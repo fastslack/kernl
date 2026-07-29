@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "kernl": {
+      "type": "streamable-http",
+      "url": "http://localhost:3086/mcp"
+    },
+    "resend": {
+      "command": "npx",
+      "args": ["-y", "resend-mcp"],
+      "env": {
+        "RESEND_API_KEY": "your-resend-api-key-here"
+      }
+    }
+  }
+}

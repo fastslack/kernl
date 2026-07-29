@@ -1,0 +1,12 @@
+{
+  "id": "task-prioritizer",
+  "name": "Task Prioritizer",
+  "description": "Analyzes task backlog, re-prioritizes based on deadlines and context, and suggests focus areas",
+  "version": "2.0.0",
+  "author": "Kernl",
+  "icon": "⚡",
+  "category": "productivity",
+  "main": "index.js",
+  "permissions": ["read:tasks", "write:tasks", "notifications"],
+  "tags": ["tasks", "gtd", "priority", "automation", "focus"]
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.triage-orchestrator",
+  "slug": "triage-orchestrator",
+  "name": "Triage Orchestrator",
+  "version": "0.1.0",
+  "type": "office",
+  "description": "Triage office — cron-driven agents that run the maintainer-bot loop end-to-end (sync → review → apply) on every configured target. No backend; declarative agents that consume the kernel_triage_* tools.",
+  "long_description": "Office that owns the triage maintainer-bot loop on a fixed cadence:\n\n- :00 of every hour — kernel_triage_sync against every enabled target.\n- :17 — pick items due for review (never reviewed, or updated since last review) and run kernel_triage_review on each.\n- :37 — apply pending high-confidence proposed closes with dry_run=false, snapshot-guarded and throttled.\n\nUses Anthropic Haiku 4.5 as the agent driver; the actual LLM review uses whatever the kernel's LlmClient is configured with.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": ["triage", "automation", "cron", "office"],
+  "dependencies": ["com.kernl.triage"],
+  "permissions": [],
+  "office": "office/triage.json",
+  "agents": [
+    "agents/sync.json",
+    "agents/planner.json",
+    "agents/applier.json"
+  ]
+}

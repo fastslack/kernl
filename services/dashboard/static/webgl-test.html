@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>WebGL Test for WebKitGTK</title>
+<style>
+  body { margin: 0; font-family: monospace; background: #111; color: #eee; padding: 20px; }
+  #log { white-space: pre; background: #000; padding: 12px; border: 1px solid #333; max-height: 400px; overflow: auto; }
+  #canvas { display: block; margin-top: 12px; border: 2px solid #0f0; }
+  .ok { color: #0f0; }
+  .err { color: #f55; }
+  .warn { color: #fa0; }
+</style>
+</head>
+<body>
+<h2>WebGL Diagnostic for WebKitGTK</h2>
+<div id="log"></div>
+<canvas id="canvas" width="400" height="300"></canvas>
+<script>
+const log = document.getElementById('log');
+function say(msg, cls='') {
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = msg;
+  log.appendChild(line);
+}
+
+say('UserAgent: ' + navigator.userAgent);
+say('');
+
+// Test 1: Basic canvas + WebGL1
+const canvas = document.getElementById('canvas');
+let gl = null;
+try {
+  gl = canvas.getContext('webgl2');
+  say('webgl2 context: ' + (gl ? 'OK' : 'FAILED'), gl ? 'ok' : 'err');
+} catch (e) { say('webgl2 error: ' + e.message, 'err'); }
+
+if (!gl) {
+  try {
+    gl = canvas.getContext('webgl');
+    say('webgl context: ' + (gl ? 'OK' : 'FAILED'), gl ? 'ok' : 'err');
+  } catch (e) { say('webgl error: ' + e.message, 'err'); }
+}
+
+if (!gl) {
+  try {
+    gl = canvas.getContext('experimental-webgl');
+    say('experimental-webgl: ' + (gl ? 'OK' : 'FAILED'), gl ? 'ok' : 'err');
+  } catch (e) { say('experimental-webgl error: ' + e.message, 'err'); }
+}
+
+if (gl) {
+  say('');
+  say('=== WebGL INFO ===', 'ok');
+  say('VERSION: ' + gl.getParameter(gl.VERSION));
+  say('SHADING_LANGUAGE_VERSION: ' + gl.getParameter(gl.SHADING_LANGUAGE_VERSION));
+  say('VENDOR: ' + gl.getParameter(gl.VENDOR));
+  say('RENDERER: ' + gl.getParameter(gl.RENDERER));
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info');
+  if (dbg) {
+    say('UNMASKED_VENDOR: ' + gl.getParameter(dbg.UNMASKED_VENDOR_WEBGL));
+    say('UNMASKED_RENDERER: ' + gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL));
+  }
+  say('');
+  say('=== LIMITS ===', 'ok');
+  say('MAX_TEXTURE_SIZE: ' + gl.getParameter(gl.MAX_TEXTURE_SIZE));
+  say('MAX_VERTEX_UNIFORM_VECTORS: ' + gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS));
+  say('MAX_FRAGMENT_UNIFORM_VECTORS: ' + gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS));
+  say('MAX_TEXTURE_IMAGE_UNITS: ' + gl.getParameter(gl.MAX_TEXTURE_IMAGE_UNITS));
+  say('MAX_VERTEX_ATTRIBS: ' + gl.getParameter(gl.MAX_VERTEX_ATTRIBS));
+  say('MAX_VARYING_VECTORS: ' + gl.getParameter(gl.MAX_VARYING_VECTORS));
+  say('');
+  say('=== EXTENSIONS ===', 'ok');
+  const exts = gl.getSupportedExtensions() || [];
+  say('Count: ' + exts.length);
+  const critical = ['OES_standard_derivatives', 'EXT_shader_texture_lod', 'OES_texture_float', 'WEBGL_depth_texture', 'ANGLE_instanced_arrays'];
+  for (const name of critical) {
+    const has = exts.includes(name);
+    say('  ' + name + ': ' + (has ? 'YES' : 'NO'), has ? 'ok' : 'warn');
+  }
+
+  // Test 2: clear color (verify rendering works)
+  say('');
+  say('=== RENDER TEST ===', 'ok');
+  gl.clearColor(0, 1, 0, 1); // green
+  gl.clear(gl.COLOR_BUFFER_BIT);
+  say('Canvas should be GREEN ✓', 'ok');
+
+  // Test 3: shader compilation
+  const vs = gl.createShader(gl.VERTEX_SHADER);
+  gl.shaderSource(vs, 'attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }');
+  gl.compileShader(vs);
+  const vsOk = gl.getShaderParameter(vs, gl.COMPILE_STATUS);
+  say('Vertex shader compile: ' + (vsOk ? 'OK' : 'FAILED'), vsOk ? 'ok' : 'err');
+  if (!vsOk) say('  log: ' + gl.getShaderInfoLog(vs), 'err');
+
+  const fs = gl.createShader(gl.FRAGMENT_SHADER);
+  gl.shaderSource(fs, 'precision mediump float; void main() { gl_FragColor = vec4(1.0, 0.5, 0.0, 1.0); }');
+  gl.compileShader(fs);
+  const fsOk = gl.getShaderParameter(fs, gl.COMPILE_STATUS);
+  say('Fragment shader compile: ' + (fsOk ? 'OK' : 'FAILED'), fsOk ? 'ok' : 'err');
+  if (!fsOk) say('  log: ' + gl.getShaderInfoLog(fs), 'err');
+
+  // Test 4: Three.js import
+  say('');
+  say('=== THREE.JS TEST ===', 'ok');
+  import('https://unpkg.com/three@0.183.2/build/three.module.js')
+    .then(THREE => {
+      say('Three.js import: OK', 'ok');
+      try {
+        const r = new THREE.WebGLRenderer({ canvas: document.createElement('canvas') });
+        say('THREE.WebGLRenderer: OK', 'ok');
+        r.dispose();
+      } catch (e) {
+        say('THREE.WebGLRenderer: FAILED — ' + e.message, 'err');
+      }
+    })
+    .catch(e => say('Three.js import FAILED: ' + e.message, 'err'));
+}
+</script>
+</body>
+</html>

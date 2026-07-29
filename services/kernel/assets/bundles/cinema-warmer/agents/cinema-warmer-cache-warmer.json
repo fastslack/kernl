@@ -1,0 +1,21 @@
+{
+  "slug": "cinema-warmer-cache-warmer",
+  "name": "Cinema Cache Warmer",
+  "description": "Pre-fetches archive.org movie pages into the local SQLite cache so /cinema renders instantly. Picks 3 missing or stale (collection, page) cells per tick and refreshes them with a polite 2s delay between requests.",
+  "system_prompt": "",
+  "goal_template": "",
+  "builtin_handler": "cinema:cache-warmer",
+  "allowed_tools": [],
+  "flow_slug": "flow-leisure",
+  "max_iterations": 1,
+  "max_tokens": 1000,
+  "timeout_ms": 120000,
+  "show_on_dashboard": true,
+  "role": "worker",
+  "schedules": [
+    {
+      "cron_expression": "*/30 * * * *",
+      "goal_override": ""
+    }
+  ]
+}

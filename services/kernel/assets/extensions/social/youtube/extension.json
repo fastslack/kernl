@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.youtube",
+  "slug": "youtube",
+  "name": "YouTube",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "YouTube account management + video metadata + resumable uploads via Data API v3 (OAuth2).",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "social",
+  "tags": ["youtube", "social", "video", "marketing"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "fs:read", "module:youtube"],
+  "backend": { "entry": "backend/entry.js" }
+}

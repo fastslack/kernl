@@ -1,0 +1,46 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.leisure",
+  "slug": "leisure",
+  "name": "Leisure",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "Entertainment hub — cinema, shows, games, and other leisure activities.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "leisure",
+  "frontend": {
+    "navGroups": [
+      {
+        "id": "leisure",
+        "label": "Leisure",
+        "icon": "🎭",
+        "order": 450
+      }
+    ],
+    "navItems": [
+      {
+        "id": "cinema",
+        "group": "leisure",
+        "label": "Cinema",
+        "icon": "🎬",
+        "order": 10
+      },
+      {
+        "id": "books",
+        "group": "leisure",
+        "label": "Books",
+        "icon": "📚",
+        "order": 20
+      },
+      {
+        "id": "music",
+        "group": "leisure",
+        "label": "Music",
+        "icon": "🎵",
+        "order": 30
+      }
+    ]
+  }
+}

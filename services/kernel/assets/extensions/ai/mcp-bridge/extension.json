@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.mcp-bridge",
+  "slug": "mcp-bridge",
+  "name": "MCP Bridge",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Connects to external MCP servers and injects their tools into the kernel pipeline.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "ai",
+  "tags": ["mcp", "bridge", "tools"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:mcp-bridge"],
+  "backend": { "entry": "backend/entry.js" }
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.cinema-warmer",
+  "slug": "cinema-warmer",
+  "name": "Cinema Warmer",
+  "version": "1.0.0",
+  "type": "office",
+  "description": "Background warmer that keeps the /cinema archive.org cache hot. Non-LLM script agent — runs every 30 min and refreshes a few collection pages per tick.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "agents",
+  "agents": [
+    "agents/cinema-warmer-cache-warmer.json"
+  ],
+  "office": "office.json"
+}

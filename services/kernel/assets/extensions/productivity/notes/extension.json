@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.notes",
+  "slug": "notes",
+  "name": "Notes",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Lightweight note-taking with tags and search.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "productivity",
+  "tags": ["notes", "writing"],
+  "kernel_min": "0.1.0",
+  "permissions": ["module:notes"],
+  "backend": { "entry": "backend/entry.js" }
+}

@@ -1,0 +1,22 @@
+{
+  "slug": "triage:planner",
+  "name": "Triage Planner+Reviewer",
+  "description": "Picks items due for review and runs kernel_triage_review on each, persisting proposed decisions.",
+  "flow_slug": "triage",
+  "executor_type": "native",
+  "model_chain": [
+    { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" }
+  ],
+  "max_iterations": 30,
+  "max_tokens": 30000,
+  "timeout_ms": 1800000,
+  "allowed_tools": [
+    "kernel_triage_items_due_for_review",
+    "kernel_triage_review"
+  ],
+  "system_prompt": "You are an automation runner. Execute the goal exactly. Do not skip items, do not summarize ahead of time, do not ask questions.",
+  "goal_template": "1) Call kernel_triage_items_due_for_review with {limit: 20}. 2) Parse the response: each line that starts with '- item_id=' contains a fresh item id. 3) For EVERY item id returned, call kernel_triage_review with {item_id: <that id>} — one tool call per item, in the order they appeared. 4) Stop after the last review. 5) Reply with a one-line summary: 'reviewed N items: A close, B keep_open, C guarded, D failed'.",
+  "schedules": [
+    { "cron_expression": "17 * * * *" }
+  ]
+}

@@ -1,0 +1,144 @@
+{
+  "$schema": "https://e2e-runner.matware.dev/schema.json",
+  "hooks": {
+    "beforeEach": [
+      { "type": "goto", "value": "/login" },
+      { "type": "wait", "value": "1500" },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+      }
+    ]
+  },
+  "$flatten": "Inline JS that drops the viewport-height lock on html/body/.app-shell so puppeteer's fullPage screenshot can extend past the 720px viewport.",
+  "tests": [
+    {
+      "name": "Marketplace — overview (full page)",
+      "actions": [
+        { "type": "goto", "value": "/marketplace" },
+        { "type": "wait", "value": "8000" },
+        { "type": "assert_visible", "selector": ".mp-stats" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-mp-01-overview", "fullPage": true }
+      ],
+      "expect": "Full Marketplace page top-to-bottom — header, legacy banner, populated stats (14 Total · 9 Installed · 3 Active), tab strip, search, theme cards (CRT Terminal, Midnight Gold, Arctic Light, …)."
+    },
+    {
+      "name": "Marketplace — Themes tab + theme picker",
+      "actions": [
+        { "type": "goto", "value": "/marketplace" },
+        { "type": "wait", "value": "7000" },
+        { "type": "click", "text": "Themes" },
+        { "type": "wait", "value": "2500" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-mp-02-themes-tab", "fullPage": true }
+      ],
+      "expect": "Themes tab active; full-page theme picker grid (CRT Terminal, Arctic Light, Emerald Dark, Midnight Gold, Monochrome, Rose Quartz) + Installed cards row visible."
+    },
+    {
+      "name": "Extensions — overview (full page)",
+      "actions": [
+        { "type": "goto", "value": "/extensions" },
+        { "type": "wait", "value": "8000" },
+        { "type": "assert_visible", "selector": ".stat-row" },
+        { "type": "assert_visible", "selector": ".chip-row" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-ext-01-overview", "fullPage": true }
+      ],
+      "expect": "Extensions page top-to-bottom — Marketplace banner, stats (Total/Active/Idle/Errored), search, every type chip (Module, Skill, Office, Agent, Flow, Theme, Template, Channel, LLM, Sandbox, Database, Suite), status chips, and the long extension grid."
+    },
+    {
+      "name": "Extensions — Skill filter (full page)",
+      "actions": [
+        { "type": "goto", "value": "/extensions" },
+        { "type": "wait", "value": "7000" },
+        { "type": "click", "text": "Skill" },
+        { "type": "wait", "value": "2500" },
+        { "type": "assert_text", "text": "morning-briefing" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-ext-02-filter-skill", "fullPage": true }
+      ],
+      "expect": "Skill chip glowing; only skill cards visible end-to-end (morning-briefing, water-tracker, stale-contacts, event-notifier, task-prioritizer)."
+    },
+    {
+      "name": "Extensions — Module filter (full page, large grid)",
+      "actions": [
+        { "type": "goto", "value": "/extensions" },
+        { "type": "wait", "value": "7000" },
+        { "type": "click", "text": "Module" },
+        { "type": "wait", "value": "2500" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-ext-03-filter-module", "fullPage": true }
+      ],
+      "expect": "Module chip glowing blue; the entire ~70-card module grid scrolled into one tall screenshot — hero shot of the unified catalog."
+    },
+    {
+      "name": "Extensions — Theme filter (full page)",
+      "actions": [
+        { "type": "goto", "value": "/extensions" },
+        { "type": "wait", "value": "7000" },
+        { "type": "click", "text": "Theme" },
+        { "type": "wait", "value": "2500" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-ext-04-filter-theme", "fullPage": true }
+      ],
+      "expect": "Theme chip glowing magenta; all 6 theme cards (CRT Terminal, Midnight Gold, Arctic Light, Emerald Dark, Monochrome, Rose Quartz) end-to-end."
+    },
+    {
+      "name": "Extensions — Office filter (full page)",
+      "actions": [
+        { "type": "goto", "value": "/extensions" },
+        { "type": "wait", "value": "7000" },
+        { "type": "click", "text": "Office" },
+        { "type": "wait", "value": "2500" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-ext-05-filter-office", "fullPage": true }
+      ],
+      "expect": "Office chip active; multi-agent office bundles end-to-end (agents-communications, agents-development-office, agents-error-auditor, agents-security, etc.)."
+    },
+    {
+      "name": "Extensions — search 'morning' (full page)",
+      "actions": [
+        { "type": "goto", "value": "/extensions" },
+        { "type": "wait", "value": "7000" },
+        { "type": "type", "selector": ".filter-search", "value": "morning" },
+        { "type": "wait", "value": "3000" },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        { "type": "wait", "value": "300" },
+        { "type": "screenshot", "value": "ux-ext-06-search-morning", "fullPage": true }
+      ],
+      "expect": "Search input shows 'morning'; grid narrowed to morning-briefing card."
+    }
+  ]
+}

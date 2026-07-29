@@ -1,0 +1,19 @@
+{
+  "id": "event-notifier",
+  "name": "Event Notifier",
+  "description": "Format event notifications, track pending RSVPs, and generate attendance reports for Telegram/WhatsApp/Mattermost",
+  "version": "2.0.0",
+  "author": "Kernl",
+  "icon": "📣",
+  "category": "events",
+  "main": "index.js",
+  "permissions": ["read:events", "read:contacts", "notifications"],
+  "tags": ["events", "notifications", "sharing", "automation", "rsvp"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "lookaheadDays": { "type": "number", "description": "Days ahead to look for events", "default": 7 },
+      "defaultChannel": { "type": "string", "enum": ["telegram", "whatsapp", "mattermost"], "default": "telegram" }
+    }
+  }
+}

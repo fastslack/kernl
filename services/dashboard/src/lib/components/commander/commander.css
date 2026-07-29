@@ -1,0 +1,550 @@
+/**
+ * Filesystem Commander — shared styles.
+ *
+ * Terminal-modern brutalist: mono font, gold accent, ASCII-inspired frames,
+ * high density. Lives inside the kernel dashboard — uses its CSS variables.
+ */
+
+.cmd-root {
+	--cmd-accent: var(--gold);
+	--cmd-row-h: 22px;
+	--cmd-font: 'Fira Code', 'JetBrains Mono', ui-monospace, monospace;
+	display: grid;
+	grid-template-rows: auto 1fr auto auto;
+	gap: 0;
+	height: calc(100vh - var(--header-h) - 4px);
+	font-family: var(--cmd-font);
+	background: var(--bg);
+	color: var(--text-1);
+	overflow: hidden;
+}
+
+.cmd-title-bar {
+	display: flex;
+	align-items: center;
+	gap: 12px;
+	padding: 6px 12px;
+	background: color-mix(in srgb, var(--cmd-accent) 4%, var(--surface-1));
+	border-bottom: 1px solid var(--border);
+	font-size: 11px;
+	color: var(--text-2);
+	letter-spacing: 0.04em;
+}
+.cmd-title-bar .brand {
+	color: var(--cmd-accent);
+	font-weight: 700;
+}
+.cmd-title-bar .sep {
+	color: var(--text-3);
+}
+.cmd-title-bar .hint {
+	margin-left: auto;
+	color: var(--text-3);
+	font-size: 10px;
+}
+
+.cmd-panes {
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 4px;
+	padding: 4px;
+	min-height: 0;
+}
+
+.cmd-pane {
+	display: grid;
+	grid-template-rows: auto auto 1fr;
+	min-height: 0;
+	background: var(--surface-1);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	overflow: hidden;
+	transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.cmd-pane.active {
+	border-color: var(--cmd-accent);
+	box-shadow:
+		0 0 0 1px var(--cmd-accent),
+		0 0 18px color-mix(in srgb, var(--cmd-accent) 20%, transparent);
+}
+
+.cmd-tabs {
+	display: flex;
+	gap: 1px;
+	padding: 2px 4px 0;
+	background: var(--surface-2);
+	border-bottom: 1px solid var(--border);
+	overflow-x: auto;
+	scrollbar-width: thin;
+}
+.cmd-tab {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	font-size: 11px;
+	color: var(--text-2);
+	background: transparent;
+	border: 1px solid transparent;
+	border-bottom: none;
+	border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+	cursor: pointer;
+	white-space: nowrap;
+	max-width: 200px;
+}
+.cmd-tab:hover {
+	background: color-mix(in srgb, var(--cmd-accent) 8%, transparent);
+	color: var(--text-1);
+}
+.cmd-tab.active {
+	background: var(--surface-1);
+	color: var(--cmd-accent);
+	border-color: var(--border);
+}
+.cmd-tab .close {
+	opacity: 0.5;
+	font-size: 13px;
+	padding: 0 2px;
+}
+.cmd-tab .close:hover {
+	opacity: 1;
+	color: var(--red);
+}
+.cmd-tab.new-tab {
+	color: var(--cmd-accent);
+	padding: 4px 8px;
+}
+
+.cmd-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 10px;
+	font-size: 11px;
+	color: var(--text-2);
+	background: color-mix(in srgb, var(--cmd-accent) 3%, var(--surface-1));
+	border-bottom: 1px solid var(--border);
+	overflow: hidden;
+}
+.cmd-header .provider-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	padding: 1px 6px;
+	font-size: 10px;
+	font-weight: 600;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	color: var(--cmd-accent);
+	background: color-mix(in srgb, var(--cmd-accent) 12%, transparent);
+	border-radius: 3px;
+	flex-shrink: 0;
+}
+.cmd-header .crumb {
+	display: inline-flex;
+	align-items: center;
+	gap: 2px;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.cmd-header .crumb-seg {
+	color: var(--text-1);
+	cursor: pointer;
+	padding: 1px 4px;
+	border-radius: 3px;
+}
+.cmd-header .crumb-seg:hover {
+	background: color-mix(in srgb, var(--cmd-accent) 15%, transparent);
+	color: var(--cmd-accent);
+}
+.cmd-header .crumb-sep {
+	color: var(--text-3);
+}
+.cmd-header .actions {
+	margin-left: auto;
+	display: flex;
+	gap: 4px;
+	flex-shrink: 0;
+}
+.cmd-header button.icon {
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--text-2);
+	padding: 2px 6px;
+	font-size: 11px;
+	cursor: pointer;
+	border-radius: 3px;
+}
+.cmd-header button.icon:hover {
+	color: var(--cmd-accent);
+	border-color: var(--border-h);
+}
+.cmd-header input.filter {
+	flex: 1 1 auto;
+	min-width: 80px;
+	max-width: 220px;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	color: var(--text-1);
+	font-family: var(--cmd-font);
+	font-size: 11px;
+	padding: 2px 6px;
+	border-radius: 3px;
+}
+
+.cmd-list {
+	overflow-y: auto;
+	overflow-x: hidden;
+	min-height: 0;
+	font-size: 12px;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border-h) transparent;
+}
+.cmd-list::-webkit-scrollbar {
+	width: 6px;
+}
+.cmd-list::-webkit-scrollbar-thumb {
+	background: var(--border-h);
+	border-radius: 3px;
+}
+
+.cmd-row {
+	display: grid;
+	grid-template-columns: 16px 1fr 66px 120px;
+	column-gap: 8px;
+	align-items: center;
+	padding: 0 10px;
+	height: var(--cmd-row-h);
+	line-height: var(--cmd-row-h);
+	cursor: pointer;
+	user-select: none;
+	border-left: 2px solid transparent;
+}
+.cmd-row:hover {
+	background: var(--surface-2);
+}
+.cmd-row.cursor {
+	background: color-mix(in srgb, var(--cmd-accent) 10%, transparent);
+	border-left-color: var(--cmd-accent);
+}
+.cmd-row.selected {
+	background: color-mix(in srgb, var(--cmd-accent) 24%, transparent);
+	color: var(--text-1);
+	font-weight: 600;
+}
+.cmd-row.cursor.selected {
+	background: color-mix(in srgb, var(--cmd-accent) 36%, transparent);
+}
+.cmd-row .icon {
+	text-align: center;
+	font-size: 12px;
+	color: var(--text-3);
+}
+.cmd-row.dir .icon,
+.cmd-row.dir .name {
+	color: var(--blue);
+}
+.cmd-row.symlink .icon,
+.cmd-row.symlink .name {
+	color: var(--teal);
+}
+.cmd-row.archive .name {
+	color: var(--purple);
+}
+.cmd-row.exec .name {
+	color: var(--green);
+}
+.cmd-row .name {
+	color: var(--text-1);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.cmd-row .size {
+	text-align: right;
+	color: var(--text-3);
+	font-variant-numeric: tabular-nums;
+}
+.cmd-row .mtime {
+	text-align: right;
+	color: var(--text-3);
+	font-size: 11px;
+	font-variant-numeric: tabular-nums;
+}
+
+.cmd-empty {
+	padding: 24px;
+	text-align: center;
+	color: var(--text-3);
+	font-size: 12px;
+}
+
+.cmd-error {
+	padding: 12px 16px;
+	color: var(--red);
+	background: color-mix(in srgb, var(--red) 8%, transparent);
+	font-size: 12px;
+	border-top: 1px solid color-mix(in srgb, var(--red) 30%, transparent);
+}
+
+.cmd-statusbar {
+	display: flex;
+	align-items: center;
+	gap: 16px;
+	padding: 3px 12px;
+	background: var(--surface-2);
+	border-top: 1px solid var(--border);
+	font-size: 11px;
+	color: var(--text-2);
+	font-variant-numeric: tabular-nums;
+}
+.cmd-statusbar .sep {
+	color: var(--text-3);
+}
+.cmd-statusbar .count-hi {
+	color: var(--cmd-accent);
+	font-weight: 600;
+}
+
+.cmd-opsbar {
+	display: flex;
+	gap: 18px;
+	padding: 4px 12px;
+	background: var(--surface-1);
+	border-top: 1px solid var(--border);
+	font-size: 11px;
+	color: var(--text-2);
+	overflow-x: auto;
+	scrollbar-width: none;
+}
+.cmd-opsbar::-webkit-scrollbar {
+	display: none;
+}
+.cmd-opsbar .fkey {
+	background: none;
+	border: none;
+	color: inherit;
+	font-family: var(--cmd-font);
+	font-size: 11px;
+	cursor: pointer;
+	padding: 1px 4px;
+	border-radius: 3px;
+	white-space: nowrap;
+}
+.cmd-opsbar .fkey .key {
+	color: var(--cmd-accent);
+	font-weight: 700;
+	margin-right: 3px;
+}
+.cmd-opsbar .fkey:hover {
+	background: color-mix(in srgb, var(--cmd-accent) 10%, transparent);
+}
+
+/* ── Overlays: dialogs, prompts, toasts ───────────────────────── */
+
+.cmd-overlay {
+	position: fixed;
+	inset: 0;
+	background: color-mix(in srgb, #000 60%, transparent);
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	z-index: 1000;
+	backdrop-filter: blur(4px);
+}
+
+.cmd-dialog {
+	min-width: 360px;
+	max-width: 90vw;
+	background: var(--surface-1);
+	border: 1px solid var(--cmd-accent);
+	border-radius: var(--radius);
+	padding: 0;
+	box-shadow: 0 20px 60px color-mix(in srgb, var(--cmd-accent) 20%, #000);
+	font-family: var(--cmd-font);
+}
+.cmd-dialog-header {
+	padding: 10px 16px;
+	background: color-mix(in srgb, var(--cmd-accent) 10%, var(--surface-1));
+	border-bottom: 1px solid var(--border);
+	font-size: 12px;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--cmd-accent);
+	font-weight: 700;
+}
+.cmd-dialog-body {
+	padding: 16px;
+	font-size: 13px;
+	color: var(--text-1);
+}
+.cmd-dialog-body input,
+.cmd-dialog-body textarea {
+	width: 100%;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	color: var(--text-1);
+	font-family: var(--cmd-font);
+	font-size: 13px;
+	padding: 6px 8px;
+	border-radius: 3px;
+	margin-top: 8px;
+}
+.cmd-dialog-body input:focus,
+.cmd-dialog-body textarea:focus {
+	outline: none;
+	border-color: var(--cmd-accent);
+}
+.cmd-dialog-foot {
+	display: flex;
+	gap: 8px;
+	justify-content: flex-end;
+	padding: 10px 16px;
+	border-top: 1px solid var(--border);
+}
+.cmd-dialog-foot button {
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	color: var(--text-1);
+	font-family: var(--cmd-font);
+	font-size: 11px;
+	letter-spacing: 0.05em;
+	text-transform: uppercase;
+	padding: 5px 12px;
+	border-radius: 3px;
+	cursor: pointer;
+}
+.cmd-dialog-foot button:hover {
+	border-color: var(--cmd-accent);
+	color: var(--cmd-accent);
+}
+.cmd-dialog-foot button.primary {
+	background: var(--cmd-accent);
+	color: var(--bg);
+	border-color: var(--cmd-accent);
+	font-weight: 700;
+}
+.cmd-dialog-foot button.danger {
+	background: var(--red);
+	color: #fff;
+	border-color: var(--red);
+	font-weight: 700;
+}
+.cmd-dialog-foot button:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
+
+.cmd-toast-stack {
+	position: fixed;
+	right: 16px;
+	bottom: 16px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	z-index: 900;
+	max-width: 360px;
+}
+.cmd-toast {
+	background: var(--surface-1);
+	border: 1px solid var(--cmd-accent);
+	border-left-width: 3px;
+	border-radius: var(--radius-sm);
+	padding: 10px 12px;
+	font-size: 11px;
+	color: var(--text-1);
+	box-shadow: 0 12px 28px color-mix(in srgb, #000 40%, transparent);
+	font-family: var(--cmd-font);
+}
+.cmd-toast .head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 4px;
+	color: var(--cmd-accent);
+	font-weight: 700;
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+	font-size: 10px;
+}
+.cmd-toast .head .cancel {
+	margin-left: auto;
+	background: none;
+	border: none;
+	color: var(--text-3);
+	cursor: pointer;
+	font-size: 13px;
+}
+.cmd-toast .head .cancel:hover {
+	color: var(--red);
+}
+.cmd-toast .bar {
+	height: 2px;
+	background: color-mix(in srgb, var(--cmd-accent) 20%, transparent);
+	border-radius: 1px;
+	overflow: hidden;
+	margin: 6px 0 4px;
+}
+.cmd-toast .bar .fill {
+	height: 100%;
+	background: var(--cmd-accent);
+	transition: width 0.2s ease;
+}
+.cmd-toast .meta {
+	color: var(--text-3);
+	font-size: 10px;
+	display: flex;
+	gap: 8px;
+}
+.cmd-toast.error {
+	border-color: var(--red);
+}
+.cmd-toast.error .head {
+	color: var(--red);
+}
+.cmd-toast.done {
+	border-color: var(--green);
+}
+.cmd-toast.done .head {
+	color: var(--green);
+}
+
+/* ── Command bar (vim-style :) ─────────────────────────────────── */
+
+.cmd-prompt {
+	position: fixed;
+	bottom: 68px;
+	left: 50%;
+	transform: translateX(-50%);
+	width: min(640px, 90vw);
+	background: var(--surface-1);
+	border: 1px solid var(--cmd-accent);
+	border-radius: var(--radius);
+	padding: 6px 10px;
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	font-family: var(--cmd-font);
+	font-size: 13px;
+	box-shadow: 0 12px 40px color-mix(in srgb, var(--cmd-accent) 25%, #000);
+	z-index: 950;
+}
+.cmd-prompt .colon {
+	color: var(--cmd-accent);
+	font-weight: 700;
+}
+.cmd-prompt input {
+	flex: 1;
+	background: transparent;
+	border: none;
+	color: var(--text-1);
+	font-family: var(--cmd-font);
+	font-size: 13px;
+	outline: none;
+}
+.cmd-prompt .hint {
+	color: var(--text-3);
+	font-size: 10px;
+}

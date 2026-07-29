@@ -1,0 +1,22 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.crm",
+  "slug": "crm",
+  "name": "CRM",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Contacts, companies, leads — the people graph.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "people",
+  "tags": ["crm", "contacts", "core"],
+  "kernel_min": "0.1.0",
+  "permissions": ["read:contacts", "write:contacts"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "crm", "entry": "frontend/entry.js", "title": "CRM" },
+      { "view": "people", "entry": "frontend/entry.js", "title": "People" }
+    ]
+  }
+}

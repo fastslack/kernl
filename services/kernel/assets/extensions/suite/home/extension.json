@@ -1,0 +1,32 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.home",
+  "slug": "home",
+  "name": "Home",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "Default landing dashboard.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "core",
+  "frontend": {
+    "navGroups": [
+      {
+        "id": "dashboard",
+        "label": "Home",
+        "icon": "🏠",
+        "order": 100
+      }
+    ],
+    "navItems": [
+      {
+        "id": "home",
+        "group": "dashboard",
+        "label": "Home",
+        "icon": "🏠",
+        "order": 10
+      }
+    ]
+  }
+}

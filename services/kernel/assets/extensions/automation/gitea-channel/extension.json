@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.gitea-channel",
+  "slug": "gitea-channel",
+  "name": "Gitea Channel Backend",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Backend for the Gitea channel: connection storage (host + PAT) and the RepoProvider implementation consumed by triage and any other module that needs Gitea access.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": ["gitea", "forgejo", "codeberg", "backend", "repo-provider"],
+  "dependencies": [
+    "com.kernl.gitea",
+    "com.kernl.triage"
+  ],
+  "permissions": ["network", "module:gitea-channel"],
+  "backend": {
+    "entry": "backend/entry.js"
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.comms",
+  "slug": "comms",
+  "name": "Comms",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Unified communications: emails, threads, accounts, campaigns, templates.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "people",
+  "tags": ["email", "comms", "accounts"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:comms"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "comms", "entry": "frontend/entry.js", "title": "Comms" }
+    ]
+  }
+}

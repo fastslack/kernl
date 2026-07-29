@@ -1,0 +1,20 @@
+#!/bin/sh
+# Post-remove hook — refresh caches after uninstall.
+set -e
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -t /usr/share/icons/hicolor 2>/dev/null || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database 2>/dev/null || true
+fi
+
+# Per-user state under ~/.local/share/kernl and ~/.config/kernl
+# is intentionally NOT removed — users may want to reinstall later. Tell
+# them how to clean up if they really want a full purge.
+if [ "$1" = "purge" ]; then
+    echo "kernl: per-user data (~/.local/share/kernl, ~/.config/kernl)" >&2
+    echo "         is preserved. Remove manually if desired." >&2
+fi
+
+exit 0

@@ -1,0 +1,27 @@
+[
+  {
+    "name": "Click parent reveals subcategories",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/rss-reader"
+      },
+      {
+        "type": "wait",
+        "value": "2500"
+      },
+      {
+        "type": "click",
+        "text": "Entertainment"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      }
+    ],
+    "expect": [
+      "Sidebar shows Entertainment expanded with sub-folders Books, Movies, Music, TV, Gaming visible underneath, indented with a left guide line",
+      "The sub-category names are rendered without the 'Entertainment/' prefix"
+    ]
+  }
+]

@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.repos",
+  "slug": "repos",
+  "name": "Repos",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Registry of local git repositories, each tracked at its own absolute path. Exposes kernel_repos_* tools so any agent in the kernel can list, read, edit, search, run shell commands, and inspect git state inside registered repos.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "productivity",
+  "tags": ["repos", "git", "filesystem", "office"],
+  "kernel_min": "0.1.0",
+  "permissions": ["module:repos", "filesystem", "network"],
+  "backend": { "entry": "backend/entry.js" }
+}

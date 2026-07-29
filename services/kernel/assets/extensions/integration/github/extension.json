@@ -1,0 +1,29 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.github",
+  "slug": "github",
+  "name": "GitHub",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "GitHub repo host channel. Connection stub used by github-channel (RepoProvider for triage) and any future GitHub-aware extension.",
+  "long_description": "Channel stub that represents the GitHub integration surface. Other extensions declare it as a dependency to signal they need an authenticated GitHub client (today: github-channel; future: code-search, release-notifier, …).\n\nConfiguration (App ID, installation id, private key) is held by the github-channel extension because it owns the runtime that uses it. Installing/removing this stub cleanly gates the entire GitHub integration.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "tags": ["github", "channel", "git", "repo-host"],
+  "kernel_min": "0.1.0",
+  "channels": [
+    {
+      "implementation": "github-app",
+      "direction": "bidirectional",
+      "config": {
+        "fields": [
+          { "key": "app_id", "label": "App ID", "type": "text", "required": true },
+          { "key": "installation_id", "label": "Installation ID", "type": "text", "required": true },
+          { "key": "private_key_pem", "label": "Private Key (PEM)", "type": "password", "required": true }
+        ]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

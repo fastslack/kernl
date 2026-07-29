@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.telegram",
+  "slug": "telegram",
+  "name": "Telegram",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Telegram bot notification + receive channel (uses grammy).",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "channels",
+  "tags": ["channel", "telegram", "notifications", "messaging"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network"],
+  "backend": { "entry": "backend/entry.js" }
+}

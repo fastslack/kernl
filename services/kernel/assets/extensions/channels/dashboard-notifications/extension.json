@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.dashboard-notifications",
+  "slug": "dashboard-notifications",
+  "name": "Dashboard Notifications",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "In-dashboard notifications inbox + WebSocket bell. Auto-active.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "channels",
+  "tags": ["channel", "dashboard", "notifications"],
+  "kernel_min": "0.1.0",
+  "permissions": [],
+  "backend": { "entry": "backend/entry.js" }
+}

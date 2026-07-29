@@ -1,0 +1,140 @@
+{
+  "hooks": {
+    "beforeEach": [
+      {
+        "type": "goto",
+        "value": "/login"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Extensions — morning-briefing local-only receipt (path A)",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/extensions"
+        },
+        {
+          "type": "wait",
+          "value": "8000"
+        },
+        {
+          "type": "type",
+          "selector": ".filter-search",
+          "value": "morning"
+        },
+        {
+          "type": "wait",
+          "value": "2000"
+        },
+        {
+          "type": "click",
+          "text": "Morning Briefing"
+        },
+        {
+          "type": "wait",
+          "value": "1500"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".receipt-panel"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".receipt-grid"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".receipt-badge-ok"
+        },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main'), document.querySelector('.drawer')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        {
+          "type": "wait",
+          "value": "300"
+        },
+        {
+          "type": "screenshot",
+          "value": "ux-receipt-A-bundled",
+          "fullPage": true
+        }
+      ],
+      "expect": "Morning Briefing drawer shows the Install Receipt panel with SIGNED badge, install_id (uuid), bundle_sha256 + install_sha256 hashes, kernel_identity, source=bundled. NO watermark sub-card (this is a bundled install)."
+    },
+    {
+      "name": "Extensions — echo-test loopback download with watermark (path B)",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/extensions"
+        },
+        {
+          "type": "wait",
+          "value": "8000"
+        },
+        {
+          "type": "type",
+          "selector": ".filter-search",
+          "value": "echo"
+        },
+        {
+          "type": "wait",
+          "value": "2000"
+        },
+        {
+          "type": "click",
+          "text": "Echo Test Agent"
+        },
+        {
+          "type": "wait",
+          "value": "1500"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".receipt-panel"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".receipt-badge-wm"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".watermark-card"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".watermark-pill"
+        },
+        {
+          "type": "assert_text",
+          "text": "demo-loopback-fp"
+        },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main'), document.querySelector('.drawer')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        {
+          "type": "wait",
+          "value": "300"
+        },
+        {
+          "type": "screenshot",
+          "value": "ux-receipt-B-watermark",
+          "fullPage": true
+        }
+      ],
+      "expect": "Echo Test Agent drawer shows TWO panels: (1) Install Receipt with SIGNED + ◈ WATERMARK badges; (2) cyan Remote download watermark sub-card with VERIFIABLE pill, download_id, source identity, downloader=ed25519:demo-loopback-fp, issued_at, signature. Proves path B end-to-end."
+    }
+  ]
+}

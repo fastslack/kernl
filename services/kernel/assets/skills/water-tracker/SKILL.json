@@ -1,0 +1,12 @@
+{
+  "id": "water-tracker",
+  "name": "Water Tracker",
+  "description": "Track water intake with daily goals, weekly trends, and streak tracking",
+  "version": "2.0.0",
+  "author": "Kernl",
+  "icon": "💧",
+  "category": "health",
+  "main": "index.js",
+  "permissions": ["read:reminders", "write:reminders", "read:health", "notifications"],
+  "tags": ["health", "habits", "reminders", "wellness", "water"]
+}

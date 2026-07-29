@@ -1,0 +1,135 @@
+# mtwRequest Server Configuration (Docker)
+# Mounted as /app/mtw.toml inside the container
+
+[server]
+host = "0.0.0.0"
+port = 7741
+max_connections = 10000
+
+[transport]
+default = "websocket"
+
+[transport.websocket]
+path = "/ws"
+ping_interval = 30
+max_message_size = "10MB"
+
+[codec]
+default = "json"
+
+# ── Data Store ──────────────────────────────────────────────
+# In Docker, kernel.db is mounted at /data/kernel.db (via ./data:/data:ro)
+[store]
+path = "/data/kernel.db"
+
+# Bridge — delegates writes to kernel via Unix socket (Rust→TS)
+[store.bridge]
+socket = "/tmp/kernl.sock"
+
+# ── Channels ────────────────────────────────────────────────
+[[channels]]
+name = "dashboard"
+history = 1
+
+[[channels]]
+name = "agenda"
+history = 1
+
+[[channels]]
+name = "calendar"
+history = 1
+
+[[channels]]
+name = "analytics"
+history = 1
+
+[[channels]]
+name = "agents"
+history = 10
+
+[[channels]]
+name = "agents.flow"
+history = 50
+
+[[channels]]
+name = "notifications"
+auth = false
+history = 20
+
+[[channels]]
+name = "chat.*"
+auth = false
+max_members = 100
+history = 50
+
+[[channels]]
+name = "system"
+auth = true
+history = 10
+
+# RPC channel — browser sends request, kernel responds via ref_id correlation
+[[channels]]
+name = "rpc"
+history = 0
+
+[[channels]]
+name = "trading"
+history = 5
+
+[[channels]]
+name = "trading-ticker"
+history = 1
+
+[[channels]]
+name = "crossIntel"
+history = 1
+
+[[channels]]
+name = "systemAgenda"
+history = 1
+
+[[channels]]
+name = "life"
+history = 1
+
+[[channels]]
+name = "finance"
+history = 1
+
+[[channels]]
+name = "health"
+history = 1
+
+[[channels]]
+name = "notes"
+history = 1
+
+[[channels]]
+name = "learning"
+history = 1
+
+# WhatsApp pub/sub channels (populated by the whatsapp-bridge sidecar).
+[[channels]]
+name = "whatsapp:qr"
+auth = false
+history = 1
+
+[[channels]]
+name = "whatsapp:status"
+auth = false
+history = 1
+
+[[channels]]
+name = "whatsapp:inbound"
+auth = false
+history = 50
+
+# ── WhatsApp integration ────────────────────────────────────
+# Connects mtw-request to the whatsapp-bridge Go sidecar via a shared
+# Unix socket (mounted from the `mtw-whatsapp-sock` Docker volume).
+# Exposes whatsapp.* request actions and publishes events on the
+# whatsapp:* channels above.
+[whatsapp]
+enabled = true
+socket = "/var/run/mtw-whatsapp/whatsapp.sock"
+connect_timeout_secs = 60

@@ -1,0 +1,17 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.events-reminders-integration",
+  "slug": "events-reminders-integration",
+  "name": "Events ↔ Reminders Integration",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Cross-extension orchestration: subscribes to events:* and email:urgent signals, sends notifications, and creates reminders 24h before events.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": ["events", "reminders", "notifications", "integration"],
+  "kernel_min": "0.1.0",
+  "dependencies": ["com.kernl.events", "com.kernl.reminders"],
+  "permissions": ["notifications", "read:events", "write:reminders"],
+  "backend": { "entry": "backend/entry.js" }
+}

@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.openai",
+  "slug": "openai",
+  "name": "OpenAI",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "OpenAI GPT models (chat + fallback).",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/openai.svg",
+  "permissions": ["network"],
+  "built_in": true
+}

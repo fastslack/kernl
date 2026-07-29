@@ -1,0 +1,45 @@
+# Bun Configuration
+# https://bun.sh/docs/runtime/bunfig
+
+# ── Install Configuration ──────────────────────────────────────
+
+[install]
+# Use exact versions to match package-lock behavior
+exact = false
+
+# Auto-install peer dependencies
+peer = true
+
+# ── Test Configuration ─────────────────────────────────────────
+
+[test]
+# Only scan tests/ — without this, `bun test` also picks up stale compiled
+# copies in dist/tests/ and scratch repos under data/workspaces/.
+# (`include` is not a bun option; `root` is.)
+root = "tests"
+
+# Globals: describe, it, expect, etc. — compatible with vitest API
+smol = false
+
+# Test timeout in milliseconds
+timeout = 30000
+
+# Enable coverage reporting
+coverage = true
+
+# Coverage reporters: text (terminal), lcov (for CI tools like Codecov)
+coverageReporter = ["text", "lcov"]
+
+# Output directory for coverage reports
+coverageDir = "./coverage"
+
+# Skip coverage for test files
+coverageSkipTestFiles = true
+
+# Coverage thresholds (will fail CI if below these values)
+# Uncomment when you want to enforce minimums in CI
+# [test.coverageThreshold]
+# line = 70
+# function = 70
+# branch = 60
+# statement = 70

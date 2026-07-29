@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.whatsapp",
+  "slug": "whatsapp",
+  "name": "WhatsApp",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "WhatsApp notification + receive channel via mtwRequest + whatsapp-bridge sidecar.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "channels",
+  "tags": ["channel", "whatsapp", "notifications", "messaging"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network"],
+  "backend": { "entry": "backend/entry.js" }
+}

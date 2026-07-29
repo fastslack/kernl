@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.cinema",
+  "slug": "cinema",
+  "name": "Cinema",
+  "version": "1.4.0",
+  "type": "module",
+  "description": "archive.org movie catalog with semantic search and Nostr discovery.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "leisure",
+  "tags": ["cinema", "movies", "archive"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:cinema"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "cinema", "entry": "frontend/entry.js", "title": "Cinema" }
+    ]
+  }
+}

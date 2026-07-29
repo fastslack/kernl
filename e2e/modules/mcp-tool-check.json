@@ -1,0 +1,16 @@
+{
+  "$module": "mcp-tool-check",
+  "description": "Initialize MCP session and verify a tool call succeeds (kernel_tasks_list)",
+  "params": {},
+  "actions": [
+    { "$use": "mcp-init" },
+    {
+      "type": "evaluate",
+      "value": "(async()=>{if(!window.__mcpReady)throw new Error('MCP not initialized');var r=await window.__toolCall('kernel_tasks_list',{limit:1});if(!r&&r!=='')throw new Error('Tool call returned empty');window.__mcpToolOk=true;window.__showResult('MCP tool check passed: '+r.substring(0,200))})()"
+    },
+    {
+      "type": "assert_visible",
+      "selector": "#mcp-result"
+    }
+  ]
+}

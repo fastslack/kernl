@@ -1,0 +1,24 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.shopping-nav",
+  "slug": "shopping-nav",
+  "name": "Shopping",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "Grocery and retail tracking tab.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "home",
+  "frontend": {
+    "navItems": [
+      {
+        "id": "shopping",
+        "group": "dashboard",
+        "label": "Shop",
+        "icon": "🛒",
+        "order": 40
+      }
+    ]
+  }
+}

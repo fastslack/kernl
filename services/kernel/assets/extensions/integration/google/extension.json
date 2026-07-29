@@ -1,0 +1,26 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.google",
+  "slug": "google",
+  "name": "Google",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "Google account connection (OAuth). Shared authentication used by Gmail, Calendar, Contacts, Drive and any other Google integration.",
+  "long_description": "Connection stub that represents the Google OAuth account. Other extensions declare it as a dependency to signal they need an authenticated Google client (google-sync, a future gmail-sync, calendar-sync, drive, etc.). Installing/removing this extension cleanly gates the entire Google integration surface.\n\nToday the OAuth client + token storage live inside google-sync. A future refactor will hoist auth here so each consumer shares the same refresh-token pool.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "logo": "logo.svg",
+  "tags": ["google", "oauth", "auth", "connection", "integration"],
+  "kernel_min": "0.1.0",
+  "channels": [
+    {
+      "implementation": "google-oauth",
+      "direction": "outbound",
+      "config": { "scopes": [] }
+    }
+  ],
+  "permissions": [
+    "network"
+  ]
+}

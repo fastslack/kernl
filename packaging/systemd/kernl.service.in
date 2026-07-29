@@ -1,0 +1,42 @@
+# Kernl — Docker Compose stack as a systemd service
+#
+# This is a TEMPLATE. scripts/install-linux.sh substitutes:
+#   __REPO_ROOT__   absolute path to the Kernl checkout
+#   __USER__        user that owns the checkout (runs the unit)
+#   __DOCKER_BIN__  absolute path to the docker CLI
+#
+# Generated unit lands in /etc/systemd/system/kernl.service
+# Manage with:
+#   systemctl status kernl
+#   systemctl restart kernl
+#   journalctl -u kernl -f       # compose orchestration logs
+#   docker compose -f __REPO_ROOT__/docker-compose.yml logs -f kernel
+
+[Unit]
+Description=Kernl — Personal Life Management Server
+Documentation=https://github.com/fastslack/kernl
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+# oneshot + RemainAfterExit lets `docker compose up -d` return immediately
+# while systemd still considers the unit "active". Container restart is
+# handled by Docker itself (each service uses `restart: unless-stopped`).
+Type=oneshot
+RemainAfterExit=yes
+
+User=__USER__
+Group=docker
+
+WorkingDirectory=__REPO_ROOT__
+ExecStart=__DOCKER_BIN__ compose up -d
+ExecStop=__DOCKER_BIN__ compose down
+ExecReload=__DOCKER_BIN__ compose up -d --build
+
+# First boot may need to pull/build images — give it room.
+TimeoutStartSec=600
+TimeoutStopSec=300
+
+[Install]
+WantedBy=multi-user.target

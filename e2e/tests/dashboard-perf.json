@@ -1,0 +1,218 @@
+[
+  {
+    "name": "Home (agents-flow) perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-home"
+      }
+    ],
+    "expect": "Green PERF banner at top with path, ttfb, dcl, load, fcp, resources, kb, heapMb"
+  },
+  {
+    "name": "Tasks perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/tasks"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-tasks"
+      }
+    ],
+    "expect": "PERF banner visible; tasks list rendered below"
+  },
+  {
+    "name": "CRM perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/crm"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-crm"
+      }
+    ],
+    "expect": "PERF banner visible"
+  },
+  {
+    "name": "Trading perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/trading"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-trading"
+      }
+    ],
+    "expect": "PERF banner visible; trading UI rendered"
+  },
+  {
+    "name": "Analytics perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/analytics"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-analytics"
+      }
+    ],
+    "expect": "PERF banner visible"
+  },
+  {
+    "name": "Comms perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/comms"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-comms"
+      }
+    ],
+    "expect": "PERF banner visible"
+  },
+  {
+    "name": "Workspace perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/workspace"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-workspace"
+      }
+    ],
+    "expect": "PERF banner visible"
+  },
+  {
+    "name": "Marketplace perf",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/marketplace"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const n=performance.getEntriesByType('navigation')[0]||{},p=performance.getEntriesByType('paint'),f=p.find(x=>x.name==='first-contentful-paint'),r=performance.getEntriesByType('resource'),tb=r.reduce((s,x)=>s+(x.transferSize||0),0),h=(performance.memory&&performance.memory.usedJSHeapSize)||0,m={path:location.pathname,ttfb:Math.round(n.responseStart||0),dcl:Math.round(n.domContentLoadedEventEnd||0),load:Math.round(n.loadEventEnd||0),fcp:Math.round((f&&f.startTime)||0),resources:r.length,kb:Math.round(tb/1024),heapMb:Math.round(h/104857.6)/10};const b=document.createElement('div');b.id='perf-banner';b.style.cssText='position:fixed;top:0;left:0;right:0;z-index:99999;padding:8px 12px;background:#000;color:#0f0;font:11px/1.4 monospace;border-bottom:2px solid #0f0';b.textContent='PERF '+m.path+' ttfb='+m.ttfb+'ms dcl='+m.dcl+'ms load='+m.load+'ms fcp='+m.fcp+'ms resources='+m.resources+' kb='+m.kb+' heapMb='+m.heapMb;document.body.appendChild(b);})()"
+      },
+      {
+        "type": "assert_text_in",
+        "selector": "#perf-banner",
+        "text": "ttfb"
+      },
+      {
+        "type": "screenshot",
+        "value": "perf-marketplace"
+      }
+    ],
+    "expect": "PERF banner visible"
+  }
+]

@@ -1,0 +1,19 @@
+{
+  "id": "stale-contacts",
+  "name": "Stale Contacts Monitor",
+  "description": "Monitors contacts you haven't interacted with, surfaces follow-ups, and provides relationship health scores",
+  "version": "2.0.0",
+  "author": "Kernl",
+  "icon": "👤",
+  "category": "productivity",
+  "main": "index.js",
+  "permissions": ["read:contacts", "notifications"],
+  "tags": ["crm", "contacts", "follow-up", "automation", "health-score"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "staleDays": { "type": "number", "description": "Days without interaction to consider stale", "default": 60 },
+      "maxResults": { "type": "number", "description": "Max contacts to return", "default": 10 }
+    }
+  }
+}

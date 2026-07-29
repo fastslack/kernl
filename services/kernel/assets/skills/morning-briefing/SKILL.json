@@ -1,0 +1,20 @@
+{
+  "id": "morning-briefing",
+  "name": "Morning Briefing",
+  "description": "Generates a personalized daily briefing with tasks, reminders, events, habits, learning progress, and training summary",
+  "version": "2.0.0",
+  "author": "Kernl",
+  "icon": "☀️",
+  "category": "productivity",
+  "main": "index.js",
+  "permissions": ["read:tasks", "read:reminders", "read:events", "read:health", "notifications"],
+  "tags": ["automation", "daily", "briefing", "morning", "learning", "training"],
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "hour": { "type": "number", "description": "Hour to send briefing (0-23)", "default": 7 },
+      "includeLearning": { "type": "boolean", "description": "Include learning/training in briefing", "default": true },
+      "maxTasks": { "type": "number", "description": "Max tasks to show", "default": 5 }
+    }
+  }
+}

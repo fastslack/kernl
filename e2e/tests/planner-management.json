@@ -1,0 +1,132 @@
+{
+  "hooks": {
+    "beforeEach": [
+      {
+        "type": "goto",
+        "value": "/setup"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernl.setupComplete','1');localStorage.setItem('kernl.welcomeSeen','1');localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS');"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Planner grid renders with legend and day cells",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/planner"
+        },
+        {
+          "type": "wait",
+          "selector": ".tl-grid",
+          "timeout": 35000
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".tl-grid"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".tl-legend"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".tl-month-row"
+        }
+      ],
+      "expect": [
+        "A month-grid calendar is visible with a colored legend and day cells."
+      ]
+    },
+    {
+      "name": "Opening a day shows the management DayModal with the Add control",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/planner"
+        },
+        {
+          "type": "wait",
+          "selector": ".tl-grid",
+          "timeout": 35000
+        },
+        {
+          "type": "evaluate",
+          "value": "document.querySelector('.tl-cell.today, .tl-cell:not(.outside)').click()"
+        },
+        {
+          "type": "wait",
+          "selector": ".day-modal",
+          "timeout": 10000
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".day-modal"
+        },
+        {
+          "type": "assert_text",
+          "text": "Add to this day"
+        }
+      ],
+      "expect": [
+        "A modal opens for the clicked day and shows the '+ Add to this day' control."
+      ]
+    },
+    {
+      "name": "Create a task from the calendar round-trips and the chip appears",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/planner"
+        },
+        {
+          "type": "wait",
+          "selector": ".tl-grid",
+          "timeout": 35000
+        },
+        {
+          "type": "evaluate",
+          "value": "document.querySelector('.tl-cell.today').click()"
+        },
+        {
+          "type": "wait",
+          "selector": ".day-modal",
+          "timeout": 10000
+        },
+        {
+          "type": "click",
+          "text": "Add to this day"
+        },
+        {
+          "type": "wait",
+          "selector": "input[placeholder^='Title']",
+          "timeout": 8000
+        },
+        {
+          "type": "type",
+          "selector": "input[placeholder^='Title']",
+          "value": "E2E smoke task ZZZ"
+        },
+        {
+          "type": "click",
+          "text": "Add"
+        },
+        {
+          "type": "wait",
+          "text": "E2E smoke task ZZZ",
+          "timeout": 20000
+        },
+        {
+          "type": "assert_text",
+          "text": "E2E smoke task ZZZ"
+        }
+      ],
+      "expect": [
+        "After typing a title and clicking Add, the new task chip appears in the day modal (full UI->RPC->service->DB->refetch round-trip)."
+      ]
+    }
+  ]
+}

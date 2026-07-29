@@ -1,0 +1,4 @@
+{
+  "baseUrl": "http://localhost:3086",
+  "chromeWsEndpoint": "ws://localhost:3333"
+}

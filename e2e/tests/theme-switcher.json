@@ -1,0 +1,13 @@
+[
+  {
+    "name": "open theme switcher dropdown",
+    "actions": [
+      { "type": "goto",       "value": "http://localhost:3086/home" },
+      { "type": "wait",       "value": "3000" },
+      { "type": "click",      "selector": ".theme-trigger" },
+      { "type": "wait",       "value": "1500" },
+      { "type": "screenshot", "value": "theme-switcher-open" }
+    ],
+    "expect": "Dropdown is open. 6 themes listed (Midnight Gold, Arctic Light, CRT Terminal, Emerald Dark, Monochrome, Rose Quartz) each with icon, name, and 5 small color swatches on the right. The currently active theme has a gold border."
+  }
+]

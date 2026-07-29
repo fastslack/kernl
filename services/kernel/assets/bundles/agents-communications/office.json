@@ -1,0 +1,6 @@
+{
+  "slug": "flow-communications",
+  "name": "Communications",
+  "description": "Communications office: inbound email intake (IMAP/Gmail/webhook), classification, and routing to other offices.",
+  "color": "#0ea5a4"
+}

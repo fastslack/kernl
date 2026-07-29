@@ -1,0 +1,150 @@
+# ══════════════════════════════════════════════════════════════════════════
+#  Kernl — DEFAULT STACK (zero-config)
+#
+#  A self-contained stack anyone can run from a fresh clone with no host
+#  paths and no private sibling repos:
+#
+#      docker compose up -d --build
+#      open http://localhost:3086
+#
+#  What you get: kernel API + MCP (http://localhost:3086/mcp), the dashboard,
+#  Neo4j (graph features), and SearXNG (key-free web search). The Rust bridge
+#  (mtw-request) and the WhatsApp bridge live in docker-compose.full.yml
+#  (the host-coupled full stack: `docker compose -f docker-compose.full.yml up`)
+#  and are intentionally omitted here — the kernel degrades gracefully
+#  without them.
+#
+#  Optional API keys can be supplied via the host environment or an .env
+#  file; everything below has safe defaults so the stack boots with
+#  literally zero setup.
+# ══════════════════════════════════════════════════════════════════════════
+name: kernl-public
+
+services:
+  # ── Kernl API (backend + MCP over HTTP) ─────────
+  kernel:
+    build:
+      context: ./services/kernel
+      dockerfile: Dockerfile
+    image: localhost/kernl:public
+    container_name: kernl-public-kernel
+    restart: unless-stopped
+    environment:
+      MCP_TRANSPORT: http
+      DASHBOARD_ENABLED: "false"   # nginx (dashboard service) serves the SPA
+      DASHBOARD_PORT: "3087"
+      SQLITE_PATH: /app/data/kernel.db
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: neo4j
+      NEO4J_PASSWORD: kernlgraph
+      SEARXNG_BASE_URL: http://searxng:8080
+      TIMEZONE: ${TIMEZONE:-UTC}
+      # Rust bridge OFF — kernel falls back to local implementations.
+      BRIDGE_ENABLED: "false"
+      RUST_BRIDGE_ENABLED: "false"
+      # Eval-only: run the API unauthenticated. Safe here because the dashboard
+      # is bound to 127.0.0.1 (loopback) below, so the open API is not reachable
+      # from the LAN. For any real/exposed deployment set KERNEL_AUTH_TOKEN
+      # instead (openssl rand -hex 32) and drop this line.
+      KERNEL_ALLOW_UNAUTH: "1"
+      # In-container the kernel MUST bind 0.0.0.0 or nginx (sibling container)
+      # can't proxy to it — port 3087 is never published to the host, so the
+      # only external surface remains nginx on host loopback. resolveSecureBind
+      # honors this only because ALLOW_UNAUTH + explicit bind are BOTH set.
+      KERNEL_DASHBOARD_BIND: 0.0.0.0
+      # ── Pro license (owner all-access) ──────────────────────────
+      # The license JWT lives in the data volume at $XDG_CONFIG_HOME/kernl/
+      # license.jwt so it survives container recreation. KERNEL_LICENSE_ISSUER
+      # must match the license's `iss` claim.
+      XDG_CONFIG_HOME: /app/data/xdg
+      KERNEL_LICENSE_ISSUER: ${KERNEL_LICENSE_ISSUER:-issuer.lifekernl.com}
+      # KERNEL_ENCRYPTION_KEY intentionally unset: the kernel auto-generates a
+      # random 32-byte key on first boot and persists it to /app/data
+      # (.kernel-encryption-key, mode 600) in the kernel-data volume, reusing it
+      # across restarts. Override here only if you want to pin a specific key:
+      #   KERNEL_ENCRYPTION_KEY: ${KERNEL_ENCRYPTION_KEY:-}
+      # Optional LLM keys — leave unset and configure later in Settings → AI.
+      # Set any of these in .env next to this file; empty ones are ignored and
+      # the provider simply stays out of the chain. Without at least one, every
+      # LLM-backed feature (subtitle translation, triage, digests, agents)
+      # fails with "no usable output" — the kernel has nothing to call.
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
+      MINIMAX_DEFAULT_MODEL: ${MINIMAX_DEFAULT_MODEL:-}
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      GROK_API_KEY: ${GROK_API_KEY:-}
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      # Local runtimes (LM Studio / Ollama). Point at the host with
+      # host.docker.internal, e.g. http://host.docker.internal:1234/v1
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
+      # A small, cheap model for mechanical subtasks (subtitle translation,
+      # extraction). Falls back to the chain default when unset.
+      CHAT_EXTRACTION_MODEL: ${CHAT_EXTRACTION_MODEL:-}
+    volumes:
+      - kernel-data:/app/data
+    depends_on:
+      neo4j:
+        condition: service_started
+      searxng:
+        condition: service_started
+
+  # ── Dashboard (self-contained SvelteKit SPA + nginx) ─
+  dashboard:
+    build:
+      context: ./services/dashboard
+      dockerfile: Dockerfile.public
+    image: localhost/mtw-dashboard:public
+    container_name: kernl-public-dashboard
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3086:80"   # loopback only — the eval API is unauthenticated
+    depends_on:
+      - kernel
+
+  # ── SearXNG (key-free meta-search for web-intel) ─────
+  searxng:
+    image: searxng/searxng:latest
+    container_name: kernl-public-searxng
+    restart: unless-stopped
+    volumes:
+      - ./services/searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-kernl-public-eval-secret}
+
+  # ── Neo4j (graph intelligence; kernel degrades if absent) ─
+  #  Heaviest service. On a ≤2 GB host it may be OOM-killed — that's fine, the
+  #  kernel runs without it (graph features just go dark). To run leaner, delete
+  #  this service and the `neo4j:` depends_on entry above. Tip: run
+  #  `bash scripts/preflight.sh` first to catch port/RAM problems early.
+  neo4j:
+    image: neo4j:5.22.0
+    container_name: kernl-public-neo4j
+    restart: unless-stopped
+    environment:
+      # Neo4j 5.x rejects passwords shorter than 8 characters and exits 70 on
+      # startup, which `restart: unless-stopped` turns into a crash loop. Keep
+      # this at 8+ chars, and in sync with NEO4J_PASSWORD above and the
+      # healthcheck below.
+      NEO4J_AUTH: neo4j/kernlgraph
+      NEO4J_server_memory_heap_initial__size: 256m
+      NEO4J_server_memory_heap_max__size: 512m
+      NEO4J_server_memory_pagecache_size: 256m
+    # Health shows in `docker compose ps`; the kernel does NOT block on it (it
+    # degrades gracefully), so a dead Neo4j never wedges startup.
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p kernlgraph 'RETURN 1' >/dev/null 2>&1 || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 45s
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+
+volumes:
+  kernel-data:
+  neo4j-data:
+  neo4j-logs:

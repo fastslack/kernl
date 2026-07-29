@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.gitlab-channel",
+  "slug": "gitlab-channel",
+  "name": "GitLab Channel Backend",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Backend for the GitLab channel: connection storage (Personal/Project Access Token + host) and the RepoProvider implementation consumed by triage and any other module that needs GitLab access.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": ["gitlab", "backend", "repo-provider"],
+  "dependencies": [
+    "com.kernl.gitlab",
+    "com.kernl.triage"
+  ],
+  "permissions": ["network", "module:gitlab-channel"],
+  "backend": {
+    "entry": "backend/entry.js"
+  }
+}

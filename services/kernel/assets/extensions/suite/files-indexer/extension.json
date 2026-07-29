@@ -1,0 +1,13 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.files-indexer",
+  "slug": "files-indexer",
+  "name": "Files",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "File indexer with semantic search (separate from Commander). Nav entry disabled until the /api/files backend ships as part of this extension.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "home"
+}

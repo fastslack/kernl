@@ -1,0 +1,18 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.agents-communications",
+  "slug": "agents-communications",
+  "name": "Communications",
+  "version": "1.0.0",
+  "type": "office",
+  "description": "Comms office agents (email triage, channels, etc.)",
+  "author": "Matware",
+  "license": "Apache-2.0",
+  "category": "agents",
+  "agents": [
+    "agents/agents-communications-communications-captain.json",
+    "agents/agents-communications-content-analyst.json",
+    "agents/agents-communications-inbox-classifier.json"
+  ],
+  "office": "office.json"
+}

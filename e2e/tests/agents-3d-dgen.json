@@ -1,0 +1,29 @@
+[
+  {
+    "name": "3D office D-Generation style",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "2000"
+      },
+      {
+        "type": "click",
+        "text": "3D"
+      },
+      {
+        "type": "wait",
+        "value": "5000"
+      }
+    ],
+    "expect": [
+      "A 3D isometric office view with dark blue thick walls",
+      "Room name signs visible above doors",
+      "Dark background outside the building",
+      "Office rooms with tile floors visible"
+    ]
+  }
+]

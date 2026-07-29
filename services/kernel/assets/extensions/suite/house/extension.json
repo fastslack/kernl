@@ -1,0 +1,25 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.house",
+  "slug": "house",
+  "name": "House",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "Home maintenance, vehicles, and inventory.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "home",
+  "frontend": {
+    "navItems": [
+      {
+        "id": "house",
+        "group": "dashboard",
+        "label": "House",
+        "icon": "🔧",
+        "order": 50,
+        "requires": "ext:house"
+      }
+    ]
+  }
+}

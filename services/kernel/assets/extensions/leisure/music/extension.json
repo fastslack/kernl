@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.music",
+  "slug": "music",
+  "name": "Music",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "archive.org audio catalog — vinyls (78rpm/georgeblood), netlabels, live music, radio. Browse, search, stream, save to library.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "leisure",
+  "tags": ["music", "audio", "vinyl", "78rpm", "archive"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:music"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "music", "entry": "frontend/entry.js", "title": "Music" }
+    ]
+  }
+}

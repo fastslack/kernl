@@ -1,0 +1,28 @@
+[
+  {
+    "name": "Switch to 3D Command Center view",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "3000"
+      },
+      {
+        "type": "click",
+        "text": "3D"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      }
+    ],
+    "expect": [
+      "A 3D visualization is visible with Three.js rendered content",
+      "The 3D button in the toggle is active/highlighted",
+      "Agent pods or 3D objects are visible in the scene"
+    ]
+  }
+]

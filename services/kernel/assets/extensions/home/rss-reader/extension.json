@@ -1,0 +1,24 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.rss-reader",
+  "slug": "rss-reader",
+  "name": "RSS Reader",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Beautiful three-pane RSS reader. Consumes the rss-registry catalog, tracks read/starred state per item.",
+  "long_description": "A modern, dynamic RSS reader UI: categories sidebar, item inbox with live preview, full reader pane with formatted article view. Supports unread tracking, starring, search, filters by feed/category/language, manual + automatic refresh, and live updates when the registry pushes new items.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "home",
+  "tags": ["rss", "reader", "news", "inbox"],
+  "dependencies": ["com.kernl.rss-registry"],
+  "permissions": ["module:rss-reader"],
+  "backend": {
+    "entry": "backend/entry.js"
+  },
+  "frontend": {
+    "pages": [
+      { "view": "rss-reader", "entry": "frontend/entry.js", "title": "RSS Reader" }
+    ]
+  }
+}

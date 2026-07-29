@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.shopping",
+  "slug": "shopping",
+  "name": "Shopping",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Shopping lists, products catalog, low-stock alerts.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "home",
+  "tags": ["shopping", "lists", "core"],
+  "kernel_min": "0.1.0",
+  "permissions": ["module:shopping"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "shopping", "entry": "frontend/entry.js", "title": "Shopping" }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+[
+  {
+    "name": "Health endpoint OK after rebuild",
+    "actions": [
+      { "$use": "wait-for-docker" },
+      { "$use": "api-health-check" },
+      { "type": "screenshot", "value": "smoke-health" }
+    ],
+    "expect": "Health endpoint responds with status ok"
+  },
+  {
+    "name": "Dashboard loads with sidebar visible",
+    "actions": [
+      { "$use": "goto-dashboard" },
+      { "type": "assert_visible", "selector": ".sidebar-logo" },
+      { "type": "assert_visible", "selector": ".nav-item" },
+      { "type": "screenshot", "value": "smoke-dashboard" }
+    ],
+    "expect": "Dashboard renders with sidebar and navigation"
+  },
+  {
+    "name": "MCP tool call succeeds",
+    "actions": [
+      { "$use": "mcp-tool-check" },
+      { "type": "screenshot", "value": "smoke-mcp" }
+    ],
+    "expect": "MCP session initializes and at least one tool call returns data"
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.claude",
+  "slug": "claude",
+  "name": "Claude",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "Anthropic Claude (REST API + API key).",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/anthropic.svg",
+  "permissions": ["network"],
+  "built_in": true
+}

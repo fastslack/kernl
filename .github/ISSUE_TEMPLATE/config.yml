@@ -1,0 +1,26 @@
+blank_issues_enabled: false
+
+contact_links:
+  - name: 🙋 Question / Setup help
+    url: https://github.com/fastslack/kernl/discussions/categories/q-a
+    about: For setup help, usage questions, or how-to questions, please use Discussions. The community searches and answers them collectively.
+
+  - name: 💡 Feature idea
+    url: https://github.com/fastslack/kernl/discussions/categories/ideas
+    about: Share feature ideas in Discussions so the community can vote with 👍 on what matters most.
+
+  - name: 🎨 Show off your kernel
+    url: https://github.com/fastslack/kernl/discussions/categories/show-and-tell
+    about: Share screenshots, custom extensions, or agent flows you've built.
+
+  - name: 🔒 Security vulnerability
+    url: https://github.com/fastslack/kernl/security/advisories/new
+    about: Please report security issues PRIVATELY via Security Advisories — not in a public issue.
+
+  - name: 💼 Commercial / Enterprise / Partnerships
+    url: mailto:fastslack@matware.nl
+    about: For partnerships, enterprise licensing, or commercial inquiries, please email directly.
+
+  - name: 📖 Documentation
+    url: https://github.com/fastslack/kernl#documentation
+    about: Read the docs first — most setup questions are answered there.

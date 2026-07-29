@@ -1,0 +1,24 @@
+{
+  "$module": "goto-comms",
+  "description": "Navigate directly to the Kernl comms view and wait for it to load",
+  "params": {},
+  "actions": [
+    {
+      "type": "goto",
+      "value": "/"
+    },
+    {
+      "type": "wait",
+      "selector": "#app-ready",
+      "timeout": 45000
+    },
+    {
+      "type": "goto",
+      "value": "/#comms"
+    },
+    {
+      "type": "wait",
+      "value": "1000"
+    }
+  ]
+}

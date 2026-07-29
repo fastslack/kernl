@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.tasks",
+  "slug": "tasks",
+  "name": "Tasks",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Core task management — todos, due dates, dependencies.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "productivity",
+  "tags": ["tasks", "todo", "core"],
+  "kernel_min": "0.1.0",
+  "permissions": ["read:tasks", "write:tasks"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "tasks", "entry": "frontend/entry.js", "title": "Tasks" }
+    ]
+  }
+}

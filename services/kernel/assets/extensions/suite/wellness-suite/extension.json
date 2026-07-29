@@ -1,0 +1,53 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.wellness-suite",
+  "slug": "wellness-suite",
+  "name": "Wellness Suite",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "Wellness overview, health tracking, training, nutrition.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "health",
+  "frontend": {
+    "navGroups": [
+      {
+        "id": "wellness",
+        "label": "Wellness",
+        "icon": "💚",
+        "order": 400
+      }
+    ],
+    "navItems": [
+      {
+        "id": "wellness",
+        "group": "wellness",
+        "label": "Overview",
+        "icon": "💚",
+        "order": 10
+      },
+      {
+        "id": "health",
+        "group": "wellness",
+        "label": "Health",
+        "icon": "🩺",
+        "order": 20
+      },
+      {
+        "id": "training",
+        "group": "wellness",
+        "label": "Train",
+        "icon": "💪",
+        "order": 30
+      },
+      {
+        "id": "nutrition",
+        "group": "wellness",
+        "label": "Food",
+        "icon": "🥗",
+        "order": 40
+      }
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.rss-registry",
+  "slug": "rss-registry",
+  "name": "RSS Registry",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "RSS/Atom feed catalog and ingestion engine. Fetches and persists items on a schedule, deduplicates, and emits rss.item.new events for downstream consumers.",
+  "long_description": "Centralized registry of RSS/Atom sources with health tracking, quality scoring, and a built-in catalog of curated feeds. Items are fetched periodically based on each feed's update_frequency, deduplicated by guid/link, and stored for downstream consumers (the rss-reader app, agents, the research engine, notifications).",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "tags": ["rss", "atom", "feeds", "ingestion"],
+  "permissions": ["network", "module:rss-registry"],
+  "backend": {
+    "entry": "backend/entry.js"
+  }
+}

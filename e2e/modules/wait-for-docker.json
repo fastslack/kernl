@@ -1,0 +1,11 @@
+{
+  "$module": "wait-for-docker",
+  "description": "Poll the health endpoint until Docker services are ready (retries every 2s for up to 60s)",
+  "params": {},
+  "actions": [
+    {
+      "type": "evaluate",
+      "value": "(async()=>{for(var i=0;i<30;i++){try{var r=await fetch('/api/health');if(r.ok){var j=await r.json();if(j.status==='ok'){window.__dockerReady=true;return}}}catch(e){}await new Promise(r=>setTimeout(r,2000))}throw new Error('Docker services not ready after 60s')})()"
+    }
+  ]
+}

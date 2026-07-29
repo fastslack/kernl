@@ -1,0 +1,32 @@
+# SearXNG configuration tuned for the kernel's web-intel module.
+#
+# Two non-default settings matter:
+#   * `formats: [html, json]` — the JSON endpoint is opt-in; without it the
+#     web-intel SearxngSource cannot parse responses.
+#   * `server.limiter: false` — the limiter would 429 the kernel as soon as
+#     a couple of agents start querying at the same time.
+#
+# Everything else inherits SearXNG's upstream defaults so search engines,
+# preferences, etc. work out of the box. Keep this file flat and small —
+# the SearXNG image fills in the rest on first boot.
+
+use_default_settings: true
+
+server:
+  secret_key: "kernl-searxng-default-secret-rotate-in-prod"
+  limiter: false
+  image_proxy: false
+
+search:
+  formats:
+    - html
+    - json
+  safe_search: 0
+  autocomplete: ""
+
+ui:
+  static_use_hash: true
+
+# Optional engine restrictions. Leaving the upstream default list active
+# (Google, DDG, Bing, Brave, Wikipedia, ...) — narrow this down later if
+# you find some engines too slow / noisy.

@@ -1,0 +1,149 @@
+node_modules/
+dist/
+data/
+# Runtime data symlink (services/kernel/data → ../../data): the trailing-slash
+# `data/` rule above only matches directories, not this symlink, so anchor it.
+/services/kernel/data
+# Database files — never commit. Covers SQLite (primary store), its
+# WAL/SHM/journal sidecars, and Neo4j dumps. The default SQLITE_PATH lives
+# under data/ (already ignored) but these catch DBs written anywhere.
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite-journal
+*.dump
+.env
+.mcp.json
+.DS_Store
+coverage/
+
+# Packaging build outputs — produced by packaging/{rpm,deb,macos,windows}/
+# scripts. RPMs land in ~/rpmbuild/ outside the repo; the rest land in
+# packaging/out/. Never commit binaries. (Los patrones sueltos quedan por
+# si algún build viejo/externo vuelve a escupir artefactos en la raíz.)
+packaging/out/
+*.deb
+*.dmg
+*.msi
+Kernl-*-windows-x64.zip
+Kernl-*-macos.tar.gz
+*.app/
+
+# E2E test artifacts (generated screenshots, run history, reports)
+e2e/screenshots/
+e2e/learnings.md
+.e2e-pool/
+
+# Docker Compose override — keep personal extra_hosts / volumes here.
+# Docker Compose auto-merges this with docker-compose.yml at runtime.
+docker-compose.override.yml
+docker-compose.override.yaml
+
+# Personal scrapers — instance-specific, loaded dynamically by
+# builtin-handlers.ts when present. Kept out of the public repo because
+# they hardcode target cities, event IDs, notification recipients, etc.
+services/kernel/src/modules/agents/personal-scrapers.ts
+
+# Personal assets: agent bundles, one-off scripts, and tests that are
+# instance-specific (named CEOs, regional targets, owned accounts,
+# hardcoded event IDs). Intended to live in a private git submodule
+# mounted at each of these paths.
+services/kernel/scripts/personal/
+e2e/tests/personal/
+
+# Claude Code per-project local settings (machine-specific).
+.claude/settings.local.json
+# Scheduler lock — runtime, holds the active session pid; committing it
+# would make other Claude Code sessions in this repo collide.
+.claude/scheduled_tasks.lock
+
+# Filesystem Commander workspace — the user's scratch area. Vive en
+# data/commander-workspace/ (cubierto por el ignore de data/); los
+# installers y el bind mount del compose crean el directorio.
+
+# In-tree extension build marker — regenerated on every `bun run build:extensions`.
+services/kernel/assets/extensions/.last-build
+
+# Auto-generated experiment reports (skill A/B runs, timestamped outputs).
+/experiments/
+
+# Compiled extension bundles — output of `bun run build:extensions`,
+# rebuilt from each extension's _wrapper/entry.ts. Regenerated locally,
+# not shippable: paths and bun runtime details bake in.
+# Two glob depths: legacy flat layout `extensions/<slug>/backend/` AND
+# the post-reorg layout `extensions/<category>/<slug>/backend/`.
+services/kernel/assets/extensions/*/backend/
+services/kernel/assets/extensions/*/*/backend/
+
+# Compiled extension frontend page bundles — output of the same script
+# (services/dashboard/scripts/build-ext-frontend.mjs via build:extensions),
+# rebuilt from each extension's frontend/src/.
+services/kernel/assets/extensions/*/*/frontend/entry.js
+
+# Personal feed/data dumps — OPML exports, backups, instance-specific
+# blobs that get imported via scripts (e.g. scripts/import-opml.ts).
+# Tracking them would leak the user's subscriptions / private state.
+# Anchored to the repo root so subdirectories named `files/` deep in the
+# tree (notably packaging/rpm/files/) stay tracked.
+/files/
+
+# Local debug utilities — leading underscore is the convention for
+# one-shot scripts (smoke tests, ad-hoc migrations) that don't belong
+# in the shared repo. Use scripts/migrations/ for committed migrations.
+services/kernel/scripts/_*.ts
+services/kernel/scripts/_*.mts
+
+# Claude Code agent skills — each contributor installs their own set via
+# `find-skills` (or another tool). The lockfile and skill content are
+# personal/exploratory and don't belong in this repo's history.
+.agents/
+# Anchored to repo root — src/skills/, src/modules/skills/, assets/skills/ and
+# dashboard/src/routes/skills/ are real source that MUST be tracked.
+/skills/
+.claude/skills/
+skills-lock.json
+
+# Counteract any user-global `lib/` ignore rule (e.g. ~/.gitignore_global):
+# dashboard/src/lib/ and scripts/lib/ are real source, not build output.
+!**/lib/
+
+# Stray .torrent downloads
+*.torrent
+btdownload.php*
+
+# Private / non-public material — internal docs (security audits, launch
+# playbooks, design plans, marketing), never copied into the public repo.
+# See _private/README.md for the full private-vs-public inventory.
+_private/
+
+# Marketing / landing — kept local, not tracked
+apps/landing/
+docs/marketing/
+services/dashboard/static/download.html
+services/dashboard/src/routes/download/
+e2e/tests/marketing-*.json
+
+# Distribution / website installers — kept local
+services/kernel/scripts/get.sh
+services/kernel/scripts/get.ps1
+
+# Conference/talk transcripts
+*.en.vtt
+
+# Personal agents + offices — instance-specific, gitignored.
+# Packed via scripts/install-agent-bundles.sh and installed through the marketplace.
+services/kernel/assets/personal/
+
+# Legacy: runtime de SearXNG generado por el stack público antes de la
+# unificación en services/searxng/ — borrable manualmente.
+/searxng/
+
+
+
+# Docs de trabajo internos (planes/specs de sesiones de desarrollo) — no publicar.
+docs/superpowers/

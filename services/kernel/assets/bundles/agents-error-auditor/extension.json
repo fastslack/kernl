@@ -1,0 +1,19 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.agents-error-auditor",
+  "slug": "agents-error-auditor",
+  "name": "Error Auditor",
+  "version": "1.0.0",
+  "type": "office",
+  "description": "Investigates failed agent runs and creates actionable issues",
+  "author": "Matware",
+  "license": "Apache-2.0",
+  "category": "agents",
+  "agents": [
+    "agents/agents-error-auditor-error-auditor.json"
+  ],
+  "office": "office.json",
+  "integrity": {
+    "sha256": "1b81da8a95c1f1469f20f58eb920516532487cd7529b76528cc7edf200c6ba2b"
+  }
+}

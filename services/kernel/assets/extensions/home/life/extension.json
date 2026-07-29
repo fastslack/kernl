@@ -1,0 +1,27 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.life",
+  "slug": "life",
+  "name": "Life",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Weather, clocks, and personal widgets.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "home",
+  "frontend": {
+    "pages": [
+      { "view": "life", "entry": "frontend/entry.js", "title": "Life" }
+    ],
+    "navItems": [
+      {
+        "id": "life",
+        "group": "dashboard",
+        "label": "Life",
+        "icon": "🌤",
+        "order": 30
+      }
+    ]
+  },
+  "backend": { "entry": "backend/entry.js" }
+}

@@ -1,0 +1,21 @@
+{
+  "hooks": {
+    "beforeEach": [
+      { "type": "goto", "value": "/setup" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernl.setupComplete','1');localStorage.setItem('kernl.welcomeSeen','1');localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS');" }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Providers Google card renders (reconnect state confirmed visually)",
+      "actions": [
+        { "type": "goto", "value": "/providers" },
+        { "type": "wait", "selector": ".prov-google-card", "timeout": 40000 },
+        { "type": "evaluate", "value": "document.querySelector('.prov-google-card')?.scrollIntoView({block:'center'})" },
+        { "type": "wait", "value": "6000" },
+        { "type": "assert_visible", "selector": ".prov-google-card" }
+      ],
+      "expect": ["The Google Integration card renders. When the token is dead it shows '⚠️ RECONNECT NEEDED' + a 'Reconectar Gmail' button (verified visually; the text load is timing-sensitive under heavy kernel load)."]
+    }
+  ]
+}

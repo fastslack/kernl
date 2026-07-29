@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.agent-advanced",
+  "slug": "agent-advanced",
+  "name": "Agent Advanced",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Heavy / optional agent features: Claude Code executor, meeting + debate orchestration, workspace tools + evolver, reflection optimizer, demo seeders. Imported by the agents core.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "agents",
+  "tags": ["agents", "advanced", "claude-code", "meetings", "workspace", "evolver"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "filesystem"],
+  "backend": { "entry": "backend/entry.js" }
+}

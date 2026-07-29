@@ -1,0 +1,22 @@
+{
+  "hooks": {
+    "beforeEach": [
+      { "type": "goto", "value": "/setup" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernl.setupComplete','1');localStorage.setItem('kernl.welcomeSeen','1');localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS');" }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Mail shows the Gmail reconnect banner when the sync token is dead",
+      "actions": [
+        { "type": "goto", "value": "/mail" },
+        { "type": "wait", "selector": ".gmail-reauth-banner", "timeout": 30000 },
+        { "type": "assert_visible", "selector": ".gmail-reauth-banner" },
+        { "type": "assert_text", "text": "Gmail sync disconnected" },
+        { "type": "assert_visible", "selector": ".gmail-reauth-btn" },
+        { "type": "assert_text", "text": "Reconectar Gmail" }
+      ],
+      "expect": ["A red banner at the top of the Mail page warns that Gmail sync is disconnected and offers a 'Reconectar Gmail' button."]
+    }
+  ]
+}

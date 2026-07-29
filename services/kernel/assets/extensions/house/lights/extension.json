@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.lights",
+  "slug": "lights",
+  "name": "Lights",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "WLED/Tasmota light control with zones, scenes, schedules.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "house",
+  "tags": ["lights", "led", "house"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:lights"],
+  "backend": { "entry": "backend/entry.js" }
+}

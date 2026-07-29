@@ -1,0 +1,28 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.gitea",
+  "slug": "gitea",
+  "name": "Gitea",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "Gitea / Forgejo / Codeberg repo host channel. Connection stub used by gitea-channel and any future Gitea-aware extension.",
+  "long_description": "Channel stub that represents the Gitea integration surface. Works with gitea.com forks, self-hosted Gitea, Forgejo, and Codeberg. Other extensions declare it as a dependency to signal they need an authenticated Gitea client.\n\nConfiguration (host + Personal Access Token) is held by the gitea-channel extension because it owns the runtime that uses it.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "tags": ["gitea", "forgejo", "codeberg", "channel", "git", "repo-host"],
+  "kernel_min": "0.1.0",
+  "channels": [
+    {
+      "implementation": "gitea-pat",
+      "direction": "bidirectional",
+      "config": {
+        "fields": [
+          { "key": "host", "label": "Host", "type": "text", "required": true, "placeholder": "https://codeberg.org" },
+          { "key": "token", "label": "Personal Access Token", "type": "password", "required": true }
+        ]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Kernl IRC</title>
+<style>
+  :root { --bg:#0e1116; --panel:#161b22; --line:#222a35; --fg:#c9d1d9; --dim:#7d8590; --accent:#3fb950; --me:#58a6ff; }
+  * { box-sizing:border-box; }
+  body { margin:0; font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; background:var(--bg); color:var(--fg); height:100vh; display:flex; flex-direction:column; }
+  header { background:var(--panel); border-bottom:1px solid var(--line); padding:8px 12px; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
+  header h1 { font-size:14px; margin:0 8px 0 0; color:var(--accent); }
+  header input { background:#0d1117; border:1px solid var(--line); color:var(--fg); padding:4px 6px; border-radius:4px; font:inherit; }
+  header button { background:var(--accent); color:#06250f; border:0; padding:5px 10px; border-radius:4px; cursor:pointer; font:inherit; font-weight:600; }
+  #main { flex:1; display:flex; min-height:0; }
+  #chans { width:180px; background:var(--panel); border-right:1px solid var(--line); overflow:auto; }
+  #chans .c { padding:6px 12px; cursor:pointer; color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  #chans .c.active { background:#0d1117; color:var(--fg); border-left:2px solid var(--accent); }
+  #right { flex:1; display:flex; flex-direction:column; min-width:0; }
+  #log { flex:1; overflow:auto; padding:8px 12px; }
+  #log .l { white-space:pre-wrap; word-break:break-word; }
+  #log .ts { color:var(--dim); }
+  #log .nick { color:var(--me); }
+  #log .sys { color:var(--dim); font-style:italic; }
+  #log .enc { color:#d29922; }
+  #inputbar { display:flex; border-top:1px solid var(--line); }
+  #inputbar input { flex:1; background:#0d1117; border:0; color:var(--fg); padding:10px 12px; font:inherit; }
+  #inputbar input:focus { outline:none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📡 Kernl IRC</h1>
+  <input id="url" size="28" placeholder="wss://host/ws/irc" />
+  <input id="nick" size="10" placeholder="nick" />
+  <input id="account" size="10" placeholder="SASL account" />
+  <input id="pass" size="10" type="password" placeholder="SASL password" />
+  <button id="connect">Connect</button>
+  <span id="status" style="color:var(--dim)"></span>
+</header>
+<div id="main">
+  <div id="chans"></div>
+  <div id="right">
+    <div id="log"></div>
+    <div id="inputbar"><input id="msg" placeholder="Message (/join #channel, /msg nick text, /part, /list, /history)" /></div>
+  </div>
+</div>
+<script>
+"use strict";
+// Minimal IRCv3 web client. Plaintext channels are fully supported; +E channels
+// show ciphertext (E2E decryption needs a kernel-aware client — see e2e.ts).
+const $ = (id) => document.getElementById(id);
+let ws = null, current = null;
+const buffers = new Map(); // target -> [lines]
+const caps = ["message-tags","server-time","account-tag","batch","multi-prefix","away-notify"];
+
+function setStatus(s){ $("status").textContent = s; }
+function ensureBuf(t){ if(!buffers.has(t)) buffers.set(t,[]); return buffers.get(t); }
+function renderChans(){
+  const el = $("chans"); el.innerHTML = "";
+  for(const t of buffers.keys()){
+    const d = document.createElement("div");
+    d.className = "c" + (t===current?" active":"");
+    d.textContent = t; d.onclick = ()=>select(t); el.appendChild(d);
+  }
+}
+function select(t){ current = t; renderLog(); renderChans(); }
+function renderLog(){
+  const el = $("log"); el.innerHTML = "";
+  for(const l of (buffers.get(current)||[])){
+    const div = document.createElement("div"); div.className="l"; div.innerHTML = l; el.appendChild(div);
+  }
+  el.scrollTop = el.scrollHeight;
+}
+function esc(s){ return s.replace(/[&<>]/g, c=>({"&":"&amp;","<":"&lt;",">":"&gt;"}[c])); }
+function add(target, html){ ensureBuf(target).push(html); if(target===current) renderLog(); else renderChans(); }
+function sys(target, text){ add(target, `<span class="sys">* ${esc(text)}</span>`); }
+
+function send(line){ if(ws && ws.readyState===1) ws.send(line); }
+
+// Tiny IRCv3 line parser (tags + prefix + command + params).
+function parse(line){
+  let rest = line, tags = {};
+  if(rest[0]==="@"){ const sp=rest.indexOf(" "); rest.slice(1,sp).split(";").forEach(t=>{const i=t.indexOf("=");tags[i<0?t:t.slice(0,i)]=i<0?"":t.slice(i+1);}); rest=rest.slice(sp+1); }
+  let prefix=""; if(rest[0]===":"){ const sp=rest.indexOf(" "); prefix=rest.slice(1,sp); rest=rest.slice(sp+1); }
+  const params=[]; while(rest.length){ if(rest[0]===":"){params.push(rest.slice(1));break;} const sp=rest.indexOf(" "); if(sp<0){params.push(rest);break;} params.push(rest.slice(0,sp)); rest=rest.slice(sp+1); }
+  return { tags, prefix, nick: prefix.split("!")[0], command:(params.shift()||"").toUpperCase(), params };
+}
+
+function handle(line){
+  const m = parse(line);
+  const time = m.tags.time ? new Date(m.tags.time).toLocaleTimeString() : new Date().toLocaleTimeString();
+  switch(m.command){
+    case "PING": send("PONG :"+(m.params[0]||"")); break;
+    case "CAP":
+      if(m.params[1]==="LS"){ send("CAP REQ :"+caps.join(" ")); }
+      else if(m.params[1]==="ACK"){ const a=$("account").value, p=$("pass").value; if(a&&p){ send("AUTHENTICATE PLAIN"); } else { send("CAP END"); } }
+      break;
+    case "AUTHENTICATE":
+      if(m.params[0]==="+"){ const a=$("account").value,p=$("pass").value; const b=btoa(a+"\0"+a+"\0"+p); send("AUTHENTICATE "+b); }
+      break;
+    case "903": sys(current||"*","SASL OK"); send("CAP END"); break;
+    case "904": case "905": sys(current||"*","SASL failed: "+(m.params.slice(1).join(" "))); send("CAP END"); break;
+    case "001": setStatus("registered as "+m.params[0]); break;
+    case "JOIN": { const ch=m.params[0]; ensureBuf(ch); if(m.nick===$("nick").value){ select(ch); } sys(ch, m.nick+" joined"); break; }
+    case "PART": sys(m.params[0], m.nick+" left"); break;
+    case "PRIVMSG": case "NOTICE": {
+      const target = m.params[0][0]==="#" ? m.params[0] : m.nick;
+      const enc = m.tags["+kernel.org/enc"]!==undefined;
+      const body = enc ? `<span class="enc">🔒 ${esc(m.params[1])}</span>` : esc(m.params[1]);
+      add(target, `<span class="ts">${time}</span> <span class="nick">&lt;${esc(m.nick)}&gt;</span> ${body}`);
+      break;
+    }
+    case "332": ensureBuf(m.params[1]); sys(m.params[1], "Topic: "+m.params[2]); break;
+    case "353": { const ch=m.params[2]; sys(ch, "Users: "+m.params[3]); break; }
+    case "322": sys("*", `${m.params[1]} (${m.params[2]}) ${m.params[3]||""}`); break;
+    case "BATCH": break;
+    default:
+      if(/^\d{3}$/.test(m.command)) sys(current||"*", m.params.slice(1).join(" "));
+  }
+}
+
+$("connect").onclick = ()=>{
+  const url=$("url").value || (location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws/irc";
+  ws = new WebSocket(url);
+  ensureBuf("*"); select("*"); setStatus("connecting…");
+  ws.onopen = ()=>{ setStatus("connected, registering…"); send("CAP LS 302"); send("NICK "+$("nick").value); send("USER "+$("nick").value+" 0 * :Kernl web client"); };
+  ws.onmessage = (e)=>{ e.data.split(/\r?\n/).forEach(l=>{ if(l) handle(l); }); };
+  ws.onclose = ()=> setStatus("disconnected");
+  ws.onerror = ()=> setStatus("error");
+};
+
+$("msg").addEventListener("keydown",(e)=>{
+  if(e.key!=="Enter") return;
+  const v = e.target.value.trim(); e.target.value="";
+  if(!v) return;
+  if(v[0]==="/"){
+    const [cmd,...args]=v.slice(1).split(" ");
+    switch(cmd.toLowerCase()){
+      case "join": send("JOIN "+args[0]); break;
+      case "part": send("PART "+(args[0]||current)); break;
+      case "msg": send("PRIVMSG "+args[0]+" :"+args.slice(1).join(" ")); break;
+      case "list": send("LIST"); break;
+      case "history": send("CHATHISTORY LATEST "+(args[0]||current)+" * "+(args[1]||"50")); break;
+      case "nick": send("NICK "+args[0]); break;
+      default: send(v.slice(1));
+    }
+    return;
+  }
+  if(current && current!=="*"){
+    send("PRIVMSG "+current+" :"+v);
+    add(current, `<span class="ts">${new Date().toLocaleTimeString()}</span> <span class="nick">&lt;${esc($("nick").value)}&gt;</span> ${esc(v)}`);
+  }
+});
+$("url").value = (location.protocol==="https:"?"wss":"ws")+"://"+location.host+"/ws/irc";
+</script>
+</body>
+</html>

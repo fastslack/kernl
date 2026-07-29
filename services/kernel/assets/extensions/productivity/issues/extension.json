@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.issues",
+  "slug": "issues",
+  "name": "Issues",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Cross-repo issue tracker (GitHub/GitLab/Gitea) with time logging and velocity reports.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "productivity",
+  "tags": ["issues", "github", "gitlab", "gitea", "tracking"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:issues"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "issues", "entry": "frontend/entry.js", "title": "Issues" }
+    ]
+  }
+}

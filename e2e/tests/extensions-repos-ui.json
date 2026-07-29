@@ -1,0 +1,101 @@
+{
+  "hooks": {
+    "beforeEach": [
+      {
+        "type": "goto",
+        "value": "/login"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Extensions — Subscribed repos panel renders",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/extensions"
+        },
+        {
+          "type": "wait",
+          "value": "8000"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".repos-panel"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".repo-card"
+        },
+        {
+          "type": "assert_text",
+          "text": "marketingskills"
+        },
+        {
+          "type": "assert_text",
+          "text": "40 items"
+        },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        {
+          "type": "wait",
+          "value": "300"
+        },
+        {
+          "type": "screenshot",
+          "value": "ux-repos-01-panel",
+          "fullPage": true
+        }
+      ],
+      "expect": "Extensions page now has 'Subscribed repositories' purple-tinted panel with 1 repo card showing marketingskills, 40 items pill, sync timestamp, and 3 action buttons (Sync / Install all / Remove). Hero shows new 'Add repository' primary button + 'Install bundle' ghost button."
+    },
+    {
+      "name": "Extensions — Add repository modal opens",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/extensions"
+        },
+        {
+          "type": "wait",
+          "value": "5000"
+        },
+        {
+          "type": "click",
+          "text": "Add repository"
+        },
+        {
+          "type": "wait",
+          "value": "1000"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".addrepo-modal"
+        },
+        {
+          "type": "assert_text",
+          "text": "Add catalog repository"
+        },
+        {
+          "type": "assert_text",
+          "text": "SKILL.md"
+        },
+        {
+          "type": "screenshot",
+          "value": "ux-repos-02-modal"
+        }
+      ],
+      "expect": "Modal opens with title 'Add catalog repository', placeholder URL field for github.com/coreyhaines31/marketingskills, hint mentioning SKILL.md / SKILL.json / extension.json markers."
+    }
+  ]
+}

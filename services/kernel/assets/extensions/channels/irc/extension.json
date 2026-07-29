@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.irc",
+  "slug": "irc",
+  "name": "IRC Server",
+  "version": "1.1.0",
+  "type": "module",
+  "description": "Modern, ultra-secure IRC server (IRCv3, TLS, SASL/CertFP, E2E channels, bouncer/CHATHISTORY) bridged to kernel offices, agents and channels.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "channels",
+  "tags": ["channel", "irc", "ircv3", "messaging", "tls", "e2e", "bouncer"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "irc", "entry": "frontend/entry.js", "title": "IRC" }
+    ]
+  }
+}

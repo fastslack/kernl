@@ -1,0 +1,246 @@
+[
+  {
+    "name": "Comms API endpoint returns valid JSON",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/api/dashboard/comms"
+      },
+      {
+        "type": "wait",
+        "value": "1000"
+      },
+      {
+        "type": "assert_text",
+        "selector": "body",
+        "text": "kpis"
+      },
+      {
+        "type": "assert_text",
+        "selector": "body",
+        "text": "byChannel"
+      },
+      {
+        "type": "assert_text",
+        "selector": "body",
+        "text": "byStatus"
+      },
+      {
+        "type": "assert_text",
+        "selector": "body",
+        "text": "pendingDrafts"
+      },
+      {
+        "type": "assert_text",
+        "selector": "body",
+        "text": "recentSent"
+      },
+      {
+        "type": "screenshot",
+        "value": "comms-api-json"
+      }
+    ],
+    "expect": "Raw JSON response with kpis object (total, drafts, sent, failed), byChannel, byStatus, pendingDrafts array, and recentSent array"
+  },
+  {
+    "name": "Comms view renders with KPI cards and panels",
+    "actions": [
+      {
+        "$use": "goto-comms"
+      },
+      {
+        "type": "assert_text",
+        "selector": ".view-title",
+        "text": "Communications"
+      },
+      {
+        "type": "assert_visible",
+        "selector": ".kpi-row"
+      },
+      {
+        "type": "assert_visible",
+        "selector": ".kpi"
+      },
+      {
+        "type": "assert_visible",
+        "selector": ".kpi-label"
+      },
+      {
+        "type": "assert_visible",
+        "selector": ".kpi-value"
+      },
+      {
+        "type": "screenshot",
+        "value": "comms-view-kpis"
+      }
+    ],
+    "expect": "Comms dashboard view with 'Communications' header showing total count, KPI cards for Drafts (gold), Sent (green), Failed (red), and Total (teal), plus By Channel and By Status bar charts"
+  },
+  {
+    "name": "Create draft via MCP tool",
+    "actions": [
+      {
+        "$use": "mcp-init"
+      },
+      {
+        "type": "evaluate",
+        "value": "(async()=>{var text=await window.__toolCall('kernel_comms_create',{subject:'E2E Test Draft',body:'Testing the comms module end-to-end via MCP HTTP transport.',recipients_to:'e2e-test@example.com'});var m=text.match(/ID: ([a-f0-9-]+)/);window.__testDraftId=m?m[1]:null;window.__showResult(text)})()"
+      },
+      {
+        "type": "wait",
+        "value": "2000"
+      },
+      {
+        "type": "assert_visible",
+        "selector": "#mcp-result"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "Communication created"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "Status: draft"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "E2E Test Draft"
+      },
+      {
+        "type": "screenshot",
+        "value": "mcp-create-draft"
+      }
+    ],
+    "expect": "Green monospace overlay at the top showing MCP tool response: 'Communication created' with a UUID ID, Channel: email, Status: draft, To: e2e-test@example.com, Subject: E2E Test Draft"
+  },
+  {
+    "name": "Created draft appears in Comms dashboard",
+    "actions": [
+      {
+        "$use": "goto-comms"
+      },
+      {
+        "type": "wait",
+        "value": "1000"
+      },
+      {
+        "type": "assert_text",
+        "selector": "body",
+        "text": "E2E Test Draft"
+      },
+      {
+        "type": "screenshot",
+        "value": "comms-draft-in-dashboard"
+      }
+    ],
+    "expect": "The Comms dashboard view shows 'E2E Test Draft' in the Pending Drafts section with an email channel badge and e2e-test@example.com recipient"
+  },
+  {
+    "name": "Create reply to draft via MCP tool",
+    "actions": [
+      {
+        "$use": "mcp-init"
+      },
+      {
+        "type": "evaluate",
+        "value": "(async()=>{var t1=await window.__toolCall('kernel_comms_create',{subject:'E2E Reply Source',body:'Original message for reply testing. Please review the attached proposal.',recipients_to:'reply-test@example.com'});var m=t1.match(/ID: ([a-f0-9-]+)/);if(!m){window.__showResult('ERROR: Create failed');return}var draftId=m[1];var t2=await window.__toolCall('kernel_comms_reply',{comm_id:draftId,body:'Thanks, I will review it today.',include_quote:true});window.__showResult(['=== ORIGINAL ===',t1,'','=== REPLY ===',t2].join(String.fromCharCode(10)))})()"
+      },
+      {
+        "type": "wait",
+        "value": "3000"
+      },
+      {
+        "type": "assert_visible",
+        "selector": "#mcp-result"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "Reply draft created"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "Re: E2E Reply Source"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "reply-test@example.com"
+      },
+      {
+        "type": "screenshot",
+        "value": "mcp-create-reply"
+      }
+    ],
+    "expect": "Green overlay showing two sections: ORIGINAL with the created draft, and REPLY with 'Reply draft created', Subject: Re: E2E Reply Source, To: reply-test@example.com, Status: draft, and the original message quoted in the body"
+  },
+  {
+    "name": "Reply includes quoted text and thread info",
+    "actions": [
+      {
+        "$use": "mcp-init"
+      },
+      {
+        "type": "evaluate",
+        "value": "(async()=>{var t1=await window.__toolCall('kernel_comms_create',{subject:'Thread Test',body:'Can we meet tomorrow at 3pm?',recipients_to:'thread@example.com'});var m=t1.match(/ID: ([a-f0-9-]+)/);if(!m){window.__showResult('ERROR');return}var id=m[1];var t2=await window.__toolCall('kernel_comms_reply',{comm_id:id,body:'Sure, 3pm works for me.',include_quote:true});var m2=t2.match(/ID: ([a-f0-9-]+)/);var replyId=m2?m2[1]:'';var t3=await window.__toolCall('kernel_comms_get',{id:replyId});window.__showResult(t3)})()"
+      },
+      {
+        "type": "wait",
+        "value": "3000"
+      },
+      {
+        "type": "assert_visible",
+        "selector": "#mcp-result"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "Re: Thread Test"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "> Can we meet tomorrow at 3pm?"
+      },
+      {
+        "type": "assert_text",
+        "selector": "#mcp-result",
+        "text": "Sure, 3pm works for me."
+      },
+      {
+        "type": "screenshot",
+        "value": "mcp-reply-quoted"
+      }
+    ],
+    "expect": "Green overlay showing the full reply communication details: Subject 'Re: Thread Test', body starting with 'Sure, 3pm works for me.' followed by quoted original '> Can we meet tomorrow at 3pm?', To: thread@example.com"
+  },
+  {
+    "name": "Search inbox via MCP tool",
+    "actions": [
+      {
+        "$use": "mcp-init"
+      },
+      {
+        "type": "evaluate",
+        "value": "(async()=>{try{var text=await window.__toolCall('kernel_comms_search_inbox',{query:'newer_than:7d',max_results:5});window.__showResult(text||'(empty response)')}catch(e){window.__showResult('Search result: '+e.message)}})()"
+      },
+      {
+        "type": "wait",
+        "value": "8000"
+      },
+      {
+        "type": "assert_visible",
+        "selector": "#mcp-result"
+      },
+      {
+        "type": "screenshot",
+        "value": "mcp-search-inbox"
+      }
+    ],
+    "expect": "Green overlay showing either Gmail search results (numbered list with From, Date, snippet, Gmail ID for each email) or 'No emails found' or an error message if Gmail is not configured. Any of these responses indicates the tool is working."
+  }
+]

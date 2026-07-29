@@ -1,0 +1,39 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.finance-suite",
+  "slug": "finance-suite",
+  "name": "Finance Suite",
+  "version": "1.0.0",
+  "type": "suite",
+  "built_in": true,
+  "description": "Finance overview and subscriptions tracker.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "finance",
+  "frontend": {
+    "navGroups": [
+      {
+        "id": "finance",
+        "label": "Finance",
+        "icon": "💰",
+        "order": 300
+      }
+    ],
+    "navItems": [
+      {
+        "id": "finance",
+        "group": "finance",
+        "label": "Finance",
+        "icon": "💰",
+        "order": 10
+      },
+      {
+        "id": "subscriptions",
+        "group": "finance",
+        "label": "Subs",
+        "icon": "🔄",
+        "order": 30
+      }
+    ]
+  }
+}

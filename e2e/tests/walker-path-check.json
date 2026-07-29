@@ -1,0 +1,32 @@
+[
+  {
+    "name": "Walker uses corridors",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "click",
+        "text": "Demo Walk"
+      },
+      {
+        "type": "wait",
+        "value": "3000"
+      },
+      {
+        "type": "evaluate",
+        "value": "() => { const canvas = document.querySelector('.world3d-canvas canvas'); return canvas ? 'canvas found' : 'no canvas'; }"
+      }
+    ],
+    "expect": [
+      "A walker (small humanoid figure with glowing light) is visible walking in the office",
+      "The walker is positioned in a corridor or doorway, NOT inside a room wall",
+      "The camera has moved to follow the walker action"
+    ]
+  }
+]

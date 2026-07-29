@@ -1,0 +1,87 @@
+{
+  "hooks": {
+    "beforeEach": [
+      {
+        "type": "goto",
+        "value": "/login"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Agent detail — Skills section + picker modal",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/agents"
+        },
+        {
+          "type": "wait",
+          "value": "5000"
+        },
+        {
+          "type": "click",
+          "text": "Sales Copywriter"
+        },
+        {
+          "type": "wait",
+          "value": "3500"
+        },
+        {
+          "type": "evaluate",
+          "value": "window.scrollTo(0, document.body.scrollHeight); true;"
+        },
+        {
+          "type": "wait",
+          "value": "500"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".skills-section-head"
+        },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height = 'auto'; el.style.maxHeight = 'none'; el.style.minHeight = '0'; el.style.overflow = 'visible'; } } true;"
+        },
+        {
+          "type": "wait",
+          "value": "300"
+        },
+        {
+          "type": "screenshot",
+          "value": "ux-agent-skills-01-section",
+          "fullPage": true
+        },
+        {
+          "type": "click",
+          "text": "Attach skill"
+        },
+        {
+          "type": "wait",
+          "value": "2000"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".skills-picker"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".skill-row"
+        },
+        {
+          "type": "screenshot",
+          "value": "ux-agent-skills-02-picker"
+        }
+      ],
+      "expect": "Agent detail page shows new 'Skills (procedural)' section with 'Attach skill' CTA. Clicking the button opens a modal listing 40 installed skills with description + token estimate."
+    }
+  ]
+}

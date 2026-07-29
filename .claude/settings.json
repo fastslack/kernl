@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__plugin_e2e-runner_e2e-runner__e2e_capture",
+      "mcp__plugin_e2e-runner_e2e-runner__e2e_screenshot",
+      "mcp__plugin_e2e-runner_e2e-runner__e2e_pool_status",
+      "mcp__plugin_e2e-runner_e2e-runner__e2e_list",
+      "Bash(docker compose:*)",
+      "Bash(sqlite3:*)",
+      "Bash(bun run:*)",
+      "Bash(bun test:*)",
+      "Bash(npm run:*)"
+    ]
+  }
+}

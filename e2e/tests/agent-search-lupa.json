@@ -1,0 +1,31 @@
+{
+  "$schema": "https://e2e-runner.matware.dev/schema.json",
+  "hooks": {
+    "beforeEach": [
+      { "type": "goto", "value": "/login" },
+      { "type": "wait", "value": "1500" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;" }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Agents-flow lupa — collapsed icon + expand + search",
+      "timeout": 150000,
+      "actions": [
+        { "type": "goto", "value": "/agents-flow" },
+        { "type": "wait", "selector": ".hq-search-btn", "timeout": 90000 },
+        { "type": "wait", "value": "8000" },
+        { "type": "screenshot", "value": "ux-lupa-01-collapsed" },
+        { "type": "evaluate", "value": "document.querySelector('.hq-search-btn').click(); true;" },
+        { "type": "wait", "value": "600" },
+        { "type": "assert_visible", "selector": ".hq-search-input" },
+        { "type": "type", "selector": ".hq-search-input", "value": "chie" },
+        { "type": "wait", "value": "1000" },
+        { "type": "assert_visible", "selector": ".hq-search-results" },
+        { "type": "assert_visible", "selector": ".hq-search-row" },
+        { "type": "screenshot", "value": "ux-lupa-02-results" }
+      ],
+      "expect": "Lupa appears in HUD bar (right after pending pill if any). Click expands into a teal-bordered input with magnifier glyph + close X. Typing a partial agent name triggers a dropdown listing matching agents with flow color dots."
+    }
+  ]
+}

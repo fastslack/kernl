@@ -1,0 +1,66 @@
+[
+  {
+    "name": "API health endpoint responds after rebuild",
+    "actions": [
+      { "$use": "wait-for-docker" },
+      { "$use": "api-health-check" },
+      { "type": "screenshot", "value": "devtools-health-ok" }
+    ],
+    "expect": "The health endpoint should return status: ok after Docker services are ready"
+  },
+  {
+    "name": "Dashboard home loads with navigation after rebuild",
+    "actions": [
+      { "$use": "goto-dashboard" },
+      { "type": "assert_visible", "selector": ".sidebar-logo" },
+      { "type": "assert_text", "selector": ".sidebar-logo", "text": "MTW" },
+      { "type": "assert_visible", "selector": ".header-greeting" },
+      { "type": "assert_visible", "selector": ".nav-item" },
+      { "type": "screenshot", "value": "devtools-home-loaded" }
+    ],
+    "expect": "Dashboard should render with sidebar logo, greeting, and navigation items"
+  },
+  {
+    "name": "Tasks view renders bar charts after rebuild",
+    "actions": [
+      { "$use": "goto-dashboard" },
+      { "type": "goto", "value": "/#tasks" },
+      { "type": "wait", "value": "1500" },
+      { "type": "assert_visible", "selector": ".sidebar-logo" },
+      { "type": "assert_visible", "selector": ".bars" },
+      { "type": "screenshot", "value": "devtools-tasks-view" }
+    ],
+    "expect": "Tasks view should display bar charts for status and priority breakdowns"
+  },
+  {
+    "name": "People view renders KPI row after rebuild",
+    "actions": [
+      { "$use": "goto-dashboard" },
+      { "type": "goto", "value": "/#people" },
+      { "type": "wait", "value": "1500" },
+      { "type": "assert_visible", "selector": ".sidebar-logo" },
+      { "type": "screenshot", "value": "devtools-people-view" }
+    ],
+    "expect": "People view should render with contact analytics data"
+  },
+  {
+    "name": "MCP session initializes and tool call succeeds after rebuild",
+    "actions": [
+      { "$use": "mcp-tool-check" },
+      { "type": "screenshot", "value": "devtools-mcp-tool-ok" }
+    ],
+    "expect": "MCP session should initialize and kernel_tasks_list tool should return data"
+  },
+  {
+    "name": "Dashboard API returns full JSON payload after rebuild",
+    "actions": [
+      { "type": "goto", "value": "/api/dashboard" },
+      { "type": "wait", "value": "2000" },
+      { "type": "assert_text", "selector": "body", "text": "generatedAt" },
+      { "type": "assert_text", "selector": "body", "text": "kpis" },
+      { "type": "assert_text", "selector": "body", "text": "tasks" },
+      { "type": "screenshot", "value": "devtools-api-dashboard" }
+    ],
+    "expect": "The dashboard API should return the full JSON payload with generatedAt, kpis, and tasks"
+  }
+]

@@ -1,0 +1,242 @@
+# Cross-platform release builder for Kernl.
+#
+# Triggered by:
+#   - push of a tag matching v*.*.*           → full release
+#   - manual workflow_dispatch                → build artifacts only, no release
+#
+# What it produces:
+#   linux-x64       kernl-<v>.rpm                   sudo dnf install
+#                   kernl_<v>_amd64.deb             sudo apt install
+#   darwin-arm64    Kernl-<v>-arm64.dmg             drag to /Applications
+#                   Kernl-<v>-arm64-macos.tar.gz    portable
+#   darwin-x64      Kernl-<v>-x64.dmg               (Intel Macs)
+#   win-x64         Kernl-<v>-windows-x64.msi       msiexec / installer
+#                   Kernl-<v>-windows-x64.zip       portable
+#
+# All artifacts use the same `packaging/stage-payload.sh` pipeline. Native
+# modules are installed fresh on each runner so prebuilds match the host.
+# Code signing is opt-in via secrets (see "Signing" section below).
+
+name: release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: "20"
+
+jobs:
+  # ── Linux: RPM + DEB (Ubuntu runner) ────────────────────────────
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v5
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm zstd
+          npm ci --no-audit --no-fund --prefix services/kernel
+
+      - name: Build kernel + dashboard
+        run: |
+          (cd services/kernel && npm run build)
+          (cd services/dashboard && npm ci --no-audit --no-fund && npm run build)
+
+      - name: Build RPM
+        run: PLATFORM=linux-x64 packaging/rpm/build-rpm.sh
+      - name: Build DEB
+        run: PLATFORM=linux-x64 packaging/deb/build-deb.sh
+
+      - name: Locate artifacts
+        id: locate
+        run: |
+          RPM=$(find ~/rpmbuild/RPMS/x86_64 -name "*.rpm")
+          DEB=$(find packaging/out -name "kernl_*.deb")
+          echo "rpm=$RPM" >> $GITHUB_OUTPUT
+          echo "deb=$DEB" >> $GITHUB_OUTPUT
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64
+          path: |
+            ${{ steps.locate.outputs.rpm }}
+            ${{ steps.locate.outputs.deb }}
+
+  # ── macOS: .app → .dmg, both archs (macOS runners) ─────────────
+  macos:
+    strategy:
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-14
+            platform: darwin-arm64
+          - arch: x64
+            runner: macos-13
+            platform: darwin-x64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v5
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+
+      - name: Install npm deps
+        run: |
+          npm ci --no-audit --no-fund --prefix services/kernel
+          (cd services/dashboard && npm ci --no-audit --no-fund && npm run build)
+
+      - name: Build kernel
+        run: (cd services/kernel && npm run build)
+
+      - name: Build .app bundle
+        run: PLATFORM=${{ matrix.platform }} packaging/macos/build-app.sh
+
+      # ── Sign + notarize (opt-in via secrets) ─────────────────────
+      # Without these secrets the .app is unsigned. Users right-click → Open
+      # to bypass Gatekeeper. With them, we get a Developer ID-signed and
+      # Apple-notarized bundle that opens with a normal double-click.
+      - name: Import signing certificate
+        if: env.APPLE_CERT_DATA != ''
+        env:
+          APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+        run: |
+          echo "$APPLE_CERT_DATA" | base64 --decode > cert.p12
+          security create-keychain -p '' build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p '' build.keychain
+          security import cert.p12 -k build.keychain -P "$APPLE_CERT_PASSWORD" \
+            -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s -k '' build.keychain
+          rm cert.p12
+
+      - name: Sign .app
+        if: env.APPLE_TEAM_ID != ''
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          APP="packaging/out/Kernl-$(node -p "require('./services/kernel/package.json').version")-${{ matrix.arch }}.app"
+          codesign --deep --force --options runtime \
+            --sign "Developer ID Application: $APPLE_TEAM_ID" "$APP"
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+      - name: Build .dmg
+        run: |
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          APP="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.app"
+          DMG="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.dmg"
+          # hdiutil ships with macOS — produces a compressed read-only image
+          # that Mac users recognise as "the standard Mac install file".
+          hdiutil create -volname "Kernl" -srcfolder "$APP" \
+            -ov -format UDZO "$DMG"
+
+      - name: Notarize
+        if: env.APPLE_API_KEY_ID != ''
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
+        run: |
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          DMG="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.dmg"
+          echo "$APPLE_API_KEY" > AuthKey.p8
+          xcrun notarytool submit "$DMG" \
+            --key AuthKey.p8 \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$DMG"
+          rm AuthKey.p8
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darwin-${{ matrix.arch }}
+          path: |
+            packaging/out/Kernl-*-${{ matrix.arch }}.dmg
+            packaging/out/Kernl-*-${{ matrix.arch }}-macos.tar.gz
+
+  # ── Windows: .zip portable + .msi installer ─────────────────────
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
+      - uses: actions/setup-node@v5
+        with: { node-version: "${{ env.NODE_VERSION }}" }
+
+      - name: Install npm deps
+        shell: bash
+        run: |
+          npm ci --no-audit --no-fund --prefix services/kernel
+          (cd services/dashboard && npm ci --no-audit --no-fund && npm run build)
+
+      - name: Build kernel
+        run: (cd services/kernel && npm run build)
+
+      - name: Build portable zip
+        shell: bash
+        run: PLATFORM=win-x64 packaging/windows/build-zip.sh
+
+      - name: Install WiX
+        run: |
+          choco install wixtoolset --no-progress --yes
+          echo "C:\Program Files (x86)\WiX Toolset v3.14\bin" >> $env:GITHUB_PATH
+
+      - name: Build MSI
+        shell: bash
+        run: PLATFORM=win-x64 packaging/windows/build-msi.sh
+
+      # ── Sign (opt-in via secrets) ───────────────────────────────
+      - name: Sign artifacts
+        if: env.WINDOWS_CERT_DATA != ''
+        env:
+          WINDOWS_CERT_DATA: ${{ secrets.WINDOWS_CERT_DATA }}
+          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
+        shell: bash
+        run: |
+          echo "$WINDOWS_CERT_DATA" | base64 --decode > cert.pfx
+          for f in packaging/out/*.msi; do
+            signtool.exe sign /f cert.pfx /p "$WINDOWS_CERT_PASSWORD" \
+              /tr http://timestamp.digicert.com /td sha256 /fd sha256 "$f"
+          done
+          rm cert.pfx
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: win-x64
+          path: |
+            packaging/out/Kernl-*-windows-x64.zip
+            packaging/out/Kernl-*-windows-x64.msi
+
+  # ── Publish: assemble GitHub Release from all artifacts ─────────
+  release:
+    needs: [linux, macos, windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Flatten artifact tree
+        run: find artifacts -type f -exec mv -t . {} +
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            kernl-*.rpm
+            kernl_*.deb
+            Kernl-*.dmg
+            Kernl-*-macos.tar.gz
+            Kernl-*-windows-x64.msi
+            Kernl-*-windows-x64.zip
+          generate_release_notes: true

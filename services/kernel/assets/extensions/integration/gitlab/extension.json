@@ -1,0 +1,28 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.gitlab",
+  "slug": "gitlab",
+  "name": "GitLab",
+  "version": "1.0.0",
+  "type": "channel",
+  "description": "GitLab repo host channel (gitlab.com or self-hosted). Connection stub used by gitlab-channel and any future GitLab-aware extension.",
+  "long_description": "Channel stub that represents the GitLab integration surface. Other extensions declare it as a dependency to signal they need an authenticated GitLab client (today: gitlab-channel; future: ci-watcher, release-notifier, …).\n\nConfiguration (host + Personal/Project Access Token with 'api' scope) is held by the gitlab-channel extension because it owns the runtime that uses it.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "tags": ["gitlab", "channel", "git", "repo-host"],
+  "kernel_min": "0.1.0",
+  "channels": [
+    {
+      "implementation": "gitlab-pat",
+      "direction": "bidirectional",
+      "config": {
+        "fields": [
+          { "key": "host", "label": "GitLab Host", "type": "text", "required": false, "default": "https://gitlab.com" },
+          { "key": "token", "label": "Access Token (api scope)", "type": "password", "required": true }
+        ]
+      }
+    }
+  ],
+  "permissions": ["network"]
+}

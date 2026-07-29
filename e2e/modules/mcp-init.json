@@ -1,0 +1,19 @@
+{
+  "$module": "mcp-init",
+  "description": "Navigate to dashboard, initialize an MCP HTTP session, and set up tool call helpers on window",
+  "params": {},
+  "actions": [
+    {
+      "type": "goto",
+      "value": "/"
+    },
+    {
+      "type": "wait",
+      "value": "2000"
+    },
+    {
+      "type": "evaluate",
+      "value": "(async()=>{window.__parseSse=function(t){var m=t.match(/data: .+/g)||[];if(!m.length)return null;try{return JSON.parse(m[m.length-1].substring(6))}catch(e){return null}};window.__mcpCall=async function(method,params,id){var h={'Content-Type':'application/json','Accept':'application/json, text/event-stream'};if(window.__mcpSession)h['mcp-session-id']=window.__mcpSession;var b={jsonrpc:'2.0',method:method};if(params!==undefined)b.params=params;if(id!==undefined)b.id=id;var res=await fetch('/mcp',{method:'POST',headers:h,body:JSON.stringify(b)});var sid=res.headers.get('mcp-session-id');if(sid)window.__mcpSession=sid;if(id===undefined)return null;var txt=await res.text();try{return JSON.parse(txt)}catch(e){return window.__parseSse(txt)}};window.__toolCall=async function(name,args){var r=await window.__mcpCall('tools/call',{name:name,arguments:args||{}},Date.now());return r&&r.result&&r.result.content&&r.result.content[0]?r.result.content[0].text:''};window.__showResult=function(text){var el=document.getElementById('mcp-result');if(!el){el=document.createElement('div');el.id='mcp-result';document.body.appendChild(el)}el.style.cssText='position:fixed;top:0;left:0;right:0;background:#1a1a2e;color:#0f0;padding:16px;z-index:9999;font:12px monospace;white-space:pre-wrap;max-height:60vh;overflow:auto';el.textContent=text};await window.__mcpCall('initialize',{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'e2e-test',version:'1.0.0'}},1);var nh={'Content-Type':'application/json'};if(window.__mcpSession)nh['mcp-session-id']=window.__mcpSession;await fetch('/mcp',{method:'POST',headers:nh,body:JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})});window.__mcpReady=true})()"
+    }
+  ]
+}

@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.linkedin",
+  "slug": "linkedin",
+  "name": "LinkedIn",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "LinkedIn personal-profile + company-page posting via OAuth2 (UGC Posts API).",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "social",
+  "tags": ["linkedin", "social", "b2b", "marketing"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "fs:read", "module:linkedin"],
+  "backend": { "entry": "backend/entry.js" }
+}

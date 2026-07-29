@@ -1,0 +1,16 @@
+{
+  "$module": "goto-dashboard",
+  "description": "Navigate to the Kernl dashboard and wait for it to fully load",
+  "params": {},
+  "actions": [
+    {
+      "type": "goto",
+      "value": "/"
+    },
+    {
+      "type": "wait",
+      "selector": "#app-ready",
+      "timeout": 45000
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "slug": "triage:sync",
+  "name": "Triage Sync",
+  "description": "Pulls open issues + PRs from every enabled triage target into the local triage_items table.",
+  "flow_slug": "triage",
+  "executor_type": "native",
+  "model_chain": [
+    { "provider": "anthropic", "model": "claude-haiku-4-5-20251001" }
+  ],
+  "max_iterations": 8,
+  "max_tokens": 8000,
+  "timeout_ms": 600000,
+  "allowed_tools": [
+    "kernel_triage_targets_list",
+    "kernel_triage_sync"
+  ],
+  "system_prompt": "You are an automation runner. Execute the goal exactly. Do not ask questions. Do not produce prose unless the goal asks for it. When the goal says to call a tool, call it.",
+  "goal_template": "1) Call kernel_triage_targets_list. 2) For each target whose enabled=true, call kernel_triage_sync with {target_id: <that target's id>}. 3) Stop after every enabled target has been synced. 4) Reply with a one-line summary: 'synced N targets, M items upserted'.",
+  "schedules": [
+    { "cron_expression": "0 * * * *" }
+  ]
+}

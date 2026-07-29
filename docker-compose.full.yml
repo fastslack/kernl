@@ -1,0 +1,406 @@
+services:
+  # ── mtwRequest (Rust real-time server + bridge) ─────
+  mtw-request:
+    build:
+      context: ${KERNEL_REQUEST_SRC:?set KERNEL_REQUEST_SRC in .env (path to your local clone of the mtwRequest repo)}
+      dockerfile: Dockerfile
+    image: ${KERNEL_IMAGE_NAMESPACE:-localhost}/mtw-request:latest
+    container_name: mtw-request
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${KERNEL_PORT}:7741"
+    environment:
+      - RUST_LOG=${RUST_LOG}
+      - KERNEL_HOST=${KERNEL_HOST}
+      - KERNEL_PORT=${KERNEL_PORT}
+      - RUST_BRIDGE_SOCKET=/tmp/mtw-rust.sock
+      # Torrent engine — the librqbit data plane HTTP server. Default
+      # is 127.0.0.1 which only the same container can reach; we bind
+      # 0.0.0.0 so the kernel container can proxy stream requests via
+      # the docker network (mtw-request:9999).
+      - TORRENT_HTTP_LISTEN=0.0.0.0:9999
+      - LLM_PROVIDER=${LLM_PROVIDER:-openai}
+      - LLM_MODEL=${LLM_MODEL:-gpt-4o-mini}
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - OLLAMA_URL=${OLLAMA_URL:-http://host.docker.internal:11434}
+      - LMSTUDIO_URL=${LMSTUDIO_URL:-http://host.docker.internal:1234/v1}
+    volumes:
+      - ./data:/data:ro
+      - ./mtw.docker.toml:/app/mtw.toml:ro
+      - bridge-sock:/tmp
+      # Shared with whatsapp-bridge — holds the Unix socket the Rust
+      # integration connects to when [whatsapp] is enabled in mtw.toml.
+      - mtw-whatsapp-sock:/var/run/mtw-whatsapp
+    depends_on:
+      whatsapp-bridge:
+        condition: service_started
+    healthcheck:
+      test: ["CMD-SHELL", "test -e /proc/1/status || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  # ── WhatsApp bridge sidecar ─────────────────────────
+  whatsapp-bridge:
+    build:
+      context: ${KERNEL_WHATSAPP_BRIDGE_SRC:?set KERNEL_WHATSAPP_BRIDGE_SRC in .env (path to your local whatsapp-bridge source)}
+      dockerfile: Dockerfile
+    image: ${KERNEL_IMAGE_NAMESPACE:-localhost}/mtw-whatsapp-bridge:latest
+    container_name: mtw-whatsapp-bridge
+    restart: unless-stopped
+    environment:
+      - KERNEL_WHATSAPP_SOCKET=/var/run/mtw-whatsapp/whatsapp.sock
+      - KERNEL_WHATSAPP_DB=/var/lib/mtw-whatsapp/session.db
+    volumes:
+      - mtw-whatsapp-sock:/var/run/mtw-whatsapp
+      - mtw-whatsapp-data:/var/lib/mtw-whatsapp
+
+  # ── Kernl API (backend) ─────────────────────────
+  kernel:
+    build:
+      context: ./services/kernel
+      dockerfile: Dockerfile
+    container_name: kernl
+    restart: unless-stopped
+    # Bypass Docker's embedded DNS (127.0.0.11) — it can time out on
+    # certain Cloudflare-hosted records that resolve to direct IPs.
+    # External resolvers handle those in <10ms.
+    dns:
+      - 1.1.1.1
+      - 8.8.8.8
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      # If you run an IMAP/SMTP server whose hostname is Cloudflare-proxied,
+      # add static host→IP mappings here (or in docker-compose.override.yml
+      # which Docker Compose auto-merges at runtime and is gitignored).
+      # Example:
+      #   - "mail.example.com:1.2.3.4"
+    ports:
+      - "127.0.0.1:${DOCKER_DASHBOARD_PORT}:${DOCKER_DASHBOARD_PORT}"
+    env_file:
+      - .env
+    environment:
+      MCP_TRANSPORT: ${DOCKER_MCP_TRANSPORT}
+      DASHBOARD_ENABLED: ${DOCKER_DASHBOARD_ENABLED}
+      DASHBOARD_PORT: ${DOCKER_DASHBOARD_PORT}
+      DASHBOARD_PUBLIC_URL: ${DASHBOARD_PUBLIC_URL}
+      SQLITE_PATH: ${DOCKER_SQLITE_PATH}
+      NEO4J_URI: ${DOCKER_NEO4J_URI}
+      NEO4J_USER: ${NEO4J_USER}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD}
+      LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL}
+      AGENTS_DEFAULT_PROVIDER: ${AGENTS_DEFAULT_PROVIDER}
+      AGENTS_DEFAULT_MODEL: ${AGENTS_DEFAULT_MODEL}
+      TRADING_LIVE_ENABLED: ${TRADING_LIVE_ENABLED}
+      IBKR_GATEWAY_URL: ${DOCKER_IBKR_GATEWAY_URL}
+      IBKR_ACCOUNT_ID: ${IBKR_ACCOUNT_ID}
+      IBKR_ENABLED: ${IBKR_ENABLED}
+      WHATSAPP_ENABLED: ${WHATSAPP_ENABLED}
+      WHATSAPP_AUTH_PATH: ${DOCKER_WHATSAPP_AUTH_PATH}
+      WHATSAPP_ALLOWED_NUMBERS: ${WHATSAPP_ALLOWED_NUMBERS}
+      WHATSAPP_DEFAULT_CHAT: ${WHATSAPP_DEFAULT_CHAT}
+      KERNEL_URL: ${DOCKER_KERNEL_URL}
+      # SearXNG — self-hosted meta-search. Used by web-intel as the free
+      # fallback when no Brave / Google CSE keys are configured. The
+      # service is defined below; querying it from the kernel container
+      # uses the docker-compose network DNS name.
+      SEARXNG_BASE_URL: ${SEARXNG_BASE_URL:-http://searxng:8080}
+      # Nostr bridge for /social — broadcasts local posts to public relays
+      # and ingests inbound events. Off by default; flip to "1" to enable.
+      SOCIAL_NOSTR: ${SOCIAL_NOSTR:-1}
+      # ── LM Studio / Ollama / OpenAI / Anthropic / etc ──
+      # All AI provider settings (URLs, model IDs, API keys) are now
+      # dashboard-driven via the settings catalog (Settings → AI tab).
+      # The env vars below are only consulted as initial defaults the very
+      # first time the kernel boots — after that the DB-backed value wins.
+      # Leave them blank here; configure from /settings in the dashboard.
+      # Rust bridge — delegate heavy compute to mtwRequest
+      BRIDGE_ENABLED: "true"
+      BRIDGE_SOCKET_PATH: /tmp/kernl.sock
+      RUST_BRIDGE_ENABLED: "true"
+      RUST_BRIDGE_SOCKET: /tmp/mtw-rust.sock
+      # Host paths: the claude_code executor needs to translate in-container
+      # paths back to host paths when it spawns isolated runs via
+      # Docker-in-Docker (bind-mounts are resolved by the host daemon). All
+      # values come from .env — no host-specific defaults in the YAML.
+      HOST_KERNEL_ROOT: ${HOST_KERNEL_ROOT:?set HOST_KERNEL_ROOT in .env}
+      HOST_CLAUDE_CLI: ${HOST_CLAUDE_CLI:-${HOST_HOME}/.local/bin/claude}
+      HOST_CLAUDE_JSON: ${HOST_CLAUDE_JSON:-${HOST_HOME}/.claude.json}
+      HOST_CLAUDE_CREDS: ${HOST_CLAUDE_CREDS:-${HOST_HOME}/.claude/.credentials.json}
+      HOST_HOME: ${HOST_HOME:?set HOST_HOME in .env}
+      # Filesystem Commander — quoted here because docker-compose's env_file
+      # parser truncates values at the first comma in some versions.
+      FS_COMMANDER_ALLOWED_ROOTS: "/app/commander-workspace,/app/data/workspaces"
+    volumes:
+      - ./data:/app/data
+      - ./.env:/app/.env
+      - ./services/dashboard/build:/dashboard/build:ro
+      - ${HOST_PROJECTS_ROOT:?set HOST_PROJECTS_ROOT in .env}:/host-projects:ro
+      # Per-project RW bind mounts go in docker-compose.override.yml (gitignored)
+      # so an agent dedicated to one of your repos can edit it directly. Pattern:
+      #   - ${HOST_PROJECTS_ROOT}/MyProject:/my-project
+      # Filesystem Commander user sandbox — writable.
+      - ./data/commander-workspace:/app/commander-workspace
+      # Home del usuario: todo RO salvo ~/.claude y ~/.claude.json. El CLI del
+      # Agent SDK necesita escribir tanto session-env (~/.claude/) como
+      # metadata/refresh OAuth en ~/.claude.json. Si claude.json está RO el
+      # CLI no puede refrescar el OAuth token y termina cayendo a billing por
+      # API key (que típicamente no tiene credits → "Credit balance is too
+      # low") o muriendo mudo. Como ~/.claude/ ya es RW, hacer también RW
+      # ~/.claude.json no agrega blast radius.
+      - ${HOST_HOME}:${HOST_HOME}:ro
+      - ${HOST_HOME}/.claude:${HOST_HOME}/.claude
+      - ${HOST_HOME}/.claude.json:${HOST_HOME}/.claude.json
+      - bridge-sock:/tmp
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Relajamos seccomp/apparmor para que bubblewrap pueda crear user namespaces
+    # (necesario para el sandbox de Bash del Claude Agent SDK). CAP_SYS_ADMIN
+    # solo lo toma bwrap al hacer unshare — no se lo damos al proceso del kernel.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    depends_on:
+      mtw-request:
+        condition: service_healthy
+      neo4j:
+        condition: service_started
+      searxng:
+        condition: service_started
+
+  # ── SearXNG ───────────────────────────────────────────
+  # Self-hosted meta-search engine that aggregates results from Google,
+  # DuckDuckGo, Bing, etc. without requiring API keys. Used by the
+  # web-intel module as the default search source.
+  #
+  # The settings.yml in ./services/searxng/ enables the JSON API (off by default)
+  # and disables the limiter so the kernel container can hit it freely.
+  # ── Bridges to host loopback services (LM Studio, Ollama) ────
+  # LM Studio and Ollama bind to 127.0.0.1 by default on Linux. From inside
+  # the kernel container, host.docker.internal resolves to the docker
+  # bridge IP (172.17.0.1), which can't reach the host's loopback. These
+  # tiny socat sidecars run with `network_mode: host` so they CAN see
+  # 127.0.0.1, and re-expose those services on alternate ports
+  # (1235 / 11435) that the kernel reaches via host.docker.internal.
+  #
+  # Each bridge is ~5 MB RAM. They restart on failure but do nothing if
+  # LM Studio / Ollama aren't running on the host — connection refused
+  # gracefully, no kernel impact.
+  #
+  # In the dashboard /settings → AI tab, set:
+  #   LMSTUDIO_BASE_URL = http://host.docker.internal:1235
+  #   OLLAMA_BASE_URL   = http://host.docker.internal:11435
+  # (these are also the catalog defaults so you don't usually need to)
+  lmstudio-bridge:
+    image: alpine/socat
+    container_name: mtw-lmstudio-bridge
+    network_mode: host
+    restart: unless-stopped
+    command: >-
+      -d
+      TCP-LISTEN:1235,bind=0.0.0.0,fork,reuseaddr
+      TCP:127.0.0.1:1234
+  ollama-bridge:
+    image: alpine/socat
+    container_name: mtw-ollama-bridge
+    network_mode: host
+    restart: unless-stopped
+    command: >-
+      -d
+      TCP-LISTEN:11435,bind=0.0.0.0,fork,reuseaddr
+      TCP:127.0.0.1:11434
+
+  searxng:
+    image: searxng/searxng:latest
+    container_name: mtw-searxng
+    restart: unless-stopped
+    volumes:
+      - ./services/searxng:/etc/searxng:rw
+    environment:
+      SEARXNG_BASE_URL: http://searxng:8080/
+      # Persist a stable secret so settings.yml's auto-generated key isn't
+      # overwritten on every restart. Override in .env if you want a custom one.
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-kernl-searxng-default-secret-rotate-in-prod}
+    # Not exposed to the host — only the kernel needs to reach it. If you
+    # want to test SearXNG's UI from the browser, uncomment the ports line.
+    # ports:
+    #   - "18080:8080"
+
+  # ── Dashboard build (one-shot, on demand) ───────────
+  # Compila el SPA dentro de un contenedor con la versión correcta de Bun
+  # y deja el bundle en `./services/dashboard/build/` del host (vía volume), desde
+  # donde el servicio `dashboard` lo sirve con nginx.
+  #
+  # USO:
+  #   docker compose run --rm dashboard-build
+  #   docker compose restart dashboard      ← refresca el bind-mount
+  #
+  # El profile "build" hace que NO arranque con `docker compose up`.
+  dashboard-build:
+    image: oven/bun:1.2
+    container_name: mtw-dashboard-build
+    # Run as the host user so that .svelte-kit/, build/, and node_modules/.vite
+    # don't end up root-owned (which breaks subsequent host-side `bun run build`
+    # invocations). HOST_UID/HOST_GID come from .env; if missing, default to
+    # the conventional 1000:1000 — works for most single-user dev boxes.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /src
+    volumes:
+      - ./services/dashboard:/src
+    command: sh -c "bun install --frozen-lockfile 2>/dev/null || bun install && bun run build"
+    profiles: ["build"]
+
+  # ── Extensions build (one-shot, on demand) ──────────
+  # Compila los wrappers de las extensiones en sus entry.js (rss-registry,
+  # rss-reader, google-sync, filesystem-commander, triage, etc).
+  # Necesario antes de `docker compose build kernel` cuando cambia código
+  # en src/modules/<extensión>/ o en assets/extensions/<slug>/_wrapper/.
+  #
+  # USO:
+  #   docker compose run --rm extensions-build
+  #
+  # El profile "build" hace que NO arranque con `docker compose up`.
+  extensions-build:
+    image: oven/bun:1.2
+    container_name: mtw-extensions-build
+    # Same UID/GID story as dashboard-build — keep build artifacts host-owned.
+    user: "${HOST_UID:-1000}:${HOST_GID:-1000}"
+    working_dir: /repo
+    volumes:
+      - ./services/kernel:/repo
+      - extensions-build-node-modules:/repo/node_modules
+    command: sh -c "bun install --frozen-lockfile 2>/dev/null || bun install && bun run scripts/build-extensions.ts"
+    profiles: ["build"]
+
+  # ── Dashboard dev (Vite + HMR) ──────────────────────
+  # Servidor de desarrollo con hot-reload. Cada vez que editás un archivo
+  # en `dashboard/src/...`, Vite recompila al vuelo y el browser refresca.
+  #
+  # USO (arrancarlo):
+  #   docker compose --profile dev up -d dashboard-dev
+  #   → abrir http://localhost:3088
+  #
+  # USO (parar):
+  #   docker compose --profile dev down
+  # o  docker compose stop dashboard-dev
+  #
+  # Logs:
+  #   docker compose --profile dev logs -f dashboard-dev
+  #
+  # Mientras corre, el `dashboard` (nginx, :3086) sigue sirviendo el build
+  # estático — son independientes. Usá :3086 para production-like, :3088
+  # para iterar con hot-reload.
+  dashboard-dev:
+    image: oven/bun:1.2
+    container_name: mtw-dashboard-dev
+    working_dir: /src
+    ports:
+      - "127.0.0.1:3088:5173"
+    environment:
+      VITE_PROXY_API: http://kernel:3087
+      VITE_PROXY_MTW: ws://mtw-request:7741
+    volumes:
+      - ./services/dashboard:/src
+      - dashboard-dev-node-modules:/src/node_modules
+    command: sh -c "bun install && bun run dev --host 0.0.0.0 --port 5173"
+    depends_on:
+      - kernel
+      - mtw-request
+    profiles: ["dev"]
+
+  # ── Dashboard (frontend, nginx serving the host build) ──
+  # ⚠️ nginx sirve `./services/dashboard/build/` desde el host (volume mount).
+  # No sirve nada que esté dentro de la imagen.
+  # Para ver cambios:
+  #   docker compose run --rm dashboard-build      ← rebuild bundle
+  #   (refresh browser — no hace falta restartear este servicio)
+  dashboard:
+    build: ./services/dashboard
+    container_name: mtw-dashboard
+    restart: unless-stopped
+    ports:
+      - "3086:80"
+    volumes:
+      - ./services/dashboard/build:/usr/share/nginx/html:ro
+    depends_on:
+      - kernel
+      - mtw-request
+
+  # ── Neo4j ───────────────────────────────────────────
+  neo4j:
+    image: neo4j:5.22.0
+    container_name: mtw-neo4j
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:17474:7474"  # HTTP browser — loopback only
+      - "127.0.0.1:17687:7687"  # Bolt protocol — loopback only
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH}
+      NEO4J_PLUGINS: ${NEO4J_PLUGINS}
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE}
+      NEO4J_dbms_security_procedures_unrestricted: ${NEO4J_GDS_PROCEDURES}
+      NEO4J_dbms_security_procedures_allowlist: ${NEO4J_GDS_PROCEDURES}
+      # JVM optimization
+      NEO4J_server_jvm_additional: >-
+        -XX:+UseG1GC
+        -XX:G1HeapRegionSize=16m
+        -XX:+ParallelRefProcEnabled
+        -XX:MaxGCPauseMillis=100
+        -XX:+UnlockExperimentalVMOptions
+        -XX:+UseStringDeduplication
+      # Disable unnecessary features
+      NEO4J_server_logs_gc_enabled: "false"
+      # Transaction optimization
+      NEO4J_db_transaction_timeout: "120s"
+      NEO4J_db_transaction_bookmark__ready__timeout: "15s"
+      # Query cache
+      NEO4J_server_db_query__cache__size: "1000"
+    volumes:
+      - neo4j-data:/data
+      - neo4j-logs:/logs
+      - neo4j-plugins:/plugins
+
+  # ── IBKR Client Portal Gateway (IBeam) ──────────
+  ibkr-gateway:
+    image: voyz/ibeam
+    container_name: mtw-ibkr-gateway
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:5000:5000"
+    env_file:
+      - .env
+    environment:
+      IBEAM_ACCOUNT: ${IBEAM_ACCOUNT}
+      IBEAM_PASSWORD: ${IBEAM_PASSWORD}
+      IBEAM_GATEWAY_BASE_URL: ${IBEAM_GATEWAY_BASE_URL}
+      IBEAM_LOG_LEVEL: ${IBEAM_LOG_LEVEL}
+      IBEAM_TRADING_MODE: ${IBEAM_TRADING_MODE}
+      IBEAM_REQUEST_RETRIES: ${IBEAM_REQUEST_RETRIES}
+      IBEAM_PAGE_LOAD_TIMEOUT: ${IBEAM_PAGE_LOAD_TIMEOUT}
+    volumes:
+      - ibkr-inputs:/srv/inputs
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-k", "https://localhost:5000/v1/api/tickle"]
+      interval: 60s
+      timeout: 10s
+      start_period: 120s
+      retries: 3
+    profiles:
+      - ibkr
+
+volumes:
+  neo4j-data:
+  neo4j-logs:
+  neo4j-plugins:
+  ibkr-inputs:
+  bridge-sock:
+  mtw-whatsapp-sock:
+  mtw-whatsapp-data:
+  # Cached node_modules for the Vite dev container — keeps the host
+  # filesystem clean and avoids reinstalling on every container restart.
+  dashboard-dev-node-modules:
+  # Cached node_modules for the extensions-build container.
+  extensions-build-node-modules:

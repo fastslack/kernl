@@ -1,0 +1,19 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.agents-security",
+  "slug": "agents-security",
+  "name": "Security Auditor",
+  "version": "1.0.0",
+  "type": "office",
+  "description": "Vulnerability Scanner: searches CVE databases and security blogs, alerts on issues affecting your stack",
+  "author": "Matware",
+  "license": "Apache-2.0",
+  "category": "agents",
+  "agents": [
+    "agents/agents-security-vulnerability-scanner.json"
+  ],
+  "office": "office.json",
+  "integrity": {
+    "sha256": "e0349f6d3e0ad4106b1efabac1f9e7b7c70fdbd618855eafb63f1cd420a53114"
+  }
+}

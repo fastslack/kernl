@@ -1,0 +1,28 @@
+[
+  {
+    "name": "open meeting history panel via selector",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "5000"
+      },
+      {
+        "type": "click",
+        "selector": ".hist-toggle"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      },
+      {
+        "type": "screenshot",
+        "value": "history-panel-open"
+      }
+    ],
+    "expect": "Meeting history panel expanded showing rows with status dots, X dismiss button on completed rows, Clear all read button in header"
+  }
+]

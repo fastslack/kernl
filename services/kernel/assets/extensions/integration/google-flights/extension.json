@@ -1,0 +1,22 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.google-flights",
+  "slug": "google-flights",
+  "name": "Google Flights",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Live flight fare search via Google Flights' internal API.",
+  "long_description": "Search real Google Flights fares from any agent or workflow. Port of the `fli` Python library (https://github.com/punitarani/fli) — talks directly to Google's `GetShoppingResults` endpoint, no HTML scraping or browser automation. Exposes `kernel_google_flights_search`, `kernel_google_flights_cheapest`, and `kernel_google_flights_recent`. Pairs with the bundled Flights Concierge agent that turns natural-language travel briefs into bookable options.\n\nDisclaimer: this hits an undocumented endpoint with no SLA. Use sparingly and respect Google's terms of service.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "logo": "logo.svg",
+  "tags": ["google", "flights", "travel", "search", "fares"],
+  "kernel_min": "0.1.0",
+  "permissions": [
+    "network"
+  ],
+  "backend": {
+    "entry": "backend/entry.js"
+  }
+}

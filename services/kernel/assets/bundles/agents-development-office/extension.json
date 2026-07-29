@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.agents-development-office",
+  "slug": "agents-development-office",
+  "name": "Development Office",
+  "version": "1.0.0",
+  "type": "office",
+  "description": "Development-office agents (managers + specialists)",
+  "author": "Matware",
+  "license": "Apache-2.0",
+  "category": "agents",
+  "agents": [
+    "agents/agents-development-office-web-developer.json",
+    "agents/agents-development-office-backend-developer.json",
+    "agents/agents-development-office-e2e-engineer.json"
+  ],
+  "office": "office.json",
+  "integrity": {
+    "sha256": "539846b2ba5021d82046ed0c509a078f8cedc46970f792b81ce7e9b16050360d"
+  }
+}

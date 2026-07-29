@@ -1,0 +1,21 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.books",
+  "slug": "books",
+  "name": "Books",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "archive.org books search and library.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "leisure",
+  "tags": ["books", "archive", "library"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network", "module:books"],
+  "backend": { "entry": "backend/entry.js" },
+  "frontend": {
+    "pages": [
+      { "view": "books", "entry": "frontend/entry.js", "title": "Books" }
+    ]
+  }
+}

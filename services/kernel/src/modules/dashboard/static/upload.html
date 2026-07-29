@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Kernl — Photo Upload</title>
+<style>
+  :root { --bg: #0f1117; --surface: #1a1d27; --border: #2a2d3a; --accent: #6c8cff; --accent-hover: #8aa4ff; --text: #e0e0e6; --dim: #8888a0; --success: #4caf88; --error: #e05555; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif; background: var(--bg); color: var(--text); min-height: 100dvh; display: flex; flex-direction: column; align-items: center; padding: 16px; }
+  h1 { font-size: 1.25rem; font-weight: 600; margin-bottom: 4px; }
+  .subtitle { font-size: 0.8rem; color: var(--dim); margin-bottom: 24px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 20px; width: 100%; max-width: 420px; }
+  .capture-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: 100%; padding: 14px; border: 2px dashed var(--border); border-radius: 8px; background: transparent; color: var(--accent); font-size: 1rem; cursor: pointer; transition: border-color 0.2s, color 0.2s; }
+  .capture-btn:active { border-color: var(--accent); }
+  .capture-btn svg { width: 24px; height: 24px; }
+  input[type="file"] { display: none; }
+  .preview-area { display: none; margin-top: 16px; text-align: center; }
+  .preview-area img { max-width: 100%; max-height: 50vh; border-radius: 8px; border: 1px solid var(--border); }
+  .file-info { font-size: 0.75rem; color: var(--dim); margin-top: 8px; }
+  .rotate-bar { display: flex; justify-content: center; gap: 12px; margin-top: 12px; }
+  .rotate-btn { display: flex; align-items: center; gap: 4px; padding: 8px 14px; border: 1px solid var(--border); border-radius: 8px; background: transparent; color: var(--dim); font-size: 0.8rem; cursor: pointer; transition: color 0.2s, border-color 0.2s; }
+  .rotate-btn:active { color: var(--accent); border-color: var(--accent); }
+  .rotate-btn svg { width: 16px; height: 16px; }
+  .actions { display: flex; gap: 10px; margin-top: 16px; }
+  .actions button { flex: 1; padding: 12px; border: none; border-radius: 8px; font-size: 0.95rem; font-weight: 500; cursor: pointer; transition: opacity 0.2s; }
+  .actions button:disabled { opacity: 0.4; cursor: not-allowed; }
+  .btn-upload { background: var(--accent); color: #fff; }
+  .btn-upload:active:not(:disabled) { background: var(--accent-hover); }
+  .btn-clear { background: var(--border); color: var(--text); }
+  .result { margin-top: 16px; padding: 12px; border-radius: 8px; font-size: 0.85rem; word-break: break-all; display: none; }
+  .result.success { display: block; background: rgba(76,175,136,0.12); border: 1px solid var(--success); color: var(--success); }
+  .result.error { display: block; background: rgba(224,85,85,0.12); border: 1px solid var(--error); color: var(--error); }
+  .spinner { display: none; margin-top: 16px; text-align: center; color: var(--dim); }
+  .spinner.active { display: block; }
+  .history { margin-top: 20px; width: 100%; max-width: 420px; }
+  .history h2 { font-size: 0.85rem; color: var(--dim); margin-bottom: 8px; }
+  .history-item { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; margin-bottom: 8px; font-size: 0.8rem; display: flex; gap: 10px; align-items: center; }
+  .history-thumb { width: 48px; height: 48px; border-radius: 6px; object-fit: cover; border: 1px solid var(--border); flex-shrink: 0; }
+  .history-info { flex: 1; min-width: 0; }
+  .history-item .name { color: var(--text); font-weight: 500; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .history-item .size { color: var(--dim); font-size: 0.75rem; }
+  .copy-btn { background: none; border: 1px solid var(--border); border-radius: 4px; color: var(--dim); font-size: 0.7rem; padding: 2px 8px; cursor: pointer; flex-shrink: 0; }
+  .copy-btn:active { color: var(--accent); border-color: var(--accent); }
+</style>
+</head>
+<body>
+
+<h1>Photo Upload</h1>
+<p class="subtitle">Capture or select a photo to upload</p>
+
+<div class="card">
+  <label class="capture-btn" id="captureBtn">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
+    Take Photo or Choose File
+    <input type="file" id="fileInput" accept="image/*" capture="environment">
+  </label>
+
+  <div class="preview-area" id="previewArea">
+    <img id="previewImg" alt="Preview">
+    <div class="rotate-bar">
+      <button class="rotate-btn" id="rotateCcwBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 4v6h6"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
+        90°
+      </button>
+      <button class="rotate-btn" id="rotateCwBtn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 4v6h-6"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        90°
+      </button>
+    </div>
+    <div class="file-info" id="fileInfo"></div>
+  </div>
+
+  <div class="actions" id="actions" style="display:none">
+    <button class="btn-clear" id="clearBtn">Clear</button>
+    <button class="btn-upload" id="uploadBtn">Upload</button>
+  </div>
+
+  <div class="spinner" id="spinner">Uploading...</div>
+  <div class="result" id="result"></div>
+</div>
+
+<div class="history" id="historySection" style="display:none">
+  <h2>Uploaded this session</h2>
+  <div id="historyList"></div>
+</div>
+
+<script>
+const fileInput = document.getElementById('fileInput');
+const previewArea = document.getElementById('previewArea');
+const previewImg = document.getElementById('previewImg');
+const fileInfo = document.getElementById('fileInfo');
+const actions = document.getElementById('actions');
+const uploadBtn = document.getElementById('uploadBtn');
+const clearBtn = document.getElementById('clearBtn');
+const spinner = document.getElementById('spinner');
+const resultEl = document.getElementById('result');
+const historySection = document.getElementById('historySection');
+const historyList = document.getElementById('historyList');
+
+let currentFile = null;
+let currentBase64 = null;
+const uploads = [];
+const canvas = document.createElement('canvas');
+const ctx = canvas.getContext('2d');
+
+fileInput.addEventListener('change', (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  currentFile = file;
+  resultEl.className = 'result';
+  resultEl.style.display = 'none';
+
+  const reader = new FileReader();
+  reader.onload = (ev) => {
+    currentBase64 = ev.target.result.split(',')[1];
+    previewImg.src = ev.target.result;
+    previewArea.style.display = 'block';
+    actions.style.display = 'flex';
+    const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+    fileInfo.textContent = file.name + ' \u2014 ' + sizeMB + ' MB';
+  };
+  reader.readAsDataURL(file);
+});
+
+function rotateImage(degrees) {
+  const img = new Image();
+  img.onload = () => {
+    const rad = (degrees * Math.PI) / 180;
+    const sin = Math.abs(Math.sin(rad));
+    const cos = Math.abs(Math.cos(rad));
+    canvas.width = Math.round(img.width * cos + img.height * sin);
+    canvas.height = Math.round(img.width * sin + img.height * cos);
+    ctx.translate(canvas.width / 2, canvas.height / 2);
+    ctx.rotate(rad);
+    ctx.drawImage(img, -img.width / 2, -img.height / 2);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    const dataUrl = canvas.toDataURL('image/jpeg', 0.92);
+    currentBase64 = dataUrl.split(',')[1];
+    previewImg.src = dataUrl;
+  };
+  img.src = 'data:image/jpeg;base64,' + currentBase64;
+}
+
+document.getElementById('rotateCwBtn').addEventListener('click', () => { if (currentBase64) rotateImage(90); });
+document.getElementById('rotateCcwBtn').addEventListener('click', () => { if (currentBase64) rotateImage(-90); });
+
+clearBtn.addEventListener('click', () => {
+  currentFile = null;
+  currentBase64 = null;
+  fileInput.value = '';
+  previewArea.style.display = 'none';
+  actions.style.display = 'none';
+  resultEl.className = 'result';
+  resultEl.style.display = 'none';
+});
+
+uploadBtn.addEventListener('click', async () => {
+  if (!currentBase64 || !currentFile) return;
+  uploadBtn.disabled = true;
+  clearBtn.disabled = true;
+  spinner.classList.add('active');
+  resultEl.className = 'result';
+  resultEl.style.display = 'none';
+
+  try {
+    const resp = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ photo: currentBase64, filename: currentFile.name }),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || 'Upload failed');
+
+    resultEl.className = 'result success';
+    resultEl.textContent = 'Saved: ' + data.path;
+    resultEl.style.display = 'block';
+
+    uploads.unshift({ filename: data.filename, path: data.path, size: data.size, thumb: previewImg.src });
+    renderHistory();
+
+    currentFile = null;
+    currentBase64 = null;
+    fileInput.value = '';
+    previewArea.style.display = 'none';
+    actions.style.display = 'none';
+  } catch (err) {
+    resultEl.className = 'result error';
+    resultEl.textContent = err.message;
+    resultEl.style.display = 'block';
+  } finally {
+    uploadBtn.disabled = false;
+    clearBtn.disabled = false;
+    spinner.classList.remove('active');
+  }
+});
+
+function renderHistory() {
+  if (uploads.length === 0) { historySection.style.display = 'none'; return; }
+  historySection.style.display = 'block';
+  historyList.textContent = '';
+  for (const u of uploads) {
+    const item = document.createElement('div');
+    item.className = 'history-item';
+
+    const thumb = document.createElement('img');
+    thumb.className = 'history-thumb';
+    thumb.src = u.thumb;
+    thumb.alt = u.filename;
+    item.appendChild(thumb);
+
+    const info = document.createElement('div');
+    info.className = 'history-info';
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'name';
+    nameSpan.textContent = u.filename;
+    const br = document.createElement('br');
+    const sizeSpan = document.createElement('span');
+    sizeSpan.className = 'size';
+    sizeSpan.textContent = (u.size / 1024).toFixed(1) + ' KB';
+    info.appendChild(nameSpan);
+    info.appendChild(br);
+    info.appendChild(sizeSpan);
+
+    const copyBtn = document.createElement('button');
+    copyBtn.className = 'copy-btn';
+    copyBtn.textContent = 'Copy path';
+    copyBtn.addEventListener('click', () => {
+      navigator.clipboard.writeText(u.path).catch(() => {});
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy path'; }, 1500);
+    });
+
+    item.appendChild(info);
+    item.appendChild(copyBtn);
+    historyList.appendChild(item);
+  }
+}
+</script>
+</body>
+</html>

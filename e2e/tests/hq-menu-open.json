@@ -1,0 +1,28 @@
+[
+  {
+    "name": "open hq dropdown",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "6000"
+      },
+      {
+        "type": "click",
+        "selector": ".hq-menu-trigger"
+      },
+      {
+        "type": "wait",
+        "value": "500"
+      },
+      {
+        "type": "screenshot",
+        "value": "hq-dropdown-open"
+      }
+    ],
+    "expect": "hq-dropdown shows Create section + View section with 4 toggles (Live meeting, Meetings panel, Management log, Performance HUD), each with check mark when active"
+  }
+]

@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.nvidia",
+  "slug": "nvidia",
+  "name": "NVIDIA NIM",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "NVIDIA NIM-hosted models.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/nvidia.svg",
+  "permissions": ["network"],
+  "built_in": true
+}

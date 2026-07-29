@@ -1,0 +1,18 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.triage",
+  "slug": "triage",
+  "name": "Repo Triage",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Conservative LLM maintainer bot for GitHub repos. Proposes closures with evidence and applies only when state is unchanged.",
+  "long_description": "Inspired by ClawSweeper. Tracks issues and PRs from configured repos in SQLite, runs scheduled LLM reviews against the live source, and lets a separate apply lane close items only when the snapshot has not changed since the proposal.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": ["github", "triage", "llm", "automation"],
+  "permissions": ["network", "notifications", "module:triage"],
+  "backend": {
+    "entry": "backend/entry.js"
+  }
+}

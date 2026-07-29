@@ -1,0 +1,7 @@
+{
+  "slug": "triage",
+  "name": "Triage Office",
+  "description": "Repo maintainer-bot office. Owns the sync → review → apply loop across all configured triage targets. Each agent runs on its own cron tick; agents are decoupled so a failure in one does not block the others.",
+  "color": "#7c3aed",
+  "auto_debate": false
+}

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "open hq dropdown",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/agents-flow"
+      },
+      {
+        "type": "wait",
+        "selector": ".hq-bar"
+      },
+      {
+        "type": "wait",
+        "value": "8000"
+      },
+      {
+        "type": "click",
+        "selector": ".hq-menu-trigger"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      },
+      {
+        "type": "screenshot",
+        "value": "hq-dropdown-open"
+      }
+    ],
+    "expect": "hq-dropdown shows Create + View sections with 4 toggles"
+  }
+]

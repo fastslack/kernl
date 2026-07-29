@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Chat page loads with sidebar and input visible",
+    "actions": [
+      { "type": "goto", "value": "/chat" },
+      { "type": "wait", "value": "2500" },
+      { "type": "screenshot", "value": "chat-loaded" }
+    ],
+    "expect": "Chat page shows sidebar with conversation list on left, main area on right with input field visible at bottom"
+  },
+  {
+    "name": "Click conversation with messages shows messages and input",
+    "actions": [
+      { "type": "goto", "value": "/chat" },
+      { "type": "wait", "value": "2000" },
+      { "type": "click", "selector": ".cx-ep:nth-child(3)" },
+      { "type": "wait", "value": "2000" },
+      { "type": "screenshot", "value": "chat-with-messages" }
+    ],
+    "expect": "Messages should be displayed in the chat area with user and assistant messages visible, input field visible at bottom, scroll working correctly"
+  }
+]

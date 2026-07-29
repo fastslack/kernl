@@ -1,0 +1,45 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.google-sync",
+  "slug": "google-sync",
+  "name": "Google Sync",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Gmail, Contacts, and Calendar sync via Google OAuth.",
+  "long_description": "Bidirectional Google integration. Inbound: syncs Gmail → google_emails, Contacts → contacts, Calendar → events, plus Neo4j graph enrichment. Outbound: send email drafts from the kernel.\n\nConfigure via OAuth (Client ID + Secret from Google Cloud Console). Requires the Gmail, People, and Calendar APIs enabled on your GCP project.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "integration",
+  "logo": "logo.svg",
+  "tags": ["google", "gmail", "calendar", "contacts", "oauth", "sync"],
+  "kernel_min": "0.1.0",
+  "dependencies": ["com.kernl.google"],
+  "channels": [
+    {
+      "implementation": "gmail-sync",
+      "direction": "bidirectional",
+      "config": { "scopes": ["gmail.readonly", "gmail.send", "gmail.modify"] }
+    },
+    {
+      "implementation": "google-contacts-sync",
+      "direction": "inbound",
+      "config": { "scopes": ["contacts.readonly", "contacts.other.readonly"] }
+    },
+    {
+      "implementation": "google-calendar-sync",
+      "direction": "inbound",
+      "config": { "scopes": ["calendar.readonly", "calendar.events.readonly"] }
+    }
+  ],
+  "permissions": [
+    "network",
+    "module:google-sync",
+    "read:contacts",
+    "write:contacts",
+    "read:events",
+    "write:events"
+  ],
+  "backend": {
+    "entry": "backend/entry.js"
+  }
+}

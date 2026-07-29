@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.minimax",
+  "slug": "minimax",
+  "name": "MiniMax",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "MiniMax M-series (OpenAI-compatible) LLM provider.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/minimax.svg",
+  "permissions": ["network"],
+  "built_in": true
+}

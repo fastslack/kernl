@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Kernl
+GenericName=Personal MCP Server
+Comment=Tasks, contacts, reminders, finances, notes — all in one
+Exec=sh -c '(systemctl --user is-active --quiet kernl || systemctl --user start kernl) && for i in $(seq 1 30); do curl -sf http://localhost:${DASHBOARD_PORT:-3086}/api/manifest >/dev/null 2>&1 && break; sleep 1; done && xdg-open http://localhost:${DASHBOARD_PORT:-3086}'
+Icon=kernl
+Terminal=false
+StartupNotify=true
+Categories=Utility;Office;Productivity;
+Keywords=mcp;agent;personal;tasks;crm;notes;reminders;
+StartupWMClass=kernl

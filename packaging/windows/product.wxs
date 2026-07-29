@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  WiX 3.x descriptor for the Matware MSI installer.
+
+  Layout written to disk:
+    C:\Program Files\Matware\         (or %INSTALLDIR%, user-overridable)
+      bun.exe, mcp-server.js, …
+    Start Menu\Programs\Matware\Matware.lnk → start.bat
+
+  Per-user data lives at %LOCALAPPDATA%\Matware and is created on first
+  launch by the wrapper, NOT by the installer — so uninstall doesn't
+  destroy the user's tasks/contacts/notes.
+-->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="*"
+           Name="Matware"
+           Language="1033"
+           Version="$(var.Version)"
+           Manufacturer="Matware"
+           UpgradeCode="A8C5F2E1-7B9D-4F8A-B0E6-3D4F5A6B7C8D">
+
+    <Package InstallerVersion="500"
+             Compressed="yes"
+             InstallScope="perMachine"
+             Description="Personal life-management MCP server"
+             Manufacturer="Matware" />
+
+    <MajorUpgrade
+      DowngradeErrorMessage="A newer version of Matware is already installed." />
+
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <!-- Top-level features: just one, ships everything. -->
+    <Feature Id="ProductFeature" Title="Matware" Level="1">
+      <ComponentGroupRef Id="ApplicationFiles" />
+      <ComponentRef Id="ApplicationShortcut" />
+    </Feature>
+
+    <!-- Directory tree the installer materializes. -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Matware" />
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ApplicationProgramsFolder" Name="Matware" />
+      </Directory>
+    </Directory>
+
+    <DirectoryRef Id="ApplicationProgramsFolder">
+      <Component Id="ApplicationShortcut" Guid="*">
+        <Shortcut Id="StartMenuShortcut"
+                  Name="Matware"
+                  Description="Personal life-management MCP server"
+                  Target="[INSTALLDIR]start.bat"
+                  WorkingDirectory="INSTALLDIR" />
+        <RemoveFolder Id="CleanUpShortcut" Directory="ApplicationProgramsFolder" On="uninstall"/>
+        <RegistryValue Root="HKCU"
+                       Key="Software\Matware\Kernl"
+                       Name="installed"
+                       Type="integer"
+                       Value="1"
+                       KeyPath="yes"/>
+      </Component>
+    </DirectoryRef>
+
+    <!-- The big file list. heat.exe regenerates harvested.wxs on every
+         build by scanning the staged payload tree, so we don't have to
+         maintain it by hand. -->
+    <Property Id="WIXUI_INSTALLDIR" Value="INSTALLDIR" />
+    <UIRef Id="WixUI_InstallDir" />
+    <UIRef Id="WixUI_ErrorProgressText" />
+  </Product>
+</Wix>

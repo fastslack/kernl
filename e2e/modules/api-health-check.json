@@ -1,0 +1,20 @@
+{
+  "$module": "api-health-check",
+  "description": "Verify API health endpoint responds with ok status",
+  "params": {},
+  "actions": [
+    {
+      "type": "goto",
+      "value": "/api/health"
+    },
+    {
+      "type": "wait",
+      "value": "2000"
+    },
+    {
+      "type": "assert_text",
+      "selector": "body",
+      "text": "ok"
+    }
+  ]
+}

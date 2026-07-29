@@ -1,0 +1,24 @@
+{
+  "name": "kernl-workspace",
+  "private": true,
+  "type": "module",
+  "description": "Orquestación raíz de Kernl — los paquetes viven en services/*",
+  "scripts": {
+    "setup": "./services/kernel/scripts/setup.sh",
+    "dev": "cd services/kernel && bun run dev",
+    "start": "cd services/kernel && bun run start",
+    "build": "cd services/kernel && bun run build",
+    "test": "cd services/kernel && bun test",
+    "lint": "cd services/kernel && bun run lint",
+    "doctor": "cd services/kernel && bun run doctor",
+    "wizard": "cd services/kernel && bun run wizard",
+    "dashboard:build": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml restart dashboard",
+    "dashboard:reload": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml restart dashboard",
+    "reload": "docker compose -f docker-compose.full.yml run --rm extensions-build && docker compose -f docker-compose.full.yml build kernel && docker compose -f docker-compose.full.yml up -d --force-recreate kernel",
+    "reload:dashboard": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml restart dashboard",
+    "reload:all": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml run --rm extensions-build && docker compose -f docker-compose.full.yml build kernel && docker compose -f docker-compose.full.yml up -d --force-recreate kernel && docker compose -f docker-compose.full.yml restart dashboard",
+    "neo4j:up": "docker compose up -d",
+    "neo4j:down": "docker compose down",
+    "neo4j:logs": "docker compose logs -f neo4j"
+  }
+}

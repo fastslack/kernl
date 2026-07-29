@@ -1,0 +1,232 @@
+{
+  "hooks": {
+    "beforeEach": [
+      {
+        "type": "goto",
+        "value": "/login"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Marketplace page loads (legacy view) — no regression after catalog wire-up",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/marketplace"
+        },
+        {
+          "type": "wait",
+          "value": "5000"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".app-shell"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".mp-stats"
+        },
+        {
+          "type": "assert_text",
+          "text": "Marketplace"
+        },
+        {
+          "type": "assert_text",
+          "text": "Superseded by Extensions"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".mp-tabs"
+        },
+        {
+          "type": "screenshot",
+          "value": "marketplace-loaded"
+        }
+      ],
+      "expect": "Marketplace page renders with header, legacy banner pointing at /extensions, stats bar, tabs and theme cards — no empty data placeholder."
+    },
+    {
+      "name": "Extensions page loads — unified registry view",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/extensions"
+        },
+        {
+          "type": "wait",
+          "value": "5000"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".app-shell"
+        },
+        {
+          "type": "assert_text",
+          "text": "Extensions"
+        },
+        {
+          "type": "screenshot",
+          "value": "extensions-loaded"
+        }
+      ],
+      "expect": "Extensions page renders with the unified installed-extensions list — no error banner, items visible."
+    },
+    {
+      "name": "Catalog API — /api/marketplace/catalog/providers returns bundled provider",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/api/marketplace/catalog/providers?auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+        },
+        {
+          "type": "wait",
+          "value": "1000"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "bundled"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "Bundled with Kernl"
+        },
+        {
+          "type": "screenshot",
+          "value": "catalog-providers-json"
+        }
+      ],
+      "expect": "Raw JSON shows providers array including the bundled provider entry."
+    },
+    {
+      "name": "Catalog API — /api/marketplace/catalog returns multi-type items",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/api/marketplace/catalog?limit=200&auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+        },
+        {
+          "type": "wait",
+          "value": "2500"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"total\":"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"type\":\"skill\""
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"type\":\"office\""
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"type\":\"module\""
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"type\":\"theme\""
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"provider\":\"bundled\""
+        },
+        {
+          "type": "screenshot",
+          "value": "catalog-browse-json"
+        }
+      ],
+      "expect": "Catalog browse returns a JSON payload with items spanning at least 4 types (skill, office, module, theme) coming from the bundled provider."
+    },
+    {
+      "name": "Catalog API — filter by type=skill returns only skills",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/api/marketplace/catalog?type=skill&auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+        },
+        {
+          "type": "wait",
+          "value": "1500"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"type\":\"skill\""
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "morning-briefing"
+        },
+        {
+          "type": "screenshot",
+          "value": "catalog-filter-skill"
+        }
+      ],
+      "expect": "Type filter works: response contains skill entries and morning-briefing in particular."
+    },
+    {
+      "name": "Catalog API — install morning-briefing then verify status flips to active",
+      "actions": [
+        {
+          "type": "evaluate",
+          "value": "fetch('/api/marketplace/catalog/uninstall', {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'},body:JSON.stringify({id:'morning-briefing',force:true})}).catch(()=>null); true;"
+        },
+        {
+          "type": "wait",
+          "value": "1000"
+        },
+        {
+          "type": "evaluate",
+          "value": "fetch('/api/marketplace/catalog/install', {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'},body:JSON.stringify({id:'morning-briefing'})}).then(r=>r.json()).then(d=>{(window).__installResult=d;}); true;"
+        },
+        {
+          "type": "wait",
+          "value": "2500"
+        },
+        {
+          "type": "goto",
+          "value": "/api/marketplace/catalog/item/morning-briefing?auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+        },
+        {
+          "type": "wait",
+          "value": "1500"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "morning-briefing"
+        },
+        {
+          "type": "assert_text",
+          "selector": "body",
+          "text": "\"status\":\"active\""
+        },
+        {
+          "type": "screenshot",
+          "value": "catalog-install-active"
+        }
+      ],
+      "expect": "After install via /catalog/install, the item shows status='active' on the catalog item endpoint."
+    }
+  ]
+}

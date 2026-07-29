@@ -1,0 +1,17 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.daily-digest",
+  "slug": "daily-digest",
+  "name": "Daily Digest",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Scheduled evening (tomorrow preview) + morning (today) digests of your tasks, events and reminders, pushed to Telegram/WhatsApp with a dashboard fallback. Europe/Amsterdam time, deterministic (no LLM).",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": ["digest", "notifications", "schedule", "reminders", "tasks"],
+  "kernel_min": "0.1.0",
+  "dependencies": ["com.kernl.tasks", "com.kernl.reminders", "com.kernl.events"],
+  "permissions": ["notifications", "read:tasks", "read:reminders", "read:events"],
+  "backend": { "entry": "backend/entry.js" }
+}

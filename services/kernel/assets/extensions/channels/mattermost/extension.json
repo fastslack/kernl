@@ -1,0 +1,16 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.mattermost",
+  "slug": "mattermost",
+  "name": "Mattermost",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Mattermost notification channel — sends notifications via incoming webhook.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "channels",
+  "tags": ["channel", "mattermost", "notifications"],
+  "kernel_min": "0.1.0",
+  "permissions": ["network"],
+  "backend": { "entry": "backend/entry.js" }
+}

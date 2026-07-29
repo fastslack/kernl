@@ -1,0 +1,106 @@
+[
+  {
+    "name": "wizard walks Office → Team → Review with live blueprint",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.setupComplete','true'); localStorage.setItem('kernl.welcomeSeen','true');"
+      },
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/agents-flow?new=office"
+      },
+      {
+        "type": "wait",
+        "text": "NEW OFFICE"
+      },
+      {
+        "type": "wait",
+        "value": "2500"
+      },
+      {
+        "type": "assert_text",
+        "text": "Dibujá el plano"
+      },
+      {
+        "type": "evaluate",
+        "value": "[...document.querySelectorAll('button')].find(b=>b.className.includes('ofw-tpl')&&b.textContent.includes('Constructora')).click()"
+      },
+      {
+        "type": "wait",
+        "value": "400"
+      },
+      {
+        "type": "type",
+        "selector": "[class*=ofw-input-lg]",
+        "value": "Marketing"
+      },
+      {
+        "type": "assert_text",
+        "text": "MARKETING"
+      },
+      {
+        "type": "assert_text",
+        "text": "3 agents"
+      },
+      {
+        "type": "evaluate",
+        "value": "[...document.querySelectorAll('button')].find(b=>b.className.includes('ofw-primary')&&b.textContent.includes('Equipo')).click()"
+      },
+      {
+        "type": "assert_input_value",
+        "selector": "[class*=ofw-agent-name]",
+        "value": "Tech Lead"
+      },
+      {
+        "type": "assert_text",
+        "text": "Add agent"
+      },
+      {
+        "type": "assert_visible",
+        "selector": "[class*=ofw-agent-prompt]"
+      },
+      {
+        "type": "type",
+        "selector": "[class*=ofw-cron-input]",
+        "value": "45m"
+      },
+      {
+        "type": "assert_text",
+        "text": "Encadenar manager"
+      },
+      {
+        "type": "evaluate",
+        "value": "[...document.querySelectorAll('button')].find(b=>b.className.includes('ofw-primary')&&b.textContent.includes('Revisi')).click()"
+      },
+      {
+        "type": "assert_text",
+        "text": "★ Tech Lead"
+      },
+      {
+        "type": "assert_text",
+        "text": "cada 45m"
+      },
+      {
+        "type": "assert_text",
+        "text": "Found office"
+      },
+      {
+        "type": "wait",
+        "value": "600"
+      }
+    ],
+    "expect": [
+      "Modal 'NEW OFFICE' with a blueprint pane on the left: schematic room, door plate reading MARKETING, 3 desks (one with a gold star), cron badge",
+      "Right pane shows the Review step with rows Office / Team / Chains / Cron and a gold 'Found office' button"
+    ]
+  }
+]

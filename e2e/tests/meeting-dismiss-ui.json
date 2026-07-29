@@ -1,0 +1,28 @@
+[
+  {
+    "name": "open meeting history panel and verify dismiss buttons",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/agents-flow"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "click",
+        "text": "Meetings"
+      },
+      {
+        "type": "wait",
+        "value": "500"
+      },
+      {
+        "type": "screenshot",
+        "value": "history-open"
+      }
+    ],
+    "expect": "Meeting history panel is open with rows. Each completed/failed row shows an X button to dismiss it. Header shows 'Clear N read' if there are closed meetings."
+  }
+]

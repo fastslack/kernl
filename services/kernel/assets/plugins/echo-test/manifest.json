@@ -1,0 +1,23 @@
+{
+  "name": "echo-test",
+  "displayName": "Echo Test Agent",
+  "description": "Smoke-test agent: echoes inputs and optionally calls a kernel tool.",
+  "version": "0.1.0",
+  "entry": "index.ts",
+  "permissions": [],
+  "tools": [
+    {
+      "name": "echo",
+      "description": "Returns the input message verbatim (used for smoke-testing subprocess comms).",
+      "inputSchema": {
+        "type": "object",
+        "properties": {
+          "message": { "type": "string" }
+        }
+      }
+    }
+  ],
+  "timeoutMs": 5000,
+  "autoStart": false,
+  "env": {}
+}

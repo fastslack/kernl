@@ -1,0 +1,29 @@
+#!/bin/sh
+# Post-install hook — runs after the payload is unpacked.
+# Refresh icon + desktop caches so the launcher appears immediately.
+set -e
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -t /usr/share/icons/hicolor 2>/dev/null || true
+fi
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database 2>/dev/null || true
+fi
+
+cat <<EOF
+
+Kernl installed.
+
+  Start:        systemctl --user enable --now kernl
+                (or just run \`kernl\` from a terminal)
+  Open:         xdg-open http://localhost:3086
+  Configure:    cp /etc/kernl/env.example ~/.config/kernl/.env
+                then edit (port, encryption key, LLM API keys, etc.)
+
+Optional Tier 2 (graph analytics + ML trading):
+  - Install Neo4j Desktop or run a Neo4j container
+  - Open http://localhost:3086/extensions, filter "Database",
+    activate "Neo4j" and provide your bolt://… endpoint.
+
+EOF
+exit 0
