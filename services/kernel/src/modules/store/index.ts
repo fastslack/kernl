@@ -14,17 +14,26 @@
  *   • kernel_store_update   — manual trigger for the auto-update engine: checks
  *                             the catalog for newer versions of already-installed,
  *                             licensed extensions and applies them in place.
+ *
+ * The same mechanism is exposed over HTTP (see api-routes.ts) so the dashboard
+ * can sell and install without the user ever handling a license key: it opens a
+ * Stripe Checkout, polls the issuer for the minted license, applies it, and
+ * installs the bundle. `store_checkouts` keeps that flow resumable.
  */
 
-import type { KernelModule, ModuleContext, ToolDefinition, ToolResult } from "../../core/types.js";
+import type { ExtensibleModule, ModuleContext, ToolDefinition, ToolResult, DashboardDescriptor } from "../../core/types.js";
 import type { LicenseService } from "../../core/license/index.js";
 import { textResult, errorResult } from "../../core/helpers.js";
 import type { ExtensionService } from "../extensions/index.js";
 import type { AgentService } from "../agents/service.js";
-import { materializeOffice, officeDefinitionFromJson } from "../agents/office-kit.js";
 import { z } from "zod";
-import { fetchStoreCatalog, downloadStoreBundle, downloadStoreText } from "./client.js";
+import { fetchStoreCatalog } from "./client.js";
+import { installFromStore, DEFAULT_STORE_URL } from "./install.js";
 import { runStoreUpdates } from "./auto-update.js";
+import { registerStoreRoutes } from "./api-routes.js";
+import { storeMigrations } from "./migrations.js";
+import { CheckoutService } from "./checkout-service.js";
+import { runMigrations } from "../../core/db/migrations.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
 export interface StoreModuleDeps {
@@ -34,19 +43,39 @@ export interface StoreModuleDeps {
   getAgentService: () => AgentService | null;
 }
 
-export const DEFAULT_STORE_URL = "https://issuer.lifekernl.com";
+export { DEFAULT_STORE_URL } from "./install.js";
 
-export function createStoreModule(deps: StoreModuleDeps): KernelModule {
+export function createStoreModule(deps: StoreModuleDeps): ExtensibleModule {
   let tools: ToolDefinition[] = [];
+  let checkouts: CheckoutService | null = null;
+  let ctxRef: ModuleContext | null = null;
+  const storeUrl = process.env.KERNEL_STORE_URL ?? DEFAULT_STORE_URL;
 
   return {
     name: "store",
     async initialize(ctx: ModuleContext) {
-      const storeUrl = process.env.KERNEL_STORE_URL ?? DEFAULT_STORE_URL;
+      runMigrations(ctx.sqlite, "store", storeMigrations);
+      ctxRef = ctx;
+      checkouts = new CheckoutService(ctx.sqlite);
       tools = buildTools(ctx, deps, storeUrl, ctx.license);
     },
     getTools() {
       return tools;
+    },
+    getDashboardDescriptor(): DashboardDescriptor {
+      return {
+        registerRoutes: (server) => {
+          if (!checkouts || !ctxRef) return;
+          registerStoreRoutes(server, {
+            storeUrl,
+            license: ctxRef.license,
+            checkouts,
+            sqlite: ctxRef.sqlite,
+            getExtensionService: deps.getExtensionService,
+            getAgentService: deps.getAgentService,
+          });
+        },
+      };
     },
     async shutdown() {},
   };
@@ -115,9 +144,30 @@ function buildTools(
         }
         if (!item) return errorResult(`Unknown item "${slug}". Run kernel_store_browse to see what's available.`);
 
-        return item.type === "office"
-          ? installOffice(ctx, deps, storeUrl, slug, jwt)
-          : installExtension(deps, storeUrl, slug, jwt);
+        try {
+          const result = await installFromStore({
+            storeUrl,
+            slug,
+            licenseJwt: jwt,
+            getExtensionService: deps.getExtensionService,
+            getAgentService: deps.getAgentService,
+            sqlite: ctx.sqlite,
+          });
+          if (result.kind === "office") {
+            return textResult(
+              `✅ Set up the **${result.officeName}** office — ${result.agents.length} agents ` +
+                `(${result.agents.join(", ")}). Open the dashboard to see the team.`,
+            );
+          }
+          return textResult(
+            `✅ Installed **${result.installed.slug}** from the store. ` +
+              "Reload the kernel to activate it (`kernel_extensions_activate` or a restart).",
+          );
+        } catch (e) {
+          // The store's own messages are precise (401 no/expired license, 403
+          // not entitled, 404 unknown/not-published) — surface them verbatim.
+          return errorResult(`Install failed: ${e instanceof Error ? e.message : String(e)}`);
+        }
       },
     }),
     defineToolNoInput({
@@ -156,71 +206,3 @@ function buildTools(
   ];
 }
 
-// ─── install paths ───────────────────────────────────────────────────
-
-async function installExtension(
-  deps: StoreModuleDeps,
-  storeUrl: string,
-  slug: string,
-  jwt: string,
-): Promise<ToolResult> {
-  const service = deps.getExtensionService();
-  if (!service) return errorResult("Extensions service is not available.");
-
-  let bundlePath: string;
-  try {
-    bundlePath = (await downloadStoreBundle({ storeUrl, slug, licenseJwt: jwt })).path;
-  } catch (e) {
-    // Store returns precise messages (401 no/expired license, 403 not entitled,
-    // 404 unknown/not-published) — surface them verbatim.
-    return errorResult(`Download failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  try {
-    const installed = await service.installFromBundle(bundlePath, {
-      type: "url",
-      url: `${storeUrl.replace(/\/+$/, "")}/store/download?slug=${encodeURIComponent(slug)}`,
-    });
-    return textResult(
-      `✅ Installed **${installed.slug}** from the store. ` +
-        "Reload the kernel to activate it (`kernel_extensions_activate` or a restart).",
-    );
-  } catch (e) {
-    return errorResult(`Install failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}
-
-async function installOffice(
-  ctx: ModuleContext,
-  deps: StoreModuleDeps,
-  storeUrl: string,
-  slug: string,
-  jwt: string,
-): Promise<ToolResult> {
-  const service = deps.getAgentService();
-  if (!service) return errorResult("Agents service is not available.");
-
-  let text: string;
-  try {
-    text = await downloadStoreText({ storeUrl, slug, licenseJwt: jwt });
-  } catch (e) {
-    return errorResult(`Download failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  let def;
-  try {
-    def = officeDefinitionFromJson(JSON.parse(text));
-  } catch (e) {
-    return errorResult(`Invalid office blueprint: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  try {
-    materializeOffice(ctx.sqlite, service, def);
-    return textResult(
-      `✅ Set up the **${def.name}** office — ${def.agents.length} agents ` +
-        `(${def.agents.map((a) => a.name).join(", ")}). Open the dashboard to see the team.`,
-    );
-  } catch (e) {
-    return errorResult(`Office setup failed: ${e instanceof Error ? e.message : String(e)}`);
-  }
-}

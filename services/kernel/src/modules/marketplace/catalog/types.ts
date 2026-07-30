@@ -16,11 +16,25 @@ import type { ExtensionManifest } from "../../extensions/schema.js";
 import type { ExtensionSource } from "../../extensions/types.js";
 
 export type CatalogItemStatus =
-  | "available"   // present in catalog, not installed
+  | "available"   // present in catalog, free, not installed
+  | "for_sale"    // paid, not covered by the current license → needs a purchase
+  | "owned"       // paid, the license covers it, not installed yet → free install
   | "installed"   // installed but disabled
   | "active"      // installed and active
   | "disabled"    // installed and explicitly disabled
   | "error";      // installed but in error state
+
+/** Statuses that mean "there is a row in installed_extensions". */
+export const INSTALLED_STATUSES: readonly CatalogItemStatus[] = [
+  "installed",
+  "active",
+  "disabled",
+  "error",
+];
+
+export function isInstalledStatus(s: CatalogItemStatus): boolean {
+  return INSTALLED_STATUSES.includes(s);
+}
 
 /**
  * A normalized item in the catalog. The manifest is the source of truth for
@@ -42,6 +56,18 @@ export interface CatalogItem {
   /** Pricing hint surfaced from manifest.pricing or remote metadata. */
   price_cents: number;
   currency: string;
+  /**
+   * Stripe price ID, for paid store items only. The dashboard passes it to
+   * POST /api/store/checkout to open a checkout. Null/absent → not purchasable
+   * in-app (either free, or the store couldn't resolve a price).
+   */
+  price_id?: string | null;
+  /** License feature this item unlocks (`pro:<slug>`), for paid store items. */
+  feature?: string;
+  /** Newer version available in the catalog than the installed one. */
+  update_available?: boolean;
+  /** The installed version, when status is one of the installed ones. */
+  installed_version?: string;
   /** Aggregated stats — providers may leave these at 0. */
   install_count: number;
   avg_rating: number;

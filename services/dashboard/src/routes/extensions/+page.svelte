@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount } from 'svelte';
+  import { onMount, onDestroy } from 'svelte';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
 
   type ExtensionType =
@@ -32,10 +32,34 @@
       permissions?: string[];
       pricing?: { amount_cents: number; currency: string; model: string };
       integrity?: { sha256?: string };
+      /** Pro-author extensions that want a consent click before anything loads. */
+      requires_activation?: boolean;
+      /** Compiled into the kernel — the row is a registry stub, not a bundle. */
+      built_in?: boolean;
     } | null;
     source: unknown;
     granted_permissions: string[] | null;
     settings: Record<string, unknown> | null;
+    /**
+     * Signed record of how this extension got here, rendered by the receipt
+     * panel below. `{}` when the row predates receipts.
+     */
+    install_receipt: {
+      install_id?: string;
+      installed_at?: string;
+      bundle_sha256?: string;
+      install_sha256?: string;
+      kernel_identity?: string;
+      signature?: string;
+      source?: Record<string, unknown> & { type?: string };
+      remote_watermark?: {
+        download_id: string;
+        source_fp: string;
+        downloader_fp: string;
+        ts: string;
+        signature: string;
+      } | null;
+    } | null;
   }
 
   interface StatsBlock {
@@ -145,6 +169,534 @@
     'installed': { label: 'INSTALLED', tint: 'var(--gold)' },
     'disabled':  { label: 'DISABLED',  tint: 'var(--text-3)' },
     'error':     { label: 'ERROR',     tint: 'var(--red)' },
+  };
+
+  // ══════════════════════════════════════════════════════════════════════
+  //  Marketplace: browse, buy, install
+  // ══════════════════════════════════════════════════════════════════════
+  //
+  // Two data sources, one per tab, because they answer different questions:
+  //
+  //   • /api/marketplace/catalog — everything installable: the in-tree bundles,
+  //     items from subscribed git repos, and the paid store shelf. Drives
+  //     Discover + Updates.
+  //   • /api/extensions          — the installed rows, with receipts, settings
+  //     and per-type admin panels. Drives Installed and every drawer below.
+  //
+  // Searching in a tab searches what that tab shows, which is the whole point:
+  // the old page only ever searched the installed rows, so searching for
+  // something you hadn't installed yet always came back empty.
+
+  type Tab = 'discover' | 'installed' | 'updates';
+  type PriceFilter = '' | 'free' | 'paid';
+  type CardStatus =
+    | 'available' | 'for_sale' | 'owned'
+    | 'installed' | 'active' | 'disabled' | 'error';
+
+  interface CatalogEntry {
+    id: string;
+    slug: string;
+    origin: { provider: string; source?: unknown };
+    manifest: {
+      name: string;
+      version: string;
+      type: ExtensionType;
+      description?: string;
+      author?: string;
+      icon?: string;
+      logo?: string;
+      category?: string;
+      tags?: string[];
+      license?: string;
+      permissions?: string[];
+      pricing?: { amount_cents: number; currency: string; model: string };
+    };
+    status: CardStatus;
+    installed_id?: string;
+    installed_version?: string;
+    update_available?: boolean;
+    price_cents: number;
+    currency: string;
+    price_id?: string | null;
+    feature?: string;
+  }
+
+  /** Normalized shape the card grid renders, whichever source it came from. */
+  interface CardVM {
+    key: string;
+    slug: string;
+    name: string;
+    version: string;
+    type: ExtensionType;
+    icon: string;
+    logo: string | null;
+    description: string;
+    author: string;
+    status: CardStatus;
+    priceCents: number;
+    currency: string;
+    /** Stripe price id. Null → not purchasable in-app (see actionFor). */
+    priceId: string | null;
+    updateAvailable: boolean;
+    installedVersion: string;
+    /** The rich installed row, when this thing is installed. */
+    installed: ExtensionItem | null;
+    /** The catalog entry, when it came from the catalog. */
+    catalog: CatalogEntry | null;
+    error: string;
+    provider: string;
+  }
+
+  let tab: Tab = 'discover';
+  let priceFilter: PriceFilter = '';
+  let typeMenuOpen = false;
+
+  let catalogItems: CatalogEntry[] = [];
+  let catalogLoading = false;
+  let catalogError = '';
+
+  let storeReachable = true;
+  let storeError = '';
+  // The license is not tracked here on purpose: the catalog already resolves
+  // it into per-item `owned` / `for_sale` statuses server-side, so a second
+  // client-side copy could only ever disagree with it.
+
+  interface AllAccessPrice {
+    price_id: string;
+    price_cents: number | null;
+    currency: string;
+    interval: string | null;
+  }
+  let allAccess: { monthly: AllAccessPrice | null; yearly: AllAccessPrice | null } | null = null;
+  let showRepos = false;
+  let showPlusMenu = false;
+
+  /** In-flight and finished purchases, keyed by slug. */
+  interface PurchaseState {
+    sessionId: string;
+    state: 'pending' | 'paid' | 'done' | 'failed';
+    error: string | null;
+    url: string;
+  }
+  let purchases: Record<string, PurchaseState> = {};
+  const pollTimers = new Set<ReturnType<typeof setTimeout>>();
+  /** Slugs with an install request in flight (free or entitled). */
+  let installing: Record<string, boolean> = {};
+
+  // ── Catalog ──────────────────────────────────────────────────────────
+
+  /** Set once per page load so the first fetch bypasses the provider cache. */
+  let catalogNeedsRefresh = true;
+
+  async function fetchCatalog(): Promise<void> {
+    catalogLoading = true;
+    catalogError = '';
+    const params = new URLSearchParams();
+    if (filterType) params.set('type', filterType);
+    if (search) params.set('q', search);
+    // A reload must never show yesterday's prices; typing in the search box
+    // should not re-hit the store on every keystroke.
+    if (catalogNeedsRefresh) {
+      params.set('refresh', '1');
+      catalogNeedsRefresh = false;
+    }
+    try {
+      const r = await fetch(`${BASE}/api/marketplace/catalog?${params}`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = await r.json();
+      catalogItems = body.items ?? [];
+    } catch (e) {
+      catalogError = (e as Error).message;
+      catalogItems = [];
+    } finally {
+      catalogLoading = false;
+    }
+  }
+
+  /** Store reachability + license state + purchases to resume after a reload. */
+  async function fetchStoreStatus(): Promise<void> {
+    try {
+      // no-store, always: this drives prices and the Buy affordance. A cached
+      // response here means showing yesterday's offer — or hiding today's.
+      const r = await fetch(`${BASE}/api/store/status`, { cache: 'no-store' });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = await r.json();
+      storeReachable = body.reachable !== false;
+      storeError = body.error ?? '';
+      allAccess = body.all_access ?? null;
+      for (const row of body.open_checkouts ?? []) {
+        purchases[row.slug] = {
+          sessionId: row.session_id,
+          state: row.state,
+          error: row.error ?? null,
+          url: row.checkout_url ?? '',
+        };
+        pollCheckout(row.session_id, row.slug);
+      }
+      purchases = { ...purchases };
+    } catch {
+      // The store being unreachable is not a page error — the local catalog
+      // still works. We only note it so paid cards can explain themselves.
+      storeReachable = false;
+    }
+  }
+
+  // ── Buying ───────────────────────────────────────────────────────────
+
+  /**
+   * Open a Stripe Checkout for `slug` in a new tab and start polling. The
+   * kernel holds the session id, applies the minted license and installs the
+   * bundle — the user never touches a license key.
+   */
+  async function buy(slug: string): Promise<void> {
+    try {
+      const r = await fetch(`${BASE}/api/store/checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 409 && body.already_owned) {
+        // License already covers it — install instead of charging again.
+        await installFromStore(slug);
+        return;
+      }
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+
+      purchases[slug] = { sessionId: body.session_id, state: 'pending', error: null, url: body.url };
+      purchases = { ...purchases };
+      window.open(body.url, '_blank', 'noopener');
+      pollCheckout(body.session_id, slug);
+    } catch (e) {
+      purchases[slug] = {
+        sessionId: '',
+        state: 'failed',
+        error: (e as Error).message,
+        url: '',
+      };
+      purchases = { ...purchases };
+    }
+  }
+
+  /**
+   * Poll a checkout until it resolves. 2.5s is a good cadence: the webhook
+   * usually lands within a second or two of payment, and the user is looking at
+   * another tab anyway.
+   */
+  function pollCheckout(sessionId: string, slug: string): void {
+    const tick = async (): Promise<void> => {
+      try {
+        // A cached poll response would freeze the purchase mid-flight and the
+        // card would never leave "Waiting for payment…".
+        const r = await fetch(`${BASE}/api/store/checkout/${encodeURIComponent(sessionId)}`, {
+          cache: 'no-store',
+        });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const body = await r.json();
+        purchases[slug] = {
+          sessionId,
+          state: body.state,
+          error: body.error ?? null,
+          url: body.url ?? '',
+        };
+        purchases = { ...purchases };
+
+        if (body.state === 'done') {
+          await Promise.all([fetchList(), fetchCatalog()]);
+          window.dispatchEvent(new CustomEvent('manifest:refresh'));
+          return;
+        }
+        if (body.state === 'failed') {
+          // The license may still have been applied — refresh so an "owned"
+          // card shows up even when the install leg failed.
+          await Promise.all([fetchList(), fetchCatalog()]);
+          return;
+        }
+      } catch {
+        // Transient — keep polling. The server-side claim window is what
+        // actually ends this.
+      }
+      const t = setTimeout(() => { pollTimers.delete(t); void tick(); }, 2500);
+      pollTimers.add(t);
+    };
+    void tick();
+  }
+
+  /** Install a paid item the license already covers. */
+  async function installFromStore(slug: string): Promise<void> {
+    installing[slug] = true;
+    installing = { ...installing };
+    try {
+      const r = await fetch(`${BASE}/api/store/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ slug }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      await Promise.all([fetchList(), fetchCatalog()]);
+      window.dispatchEvent(new CustomEvent('manifest:refresh'));
+    } catch (e) {
+      alert(`Install failed: ${(e as Error).message}`);
+    } finally {
+      installing[slug] = false;
+      installing = { ...installing };
+    }
+  }
+
+  /** Install a free catalog item (bundled, or from a subscribed git repo). */
+  async function installFromCatalog(entry: CatalogEntry): Promise<void> {
+    installing[entry.slug] = true;
+    installing = { ...installing };
+    try {
+      const r = await fetch(`${BASE}/api/marketplace/catalog/install`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: entry.id }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      await Promise.all([fetchList(), fetchCatalog()]);
+      window.dispatchEvent(new CustomEvent('manifest:refresh'));
+    } catch (e) {
+      alert(`Install failed: ${(e as Error).message}`);
+    } finally {
+      installing[entry.slug] = false;
+      installing = { ...installing };
+    }
+  }
+
+  /** One entry point for "get this thing", whatever kind of thing it is. */
+  async function acquire(vm: CardVM): Promise<void> {
+    if (vm.status === 'for_sale') return buy(vm.slug);
+    if (vm.status === 'owned') return installFromStore(vm.slug);
+    if (vm.catalog) return installFromCatalog(vm.catalog);
+  }
+
+  // ── View models ──────────────────────────────────────────────────────
+
+  function catalogToVM(e: CatalogEntry): CardVM {
+    return {
+      key: e.id,
+      slug: e.slug,
+      name: e.manifest.name,
+      version: e.manifest.version,
+      type: e.manifest.type,
+      icon: e.manifest.icon ?? metaOf(e.manifest.type).icon,
+      logo: e.manifest.logo ?? null,
+      description: e.manifest.description ?? '',
+      author: e.manifest.author ?? '',
+      status: e.status,
+      priceCents: e.price_cents ?? 0,
+      currency: e.currency ?? 'USD',
+      priceId: e.price_id ?? null,
+      updateAvailable: e.update_available ?? false,
+      installedVersion: e.installed_version ?? '',
+      installed: e.installed_id ? items.find((i) => i.id === e.installed_id) ?? null : null,
+      catalog: e,
+      error: '',
+      provider: e.origin?.provider ?? '',
+    };
+  }
+
+  function installedToVM(x: ExtensionItem): CardVM {
+    return {
+      key: x.id,
+      slug: x.slug,
+      name: x.name,
+      version: x.version,
+      type: x.type,
+      icon: x.manifest?.icon ?? metaOf(x.type).icon,
+      logo: x.manifest?.logo ?? null,
+      description: x.manifest?.description ?? '',
+      author: x.manifest?.author ?? '',
+      status: x.status,
+      priceCents: x.manifest?.pricing?.amount_cents ?? 0,
+      currency: x.manifest?.pricing?.currency ?? 'USD',
+      priceId: null,
+      updateAvailable: false,
+      installedVersion: x.version,
+      installed: x,
+      catalog: null,
+      error: x.error,
+      provider: 'installed',
+    };
+  }
+
+  const isInstalledStatus = (s: CardStatus): boolean =>
+    s === 'installed' || s === 'active' || s === 'disabled' || s === 'error';
+
+  function matchesPrice(vm: CardVM): boolean {
+    if (priceFilter === 'free') return vm.priceCents === 0;
+    if (priceFilter === 'paid') return vm.priceCents > 0;
+    return true;
+  }
+
+  /** Client-side text match for the Installed tab (the catalog filters server-side). */
+  function matchesSearch(vm: CardVM): boolean {
+    if (!search) return true;
+    const q = search.toLowerCase();
+    return [vm.name, vm.slug, vm.description, vm.author].join(' ').toLowerCase().includes(q);
+  }
+
+  /**
+   * Discover is a storefront, so it shows only things you can still get:
+   * anything already installed is noise there and lives in the Installed tab.
+   * Without this, 85 of the 106 catalog entries were extensions the user had
+   * already installed, burying the ~20 they could actually acquire.
+   */
+  $: cards =
+    tab === 'installed'
+      ? items
+          .map(installedToVM)
+          .filter((vm) => (!filterStatus || vm.status === filterStatus) && matchesPrice(vm) && matchesSearch(vm))
+      : tab === 'updates'
+        ? catalogItems.filter((e) => e.update_available).map(catalogToVM).filter(matchesPrice)
+        : catalogItems
+            .map(catalogToVM)
+            .filter((vm) => !isInstalledStatus(vm.status))
+            .filter(matchesPrice);
+
+  /** The paid shelf — the storefront rail. Owned-but-uninstalled leads it. */
+  $: shelfCards = tab === 'discover'
+    ? cards
+        .filter((vm) => vm.status === 'for_sale' || vm.status === 'owned')
+        .sort((a, b) => (a.status === 'owned' ? -1 : b.status === 'owned' ? 1 : b.priceCents - a.priceCents))
+    : [];
+
+  /** Everything free and not yet installed. */
+  $: freeCards = tab === 'discover' ? cards.filter((vm) => vm.status === 'available') : [];
+
+  /**
+   * How many paid items the license still doesn't cover. This — not "does a
+   * license exist" — is what decides whether All-Access is worth offering:
+   * someone who bought a single extension still has the whole rest of the
+   * shelf to unlock, and `isPro` is true for any valid license. When a real
+   * All-Access license is present every item reports `owned`, so this hits
+   * zero and the offer disappears on its own.
+   */
+  $: forSaleCount = shelfCards.filter((vm) => vm.status === 'for_sale').length;
+  /** Paid items the license already covers — changes the All-Access pitch. */
+  $: ownedCount = shelfCards.filter((vm) => vm.status === 'owned').length;
+
+  /** How many installed items Discover is deliberately not showing. */
+  $: hiddenInstalled = catalogItems.filter((e) => isInstalledStatus(e.status as CardStatus)).length;
+
+  /**
+   * What the compact grid renders. In Discover the paid items are pulled out
+   * into the storefront rail above, so the grid holds only the free shelf —
+   * which keeps one card implementation for every tab.
+   */
+  $: gridCards = tab === 'discover' ? freeCards : cards;
+
+  /** Split a formatted price into currency symbol and digits for the big numeral. */
+  function priceParts(cents: number, currency: string): { sym: string; num: string } {
+    const formatted = fmtMoney(cents, currency);
+    const m = /^([^\d]*)(.*)$/.exec(formatted);
+    return { sym: (m?.[1] ?? '').trim(), num: m?.[2] ?? formatted };
+  }
+
+  /** Type counts for the type menu — only types that actually have something. */
+  $: typeCounts = (() => {
+    const src =
+      tab === 'installed'
+        ? items.map(installedToVM)
+        : catalogItems.map(catalogToVM).filter((vm) => !isInstalledStatus(vm.status));
+    const out: Partial<Record<ExtensionType, number>> = {};
+    for (const vm of src) out[vm.type] = (out[vm.type] ?? 0) + 1;
+    return out;
+  })();
+
+  $: installedCount = items.length;
+  $: updatesCount = catalogItems.filter((e) => e.update_available).length;
+  $: errorCount = items.filter((i) => i.status === 'error').length;
+  /** Counts what Discover actually shows — not the whole catalog. */
+  $: discoverCount = catalogItems.filter((e) => !isInstalledStatus(e.status as CardStatus)).length;
+
+  /** What the card's primary button says and does. */
+  function actionFor(vm: CardVM): {
+    label: string;
+    disabled: boolean;
+    kind: 'buy' | 'get' | 'update' | 'manage' | 'pricing';
+  } {
+    const purchase = purchases[vm.slug];
+    if (purchase && (purchase.state === 'pending' || purchase.state === 'paid')) {
+      return {
+        label: purchase.state === 'paid' ? 'Installing…' : 'Waiting for payment…',
+        disabled: true,
+        kind: 'buy',
+      };
+    }
+    if (installing[vm.slug]) return { label: 'Installing…', disabled: true, kind: 'get' };
+    if (vm.updateAvailable) return { label: `Update to v${vm.version}`, disabled: false, kind: 'update' };
+    if (vm.status === 'for_sale') {
+      // No resolvable price — an older store, an unpublished item, or Stripe
+      // being down. Send the user to the pricing page rather than showing a Buy
+      // button that can't charge, or worse, labelling a paid item "Free".
+      if (!vm.priceId || vm.priceCents <= 0) {
+        return { label: 'See pricing', disabled: false, kind: 'pricing' };
+      }
+      return { label: `${fmtMoney(vm.priceCents, vm.currency)} · Buy`, disabled: !storeReachable, kind: 'buy' };
+    }
+    if (vm.status === 'owned') return { label: 'Install', disabled: false, kind: 'get' };
+    if (vm.status === 'available') return { label: 'Install', disabled: false, kind: 'get' };
+    return { label: 'Manage', disabled: false, kind: 'manage' };
+  }
+
+  const PRICING_URL = 'https://lifekernl.com/pricing';
+
+  /** Route a card button press to the right thing. */
+  function onCardAction(vm: CardVM, kind: ReturnType<typeof actionFor>['kind']): void {
+    if (kind === 'manage') return openCard(vm);
+    if (kind === 'pricing') {
+      window.open(PRICING_URL, '_blank', 'noopener');
+      return;
+    }
+    void acquire(vm);
+  }
+
+  /** The price chip on a card. Paid-but-unpriced must never read as "Free". */
+  function priceBadge(vm: CardVM): string {
+    if (vm.status === 'owned') return '✓ Owned';
+    if (vm.priceCents > 0) return fmtMoney(vm.priceCents, vm.currency);
+    return 'PAID';
+  }
+
+  function fmtMoney(cents: number, currency: string): string {
+    if (!cents) return 'Free';
+    const amount = cents / 100;
+    const whole = Number.isInteger(amount);
+    try {
+      return new Intl.NumberFormat(undefined, {
+        style: 'currency',
+        currency: currency || 'USD',
+        minimumFractionDigits: whole ? 0 : 2,
+        maximumFractionDigits: whole ? 0 : 2,
+      }).format(amount);
+    } catch {
+      return `${currency} ${whole ? amount.toFixed(0) : amount.toFixed(2)}`;
+    }
+  }
+
+  /** Open a card: installed things get the full drawer, catalog things a preview. */
+  let previewed: CardVM | null = null;
+  function openCard(vm: CardVM): void {
+    if (vm.installed) {
+      selected = vm.installed;
+      previewed = null;
+    } else {
+      previewed = vm;
+    }
+  }
+
+  const STATUS_LABEL: Record<CardStatus, string> = {
+    available: 'NOT INSTALLED',
+    for_sale:  'PAID',
+    owned:     'OWNED',
+    installed: 'INSTALLED',
+    active:    'ACTIVE',
+    disabled:  'DISABLED',
+    error:     'ERROR',
   };
 
   // ── Catalog repos (path C — git-discovered skills) ──
@@ -410,10 +962,42 @@
   let debounceHandle: ReturnType<typeof setTimeout> | null = null;
   function onSearchInput(): void {
     if (debounceHandle) clearTimeout(debounceHandle);
-    debounceHandle = setTimeout(fetchList, 200);
+    // The catalog filters server-side (it spans providers); the installed list
+    // filters client-side off `items`, so it only needs a re-fetch when the
+    // type/status query params change.
+    debounceHandle = setTimeout(() => { void refetchActive(); }, 200);
   }
 
-  $: filtersActive = !!(search || filterType || filterStatus);
+  /** Re-query whatever backs the current tab. */
+  async function refetchActive(): Promise<void> {
+    if (tab === 'installed') await fetchList();
+    else await fetchCatalog();
+  }
+
+  function switchTab(next: Tab): void {
+    tab = next;
+    typeMenuOpen = false;
+    // Status only means something for installed things; drop it on the way out
+    // so Discover doesn't silently hide everything.
+    if (next !== 'installed') filterStatus = '';
+    void refetchActive();
+  }
+
+  function setType(t: ExtensionType | ''): void {
+    filterType = t;
+    typeMenuOpen = false;
+    void refetchActive();
+  }
+
+  function clearFilters(): void {
+    search = '';
+    filterType = '';
+    filterStatus = '';
+    priceFilter = '';
+    void refetchActive();
+  }
+
+  $: filtersActive = !!(search || filterType || filterStatus || priceFilter);
 
   // ── WhatsApp panel ─────────────────────────────────────────────────
   // Beyond the pairing QR, this drawer also surfaces:
@@ -847,42 +1431,169 @@
   onMount(() => {
     fetchList();
     fetchRepos();
+    fetchCatalog();
+    fetchStoreStatus();
+  });
+
+  onDestroy(() => {
+    for (const t of pollTimers) clearTimeout(t);
+    pollTimers.clear();
   });
 </script>
 
-<!-- Hero band with directional gradient + decorative grid pattern -->
-<header class="hero anim">
-  <div class="hero-inner">
-    <div class="hero-text">
-      <div class="hero-kicker">MARKETPLACE</div>
-      <h1 class="hero-title">Extensions</h1>
-      <p class="hero-sub">
-        Install modules, skills, agents, flows and themes as distributable
-        <code>.kernlext</code> bundles. One registry for everything you can add
-        to the kernel.
-      </p>
-    </div>
-    <div class="hero-actions">
-      <button class="btn-install" on:click={() => (showAddRepo = true)}>
-        <span class="btn-install-icon">+</span>
-        <span>Add repository</span>
-      </button>
-      <button class="btn-install btn-install-ghost" on:click={() => (showUpload = true)}>
-        <span class="btn-install-icon">↑</span>
-        <span>Install bundle</span>
-      </button>
-    </div>
+<!--
+  Command bar. Everything that used to be a 190px hero + 90px stat strip +
+  100px of chips is one 48px row and one 40px row: search dominates, the two
+  rarely-used install paths collapse into the ＋ menu, and the counters live in
+  the tab labels where they're read as navigation rather than decoration.
+-->
+<header class="bar anim">
+  <div class="bar-brand">
+    <span class="bar-mark" aria-hidden="true">⬡</span>
+    <h1 class="bar-title">Extensions</h1>
   </div>
-  <div class="hero-rays" aria-hidden="true"></div>
+
+  <div class="bar-search">
+    <span class="bar-search-icon" aria-hidden="true">⌕</span>
+    <input
+      type="text"
+      bind:value={search}
+      on:input={onSearchInput}
+      placeholder={tab === 'installed'
+        ? `Search ${installedCount} installed…`
+        : `Search ${discoverCount} extensions, skills, agents, themes…`}
+      aria-label="Search extensions"
+    />
+    {#if search}
+      <button class="bar-search-clear" on:click={clearFilters} aria-label="Clear search">×</button>
+    {/if}
+  </div>
+
+  <div class="bar-plus">
+    <button
+      class="plus-btn"
+      aria-haspopup="menu"
+      aria-expanded={showPlusMenu}
+      on:click={() => (showPlusMenu = !showPlusMenu)}
+      title="Add a repository or install a .kernlext bundle"
+    >＋</button>
+    {#if showPlusMenu}
+      <!-- svelte-ignore a11y-no-static-element-interactions -->
+      <div class="plus-scrim" role="presentation" on:click={() => (showPlusMenu = false)}></div>
+      <div class="plus-menu" role="menu">
+        <button role="menuitem" on:click={() => { showPlusMenu = false; showUpload = true; }}>
+          <span class="plus-menu-icon">↑</span>
+          <span>
+            <strong>Install bundle</strong>
+            <small>A <code>.kernlext</code> file from disk or a server path</small>
+          </span>
+        </button>
+        <button role="menuitem" on:click={() => { showPlusMenu = false; showAddRepo = true; }}>
+          <span class="plus-menu-icon">⎇</span>
+          <span>
+            <strong>Add repository</strong>
+            <small>Fill the catalog from a public Git URL</small>
+          </span>
+        </button>
+        {#if repos.length > 0}
+          <button role="menuitem" on:click={() => { showPlusMenu = false; showRepos = true; }}>
+            <span class="plus-menu-icon">⚙</span>
+            <span>
+              <strong>Manage repositories</strong>
+              <small>{repos.length} subscribed</small>
+            </span>
+          </button>
+        {/if}
+      </div>
+    {/if}
+  </div>
 </header>
 
+<!-- Tabs + the two filters that survived -->
+<nav class="tabs anim d05">
+  <div class="tabs-left">
+    <button class="tab" class:tab-on={tab === 'discover'} on:click={() => switchTab('discover')}>
+      Discover
+      {#if discoverCount}<span class="tab-n">{discoverCount}</span>{/if}
+    </button>
+    <button class="tab" class:tab-on={tab === 'installed'} on:click={() => switchTab('installed')}>
+      Installed
+      {#if installedCount}<span class="tab-n">{installedCount}</span>{/if}
+    </button>
+    {#if updatesCount > 0}
+      <button class="tab tab-accent" class:tab-on={tab === 'updates'} on:click={() => switchTab('updates')}>
+        Updates
+        <span class="tab-n tab-n-accent">{updatesCount}</span>
+      </button>
+    {/if}
+  </div>
+
+  <div class="tabs-right">
+    <!-- Type: a menu instead of twelve chips, listing only types that exist -->
+    <div class="typesel">
+      <button class="typesel-btn" aria-expanded={typeMenuOpen} on:click={() => (typeMenuOpen = !typeMenuOpen)}>
+        {filterType ? `${metaOf(filterType).icon} ${metaOf(filterType).label}` : 'All types'}
+        <span class="typesel-caret" aria-hidden="true">▾</span>
+      </button>
+      {#if typeMenuOpen}
+        <!-- svelte-ignore a11y-no-static-element-interactions -->
+        <div class="plus-scrim" role="presentation" on:click={() => (typeMenuOpen = false)}></div>
+        <div class="typesel-menu" role="menu">
+          <button role="menuitem" class:typesel-on={filterType === ''} on:click={() => setType('')}>
+            All types
+          </button>
+          {#each TYPE_ORDER.filter((t) => (typeCounts[t] ?? 0) > 0) as t}
+            <button role="menuitem" class:typesel-on={filterType === t} on:click={() => setType(t)}>
+              <span class="typesel-glyph" style="color: {metaOf(t).tint}">{metaOf(t).icon}</span>
+              {metaOf(t).label}
+              <span class="typesel-n">{typeCounts[t]}</span>
+            </button>
+          {/each}
+        </div>
+      {/if}
+    </div>
+
+    <!-- Price: the one axis people actually filter a store by -->
+    <div class="seg" role="group" aria-label="Price">
+      <button class:seg-on={priceFilter === ''} on:click={() => (priceFilter = '')}>All</button>
+      <button class:seg-on={priceFilter === 'free'} on:click={() => (priceFilter = 'free')}>Free</button>
+      <button class:seg-on={priceFilter === 'paid'} on:click={() => (priceFilter = 'paid')}>Paid</button>
+    </div>
+
+    {#if tab === 'installed'}
+      <div class="seg" role="group" aria-label="Status">
+        <button class:seg-on={filterStatus === ''} on:click={() => { filterStatus = ''; }}>Any</button>
+        {#each STATUS_ORDER as s}
+          <button
+            class:seg-on={filterStatus === s}
+            on:click={() => { filterStatus = filterStatus === s ? '' : s; }}
+          >{STATUS_META[s].label.charAt(0) + STATUS_META[s].label.slice(1).toLowerCase()}</button>
+        {/each}
+      </div>
+    {/if}
+  </div>
+</nav>
+
+<!-- Only surfaced when there's something wrong: no stat cards full of zeros. -->
+{#if errorCount > 0 && tab !== 'discover'}
+  <button class="thin-alert thin-alert-red" on:click={() => { switchTab('installed'); filterStatus = 'error'; }}>
+    ⚠︎ {errorCount} extension{errorCount === 1 ? '' : 's'} failed to load — click to review
+  </button>
+{/if}
+{#if !storeReachable}
+  <div class="thin-alert">
+    ⚠︎ The Kernl store is unreachable{storeError ? ` (${storeError})` : ''} — paid extensions can't be browsed or bought right now.
+  </div>
+{/if}
+
 <!-- Subscribed git repos — fill the marketplace by URL (path C) -->
-{#if reposLoaded && repos.length > 0}
+{#if showRepos && repos.length > 0}
   <section class="repos-panel anim d05">
     <header class="repos-head">
       <span class="repos-icon">⎇</span>
       <strong>Subscribed repositories</strong>
       <span class="repos-count">{repos.length}</span>
+      <button class="repos-close" on:click={() => (showRepos = false)} aria-label="Hide repositories">×</button>
     </header>
     <div class="repos-grid">
       {#each repos as repo (repo.id)}
@@ -956,161 +1667,353 @@
   </aside>
 {/if}
 
-<!-- Stats strip -->
-{#if stats}
-  <div class="stat-row anim d1">
-    <div class="stat" style="--stat-tint: var(--teal);">
-      <div class="stat-value">{stats.total}</div>
-      <div class="stat-label">Total installed</div>
-    </div>
-    <div class="stat" style="--stat-tint: var(--green);">
-      <div class="stat-value">{stats.by_status?.active ?? 0}</div>
-      <div class="stat-label">Active</div>
-    </div>
-    <div class="stat" style="--stat-tint: var(--gold);">
-      <div class="stat-value">{stats.by_status?.installed ?? 0}</div>
-      <div class="stat-label">Installed, idle</div>
-    </div>
-    <div class="stat" style="--stat-tint: var(--red);">
-      <div class="stat-value">{stats.by_status?.error ?? 0}</div>
-      <div class="stat-label">Errored</div>
-    </div>
-  </div>
-{/if}
-
-<!-- Filter bar -->
-<div class="filter-bar anim d2">
-  <input
-    type="text"
-    bind:value={search}
-    on:input={onSearchInput}
-    placeholder="Search by name, slug or id…"
-    class="filter-search"
-  />
-
-  <div class="chip-row">
-    <button
-      class="chip"
-      class:active={filterType === ''}
-      on:click={() => { filterType = ''; fetchList(); }}
-    >All types</button>
-    {#each TYPE_ORDER as t}
-      <button
-        class="chip"
-        class:active={filterType === t}
-        style="--chip-tint: {TYPE_META[t].tint};"
-        on:click={() => { filterType = filterType === t ? '' : t; fetchList(); }}
-      >
-        <span class="chip-glyph">{TYPE_META[t].icon}</span>
-        {TYPE_META[t].label}
-      </button>
-    {/each}
-  </div>
-
-  <div class="chip-row">
-    <button
-      class="chip chip-status"
-      class:active={filterStatus === ''}
-      on:click={() => { filterStatus = ''; fetchList(); }}
-    >Any status</button>
-    {#each STATUS_ORDER as s}
-      <button
-        class="chip chip-status"
-        class:active={filterStatus === s}
-        style="--chip-tint: {STATUS_META[s].tint};"
-        on:click={() => { filterStatus = filterStatus === s ? '' : s; fetchList(); }}
-      >{STATUS_META[s].label}</button>
-    {/each}
-    {#if filtersActive}
-      <button
-        class="chip chip-clear"
-        on:click={() => { search = ''; filterType = ''; filterStatus = ''; fetchList(); }}
-      >× Clear</button>
-    {/if}
-  </div>
-</div>
-
-<!-- Grid -->
-{#if loading}
-  <div class="loading">Loading extensions…</div>
-{:else if loadError}
-  <div class="error-banner">Failed to load: {loadError}</div>
-{:else if items.length === 0}
+<!--
+  The grid. One card component for both sources: a store item, a bundled
+  extension and an installed module all render the same way, and only the
+  primary button differs (Buy / Install / Update / Manage). The card body opens
+  the detail — the button acts without opening anything, so acquiring something
+  is one click from the grid.
+-->
+{#if tab === 'installed' ? loading : catalogLoading}
+  <div class="loading">Loading{tab === 'installed' ? ' installed extensions' : ' the catalog'}…</div>
+{:else if tab === 'installed' ? loadError : catalogError}
+  <div class="error-banner">Failed to load: {tab === 'installed' ? loadError : catalogError}</div>
+{:else if cards.length === 0}
   <div class="empty">
     <div class="empty-icon">⬡</div>
-    <div class="empty-title">Nothing here yet</div>
-    <p class="empty-sub">
-      {filtersActive
-        ? 'No extensions match the current filter.'
-        : 'Install your first .kernlext bundle to get started — modules, skills, themes, agents, flows, templates and channels all live here.'}
-    </p>
-    {#if !filtersActive}
-      <button class="btn-install" on:click={() => (showUpload = true)}>
-        <span class="btn-install-icon">↑</span>
-        <span>Install bundle</span>
-      </button>
+    {#if filtersActive}
+      <div class="empty-title">No matches</div>
+      <p class="empty-sub">
+        Nothing in {tab === 'installed' ? 'your installed extensions' : 'the catalog'} matches
+        {#if search}“{search}”{:else}the current filter{/if}.
+      </p>
+      <div class="empty-actions">
+        <button class="btn-install btn-install-ghost" on:click={clearFilters}>Clear filters</button>
+        {#if tab === 'installed' && search}
+          <button class="btn-install" on:click={() => switchTab('discover')}>
+            Search the catalog instead
+          </button>
+        {/if}
+      </div>
+    {:else if tab === 'installed'}
+      <div class="empty-title">Nothing installed yet</div>
+      <p class="empty-sub">Browse the catalog and install something — it's one click.</p>
+      <div class="empty-actions">
+        <button class="btn-install" on:click={() => switchTab('discover')}>Browse the catalog</button>
+      </div>
+    {:else if hiddenInstalled > 0}
+      <!-- Not an empty catalog: everything available is already installed. -->
+      <div class="empty-title">You've got everything</div>
+      <p class="empty-sub">
+        All {hiddenInstalled} extensions in your catalog are installed. Add a Git
+        repository for more, or check the store for premium ones.
+      </p>
+      <div class="empty-actions">
+        <button class="btn-install" on:click={() => (showAddRepo = true)}>Add repository</button>
+        <button class="btn-install btn-install-ghost" on:click={() => switchTab('installed')}>
+          See what's installed
+        </button>
+      </div>
+    {:else}
+      <div class="empty-title">The catalog is empty</div>
+      <p class="empty-sub">
+        Add a Git repository to fill it, or install a <code>.kernlext</code> bundle directly.
+      </p>
+      <div class="empty-actions">
+        <button class="btn-install" on:click={() => (showAddRepo = true)}>Add repository</button>
+        <button class="btn-install btn-install-ghost" on:click={() => (showUpload = true)}>Install bundle</button>
+      </div>
     {/if}
   </div>
 {:else}
-  <div class="grid anim d3">
-    {#each items as ext (ext.id)}
-      {@const meta = metaOf(ext.type)}
-      <button
-        type="button"
+  <!--
+    All-Access first: one strip, real prices from the store, shown only to
+    someone who doesn't already have it. It's the highest-value thing on the
+    page, so it gets the top slot and the only gradient on the screen.
+  -->
+  {#if tab === 'discover' && forSaleCount > 0 && allAccess?.monthly?.price_cents}
+    <section class="aa anim">
+      <div class="aa-glow" aria-hidden="true"></div>
+      <div class="aa-body">
+        <div class="aa-kicker">All-Access</div>
+        <h2 class="aa-title">
+          {#if ownedCount > 0}
+            Unlock the other {forSaleCount} premium extension{forSaleCount === 1 ? '' : 's'}
+          {:else}
+            Unlock all {forSaleCount} premium extension{forSaleCount === 1 ? '' : 's'}
+          {/if}
+        </h2>
+        <p class="aa-sub">
+          Every paid extension, plus everything released while you're subscribed.
+          Cancel whenever — extensions you bought outright stay yours.
+        </p>
+      </div>
+      <div class="aa-buy">
+        <div class="aa-price">
+          <span class="aa-price-sym">{priceParts(allAccess.monthly.price_cents, allAccess.monthly.currency).sym}</span>
+          <span class="aa-price-num">{priceParts(allAccess.monthly.price_cents, allAccess.monthly.currency).num}</span>
+          <span class="aa-price-per">/mo</span>
+        </div>
+        {#if allAccess.yearly?.price_cents}
+          <div class="aa-alt">
+            or {fmtMoney(allAccess.yearly.price_cents, allAccess.yearly.currency)}/year
+          </div>
+        {/if}
+        <a class="aa-cta" href={PRICING_URL} target="_blank" rel="noopener noreferrer">
+          Get All-Access
+        </a>
+      </div>
+    </section>
+  {/if}
+
+  <!--
+    The storefront rail. Paid items are goods, not config rows: big mark, the
+    price as a tabular numeral, what you actually get, and a full-width CTA.
+    Free items stay in the quiet grid below — the contrast is what sells.
+  -->
+  {#if shelfCards.length > 0}
+    <section class="shelf anim d05">
+      <header class="sec-head">
+        <span class="sec-rule" aria-hidden="true"></span>
+        <h2 class="sec-title">Premium</h2>
+        <span class="sec-n">{shelfCards.length}</span>
+        {#if !storeReachable}
+          <span class="sec-note">store unreachable</span>
+        {/if}
+      </header>
+
+      <div class="shelf-grid">
+        {#each shelfCards as vm, i (vm.key)}
+          {@const meta = metaOf(vm.type)}
+          {@const act = actionFor(vm)}
+          {@const purchase = purchases[vm.slug]}
+          {@const pp = priceParts(vm.priceCents, vm.currency)}
+          <article
+            class="pcard"
+            class:pcard-owned={vm.status === 'owned'}
+            style="--card-tint: {meta.tint}; --stagger: {i * 45}ms;"
+          >
+            <div class="pcard-sheen" aria-hidden="true"></div>
+
+            <button type="button" class="pcard-body" on:click={() => openCard(vm)}>
+              <div class="pcard-top">
+                <span class="pcard-mark">{vm.icon}</span>
+                {#if vm.status === 'owned'}
+                  <span class="pcard-owned-tag">✓ Owned</span>
+                {:else if vm.priceCents > 0}
+                  <span class="pcard-price">
+                    <span class="pcard-price-sym">{pp.sym}</span><span class="pcard-price-num">{pp.num}</span>
+                  </span>
+                {/if}
+              </div>
+
+              <h3 class="pcard-name">{vm.name}</h3>
+              <div class="pcard-meta">{meta.label} · v{vm.version}</div>
+              <p class="pcard-desc">{vm.description || '(no description)'}</p>
+
+              <div class="pcard-trust">
+                {#if vm.status === 'owned'}
+                  <span class="trust">Covered by your license</span>
+                {:else}
+                  <span class="trust">One-time — yours forever</span>
+                {/if}
+                <span class="trust">Signed bundle</span>
+              </div>
+            </button>
+
+            <div class="pcard-foot">
+              <button
+                class="pcard-cta"
+                class:pcard-cta-owned={vm.status === 'owned'}
+                disabled={act.disabled}
+                on:click={() => onCardAction(vm, act.kind)}
+              >{act.label}</button>
+            </div>
+
+            {#if purchase?.state === 'failed' && purchase.error}
+              <div class="card-error-msg">⚠︎ {purchase.error}</div>
+            {:else if purchase?.state === 'pending'}
+              <div class="pcard-hint">Finish the payment in the tab that opened — this card updates itself.</div>
+            {/if}
+          </article>
+        {/each}
+      </div>
+    </section>
+  {/if}
+
+  {#if tab === 'discover' && gridCards.length > 0}
+    <header class="sec-head anim d1">
+      <span class="sec-rule" aria-hidden="true"></span>
+      <h2 class="sec-title">Free</h2>
+      <span class="sec-n">{gridCards.length}</span>
+      {#if hiddenInstalled > 0}
+        <button class="sec-link" on:click={() => switchTab('installed')}>
+          {hiddenInstalled} already installed — hidden
+        </button>
+      {/if}
+    </header>
+  {/if}
+
+  <div class="grid anim d1">
+    {#each gridCards as vm (vm.key)}
+      {@const meta = metaOf(vm.type)}
+      {@const act = actionFor(vm)}
+      {@const purchase = purchases[vm.slug]}
+      <article
         class="card"
-        class:card-disabled={ext.status === 'disabled'}
-        class:card-error={ext.status === 'error'}
+        class:card-disabled={vm.status === 'disabled'}
+        class:card-error={vm.status === 'error'}
+        class:card-paid={vm.status === 'for_sale'}
         style="--card-tint: {meta.tint};"
-        on:click={() => (selected = ext)}
       >
         <div class="card-stripe"></div>
 
-        <div class="card-head">
-          <div class="card-icon">
-            {#if ext.manifest?.logo}
-              <img
-                src={logoUrl(ext)}
-                alt=""
-                class="card-icon-img"
-                loading="lazy"
-              />
-            {:else}
-              {ext.manifest?.icon ?? meta.icon}
+        <!-- Body opens the detail; the action button below is separate so it
+             never requires opening a drawer first. -->
+        <button type="button" class="card-body" on:click={() => openCard(vm)}>
+          <div class="card-head">
+            <div class="card-icon">
+              {#if vm.logo && vm.installed}
+                <img src={logoUrl(vm.installed)} alt="" class="card-icon-img" loading="lazy" />
+              {:else if vm.logo && /^https?:\/\//i.test(vm.logo)}
+                <img src={vm.logo} alt="" class="card-icon-img" loading="lazy" />
+              {:else}
+                {vm.icon}
+              {/if}
+            </div>
+            <div class="card-head-text">
+              <div class="card-name">{vm.name}</div>
+              <div class="card-sub">
+                <span>{meta.label}</span>
+                <span class="sep">·</span>
+                <span>v{vm.version}</span>
+                {#if vm.updateAvailable && vm.installedVersion}
+                  <span class="sep">·</span>
+                  <span class="card-from">from v{vm.installedVersion}</span>
+                {/if}
+              </div>
+            </div>
+            {#if vm.status === 'for_sale' || vm.status === 'owned'}
+              <span class="card-badge" class:card-badge-owned={vm.status === 'owned'}>
+                {priceBadge(vm)}
+              </span>
+            {:else if isInstalledStatus(vm.status)}
+              <span class="card-dot card-dot-{vm.status}" title={STATUS_LABEL[vm.status]}></span>
             {/if}
           </div>
-          <div class="card-head-text">
-            <div class="card-name">{ext.name}</div>
-            <div class="card-sub">
-              <span class="mono">{ext.slug}</span>
-              <span class="sep">·</span>
-              <span>v{ext.version}</span>
-            </div>
-          </div>
-          <div class="card-price">
-            {fmtPrice(ext.manifest)}
-          </div>
-        </div>
 
-        <p class="card-desc">
-          {ext.manifest?.description ?? '(no description)'}
-        </p>
+          <p class="card-desc">{vm.description || '(no description)'}</p>
+        </button>
 
         <div class="card-foot">
-          <span class="tag tag-type">{meta.label}</span>
-          <span class="tag tag-status tag-status-{ext.status}">
-            {STATUS_META[ext.status].label}
-          </span>
-          {#if ext.manifest?.author}
-            <span class="card-author">by {ext.manifest.author}</span>
+          <button
+            class="card-act"
+            class:card-act-buy={act.kind === 'buy'}
+            class:card-act-update={act.kind === 'update'}
+            class:card-act-ghost={act.kind === 'manage' || act.kind === 'pricing'}
+            disabled={act.disabled}
+            on:click={() => onCardAction(vm, act.kind)}
+          >
+            {act.label}
+          </button>
+          <!-- A for_sale card is by definition not covered, so the presence of
+               some other license is irrelevant here. -->
+          {#if vm.provider === 'store' && act.kind === 'buy'}
+            <a class="card-aa" href={PRICING_URL} target="_blank" rel="noopener noreferrer">
+              or All-Access
+            </a>
           {/if}
         </div>
 
-        {#if ext.status === 'error' && ext.error}
-          <div class="card-error-msg">⚠︎ {ext.error}</div>
+        {#if purchase?.state === 'failed' && purchase.error}
+          <div class="card-error-msg">⚠︎ {purchase.error}</div>
+        {:else if vm.status === 'error' && vm.error}
+          <div class="card-error-msg">⚠︎ {vm.error}</div>
         {/if}
-      </button>
+      </article>
     {/each}
   </div>
+{/if}
+
+<!-- Catalog preview: the drawer for something that isn't installed yet -->
+{#if previewed}
+  {@const vm = previewed}
+  {@const meta = metaOf(vm.type)}
+  {@const act = actionFor(vm)}
+  <div
+    class="drawer-scrim"
+    role="presentation"
+    on:click={() => (previewed = null)}
+    on:keydown={(e) => e.key === 'Escape' && (previewed = null)}
+  ></div>
+  <aside class="drawer" role="dialog" aria-modal="true" style="--card-tint: {meta.tint};">
+    <div class="drawer-ribbon"></div>
+    <header class="drawer-head">
+      <div class="drawer-title">
+        <div class="drawer-icon">{vm.icon}</div>
+        <div>
+          <div class="drawer-name">{vm.name}</div>
+          <div class="drawer-id mono">{vm.slug}</div>
+        </div>
+      </div>
+      <button class="drawer-close" on:click={() => (previewed = null)} aria-label="Close">×</button>
+    </header>
+
+    <div class="drawer-tags">
+      <span class="tag tag-type">{meta.label}</span>
+      <span class="tag">v{vm.version}</span>
+      {#if vm.catalog?.manifest.license}<span class="tag tag-muted">{vm.catalog.manifest.license}</span>{/if}
+      <span class="tag tag-price">
+        {vm.status === 'for_sale' || vm.status === 'owned' ? priceBadge(vm) : fmtMoney(vm.priceCents, vm.currency)}
+      </span>
+      {#if vm.status === 'owned'}<span class="tag tag-status tag-status-active">OWNED</span>{/if}
+      {#if vm.provider && vm.provider !== 'installed'}<span class="tag tag-muted">{vm.provider}</span>{/if}
+    </div>
+
+    <p class="drawer-desc">{vm.description || '(no description)'}</p>
+
+    <div class="drawer-actions">
+      <button
+        class="act-btn act-primary"
+        disabled={act.disabled}
+        on:click={() => onCardAction(vm, act.kind)}
+      >{act.label}</button>
+      {#if vm.status === 'for_sale' && act.kind === 'buy'}
+        <a class="act-btn act-secondary" href={PRICING_URL} target="_blank" rel="noopener noreferrer">
+          See All-Access
+        </a>
+      {/if}
+    </div>
+
+    {#if vm.status === 'for_sale' && act.kind === 'buy'}
+      <section class="drawer-section">
+        <h3>How buying works</h3>
+        <p class="drawer-note">
+          Checkout opens in a new tab. When the payment clears, this kernel picks
+          up the license on its own and installs {vm.name} — you never handle a
+          license key. If you close the tab mid-payment, it resumes here.
+        </p>
+      </section>
+    {/if}
+
+    {#if vm.catalog?.manifest.permissions?.length}
+      <section class="drawer-section">
+        <h3>Permissions requested</h3>
+        <div class="perm-list">
+          {#each vm.catalog.manifest.permissions as p}
+            <span class="tag tag-perm mono">{p}</span>
+          {/each}
+        </div>
+      </section>
+    {/if}
+
+    {#if vm.author}
+      <section class="drawer-section">
+        <h3>Author</h3>
+        <p class="drawer-note">{vm.author}</p>
+      </section>
+    {/if}
+  </aside>
 {/if}
 
 <!-- Detail drawer -->
@@ -1229,7 +2132,7 @@
           <dt>install_id</dt>
           <dd>
             <code class="mono receipt-mono">{sel.install_receipt.install_id}</code>
-            <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt.install_id)} title="Copy install_id">⎘</button>
+            <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt?.install_id ?? '')} title="Copy install_id">⎘</button>
           </dd>
 
           <dt>installed at</dt>
@@ -1249,7 +2152,7 @@
             <code class="mono receipt-mono receipt-trunc" title={sel.install_receipt.install_sha256}>
               {sel.install_receipt.install_sha256}
             </code>
-            <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt.install_sha256)} title="Copy install_sha256">⎘</button>
+            <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt?.install_sha256 ?? '')} title="Copy install_sha256">⎘</button>
           </dd>
 
           <dt>kernel_identity</dt>
@@ -1265,7 +2168,7 @@
               <code class="mono receipt-mono receipt-trunc" title={sel.install_receipt.signature}>
                 {sel.install_receipt.signature}
               </code>
-              <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt.signature)} title="Copy signature">⎘</button>
+              <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt?.signature ?? '')} title="Copy signature">⎘</button>
             {:else}
               <span class="receipt-empty-inline">— not signed —</span>
             {/if}
@@ -1293,7 +2196,7 @@
               <dt>download_id</dt>
               <dd>
                 <code class="mono receipt-mono">{sel.install_receipt.remote_watermark.download_id}</code>
-                <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt.remote_watermark.download_id)} title="Copy download_id">⎘</button>
+                <button class="receipt-copy" on:click|stopPropagation={() => copyText(sel.install_receipt?.remote_watermark?.download_id ?? '')} title="Copy download_id">⎘</button>
               </dd>
               <dt>source identity</dt>
               <dd>
@@ -1874,61 +2777,452 @@
     --ext-channel:  #9966FF;
   }
 
-  /* ── Hero ─────────────────────────────────────────────────────── */
-  .hero {
-    position: relative;
-    margin-bottom: 28px;
-    padding: 32px 36px;
-    border-radius: 16px;
-    overflow: hidden;
-    background:
-      linear-gradient(130deg,
-        color-mix(in srgb, var(--ext-module) 14%, transparent) 0%,
-        color-mix(in srgb, var(--ext-theme)  10%, transparent) 40%,
-        color-mix(in srgb, var(--ext-agent)  8%,  transparent) 70%,
-        transparent 100%),
-      var(--surface-1);
+  /* ── Command bar ──────────────────────────────────────────────────
+     Replaces the old 190px hero. Title, search and the ＋ menu on one
+     48px row: the search field is the widest thing on the page because
+     searching is the thing people came to do. */
+  .bar {
+    display: flex; align-items: center; gap: 14px;
+    margin-bottom: 10px;
+  }
+  .bar-brand { display: flex; align-items: center; gap: 9px; flex: none; }
+  .bar-mark {
+    font-size: 17px;
+    color: var(--ext-module);
+  }
+  .bar-title {
+    font-family: var(--font-display, sans-serif);
+    font-size: 19px; font-weight: 700; letter-spacing: -0.01em;
+    color: var(--text-1); margin: 0; white-space: nowrap;
+  }
+  .bar-search {
+    position: relative; flex: 1 1 auto; min-width: 0;
+    display: flex; align-items: center;
+  }
+  .bar-search input {
+    width: 100%;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    color: var(--text-1);
+    border-radius: 9px;
+    padding: 9px 34px 9px 32px;
+    font-size: 13px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .bar-search input:focus {
+    outline: none;
+    border-color: var(--ext-module);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ext-module) 15%, transparent);
+  }
+  .bar-search-icon {
+    position: absolute; left: 11px; font-size: 14px;
+    color: var(--text-2); pointer-events: none;
+  }
+  .bar-search-clear {
+    position: absolute; right: 8px;
+    background: none; border: none; cursor: pointer;
+    color: var(--text-2); font-size: 17px; line-height: 1;
+    padding: 2px 5px; border-radius: 5px;
+  }
+  .bar-search-clear:hover { color: var(--text-1); background: var(--surface-3); }
+
+  .bar-plus { position: relative; flex: none; }
+  .plus-btn {
+    width: 34px; height: 34px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: linear-gradient(135deg, var(--ext-module), var(--ext-flow));
+    color: var(--bg); border: none; border-radius: 9px;
+    font-size: 17px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 2px 10px color-mix(in srgb, var(--ext-module) 35%, transparent);
+    transition: transform .15s;
+  }
+  .plus-btn:hover { transform: translateY(-1px); }
+  .plus-scrim { position: fixed; inset: 0; z-index: 40; }
+  .plus-menu {
+    position: absolute; top: calc(100% + 6px); right: 0; z-index: 41;
+    width: 290px; padding: 6px;
+    background: var(--surface-1);
     border: 1px solid var(--border-h);
+    border-radius: 11px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; gap: 2px;
   }
-  .hero-inner {
-    position: relative; z-index: 2;
-    display: flex; align-items: flex-start; justify-content: space-between;
-    gap: 24px; flex-wrap: wrap;
+  .plus-menu button {
+    display: flex; align-items: flex-start; gap: 10px;
+    background: none; border: none; cursor: pointer;
+    padding: 9px 10px; border-radius: 8px; text-align: left;
+    color: var(--text-1);
   }
-  .hero-text { max-width: 640px; }
-  .hero-kicker {
+  .plus-menu button:hover { background: var(--surface-3); }
+  .plus-menu-icon {
+    flex: none; width: 24px; height: 24px; margin-top: 1px;
+    display: inline-flex; align-items: center; justify-content: center;
+    background: var(--surface-3); border-radius: 6px;
+    font-size: 12px; color: var(--ext-module);
+  }
+  .plus-menu strong { display: block; font-size: 13px; font-weight: 600; }
+  .plus-menu small {
+    display: block; font-size: 11.5px; color: var(--text-2); margin-top: 2px;
+    line-height: 1.4;
+  }
+  .plus-menu small code {
     font-family: var(--font-mono, monospace);
-    font-size: 11px; letter-spacing: 0.22em;
-    color: color-mix(in srgb, var(--ext-module) 80%, var(--text-2));
-    font-weight: 600;
-  }
-  .hero-title {
-    font-family: var(--font-display, serif);
-    font-size: 46px; font-weight: 700; line-height: 1.05;
-    margin: 8px 0 12px; color: var(--text-1);
-    letter-spacing: -0.02em;
-  }
-  .hero-sub {
-    font-size: 14px; line-height: 1.6; color: var(--text-2);
-    max-width: 560px; margin: 0;
-  }
-  .hero-sub code {
-    font-family: var(--font-mono, monospace);
-    background: var(--surface-3); padding: 1px 6px;
-    border-radius: 4px; font-size: 12px; color: var(--ext-flow);
+    background: var(--surface-3); padding: 0 3px; border-radius: 3px;
   }
 
-  /* Decorative angled rays, subtly animated */
-  .hero-rays {
-    position: absolute; inset: 0; z-index: 1;
-    background-image:
-      repeating-linear-gradient(
-        115deg,
-        transparent 0 120px,
-        color-mix(in srgb, var(--ext-module) 6%, transparent) 120px 121px
-      );
-    mask-image: linear-gradient(90deg, transparent, black 40%, black 70%, transparent);
-    opacity: 0.5;
+  /* ── Tabs + filters ─────────────────────────────────────────────── */
+  .tabs {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 12px; flex-wrap: wrap;
+    margin-bottom: 16px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 8px;
+  }
+  .tabs-left { display: flex; align-items: center; gap: 2px; }
+  .tabs-right { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: none; border: none; cursor: pointer;
+    padding: 7px 12px; border-radius: 8px;
+    font-size: 13px; font-weight: 600; color: var(--text-2);
+    transition: color .15s, background .15s;
+  }
+  .tab:hover { color: var(--text-1); background: var(--surface-3); }
+  .tab-on {
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--ext-module) 14%, var(--surface-1));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ext-module) 35%, transparent);
+  }
+  .tab-n {
+    font-family: var(--font-mono, monospace);
+    font-size: 10.5px; font-weight: 700;
+    padding: 1px 5px; border-radius: 20px;
+    background: var(--surface-3); color: var(--text-2);
+  }
+  .tab-n-accent { background: var(--ext-template); color: var(--bg); }
+  .tab-accent { color: var(--ext-template); }
+
+  .typesel { position: relative; }
+  .typesel-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--surface-1); border: 1px solid var(--border);
+    color: var(--text-2); border-radius: 8px;
+    padding: 6px 10px; font-size: 12.5px; cursor: pointer;
+  }
+  .typesel-btn:hover { color: var(--text-1); border-color: var(--border-h); }
+  .typesel-caret { font-size: 9px; opacity: 0.7; }
+  .typesel-menu {
+    position: absolute; top: calc(100% + 5px); right: 0; z-index: 41;
+    min-width: 200px; max-height: 320px; overflow-y: auto; padding: 5px;
+    background: var(--surface-1);
+    border: 1px solid var(--border-h); border-radius: 10px;
+    box-shadow: 0 14px 40px rgba(0,0,0,0.4);
+    display: flex; flex-direction: column; gap: 1px;
+  }
+  .typesel-menu button {
+    display: flex; align-items: center; gap: 8px;
+    background: none; border: none; cursor: pointer;
+    padding: 7px 9px; border-radius: 7px;
+    font-size: 12.5px; color: var(--text-2); text-align: left;
+  }
+  .typesel-menu button:hover { background: var(--surface-3); color: var(--text-1); }
+  .typesel-on { background: var(--surface-3); color: var(--text-1) !important; font-weight: 600; }
+  .typesel-glyph { width: 14px; text-align: center; }
+  .typesel-n {
+    margin-left: auto; font-family: var(--font-mono, monospace);
+    font-size: 10.5px; color: var(--text-2);
+  }
+
+  .seg {
+    display: inline-flex; padding: 2px;
+    background: var(--surface-1);
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .seg button {
+    background: none; border: none; cursor: pointer;
+    padding: 4px 11px; border-radius: 6px;
+    font-size: 12px; color: var(--text-2);
+    transition: color .15s, background .15s;
+  }
+  .seg button:hover { color: var(--text-1); }
+  .seg-on {
+    background: var(--surface-3); color: var(--text-1) !important; font-weight: 600;
+  }
+
+  /* One-line alerts, only rendered when they carry information. */
+  .thin-alert {
+    display: block; width: 100%; text-align: left;
+    background: color-mix(in srgb, var(--gold) 10%, var(--surface-1));
+    border: 1px solid color-mix(in srgb, var(--gold) 35%, var(--border));
+    color: var(--text-2);
+    border-radius: 8px; padding: 8px 12px; margin-bottom: 12px;
+    font-size: 12.5px; cursor: default;
+  }
+  .thin-alert-red {
+    background: color-mix(in srgb, var(--red) 10%, var(--surface-1));
+    border-color: color-mix(in srgb, var(--red) 35%, var(--border));
+    cursor: pointer;
+  }
+  .thin-alert-red:hover { border-color: var(--red); }
+
+  /* ── Section headers ─────────────────────────────────────────────
+     A hairline rule + a small caps label. Cheap, and it gives the page a
+     spine so "Premium" and "Free" read as different shelves rather than one
+     undifferentiated wall of cards. */
+  .sec-head {
+    display: flex; align-items: center; gap: 10px;
+    margin: 4px 0 12px;
+  }
+  .sec-rule {
+    width: 3px; height: 15px; border-radius: 2px;
+    background: linear-gradient(180deg, var(--gold), color-mix(in srgb, var(--gold) 20%, transparent));
+  }
+  .sec-title {
+    font-family: var(--font-display, sans-serif);
+    font-size: 12px; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--text-2); margin: 0;
+  }
+  /* --text-3 (#4A4F6A) only reaches 2.25:1 on these surfaces, so anything
+     carrying actual information here uses --text-2 (5.95:1). --text-3 stays
+     for purely decorative or redundant marks. */
+  .sec-n {
+    font-family: var(--font-mono, monospace);
+    font-size: 10.5px; font-weight: 700; color: var(--text-2);
+    background: var(--surface-3); padding: 1px 6px; border-radius: 20px;
+  }
+  .sec-note { font-size: 11.5px; color: var(--gold); }
+  .sec-link {
+    margin-left: auto;
+    background: none; border: none; cursor: pointer;
+    font-size: 11.5px; color: var(--text-2);
+  }
+  .sec-link:hover { color: var(--ext-module); text-decoration: underline; }
+
+  /* ── All-Access strip ────────────────────────────────────────────
+     The only gradient on the page, deliberately: it marks the one offer that
+     covers everything. Shown only when the user doesn't already have it. */
+  .aa {
+    position: relative; overflow: hidden;
+    display: flex; align-items: center; justify-content: space-between;
+    gap: 24px; flex-wrap: wrap;
+    padding: 18px 22px; margin-bottom: 18px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--gold) 28%, var(--border));
+    background:
+      linear-gradient(112deg,
+        color-mix(in srgb, var(--gold) 13%, transparent) 0%,
+        color-mix(in srgb, var(--ext-theme) 8%, transparent) 46%,
+        transparent 78%),
+      var(--surface-1);
+  }
+  .aa-glow {
+    position: absolute; inset: -60% 55% -60% -10%;
+    background: radial-gradient(ellipse at center, color-mix(in srgb, var(--gold) 16%, transparent), transparent 70%);
+    pointer-events: none;
+  }
+  .aa-body { position: relative; z-index: 1; max-width: 560px; }
+  .aa-kicker {
+    font-family: var(--font-mono, monospace);
+    font-size: 10px; font-weight: 700; letter-spacing: 0.2em;
+    text-transform: uppercase; color: var(--gold);
+  }
+  .aa-title {
+    font-family: var(--font-display, sans-serif);
+    font-size: 20px; font-weight: 700; letter-spacing: -0.01em;
+    color: var(--text-1); margin: 5px 0 6px; line-height: 1.2;
+  }
+  .aa-sub { font-size: 12.5px; line-height: 1.55; color: var(--text-2); margin: 0; }
+
+  .aa-buy { position: relative; z-index: 1; text-align: right; flex: none; }
+  .aa-price {
+    display: flex; align-items: baseline; justify-content: flex-end; gap: 2px;
+    font-family: var(--font-display, sans-serif);
+    color: var(--text-1);
+    /* Tabular figures so prices don't jiggle between cards. */
+    font-variant-numeric: tabular-nums;
+  }
+  .aa-price-sym { font-size: 15px; font-weight: 600; color: var(--gold); }
+  .aa-price-num { font-size: 34px; font-weight: 700; line-height: 1; letter-spacing: -0.02em; }
+  .aa-price-per { font-size: 12px; color: var(--text-2); margin-left: 2px; }
+  .aa-alt { font-size: 11.5px; color: var(--text-2); margin-top: 3px; }
+  .aa-cta {
+    display: inline-block; margin-top: 10px;
+    background: linear-gradient(135deg, var(--gold), color-mix(in srgb, var(--gold) 62%, var(--ext-template)));
+    color: var(--bg); text-decoration: none;
+    border-radius: 9px; padding: 9px 20px;
+    font-family: var(--font-display, sans-serif);
+    font-size: 13px; font-weight: 700;
+    box-shadow: 0 3px 16px color-mix(in srgb, var(--gold) 32%, transparent);
+    transition: transform .2s, box-shadow .2s;
+  }
+  .aa-cta:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 6px 24px color-mix(in srgb, var(--gold) 45%, transparent);
+  }
+
+  /* ── Storefront cards ────────────────────────────────────────────
+     Bigger than the utility grid, with the price as the second-loudest thing
+     after the name. Everything here exists to answer "what is it, what does
+     it cost, is it mine". */
+  .shelf { margin-bottom: 26px; }
+  .shelf-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+    gap: 14px;
+  }
+  .pcard {
+    position: relative; overflow: hidden;
+    display: flex; flex-direction: column;
+    padding: 16px 17px 14px;
+    border-radius: 14px;
+    border: 1px solid color-mix(in srgb, var(--gold) 22%, var(--border));
+    background:
+      linear-gradient(168deg, color-mix(in srgb, var(--gold) 7%, transparent), transparent 55%),
+      var(--surface-1);
+    transition: transform .2s, border-color .2s, box-shadow .25s;
+    animation: pcard-in .4s cubic-bezier(.22,.68,0,1) backwards;
+    animation-delay: var(--stagger, 0ms);
+  }
+  .pcard-owned {
+    border-color: color-mix(in srgb, var(--green) 30%, var(--border));
+    background:
+      linear-gradient(168deg, color-mix(in srgb, var(--green) 7%, transparent), transparent 55%),
+      var(--surface-1);
+  }
+  .pcard:hover {
+    transform: translateY(-3px);
+    border-color: color-mix(in srgb, var(--gold) 55%, transparent);
+    box-shadow:
+      0 16px 44px color-mix(in srgb, var(--gold) 14%, transparent),
+      0 2px 0 color-mix(in srgb, var(--gold) 20%, transparent) inset;
+  }
+  .pcard-owned:hover {
+    border-color: color-mix(in srgb, var(--green) 55%, transparent);
+    box-shadow: 0 16px 44px color-mix(in srgb, var(--green) 14%, transparent);
+  }
+
+  /* A single diagonal sheen that sweeps once on hover. One high-impact
+     moment beats five fidgety micro-animations. */
+  .pcard-sheen {
+    position: absolute; top: 0; bottom: 0; width: 45%;
+    left: -60%;
+    background: linear-gradient(100deg, transparent, rgba(255,255,255,0.05), transparent);
+    pointer-events: none;
+    transition: left .55s cubic-bezier(.3,.7,0,1);
+  }
+  .pcard:hover .pcard-sheen { left: 130%; }
+
+  .pcard-body {
+    background: none; border: none; padding: 0; margin: 0;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+    flex: 1 1 auto;
+  }
+  .pcard-body:focus-visible {
+    outline: 2px solid var(--gold); outline-offset: 3px; border-radius: 8px;
+  }
+
+  .pcard-top {
+    display: flex; align-items: flex-start; justify-content: space-between;
+    gap: 12px; margin-bottom: 11px;
+  }
+  .pcard-mark {
+    width: 46px; height: 46px; flex: none;
+    display: inline-flex; align-items: center; justify-content: center;
+    font-size: 24px; line-height: 1;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--gold) 10%, var(--surface-2));
+    border: 1px solid color-mix(in srgb, var(--gold) 24%, transparent);
+  }
+  .pcard-owned .pcard-mark {
+    background: color-mix(in srgb, var(--green) 10%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--green) 24%, transparent);
+  }
+  .pcard-price {
+    display: flex; align-items: baseline; gap: 1px;
+    font-family: var(--font-display, sans-serif);
+    color: var(--text-1);
+    font-variant-numeric: tabular-nums;
+  }
+  .pcard-price-sym { font-size: 13px; font-weight: 600; color: var(--gold); }
+  .pcard-price-num {
+    font-size: 27px; font-weight: 700; line-height: 1; letter-spacing: -0.02em;
+  }
+  .pcard-owned-tag {
+    font-family: var(--font-mono, monospace);
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em;
+    color: var(--green);
+    background: color-mix(in srgb, var(--green) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--green) 32%, transparent);
+    padding: 4px 8px; border-radius: 6px; white-space: nowrap;
+  }
+
+  .pcard-name {
+    font-family: var(--font-display, sans-serif);
+    font-size: 16.5px; font-weight: 700; letter-spacing: -0.01em;
+    color: var(--text-1); margin: 0; line-height: 1.25;
+  }
+  .pcard-meta {
+    font-size: 11.5px; color: var(--text-2); margin-top: 3px;
+    font-variant-numeric: tabular-nums;
+  }
+  .pcard-desc {
+    font-size: 12.5px; line-height: 1.55; color: var(--text-2);
+    margin: 9px 0 11px;
+    display: -webkit-box; -webkit-line-clamp: 3; line-clamp: 3;
+    -webkit-box-orient: vertical; overflow: hidden;
+  }
+  .pcard-trust { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .trust {
+    font-size: 11px; color: var(--text-2);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    padding: 3px 8px; border-radius: 20px;
+    white-space: nowrap;
+  }
+
+  .pcard-foot { margin-top: auto; }
+  .pcard-cta {
+    width: 100%;
+    background: linear-gradient(135deg, var(--gold), color-mix(in srgb, var(--gold) 62%, var(--ext-template)));
+    color: var(--bg); border: none;
+    border-radius: 9px; padding: 10px 14px;
+    font-family: var(--font-display, sans-serif);
+    font-size: 13.5px; font-weight: 700; cursor: pointer;
+    box-shadow: 0 2px 12px color-mix(in srgb, var(--gold) 26%, transparent);
+    transition: transform .18s, box-shadow .18s, filter .18s;
+  }
+  .pcard-cta:hover:not(:disabled) {
+    transform: translateY(-1px); filter: brightness(1.07);
+    box-shadow: 0 5px 20px color-mix(in srgb, var(--gold) 40%, transparent);
+  }
+  .pcard-cta:disabled { opacity: 0.65; cursor: default; box-shadow: none; }
+  .pcard-cta-owned {
+    background: linear-gradient(135deg, var(--green), color-mix(in srgb, var(--green) 65%, var(--ext-flow)));
+    box-shadow: 0 2px 12px color-mix(in srgb, var(--green) 26%, transparent);
+  }
+  .pcard-cta-owned:hover:not(:disabled) {
+    box-shadow: 0 5px 20px color-mix(in srgb, var(--green) 40%, transparent);
+  }
+  .pcard-hint {
+    margin-top: 9px; font-size: 11px; line-height: 1.45;
+    color: var(--gold);
+    background: color-mix(in srgb, var(--gold) 8%, transparent);
+    border-left: 2px solid var(--gold);
+    padding: 7px 9px; border-radius: 6px;
+  }
+
+  @keyframes pcard-in {
+    from { opacity: 0; transform: translateY(10px) scale(0.985); }
+    to   { opacity: 1; transform: none; }
+  }
+
+  /* Motion is decoration here, not information — drop all of it on request. */
+  @media (prefers-reduced-motion: reduce) {
+    .pcard { animation: none; transition: border-color .2s; }
+    .pcard:hover { transform: none; }
+    .pcard-sheen { display: none; }
+    .pcard-cta:hover:not(:disabled),
+    .aa-cta:hover { transform: none; }
   }
 
   .btn-install {
@@ -1957,70 +3251,6 @@
     background: rgba(0,0,0,0.2); border-radius: 6px; font-size: 13px;
   }
 
-  /* ── Stats ────────────────────────────────────────────────────── */
-  .stat-row {
-    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
-    gap: 12px; margin-bottom: 24px;
-  }
-  .stat {
-    background: var(--surface-1);
-    border: 1px solid var(--border);
-    border-left: 3px solid var(--stat-tint);
-    border-radius: 10px; padding: 16px 18px;
-    transition: border-color .15s, transform .15s;
-  }
-  .stat:hover { border-color: var(--border-h); transform: translateY(-1px); }
-  .stat-value {
-    font-family: var(--font-display, sans-serif);
-    font-size: 32px; font-weight: 700; line-height: 1;
-    color: var(--stat-tint);
-  }
-  .stat-label {
-    font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase;
-    color: var(--text-3); margin-top: 6px; font-weight: 600;
-  }
-
-  /* ── Filter bar ───────────────────────────────────────────────── */
-  .filter-bar {
-    display: flex; flex-direction: column; gap: 10px; margin-bottom: 20px;
-  }
-  .filter-search {
-    width: 100%;
-    background: var(--surface-1); border: 1px solid var(--border);
-    color: var(--text-1); border-radius: 10px;
-    padding: 10px 14px; font-size: 13px;
-    transition: border-color .15s;
-  }
-  .filter-search:focus {
-    outline: none;
-    border-color: color-mix(in srgb, var(--ext-module) 70%, var(--border));
-    box-shadow: 0 0 0 3px color-mix(in srgb, var(--ext-module) 18%, transparent);
-  }
-  .chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
-  .chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    background: var(--surface-1); border: 1px solid var(--border);
-    color: var(--text-2);
-    border-radius: 999px; padding: 6px 12px;
-    font-size: 12px; font-weight: 600; letter-spacing: 0.02em;
-    cursor: pointer; transition: all .12s;
-    --chip-tint: var(--text-2);
-  }
-  .chip-glyph {
-    color: var(--chip-tint);
-    font-size: 14px; line-height: 1;
-  }
-  .chip:hover { color: var(--text-1); border-color: var(--border-h); }
-  .chip.active {
-    background: color-mix(in srgb, var(--chip-tint) 14%, var(--surface-1));
-    border-color: color-mix(in srgb, var(--chip-tint) 55%, var(--border));
-    color: var(--text-1);
-    box-shadow: 0 0 0 1px color-mix(in srgb, var(--chip-tint) 25%, transparent);
-  }
-  .chip.active .chip-glyph { color: var(--chip-tint); }
-  .chip-status.active { background: color-mix(in srgb, var(--chip-tint) 18%, var(--surface-1)); }
-  .chip-clear { color: var(--text-3); border-style: dashed; }
-  .chip-clear:hover { color: var(--red); border-color: var(--red); }
   .chip-static {
     cursor: default; pointer-events: none;
   }
@@ -2052,16 +3282,18 @@
   /* ── Grid ─────────────────────────────────────────────────────── */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(340px, 1fr));
-    gap: 16px;
+    /* Denser than the old 340px: four columns on a 1700px screen instead of
+       four wide ones, so a browse is a browse and not a scroll. */
+    grid-template-columns: repeat(auto-fill, minmax(272px, 1fr));
+    gap: 12px;
   }
   .card {
     position: relative;
+    display: flex; flex-direction: column;
     background: var(--surface-1);
     border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 20px;
-    cursor: pointer;
+    border-radius: 12px;
+    padding: 14px 15px 12px;
     transition: transform .15s, border-color .15s, box-shadow .2s;
     overflow: hidden;
     text-align: left;
@@ -2072,12 +3304,22 @@
     border-color: color-mix(in srgb, var(--card-tint) 50%, var(--border-h));
     box-shadow: 0 12px 40px color-mix(in srgb, var(--card-tint) 12%, transparent);
   }
-  .card:focus-visible {
-    outline: 2px solid var(--card-tint);
-    outline-offset: 2px;
-  }
   .card-disabled { opacity: 0.55; }
   .card-error { border-color: color-mix(in srgb, var(--red) 45%, var(--border)); }
+  .card-paid { border-color: color-mix(in srgb, var(--gold) 28%, var(--border)); }
+
+  /* The whole body is the "open detail" hit area; the action button lives
+     outside it so one click can install without opening anything. */
+  .card-body {
+    display: block; width: 100%;
+    background: none; border: none; padding: 0; margin: 0;
+    font: inherit; color: inherit; text-align: left; cursor: pointer;
+    flex: 1 1 auto;
+  }
+  .card-body:focus-visible {
+    outline: 2px solid var(--card-tint);
+    outline-offset: 3px; border-radius: 6px;
+  }
 
   .card-stripe {
     position: absolute; top: 0; left: 0; right: 0; height: 3px;
@@ -2089,11 +3331,11 @@
   .card-head {
     display: grid;
     grid-template-columns: auto 1fr auto;
-    gap: 12px; align-items: start;
-    margin-bottom: 12px;
+    gap: 10px; align-items: start;
+    margin-bottom: 9px;
   }
   .card-icon {
-    width: 44px; height: 44px;
+    width: 36px; height: 36px;
     display: flex; align-items: center; justify-content: center;
     background: color-mix(in srgb, var(--card-tint) 12%, var(--surface-2));
     color: var(--card-tint);
@@ -2117,10 +3359,11 @@
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
   .card-sub {
-    font-size: 11px; color: var(--text-3);
+    font-size: 11.5px; color: var(--text-2);
     display: flex; gap: 6px; align-items: center; margin-top: 3px;
   }
   .card-sub .sep { opacity: 0.5; }
+  .card-from { color: var(--ext-template); }
   .card-price {
     font-family: var(--font-mono, monospace);
     font-size: 11px; font-weight: 700;
@@ -2132,16 +3375,79 @@
     white-space: nowrap; align-self: flex-start;
   }
 
+  /* Price (or ✓ Owned) on paid cards. */
+  .card-badge {
+    font-family: var(--font-mono, monospace);
+    font-size: 11.5px; font-weight: 700;
+    color: var(--gold);
+    background: color-mix(in srgb, var(--gold) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--gold) 32%, transparent);
+    padding: 3px 7px; border-radius: 6px;
+    white-space: nowrap; align-self: flex-start;
+  }
+  .card-badge-owned {
+    color: var(--green);
+    background: color-mix(in srgb, var(--green) 12%, transparent);
+    border-color: color-mix(in srgb, var(--green) 32%, transparent);
+  }
+
+  /* Installed state as a dot instead of a shouty uppercase tag — the status of
+     something you already installed is ambient information, not a headline. */
+  .card-dot {
+    width: 7px; height: 7px; border-radius: 50%;
+    align-self: center; flex: none;
+  }
+  .card-dot-active    { background: var(--green); box-shadow: 0 0 8px var(--green); }
+  .card-dot-installed { background: var(--gold); }
+  .card-dot-disabled  { background: var(--text-3); }
+  .card-dot-error     { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
   .card-desc {
-    font-size: 12.5px; line-height: 1.55; color: var(--text-2);
-    margin: 0 0 14px; display: -webkit-box;
-    -webkit-line-clamp: 3; line-clamp: 3;
+    font-size: 12px; line-height: 1.5; color: var(--text-2);
+    margin: 0 0 10px; display: -webkit-box;
+    -webkit-line-clamp: 2; line-clamp: 2;
     -webkit-box-orient: vertical; overflow: hidden;
   }
 
-  .card-foot { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .card-foot {
+    display: flex; align-items: center; gap: 8px;
+    margin-top: auto;
+  }
+  .card-act {
+    flex: 1 1 auto;
+    background: color-mix(in srgb, var(--card-tint) 16%, var(--surface-2));
+    border: 1px solid color-mix(in srgb, var(--card-tint) 40%, var(--border));
+    color: var(--text-1);
+    border-radius: 8px; padding: 7px 12px;
+    font-size: 12.5px; font-weight: 600; cursor: pointer;
+    transition: background .15s, border-color .15s, transform .12s;
+  }
+  .card-act:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--card-tint) 26%, var(--surface-2));
+    transform: translateY(-1px);
+  }
+  .card-act:disabled { opacity: 0.6; cursor: default; }
+  .card-act-buy {
+    background: linear-gradient(135deg, var(--gold), color-mix(in srgb, var(--gold) 70%, var(--ext-template)));
+    border-color: transparent; color: var(--bg); font-weight: 700;
+  }
+  .card-act-update {
+    background: color-mix(in srgb, var(--ext-template) 22%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--ext-template) 50%, var(--border));
+  }
+  .card-act-ghost {
+    background: none; color: var(--text-2);
+    border-color: var(--border);
+  }
+  .card-act-ghost:hover:not(:disabled) { color: var(--text-1); border-color: var(--border-h); background: var(--surface-3); }
+  .card-aa {
+    font-size: 11.5px; color: var(--text-2); text-decoration: none;
+    white-space: nowrap;
+  }
+  .card-aa:hover { color: var(--ext-module); text-decoration: underline; }
+
   .card-author {
-    margin-left: auto; font-size: 11px; color: var(--text-3);
+    margin-left: auto; font-size: 11px; color: var(--text-2);
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
     max-width: 120px;
   }
@@ -2198,21 +3504,49 @@
     color: var(--red); border-radius: 10px; font-size: 13px;
   }
   .empty {
-    padding: 72px 32px; text-align: center;
+    padding: 56px 32px; text-align: center;
     background: var(--surface-1);
     border: 1px dashed var(--border-h); border-radius: 14px;
   }
   .empty-icon {
-    font-size: 48px; color: var(--ext-flow); margin-bottom: 12px; opacity: 0.8;
+    font-size: 40px; color: var(--ext-flow); margin-bottom: 10px; opacity: 0.8;
   }
   .empty-title {
     font-family: var(--font-display, sans-serif);
-    font-size: 20px; font-weight: 700; color: var(--text-1);
+    font-size: 18px; font-weight: 700; color: var(--text-1);
     margin-bottom: 6px;
   }
   .empty-sub {
-    font-size: 13px; color: var(--text-2); max-width: 420px;
-    margin: 0 auto 20px; line-height: 1.6;
+    font-size: 13px; color: var(--text-2); max-width: 440px;
+    margin: 0 auto 18px; line-height: 1.6;
+  }
+  .empty-sub code {
+    font-family: var(--font-mono, monospace);
+    background: var(--surface-3); padding: 1px 5px; border-radius: 4px;
+    font-size: 12px; color: var(--ext-flow);
+  }
+  .empty-actions {
+    display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
+  }
+  .empty-actions .btn-install { padding: 9px 16px; font-size: 13px; }
+
+  .repos-close {
+    margin-left: auto;
+    background: none; border: none; cursor: pointer;
+    color: var(--text-3); font-size: 18px; line-height: 1;
+    padding: 2px 6px; border-radius: 6px;
+  }
+  .repos-close:hover { color: var(--text-1); background: var(--surface-3); }
+
+  .drawer-note {
+    font-size: 12.5px; line-height: 1.6; color: var(--text-2); margin: 0;
+  }
+  .perm-list { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tag-perm {
+    text-transform: none; letter-spacing: 0;
+    color: var(--ext-flow);
+    background: color-mix(in srgb, var(--ext-flow) 10%, var(--surface-2));
+    border-color: color-mix(in srgb, var(--ext-flow) 28%, transparent);
   }
 
   /* ── Drawer ───────────────────────────────────────────────────── */

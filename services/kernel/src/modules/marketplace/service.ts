@@ -70,6 +70,11 @@ export class MarketplaceService {
     return this.catalog.browse(filter);
   }
 
+  /** Drop provider caches so the next browse re-fetches. */
+  async refreshCatalog(): Promise<void> {
+    await this.catalog?.refreshProviders();
+  }
+
   async getCatalogItem(idOrSlug: string): Promise<CatalogItem | null> {
     if (!this.catalog) return null;
     return this.catalog.getItem(idOrSlug);

@@ -47,6 +47,12 @@ export function registerMarketplaceRoutes(
         query,
         limit: limit ? Number(limit) : undefined,
       };
+      // `?refresh=1` drops provider caches first. The dashboard passes it on
+      // page load so a reload always shows a current shelf (prices included),
+      // while keystroke-level searches keep hitting the cache.
+      if (url.searchParams.get("refresh") === "1") {
+        await service.refreshCatalog();
+      }
       const items = await service.browseCatalog(filter);
       server.json(res, 200, { items, total: items.length });
     } catch (err) {

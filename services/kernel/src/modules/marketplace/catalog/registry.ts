@@ -18,12 +18,21 @@ import type { ExtensionService } from "../../extensions/service.js";
 import type { ExtensionManifest } from "../../extensions/schema.js";
 import type { InstalledExtension } from "../../extensions/types.js";
 import { RemoteProvider } from "./remote-provider.js";
-import type {
-  CatalogFilter,
-  CatalogItem,
-  CatalogItemStatus,
-  CatalogProvider,
+import { STORE_PROVIDER_NAME } from "./store-provider.js";
+import {
+  isInstalledStatus,
+  type CatalogFilter,
+  type CatalogItem,
+  type CatalogItemStatus,
+  type CatalogProvider,
 } from "./types.js";
+
+/**
+ * Installs a purchased/entitled item from the licensed store. Injected by the
+ * marketplace module so the registry stays ignorant of licenses and HTTP —
+ * it only knows "store items install through this callback".
+ */
+export type StoreInstaller = (slug: string) => Promise<InstalledExtension>;
 
 export interface CatalogRegistryOptions {
   extensionService: ExtensionService;
@@ -31,8 +40,14 @@ export interface CatalogRegistryOptions {
 
 export class CatalogRegistry {
   private providers: CatalogProvider[] = [];
+  private storeInstaller: StoreInstaller | null = null;
 
   constructor(private readonly opts: CatalogRegistryOptions) {}
+
+  /** Wire the licensed-store install path. See StoreInstaller. */
+  setStoreInstaller(installer: StoreInstaller | null): void {
+    this.storeInstaller = installer;
+  }
 
   registerProvider(provider: CatalogProvider): void {
     if (this.providers.some((p) => p.name === provider.name)) {
@@ -59,6 +74,26 @@ export class CatalogRegistry {
 
   listProviders(): Array<{ name: string; label: string }> {
     return this.providers.map((p) => ({ name: p.name, label: p.label }));
+  }
+
+  /**
+   * Drop every provider's cache so the next browse() re-fetches.
+   *
+   * Providers that cache (the store hits the network, so it does) would
+   * otherwise keep serving a stale shelf for their whole TTL — including
+   * across a page reload, which reads as "the dashboard is showing me old
+   * prices". A failing provider must not sink the whole refresh.
+   */
+  async refreshProviders(): Promise<void> {
+    await Promise.all(
+      this.providers.map(async (p) => {
+        try {
+          await p.refresh?.();
+        } catch (err) {
+          log.warn(`CatalogRegistry: provider ${p.name} refresh() failed: ${err}`);
+        }
+      }),
+    );
   }
 
   /**
@@ -122,7 +157,8 @@ export class CatalogRegistry {
   async install(idOrSlug: string): Promise<InstalledExtension> {
     const item = await this.getItem(idOrSlug);
     if (!item) throw new Error(`Catalog item not found: ${idOrSlug}`);
-    if (item.status !== "available") {
+
+    if (isInstalledStatus(item.status)) {
       // Already installed — just flip to active.
       const row = item.installed_id
         ? this.opts.extensionService.get(item.installed_id)
@@ -130,6 +166,25 @@ export class CatalogRegistry {
       if (!row) throw new Error(`Item ${idOrSlug} is marked installed but missing from registry`);
       if (row.status !== "active") await this.opts.extensionService.enable(row.id);
       return this.opts.extensionService.get(row.id)!;
+    }
+
+    // Paid item the license doesn't cover. Installing is not the next step —
+    // buying is. The dashboard turns this into a Buy button; MCP callers get a
+    // message that tells them where to go.
+    if (item.status === "for_sale") {
+      throw new Error(
+        `${item.manifest.name} is a paid extension and your license doesn't include ` +
+          `${item.feature ?? `pro:${item.slug}`}. Buy it from Extensions in the dashboard, ` +
+          `or at https://lifekernl.com/pricing.`,
+      );
+    }
+
+    // Entitled paid item → license-authenticated download from the store.
+    if (item.status === "owned" || item.origin.provider === STORE_PROVIDER_NAME) {
+      if (!this.storeInstaller) {
+        throw new Error("Store install path not wired — no license service attached");
+      }
+      return this.storeInstaller(item.slug);
     }
 
     // Remote providers: download the watermarked bundle, install it, fold the
@@ -212,7 +267,36 @@ function applyInstalledOverlay(
     ...item,
     status: rowStatusToCatalog(installed.status),
     installed_id: installed.id,
+    installed_version: installed.version,
+    update_available: isNewer(item.manifest.version, installed.version),
   };
+}
+
+/**
+ * Loose semver comparison — "is `candidate` newer than `current`?".
+ *
+ * Numeric segments only, extra segments treated as 0, prerelease suffixes
+ * ignored. Deliberately conservative: anything unparseable returns false, so a
+ * weird version string never fabricates an update prompt.
+ */
+export function isNewer(candidate: string, current: string): boolean {
+  const parse = (v: string): number[] | null => {
+    const core = v.trim().replace(/^v/, "").split(/[-+]/)[0] ?? "";
+    const parts = core.split(".");
+    if (parts.length === 0) return null;
+    const nums = parts.map((p) => Number(p));
+    return nums.some((n) => !Number.isFinite(n)) ? null : nums;
+  };
+  const a = parse(candidate);
+  const b = parse(current);
+  if (!a || !b) return false;
+  const len = Math.max(a.length, b.length);
+  for (let i = 0; i < len; i++) {
+    const x = a[i] ?? 0;
+    const y = b[i] ?? 0;
+    if (x !== y) return x > y;
+  }
+  return false;
 }
 
 function installedRowToCatalogItem(row: InstalledExtension): CatalogItem {
@@ -241,6 +325,7 @@ function installedRowToCatalogItem(row: InstalledExtension): CatalogItem {
     manifest,
     status: rowStatusToCatalog(row.status),
     installed_id: row.id,
+    installed_version: row.version,
     price_cents: 0,
     currency: "EUR",
     install_count: 0,
