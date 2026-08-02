@@ -75,11 +75,15 @@ jobs:
     strategy:
       matrix:
         include:
+          # macos-13 was retired and macos-14 is deprecated: a job asking for a
+          # retired label is not rejected, it queues until it expires — which is
+          # exactly how the x64 build silently never ran. Both pinned to the
+          # current GA image instead.
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
             platform: darwin-arm64
           - arch: x64
-            runner: macos-13
+            runner: macos-15-intel
             platform: darwin-x64
     runs-on: ${{ matrix.runner }}
     steps:
