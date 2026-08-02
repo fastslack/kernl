@@ -10,8 +10,12 @@
 #   darwin-arm64    Kernl-<v>-arm64.dmg             drag to /Applications
 #                   Kernl-<v>-arm64-macos.tar.gz    portable
 #   darwin-x64      Kernl-<v>-x64.dmg               (Intel Macs)
-#   win-x64         Kernl-<v>-windows-x64.msi       msiexec / installer
-#                   Kernl-<v>-windows-x64.zip       portable
+#   win-x64         kernl-<v>-windows-x64.msi       msiexec / installer
+#                   kernl-<v>-windows-x64.zip       portable
+#
+# Note the casing: macOS artifacts are "Kernl-*", linux and windows ones are
+# "kernl-*". That is what the packagers actually emit, and the publish job
+# runs on Linux where the distinction is load-bearing.
 #
 # All artifacts use the same `packaging/stage-payload.sh` pipeline. Native
 # modules are installed fresh on each runner so prebuilds match the host.
@@ -26,9 +30,33 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "22"
 
 jobs:
+  # ── Guard: the tag must match the version the packages are built from ──
+  # install.sh resolves assets by exact filename, deriving the version from the
+  # release TAG, while every packager derives it from services/kernel/
+  # package.json. If those drift, the build is green, the release publishes,
+  # and every native install path 404s — the failure lands on users, not here.
+  # Fail loudly instead, before anything is built.
+  version-check:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag matches package.json
+        run: |
+          PKG="$(node -p "require('./services/kernel/package.json').version")"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json: $PKG"
+          echo "tag:          $TAG"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG."
+            echo "::error::Packages would be named kernl-$PKG-* while install.sh looks for kernl-$TAG-*."
+            echo "::error::Bump services/kernel/package.json to $TAG, or tag v$PKG."
+            exit 1
+          fi
+
   # ── Linux: RPM + DEB (Ubuntu runner) ────────────────────────────
   linux:
     runs-on: ubuntu-latest
@@ -63,7 +91,7 @@ jobs:
           echo "rpm=$RPM" >> $GITHUB_OUTPUT
           echo "deb=$DEB" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-x64
           path: |
@@ -161,7 +189,7 @@ jobs:
           xcrun stapler staple "$DMG"
           rm AuthKey.p8
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: darwin-${{ matrix.arch }}
           path: |
@@ -215,32 +243,43 @@ jobs:
           done
           rm cert.pfx
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: win-x64
+          # Lowercase: build-zip.sh / build-msi.sh name these from $NAME, which
+          # is "kernl". The capitalised pattern only ever matched because the
+          # Windows filesystem ignores case — the publish job below runs on
+          # Linux, where it silently matches nothing.
           path: |
-            packaging/out/Kernl-*-windows-x64.zip
-            packaging/out/Kernl-*-windows-x64.msi
+            packaging/out/kernl-*-windows-x64.zip
+            packaging/out/kernl-*-windows-x64.msi
 
   # ── Publish: assemble GitHub Release from all artifacts ─────────
   release:
-    needs: [linux, macos, windows]
+    # version-check is included so a mismatched tag blocks publication rather
+    # than merely turning the run red beside a release that already shipped.
+    # On workflow_dispatch it is skipped, but so is this job (see `if` below),
+    # so nothing is held up.
+    needs: [version-check, linux, macos, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Flatten artifact tree
         run: find artifacts -type f -exec mv -t . {} +
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
+          # Case matters here: this job runs on Linux. macOS artifacts are
+          # built as "Kernl-*" (APP_NAME) while linux and windows ones use
+          # "kernl-*" ($NAME). Both spellings are deliberate, not a typo.
           files: |
             kernl-*.rpm
             kernl_*.deb
             Kernl-*.dmg
             Kernl-*-macos.tar.gz
-            Kernl-*-windows-x64.msi
-            Kernl-*-windows-x64.zip
+            kernl-*-windows-x64.msi
+            kernl-*-windows-x64.zip
           generate_release_notes: true

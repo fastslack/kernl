@@ -67,7 +67,7 @@ Name:           %{appname}
 Version:        0.1.0
 Release:        1%{?dist}
 Summary:        Personal life-management MCP server with dashboard
-License:        AGPLv3
+License:        Apache-2.0
 URL:            https://github.com/fastslack/kernl
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      x86_64
