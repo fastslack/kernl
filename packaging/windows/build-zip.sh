@@ -88,7 +88,17 @@ unix2dos "$PKG_DIR/README.txt" 2>/dev/null || sed -i 's/$/\r/' "$PKG_DIR/README.
 # stale $ZIP_OUT would keep files from previous builds (e.g. the Linux
 # sharp binaries from a linux-x64 run). Start from a clean archive.
 rm -f "$ZIP_OUT"
-( cd "$STAGE_DIR" && zip -qr "$ZIP_OUT" "$(basename "$PKG_DIR")" )
+# GitHub's windows-latest runner has no `zip` — the Git-bash environment this
+# script runs under ships neither. 7-Zip is preinstalled there, so prefer zip
+# when present (Linux/macOS hosts, local builds) and fall back to 7z.
+if command -v zip >/dev/null 2>&1; then
+  ( cd "$STAGE_DIR" && zip -qr "$ZIP_OUT" "$(basename "$PKG_DIR")" )
+elif command -v 7z >/dev/null 2>&1; then
+  ( cd "$STAGE_DIR" && 7z a -tzip -bso0 -bsp0 "$ZIP_OUT" "$(basename "$PKG_DIR")" >/dev/null )
+else
+  echo "ERROR: need either 'zip' or '7z' on PATH to build the portable archive." >&2
+  exit 1
+fi
 
 # Cleanup.
 rm -rf "$STAGE_DIR"

@@ -148,7 +148,11 @@ else
 fi
 
 # ── Tarball for distribution ─────────────────────────────────────────
-( cd "$REPO_ROOT" && tar czf "$TARBALL" "$(basename "$APP_BUNDLE")" )
+# cd into the directory that actually holds the bundle — it lives in
+# packaging/out/, not at the repo root, so tar'ing basename from $REPO_ROOT
+# fails with "Cannot stat". Deriving the directory from $APP_BUNDLE keeps the
+# two in step if the output location ever moves.
+( cd "$(dirname "$APP_BUNDLE")" && tar czf "$TARBALL" "$(basename "$APP_BUNDLE")" )
 
 # Cleanup staging.
 rm -rf "$STAGE_DIR"

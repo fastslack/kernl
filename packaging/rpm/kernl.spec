@@ -35,6 +35,19 @@
 %global         __requires_exclude (libonnxruntime|libonnxruntime_providers_cuda|libonnxruntime_providers_tensorrt|libonnxruntime_providers_shared|libcuda|libcublas|libcudart|libcudnn|libcufft|libcurand|libnvinfer|libnvinfer_plugin|libnvonnxparser|libnvrtc)
 %global         __provides_exclude (libonnxruntime|libonnxruntime_providers)
 
+# The release builder runs on ubuntu-latest, whose rpm does not define
+# %%_userunitdir — it is a Fedora/RHEL macro. Left undefined it is not expanded
+# at all, so the unit lands in a directory named after the literal macro text
+# and systemd never sees it. Define it only when the builder hasn't.
+%{!?_userunitdir: %global _userunitdir /usr/lib/systemd/user}
+
+# node_modules ships prebuilt binaries for foreign architectures
+# (bare-os/prebuilds/android-arm, android-arm64, linux-arm64, ...). brp-strip
+# cannot parse them, and its failure aborts %install outright. Nothing here is
+# worth stripping anyway: the payload is a JS tree plus a vendored bun binary,
+# not compiled objects we own.
+%global         __os_install_post %{nil}
+
 Name:           %{appname}
 Version:        0.1.0
 Release:        1%{?dist}
