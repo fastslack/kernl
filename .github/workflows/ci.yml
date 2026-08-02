@@ -14,3 +14,23 @@ jobs:
       - run: bun install
       - run: bun run lint
       - run: bun test
+
+  # Day-to-day work runs on bun (bun.lock); the release workflow builds with
+  # `npm ci`, which reads package-lock.json. Nothing keeps the two in sync, so
+  # a `bun install` that bumps a dependency leaves package-lock.json stale and
+  # CI stays green — the break only surfaces when a tag is pushed and the
+  # release dies. That is exactly how v0.1.0 shipped with zero assets.
+  # Validating the npm lockfiles on every push moves that failure here, where
+  # it costs seconds instead of a broken launch.
+  lockfiles:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with: { node-version: "20" }
+      - name: services/kernel lockfile is in sync
+        run: npm ci --dry-run --no-audit --no-fund
+        working-directory: services/kernel
+      - name: services/dashboard lockfile is in sync
+        run: npm ci --dry-run --no-audit --no-fund
+        working-directory: services/dashboard

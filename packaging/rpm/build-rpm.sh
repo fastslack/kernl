@@ -3,7 +3,8 @@
 #
 # Usage (from repo root):  packaging/rpm/build-rpm.sh
 #
-# Outputs:  ~/rpmbuild/RPMS/x86_64/kernl-<version>-1.fc*.x86_64.rpm
+# Outputs:  ~/rpmbuild/RPMS/x86_64/kernl-<version>-1.x86_64.rpm
+#           (no %{?dist} suffix — install.sh resolves this exact name)
 
 set -euo pipefail
 
@@ -41,9 +42,18 @@ TARBALL="$RPMBUILD_HOME/SOURCES/${NAME}-${VERSION}.tar.gz"
 tar --owner=0 --group=0 -czf "$TARBALL" -C "$STAGE_DIR" "${NAME}-${VERSION}"
 echo "▶ source tarball: $TARBALL ($(du -sh "$TARBALL" | cut -f1))"
 
-cp "$SPEC_FILE" "$RPMBUILD_HOME/SPECS/${NAME}.spec"
+# The spec carries a placeholder Version — stamp it from the staged VERSION
+# (which comes from services/kernel/package.json) so a v0.2.0 tag cannot
+# silently produce a 0.1.0 RPM that install.sh will then fail to find.
+sed -e "s/^Version:.*/Version:        ${VERSION}/" \
+    "$SPEC_FILE" > "$RPMBUILD_HOME/SPECS/${NAME}.spec"
+
 echo "▶ rpmbuild -bb"
-rpmbuild --define "_topdir $RPMBUILD_HOME" -bb "$RPMBUILD_HOME/SPECS/${NAME}.spec"
+# dist is forced empty on purpose: install.sh resolves the asset by exact
+# filename (kernl-<version>-1.x86_64.rpm), so a builder-dependent .fc41/.el9
+# suffix would make the published asset unreachable.
+rpmbuild --define "_topdir $RPMBUILD_HOME" --define "dist %{nil}" \
+         -bb "$RPMBUILD_HOME/SPECS/${NAME}.spec"
 
 RPM_OUT="$(find "$RPMBUILD_HOME/RPMS" -name "${NAME}-${VERSION}-*.rpm" -newer "$TARBALL" | head -1)"
 rm -rf "$STAGE_DIR"
