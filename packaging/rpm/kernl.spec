@@ -35,6 +35,21 @@
 %global         __requires_exclude (libonnxruntime|libonnxruntime_providers_cuda|libonnxruntime_providers_tensorrt|libonnxruntime_providers_shared|libcuda|libcublas|libcudart|libcudnn|libcufft|libcurand|libnvinfer|libnvinfer_plugin|libnvonnxparser|libnvrtc)
 %global         __provides_exclude (libonnxruntime|libonnxruntime_providers)
 
+# Everything under %{appdir} is a vendored, self-contained tree: a bun binary
+# plus prebuilt native node modules. Letting rpm scan it for dependencies is
+# not just noise, it produces an uninstallable package — the prebuilt objects
+# link against the unversioned `libdl.so` and `libm.so` development sonames,
+# which no modern distro provides (glibc 2.34 merged both into libc). The
+# result installs nowhere:
+#
+#     nothing provides libdl.so()(64bit) needed by kernl-0.1.0-1.x86_64
+#
+# The real runtime dependencies are declared explicitly as Requires: below,
+# so exclude the bundle from automatic generation entirely rather than chase
+# sonames one at a time.
+%global         __requires_exclude_from ^%{appdir}/.*$
+%global         __provides_exclude_from ^%{appdir}/.*$
+
 # The release builder runs on ubuntu-latest, whose rpm does not define
 # %%_userunitdir — it is a Fedora/RHEL macro. Left undefined it is not expanded
 # at all, so the unit lands in a directory named after the literal macro text
