@@ -28,44 +28,8 @@ import { existsSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { log } from "../logger.js";
+import { assetsRoot } from "../assets-root.js";
 
-/**
- * Locate the tree the bundled catalog scans (`<root>/assets/extensions`, and
- * its bundles/skills/plugins siblings).
- *
- * This used to default to `process.cwd()`, which is correct in development and
- * in Docker and wrong in every native package: each launcher chdirs into the
- * user's DATA directory before starting the kernel — `~/Library/Application
- * Support/Kernl` on macOS, `%LOCALAPPDATA%\Kernl` on Windows,
- * `~/.local/share/kernl` on Linux. None of those contain `assets/`, so the
- * scan found nothing and the dashboard rendered a single menu entry (the one
- * row the legacy import creates) instead of 71 modules. The package installed,
- * started and served — and was empty.
- *
- * cwd is still tried first so dev and Docker keep working unchanged; the two
- * additional spellings cover where the packagers actually stage the tree.
- */
-function resolveAssetsRoot(): string {
-  const here = dirname(fileURLToPath(import.meta.url));
-  // Verified against the built artifacts, not assumed:
-  //   rpm/deb  bin/mcp-server.js  + assets/  under /opt/kernl  → here/..
-  //   .app     Resources/mcp-server.js + Resources/assets/     → here
-  //   win zip  <root>/mcp-server.js + <root>/assets/           → here
-  const candidates = [
-    process.cwd(),           // dev (services/kernel) and Docker (/app)
-    here,                    // .app Resources/ and the Windows zip root
-    resolve(here, ".."),     // deb/rpm: /opt/kernl/bin → /opt/kernl
-  ];
-  const hit = candidates.find((c) => existsSync(resolve(c, "assets")));
-  if (!hit) {
-    log.warn(
-      `assets/ not found from any known location (cwd=${process.cwd()}, module=${here}) — ` +
-        `the bundled catalog will be empty`,
-    );
-    return process.cwd();
-  }
-  return hit;
-}
 import type { SqliteDb } from "../db/sqlite.js";
 import type { ModuleContext, ToolDefinition } from "../types.js";
 import type { ModuleRegistry } from "../module-registry.js";
@@ -147,7 +111,7 @@ export async function loadExtensions(args: {
   //    threaded through so receipts (local) and watermarks (remote downloads)
   //    can be Ed25519-signed.
   marketplaceModule.attachCatalog(extensionsModule.service, {
-    rootDir: resolveAssetsRoot(),
+    rootDir: assetsRoot(),
     identity: identity ?? null,
   });
   extensionsModule.service.setIdentity(identity ?? null);
