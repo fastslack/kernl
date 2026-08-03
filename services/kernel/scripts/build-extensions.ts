@@ -11,7 +11,7 @@
  * Cheap (<1s per extension) so don't over-engineer.
  */
 
-import { readdirSync, existsSync, statSync, writeFileSync, cpSync } from "node:fs";
+import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, cpSync } from "node:fs";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 
@@ -154,6 +154,80 @@ function buildFrontends(): void {
   console.log(`[build-extensions] frontend built=${built} fresh=${fresh}`);
 }
 
+/**
+ * Record, in each extension's manifest, the npm packages its built backend
+ * imports and the exact version this build resolved.
+ *
+ * Everything in EXTERNALS is deliberately left unbundled and resolved at
+ * runtime, which only works if the package is actually present. It was not:
+ * a native install shipped a node_modules pruned to the kernel's own needs,
+ * so 50 of 79 extensions failed to load on `Cannot find package 'uuid'`.
+ * Docker hid it because /app/node_modules is a full install.
+ *
+ * Deriving this from the built artifact rather than maintaining it by hand is
+ * the point — an extension that starts importing something new cannot quietly
+ * ship broken, because the manifest is regenerated from the code every build.
+ *
+ * Versions are exact. With ranges, two people enabling the same channel end up
+ * on different releases and a bug report stops being reproducible.
+ */
+function recordBackendPackages(): void {
+  const VALID = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+  const external = new Set(EXTERNALS);
+  let written = 0;
+
+  // Every directory carrying a manifest. Deliberately not collectExtensionDirs
+  // — that one skips anything with an extension.json, because it hunts for
+  // wrappers to build. Here the manifest is exactly what we are looking for.
+  const manifestDirs: string[] = [];
+  (function walk(dir: string, depth = 4): void {
+    if (depth < 0) return;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name.startsWith("_") || e.name === "node_modules") continue;
+      const sub = resolve(dir, e.name);
+      if (existsSync(resolve(sub, "extension.json"))) manifestDirs.push(sub);
+      else walk(sub, depth - 1);
+    }
+  })(EXT_DIR);
+
+  for (const extDir of manifestDirs) {
+    const manifestPath = resolve(extDir, "extension.json");
+    const entry = resolve(extDir, "backend/entry.js");
+    if (!existsSync(manifestPath) || !existsSync(entry)) continue;
+
+    const src = readFileSync(entry, "utf-8");
+    const packages: Record<string, string> = {};
+    // These bundles embed SQL, and `FROM communications` matches an import
+    // regex just as well as a real one — hence the name validation and the
+    // EXTERNALS membership test rather than trusting the match.
+    for (const m of src.matchAll(/(?:\bfrom|\brequire\()\s*["']([^"'\n]+)["']/g)) {
+      const spec = m[1];
+      if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("node:")) continue;
+      const name = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+      if (!VALID.test(name) || !external.has(name)) continue;
+      const pj = resolve(ROOT, "node_modules", name, "package.json");
+      if (!existsSync(pj)) {
+        console.warn(`[build-extensions] ${name} imported but not installed — not recorded`);
+        continue;
+      }
+      packages[name] = JSON.parse(readFileSync(pj, "utf-8")).version;
+    }
+
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    if (!manifest.backend) continue;
+
+    const sorted = Object.fromEntries(Object.entries(packages).sort(([a], [b]) => a.localeCompare(b)));
+    const before = JSON.stringify(manifest.backend.packages ?? {});
+    if (JSON.stringify(sorted) === before) continue;
+
+    if (Object.keys(sorted).length) manifest.backend.packages = sorted;
+    else delete manifest.backend.packages;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
+    written++;
+  }
+  console.log(`[build-extensions] manifests updated with backend.packages: ${written}`);
+}
+
 function main(): void {
   if (!existsSync(EXT_DIR)) {
     console.log("[build-extensions] No assets/extensions/ dir — skipping");
@@ -199,6 +273,9 @@ function main(): void {
 
   // Frontend page bundles (D2 — frontend/src/index.ts → frontend/entry.js).
   buildFrontends();
+
+  // Must run after the backends are built: it reads the emitted entry.js.
+  recordBackendPackages();
 
   // Keep TypeScript happy with a harmless export so `bun run` doesn't treat
   // this as a "no-output" script in certain configurations.

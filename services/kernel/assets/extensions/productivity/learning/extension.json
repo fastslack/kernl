@@ -9,8 +9,19 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
-  "tags": ["learning", "spaced-repetition"],
+  "tags": [
+    "learning",
+    "spaced-repetition"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["module:learning"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "module:learning"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

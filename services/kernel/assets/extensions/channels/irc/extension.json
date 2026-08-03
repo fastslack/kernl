@@ -9,13 +9,34 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "channels",
-  "tags": ["channel", "irc", "ircv3", "messaging", "tls", "e2e", "bouncer"],
+  "tags": [
+    "channel",
+    "irc",
+    "ircv3",
+    "messaging",
+    "tls",
+    "e2e",
+    "bouncer"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "network"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "ws": "8.21.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "irc", "entry": "frontend/entry.js", "title": "IRC" }
+      {
+        "view": "irc",
+        "entry": "frontend/entry.js",
+        "title": "IRC"
+      }
     ]
   }
 }

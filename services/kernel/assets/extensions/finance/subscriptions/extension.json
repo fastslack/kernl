@@ -9,13 +9,29 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "finance",
-  "tags": ["subscriptions", "finance", "recurring"],
+  "tags": [
+    "subscriptions",
+    "finance",
+    "recurring"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["module:subscriptions"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "module:subscriptions"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "subscriptions", "entry": "frontend/entry.js", "title": "Subscriptions" }
+      {
+        "view": "subscriptions",
+        "entry": "frontend/entry.js",
+        "title": "Subscriptions"
+      }
     ]
   }
 }

@@ -9,13 +9,32 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "people",
-  "tags": ["events", "rsvp", "invitations"],
+  "tags": [
+    "events",
+    "rsvp",
+    "invitations"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["read:events", "write:events", "notifications"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "read:events",
+    "write:events",
+    "notifications"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "cron-parser": "5.5.0",
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "planner", "entry": "frontend/entry.js", "title": "Planner" }
+      {
+        "view": "planner",
+        "entry": "frontend/entry.js",
+        "title": "Planner"
+      }
     ]
   }
 }

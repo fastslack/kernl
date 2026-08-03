@@ -9,8 +9,20 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "channels",
-  "tags": ["channel", "telegram", "notifications", "messaging"],
+  "tags": [
+    "channel",
+    "telegram",
+    "notifications",
+    "messaging"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "network"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "grammy": "1.41.1"
+    }
+  }
 }

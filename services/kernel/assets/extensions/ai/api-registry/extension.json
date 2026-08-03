@@ -9,8 +9,21 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "ai",
-  "tags": ["api", "registry", "catalog"],
+  "tags": [
+    "api",
+    "registry",
+    "catalog"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "module:api-registry"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "network",
+    "module:api-registry"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

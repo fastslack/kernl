@@ -11,7 +11,11 @@
   "category": "home",
   "frontend": {
     "pages": [
-      { "view": "news", "entry": "frontend/entry.js", "title": "News" }
+      {
+        "view": "news",
+        "entry": "frontend/entry.js",
+        "title": "News"
+      }
     ],
     "navItems": [
       {
@@ -23,5 +27,10 @@
       }
     ]
   },
-  "backend": { "entry": "backend/entry.js" }
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0"
+    }
+  }
 }

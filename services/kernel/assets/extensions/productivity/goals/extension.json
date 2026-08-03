@@ -9,8 +9,20 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
-  "tags": ["goals", "okr", "planning"],
+  "tags": [
+    "goals",
+    "okr",
+    "planning"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["module:goals"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "module:goals"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

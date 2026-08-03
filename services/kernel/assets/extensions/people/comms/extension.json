@@ -9,13 +9,34 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "people",
-  "tags": ["email", "comms", "accounts"],
+  "tags": [
+    "email",
+    "comms",
+    "accounts"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "module:comms"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "network",
+    "module:comms"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "@anthropic-ai/claude-agent-sdk": "0.2.114",
+      "@modelcontextprotocol/sdk": "1.26.0",
+      "imapflow": "1.3.2",
+      "nodemailer": "8.0.5",
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "comms", "entry": "frontend/entry.js", "title": "Comms" }
+      {
+        "view": "comms",
+        "entry": "frontend/entry.js",
+        "title": "Comms"
+      }
     ]
   }
 }

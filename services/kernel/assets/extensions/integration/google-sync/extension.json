@@ -11,24 +11,49 @@
   "license": "Apache-2.0",
   "category": "integration",
   "logo": "logo.svg",
-  "tags": ["google", "gmail", "calendar", "contacts", "oauth", "sync"],
+  "tags": [
+    "google",
+    "gmail",
+    "calendar",
+    "contacts",
+    "oauth",
+    "sync"
+  ],
   "kernel_min": "0.1.0",
-  "dependencies": ["com.kernl.google"],
+  "dependencies": [
+    "com.kernl.google"
+  ],
   "channels": [
     {
       "implementation": "gmail-sync",
       "direction": "bidirectional",
-      "config": { "scopes": ["gmail.readonly", "gmail.send", "gmail.modify"] }
+      "config": {
+        "scopes": [
+          "gmail.readonly",
+          "gmail.send",
+          "gmail.modify"
+        ]
+      }
     },
     {
       "implementation": "google-contacts-sync",
       "direction": "inbound",
-      "config": { "scopes": ["contacts.readonly", "contacts.other.readonly"] }
+      "config": {
+        "scopes": [
+          "contacts.readonly",
+          "contacts.other.readonly"
+        ]
+      }
     },
     {
       "implementation": "google-calendar-sync",
       "direction": "inbound",
-      "config": { "scopes": ["calendar.readonly", "calendar.events.readonly"] }
+      "config": {
+        "scopes": [
+          "calendar.readonly",
+          "calendar.events.readonly"
+        ]
+      }
     }
   ],
   "permissions": [
@@ -40,6 +65,10 @@
     "write:events"
   ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
   }
 }

@@ -9,13 +9,32 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
-  "tags": ["issues", "github", "gitlab", "gitea", "tracking"],
+  "tags": [
+    "issues",
+    "github",
+    "gitlab",
+    "gitea",
+    "tracking"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "module:issues"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "network",
+    "module:issues"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "issues", "entry": "frontend/entry.js", "title": "Issues" }
+      {
+        "view": "issues",
+        "entry": "frontend/entry.js",
+        "title": "Issues"
+      }
     ]
   }
 }

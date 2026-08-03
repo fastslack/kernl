@@ -9,13 +9,29 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "leisure",
-  "tags": ["books", "archive", "library"],
+  "tags": [
+    "books",
+    "archive",
+    "library"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "module:books"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "network",
+    "module:books"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "books", "entry": "frontend/entry.js", "title": "Books" }
+      {
+        "view": "books",
+        "entry": "frontend/entry.js",
+        "title": "Books"
+      }
     ]
   }
 }

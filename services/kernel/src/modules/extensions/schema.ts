@@ -55,6 +55,24 @@ const backendSchema = z.object({
   entry: z.string().min(1),
   migrations: z.string().min(1).optional(),
   uninstall: z.string().min(1).optional(),
+
+  /**
+   * npm packages this extension's backend imports, as `name -> exact version`.
+   *
+   * Distinct from the top-level `dependencies`, which lists other extensions
+   * by reverse-DNS id. These are libraries fetched from a registry.
+   *
+   * Written by `scripts/build-extensions.ts`, which reads the built entry
+   * point and records the version the build actually resolved — never hand
+   * maintained, so it cannot drift from what the code imports. Versions are
+   * exact on purpose: with ranges two users enabling the same channel end up
+   * on different releases, and bug reports stop being reproducible.
+   *
+   * Heavy, rarely-used SDKs (discord.js, @slack/bolt, the AWS clients) are not
+   * shipped in the payload — they are installed into the extension's own
+   * directory when the user enables it, which is why this list has to exist.
+   */
+  packages: z.record(z.string().min(1), z.string().min(1)).optional(),
 });
 
 const navItemSchema = z.object({

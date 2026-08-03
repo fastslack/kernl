@@ -9,8 +9,23 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
-  "tags": ["repos", "git", "filesystem", "office"],
+  "tags": [
+    "repos",
+    "git",
+    "filesystem",
+    "office"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["module:repos", "filesystem", "network"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "module:repos",
+    "filesystem",
+    "network"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

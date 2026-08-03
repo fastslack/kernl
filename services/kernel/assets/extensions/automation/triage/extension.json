@@ -10,9 +10,24 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "automation",
-  "tags": ["github", "triage", "llm", "automation"],
-  "permissions": ["network", "notifications", "module:triage"],
+  "tags": [
+    "github",
+    "triage",
+    "llm",
+    "automation"
+  ],
+  "permissions": [
+    "network",
+    "notifications",
+    "module:triage"
+  ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "@anthropic-ai/claude-agent-sdk": "0.2.114",
+      "@modelcontextprotocol/sdk": "1.26.0",
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
   }
 }
