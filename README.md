@@ -71,9 +71,14 @@ Zero config. One command. A full stack in ~2 minutes:
 git clone https://github.com/fastslack/kernl.git
 cd kernl
 docker compose up -d --build
+
+# Kernl generates an API token on first boot. Grab it:
+docker compose exec kernel cat /app/data/.kernel-auth-token
 ```
 
 → Dashboard at **http://localhost:3086** · MCP endpoint at **http://localhost:3086/mcp**
+
+Paste that token once into the dashboard's login screen and you're in — it's kept in your browser and reused for every request. To pin your own instead, set `KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`.
 
 No API keys, no host paths, no accounts. Add your LLM keys and channels later from **Settings → AI**. The graph brain (Neo4j) and key-free web search come bundled.
 
@@ -182,16 +187,21 @@ bun run dev                # stdio MCP + HTTP router (delega a services/kernel)
 
 ## Configuration
 
-Everything is environment-driven — copy `.env.example` to `.env`. Minimum keys for Docker runs:
+Everything is environment-driven, and the quick start needs **none of it** —
+`docker compose up` boots with working defaults. Copy `.env.example` to `.env`
+only when you want to override something.
 
-| Variable | Purpose |
+Two secrets are generated and persisted on first boot if you don't set them:
+
+| Variable | If unset |
 |---|---|
-| `HOST_HOME` | Your host home, mounted read-only into the kernel container |
-| `HOST_KERNEL_ROOT` | Absolute host path of this repo (Docker-in-Docker path translation) |
-| `HOST_PROJECTS_ROOT` | Parent dir of sibling repos, mounted at `/host-projects` |
-| `KERNEL_ENCRYPTION_KEY` | 32-byte hex (`openssl rand -hex 32`) for encrypting stored secrets |
+| `KERNEL_AUTH_TOKEN` | A random token is generated and stored as `data/.kernel-auth-token` (mode 600). The API always requires it — there is no unauthenticated mode. |
+| `KERNEL_ENCRYPTION_KEY` | A random 32-byte key is generated and stored as `data/.kernel-encryption-key`. **Back this file up** — without it, encrypted secrets in the database are unrecoverable. |
 
-Everything else (LLM keys, Neo4j creds, feature toggles) is documented inline in `.env.example`.
+The host-path variables (`HOST_HOME`, `HOST_KERNEL_ROOT`, `HOST_PROJECTS_ROOT`)
+belong to the full stack in `docker-compose.full.yml`, not the default one.
+Everything else — LLM keys, Neo4j creds, feature toggles — is documented inline
+in `.env.example`.
 
 ## Scripts
 
@@ -203,6 +213,28 @@ Everything else (LLM keys, Neo4j creds, feature toggles) is documented inline in
 | `bun test` | Run the test suite |
 | `bun run build` | Bundle to `services/kernel/dist/` |
 | `bun run reload` | Rebuild + restart the kernel container |
+
+## Known limitations
+
+Worth knowing before you commit your life to it. None of these are secret — we'd
+rather you read them here than discover them at an awkward moment.
+
+- **Single user.** One kernel, one person. There is user and password
+  infrastructure inside, but no per-user data isolation: everyone who has the
+  API token sees everything. Give each person their own instance; don't share
+  one across a team. ([`docs/MULTI_USER.md`](./docs/MULTI_USER.md))
+- **No auto-update.** Kernl doesn't check for new versions or update itself.
+  Watch releases if you want to know when something ships.
+- **Installers are unsigned.** macOS needs right-click → Open the first time,
+  Windows needs "More info → Run anyway". The signing pipeline is wired but the
+  certificates aren't bought yet. Docker and source installs are unaffected.
+- **Back it up yourself, and check the exit code.** `backup.sh` is solid and
+  verifies its own output, but nothing runs it for you. See
+  [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+- **Neo4j is hungry.** The bundled graph wants ~1–2 GB of RAM on its own. On a
+  small VPS, run the stack without it — Kernl degrades gracefully.
+- **No telemetry, which cuts both ways.** Nothing phones home, so nothing tells
+  us when your install breaks. Bug reports are the only signal we get.
 
 ## Documentation
 
