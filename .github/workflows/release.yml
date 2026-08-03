@@ -114,6 +114,20 @@ jobs:
             runner: macos-15-intel
             platform: darwin-x64
     runs-on: ${{ matrix.runner }}
+    # Signing secrets are mapped at the JOB level on purpose. A step's `if:` is
+    # evaluated before that step's own `env:` block exists, so the previous
+    # `if: env.APPLE_CERT_DATA != ''` next to `env: APPLE_CERT_DATA: ${{ ... }}`
+    # was always false — signing and notarization silently never ran, and the
+    # release still succeeded with unsigned artifacts. Job-level env IS in
+    # scope for step conditions. (`secrets` itself is not available in a
+    # step-level `if`, which is why the mapping exists at all.)
+    env:
+      APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -138,9 +152,6 @@ jobs:
       # Apple-notarized bundle that opens with a normal double-click.
       - name: Import signing certificate
         if: env.APPLE_CERT_DATA != ''
-        env:
-          APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
           echo "$APPLE_CERT_DATA" | base64 --decode > cert.p12
           security create-keychain -p '' build.keychain
@@ -153,8 +164,6 @@ jobs:
 
       - name: Sign .app
         if: env.APPLE_TEAM_ID != ''
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP="packaging/out/Kernl-$(node -p "require('./services/kernel/package.json').version")-${{ matrix.arch }}.app"
           codesign --deep --force --options runtime \
@@ -173,10 +182,6 @@ jobs:
 
       - name: Notarize
         if: env.APPLE_API_KEY_ID != ''
-        env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           VERSION=$(node -p "require('./services/kernel/package.json').version")
           DMG="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.dmg"
@@ -199,6 +204,11 @@ jobs:
   # ── Windows: .zip portable + .msi installer ─────────────────────
   windows:
     runs-on: windows-latest
+    # Job-level, so the signing step's `if:` can actually see it — see the note
+    # on the macos job.
+    env:
+      WINDOWS_CERT_DATA: ${{ secrets.WINDOWS_CERT_DATA }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -231,9 +241,6 @@ jobs:
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
         if: env.WINDOWS_CERT_DATA != ''
-        env:
-          WINDOWS_CERT_DATA: ${{ secrets.WINDOWS_CERT_DATA }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: bash
         run: |
           echo "$WINDOWS_CERT_DATA" | base64 --decode > cert.pfx
@@ -283,3 +290,9 @@ jobs:
             kernl-*-windows-x64.msi
             kernl-*-windows-x64.zip
           generate_release_notes: true
+          # Any tag carrying a prerelease suffix (v0.1.1-rc.1, -beta.2 …) is
+          # published as a prerelease. This is what keeps `install.sh` honest:
+          # it resolves through the API's /releases/latest, which excludes
+          # prereleases — so an RC never gets served to someone who just ran
+          # the one-liner expecting a stable build.
+          prerelease: ${{ contains(github.ref_name, '-') }}

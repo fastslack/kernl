@@ -30,7 +30,14 @@ RPM_FILES_DIR="$SCRIPT_DIR/../rpm/files"
 source "$SCRIPT_DIR/../stage-payload.sh"
 
 PKG_REVISION="${PKG_REVISION:-1}"
-DEB_NAME="${NAME}_${VERSION}-${PKG_REVISION}_amd64.deb"
+
+# Debian encodes a prerelease with '~', not '-'. The distinction is not
+# cosmetic: '~' sorts BEFORE the empty string, so 0.2.0~rc.1 < 0.2.0, while
+# 0.2.0-rc.1 would sort AFTER it — apt would treat the release candidate as
+# newer than the final release and refuse to upgrade off it. Only the first
+# '-' is the prerelease separator; the trailing -$PKG_REVISION stays.
+DEB_VERSION="${VERSION/-/\~}"
+DEB_NAME="${NAME}_${DEB_VERSION}-${PKG_REVISION}_amd64.deb"
 DEB_OUT="$REPO_ROOT/packaging/out/$DEB_NAME"
 mkdir -p "$REPO_ROOT/packaging/out"
 
@@ -84,7 +91,9 @@ mkdir -p "$CONTROL_ROOT"
 
 # Installed-Size in KB — what dpkg expects.
 SIZE_KB="$(du -sk "$DATA_ROOT" | cut -f1)"
-sed -e "s/__VERSION__/${VERSION}/g" \
+# The control file's Version must match the filename's, tilde and all, or dpkg
+# installs a package whose recorded version disagrees with what apt resolved.
+sed -e "s/__VERSION__/${DEB_VERSION}-${PKG_REVISION}/g" \
     -e "s/__SIZE_KB__/${SIZE_KB}/g" \
     "$SCRIPT_DIR/control.template" > "$CONTROL_ROOT/control"
 

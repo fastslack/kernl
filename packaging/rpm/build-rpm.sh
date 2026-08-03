@@ -35,17 +35,42 @@ else
   printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82' > "$SRC_TREE/packaging/kernl.png"
 fi
 
-# ── Tarball + rpmbuild ─────────────────────────────────────────────
+# RPM forbids '-' in Version, so a prerelease like 0.2.0-rc.1 cannot go there:
+# rpmbuild aborts with "Illegal char '-'". The convention is to keep the base
+# version and encode the prerelease in Release with a leading 0, which also
+# makes it sort BEFORE the eventual final build:
+#
+#   0.2.0-rc.1  →  Version: 0.2.0   Release: 0.rc.1
+#   0.2.0       →  Version: 0.2.0   Release: 1
+#
+# Anything after the first '-' is the prerelease; remaining '-' become '_',
+# which Release does allow.
+RPM_VERSION="${VERSION%%-*}"
+if [ "$RPM_VERSION" != "$VERSION" ]; then
+  RPM_RELEASE="0.${VERSION#*-}"
+  RPM_RELEASE="${RPM_RELEASE//-/_}"
+else
+  RPM_RELEASE="1"
+fi
+
+# ── Tarball ────────────────────────────────────────────────────────
+# The spec's %prep resolves both the source and the unpacked directory as
+# %{name}-%{version}, so on a prerelease build the staged tree has to be
+# renamed to the RPM's idea of the version (0.2.0), not npm's (0.2.0-rc.1).
 RPMBUILD_HOME="${RPMBUILD_HOME:-$HOME/rpmbuild}"
 mkdir -p "$RPMBUILD_HOME"/{SOURCES,SPECS,BUILD,RPMS,SRPMS}
-TARBALL="$RPMBUILD_HOME/SOURCES/${NAME}-${VERSION}.tar.gz"
-tar --owner=0 --group=0 -czf "$TARBALL" -C "$STAGE_DIR" "${NAME}-${VERSION}"
+if [ "$RPM_VERSION" != "$VERSION" ]; then
+  mv "$STAGE_DIR/${NAME}-${VERSION}" "$STAGE_DIR/${NAME}-${RPM_VERSION}"
+fi
+TARBALL="$RPMBUILD_HOME/SOURCES/${NAME}-${RPM_VERSION}.tar.gz"
+tar --owner=0 --group=0 -czf "$TARBALL" -C "$STAGE_DIR" "${NAME}-${RPM_VERSION}"
 echo "▶ source tarball: $TARBALL ($(du -sh "$TARBALL" | cut -f1))"
 
 # The spec carries a placeholder Version — stamp it from the staged VERSION
 # (which comes from services/kernel/package.json) so a v0.2.0 tag cannot
 # silently produce a 0.1.0 RPM that install.sh will then fail to find.
-sed -e "s/^Version:.*/Version:        ${VERSION}/" \
+sed -e "s/^Version:.*/Version:        ${RPM_VERSION}/" \
+    -e "s/^Release:.*/Release:        ${RPM_RELEASE}%{?dist}/" \
     "$SPEC_FILE" > "$RPMBUILD_HOME/SPECS/${NAME}.spec"
 
 echo "▶ rpmbuild -bb"
@@ -55,7 +80,7 @@ echo "▶ rpmbuild -bb"
 rpmbuild --define "_topdir $RPMBUILD_HOME" --define "dist %{nil}" \
          -bb "$RPMBUILD_HOME/SPECS/${NAME}.spec"
 
-RPM_OUT="$(find "$RPMBUILD_HOME/RPMS" -name "${NAME}-${VERSION}-*.rpm" -newer "$TARBALL" | head -1)"
+RPM_OUT="$(find "$RPMBUILD_HOME/RPMS" -name "${NAME}-${RPM_VERSION}-${RPM_RELEASE}*.rpm" -newer "$TARBALL" | head -1)"
 rm -rf "$STAGE_DIR"
 
 echo ""
