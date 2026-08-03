@@ -35,8 +35,8 @@
 %global         __requires_exclude (libonnxruntime|libonnxruntime_providers_cuda|libonnxruntime_providers_tensorrt|libonnxruntime_providers_shared|libcuda|libcublas|libcudart|libcudnn|libcufft|libcurand|libnvinfer|libnvinfer_plugin|libnvonnxparser|libnvrtc)
 %global         __provides_exclude (libonnxruntime|libonnxruntime_providers)
 
-# Everything under %{appdir} is a vendored, self-contained tree: a bun binary
-# plus prebuilt native node modules. Letting rpm scan it for dependencies is
+# Everything under the app directory is a vendored, self-contained tree: a bun
+# binary plus prebuilt native node modules. Letting rpm scan it for deps is
 # not just noise, it produces an uninstallable package — the prebuilt objects
 # link against the unversioned `libdl.so` and `libm.so` development sonames,
 # which no modern distro provides (glibc 2.34 merged both into libc). The
@@ -72,11 +72,22 @@ URL:            https://github.com/fastslack/kernl
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      x86_64
 
-# Runtime deps — kernel won't start without these.
-# (sqlite is for the better-sqlite3 native module; libstdc++ for onnxruntime.)
+# Runtime deps — kernel won't start without these. libstdc++ is for
+# onnxruntime. There is deliberately no sqlite dependency: better-sqlite3
+# compiles SQLite into better_sqlite3.node, so `ldd` on it shows only libc,
+# libgcc_s, libm, libpthread and libstdc++ — no libsqlite3 at all.
+#
+# Requiring it was worse than redundant. On RHEL and its rebuilds the package
+# named `sqlite` is the CLI, is not installed by default, and nothing pulls it
+# in, so `rpm -i` refused outright:
+#
+#     error: Failed dependencies: sqlite is needed by kernl-0.1.1-1.x86_64
+#
+# That took out Rocky, Alma and CentOS Stream while Fedora installed fine.
+# Verified with --nodeps on rockylinux:9: the kernel starts, opens its
+# database and serves the dashboard.
 Requires:       glibc >= 2.34
 Requires:       libstdc++
-Requires:       sqlite
 
 # Optional but strongly recommended — features degrade gracefully when
 # missing. ffmpeg powers cinema/torrents transcoding; bubblewrap backs

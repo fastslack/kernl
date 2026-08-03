@@ -5,7 +5,7 @@ Priority: optional
 Architecture: amd64
 Maintainer: Matias Aguirre <fastslack@matware.nl>
 Installed-Size: __SIZE_KB__
-Depends: libc6 (>= 2.34), libstdc++6, libsqlite3-0
+Depends: libc6 (>= 2.34), libstdc++6
 Recommends: ffmpeg, bubblewrap
 Suggests: docker.io
 Homepage: https://github.com/fastslack/kernl
