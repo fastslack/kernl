@@ -349,6 +349,18 @@ jobs:
           }
           Write-Host "dashboard served the SPA"
 
+          # "It answers 200" is not the same as "it works". A native install
+          # once served a perfectly good dashboard whose menu had one entry,
+          # because the bundled catalog root fell back to cwd — the user's data
+          # directory — and 71 modules went undiscovered. Every check passed:
+          # installed, started, 200. Empty, but green.
+          if (Select-String -Path $log -Pattern "assets/ not found from any known location" -Quiet) {
+            Write-Host "::error::the kernel could not locate assets/ — the module catalog will be empty"
+            Get-Content $log | Select-String -Pattern "assets/ not found" -Context 0,2
+            exit 1
+          }
+          Write-Host "bundled catalog root resolved"
+
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
         if: env.WINDOWS_CERT_DATA != ''
