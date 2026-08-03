@@ -9433,12 +9433,13 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     border:1px solid color-mix(in srgb, var(--flow-color) 30%, transparent);
     flex-shrink:0;
   }
-  .ip-head-txt{min-width:0;flex:1}
+  /* One rhythm for the whole header. The name, the identity row and the tag
+     row used ad-hoc 4px/5px margins, so nothing lined up with anything. */
+  .ip-head-txt{min-width:0;flex:1;display:flex;flex-direction:column;gap:7px}
   .ip-name{
     font:600 17px/1.1 'Syne',sans-serif;
     color:#f0f2f7;
     letter-spacing:-.01em;
-    margin-bottom:4px;
     word-break:break-word;
     display:inline-flex;align-items:center;gap:8px;
   }
@@ -9449,7 +9450,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-name:hover .ip-name-edit-btn{opacity:1}
   .ip-name-edit-btn:hover{color:#ecc968;background:rgba(201,168,76,0.12)}
-  .ip-name-edit{display:flex;align-items:center;gap:6px;margin-bottom:4px}
+  .ip-name-edit{display:flex;align-items:center;gap:6px}
   .ip-name-input{
     font:600 17px/1.1 'Syne',sans-serif;color:#f0f2f7;
     background:rgba(10,12,22,0.7);
@@ -9465,25 +9466,29 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .ip-name-btn-ok:hover{border-color:#3dd68c;color:#3dd68c;background:rgba(61,214,140,0.1)}
   .ip-name-btn-cancel:hover{border-color:#f04770;color:#f04770;background:rgba(240,71,112,0.1)}
   .ip-name-btn:disabled{opacity:0.5;cursor:wait}
+  /* Wraps instead of overflowing: a long flow name plus an id used to push the
+     row past the panel edge. */
   .ip-sub{
-    display:flex;align-items:center;gap:8px;
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:7px;
     font:500 10px 'JetBrains Mono',monospace;
     color:#7a7f92;
   }
   .ip-flow{
     color:var(--f, var(--flow-color));
-    font-weight:600;text-transform:uppercase;letter-spacing:.8px;
-    padding:2px 7px;border-radius:4px;
+    font-weight:600;text-transform:uppercase;letter-spacing:.6px;
+    font-size:10px;line-height:1.5;padding:3px 8px;border-radius:5px;
     background:color-mix(in srgb, var(--f, var(--flow-color)) 10%, transparent);
     border:1px solid color-mix(in srgb, var(--f, var(--flow-color)) 25%, transparent);
   }
   .ip-dot{width:3px;height:3px;border-radius:50%;background:#4a4f66}
   .ip-tags{
-    display:flex;align-items:center;gap:5px;flex-wrap:wrap;margin-top:5px;
+    display:flex;align-items:center;gap:6px;flex-wrap:wrap;
   }
+  /* Same metrics as .ip-flow so every chip in the header sits on one baseline
+     and reads as one family. */
   .ip-tag{
-    font:700 9px/1 'JetBrains Mono',monospace;letter-spacing:.5px;
-    padding:3px 7px;border-radius:3px;text-transform:uppercase;
+    font:700 10px/1.5 'JetBrains Mono',monospace;letter-spacing:.6px;
+    padding:3px 8px;border-radius:5px;text-transform:uppercase;
     border:1px solid transparent;white-space:nowrap;
   }
   .ip-tag-llm{
