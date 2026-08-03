@@ -96,9 +96,15 @@ Single-user, self-hosted by default. Key invariants (see `SECURITY.md` and the
 
 - The HTTP API and `/mcp` require `Authorization: Bearer $KERNEL_AUTH_TOKEN`.
   If no token is configured the kernel **generates and persists one** at first
-  boot (mode-600 file next to the DB) rather than running open — unless
-  `KERNEL_ALLOW_UNAUTH=1` is explicitly set (the loopback-only eval stack does
-  this).
+  boot (mode-600 file next to the DB) rather than running open. Every shipped
+  stack, including the Docker quick start, runs authenticated;
+  `KERNEL_ALLOW_UNAUTH=1` exists only as a deliberate local-development escape
+  hatch. Binding to loopback is **not** a substitute for it — the user's own
+  browser is inside the loopback boundary, so any page they have open can
+  reach an unauthenticated API.
+- CORS is deny-by-default: the API sends `Access-Control-Allow-Origin` only for
+  an origin explicitly listed in `CORS_ALLOWED_ORIGINS`. The dashboard is
+  same-origin and needs none.
 - The encryption key (`KERNEL_ENCRYPTION_KEY`) is likewise auto-generated and
   persisted if unset; at-rest secrets use AES-256-GCM.
 - Untrusted input that reaches `fetch`, the shell, `import()`, or a DB column

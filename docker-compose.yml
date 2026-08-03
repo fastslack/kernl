@@ -42,15 +42,21 @@ services:
       # Rust bridge OFF — kernel falls back to local implementations.
       BRIDGE_ENABLED: "false"
       RUST_BRIDGE_ENABLED: "false"
-      # Eval-only: run the API unauthenticated. Safe here because the dashboard
-      # is bound to 127.0.0.1 (loopback) below, so the open API is not reachable
-      # from the LAN. For any real/exposed deployment set KERNEL_AUTH_TOKEN
-      # instead (openssl rand -hex 32) and drop this line.
-      KERNEL_ALLOW_UNAUTH: "1"
+      # KERNEL_AUTH_TOKEN intentionally unset: the kernel generates a random
+      # token on first boot and persists it to /app/data/.kernel-auth-token
+      # (mode 600) in the kernel-data volume. Read it once and paste it into
+      # the dashboard's login screen:
+      #   docker compose exec kernel cat /app/data/.kernel-auth-token
+      # Pin your own instead with:  KERNEL_AUTH_TOKEN: <openssl rand -hex 32>
+      #
+      # Do NOT set KERNEL_ALLOW_UNAUTH here. Binding to loopback does not make
+      # an open API safe: the API answers any page the user has open in a
+      # browser, which is already inside the loopback boundary.
+      #
       # In-container the kernel MUST bind 0.0.0.0 or nginx (sibling container)
       # can't proxy to it — port 3087 is never published to the host, so the
       # only external surface remains nginx on host loopback. resolveSecureBind
-      # honors this only because ALLOW_UNAUTH + explicit bind are BOTH set.
+      # honors an explicit bind because a real auth token is in place.
       KERNEL_DASHBOARD_BIND: 0.0.0.0
       # ── Pro license (owner all-access) ──────────────────────────
       # The license JWT lives in the data volume at $XDG_CONFIG_HOME/kernl/
@@ -99,7 +105,7 @@ services:
     container_name: kernl-public-dashboard
     restart: unless-stopped
     ports:
-      - "127.0.0.1:3086:80"   # loopback only — the eval API is unauthenticated
+      - "127.0.0.1:3086:80"   # loopback only; the API behind it requires a token
     depends_on:
       - kernel
 
