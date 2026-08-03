@@ -86,6 +86,14 @@ export class KernelHttpServer {
       resolve(__dirname, "../../../dashboard/build"),        // dev: services/kernel/src/core (layout final)
       resolve(__dirname, "../dashboard/build"),              // bundled: dist/ → ../dashboard/build (Docker)
       resolve(process.cwd(), "dashboard/build"),             // cwd-relative (Docker /app)
+      // Native packages stage the SPA as `dashboard/` — stage-payload.sh copies
+      // services/dashboard/build to <tree>/dashboard, so there is no nested
+      // build/ segment and none of the candidates above can match. Without
+      // these two every .deb, .rpm, .dmg and .msi serves 500 at / while the
+      // API answers fine, which is a broken product that looks like a running
+      // one. The two spellings cover both staged layouts:
+      resolve(__dirname, "../dashboard"),  // deb/rpm: /opt/kernl/bin → /opt/kernl/dashboard
+      resolve(__dirname, "dashboard"),     // .app Resources/ and the Windows zip root
     ];
     this.staticDir = candidates.find(p => existsSync(p)) || candidates[0];
     log.info(`Dashboard static dir: ${this.staticDir}`);
@@ -154,13 +162,23 @@ export class KernelHttpServer {
     }
   }
 
-  /** Compute the Access-Control-Allow-Origin value for a request. */
-  private getAllowedOrigin(req?: IncomingMessage): string {
-    if (this.corsOrigins.length === 0) return "*";
+  /**
+   * CORS headers for a request — `{}` unless the caller's Origin was
+   * explicitly allow-listed via CORS_ALLOWED_ORIGINS.
+   *
+   * The dashboard always shares the kernel's origin (served by the kernel
+   * itself, or proxied on the same host by the nginx sibling), so the normal
+   * case needs no CORS at all. A default wildcard would instead let any page
+   * the user has open read every API response cross-origin — a drive-by read
+   * of the whole kernel, and a write too on an unauthenticated deployment.
+   * Cross-origin callers (a dashboard dev server on another port) are opt-in.
+   */
+  private corsHeaders(req?: IncomingMessage): Record<string, string> {
     const origin = req?.headers.origin ?? "";
-    if (this.corsOrigins.includes(origin)) return origin;
-    // If no match, return the first configured origin (browser will block the request)
-    return this.corsOrigins[0];
+    if (!origin || !this.corsOrigins.includes(origin)) return {};
+    // Vary: the same URL answers differently per Origin — caches must not
+    // hand one origin's allowance to another.
+    return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
   }
 
   parseBody<T = unknown>(req: IncomingMessage, maxBytes = 10 * 1024 * 1024): Promise<T> {
@@ -189,14 +207,14 @@ export class KernelHttpServer {
 
   json(res: ServerResponse, status: number, data: unknown, req?: IncomingMessage): void {
     const body = JSON.stringify(data);
-    const origin = this.getAllowedOrigin(req);
+    const cors = this.corsHeaders(req);
     // Gzip if client accepts it and response is large enough
     if (req && body.length > GZIP_THRESHOLD && req.headers["accept-encoding"]?.includes("gzip")) {
       gzipAsync(Buffer.from(body)).then((compressed) => {
         res.writeHead(status, {
           "Content-Type": "application/json; charset=utf-8",
           "Content-Encoding": "gzip",
-          "Access-Control-Allow-Origin": origin,
+          ...cors,
           "Cache-Control": "no-store",
           ...SECURITY_HEADERS,
         });
@@ -205,7 +223,7 @@ export class KernelHttpServer {
         // Fallback to uncompressed on gzip error
         res.writeHead(status, {
           "Content-Type": "application/json; charset=utf-8",
-          "Access-Control-Allow-Origin": origin,
+          ...cors,
           "Cache-Control": "no-store",
           ...SECURITY_HEADERS,
         });
@@ -215,7 +233,7 @@ export class KernelHttpServer {
     }
     res.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
-      "Access-Control-Allow-Origin": origin,
+      ...cors,
       "Cache-Control": "no-store",
       ...SECURITY_HEADERS,
     });
@@ -287,14 +305,20 @@ export class KernelHttpServer {
   }
 
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
-    const origin = this.getAllowedOrigin(req);
-
-    // CORS preflight
+    // CORS preflight. Without an allow-listed Origin the response carries no
+    // CORS headers at all, which the browser reads as "denied" — the request
+    // never leaves the preflight.
     if (req.method === "OPTIONS") {
+      const cors = this.corsHeaders(req);
       res.writeHead(204, {
-        "Access-Control-Allow-Origin": origin,
-        "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type, Authorization, mcp-session-id, mcp-protocol-version",
+        ...cors,
+        ...(Object.keys(cors).length > 0
+          ? {
+              "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+              "Access-Control-Allow-Headers":
+                "Content-Type, Authorization, mcp-session-id, mcp-protocol-version",
+            }
+          : {}),
         ...SECURITY_HEADERS,
       });
       res.end();
