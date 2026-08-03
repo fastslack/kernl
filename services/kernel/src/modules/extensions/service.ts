@@ -21,7 +21,7 @@ import type {
 } from "./types.js";
 import type { ExtensionManifest } from "./schema.js";
 import { peekManifest, unpackBundle } from "./bundle.js";
-import { ensureExtensionPackages } from "./ensure-packages.js";
+import { ensureExtensionPackages, needsPackageInstall } from "./ensure-packages.js";
 import { verifyBundleSignature } from "./bundle-signature.js";
 import {
   checkBundleAuthenticity,
@@ -191,7 +191,7 @@ export class ExtensionService {
     try {
       this.insertRow(row);
       await dispatchInstall(manifest, installPath, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest);
+      const finalStatus = this.postInstallStatus(manifest, installPath);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
       await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
@@ -351,7 +351,7 @@ export class ExtensionService {
     this.insertRow(row);
     try {
       await dispatchInstall(manifest, sourceDir, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest);
+      const finalStatus = this.postInstallStatus(manifest, sourceDir);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
       await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
@@ -419,7 +419,7 @@ export class ExtensionService {
     this.insertRow(row);
     try {
       await dispatchInstall(manifest, installPath, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest);
+      const finalStatus = this.postInstallStatus(manifest, installPath);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
       await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
@@ -618,9 +618,17 @@ export class ExtensionService {
    * instead of 'active' — the user has to consciously activate via
    * kernel_extensions_activate or the dashboard.
    */
-  private postInstallStatus(manifest: ExtensionManifest): ExtensionStatus {
-    const requiresActivation = !!(manifest as ExtensionManifest & { requires_activation?: boolean })
-      .requires_activation;
+  private postInstallStatus(manifest: ExtensionManifest, installPath = ""): ExtensionStatus {
+    // An extension whose packages are not on disk yet has to wait to be asked
+    // for, exactly like one that declares requires_activation. Activating it on
+    // sight means the loader imports it at boot, fails on the missing package,
+    // and files it under `error` — which is how a fresh install came up showing
+    // ten broken extensions that were only ever waiting for someone to enable
+    // them. Derived rather than another manifest flag: the condition is simply
+    // whether the packages are there.
+    const requiresActivation =
+      !!(manifest as ExtensionManifest & { requires_activation?: boolean }).requires_activation ||
+      needsPackageInstall(manifest, installPath);
     // Paid extensions install but stay inactive until their `pro:<slug>` license
     // is present. Free extensions activate as before.
     return activationStatus(manifest, (f) => this.hasLicense(f), requiresActivation);

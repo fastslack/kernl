@@ -26,7 +26,7 @@ import { log } from "../../core/logger.js";
 import type { ExtensionManifest } from "./schema.js";
 
 /** Walk up from `startDir` looking for `node_modules/<pkg>/package.json`. */
-function isResolvable(pkg: string, startDir: string): boolean {
+export function isResolvable(pkg: string, startDir: string): boolean {
   let dir = resolve(startDir);
   for (;;) {
     if (existsSync(join(dir, "node_modules", pkg, "package.json"))) return true;
@@ -69,6 +69,21 @@ function runBunInstall(cwd: string, timeoutMs: number): Promise<void> {
       ));
     });
   });
+}
+
+/**
+ * True when the extension declares packages that are not currently available.
+ *
+ * Such an extension must not be activated on sight. The loader would try to
+ * import it at boot, fail on the missing package, and park it in `error` — so
+ * a fresh install showed ten extensions apparently broken when they were
+ * simply waiting to be asked for. Left in `installed`, they appear as
+ * available, and enabling one is what fetches its packages.
+ */
+export function needsPackageInstall(manifest: ExtensionManifest, installPath: string): boolean {
+  const declared = Object.keys(manifest.backend?.packages ?? {});
+  if (!declared.length || !installPath) return false;
+  return declared.some((p) => !isResolvable(p, installPath));
 }
 
 export interface EnsurePackagesResult {
