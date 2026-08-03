@@ -1,0 +1,43 @@
+{
+  "$module": "goto-view",
+  "description": "Sign in with the kernel's API token, clear the onboarding gates, then open one dashboard view and wait for the app shell",
+  "params": {
+    "path": {
+      "required": true,
+      "description": "Route to open, e.g. /agents-flow. Real SvelteKit paths — the dashboard stopped using #hash routing."
+    },
+    "settle": {
+      "default": "1500",
+      "description": "Extra ms to wait after the shell renders, for views that stream their data in."
+    }
+  },
+  "actions": [
+    {
+      "comment": "The shell is gated twice: /api/* answers 401 without a bearer token (the layout's fetch interceptor then bounces to /login), and a missing kernl.setupComplete / kernl.welcomeSeen sends a first-run visitor to /setup. Seeding both from /login — a shell-less page that never triggers either redirect — is what lets the next goto land on the requested view instead of an onboarding screen.",
+      "type": "goto",
+      "value": "/login"
+    },
+    {
+      "type": "wait",
+      "value": "800"
+    },
+    {
+      "type": "evaluate",
+      "value": "localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}'); localStorage.setItem('kernl.welcomeSeen','true'); localStorage.setItem('kernl.setupComplete','1'); true;"
+    },
+    {
+      "type": "goto",
+      "value": "{{path}}"
+    },
+    {
+      "comment": "`.sidebar` is the <nav> the layout renders once the shell is up. Waiting on it also proves we did not get bounced to /login or /setup, which render shell-less.",
+      "type": "wait",
+      "selector": ".sidebar",
+      "timeout": 45000
+    },
+    {
+      "type": "wait",
+      "value": "{{settle}}"
+    }
+  ]
+}

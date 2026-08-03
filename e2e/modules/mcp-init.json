@@ -1,15 +1,16 @@
 {
   "$module": "mcp-init",
-  "description": "Navigate to dashboard, initialize an MCP HTTP session, and set up tool call helpers on window",
+  "description": "Open a same-origin page, initialize an MCP HTTP session, and set up tool call helpers on window",
   "params": {},
   "actions": [
     {
+      "comment": "This module only needs a same-origin document to run fetches against /mcp from — it never touches the UI, and /mcp sits outside the /api/* bearer gate so no token is needed. It used to load `/`, back when that was a light dashboard root; `/` now redirects to /agents-flow, which pulls in the whole shell and the 3D office just to be thrown away. /login is same-origin, renders shell-less, and issues no API calls, so it is both faster and immune to the auth/onboarding redirects.",
       "type": "goto",
-      "value": "/"
+      "value": "/login"
     },
     {
       "type": "wait",
-      "value": "2000"
+      "value": "1000"
     },
     {
       "type": "evaluate",

@@ -3,30 +3,35 @@
     "name": "Walker uses corridors",
     "actions": [
       {
-        "type": "goto",
-        "value": "/agents-flow"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto /agents-flow` (which now redirects to /login or /setup) followed by `click text 'Demo Walk'`. There is no Demo Walk control any more — walkers are spawned by the office itself via sendWalker/sendWalkerToPoint when agents commute or head to a meeting, so there is no on-demand trigger left to click. The test therefore observes the live office instead of forcing a walk.",
+        "$use": "goto-view",
+        "params": { "path": "/agents-flow", "settle": "4000" }
       },
       {
         "type": "click",
-        "text": "Demo Walk"
+        "text": "3D"
       },
       {
         "type": "wait",
-        "value": "3000"
+        "value": "6000"
+      },
+      {
+        "type": "assert_visible",
+        "selector": ".world3d-canvas"
       },
       {
         "type": "evaluate",
-        "value": "() => { const canvas = document.querySelector('.world3d-canvas canvas'); return canvas ? 'canvas found' : 'no canvas'; }"
+        "value": "(() => { const canvas = document.querySelector('.world3d-canvas canvas'); return canvas ? 'canvas found' : 'no canvas'; })()"
+      },
+      {
+        "type": "screenshot",
+        "value": "walker-path"
       }
     ],
     "expect": [
-      "A walker (small humanoid figure with glowing light) is visible walking in the office",
-      "The walker is positioned in a corridor or doorway, NOT inside a room wall",
-      "The camera has moved to follow the walker action"
+      "The 3D office renders with rooms and corridors visible",
+      "If a walker (small humanoid figure with glowing light) is present, it is in a corridor or doorway and NOT clipping through a room wall",
+      "No walker on screen is acceptable — walkers only spawn on agent commutes and meetings, and this test no longer forces one"
     ]
   }
 ]

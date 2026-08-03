@@ -3,16 +3,21 @@
     "name": "open meeting history panel via selector",
     "actions": [
       {
-        "type": "goto",
-        "value": "http://localhost:3086/agents-flow"
-      },
-      {
-        "type": "wait",
-        "value": "5000"
+        "comment": "Was a bare goto plus `click .hist-toggle`. `.hist-toggle` does not exist anywhere in the codebase — the meetings history panel is toggled from the hq-bar View menu, and the panel's own classes are `.hist-panel` / `.hist-head` / `.hist-row`. The page is also behind the auth + setup gates now.",
+        "$use": "goto-view",
+        "params": { "path": "/agents-flow", "settle": "5000" }
       },
       {
         "type": "click",
-        "selector": ".hist-toggle"
+        "selector": ".hq-menu-trigger"
+      },
+      {
+        "type": "wait",
+        "value": "500"
+      },
+      {
+        "type": "click",
+        "text": "Meetings panel"
       },
       {
         "type": "wait",
@@ -23,6 +28,6 @@
         "value": "history-panel-open"
       }
     ],
-    "expect": "Meeting history panel expanded showing rows with status dots, X dismiss button on completed rows, Clear all read button in header"
+    "expect": "The Meetings panel toggle is checked in the hq-bar View menu. When meetings exist the `.hist-panel` is expanded showing rows with status dots, an X dismiss button on completed rows, and a 'Clear N read' button in its header. With no meetings recorded the panel stays hidden by design."
   }
 ]

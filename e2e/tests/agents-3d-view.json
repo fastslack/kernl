@@ -3,12 +3,9 @@
     "name": "Switch to 3D Command Center view",
     "actions": [
       {
-        "type": "goto",
-        "value": "/agents-flow"
-      },
-      {
-        "type": "wait",
-        "value": "3000"
+        "comment": "Was a bare `goto /agents-flow`. Unauthenticated that redirects to /login (401 on the first /api call) or /setup, so the '3D' toggle was never on screen to click.",
+        "$use": "goto-view",
+        "params": { "path": "/agents-flow", "settle": "3000" }
       },
       {
         "type": "click",
@@ -17,6 +14,10 @@
       {
         "type": "wait",
         "value": "4000"
+      },
+      {
+        "type": "assert_visible",
+        "selector": ".world3d-canvas"
       }
     ],
     "expect": [

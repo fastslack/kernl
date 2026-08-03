@@ -3,26 +3,31 @@
     "name": "open meeting history panel and verify dismiss buttons",
     "actions": [
       {
-        "type": "goto",
-        "value": "http://localhost:3086/agents-flow"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare goto plus a click on the text 'Meetings'. Two things had rotted: the page is behind the auth + setup gates now, and 'Meetings' is the *label inside* the history panel (`.hist-head-label`), not something that opens it. The panel is opened from the hq-bar View menu.",
+        "$use": "goto-view",
+        "params": { "path": "/agents-flow", "settle": "4000" }
       },
       {
         "type": "click",
-        "text": "Meetings"
+        "selector": ".hq-menu-trigger"
       },
       {
         "type": "wait",
         "value": "500"
       },
       {
+        "type": "click",
+        "text": "Meetings panel"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      },
+      {
         "type": "screenshot",
         "value": "history-open"
       }
     ],
-    "expect": "Meeting history panel is open with rows. Each completed/failed row shows an X button to dismiss it. Header shows 'Clear N read' if there are closed meetings."
+    "expect": "The Meetings panel toggle is checked in the hq-bar View menu. When the office has recorded meetings the history panel is open with rows; each completed/failed row shows an X button to dismiss it and the header shows 'Clear N read'. With no meetings recorded the panel stays hidden — it only renders when the list is non-empty."
   }
 ]

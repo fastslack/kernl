@@ -3,12 +3,9 @@
     "name": "open hq dropdown",
     "actions": [
       {
-        "type": "goto",
-        "value": "http://localhost:3086/agents-flow"
-      },
-      {
-        "type": "wait",
-        "value": "6000"
+        "comment": "Was a bare `goto http://localhost:3086/agents-flow`. The dashboard now gates on an API token and the setup wizard, so an unauthenticated visit lands on /login or /setup and `.hq-menu-trigger` never appears. goto-view seeds both and waits for the shell; it also honours the configured baseUrl instead of hardcoding the host.",
+        "$use": "goto-view",
+        "params": { "path": "/agents-flow", "settle": "6000" }
       },
       {
         "type": "click",
@@ -23,6 +20,6 @@
         "value": "hq-dropdown-open"
       }
     ],
-    "expect": "hq-dropdown shows Create section + View section with 4 toggles (Live meeting, Meetings panel, Management log, Performance HUD), each with check mark when active"
+    "expect": "hq-dropdown shows the Create section + a View section with 5 toggles (Live meeting, Meetings panel, Management log, Performance HUD, Giro/rotation), each with a check mark when active"
   }
 ]

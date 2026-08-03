@@ -11,7 +11,7 @@
       },
       {
         "type": "evaluate",
-        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+        "value": "localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
       }
     ]
   },
@@ -73,15 +73,16 @@
           "selector": ".skills-picker"
         },
         {
+          "comment": "The picker's list was rebuilt as a tile grid: `.skills-picker-list` > `.skill-tiles` > `.skill-tile`. `.skill-row` is gone from the codebase.",
           "type": "assert_visible",
-          "selector": ".skill-row"
+          "selector": ".skill-tile"
         },
         {
           "type": "screenshot",
           "value": "ux-agent-skills-02-picker"
         }
       ],
-      "expect": "Agent detail page shows new 'Skills (procedural)' section with 'Attach skill' CTA. Clicking the button opens a modal listing 40 installed skills with description + token estimate."
+      "expect": "Agent detail page shows new 'Skills (procedural)' section with 'Attach skill' CTA. Clicking the button opens a modal listing the installed skills as tiles, each with its slug and a token estimate (the count depends on which skill repos are subscribed)."
     }
   ]
 }

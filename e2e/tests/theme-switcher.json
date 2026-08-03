@@ -2,12 +2,15 @@
   {
     "name": "open theme switcher dropdown",
     "actions": [
-      { "type": "goto",       "value": "http://localhost:3086/home" },
-      { "type": "wait",       "value": "3000" },
+      {
+        "comment": "Was a bare `goto http://localhost:3086/home`, which redirected to /login without a token, so `.theme-trigger` was never present.",
+        "$use": "goto-view",
+        "params": { "path": "/home", "settle": "3000" }
+      },
       { "type": "click",      "selector": ".theme-trigger" },
       { "type": "wait",       "value": "1500" },
       { "type": "screenshot", "value": "theme-switcher-open" }
     ],
-    "expect": "Dropdown is open. 6 themes listed (Midnight Gold, Arctic Light, CRT Terminal, Emerald Dark, Monochrome, Rose Quartz) each with icon, name, and 5 small color swatches on the right. The currently active theme has a gold border."
+    "expect": "Dropdown is open, listing the installed themes — each row with an icon, a name, and small colour swatches on the right, the active theme highlighted. The list comes from /api/marketplace/theme/list, so its length depends on which theme packages are installed rather than being a fixed set."
   }
 ]
