@@ -17,7 +17,20 @@
 import { LicenseError, type LicenseClaim } from "./types.js";
 import { LICENSE_PUBLIC_KEY } from "./public-key.js";
 
-const EXPECTED_ISSUER = process.env.KERNEL_LICENSE_ISSUER ?? "issuer.mtwkernel.com";
+/**
+ * The issuer a license must be signed by, as its `iss` claim.
+ *
+ * Default: the issuer Worker we actually mint from. Overriding it is for
+ * staging only — a wrong default silently rejects every real customer key,
+ * and the override is set in exactly one place (docker-compose.yml), so the
+ * native installers depend entirely on this default being right.
+ *
+ * Read per call rather than captured at import: the license service is built
+ * during bootstrap, after `.env` has been loaded.
+ */
+export function expectedIssuer(): string {
+  return process.env.KERNEL_LICENSE_ISSUER ?? "issuer.lifekernl.com";
+}
 
 /**
  * Parse and cryptographically verify a license JWT.
@@ -82,10 +95,11 @@ export async function verifyLicenseJwt(jwt: string): Promise<LicenseClaim> {
   if (!["pro", "cloud", "both"].includes(claim.sku)) {
     throw new LicenseError("invalid", `Unknown SKU "${claim.sku}"`);
   }
-  if (claim.iss !== EXPECTED_ISSUER) {
+  const issuer = expectedIssuer();
+  if (claim.iss !== issuer) {
     throw new LicenseError(
       "invalid",
-      `Wrong issuer "${claim.iss}"; expected "${EXPECTED_ISSUER}"`,
+      `Wrong issuer "${claim.iss}"; expected "${issuer}"`,
     );
   }
   if (!claim.features.every((f) => typeof f === "string")) {
