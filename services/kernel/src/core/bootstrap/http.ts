@@ -54,7 +54,7 @@ import {
 import { registerSkillRoutes } from "../../modules/skills/api-routes.js";
 import { registerAgentRoutes } from "../../modules/agents/api-routes.js";
 import { registerSandboxDriverRoutes } from "../sandbox/routes.js";
-import { registerLlmProviderRoutes } from "../llm/provider-routes.js";
+import { registerLlmProviderRoutes, registerClaudeCodeAuthRoutes } from "../llm/provider-routes.js";
 import { registerDbDriverRoutes } from "../db-drivers/api-routes.js";
 import { registerAiConfigRoutes } from "../../modules/config/ai-routes.js";
 import { registerSettingsRoutes } from "../../modules/config/settings-routes.js";
@@ -241,6 +241,7 @@ export async function initHttpAndMcp(args: {
       }
 
       const llmEnvPath = resolvePath(process.cwd(), ".env");
+      registerClaudeCodeAuthRoutes(httpServer, llmRegistry);
       registerLlmProviderRoutes(httpServer, llmRegistry, modelBlocklist, (slug) => {
         syncProvidersToKernelConfig(config, llmRegistry);
         const envUpdates = providerEnvUpdates(slug, llmRegistry.loadConfig(slug));

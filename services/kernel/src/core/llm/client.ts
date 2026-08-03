@@ -106,6 +106,18 @@ function getClaudeCodeSdk(): ChatClaudeCodeProvider | null {
   return _claudeCodeSdk;
 }
 
+/**
+ * Forget the memoised provider so the next call re-probes the CLI.
+ *
+ * Called after a login completes. Without it the singleton above keeps whatever
+ * it decided at boot — which for a logged-out kernel is a provider that
+ * materialises as the primary link and fails every request — so a successful
+ * login would appear to do nothing until the operator restarted the kernel.
+ */
+export function resetClaudeCodeSdkCache(): void {
+  _claudeCodeSdk = undefined;
+}
+
 export interface LlmConfig {
   provider: LlmProvider;
   apiKey: string;

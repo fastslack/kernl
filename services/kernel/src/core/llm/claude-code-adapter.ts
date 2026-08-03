@@ -34,6 +34,7 @@ import {
 import { log } from "../logger.js";
 import { newId } from "../helpers.js";
 import { resolveDefaultSocketPath as resolveKernelMcpSocketPath } from "../mcp-unix-socket.js";
+import { claudeAuthEnv } from "./claude-code-auth.js";
 import type {
   ChatMessage,
   ChatCompletionResult,
@@ -61,6 +62,11 @@ export interface ClaudeCodeProviderOptions {
   mcpTransport?: string;
   /** CLAUDE_CODE_PATH — explicit path to the `claude` binary. */
   cliPath?: string;
+  /**
+   * A long-lived token from `claude setup-token`, for hosts where the
+   * interactive login cannot run (no PTY). Injected as CLAUDE_CODE_OAUTH_TOKEN.
+   */
+  oauthToken?: string;
 }
 
 /**
@@ -175,6 +181,11 @@ export class ChatClaudeCodeProvider {
 
   available(): boolean {
     return !!this.findBinary();
+  }
+
+  /** Where the CLI was resolved to, for the sign-in dialog to report. */
+  binaryPath(): string | undefined {
+    return this.findBinary();
   }
 
   /**
@@ -553,6 +564,11 @@ export class ChatClaudeCodeProvider {
     childEnv.ANTHROPIC_API_KEY = undefined;
     childEnv.ANTHROPIC_AUTH_TOKEN = undefined;
     if (process.env.HOST_HOME) childEnv.HOME = process.env.HOST_HOME;
+    // Credentials live in the kernel's own config dir, not $HOME — under Docker
+    // $HOME is the image layer, so a `--force-recreate` threw the login away and
+    // every LLM feature started failing with "Not logged in". Assigned last so
+    // it also wins over the HOST_HOME redirect above.
+    Object.assign(childEnv, claudeAuthEnv({ oauthToken: this.cfg.oauthToken }));
     return childEnv;
   }
 

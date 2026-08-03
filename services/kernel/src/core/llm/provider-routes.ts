@@ -19,6 +19,8 @@ import { getAllHealth } from "./provider-health.js";
 import { ModelBlocklist } from "./model-blocklist.js";
 import { recent as recentCalls } from "./call-log.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
+import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
+import { ClaudeCodeAuthService } from "./claude-code-auth-service.js";
 
 function slugOf(req: unknown): string | null {
   const params = (req as { params?: Record<string, string> }).params;
@@ -480,5 +482,64 @@ export function registerLlmProviderRoutes(
       primary: describe(chain.primary, true),
       fallbacks: chain.fallbacks.map(l => describe(l, false)),
     });
+  });
+}
+
+/**
+ * Claude Code sign-in, driven from the dashboard.
+ *
+ * This provider runs on the operator's Claude subscription instead of a metered
+ * key, which makes it the one provider that works with nothing configured — and
+ * the one that silently stops working when its session goes. A container
+ * recreate used to be enough to lose it, with no way to sign back in short of
+ * an interactive shell inside the container. These four routes are that way in.
+ */
+export function registerClaudeCodeAuthRoutes(
+  server: KernelHttpServer,
+  registry: LlmProviderRegistry,
+): void {
+  const SLUG = "claude-code";
+  const auth = new ClaudeCodeAuthService(
+    () => new ChatClaudeCodeProvider().binaryPath(),
+    () => {
+      const cfg = registry.loadConfig(SLUG);
+      const t = cfg.oauthToken;
+      return typeof t === "string" && t ? t : undefined;
+    },
+    (token) => {
+      registry.saveConfig(SLUG, { ...registry.loadConfig(SLUG), oauthToken: token });
+      // Mirror into the environment so the adapter picks it up on the very next
+      // call. It is built without config, so the registry alone is invisible.
+      if (token) process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    },
+  );
+
+  server.get("/api/llm/claude-code/auth", (_req, res) => {
+    server.json(res, 200, auth.status());
+  });
+
+  server.post("/api/llm/claude-code/auth/login", async (_req, res) => {
+    const r = await auth.startLogin();
+    if ("error" in r) return server.json(res, 400, { error: r.error });
+    server.json(res, 200, r.session);
+  });
+
+  server.post("/api/llm/claude-code/auth/code", async (req, res) => {
+    const body = await server.parseBody<{ session?: string; code?: string }>(req);
+    const r = await auth.submitCode(String(body?.session ?? ""), String(body?.code ?? ""));
+    server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
+  });
+
+  server.post("/api/llm/claude-code/auth/token", async (req, res) => {
+    const body = await server.parseBody<{ token?: string }>(req);
+    const r = auth.saveToken(String(body?.token ?? ""));
+    server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
+  });
+
+  server.post("/api/llm/claude-code/auth/cancel", async (req, res) => {
+    const body = await server.parseBody<{ session?: string }>(req);
+    auth.cancel(String(body?.session ?? ""));
+    server.json(res, 200, { ok: true });
   });
 }

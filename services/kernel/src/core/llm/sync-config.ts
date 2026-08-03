@@ -21,10 +21,17 @@ export function syncProvidersToKernelConfig(config: KernelConfig, registry: Conf
   const nvidia = registry.loadConfig("nvidia");
   const lmstudio = registry.loadConfig("lmstudio");
   const minimax = registry.loadConfig("minimax");
+  const claudeCode = registry.loadConfig("claude-code");
 
   // MiniMax has no config.webIntel home (it's a registry-native provider). The
   // chat adapter / web-intel read it from process.env, so mirror it there so a
   // value saved in the registry is visible after a restart even without .env.
+  // Claude Code authenticates with a subscription token rather than an API key.
+  // The adapter reads it from the environment, so a token saved in the registry
+  // has to be mirrored here or it is forgotten on every restart.
+  const ccToken = str(claudeCode.oauthToken);
+  if (ccToken !== undefined) process.env.CLAUDE_CODE_OAUTH_TOKEN = ccToken;
+
   const mmKey = str(minimax.apiKey);
   if (mmKey !== undefined) process.env.MINIMAX_API_KEY = mmKey;
   const mmBase = str(minimax.baseUrl);

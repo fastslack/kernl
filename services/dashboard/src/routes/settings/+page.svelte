@@ -22,6 +22,7 @@
   import Field from '$lib/components/settings/Field.svelte';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import SelectField from '$lib/components/settings/SelectField.svelte';
+  import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
   import StatusPill from '$lib/components/settings/StatusPill.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
@@ -93,6 +94,11 @@
     return r.json();
   }
   const jsonHeaders = { 'Content-Type': 'application/json' };
+
+  // Claude Code is the one provider whose credential is a login, not a key —
+  // there is no field to type into, so it gets a dialog of its own.
+  let ccAuthOpen = false;
+
 
   // ── Locale helpers ───────────────────────────
   function resolveText(txt: unknown, loc: string): string {
@@ -949,6 +955,9 @@
                     {#if trow?.ok && trow.latencyMs != null}
                       <span class="prov-lat">{trow.latencyMs}ms</span>
                     {/if}
+                    {#if row.slug === 'claude-code'}
+                      <button class="btn-sm" on:click={() => (ccAuthOpen = true)}>Sign in…</button>
+                    {/if}
                   </div>
                   <div class="prov-fields">
                     {#each (provEdits[row.slug] ? row.schema ?? [] : []) as f (f.key)}
@@ -1222,6 +1231,12 @@
     </div>
   {/if}
 </div>
+
+<ClaudeCodeAuthModal
+  open={ccAuthOpen}
+  on:close={() => (ccAuthOpen = false)}
+  on:changed={() => { void loadAll(); }}
+/>
 
 <style>
   .st-page { display: flex; flex-direction: column; height: calc(100vh - 56px - 48px); overflow: hidden; }

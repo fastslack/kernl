@@ -1,5 +1,40 @@
 <script lang="ts">
   import { onMount, tick, afterUpdate } from 'svelte';
+  import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
+  import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
+  import { modelIds } from '$lib/llm-models.js';
+
+  /** The provider's session lapsed — offer the fix instead of a dead instruction. */
+  let ccAuthOpen = false;
+
+  /** The auth failure can arrive as plain content OR inside content_blocks. */
+  function msgAuthError(m: any): boolean {
+    if (isClaudeCodeAuthError(m?.content)) return true;
+    try {
+      const blocks = typeof m?.content_blocks === 'string' ? JSON.parse(m.content_blocks) : m?.content_blocks;
+      if (!Array.isArray(blocks)) return false;
+      return isClaudeCodeAuthError(blocks.map((b: any) => b?.text ?? '').join(' '));
+    } catch {
+      return false;
+    }
+  }
+
+  /** The live bubble is a separate render path and needs the same affordance. */
+  function streamAuthError(blocks: any[]): boolean {
+    return isClaudeCodeAuthError((blocks ?? []).filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join(' '));
+  }
+
+  /**
+   * A failed turn is reported twice — once by the SSE `error` event and once by
+   * the HTTP reply — so the same text landed in the transcript as two bubbles.
+   * Whichever arrives second is dropped.
+   */
+  function appendError(text: string): void {
+    const last = messages[messages.length - 1];
+    if (last && last.role === 'assistant' && last.content === text) return;
+    messages = [...messages, { role: 'assistant', content: text, created_at: new Date().toISOString() }];
+  }
+
   import { fmtTime, timeAgo } from '$lib/utils.js';
   import {
     getChatEpisodes,
@@ -262,7 +297,7 @@
         if (data.message) {
           messages = [...messages, { role: 'assistant', content: data.message.content, created_at: new Date().toISOString() }];
         } else if (data.error) {
-          messages = [...messages, { role: 'assistant', content: 'Error: ' + data.error, created_at: new Date().toISOString() }];
+          appendError('Error: ' + data.error);
         }
       }
     } catch (e: any) {
@@ -350,11 +385,7 @@
       streamingBlocks = [];
       streamingActive = false;
     } else if (ev.type === 'error') {
-      messages = [...messages, {
-        role: 'assistant',
-        content: 'Error: ' + ev.message,
-        created_at: new Date().toISOString(),
-      }];
+      appendError('Error: ' + ev.message);
       streamingBlocks = [];
       streamingActive = false;
     }
@@ -554,7 +585,7 @@
             const mr = await fetch(`/api/llm-providers/${encodeURIComponent(p.slug)}/models`);
             if (mr.ok) {
               const mb = await mr.json();
-              models = (mb.models ?? []) as string[];
+              models = modelIds(mb.models);
             }
           } catch { /* ignore */ }
         }
@@ -966,8 +997,20 @@
                       {/if}
                     {/each}
                   </div>
+                {:else if msgAuthError(m)}
+                  <!-- The CLI's wording says to run /login, a command that does
+                       not exist in this chat. Say what actually works here. -->
+                  <div class="cx-msg-content">
+                    Claude Code has no active session, so this agent can't answer.
+                    Sign in once and it will work from the next message.
+                  </div>
                 {:else}
                   <div class="cx-msg-content">{@html formatMd(m.content)}</div>
+                {/if}
+                {#if msgAuthError(m)}
+                  <button class="cx-fix-auth" on:click={() => (ccAuthOpen = true)}>
+                    Sign in to Claude Code
+                  </button>
                 {/if}
               {/if}
             </div>
@@ -1002,6 +1045,11 @@
                   {/if}
                 {/each}
               </div>
+              {#if streamAuthError(streamingBlocks)}
+                <button class="cx-fix-auth" on:click={() => (ccAuthOpen = true)}>
+                  Sign in to Claude Code
+                </button>
+              {/if}
             </div>
           </div>
         {/if}
@@ -1212,6 +1260,9 @@
     </div>
   </div>
 {/if}
+
+
+<ClaudeCodeAuthModal open={ccAuthOpen} on:close={() => (ccAuthOpen = false)} />
 
 <style>
   /* ── Chat Container ─────────────────────────────────────── */
@@ -2077,6 +2128,10 @@
     font-family: var(--font-mono);
   }
 
+  .cx-fix-auth {
+    margin-top: 8px; background: var(--teal, #2dd4bf); color: #04211d; border: 0;
+    border-radius: 6px; padding: 6px 12px; font-size: 12.5px; font-weight: 650; cursor: pointer;
+  }
   .cx-msg-content {
     font-size: 13.5px;
     line-height: 1.65;

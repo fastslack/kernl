@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { modelIds } from '$lib/llm-models.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
 
   type ExtensionType =
@@ -1071,7 +1072,7 @@
         const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/models`);
         if (r.ok) {
           const body = await r.json();
-          llmModels = (body.models ?? []) as string[];
+          llmModels = modelIds(body.models);
         }
       } catch { /* ignore */ }
       llmLoadingModels = false;
@@ -1123,7 +1124,7 @@
     llmLoadingModels = true;
     try {
       const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/models`);
-      if (r.ok) llmModels = ((await r.json()).models ?? []) as string[];
+      if (r.ok) llmModels = modelIds((await r.json()).models);
     } catch { /* ignore */ }
     llmLoadingModels = false;
   }
