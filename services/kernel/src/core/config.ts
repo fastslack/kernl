@@ -347,14 +347,12 @@ export function loadConfig(): KernelConfig {
     dashboard: {
       enabled: (process.env.DASHBOARD_ENABLED ?? "true") === "true",
       port: parseInt(process.env.DASHBOARD_PORT ?? "3086", 10),
-      bind: resolveSecureBind(
-        process.env.KERNEL_DASHBOARD_BIND ?? "0.0.0.0",
-        process.env.KERNEL_AUTH_TOKEN ?? "",
-        {
-          allowUnauth: process.env.KERNEL_ALLOW_UNAUTH === "1",
-          bindIsExplicit: process.env.KERNEL_DASHBOARD_BIND !== undefined,
-        },
-      ),
+      // The operator's bind, verbatim. The fail-closed downgrade belongs at the
+      // bind site (KernelHttpServer), not here: bootstrap generates an auth
+      // token AFTER loadConfig runs, so deciding now would judge an empty token
+      // and permanently rewrite an explicit 0.0.0.0 to loopback — leaving an
+      // authenticated kernel unreachable from the nginx sibling container.
+      bind: process.env.KERNEL_DASHBOARD_BIND ?? "0.0.0.0",
       refreshIntervalMs: parseInt(process.env.DASHBOARD_REFRESH_MS ?? "30000", 10),
     },
     google: {
