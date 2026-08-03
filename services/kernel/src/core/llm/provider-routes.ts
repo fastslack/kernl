@@ -528,12 +528,16 @@ export function registerClaudeCodeAuthRoutes(
   server.post("/api/llm/claude-code/auth/code", async (req, res) => {
     const body = await server.parseBody<{ session?: string; code?: string }>(req);
     const r = await auth.submitCode(String(body?.session ?? ""), String(body?.code ?? ""));
+    // A completed sign-in changes the answer to "can an agent run", so the
+    // next check must ask again instead of serving a pre-login verdict.
+    if (r.ok) (await import("./readiness.js")).markLlmReadinessStale("claude-code signed in");
     server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
   });
 
   server.post("/api/llm/claude-code/auth/token", async (req, res) => {
     const body = await server.parseBody<{ token?: string }>(req);
     const r = auth.saveToken(String(body?.token ?? ""));
+    if (r.ok) (await import("./readiness.js")).markLlmReadinessStale("claude-code token saved");
     server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
   });
 
@@ -541,5 +545,20 @@ export function registerClaudeCodeAuthRoutes(
     const body = await server.parseBody<{ session?: string }>(req);
     auth.cancel(String(body?.session ?? ""));
     server.json(res, 200, { ok: true });
+  });
+
+  // ── Readiness ────────────────────────────────────────────────────
+  //
+  // Exempt from the gate it feeds (see readiness-gate.ts) — a blocked
+  // dashboard has to be able to ask why it is blocked.
+  server.get("/api/llm/readiness", async (_req, res) => {
+    const { ensureLlmReadiness } = await import("./readiness.js");
+    server.json(res, 200, await ensureLlmReadiness());
+  });
+
+  /** Re-probe on demand. This spends a real call, so it is a POST. */
+  server.post("/api/llm/readiness/recheck", async (_req, res) => {
+    const { ensureLlmReadiness } = await import("./readiness.js");
+    server.json(res, 200, await ensureLlmReadiness(true));
   });
 }

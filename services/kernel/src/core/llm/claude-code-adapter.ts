@@ -172,6 +172,15 @@ export interface ChatStreamCallOptions {
 
 export class ChatClaudeCodeProvider {
   readonly name = "claude_code";
+  /**
+   * `chatCompletion()` below is a single-turn shim: maxTurns 1, allowedTools
+   * empty, kernel tools explicitly ignored. It cannot carry a tool loop, and
+   * handing it one produces "Reached maximum number of turns (1)" rather than
+   * a clear refusal. Callers that need tools skip this provider on this flag.
+   * The full SDK loop lives in the streaming path, which agents reach through
+   * executor_type "claude_code" instead.
+   */
+  readonly supportsToolLoop = false;
   private cachedBin: string | null | undefined = undefined;
 
   constructor(

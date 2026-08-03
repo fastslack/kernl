@@ -180,6 +180,17 @@ function kernelMessagesToOpenAi(
 export interface ChatLlmProvider {
   readonly name: string;
   available(): boolean;
+  /**
+   * Whether this provider can sustain a tool-use loop — send tool definitions,
+   * receive a tool call, take the result back and continue.
+   *
+   * Absent means yes; every API-backed provider drives its own loop. Only set
+   * it to `false` for a provider that structurally cannot, like the
+   * claude_code CLI shim, which runs a single turn with no tools. Handing an
+   * agent's tools to one of those produces a turn-limit error rather than an
+   * honest "unsupported", so callers that need tools filter on this.
+   */
+  readonly supportsToolLoop?: boolean;
   chatCompletion(
     messages: ChatMessage[],
     opts?: ChatCompletionOptions,
@@ -1106,8 +1117,12 @@ export function resolveProvider(
   // fleet primary — quota-exhausting). claude_code IS in here for chats
   // that don't need tool loops — it uses the local CLI's OAuth (no per-call
   // billing), so when paid keys are exhausted it's the safest fallback.
-  // Tool-using callers should pass `disableToolFallbacks` (or pin a non-CLI
-  // provider) since claude_code is a single-turn shim (maxTurns=1).
+  // claude_code is a single-turn shim (maxTurns=1) that ignores tools, so a
+  // caller which sends tools must not land here. That is enforced through the
+  // provider's `supportsToolLoop: false` — the agent executor filters on it.
+  // (An earlier comment told callers to pass `disableToolFallbacks`; no such
+  // option ever existed, which is precisely how agent runs kept ending in
+  // "Reached maximum number of turns (1)".)
   const FALLBACK_ORDER = ["grok", "claude_code", "claude", "nvidia", "lmstudio"];
 
   // 1. Honour the explicit request when it's truly usable

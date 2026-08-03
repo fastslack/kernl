@@ -24,7 +24,7 @@
  *     without a restart.
  */
 
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -49,6 +49,38 @@ export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   const xdg = env.XDG_CONFIG_HOME;
   const base = xdg && xdg.length > 0 ? xdg : resolve(homedir(), ".config");
   return resolve(base, "kernl", "claude");
+}
+
+/**
+ * Is a credential configured for the CLI?
+ *
+ * Answers problem 3 in the header without paying for it. `claude auth status`
+ * is the authoritative reader, but it spawns the binary and waits up to 20s —
+ * far too heavy for `isReady()`, which runs on every provider listing. These
+ * are the three places a credential can live, and reading them is a stat plus
+ * at most one small JSON parse:
+ *
+ *   · CLAUDE_CODE_OAUTH_TOKEN — the non-interactive escape hatch
+ *   · <configDir>/.credentials.json — what the OAuth flow writes on Linux
+ *   · oauthAccount in <configDir>/.claude.json — the subscription sign-in
+ *
+ * Like `auth status`, this reports presence and not validity; proving a
+ * credential works needs a real call, which is what the readiness probe does.
+ */
+export function hasStoredCredential(env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim().length > 0) return true;
+
+  const dir = claudeConfigDir(env);
+  if (existsSync(resolve(dir, ".credentials.json"))) return true;
+
+  try {
+    const raw = readFileSync(resolve(dir, ".claude.json"), "utf-8");
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    return parsed.oauthAccount != null;
+  } catch {
+    // Missing, unreadable or malformed all mean the same thing here.
+    return false;
+  }
 }
 
 /** Create the directory on first use; the CLI will not create the parent. */

@@ -16,6 +16,7 @@
  */
 
 import { ChatClaudeCodeProvider } from "../claude-code-adapter.js";
+import { hasStoredCredential } from "../claude-code-auth.js";
 import type {
   LlmProvider,
   LlmProviderCapabilities,
@@ -53,25 +54,51 @@ class ClaudeCodeProviderImpl implements LlmProvider {
 
   async start(): Promise<void> {
     this.impl = new ChatClaudeCodeProvider(this.defaultModel);
-    this.lastError = this.impl.available() ? undefined : "Claude Code CLI not found — run `claude login`.";
+    // Deliberately not seeding `lastError` with an unreadiness message.
+    // `syncProvidersToKernelConfig` mirrors the stored oauthToken into
+    // CLAUDE_CODE_OAUTH_TOKEN *after* providers start, so a message computed
+    // here says "not signed in" about an account that is about to load — and
+    // then survives as a stale string under a status that reads ready.
+    // `describeUnreadiness()` answers live instead; `lastError` is only for
+    // failures observed while actually calling the provider.
   }
 
   async stop(): Promise<void> {
     this.impl = null;
   }
 
+  /**
+   * Installed AND signed in.
+   *
+   * The binary alone used to be enough, and the Agent SDK bundles that binary,
+   * so this returned true on every install ever made — including ones with no
+   * account at all. Settings showed a green provider, the chain picked it as
+   * the primary link, and every call failed with "Not logged in". Presence of a
+   * credential is the honest floor; whether it still works is what the
+   * readiness probe answers.
+   */
   isReady(): boolean {
-    return this.impl?.available() ?? false;
+    if (!this.impl?.available()) return false;
+    return hasStoredCredential();
+  }
+
+  private describeUnreadiness(): string | undefined {
+    if (!this.impl?.available()) return "Claude Code CLI not found.";
+    if (!hasStoredCredential()) return "Claude Code is installed but not signed in — run `claude login`.";
+    return undefined;
   }
 
   getStatus(): LlmProviderStatus {
+    // Computed per call, not read from `start()`. Signing in is exactly the
+    // event that changes this answer, and it happens long after start — a
+    // cached string would keep telling the operator to log in after they had.
     return {
       slug: this.slug,
       name: this.name,
       ready: this.isReady(),
       capabilities: this.capabilities,
       lastModel: this.lastModel,
-      error: this.lastError,
+      error: this.describeUnreadiness() ?? this.lastError,
     };
   }
 

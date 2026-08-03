@@ -251,6 +251,39 @@ export async function initHttpAndMcp(args: {
         }
         try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* */ }
         reloadLlmClient(config);
+        markLlmReadinessStale(`provider "${slug}" was reconfigured`);
+      });
+
+      // ── Can an agent actually run? ────────────────────────────────
+      //
+      // `isReady()` on a provider only means "installed": the claude-code CLI
+      // ships inside the Agent SDK, so it reports ready on a machine with no
+      // account, and it cannot carry a tool loop at all. The gate below refuses
+      // the API until some provider proves it can take a tool call, and the
+      // probe rebuilds its providers from `config` on every run so a key saved
+      // a second ago is the one being tested.
+      const { initLlmReadiness, ensureLlmReadiness, markLlmReadinessStale } =
+        await import("../llm/readiness.js");
+      const { createLlmReadinessGate } = await import("../llm/readiness-gate.js");
+      const { createChatProviders } = await import("../llm/chat-adapters.js");
+      initLlmReadiness(() =>
+        createChatProviders({
+          anthropicApiKey: config.webIntel.anthropicApiKey,
+          openaiApiKey: config.webIntel.openaiApiKey,
+          lmstudioBaseUrl: config.webIntel.lmstudioBaseUrl,
+          grokApiKey: config.webIntel.grokApiKey,
+          grokDefaultModel: config.webIntel.grokDefaultModel,
+          nvidiaApiKey: config.webIntel.nvidiaApiKey,
+          nvidiaDefaultModel: config.webIntel.nvidiaDefaultModel,
+          claudeCode: config.claudeCode,
+        }),
+      );
+      httpServer.addPrecondition(createLlmReadinessGate());
+      // Fill the cache in the background: boot must not wait on a provider,
+      // and the gate refuses by default until the answer arrives.
+      void ensureLlmReadiness().then((r) => {
+        if (r.ok) log.info(`LLM readiness: ${r.provider} can run agent tools`);
+        else log.warn(`LLM readiness: blocked (${r.reason}) — ${r.detail ?? ""}`);
       });
       // Persist health tracker to sqlite so a kernel restart doesn't
       // re-discover quota/auth/timeout failures from scratch — the next

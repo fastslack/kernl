@@ -21,6 +21,7 @@ import type {
 } from "./types.js";
 import type { ExtensionManifest } from "./schema.js";
 import { peekManifest, unpackBundle } from "./bundle.js";
+import { ensureExtensionPackages } from "./ensure-packages.js";
 import { verifyBundleSignature } from "./bundle-signature.js";
 import {
   checkBundleAuthenticity,
@@ -465,6 +466,29 @@ export class ExtensionService {
           `Add your license at /settings/license, then enable it.`,
       );
     }
+    // Fetch anything the backend imports that is not already resolvable. The
+    // heavy SDKs are left out of the payload deliberately — this is where they
+    // arrive, for the people who actually use them. Runs BEFORE the status
+    // flips: enabling an extension whose dependencies are missing yields
+    // something that reads as installed and throws on first use, so a failure
+    // here has to keep it disabled and say why.
+    if (row.install_path) {
+      const result = await ensureExtensionPackages({
+        manifest,
+        slug: row.slug,
+        installPath: row.install_path,
+        extensionsDir: this.opts.extensionsDir,
+      });
+      // Materializing out of the read-only bundle moves the extension; the
+      // loader imports from install_path, so it has to follow.
+      if (result.installPath !== row.install_path) {
+        this.db
+          .prepare("UPDATE installed_extensions SET install_path = ? WHERE id = ?")
+          .run(result.installPath, id);
+        row.install_path = result.installPath;
+      }
+    }
+
     this.setStatus(id, "active");
     log.info(`Extension enabled: ${row.slug} (${row.type})`);
 

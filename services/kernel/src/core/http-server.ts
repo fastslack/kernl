@@ -39,6 +39,24 @@ type RouteHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void>
 
 type ParamRouteEntry = { pattern: RegExp; keys: string[]; handler: RouteHandler };
 
+/**
+ * A server-wide condition an `/api/` request must satisfy before it reaches a
+ * route. Returns null to let the request through, or the response to send in
+ * its place.
+ *
+ * Kept generic on purpose: the server has no business knowing what an LLM is.
+ * Bootstrap registers the checks that matter to this product, and the check
+ * owns its own exemptions — the paths you need in order to fix the very thing
+ * the check is complaining about.
+ *
+ * Must be synchronous. This runs on every API request, so a check that waits
+ * on the network would put that latency on all of them.
+ */
+export type Precondition = (
+  pathname: string,
+  method: string,
+) => { status: number; body: unknown } | null;
+
 export class KernelHttpServer {
   private server: Server | null = null;
   private routes = new Map<string, RouteHandler>();
@@ -51,6 +69,7 @@ export class KernelHttpServer {
   private htmlCache: string | null = null;
   private authToken: string;
   private corsOrigins: string[];
+  private preconditions: Precondition[] = [];
 
   // Simple IP rate limiter for HTTP API (separate from messaging rate limiter)
   private apiRateLimits = new Map<string, { count: number; resetAt: number }>();
@@ -133,6 +152,11 @@ export class KernelHttpServer {
     } else {
       this.routes.set(`${method}:${path}`, handler);
     }
+  }
+
+  /** Register a condition every `/api/` request must pass. See `Precondition`. */
+  addPrecondition(check: Precondition): void {
+    this.preconditions.push(check);
   }
 
   get(path: string, handler: RouteHandler): void {
@@ -353,6 +377,21 @@ export class KernelHttpServer {
       if (!isAuthenticated(req, this.authToken)) {
         this.json(res, 401, { error: "Unauthorized" }, req);
         return;
+      }
+    }
+
+    // ── Preconditions ──
+    // After auth, so an unauthenticated caller learns nothing about how the
+    // install is configured. `/mcp` is deliberately outside: it is not a page,
+    // it carries its own auth, and cutting it off would break every connected
+    // client with an error none of them can act on.
+    if (pathname.startsWith("/api/")) {
+      for (const check of this.preconditions) {
+        const failure = check(pathname, req.method ?? "GET");
+        if (failure) {
+          this.json(res, failure.status, failure.body, req);
+          return;
+        }
       }
     }
 

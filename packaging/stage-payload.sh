@@ -139,6 +139,18 @@ EXT_DEPS="$(node -e "
   const fs = require('node:fs'), path = require('node:path');
   const builtins = new Set(require('node:module').builtinModules);
   const VALID = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*\$/;
+  // Deliberately NOT staged. Together these pull ~100 MB of transitive
+  // closure — a third of the whole package — to serve the minority who
+  // connect Discord, Slack or S3. Each extension records them in
+  // backend.packages and the kernel installs them into the extension's own
+  // directory the moment someone enables it. Adding one here trades the
+  // install size of everyone for the convenience of a few; before doing that,
+  // measure it.
+  const ON_DEMAND = new Set([
+    'discord.js', 'grammy', '@slack/bolt',
+    '@aws-sdk/client-s3', '@aws-sdk/lib-storage',
+    '@anthropic-ai/claude-agent-sdk', '@modelcontextprotocol/sdk',
+  ]);
   const root = 'services/kernel/assets/extensions';
   const found = new Set();
   if (fs.existsSync(root)) (function walk(d) {
@@ -155,6 +167,7 @@ EXT_DEPS="$(node -e "
           // Anything not actually installed is a false positive from the same
           // string-matching problem; the consumers below skip it anyway.
           if (!fs.existsSync(path.join('services/kernel/node_modules', name))) continue;
+          if (ON_DEMAND.has(name)) continue;
           found.add(name);
         }
       }
