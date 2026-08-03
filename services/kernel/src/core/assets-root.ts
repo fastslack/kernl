@@ -45,7 +45,14 @@ export function assetsRoot(): string {
     resolve(here, ".."),  // deb/rpm: /opt/kernl/bin → /opt/kernl
   ];
 
-  const hit = candidates.find((c) => existsSync(resolve(c, "assets")));
+  // Probe for assets/extensions, not assets/. The kernel creates an
+  // `assets/skills/` directory inside the user's DATA dir at runtime, so
+  // `<data>/assets` exists — and since cwd is that data dir in every native
+  // install, testing for `assets` alone matched the wrong tree and resolved
+  // to a folder holding one empty subdirectory. `extensions` is present in
+  // every genuine tree (dev, Docker, and all three packages) and never in the
+  // runtime-created one.
+  const hit = candidates.find((c) => existsSync(resolve(c, "assets", "extensions")));
   if (!hit) {
     log.warn(
       `assets/ not found from any known location (cwd=${process.cwd()}, module=${here}) — ` +
