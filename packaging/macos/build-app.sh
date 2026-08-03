@@ -80,10 +80,25 @@ cd "$DATA_DIR"
 
 # Open the dashboard once the kernel is up (background; doesn't block the
 # kernel process which becomes the .app's foreground task).
+#
+# First run has no token the user could possibly know: the kernel generates one
+# at boot and persists it next to the DB. Hand it over in the URL *fragment* —
+# never sent to the server, so it stays out of logs — and the login page signs
+# in with it and wipes it from the URL. Without this the first thing a new user
+# sees is a login form asking for a secret nobody showed them.
 (
   for _ in $(seq 1 30); do
     if curl -sf "http://localhost:${DASHBOARD_PORT:-3086}/api/manifest" >/dev/null 2>&1; then
-      open "http://localhost:${DASHBOARD_PORT:-3086}"
+      URL="http://localhost:${DASHBOARD_PORT:-3086}"
+      TOKEN="${KERNEL_AUTH_TOKEN:-}"
+      if [ -z "$TOKEN" ] && [ -f "$DATA_DIR/data/.kernel-auth-token" ]; then
+        TOKEN="$(cat "$DATA_DIR/data/.kernel-auth-token")"
+      fi
+      if [ -n "$TOKEN" ]; then
+        open "$URL/login#token=$TOKEN"
+      else
+        open "$URL"
+      fi
       break
     fi
     sleep 1

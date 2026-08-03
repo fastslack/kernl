@@ -309,7 +309,8 @@ const es: Record<string, string> = {
   "login.button_save": "guardar y entrar",
   "login.button_verifying": "verificando…",
   "login.button_clear": "limpiar",
-  "login.tip_host": "tip: en host, ",
+  "login.tip_host": "tu kernel generó un token en el primer arranque — desde su data dir, ",
+  "login.tip_docker": "en el stack Docker, ",
   "login.tip_oauth": "stage 1 del roadmap reemplaza este form por \"Continue with Google\".",
 
   // ── Welcome (post-install onboarding) ─────────────────────────────────
