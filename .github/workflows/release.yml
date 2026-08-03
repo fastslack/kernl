@@ -238,6 +238,56 @@ jobs:
         shell: bash
         run: PLATFORM=win-x64 packaging/windows/build-msi.sh
 
+      # ── Smoke-test the MSI on the runner ────────────────────────
+      # Building an installer proves nothing about whether it installs. The
+      # Linux packages were green for four builds while every one of them
+      # served a 500 at / because the kernel could not find the dashboard in
+      # the packaged layout — an error no build step can catch. This installs
+      # the artifact for real and asks the running server for a page.
+      #
+      # Note this cannot see the SmartScreen prompt: /quiet bypasses it. That
+      # part of the experience still needs a human on a real desktop.
+      - name: Install the MSI and check it serves
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem packaging/out/*.msi | Select-Object -First 1).FullName
+          Write-Host "Installing $msi"
+          $p = Start-Process msiexec.exe -Wait -PassThru `
+                 -ArgumentList "/i","`"$msi`"","/quiet","/norestart","/l*v","$PWD\msi-install.log"
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::msiexec exited $($p.ExitCode)"
+            Get-Content msi-install.log -Tail 40
+            exit 1
+          }
+
+          $dir = "C:\Program Files\Kernl"
+          foreach ($f in @("bun.exe","mcp-server.js","start.bat","dashboard\index.html")) {
+            if (-not (Test-Path (Join-Path $dir $f))) {
+              Write-Host "::error::missing after install: $f"
+              exit 1
+            }
+            Write-Host "  present: $f"
+          }
+
+          $env:KERNEL_ALLOW_UNAUTH = "1"
+          $env:DASHBOARD_ENABLED   = "true"
+          Start-Process -FilePath (Join-Path $dir "bun.exe") `
+            -ArgumentList (Join-Path $dir "mcp-server.js") -WorkingDirectory $dir
+
+          $code = 0
+          foreach ($i in 1..60) {
+            try {
+              $r = Invoke-WebRequest -Uri "http://127.0.0.1:3086/" -UseBasicParsing -TimeoutSec 5
+              $code = $r.StatusCode
+              if ($code -eq 200) { break }
+            } catch { Start-Sleep -Seconds 2 }
+          }
+          if ($code -ne 200) {
+            Write-Host "::error::dashboard did not answer 200 (last: $code)"
+            exit 1
+          }
+          Write-Host "dashboard answered 200"
+
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
         if: env.WINDOWS_CERT_DATA != ''

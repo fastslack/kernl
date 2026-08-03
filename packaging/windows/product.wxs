@@ -1,19 +1,24 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
-  WiX 3.x descriptor for the Matware MSI installer.
+  WiX 3.x descriptor for the Kernl MSI installer.
 
   Layout written to disk:
-    C:\Program Files\Matware\         (or %INSTALLDIR%, user-overridable)
+    C:\Program Files\Kernl\           (or %INSTALLDIR%, user-overridable)
       bun.exe, mcp-server.js, …
-    Start Menu\Programs\Matware\Matware.lnk → start.bat
+    Start Menu\Programs\Kernl\Kernl.lnk → start.bat
 
-  Per-user data lives at %LOCALAPPDATA%\Matware and is created on first
-  launch by the wrapper, NOT by the installer — so uninstall doesn't
+  Manufacturer stays "Matware" — that is the company, and it is what shows
+  in the publisher field. Everything the user reads as the product's name is
+  "Kernl": someone installs Kernl from lifekernl.com, so Add/Remove Programs
+  and the Start Menu must not say something else.
+
+  Per-user data lives at %LOCALAPPDATA%\Kernl (see start.bat) and is created
+  on first launch by the wrapper, NOT by the installer — so uninstall doesn't
   destroy the user's tasks/contacts/notes.
 -->
 <Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
   <Product Id="*"
-           Name="Matware"
+           Name="Kernl"
            Language="1033"
            Version="$(var.Version)"
            Manufacturer="Matware"
@@ -26,12 +31,12 @@
              Manufacturer="Matware" />
 
     <MajorUpgrade
-      DowngradeErrorMessage="A newer version of Matware is already installed." />
+      DowngradeErrorMessage="A newer version of Kernl is already installed." />
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
     <!-- Top-level features: just one, ships everything. -->
-    <Feature Id="ProductFeature" Title="Matware" Level="1">
+    <Feature Id="ProductFeature" Title="Kernl" Level="1">
       <ComponentGroupRef Id="ApplicationFiles" />
       <ComponentRef Id="ApplicationShortcut" />
     </Feature>
@@ -39,17 +44,17 @@
     <!-- Directory tree the installer materializes. -->
     <Directory Id="TARGETDIR" Name="SourceDir">
       <Directory Id="ProgramFiles64Folder">
-        <Directory Id="INSTALLDIR" Name="Matware" />
+        <Directory Id="INSTALLDIR" Name="Kernl" />
       </Directory>
       <Directory Id="ProgramMenuFolder">
-        <Directory Id="ApplicationProgramsFolder" Name="Matware" />
+        <Directory Id="ApplicationProgramsFolder" Name="Kernl" />
       </Directory>
     </Directory>
 
     <DirectoryRef Id="ApplicationProgramsFolder">
       <Component Id="ApplicationShortcut" Guid="*">
         <Shortcut Id="StartMenuShortcut"
-                  Name="Matware"
+                  Name="Kernl"
                   Description="Personal life-management MCP server"
                   Target="[INSTALLDIR]start.bat"
                   WorkingDirectory="INSTALLDIR" />
