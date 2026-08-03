@@ -120,6 +120,50 @@ HOST_ARCH="$(uname -m)"
 
 mkdir -p "$SRC_TREE/node_modules"
 
+# ── 4a) What the bundled extensions import ─────────────────────────
+# The staged node_modules used to carry only what the KERNEL needs. The
+# bundled extensions under assets/extensions/ import their own packages, and
+# in a native install nothing resolves them: the tree is pruned and there is
+# no parent node_modules to walk up into. Docker never showed this because
+# /app/node_modules is a full install.
+#
+# The result was 50 of 79 registered extensions failing to load — mostly on
+# `uuid` — so the dashboard listed them and none of them worked.
+#
+# Derived from the built entry points rather than hardcoded, so adding an
+# extension that pulls a new package does not silently ship broken. Names are
+# validated against npm's grammar because these files embed SQL, and `FROM
+# communications` reads exactly like an import to a naive regex.
+echo "▶ scanning bundled extensions for external imports"
+EXT_DEPS="$(node -e "
+  const fs = require('node:fs'), path = require('node:path');
+  const builtins = new Set(require('node:module').builtinModules);
+  const VALID = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*\$/;
+  const root = 'services/kernel/assets/extensions';
+  const found = new Set();
+  if (fs.existsSync(root)) (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.js')) {
+        const src = fs.readFileSync(p, 'utf8');
+        for (const m of src.matchAll(/(?:\bfrom|\brequire\()\s*[\"']([^\"'\n]+)[\"']/g)) {
+          const spec = m[1];
+          if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('node:')) continue;
+          const name = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+          if (builtins.has(name) || !VALID.test(name)) continue;
+          // Anything not actually installed is a false positive from the same
+          // string-matching problem; the consumers below skip it anyway.
+          if (!fs.existsSync(path.join('services/kernel/node_modules', name))) continue;
+          found.add(name);
+        }
+      }
+    }
+  })(root);
+  console.log(JSON.stringify([...found].sort()));
+")"
+echo "  $(node -e "console.log(JSON.parse(process.argv[1]).length)" "$EXT_DEPS") packages: $(node -e "console.log(JSON.parse(process.argv[1]).join(', '))" "$EXT_DEPS")"
+
 if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/better-sqlite3 ]; then
   echo "▶ reusing host node_modules (PLATFORM matches host)"
   cp -a services/kernel/node_modules/better-sqlite3 "$SRC_TREE/node_modules/"
@@ -144,6 +188,7 @@ if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/b
     }
     walk('better-sqlite3'); walk('onnxruntime-node');
     walk('@huggingface/transformers'); walk('neo4j-driver');
+    for (const d of $EXT_DEPS) walk(d);
     console.log(JSON.stringify([...seen]));
   ")"
   node -e "
@@ -169,7 +214,8 @@ else
   node -e "
     const fs = require('node:fs');
     const pkg = require('./services/kernel/package.json');
-    const names = ['better-sqlite3', 'onnxruntime-node', '@huggingface/transformers', 'neo4j-driver'];
+    const names = ['better-sqlite3', 'onnxruntime-node', '@huggingface/transformers', 'neo4j-driver',
+                   ...$EXT_DEPS];
     const dependencies = {};
     for (const name of names) {
       let version = pkg.dependencies?.[name];
