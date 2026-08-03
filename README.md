@@ -34,7 +34,7 @@ Every conversation starts from zero. Your LLM can't see your tasks, read your in
 
 ## What is Kernl?
 
-Kernl is a **self-hosted** server that plugs your real life into **any** LLM through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One endpoint exposes **~290 tools across 60+ modules** — tasks, contacts, email, finance, calendar, notes, health, shopping, travel and more — to Claude, Cursor, or any MCP client.
+Kernl is a **self-hosted** server that plugs your real life into **any** LLM through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One endpoint exposes **103 tools out of the box** — rising past 290 as you enable more of the **71 bundled modules**: tasks, contacts, email, finance, calendar, notes, health, shopping, travel and more — to Claude, Cursor, or any MCP client.
 
 Then it goes past a data bridge: Kernl runs **agents** — autonomous teams (it calls them *offices*) that work in loops, call your tools, and finish jobs while you're away.
 
@@ -91,7 +91,7 @@ No API keys, no host paths, no accounts. Add your LLM keys and channels later fr
 | 🤖 **Agents that act** | Not a chatbot — autonomous *offices* that work in loops and use your tools. |
 | 🔌 **Any LLM, any client** | Claude, OpenAI, Grok, or a local model via LM Studio. Any MCP client connects. |
 | 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernlext` package. |
-| 📊 **~290 tools, 60+ modules** | One surface for your whole life — not fifteen disconnected apps. |
+| 📊 **103 tools installed, 71 modules available** | One surface for your whole life — not fifteen disconnected apps. Enable everything and you pass 290 tools. |
 
 ## ⚔️ Kernl vs. the usual options
 
