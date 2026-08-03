@@ -284,11 +284,20 @@ jobs:
           # loads an ONNX embedding model, none of which is instant on a cold
           # runner — and a timeout that fires early is indistinguishable from
           # a hang, which is the thing being diagnosed.
+          # -SkipHttpErrorCheck matters here. Without it Invoke-WebRequest
+          # throws on any 4xx, and start.bat does not pass KERNEL_ALLOW_UNAUTH:
+          # the kernel mints its own token and answers 401. A 401 means the
+          # server is up and talking — treating it as "not ready" polled a
+          # perfectly healthy server 150 times and then called it a hang.
           $ready = $false
           foreach ($i in 1..150) {
             try {
-              Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/manifest" -UseBasicParsing -TimeoutSec 5 | Out-Null
-              $ready = $true; break
+              $probe = Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/manifest" `
+                         -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
+              if ($probe.StatusCode -gt 0) {
+                Write-Host "kernel answered $($probe.StatusCode) on /api/manifest"
+                $ready = $true; break
+              }
             } catch { Start-Sleep -Seconds 2 }
           }
 
@@ -319,18 +328,26 @@ jobs:
           # The dashboard itself. A 200 here is the whole point: the Linux
           # packages answered on the API while serving 500 at / for four
           # builds, because the SPA was not where the server looked for it.
-          try {
-            $r = Invoke-WebRequest -Uri "http://127.0.0.1:3086/" -UseBasicParsing -TimeoutSec 10
-            $code = $r.StatusCode
-          } catch {
-            $code = $_.Exception.Response.StatusCode.value__
-          }
+          $r = Invoke-WebRequest -Uri "http://127.0.0.1:3086/" `
+                 -UseBasicParsing -TimeoutSec 15 -SkipHttpErrorCheck
+          $code = $r.StatusCode
+          Write-Host "GET / -> $code"
+
+          # 200 is the SPA (the login page is part of it — auth is on, since
+          # start.bat does not disable it). 500 is the failure this step exists
+          # to catch: the server running while the dashboard files are not
+          # where it looks for them.
           if ($code -ne 200) {
-            Write-Host "::error::dashboard returned $code at /"
-            if (Test-Path $log) { Write-Host "---- kernel log ----"; Get-Content $log -Tail 60 }
+            Write-Host "::error::dashboard returned $code at / (expected 200)"
+            if ($code -eq 500) {
+              Write-Host "500 means the SPA was not found in the packaged layout."
+              Write-Host "Contents of the install directory:"
+              Get-ChildItem $dir | ForEach-Object { Write-Host "  $($_.Name)" }
+            }
+            if (Test-Path $log) { Write-Host "---- kernel log ----"; Get-Content $log -Tail 40 }
             exit 1
           }
-          Write-Host "dashboard answered 200"
+          Write-Host "dashboard served the SPA"
 
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
