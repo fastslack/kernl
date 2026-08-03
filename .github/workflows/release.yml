@@ -280,8 +280,12 @@ jobs:
 
           # /api/manifest is the readiness probe start.bat itself waits on, so
           # it is the product's own definition of "up".
+          # 5 minutes. The first boot seeds agents, offices and drivers and
+          # loads an ONNX embedding model, none of which is instant on a cold
+          # runner — and a timeout that fires early is indistinguishable from
+          # a hang, which is the thing being diagnosed.
           $ready = $false
-          foreach ($i in 1..75) {
+          foreach ($i in 1..150) {
             try {
               Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/manifest" -UseBasicParsing -TimeoutSec 5 | Out-Null
               $ready = $true; break
@@ -290,8 +294,24 @@ jobs:
 
           if (-not $ready) {
             Write-Host "::error::kernel never became ready on :3086"
-            if (Test-Path $log) { Write-Host "---- kernel log ----"; Get-Content $log -Tail 60 }
-            else { Write-Host "(no log was produced — start.bat did not run)" }
+
+            # Hung or dead? The log ending mid-boot looks identical either way,
+            # so ask the OS whether anything is still running before reading it.
+            $procs = Get-Process -Name "bun" -ErrorAction SilentlyContinue
+            if ($procs) {
+              Write-Host "bun.exe is STILL RUNNING (pid $($procs.Id -join ',')) — it hung rather than crashed"
+            } else {
+              Write-Host "no bun.exe process alive — it exited during boot"
+            }
+            Write-Host "listening sockets on 3086:"
+            netstat -ano | Select-String ":3086" | ForEach-Object { Write-Host "  $_" }
+
+            if (Test-Path $log) {
+              Write-Host "---- kernel log (full) ----"
+              Get-Content $log
+            } else {
+              Write-Host "(no log was produced — start.bat did not run)"
+            }
             exit 1
           }
           Write-Host "kernel is up"
