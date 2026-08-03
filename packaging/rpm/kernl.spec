@@ -64,7 +64,7 @@
 %global         __os_install_post %{nil}
 
 Name:           %{appname}
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Personal life-management MCP server with dashboard
 License:        Apache-2.0
