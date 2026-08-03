@@ -93,7 +93,7 @@ Once running, try these via Claude or the dashboard:
 | **dashboard** | Web UI + life intelligence (weather, AQI, moon, clocks) |
 
 Additional Pro extensions (trading, web-intel, graph-intel, mesh, federation)
-are distributed separately with a [Kernl Pro license](https://github.com/fastslack/kernl/pro).
+are distributed separately with a [Kernl Pro license](https://lifekernl.com/pricing).
 
 ## Optional Features
 

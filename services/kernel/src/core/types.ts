@@ -185,8 +185,8 @@ export interface ModuleContext {
    * Pro license gate. Free modules ignore this entirely. Pro modules
    * call `ctx.license.has('pro:<module>')` inside `initialize()` to decide
    * whether to register real tools or stub tools that direct users to
-   * github.com/fastslack/kernl/pro. Authoring docs for pro modules are
-   * maintained outside this repository.
+   * lifekernl.com/pricing. Authoring docs for pro modules are maintained
+   * outside this repository.
    */
   license: LicenseService;
   /**
