@@ -243,7 +243,14 @@ else
     npm_config_platform="$NPM_PLATFORM" \
     npm_config_arch="$NPM_ARCH" \
     npm_config_runtime="node" \
+    # --legacy-peer-deps: this tree exists only to have files copied out of
+    #   it, never to run. Staging the extensions' packages alongside the
+    #   kernel's puts unrelated libraries in one synthetic package.json, and
+    #   npm refuses on their peer ranges (zod, via the Anthropic and MCP SDKs).
+    #   Peer resolution is meaningless here — the host tree already resolved
+    #   these versions and they are what ships.
     npm install --os="$NPM_PLATFORM" --cpu="$NPM_ARCH" \
+      --legacy-peer-deps \
       --omit=dev --no-audit --no-fund --loglevel=error
   )
   cp -a "$NATIVE_TMP/node_modules/." "$SRC_TREE/node_modules/"
