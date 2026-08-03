@@ -18,6 +18,7 @@
    * which +layout.svelte checks to skip re-prompting on subsequent visits.
    */
   import { onMount } from 'svelte';
+  import OfficeStep from '$lib/components/setup/OfficeStep.svelte';
   import { goto } from '$app/navigation';
   import { t, locale, setUserLocale, type Locale } from '$lib/i18n/index.js';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
@@ -50,7 +51,10 @@
   }
 
   // ── Wizard state ──────────────────────────────────────────────
-  const TOTAL = 3;
+  // 4 steps: language -> provider -> hire a team -> done. The team step exists
+  // because finishing setup on an empty 3D floor is the worst first impression
+  // this product can make.
+  const TOTAL = 4;
   let step = 0;
 
   // Step 0 — language
@@ -225,13 +229,13 @@
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  function finish(): void {
+  function finish(dest = '/settings?welcome=1'): void {
     try {
       localStorage.setItem('kernl.setupComplete', '1');
       // Mirror the legacy welcomeSeen flag so /welcome doesn't re-trigger.
       localStorage.setItem('kernl.welcomeSeen', '1');
     } catch { /* private browsing */ }
-    goto('/settings?welcome=1');
+    goto(dest);
   }
 
   onMount(() => {
@@ -253,7 +257,10 @@
   });
 
   $: stepLabel =
-    step === 0 ? $t('setup.step_language') : step === 1 ? $t('setup.step_llm') : $t('setup.step_done');
+    step === 0 ? $t('setup.step_language')
+    : step === 1 ? $t('setup.step_llm')
+    : step === 2 ? 'Your team'
+    : $t('setup.step_done');
 </script>
 
 <svelte:head>
@@ -485,8 +492,14 @@
         </div>
       </section>
 
+    {:else if step === 2}
+      <!-- ───────────────────── Step 3 ─ Hire a team ─── -->
+      <section class="step-card">
+        <OfficeStep on:done={next} />
+      </section>
+
     {:else}
-      <!-- ─────────────────────────── Step 3 ─ Done ─── -->
+      <!-- ─────────────────────────── Step 4 ─ Done ─── -->
       <section class="step-card done">
         <div class="done-medal" aria-hidden="true">
           <svg viewBox="0 0 64 64">
@@ -522,7 +535,8 @@
         <SetupChecklist />
 
         <div class="nav center">
-          <button class="btn-primary big" on:click={finish}>{$t('setup.done_cta')}</button>
+          <button class="btn-primary big" on:click={() => finish('/agents-flow')}>{$t('setup.done_cta_office')}</button>
+          <button class="btn-ghost big" on:click={() => finish('/settings?welcome=1')}>{$t('setup.done_cta_settings')}</button>
         </div>
 
         <p class="reset-hint">
@@ -561,7 +575,7 @@
 
   /* ── Top bar ───────────────────────────────────────────── */
   .topbar {
-    max-width: 720px;
+    max-width: 1040px;
     margin: 8px auto 32px;
     display: flex;
     align-items: center;
@@ -601,7 +615,7 @@
 
   /* ── Progress bar ──────────────────────────────────────── */
   .progress-shell {
-    max-width: 720px;
+    max-width: 1040px;
     margin: 0 auto 32px;
   }
   .progress-meta {
@@ -637,7 +651,7 @@
 
   /* ── Content shell ─────────────────────────────────────── */
   .content {
-    max-width: 720px;
+    max-width: 1040px;
     margin: 0 auto;
   }
 
@@ -657,6 +671,7 @@
     color: #fff;
   }
   .step-lede {
+    max-width: 64ch;
     color: #b8bdd1;
     font-size: 14px;
     line-height: 1.6;
@@ -666,10 +681,17 @@
   /* ── Option cards (radio cards) ────────────────────────── */
   .option-grid {
     display: grid;
-    gap: 12px;
+    gap: 10px;
   }
-  .option-grid.two { grid-template-columns: 1fr 1fr; }
-  .option-grid.one { grid-template-columns: 1fr; }
+  /* Two-choice steps stay narrow and centred — stretching two cards across a
+     1040px shell reads as a mistake. */
+  .option-grid.two { grid-template-columns: 1fr 1fr; max-width: 720px; }
+  /* The provider step has six options. As a single column it needed scrolling
+     on every laptop; auto-fit turns the spare width into columns so the whole
+     choice is visible at once, which is the point of a chooser. */
+  /* stretch, not start: ragged card heights inside a row read as broken. */
+  .option-grid.one { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: stretch; }
+  .option-grid.one > * { height: 100%; }
   @media (max-width: 600px) {
     .option-grid.two { grid-template-columns: 1fr; }
   }
@@ -906,15 +928,24 @@
   }
 
   /* ── Buttons ───────────────────────────────────────────── */
+  /* Sticks to the bottom of the card. The provider step is tall enough that
+     Back/Continue fell below the fold on a laptop — the two controls that move
+     the wizard forward were the ones you could not see. */
   .nav {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 16px;
-    margin-top: 32px;
-    padding-top: 24px;
+    margin-top: 24px;
+    padding-top: 16px;
     border-top: 1px solid #1d2138;
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(to top, #10132a 72%, rgba(16,19,42,0));
+    padding-bottom: 4px;
+    z-index: 2;
   }
+  .nav > * { flex: none; }
   .nav.center { justify-content: center; border-top: 0; padding-top: 16px; }
   .nav.end { justify-content: flex-end; }
 
