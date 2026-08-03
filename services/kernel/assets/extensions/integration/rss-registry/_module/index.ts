@@ -84,7 +84,9 @@ export function createRssRegistryModule(): RssRegistryModule {
             label: "RSS Sources",
             icon: "📡",
             group: "system",
-            order: 65,
+            // After Extensions (90). A feed registry is a niche setting; it was
+            // heading the System group purely because 65 sorts before 90.
+            order: 120,
           },
         ],
         stores: ["rssRegistry"],

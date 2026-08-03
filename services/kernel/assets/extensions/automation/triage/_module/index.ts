@@ -54,11 +54,24 @@ export function createTriageModule(): TriageModule {
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
+        // The group has to be declared, not just referenced. Without this the
+        // sidebar had a nav item pointing at a group nobody defined, so the
+        // item was silently dropped — and once the dashboard started creating
+        // missing groups on the fly, it appeared with an invented icon and no
+        // ordering instead of the real ones.
+        navGroups: [
+          {
+            id: "automation",
+            label: "Automation",
+            icon: "\u2699\ufe0f",
+            order: 600,
+          },
+        ],
         nav: [
           {
             id: "triage",
             label: "Triage",
-            icon: "🩺",
+            icon: "\ud83e\ude7a",
             group: "automation",
             order: 50,
           },

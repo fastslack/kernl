@@ -650,8 +650,24 @@
         // `requires` always show (never hides a legit feature); items that
         // name an absent module (paid extras, unbuilt stubs) are dropped.
         if (item.requires && !installedModules.has(item.requires)) continue;
-        const group = nextGroups.find(g => g.id === item.group);
-        if (!group) continue;
+        // Fail open, like the manifest gate above. Dropping an item because its
+        // group has not been merged yet hides real features with no trace: the
+        // nav silently collapsed to the three hardcoded base groups and 39 of
+        // 42 items vanished. An item that names an unknown group now creates
+        // it rather than disappearing.
+        let group = nextGroups.find(g => g.id === item.group);
+        if (!group) {
+          // Needs an icon and a readable label: without them the sidebar
+          // rendered the literal text "undefined" above the group.
+          group = {
+            id: item.group,
+            label: item.group.charAt(0).toUpperCase() + item.group.slice(1),
+            icon: '⚙️',
+            views: [],
+            order: 500,
+          } as any;
+          nextGroups.push(group);
+        }
         if (group.views.find(v => v.id === item.id)) continue;
         const view: any = { id: item.id, label: item.label, icon: item.icon };
         if (item.parent) view.parent = item.parent;
