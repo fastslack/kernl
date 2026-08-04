@@ -58,10 +58,16 @@ Real data. Real actions. On your machine — not in someone else's cloud.
 
 ## 🎬 See it in action
 
-<div align="center">
-<img src="docs/assets/demo.gif" alt="Kernl 3D office — watch your agents work" width="800">
-<br><i>Watch your agents walk between desks and get work done in the live 3D dashboard.</i>
-</div>
+Kernl ships a live 3D view of your agent teams — you watch them move between
+desks and pick up work as it happens. It is at `/agents-flow` once you are
+running, which the quick start below gets you to in about two minutes.
+
+<!-- The recording that belongs here is not made yet. This section used to
+     embed docs/assets/demo.gif, a file that has never existed in the
+     repository, so every visitor landed on a broken image directly under a
+     caption promising a demo. A missing recording is a gap; a broken image is
+     a claim that the project does not look after itself. Put the file here and
+     restore the embed. -->
 
 ## ⚡ Quick start
 
@@ -80,7 +86,12 @@ docker compose exec kernel cat /app/data/.kernel-auth-token
 
 Paste that token once into the dashboard's login screen and you're in — it's kept in your browser and reused for every request. To pin your own instead, set `KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`.
 
-No API keys, no host paths, no accounts. Add your LLM keys and channels later from **Settings → AI**. The graph brain (Neo4j) and key-free web search come bundled.
+No host paths, no accounts, nothing to sign up for. First run walks you through
+a four-step setup, and one of those steps is picking an LLM — a cloud key, or a
+local model through LM Studio or Ollama if you would rather nothing left the
+machine at all. The kernel waits for that choice before serving the rest of the
+API, so the dashboard cannot hand you a screen whose every button fails. The
+graph brain (Neo4j) and key-free web search come bundled.
 
 ## 🔥 Why Kernl
 
