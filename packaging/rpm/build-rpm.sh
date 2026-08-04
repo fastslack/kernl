@@ -22,18 +22,19 @@ cp "$FILES_DIR/kernl.service"  "$SRC_TREE/packaging/kernl.service"
 cp "$FILES_DIR/kernl.desktop"  "$SRC_TREE/packaging/kernl.desktop"
 cp "$FILES_DIR/env.example"        "$SRC_TREE/packaging/env.example"
 
-# Icon (256×256 PNG) — render from the SVG favicon if ImageMagick is around;
-# fall back to a tiny valid PNG so rpmbuild doesn't choke on the missing file.
-if [ -f "$FILES_DIR/kernl.png" ]; then
-  cp "$FILES_DIR/kernl.png" "$SRC_TREE/packaging/kernl.png"
-elif [ -f "dashboard/static/favicon.svg" ] && command -v convert &>/dev/null; then
-  convert -background none -density 384 -resize 256x256 \
-    dashboard/static/favicon.svg "$SRC_TREE/packaging/kernl.png"
-elif [ -f "dashboard/static/favicon.png" ]; then
-  cp "dashboard/static/favicon.png" "$SRC_TREE/packaging/kernl.png"
-else
-  printf '\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\rIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82' > "$SRC_TREE/packaging/kernl.png"
+# Icon: a committed 256×256 PNG, not something rendered at build time.
+#
+# This used to try ImageMagick against `dashboard/static/favicon.svg` — a path
+# that does not exist, the file lives under services/ — and fall back to a
+# 1×1 transparent pixel so rpmbuild would not choke. It never choked, and every
+# package ever built shipped that pixel as its application icon. A silent
+# fallback for a missing asset is how you ship a blank icon and never find out.
+ICON_SRC="$REPO_ROOT/packaging/icons/kernl.png"
+if [ ! -f "$ICON_SRC" ]; then
+  echo "ERROR: missing $ICON_SRC — the application icon is not optional." >&2
+  exit 1
 fi
+cp "$ICON_SRC" "$SRC_TREE/packaging/kernl.png"
 
 # RPM forbids '-' in Version, so a prerelease like 0.2.0-rc.1 cannot go there:
 # rpmbuild aborts with "Illegal char '-'". The convention is to keep the base

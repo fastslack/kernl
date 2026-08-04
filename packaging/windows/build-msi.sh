@@ -79,10 +79,20 @@ MSI_VERSION="${VERSION%%-*}"
 [ "$MSI_VERSION" != "$VERSION" ] && \
   echo "▶ MSI ProductVersion: $MSI_VERSION (prerelease suffix dropped from $VERSION)"
 
+# The MSI carried no icon at all, so both the Start Menu entry and the
+# Add/Remove Programs listing showed Windows' generic box. Not optional, and
+# not something to discover after publishing.
+ICON_FILE="$REPO_ROOT/packaging/icons/kernl.ico"
+if [ ! -f "$ICON_FILE" ]; then
+  echo "ERROR: missing $ICON_FILE — the application icon is not optional." >&2
+  exit 1
+fi
+
 # Compile static product.wxs + harvested fragment.
 echo "▶ candle: compiling .wxs → .wixobj"
 "$CANDLE" -nologo -arch x64 \
   -dVersion="$MSI_VERSION" \
+  -dIconFile="$ICON_FILE" \
   -dSourceDir="$PKG_DIR" \
   -out "$STAGE_DIR/" \
   "$REPO_ROOT/packaging/windows/product.wxs" \

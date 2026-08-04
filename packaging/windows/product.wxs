@@ -35,6 +35,13 @@
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
 
+    <!-- Application icon. Without this the Start Menu shortcut and the
+         Add/Remove Programs entry both fall back to Windows' generic box.
+         ARPPRODUCTICON is what Add/Remove reads; the Shortcut below points at
+         the same Icon id. -->
+    <Icon Id="KernlIcon" SourceFile="$(var.IconFile)" />
+    <Property Id="ARPPRODUCTICON" Value="KernlIcon" />
+
     <!-- Top-level features: just one, ships everything. -->
     <Feature Id="ProductFeature" Title="Kernl" Level="1">
       <ComponentGroupRef Id="ApplicationFiles" />
@@ -57,7 +64,8 @@
                   Name="Kernl"
                   Description="Personal life-management MCP server"
                   Target="[INSTALLDIR]start.bat"
-                  WorkingDirectory="INSTALLDIR" />
+                  WorkingDirectory="INSTALLDIR"
+                  Icon="KernlIcon" />
         <RemoveFolder Id="CleanUpShortcut" Directory="ApplicationProgramsFolder" On="uninstall"/>
         <RegistryValue Root="HKCU"
                        Key="Software\Matware\Kernl"

@@ -143,24 +143,19 @@ cp -a "$SRC_TREE/assets"       "$APP_BUNDLE/Contents/Resources/"
 cp    "$SRC_TREE/package.json" "$APP_BUNDLE/Contents/Resources/"
 cp    "$REPO_ROOT/packaging/rpm/files/env.example" "$APP_BUNDLE/Contents/Resources/env.example"
 
-# Icon — generate from the SVG favicon when iconutil is available
-# (macOS host); else placeholder. CI overrides this with the proper .icns.
-if command -v iconutil &>/dev/null && [ -f "$REPO_ROOT/services/dashboard/static/favicon.svg" ]; then
-  ICONSET="$STAGE_DIR/kernl.iconset"
-  mkdir -p "$ICONSET"
-  for size in 16 32 64 128 256 512 1024; do
-    convert -background none -density "$((size * 4))" -resize "${size}x${size}" \
-      "$REPO_ROOT/services/dashboard/static/favicon.svg" "$ICONSET/icon_${size}x${size}.png" 2>/dev/null || true
-  done
-  iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/kernl.icns" 2>/dev/null || true
-elif [ -f "$REPO_ROOT/services/dashboard/static/favicon.svg" ] && command -v convert &>/dev/null; then
-  # Fallback: render a 512x512 PNG and cp as .icns (macOS will warn but display)
-  convert -background none -density 1024 -resize 512x512 \
-    "$REPO_ROOT/services/dashboard/static/favicon.svg" "$APP_BUNDLE/Contents/Resources/kernl.icns" 2>/dev/null || \
-    touch "$APP_BUNDLE/Contents/Resources/kernl.icns"
-else
-  touch "$APP_BUNDLE/Contents/Resources/kernl.icns"
+# Icon: a committed .icns, not one rendered here.
+#
+# The previous version needed iconutil AND ImageMagick, and quietly ran
+# `touch kernl.icns` when either was missing. The macOS runners have neither,
+# so every .app ever built carried an empty file where its icon should be —
+# Info.plist pointed at kernl.icns and Finder found nothing. Nothing failed,
+# which is exactly why nobody noticed.
+ICNS_SRC="$REPO_ROOT/packaging/icons/kernl.icns"
+if [ ! -f "$ICNS_SRC" ]; then
+  echo "ERROR: missing $ICNS_SRC — the application icon is not optional." >&2
+  exit 1
 fi
+cp "$ICNS_SRC" "$APP_BUNDLE/Contents/Resources/kernl.icns"
 
 # ── Tarball for distribution ─────────────────────────────────────────
 # cd into the directory that actually holds the bundle — it lives in
