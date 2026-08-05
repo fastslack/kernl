@@ -15,6 +15,7 @@
 		closeTab,
 		visibleEntries,
 		type PaneId,
+		type PaneError,
 		type CommanderTab
 	} from '$lib/commander-stores.js';
 	import {
@@ -28,6 +29,7 @@
 		cancelOp,
 		streamOp,
 		historyPush,
+		FsApiError,
 		type FsEntry,
 		type OpProgress
 	} from '$lib/fs-api.js';
@@ -49,6 +51,75 @@
 	let editor: { providerId: string; path: string } | null = null;
 	let remoteManagerOpen = false;
 	let bookmarksOpen = false;
+
+	/** Provider home, resolved on mount. Backs the "Go to home" recovery action. */
+	let homePath = '/';
+
+	// ── Split ratio ─────────────────────────────────────────────────
+	const MIN_SPLIT = 20;
+	const MAX_SPLIT = 80;
+	const SPLIT_KEY = 'commander:split';
+	let splitPct = 50;
+	let draggingSplit = false;
+	let panesEl: HTMLElement | null = null;
+
+	let leftPaneEl: Pane | null = null;
+	let rightPaneEl: Pane | null = null;
+
+	function clampSplit(v: number): number {
+		return Math.max(MIN_SPLIT, Math.min(MAX_SPLIT, v));
+	}
+
+	function startSplitDrag(ev: PointerEvent): void {
+		const target = ev.currentTarget as HTMLElement;
+		panesEl = target.parentElement;
+		if (!panesEl) return;
+		draggingSplit = true;
+		target.setPointerCapture(ev.pointerId);
+		ev.preventDefault();
+	}
+
+	function onSplitPointerMove(ev: PointerEvent): void {
+		if (!draggingSplit || !panesEl) return;
+		const rect = panesEl.getBoundingClientRect();
+		splitPct = clampSplit(((ev.clientX - rect.left) / rect.width) * 100);
+	}
+
+	function endSplitDrag(): void {
+		if (!draggingSplit) return;
+		draggingSplit = false;
+		try {
+			localStorage.setItem(SPLIT_KEY, String(Math.round(splitPct)));
+		} catch {
+			// storage unavailable (private mode) — the split just won't persist
+		}
+	}
+
+	/** The splitter is focusable, so arrows must move it too. */
+	function onSplitterKeydown(ev: KeyboardEvent): void {
+		const step = ev.shiftKey ? 10 : 2;
+		if (ev.key === 'ArrowLeft') {
+			ev.preventDefault();
+			splitPct = clampSplit(splitPct - step);
+			endSplitDragValue();
+		} else if (ev.key === 'ArrowRight') {
+			ev.preventDefault();
+			splitPct = clampSplit(splitPct + step);
+			endSplitDragValue();
+		} else if (ev.key === 'Home' || ev.key === 'Enter') {
+			ev.preventDefault();
+			splitPct = 50;
+			endSplitDragValue();
+		}
+	}
+
+	function endSplitDragValue(): void {
+		try {
+			localStorage.setItem(SPLIT_KEY, String(Math.round(splitPct)));
+		} catch {
+			// ignore
+		}
+	}
 
 	// ── Modal state ──────────────────────────────────────────────────
 	type Modal =
@@ -86,6 +157,19 @@
 		opStreams.get(id)?.close();
 		opStreams.delete(id);
 		opsInFlight.update((list) => list.filter((o) => o.id !== id));
+	}
+
+	// ── Errors ──────────────────────────────────────────────────────
+
+	/**
+	 * Normalises anything thrown by the API layer into the shape the pane
+	 * renders: a readable headline plus a folded-away technical detail.
+	 */
+	function toPaneError(err: unknown, path?: string): PaneError {
+		if (err instanceof FsApiError) {
+			return { message: err.message, detail: err.detail, status: err.status, path };
+		}
+		return { message: err instanceof Error ? err.message : String(err), path };
 	}
 
 	// ── Navigation & refresh ────────────────────────────────────────
@@ -132,21 +216,50 @@
 				...t,
 				entries: [],
 				loading: false,
-				error: err instanceof Error ? err.message : String(err)
+				error: toPaneError(err, path)
 			}));
 		}
 	}
 
-	async function refresh(paneId: PaneId): Promise<void> {
+	/**
+	 * Re-lists the pane's current path.
+	 *
+	 * `loud` distinguishes the two callers: background refreshes after an op
+	 * finishes stay silent (the directory may legitimately be gone), while the
+	 * error state's Retry button must show the outcome — otherwise pressing it
+	 * on a still-broken path looks like nothing happened.
+	 */
+	async function refresh(paneId: PaneId, loud = false): Promise<void> {
 		const store = getPaneStore(paneId);
 		const t = activeTab(get(store));
 		if (!t) return;
+		if (loud) updateActiveTab(store, (x) => ({ ...x, loading: true }));
 		try {
 			const listing = await listDir(t.providerId, t.path);
-			updateActiveTab(store, (x) => ({ ...x, entries: listing.entries, error: null }));
-		} catch {
-			// ignore; likely pane was deleted
+			updateActiveTab(store, (x) => ({
+				...x,
+				entries: listing.entries,
+				cursor: x.cursor ?? listing.entries[0]?.name ?? null,
+				loading: false,
+				error: null
+			}));
+		} catch (err) {
+			if (!loud) {
+				updateActiveTab(store, (x) => ({ ...x, loading: false }));
+				return;
+			}
+			updateActiveTab(store, (x) => ({
+				...x,
+				entries: [],
+				loading: false,
+				error: toPaneError(err, t.path)
+			}));
 		}
+	}
+
+	/** Sends a pane back to the provider's home directory. */
+	function goHome(paneId: PaneId): void {
+		navigate(paneId, homePath);
 	}
 
 	async function historyBack(paneId: PaneId): Promise<void> {
@@ -189,7 +302,7 @@
 				loading: false
 			}));
 		} catch (err) {
-			updateActiveTab(store, (t) => ({ ...t, loading: false, error: String(err) }));
+			updateActiveTab(store, (t) => ({ ...t, loading: false, error: toPaneError(err, path) }));
 		}
 	}
 
@@ -200,6 +313,16 @@
 	$: activeT = activeSide === 'left' ? leftTab : rightTab;
 	$: passiveSide = (activeSide === 'left' ? 'right' : 'left') as PaneId;
 	$: passiveT = activeSide === 'left' ? rightTab : leftTab;
+
+	/**
+	 * What an F5/F6/F8 would act on right now: the explicit selection, or the
+	 * cursor row when nothing is explicitly selected. Feeds the ops bar's
+	 * disabled states so keys are never offered with no valid target.
+	 */
+	$: targetCount = activeT ? (activeT.selection.size || (activeT.cursor ? 1 : 0)) : 0;
+	$: hasFileCursor =
+		!!activeT?.cursor &&
+		activeT.entries.find((e) => e.name === activeT!.cursor)?.kind === 'file';
 
 	function selectedPaths(t: CommanderTab | null): string[] {
 		if (!t) return [];
@@ -414,10 +537,22 @@
 		}
 	}
 
-	function setPaneError(paneId: PaneId, msg: string): void {
+	/**
+	 * Reports a failed operation without destroying the listing. The pane keeps
+	 * its rows, cursor and scroll position; the message appears as a strip.
+	 */
+	function setPaneError(paneId: PaneId, err: unknown): void {
 		const store = getPaneStore(paneId);
-		updateActiveTab(store, (x) => ({ ...x, error: msg }));
-		setTimeout(() => updateActiveTab(store, (x) => ({ ...x, error: null })), 3000);
+		const msg = err instanceof Error ? err.message : String(err);
+		updateActiveTab(store, (x) => ({ ...x, notice: msg }));
+		setTimeout(
+			() => updateActiveTab(store, (x) => (x.notice === msg ? { ...x, notice: null } : x)),
+			6000
+		);
+	}
+
+	function clearNotice(paneId: PaneId): void {
+		updateActiveTab(getPaneStore(paneId), (x) => ({ ...x, notice: null }));
 	}
 
 	async function doMkdir(name: string): Promise<void> {
@@ -552,11 +687,25 @@
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'b') { ev.preventDefault(); handleAction('bookmark'); return; }
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'h') { ev.preventDefault(); bookmarksOpen = true; return; }
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'r') { ev.preventDefault(); remoteManagerOpen = true; return; }
-		// Lazy-used: prevent browser refresh on F5 elsewhere
+		// Ctrl+L — type a path directly, the way every browser and file manager
+		// does it. Previously the only way to reach an arbitrary path was `:cd`.
+		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'l') {
+			ev.preventDefault();
+			(activeSide === 'left' ? leftPaneEl : rightPaneEl)?.beginPathEdit();
+			return;
+		}
+		if (ev.key === 'F2') { ev.preventDefault(); refresh(activeSide, true); return; }
 	}
 
 	// ── Mount ───────────────────────────────────────────────────────
 	onMount(async () => {
+		try {
+			const saved = Number(localStorage.getItem(SPLIT_KEY));
+			if (Number.isFinite(saved) && saved > 0) splitPct = clampSplit(saved);
+		} catch {
+			// storage unavailable — keep the 50/50 default
+		}
+
 		let home = '/';
 		try {
 			const pl = await listProviders();
@@ -583,14 +732,19 @@
 			title: leftTitle ?? leftPath.split('/').filter(Boolean).slice(-1)[0] ?? '/'
 		}));
 		updateActiveTab(rightPane, (t) => ({ ...t, providerId: 'local', path: home }));
+		homePath = home;
 		await navigate('left', leftPath);
 		await navigate('right', home);
 
 		window.addEventListener('keydown', onKeydown);
+		window.addEventListener('pointermove', onSplitPointerMove);
+		window.addEventListener('pointerup', endSplitDrag);
 	});
 
 	onDestroy(() => {
 		window.removeEventListener('keydown', onKeydown);
+		window.removeEventListener('pointermove', onSplitPointerMove);
+		window.removeEventListener('pointerup', endSplitDrag);
 		for (const s of opStreams.values()) s.close();
 		opStreams.clear();
 	});
@@ -622,38 +776,81 @@
      reads inside event handlers without binding). -->
 
 <div class="cmd-root">
-	<!-- Title bar -->
+	<!-- Title bar. The keyboard cheatsheet that used to live here is gone: it
+	     duplicated the operations bar at a size nobody could read. -->
 	<div class="cmd-title-bar">
-		<span class="brand">⧉ COMMANDER</span>
-		<span class="sep">|</span>
-		<span>terminal-modern · dual-pane</span>
-		<span class="hint">
-			Tab switch · Enter open · F5 copy · F6 move · F8 delete · : cmd
-		</span>
+		<span class="brand">⧉ Commander</span>
+		<span class="sep" aria-hidden="true">/</span>
+		<span class="subtitle">Dual-pane file manager</span>
+		<div class="title-actions">
+			<button class="title-btn" title="Bookmarks & history (Ctrl+H)" on:click={() => (bookmarksOpen = true)}>
+				Bookmarks
+			</button>
+			<button class="title-btn" title="Manage remote providers (Ctrl+R)" on:click={() => (remoteManagerOpen = true)}>
+				Remotes
+			</button>
+			<button class="title-btn" title="Reload both panes" on:click={() => { refresh('left', true); refresh('right', true); }}>
+				Reload
+			</button>
+		</div>
 	</div>
 
-	<!-- Panes -->
-	<div class="cmd-panes">
+	<!-- Panes. The split is user-resizable — a 50/50 lock is wrong whenever one
+	     side holds long paths and the other holds a handful of short names. -->
+	<div class="cmd-panes" style={`--cmd-split:${splitPct}%`}>
 		<Pane
+			bind:this={leftPaneEl}
 			paneId="left"
 			store={leftPane}
 			active={activeSide === 'left'}
 			onActivate={() => activePane.set('left')}
 			onNavigate={(p) => navigate('left', p)}
 			onOpen={openEntry}
+			onRetry={() => refresh('left', true)}
+			onHome={() => goHome('left')}
+			onDismissNotice={() => clearNotice('left')}
 		/>
+
+		<!--
+			A focusable `separator` is an interactive widget in ARIA: it takes a
+			tabindex and responds to arrow keys, which is exactly what happens
+			below. Svelte's linter treats every separator as decorative.
+		-->
+		<!-- svelte-ignore a11y-no-noninteractive-tabindex -->
+		<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+		<div
+			class="cmd-splitter"
+			class:dragging={draggingSplit}
+			role="separator"
+			aria-orientation="vertical"
+			aria-label="Resize panes"
+			aria-valuenow={Math.round(splitPct)}
+			aria-valuemin={MIN_SPLIT}
+			aria-valuemax={MAX_SPLIT}
+			tabindex="0"
+			on:pointerdown={startSplitDrag}
+			on:dblclick={() => (splitPct = 50)}
+			on:keydown={onSplitterKeydown}
+		>
+			<span class="grip" aria-hidden="true"></span>
+		</div>
+
 		<Pane
+			bind:this={rightPaneEl}
 			paneId="right"
 			store={rightPane}
 			active={activeSide === 'right'}
 			onActivate={() => activePane.set('right')}
 			onNavigate={(p) => navigate('right', p)}
 			onOpen={openEntry}
+			onRetry={() => refresh('right', true)}
+			onHome={() => goHome('right')}
+			onDismissNotice={() => clearNotice('right')}
 		/>
 	</div>
 
-	<StatusBar {leftTab} {rightTab} {activeSide} />
-	<OpsBar onAction={handleAction} />
+	<StatusBar {leftTab} {rightTab} {activeSide} {targetCount} />
+	<OpsBar onAction={handleAction} {targetCount} {hasFileCursor} />
 </div>
 
 <!-- Ops toasts -->

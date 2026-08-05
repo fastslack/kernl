@@ -7,6 +7,20 @@ import type { FsEntry, OpProgress, ProviderInfo } from './fs-api.js';
 
 export type PaneId = 'left' | 'right';
 
+/**
+ * A pane failure, split into what the user reads and what a developer needs.
+ * `detail` is folded behind a disclosure in the UI — never shown by default.
+ */
+export interface PaneError {
+	/** Plain-language headline, e.g. "This path is outside the allowed roots". */
+	message: string;
+	/** Raw transport payload for debugging. */
+	detail?: string;
+	status?: number;
+	/** Path that failed — lets the error state offer "go up" / "go home". */
+	path?: string;
+}
+
 export interface CommanderTab {
 	id: string;
 	providerId: string;
@@ -14,7 +28,14 @@ export interface CommanderTab {
 	/** Entries from the last refresh; re-fetched whenever path changes. */
 	entries: FsEntry[];
 	loading: boolean;
-	error: string | null;
+	/** Fatal: the listing could not be produced, so the pane shows a recovery state. */
+	error: PaneError | null;
+	/**
+	 * Transient: an operation failed but the listing is still valid. Shown as a
+	 * strip above the rows — replacing a good listing with an error screen
+	 * because a rename failed loses the user's place for no reason.
+	 */
+	notice: string | null;
 	/** Cursor (highlighted row) name. null = first entry. */
 	cursor: string | null;
 	/** Multi-selection by entry name. */
@@ -44,6 +65,7 @@ function newTab(providerId: string, path: string): CommanderTab {
 		entries: [],
 		loading: false,
 		error: null,
+		notice: null,
 		cursor: null,
 		selection: new Set(),
 		filter: '',
@@ -151,4 +173,45 @@ export function visibleEntries(tab: CommanderTab): FsEntry[] {
 	if (!tab.filter) return sorted;
 	const needle = tab.filter.toLowerCase();
 	return sorted.filter((e) => e.name.toLowerCase().includes(needle));
+}
+
+// ── Summaries ─────────────────────────────────────────────────────
+
+export interface TabSummary {
+	dirs: number;
+	files: number;
+	/** Rows currently listed (after the quick filter). */
+	shown: number;
+	/** Rows hidden by the quick filter. */
+	filtered: number;
+	selected: number;
+	selectedBytes: number;
+}
+
+/**
+ * Counts for the pane footer. Computed over `visibleEntries` so the numbers
+ * always match what the user is looking at, with the filtered-out remainder
+ * reported separately instead of silently vanishing.
+ */
+export function summarize(tab: CommanderTab | null): TabSummary {
+	if (!tab) return { dirs: 0, files: 0, shown: 0, filtered: 0, selected: 0, selectedBytes: 0 };
+	const shownEntries = visibleEntries(tab);
+	let dirs = 0;
+	let files = 0;
+	for (const e of shownEntries) {
+		if (e.kind === 'dir') dirs++;
+		else files++;
+	}
+	let selectedBytes = 0;
+	for (const e of tab.entries) {
+		if (tab.selection.has(e.name) && e.kind !== 'dir') selectedBytes += e.size;
+	}
+	return {
+		dirs,
+		files,
+		shown: shownEntries.length,
+		filtered: tab.entries.length - shownEntries.length,
+		selected: tab.selection.size,
+		selectedBytes
+	};
 }
