@@ -34,6 +34,16 @@ export interface IrcTransportConfig {
   dataDir: string;
 }
 
+/**
+ * A WebSocket frame is already message-framed, so a frame that carries no line
+ * terminator *is* one complete IRC line. Browser clients routinely send it that
+ * way; without this the line would sit in the buffer forever and the session
+ * would look connected while the server ignored every command.
+ */
+export function normalizeWsFrame(data: string): string {
+  return data.endsWith("\n") ? data : data + "\r\n";
+}
+
 /** Compute the CertFP (SHA-256 hex, lowercase) of a peer certificate. */
 function certFingerprint(socket: TLSSocket): string | undefined {
   const cert = socket.getPeerCertificate?.();
@@ -76,6 +86,12 @@ export class IrcTransport implements ChannelTransport {
   officeHandler: ((ev: InboundEvent) => void) | null = null;
   /** Bridged-channel messages route here (set by the channel bridge). */
   bridgeHandler: ((ev: InboundEvent) => void) | null = null;
+  /**
+   * Messages aimed at a mirrored upstream buffer route here (set by the
+   * bouncer). Returns true when it took the message, which ends the dispatch:
+   * chatting on DALnet is not a prompt for the kernel's agents.
+   */
+  upstreamHandler: ((ev: InboundEvent) => boolean) | null = null;
 
   constructor(
     readonly server: IrcServer,
@@ -175,7 +191,9 @@ export class IrcTransport implements ChannelTransport {
     this.server.attach(client);
     ws.on("message", (data) => {
       // WS clients may batch multiple IRC lines per frame.
-      for (const msg of client.feed(data.toString())) this.server.handle(client, msg);
+      for (const msg of client.feed(normalizeWsFrame(data.toString()))) {
+        this.server.handle(client, msg);
+      }
     });
     ws.on("close", () => this.server.disconnect(client));
     ws.on("error", () => this.server.disconnect(client));
@@ -184,6 +202,7 @@ export class IrcTransport implements ChannelTransport {
   // ── inbound dispatch ────────────────────────────────────────
   private dispatch(ev: InboundEvent): void {
     if (ev.from.isAgent) return; // never recurse on agent-injected messages
+    if (this.upstreamHandler?.(ev)) return; // relayed to an external network
     if (ev.channelIsOffice && this.officeHandler) {
       this.officeHandler(ev);
       return;

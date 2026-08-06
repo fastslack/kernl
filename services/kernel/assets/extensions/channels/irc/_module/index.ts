@@ -1,9 +1,17 @@
 import { resolve } from "node:path";
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
+import type {
+  DashboardDescriptor,
+  ExtensibleModule,
+  ModuleContext,
+  ToolDefinition,
+} from "../../../../../src/core/types.js";
 import { runMigrations } from "../../../../../src/core/db/migrations.js";
 import { log } from "../../../../../src/core/logger.js";
-import { ircMigrations } from "./migrations/001_irc.js";
+import { allIrcMigrations } from "./migrations/index.js";
 import { IrcStore } from "./store.js";
+import { UpstreamStore } from "./upstream/store.js";
+import { UpstreamManager } from "./upstream/manager.js";
+import { registerUpstreamRoutes } from "./upstream/api-routes.js";
 import { SaslAuthenticator } from "./security/sasl.js";
 import { IrcServer } from "./server/ircd.js";
 import { IrcProvider, type IrcRuntimeConfig } from "./irc-provider.js";
@@ -101,14 +109,16 @@ function buildOfficeSource(ctx: ModuleContext): OfficeAgentSource {
   };
 }
 
-export function createIrcModule(): KernelModule {
+export function createIrcModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
   let provider: IrcProvider | null = null;
+  let upstream: UpstreamManager | null = null;
+  let upstreamStore: UpstreamStore | null = null;
 
   return {
     name: "ext:irc",
     async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "irc", ircMigrations);
+      runMigrations(ctx.sqlite, "irc", allIrcMigrations);
 
       const store = new IrcStore(ctx.sqlite);
       const sasl = new SaslAuthenticator(store, {});
@@ -136,7 +146,18 @@ export function createIrcModule(): KernelModule {
       const registry = ctx.notifier.getRegistry() as unknown as RegistryLike;
       const channelBridge = new ChannelBridge(server, registry);
 
-      provider = new IrcProvider({ server, cfg: runtime, officeBridge, channelBridge, sasl });
+      // The bouncer: outbound connections to external networks, per account.
+      upstreamStore = new UpstreamStore(ctx.sqlite, ctx.config.encryption?.key ?? "");
+      upstream = new UpstreamManager({
+        server,
+        store: upstreamStore,
+        ircStore: store,
+        serverName: runtime.serverName,
+      });
+      server.onBeforeJoin = (client, channel) => upstream!.handleBeforeJoin(client, channel);
+      server.onPart = (client, channel) => upstream!.handlePart(client, channel);
+
+      provider = new IrcProvider({ server, cfg: runtime, officeBridge, channelBridge, sasl, upstream });
       ctx.notifier.getRegistry().registerFactory("irc", () => provider!);
 
       tools = ircTools({ server, store, channelBridge, officeBridge });
@@ -144,6 +165,16 @@ export function createIrcModule(): KernelModule {
     },
     getTools(): ToolDefinition[] {
       return tools;
+    },
+    getDashboardDescriptor(): DashboardDescriptor {
+      // No nav entry: the IRC page is contributed through extension.json.
+      return {
+        registerRoutes: (httpServer) => {
+          if (upstream && upstreamStore) {
+            registerUpstreamRoutes(httpServer, upstream, upstreamStore);
+          }
+        },
+      };
     },
     async shutdown() {
       await provider?.stop();

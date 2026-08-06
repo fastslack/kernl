@@ -19,6 +19,7 @@ import { IrcTransport } from "./irc-transport.js";
 import type { OfficeBridge } from "./bridge/office-bridge.js";
 import type { ChannelBridge } from "./bridge/channel-bridge.js";
 import type { SaslAuthenticator } from "./security/sasl.js";
+import type { UpstreamManager } from "./upstream/manager.js";
 
 export interface IrcRuntimeConfig {
   tlsPort: number;
@@ -54,6 +55,8 @@ export class IrcProvider implements NotificationProvider {
       officeBridge: OfficeBridge;
       channelBridge: ChannelBridge;
       sasl: SaslAuthenticator;
+      /** The bouncer. Absent only in tests that exercise the server alone. */
+      upstream?: UpstreamManager;
     },
   ) {}
 
@@ -122,9 +125,13 @@ export class IrcProvider implements NotificationProvider {
           this.deps.channelBridge.forwardToExternal(ev.target, ev.from.nick, ev.text);
         }
       };
+      this.transport.upstreamHandler = (ev) => this.deps.upstream?.handleOutbound(ev) ?? false;
       if (this.httpServer) this.transport.setHttpServer(this.httpServer);
       await this.transport.start();
       this.deps.officeBridge.sync();
+      // The bouncer outlives any dashboard session: it connects here and only
+      // stops with the provider.
+      this.deps.upstream?.start();
       this.ready = true;
       this.error = undefined;
       log.info("IRC: provider started");
@@ -136,6 +143,7 @@ export class IrcProvider implements NotificationProvider {
   }
 
   async stop(): Promise<void> {
+    this.deps.upstream?.stop();
     if (this.transport) {
       await this.transport.stop();
       this.transport = null;

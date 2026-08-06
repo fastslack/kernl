@@ -35,6 +35,167 @@
   }
   url = defaultUrl();
 
+  // ── saved connection profiles ────────────────────────────────
+  // For hopping between Kernl instances (localhost vs a remote one). The SASL
+  // password is deliberately never stored.
+  interface Profile {
+    name: string;
+    url: string;
+    nick: string;
+    account: string;
+  }
+  const PROFILES_KEY = 'kernl.irc.profiles';
+  let profiles: Profile[] = [];
+  let selectedProfile = '';
+
+  function loadProfiles() {
+    if (typeof localStorage === 'undefined') return;
+    try {
+      const raw = localStorage.getItem(PROFILES_KEY);
+      profiles = raw ? (JSON.parse(raw) as Profile[]) : [];
+    } catch {
+      profiles = [];
+    }
+  }
+  function persistProfiles() {
+    if (typeof localStorage === 'undefined') return;
+    localStorage.setItem(PROFILES_KEY, JSON.stringify(profiles));
+  }
+  function applyProfile(name: string) {
+    const p = profiles.find((x) => x.name === name);
+    if (!p) return;
+    url = p.url;
+    nick = p.nick;
+    account = p.account;
+    selectedProfile = name;
+  }
+  function saveProfile() {
+    const name = (prompt('Save this connection as:', selectedProfile || nick || 'kernl') ?? '').trim();
+    if (!name) return;
+    const entry: Profile = { name, url, nick, account };
+    const i = profiles.findIndex((p) => p.name === name);
+    if (i >= 0) profiles[i] = entry;
+    else profiles = [...profiles, entry];
+    persistProfiles();
+    selectedProfile = name;
+  }
+  function deleteProfile() {
+    if (!selectedProfile) return;
+    profiles = profiles.filter((p) => p.name !== selectedProfile);
+    persistProfiles();
+    selectedProfile = '';
+  }
+  loadProfiles();
+
+  // ── upstream networks (the bouncer) ──────────────────────────
+  interface Upstream {
+    id: string;
+    network: string;
+    label: string;
+    host: string;
+    port: number;
+    nick: string;
+    currentNick: string;
+    hasPassword: boolean;
+    enabled: boolean;
+    state: string;
+    lastError: string;
+    channels: string[];
+  }
+  interface Preset {
+    slug: string;
+    name: string;
+    host: string;
+    port: number;
+    tls: boolean;
+    note: string;
+  }
+  let upstreams: Upstream[] = [];
+  let presets: Preset[] = [];
+  let netError = '';
+  let netBusy = false;
+  let showAdd = false;
+  let form = { network: '', host: '', port: 6697, tls: true, nick: '', sasl_account: '', password: '' };
+
+  function onPresetPick() {
+    const p = presets.find((x) => x.slug === form.network);
+    if (!p) return;
+    form.host = p.host;
+    form.port = p.port;
+    form.tls = p.tls;
+  }
+
+  /**
+   * Who owns the networks. The kernel uses the SASL account when the server
+   * authenticates and the nick when it does not, so the panel asks for
+   * whichever one you actually have — never both.
+   */
+  $: owner = (account.trim() || nick.trim());
+
+  async function loadNetworks() {
+    if (!owner) {
+      upstreams = [];
+      return;
+    }
+    try {
+      const res = await ctx.api.fetchJson(`/api/irc/upstreams?account=${encodeURIComponent(owner)}`);
+      upstreams = res.upstreams ?? [];
+      presets = res.presets ?? [];
+      netError = '';
+    } catch (e) {
+      netError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  async function callNetworks(path: string, init?: RequestInit) {
+    netBusy = true;
+    try {
+      const res = await ctx.api.fetchJson(path, init);
+      if (res.upstreams) upstreams = res.upstreams;
+      netError = '';
+    } catch (e) {
+      netError = e instanceof Error ? e.message : String(e);
+    } finally {
+      netBusy = false;
+    }
+  }
+
+  async function addNetwork() {
+    if (!owner || !form.network || !form.nick) {
+      netError = 'A nick, a network and a nick on that network are required';
+      return;
+    }
+    await callNetworks('/api/irc/upstreams', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ ...form, account: owner }),
+    });
+    if (!netError) {
+      showAdd = false;
+      form = { network: '', host: '', port: 6697, tls: true, nick: '', sasl_account: '', password: '' };
+    }
+  }
+
+  const connectNetwork = (u: Upstream) => callNetworks(`/api/irc/upstreams/${u.id}/connect`, { method: 'POST' });
+  const disconnectNetwork = (u: Upstream) => callNetworks(`/api/irc/upstreams/${u.id}/disconnect`, { method: 'POST' });
+  async function removeNetwork(u: Upstream) {
+    if (!confirm(`Remove ${u.label || u.network}? Its scrollback stays, the connection goes.`)) return;
+    await callNetworks(`/api/irc/upstreams/${u.id}`, { method: 'DELETE' });
+  }
+
+  /** Join a mirrored upstream channel in the current session. */
+  function openUpstreamChannel(u: Upstream, channel: string) {
+    if (!connected) return;
+    send(`JOIN ${channel}/${u.network}`);
+  }
+
+  /** Split a buffer name into its base and network parts, for display. */
+  function bufferParts(t: string): { base: string; network: string } {
+    const cut = t.lastIndexOf('/');
+    if (cut <= 0 || cut === t.length - 1) return { base: t, network: '' };
+    return { base: t.slice(0, cut), network: t.slice(cut + 1) };
+  }
+
   function ensureBuf(t: string) {
     if (!buffers[t]) {
       buffers[t] = [];
@@ -61,7 +222,9 @@
     setTimeout(() => { if (logEl) logEl.scrollTop = logEl.scrollHeight; }, 0);
   }
   function send(line: string) {
-    if (ws && ws.readyState === 1) ws.send(line);
+    // IRC lines are CRLF-terminated. Without it the server buffers the frame
+    // and never parses a thing, which looks exactly like a dead connection.
+    if (ws && ws.readyState === 1) ws.send(line.endsWith('\r\n') ? line : line + '\r\n');
   }
 
   // ── IRCv3 line parser ────────────────────────────────────────
@@ -113,7 +276,10 @@
         break;
       case '903': sys(current, 'SASL OK'); send('CAP END'); break;
       case '904': case '905': sys(current, 'SASL failed: ' + m.params.slice(1).join(' ')); send('CAP END'); break;
-      case '001': status = 'registered as ' + m.params[0]; break;
+      case '001':
+        status = 'registered as ' + m.params[0];
+        void loadNetworks();
+        break;
       case 'JOIN': {
         const ch = m.params[0];
         ensureBuf(ch);
@@ -223,22 +389,103 @@
 
 <Panel title="Connection">
   <div class="conn">
+    <select
+      class="inp"
+      bind:value={selectedProfile}
+      on:change={() => applyProfile(selectedProfile)}
+      title="Saved profiles"
+    >
+      <option value="">— profile —</option>
+      {#each profiles as p}
+        <option value={p.name}>{p.name}</option>
+      {/each}
+    </select>
     <input class="inp grow" bind:value={url} placeholder="wss://host/ws/irc" />
-    <input class="inp" bind:value={nick} placeholder="nick" />
-    <input class="inp" bind:value={account} placeholder="SASL account" />
+    <input class="inp" bind:value={nick} on:change={loadNetworks} placeholder="nick" />
+    <input class="inp" bind:value={account} on:change={loadNetworks} placeholder="SASL account (optional)" />
     <input class="inp" type="password" bind:value={password} placeholder="SASL password" />
+    <button class="btn ghost" on:click={saveProfile} title="Save these settings as a profile">Save</button>
+    {#if selectedProfile}
+      <button class="btn ghost" on:click={deleteProfile} title="Delete the selected profile">✕</button>
+    {/if}
     {#if connected}
       <button class="btn danger" on:click={disconnect}>Disconnect</button>
     {:else}
       <button class="btn" on:click={connect}>Connect</button>
     {/if}
   </div>
+  <p class="hint">Passwords are never saved in a profile.</p>
+</Panel>
+
+<Panel title="Networks">
+  {#if !owner}
+    <p class="hint">Enter a nick above to manage the networks this kernel stays connected to for you.</p>
+  {:else}
+    {#if netError}<p class="err">{netError}</p>{/if}
+    <div class="nets">
+      {#each upstreams as u}
+        <div class="net">
+          <div class="net-main">
+            <span class="dot {u.state}"></span>
+            <strong>{u.label || u.network}</strong>
+            <span class="muted">{u.host}:{u.port}</span>
+            <span class="muted">as {u.currentNick || u.nick}</span>
+            <span class="state">{u.state}</span>
+          </div>
+          {#if u.lastError}<div class="net-err">{u.lastError}</div>{/if}
+          {#if u.channels.length}
+            <div class="net-chans">
+              {#each u.channels as ch}
+                <button class="chip" on:click={() => openUpstreamChannel(u, ch)} disabled={!connected}>
+                  {ch}
+                </button>
+              {/each}
+            </div>
+          {/if}
+          <div class="net-actions">
+            {#if u.enabled}
+              <button class="btn ghost" on:click={() => disconnectNetwork(u)} disabled={netBusy}>Disconnect</button>
+            {:else}
+              <button class="btn ghost" on:click={() => connectNetwork(u)} disabled={netBusy}>Connect</button>
+            {/if}
+            <button class="btn ghost danger-text" on:click={() => removeNetwork(u)} disabled={netBusy}>Remove</button>
+          </div>
+        </div>
+      {:else}
+        <p class="hint">No networks yet. Add DALnet, QuakeNet, Libera or any other host.</p>
+      {/each}
+    </div>
+
+    {#if showAdd}
+      <div class="add">
+        <select class="inp" bind:value={form.network} on:change={onPresetPick}>
+          <option value="">— network —</option>
+          {#each presets as p}
+            <option value={p.slug} title={p.note}>{p.name}</option>
+          {/each}
+        </select>
+        <input class="inp grow" bind:value={form.host} placeholder="host" />
+        <input class="inp port" type="number" bind:value={form.port} placeholder="port" />
+        <label class="tls"><input type="checkbox" bind:checked={form.tls} /> TLS</label>
+        <input class="inp" bind:value={form.nick} placeholder="nick on that network" />
+        <input class="inp" bind:value={form.sasl_account} placeholder="account (optional)" />
+        <input class="inp" type="password" bind:value={form.password} placeholder="password (optional)" />
+        <button class="btn" on:click={addNetwork} disabled={netBusy}>Add</button>
+        <button class="btn ghost" on:click={() => (showAdd = false)}>Cancel</button>
+      </div>
+    {:else}
+      <button class="btn ghost" on:click={() => { showAdd = true; void loadNetworks(); }}>+ Add network</button>
+    {/if}
+  {/if}
 </Panel>
 
 <div class="irc">
   <div class="chans">
     {#each targets as t}
-      <button class="chan" class:active={t === current} on:click={() => select(t)}>{t}</button>
+      {@const parts = bufferParts(t)}
+      <button class="chan" class:active={t === current} on:click={() => select(t)} title={t}>
+        {parts.base}{#if parts.network}<span class="netbadge">{parts.network}</span>{/if}
+      </button>
     {/each}
   </div>
   <div class="conv">
@@ -264,6 +511,31 @@
   .inp.grow { flex: 1; min-width: 220px; }
   .btn { background: var(--accent, #3fb950); color: #06250f; border: 0; padding: 7px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; }
   .btn.danger { background: #f85149; color: #2b0a08; }
+  .btn.ghost { background: none; border: 1px solid var(--line, #222a35); color: var(--fg, #c9d1d9); font-weight: 500; }
+  .btn.ghost:disabled { opacity: 0.5; cursor: default; }
+  .btn.danger-text { color: #f85149; }
+  .hint { color: var(--muted, #7d8590); font-size: 12px; margin: 8px 0 0; }
+  .err { color: #f85149; font-size: 13px; margin: 0 0 8px; }
+
+  /* Networks panel */
+  .nets { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .net { border: 1px solid var(--line, #222a35); border-radius: 8px; padding: 10px 12px; }
+  .net-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .net-err { color: #f85149; font-size: 12px; margin-top: 4px; }
+  .net-chans { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+  .net-actions { display: flex; gap: 6px; margin-top: 8px; }
+  .muted { color: var(--muted, #7d8590); font-size: 12px; }
+  .state { margin-left: auto; color: var(--muted, #7d8590); font-size: 12px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted, #7d8590); flex: none; }
+  .dot.connected { background: #3fb950; }
+  .dot.connecting, .dot.registering, .dot.reconnecting { background: #d29922; }
+  .dot.error { background: #f85149; }
+  .chip { background: var(--bg, #0d1117); border: 1px solid var(--line, #222a35); color: var(--fg, #c9d1d9); border-radius: 999px; padding: 3px 10px; font: inherit; font-size: 12px; cursor: pointer; }
+  .chip:disabled { opacity: 0.5; cursor: default; }
+  .add { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .inp.port { width: 90px; }
+  .tls { color: var(--muted, #7d8590); font-size: 13px; display: flex; align-items: center; gap: 4px; }
+  .netbadge { color: var(--muted, #7d8590); font-size: 11px; margin-left: 6px; }
   .irc { display: flex; gap: 12px; margin-top: 12px; height: 60vh; min-height: 360px; }
   .chans { width: 180px; overflow: auto; background: var(--panel, #161b22); border: 1px solid var(--line, #222a35); border-radius: 8px; padding: 6px; }
   .chan { display: block; width: 100%; text-align: left; background: none; border: 0; color: var(--muted, #7d8590); padding: 6px 8px; border-radius: 6px; cursor: pointer; font: inherit; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
