@@ -13,13 +13,15 @@
  *
  * Container: gzipped tar (.kernlext = .tar.gz by another name).
  *
- * Integrity: the manifest's `integrity.sha256` field holds the SHA256 of a
- * canonical digest over every file in the bundle EXCEPT extension.json
- * itself (which contains the hash). The digest is computed as:
+ * Integrity: the manifest's `integrity.sha256` field holds a canonical digest
+ * over every file in the bundle, computed as:
  *   sha256( concat_for_each_file_sorted_by_path(
  *     relPath + "\0" + fileSha256Hex + "\n"
  *   ) )
- * This is stable across tar implementations and cheap to verify.
+ * extension.json contributes too, hashed as canonical JSON with its own
+ * `integrity` block removed — that block holds the digest, so it cannot be an
+ * input to it, but every other field must be. This is stable across tar
+ * implementations and cheap to verify.
  */
 
 import {
@@ -104,6 +106,35 @@ async function sha256File(path: string): Promise<string> {
  * Compute the canonical integrity hash for a bundle directory.
  * Excludes extension.json from the digest (the hash is stored inside it).
  */
+/**
+ * Deterministic JSON: object keys sorted at every depth.
+ *
+ * The manifest has to hash identically no matter what order a packer, an
+ * editor, or a JSON library happened to write its keys in, or the digest would
+ * depend on formatting rather than content.
+ */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonicalJson(v)}`).join(",")}}`;
+}
+
+/**
+ * Hash of the manifest with its own `integrity` block removed.
+ *
+ * `integrity` holds the digest, so it cannot be an input to the digest. Every
+ * other field — permissions, pricing, id, entry points — must be, or it sits
+ * outside the signature.
+ */
+async function sha256ManifestSansIntegrity(path: string): Promise<string> {
+  const raw = JSON.parse(await readFile(path, "utf-8")) as Record<string, unknown>;
+  const { integrity: _dropped, ...rest } = raw;
+  return createHash("sha256").update(canonicalJson(rest)).digest("hex");
+}
+
 export async function computeBundleSha256(dir: string): Promise<string> {
   const files = await listFiles(dir);
   const digest = createHash("sha256");
@@ -112,6 +143,12 @@ export async function computeBundleSha256(dir: string): Promise<string> {
     const fileHash = await sha256File(join(dir, rel));
     digest.update(`${rel}\0${fileHash}\n`);
   }
+  // The manifest itself, minus `integrity`. Leaving it out made the signature
+  // cover only the payload: anyone could rewrite permissions, pricing, id or
+  // `backend.entry` in a signed bundle and it still verified as authentic,
+  // which is precisely what the signature exists to prevent.
+  const manifestHash = await sha256ManifestSansIntegrity(join(dir, MANIFEST_FILE));
+  digest.update(`${MANIFEST_FILE}\0${manifestHash}\n`);
   return digest.digest("hex");
 }
 

@@ -150,6 +150,57 @@ const frontendSchema = z.object({
   pages: z.array(frontendPageSchema).optional(),
 });
 
+/** Localizable text: a plain string, or a { locale: text } map. */
+const localizedTextSchema = z.union([
+  z.string().min(1).max(500),
+  z.record(z.string().min(2).max(8), z.string().min(1).max(500)),
+]);
+
+/**
+ * One user-configurable value contributed by an extension.
+ *
+ * Mirrors `ExtensionSettingsField` in types.ts, which is what
+ * `config/extension-settings.ts` already consumes — the registry namespaces
+ * `key` to `ext.<slug>.<name>` unless it is env-style, marks `secret` fields
+ * sensitive, and seeds `default` into the settings store.
+ *
+ * `default` is a string for every type, including booleans: settings are
+ * persisted as strings, so a boolean's default is "0"/"1", not `false`.
+ */
+const settingsFieldSchema = z.object({
+  key: z.string().min(1).max(128),
+  type: z.enum(["string", "number", "boolean", "secret", "json"]),
+  label: localizedTextSchema,
+  description: localizedTextSchema.optional(),
+  default: z.string().max(2000).optional(),
+});
+
+/**
+ * Settings an extension contributes to the dashboard's Settings UI.
+ *
+ * The consuming registry has existed all along; only this schema entry was
+ * missing. Zod strips unknown keys, so every `settings` block authors wrote was
+ * silently dropped while parsing the manifest and never reached an installed
+ * extension — the feature looked implemented from both ends and worked from
+ * neither.
+ *
+ * Deliberately permissive: the registry skips malformed fields with a warning
+ * rather than failing, so rejecting a whole install here would be stricter than
+ * the runtime it feeds.
+ */
+const settingsSchema = z.object({
+  /** Optional — the registry falls back to the extension's slug and name. */
+  section: z
+    .object({
+      id: z.string().min(1).max(64).optional(),
+      label: localizedTextSchema.optional(),
+      /** Emoji or icon name; the dashboard decides how to resolve it. */
+      icon: z.string().min(1).max(64).optional(),
+    })
+    .optional(),
+  fields: z.array(settingsFieldSchema).min(1).max(64),
+});
+
 const themeSchema = z.object({
   variables: z.record(z.string(), z.string()),
   fonts: z.array(z.string()).optional(),
@@ -251,6 +302,8 @@ export const extensionManifestSchema = z.object({
   office: z.string().optional(),
   chains: z.array(z.string()).optional(),
   theme: themeSchema.optional(),
+  /** User-configurable values surfaced on the dashboard's settings page. */
+  settings: settingsSchema.optional(),
   templates: z.array(templateSchema).optional(),
   channels: z.array(channelSchema).optional(),
   db: dbDriverSchema.optional(),
