@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { log } from "./logger.js";
 import type { KernelConfig } from "./config.js";
 import { resolveSecureBind } from "./config.js";
-import { isAuthenticated, AUTH_EXEMPT_PATHS } from "./auth.js";
+import { isAuthenticated, AUTH_EXEMPT_PATHS, isPeerAuthenticatedPath } from "./auth.js";
 
 const gzipAsync = promisify(gzip);
 const GZIP_THRESHOLD = 1024; // Only compress responses > 1KB
@@ -373,7 +373,14 @@ export class KernelHttpServer {
     // ── Authentication gate ──
     // Exempt paths (/api/health, /api/auth/verify) and non-API paths skip auth.
     // /mcp has its own auth mechanism.
-    if (this.authToken && pathname.startsWith("/api/") && !AUTH_EXEMPT_PATHS.includes(pathname)) {
+    if (
+      this.authToken &&
+      pathname.startsWith("/api/") &&
+      !AUTH_EXEMPT_PATHS.includes(pathname) &&
+      // Peering endpoints authenticate the caller by signature instead; the
+      // token gate would reject a friend before its credential is ever read.
+      !isPeerAuthenticatedPath(pathname)
+    ) {
       if (!isAuthenticated(req, this.authToken)) {
         this.json(res, 401, { error: "Unauthorized" }, req);
         return;

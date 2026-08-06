@@ -42,6 +42,12 @@ services:
       # Rust bridge OFF — kernel falls back to local implementations.
       BRIDGE_ENABLED: "false"
       RUST_BRIDGE_ENABLED: "false"
+      # Peering: instance identity + friends. KERNEL_TOR=1 brings up an onion
+      # service so this instance is reachable behind NAT, CGNAT or a tethered
+      # phone, with no port forwarding and no infrastructure to operate. The
+      # onion key lives in the data volume, so the address survives restarts.
+      KERNEL_TOR: ${KERNEL_TOR:-0}
+      KERNEL_INSTANCE_NAME: ${KERNEL_INSTANCE_NAME:-}
       # KERNEL_AUTH_TOKEN intentionally unset: the kernel generates a random
       # token on first boot and persists it to /app/data/.kernel-auth-token
       # (mode 600) in the kernel-data volume. Read it once and paste it into
@@ -88,8 +94,22 @@ services:
       # A small, cheap model for mechanical subtasks (subtitle translation,
       # extraction). Falls back to the chain default when unset.
       CHAT_EXTRACTION_MODEL: ${CHAT_EXTRACTION_MODEL:-}
+      # ── Filesystem Commander scope ──────────────────────────────
+      # Without this the local provider falls back to homedir(), which inside
+      # this image is /home/bun — the base image's home, holding three dotfiles
+      # and nothing the user cares about. Every real path then fails with
+      # "Path out of allowed scope".
+      #
+      # Must match a path that is actually mounted below: declaring a root the
+      # container cannot see just moves the failure from "out of scope" to
+      # "no such directory".
+      FS_COMMANDER_ALLOWED_ROOTS: /home/fastslack/mtwProjects/LABS
     volumes:
       - kernel-data:/app/data
+      # Mounted at its host path so the commander's breadcrumbs match what the
+      # user sees in a terminal. Read-only: this API exposes delete and move
+      # over HTTP, so write access is a deliberate later step, not a default.
+      - /home/fastslack/mtwProjects/LABS:/home/fastslack/mtwProjects/LABS:ro
     depends_on:
       neo4j:
         condition: service_started

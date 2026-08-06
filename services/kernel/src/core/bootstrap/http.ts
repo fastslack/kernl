@@ -254,6 +254,21 @@ export async function initHttpAndMcp(args: {
         markLlmReadinessStale(`provider "${slug}" was reconfigured`);
       });
 
+      // Mirror the stored provider settings into KernelConfig once at boot.
+      // This only ran from the save callback, so anything living solely in the
+      // registry — the Claude Code token, and the model picked for it — was
+      // absent on every fresh start until someone happened to press Save.
+      try {
+        syncProvidersToKernelConfig(config, llmRegistry);
+        // The chat service and the llm() singleton read this config in their
+        // constructors, which already ran — so mirroring alone changes nothing
+        // until they are rebuilt. Same two calls the save path makes.
+        try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* chat may be disabled */ }
+        reloadLlmClient(config);
+      } catch (err) {
+        log.warn("Provider settings could not be mirrored into config at boot", err);
+      }
+
       // ── Can an agent actually run? ────────────────────────────────
       //
       // `isReady()` on a provider only means "installed": the claude-code CLI
@@ -306,6 +321,36 @@ export async function initHttpAndMcp(args: {
       // User-to-bot pairing approval (whatsapp/telegram/slack first-contact).
       const { registerPairingAdminRoutes } = await import("../pairing-admin-routes.js");
       registerPairingAdminRoutes(httpServer, pairingManager);
+
+      // Peering: this instance's signed identity, its friends, and the
+      // transports that reach them. The layer is kernel-wide; cinema's
+      // friends-only directories are simply its first consumer.
+      try {
+        const { PeeringService } = await import("../peering/service.js");
+        const { registerPeeringRoutes } = await import("../peering/routes.js");
+        const { NostrRelayPool } = await import("../nostr/nostr-relay-pool.js");
+        const peering = PeeringService.create({
+          sqlite,
+          encryptionKey: config.encryption.key,
+          version: process.env.KERNEL_VERSION ?? "0",
+          port: config.dashboard.port,
+          // Presence goes to public relays: a few hundred bytes every few
+          // hours, which is what lets a friend find us after we move.
+          pool: process.env.KERNEL_PEERING_ANNOUNCE === "0" ? undefined : new NostrRelayPool(),
+        });
+        if (peering) {
+          void peering.start();
+          registerPeeringRoutes(httpServer, {
+            friends: peering.friends,
+            resolver: peering.resolver,
+            client: peering.client,
+            currentDescriptor: () => peering.currentDescriptor(),
+            selfNpub: () => peering.selfNpub(),
+          });
+        }
+      } catch (err) {
+        log.warn("peering: failed to initialise — instance sharing disabled", err);
+      }
 
       // Auto-register routes from self-registering modules.
       dashboardRegistry.registerAllRoutes(httpServer, sqlite, neo4j);
