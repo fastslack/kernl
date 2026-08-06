@@ -6,6 +6,16 @@
   export let flowId: string;
   export let officeName = '';
   export let color = '#c9a84c';
+  /** Start folded to the header row. Set for agents that cannot reach a shell
+   *  or a filesystem — a Docker image and a Start button mean nothing to an
+   *  agent that only calls a model. The environment is office-scoped and this
+   *  is its only entry point in the dashboard, so it is folded, never removed,
+   *  and an environment that is actually up unfolds itself below. */
+  export let startCollapsed = false;
+
+  let open = !startCollapsed;
+  /** Only auto-unfold once per office, so a manual fold stays folded. */
+  let autoOpened = false;
 
   let status: OfficeEnvStatus | null = null;
   let config: OfficeEnvConfig | null = null;
@@ -86,6 +96,10 @@
   $: meta = STATE_META[status?.state ?? 'absent'] ?? STATE_META.absent;
   $: st = status?.state ?? 'absent';
 
+  // A container that exists is something you must be able to see and stop,
+  // whoever is selected. Only 'absent' stays folded.
+  $: if (!autoOpened && status && st !== 'absent') { autoOpened = true; open = true; }
+
   onMount(() => {
     load();
     poll = setInterval(() => { if (!busy) officeEnvAction('status', flowId).then((r) => (status = r.status)).catch(() => {}); }, 5000);
@@ -94,18 +108,25 @@
 
   // Reload when the office changes (panel reused across agents).
   let lastFlow = flowId;
-  $: if (flowId !== lastFlow) { lastFlow = flowId; loading = true; load(); }
+  $: if (flowId !== lastFlow) { lastFlow = flowId; loading = true; autoOpened = false; open = !startCollapsed; load(); }
+
+  // Same panel, next agent: re-apply the fold the new selection asks for.
+  let lastCollapsed = startCollapsed;
+  $: if (startCollapsed !== lastCollapsed) { lastCollapsed = startCollapsed; autoOpened = false; open = !startCollapsed; }
 </script>
 
-<div class="oi" style="--oi-color:{color}">
-  <div class="oi-head">
-    <span class="oi-title">Infraestructura{officeName ? ' · ' + officeName : ''}</span>
+<div class="oi" class:oi-folded={!open} style="--oi-color:{color}">
+  <button class="oi-head" aria-expanded={open} on:click={() => (open = !open)}>
+    <span class="oi-caret" class:open aria-hidden="true">▸</span>
+    <span class="oi-title">Entorno de la oficina{officeName ? ' · ' + officeName : ''}</span>
     {#if status}
       <span class="oi-badge oi-{st}">{meta.glyph} {meta.label}</span>
     {/if}
-  </div>
+  </button>
 
-  {#if loading}
+  {#if !open}
+    <!-- folded: the header row is the whole component -->
+  {:else if loading}
     <div class="oi-muted">Loading environment…</div>
   {:else}
     {#if reconnecting}
@@ -150,12 +171,23 @@
 </div>
 
 <style>
-  .oi { margin-top: 14px; padding: 12px; border-radius: 10px;
-    background: color-mix(in srgb, var(--oi-color) 6%, transparent);
-    border: 1px solid color-mix(in srgb, var(--oi-color) 24%, transparent); }
-  .oi-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
-  .oi-title { font: 700 10px 'Manrope', sans-serif; letter-spacing: 2px; text-transform: uppercase;
-    color: color-mix(in srgb, var(--oi-color) 80%, #fff); }
+  /* A peer of the panel's other sections, not the hero it used to be: the
+     office colour survives as a hairline, not as a wash over the largest box
+     on screen. */
+  .oi { margin-top: 4px; padding: 10px 12px; border-radius: 10px;
+    background: rgba(120, 130, 160, .04);
+    border: 1px solid rgba(120, 130, 160, .12);
+    border-left: 2px solid color-mix(in srgb, var(--oi-color) 45%, transparent); }
+  .oi-folded { background: none; }
+  .oi-head { display: flex; align-items: center; gap: 8px; width: 100%;
+    background: none; border: none; padding: 0; cursor: pointer; text-align: left; }
+  .oi:not(.oi-folded) .oi-head { margin-bottom: 10px; }
+  .oi-caret { flex-shrink: 0; font: 400 9px monospace; color: #6a6f82; transition: transform .2s; }
+  .oi-caret.open { transform: rotate(90deg); }
+  /* Same type as .ip-sec-h in the parent panel so the headings read as one set. */
+  .oi-title { flex: 1; min-width: 0; font: 600 10px 'Syne', sans-serif; letter-spacing: 1.5px;
+    text-transform: uppercase; color: #8a8fa8; }
+  .oi-head:hover .oi-title { color: #d8dae3; }
   .oi-badge { font: 600 10px 'JetBrains Mono', monospace; padding: 2px 8px; border-radius: 10px;
     background: rgba(120,130,160,.14); color: #c0c5d8; }
   .oi-running { color: #7ed8a4; background: rgba(80,180,120,.16); }
@@ -171,7 +203,12 @@
     background: rgba(120,130,160,.08); color: #d8dae3; }
   .oi-actions button:hover:not(:disabled) { background: rgba(120,130,160,.18); }
   .oi-actions button:disabled { opacity: .45; cursor: not-allowed; }
-  .oi-primary { background: var(--oi-color) !important; color: #14110a !important; border: none !important; }
+  /* Outlined, not filled: the panel already has one filled primary — Run now,
+     in the header — and a section this far down must not outrank it. */
+  .oi-primary { background: color-mix(in srgb, var(--oi-color) 10%, transparent) !important;
+    color: color-mix(in srgb, var(--oi-color) 75%, #fff) !important;
+    border: 1px solid color-mix(in srgb, var(--oi-color) 45%, transparent) !important; }
+  .oi-primary:hover:not(:disabled) { background: color-mix(in srgb, var(--oi-color) 20%, transparent) !important; }
   .oi-danger:hover:not(:disabled) { border-color: #e88080 !important; color: #e88080; }
   .oi-cfg-toggle { margin-top: 8px; background: none; border: none; color: #8a8fa8; cursor: pointer;
     font: 600 10px 'Manrope', sans-serif; padding: 0; }

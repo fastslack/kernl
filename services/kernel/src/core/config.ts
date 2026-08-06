@@ -204,6 +204,10 @@ export interface KernelConfig {
     /** CLAUDE_CODE_PATH — explicit path to the `claude` binary. Empty →
      *  auto-discover (which/PATH/known locations). */
     cliPath: string;
+    /** CLAUDE_CODE_DEFAULT_MODEL — the model chosen for this provider in
+     *  Settings, mirrored out of the registry. Empty → the kernel-wide
+     *  default. */
+    model: string;
   };
   // CORS configuration
   cors: {
@@ -529,6 +533,9 @@ export function loadConfig(): KernelConfig {
       mcpBridgePath: process.env.KERNEL_MCP_BRIDGE ?? "",
       mcpTransport: (process.env.KERNEL_MCP_TRANSPORT ?? "stdio").toLowerCase(),
       cliPath: process.env.CLAUDE_CODE_PATH ?? "",
+      // Mirrored out of the provider registry by syncProvidersToKernelConfig,
+      // so the model chosen in Settings is the one the adapter sends.
+      model: process.env.CLAUDE_CODE_DEFAULT_MODEL ?? "",
     },
     cors: {
       allowedOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? "")

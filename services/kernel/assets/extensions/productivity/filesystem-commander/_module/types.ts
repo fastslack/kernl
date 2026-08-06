@@ -92,4 +92,19 @@ export interface ProviderInfo {
   readonly?: boolean;
   /** Suggested starting path. For `local`, the first allowedRoot; otherwise "/". */
   home?: string;
+  /**
+   * Every path this provider will serve. For `local`, the configured
+   * allowedRoots; otherwise `["/"]`.
+   *
+   * The UI needs the full set, not just `home`: with several roots configured
+   * the others were unreachable — nothing named them, so nothing could offer
+   * them. It also lets the client grey out breadcrumb segments that sit above
+   * a root instead of letting the user click into a certain scope error.
+   *
+   * `writable` is probed, not declared: a `:ro` mount, a foreign owner and a
+   * restrictive mode all produce the same result and the config sees none of
+   * them. Clients use it to disable create/rename/delete up front rather than
+   * letting the user discover it from an EROFS.
+   */
+  roots?: Array<{ path: string; writable: boolean }>;
 }

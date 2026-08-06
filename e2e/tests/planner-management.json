@@ -7,7 +7,7 @@
       },
       {
         "type": "evaluate",
-        "value": "localStorage.setItem('kernl.setupComplete','1');localStorage.setItem('kernl.welcomeSeen','1');localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS');"
+        "value": "localStorage.setItem('kernl.setupComplete','1');localStorage.setItem('kernl.welcomeSeen','1');localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}');"
       }
     ]
   },

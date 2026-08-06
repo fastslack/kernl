@@ -19,6 +19,19 @@ import { getAllHealth } from "./provider-health.js";
 import { ModelBlocklist } from "./model-blocklist.js";
 import { recent as recentCalls } from "./call-log.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
+
+/** Enough of the value to recognise it, never enough to use it. */
+const MASK = "***";
+function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 8) return value.slice(0, 2) + MASK;
+  return value.slice(0, 8) + MASK + value.slice(-4);
+}
+/** A value that came back out of `maskSecret` — i.e. the client never saw the
+ *  real one and is echoing our own placeholder. Must not be persisted. */
+function isMasked(value: string): boolean {
+  return value.includes(MASK);
+}
 import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
 import { ClaudeCodeAuthService } from "./claude-code-auth-service.js";
 
@@ -108,10 +121,29 @@ export function registerLlmProviderRoutes(
     }
   });
 
+  /**
+   * Masked. This used to return `settings_json` verbatim, so a plain GET
+   * handed back the Claude Code OAuth token and every provider API key in
+   * cleartext to anything holding a dashboard session.
+   *
+   * It read raw for a reason — the dashboard does read-modify-write and needs
+   * the old secret to send back unchanged — so the PUT below now does that
+   * merge server-side instead. The secret never has to leave the kernel.
+   */
   server.get("/api/llm-providers/:slug/config", (req, res) => {
     const slug = slugOf(req);
     if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    server.json(res, 200, { config: registry.loadConfig(slug) });
+    const raw = registry.loadConfig(slug);
+    const schema = registry.getConfigSchema(slug) ?? [];
+    const secretKeys = new Set(schema.filter((f) => f.type === "password").map((f) => f.key));
+    // oauthToken has no schema field (it is set by the sign-in dialog, not the
+    // form) and is the most sensitive value here, so name it explicitly.
+    secretKeys.add("oauthToken");
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      out[k] = secretKeys.has(k) && typeof v === "string" ? maskSecret(v) : v;
+    }
+    server.json(res, 200, { config: out });
   });
 
   server.put("/api/llm-providers/:slug/config", async (req, res) => {
@@ -133,6 +165,20 @@ export function registerLlmProviderRoutes(
     }
     const schema = registry.getConfigSchema(slug);
     if (!schema) { server.json(res, 404, { error: "provider not found" }); return; }
+
+    // Merge secrets server-side. `saveConfig` replaces wholesale, so before the
+    // GET was masked the client had to fetch the real token and send it back
+    // just to change a model name. Now an omitted, empty or still-masked
+    // secret means "leave it alone" — a config save can no longer wipe a
+    // credential, and the credential never travels.
+    const stored = registry.loadConfig(slug);
+    const secretKeys = new Set(schema.filter((f) => f.type === "password").map((f) => f.key));
+    secretKeys.add("oauthToken");
+    for (const key of secretKeys) {
+      const incoming = config[key];
+      const keep = typeof incoming !== "string" || incoming === "" || isMasked(incoming);
+      if (keep && typeof stored[key] === "string" && stored[key]) config[key] = stored[key];
+    }
 
     const ok = registry.saveConfig(slug, config);
     if (!ok) { server.json(res, 500, { error: "failed to persist config" }); return; }

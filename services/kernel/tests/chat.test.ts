@@ -63,7 +63,7 @@ function stubConfig(): KernelConfig {
     saxo: { baseUrl: "", appKey: "", appSecret: "", certPath: "", certKeyPath: "", enabled: false },
     encryption: { key: "" },
     auth: { token: "" },
-    claudeCode: { mcpUrl: "http://localhost:3087/mcp", mcpBridgePath: "", mcpTransport: "stdio", cliPath: "" },
+    claudeCode: { mcpUrl: "http://localhost:3087/mcp", mcpBridgePath: "", mcpTransport: "stdio", cliPath: "", model: "" },
     cors: { allowedOrigins: [] },
     bridge: { enabled: false, socketPath: "/tmp/kernl.sock" },
     rustBridge: { enabled: false, socketPath: "/tmp/mtw-rust.sock" },

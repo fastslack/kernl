@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
+  import { onMount, onDestroy, createEventDispatcher, tick } from 'svelte';
   import { slide, scale } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import PerfOverlay from './PerfOverlay.svelte';
@@ -39,6 +39,7 @@
   import OfficeCreatorChat from '$lib/components/OfficeCreatorChat.svelte';
   import NewOfficeModal from './NewOfficeModal.svelte';
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
+  import ChatComposer from '$lib/components/ChatComposer.svelte';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
 
   // Tabs contribuidos por extensiones (declarados en su manifest, expuestos por
@@ -65,6 +66,13 @@
     rank_id?: string;
     executor_type?: 'native' | 'claude_code' | string;
     model_chain?: string;
+    // Both ride along in the graph payload, so Overview can lead with the
+    // mandate and gate the office environment without a second fetch.
+    system_prompt?: string;
+    allowed_tools?: string;
+    // How long the kernel lets a run go. The chat waits on the agent's own
+    // budget instead of a hardcoded one.
+    timeout_ms?: number;
   }> = [];
   export let chains: Array<{
     id: string; source_agent_id: string; target_agent_id: string;
@@ -4861,6 +4869,29 @@
   $: selChains = selectedAgent ? chains.filter(c => c.source_agent_id === selectedAgent || c.target_agent_id === selectedAgent) : [];
   $: selFlow = selData ? flows.find(f => f.id === selData.flow_id) : null;
 
+  // ── What defines the selected agent ────────────────────────────────────
+  // The system prompt for an LLM agent, the builtin handler for a scripted
+  // one. Either way it is the answer to "what is this thing", so Overview
+  // leads with it instead of burying it under a collapsed section at the end.
+  // The graph payload already carries both, so the block renders with the
+  // selection instead of flashing a loading line until the detail fetch lands.
+  $: selPrompt = String(agentDetail?.agent?.system_prompt ?? selData?.system_prompt ?? '');
+
+  /** Tools that reach outside the model: a shell, a filesystem, a container. */
+  const ENV_TOOL_RE = /office_exec|workspace|filesystem|shell|bash|terminal|docker/i;
+  $: selAllowedTools = (() => {
+    const parsed = safeParse(agentDetail?.agent?.allowed_tools ?? selData?.allowed_tools);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  })();
+  /** Can this agent actually use the office's shared container?
+   *  A pure LLM agent calls a model and nothing else — a Docker image and a
+   *  Start button mean nothing to it. The environment is still office-scoped
+   *  and this panel is its only entry point, so it is never removed, only
+   *  folded away (see the `startCollapsed` prop on OfficeInfraPanel). */
+  $: canUseOfficeEnv =
+    !!selData &&
+    (agentType(selData) === 'claude_code' || selAllowedTools.some((t) => ENV_TOOL_RE.test(t)));
+
   // Show/hide hallway lines based on selected agent
   $: {
     for (const h of hallwayLines) {
@@ -4957,7 +4988,7 @@
   }
 
   // Collapsible section state (persists per-agent session)
-  let collapsed = { prompt: true, tools: true, variables: false };
+  let collapsed = { tools: true, variables: false };
   function toggleSection(k: keyof typeof collapsed) {
     collapsed = { ...collapsed, [k]: !collapsed[k] };
   }
@@ -4975,6 +5006,38 @@
   let editNameValue = '';
   let savingName = false;
   let chatHistory: Array<{ role: 'you' | 'agent'; text: string; ts: number }> = [];
+  let chatHistoryLoading = false;
+  let chatError = '';
+  /** The run was accepted and the agent is working. Replaces the old trick of
+   *  pushing a literal "Working on it..." bubble and later deleting whatever
+   *  message happened to carry that exact text. */
+  let chatPending = false;
+  let chatScrollEl: HTMLDivElement | null = null;
+
+  /** Can this agent read what you write?
+   *
+   *  No, if it is backed by a builtin handler. `AgentExecutor.execute` (see
+   *  services/kernel/src/modules/agents/executor.ts) short-circuits on
+   *  `agent.builtin_handler` and calls `await handler()` — no arguments. The
+   *  whole conversational goal this panel builds is discarded, the script runs
+   *  as if you had pressed Run now, and its output comes back looking like a
+   *  reply to a message nothing ever read. 31 of the agents on this floor are
+   *  in that shape, so the tab says so instead of pretending. */
+  $: chatCanConverse = !!selData && !selData.builtin_handler;
+
+  /** Openers built from this agent, not from whatever product the placeholder
+   *  was copied out of. The old one advertised a prospecting syntax
+   *  ("Prospect city=Valencia…") on every agent in the office. */
+  $: chatSuggestions = (() => {
+    if (!selData || !chatCanConverse) return [] as string[];
+    const out: string[] = [];
+    const goal = String(agentDetail?.agent?.goal_template ?? '').trim();
+    if (goal) out.push(goal.length > 90 ? goal.slice(0, 88) + '…' : goal);
+    if (selData.description) out.push(`What did you do about ${selData.description.toLowerCase()} this week?`);
+    out.push('What are you working on right now?');
+    if (selStats?.failed) out.push('Why did your last runs fail?');
+    return out.slice(0, 3);
+  })();
 
   function beginEditName() {
     if (!selData) return;
@@ -5242,6 +5305,8 @@
 
   async function loadChatFromMemory() {
     if (!selectedAgent) return;
+    chatHistoryLoading = true;
+    chatError = '';
     try {
       const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30`);
       const data: any = await res.json();
@@ -5253,7 +5318,20 @@
         text: m.content,
         ts: new Date(m.created_at).getTime(),
       }));
-    } catch { /* keep current chatHistory */ }
+    } catch (e: any) {
+      // Was swallowed silently, which made a failed fetch and a genuinely empty
+      // thread look identical — and the empty one invites you to write.
+      chatError = e?.message ?? String(e);
+    } finally {
+      chatHistoryLoading = false;
+      scrollChatToEnd();
+    }
+  }
+
+  /** Keep the newest message in view after loads, sends and replies. */
+  async function scrollChatToEnd() {
+    await tick();
+    if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
   }
 
   /**
@@ -5413,6 +5491,12 @@
     panelTab = tab;
     if (tab === 'history') loadAgentRuns();
     if (tab === 'info') loadLatestRun();
+    // Re-read the thread from the server every time the tab is opened, not
+    // only when the selected agent changes. The reply is persisted by the
+    // executor the moment the run ends, so this is what makes an answer
+    // recoverable after the page-side poll is interrupted — switching tabs,
+    // closing the panel, a re-render — instead of lost with it.
+    if (tab === 'chat' && !chatSending) loadChatFromMemory();
   }
 
   // ── Latest run result (shown prominently in Overview) ──
@@ -6338,13 +6422,15 @@
     }
   }
 
-  async function talkToAgent() {
-    if (!selectedAgent || !chatInput.trim() || chatSending) return;
-    const msg = chatInput.trim();
+  async function talkToAgent(text?: string) {
+    const msg = (text ?? chatInput).trim();
+    if (!selectedAgent || !msg || chatSending) return;
     chatInput = '';
     chatSending = true;
+    chatError = '';
 
     chatHistory = [...chatHistory, { role: 'you', text: msg, ts: Date.now() }];
+    scrollChatToEnd();
     showBubble(selectedAgent, msg, 400);
 
     // Persist user message to agent memory
@@ -6392,39 +6478,78 @@ Boss says: "${msg}"`;
       });
 
       if (res?.run_id) {
-        chatHistory = [...chatHistory, { role: 'agent', text: 'Working on it...', ts: Date.now() }];
-        // Poll for completion
-        const pollResult = async () => {
-          for (let i = 0; i < 60; i++) {
-            await new Promise(r => setTimeout(r, 3000));
-            try {
-              const detail: any = await rpcOrCall('agents.runs.detail', { id: res.run_id }, async () => {
-                const r2 = await fetch(`/api/agents/runs/${res.run_id}`);
-                return r2.json();
-              });
-              if (detail?.run?.status === 'completed' || detail?.run?.status === 'failed') {
+        // The run is queued; the agent is now working. A typing indicator in the
+        // thread carries that, so no fake message has to be pushed and later
+        // matched by its text to be removed.
+        chatPending = true;
+        scrollChatToEnd();
+
+        // Poll until the agent's own timeout, plus a grace period. The old
+        // budget was a hardcoded 60 × 3s = 3 min while agents are configured
+        // for 5 (timeout_ms defaults to 300000), so a slow-but-successful run
+        // reported "Timed out waiting for response" and its real answer was
+        // never shown.
+        const askedAgent = selectedAgent;
+        const budgetMs = Number(agentDetail?.agent?.timeout_ms ?? selData?.timeout_ms ?? 300000) + 30000;
+        const attempts = Math.ceil(budgetMs / 3000);
+        let answered = false;
+
+        for (let i = 0; i < attempts && !answered; i++) {
+          await new Promise(r => setTimeout(r, 3000));
+          // The panel moved on. The run keeps going and the executor still
+          // persists the reply, so it is waiting in memory the next time this
+          // agent's thread is opened — but writing it into whatever thread is
+          // on screen now would put one agent's answer under another's name.
+          if (selectedAgent !== askedAgent) return;
+          try {
+            const detail: any = await rpcOrCall('agents.runs.detail', { id: res.run_id }, async () => {
+              const r2 = await fetch(`/api/agents/runs/${res.run_id}`);
+              return r2.json();
+            });
+            if (detail?.run?.status === 'completed' || detail?.run?.status === 'failed') {
+              const ok = detail.run.status === 'completed';
+              showBubble(askedAgent, ok ? 'Done!' : 'Failed', 200);
+              answered = true;
+              // Re-read the thread instead of appending the run result.
+              // The executor writes the reply to the agent's memory, which is
+              // the same source the tab loads from — building the thread by
+              // hand here meant the two could disagree, and the reply existed
+              // on the server while the pane showed a spinner.
+              chatPending = false;
+              await loadChatFromMemory();
+              if (!chatHistory.some((m) => m.role === 'agent')) {
+                // Memory had nothing (an executor that does not persist, or a
+                // failure); fall back to what the run itself reported.
                 const result = detail.run.result || detail.run.error || detail.run.status;
                 const fullText = typeof result === 'string' ? result : JSON.stringify(result);
                 chatHistory = [...chatHistory, {
                   role: 'agent',
-                  text: detail.run.status === 'completed' ? fullText : `Failed: ${fullText}`,
+                  text: ok ? fullText : `Failed: ${fullText}`,
                   ts: Date.now(),
                 }];
-                // Remove the "Working on it..." placeholder
-                chatHistory = chatHistory.filter(m => m.text !== 'Working on it...');
-                showBubble(selectedAgent!, detail.run.status === 'completed' ? 'Done!' : 'Failed', 200);
-                return;
               }
-            } catch { /* keep polling */ }
-          }
-          chatHistory = [...chatHistory, { role: 'agent', text: 'Timed out waiting for response', ts: Date.now() }];
-        };
-        pollResult();
+            }
+          } catch { /* keep polling — a blip shouldn't end the wait */ }
+        }
+
+        if (!answered) {
+          chatError =
+            `No reply after ${Math.round(budgetMs / 60000)} min. The run may still be going — ` +
+            `check History, and reopen this tab afterwards: the answer is saved with the agent ` +
+            `whether or not this window was watching.`;
+        }
+      } else {
+        chatError = 'The kernel did not start a run for this message.';
       }
     } catch (e: any) {
-      chatHistory = [...chatHistory, { role: 'agent', text: `Error: ${e.message}`, ts: Date.now() }];
+      chatError = e?.message ?? String(e);
     } finally {
+      // Both flags clear only now. `chatSending` used to be reset here while the
+      // polling ran unawaited in the background, so the field re-enabled and the
+      // send button dropped its progress state seconds into a minutes-long run.
+      chatPending = false;
       chatSending = false;
+      scrollChatToEnd();
     }
   }
 
@@ -6827,9 +6952,9 @@ Boss says: "${msg}"`;
     } catch { return '(could not fetch runs)'; }
   }
 
-  async function sendMeetingMessage() {
-    if (!meetingInput.trim() || meetingSending) return;
-    const msg = meetingInput.trim();
+  async function sendMeetingMessage(text?: string) {
+    const msg = (text ?? meetingInput).trim();
+    if (!msg || meetingSending) return;
     meetingInput = '';
     meetingSending = true;
 
@@ -7693,15 +7818,16 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           </div>
         {/if}
       </div>
-      <div class="meeting-input-row">
-        <input type="text" class="meeting-input" bind:value={meetingInput}
-          placeholder="Say something to the group..."
-          on:keydown={e => e.key === 'Enter' && sendMeetingMessage()}
-          disabled={meetingSending} />
-        <button class="meeting-send" on:click={sendMeetingMessage}
-          disabled={meetingSending || !meetingInput.trim()}>
-          {meetingSending ? '...' : 'Send'}
-        </button>
+      <div class="meeting-composer">
+        <ChatComposer
+          bind:value={meetingInput}
+          sending={meetingSending}
+          placeholder="Say something to the group…"
+          hint="Enter sends · Shift+Enter for a new line · everyone in the room reads this"
+          sendLabel="Send to the room"
+          maxRows={4}
+          on:send={(e) => sendMeetingMessage(e.detail)}
+        />
       </div>
     </div>
   {/if}
@@ -8098,8 +8224,15 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
         <button class="ip-close" on:click={() => { selectedAgent = null; }} aria-label="close">×</button>
       </div>
 
-      <!-- Primary actions -->
+      <!-- Primary actions. The run state leads the row: it is what Pause and
+           Resume change, so it belongs with them and not floating in the body. -->
       <div class="ip-actions">
+        <span class="ip-state" class:ip-state-on={selData.active === 1} class:ip-state-off={selData.active !== 1}
+              title={selData.active === 1
+                ? 'Schedule and event triggers are live'
+                : 'Paused — schedule and triggers are off. Manual runs still work.'}>
+          <span class="led" class:on={selData.active === 1}></span>{selData.active ? 'active' : 'paused'}
+        </span>
         <button class="ip-btn ip-btn-primary" on:click={startAgent} disabled={starting} title={selData.active !== 1 ? 'Manual run — overrides pause' : 'Run this agent now'}>
           <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
           <span>{starting ? 'starting…' : 'Run now'}</span>
@@ -8159,17 +8292,37 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       <!-- ──────────────── OVERVIEW TAB ──────────────── -->
       {#if panelTab === 'info'}
         <div class="ip-body">
-          {#if selData.description}
-            <p class="ip-desc">{selData.description}</p>
-          {/if}
-
-          {#if selData.flow_id}
-            <OfficeInfraPanel
-              flowId={selData.flow_id}
-              officeName={flows.find((f) => f.id === selData.flow_id)?.name ?? ''}
-              color={flowColor(selData.id)}
-            />
-          {/if}
+          <!-- ─── Mandate ───
+               What the agent was told to be. The role used to hang loose under
+               the tabs and the system prompt sat last and collapsed, so the
+               panel opened on infrastructure instead of on the agent. Both now
+               live in one block, and it leads. -->
+          <section class="ip-sec ip-mandate">
+            <div class="ip-sec-hrow">
+              <h3 class="ip-sec-h">
+                Mandate
+                {#if selPrompt}<span class="ip-sec-c">{selPrompt.length} chars</span>{/if}
+              </h3>
+              {#if selPrompt}
+                <button class="ip-icon-btn" title="copy system prompt" on:click={() => copy(selPrompt, 'sys')}>{copiedKey === 'sys' ? '✓ copied' : '⧉ copy'}</button>
+              {/if}
+            </div>
+            {#if selData.description}
+              <p class="ip-role">{selData.description}</p>
+            {/if}
+            {#if selPrompt}
+              <pre class="ip-pre ip-pre-scroll">{selPrompt}</pre>
+            {:else if selData.builtin_handler}
+              <div class="ip-mandate-alt">
+                Runs a builtin handler — no system prompt.
+                <code class="ip-code">{selData.builtin_handler}</code>
+              </div>
+            {:else if detailLoading}
+              <div class="ip-mandate-alt">Loading system prompt…</div>
+            {:else}
+              <div class="ip-mandate-alt">No system prompt set.</div>
+            {/if}
+          </section>
 
           {#if dependsOnGoogleAuth(selData)}
             <div class="ip-auth-cta" title="This agent talks to Google — re-login any time tokens expire.">
@@ -8240,35 +8393,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             <div class="result-hero result-hero-loading">Loading last result…</div>
           {/if}
 
-          <!-- Chips: status + execution flavour + provider + model -->
-          <div class="ip-chips">
-            <span class="ip-chip" class:chip-on={selData.active === 1} class:chip-paused={selData.active !== 1}>
-              <span class="led" class:on={selData.active === 1}></span>{selData.active ? 'active' : 'paused'}
-            </span>
-            <span class="ip-chip chip-muted" title={
-              agentType(selData) === 'claude_code' ? 'Claude Agent SDK executor' :
-              agentType(selData) === 'llm' ? 'Native runToolLoop multi-provider LLM agent' :
-              agentType(selData) === 'cli' ? 'Builtin CLI script handler' :
-              'Builtin function handler'
-            }>{
-              agentType(selData) === 'claude_code' ? 'claude-code-sdk' :
-              agentType(selData) === 'llm' ? 'llm-agent' :
-              agentType(selData) === 'cli' ? 'script' :
-              'builtin'
-            }</span>
-            {#if agentType(selData) === 'claude_code'}
-              <span class="ip-chip chip-muted" title={selData.model ? `SDK model: ${selData.model}` : `SDK default model (backend fallback): ${CLAUDE_CODE_DEFAULT_MODEL}`}>
-                {selData.model || CLAUDE_CODE_DEFAULT_MODEL}{!selData.model ? ' · default' : ''}
-              </span>
-            {:else if agentType(selData) === 'llm'}
-              {@const fb = modelChainFallbacks(selData.model_chain)}
-              {#if selData.provider}<span class="ip-chip chip-muted">{selData.provider}</span>{/if}
-              {#if selData.model}<span class="ip-chip chip-muted">{selData.model}</span>{/if}
-              {#if fb > 0}
-                <span class="ip-chip chip-muted" title="model_chain fallbacks configured">+{fb} fallback{fb > 1 ? 's' : ''}</span>
-              {/if}
-            {/if}
-          </div>
+          <!-- The status/executor/model chips that used to sit here said what
+               the header tags already say. The run state moved up next to the
+               Pause control; provider and model are rows in Runtime below. -->
 
           <!-- KPIs -->
           {#if selStats}
@@ -8372,40 +8499,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           {#if agentDetail?.agent}
             {@const ag = agentDetail.agent}
 
-            {#if availableSkins.length > 1}
-              <section class="ip-sec">
-                <h3 class="ip-sec-h">Appearance</h3>
-                <div class="skin-picker">
-                  <label class="skin-lbl">skin</label>
-                  <select
-                    class="skin-sel"
-                    disabled={savingSkin}
-                    value={selData?.skin_id || ag.skin_id || 'office-worker'}
-                    on:change={onSkinChange}
-                  >
-                    {#each availableSkins as s}
-                      <option value={s.manifest.id}>{s.manifest.name}</option>
-                    {/each}
-                  </select>
-                </div>
-                {#each availableSkins as s}
-                  {#if (selData?.skin_id || ag.skin_id || 'office-worker') === s.manifest.id && s.manifest.description}
-                    <p class="skin-desc">{s.manifest.description}</p>
-                  {/if}
-                {/each}
-              </section>
-            {/if}
-
-            <section class="ip-sec">
-              <h3 class="ip-sec-h">Limits</h3>
-              <div class="ip-kv-grid">
-                <div class="ip-kv"><span>max iterations</span><code>{ag.max_iterations ?? '—'}</code></div>
-                <div class="ip-kv"><span>token budget</span><code>{fmtTokens(ag.max_tokens)}</code></div>
-                <div class="ip-kv"><span>timeout</span><code>{fmtDuration(ag.timeout_ms)}</code></div>
-                <div class="ip-kv"><span>max errors</span><code>{ag.max_errors ?? '—'}</code></div>
-              </div>
-            </section>
-
             {#if ag.goal_template}
               <section class="ip-sec">
                 <div class="ip-sec-hrow">
@@ -8416,20 +8509,19 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
               </section>
             {/if}
 
-            {#if ag.system_prompt}
-              <section class="ip-sec">
-                <div class="ip-sec-hrow">
-                  <button class="ip-sec-h ip-sec-btn" on:click={() => toggleSection('prompt')}>
-                    <span class="ip-caret" class:open={!collapsed.prompt}>▸</span>
-                    System prompt <span class="ip-sec-c">{String(ag.system_prompt).length} chars</span>
-                  </button>
-                  <button class="ip-icon-btn" title="copy" on:click|stopPropagation={() => copy(ag.system_prompt, 'sys')}>{copiedKey === 'sys' ? '✓ copied' : '⧉ copy'}</button>
-                </div>
-                {#if !collapsed.prompt}
-                  <pre class="ip-pre ip-pre-scroll">{ag.system_prompt}</pre>
-                {/if}
-              </section>
-            {/if}
+            <!-- Runtime — where the loose provider/model chips landed, beside
+                 the limits that govern the same loop. -->
+            <section class="ip-sec">
+              <h3 class="ip-sec-h">Runtime</h3>
+              <div class="ip-kv-grid">
+                <div class="ip-kv"><span>provider</span><code>{selData.provider || (agentType(selData) === 'claude_code' ? 'claude-code-sdk' : '—')}</code></div>
+                <div class="ip-kv"><span>model</span><code>{selData.model || (agentType(selData) === 'claude_code' ? CLAUDE_CODE_DEFAULT_MODEL : '—')}</code></div>
+                <div class="ip-kv"><span>max iterations</span><code>{ag.max_iterations ?? '—'}</code></div>
+                <div class="ip-kv"><span>token budget</span><code>{fmtTokens(ag.max_tokens)}</code></div>
+                <div class="ip-kv"><span>timeout</span><code>{fmtDuration(ag.timeout_ms)}</code></div>
+                <div class="ip-kv"><span>max errors</span><code>{ag.max_errors ?? '—'}</code></div>
+              </div>
+            </section>
 
             {@const tools = safeParse(ag.allowed_tools) || []}
             {#if Array.isArray(tools) && tools.length}
@@ -8471,6 +8563,45 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                 {/if}
               </section>
             {/if}
+
+            {#if availableSkins.length > 1}
+              <section class="ip-sec">
+                <h3 class="ip-sec-h">Appearance</h3>
+                <div class="skin-picker">
+                  <label class="skin-lbl">skin</label>
+                  <select
+                    class="skin-sel"
+                    disabled={savingSkin}
+                    value={selData?.skin_id || ag.skin_id || 'office-worker'}
+                    on:change={onSkinChange}
+                  >
+                    {#each availableSkins as s}
+                      <option value={s.manifest.id}>{s.manifest.name}</option>
+                    {/each}
+                  </select>
+                </div>
+                {#each availableSkins as s}
+                  {#if (selData?.skin_id || ag.skin_id || 'office-worker') === s.manifest.id && s.manifest.description}
+                    <p class="skin-desc">{s.manifest.description}</p>
+                  {/if}
+                {/each}
+              </section>
+            {/if}
+          {/if}
+
+          <!-- ─── Office environment ───
+               Office-scoped, not agent-scoped, and this panel is its only entry
+               point in the dashboard — so it is never hidden, only folded. It
+               opens for agents that can reach a shell or a filesystem, and for
+               any office whose container is already up; for a pure LLM agent
+               with a dormant environment it stays one quiet line. -->
+          {#if selData.flow_id}
+            <OfficeInfraPanel
+              flowId={selData.flow_id}
+              officeName={flows.find((f) => f.id === selData.flow_id)?.name ?? ''}
+              color={flowColor(selData.id)}
+              startCollapsed={!canUseOfficeEnv}
+            />
           {/if}
 
           {#if detailLoading && !agentDetail}
@@ -8728,32 +8859,98 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       <!-- ──────────────── CHAT TAB ──────────────── -->
       {#if panelTab === 'chat'}
         <div class="chat-section">
-          {#if chatHistory.length > 0}
-            <div class="chat-messages">
-              {#each chatHistory as msg}
-                <div class="chat-msg copy-wrap" class:chat-you={msg.role === 'you'} class:chat-agent={msg.role === 'agent'}>
-                  <CopyTextBtn text={msg.text} title="Copy message" />
-                  <span class="chat-role">{msg.role === 'you' ? 'You' : selData.name}</span>
-                  {#if msg.role === 'agent'}
-                    <div class="chat-text ip-out-md" on:click={handleOutputClick} role="presentation">{@html formatRunOutput(msg.text)}</div>
-                  {:else}
-                    <span class="chat-text">{msg.text}</span>
-                  {/if}
+          {#if !chatCanConverse}
+            <!-- A builtin agent never sees what you type: the executor calls
+                 `handler()` with no arguments and throws the goal away. Rather
+                 than offer a field that quietly does something else, say what
+                 this agent is and point at the controls that do work. -->
+            <div class="chat-noop">
+              <div class="chat-noop-glyph" aria-hidden="true">▣</div>
+              <h4 class="chat-noop-h">{selData.name} doesn't read messages</h4>
+              <p class="chat-noop-p">
+                It's a script agent. Anything sent here would be discarded and the script
+                would run unchanged — the same thing <b>Run now</b> does.
+              </p>
+              <div class="chat-noop-kv">
+                <span class="chat-noop-lbl">runs</span>
+                <code class="ip-code">{selData.builtin_handler}</code>
+              </div>
+              {#if selData.description}
+                <div class="chat-noop-kv">
+                  <span class="chat-noop-lbl">does</span>
+                  <span class="chat-noop-desc">{selData.description}</span>
                 </div>
-              {/each}
+              {/if}
+              <div class="chat-noop-actions">
+                <button class="ip-btn ip-btn-primary" on:click={startAgent} disabled={starting}>
+                  <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
+                  <span>{starting ? 'starting…' : 'Run now'}</span>
+                </button>
+                <button class="ip-btn ip-btn-ghost" on:click={() => selectPanelTab('history')}>
+                  <span class="ip-btn-ico">◷</span><span>See what it did</span>
+                </button>
+              </div>
             </div>
           {:else}
-            <div class="ip-empty">Send a message to give this agent an ad-hoc task.</div>
+            <div class="chat-messages" bind:this={chatScrollEl}>
+              {#if chatHistoryLoading && chatHistory.length === 0}
+                <div class="ip-loading">Loading the conversation…</div>
+              {:else if chatHistory.length === 0}
+                <div class="chat-intro">
+                  <div class="chat-intro-h">Talk to {selData.name}</div>
+                  <p class="chat-intro-p">
+                    {#if selData.description}{selData.description} — a{:else}A{/if}sk a question or hand
+                    over a one-off task. It answers here using its own tools, and the thread is
+                    stored with the agent, so it's still here next time you open this panel.
+                  </p>
+                </div>
+              {:else}
+                {#each chatHistory as msg, i (msg.ts + '-' + msg.role + '-' + i)}
+                  <div class="chat-msg copy-wrap" class:chat-you={msg.role === 'you'} class:chat-agent={msg.role === 'agent'}>
+                    <CopyTextBtn text={msg.text} title="Copy message" />
+                    <div class="chat-meta">
+                      <span class="chat-role">{msg.role === 'you' ? 'You' : selData.name}</span>
+                      <span class="chat-time">{fmtClock(new Date(msg.ts).toISOString())}</span>
+                    </div>
+                    {#if msg.role === 'agent'}
+                      <div class="chat-text ip-out-md" on:click={handleOutputClick} role="presentation">{@html formatRunOutput(msg.text)}</div>
+                    {:else}
+                      <span class="chat-text">{msg.text}</span>
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+
+              {#if chatPending}
+                <!-- Named work, not a bare spinner: these runs take minutes and
+                     an unlabelled dot reads as a hang. -->
+                <div class="chat-msg chat-agent chat-typing" aria-live="polite">
+                  <div class="chat-meta"><span class="chat-role">{selData.name}</span></div>
+                  <div class="chat-typing-row">
+                    <span class="chat-typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>
+                    <span class="chat-typing-txt">working — running its tools, this can take a few minutes</span>
+                  </div>
+                </div>
+              {/if}
+            </div>
+
+            {#if chatError}
+              <div class="chat-err" role="alert">
+                <span class="chat-err-ico" aria-hidden="true">⚠</span>
+                <span>{chatError}</span>
+              </div>
+            {/if}
+
+            <ChatComposer
+              bind:value={chatInput}
+              sending={chatSending}
+              placeholder={`Ask ${selData.name} something, or hand over a task…`}
+              hint="Enter sends · Shift+Enter for a new line · the thread is saved with the agent"
+              suggestions={chatSuggestions}
+              sendLabel={`Send to ${selData.name}`}
+              on:send={(e) => talkToAgent(e.detail)}
+            />
           {/if}
-          <div class="chat-input-row">
-            <input type="text" class="chat-input" bind:value={chatInput}
-              placeholder="e.g. Prospect city=Valencia, country=ES, industry=peluquería…"
-              on:keydown={e => e.key === 'Enter' && talkToAgent()}
-              disabled={chatSending} />
-            <button class="chat-send" on:click={talkToAgent} disabled={chatSending || !chatInput.trim()}>
-              {chatSending ? '…' : '↵'}
-            </button>
-          </div>
         </div>
       {/if}
 
@@ -9631,33 +9828,48 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
   .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}
 
-  .ip-desc{
-    font:400 13px/1.55 'Manrope',sans-serif;
-    color:#b0b5c8;margin:0 0 16px;
-  }
-
-  /* ── Chips (status row) ───────── */
-  .ip-chips{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px}
-  .ip-chip{
+  /* ── Run state ─────────────────
+     Leads the action row and is separated from the buttons by a rule, so it
+     reads as the state those buttons act on rather than a fourth control.
+     Same 8px/14px box as .ip-btn so both sit on one baseline. */
+  .ip-state{
     display:inline-flex;align-items:center;gap:6px;
-    padding:4px 10px;border-radius:100px;
+    padding:8px 12px 8px 0;margin-right:4px;
+    border-right:1px solid rgba(120,130,160,.15);
     font:600 10px 'JetBrains Mono',monospace;
-    text-transform:lowercase;
-    border:1px solid rgba(120,130,160,.18);
+    text-transform:lowercase;letter-spacing:.4px;
   }
-  .ip-chip.chip-muted{background:rgba(120,130,160,.06);color:#a0a5b8}
-  .ip-chip.chip-on{background:rgba(120,220,140,.1);color:#78dc8c;border-color:rgba(120,220,140,.3)}
-  .ip-chip.chip-off{background:rgba(239,93,110,.08);color:#ef5d6e;border-color:rgba(239,93,110,.25)}
-  .ip-chip.chip-paused{background:rgba(251,191,36,.1);color:#fbbf24;border-color:rgba(251,191,36,.3)}
-  .ip-chip .led{
+  .ip-state-on{color:#78dc8c}
+  .ip-state-off{color:#fbbf24}
+  .ip-state .led{
     width:6px;height:6px;border-radius:50%;
-    background:#6a6f82;
+    background:#fbbf24;
   }
-  .ip-chip .led.on{
+  .ip-state .led.on{
     background:#78dc8c;box-shadow:0 0 6px #78dc8c;
     animation:led-pulse 2s ease-in-out infinite;
   }
   @keyframes led-pulse{50%{opacity:.55}}
+
+  /* ── Mandate ───────────────────
+     The block that opens Overview: the role the agent was given and the prompt
+     that spells it out. The role is the lead line of the card it belongs to,
+     not a loose paragraph under the tabs. */
+  .ip-mandate{
+    padding-left:12px;
+    border-left:2px solid color-mix(in srgb, var(--flow-color) 55%, transparent);
+  }
+  .ip-mandate .ip-role{
+    font:500 13px/1.5 'Manrope',sans-serif;
+    color:#dfe2ec;margin:0 0 8px;
+  }
+  .ip-mandate-alt{
+    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
+    padding:10px 12px;border-radius:8px;
+    background:rgba(120,130,160,.05);
+    border:1px dashed rgba(120,130,160,.18);
+    font:400 11px 'Manrope',sans-serif;color:#8a8fa8;
+  }
 
   /* ── KPI grid ────────────────── */
   .ip-kpis{
@@ -9784,13 +9996,17 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   /* ── KV grid (limits etc) ────── */
   .ip-kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
   .ip-kv{
-    display:flex;justify-content:space-between;align-items:center;
+    display:flex;justify-content:space-between;align-items:center;gap:10px;
     padding:8px 12px;border-radius:6px;
     background:rgba(120,130,160,.04);
     border:1px solid rgba(120,130,160,.08);
   }
-  .ip-kv span{font:500 10px 'Manrope',sans-serif;color:#8a8fa8}
-  .ip-kv code{font:600 11px 'JetBrains Mono',monospace;color:#f0f2f7}
+  .ip-kv span{font:500 10px 'Manrope',sans-serif;color:#8a8fa8;flex-shrink:0}
+  /* A model id is long enough to squash the label out of a two-up grid. */
+  .ip-kv code{
+    font:600 11px 'JetBrains Mono',monospace;color:#f0f2f7;
+    min-width:0;text-align:right;overflow-wrap:anywhere;
+  }
 
   /* ── Pre blocks ─────────────── */
   .ip-pre{
@@ -10086,39 +10302,70 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     background:rgba(120,130,160,.06);
     border:1px solid rgba(120,130,160,.15);
   }
+  /* Author and clock on one line — a reply that lands minutes after you asked
+     needs a timestamp to be readable as a conversation. */
+  .chat-meta{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
   .chat-role{
-    display:block;margin-bottom:4px;
     font:600 9px 'JetBrains Mono',monospace;
     text-transform:uppercase;letter-spacing:.5px;
   }
+  .chat-time{font:400 9px 'JetBrains Mono',monospace;color:#6a6f82;font-variant-numeric:tabular-nums}
   .chat-you .chat-role{color:var(--flow-color)}
   .chat-agent .chat-role{color:#a78bfa}
   .chat-text{color:#e0e2ea}
   .chat-agent .chat-text{max-height:300px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.2) transparent}
-  .chat-input-row{
-    display:flex;gap:8px;
-    padding-top:12px;
-    border-top:1px solid rgba(120,130,160,.12);
+
+  /* ── Empty thread ──
+     Says who you are about to talk to and what happens to the thread, instead
+     of a one-liner floating over 500px of nothing. */
+  .chat-intro{margin:auto 0;padding:4px 2px;max-width:46ch}
+  .chat-intro-h{font:600 14px 'Syne',sans-serif;color:#e0e2ea;margin-bottom:6px}
+  .chat-intro-p{font:400 12px/1.6 'Manrope',sans-serif;color:#8a8fa8;margin:0}
+
+  /* ── Working ────────────────── */
+  .chat-typing{opacity:.9}
+  .chat-typing-row{display:flex;align-items:center;gap:8px}
+  .chat-typing-txt{font:400 11px 'Manrope',sans-serif;color:#8a8fa8}
+  .chat-typing-dots{display:inline-flex;gap:3px;flex-shrink:0}
+  .chat-typing-dots span{
+    width:5px;height:5px;border-radius:50%;background:#a78bfa;
+    animation:chat-blink 1.2s ease-in-out infinite;
   }
-  .chat-input{
-    flex:1;padding:10px 14px;border-radius:8px;
-    background:rgba(0,0,0,.3);
-    border:1px solid rgba(120,130,160,.2);
-    color:#e0e2ea;
-    font:400 12px 'Manrope',sans-serif;outline:none;box-sizing:border-box;
-    transition:border-color .15s;
+  .chat-typing-dots span:nth-child(2){animation-delay:.18s}
+  .chat-typing-dots span:nth-child(3){animation-delay:.36s}
+  @keyframes chat-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
+  @media (prefers-reduced-motion: reduce){
+    .chat-typing-dots span{animation:none;opacity:.7}
   }
-  .chat-input::placeholder{color:#6a6f82}
-  .chat-input:focus{border-color:var(--flow-color)}
-  .chat-input:disabled{opacity:.5}
-  .chat-send{
-    padding:10px 16px;border-radius:8px;
-    font:600 14px 'JetBrains Mono',monospace;
-    background:var(--flow-color);border:none;color:#0a0e14;
-    cursor:pointer;transition:all .15s;
+
+  .chat-err{
+    display:flex;align-items:flex-start;gap:8px;
+    margin-bottom:10px;padding:8px 10px;border-radius:8px;
+    background:rgba(239,93,110,.08);
+    border:1px solid rgba(239,93,110,.25);
+    font:400 11px/1.45 'Manrope',sans-serif;color:#f0a0aa;
   }
-  .chat-send:hover:not(:disabled){filter:brightness(1.1)}
-  .chat-send:disabled{opacity:.35;cursor:not-allowed}
+  .chat-err-ico{flex-shrink:0}
+
+  /* ── Script agents ──
+     The tab stays, the input does not. Same call as the office environment:
+     an affordance that cannot work is explained, not silently removed. */
+  .chat-noop{
+    margin:auto 0;padding:18px;border-radius:12px;max-width:52ch;
+    background:rgba(120,130,160,.04);
+    border:1px solid rgba(120,130,160,.14);
+  }
+  .chat-noop-glyph{font:400 20px 'JetBrains Mono',monospace;color:#8a8fa8;margin-bottom:8px}
+  .chat-noop-h{font:600 14px 'Syne',sans-serif;color:#e0e2ea;margin:0 0 6px}
+  .chat-noop-p{font:400 12px/1.6 'Manrope',sans-serif;color:#8a8fa8;margin:0 0 14px}
+  .chat-noop-kv{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
+  .chat-noop-lbl{
+    flex-shrink:0;width:38px;
+    font:600 9px 'JetBrains Mono',monospace;color:#6a6f82;
+    text-transform:uppercase;letter-spacing:.5px;
+  }
+  .chat-noop-desc{font:400 12px/1.5 'Manrope',sans-serif;color:#c0c5d8}
+  .chat-noop-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
 
   /* ── Workspace panel ──────────── */
   .ws-panel{padding:8px 0;overflow-y:auto;max-height:calc(100% - 120px);scrollbar-width:thin}
@@ -10312,15 +10559,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .meeting-msg-name{display:block;font:700 8px 'Syne',sans-serif;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px}
   .meeting-msg-text{font:400 11px 'Manrope',sans-serif;color:var(--text-2);line-height:1.4;word-break:break-word}
   .meeting-typing{opacity:.5}
-  .meeting-input-row{display:flex;gap:4px;padding:8px 14px;border-top:1px solid rgba(74,79,106,.2)}
-  .meeting-input{flex:1;padding:7px 10px;border-radius:6px;background:#141620;border:1px solid rgba(74,79,106,.3);
-    color:var(--text-1);font:400 11px 'Manrope',sans-serif;outline:none;box-sizing:border-box}
-  .meeting-input:focus{border-color:#8b8cf6}
-  .meeting-input:disabled{opacity:.5}
-  .meeting-send{padding:7px 14px;border-radius:6px;font:600 10px 'Syne',sans-serif;
-    background:#6366f1;border:none;color:#fff;cursor:pointer;transition:all .15s}
-  .meeting-send:hover{filter:brightness(1.1)}
-  .meeting-send:disabled{opacity:.4;cursor:not-allowed}
+  /* The room's own input row is gone — ChatComposer supplies it. Only the
+     surrounding padding and the accent it focuses to stay local. */
+  .meeting-composer{padding:0 14px 10px;--flow-color:#8b8cf6}
 
   /* ── Modal ──────────────────── */
   .modal-overlay{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}

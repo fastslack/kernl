@@ -27,7 +27,15 @@
 
   let status: AuthStatus | null = null;
   let loading = false;
+  /** Dialog-level only: reading the status, or starting the sign-in flow.
+   *  A rejected paste is NOT one of these — see codeError / tokenError. */
   let error = '';
+  /** Errors belong beside the field that produced them. Sharing one slot put a
+   *  rejected paste directly under the green "Signed in" line, which reads as
+   *  "your session is broken" when the session was never touched: the shape
+   *  check in saveToken returns before it writes anything. */
+  let codeError = '';
+  let tokenError = '';
   let notice = '';
   let sessionId = '';
   let loginUrl = '';
@@ -60,7 +68,7 @@
   $: if (open && !status && !loading) refresh();
 
   async function startLogin(): Promise<void> {
-    busy = true; error = ''; notice = ''; loginUrl = ''; code = '';
+    busy = true; error = ''; codeError = ''; tokenError = ''; notice = ''; loginUrl = ''; code = '';
     try {
       const s = await call('/api/llm/claude-code/auth/login', {});
       sessionId = s.id;
@@ -74,7 +82,7 @@
 
   async function sendCode(): Promise<void> {
     if (!code.trim()) return;
-    busy = true; error = '';
+    busy = true; codeError = '';
     try {
       const r = await call('/api/llm/claude-code/auth/code', { session: sessionId, code });
       status = r.status;
@@ -82,7 +90,7 @@
       notice = 'Signed in. Claude Code is ready to use.';
       dispatch('changed');
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      codeError = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }
@@ -90,7 +98,7 @@
 
   async function saveToken(): Promise<void> {
     if (!token.trim()) return;
-    busy = true; error = '';
+    busy = true; tokenError = '';
     try {
       const r = await call('/api/llm/claude-code/auth/token', { token });
       status = r.status;
@@ -98,7 +106,7 @@
       notice = 'Token accepted. Claude Code is ready to use.';
       dispatch('changed');
     } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
+      tokenError = e instanceof Error ? e.message : String(e);
     } finally {
       busy = false;
     }
@@ -161,6 +169,7 @@
                         {busy ? 'Verifying…' : 'Finish'}
                       </button>
                     </div>
+                    {#if codeError}<p class="err field-err">{codeError}</p>{/if}
                   </li>
                 </ol>
               {/if}
@@ -174,12 +183,23 @@
           <section>
             <h3>Or paste a token</h3>
             <p class="dim">
-              Run <code>claude setup-token</code> on any machine where you are signed in, then paste the result.
+              Run <code>claude setup-token</code> on any machine where you are signed in, then paste the
+              result. This is not the verification code from the sign-in link above — a token starts
+              with <code>sk-ant-</code>.
             </p>
             <div class="row">
               <input bind:value={token} placeholder="sk-ant-oat01-…" spellcheck="false" type="password" />
               <button on:click={saveToken} disabled={busy || !token.trim()}>Save</button>
             </div>
+            {#if tokenError}
+              <p class="err field-err">{tokenError}</p>
+              {#if status.loggedIn}
+                <!-- The shape check runs before anything is written, so a
+                     rejected paste cannot have logged you out. Say so, because
+                     a red message under a green status reads otherwise. -->
+                <p class="dim field-err">Nothing changed — you are still signed in.</p>
+              {/if}
+            {/if}
           </section>
         {/if}
       {:else if error}
@@ -225,5 +245,7 @@
   button.primary { background: var(--teal, #2dd4bf); border-color: transparent; color: #04211d; }
   button:disabled { opacity: 0.5; cursor: default; }
   .err { color: var(--red, #f85149); margin: 8px 0 0; }
+  /* Sits with the input that produced it, not up beside the session status. */
+  .field-err { margin: 6px 0 0; font-size: 12px; line-height: 1.45; }
   .ok-msg { color: var(--green, #3fb950); margin: 8px 0 0; }
 </style>

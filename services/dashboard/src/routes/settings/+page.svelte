@@ -55,10 +55,19 @@
     source: string;
     ready: boolean;
     error?: string;
+    /** The API has always sent this and the page ignored it, which is how a
+     *  provider that cannot run a single agent displayed a green READY. */
+    capabilities?: { tools?: boolean };
     schema: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string }>;
     values: Record<string, string>;
   }
-  interface TestResult { ok: boolean; latencyMs?: number; models?: string[]; error?: string }
+  interface TestResult {
+    ok: boolean; latencyMs?: number; models?: string[]; error?: string;
+    /** A real completion came back. */
+    answered?: boolean;
+    /** It executed a tool call — the thing an agent actually needs. */
+    toolCall?: boolean;
+  }
   interface ChainLink { provider: string; model: string }
 
   // ── Load state ───────────────────────────────
@@ -156,6 +165,23 @@
   }
 
   // ── Initial load ─────────────────────────────
+  /**
+   * Nothing here may hang the page.
+   *
+   * Two of these go over the WebSocket RPC, which resolves only when the
+   * kernel answers — and a socket that is open but silent never rejects, so
+   * `Promise.allSettled` waits forever and the page sits on "Loading
+   * configuration…" with no error and no way to tell what happened.
+   */
+  function withTimeout<T>(p: Promise<T>, label: string, ms = 12_000): Promise<T> {
+    return Promise.race([
+      p,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error(`${label}: no response in ${ms / 1000}s`)), ms),
+      ),
+    ]);
+  }
+
   async function loadAll() {
     const tasks: Array<[string, Promise<any>]> = [
       ['catalog', jfetch('/api/settings/catalog')],
@@ -165,7 +191,9 @@
       ['apis', jfetch('/api/registry/apis')],
       ['rss', jfetch('/api/registry/rss')],
     ];
-    const settled = await Promise.allSettled(tasks.map(([, p]) => p));
+    const settled = await Promise.allSettled(
+      tasks.map(([label, p]) => withTimeout(p, label)),
+    );
     const errs: Record<string, string> = {};
     settled.forEach((res, i) => {
       const key = tasks[i][0];
@@ -368,6 +396,13 @@
   async function jumpTo(result: { key: string; section: string }) {
     searchQuery = '';
     gotoSection(result.section);
+    // Only one card is mounted at a time now, so open the one holding this
+    // field first — otherwise the search lands on an element that is not in
+    // the tree and the jump silently does nothing.
+    const owner = (cardsBySection[result.section] ?? []).find((c) =>
+      c.items.some((it: { key: string }) => it.key === result.key),
+    );
+    if (owner) revealCard(owner.id);
     await tick();
     highlightKey = result.key;
     if (highlightTimer) clearTimeout(highlightTimer);
@@ -517,15 +552,105 @@
     return (row.schema ?? []).some((f) => f.type === 'password' && (row.values?.[f.key] ?? '') !== '' && row.values[f.key] !== '(not set)');
   }
 
+  /**
+   * Can this provider run the tool loop a native-executor agent needs?
+   *
+   * A finished test is evidence and wins; the declared capability is only the
+   * prediction to fall back on before anyone pressed Test.
+   */
+  function runsTools(row: ProviderRow, tests: Record<string, TestResult> = testResults): boolean {
+    const tr = tests[testIdFor(row.slug)];
+    if (tr?.ok && tr.toolCall !== undefined) return tr.toolCall;
+    return row.capabilities?.tools !== false;
+  }
+
+  // ── Can an agent actually run? ──────────────────────────────
+  // The kernel's own verdict, from a real tool call. Read on load; the button
+  // re-probes on demand because it spends a call.
+  interface Readiness { ok: boolean; reason: string; provider?: string; detail?: string }
+  let readiness: Readiness | null = null;
+  let readinessBusy = false;
+
+  /**
+   * Which provider's form is open.
+   *
+   * Seven providers stacked full-height turned the one screen you go to when
+   * something is broken into a scroll. The tab strip keeps every provider's
+   * status visible at once — that is what you scan for — and only the row you
+   * are actually editing gets expanded.
+   */
+  /**
+   * Card-level tabs, so a section is one screen instead of a scroll.
+   *
+   * The rich cards are hand-written per section, the rest come from the
+   * catalog, so the strip is built from both. Declared here rather than read
+   * off the DOM because the tab has to exist before its card renders — only
+   * one of them is in the tree at a time.
+   */
+  $: richCards = {
+    ai: [
+      { id: 'brains', title: $t('settings.ai.brains_title') },
+      { id: 'providers', title: $t('settings.ai.providers_title') },
+    ],
+    channels: [
+      { id: 'channels-runtime', title: $t('settings.channels.runtime_title') },
+      { id: 'whatsapp', title: 'WhatsApp' },
+    ],
+  } as Record<string, Array<{ id: string; title: string }>>;
+
+  $: cardTabs = [
+    ...(richCards[activeSection] ?? []),
+    ...(cardsBySection[activeSection] ?? []).map((c) => ({ id: c.id, title: c.title })),
+  ];
+  let activeCard = '';
+  // Switching section, or landing on one whose first card changed, must not
+  // leave the content area blank.
+  $: if (cardTabs.length && !cardTabs.some((t) => t.id === activeCard)) activeCard = cardTabs[0].id;
+
+  /** Search jumps to a field; open the card holding it or the jump lands nowhere. */
+  function revealCard(id: string): void {
+    if (cardTabs.some((t) => t.id === id)) activeCard = id;
+  }
+
+  let provTab = '';
+  $: if (!provTab && providerRows.length) {
+    // Open on something worth looking at: a provider that is live, else the
+    // first one in the list.
+    provTab = (providerRows.find((r) => r.ready) ?? providerRows[0]).slug;
+  }
+
+  async function loadReadiness(): Promise<void> {
+    try {
+      const r = await fetch('/api/llm/readiness');
+      readiness = r.ok ? await r.json() : null;
+    } catch { readiness = null; }
+  }
+
+  async function checkReadiness(): Promise<void> {
+    readinessBusy = true;
+    try {
+      const r = await fetch('/api/llm/readiness/recheck', { method: 'POST' });
+      if (r.ok) readiness = await r.json();
+    } catch { /* leave the previous verdict rather than blank the banner */ }
+    finally { readinessBusy = false; }
+  }
+
   function rowStatus(row: ProviderRow, tests: Record<string, TestResult>, isTesting: boolean):
     { status: 'ok' | 'warn' | 'error' | 'neutral'; label: string } {
     const tr = tests[testIdFor(row.slug)];
     if (isTesting && !tr) return { status: 'neutral', label: '…' };
+    // Reachable and still useless to a native agent. Claude Code sits here: it
+    // answers, so every connectivity check passed it, but it cannot execute a
+    // tool call — which is the whole job. Green was a lie; this is the truth.
+    if (tr?.ok && !runsTools(row, tests)) return { status: 'warn', label: $t('settings.ai.no_tools') };
     if (tr?.ok) return { status: 'ok', label: $t('settings.ai.ready') };
     if (tr && !tr.ok && hasKey(row)) return { status: 'error', label: $t('settings.ai.error') };
+    // Never configured is not broken. This branch used to sit below `row.error`,
+    // so every provider you had simply not set up glowed red as a failure.
+    if (!hasKey(row)) return { status: 'neutral', label: $t('settings.ai.no_key') };
     if (row.error) return { status: 'error', label: $t('settings.ai.error') };
-    if (hasKey(row)) return { status: 'warn', label: $t('settings.ai.configured') };
-    return { status: 'neutral', label: $t('settings.ai.no_key') };
+    if (!runsTools(row, tests)) return { status: 'warn', label: $t('settings.ai.no_tools') };
+    return { status: 'warn', label: $t('settings.ai.configured') };
   }
 
   /**
@@ -764,6 +889,10 @@
 
   // ── Section error banner ─────────────────────
   $: sectionError = (() => {
+    // A load that failed outright is reported verbatim, not folded into the
+    // "some data failed" summary — when the whole page did not load, the exact
+    // message is the only thing that tells you why.
+    if (loadErrors.page) return loadErrors.page;
     const src: string[] = [];
     if (loadErrors.catalog) src.push('catalog');
     if (activeSection === 'ai') {
@@ -780,10 +909,22 @@
 
   // ── Lifecycle ────────────────────────────────
   onMount(async () => {
-    await loadAll();
-    loading = false;
+    // `loading = false` used to sit after an unguarded await, so anything that
+    // threw inside loadAll — a rejected fetch, a parse error in applyCatalog —
+    // left the page on its spinner permanently, showing neither the settings
+    // nor the reason. The spinner must always end, even when the load fails.
+    try {
+      await loadAll();
+    } catch (err) {
+      loadErrors = { ...loadErrors, page: err instanceof Error ? err.message : String(err) };
+    } finally {
+      loading = false;
+    }
     mounted = true;
     sectionFx(activeSection);
+    // Cached verdict — no call is spent unless the kernel already marked it
+    // stale, so opening Settings stays free.
+    void loadReadiness();
   });
 
   onDestroy(() => {
@@ -859,8 +1000,25 @@
           <div class="st-banner">{sectionError}</div>
         {/if}
 
+        <!-- Card tabs — one section, one screen. Stacking every card meant the
+             page you open when something is broken opened on a scroll. -->
+        {#if cardTabs.length > 1}
+          <div class="card-tabs" role="tablist">
+            {#each cardTabs as tab (tab.id)}
+              <button
+                type="button"
+                role="tab"
+                class="card-tab"
+                class:active={activeCard === tab.id}
+                aria-selected={activeCard === tab.id}
+                on:click={() => (activeCard = tab.id)}
+              >{tab.title}</button>
+            {/each}
+          </div>
+        {/if}
+
         <!-- ═══ AI (rich) ═══ -->
-        {#if activeSection === 'ai'}
+        {#if activeSection === 'ai' && activeCard === 'brains'}
           <!-- Brains -->
           <SettingsCard
             cardId="brains"
@@ -930,7 +1088,9 @@
               </div>
             </div>
           </SettingsCard>
+        {/if}
 
+        {#if activeSection === 'ai' && activeCard === 'providers'}
           <!-- Providers -->
           <SettingsCard
             cardId="providers"
@@ -939,12 +1099,58 @@
             showFooter={false}
           >
             <div slot="header">
+              <button class="btn-sm" disabled={readinessBusy} on:click={checkReadiness}>
+                {readinessBusy ? $t('settings.ai.readiness_checking') : $t('settings.ai.readiness_check')}
+              </button>
               <button class="btn-sm" disabled={testing} on:click={runProviderTests}>
                 {testing ? $t('settings.ai.testing') : $t('settings.ai.test_all')}
               </button>
             </div>
-            <div class="prov-table">
+
+            <!-- The one test that answers the question this page exists for.
+                 "Test all" only proves a provider replies; it passed Claude
+                 Code, which cannot execute a tool call, so every agent failed
+                 while this screen showed green. This runs a real tool call. -->
+            {#if readiness}
+              <div class="readiness" class:ok={readiness.ok && readiness.reason === 'ok'}
+                   class:partial={readiness.ok && readiness.reason !== 'ok'}
+                   class:bad={!readiness.ok}>
+                {#if readiness.reason === 'ok'}
+                  {$t('settings.ai.readiness_ok', { provider: readiness.provider ?? '' })}
+                {:else if readiness.ok}
+                  {$t('settings.ai.readiness_sdk')}
+                {:else}
+                  {$t('settings.ai.readiness_bad', { detail: readiness.detail ?? readiness.reason })}
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Every provider's state on one line each, always visible. The
+                 form for one of them below. -->
+            <div class="prov-tabs" role="tablist">
               {#each providerRows as row (row.slug)}
+                {@const st = rowStatus(row, testResults, testing)}
+                <button
+                  type="button"
+                  role="tab"
+                  class="prov-tab"
+                  class:active={provTab === row.slug}
+                  aria-selected={provTab === row.slug}
+                  on:click={() => (provTab = row.slug)}
+                >
+                  <span class="prov-tab-name">{row.name || row.slug}</span>
+                  <StatusPill status={st.status} label={st.label} />
+                  {#if provRowDirty(row, provEdits)}
+                    <!-- Unsaved edits must be findable from a tab you are not
+                         currently looking at. -->
+                    <span class="prov-tab-dirty" title="Unsaved changes">●</span>
+                  {/if}
+                </button>
+              {/each}
+            </div>
+
+            <div class="prov-table">
+              {#each providerRows.filter((r) => r.slug === provTab) as row (row.slug)}
                 {@const st = rowStatus(row, testResults, testing)}
                 {@const trow = testResults[testIdFor(row.slug)]}
                 <div class="prov-row">
@@ -959,6 +1165,12 @@
                       <button class="btn-sm" on:click={() => (ccAuthOpen = true)}>Sign in…</button>
                     {/if}
                   </div>
+                  {#if !runsTools(row)}
+                    <!-- Says the quiet part where the operator is looking, and
+                         not only in the pill: this provider passes a
+                         connectivity test and still cannot drive an agent. -->
+                    <p class="prov-note">{$t('settings.ai.agents_need_tools')}</p>
+                  {/if}
                   <div class="prov-fields">
                     {#each (provEdits[row.slug] ? row.schema ?? [] : []) as f (f.key)}
                       <div class="prov-field">
@@ -1012,7 +1224,7 @@
         {/if}
 
         <!-- ═══ Channels (rich) ═══ -->
-        {#if activeSection === 'channels'}
+        {#if activeSection === 'channels' && activeCard === 'channels-runtime'}
           <!-- Runtime channels -->
           <SettingsCard
             cardId="channels-runtime"
@@ -1071,7 +1283,9 @@
               </div>
             {/if}
           </SettingsCard>
+        {/if}
 
+        {#if activeSection === 'channels' && activeCard === 'whatsapp'}
           <!-- WhatsApp rich panel -->
           <SettingsCard
             cardId="whatsapp"
@@ -1183,7 +1397,7 @@
         {/if}
 
         <!-- ═══ Generic catalog cards for the active section ═══ -->
-        {#each cardsBySection[activeSection] ?? [] as card (card.id)}
+        {#each (cardsBySection[activeSection] ?? []).filter((c) => c.id === activeCard) as card (card.id)}
           <SettingsCard
             cardId={card.id}
             title={card.title}
@@ -1356,6 +1570,71 @@
   .prov-name { font-size: 12px; font-weight: 700; color: var(--text-1); }
   .prov-slug { font: 400 9px var(--font-mono); color: var(--text-3); }
   .prov-lat { font: 400 9px var(--font-mono); color: #4ade80; }
+  .prov-note {
+    margin: 4px 0 0; max-width: 62ch;
+    font: 400 11px/1.5 var(--font-sans, inherit); color: #e8c070;
+  }
+
+  /* ── Card tabs ──
+     Section-level. Same wrap rule as the provider strip: never scroll
+     sideways, because a tab you cannot see is a card you cannot reach. */
+  .card-tabs {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin: 0 0 16px;
+  }
+  .card-tab {
+    padding: 7px 14px; border-radius: 8px; cursor: pointer;
+    background: rgba(120, 130, 160, .05);
+    border: 1px solid rgba(120, 130, 160, .16);
+    color: var(--text-2);
+    font: 600 12px var(--font-sans, inherit);
+    text-transform: uppercase; letter-spacing: .6px;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .card-tab:hover { background: rgba(120, 130, 160, .12); color: var(--text-1); }
+  .card-tab.active {
+    background: rgba(120, 130, 160, .18);
+    border-color: rgba(120, 130, 160, .5);
+    color: var(--text-1);
+  }
+  .card-tab:focus-visible { outline: 2px solid #4ade80; outline-offset: 2px; }
+
+  /* ── Provider tabs ──
+     Wraps rather than scrolls sideways: a hidden provider is exactly the
+     failure this replaced. */
+  .prov-tabs {
+    display: flex; flex-wrap: wrap; gap: 6px;
+    margin: 0 0 14px; padding-bottom: 12px;
+    border-bottom: 1px solid rgba(120, 130, 160, .14);
+  }
+  .prov-tab {
+    display: inline-flex; align-items: center; gap: 7px;
+    padding: 6px 11px; border-radius: 8px; cursor: pointer;
+    background: rgba(120, 130, 160, .05);
+    border: 1px solid rgba(120, 130, 160, .16);
+    color: var(--text-2);
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .prov-tab:hover { background: rgba(120, 130, 160, .12); color: var(--text-1); }
+  .prov-tab.active {
+    background: rgba(120, 130, 160, .16);
+    border-color: rgba(120, 130, 160, .45);
+    color: var(--text-1);
+  }
+  .prov-tab:focus-visible { outline: 2px solid #4ade80; outline-offset: 2px; }
+  .prov-tab-name { font: 600 12px var(--font-sans, inherit); white-space: nowrap; }
+  .prov-tab-dirty { color: #e8c070; font-size: 9px; line-height: 1; }
+  /* The verdict that actually decides whether the product works. Sits above
+     the provider list because no single row can answer it. */
+  .readiness {
+    margin: 0 0 12px; padding: 10px 12px; border-radius: 8px;
+    font: 400 12px/1.5 var(--font-sans, inherit);
+    border: 1px solid rgba(120, 130, 160, .2); background: rgba(120, 130, 160, .06);
+    color: var(--text-2);
+  }
+  .readiness.ok { border-color: rgba(74, 222, 128, .35); background: rgba(74, 222, 128, .08); color: #86efac; }
+  .readiness.partial { border-color: rgba(232, 192, 112, .35); background: rgba(232, 192, 112, .08); color: #e8c070; }
+  .readiness.bad { border-color: rgba(248, 81, 73, .35); background: rgba(248, 81, 73, .08); color: #f8a5a0; }
   .prov-fields { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
   .prov-field { display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: center; }
   .prov-flabel { font-size: 10px; color: var(--text-2); }

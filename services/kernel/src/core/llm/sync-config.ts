@@ -31,6 +31,17 @@ export function syncProvidersToKernelConfig(config: KernelConfig, registry: Conf
   // has to be mirrored here or it is forgotten on every restart.
   const ccToken = str(claudeCode.oauthToken);
   if (ccToken !== undefined) process.env.CLAUDE_CODE_OAUTH_TOKEN = ccToken;
+  // Same round trip for the model. Only the token was mirrored, so the model
+  // chosen in Settings never reached the adapter — saved, shown back in the
+  // dropdown, and ignored on every call.
+  const ccModel = str(claudeCode.defaultModel);
+  if (ccModel !== undefined) {
+    process.env.CLAUDE_CODE_DEFAULT_MODEL = ccModel;
+    // The live config object was built at boot, so the env write alone would
+    // not take effect until the next restart.
+    const cc = (config as unknown as { claudeCode?: Record<string, unknown> }).claudeCode;
+    if (cc) cc.model = ccModel;
+  }
 
   const mmKey = str(minimax.apiKey);
   if (mmKey !== undefined) process.env.MINIMAX_API_KEY = mmKey;

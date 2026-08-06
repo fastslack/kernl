@@ -14,6 +14,7 @@
 import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, cpSync } from "node:fs";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const EXT_DIR = resolve(ROOT, "assets/extensions");
@@ -115,6 +116,92 @@ function newestMtime(dir: string): number {
  * when services/dashboard/node_modules is missing; skips incrementally when
  * entry.js is newer than every file under frontend/src/.
  */
+/**
+ * A frontend bundle that changed must ship a new version.
+ *
+ * The dashboard loads extension pages from
+ * `/ext-assets/<slug>/<entry>?v=<version>`, and the kernel answers that URL
+ * with `Cache-Control: public, max-age=31536000, immutable`. The version IS
+ * the cache key: rebuild the bundle without touching it and every browser
+ * that has already loaded the page keeps running the old code forever, with
+ * no error and nothing in any log to say so. It has bitten this repo twice in
+ * one session — a redesigned TV page and a rebuilt cinema page both looked
+ * like "the change did nothing".
+ *
+ * So the build refuses. The lockfile records the hash each version shipped;
+ * a differing hash under an unchanged version is the mistake, and the fix is
+ * one line in extension.json.
+ */
+const LOCKFILE = resolve(EXT_DIR, ".frontend-versions.json");
+
+interface LockEntry { version: string; sha256: string }
+
+function readLock(): Record<string, LockEntry> {
+  if (!existsSync(LOCKFILE)) return {};
+  try {
+    return JSON.parse(readFileSync(LOCKFILE, "utf-8")) as Record<string, LockEntry>;
+  } catch {
+    // A corrupt lockfile must not block a build; it re-records below.
+    console.warn("[build-extensions] frontend-versions lockfile unreadable — re-recording");
+    return {};
+  }
+}
+
+function manifestVersion(extDir: string): string {
+  try {
+    const m = JSON.parse(readFileSync(resolve(extDir, "extension.json"), "utf-8")) as { version?: string };
+    return m.version ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function sha256(file: string): string {
+  return createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 16);
+}
+
+/**
+ * Compare every built bundle against the version it was last recorded under.
+ * Returns the number of extensions that changed without a version bump.
+ */
+function checkFrontendVersions(frontendDirs: string[]): number {
+  const lock = readLock();
+  const next: Record<string, LockEntry> = { ...lock };
+  const offenders: string[] = [];
+
+  for (const extDir of frontendDirs) {
+    const slug = extDir.slice(EXT_DIR.length + 1);
+    const outfile = resolve(extDir, "frontend/entry.js");
+    if (!existsSync(outfile)) continue;
+
+    const version = manifestVersion(extDir);
+    if (!version) continue;                       // nothing to key a cache on
+    const hash = sha256(outfile);
+    const prev = lock[slug];
+
+    if (prev && prev.sha256 !== hash && prev.version === version) {
+      offenders.push(
+        `  ${slug}\n` +
+        `    bundle changed but version is still ${version}\n` +
+        `    → bump "version" in assets/extensions/${slug}/extension.json`,
+      );
+      continue;                                    // do not record the mistake
+    }
+    next[slug] = { version, sha256: hash };
+  }
+
+  writeFileSync(LOCKFILE, JSON.stringify(next, null, 2) + "\n");
+
+  if (offenders.length > 0) {
+    console.error(
+      `\n[build-extensions] ${offenders.length} frontend bundle(s) changed without a version bump.\n` +
+      `Browsers cache these immutably by version, so the change would reach nobody:\n\n` +
+      offenders.join("\n\n") + "\n",
+    );
+  }
+  return offenders.length;
+}
+
 function buildFrontends(): void {
   const frontendDirs = collectFrontendDirs(EXT_DIR);
   if (frontendDirs.length === 0) return;
@@ -152,6 +239,10 @@ function buildFrontends(): void {
     }
   }
   console.log(`[build-extensions] frontend built=${built} fresh=${fresh}`);
+
+  // Checked for every extension, not only the ones rebuilt this run: a bundle
+  // can be left changed by an interrupted build or an edit to entry.js itself.
+  if (checkFrontendVersions(frontendDirs) > 0) process.exitCode = 1;
 }
 
 /**

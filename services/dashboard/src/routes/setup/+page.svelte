@@ -78,6 +78,8 @@
   let llmErrMsg = '';
   let llmModels: string[] = [];
   let llmModelChoice = '';
+  /** Why the kernel says no agent can run yet. Empty when it can. */
+  let readinessMsg = '';
   let probedSlug: string | null = null; // which slug the current ✓ belongs to
 
   $: selectedRow = providerRows.find((p) => p.slug === chosen) ?? null;
@@ -189,11 +191,9 @@
   }
 
   async function commitLLMAndContinue(): Promise<void> {
-    if (chosen === 'skip') {
-      next();
-      return;
-    }
+    if (chosen === 'skip') return; // no longer reachable — the card is gone
     llmSaving = true;
+    readinessMsg = '';
     try {
       // Next without a prior successful probe runs the probe itself.
       if (probedSlug !== chosen) {
@@ -212,10 +212,37 @@
         headers: jsonHeaders,
         body: JSON.stringify(body),
       }).catch(() => null);
+
+      // The connection test above proves the credential answers. It does not
+      // prove the provider will execute a tool call, and an agent that cannot
+      // call tools cannot do anything at all — which is the failure this whole
+      // step exists to prevent. Ask the kernel to prove it before stepping on.
+      const verdict = await recheckReadiness();
+      if (!verdict.ok) {
+        readinessMsg = verdict.detail || $t('setup.llm_not_agent_ready');
+        return;
+      }
       // Slight delay so the user sees the success state before stepping on.
       setTimeout(next, 400);
     } finally {
       llmSaving = false;
+    }
+  }
+
+  /**
+   * Ask the kernel to run a real tool call against the configured chain.
+   *
+   * Separate from `testLLM` on purpose: that one lists models and proves the
+   * key is accepted, this one proves an agent can run. Claude Code passes the
+   * first and fails the second — its `capabilities.tools` is false.
+   */
+  async function recheckReadiness(): Promise<{ ok: boolean; detail?: string }> {
+    try {
+      const r = await fetch('/api/llm/readiness/recheck', { method: 'POST', headers: jsonHeaders });
+      if (!r.ok) return { ok: false, detail: `readiness check failed (HTTP ${r.status})` };
+      return (await r.json()) as { ok: boolean; detail?: string };
+    } catch (e) {
+      return { ok: false, detail: e instanceof Error ? e.message : String(e) };
     }
   }
 
@@ -440,17 +467,9 @@
               </button>
             {/each}
 
-            <button
-              type="button"
-              class="option-card"
-              class:selected={chosen === 'skip'}
-              on:click={() => pickProvider('skip')}>
-              <span class="opt-radio" aria-hidden="true"></span>
-              <div class="opt-body">
-                <div class="opt-title">{$t('setup.llm_skip')}</div>
-                <div class="opt-desc">{$t('setup.llm_skip_desc')}</div>
-              </div>
-            </button>
+            <!-- The "continue without a provider" card used to live here. It
+                 produced an install where every agent failed on its first run,
+                 which is not a state worth offering as a choice. -->
           </div>
 
           {#if chosen !== 'skip' && selectedRow}
@@ -482,11 +501,22 @@
           {:else if llmStatus === 'err'}
             <p class="status err">⚠ {llmErrMsg}</p>
           {/if}
+
+          <!-- The key was accepted and the provider still could not run a tool
+               call, so no agent would work. Says which, so the next move is
+               obvious instead of guesswork. -->
+          {#if readinessMsg}
+            <p class="status err">⚠ {readinessMsg}</p>
+          {/if}
         {/if}
 
         <div class="nav">
           <button class="btn-ghost" on:click={back}>{$t('setup.btn_back')}</button>
-          <button class="btn-primary" on:click={commitLLMAndContinue} disabled={llmSaving || llmTesting || provLoading}>
+          <button
+            class="btn-primary"
+            on:click={commitLLMAndContinue}
+            disabled={llmSaving || llmTesting || provLoading || chosen === 'skip'}
+            title={chosen === 'skip' ? $t('setup.llm_required_hint') : ''}>
             {llmSaving ? $t('setup.btn_saving') : $t('setup.btn_next')}
           </button>
         </div>
@@ -524,11 +554,9 @@
           </div>
           <div class="summary-row">
             <span class="summary-k">{$t('setup.done_llm')}</span>
-            <span class="summary-v">
-              {chosen === 'skip'
-                ? $t('setup.done_llm_skipped')
-                : (selectedRow?.name ?? chosen)}
-            </span>
+            <!-- No "skipped" branch: reaching this step means a provider ran a
+                 tool call, so there is always a name to show. -->
+            <span class="summary-v">{selectedRow?.name ?? chosen}</span>
           </div>
         </div>
 

@@ -11,7 +11,7 @@
       },
       {
         "type": "evaluate",
-        "value": "localStorage.setItem('kernel_auth_token','KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
+        "value": "localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}'); localStorage.setItem('kernl.welcomeSeen','true'); true;"
       }
     ]
   },
@@ -85,7 +85,7 @@
       "actions": [
         {
           "type": "goto",
-          "value": "/api/marketplace/catalog/providers?auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+          "value": "/api/marketplace/catalog/providers?auth={{var.KERNEL_AUTH_TOKEN}}"
         },
         {
           "type": "wait",
@@ -113,7 +113,7 @@
       "actions": [
         {
           "type": "goto",
-          "value": "/api/marketplace/catalog?limit=200&auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+          "value": "/api/marketplace/catalog?limit=200&auth={{var.KERNEL_AUTH_TOKEN}}"
         },
         {
           "type": "wait",
@@ -161,7 +161,7 @@
       "actions": [
         {
           "type": "goto",
-          "value": "/api/marketplace/catalog?type=skill&auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+          "value": "/api/marketplace/catalog?type=skill&auth={{var.KERNEL_AUTH_TOKEN}}"
         },
         {
           "type": "wait",
@@ -189,7 +189,7 @@
       "actions": [
         {
           "type": "evaluate",
-          "value": "fetch('/api/marketplace/catalog/uninstall', {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'},body:JSON.stringify({id:'morning-briefing',force:true})}).catch(()=>null); true;"
+          "value": "fetch('/api/marketplace/catalog/uninstall', {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer {{var.KERNEL_AUTH_TOKEN}}'},body:JSON.stringify({id:'morning-briefing',force:true})}).catch(()=>null); true;"
         },
         {
           "type": "wait",
@@ -197,7 +197,7 @@
         },
         {
           "type": "evaluate",
-          "value": "fetch('/api/marketplace/catalog/install', {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS'},body:JSON.stringify({id:'morning-briefing'})}).then(r=>r.json()).then(d=>{(window).__installResult=d;}); true;"
+          "value": "fetch('/api/marketplace/catalog/install', {method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer {{var.KERNEL_AUTH_TOKEN}}'},body:JSON.stringify({id:'morning-briefing'})}).then(r=>r.json()).then(d=>{(window).__installResult=d;}); true;"
         },
         {
           "type": "wait",
@@ -205,7 +205,7 @@
         },
         {
           "type": "goto",
-          "value": "/api/marketplace/catalog/item/morning-briefing?auth=KERNEL_AUTH_TOKEN_PLACEHOLDER_SET_YOURS"
+          "value": "/api/marketplace/catalog/item/morning-briefing?auth={{var.KERNEL_AUTH_TOKEN}}"
         },
         {
           "type": "wait",

@@ -67,6 +67,17 @@ export interface ClaudeCodeProviderOptions {
    * interactive login cannot run (no PTY). Injected as CLAUDE_CODE_OAUTH_TOKEN.
    */
   oauthToken?: string;
+  /**
+   * CLAUDE_CODE_DEFAULT_MODEL — the model picked for this provider in
+   * Settings.
+   *
+   * It needs its own home because the constructor's `defaultModel` argument
+   * carries the kernel-wide default. Without it the per-provider choice was
+   * stored, rendered back in the dropdown, and read by nobody: you selected
+   * claude-opus-4-7, saved, and every call still went out on
+   * claude-sonnet-4-5.
+   */
+  model?: string;
 }
 
 /**
@@ -184,9 +195,15 @@ export class ChatClaudeCodeProvider {
   private cachedBin: string | null | undefined = undefined;
 
   constructor(
-    private defaultModel: string = DEFAULT_MODEL,
+    defaultModel: string = DEFAULT_MODEL,
     private cfg: ClaudeCodeProviderOptions = {},
-  ) {}
+  ) {
+    // The provider's own setting wins over the kernel-wide default; the
+    // argument is the fallback for when nothing was chosen for this provider.
+    this.defaultModel = cfg.model || defaultModel || DEFAULT_MODEL;
+  }
+
+  private defaultModel: string;
 
   available(): boolean {
     return !!this.findBinary();

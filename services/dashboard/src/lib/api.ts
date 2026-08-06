@@ -24,10 +24,21 @@ async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
 	const r = await fetch(url, { headers, ...opts });
 
 	if (r.status === 401) {
-		const input = prompt('API authentication required. Enter your KERNEL_AUTH_TOKEN:');
-		if (input) {
-			setAuthToken(input.trim());
-			return apiFetch(url, opts);
+		// Send the user to /login rather than opening a native prompt().
+		//
+		// prompt() is modal and blocking: any browser that suppresses dialogs —
+		// headless Chrome, an embedded webview, a user who ticked "prevent this
+		// page from creating more dialogs" — simply never returns, so the whole
+		// dashboard hangs with no error. That is what made every UI end-to-end
+		// test time out at 60s without a single failed assertion. It is also a
+		// poor way to ask for a 64-character token when there is a login screen
+		// built for exactly this.
+		clearAuthToken();
+		if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
+			const next = encodeURIComponent(
+				window.location.pathname + window.location.search + window.location.hash,
+			);
+			window.location.href = `/login?next=${next}`;
 		}
 		throw new Error('Authentication required');
 	}

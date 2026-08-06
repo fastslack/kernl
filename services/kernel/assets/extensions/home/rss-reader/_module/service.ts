@@ -141,6 +141,18 @@ export class RssReaderService {
     return row ?? null;
   }
 
+  /**
+   * Cache a body fetched from the article page.
+   *
+   * Written back onto the item so the fetch happens once. `rss_items` is the
+   * registry's table, and `content` is exactly the column the feed would have
+   * filled had it carried the text — a feed refresh only touches rows whose
+   * hash changed, so this survives.
+   */
+  saveFetchedContent(itemId: string, html: string): void {
+    this.db.prepare("UPDATE rss_items SET content = ? WHERE id = ?").run(html, itemId);
+  }
+
   markRead(itemId: string, read = true): void {
     const now = isoNow();
     this.upsertState(itemId, { read: read ? 1 : 0, read_at: read ? now : null });
