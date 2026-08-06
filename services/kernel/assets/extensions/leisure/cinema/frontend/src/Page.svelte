@@ -8,6 +8,13 @@
     and bulk import via the /api/cinema/media/import-archive/run endpoint.
   */
   import { onMount, tick } from 'svelte';
+  // Framework-level motion — the part of "looks expensive" that CSS alone
+  // cannot do. When a filter changes the result set, the cards that survive
+  // SLIDE to their new positions instead of the grid snapping to a different
+  // arrangement. The each-block is already keyed by identifier, which is the
+  // prerequisite that makes it possible.
+  import { flip } from 'svelte/animate';
+  import { cubicOut } from 'svelte/easing';
   import type { ExtPageContext } from './types.js';
   // Cue parsing, cue installation and caption styling are shared with /tv and
   // /torrents — this page used to carry its own copies of all three.
@@ -52,6 +59,47 @@
     collection?: string[];
     downloads?: number;
     runtime_sec?: number;
+    /**
+     * Uploads of this film folded into this row. Present only on collapsed
+     * queries; 1 means this is the only copy. When >1, `downloads` and the
+     * rating on this row are the work's totals, not this copy's share.
+     */
+    copies?: number;
+    /**
+     * What the item actually holds, probed from archive.org's metadata
+     * endpoint. Null means nobody has looked inside yet — which is NOT the
+     * same as an item that was probed and found empty, and the card has to
+     * tell those apart.
+     */
+    media?: {
+      duration_sec: number;
+      width: number;
+      height: number;
+      has_video: boolean;
+      has_streamable: boolean;
+      has_subtitles: boolean;
+      best_format: string;
+      probed_at: string;
+    } | null;
+    /**
+     * The catalogued work this upload was identified as, when it was
+     * identified at all. Null for the long tail — which means "unknown",
+     * not "junk": the archive's industrial and educational cinema is
+     * legitimate material that simply is not catalogued as works.
+     */
+    canonical?: {
+      qid: string;
+      label: string;
+      year: number;
+      director: string;
+      country: string;
+      imdb_id: string;
+      /** Already on the catalogue's 0..5 scale. 0 when nobody has rated it. */
+      ext_rating: number;
+      ext_votes: number;
+    } | null;
+    /** Curated lists this work is on, as canon rail keys. */
+    canon?: string[];
   }
 
   // The hardcoded collection chip row was removed in Stage 6: those slugs
@@ -71,10 +119,123 @@
   // mode that goes to the API as `tags_match`.
   let activeTags: string[] = [];
   let tagsMatch: 'all' | 'any' = 'all';
+  // The tag row shows one line until asked for more. See .tag-chips.collapsed.
+  let tagsExpanded = false;
   // Language ISO 2-letter code, empty = any.
   let langFilter = '';
   // Sort dropdown — exposed inline so the user doesn't have to dig.
-  let sortMode: 'downloads' | 'year_desc' | 'year_asc' | 'added_desc' | 'rating' = 'downloads';
+  let sortMode: 'downloads' | 'year_desc' | 'year_asc' | 'added_desc' | 'rating' | 'best' = 'downloads';
+
+  // ── Identified titles only ───────────────────────────────────
+  // Off by default and staying that way. The unidentified tail is not junk:
+  // Prelinger, educationalfilms and culturalandacademicfilms are legitimate
+  // industrial cinema that Wikidata simply does not catalogue as works, and
+  // defaulting this on would hide some of the best material in the archive.
+  // The ★ order already floats identified titles up without anyone opting in.
+  let identifiedOnly = false;
+
+  // ── Collapse copies of the same film ─────────────────────────
+  // ON by default, unlike the identified filter — and the difference is
+  // deliberate. Hiding the unidentified tail would lose real material;
+  // hiding the fifth upload of Metropolis loses nothing, because the film is
+  // still on screen and its other copies are one click away on the card.
+  // Collapsed rows also carry the work's SUMMED downloads and votes, which is
+  // the count that was always true.
+  let collapseWorks = true;
+
+  // ── File-level filters ───────────────────────────────────────
+  // These read what the item actually CONTAINS, probed from archive.org's
+  // metadata endpoint — not the catalogue's runtime_sec, which is 0 on a
+  // large part of the table. A minimum duration is the bluntest and most
+  // effective quality filter available: it removes the things that are not
+  // films at all, which no amount of reranking can do.
+  //
+  // All default to off. A title nobody has probed yet cannot satisfy them,
+  // so switching one on mid-probe narrows the grid to what has been looked
+  // at — correct, but surprising if it happened without being asked for.
+  let minMinutes = 0;
+  let playableOnly = false;
+  let subsOnly = false;
+
+  // ── Canon rails ──────────────────────────────────────────────
+  // Editorial rather than statistical: the National Film Registry is a
+  // decision by people whose job is film preservation, which no ranking over
+  // downloads or ratings can express. Rails the catalogue holds nothing from
+  // are hidden — an empty shelf is worse than no shelf.
+  let canonRails: Array<{ key: string; label: string; blurb: string; members: number; held: number }> = [];
+  let activeRail = '';
+
+  // ── Discovery from the vectors ───────────────────────────────
+  // Neither of these depends on canonical identification, which is why they
+  // reach the 81 cartoons Wikidata ignores — the most-downloaded material in
+  // this catalogue and invisible to every other quality signal here.
+  let similarItems: ArchiveItem[] = [];
+  let forYouMode = false;
+  // Distinguishes "save a few films first" from "run the embed runner".
+  let forYouReason: 'ok' | 'no_profile' | 'no_vectors' | 'no_direction' | '' = '';
+  let forYouProfileSize = 0;
+
+  async function loadSimilar(identifier: string) {
+    try {
+      const r = await apiFetch(`/api/cinema/similar/${encodeURIComponent(identifier)}?limit=12`);
+      if (!r.ok) return;
+      const body = await r.json();
+      // Guard against a slow response for a film the user already closed.
+      if (playItem?.identifier === identifier) similarItems = body.items ?? [];
+    } catch {
+      // Embeddings absent or Neo4j down. The strip just does not appear;
+      // there is nothing here worth interrupting playback for.
+      similarItems = [];
+    }
+  }
+
+  async function toggleForYou() {
+    forYouMode = !forYouMode;
+    if (!forYouMode) { forYouReason = ''; runSearch(); return; }
+    busy = true;
+    try {
+      const r = await apiFetch('/api/cinema/for-you?limit=48');
+      const body = await r.json();
+      if (!r.ok) throw new Error(body.error ?? `http ${r.status}`);
+      items = body.items ?? [];
+      forYouReason = body.reason ?? '';
+      forYouProfileSize = body.profile_size ?? 0;
+      page = 1;
+      // One ranked set, not a paged query — the infinite-scroll sentinel must
+      // not try to fetch a second page of it.
+      hasMore = false;
+    } catch (e) {
+      forYouReason = 'no_vectors';
+      items = [];
+      hasMore = false;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function loadCanonRails() {
+    try {
+      const r = await apiFetch('/api/cinema/canon/rails');
+      if (!r.ok) return;
+      const body = await r.json();
+      canonRails = (body.rails ?? []).filter((x: { held: number }) => x.held > 0);
+    } catch {
+      // A missing rail row is not worth interrupting the page for.
+      canonRails = [];
+    }
+  }
+
+  function toggleRail(key: string) {
+    activeRail = activeRail === key ? '' : key;
+    runSearch();
+  }
+
+  // ── Films or series ──────────────────────────────────────────
+  // archive.org has no such field: a serial lives in the television
+  // collections and a feature does not. The kernel derives it from that
+  // membership; here it is just the question people actually ask.
+  let kindFilter: '' | 'film' | 'series' = '';
+
 
   // ── Top-tag chip row ─────────────────────────────────────────
   // Populated from /api/cinema/tags. Cached at module scope so reloading
@@ -100,6 +261,11 @@
     } else {
       activeTags = [...activeTags, tag];
     }
+    // Picking a genre is a "show me the good ones" gesture, not a "show me
+    // the most downloaded" one — and downloads here mostly track how long a
+    // file has been online rather than whether it is worth watching.
+    if (activeTags.length > 0 && sortMode === 'downloads') sortMode = 'best';
+    page = 1;
     runSearch();
   }
   function clearTags() {
@@ -157,9 +323,29 @@
   // to /cinema/directories where the form lives.
   interface MyDirectorySummary { id: string; title: string; item_count: number; }
   let myDirs: MyDirectorySummary[] = [];
-  let dirPopoverFor: string | null = null;     // identifier of the card whose popover is open
+  // The film being filed, not just its id: the dialog shows what you are
+  // filing. The old popover covered the card it opened on, so the one thing
+  // you needed to see — which film this is — was the thing it hid.
+  let dirPickerItem: ArchiveItem | null = null;
   let dirPopoverBusy = false;
   let dirPopoverNotice = '';
+  // Inline creation. The empty state used to be a link to another page,
+  // which meant discovering you had no directories cost you the film you
+  // were trying to file. Now the first directory is made right here.
+  let dirNewTitle = '';
+  let dirCreating = false;
+
+  // The film whose description is open for reading.
+  //
+  // The hover overlay is a glance, not a read: 11.5px, clipped to the poster,
+  // pointer-events off, so it cannot be scrolled or selected and a long
+  // synopsis simply disappears past the bottom edge. This is the read.
+  let infoItem: ArchiveItem | null = null;
+  function openInfo(item: ArchiveItem, ev: Event) {
+    ev.stopPropagation();
+    infoItem = item;
+  }
+  function closeInfo() { infoItem = null; }
   async function ensureMyDirsLoaded() {
     if (myDirs.length > 0) return;
     try {
@@ -172,11 +358,61 @@
       }
     } catch { /* */ }
   }
-  async function openDirPopover(identifier: string, ev: Event) {
+  async function openDirPicker(item: ArchiveItem, ev: Event) {
     ev.stopPropagation();
     dirPopoverNotice = '';
-    dirPopoverFor = dirPopoverFor === identifier ? null : identifier;
-    if (dirPopoverFor) await ensureMyDirsLoaded();
+    dirNewTitle = '';
+    dirPickerItem = dirPickerItem?.identifier === item.identifier ? null : item;
+    if (dirPickerItem) await ensureMyDirsLoaded();
+  }
+
+  /**
+   * Create a directory and drop this film into it, in one go.
+   *
+   * The two steps are one intention — nobody opens this dialog wanting an
+   * empty directory — so splitting them across two screens was the whole
+   * problem with the old flow.
+   */
+  async function createDirAndAdd() {
+    const title = dirNewTitle.trim();
+    const item = dirPickerItem;
+    if (!title || !item) return;
+    dirCreating = true;
+    dirPopoverNotice = '';
+    try {
+      const r = await apiFetch('/api/cinema/directories', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          description: '',
+          category: '',
+          cover_identifier: item.identifier,
+          visibility: 'private',
+          collaborators: [],
+        }),
+      });
+      const body = await r.json().catch(() => ({} as any));
+      if (!r.ok) {
+        dirPopoverNotice = `✗ ${body.error ?? 'no se pudo crear'}`;
+        return;
+      }
+      const id = body.directory?.id ?? body.id;
+      if (!id) {
+        dirPopoverNotice = '✗ el servidor no devolvió un id';
+        return;
+      }
+      // Refetched rather than pushed locally, so item_count and anything
+      // else the server decided stay authoritative.
+      myDirs = [];
+      await ensureMyDirsLoaded();
+      dirNewTitle = '';
+      await addToDir(id, item.identifier);
+    } catch (err: any) {
+      dirPopoverNotice = `✗ ${err?.message ?? String(err)}`;
+    } finally {
+      dirCreating = false;
+    }
   }
   async function addToDir(dirId: string, identifier: string) {
     dirPopoverBusy = true;
@@ -195,13 +431,21 @@
       dirPopoverNotice = '✓ agregada';
       // optimistic count bump
       myDirs = myDirs.map(d => d.id === dirId ? { ...d, item_count: d.item_count + 1 } : d);
-      // close after a short visual confirmation
-      setTimeout(() => { if (dirPopoverFor === identifier) dirPopoverFor = null; }, 700);
+      // Close after a beat, so the ✓ is seen. Guarded on the film still being
+      // the one that was filed: without it, filing A and quickly opening B
+      // would slam B's dialog shut.
+      setTimeout(() => {
+        if (dirPickerItem?.identifier === identifier) closeDirPopover();
+      }, 700);
     } catch (err: any) {
       dirPopoverNotice = `✗ ${err?.message ?? err}`;
     } finally { dirPopoverBusy = false; }
   }
-  function closeDirPopover() { dirPopoverFor = null; dirPopoverNotice = ''; }
+  function closeDirPopover() {
+    dirPickerItem = null;
+    dirPopoverNotice = '';
+    dirNewTitle = '';
+  }
 
   // ── Embed runner state (drives the progress bar in the admin panel) ──
   interface EmbedSnapshot {
@@ -475,8 +719,6 @@
   // "+ Generate" button. 'generate' is a tiny config-and-run form that
   // takes over the panel. After Start, we auto-close the popover and
   // show progress via the centred modal.
-  type SubsMode = 'select' | 'generate';
-  let subsMode: SubsMode = 'select';
   // (Legacy modalPhaseSwapTimer removed — the auto+translate flow now
   //  uses 2 sequential frontend fetches so the modal swap is exact.)
   let modalPhaseSwapTimer: ReturnType<typeof setTimeout> | null = null;
@@ -743,6 +985,54 @@
         tracks.find((t) => !t.id.startsWith('local:') && t.kind === 'translation' && t.lang === subTargetLang)
         ?? tracks.find((t) => !t.id.startsWith('local:') && t.kind !== 'translation')
         ?? null,
+
+      /**
+       * Generate captions for this film.
+       *
+       * The adapter used to stop at listTracks/fetchVtt/remove, because
+       * generation was driven by a separate wizard of this page's own rather
+       * than through the controller. With that wizard gone, the player's
+       * "Generate subtitles" button called a method nobody had implemented —
+       * so the one remaining path did nothing at all.
+       *
+       * It delegates to the same orchestrator the wizard used, so there is
+       * one transcription pipeline and not a second copy of it.
+       */
+      async generate(opts) {
+        if (!playItem || !playFiles[playActiveIdx]) {
+          throw new Error('no hay un archivo de video seleccionado');
+        }
+        if (opts?.lang) subSourceLang = opts.lang;
+        // Transcribe only. Translation is its own call below, so asking for
+        // captions never silently also translates them.
+        translateActive = false;
+        generateRequested = true;
+        await runAutoTranslatePipeline();
+      },
+
+      /** Translate the current captions into `to`, via the same pipeline. */
+      async translate(opts) {
+        if (!playItem || !playFiles[playActiveIdx]) {
+          throw new Error('no hay un archivo de video seleccionado');
+        }
+        subTargetLang = opts.to;
+        if (opts.from) subSourceLang = opts.from;
+        translateActive = true;
+        generateRequested = true;
+        await runAutoTranslatePipeline();
+      },
+
+      /** Stop whatever is running. */
+      async cancel() {
+        if (inflightAbort) { try { inflightAbort.abort(); } catch { /* already gone */ } }
+        stopProgress();
+      },
+
+      /** What the kernel can translate into — the menu's language list. */
+      async languages() {
+        if (!subInfo) await loadSubInfo();
+        return (subInfo?.languages ?? []).map((l) => ({ code: l.iso, name: l.name }));
+      },
     };
   }
 
@@ -775,12 +1065,6 @@
     // it). trackSrc() gates the generating /subs pipeline on this flag, so
     // opening a video never auto-downloads the model.
     if (subSource === 'auto') generateRequested = true;
-    // Auto-close the settings popover so the user has an unobstructed
-    // view of the centred progress modal. Also flip the wizard back to
-    // SELECT mode so the next time they open settings the new sub will
-    // be there as a highlighted pill.
-    settingsOpen = false;
-    subsMode = 'select';
     // The user wants the video paused at 0:00 while we generate, then
     // auto-resumed once captions are loaded. Otherwise they'd waste
     // minutes of the film while staring at a "Transcribing…" modal,
@@ -1359,8 +1643,6 @@
   let isFullscreen = false;
   let controlsVisible = true;       // auto-hides during playback
   let controlsHideTimer: ReturnType<typeof setTimeout> | null = null;
-  let settingsOpen = false;
-  let settingsTab: 'subs' | 'style' | 'speed' = 'subs';
   let activeCueText = '';           // current cue(s) the overlay paints
   // ── Caption styling — now shared with /tv and /torrents ──────────
   // The store lives in $shared/media/caption-style, so a viewer's font/size/
@@ -1875,7 +2157,7 @@
     controlsVisible = true;
     if (controlsHideTimer) { clearTimeout(controlsHideTimer); controlsHideTimer = null; }
     controlsHideTimer = setTimeout(() => {
-      if (playerIsPlaying && !settingsOpen) controlsVisible = false;
+      if (playerIsPlaying) controlsVisible = false;
     }, 2500);
   }
 
@@ -2183,6 +2465,11 @@
     playOpen = true;
     playLoading = true;
     playError = '';
+    // Cleared immediately so the previous film's row never shows under the
+    // new one, then refilled in the background — the strip is a nicety and
+    // must never hold up playback.
+    similarItems = [];
+    loadSimilar(item.identifier);
     playFiles = [];
     playActiveIdx = 0;
     playSrc = '';
@@ -2283,7 +2570,6 @@
       const auto = pickAutoSub();
       if (auto) {
         console.log('[cinema] openPlayer: auto-recovering', auto.kind, auto.tgt_lang || auto.src_lang, auto.key);
-        subsMode = 'select';
         generateOpen = false;
         // Fire-and-forget — selectCachedSub installs the cues + syncs
         // subSource / subTargetLang / subsApplied so the picker
@@ -2296,14 +2582,12 @@
         // than the sidecar list — uses raw transcribe URL). Treat as
         // ready and let the reactive load it.
         console.log('[cinema] openPlayer: /transcribe cache hit → auto subs');
-        subsMode = 'select';
         generateOpen = false;
         subSource = 'auto';
         subsApplied = true;
         activeSubKey = 'off';     // no matching sidecar — leave Off until reactive applies
       } else if (localHasSrt) {
         console.log('[cinema] openPlayer: shipped .srt only → enabling orig');
-        subsMode = 'select';
         generateOpen = false;
         subSource = 'orig';
         subsApplied = true;
@@ -2312,7 +2596,6 @@
         // No subs anywhere — default wizard to generate so the CTA is
         // obvious. User still has to click START.
         console.log('[cinema] openPlayer: no subs found → wizard primed for generate');
-        subsMode = 'generate';
         generateOpen = false;
         subSource = 'auto';
         subsApplied = false;
@@ -2352,7 +2635,6 @@
     descOpen = false;
     probedDurationSec = 0;
     probedDurationToken++;            // cancel any in-flight probe
-    subsMode = 'select';              // reset to default for next video
     activeSubKey = 'off';
     cachedSubs = [];
     filesOpen = false;
@@ -2360,8 +2642,8 @@
   function onPlayerKeydown(e: KeyboardEvent) {
     if (!playOpen) return;
     if (e.key === 'Escape') {
-      // First Esc closes settings, second closes player.
-      if (settingsOpen) { settingsOpen = false; return; }
+      // One Esc, one meaning: close the player. There used to be a
+      // settings popover that swallowed the first press.
       closePlayer();
       return;
     }
@@ -2394,6 +2676,7 @@
     watchlist = loadLocalWatchlist();
     syncWatchlistFromServer();
     loadTopTags();
+    loadCanonRails();
     refreshEmbedStatus();
     runSearch();
     loadSubInfo();
@@ -2493,6 +2776,13 @@
       params.set('tags_match', tagsMatch);
     }
     if (langFilter) params.set('language', langFilter);
+    if (kindFilter) params.set('kind', kindFilter);
+    if (identifiedOnly) params.set('identified_only', '1');
+    if (collapseWorks) params.set('collapse', '1');
+    if (minMinutes > 0) params.set('min_minutes', String(minMinutes));
+    if (playableOnly) params.set('playable_only', '1');
+    if (subsOnly) params.set('has_subtitles', '1');
+    if (activeRail) params.set('canon_list', activeRail);
     params.set('limit', String(rows));
     params.set('offset', String((targetPage - 1) * rows));
     params.set('sort', sortMode);
@@ -2680,13 +2970,59 @@
         <option value="ja">Japanese</option>
         <option value="ru">Russian</option>
       </select>
-      <select class="sort-select" bind:value={sortMode} on:change={runSearch} title="sort order (ignored while searching — BM25 + semantic ranking wins)">
+      <!-- Films or series. "any" is the default so nothing is hidden until
+           the user actually asks for one or the other. -->
+      <select class="kind-select" bind:value={kindFilter} on:change={runSearch}
+              aria-label="Films or series">
+        <option value="">películas y series</option>
+        <option value="film">solo películas</option>
+        <option value="series">solo series</option>
+      </select>
+      <select class="sort-select" bind:value={sortMode} on:change={runSearch}
+              aria-label="Sort order"
+              title="how the results are ordered — 'mejores' weights the rating by how many people voted">
+        <option value="best">★ mejores</option>
         <option value="downloads">+ views</option>
         <option value="rating">+ rating</option>
         <option value="year_desc">year ↓</option>
         <option value="year_asc">year ↑</option>
         <option value="added_desc">added ↓</option>
       </select>
+      <!-- Opt-in narrowing to titles matched against a catalogued work.
+           Deliberately a checkbox rather than a default: turning it on hides
+           the industrial and educational cinema the archive is best at. -->
+      <!-- Duration read from the item's real files, not from runtime_sec.
+           Only items already probed can satisfy this. -->
+      <select class="sort-select" bind:value={minMinutes} on:change={runSearch}
+              aria-label="Duración mínima"
+              title="duración mínima real, leída de los archivos del ítem — saca clips, cartas de ajuste y audios mal etiquetados">
+        <option value={0}>cualquier duración</option>
+        <option value={20}>20 min +</option>
+        <option value={40}>40 min +</option>
+        <option value={60}>60 min + (largos)</option>
+      </select>
+      <!-- Four toggles in one bordered box rather than four loose checkboxes
+           strewn along the row. They are all the same kind of thing — narrow
+           the set — and grouping them says so, as well as keeping the bar from
+           reading as an undifferentiated pile of controls. -->
+      <div class="toggle-cluster" role="group" aria-label="Filtros de contenido">
+        <label title="agrupa las múltiples subidas de una misma película en una fila, sumando descargas y votos">
+          <input type="checkbox" bind:checked={collapseWorks} on:change={runSearch} />
+          <span>⧉ agrupar</span>
+        </label>
+        <label title="solo ítems con un formato que el reproductor puede abrir — no es lo mismo que tener torrent">
+          <input type="checkbox" bind:checked={playableOnly} on:change={runSearch} />
+          <span>▶ reproducibles</span>
+        </label>
+        <label title="solo ítems que traen subtítulos">
+          <input type="checkbox" bind:checked={subsOnly} on:change={runSearch} />
+          <span>💬 subs</span>
+        </label>
+        <label title="solo títulos identificados como una obra catalogada — deja fuera cine industrial y educativo que no está en Wikidata">
+          <input type="checkbox" bind:checked={identifiedOnly} on:change={runSearch} />
+          <span>🎬 identificadas</span>
+        </label>
+      </div>
       <button class="primary" disabled={busy} on:click={runSearch}>
         {busy ? '…' : 'search'}
       </button>
@@ -2695,9 +3031,71 @@
     {/if}
   </section>
 
+  <!-- ── CANON RAILS ──────────────────────────────────────────
+       Curated lists, above the tag row because they answer a different and
+       stronger question: not "what is this about" but "who decided this
+       mattered". Only rails the catalogue actually holds titles from are
+       rendered, so this section disappears entirely on a fresh install. -->
+  <!-- Shown whenever EITHER kind of rail is available. Gating the whole
+       section on canon rails would have hidden "para vos" on any catalogue
+       that holds nothing from a curated list — which is most of them. -->
+  {#if !viewWatchlist && !semanticMode}
+    <section class="canon-rails">
+      <!-- One label for the whole row, always present. Previously it only
+           appeared alongside curated rails, so on a catalogue with none the
+           "para vos" chip rendered alone against the left edge and read as a
+           stray element rather than a control. -->
+      <span class="dim mini canon-rails-label">descubrir</span>
+      <!-- Sits with the rails because it answers the same shape of question —
+           "what should I watch" rather than "what matches these words" —
+           even though it is computed rather than curated. -->
+      <button
+        class="canon-chip foryou"
+        class:active={forYouMode}
+        title="rankea el catálogo contra el centroide de tu watchlist, tus vistas y tus puntuaciones"
+        on:click={toggleForYou}
+      >✦ para vos</button>
+      {#if canonRails.length > 0}
+        <span class="chip-sep" aria-hidden="true"></span>
+      {/if}
+      {#each canonRails as rail (rail.key)}
+        <button
+          class="canon-chip"
+          class:active={activeRail === rail.key}
+          title={`${rail.blurb} — el catálogo tiene ${rail.held} de ${rail.members}`}
+          on:click={() => toggleRail(rail.key)}
+        >
+          {rail.label}
+          <span class="canon-chip-count">{rail.held}</span>
+        </button>
+      {/each}
+      {#if activeRail}
+        <button class="ghost sm" on:click={() => toggleRail(activeRail)}>× limpiar</button>
+      {/if}
+    </section>
+
+    <!-- Why the rail came back empty. The two causes need different actions
+         from the user, so collapsing them into "no results" would leave them
+         with nothing to do about it. -->
+    {#if forYouMode && forYouReason !== 'ok' && forYouReason !== ''}
+      <section class="foryou-note">
+        {#if forYouReason === 'no_profile'}
+          Guardá o puntuá algunas películas y este carril empieza a funcionar
+          — van {forYouProfileSize}, hacen falta al menos 3.
+        {:else if forYouReason === 'no_vectors'}
+          El catálogo todavía no está indexado. Corré el indexador de embeddings
+          y volvé a probar.
+        {:else}
+          Tus puntuaciones se cancelan entre sí — no hay una dirección clara
+          para buscar todavía.
+        {/if}
+      </section>
+    {/if}
+  {/if}
+
   <!-- ── TAG CHIP ROW (top tags from the catalog) ─────────────── -->
   {#if !viewWatchlist && !semanticMode && topTags.length > 0}
-    <section class="tag-chips">
+    <section class="tag-chips" class:collapsed={!tagsExpanded}>
       {#if activeTags.length > 0}
         <!-- Active tags first, with X to remove individually -->
         {#each activeTags as activeT (activeT)}
@@ -2766,6 +3164,13 @@
         {/if}
       </div>
     </section>
+    <!-- Only offered when there is actually more to show. On a small
+         catalogue the tags fit in one row and this never appears. -->
+    {#if topTags.length > 8}
+      <button class="tag-more" on:click={() => tagsExpanded = !tagsExpanded}>
+        {tagsExpanded ? '▴ menos etiquetas' : `▾ ver las ${topTags.length} etiquetas`}
+      </button>
+    {/if}
   {/if}
 
   <!-- ── EMBED ADMIN PANEL ────────────────────────────────────── -->
@@ -2835,6 +3240,7 @@
     {#each shownItems as it (it.identifier)}
       <button
         class="card"
+        animate:flip={{ duration: 320, easing: cubicOut }}
         on:click={() => openPlayer(it)}
         on:mouseenter={() => hoverItem = it.identifier}
         on:mouseleave={() => hoverItem === it.identifier && (hoverItem = null)}
@@ -2843,12 +3249,56 @@
 
         <div class="overlay">
           <div class="ovl-title">{it.title || it.identifier}</div>
+          <!-- Facts, on exactly one line that never wraps.
+               This used to be a wrapping row of up to eight badges plus the
+               creator plus the download count. Every card ended up a different
+               height of metadata, so the grid had no rhythm and the badges
+               read as noise rather than information. What survives is what you
+               scan a poster wall for; the rest moved to the ℹ sheet, which is
+               where you go when you actually want to know. -->
           <div class="ovl-meta">
-            {#if it.date}<span class="badge">{it.date.slice(0, 4)}</span>{/if}
-            {#if it.runtime_sec}<span class="badge runtime" title="duration">⏱ {fmtRuntime(it.runtime_sec)}</span>{/if}
-            {#if it.creator}<span class="dim mini">{it.creator.length > 30 ? it.creator.slice(0, 30) + '…' : it.creator}</span>{/if}
-            {#if it.downloads}<span class="dim mini">⇩ {fmtDownloads(it.downloads)}</span>{/if}
+            {#if it.date}<span class="fact">{it.date.slice(0, 4)}</span>{/if}
+            <!-- Prefer the probed duration: runtime_sec is 0 on a large part
+                 of the catalogue, and where both exist the probe read it off
+                 the file rather than off a metadata field someone typed. -->
+            {#if it.media?.duration_sec}
+              <span class="fact" title="duración real, leída de los archivos del ítem">{fmtRuntime(it.media.duration_sec)}</span>
+            {:else if it.runtime_sec}
+              <span class="fact" title="duración declarada">{fmtRuntime(it.runtime_sec)}</span>
+            {/if}
+            {#if it.media?.height}
+              <span class="fact" title={`${it.media.width}×${it.media.height} · ${it.media.best_format}`}>{it.media.height}p</span>
+            {/if}
+            {#if it.media?.has_subtitles}<span class="fact" title="trae subtítulos">SUBS</span>{/if}
+            {#if it.downloads}<span class="fact dl" title="descargas">⇩ {fmtDownloads(it.downloads)}</span>{/if}
           </div>
+          <!-- Second fixed line: who made it. Always rendered, even empty, so
+               every card in the grid is the same height. -->
+          <div class="ovl-creator">{it.creator ?? ''}</div>
+        </div>
+
+        <!-- Quality marks, top-right and away from the title.
+             These answer "is this worth your time", which is a different
+             question from "what is it" — mixing them into the same row was
+             what made both unreadable. At most three ever show. -->
+        <div class="card-flags">
+          {#if it.media && !it.media.has_video}
+            <span class="flag bad" title="el ítem no contiene ningún archivo de video">SIN VIDEO</span>
+          {/if}
+          {#if it.canon?.length}
+            {@const rail = canonRails.find((r) => r.key === it.canon?.[0])}
+            <span class="flag rail" title={it.canon.map((k) => canonRails.find((r) => r.key === k)?.label ?? k).join(' · ')}>
+              ★ {rail?.label ?? it.canon[0]}{#if it.canon.length > 1}&nbsp;+{it.canon.length - 1}{/if}
+            </span>
+          {/if}
+          {#if it.canonical}
+            <span class="flag canon"
+                  title={`identificada: ${it.canonical.label}${it.canonical.year ? ` (${it.canonical.year})` : ''}${it.canonical.director ? ` · ${it.canonical.director}` : ''}${it.canonical.country ? ` · ${it.canonical.country}` : ''}`}
+            >🎬{#if it.canonical.ext_votes > 0}&nbsp;{it.canonical.ext_rating.toFixed(1)}{/if}</span>
+          {/if}
+          {#if it.copies && it.copies > 1}
+            <span class="flag copies" title={`${it.copies} subidas de esta película — descargas y votos sumados`}>⧉ {it.copies}</span>
+          {/if}
         </div>
 
         <span
@@ -2864,35 +3314,20 @@
           class="dir-btn"
           role="button"
           tabindex="0"
-          title="add to a directory"
-          on:click={(ev) => openDirPopover(it.identifier, ev)}
-          on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openDirPopover(it.identifier, e)}
+          title="guardar en un directorio"
+          on:click={(ev) => openDirPicker(it, ev)}
+          on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openDirPicker(it, e)}
         >📁</span>
-        {#if dirPopoverFor === it.identifier}
-          <div class="dir-popover" on:click|stopPropagation>
-            <div class="dir-popover-header">
-              <strong>+ a directorio</strong>
-              <button class="ghost sm" on:click={closeDirPopover}>×</button>
-            </div>
-            {#if myDirs.length === 0}
-              <div class="dim mini">no directories yet.</div>
-              <a class="ghost sm" href="/cinema/directories">+ crear uno</a>
-            {:else}
-              <ul class="dir-popover-list">
-                {#each myDirs as d (d.id)}
-                  <li>
-                    <button on:click={() => addToDir(d.id, it.identifier)} disabled={dirPopoverBusy}>
-                      <span class="dir-name">{d.title}</span>
-                      <span class="dim mini">{d.item_count}</span>
-                    </button>
-                  </li>
-                {/each}
-              </ul>
-              <a class="ghost sm" href="/cinema/directories">+ crear uno</a>
-            {/if}
-            {#if dirPopoverNotice}<div class="dir-popover-notice">{dirPopoverNotice}</div>{/if}
-          </div>
-        {/if}
+        <!-- Read the description properly. The hover overlay clips it and
+             cannot be scrolled, so anything past a few lines was unreachable. -->
+        <span
+          class="info-btn"
+          role="button"
+          tabindex="0"
+          title="ver la ficha completa"
+          on:click={(ev) => openInfo(it, ev)}
+          on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openInfo(it, e)}
+        >ℹ</span>
 
         {#if hoverItem === it.identifier && it.description}
           <div class="hover-desc">
@@ -2972,7 +3407,7 @@
                   class:controls-hidden={!controlsVisible}
                   data-debug-tracksrc={trackUrl ?? ''}
                   on:mousemove={showControls}
-                  on:mouseleave={() => { if (playerIsPlaying && !settingsOpen) controlsVisible = false; }}
+                  on:mouseleave={() => { if (playerIsPlaying) controlsVisible = false; }}
                   role="presentation"
                 >
                   <!-- The <video> stays mounted across track changes (the <track>
@@ -2989,22 +3424,23 @@
                        full transport, scrubbing and speed. Captions, their
                        styling and the translation menu all live in its bar,
                        driven by the shared controller. -->
+                  <!-- `poster` shows the item's own artwork until the first
+                       frame decodes. The player has supported it all along;
+                       cinema simply never passed one, which is why starting a
+                       video was a black rectangle for several seconds. -->
                   <KernlPlayer
                     bind:video={videoEl}
                     src={playSrc}
+                    poster={playItem ? thumbUrl(playItem.identifier) : ''}
                     live={false}
                     autoplay={true}
                     crossorigin="anonymous"
                     ctl={subsCtl}
                     tick={subsTick}
                   >
-                    <svelte:fragment slot="actions">
-                      <button
-                        class="cine-gear"
-                        title="Subtitle pipeline"
-                        on:click={() => (settingsOpen = !settingsOpen)}
-                      >⚙</button>
-                    </svelte:fragment>
+                    <!-- No gear. Subtitles are managed in the player's own
+                         caption menu, which is the only place they live now. -->
+
                     <svelte:fragment slot="overlay">
 
                   {#if codecFallbackHint}
@@ -3017,257 +3453,78 @@
                   <!-- Settings popover (over the video, top-right). Three tabs:
                        subs, style, speed. Closes when the user clicks outside
                        (handled by the .video-stack mousedown). -->
-                  {#if settingsOpen}
-                    <div
-                      class="settings-popover"
-                      role="dialog"
-                      aria-label="player settings"
-                      on:click|stopPropagation
-                      on:mousedown|stopPropagation
-                    >
-                      <div class="settings-tabs">
-                        <button class="tab-btn on">subtitles</button>
-                        <!-- style + speed moved into the player's own menus
-                             (Aa and the rate button) — one place for both. -->
-                        <span class="spacer" />
-                        <button class="tab-btn close-btn" on:click={() => settingsOpen = false} title="close">×</button>
-                      </div>
+                    </svelte:fragment>
 
-                      {#if settingsTab === 'subs'}
-                        <div class="settings-body subs-panel">
-
-                          {#if subsMode === 'select'}
-                            <!-- ─────────────────────────────────────────────
-                                 SELECT MODE (default screen)
-                                 One simple list. Click a language to switch
-                                 captions instantly. "+ Generate" jumps to
-                                 generate mode.
-                                 ───────────────────────────────────────────── -->
-                            <div class="cfg-block">
-                              <div class="cfg-label">Subtitle</div>
-                              <div class="cfg-row source-row">
-                                <button class="src-pill" class:on={activeSubKey === 'off'} on:click={selectOff}>
-                                  <span class="src-icon">⊘</span> Off
-                                </button>
-                                {#if hasSrt}
-                                  <button class="src-pill" class:on={activeSubKey === 'shipped'} on:click={selectShipped}>
-                                    <span class="src-icon">📜</span> Shipped <span class="src-badge">.srt · {subSourceLang}</span>
-                                  </button>
-                                {/if}
-                                {#each cachedSubs as cs (cs.key)}
-                                  <button class="src-pill" class:on={activeSubKey === cs.key} on:click={() => selectCachedSub(cs)} title={`${cs.kind} · ${cs.engine ?? ''} ${cs.model ?? ''}`}>
-                                    <span class="src-icon">{cs.kind === 'translation' ? '🌐' : '🎙'}</span>
-                                    {cs.kind === 'translation'
-                                      ? `${(subInfo?.languages.find(l => l.iso === cs.tgt_lang)?.name ?? cs.tgt_lang)}`
-                                      : `Auto-detected (${cs.src_lang})`}
-                                    {#if cs.engine}<span class="src-badge">{shortModel(cs.engine)}</span>{/if}
-                                  </button>
-                                {/each}
-                                {#if !hasSrt && cachedSubs.length === 0}
-                                  <span class="empty-hint dim mini">no subtitle generated yet</span>
-                                {/if}
-                              </div>
-                            </div>
-
-                            <!-- ── Federated subtitle marketplace (Stage 4b) ── -->
-                            <div class="cfg-block fed-block">
-                              <div class="cfg-label-row">
-                                <span class="cfg-label">🌐 Compartidos</span>
-                                <span class="dim mini">{federatedSubs.length} in the index</span>
-                                <button
-                                  class="ghost sm"
-                                  disabled={federatedRefreshing}
-                                  on:click={() => loadFederatedSubs(true)}
-                                  title="consultar Nostr y archive.org en vivo"
-                                >
-                                  {federatedRefreshing ? '…' : '↻ search the network'}
-                                </button>
-                                <label class="toggle-line dim mini" title="ocultar publicadores no marcados como confiables">
-                                  <input type="checkbox" bind:checked={federatedTrustOnly} />
-                                  trusted only
-                                </label>
-                              </div>
-
-                              {#if federatedError}
-                                <div class="fed-err">⚠ {federatedError}</div>
-                              {/if}
-
-                              {#if federatedShown.length === 0}
-                                <div class="fed-empty dim mini">
-                                  {federatedSubs.length === 0
-                                    ? 'nothing shared for this film — try ↻ search the network'
-                                    : 'ningún publicador trusted ofrece subs todavía'}
-                                </div>
-                              {:else}
-                                <div class="fed-list">
-                                  {#each federatedShown as row (row.rowId)}
-                                    {@const pub = publishersMap[row.signerPubkey]}
-                                    {@const trust = pub?.trust ?? 'unknown'}
-                                    <div class="fed-row" class:downloaded={row.downloadedSubId} class:blocked={trust === 'blocked'}>
-                                      <span class="fed-provider">
-                                        {row.providerId === 'nostr' ? '⚡' : row.providerId === 'archive_org' ? '📦' : '·'}
-                                        {row.providerId}
-                                      </span>
-                                      <span class="fed-lang">{row.tgtLang || '??'}</span>
-                                      <span class="fed-engine dim mini">{row.engine || 'human'}</span>
-                                      <span class="fed-signer dim mini" title={row.signerPubkey}>
-                                        {row.signerPubkey ? (pub?.alias || shortPubkey(row.signerPubkey)) : '—'}
-                                        {#if trust !== 'unknown'}<span class="fed-trust fed-trust-{trust}">{trust}</span>{/if}
-                                      </span>
-                                      <span class="fed-size dim mini">{fmtBytesShort(row.sizeBytes)}</span>
-                                      {#if row.downloadedSubId}
-                                        <span class="fed-status">✓ bajado</span>
-                                      {:else}
-                                        <button
-                                          class="ghost sm"
-                                          disabled={downloadingRowIds.has(row.rowId) || !row.webseedUrl}
-                                          on:click={() => downloadFederated(row)}
-                                          title={row.webseedUrl || 'sin webseed — magnet-only no soportado'}
-                                        >
-                                          {downloadingRowIds.has(row.rowId) ? '…' : 'bajar'}
-                                        </button>
-                                      {/if}
-                                      {#if row.signerPubkey && trust === 'unknown'}
-                                        <button class="ghost sm" on:click={() => setPublisherTrust(row.signerPubkey, 'trusted')} title="marcar publicador como confiable">★</button>
-                                        <button class="ghost sm" on:click={() => setPublisherTrust(row.signerPubkey, 'blocked')} title="bloquear publicador">⊘</button>
-                                      {/if}
-                                    </div>
-                                  {/each}
-                                </div>
-                              {/if}
-                            </div>
-
-                            <button class="cta-btn cta-generate-new" on:click={() => subsMode = 'generate'}>
-                              ＋ Generate new subtitle
-                            </button>
-
-                          {:else}
-                            <!-- ─────────────────────────────────────────────
-                                 GENERATE MODE
-                                 Minimal form — pick a language, click Start.
-                                 Engine/model defaults are auto-picked; user
-                                 only sees them via the "Advanced" link.
-                                 ───────────────────────────────────────────── -->
-                            <button class="back-link" on:click={() => subsMode = 'select'}>
-                              ← Back to subtitle list
-                            </button>
-
-                            <div class="cfg-block">
-                              <div class="cfg-label">Generate subtitle in</div>
-                              <select class="cfg-select cfg-select-lg" bind:value={subTargetLang} on:change={() => translateActive = subTargetLang !== subSourceLang}>
-                                <option value={subSourceLang}>Audio language ({subSourceLang}) — transcribe only</option>
-                                {#each (subInfo?.languages ?? []).filter(l => l.iso !== subSourceLang) as l}
-                                  <option value={l.iso}>{l.name} ({l.iso}) — transcribe + translate</option>
-                                {/each}
-                              </select>
-                            </div>
-
-                            <!-- Pipeline summary using current saved settings -->
-                            <div class="pipeline-preview">
-                              <div class="pp-label">▸ pipeline</div>
-                              <div class="pp-line">
-                                <span class="pp-step">whisper <strong>{transcribeEngine}</strong>/<strong>{transcribeModel}</strong></span>
-                                {#if subTargetLang !== subSourceLang}
-                                  <span class="pp-arrow">→</span>
-                                  <span class="pp-step">translate via <strong>{subEngine}</strong></span>
-                                {/if}
-                              </div>
-                            </div>
-
-                            <!-- Advanced — engine config (saved across runs) -->
-                            <button class="adv-toggle" class:open={advancedOpen} on:click={() => advancedOpen = !advancedOpen}>
-                              <span class="adv-caret">{advancedOpen ? '▾' : '▸'}</span>
-                              <span class="adv-label">Engine settings</span>
-                              <span class="adv-hint">{advancedOpen ? 'these are saved for next time' : 'whisper engine, translation engine'}</span>
-                            </button>
-
-                            {#if advancedOpen}
-                              <div class="adv-body">
-                                {#if transcribeInfo}
-                                  <div class="cfg-block">
-                                    <div class="cfg-label">Whisper (transcribe)</div>
-                                    <div class="cfg-row">
-                                      <select class="cfg-select" bind:value={transcribeEngine} disabled={transcribeBusy}>
-                                        {#if transcribeInfo.engines.groq.available}<option value="groq">groq · cloud · ~30s</option>{/if}
-                                        {#if transcribeInfo.engines.whispercpp.available}<option value="whispercpp">whisper.cpp · CPU · 3–8 min</option>{/if}
-                                        {#if transcribeInfo.engines.transformers.available}<option value="transformers">transformers · CPU · 10–20 min</option>{/if}
-                                      </select>
-                                      <select class="cfg-select" bind:value={transcribeModel} disabled={transcribeBusy}>
-                                        {#each transcribeInfo.models as m}<option value={m}>{m}</option>{/each}
-                                      </select>
-                                    </div>
-                                  </div>
-                                {/if}
-                                {#if subTargetLang !== subSourceLang}
-                                  <div class="cfg-block">
-                                    <div class="cfg-label">Translation engine</div>
-                                    <div class="engine-grid">
-                                      {#if subInfo?.engines.llm.available}
-                                        <button class="engine-tile" class:on={subEngine === 'llm'} on:click={() => subEngine = 'llm'}>
-                                          <span class="et-name">Auto (chain)
-                                            <span class="et-badge">/models</span>
-                                          </span>
-                                          <span class="et-meta">{subInfo.engines.llm.primary.slug}{shortModel(subInfo.engines.llm.primary.model) ? ' · ' + shortModel(subInfo.engines.llm.primary.model) : ''}</span>
-                                          <span class="et-time">~30s–5 min · falls back automatically</span>
-                                        </button>
-                                      {/if}
-                                      {#if subInfo?.engines.nllb.available}
-                                        <button class="engine-tile" class:on={subEngine === 'nllb'} on:click={() => subEngine = 'nllb'}>
-                                          <span class="et-name">NLLB</span>
-                                          <span class="et-meta">offline CPU · 200 langs</span>
-                                          <span class="et-time">~5–10 min · free</span>
-                                        </button>
-                                      {/if}
-                                    </div>
-                                    {#if subInfo?.engines.llm.available && subInfo.engines.llm.fallbacks.length > 0}
-                                      <div class="cfg-hint">
-                                        Fallbacks: {subInfo.engines.llm.fallbacks.map(f => f.slug + (f.available ? '' : ' (no key)')).join(' → ')}
-                                      </div>
-                                    {/if}
-                                  </div>
-                                {/if}
-                              </div>
-                            {/if}
-
+                    <!-- ── COMMUNITY SUBTITLES ────────────────────────
+                         The one thing the shared player cannot know about:
+                         subtitles other people published over Nostr and
+                         archive.org. This used to be a whole second panel
+                         behind a gear icon, which meant choosing a track was
+                         in one place and finding a track was in another.
+                         Now it is the last section of the same menu. -->
+                    <svelte:fragment slot="cc-extra">
+                      {#if playItem}
+                        <div class="cc-fed">
+                          <div class="cc-fed-head">
+                            <span>De la comunidad</span>
                             <button
-                              class="cta-btn cta-apply"
-                              disabled={transcribeBusy || translateBusy}
-                              on:click={() => { subSource = 'auto'; translateActive = subTargetLang !== subSourceLang; applySubs(); }}
-                            >
-                              {#if transcribeBusy || translateBusy}
-                                ⚙ working…
-                              {:else}
-                                ▶ Start generation
-                              {/if}
-                            </button>
+                              class="cc-fed-refresh"
+                              disabled={federatedRefreshing}
+                              on:click={() => loadFederatedSubs(true)}
+                              title="Buscar en Nostr y archive.org"
+                              aria-label="Buscar en la red"
+                            >{federatedRefreshing ? '…' : '↻'}</button>
+                          </div>
 
-                            {#if transcribeError}
-                              <div class="inline-err">{transcribeError}</div>
-                            {/if}
-                            {#if translateError}
-                              <div class="inline-err">{translateError} <button class="dismiss-mini" on:click={() => translateError = ''}>×</button></div>
-                            {/if}
+                          {#if federatedError}
+                            <p class="cc-fed-err">{federatedError}</p>
                           {/if}
 
-                          <!-- ── PLAYBACK · OVERRIDE (force-transcode) ─────── -->
-                          <div class="force-transcode-row">
-                            <label class="force-transcode-toggle">
-                              <input
-                                type="checkbox"
-                                checked={playNeedsTranscode}
-                                on:change={onForceTranscodeToggle}
-                              />
-                              <span class="ftt-knob"></span>
-                              <span class="ftt-text">
-                                <span class="ftt-title">Force transcode (ffmpeg)</span>
-                                <span class="ftt-sub dim">enable if the video is black but audio plays — slower, no seeking</span>
-                              </span>
-                            </label>
-                          </div>
+                          {#if federatedShown.length === 0}
+                            <p class="cc-fed-empty">
+                              {federatedSubs.length === 0
+                                ? 'Nadie compartió subtítulos de esta película todavía.'
+                                : 'Ningún publicador confiable ofrece subtítulos.'}
+                            </p>
+                          {:else}
+                            {#each federatedShown as row (row.rowId)}
+                              {@const pub = publishersMap[row.signerPubkey]}
+                              {@const trust = pub?.trust ?? 'unknown'}
+                              <!-- One row, one line: language and who made it
+                                   are what you choose by; provider and size
+                                   are detail and live in the tooltip. -->
+                              <div class="cc-fed-row" class:got={row.downloadedSubId}>
+                                <span class="cc-fed-lang">{row.tgtLang || '??'}</span>
+                                <span
+                                  class="cc-fed-who"
+                                  title={`${row.providerId} · ${row.engine || 'humano'} · ${fmtBytesShort(row.sizeBytes)}`}
+                                >
+                                  {row.engine || 'humano'}
+                                  {#if row.signerPubkey}· {pub?.alias || shortPubkey(row.signerPubkey)}{/if}
+                                </span>
+                                {#if trust === 'trusted'}
+                                  <span class="cc-fed-trust" title="Publicador confiable">★</span>
+                                {/if}
+                                {#if row.downloadedSubId}
+                                  <span class="cc-fed-got" title="Ya lo tenés">✓</span>
+                                {:else}
+                                  <button
+                                    class="cc-fed-get"
+                                    disabled={downloadingRowIds.has(row.rowId) || !row.webseedUrl}
+                                    on:click={() => downloadFederated(row)}
+                                    title={row.webseedUrl || 'Sin webseed disponible'}
+                                  >{downloadingRowIds.has(row.rowId) ? '…' : 'Usar'}</button>
+                                {/if}
+                              </div>
+                            {/each}
+                          {/if}
+
+                          <label class="cc-fed-trustonly">
+                            <input type="checkbox" bind:checked={federatedTrustOnly} />
+                            Sólo publicadores confiables
+                          </label>
                         </div>
                       {/if}
-                    </div>
-                  {/if}
                     </svelte:fragment>
                   </KernlPlayer>
 
@@ -3447,6 +3704,163 @@
             </div>
           </div>
         {/if}
+
+        <!-- ── MORE LIKE THIS ────────────────────────────────────
+             The route from a film you liked to the next one, which is the
+             thing a catalogue of this size most lacks. Cosine over the
+             stored vectors, so it works on the cartoons and industrial
+             shorts that no identification-based signal can see.
+             Rendered only when there is something to show: an empty row
+             under every film would just be noise. -->
+        {#if similarItems.length > 0}
+          <div class="similar-row" role="region" aria-label="Similar titles">
+            <div class="similar-head">▸ MÁS COMO ESTO</div>
+            <div class="similar-strip">
+              {#each similarItems as s (s.identifier)}
+                <button class="similar-card" on:click={() => openPlayer(s)} title={s.title}>
+                  <img src={thumbUrl(s.identifier)} alt={s.title} loading="lazy" on:error={onPosterError} />
+                  <span class="similar-title">{s.title || s.identifier}</span>
+                  {#if s.date}<span class="dim mini">{s.date.slice(0, 4)}</span>{/if}
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
+      </div>
+    </div>
+  {/if}
+
+  <!-- ── FILM SHEET ───────────────────────────────────────────
+       The description at a size meant for reading, scrollable, selectable,
+       with the metadata the archive actually holds beside it. From here the
+       two things you might want next — watch it, file it — are one click
+       away, so opening the sheet is never a dead end. -->
+  {#if infoItem}
+    <div class="modal-back" on:click|self={closeInfo} role="presentation">
+      <div class="info-dialog" role="dialog" aria-modal="true" aria-label="Ficha de la película">
+        <header class="dir-dialog-head">
+          <span>FICHA</span>
+          <button class="ghost sm" on:click={closeInfo} aria-label="cerrar">×</button>
+        </header>
+
+        <div class="info-body">
+          <img class="info-poster" src={thumbUrl(infoItem.identifier)} alt="" on:error={onPosterError} />
+
+          <div class="info-main">
+            <h2 class="info-title">{infoItem.title || infoItem.identifier}</h2>
+
+            <div class="info-facts">
+              {#if infoItem.canonical?.year || infoItem.date}
+                <span>{infoItem.canonical?.year || infoItem.date?.slice(0, 4)}</span>
+              {/if}
+              {#if infoItem.canonical?.director}<span>{infoItem.canonical.director}</span>{/if}
+              {#if infoItem.canonical?.country}<span>{infoItem.canonical.country}</span>{/if}
+              {#if infoItem.media?.duration_sec}<span>{fmtRuntime(infoItem.media.duration_sec)}</span>
+              {:else if infoItem.runtime_sec}<span>{fmtRuntime(infoItem.runtime_sec)}</span>{/if}
+              {#if infoItem.media?.height}<span>{infoItem.media.height}p</span>{/if}
+              {#if infoItem.downloads}<span>⇩ {fmtDownloads(infoItem.downloads)}</span>{/if}
+              {#if infoItem.copies && infoItem.copies > 1}<span>⧉ {infoItem.copies} copias</span>{/if}
+            </div>
+
+            {#if infoItem.creator}
+              <div class="dim mini info-creator">{infoItem.creator}</div>
+            {/if}
+
+            {#if infoItem.description}
+              <p class="info-desc">{infoItem.description}</p>
+            {:else}
+              <p class="info-desc dim">Este ítem no trae descripción en archive.org.</p>
+            {/if}
+
+            {#if infoItem.subject?.length}
+              <div class="info-tags">
+                {#each infoItem.subject.slice(0, 14) as t}<span class="tag">{t}</span>{/each}
+              </div>
+            {/if}
+          </div>
+        </div>
+
+        <footer class="info-actions">
+          <button class="primary" on:click={() => { const i = infoItem; closeInfo(); if (i) openPlayer(i); }}>
+            ▶ ver
+          </button>
+          <button class="ghost" on:click={(ev) => { const i = infoItem; closeInfo(); if (i) openDirPicker(i, ev); }}>
+            📁 guardar en…
+          </button>
+          <span class="spacer" />
+          <a class="dim mini" href={`https://archive.org/details/${encodeURIComponent(infoItem.identifier)}`}
+             target="_blank" rel="noopener noreferrer">ver en archive.org →</a>
+        </footer>
+      </div>
+    </div>
+  {/if}
+
+  <!-- ── SAVE TO A DIRECTORY ───────────────────────────────────
+       A dialog at page level rather than a popover inside the card. The old
+       one was absolutely positioned over the poster, so it covered the single
+       thing you needed to see: which film you were filing. Here the film is
+       the first thing in it. -->
+  {#if dirPickerItem}
+    <div class="modal-back" on:click|self={closeDirPopover} role="presentation">
+      <div class="dir-dialog" role="dialog" aria-modal="true" aria-label="Guardar en un directorio">
+        <header class="dir-dialog-head">
+          <span>GUARDAR EN…</span>
+          <button class="ghost sm" on:click={closeDirPopover} aria-label="cerrar">×</button>
+        </header>
+
+        <div class="dir-dialog-subject">
+          <img src={thumbUrl(dirPickerItem.identifier)} alt="" on:error={onPosterError} />
+          <div>
+            <div class="dir-dialog-title">{dirPickerItem.title || dirPickerItem.identifier}</div>
+            {#if dirPickerItem.date}<div class="dim mini">{dirPickerItem.date.slice(0, 4)}</div>{/if}
+          </div>
+        </div>
+
+        {#if myDirs.length > 0}
+          <ul class="dir-dialog-list">
+            {#each myDirs as d (d.id)}
+              <li>
+                <button
+                  on:click={() => dirPickerItem && addToDir(d.id, dirPickerItem.identifier)}
+                  disabled={dirPopoverBusy}
+                >
+                  <span class="dir-name">{d.title}</span>
+                  <span class="dim mini">{d.item_count} títulos</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
+        {/if}
+
+        <!-- Always available, not just when the list is empty: the moment you
+             most want a new directory is when none of the existing ones fit. -->
+        <form class="dir-dialog-new" on:submit|preventDefault={createDirAndAdd}>
+          <label class="dim mini" for="dir-new-title">
+            {myDirs.length === 0
+              ? 'Todavía no tenés directorios. Creá el primero y esta película entra sola:'
+              : 'O creá uno nuevo con esta película adentro:'}
+          </label>
+          <div class="dir-dialog-new-row">
+            <input
+              id="dir-new-title"
+              bind:value={dirNewTitle}
+              placeholder="ej. Terror clase B"
+              maxlength="80"
+              disabled={dirCreating || dirPopoverBusy}
+            />
+            <button class="primary" type="submit" disabled={!dirNewTitle.trim() || dirCreating || dirPopoverBusy}>
+              {dirCreating ? '…' : 'crear y guardar'}
+            </button>
+          </div>
+        </form>
+
+        {#if dirPopoverNotice}
+          <div class="dir-dialog-notice" class:ok={dirPopoverNotice.startsWith('✓')}>
+            {dirPopoverNotice}
+          </div>
+        {/if}
+
+        <a class="dim mini dir-dialog-manage" href="/cinema/directories">administrar directorios →</a>
       </div>
     </div>
   {/if}
@@ -3455,14 +3869,43 @@
 <style>
   :global(body) { background: #050807; }
 
+  /* ── Bridge to the dashboard's design tokens ──────────────────────
+     This page was written against variable names that exist nowhere:
+     --amber (175 uses), --green-dim (58), --cyan (57), --bg-1/--bg-2 (11).
+     None of them are defined in app.css, so every one of those ~330
+     references silently fell through to the hardcoded hex in its var()
+     fallback. The page was not participating in the design system at all —
+     it ran on 330 loose constants, which is why its green (#33ff77) and the
+     system's (#3DD68C) were two different greens nobody had compared, and
+     why the theme switcher could not touch it.
+
+     Rather than rewrite 330 call sites, the invented names are declared here
+     ONCE as aliases of the real tokens. Every existing reference now resolves
+     through the system, the theme reaches this page, and there is a single
+     place that states what cinema's "amber" actually is.
+
+     Declared on .page rather than :root so the aliases stay scoped to this
+     extension instead of leaking into every other page. */
   .page {
+    --amber: var(--gold);
+    --green-dim: var(--text-3);
+    --cyan: var(--teal);
+    --bg-1: var(--surface-1);
+    --bg-2: var(--surface-2);
+    --line: var(--border);
+    --dim-fg: var(--text-2);
+
     padding: 0 0 60px;
-    color: var(--green, #33ff77);
-    font-family: var(--font-mono, monospace);
+    color: var(--text-1);
+    /* Body copy in the body font. Monospace everywhere was why long
+       descriptions and creator names read as terminal output rather than
+       as text; it is kept below for the places where it earns its keep —
+       counts, durations, identifiers. */
+    font-family: var(--font-body);
     background:
-      radial-gradient(circle at top right, rgba(51, 255, 119, 0.04), transparent 40%),
-      radial-gradient(circle at 30% 20%, rgba(255, 176, 0, 0.03), transparent 50%),
-      #050807;
+      radial-gradient(circle at top right, color-mix(in srgb, var(--green) 5%, transparent), transparent 40%),
+      radial-gradient(circle at 30% 20%, color-mix(in srgb, var(--gold) 4%, transparent), transparent 50%),
+      var(--bg);
     /* full-bleed parent (.main-inner) is a flex column with overflow:hidden,
        so this element must own its own scroll container — otherwise the
        grid grows past the viewport and gets clipped with no scrollbar. */
@@ -3536,14 +3979,16 @@
   .filters > .years input,
   .filters > .rows,
   .filters > .lang-select,
+  .filters > .kind-select,
   .filters > .sort-select,
+  .filters > .toggle-cluster,
   .filters > button.primary {
     height: 32px;
     box-sizing: border-box;
     padding: 0 12px;
     font-size: 13px;
     line-height: 30px;               /* visually centers text inside fixed height */
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
   }
   .search {
     flex: 1 1 320px;
@@ -3578,25 +4023,54 @@
   .spacer { flex: 1; }
 
   /* ─── BUTTONS ────────────────────────────────────────────── */
+  /* What makes a control look built rather than declared, in four layers:
+     a fill with a slight vertical gradient so it has a light source; a 1px
+     inset highlight along the top edge (the inset shadow below) so it reads
+     as a raised surface; a drop shadow beneath it; and a press state that
+     actually moves. None of this is decoration — it is the difference
+     between a rectangle with a border and something that looks pressable. */
   button.primary {
-    background: var(--green-deep, #0d2516);
-    border: 1px solid var(--green, #33ff77);
-    color: var(--green, #33ff77);
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--green) 22%, transparent),
+        color-mix(in srgb, var(--green) 11%, transparent)
+      );
+    border: 1px solid color-mix(in srgb, var(--green) 55%, transparent);
+    color: var(--green);
     padding: 0 16px;
     cursor: pointer;
     font: inherit;
     font-size: 13px;
-    border-radius: 2px;
-    text-transform: lowercase;
-    letter-spacing: 0.04em;
+    font-weight: 600;
+    border-radius: var(--radius-sm);
+    letter-spacing: 0.01em;
     height: 32px;
     box-sizing: border-box;
-    line-height: 30px;
+    box-shadow:
+      inset 0 1px 0 color-mix(in srgb, var(--green) 30%, transparent),
+      0 1px 2px rgba(0, 0, 0, 0.5);
+    transition: background 0.15s, box-shadow 0.15s, transform 0.08s, border-color 0.15s;
+  }
+  /* Pressing moves the control and pulls its shadow in. A button that does
+     not react to being pressed feels broken even when it works. */
+  button.primary:active:not(:disabled) {
+    transform: translateY(1px);
+    box-shadow:
+      inset 0 1px 3px rgba(0, 0, 0, 0.45),
+      0 0 0 rgba(0, 0, 0, 0);
+  }
+  button.primary:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
   }
   button.primary:hover:not(:disabled) {
-    background: var(--green, #33ff77);
-    color: #050807;
-    box-shadow: 0 0 14px rgba(51, 255, 119, 0.4);
+    background: var(--green);
+    border-color: var(--green);
+    color: var(--bg);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.25),
+      0 2px 10px color-mix(in srgb, var(--green) 35%, transparent);
   }
   button.primary.go {
     background: rgba(255, 176, 0, 0.08);
@@ -3617,7 +4091,7 @@
     cursor: pointer;
     font: inherit;
     font-size: 11px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     text-transform: lowercase;
   }
   button.ghost:hover:not(:disabled) { color: var(--green, #33ff77); border-color: var(--green-dim, #4d8a5a); }
@@ -3630,7 +4104,7 @@
     border: 1px solid var(--red, #f55);
     color: var(--red, #f55);
     background: rgba(255, 60, 60, 0.06);
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
   }
   .hint {
     margin: 12px 32px;
@@ -3638,7 +4112,7 @@
     border: 1px dashed var(--dim-fg, #6a7a6a);
     color: var(--dim-fg, #99a);
     background: rgba(255, 255, 255, 0.02);
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     font-size: 0.92em;
   }
   /* ── Tag chip row (top tags from catalog) ─────────────────── */
@@ -3652,6 +4126,25 @@
     border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     background: rgba(255, 255, 255, 0.015);
   }
+  /* Collapsed to a single row by default.
+     Twenty-five chips wrapped to three rows and pushed the first poster
+     most of the way down the viewport — the catalogue's own content lost
+     the fold to its filters. The rest stay one click away. */
+  .tag-chips.collapsed {
+    max-height: 42px;
+    overflow: hidden;
+  }
+  .tag-more {
+    margin: -6px 32px 12px;
+    background: none;
+    border: none;
+    color: var(--green-dim, #4d8a5a);
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+    padding: 2px 12px;
+  }
+  .tag-more:hover { color: var(--amber, #ffb000); }
   .tag-chip {
     display: inline-flex;
     align-items: center;
@@ -3755,7 +4248,8 @@
   /* Match exact dimensions of the year/rows inputs so the bar is a
      single horizontal beam. Native <select> ignores line-height for
      the option text but the dropdown arrow still aligns. */
-  .lang-select, .sort-select {
+
+  .kind-select, .lang-select, .sort-select {
     height: 32px;
     box-sizing: border-box;
     padding: 0 10px;
@@ -3764,12 +4258,12 @@
     color: var(--green, #33ff77);
     font-family: inherit;
     font-size: 13px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     cursor: pointer;
     /* Keep arrow space readable; native appearance varies per OS. */
     appearance: auto;
   }
-  .lang-select:focus, .sort-select:focus {
+  .kind-select:focus, .lang-select:focus, .sort-select:focus {
     border-color: var(--amber, #ffb000);
     outline: none;
     box-shadow: 0 0 6px rgba(255, 176, 0, 0.2);
@@ -3780,7 +4274,7 @@
     padding: 12px 16px;
     background: rgba(0, 0, 0, 0.4);
     border: 1px solid rgba(255, 176, 0, 0.25);
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
   }
   .embed-row-top {
     display: flex;
@@ -3836,51 +4330,11 @@
     padding: 4px 10px;
     font-size: 12px;
   }
-  /* ── Federated subtitle marketplace ────────────────────────── */
-  .fed-block { border-top: 1px solid rgba(255,255,255,0.06); padding-top: 10px; margin-top: 8px; }
-  .cfg-label-row { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; flex-wrap: wrap; }
-  .toggle-line { display: inline-flex; align-items: center; gap: 4px; cursor: pointer; }
-  .fed-empty { padding: 6px 0; }
-  .fed-err {
-    margin: 4px 0 8px;
-    padding: 6px 10px;
-    border: 1px solid var(--red, #f55);
-    color: var(--red, #f55);
-    background: rgba(255, 60, 60, 0.06);
-    border-radius: 2px;
-    font-size: 0.9em;
-  }
-  .fed-list { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
-  .fed-row {
-    display: grid;
-    grid-template-columns: auto auto auto 1fr auto auto auto;
-    gap: 8px;
-    align-items: center;
-    padding: 4px 8px;
-    border: 1px solid rgba(255,255,255,0.04);
-    border-radius: 2px;
-    font-size: 0.88em;
-  }
-  .fed-row.downloaded { background: rgba(60, 200, 100, 0.04); }
-  .fed-row.blocked { opacity: 0.4; }
-  .fed-provider { font-weight: 600; }
-  .fed-lang { text-transform: uppercase; font-weight: 700; min-width: 26px; text-align: center; }
-  .fed-status { color: var(--green, #4d8); font-size: 0.85em; }
-  .fed-trust {
-    display: inline-block;
-    margin-left: 4px;
-    padding: 0 4px;
-    border-radius: 2px;
-    font-size: 0.85em;
-  }
-  .fed-trust-mine    { background: rgba(120, 180, 255, 0.18); color: #9cf; }
-  .fed-trust-trusted { background: rgba(80, 220, 130, 0.18); color: #6e8; }
-  .fed-trust-blocked { background: rgba(255, 80, 80, 0.18); color: #f88; }
   .result {
     margin: 12px 32px;
     padding: 8px 14px;
     border: 1px dashed var(--green-dim, #4d8a5a);
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
     gap: 14px;
@@ -3941,13 +4395,25 @@
   .overlay {
     position: absolute;
     inset: auto 0 0 0;
-    padding: 10px 12px;
-    background: linear-gradient(180deg, transparent 0%, rgba(0, 0, 0, 0.85) 60%, rgba(0, 0, 0, 0.95) 100%);
+    padding: 26px 12px 10px;
+    /* The scrim starts higher and darker than before. Titles are set in amber
+       over whatever the poster happens to be, and on a light frame — a snow
+       scene, a title card — the old gradient left them barely legible. */
+    background: linear-gradient(
+      180deg,
+      transparent 0%,
+      rgba(0, 0, 0, 0.55) 28%,
+      rgba(0, 0, 0, 0.88) 62%,
+      rgba(0, 0, 0, 0.97) 100%
+    );
     color: #fff;
     pointer-events: none;
   }
   .ovl-title {
-    color: var(--amber, #ffb000);
+    /* Display font on titles — the one place a distinct face earns its
+       keep, and what the token set provides Geist for. */
+    font-family: var(--font-display);
+    color: var(--gold);
     font-size: 13px;
     line-height: 1.25;
     font-weight: 600;
@@ -3958,21 +4424,327 @@
     -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .ovl-meta { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; font-size: 10.5px; }
-  .ovl-meta .badge {
-    background: rgba(0, 0, 0, 0.5);
-    border: 1px solid var(--green-dim, #4d8a5a);
-    color: var(--amber, #ffb000);
-    padding: 0 6px;
-    border-radius: 2px;
-    font-size: 10px;
+  /* One line, never wrapping. `min-width: 0` on the children is what lets the
+     line clip instead of forcing the row taller — the wrapping version is
+     exactly what made every card a different height. */
+  .ovl-meta {
+    display: flex;
+    gap: 0;
+    flex-wrap: nowrap;
+    align-items: baseline;
+    overflow: hidden;
+    height: 15px;
+    /* Mono here, and only here: years, durations, resolutions and counts are
+       exactly the case tabular figures exist for, so columns of cards line
+       their numbers up instead of drifting. */
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
   }
-  .ovl-meta .badge.runtime {
-    color: #cfe8d0;
-    border-color: rgba(207, 232, 208, 0.35);
-    letter-spacing: 0.02em;
+  .ovl-meta .fact { white-space: nowrap; min-width: 0; }
+  /* Interpuncts as separators rather than boxes. Six bordered pills on a
+     poster is a fence; six words with dots between them is a caption. */
+  .ovl-meta .fact + .fact::before {
+    content: "·";
+    margin: 0 6px;
+    color: var(--green-dim, #4d8a5a);
+  }
+  .ovl-meta .fact.dl { color: #9dbfa8; }
+  /* Always rendered, even empty, so the grid keeps a single rhythm. */
+  .ovl-creator {
+    height: 14px;
+    margin-top: 2px;
+    font-size: 10.5px;
+    color: #8fae99;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* Quality marks, stacked top-right, clear of the title and of the
+     hover buttons on the left. */
+  .card-flags {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    max-width: 70%;
+    pointer-events: none;
+  }
+  .flag {
+    font-size: 10px;
+    line-height: 1;
+    letter-spacing: 0.04em;
+    padding: 3px 6px;
+    border-radius: var(--radius-sm);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 100%;
+    backdrop-filter: blur(2px);
+  }
+  .flag.rail {
+    color: #1a1206;
+    background: var(--amber, #ffb000);
+    font-weight: 700;
+  }
+  .flag.canon {
+    color: #ffe9a8;
+    background: rgba(20, 14, 2, 0.82);
+    border: 1px solid rgba(255, 176, 0, 0.5);
+  }
+  .flag.copies {
+    color: #cfe0ff;
+    background: rgba(8, 14, 28, 0.82);
+    border: 1px solid rgba(160, 190, 255, 0.45);
+  }
+  .flag.bad {
+    color: #fff;
+    background: rgba(158, 26, 26, 0.92);
+    font-weight: 700;
   }
   .ovl-meta .dim { color: #b0c8b8; }
+
+  /* ── Community subtitles, inside the player's caption menu ────────
+     Styled to belong to that menu rather than to this page: the menu sits
+     over video on a dark translucent panel, so these rows borrow its
+     restraint — no borders per row, one line each, the action on the right.
+     Global because the markup is passed through a slot into KernlPlayer,
+     which puts it outside this component's style scope. */
+  /* A panel of its own, not a section that leans on a divider.
+     The border-top alone was enough while something sat above it, but when
+     the film has no tracks yet this is the only content in the menu and it
+     read as a fragment floating over the video. Its own surface, border and
+     radius mean it looks deliberate whether it is first or last. */
+  :global(.cc-fed) {
+    margin-top: 10px;
+    padding: 10px 10px 8px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.04);
+    font-family: var(--font-body);
+  }
+  :global(.cc-fed-head) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 10px;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: rgba(255, 255, 255, 0.45);
+    margin-bottom: 6px;
+  }
+  :global(.cc-fed-refresh) {
+    margin-left: auto;
+    width: 20px; height: 20px;
+    border-radius: 4px;
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    background: transparent;
+    color: rgba(255, 255, 255, 0.7);
+    cursor: pointer;
+    font-size: 11px;
+    line-height: 1;
+  }
+  :global(.cc-fed-refresh:hover:not(:disabled)) { color: #F0B429; border-color: #F0B429; }
+  :global(.cc-fed-refresh:disabled) { opacity: 0.4; cursor: wait; }
+
+  /* One row per shared track. Language leads because that is what you pick
+     by; who made it follows; provider and size are detail and live in the
+     tooltip rather than crowding the line. */
+  :global(.cc-fed-row) {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 5px 6px;
+    border-radius: 5px;
+    font-size: 12px;
+    color: rgba(255, 255, 255, 0.85);
+  }
+  :global(.cc-fed-row:hover) { background: rgba(255, 255, 255, 0.06); }
+  :global(.cc-fed-row.got) { color: rgba(255, 255, 255, 0.5); }
+  :global(.cc-fed-lang) {
+    font-family: var(--font-mono);
+    text-transform: uppercase;
+    font-weight: 700;
+    font-size: 11px;
+    min-width: 22px;
+  }
+  :global(.cc-fed-who) {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: rgba(255, 255, 255, 0.55);
+    font-size: 11px;
+  }
+  :global(.cc-fed-trust) { color: #F0B429; font-size: 11px; }
+  :global(.cc-fed-got) { color: #6ee7a0; font-size: 12px; }
+  :global(.cc-fed-get) {
+    padding: 3px 9px;
+    border-radius: 4px;
+    border: 1px solid rgba(240, 180, 41, 0.5);
+    background: rgba(240, 180, 41, 0.12);
+    color: #F0B429;
+    font: inherit;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  :global(.cc-fed-get:hover:not(:disabled)) { background: #F0B429; color: #10131a; }
+  :global(.cc-fed-get:disabled) { opacity: 0.35; cursor: not-allowed; }
+
+  :global(.cc-fed-err) { color: #ff9a9a; font-size: 11px; margin: 4px 0; }
+  :global(.cc-fed-empty) {
+    color: rgba(255, 255, 255, 0.45);
+    font-size: 11px;
+    line-height: 1.5;
+    margin: 4px 0;
+  }
+  :global(.cc-fed-trustonly) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 8px;
+    font-size: 11px;
+    color: rgba(255, 255, 255, 0.5);
+    cursor: pointer;
+  }
+  :global(.cc-fed-trustonly input) { accent-color: #F0B429; cursor: pointer; }
+
+  .canon-rails {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    /* 32px matches the gutter every other band on this page uses. Without it
+       this row started at x=0 while the filters and the grid began a third of
+       an inch in, which read as a rendering fault rather than a rail. */
+    padding: 10px 32px 4px;
+  }
+  .canon-rails-label { margin-right: 2px; }
+  .canon-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 9px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    color: #ffe9a8;
+    background: rgba(255, 176, 0, 0.08);
+    border: 1px solid rgba(255, 176, 0, 0.35);
+  }
+  .canon-chip:hover { background: rgba(255, 176, 0, 0.18); }
+  .canon-chip.active {
+    background: rgba(255, 176, 0, 0.28);
+    border-color: var(--amber, #ffb000);
+    font-weight: 600;
+  }
+  .canon-chip-count { opacity: 0.65; font-size: 11px; }
+  /* Computed rather than curated — cooler tone so it does not read as
+     another editorial list. */
+  .canon-chip.foryou {
+    color: #cfe0ff;
+    background: rgba(120, 160, 255, 0.10);
+    border-color: rgba(160, 190, 255, 0.40);
+  }
+  .canon-chip.foryou:hover { background: rgba(120, 160, 255, 0.20); }
+  .canon-chip.foryou.active {
+    background: rgba(120, 160, 255, 0.30);
+    border-color: #9fc0ff;
+    font-weight: 600;
+  }
+  .foryou-note {
+    padding: 4px 0 2px;
+    font-size: 12px;
+    color: #b0c8b8;
+  }
+
+  .similar-row { padding: 10px 0 2px; }
+  .similar-head {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    color: #b0c8b8;
+    padding-bottom: 6px;
+  }
+  /* Horizontal strip: this sits inside a modal whose height is already
+     spoken for by the player, so it scrolls sideways rather than pushing
+     the video off screen. */
+  .similar-strip {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 6px;
+  }
+  .similar-card {
+    flex: 0 0 104px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    padding: 0;
+    background: none;
+    border: 1px solid transparent;
+    cursor: pointer;
+    text-align: left;
+    color: var(--green, #33ff77);
+  }
+  .similar-card:hover { border-color: var(--green-dim, #4d8a5a); }
+  .similar-card img {
+    width: 104px;
+    height: 146px;
+    object-fit: cover;
+    background: #0b1410;
+  }
+  .similar-title {
+    font-size: 11px;
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+
+  /* One box for the narrowing toggles, sharing the filter row's 32px height
+     so it sits on the same baseline as the selects rather than floating. */
+  .toggle-cluster {
+    display: inline-flex;
+    align-items: center;
+    gap: 14px;
+    padding: 0 12px;
+    background: var(--bg-2, #0b1f12);
+    border: 1px solid var(--line, #1d3a26);
+  }
+  .toggle-cluster label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 12px;
+    line-height: 1;
+    color: #b0c8b8;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .toggle-cluster label:hover { color: var(--amber, #ffb000); }
+  .toggle-cluster input {
+    cursor: pointer;
+    margin: 0;
+    accent-color: var(--amber, #ffb000);
+  }
+  /* An active narrowing filter is worth seeing at a glance — otherwise an
+     empty grid looks like a broken catalogue rather than a filter doing its
+     job. */
+  .toggle-cluster label:has(input:checked) { color: var(--amber, #ffb000); }
+
+  @media (max-width: 900px) {
+    /* Below this the cluster would push the row into a third line; letting it
+       span full width keeps the toggles legible instead of squeezed. */
+    .filters > .toggle-cluster { flex: 1 1 100%; justify-content: flex-start; }
+  }
 
   .check {
     position: absolute;
@@ -4087,43 +4859,226 @@
     outline: none;
   }
   .card:hover .dir-btn { opacity: 1; transform: scale(1); }
-  .dir-popover {
+  /* ℹ — read the description. Same circle as the star and folder so the
+     three read as one row of card actions rather than three inventions. */
+  .info-btn {
     position: absolute;
-    top: 48px;
-    left: 8px;
-    z-index: 10;
+    top: 8px;
+    left: 124px;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.6);
+    color: var(--green-dim, #4d8a5a);
+    border: 1px solid var(--green-dim, #4d8a5a);
+    font-size: 15px;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.85);
+    transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
+  }
+  .card:hover .info-btn { opacity: 1; transform: scale(1); }
+  .info-btn:hover, .info-btn:focus {
+    color: var(--amber, #ffb000);
+    border-color: var(--amber, #ffb000);
+    background: rgba(0, 0, 0, 0.8);
+    outline: none;
+  }
+
+  /* The film sheet. Wider than the directory dialog because its job is
+     reading — a synopsis set in a 460px column at 11px was the complaint. */
+  .info-dialog {
+    width: min(760px, calc(100vw - 32px));
+    max-height: min(86vh, 720px);
+    display: flex;
+    flex-direction: column;
     background: var(--bg-1, #0a1812);
-    border: 1px solid var(--cyan, #4dd0e1);
-    border-radius: 2px;
-    padding: 8px 10px;
-    min-width: 220px;
-    max-height: 280px;
-    overflow-y: auto;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
+    border: 1px solid var(--green-dim, #4d8a5a);
+    border-radius: var(--radius-sm);
+    padding: 14px 18px 12px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.8);
     text-align: left;
   }
-  .dir-popover-header {
-    display: flex; align-items: center; justify-content: space-between;
-    margin-bottom: 8px;
-    color: var(--cyan, #4dd0e1);
-    font-size: 12px;
+  .info-body {
+    display: flex;
+    gap: 18px;
+    padding: 14px 0 4px;
+    overflow-y: auto;
+    flex: 1 1 auto;
   }
-  .dir-popover-list { list-style: none; padding: 0; margin: 0 0 6px; }
-  .dir-popover-list li button {
+  .info-poster {
+    width: 168px;
+    flex: 0 0 auto;
+    align-self: flex-start;
+    background: #0b1410;
+    border: 1px solid var(--line, #1d3a26);
+  }
+  .info-main { min-width: 0; flex: 1 1 auto; }
+  .info-title {
+    margin: 0 0 8px;
+    font-family: var(--font-display);
+    font-size: 19px;
+    line-height: 1.25;
+    font-weight: 600;
+    color: var(--text-1);
+    text-wrap: balance;
+  }
+  /* Facts as a separated run rather than a paragraph — they are scanned,
+     not read. */
+  .info-facts {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--amber, #ffb000);
+    margin-bottom: 6px;
+  }
+  .info-facts > span + span::before {
+    content: "·";
+    margin-right: 8px;
+    color: var(--green-dim, #4d8a5a);
+  }
+  .info-creator { margin-bottom: 12px; }
+  /* 14.5px and 1.65 line-height: this is body copy now, not a tooltip.
+     max-width keeps the measure near 70 characters so long synopses stay
+     readable instead of running the full dialog width. */
+  .info-desc {
+    margin: 0 0 14px;
+    font-size: 14.5px;
+    line-height: 1.65;
+    color: #c8e8d2;
+    max-width: 62ch;
+    white-space: pre-wrap;
+  }
+  .info-tags { display: flex; flex-wrap: wrap; gap: 5px; }
+  .info-tags .tag {
+    color: #cfe8d0;
+    font-size: 11px;
+    background: rgba(207, 232, 208, 0.07);
+    border: 1px solid rgba(207, 232, 208, 0.18);
+    padding: 2px 8px;
+    border-radius: 999px;
+  }
+  .info-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-top: 12px;
+    margin-top: 4px;
+    border-top: 1px dashed var(--line, #1d3a26);
+    flex: 0 0 auto;
+  }
+  .info-actions .spacer { flex: 1 1 auto; }
+
+  @media (max-width: 640px) {
+    .info-body { flex-direction: column; }
+    .info-poster { width: 128px; }
+  }
+
+  /* Save-to-directory dialog.
+     Amber, not the cyan the old popover used — that colour appeared nowhere
+     else on the page and read as a foreign element pasted over the grid.
+     Amber is already this interface's "you did something" accent (the star,
+     the canon badge), which is exactly what filing a film is. */
+  .dir-dialog {
+    width: min(460px, calc(100vw - 32px));
+    max-height: min(80vh, 620px);
+    overflow-y: auto;
+    background: var(--bg-1, #0a1812);
+    border: 1px solid var(--amber, #ffb000);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px 12px;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.8);
+    text-align: left;
+  }
+  .dir-dialog-head {
+    display: flex; align-items: center; justify-content: space-between;
+    color: var(--amber, #ffb000);
+    font-size: 12px;
+    letter-spacing: 0.14em;
+    padding-bottom: 10px;
+    border-bottom: 1px dashed var(--line, #1d3a26);
+  }
+  /* The film being filed, stated first. The old popover covered it. */
+  .dir-dialog-subject {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+    padding: 12px 0;
+  }
+  .dir-dialog-subject img {
+    width: 48px; height: 68px;
+    object-fit: cover;
+    background: #0b1410;
+    flex: 0 0 auto;
+  }
+  .dir-dialog-title {
+    font-size: 13px;
+    line-height: 1.3;
+    color: var(--green, #33ff77);
+  }
+
+  .dir-dialog-list { list-style: none; padding: 0; margin: 0 0 12px; }
+  .dir-dialog-list li button {
     width: 100%;
     display: flex; justify-content: space-between; align-items: center;
-    padding: 4px 8px;
-    background: transparent;
-    border: 1px solid transparent;
+    gap: 10px;
+    padding: 8px 10px;
+    background: var(--bg-2, #0b1f12);
+    border: 1px solid var(--line, #1d3a26);
     color: var(--text-1, #e5e5e5);
     cursor: pointer;
     font: inherit; font-size: 12px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
+    margin-bottom: 4px;
   }
-  .dir-popover-list li button:hover { background: rgba(77, 208, 225, 0.1); border-color: var(--cyan, #4dd0e1); }
-  .dir-popover-list li button:disabled { opacity: 0.5; cursor: wait; }
+  .dir-dialog-list li button:hover:not(:disabled) {
+    background: rgba(255, 176, 0, 0.12);
+    border-color: var(--amber, #ffb000);
+    color: var(--amber, #ffb000);
+  }
+  .dir-dialog-list li button:disabled { opacity: 0.5; cursor: wait; }
   .dir-name { text-align: left; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .dir-popover-notice { font-size: 11px; color: var(--green, #4d8); margin-top: 6px; }
+
+  .dir-dialog-new { display: block; padding-top: 4px; }
+  .dir-dialog-new label { display: block; margin-bottom: 6px; line-height: 1.4; }
+  .dir-dialog-new-row { display: flex; gap: 6px; }
+  .dir-dialog-new-row input {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0 10px;
+    background: var(--bg-2, #0b1f12);
+    border: 1px solid var(--line, #1d3a26);
+    color: var(--green, #33ff77);
+    font: inherit; font-size: 13px;
+    border-radius: var(--radius-sm);
+    outline: none;
+  }
+  .dir-dialog-new-row input:focus {
+    border-color: var(--amber, #ffb000);
+    box-shadow: 0 0 6px rgba(255, 176, 0, 0.2);
+  }
+  .dir-dialog-new-row button { flex: 0 0 auto; height: 32px; white-space: nowrap; }
+
+  .dir-dialog-notice {
+    font-size: 12px;
+    margin-top: 10px;
+    color: #ff9a9a;
+  }
+  .dir-dialog-notice.ok { color: var(--green, #33ff77); }
+  .dir-dialog-manage {
+    display: block;
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--line, #1d3a26);
+  }
 
   .chip-sep {
     width: 1px;
@@ -4362,18 +5317,6 @@
     color: var(--amber, #ffb000) !important;
     background: rgba(255, 176, 0, 0.04);
   }
-
-  /* Subtitle / translation bar under the player */
-  .subs-bar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 6px 12px;
-    border-top: 1px solid var(--line, #1d3a26);
-    background: #07120a;
-    flex-wrap: wrap;
-    flex-shrink: 0;
-  }
   .sub-btn {
     background: rgba(0, 0, 0, 0.4);
     border: 1px solid var(--line, #1d3a26);
@@ -4405,7 +5348,7 @@
     padding: 3px 6px;
     font: inherit;
     font-size: 11px;
-    border-radius: 2px;
+    border-radius: var(--radius-sm);
     outline: none;
   }
 
@@ -4751,83 +5694,6 @@
     from { transform: translateY(10px) scale(0.98); opacity: 0; }
     to   { transform: translateY(0) scale(1);       opacity: 1; }
   }
-  /* Corner brackets — same trick as the modal but smaller and tighter
-     to mark the popover as a sub-instrument. */
-  .settings-popover::before {
-    content: "";
-    position: absolute;
-    inset: 0;
-    pointer-events: none;
-    background:
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 0 0 / 8px 1px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 0 0 / 1px 8px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 100% 0 / 8px 1px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 100% 0 / 1px 8px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 0 100% / 8px 1px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 0 100% / 1px 8px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 100% 100% / 8px 1px no-repeat,
-      linear-gradient(var(--amber, #ffb000), var(--amber, #ffb000)) 100% 100% / 1px 8px no-repeat;
-    filter: drop-shadow(0 0 2px rgba(255, 176, 0, 0.7));
-  }
-
-  .settings-tabs {
-    display: flex;
-    gap: 0;
-    border-bottom: 1px solid rgba(255, 176, 0, 0.3);
-    padding: 0 6px;
-    background: linear-gradient(180deg, rgba(255, 176, 0, 0.04), transparent);
-    flex-shrink: 0;       /* tabs never collapse — the body absorbs scroll */
-  }
-  .tab-btn {
-    background: transparent;
-    border: 0;
-    color: var(--green-dim, #4d8a5a);
-    padding: 10px 14px 9px;
-    font: inherit;
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 10px;
-    text-transform: uppercase;
-    letter-spacing: 0.12em;
-    cursor: pointer;
-    border-bottom: 2px solid transparent;
-    margin-bottom: -1px;
-    position: relative;
-    transition: color 100ms;
-  }
-  .tab-btn:hover { color: var(--green, #33ff77); }
-  /* Active tab gets `[ ]` brackets to make the selection unambiguous
-     even at small font sizes — a terminal-style emphasis.            */
-  .tab-btn.on {
-    color: var(--amber, #ffb000);
-    border-bottom-color: var(--amber, #ffb000);
-    text-shadow: 0 0 6px rgba(255, 176, 0, 0.6);
-  }
-  .tab-btn.on::before { content: "["; margin-right: 3px; opacity: 0.7; }
-  .tab-btn.on::after  { content: "]"; margin-left: 3px; opacity: 0.7; }
-  .tab-btn.close-btn {
-    color: var(--text-2, #aaa);
-    font-size: 18px;
-    padding: 6px 12px;
-    line-height: 1;
-  }
-  .tab-btn.close-btn:hover { color: var(--red, #f55); text-shadow: 0 0 6px rgba(255, 80, 80, 0.5); }
-  .tab-btn.close-btn::before, .tab-btn.close-btn::after { content: none; }
-  .settings-tabs .spacer { flex: 1; }
-
-  .settings-body {
-    /* Generous top padding so the first label's text-shadow halo and
-       ascenders aren't clipped by the scroll edge. */
-    padding: 28px 22px 22px;
-    flex: 0 1 auto;
-    min-height: 0;
-    overflow-y: auto;
-    overflow-x: hidden;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 176, 0, 0.4) transparent;
-  }
-  .settings-body::-webkit-scrollbar { width: 6px; }
-  .settings-body::-webkit-scrollbar-thumb { background: rgba(255, 176, 0, 0.4); border-radius: 0; }
-  .settings-body::-webkit-scrollbar-track { background: transparent; }
 
   .section-head {
     font-size: 10px;
@@ -4916,28 +5782,6 @@
     flex-direction: column;
     gap: 10px;
   }
-  .cfg-label {
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 11px;             /* bumped from 9px so labels are readable */
-    font-weight: 700;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--amber, #ffb000);
-    text-shadow: 0 0 6px rgba(255, 176, 0, 0.45);
-    padding-bottom: 4px;
-    border-bottom: 1px dashed rgba(255, 176, 0, 0.25);
-    /* Padding-top + line-height so the text-shadow halo doesn't get
-       clipped by the parent's scroll edge. */
-    padding-top: 2px;
-    line-height: 1.4;
-  }
-  .cfg-label::before { content: "▸ "; opacity: 0.6; }
-  .cfg-row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    align-items: center;
-  }
   /* Stack source pills as full-width rows for the SELECT list — each
      option is a clear, tappable row instead of a cramped horizontal
      line of capsules. The Target Language picker overrides this back
@@ -4947,78 +5791,12 @@
     align-items: stretch;
     gap: 6px;
   }
-  .cfg-row.target-row {
-    flex-direction: row;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
   /* Compact pills used in horizontal rows (target language) — keep them
      inline-sized, not full-width. */
   .cfg-row.target-row .src-pill {
     width: auto;
     padding: 9px 14px;
   }
-
-  /* Source pill — full-row card with icon + label + optional badge. */
-  .src-pill {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 11px 14px;
-    width: 100%;
-    text-align: left;
-    background: rgba(0, 0, 0, 0.55);
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--text-1, #e5e5e5);
-    cursor: pointer;
-    font: inherit;
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 12px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
-    border-radius: 0;
-    transition: border-color 120ms, color 120ms, background 120ms, box-shadow 120ms;
-  }
-  .src-pill:hover {
-    color: var(--text-1, #e5e5e5);
-    border-color: var(--green-dim, #4d8a5a);
-    background: rgba(51, 255, 119, 0.05);
-  }
-  .src-pill.on {
-    background: linear-gradient(135deg, rgba(255, 176, 0, 0.18), rgba(255, 176, 0, 0.04));
-    border-color: var(--amber, #ffb000);
-    color: var(--amber, #ffb000);
-    box-shadow: inset 3px 0 0 var(--amber, #ffb000), 0 0 10px rgba(255, 176, 0, 0.18);
-  }
-  .src-icon { font-size: 16px; line-height: 1; flex-shrink: 0; width: 18px; text-align: center; }
-  .src-badge {
-    display: inline-block;
-    margin-left: auto;             /* push to right edge of full-row pill */
-    padding: 2px 8px;
-    border: 1px solid rgba(77, 208, 225, 0.5);
-    background: rgba(77, 208, 225, 0.08);
-    color: var(--cyan, #4dd0e1);
-    border-radius: 0;
-    font-size: 10px;
-    letter-spacing: 0.08em;
-    text-transform: lowercase;
-    white-space: nowrap;
-    flex-shrink: 0;
-  }
-  .src-badge.ready {
-    color: var(--green, #33ff77);
-    background: rgba(51, 255, 119, 0.12);
-    border-color: rgba(51, 255, 119, 0.45);
-    text-shadow: 0 0 3px rgba(51, 255, 119, 0.5);
-    opacity: 1;
-  }
-  .src-badge.cached {
-    color: var(--cyan, #4dd0e1);
-    background: rgba(77, 208, 225, 0.1);
-    border-color: rgba(77, 208, 225, 0.4);
-    opacity: 1;
-  }
-  .src-pill .dim { color: var(--green-dim, #4d8a5a); margin-left: 3px; font-weight: 400; }
 
   /* Generic config select inside a cfg-row */
   .cfg-select {
@@ -6030,27 +6808,6 @@
   .section-head .dim { color: var(--green-dim, #4d8a5a); font-weight: 400; text-transform: none; letter-spacing: 0; }
   .row.indent { margin-left: 16px; padding-left: 8px; border-left: 1px solid rgba(77, 138, 90, 0.18); }
   .opt .dim { color: rgba(255, 255, 255, 0.4); margin-left: 4px; font-size: 10px; }
-  .settings-body .row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 12px;
-    line-height: 1.3;
-  }
-  .settings-body .row.preview-row {
-    flex-direction: column;
-    align-items: stretch;
-    background: #000;
-    padding: 12px;
-    border-radius: 4px;
-    margin-top: 6px;
-  }
-  .settings-body .row.err {
-    color: var(--red, #f55);
-    font-size: 11px;
-  }
-  .settings-body .row.dim { color: var(--green-dim, #4d8a5a); }
-  .settings-body .row.mini { font-size: 11px; }
   .lbl {
     flex: 0 0 110px;
     font-size: 11px;
@@ -6106,30 +6863,6 @@
     color: var(--cyan, #4dd0e1);
   }
   .opt:disabled { opacity: 0.4; cursor: not-allowed; }
-
-  .settings-body .sel {
-    flex: 1;
-    background: var(--bg-2, #0b1f12);
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--green, #33ff77);
-    padding: 4px 8px;
-    font: inherit;
-    font-size: 11px;
-    border-radius: 3px;
-    outline: none;
-  }
-  .settings-body input[type="range"] {
-    flex: 1;
-    accent-color: var(--amber, #ffb000);
-    cursor: pointer;
-  }
-  .settings-body input[type="color"] {
-    width: 32px;
-    height: 24px;
-    border: 1px solid var(--line, #1d3a26);
-    background: transparent;
-    cursor: pointer;
-  }
 
   .caption-preview {
     display: inline-block;
@@ -6931,8 +7664,10 @@
     color: var(--green, #33ff77);
     padding: 14px 14px 70px;
     overflow: hidden;
-    font-size: 11.5px;
-    line-height: 1.5;
+    /* A glance, not a read — the ℹ button opens the readable version. Still
+       bumped from 11.5px, which was small enough to be decorative. */
+    font-size: 12.5px;
+    line-height: 1.55;
     pointer-events: none;
     animation: fade 0.18s ease-out;
   }

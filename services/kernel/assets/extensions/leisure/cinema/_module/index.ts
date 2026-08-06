@@ -40,10 +40,16 @@ import { NostrSubsProvider } from "./discovery/nostr-provider.js";
 import { ArchiveSubsProvider } from "./discovery/archive-provider.js";
 import { NostrDirectoriesProvider } from "./discovery/nostr-directories-provider.js";
 import { registerCinemaRoutes } from "./api-routes.js";
+import { registerCinemaFriendsRoutes } from "./friends-routes.js";
 import { registerCinemaMediaRoutes } from "./media-routes.js";
 import { cinemaTools } from "./tools.js";
 import { EmbedRunner } from "./embed-runner.js";
 import { TranslateRunner } from "./translate-runner.js";
+import { CanonicalService } from "./canonical/service.js";
+import { CanonicalRunner } from "./canonical/runner.js";
+import { tmdbFromEnv } from "./canonical/tmdb.js";
+import { MediaProbeRunner } from "./media-runner.js";
+import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
 import type { AgentDriver } from "../../../../../src/core/types.js";
@@ -88,6 +94,10 @@ export function createCinemaModule(): CinemaModule {
   let embeddingsRef: EmbeddingsClient | null = null;
   let embedRunner: EmbedRunner | null = null;
   let translateRunner: TranslateRunner | null = null;
+  let canonicalService: CanonicalService | null = null;
+  let canonicalRunner: CanonicalRunner | null = null;
+  let mediaRunner: MediaProbeRunner | null = null;
+  let sqliteRef: SqliteDb | null = null;
   let directoriesService: CinemaDirectoriesService | null = null;
   let directoriesProvider: NostrDirectoriesProvider | null = null;
   /** Local kernel's Nostr identity. Held here so we can reuse it for
@@ -120,6 +130,24 @@ export function createCinemaModule(): CinemaModule {
       // text to SQLite and clears each row's embed bookkeeping so the
       // EmbedRunner re-processes against the Spanish profile.
       translateRunner = new TranslateRunner(service);
+      // Canonical identification — resolves catalogue rows against a local
+      // copy of Wikidata's film corpus, which is what gives the "best" order
+      // something real to rank by. The runner owns all three phases (corpus
+      // pull, matching, optional TMDb ratings) and, like the others, is
+      // driven from the API rather than started on boot: the first pass is a
+      // long network walk and that is the user's call to make.
+      // Asks archive.org what each item actually contains. Independent of the
+      // canonical runner — identity comes from Wikidata, contents come from
+      // the item — so the two run without waiting on each other.
+      sqliteRef = ctx.sqlite;
+      mediaRunner = new MediaProbeRunner(ctx.sqlite);
+      canonicalService = new CanonicalService(ctx.sqlite);
+      canonicalRunner = new CanonicalRunner(
+        ctx.sqlite,
+        canonicalService,
+        tmdbFromEnv,
+        new Date().getFullYear(),
+      );
       // Community directories — local CRUD now, Nostr publish/discover
       // wires up once setNostrIdentity lands.
       directoriesService = new CinemaDirectoriesService(ctx.sqlite);
@@ -271,6 +299,10 @@ export function createCinemaModule(): CinemaModule {
       const getDirectories = () => directoriesService;
       const getDirectoriesProvider = () => directoriesProvider;
       const getLocalIdentity = () => localIdentity;
+      const getCanonical = () => canonicalService;
+      const getCanonicalRunner = () => canonicalRunner;
+      const getMediaRunner = () => mediaRunner;
+      const getSqlite = () => sqliteRef;
       return {
         // No nav entry yet — /cinema is already registered from the
         // dashboard module's static routes. Stage 3 swaps the data
@@ -282,13 +314,19 @@ export function createCinemaModule(): CinemaModule {
               server, svc, subs,
               getGraph, getEmbedder, getRegistry, getEmbedRunner,
               getDirectories, getDirectoriesProvider, getLocalIdentity,
-              getTranslateRunner,
+              getTranslateRunner, getCanonical, getCanonicalRunner,
+              getMediaRunner, getSqlite,
             );
           }
           // Media-serving layer (archive.org proxy/transcode/probe + subtitle
           // pipeline). Standalone — no service deps, so register unconditionally
           // so the cinema player works even before the graph/embedder wire up.
           registerCinemaMediaRoutes(server);
+
+          // Friends lane: serving friends-only directories to another kernel
+          // and pulling theirs. Registered unconditionally — it reports 503
+          // by itself while peering or the directories service is missing.
+          registerCinemaFriendsRoutes(server, getDirectories);
         },
       };
     },

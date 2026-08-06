@@ -96,26 +96,10 @@ html, body {
   width: auto;
   display: block;
 }
-.header-clock {
-  font-family: var(--font-mono);
-  font-size: 13px;
-  color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  transition: background 0.15s;
-  white-space: nowrap;
-}
-.header-clock:hover { background: var(--surface-2); }
-.header-greeting {
-  font-size: 13px;
-  color: var(--text-3);
-  flex: 1;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
+/* .header-clock and .header-greeting removed with their markup — the clock
+   moved to the foot of the rail. `.header-greeting` carried the `flex: 1`
+   that pushed this cluster right, but `.header-right` already sets
+   `margin-left: auto`, so the layout holds without it. */
 .header-right {
   display: flex;
   align-items: center;
@@ -525,6 +509,51 @@ html, body {
   letter-spacing: 0.3px;
   text-transform: uppercase;
 }
+/* ── Rail clock ────────────────────────────────────────────────────
+   Pinned under the nav. Time reads first and date second because that is
+   the order you want them: the hour is the glance, the date is the check.
+   Tabular figures so the digits do not shuffle sideways every minute. */
+.rail-clock {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  width: 100%;
+  margin-top: 6px;
+  padding: 8px 2px 6px;
+  border: none;
+  border-top: 1px solid var(--border);
+  background: none;
+  cursor: pointer;
+  color: var(--text-3);
+  font-family: var(--font-body);
+  transition: color 0.2s, background 0.2s;
+  border-radius: var(--radius);
+}
+.rail-clock:hover { color: var(--text-1); background: var(--surface-2); }
+.rail-clock:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: -2px;
+  color: var(--text-1);
+}
+.rail-clock-time {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.1;
+  letter-spacing: 0.02em;
+  color: var(--text-1);
+}
+.rail-clock:hover .rail-clock-time { color: var(--gold); }
+.rail-clock-date {
+  font-size: 8.5px;
+  font-weight: 600;
+  letter-spacing: 0.4px;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
 .nav-badge {
   position: absolute;
   top: 2px; right: 2px;

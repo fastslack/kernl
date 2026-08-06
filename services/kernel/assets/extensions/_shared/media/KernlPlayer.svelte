@@ -444,6 +444,16 @@
           {/if}
           {#if subsFailed && job?.error}<p class="kp-err">{job.error}</p>{/if}
         {/if}
+
+        <!-- Host-supplied sources.
+             Cinema has two the player cannot know about: the .srt shipped
+             inside the archive.org item, and the community layer shared over
+             Nostr. They used to live in a second, separate subtitle panel
+             behind a gear icon, which meant two places to manage one thing.
+             They belong in this menu; the slot lets them in without the
+             shared player learning anything about archive.org or Nostr, so
+             TV and torrents are unaffected — they simply do not fill it. -->
+        <slot name="cc-extra" />
       </div>
     {/if}
   </div>

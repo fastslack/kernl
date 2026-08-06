@@ -9,7 +9,6 @@
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
-  import { greeting } from '$lib/utils.js';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
@@ -101,11 +100,21 @@
   let manifestEndpoints: Array<{ url: string; store: string }> = [];
 
   // ── Clock ────────────────────────────────────────────────────────
+  // The rail clock is split into its own parts rather than reusing the
+  // header's single string: 72px of width cannot hold "Thu, Aug 6 04:19:29"
+  // on one line, and seconds ticking in the corner of the eye is noise when
+  // the point is "what time is it, roughly".
+  let railTime = '';
+  let railDate = '';
+
   function updateClock() {
     const now = new Date();
     const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: serverTimezone });
     const date = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: serverTimezone });
     clock = date + '  ' + time;
+
+    railTime = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: serverTimezone });
+    railDate = now.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', timeZone: serverTimezone });
   }
 
   // ── Navigation ───────────────────────────────────────────────────
@@ -119,6 +128,9 @@
     providers: 'system',
     'api-registry': 'system',
     'rss-registry': 'system',
+    // Instance peering: identity and trusted instances. Lives under System
+    // because it is about who this kernel is, not about a person.
+    friends: 'system',
   };
   $: currentGroupId = viewToGroup[currentView] ?? ORPHAN_VIEW_GROUP[currentView] ?? navGroups[0].id;
 
@@ -210,6 +222,19 @@
       const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
       if (token && !headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
       const res = await origFetch(input as any, { ...init, headers });
+
+      // 428 → the kernel has no LLM that can run an agent, and is refusing
+      // every feature route until one exists. Same shape as the 401 bounce
+      // below, including the guard against N parallel failures racing N
+      // redirects. /setup is where it gets fixed, so never bounce off it.
+      if (res.status === 428) {
+        if (!redirecting && !location.pathname.startsWith('/setup') && !location.pathname.startsWith('/login')) {
+          redirecting = true;
+          location.href = '/setup?blocked=llm';
+        }
+        return res;
+      }
+
       if (res.status !== 401) return res;
       // 401 → bounce to /login (carrying ?next= so we come back here).
       // Skip if we're already on /login itself (avoid redirect loops).
@@ -435,6 +460,9 @@
     'commander', 'agents', 'agents-flow', 'workspace', 'files', 'models',
     'providers', 'memory', 'skills',
     'autogenesis', 'issues',
+    // Instance peering. Core, not an extension: it is how this kernel knows
+    // who it is and which other instances it trusts.
+    'friends',
   ]);
 
   // Views granted by nav (hardcoded NAV_GROUPS base + manifest navItems),
@@ -483,6 +511,28 @@
       /* localStorage disabled (privacy mode, sandboxed iframe) — skip the
          redirect rather than block the dashboard. */
     }
+
+    // ── Is there an LLM that can run an agent? ──────────────────────
+    //
+    // Asked up front so a blocked install lands on the screen that fixes it
+    // instead of on a dashboard whose every panel fails one by one. The 428
+    // handler on window.fetch is the backstop for anything that slips past;
+    // this is what makes the first paint correct.
+    //
+    // Deliberately NOT keyed off localStorage the way the first-run redirect
+    // above is: a flag in the browser is not evidence about the server, and
+    // clearing it was all it took to walk past that one.
+    fetch('/api/llm/readiness')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v: { ok?: boolean } | null) => {
+        if (v && v.ok === false && !window.location.pathname.startsWith('/setup')) {
+          goto('/setup?blocked=llm', { replaceState: true });
+        }
+      })
+      .catch(() => {
+        /* Kernel unreachable — the existing offline handling covers it; a
+           readiness verdict we could not fetch is not evidence of anything. */
+      });
 
     // Fetch server timezone before starting clock
     rpcOrCall('server.health', {}, () => fetch('/api/health').then(r => r.json())).then((d: any) => {
@@ -724,10 +774,10 @@
     <div class="header-logo">
       <img class="header-logo-img" src="/mascot.png" alt="Kernl" />
     </div>
-    <div class="header-clock" on:click={() => navigate('planner')} role="button" tabindex="0" on:keypress={() => navigate('planner')}>
-      {clock}
-    </div>
-    <div class="header-greeting">{greeting()}</div>
+    <!-- The clock lives at the foot of the rail now, where it is always in
+         the same place regardless of which page is open. Repeating it here,
+         alongside a greeting, spent the most valuable strip of the screen on
+         something neither actionable nor changing. -->
     <div class="header-right">
       <!-- Status cluster: live state of the kernel (tasks pending, mail drafts) -->
       <div class="hdr-cluster hdr-status">
@@ -873,6 +923,19 @@
       >
         <span class="nav-icon">{sysGroup.icon}</span>
         <span class="nav-label">{sysGroup.label}</span>
+      </button>
+
+      <!-- Clock, pinned below everything.
+           Clicking it goes to the planner, same as the header clock — a date
+           on screen that does nothing when you press it is a small lie. -->
+      <button
+        class="rail-clock"
+        on:click={() => navigate('planner')}
+        title={clock}
+        aria-label={`Ir a la agenda — ${clock}`}
+      >
+        <span class="rail-clock-time">{railTime}</span>
+        <span class="rail-clock-date">{railDate}</span>
       </button>
 
     </div>

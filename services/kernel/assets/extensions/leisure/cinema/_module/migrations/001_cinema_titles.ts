@@ -7,6 +7,12 @@ import { cinemaFtsFixMigration } from "./006_fts_fix.js";
 import { cinemaPurgeCollectionItemsMigration } from "./007_purge_collection_items.js";
 import { cinemaPurgeNoiseCollectionsMigration } from "./008_purge_noise_collections.js";
 import { cinemaResetMinilmEmbeddingsMigration } from "./009_reset_minilm_embeddings.js";
+import { cinemaCanonicalMigration } from "./010_canonical.js";
+import { cinemaWorksMigration } from "./011_works.js";
+import { cinemaMediaMigration } from "./012_media.js";
+import { cinemaCanonMigration } from "./013_canon.js";
+import { cinemaSyncAttemptsMigration } from "./014_sync_attempts.js";
+import { cinemaFriendsVisibilityMigration } from "./015_friends_visibility.js";
 
 export const cinemaMigrations: Migration[] = [
   {
@@ -91,4 +97,10 @@ export const cinemaMigrations: Migration[] = [
   cinemaPurgeCollectionItemsMigration,
   cinemaPurgeNoiseCollectionsMigration,
   cinemaResetMinilmEmbeddingsMigration,
+  cinemaCanonicalMigration,
+  cinemaWorksMigration,
+  cinemaMediaMigration,
+  cinemaCanonMigration,
+  cinemaSyncAttemptsMigration,
+  cinemaFriendsVisibilityMigration,
 ];
