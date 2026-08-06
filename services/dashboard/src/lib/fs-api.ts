@@ -34,6 +34,46 @@ export interface ProviderInfo {
 	kind: 'local' | 'sftp' | 's3' | 'webdav' | 'archive';
 	label: string;
 	home?: string;
+	/** Every path this provider serves. Anything outside these is out of scope. */
+	roots?: FsRoot[];
+}
+
+export interface FsRoot {
+	path: string;
+	/** Probed at the kernel: false for :ro mounts, wrong owner, or bad mode. */
+	writable: boolean;
+}
+
+function trimSlash(p: string): string {
+	return p.endsWith('/') && p !== '/' ? p.slice(0, -1) : p;
+}
+
+/** True when `path` sits inside (or is) `root`. */
+export function isUnder(path: string, root: string): boolean {
+	const p = trimSlash(path);
+	const r = trimSlash(root);
+	return p === r || p.startsWith(r === '/' ? '/' : r + '/');
+}
+
+/** True when `path` sits inside any of `roots`. Empty roots means scope unknown. */
+export function isInScope(path: string, roots: FsRoot[]): boolean {
+	if (!roots.length) return true; // do not pretend to know better than the server
+	return roots.some((r) => isUnder(path, r.path));
+}
+
+/**
+ * Whether `path` can be written to.
+ *
+ * Unknown scope is treated as writable: refusing operations because the server
+ * did not tell us anything would break older backends that report no roots.
+ */
+export function isWritable(path: string, roots: FsRoot[]): boolean {
+	if (!roots.length) return true;
+	const owning = roots.filter((r) => isUnder(path, r.path));
+	if (!owning.length) return false; // out of scope entirely
+	// Nested roots: the most specific one wins.
+	owning.sort((a, b) => b.path.length - a.path.length);
+	return owning[0].writable;
 }
 
 export interface Bookmark {

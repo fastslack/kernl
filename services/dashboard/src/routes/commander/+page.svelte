@@ -30,7 +30,9 @@
 		streamOp,
 		historyPush,
 		FsApiError,
+		isWritable,
 		type FsEntry,
+		type FsRoot,
 		type OpProgress
 	} from '$lib/fs-api.js';
 	import Pane from '$lib/components/commander/Pane.svelte';
@@ -323,6 +325,30 @@
 	$: hasFileCursor =
 		!!activeT?.cursor &&
 		activeT.entries.find((e) => e.name === activeT!.cursor)?.kind === 'file';
+	$: hasCursor = !!activeT?.cursor && activeT.entries.some((e) => e.name === activeT!.cursor);
+
+	/**
+	 * Roots served by a provider. Falls back to `home` for backends that predate
+	 * the `roots` field, and to empty when the provider is unknown — an empty
+	 * list means "scope unknown", which the client treats as "do not restrict".
+	 */
+	function rootsFor(providerId: string | undefined): FsRoot[] {
+		if (!providerId) return [];
+		const p = $providers.find((x) => x.id === providerId);
+		if (!p) return [];
+		if (p.roots?.length) return p.roots;
+		// Backend predates the roots field: assume its home and assume writable,
+		// since it gave us nothing to restrict on.
+		return p.home ? [{ path: p.home, writable: true }] : [];
+	}
+
+	/**
+	 * Writability of each side. Copy and move are gated on the *destination*:
+	 * a read-only source is perfectly fine to copy from, and the failure a user
+	 * needs warning about is the one at the far end.
+	 */
+	$: activeWritable = activeT ? isWritable(activeT.path, rootsFor(activeT.providerId)) : true;
+	$: passiveWritable = passiveT ? isWritable(passiveT.path, rootsFor(passiveT.providerId)) : true;
 
 	function selectedPaths(t: CommanderTab | null): string[] {
 		if (!t) return [];
@@ -447,6 +473,12 @@
 			case 'mkdir':
 				modal = { kind: 'mkdir' };
 				break;
+			case 'rename': {
+				const e = currentEntry();
+				if (!e) return;
+				modal = { kind: 'rename', current: e.name };
+				break;
+			}
 			case 'delete': {
 				const paths = selectedPaths(activeT);
 				if (!paths.length) return;
@@ -586,6 +618,47 @@
 		}
 	}
 
+	/**
+	 * Renames the cursor entry in place.
+	 *
+	 * Rejects anything containing a separator: a rename is not a move, and
+	 * silently relocating a file because the user typed a slash is exactly the
+	 * kind of surprise a file manager must not spring. Use F6 to move.
+	 */
+	function validateRename(name: string): string | null {
+		const trimmed = name.trim();
+		if (!trimmed) return 'Name cannot be empty';
+		if (trimmed === '.' || trimmed === '..') return 'Reserved name';
+		if (trimmed.includes('/')) return 'A name cannot contain “/” — use F6 to move';
+		if (modal?.kind === 'rename' && trimmed === modal.current) return null;
+		if (activeT?.entries.some((e) => e.name === trimmed)) {
+			return `“${trimmed}” already exists here`;
+		}
+		return null;
+	}
+
+	async function doRename(next: string): Promise<void> {
+		if (!modal || modal.kind !== 'rename' || !activeT) return;
+		const from = joinPath(activeT.path, modal.current);
+		const to = joinPath(activeT.path, next.trim());
+		const side = activeSide;
+		modal = null;
+		if (from === to) return;
+		try {
+			await renameFs(activeT.providerId, from, to);
+			await refresh(side);
+			// Follow the entry to its new name so the cursor does not jump to
+			// the top of the listing after every rename.
+			updateActiveTab(getPaneStore(side), (x) => ({
+				...x,
+				cursor: next.trim(),
+				selection: new Set()
+			}));
+		} catch (err) {
+			setPaneError(side, err instanceof Error ? err.message : String(err));
+		}
+	}
+
 	async function doTransfer(): Promise<void> {
 		if (!modal || !activeT || !passiveT) return;
 		if (modal.kind !== 'copy-to' && modal.kind !== 'move-to') return;
@@ -686,6 +759,13 @@
 		if (ev.key === ':') { ev.preventDefault(); modal = { kind: 'cmd' }; return; }
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'b') { ev.preventDefault(); handleAction('bookmark'); return; }
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'h') { ev.preventDefault(); bookmarksOpen = true; return; }
+		// Shift variant first: with Shift held, ev.key is "R", so the remotes
+		// binding below would not match anyway — but ordering makes that explicit.
+		if ((ev.ctrlKey || ev.metaKey) && ev.shiftKey && ev.key.toLowerCase() === 'r') {
+			ev.preventDefault();
+			refresh(activeSide, true);
+			return;
+		}
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'r') { ev.preventDefault(); remoteManagerOpen = true; return; }
 		// Ctrl+L — type a path directly, the way every browser and file manager
 		// does it. Previously the only way to reach an arbitrary path was `:cd`.
@@ -694,7 +774,9 @@
 			(activeSide === 'left' ? leftPaneEl : rightPaneEl)?.beginPathEdit();
 			return;
 		}
-		if (ev.key === 'F2') { ev.preventDefault(); refresh(activeSide, true); return; }
+		// F2 renames, as in Explorer and Total Commander. Refresh moved to
+		// Ctrl+Shift+R above; the title bar's Reload button also does it.
+		if (ev.key === 'F2') { ev.preventDefault(); handleAction('rename'); return; }
 	}
 
 	// ── Mount ───────────────────────────────────────────────────────
@@ -809,6 +891,7 @@
 			onRetry={() => refresh('left', true)}
 			onHome={() => goHome('left')}
 			onDismissNotice={() => clearNotice('left')}
+			roots={rootsFor(leftTab?.providerId)}
 		/>
 
 		<!--
@@ -846,11 +929,19 @@
 			onRetry={() => refresh('right', true)}
 			onHome={() => goHome('right')}
 			onDismissNotice={() => clearNotice('right')}
+			roots={rootsFor(rightTab?.providerId)}
 		/>
 	</div>
 
 	<StatusBar {leftTab} {rightTab} {activeSide} {targetCount} />
-	<OpsBar onAction={handleAction} {targetCount} {hasFileCursor} />
+	<OpsBar
+		onAction={handleAction}
+		{targetCount}
+		{hasFileCursor}
+		{hasCursor}
+		{activeWritable}
+		{passiveWritable}
+	/>
 </div>
 
 <!-- Ops toasts -->
@@ -879,6 +970,18 @@
 			modal = null;
 			awaitingBookmark = false;
 		}}
+	/>
+{:else if modal?.kind === 'rename'}
+	<ConfirmDialog
+		title="Rename"
+		message={`In ${activeT?.path ?? ''}`}
+		inputLabel="New name"
+		initialValue={modal.current}
+		selectRange="basename"
+		validate={validateRename}
+		confirmLabel="Rename"
+		on:confirm={(e) => doRename(e.detail.value)}
+		on:cancel={() => (modal = null)}
 	/>
 {:else if modal?.kind === 'delete'}
 	<ConfirmDialog

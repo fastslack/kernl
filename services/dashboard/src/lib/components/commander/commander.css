@@ -252,6 +252,142 @@
 	border-radius: 3px;
 	flex-shrink: 0;
 }
+.cmd-header .provider-pill.open,
+.cmd-header .provider-pill:hover {
+	background: color-mix(in srgb, var(--cmd-accent) 24%, transparent);
+}
+.cmd-header .provider-pill .pill-caret {
+	font-size: 7px;
+	margin-left: 4px;
+	opacity: 0.8;
+}
+
+/* Read-only marker. Carries a glyph and a word, so it survives a greyscale
+   screen — the amber tint is reinforcement, not the message. */
+.cmd-header .ro-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 4px;
+	flex-shrink: 0;
+	padding: 3px 7px;
+	font-size: 9px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--orange);
+	background: color-mix(in srgb, var(--orange) 14%, transparent);
+	border: 1px solid color-mix(in srgb, var(--orange) 35%, transparent);
+	border-radius: 3px;
+	white-space: nowrap;
+}
+
+/* ── Places: the mounted locations popover ─────────────────────── */
+
+.places-wrap {
+	position: relative;
+	flex-shrink: 0;
+}
+/* Fixed, not absolute: both .cmd-header and .cmd-pane clip their overflow,
+   so an in-flow popover is cut off. Coordinates come from the trigger's rect. */
+.places-menu {
+	position: fixed;
+	z-index: 1100;
+	width: 300px;
+	max-width: calc(100vw - 16px);
+	background: var(--surface-1);
+	border: 1px solid var(--cmd-accent);
+	border-radius: var(--radius-sm);
+	box-shadow: 0 16px 40px color-mix(in srgb, #000 55%, transparent);
+	padding: 6px;
+}
+.places-head {
+	margin: 2px 6px 6px;
+	font-size: 9px;
+	letter-spacing: 0.12em;
+	text-transform: uppercase;
+	color: var(--text-3);
+}
+/* Flex, not grid: the read-only badge only exists on some rows, and a fixed
+   column count would shunt the path sideways on the rows that lack it. */
+.places-item {
+	display: flex;
+	align-items: baseline;
+	gap: 8px;
+	width: 100%;
+	text-align: left;
+	font-family: var(--cmd-font);
+	font-size: 11px;
+	color: var(--text-1);
+	background: none;
+	border: 1px solid transparent;
+	border-radius: 3px;
+	padding: 7px 6px;
+	min-height: 30px;
+	cursor: pointer;
+}
+.places-item:hover {
+	background: color-mix(in srgb, var(--cmd-accent) 12%, transparent);
+	border-color: color-mix(in srgb, var(--cmd-accent) 30%, transparent);
+}
+.places-item.current {
+	background: color-mix(in srgb, var(--cmd-accent) 16%, transparent);
+}
+.places-item.current .places-label {
+	color: var(--cmd-accent);
+	font-weight: 700;
+}
+.places-glyph {
+	color: var(--blue);
+	width: 14px;
+	flex-shrink: 0;
+	text-align: center;
+}
+.places-item .places-label,
+.places-item .places-ro {
+	flex-shrink: 0;
+}
+.places-label {
+	font-weight: 600;
+}
+.places-ro {
+	font-size: 8px;
+	font-weight: 700;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--orange);
+	background: color-mix(in srgb, var(--orange) 14%, transparent);
+	border-radius: 2px;
+	padding: 1px 4px;
+	white-space: nowrap;
+}
+.places-path {
+	margin-left: auto;
+	color: var(--cmd-dim);
+	font-size: 10px;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	text-align: right;
+	direction: rtl; /* keep the meaningful tail visible when it must truncate */
+}
+.places-empty,
+.places-foot {
+	margin: 6px;
+	font-size: 10px;
+	line-height: 1.6;
+	color: var(--text-3);
+}
+.places-empty code {
+	font-family: var(--cmd-font);
+	color: var(--cmd-accent);
+	word-break: break-all;
+}
+.places-foot {
+	border-top: 1px solid var(--border);
+	padding-top: 6px;
+	margin-bottom: 2px;
+}
+
 .cmd-header .crumb {
 	display: flex;
 	align-items: center;
@@ -281,6 +417,17 @@
 .cmd-header .crumb-seg:hover {
 	background: color-mix(in srgb, var(--cmd-accent) 16%, transparent);
 	color: var(--cmd-accent);
+}
+/* Above the allowed roots: shown for orientation, but not offered as a target,
+   because opening it can only ever fail. */
+.cmd-header .crumb-seg.out-of-scope {
+	color: var(--text-3);
+	cursor: default;
+	padding: 4px 5px;
+}
+.cmd-header .crumb-seg.out-of-scope:hover {
+	background: none;
+	color: var(--text-3);
 }
 .cmd-header .crumb-sep {
 	color: var(--text-3);
@@ -1011,6 +1158,14 @@
 	border-color: var(--cmd-accent);
 	box-shadow: 0 0 0 2px color-mix(in srgb, var(--cmd-accent) 25%, transparent);
 }
+/* Validation sits directly under its input, not in a summary elsewhere. */
+.cmd-dialog-err {
+	margin: 6px 0 0;
+	font-size: 11px;
+	line-height: 1.5;
+	color: var(--red);
+}
+
 .cmd-dialog-foot {
 	display: flex;
 	gap: 8px;

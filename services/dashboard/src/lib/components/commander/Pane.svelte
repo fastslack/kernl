@@ -11,7 +11,7 @@
 		visibleEntries,
 		createTab
 	} from '$lib/commander-stores.js';
-	import type { FsEntry } from '$lib/fs-api.js';
+	import { isInScope, isUnder, isWritable, type FsEntry, type FsRoot } from '$lib/fs-api.js';
 
 	export let paneId: PaneId;
 	export let store: Writable<PaneState>;
@@ -25,6 +25,11 @@
 	export let onHome: () => void;
 	/** Dismisses the transient operation notice. */
 	export let onDismissNotice: () => void;
+	/** Every path the active provider serves. Drives Places and breadcrumb scope. */
+	export let roots: FsRoot[] = [];
+
+	/** False when this pane's directory cannot be written to. */
+	$: readOnly = tab ? !isWritable(tab.path, roots) : false;
 
 	$: tab = activeTab($store);
 	$: entries = tab ? visibleEntries(tab) : [];
@@ -133,15 +138,83 @@
 		return 'File';
 	}
 
-	function crumbs(path: string): Array<{ label: string; path: string }> {
+	/**
+	 * Breadcrumb segments, each flagged with whether it can actually be opened.
+	 *
+	 * With real roots configured most of the leading path sits *above* them —
+	 * `/`, `/home`, `/home/user` are all outside the scope. Rendering those as
+	 * buttons invites a click that can only ever produce "Path out of allowed
+	 * scope", so they render as plain text instead.
+	 */
+	function crumbs(path: string): Array<{ label: string; path: string; reachable: boolean }> {
 		const parts = path.split('/').filter(Boolean);
-		const out: Array<{ label: string; path: string }> = [{ label: '/', path: '/' }];
+		const out = [{ label: '/', path: '/', reachable: isInScope('/', roots) }];
 		let cur = '';
 		for (const p of parts) {
 			cur += '/' + p;
-			out.push({ label: p, path: cur });
+			out.push({ label: p, path: cur, reachable: isInScope(cur, roots) });
 		}
 		return out;
+	}
+
+	// ── Places: the directories this provider actually serves ───────
+
+	let placesOpen = false;
+	let pillEl: HTMLButtonElement | null = null;
+	let menuX = 0;
+	let menuY = 0;
+
+	/**
+	 * The popover is positioned `fixed` and placed by hand.
+	 *
+	 * It lives inside `.cmd-header`, which clips its overflow so long
+	 * breadcrumbs don't escape, inside `.cmd-pane`, which clips so the rounded
+	 * corners hold. An absolutely-positioned menu is cut off by both. Taking it
+	 * out of flow entirely is the only placement those two constraints allow.
+	 */
+	const MENU_W = 300;
+
+	async function togglePlaces(): Promise<void> {
+		placesOpen = !placesOpen;
+		if (!placesOpen) return;
+		await tick();
+		positionPlaces();
+	}
+
+	function positionPlaces(): void {
+		if (!pillEl) return;
+		const r = pillEl.getBoundingClientRect();
+		// Keep it on screen: the right pane's pill sits close enough to the
+		// viewport edge that a left-aligned menu would hang off it.
+		menuX = Math.max(8, Math.min(r.left, window.innerWidth - MENU_W - 12));
+		menuY = r.bottom + 6;
+	}
+
+	/** Any press outside the trigger or the menu dismisses it. */
+	function onWindowPointerDown(ev: PointerEvent): void {
+		if (!placesOpen) return;
+		const target = ev.target as HTMLElement | null;
+		if (target?.closest('.places-wrap, .places-menu')) return;
+		placesOpen = false;
+	}
+
+	function jumpTo(root: string): void {
+		placesOpen = false;
+		goTo(root);
+	}
+
+	/** Last path segment, or the whole path for a single-segment root. */
+	function rootLabel(r: string): string {
+		const parts = r.split('/').filter(Boolean);
+		return parts.length ? parts[parts.length - 1] : '/';
+	}
+
+
+	function onPlacesKeydown(ev: KeyboardEvent): void {
+		if (ev.key === 'Escape') {
+			ev.stopPropagation();
+			placesOpen = false;
+		}
 	}
 
 	function parentOf(p: string): string {
@@ -241,6 +314,11 @@
 	const SKELETON_ROWS = 14;
 </script>
 
+<svelte:window
+	on:pointerdown={onWindowPointerDown}
+	on:resize={() => placesOpen && positionPlaces()}
+/>
+
 <section
 	class="cmd-pane"
 	class:active
@@ -288,9 +366,73 @@
 
 	<!-- Header: provider + breadcrumb + quick filter -->
 	<div class="cmd-header">
-		<span class="provider-pill" title={`Provider: ${tab?.providerId ?? 'none'}`}>
-			{tab?.providerId ?? '—'}
-		</span>
+		<!-- The pill names where this pane is rooted, so it is also the natural
+		     place to ask "where else can it be rooted". -->
+		<div class="places-wrap">
+			<button
+				class="provider-pill"
+				bind:this={pillEl}
+				class:open={placesOpen}
+				aria-haspopup="menu"
+				aria-expanded={placesOpen}
+				title={`Provider: ${tab?.providerId ?? 'none'} — click for mounted locations`}
+				on:click|stopPropagation={togglePlaces}
+			>
+				{tab?.providerId ?? '—'}
+				<span class="pill-caret" aria-hidden="true">▾</span>
+			</button>
+
+			{#if readOnly}
+				<!-- Stated up front, not discovered from an EROFS after the fact. -->
+				<span
+					class="ro-badge"
+					title="This location is mounted read-only — create, rename, delete and paste are unavailable here"
+				>
+					<span aria-hidden="true">⊘</span> Read only
+				</span>
+			{/if}
+
+			{#if placesOpen}
+				<!-- svelte-ignore a11y-no-noninteractive-element-interactions -->
+				<div
+					class="places-menu"
+					style={`left:${menuX}px; top:${menuY}px`}
+					role="menu"
+					tabindex="-1"
+					aria-label="Mounted locations"
+					on:click|stopPropagation
+					on:keydown={onPlacesKeydown}
+				>
+					<p class="places-head">Mounted locations</p>
+					{#if roots.length === 0}
+						<p class="places-empty">
+							No roots reported. Set <code>FS_COMMANDER_ALLOWED_ROOTS</code> and mount the path into
+							the kernel container.
+						</p>
+					{:else}
+						{#each roots as r (r.path)}
+							<button
+								class="places-item"
+								class:current={tab ? isUnder(tab.path, r.path) : false}
+								role="menuitem"
+								title={`${r.path}${r.writable ? '' : ' — mounted read-only'}`}
+								on:click|stopPropagation={() => jumpTo(r.path)}
+							>
+								<span class="places-glyph" aria-hidden="true">{r.writable ? '▪' : '⊘'}</span>
+								<span class="places-label">{rootLabel(r.path)}</span>
+								{#if !r.writable}
+									<span class="places-ro">read only</span>
+								{/if}
+								<span class="places-path">{r.path}</span>
+							</button>
+						{/each}
+					{/if}
+					<p class="places-foot">
+						Locations come from <code>FS_COMMANDER_ALLOWED_ROOTS</code> and the kernel's mounts.
+					</p>
+				</div>
+			{/if}
+		</div>
 
 		{#if editingPath}
 			<input
@@ -306,13 +448,18 @@
 		{:else}
 			<nav class="crumb" aria-label="Path">
 				{#if tab}
-					{#each crumbs(tab.path) as c, i (c.path)}
+					{@const segs = crumbs(tab.path)}
+					{#each segs as c, i (c.path)}
 						{#if i > 0}<span class="crumb-sep" aria-hidden="true">/</span>{/if}
-						<button
-							class="crumb-seg"
-							class:last={i === crumbs(tab.path).length - 1}
-							on:click|stopPropagation={() => goTo(c.path)}>{c.label}</button
-						>
+						{#if c.reachable}
+							<button
+								class="crumb-seg"
+								class:last={i === segs.length - 1}
+								on:click|stopPropagation={() => goTo(c.path)}>{c.label}</button
+							>
+						{:else}
+							<span class="crumb-seg out-of-scope" title="Outside the allowed roots">{c.label}</span>
+						{/if}
 					{/each}
 				{/if}
 			</nav>
