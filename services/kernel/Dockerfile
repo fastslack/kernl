@@ -49,7 +49,10 @@ WORKDIR /app
 # - docker CLI: usado por el claude_code executor para spawnear cada run en su
 #   propio container (Capa 2 isolation). Accede al socket del host via el
 #   bind-mount /var/run/docker.sock ya declarado en docker-compose.
-RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates bubblewrap socat ffmpeg build-essential cmake \
+# tor: onion service for instance peering. Installed but inert — it only runs
+# when KERNEL_TOR=1 (see docker-entrypoint.sh), and the kernel advertises no
+# onion reach entry when it is absent.
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates bubblewrap socat ffmpeg build-essential cmake tor \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc \
     && chmod a+r /etc/apt/keyrings/docker.asc \
@@ -80,6 +83,9 @@ COPY --chown=bun:bun --from=build /build/package.json ./
 # assets/ MUST come from the build stage (not the context): it now contains the
 # compiled backend/entry.js bundles produced by build-extensions above.
 COPY --chown=bun:bun --from=build /build/assets/ ./assets/
+
+COPY --chown=bun:bun docker-entrypoint.sh /app/docker-entrypoint.sh
+RUN chmod 0755 /app/docker-entrypoint.sh
 
 RUN mkdir -p /app/data && chown -R bun:bun /app/data
 
@@ -121,5 +127,7 @@ VOLUME /app/data
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
   CMD bun -e "fetch('http://localhost:3087/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+
+ENTRYPOINT ["/app/docker-entrypoint.sh"]
 
 CMD ["bun", "run", "dist/mcp-server.js"]

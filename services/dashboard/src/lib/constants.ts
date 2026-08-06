@@ -126,7 +126,7 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 	automations: 'Automation',
 	settings: 'Settings', system: 'System', extensions: 'Extensions', notifications: 'Notifications',
 	// Off-tab system routes (still routable, linked from /system sub-nav):
-	sysoverview: 'Overview', architecture: 'Arch 3D', providers: 'AI Providers',
+	sysoverview: 'Overview', architecture: 'Arch 3D', providers: 'AI Providers', friends: 'Friends',
 	'api-registry': 'API Registry', 'rss-registry': 'RSS Feeds'
 };
 
