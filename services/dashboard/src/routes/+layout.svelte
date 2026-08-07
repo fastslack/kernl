@@ -17,6 +17,7 @@
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
   import { displayMode as musicDisplayMode, toggle as musicToggle, next as musicNext, prev as musicPrev, toggleMute as musicToggleMute, setVolume as musicSetVolume, volume as musicVolume, seek as musicSeek, currentTime as musicTime, duration as musicDuration, album as musicAlbum, setDisplayMode as musicSetMode } from '$lib/music-player.js';
   import { initMusicBridge } from '$lib/music-bridge.js';
+  import { initLocale } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
 
   // ── State ───────────────────────────────────────────────────────
@@ -27,10 +28,10 @@
   let notifOpen = false;
   let liveOpen = false;
 
-  // ── LIVE pill popover: show the LLM chain from /models with status ─
+  // ── LIVE pill popover: the configured LLM chain, with status ─────
   // Hits /api/llm/chain on open. Re-fetches on every open so the user
   // sees the current health (a 403 on Grok between yesterday and now
-  // would otherwise be invisible until they navigated to /models).
+  // would otherwise be invisible until they opened Settings → AI).
   interface ChainLink {
     slug: string; provider: string; model: string;
     status: 'active' | 'standby' | 'no-key' | 'quota' | 'rate-limit' | 'auth' | 'degraded';
@@ -131,8 +132,24 @@
     // Instance peering: identity and trusted instances. Lives under System
     // because it is about who this kernel is, not about a person.
     friends: 'system',
+    // Scheduled jobs / system agenda. Was a tab under AI ("Auto") reading the
+    // same systemAgenda store as /system — a third view of one dataset, filed
+    // under the wrong group. Now reached from /system's own sub-nav.
+    automations: 'system',
+    // Legacy registry, superseded by /extensions (the page says so itself).
+    marketplace: 'system',
+    // Redirect stubs onto Settings → AI. Kept routable for old bookmarks.
+    models: 'system',
+    // Pages with no nav item of their own. Both are reached from in-page
+    // links, and both were falling through to the old navGroups[0] fallback —
+    // which lit up Home and rendered Home's tab bar above them.
+    files: 'tools',
+    memory: 'ai',
   };
-  $: currentGroupId = viewToGroup[currentView] ?? ORPHAN_VIEW_GROUP[currentView] ?? navGroups[0].id;
+  // Empty string when the view belongs to no group: Chat is pinned to the rail
+  // on its own, and a handful of pages are link-only. Defaulting to
+  // navGroups[0] made every one of them impersonate Home.
+  $: currentGroupId = viewToGroup[currentView] ?? ORPHAN_VIEW_GROUP[currentView] ?? '';
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
@@ -140,12 +157,12 @@
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
-  $: currentGroup = navGroups.find(g => g.id === currentGroupId) ?? navGroups[0];
+  $: currentGroup = navGroups.find(g => g.id === currentGroupId) ?? null;
   // Top-level sub-tabs of the group exclude items declared as children of
   // another view (via manifest `parent` field).
-  $: subViews = currentGroup.views.filter(v => !(v as any).parent);
+  $: subViews = currentGroup?.views.filter(v => !(v as any).parent) ?? [];
   // Sub-sub-tabs: views whose `parent` matches the currently-open view.
-  $: childViews = currentGroup.views.filter(v => (v as any).parent === currentView);
+  $: childViews = currentGroup?.views.filter(v => (v as any).parent === currentView) ?? [];
   $: sysGroup = navGroups[navGroups.length - 1];
 
   // ── Auto-subscribe to page-specific WebSocket channels ──
@@ -185,14 +202,18 @@
   }
 
   // Per-group landing override — sub-tab order stays as-is, but clicking the
-  // group icon opens this specific view instead of views[0]. Used to make the
-  // AI menu land on the 3D flow.
-  const GROUP_DEFAULT_VIEW: Record<string, string> = {
-    ai: 'agents-flow',
-  };
-
+  // group icon opens this specific view instead of views[0]. Declared by the
+  // group itself (`navGroups[].defaultView` in the manifest); this used to be
+  // a hardcoded `{ ai: 'agents-flow' }` map here, so the manifest field was
+  // parsed, stored, and never read — an extension could not pick its own
+  // landing page. The view still has to exist in the group.
   function navigateGroup(group: NavGroup) {
-    goto('/' + (GROUP_DEFAULT_VIEW[group.id] ?? group.views[0].id));
+    const preferred = group.defaultView;
+    const landing =
+      preferred && group.views.some(v => v.id === preferred)
+        ? preferred
+        : group.views[0]?.id;
+    if (landing) goto('/' + landing);
   }
 
   // ── Page transition loader ──
@@ -487,8 +508,44 @@
     !allowedViews.has(routeSegment);
 
   // ── Lifecycle ────────────────────────────────────────────────────
+  //
+  // The shell's init (manifest, WebSocket, clock, notifications) is split out
+  // of onMount so it can also run when we *leave* a standalone page without a
+  // full page load.
+  //
+  // Why that matters: on a fresh install every /api/* route answers 428 until
+  // an LLM is configured, and the fetch interceptor above turns that into a
+  // hard `location.href = '/setup'`. The app therefore boots *at* /setup, the
+  // init is skipped, and the wizard's closing `goto()` is a client-side
+  // navigation that never remounts this layout. The result was a dashboard
+  // with no manifest — sidebar stuck on the two hardcoded base groups, so the
+  // rail showed a single "Social" icon — no WebSocket, no clock and no data,
+  // until the user pressed F5. Running init on the standalone→shell transition
+  // is what makes that first paint correct.
+  let shellInitialized = false;
+  let mounted = false;
+
   onMount(() => {
-    if (isStandalonePage) return; // skip init entirely on shell-less pages (login, setup)
+    mounted = true;
+    // Resolve the saved language before anything else. This used to be called
+    // from /login only, so any hard load that did not pass through the login
+    // page — a bookmark, a refresh, a deep link — left the store on its "en"
+    // default and rendered the whole dashboard in English no matter what the
+    // user had chosen. Extension pages inherit the same value through
+    // ExtPageContext.locale, so they were mistranslated for the same reason.
+    // initLocale() reads localStorage first and is a no-op on repeat calls
+    // beyond re-setting the same value, so /login calling it too is harmless.
+    initLocale();
+    if (!isStandalonePage) initShell();
+  });
+
+  // Leaving /login or /setup without a page load → initialize now. Gated on
+  // `mounted` so init never runs before the router is live (it calls goto()).
+  $: if (mounted && !isStandalonePage && !shellInitialized) initShell();
+
+  function initShell() {
+    if (shellInitialized) return;
+    shellInitialized = true;
     // First-run redirect to the setup wizard — fire-and-forget, do NOT
     // early-return. The layout still needs to fetch the manifest, set
     // up the clock, and open the WebSocket so when the user dismisses
@@ -592,7 +649,7 @@
     // Also try immediately (works when HTTP is already up)
     fetchInitialData();
     fetchNotifications();
-  });
+  }
 
   onDestroy(() => {
     clearInterval(clockInterval);
@@ -833,7 +890,7 @@
           {#if liveOpen}
             <div class="live-popover" role="dialog" aria-label="LLM chain status">
               <header class="lp-head">
-                <span class="lp-title">LLM chain · /models</span>
+                <span class="lp-title">LLM chain · Settings → AI</span>
                 <button type="button" class="lp-refresh" on:click={loadChain} title="Re-check provider health" disabled={chainLoading}>
                   ↻
                 </button>
@@ -870,7 +927,9 @@
                   {/each}
                 </ul>
                 <footer class="lp-foot">
-                  <a href="/models" on:click={() => liveOpen = false}>configure at /models →</a>
+                  <!-- /models is a redirect stub onto the AI section of
+                       Settings; link the real destination. -->
+                  <a href="/settings?section=ai" on:click={() => liveOpen = false}>configure in Settings →</a>
                 </footer>
               {/if}
             </div>

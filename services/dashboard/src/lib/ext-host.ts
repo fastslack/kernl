@@ -61,6 +61,33 @@ export interface ExtPageModule {
 	mount(target: HTMLElement, ctx: ExtPageContext): { destroy(): void };
 }
 
+/**
+ * Rebroadcast locale switches onto the `kernl:` event bus.
+ *
+ * Extension bundles get `locale` as a string snapshot taken when mount() ran,
+ * and this route does NOT remount an ext view when the language changes — the
+ * remount is keyed on `info.view` alone. So a page mounted in English stayed in
+ * English until the user navigated away and back. Extensions listen for this
+ * event (see $shared/i18n) and re-render in place.
+ *
+ * Registered at module scope, once: the shell imports this module exactly once,
+ * and the subscription must outlive any individual mounted page.
+ */
+if (typeof window !== 'undefined') {
+	let lastLocale: string | null = null;
+	locale.subscribe((loc) => {
+		// Skip the store's initial synchronous emission — nothing is mounted yet,
+		// and a page mounting later reads ctx.locale for its starting value.
+		if (lastLocale === null) {
+			lastLocale = loc;
+			return;
+		}
+		if (loc === lastLocale) return;
+		lastLocale = loc;
+		window.dispatchEvent(new CustomEvent('kernl:locale', { detail: { locale: loc } }));
+	});
+}
+
 /** Pages contributed by active extensions — refreshed with /api/manifest. */
 export const extPages = writable<ExtPageInfo[]>([]);
 
