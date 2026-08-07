@@ -189,6 +189,17 @@
   }
   function trackLabel(t: SubTrack): string { return t.label || t.lang.toUpperCase(); }
 
+  /** Where a track came from, in one word. */
+  function kindLabel(kind: SubTrack['kind']): string {
+    switch (kind) {
+      case 'shipped':    return 'incluido';
+      case 'transcribe': return 'whisper';
+      case 'translation':return 'traducido';
+      case 'federated':  return 'comunidad';
+      default:           return '';
+    }
+  }
+
   /**
    * Can this track be deleted?
    *
@@ -425,18 +436,50 @@
         {/if}
 
         {#if tracks.length > 0}
-          <button class="kp-item" class:sel={!showing} on:click={() => ctl.off()}>Off</button>
-          {#each tracks as t (t.id)}
-            <div class="kp-item-row">
-              <button class="kp-item" class:sel={showing && activeTrack?.id === t.id} on:click={() => run(() => ctl.show(t))}>
-                {trackLabel(t)}
-                {#if t.createdAt}<em>{relativeAge(t.createdAt)}</em>{/if}
-              </button>
-              {#if allowManage && deletable(t)}
-                <button class="kp-x" title="Delete" on:click={() => run(() => ctl.remove(t))}>🗑</button>
-              {/if}
-            </div>
-          {/each}
+          <!-- These are mutually exclusive choices, so they carry radio
+               semantics and a visible mark. They used to be bare 12px labels
+               whose only selected cue was a faint background tint — on a dark
+               menu that is not a state, it is a guess. -->
+          <div class="kp-menu-head kp-sub">Pistas</div>
+          <div class="kp-tracks" role="radiogroup" aria-label="pista de subtítulos">
+            <button
+              class="kp-item kp-track"
+              class:sel={!showing}
+              role="radio"
+              aria-checked={!showing}
+              on:click={() => ctl.off()}
+            >
+              <span class="kp-mark" aria-hidden="true"></span>
+              <span class="kp-track-main"><span class="kp-track-name">Off</span></span>
+            </button>
+            {#each tracks as t (t.id)}
+              {@const on = showing && activeTrack?.id === t.id}
+              <div class="kp-item-row">
+                <button
+                  class="kp-item kp-track"
+                  class:sel={on}
+                  role="radio"
+                  aria-checked={on}
+                  on:click={() => run(() => ctl.show(t))}
+                >
+                  <span class="kp-mark" aria-hidden="true"></span>
+                  <span class="kp-track-main">
+                    <span class="kp-track-name">{trackLabel(t)}</span>
+                    <span class="kp-track-sub">
+                      <!-- Where the track came from. Four kinds used to be
+                           four indistinguishable rows of text. -->
+                      <span class="kp-kind kp-kind-{t.kind}">{kindLabel(t.kind)}</span>
+                      {#if t.createdAt}<em>{relativeAge(t.createdAt)}</em>{/if}
+                    </span>
+                  </span>
+                </button>
+                {#if allowManage && deletable(t)}
+                  <button class="kp-x" title="Delete" aria-label="Delete {trackLabel(t)}"
+                          on:click={() => run(() => ctl.remove(t))}>🗑</button>
+                {/if}
+              </div>
+            {/each}
+          </div>
         {/if}
 
         {#if !subsRunning}
@@ -583,10 +626,16 @@
 
   /* ── Menus ──────────────────────────────────────────────────── */
   .kp-menu {
-    position:absolute; bottom:52px; min-width:190px; max-height:min(58vh,340px); overflow-y:auto;
+    position:absolute; bottom:52px;
+    /* 190px could not hold "44 / 409 cues · 2:56 left" without wrapping it
+       into a second cramped line. A min/max pair lets the menu take the room
+       it needs while staying a menu, not a panel. */
+    min-width:250px; max-width:320px;
+    max-height:min(62vh,420px); overflow-y:auto;
     padding:7px; border-radius:9px;
     background:rgba(10,11,16,.95); backdrop-filter:blur(14px);
     border:1px solid rgba(255,255,255,.12); box-shadow:0 18px 44px -18px #000;
+    overscroll-behavior:contain;
   }
   .kp-menu-right { right:10px }
   .kp-menu-head {
@@ -603,6 +652,44 @@
   .kp-item:hover { background:rgba(255,255,255,.08) }
   .kp-item.sel { background:rgba(240,180,41,.15); color:#F0B429 }
   .kp-item em { font-style:normal; font-size:9.5px; color:#4A4F6A; margin-left:6px }
+  .kp-item:focus-visible { outline:2px solid #F0B429; outline-offset:-2px }
+
+  /* ── Track rows ─────────────────────────────────────────────────── */
+  .kp-tracks { display:flex; flex-direction:column; gap:2px }
+  .kp-track {
+    display:flex; align-items:center; gap:9px;
+    /* 34px, up from ~26. Comfortable to hit, and it gives the second line
+       room so the origin of a track is readable rather than crammed. */
+    min-height:34px; padding:5px 8px;
+  }
+  /* The mark is the state. A background tint alone reads as hover on a dark
+     surface, and hover was the only other thing that painted a background. */
+  .kp-mark {
+    flex:0 0 auto; width:13px; height:13px; border-radius:50%;
+    border:1.5px solid rgba(224,226,234,.35);
+    position:relative; transition:border-color .15s ease;
+  }
+  .kp-track.sel .kp-mark { border-color:#F0B429 }
+  .kp-track.sel .kp-mark::after {
+    content:""; position:absolute; inset:2.5px; border-radius:50%; background:#F0B429;
+  }
+  .kp-track:hover .kp-mark { border-color:rgba(224,226,234,.7) }
+  .kp-track-main { min-width:0; display:flex; flex-direction:column; gap:1px }
+  .kp-track-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .kp-track-sub { display:flex; align-items:center; gap:6px; font-size:9.5px; color:#4A4F6A }
+  .kp-track-sub em { margin:0 }
+  /* Origin badge — colour plus the word, never colour alone. */
+  .kp-kind {
+    padding:0 5px; border-radius:3px; letter-spacing:.04em;
+    background:rgba(224,226,234,.08); color:#8A8FA8;
+  }
+  .kp-kind-shipped     { background:rgba(120,180,255,.14); color:#9ec5ff }
+  .kp-kind-transcribe  { background:rgba(240,180,41,.14);  color:#F0B429 }
+  .kp-kind-translation { background:rgba(77,208,225,.14);  color:#6fd9e8 }
+  .kp-kind-federated   { background:rgba(160,140,255,.14); color:#b8a6ff }
+  @media (prefers-reduced-motion: reduce) {
+    .kp-mark { transition:none }
+  }
   .kp-primary { background:#F0B429; color:#0B0C10; text-align:center; font-weight:700 }
   .kp-primary:hover { background:#F0B429; filter:brightness(1.1) }
   .kp-x { background:none; border:0; color:#4A4F6A; cursor:pointer; font-size:11px; padding:3px 5px; border-radius:4px }
@@ -633,13 +720,39 @@
   }
   .kp-lang:hover { border-color:#F0B429; color:#F0B429 }
 
-  .kp-menu-job { padding:6px; border-radius:6px; background:rgba(255,255,255,.05); margin-bottom:6px }
+  /* The running job. It leads the menu because while it runs it is the only
+     thing you came here for; a left accent bar marks it as live state rather
+     than another option in the list. */
+  .kp-menu-job {
+    padding:8px 9px 9px; border-radius:6px; margin-bottom:8px;
+    background:rgba(240,180,41,.07);
+    border:1px solid rgba(240,180,41,.22);
+    border-left:2px solid #F0B429;
+  }
   .kp-menu-job-top { display:flex; align-items:center; gap:6px; font-size:9.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#F0B429 }
   .kp-job-route { font-weight:600; letter-spacing:.06em; opacity:.7; text-transform:none }
-  .kp-job-detail { margin:5px 0 0; font-size:10px; color:rgba(255,255,255,.62); font-variant-numeric:tabular-nums }
-  .kp-menu-track { height:3px; border-radius:2px; background:rgba(255,255,255,.12); overflow:hidden; margin-top:5px }
-  .kp-menu-track span { display:block; height:100%; background:linear-gradient(90deg,#C98A1E,#F0B429); transition:width .6s ease }
+  .kp-job-detail { margin:6px 0 0; font-size:10.5px; color:rgba(255,255,255,.7); font-variant-numeric:tabular-nums }
+  /* 3px was a hairline that read as a divider. 5px with a soft glow reads as
+     a progress bar you can actually track out of the corner of your eye. */
+  .kp-menu-track { height:5px; border-radius:3px; background:rgba(0,0,0,.4); overflow:hidden; margin-top:7px }
+  .kp-menu-track span {
+    display:block; height:100%; border-radius:3px;
+    background:linear-gradient(90deg,#C98A1E,#F0B429);
+    box-shadow:0 0 8px rgba(240,180,41,.5);
+    transition:width .6s ease;
+  }
   .kp-hint { font-size:9.5px; color:#8A8FA8; margin-top:5px }
+  /* Cancel is destructive and was an 11px glyph in a 3px-padded box — under
+     any reasonable target size, and easy to miss entirely. */
+  .kp-menu-job .kp-x {
+    min-width:24px; min-height:24px;
+    display:inline-flex; align-items:center; justify-content:center;
+    border:1px solid rgba(255,255,255,.14);
+  }
+  .kp-menu-job .kp-x:hover { border-color:#F04770; background:rgba(240,71,112,.12) }
+  @media (prefers-reduced-motion: reduce) {
+    .kp-menu-track span { transition:none }
+  }
   .kp-err { font-family:var(--font-body, system-ui); font-size:10.5px; color:#F04770; padding:4px 6px; line-height:1.4 }
 
   /* ── Caption overlay (we paint it, so it can be styled) ─────── */

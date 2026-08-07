@@ -416,8 +416,90 @@
   function openInfo(item: ArchiveItem, ev: Event) {
     ev.stopPropagation();
     infoItem = item;
+    descShowFull = false;
+    descLang = '';
+    descErr = '';
   }
   function closeInfo() { infoItem = null; }
+
+  // ── Synopsis: translate + expand ────────────────────────────────────
+  //
+  // archive.org descriptions are almost always English, and long ones were
+  // both cut at 1200 characters with no way to see the rest and unreadable to
+  // anyone who does not read English. Both are the same problem: the text is
+  // there, the UI just would not give it to you.
+  //
+  // Translation goes through /api/llm/chat, the kernel's one door to the model
+  // chain — no bespoke endpoint, and it inherits provider fallback, the rate
+  // limiter and the call log for free.
+  let descLang = '';           // '' = original
+  let descBusy = false;
+  let descErr = '';
+  let descShowFull = false;
+  let descModel = '';
+  /** key: `${identifier}:${lang}` — a translation costs tokens; buy it once. */
+  const descCache = new Map<string, string>();
+
+  const DESC_LANGS = [
+    { code: 'es', label: 'español' },
+    { code: 'en', label: 'english' },
+    { code: 'pt', label: 'português' },
+    { code: 'fr', label: 'français' },
+    { code: 'de', label: 'deutsch' },
+    { code: 'it', label: 'italiano' },
+  ];
+  let descTarget = 'es';
+
+  /** What the synopsis paragraph should render right now. */
+  $: descSource = infoItem?.description ?? '';
+  $: descShown = descLang && infoItem
+    ? (descCache.get(`${infoItem.identifier}:${descLang}`) ?? descSource)
+    : descSource;
+  /** Long ones stay collapsed until asked — see `.info-desc.clamped`. */
+  $: descIsLong = descShown.length > 700;
+
+  async function translateDescription(): Promise<void> {
+    if (!infoItem || descBusy) return;
+    const item = infoItem;
+    const key = `${item.identifier}:${descTarget}`;
+    if (descCache.has(key)) { descLang = descTarget; return; }
+    if (!item.description) return;
+
+    descBusy = true;
+    descErr = '';
+    try {
+      const target = DESC_LANGS.find((l) => l.code === descTarget)?.label ?? descTarget;
+      const r = await apiFetch('/api/llm/chat', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          system:
+            'You translate film synopses. Return ONLY the translated text: no preamble, ' +
+            'no notes, no quotes around it, and no explanation of what you did. Preserve ' +
+            'proper nouns, film titles and character names. Keep the paragraph structure.',
+          user: `Translate this film synopsis into ${target}:\n\n${item.description}`,
+          temperature: 0.2,
+          maxTokens: Math.max(400, Math.round(item.description.length / 2)),
+          caller: 'cinema:describe-translate',
+        }),
+      });
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({} as any));
+        throw new Error(e?.error ?? `http ${r.status}`);
+      }
+      const j = await r.json();
+      const text = String(j?.text ?? '').trim();
+      if (!text) throw new Error('el modelo devolvió una respuesta vacía');
+      descCache.set(key, text);
+      descModel = String(j?.model ?? '');
+      descLang = descTarget;
+      descShowFull = true;   // you asked to read it — don't make it a second click
+    } catch (err) {
+      descErr = err instanceof Error ? err.message : String(err);
+    } finally {
+      descBusy = false;
+    }
+  }
   async function ensureMyDirsLoaded() {
     if (myDirs.length > 0) return;
     try {
@@ -3987,7 +4069,7 @@
                scan a poster wall for; the rest moved to the ℹ sheet, which is
                where you go when you actually want to know. -->
           <div class="ovl-meta">
-            {#if it.date}<span class="fact">{it.date.slice(0, 4)}</span>{/if}
+            {#if it.date}<span class="fact year">{it.date.slice(0, 4)}</span>{/if}
             <!-- Prefer the probed duration: runtime_sec is 0 on a large part
                  of the catalogue, and where both exist the probe read it off
                  the file rather than off a metadata field someone typed. -->
@@ -4031,42 +4113,71 @@
           {/if}
         </div>
 
-        <span
-          class="star-btn"
-          class:saved={isSaved(it.identifier)}
-          role="button"
-          tabindex="0"
-          title={isSaved(it.identifier) ? 'remove from watchlist' : 'save to watchlist'}
-          on:click|stopPropagation={() => toggleWatch(it)}
-          on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && toggleWatch(it)}
-        >{isSaved(it.identifier) ? '★' : '☆'}</span>
-        <span
-          class="dir-btn"
-          role="button"
-          tabindex="0"
-          title="guardar en un directorio"
-          on:click={(ev) => openDirPicker(it, ev)}
-          on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openDirPicker(it, e)}
-        >📁</span>
+        <!-- One toolbar instead of three absolutely-placed buttons. They were
+             pinned at left 48/86/124 — gaps of 40, 38, 38, and a 48px indent
+             that was the hole left by a play button whose markup is long gone
+             (its CSS still is; removed below). A flex row owns the spacing, so
+             the group starts flush at the left and adding or dropping a
+             control cannot desync the numbers again. -->
+        <div class="card-actions">
+          <span
+            class="card-act star-btn"
+            class:saved={isSaved(it.identifier)}
+            role="button"
+            tabindex="0"
+            title={isSaved(it.identifier) ? 'remove from watchlist' : 'save to watchlist'}
+            on:click|stopPropagation={() => toggleWatch(it)}
+            on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && toggleWatch(it)}
+          >{isSaved(it.identifier) ? '★' : '☆'}</span>
+          <span
+            class="card-act dir-btn"
+            role="button"
+            tabindex="0"
+            title="guardar en un directorio"
+            on:click={(ev) => openDirPicker(it, ev)}
+            on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openDirPicker(it, e)}
+          >📁</span>
         <!-- Read the description properly. The hover overlay clips it and
              cannot be scrolled, so anything past a few lines was unreachable. -->
-        <span
-          class="info-btn"
-          role="button"
-          tabindex="0"
-          title="ver la ficha completa"
-          on:click={(ev) => openInfo(it, ev)}
-          on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openInfo(it, e)}
-        >ℹ</span>
+          <span
+            class="card-act info-btn"
+            role="button"
+            tabindex="0"
+            title="ver la ficha completa"
+            on:click={(ev) => openInfo(it, ev)}
+            on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openInfo(it, e)}
+          >ℹ</span>
+        </div>
 
         {#if hoverItem === it.identifier && it.description}
           <div class="hover-desc">
-            <p>{it.description.length > 360 ? it.description.slice(0, 360) + '…' : it.description}</p>
+            <!-- Full text, clamped in CSS. Slicing at 360 characters cut
+                 mid-word at a count that knows nothing about the card's width
+                 or font size, and then `overflow: hidden` cut it AGAIN at
+                 whatever pixel the box ended — two truncations fighting, and
+                 neither landing on a line boundary. -->
+            <p class="hover-text">{it.description}</p>
             {#if it.subject?.length}
               <div class="tags">
-                {#each it.subject.slice(0, 6) as s}<span class="tag">#{s}</span>{/each}
+                {#each it.subject.slice(0, 4) as s}<span class="tag">#{s}</span>{/each}
               </div>
             {/if}
+            <!-- A real control, not a caption. It first shipped as a plain
+                 <span>, and since the overlay is `pointer-events: none` the
+                 click fell straight through to the card and opened the video
+                 — a thing that looked tappable and did the wrong thing, which
+                 is worse than no affordance at all. `role="button"` rather
+                 than <button> because the card itself is a <button> and
+                 nesting one inside another is invalid; the star/folder/info
+                 controls above use the same pattern. -->
+            <span
+              class="hover-more"
+              role="button"
+              tabindex="0"
+              title="ver la ficha completa"
+              on:click|stopPropagation={(ev) => openInfo(it, ev)}
+              on:keydown|stopPropagation={(e) => (e.key === 'Enter' || e.key === ' ') && openInfo(it, e)}
+            >ℹ ficha completa</span>
           </div>
         {/if}
       </button>
@@ -4456,10 +4567,10 @@
               {/if}
               {#if infoItem.canonical?.director}<span>{infoItem.canonical.director}</span>{/if}
               {#if infoItem.canonical?.country}<span>{infoItem.canonical.country}</span>{/if}
-              {#if infoItem.media?.duration_sec}<span>{fmtRuntime(infoItem.media.duration_sec)}</span>
-              {:else if infoItem.runtime_sec}<span>{fmtRuntime(infoItem.runtime_sec)}</span>{/if}
-              {#if infoItem.media?.height}<span>{infoItem.media.height}p</span>{/if}
-              {#if infoItem.downloads}<span>⇩ {fmtDownloads(infoItem.downloads)}</span>{/if}
+              {#if infoItem.media?.duration_sec}<span title="duración">{fmtRuntime(infoItem.media.duration_sec)}</span>
+              {:else if infoItem.runtime_sec}<span title="duración">{fmtRuntime(infoItem.runtime_sec)}</span>{/if}
+              {#if infoItem.media?.height}<span title="resolución vertical">{infoItem.media.height}p</span>{/if}
+              {#if infoItem.downloads}<span title="descargas en archive.org">⇩ {fmtDownloads(infoItem.downloads)}</span>{/if}
               {#if infoItem.copies && infoItem.copies > 1}<span>⧉ {infoItem.copies} copias</span>{/if}
             </div>
 
@@ -4468,7 +4579,59 @@
             {/if}
 
             {#if infoItem.description}
-              <p class="info-desc">{infoItem.description}</p>
+              <!-- Synopsis toolbar: language, and the state of what you are
+                   reading. Sits above the text so it is found before the wall
+                   of English, not after it. -->
+              <div class="desc-bar">
+                <span class="desc-state" class:on={!!descLang}>
+                  {descLang
+                    ? `traducido · ${DESC_LANGS.find((l) => l.code === descLang)?.label ?? descLang}`
+                    : 'texto original'}
+                </span>
+                <span class="spacer" />
+                {#if descLang}
+                  <button class="desc-btn" on:click={() => (descLang = '')}>ver original</button>
+                {/if}
+                <select
+                  class="desc-lang"
+                  bind:value={descTarget}
+                  disabled={descBusy}
+                  aria-label="idioma de la traducción"
+                >
+                  {#each DESC_LANGS as l}<option value={l.code}>{l.label}</option>{/each}
+                </select>
+                <button
+                  class="desc-btn primary"
+                  disabled={descBusy || descLang === descTarget}
+                  on:click={translateDescription}
+                  title="traducir la sinopsis con el modelo configurado"
+                >
+                  {#if descBusy}
+                    <span class="desc-spin" aria-hidden="true"></span> traduciendo…
+                  {:else}
+                    <Icon name="globe" size={12} /> traducir
+                  {/if}
+                </button>
+              </div>
+
+              {#if descErr}
+                <div class="desc-err" role="alert">
+                  ⚠ no se pudo traducir: {descErr}
+                  <button class="desc-err-x" on:click={() => (descErr = '')} aria-label="cerrar">×</button>
+                </div>
+              {/if}
+
+              <p class="info-desc" class:clamped={descIsLong && !descShowFull}>{descShown}</p>
+
+              {#if descIsLong}
+                <button class="desc-btn desc-more" on:click={() => (descShowFull = !descShowFull)}>
+                  {descShowFull ? '▲ ver menos' : '▼ leer completa'}
+                </button>
+              {/if}
+
+              {#if descLang && descModel}
+                <p class="desc-credit dim mini">traducido por {descModel}</p>
+              {/if}
             {:else}
               <p class="info-desc dim">Este ítem no trae descripción en archive.org.</p>
             {/if}
@@ -5658,6 +5821,16 @@
     color: var(--green-dim, #4d8a5a);
   }
   .ovl-meta .fact.dl { color: #9dbfa8; }
+  /* The year leads the row, so it earns a little weight — it is the fact you
+     scan a poster wall by, and at --text-2 it sat level with the resolution
+     and the download count. Brighter and bolder, but the same size and the
+     same mono figures: the row must still read as one line, not as a badge
+     with a caption trailing off it. */
+  .ovl-meta .fact.year {
+    color: var(--amber, #ffb000);
+    font-weight: 700;
+    letter-spacing: 0.02em;
+  }
   /* Always rendered, even empty, so the grid keeps a single rhythm. */
   .ovl-creator {
     height: 14px;
@@ -5882,115 +6055,36 @@
     box-shadow: 0 0 10px rgba(255, 176, 0, 0.6);
   }
 
-  /* ▶ play button on each card */
-  .play-btn {
+  /* ── Card action toolbar ──────────────────────────────────────────
+     One row, one gap value, flush left. The `.play-btn` rules that used to
+     live here had no markup left anywhere in the file — but the star was
+     still positioned at `left: 48px` to clear it, so every card carried a
+     48px indent for a button that no longer existed. */
+  .card-actions {
     position: absolute;
     top: 8px;
     left: 8px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.6);
-    color: var(--green, #33ff77);
-    border: 1px solid var(--green-dim, #4d8a5a);
-    font-size: 13px;
     display: flex;
     align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    transform: scale(0.85);
-    transition: all 0.15s ease;
+    gap: 6px;
     z-index: 3;
   }
-  .play-btn:hover, .play-btn:focus {
-    background: var(--green, #33ff77);
-    color: #050807;
-    border-color: var(--green, #33ff77);
-    box-shadow: 0 0 14px rgba(51, 255, 119, 0.6);
-    outline: none;
-  }
-  .card:hover .play-btn { opacity: 1; transform: scale(1); }
-
-  /* ★ watchlist toggle on each card */
-  .star-btn {
-    position: absolute;
-    top: 8px;
-    left: 48px;
+  /* Shared shell for every control in the bar: same box, same ring, same
+     motion. Only the glyph and its accent differ. */
+  .card-act {
     width: 32px;
     height: 32px;
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.6);
-    color: var(--green-dim, #4d8a5a);
-    border: 1px solid var(--green-dim, #4d8a5a);
-    font-size: 16px;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    transform: scale(0.85);
-    transition: all 0.15s ease;
-    z-index: 3;
-  }
-  .star-btn.saved {
-    color: var(--amber, #ffb000);
-    border-color: var(--amber, #ffb000);
-    box-shadow: 0 0 10px rgba(255, 176, 0, 0.4);
-    opacity: 1;
-    transform: scale(1);
-  }
-  .star-btn:hover, .star-btn:focus {
-    color: var(--amber, #ffb000);
-    border-color: var(--amber, #ffb000);
-    background: rgba(0, 0, 0, 0.8);
-    outline: none;
-  }
-  .card:hover .star-btn { opacity: 1; transform: scale(1); }
-
-  /* Folder (📁 add-to-directory) — same styling as star, just shifted right
-     and uses a different default tint until the popover is open. */
-  .dir-btn {
-    position: absolute;
-    top: 8px;
-    left: 86px;                      /* sits right of the star */
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.6);
-    color: var(--green-dim, #4d8a5a);
-    border: 1px solid var(--green-dim, #4d8a5a);
-    font-size: 14px;
-    line-height: 1;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    cursor: pointer;
-    opacity: 0;
-    transform: scale(0.85);
-    transition: all 0.15s ease;
-    z-index: 3;
-  }
-  .dir-btn:hover, .dir-btn:focus {
-    color: var(--cyan, #4dd0e1);
-    border-color: var(--cyan, #4dd0e1);
-    background: rgba(0, 0, 0, 0.8);
-    outline: none;
-  }
-  .card:hover .dir-btn { opacity: 1; transform: scale(1); }
-  /* ℹ — read the description. Same circle as the star and folder so the
-     three read as one row of card actions rather than three inventions. */
-  .info-btn {
-    position: absolute;
-    top: 8px;
-    left: 124px;
-    width: 32px;
-    height: 32px;
-    border-radius: 50%;
-    background: rgba(0, 0, 0, 0.6);
-    color: var(--green-dim, #4d8a5a);
-    border: 1px solid var(--green-dim, #4d8a5a);
+    /* Opaque enough to hold contrast over a bright poster — at 0.6 the dim
+       green washed out completely against a pale frame, which is why the ℹ
+       read as "dark and invisible". */
+    background: rgba(4, 8, 6, 0.82);
+    /* One legible foreground for all three. They were split between bright
+       green and a dim #4d8a5a that only cleared 4.5:1 against pure black,
+       and these sit over arbitrary artwork. */
+    color: #b9f2cc;
+    border: 1px solid rgba(185, 242, 204, 0.5);
+    /* Sizes were 16 / 14 / 15 with no reason; one token keeps the row even. */
     font-size: 15px;
     line-height: 1;
     display: flex;
@@ -5999,14 +6093,42 @@
     cursor: pointer;
     opacity: 0;
     transform: scale(0.85);
-    transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease;
+    transition: opacity 0.15s ease, transform 0.15s ease, color 0.15s ease,
+                border-color 0.15s ease, background 0.15s ease;
   }
-  .card:hover .info-btn { opacity: 1; transform: scale(1); }
-  .info-btn:hover, .info-btn:focus {
+  .card:hover .card-act,
+  .card:focus-within .card-act { opacity: 1; transform: scale(1); }
+  .card-act:hover,
+  .card-act:focus-visible {
     color: var(--amber, #ffb000);
     border-color: var(--amber, #ffb000);
-    background: rgba(0, 0, 0, 0.8);
+    background: rgba(0, 0, 0, 0.9);
     outline: none;
+  }
+  .card-act:focus-visible { outline: 2px solid var(--amber, #ffb000); outline-offset: 2px; }
+  /* Saved is a state, so it stays lit even when the card is not hovered —
+     otherwise the only way to see your watchlist marks is to sweep the grid. */
+  .card-act.saved {
+    color: var(--amber, #ffb000);
+    border-color: var(--amber, #ffb000);
+    box-shadow: 0 0 10px rgba(255, 176, 0, 0.4);
+    opacity: 1;
+    transform: scale(1);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .card-act { transition: opacity 0.15s ease; transform: none; }
+    .card:hover .card-act { transform: none; }
+  }
+
+  /* ★ watchlist toggle on each card */
+  /* The three controls differ only in their accent; the shell lives in
+     `.card-act` above so the row cannot drift apart again. */
+
+  /* 📁 add-to-directory — cyan while its popover is the thing you are aiming
+     at, so it reads apart from the amber "saved" state next to it. */
+  .dir-btn:hover, .dir-btn:focus-visible {
+    color: var(--cyan, #4dd0e1);
+    border-color: var(--cyan, #4dd0e1);
   }
 
   /* The film sheet. Wider than the directory dialog because its job is
@@ -6031,49 +6153,163 @@
     flex: 1 1 auto;
   }
   .info-poster {
-    width: 168px;
+    /* 168 → 200 with a fixed 3/4 box. archive.org art arrives at wildly
+       different ratios, so an unconstrained <img> made the whole left column
+       jump between films; reserving the box also keeps the layout from
+       shifting as the image decodes. */
+    width: 200px;
+    aspect-ratio: 3 / 4;
+    object-fit: cover;
     flex: 0 0 auto;
     align-self: flex-start;
     background: #0b1410;
     border: 1px solid var(--line, #1d3a26);
+    border-radius: 3px;
   }
   .info-main { min-width: 0; flex: 1 1 auto; }
   .info-title {
-    margin: 0 0 8px;
+    /* 19 → 24. The title was barely larger than the synopsis under it, so the
+       card had no clear entry point; hierarchy comes from size and spacing,
+       not from colour. */
+    margin: 0 0 10px;
     font-family: var(--font-display);
-    font-size: 19px;
-    line-height: 1.25;
-    font-weight: 600;
+    font-size: 24px;
+    line-height: 1.2;
+    font-weight: 700;
     color: var(--text-1);
     text-wrap: balance;
+    letter-spacing: -0.01em;
   }
   /* Facts as a separated run rather than a paragraph — they are scanned,
      not read. */
+  /* Chips instead of a `·`-joined run. "2005 · 1:43:32 · 136p · ⇩354.9k" made
+     the reader guess what 136p and 354.9k were; each value now sits in its own
+     box with a `title`, and the figures are tabular so they line up. */
   .info-facts {
     display: flex;
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
-    font-size: 12px;
-    color: var(--amber, #ffb000);
-    margin-bottom: 6px;
+    gap: 6px;
+    margin-bottom: 10px;
   }
-  .info-facts > span + span::before {
-    content: "·";
-    margin-right: 8px;
-    color: var(--green-dim, #4d8a5a);
+  .info-facts > span {
+    padding: 3px 9px;
+    border: 1px solid rgba(255, 176, 0, 0.28);
+    border-radius: 3px;
+    background: rgba(255, 176, 0, 0.07);
+    font-size: 11.5px;
+    font-variant-numeric: tabular-nums;
+    color: var(--amber, #ffb000);
+    white-space: nowrap;
   }
   .info-creator { margin-bottom: 12px; }
   /* 14.5px and 1.65 line-height: this is body copy now, not a tooltip.
      max-width keeps the measure near 70 characters so long synopses stay
      readable instead of running the full dialog width. */
   .info-desc {
-    margin: 0 0 14px;
+    margin: 0 0 10px;
     font-size: 14.5px;
     line-height: 1.65;
     color: #c8e8d2;
     max-width: 62ch;
     white-space: pre-wrap;
+  }
+  /* Long synopses open collapsed. Clamping at a line boundary beats the old
+     1200-character slice, which cut mid-word and offered no way to the rest. */
+  .info-desc.clamped {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 7;
+    line-clamp: 7;
+    overflow: hidden;
+  }
+
+  /* ── Synopsis toolbar ────────────────────────────────────────────── */
+  .desc-bar {
+    display: flex; align-items: center; gap: 8px;
+    max-width: 62ch;
+    margin: 0 0 8px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid rgba(77, 138, 90, 0.22);
+  }
+  /* Says what you are looking at. Without it a translated synopsis is
+     indistinguishable from an original one written in your language. */
+  .desc-state {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--green-dim, #4d8a5a);
+  }
+  .desc-state.on { color: var(--cyan, #4dd0e1); }
+  .desc-btn {
+    display: inline-flex; align-items: center; gap: 5px;
+    min-height: 26px;
+    padding: 0 9px;
+    border: 1px solid rgba(207, 232, 208, 0.22);
+    border-radius: 3px;
+    background: rgba(207, 232, 208, 0.05);
+    color: #cfe8d0;
+    font: 500 11px 'Manrope', sans-serif;
+    cursor: pointer;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .desc-btn:hover:not(:disabled) {
+    color: var(--amber, #ffb000);
+    border-color: var(--amber, #ffb000);
+    background: rgba(255, 176, 0, 0.08);
+  }
+  .desc-btn:focus-visible { outline: 2px solid var(--amber, #ffb000); outline-offset: 2px; }
+  /* Disabled reads as disabled: dimmed AND not-allowed, never a live-looking
+     control that ignores you. */
+  .desc-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .desc-btn.primary {
+    border-color: rgba(77, 208, 225, 0.45);
+    background: rgba(77, 208, 225, 0.1);
+    color: var(--cyan, #4dd0e1);
+  }
+  .desc-lang {
+    min-height: 26px;
+    padding: 0 6px;
+    border: 1px solid rgba(207, 232, 208, 0.22);
+    border-radius: 3px;
+    background: var(--bg-1, #0a1812);
+    color: #cfe8d0;
+    font: 500 11px 'Manrope', sans-serif;
+    cursor: pointer;
+  }
+  .desc-lang:focus-visible { outline: 2px solid var(--amber, #ffb000); outline-offset: 2px; }
+  .desc-more { margin: 0 0 12px; }
+  .desc-credit { margin: 0 0 12px; }
+  /* An LLM call is seconds, not milliseconds — the button has to show it is
+     working or people press it again. */
+  .desc-spin {
+    width: 10px; height: 10px;
+    border: 1.5px solid rgba(77, 208, 225, 0.3);
+    border-top-color: var(--cyan, #4dd0e1);
+    border-radius: 50%;
+    animation: desc-spin 0.7s linear infinite;
+  }
+  @keyframes desc-spin { to { transform: rotate(360deg); } }
+  .desc-err {
+    display: flex; align-items: center; gap: 8px;
+    max-width: 62ch;
+    margin: 0 0 10px;
+    padding: 7px 10px;
+    border: 1px solid rgba(255, 90, 90, 0.4);
+    border-radius: 3px;
+    background: rgba(255, 90, 90, 0.08);
+    color: #ffb3b3;
+    font-size: 11.5px;
+  }
+  .desc-err-x {
+    margin-left: auto;
+    border: 0; background: none;
+    color: inherit; font-size: 15px; line-height: 1;
+    cursor: pointer;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .desc-btn { transition: none; }
+    .desc-spin { animation-duration: 2s; }
   }
   .info-tags { display: flex; flex-wrap: wrap; gap: 5px; }
   .info-tags .tag {
@@ -8901,8 +9137,22 @@
     inset: 0;
     background: linear-gradient(180deg, rgba(5, 8, 7, 0.92), rgba(5, 8, 7, 0.96));
     color: var(--green, #33ff77);
-    padding: 14px 14px 70px;
+    /* 48px of top padding, not 14: the star/folder/info buttons sit at
+       `top: 8px` and are 32px tall, so text starting at 14px ran straight
+       under them and the first two lines were unreadable. Reserve the row
+       instead of stacking on it. */
+    padding: 48px 14px 12px;
+    /* A column so the tags and the affordance can hold the bottom while the
+       paragraph takes whatever is left — previously everything flowed from
+       the top and the tags were sliced by the card edge. */
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     overflow: hidden;
+    /* Explicit, and below the action buttons' 3. It relied on source order
+       before, which is why the buttons drew over the text rather than the
+       text simply starting below them. */
+    z-index: 1;
     /* A glance, not a read — the ℹ button opens the readable version. Still
        bumped from 11.5px, which was small enough to be decorative. */
     font-size: 12.5px;
@@ -8911,14 +9161,78 @@
     animation: fade 0.18s ease-out;
   }
   @keyframes fade { from { opacity: 0; } to { opacity: 1; } }
-  .hover-desc p { margin: 0 0 8px; color: #c0e8cd; }
-  .hover-desc .tags { display: flex; gap: 5px; flex-wrap: wrap; }
+  .hover-desc .hover-text {
+    margin: 0;
+    color: #c0e8cd;
+    /* Clamp at a LINE boundary with a real ellipsis, and let the box shrink:
+       `min-height: 0` is what allows a flex child to give room back to the
+       tags below instead of pushing them out of the card. */
+    flex: 0 1 auto;
+    min-height: 0;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 6;
+    line-clamp: 6;
+    overflow: hidden;
+  }
+  /* The tags and the hint own the bottom — pushed there, never overrun. */
+  .hover-desc .tags {
+    display: flex; gap: 5px; flex-wrap: wrap;
+    flex: 0 0 auto;
+    margin-top: auto;
+    max-height: 44px;
+    overflow: hidden;
+  }
   .hover-desc .tag {
     color: var(--cyan, #4dd0e1);
     font-size: 10px;
     background: rgba(77, 208, 225, 0.08);
     padding: 1px 6px;
     border-radius: 999px;
+    /* One tag with a long name used to wrap into a second line and shove the
+       row past the card; keep each to one line. */
+    max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Truncation needs a way out, not just an ellipsis. This IS the way out, so
+     it has to be clickable — the overlay above sets `pointer-events: none`,
+     which every child inherits, so it re-enables them for itself. */
+  .hover-desc .hover-more {
+    flex: 0 0 auto;
+    align-self: flex-start;
+    pointer-events: auto;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    /* 28px, not 44: it lives inside a hover-only overlay that no touch device
+       ever sees, and a full-size button would eat the card. Generous padding
+       keeps it comfortably clickable with a mouse. */
+    min-height: 28px;
+    padding: 2px 8px;
+    border: 1px solid rgba(77, 138, 90, 0.45);
+    border-radius: 999px;
+    background: rgba(0, 0, 0, 0.4);
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: var(--green-dim, #4d8a5a);
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  }
+  .hover-desc .hover-more:hover {
+    color: var(--amber, #ffb000);
+    border-color: var(--amber, #ffb000);
+    background: rgba(0, 0, 0, 0.7);
+  }
+  .hover-desc .hover-more:focus-visible {
+    outline: 2px solid var(--amber, #ffb000);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hover-desc .hover-more { transition: none; }
+  }
+  /* Shorter cards can't hold six lines plus tags; drop the clamp so the
+     paragraph yields first and the bottom row still fits. */
+  @media (max-height: 820px) {
+    .hover-desc .hover-text { -webkit-line-clamp: 4; line-clamp: 4; }
   }
 
   .empty {

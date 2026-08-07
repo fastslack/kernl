@@ -3,7 +3,7 @@
   "id": "com.kernl.cinema",
   "slug": "cinema",
   "name": "Cinema",
-  "version": "1.28.0",
+  "version": "1.32.0",
   "type": "module",
   "description": "archive.org movie catalog with semantic search and Nostr discovery.",
   "author": "Kernl",
