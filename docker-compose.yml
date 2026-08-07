@@ -21,6 +21,45 @@
 name: kernl-public
 
 services:
+  # ── mtwRequest (Rust engine: torrents + realtime bridge) ─────
+  #
+  # OPT-IN via the `torrents` profile, so the zero-config `docker compose up`
+  # is unchanged for anyone who does not have this image. Bring it in with:
+  #
+  #   BRIDGE_ENABLED=true RUST_BRIDGE_ENABLED=true \
+  #     docker compose --profile torrents up -d
+  #
+  # (or set those two in .env and use `--profile torrents` alone)
+  #
+  # Without it the Torrents extension has no engine: no DHT, no metadata, no
+  # byte stream — /api/torrents/capabilities reports backend "legacy" and the
+  # player says so instead of waiting on a swarm that can never form.
+  #
+  # The image is built from the mtwRequest repo; override the namespace with
+  # KERNEL_IMAGE_NAMESPACE if yours is tagged differently.
+  mtw-request:
+    profiles: ["torrents"]
+    image: ${KERNEL_IMAGE_NAMESPACE:-fastslack}/mtw-request:latest
+    container_name: kernl-public-mtw-request
+    restart: unless-stopped
+    environment:
+      RUST_LOG: ${RUST_LOG:-info}
+      # The kernel talks control-plane over this Unix socket (msgpack RPC),
+      # shared through the bridge-sock volume below.
+      RUST_BRIDGE_SOCKET: /tmp/mtw-rust.sock
+      # librqbit's data plane. Defaults to 127.0.0.1, which only this
+      # container could reach — the kernel proxies stream bytes over the
+      # docker network, so it has to bind 0.0.0.0.
+      TORRENT_HTTP_LISTEN: 0.0.0.0:9999
+    volumes:
+      - ./mtw.docker.toml:/app/mtw.toml:ro
+      - bridge-sock:/tmp
+      # mtw.toml points its store at /data/kernel.db. The full stack bind-mounts
+      # ./data there; here the database lives in the kernel-data volume, so the
+      # engine reads the same file the kernel writes. Read-only: the engine is a
+      # consumer of that store, not an author.
+      - kernel-data:/data:ro
+
   # ── Kernl API (backend + MCP over HTTP) ─────────
   kernel:
     build:
@@ -31,6 +70,12 @@ services:
     restart: unless-stopped
     environment:
       MCP_TRANSPORT: http
+      # This container has no IPv6 default route, but the resolver still returns
+      # AAAA records — so any Cloudflare-fronted host (loc.gov, api.europeana.eu,
+      # the YTS RSS feed) intermittently resolved to an address nothing could
+      # reach, surfacing as "Unable to connect" or getaddrinfo ESERVFAIL.
+      # archive.org is not behind Cloudflare, which is why cinema never hit it.
+      NODE_OPTIONS: --dns-result-order=ipv4first
       DASHBOARD_ENABLED: "false"   # nginx (dashboard service) serves the SPA
       DASHBOARD_PORT: "3087"
       SQLITE_PATH: /app/data/kernel.db
@@ -39,9 +84,27 @@ services:
       NEO4J_PASSWORD: kernlgraph
       SEARXNG_BASE_URL: http://searxng:8080
       TIMEZONE: ${TIMEZONE:-UTC}
-      # Rust bridge OFF — kernel falls back to local implementations.
-      BRIDGE_ENABLED: "false"
-      RUST_BRIDGE_ENABLED: "false"
+      # Rust bridge — OFF by default, so the stack still boots with nothing
+      # but the kernel. Turn both on (in .env or inline) together with
+      # `--profile torrents` to get the real torrent engine.
+      BRIDGE_ENABLED: ${BRIDGE_ENABLED:-false}
+      RUST_BRIDGE_ENABLED: ${RUST_BRIDGE_ENABLED:-false}
+      # The engine creates the socket at /tmp/mtw-rust.sock inside ITS
+      # container; that /tmp is the bridge-sock volume, which this container
+      # mounts at /run/mtw. Same file, different path — hence the override.
+      # (docker-compose.full.yml shares the whole /tmp instead; here the
+      # kernel keeps its own /tmp, which it uses to stage extension uploads.)
+      RUST_BRIDGE_SOCKET: /run/mtw/mtw-rust.sock
+      # Where the mtwRequest broker lives. Defaults to ws://localhost:7741/ws
+      # (see core/bootstrap/mtw.ts), which inside this container is nothing —
+      # the engine is a sibling on the compose network.
+      KERNEL_URL: ${KERNEL_URL:-ws://mtw-request:7741/ws}
+      # Where to fetch torrent bytes from. The engine reports its own listen
+      # address as 0.0.0.0:9999, which is meaningless to another container —
+      # rust-backend.ts substitutes this host when the reported one is a
+      # wildcard or loopback.
+      TORRENT_RUST_HTTP_HOST: ${TORRENT_RUST_HTTP_HOST:-mtw-request}
+      TORRENT_RUST_HTTP_PORT: ${TORRENT_RUST_HTTP_PORT:-9999}
       # Peering: instance identity + friends. KERNEL_TOR=1 brings up an onion
       # service so this instance is reachable behind NAT, CGNAT or a tethered
       # phone, with no port forwarding and no infrastructure to operate. The
@@ -106,6 +169,9 @@ services:
       FS_COMMANDER_ALLOWED_ROOTS: /home/fastslack/mtwProjects/LABS
     volumes:
       - kernel-data:/app/data
+      # The Unix socket mtw-request listens on. Harmless when the engine is
+      # not running: the bridge just finds nothing there and stays disabled.
+      - bridge-sock:/run/mtw
       # Mounted at its host path so the commander's breadcrumbs match what the
       # user sees in a terminal. Read-only: this API exposes delete and move
       # over HTTP, so write access is a deliberate later step, not a default.
@@ -172,5 +238,7 @@ services:
 
 volumes:
   kernel-data:
+  # Carries /tmp/mtw-rust.sock between the engine and the kernel.
+  bridge-sock:
   neo4j-data:
   neo4j-logs:
