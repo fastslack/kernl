@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "../../../../../src/core/logger.js";
+import { mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
 import type { SubCue } from "./subtitles.js";
 import { parseSubs, dropRepeatRuns } from "./subtitles.js";
 
@@ -127,7 +128,11 @@ export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Pr
       }
     });
     ff.stderr?.on("data", (b: Buffer) => { err += b.toString(); });
-    ff.on("error", reject);
+    // A spawn failure here is almost always "ffmpeg is not installed" — the
+    // native macOS and Windows builds bundle the runtime only. Raw ENOENT
+    // reached the user as "spawn ffmpeg ENOENT", which names the problem
+    // without naming the fix.
+    ff.on("error", (e) => reject(mediaToolError("ffmpeg", e)));
     ff.on("exit", (code) => {
       if (code === 0) resolve();
       else reject(new Error(`ffmpeg exited ${code}: ${err.slice(0, 200)}`));
@@ -373,7 +378,7 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
         stderr += chunk;
         handleProgressChunk(chunk);
       });
-      proc.on("error", reject);
+      proc.on("error", (e) => reject(mediaToolError("whisper-cli", e)));
       proc.on("exit", (code) => code === 0 ? resolve() : reject(new Error(`whisper-cli exited ${code}: ${stderr.slice(0, 200)}`)));
     });
     emit?.({
