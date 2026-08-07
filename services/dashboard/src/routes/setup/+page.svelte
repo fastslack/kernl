@@ -19,7 +19,6 @@
    */
   import { onMount } from 'svelte';
   import OfficeStep from '$lib/components/setup/OfficeStep.svelte';
-  import { goto } from '$app/navigation';
   import { t, locale, setUserLocale, type Locale } from '$lib/i18n/index.js';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
 
@@ -262,7 +261,12 @@
       // Mirror the legacy welcomeSeen flag so /welcome doesn't re-trigger.
       localStorage.setItem('kernl.welcomeSeen', '1');
     } catch { /* private browsing */ }
-    goto(dest);
+    // Hard navigation, like /login does on success — not goto(). The wizard
+    // runs in the shell-less layout, and the kernel it just configured only
+    // starts answering /api/* once an LLM exists. A full load guarantees the
+    // dashboard comes up against the post-setup server state instead of
+    // whatever the pre-setup session had (or had not) fetched.
+    window.location.href = dest;
   }
 
   onMount(() => {

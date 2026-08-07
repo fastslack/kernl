@@ -92,7 +92,9 @@ export const NAV_GROUPS: NavGroup[] = [
 		label: 'Social',
 		icon: '🌐',
 		views: [
-			{ id: 'irc', label: 'IRC', icon: '📡' }
+			// Explicit order — items without one sort to 999 and land after
+			// every manifest-contributed tab regardless of intent.
+			{ id: 'irc', label: 'IRC', icon: '📡', order: 60 }
 		]
 	},
 	{
@@ -104,10 +106,10 @@ export const NAV_GROUPS: NavGroup[] = [
 		// and architecture are reachable via the internal sub-nav on
 		// /system, the rest via direct URL or in-page links.
 		views: [
-			{ id: 'settings', label: 'Settings', icon: '⚙️' },
-			{ id: 'system', label: 'System', icon: '🖥️' },
-			{ id: 'extensions', label: 'Extensions', icon: '🧩' },
-			{ id: 'notifications', label: 'Notifs', icon: '🔔' }
+			{ id: 'settings', label: 'Settings', icon: '⚙️', order: 10 },
+			{ id: 'system', label: 'System', icon: '🖥️', order: 20 },
+			{ id: 'extensions', label: 'Extensions', icon: '🧩', order: 30 },
+			{ id: 'notifications', label: 'Notifs', icon: '🔔', order: 40 }
 		]
 	}
 ];
@@ -132,10 +134,14 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 
 export const VIEWS: NavView[] = NAV_GROUPS.flatMap(g => g.views);
 
+// view id → group **id**. Keying on the label instead was a latent bug: the
+// layout looks the result up with `navGroups.find(g => g.id === ...)`, and the
+// people group's label ('Social') matches no id, so before the manifest lands
+// no rail item highlighted at all.
 export const VIEW_TO_GROUP: Record<string, string> = {};
 for (const g of NAV_GROUPS) {
 	for (const v of g.views) {
-		VIEW_TO_GROUP[v.id] = g.label.toLowerCase();
+		VIEW_TO_GROUP[v.id] = g.id;
 	}
 }
 

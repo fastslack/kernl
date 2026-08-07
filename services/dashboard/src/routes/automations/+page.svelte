@@ -105,6 +105,17 @@
   }
 </script>
 
+<!-- Internal sub-nav, same as /system: this page used to be the "Auto" tab of
+     the AI group, which is neither where it belongs nor where its data comes
+     from (it reads the same systemAgenda store /system does). -->
+<nav class="sys-subnav" aria-label="System pages">
+  <a class="sub-tab" href="/system">Status</a>
+  <a class="sub-tab" href="/sysoverview">Overview</a>
+  <a class="sub-tab active" href="/automations" aria-current="page">Automation</a>
+  <a class="sub-tab" href="/architecture">Arch 3D</a>
+  <a class="sub-tab" href="/friends">Friends</a>
+</nav>
+
 <ViewHeader title="Automations" sub="System processes & scheduled jobs" />
 
 {#if !cal}
@@ -210,6 +221,19 @@
 <DayModal open={modalOpen} date={selectedDay} events={selectedEvents} onClose={() => modalOpen = false} />
 
 <style>
+  /* Mirrors /system and /sysoverview — the `.sub-tab` class itself is global. */
+  .sys-subnav {
+    display: flex;
+    gap: 0;
+    border-bottom: 1px solid var(--border);
+    margin: 0 0 20px;
+    overflow-x: auto;
+  }
+  .sys-subnav a {
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
   .tl-hint {
     font-size: 11px;
     color: var(--text-3);

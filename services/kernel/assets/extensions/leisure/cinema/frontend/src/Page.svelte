@@ -7,7 +7,12 @@
     background. Cards fade-in lazy, support hover zoom + selection toggle,
     and bulk import via the /api/cinema/media/import-archive/run endpoint.
   */
-  import { onMount, tick } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  // The filters panel opens by pushing the bands below it down rather than
+  // floating over the grid. A popover would have covered the posters the
+  // filters are there to change, which is the one thing you need to watch
+  // while changing them.
+  import { slide } from 'svelte/transition';
   // Framework-level motion — the part of "looks expensive" that CSS alone
   // cannot do. When a filter changes the result set, the cards that survive
   // SLIDE to their new positions instead of the grid snapping to a different
@@ -20,7 +25,7 @@
   // /torrents — this page used to carry its own copies of all three.
   import {
     parseVtt as parseVttShared, installCues,
-    SubsController, type SubsAdapter, type SubTrack,
+    SubsController, type SubsAdapter, type SubTrack, type SubsJobStatus,
   } from '$shared/media/subs-client';
   import KernlPlayer from '$shared/media/KernlPlayer.svelte';
   import {
@@ -28,9 +33,24 @@
     CAPTION_FAMILIES as SHARED_FAMILIES,
     type CaptionStyle,
   } from '$shared/media/caption-style';
+  // One icon family for the whole page. The emoji these replaced rendered
+  // from a different font on every platform and carried their own colour, so
+  // a "dim" chip still had a full-saturation 📁 sitting in it.
+  import Icon from '$shared/components/Icon.svelte';
+  import { createI18n } from '$shared/i18n';
+  import { dicts, CONTENT_LANGUAGES, languageName } from './i18n/index.js';
 
   /** Host-provided context — auth token, locale, navigation. */
   export let ctx: ExtPageContext;
+
+  // ── i18n ───────────────────────────────────────────────────────
+  // ctx.locale is a snapshot taken when the host called mount(), and the host
+  // does NOT remount ext views when the language changes — so the store also
+  // listens for the shell's `kernl:locale` broadcast and re-renders in place.
+  const i18n = createI18n({ initial: ctx.locale, dicts, events: ctx.events });
+  const t = i18n.t;
+  const uiLocale = i18n.locale;
+  onDestroy(i18n.destroy);
 
   /**
    * Same-origin /api fetch with the host auth token attached. This page
@@ -119,8 +139,59 @@
   // mode that goes to the API as `tags_match`.
   let activeTags: string[] = [];
   let tagsMatch: 'all' | 'any' = 'all';
-  // The tag row shows one line until asked for more. See .tag-chips.collapsed.
-  let tagsExpanded = false;
+  // ── Header chrome state ──────────────────────────────────────
+  // The hard filters (year, language, type, duration, sort, the four content
+  // toggles) live in a panel instead of strung along one wrapping row. Not
+  // because they are rare — they are used constantly — but because eight loose
+  // controls with placeholder text where their labels should be told you
+  // nothing about what was actually applied. In the panel every control has a
+  // visible label; outside it, the "Showing" row names every filter that is on.
+  //
+  // Open/closed is remembered: someone who filters on every visit keeps the
+  // panel open and pays nothing for it, and someone who never does never sees
+  // it. A session-scoped default would have made that choice for both of them.
+  const FILTERS_OPEN_KEY = 'cinema:filtersOpen';
+  let filtersOpen = false;
+  // Tag section inside the panel, holding the searchable long tail. The row
+  // outside the panel carries the top tags only.
+  let tagPanelOpen = false;
+  // Set once the user scrolls into the grid: bands ③ and ④ fold away and the
+  // command bar plus the active-filter row stay. Everything is still one
+  // keystroke away, but the posters get the screen back.
+  let condensed = false;
+  let scrollEl: HTMLDivElement | null = null;
+
+  function toggleFilters(): void {
+    filtersOpen = !filtersOpen;
+    try { localStorage.setItem(FILTERS_OPEN_KEY, filtersOpen ? '1' : '0'); } catch { /* private mode */ }
+  }
+
+  // The tag band expands in place — it no longer lives inside the filters
+  // panel, so opening it must not drag the filters open with it.
+  function openTagPanel(): void {
+    tagPanelOpen = true;
+  }
+
+  function closeTagPanel(): void {
+    tagPanelOpen = false;
+    tagSearchOpen = false;
+    tagSearchQuery = '';
+  }
+
+  function onPageScroll(e: Event): void {
+    const top = (e.currentTarget as HTMLElement).scrollTop;
+    // Hysteresis. Collapsing the header shortens the document, which can pull
+    // the scroll position back across a single threshold and start the whole
+    // thing flickering. Two thresholds 90px apart cannot oscillate.
+    if (!condensed && top > 180) {
+      condensed = true;
+      // The expanded cloud opts out of `band-collapsible` — it is taller than
+      // the 56px that rule folds away. Without this it would be the one band
+      // that refuses to get out of the way once you are reading posters,
+      // which is the whole point of condensing.
+      if (tagPanelOpen) closeTagPanel();
+    } else if (condensed && top < 90) condensed = false;
+  }
   // Language ISO 2-letter code, empty = any.
   let langFilter = '';
   // Sort dropdown — exposed inline so the user doesn't have to dig.
@@ -268,10 +339,11 @@
     page = 1;
     runSearch();
   }
-  function clearTags() {
-    activeTags = [];
-    runSearch();
-  }
+  // clearTags() lived here. Orphaned by the header redesign: tags are now
+  // removed one at a time from the "Showing" row, and the only "clear
+  // everything" affordance is clearAllFilters(), which resets the rail, the
+  // kind, the duration floor and the content toggles as well — the four things
+  // a tags-only clear used to leave silently applied.
   function toggleTagsMatch() {
     tagsMatch = tagsMatch === 'all' ? 'any' : 'all';
     if (activeTags.length >= 2) runSearch();
@@ -635,6 +707,23 @@
 
   // ── Player modal state ─────────────────────────────────────
   interface PlayFile { name: string; size: number; format: string; length: string; kind: string; }
+  /**
+   * Chatty tracing, off unless asked for.
+   *
+   * These 27 call sites were plain console.log, and `maybeLoadTranscript`
+   * alone fires on every reactive update — opening one film printed dozens of
+   * lines. A console that is always full is a console nobody reads, so a real
+   * error in there goes unnoticed. Warnings and errors are untouched; only the
+   * play-by-play is gated.
+   *
+   * Turn it on with `localStorage.setItem('cinema:debug', '1')` and reload.
+   */
+  const CINEMA_DEBUG = typeof window !== 'undefined'
+    && (() => { try { return localStorage.getItem('cinema:debug') === '1'; } catch { return false; } })();
+  function dbg(...args: unknown[]): void {
+    if (CINEMA_DEBUG) console.log(...args);
+  }
+
   let playOpen = false;
   // Description panel — collapsed by default so the description doesn't
   // sit below the player as permanent visual noise. Toggle from header.
@@ -801,7 +890,7 @@
       const body = await r.json();
       federatedSubs = Array.isArray(body?.federated) ? body.federated : [];
       publishersMap = body?.publishers ?? {};
-      console.log('[cinema] loadFederatedSubs:', federatedSubs.length, 'rows', refresh ? '(refreshed)' : '(cached)');
+      dbg('[cinema] loadFederatedSubs:', federatedSubs.length, 'rows', refresh ? '(refreshed)' : '(cached)');
     } catch (err: any) {
       federatedError = err?.message ?? String(err);
     } finally {
@@ -1025,7 +1114,24 @@
       /** Stop whatever is running. */
       async cancel() {
         if (inflightAbort) { try { inflightAbort.abort(); } catch { /* already gone */ } }
-        stopProgress();
+        // 'cancelled', not 'done' — a cancel produced nothing, so the
+        // controller must not go looking for a finished track to show.
+        stopProgress(undefined, 'cancelled');
+      },
+
+      /**
+       * Push-based progress, which the controller prefers over polling. Cinema
+       * already runs an SSE channel against the kernel for exactly this data;
+       * this hands it to the player instead of keeping it to itself.
+       */
+      subscribeProgress(onStatus) {
+        jobListeners.add(onStatus);
+        // Seed only when something IS running. Emitting an idle snapshot here
+        // would clear `ctl.job` the instant the controller starts watching,
+        // blanking the UI until the first SSE event arrives.
+        const seed = currentJobStatus();
+        if (seed.status === 'running') onStatus(seed);
+        return () => { jobListeners.delete(onStatus); };
       },
 
       /** What the kernel can translate into — the menu's language list. */
@@ -1050,7 +1156,7 @@
   }
 
   async function applySubs() {
-    console.log('[cinema] applySubs: confirmed', { subSource, translateActive, subTargetLang, subEngine, transcribeEngine, transcribeModel });
+    dbg('[cinema] applySubs: confirmed', { subSource, translateActive, subTargetLang, subEngine, transcribeEngine, transcribeModel });
     // Auto-pick path: if the LLM chain (configured at /models) has any
     // usable link, use it; otherwise fall back to offline NLLB. Provider
     // selection inside "llm" is the chain's job — quota/auth fallbacks
@@ -1078,7 +1184,7 @@
     if (subSource === 'auto') startProgress('transcribe');
     else if (willTranslate) startProgress('translate');
     await tick();
-    console.log('[cinema] applySubs: triggering maybeLoadTranscript');
+    dbg('[cinema] applySubs: triggering maybeLoadTranscript');
     maybeLoadTranscript();
   }
 
@@ -1098,7 +1204,7 @@
       videoEl.currentTime = 0;
     } catch { /* */ }
     resumeAfterSubs = wasPlaying || neverStarted;
-    console.log('[cinema] pauseAndRewindForGeneration:', { wasPlaying, neverStarted, resume: resumeAfterSubs });
+    dbg('[cinema] pauseAndRewindForGeneration:', { wasPlaying, neverStarted, resume: resumeAfterSubs });
   }
   function resumePlaybackIfArmed(): void {
     if (!videoEl || !resumeAfterSubs) return;
@@ -1140,7 +1246,7 @@
     let phase1UpstreamUrl: string;
     startProgress('transcribe');
     if (shippedSrc) {
-      console.log('[cinema] runAutoTranslatePipeline: using shipped sub instead of whisper:', shippedSrc.file.name);
+      dbg('[cinema] runAutoTranslatePipeline: using shipped sub instead of whisper:', shippedSrc.file.name);
       const shippedUpstream = `https://archive.org/download/${encodeURIComponent(item.identifier)}/${shippedSrc.file.name.split('/').map(encodeURIComponent).join('/')}`;
       phase1UpstreamUrl = shippedUpstream;
       const shippedParams = new URLSearchParams({
@@ -1194,7 +1300,7 @@
     // Phase 2: translate. Same regardless of whether Phase 1 used
     // shipped or whisper — the translate-srt endpoint just needs an
     // upstream URL it can fetch.
-    stopProgress();
+    stopProgress(undefined, 'phase-swap');
     startProgress('translate');
     const translateParams = new URLSearchParams({
       url: phase1UpstreamUrl,
@@ -1333,7 +1439,7 @@
       created_at: Date.now(),
     }];
     activeSubKey = syntheticKey;
-    console.log('[cinema] ensureCurrentSubInCacheList: synthetic entry added', syntheticKey);
+    dbg('[cinema] ensureCurrentSubInCacheList: synthetic entry added', syntheticKey);
   }
   // (Reset of `subsApplied` is handled explicitly in openPlayer(),
   // selectPlayFile(), closePlayer(), and the source-pill click handlers
@@ -1370,7 +1476,7 @@
         // Order: lmstudio > ollama > grok > nllb. If user later opens
         // Advanced and picks a different one, that takes precedence.
         subEngine = subInfo?.engines.llm.available ? 'llm' : 'nllb';
-        console.log('[cinema] loadSubInfo: default engine →', subEngine,
+        dbg('[cinema] loadSubInfo: default engine →', subEngine,
           subInfo?.engines.llm.available ? `(primary=${subInfo.engines.llm.primary.slug})` : '');
       }
     } catch { /* keep null */ }
@@ -1439,18 +1545,37 @@
   // models or transformers engine may need more.
   const TRANSCRIBE_HARD_TIMEOUT_MS = 25 * 60 * 1000;
 
-  function cancelGenerateSubs(): void {
+  /**
+   * Tear the subtitle pipeline down to a clean slate: abort whatever is in
+   * flight, kill the timers, close the SSE channel and clear the busy flags.
+   *
+   * This has to run whenever the player leaves a video, not only when the
+   * user cancels. Nothing used to: closing the modal or opening another film
+   * left `translateBusy` stuck at true and `subsJobId` pointing at the
+   * previous run's channel. The consequences compounded —
+   *
+   *   • the progress card rendered on the NEXT film reading "TRANSLATING 0%",
+   *     for a translation that was not running;
+   *   • `startProgress()` is idempotent on `translateBusy`, so it returned
+   *     early and never armed a real run;
+   *   • `loadTranscriptManual()` is gated on `!translateBusy`, so the lazy
+   *     modal never armed either;
+   *   • and the request carried the dead jobId, publishing progress to a
+   *     channel with no subscriber left.
+   *
+   * Net effect: translate once, and every film after it showed a permanent
+   * fake "loading" and could never be translated again for the life of the
+   * tab. One teardown, called from every exit, is the whole fix.
+   */
+  function resetSubsPipeline(): void {
     // Abort BOTH the legacy generateSubs() path AND the unified-flow
-    // loadTranscriptManual() fetch — the user clicks one Cancel and
-    // expects everything to stop, regardless of which path is running.
+    // loadTranscriptManual() fetch — whichever is running has to stop.
     if (transcribeAbort) {
-      console.log('[cinema] cancelGenerateSubs: aborting transcribeAbort');
-      try { transcribeAbort.abort(); } catch { /* */ }
+      try { transcribeAbort.abort(); } catch { /* already gone */ }
       transcribeAbort = null;
     }
     if (inflightAbort) {
-      console.log('[cinema] cancelGenerateSubs: aborting inflightAbort');
-      try { inflightAbort.abort(); } catch { /* */ }
+      try { inflightAbort.abort(); } catch { /* already gone */ }
       inflightAbort = null;
       inflightTrackUrl = '';
     }
@@ -1459,14 +1584,26 @@
     if (transcribeTimer) { clearInterval(transcribeTimer); transcribeTimer = null; }
     if (translateTimer) { clearInterval(translateTimer); translateTimer = null; }
     if (modalPhaseSwapTimer) { clearTimeout(modalPhaseSwapTimer); modalPhaseSwapTimer = null; }
-    stopSubsProgressStream();
+    stopSubsProgressStream();          // closes the EventSource AND clears subsJobId
+    failedTrackUrls = new Set();       // a new video gets a clean slate
+    translateCuesDone = 0;
+    translateCuesTotal = 0;
+    translateEtaMs = 0;
+    translateElapsedMs = 0;
+    transcribeElapsedMs = 0;
+    translateError = '';
+  }
+
+  function cancelGenerateSubs(): void {
+    dbg('[cinema] cancelGenerateSubs: user cancelled');
+    resetSubsPipeline();
     transcribeError = 'Cancelled by user.';
     subsApplied = false;          // user cancelled — let them re-configure
   }
 
   async function generateSubs() {
     if (transcribeBusy || !playItem || !playFiles[playActiveIdx]) return;
-    console.log('[cinema] generateSubs: starting whisper', transcribeEngine, transcribeModel);
+    dbg('[cinema] generateSubs: starting whisper', transcribeEngine, transcribeModel);
     transcribeBusy = true;
     transcribeError = '';
     transcribeStartedAt = Date.now();
@@ -1500,14 +1637,14 @@
       const cueHdr = r.headers.get('x-transcribe-cues');
       transcribeCueCount = cueHdr ? parseInt(cueHdr, 10) : 0;
       await r.text();           // drain so the cache file lands on disk
-      console.log('[cinema] generateSubs: success', transcribeCueCount, 'cues in', Date.now() - transcribeStartedAt, 'ms');
+      dbg('[cinema] generateSubs: success', transcribeCueCount, 'cues in', Date.now() - transcribeStartedAt, 'ms');
       transcribeAvailable = true;
       subSource = 'auto';
       transcribeJustDone = true;
       setTimeout(() => { transcribeJustDone = false; }, 4500);
     } catch (err: any) {
       if (err?.name === 'AbortError') {
-        console.log('[cinema] generateSubs: aborted (cancel or timeout)');
+        dbg('[cinema] generateSubs: aborted (cancel or timeout)');
         // transcribeError already set by the cancel/timeout path
       } else {
         transcribeError = err?.message ?? String(err);
@@ -1519,7 +1656,7 @@
       transcribeBusy = false;
       if (transcribeTimer) { clearInterval(transcribeTimer); transcribeTimer = null; }
       stopSubsProgressStream();
-      console.log('[cinema] generateSubs: finally → transcribeBusy=false');
+      dbg('[cinema] generateSubs: finally → transcribeBusy=false');
     }
   }
 
@@ -1615,10 +1752,10 @@
   // destroyed conditional blocks ("Cannot read properties of null").
   $: if (typeof window !== 'undefined' && playOpen && !playLoading && subSource === 'off') {
     if (transcribeAvailable) {
-      console.log('[cinema] auto-enabling cached transcribed subs');
+      dbg('[cinema] auto-enabling cached transcribed subs');
       subSource = 'auto';
     } else if (hasSrt) {
-      console.log('[cinema] auto-enabling shipped SRT subs');
+      dbg('[cinema] auto-enabling shipped SRT subs');
       subSource = 'orig';
     }
   }
@@ -1678,6 +1815,8 @@
   // `addTextTrack()`. Same end-result, no <track> element needed.
   let manualTrack: TextTrack | null = null;
   let lastLoadedTrackUrl = '';
+  /** Track URLs that failed permanently — never re-request them for this video. */
+  let failedTrackUrls = new Set<string>();
   let inflightTrackUrl = '';      // dedupe: which URL is being fetched right now
   let inflightAbort: AbortController | null = null;  // cancel old fetch on new one
 
@@ -1777,6 +1916,7 @@
           }
           // 'done' / 'error' are surfaced through the HTTP response of the
           // pipeline fetch itself; we just keep the SSE open until then.
+          publishJobStatus();
         } catch { /* ignore malformed event */ }
       };
       subsSse.onerror = () => {
@@ -1789,6 +1929,49 @@
   function stopSubsProgressStream(): void {
     if (subsSse) { try { subsSse.close(); } catch { /* */ } subsSse = null; }
     subsJobId = '';
+  }
+
+  // ── Job status → the shared controller ─────────────────────────────
+  //
+  // The SSE above is the only live source of truth about a running subtitle
+  // job. It used to write into cinema's own locals and nowhere else, so the
+  // shared player's two surfaces — the chip in the bar and the progress block
+  // in the caption menu — read a `ctl.job` nobody ever fed and sat at 0% for
+  // the entire run, while cinema's own modal showed real cue counts beside
+  // them. Three reports of one job, two of them wrong.
+  //
+  // `subscribeProgress` is the adapter hook the controller already prefers
+  // over polling. Feeding it here makes the player the single owner of what
+  // the user sees, and let cinema's duplicate modal go.
+  let jobListeners = new Set<(s: SubsJobStatus) => void>();
+
+  /** Build the current status from whatever the SSE has told us so far. */
+  function currentJobStatus(): SubsJobStatus {
+    const translating = translateBusy && translateMode === 'translate';
+    const progress = translating
+      ? (translateCuesTotal > 0 ? translateCuesDone / translateCuesTotal : 0)
+      : transcribeFrac;
+    return {
+      status: (translateBusy || transcribeBusy) ? 'running' : 'idle',
+      progress: Math.max(0, Math.min(1, progress)),
+      phase: translating ? 'translate' : (transcribeSubPhase || 'transcribe'),
+      hint: translating ? '' : transcribeHint,
+      processedSec: transcribeProcessedSec,
+      totalSec: transcribeTotalSec,
+      error: '',
+      cuesDone: translating ? translateCuesDone : undefined,
+      cuesTotal: translating && translateCuesTotal > 0 ? translateCuesTotal : undefined,
+      etaMs: translating && translateEtaMs > 0 ? translateEtaMs : undefined,
+      engine: translating ? subEngine : transcribeEngine,
+      route: translating ? `${subSourceLang} → ${subTargetLang}` : subSourceLang,
+    };
+  }
+
+  function publishJobStatus(): void {
+    const s = currentJobStatus();
+    for (const fn of jobListeners) {
+      try { fn(s); } catch { /* a listener must not break the stream */ }
+    }
   }
 
   function startProgress(mode: 'transcribe' | 'translate'): void {
@@ -1829,8 +2012,18 @@
     // need to re-open it on the phase swap (which would race the kernel's
     // first batch event). Reuse if it's already open.
     if (!subsJobId) startSubsProgressStream();
+    publishJobStatus();   // the player's chip + menu light up immediately
   }
-  function stopProgress(err?: string): void {
+  /**
+   * `outcome` says what actually happened, because this function is called
+   * for three different things and the shared controller must not be told
+   * the same story about all of them:
+   *   'done'       — the run finished (or failed, if `err` is set)
+   *   'cancelled'  — the user stopped it; nothing was produced
+   *   'phase-swap' — transcribe ended, translate is about to start. The job
+   *                  is still running; the controller must not hear a word.
+   */
+  function stopProgress(err?: string, outcome: 'done' | 'cancelled' | 'phase-swap' = 'done'): void {
     // Clear both: a single pipeline run may have started transcribe first
     // and translate after, so we don't know which is currently active.
     translateBusy = false;
@@ -1843,6 +2036,23 @@
       // Surface the error in whichever card is/was showing.
       if (translateMode === 'transcribe') transcribeError = err;
       else translateError = err;
+    }
+    // A phase swap is NOT the end of the job, and saying it is broke the
+    // translate button outright: the controller reacts to 'ready' by calling
+    // onJobDone(), which unsubscribes us, refreshes the track list and shows
+    // whatever it finds — and showing a track goes through the adapter's
+    // load(), which aborts `inflightAbort`. That controller is the pipeline's
+    // own AbortController, so phase 2 died on an AbortError the pipeline
+    // swallows silently. Pressing Translate did nothing at all, with no error
+    // anywhere. Only a real ending talks to the controller.
+    if (outcome === 'phase-swap') return;
+    const base = currentJobStatus();
+    const terminal: SubsJobStatus =
+      err ? { ...base, status: 'error', error: err }
+      : outcome === 'cancelled' ? { ...base, status: 'idle' }
+      : { ...base, status: 'ready', progress: 1 };
+    for (const fn of jobListeners) {
+      try { fn(terminal); } catch { /* a listener must not break teardown */ }
     }
   }
   // Rough ETA: nllb is ~0.3-0.4s/cue on CPU, grok is ~0.05s/cue (one batch).
@@ -1898,7 +2108,7 @@
     // is based on real reads (not `void`s), so `trackUrl` may be stale
     // when this reactive block fires earlier than the trackUrl one.
     const url = trackSrc();
-    console.log('[cinema] maybeLoadTranscript', { hasVideo: !!videoEl, url, subTrack, transcribeAvailable, hasPlayItem: !!playItem, filesLen: playFiles.length, lastLoadedTrackUrl });
+    dbg('[cinema] maybeLoadTranscript', { hasVideo: !!videoEl, url, subTrack, transcribeAvailable, hasPlayItem: !!playItem, filesLen: playFiles.length, lastLoadedTrackUrl });
     if (!videoEl) { return; }
     if (!url) {
       // Only WIPE cues when the user explicitly turned subs OFF. trackSrc()
@@ -1916,8 +2126,9 @@
       }
       return;
     }
-    if (url === lastLoadedTrackUrl) { console.log('[cinema] maybeLoadTranscript: already loaded, skip'); return; }
-    if (url === inflightTrackUrl) { console.log('[cinema] maybeLoadTranscript: in-flight, skip'); return; }
+    if (url === lastLoadedTrackUrl) { dbg('[cinema] maybeLoadTranscript: already loaded, skip'); return; }
+    if (failedTrackUrls.has(url)) { dbg('[cinema] maybeLoadTranscript: known-bad url, skip'); return; }
+    if (url === inflightTrackUrl) { dbg('[cinema] maybeLoadTranscript: in-flight, skip'); return; }
     void loadTranscriptManual(url);
   }
   // Reactive: re-fire when ANY input that affects trackSrc() or videoEl
@@ -1936,7 +2147,7 @@
   async function loadTranscriptManual(url: string): Promise<void> {
     const v = videoEl;
     if (!v) return;
-    console.log('[cinema] fetching VTT:', url);
+    dbg('[cinema] fetching VTT:', url);
     // Cancel any prior in-flight fetch so we don't end up with two
     // overlapping requests competing to set translateBusy / call
     // stopProgress in the wrong order. The aborted call's catch handler
@@ -1952,7 +2163,14 @@
     // translate (if `tgt` is set) inside a single kernel call — show the
     // big centered transcribe modal because that's the dominant cost.
     const isUnified = url.startsWith('/api/cinema/media/subs');
-    const isTranslate = url.startsWith('/api/cinema/media/translate-srt');
+    // `passthrough=1` is the same endpoint doing no translation at all — it
+    // just converts a shipped .srt to WebVTT, which the browser needs because
+    // <track> cannot read SRT. Counting it as a translation is why opening
+    // any film that ships subtitles raised a full "TRANSLATING TO ESPAÑOL ·
+    // LLM · EN → ES" modal that nobody asked for: the request never touched
+    // an LLM, only the URL prefix matched.
+    const isPassthrough = /[?&]passthrough=1(?:&|$)/.test(url);
+    const isTranslate = url.startsWith('/api/cinema/media/translate-srt') && !isPassthrough;
     const isTranscribe = url.startsWith('/api/cinema/media/transcribe') || isUnified;
     // Closure-scoped lazy timer for transcribe — previously stored on
     // globalThis, which the second concurrent call would overwrite,
@@ -1964,13 +2182,16 @@
     // here would race the swap timer and resurrect transcribe mode after
     // we already moved on, leaving BOTH the big modal AND the corner
     // card visible at once. Only engage if nothing's already showing.
-    if (isTranslate && !translateBusy && !transcribeBusy) {
-      startProgress('translate');
-    } else if (isTranscribe && !translateBusy && !transcribeBusy) {
+    if ((isTranslate || isTranscribe) && !translateBusy && !transcribeBusy) {
       // Cache hits return in <100ms — only show progress if the response
       // genuinely delays beyond 1.5s. Re-check at fire time too.
+      //
+      // Translate used to open its modal eagerly, so a cached translation
+      // flashed a full-screen "translating…" card on its way to being
+      // instant. A real run takes minutes; 1.5s of nothing costs it nothing.
+      const mode: 'translate' | 'transcribe' = isTranslate ? 'translate' : 'transcribe';
       lazyTimer = setTimeout(() => {
-        if (!translateBusy && !transcribeBusy) startProgress('transcribe');
+        if (!translateBusy && !transcribeBusy) startProgress(mode);
       }, 1500);
     }
     // Open SSE eagerly so jobId is ready to forward in the request below,
@@ -1991,19 +2212,32 @@
       if (!r.ok) {
         let msg = `http ${r.status}`;
         try { const j = await r.json(); if (j?.error) msg = j.error; } catch { /* fall through */ }
-        throw new Error(msg);
+        const e = new Error(msg) as Error & { status?: number };
+        e.status = r.status;
+        throw e;
       }
       raw = await r.text();
     } catch (err) {
       // If we got aborted because a newer fetch superseded us, exit
       // silently — the new fetch's lifecycle owns the progress state.
       if (err instanceof Error && err.name === 'AbortError') {
-        console.log('[cinema] VTT fetch aborted (superseded):', url.slice(-80));
+        dbg('[cinema] VTT fetch aborted (superseded):', url.slice(-80));
         if (lazyTimer) clearTimeout(lazyTimer);
         return;
       }
       const msg = err instanceof Error ? err.message : String(err);
-      console.warn('[cinema] VTT fetch failed:', msg);
+      const status = (err as { status?: number })?.status;
+      console.warn('[cinema] VTT fetch failed:', msg, status ? `(http ${status})` : '');
+      // Some failures will never succeed on a retry: the shipped .srt has no
+      // parseable cues (422), the URL is wrong (400/404), the extension is
+      // gone (410). `lastLoadedTrackUrl` is only set on SUCCESS, so without
+      // this the reactive re-fires the same doomed request forever — one
+      // archive.org item with an empty .asr.srt produced a 422 on every
+      // single update cycle. Transient codes (5xx, 429, network) stay
+      // retryable on purpose.
+      if (status !== undefined && status >= 400 && status < 500 && status !== 429) {
+        failedTrackUrls.add(url);
+      }
       if (lazyTimer) clearTimeout(lazyTimer);
       stopProgress(msg);
       if (inflightTrackUrl === url) inflightTrackUrl = '';
@@ -2026,7 +2260,12 @@
     subsTick++;
     refreshCachedSubs().then(() => ensureCurrentSubInCacheList());
     resumePlaybackIfArmed();          // auto-resume from 0:00 with subs ready
-    console.log(`[cinema] manual track ready, mode=${manualTrack.mode}, cues=${manualTrack.cues?.length}`);
+    // `manualTrack` is null since display moved to the shared controller —
+    // every other reader here is guarded, this debug line was not, so it threw
+    // `Cannot read properties of null (reading 'mode')` as the LAST statement
+    // of the install. An unhandled rejection from a console.log, which also
+    // propagated up through the controller's show() → onJobDone() path.
+    console.log(`[cinema] manual track ready, cues=${parseVttShared(raw).length}`);
   }
 
   // Legacy hook kept so existing on:loadedmetadata / on:load callers
@@ -2095,6 +2334,24 @@
       if (!r.ok || myToken !== probedDurationToken) return;
       const j = await r.json();
       if (myToken !== probedDurationToken) return;
+
+      // The same probe now reports the codecs, so an unplayable file is known
+      // BEFORE the browser has had a chance to choke on it. Switching here
+      // replaces the old reactive path — load raw, wait for `on:error` or a
+      // 2.5s black-frame watchdog, tear down, reload through ffmpeg — which
+      // cost two loads and put an alarming "Codec not supported" banner on
+      // screen for what is a routine property of half this catalog.
+      lastProbeVerdict = {
+        playable: j?.browser_playable !== false,
+        video: String(j?.video_codec ?? ''),
+        audio: String(j?.audio_codec ?? ''),
+      };
+      if (j?.browser_playable === false && !codecFallbackUsed && !playNeedsTranscode) {
+        dbg('[cinema] probe says not browser-playable:', j.reason, '→ transcoding up front');
+        switchToTranscode(j.reason || 'codec not supported', { expected: true });
+        return;   // playSrc changed; the reactive will re-probe the new src
+      }
+
       const d = Number(j?.duration_sec);
       if (Number.isFinite(d) && d > 0) {
         probedDurationSec = d;
@@ -2201,8 +2458,83 @@
     videoEl.addEventListener('volumechange', onVolumeChange);
     videoEl.addEventListener('ratechange', onRateChange);
     videoEl.addEventListener('error', onVideoError);
+    // Startup states, for the preloader below.
+    videoEl.addEventListener('loadstart', onStartupLoadStart);
+    videoEl.addEventListener('progress', onStartupProgress);
+    videoEl.addEventListener('waiting', onStartupWaiting);
+    videoEl.addEventListener('stalled', onStartupWaiting);
+    videoEl.addEventListener('canplay', onStartupReady);
+    videoEl.addEventListener('playing', onStartupReady);
     subsCtl?.setVideo(videoEl);
   }
+
+  // ── Startup preloader ──────────────────────────────────────────────
+  //
+  // Opening a film used to be a black rectangle with `0:00 / 0:00` and a
+  // static play glyph for several seconds — nothing said whether it was
+  // working, stuck, or broken. Long by nature: archive.org is cold-cache
+  // slow, and a transcoded source waits on ffmpeg before a single byte of
+  // playable video exists.
+  //
+  // So this reports what is actually happening rather than spinning: the
+  // phase, how long it has been going, and the real buffered fraction read
+  // off `video.buffered` when the browser knows one.
+  type StartupPhase = 'idle' | 'connecting' | 'buffering' | 'ready';
+  let startupPhase: StartupPhase = 'idle';
+  let startupBufferedFrac = 0;
+  let startupElapsedMs = 0;
+  let startupTimer: ReturnType<typeof setInterval> | null = null;
+  let startupStartedAt = 0;
+
+  function startupTick(): void {
+    if (startupTimer) return;
+    startupStartedAt = Date.now();
+    startupElapsedMs = 0;
+    startupTimer = setInterval(() => {
+      startupElapsedMs = Date.now() - startupStartedAt;
+    }, 100);
+  }
+  function startupStop(): void {
+    if (startupTimer) { clearInterval(startupTimer); startupTimer = null; }
+  }
+  function onStartupLoadStart(): void {
+    startupPhase = 'connecting';
+    startupBufferedFrac = 0;
+    startupTick();
+  }
+  function onStartupWaiting(): void {
+    if (startupPhase === 'ready') return;   // mid-playback rebuffer: the bar owns it
+    startupPhase = 'buffering';
+    startupTick();
+  }
+  function onStartupReady(): void {
+    startupPhase = 'ready';
+    startupStop();
+  }
+  function onStartupProgress(): void {
+    const v = videoEl;
+    if (!v) return;
+    if (startupPhase === 'connecting') startupPhase = 'buffering';
+    // `duration` is Infinity/NaN on a live transcode, so a fraction is only
+    // meaningful once we have a real length — from the element or the probe.
+    const total = Number.isFinite(v.duration) && v.duration > 0
+      ? v.duration
+      : probedDurationSec;
+    if (!total || v.buffered.length === 0) return;
+    startupBufferedFrac = Math.min(1, v.buffered.end(v.buffered.length - 1) / total);
+  }
+
+  /**
+   * Visible while the first frame is still out of reach.
+   *
+   * `idle` counts as busy: there is a gap between the element receiving a src
+   * and the browser firing `loadstart`, and leaving it out let the transport
+   * bar flash a `0:00 / 0:00` before the preloader took over — the exact
+   * frame this is meant to replace.
+   */
+  $: startupBusy = playOpen && !playLoading && !playError && !!playSrc && startupPhase !== 'ready';
+  /** A transcode has no seekable buffer to report — say so instead of faking one. */
+  $: startupIndeterminate = playNeedsTranscode || startupBufferedFrac <= 0;
 
   $: if (typeof window !== 'undefined' && trackUrl) {
     setTimeout(enableAllTextTracks, 120);
@@ -2399,6 +2731,7 @@
   // encodes to a profile every browser eats.
   let codecFallbackUsed = false;        // avoid infinite loop
   let codecFallbackHint = '';            // banner message
+  let codecFallbackExpected = false;     // probe knew up front → informational, not an error
   let videoLoadWatchdog: ReturnType<typeof setTimeout> | null = null;
 
   // Manual toggle handler — extracted from the template because inline
@@ -2415,26 +2748,77 @@
     playNeedsTranscode = built.needsTranscode;
   }
 
-  function fallbackToTranscode(reason: string): void {
+  /**
+   * Move playback onto the transcoder.
+   *
+   * `expected: true` means we knew before loading — the probe told us the
+   * codec is undecodable — so this is a routine routing decision, not a
+   * failure, and it gets a quiet one-line note instead of the red-alert
+   * banner. `expected: false` is the old reactive path: the browser already
+   * tried and failed, the user watched a black frame, and saying so is
+   * warranted.
+   */
+  function switchToTranscode(reason: string, opts?: { expected?: boolean }): void {
     if (codecFallbackUsed) return;
     if (!playItem || !playFiles[playActiveIdx]) return;
     codecFallbackUsed = true;
-    codecFallbackHint = `Codec not supported (${reason}) — switching to live transcode…`;
-    console.warn('[cinema] codec fallback:', reason);
+    const expected = opts?.expected === true;
+    codecFallbackHint = expected
+      ? `${reason} — transcoding for the browser`
+      : `Codec not supported (${reason}) — switching to live transcode…`;
+    codecFallbackExpected = expected;
+    if (expected) dbg('[cinema] transcoding up front:', reason);
+    else console.warn('[cinema] codec fallback:', reason);
     const built = buildPlayUrl(playItem, playFiles[playActiveIdx], true);
     playSrc = built.src;
     playNeedsTranscode = true;
-    // Auto-clear the banner once the transcode load fires loadedmetadata.
-    setTimeout(() => { codecFallbackHint = ''; }, 6000);
+    // Auto-clear once the transcode load is under way. The expected case is
+    // informational, so it goes sooner.
+    setTimeout(() => { codecFallbackHint = ''; }, expected ? 3500 : 6000);
   }
+  /** Reactive failure path — kept as the backstop for what the probe misses. */
+  function fallbackToTranscode(reason: string): void {
+    switchToTranscode(reason, { expected: false });
+  }
+
+  /**
+   * What ffprobe said about the file currently in `playSrc`, or null before
+   * the probe lands. `<video>` reports MEDIA_ERR_SRC_NOT_SUPPORTED (code 4)
+   * for a failed *request* just as readily as for an undecodable codec, and
+   * the old handler called every one of them "Codec not supported". When the
+   * probe has already confirmed h264/aac/yuv420p, that message is simply
+   * false and sends whoever reads it looking in the wrong place.
+   */
+  let lastProbeVerdict: { playable: boolean; video: string; audio: string } | null = null;
   function onVideoError(e: Event): void {
-    if (codecFallbackUsed) return;
+    const v0 = e.currentTarget as HTMLVideoElement;
+    if (codecFallbackUsed) {
+      // Second failure — the transcoder was already the recovery and it did
+      // not work either. Say so. Silently returning left the preloader
+      // spinning forever with the controls hidden behind it, which is a
+      // worse dead end than the black rectangle this all started as.
+      const code0 = v0.error?.code;
+      console.error('[cinema] playback failed after transcode fallback', { code: code0, src: playSrc });
+      playError = playNeedsTranscode
+        ? `Playback failed even through the transcoder (media error ${code0 ?? '?'}). Try another file from FILES.`
+        : `Playback failed (media error ${code0 ?? '?'}).`;
+      startupPhase = 'ready';   // release the preloader so the error is visible
+      startupStop();
+      return;
+    }
     const v = e.currentTarget as HTMLVideoElement;
     const code = v.error?.code;
     const msgs: Record<number, string> = {
       1: 'aborted', 2: 'network', 3: 'decode error', 4: 'src not supported',
     };
-    const msg = msgs[code ?? 0] ?? `error ${code}`;
+    let msg = msgs[code ?? 0] ?? `error ${code}`;
+    // Code 4 with a probe that says the codecs are fine means the *fetch*
+    // failed, not the decoder. Same recovery (the transcoder is a different
+    // endpoint and often just works), honest wording.
+    if (code === 4 && lastProbeVerdict?.playable) {
+      msg = `could not load the source (${lastProbeVerdict.video || 'unknown'}/${lastProbeVerdict.audio || 'unknown'} decodes fine)`;
+    }
+    console.warn('[cinema] video error', { code, probe: lastProbeVerdict, src: playSrc });
     fallbackToTranscode(msg);
   }
   // Auto-fallback was checking videoWidth here, but that's premature —
@@ -2482,6 +2866,12 @@
     translateError = '';
     codecFallbackUsed = false;
     codecFallbackHint = '';
+    codecFallbackExpected = false;
+    lastProbeVerdict = null;
+    startupPhase = 'idle';
+    startupBufferedFrac = 0;
+    startupStop();
+    resetSubsPipeline();              // a run from the previous video must not leak into this one
     try {
       const r = await apiFetch(`/api/cinema/media/import-archive/files?id=${encodeURIComponent(item.identifier)}`);
       if (!r.ok) {
@@ -2520,7 +2910,7 @@
       // lower down also fires, but Svelte 4 sometimes elides `void x`
       // dependency tracking and the playFiles-mutation re-run gets dropped
       // — calling explicitly here makes the auto-show deterministic.
-      console.log('[cinema] openPlayer: probing for cached transcript');
+      dbg('[cinema] openPlayer: probing for cached transcript');
       await probeTranscribeCache();
       // Also load the full sidecar list so SELECT shows everything
       // already produced for this video.
@@ -2569,7 +2959,7 @@
       };
       const auto = pickAutoSub();
       if (auto) {
-        console.log('[cinema] openPlayer: auto-recovering', auto.kind, auto.tgt_lang || auto.src_lang, auto.key);
+        dbg('[cinema] openPlayer: auto-recovering', auto.kind, auto.tgt_lang || auto.src_lang, auto.key);
         generateOpen = false;
         // Fire-and-forget — selectCachedSub installs the cues + syncs
         // subSource / subTargetLang / subsApplied so the picker
@@ -2581,13 +2971,13 @@
         // /transcribe cache hit for the CURRENT config (different shape
         // than the sidecar list — uses raw transcribe URL). Treat as
         // ready and let the reactive load it.
-        console.log('[cinema] openPlayer: /transcribe cache hit → auto subs');
+        dbg('[cinema] openPlayer: /transcribe cache hit → auto subs');
         generateOpen = false;
         subSource = 'auto';
         subsApplied = true;
         activeSubKey = 'off';     // no matching sidecar — leave Off until reactive applies
       } else if (localHasSrt) {
-        console.log('[cinema] openPlayer: shipped .srt only → enabling orig');
+        dbg('[cinema] openPlayer: shipped .srt only → enabling orig');
         generateOpen = false;
         subSource = 'orig';
         subsApplied = true;
@@ -2595,7 +2985,7 @@
       } else {
         // No subs anywhere — default wizard to generate so the CTA is
         // obvious. User still has to click START.
-        console.log('[cinema] openPlayer: no subs found → wizard primed for generate');
+        dbg('[cinema] openPlayer: no subs found → wizard primed for generate');
         generateOpen = false;
         subSource = 'auto';
         subsApplied = false;
@@ -2620,6 +3010,12 @@
     playActiveIdx = idx;
     codecFallbackUsed = false;
     codecFallbackHint = '';
+    codecFallbackExpected = false;
+    lastProbeVerdict = null;
+    startupPhase = 'idle';
+    startupBufferedFrac = 0;
+    startupStop();
+    resetSubsPipeline();              // a run from the previous video must not leak into this one
     subsApplied = false;              // new file → user must reconfirm subs
     generateRequested = false;        // new file → no whisper until explicit APPLY
     const built = buildPlayUrl(playItem, playFiles[idx]);
@@ -2638,6 +3034,9 @@
     activeSubKey = 'off';
     cachedSubs = [];
     filesOpen = false;
+    startupPhase = 'idle';
+    startupStop();                    // don't leave a 100ms interval running
+    resetSubsPipeline();              // closing mid-translation must not poison the next film
   }
   function onPlayerKeydown(e: KeyboardEvent) {
     if (!playOpen) return;
@@ -2672,6 +3071,9 @@
 
   let observer: IntersectionObserver | null = null;
   onMount(async () => {
+    // Whether the filters panel was left open last visit. Read before the
+    // first paint so the panel does not slide open a frame after the header.
+    try { filtersOpen = localStorage.getItem(FILTERS_OPEN_KEY) === '1'; } catch { /* private mode */ }
     // Hot-render from localStorage (instant) then reconcile with server.
     watchlist = loadLocalWatchlist();
     syncWatchlistFromServer();
@@ -2747,6 +3149,23 @@
     return `https://archive.org/services/img/${encodeURIComponent(identifier)}`;
   }
 
+  /**
+   * The same artwork, but same-origin, for the `<video poster>`.
+   *
+   * The player carries `crossorigin="anonymous"` so its cross-origin captions
+   * work. That attribute applies to the POSTER too, which turns a plain image
+   * load into a CORS request — and archive.org sends no
+   * `Access-Control-Allow-Origin`. So every film logged a CORS failure and
+   * fell back to the black rectangle the poster exists to prevent. Grid cards
+   * are plain `<img>` with no crossorigin, so they load directly and stay off
+   * the proxy.
+   */
+  function posterUrl(identifier: string): string {
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const upstream = thumbUrl(identifier);
+    return `${origin}/api/cinema/media/webseed-proxy?url=${encodeURIComponent(upstream)}${authQuery()}`;
+  }
+
   function onPosterError(e: Event) {
     const img = e.target as HTMLImageElement | null;
     if (img) img.style.opacity = '0.05';
@@ -2812,7 +3231,29 @@
   // Reset + fetch first page. Single path now — the /titles endpoint
   // runs hybrid (FTS5+semantic+RRF) when there's a query, classic
   // listing when there isn't. Filters always layer on top.
+  /**
+   * Pull `#tag` tokens out of the search box and turn them into real tag
+   * filters. This is what makes the long tail reachable: the catalogue holds
+   * ~136k tags and the row outside can show twelve, so anything else used to
+   * need the autocomplete popover. Typing `#film-noir` now does it directly,
+   * and the tag shows up in the "Showing" row like any other filter.
+   *
+   * Hyphens and underscores become spaces so `#cine-argentino` finds the tag
+   * actually stored as "cine argentino".
+   */
+  const TAG_TOKEN = /#[\p{L}\p{N}_-]+/gu;
+  function absorbTagTokens(): void {
+    const found = query.match(TAG_TOKEN);
+    if (!found) return;
+    for (const token of found) {
+      const norm = token.slice(1).toLowerCase().replace(/[-_]+/g, ' ').trim();
+      if (norm && !activeTags.includes(norm)) activeTags = [...activeTags, norm];
+    }
+    query = query.replace(TAG_TOKEN, ' ').replace(/\s+/g, ' ').trim();
+  }
+
   async function runSearch() {
+    absorbTagTokens();
     busy = true;
     lastError = '';
     semanticHint = '';
@@ -2872,6 +3313,129 @@
     query = '';
     sortMode = 'downloads';
     viewWatchlist = false;
+    // These four were missing, which is why "clear" used to leave the grid
+    // filtered: the rail, the kind, the duration floor and the three content
+    // toggles all survived a clear-all and there was nothing on screen saying
+    // so. Reset to the same defaults the page starts at — collapseWorks is the
+    // only one whose default is on.
+    activeRail = '';
+    kindFilter = '';
+    minMinutes = 0;
+    playableOnly = false;
+    subsOnly = false;
+    identifiedOnly = false;
+    collapseWorks = true;
+    forYouMode = false;
+    forYouReason = '';
+    page = 1;
+    runSearch();
+  }
+
+  // ── Active filters, as one readable row ──────────────────────
+  // The single largest usability hole this page had: seven controls plus a tag
+  // row plus a rail could all be narrowing the grid at once, and nothing said
+  // which. Reading the state meant reading every control. This turns the whole
+  // filter state into one sentence of removable chips.
+  interface ActiveChip {
+    id: string;
+    label: string;
+    /** Drives the colour: which taxonomy this chip came from. */
+    tone: 'query' | 'tag' | 'rail' | 'filter';
+    /** What removeActive() should undo. */
+    act: string;
+    value?: string;
+  }
+
+  /** Human label for a duration floor, e.g. "60 min or more". */
+  function durationLabel(tr: (k: string, p?: Record<string, string | number>) => string, mins: number): string {
+    return tr('active.duration', { n: mins });
+  }
+
+  // Referenced top-level state is tracked by Svelte, so this rebuilds whenever
+  // any filter changes — including a locale switch, via $t.
+  $: activeChips = ((): ActiveChip[] => {
+    const tr = $t;
+    const out: ActiveChip[] = [];
+    if (query.trim()) {
+      out.push({ id: 'q', label: tr('active.query', { q: query.trim() }), tone: 'query', act: 'query' });
+    }
+    if (activeRail) {
+      const rail = canonRails.find((r) => r.key === activeRail);
+      out.push({ id: 'rail', label: tr('active.rail', { x: rail?.label ?? activeRail }), tone: 'rail', act: 'rail' });
+    }
+    for (const tag of activeTags) {
+      const meta = topTags.find((x) => x.tag_norm === tag);
+      out.push({ id: 'tag:' + tag, label: meta?.tag_display ?? tag, tone: 'tag', act: 'tag', value: tag });
+    }
+    if (yearMin && yearMax) {
+      out.push({ id: 'year', label: tr('active.year.between', { a: yearMin, b: yearMax }), tone: 'filter', act: 'year' });
+    } else if (yearMin) {
+      out.push({ id: 'year', label: tr('active.year.from', { a: yearMin }), tone: 'filter', act: 'year' });
+    } else if (yearMax) {
+      out.push({ id: 'year', label: tr('active.year.to', { b: yearMax }), tone: 'filter', act: 'year' });
+    }
+    if (langFilter) {
+      out.push({ id: 'lang', label: languageName(langFilter, $uiLocale), tone: 'filter', act: 'lang' });
+    }
+    if (kindFilter) {
+      out.push({ id: 'kind', label: tr('active.kind.' + kindFilter), tone: 'filter', act: 'kind' });
+    }
+    if (minMinutes > 0) {
+      out.push({ id: 'dur', label: durationLabel(tr, minMinutes), tone: 'filter', act: 'duration' });
+    }
+    if (playableOnly) out.push({ id: 'playable', label: tr('active.playable'), tone: 'filter', act: 'playable' });
+    if (subsOnly) out.push({ id: 'subs', label: tr('active.subs'), tone: 'filter', act: 'subs' });
+    if (identifiedOnly) out.push({ id: 'identified', label: tr('active.identified'), tone: 'filter', act: 'identified' });
+    // Only surfaced when it is NOT the default. Grouping is on out of the box,
+    // and a chip that is always present is not information.
+    if (!collapseWorks) out.push({ id: 'collapse', label: tr('active.ungrouped'), tone: 'filter', act: 'collapse' });
+    if (sortMode !== 'downloads') {
+      out.push({ id: 'sort', label: tr('filters.sort.' + sortMode), tone: 'filter', act: 'sort' });
+    }
+    return out;
+  })();
+
+  /**
+   * Count of filters living in the panel — what the "Filters" button badges.
+   * Tags and rails are excluded: they have their own visible rows, so counting
+   * them here would double-report them.
+   */
+  $: panelFilterCount =
+    (yearMin ? 1 : 0) +
+    (yearMax ? 1 : 0) +
+    (langFilter ? 1 : 0) +
+    (kindFilter ? 1 : 0) +
+    (minMinutes > 0 ? 1 : 0) +
+    (sortMode !== 'downloads' ? 1 : 0) +
+    (collapseWorks ? 0 : 1) +
+    (playableOnly ? 1 : 0) +
+    (subsOnly ? 1 : 0) +
+    (identifiedOnly ? 1 : 0);
+
+  /**
+   * Undo one chip. A dispatcher rather than a closure carried on each chip:
+   * closures built inside the reactive block would be assigning to the very
+   * state that block reads, which Svelte rejects as a cyclical dependency.
+   */
+  function removeActive(chip: ActiveChip): void {
+    switch (chip.act) {
+      case 'query': query = ''; break;
+      case 'tag': activeTags = activeTags.filter((x) => x !== chip.value); break;
+      case 'rail': activeRail = ''; break;
+      case 'year': yearMin = null; yearMax = null; break;
+      case 'lang': langFilter = ''; break;
+      case 'kind': kindFilter = ''; break;
+      case 'duration': minMinutes = 0; break;
+      case 'playable': playableOnly = false; break;
+      case 'subs': subsOnly = false; break;
+      case 'identified': identifiedOnly = false; break;
+      case 'collapse': collapseWorks = true; break;
+      case 'sort': sortMode = 'downloads'; break;
+    }
+    page = 1;
+    // "for you" is a ranked one-shot set, not a query — leaving it on while the
+    // user edits filters would show a grid that ignores the edit.
+    if (forYouMode) { forYouMode = false; forYouReason = ''; }
     runSearch();
   }
 
@@ -2898,280 +3462,446 @@
 
 <svelte:head><title>cinema — Kernl</title></svelte:head>
 
-<div class="page">
-  <!-- ── HERO / CHIPS ─────────────────────────────────────────── -->
-  <header class="hero">
-    <div class="hero-inner">
-      <h1>cinema<span class="cur">█</span></h1>
-      <span class="dim mini">
-        {viewWatchlist
-          ? `★ watchlist · ${watchlist.length} saved`
-          : query.trim()
-            ? `${items.length} resultados para "${query.trim()}"`
-            : `catálogo local · ${items.length} cargados`}
-      </span>
-    </div>
-    <nav class="chips">
-      <button
-        class="chip chip-star"
-        class:on={viewWatchlist}
-        on:click={() => (viewWatchlist = !viewWatchlist)}
-        title="show items saved with the ★ button"
-      >
-        <span class="chip-icon">★</span>watchlist {watchlist.length ? `(${watchlist.length})` : ''}
-      </button>
-      <span class="chip-sep"></span>
-      <button
-        class="chip"
-        class:on={embedPanelOpen}
-        on:click={() => { embedPanelOpen = !embedPanelOpen; refreshEmbedStatus(); }}
-        title="ver / lanzar embedder bge-m3"
-      >
-        <span class="chip-icon">⚙</span>embeddings{embedSnap?.status === 'running' ? ' ●' : ''}
-      </button>
-      <a class="chip" href="/cinema/directories" title="directorios comunitarios federados via Nostr">
-        <span class="chip-icon">📁</span>directorios
-      </a>
-      {#if collection || activeTags.length > 0 || langFilter || yearMin || yearMax || query.trim() || sortMode !== 'downloads'}
-        <button
-          class="chip chip-star"
-          on:click={clearAllFilters}
-          title="clear all filters"
-        >
-          <span class="chip-icon">⊘</span>limpiar
-        </button>
-      {/if}
-    </nav>
-  </header>
+<div class="page" bind:this={scrollEl} on:scroll={onPageScroll}>
+  <!-- ══ HEADER CHROME ═════════════════════════════════════════════
+       Four bands, in the order the questions actually get asked:
 
-  <!-- ── FILTERS BAR ─────────────────────────────────────────── -->
-  <section class="filters">
-    {#if !viewWatchlist}
-      <input
-        class="search"
-        type="text"
-        bind:value={query}
-        placeholder='search — "ALF", "dracula", "silent films with vampires"… ↵'
-        on:keydown={(e) => e.key === 'Enter' && runSearch()}
-      />
-      <div class="years" title="year range">
-        <input type="number" bind:value={yearMin} placeholder="year ≥" min="1888" max="2099" />
-        <span class="dim">—</span>
-        <input type="number" bind:value={yearMax} placeholder="year ≤" min="1888" max="2099" />
-      </div>
-      <select class="lang-select" bind:value={langFilter} title="language">
-        <option value="">language</option>
-        <option value="en">English</option>
-        <option value="es">Spanish</option>
-        <option value="fr">French</option>
-        <option value="de">German</option>
-        <option value="it">Italian</option>
-        <option value="pt">Portuguese</option>
-        <option value="ja">Japanese</option>
-        <option value="ru">Russian</option>
-      </select>
-      <!-- Films or series. "any" is the default so nothing is hidden until
-           the user actually asks for one or the other. -->
-      <select class="kind-select" bind:value={kindFilter} on:change={runSearch}
-              aria-label="Films or series">
-        <option value="">películas y series</option>
-        <option value="film">solo películas</option>
-        <option value="series">solo series</option>
-      </select>
-      <select class="sort-select" bind:value={sortMode} on:change={runSearch}
-              aria-label="Sort order"
-              title="how the results are ordered — 'mejores' weights the rating by how many people voted">
-        <option value="best">★ mejores</option>
-        <option value="downloads">+ views</option>
-        <option value="rating">+ rating</option>
-        <option value="year_desc">year ↓</option>
-        <option value="year_asc">year ↑</option>
-        <option value="added_desc">added ↓</option>
-      </select>
-      <!-- Opt-in narrowing to titles matched against a catalogued work.
-           Deliberately a checkbox rather than a default: turning it on hides
-           the industrial and educational cinema the archive is best at. -->
-      <!-- Duration read from the item's real files, not from runtime_sec.
-           Only items already probed can satisfy this. -->
-      <select class="sort-select" bind:value={minMinutes} on:change={runSearch}
-              aria-label="Duración mínima"
-              title="duración mínima real, leída de los archivos del ítem — saca clips, cartas de ajuste y audios mal etiquetados">
-        <option value={0}>cualquier duración</option>
-        <option value={20}>20 min +</option>
-        <option value={40}>40 min +</option>
-        <option value={60}>60 min + (largos)</option>
-      </select>
-      <!-- Four toggles in one bordered box rather than four loose checkboxes
-           strewn along the row. They are all the same kind of thing — narrow
-           the set — and grouping them says so, as well as keeping the bar from
-           reading as an undifferentiated pile of controls. -->
-      <div class="toggle-cluster" role="group" aria-label="Filtros de contenido">
-        <label title="agrupa las múltiples subidas de una misma película en una fila, sumando descargas y votos">
-          <input type="checkbox" bind:checked={collapseWorks} on:change={runSearch} />
-          <span>⧉ agrupar</span>
-        </label>
-        <label title="solo ítems con un formato que el reproductor puede abrir — no es lo mismo que tener torrent">
-          <input type="checkbox" bind:checked={playableOnly} on:change={runSearch} />
-          <span>▶ reproducibles</span>
-        </label>
-        <label title="solo ítems que traen subtítulos">
-          <input type="checkbox" bind:checked={subsOnly} on:change={runSearch} />
-          <span>💬 subs</span>
-        </label>
-        <label title="solo títulos identificados como una obra catalogada — deja fuera cine industrial y educativo que no está en Wikidata">
-          <input type="checkbox" bind:checked={identifiedOnly} on:change={runSearch} />
-          <span>🎬 identificadas</span>
-        </label>
-      </div>
-      <button class="primary" disabled={busy} on:click={runSearch}>
-        {busy ? '…' : 'search'}
-      </button>
-    {:else}
-      <span class="dim mini">★ tu watchlist · {watchlist.length} guardadas</span>
-    {/if}
-  </section>
+         ①  what am I looking at        — identity + global actions
+         ②  what am I looking for       — the search box, and the filters
+         ③  what is narrowing it        — every active filter, in one line
+         ④  what else could I look at   — curated rails, then tags
 
-  <!-- ── CANON RAILS ──────────────────────────────────────────
-       Curated lists, above the tag row because they answer a different and
-       stronger question: not "what is this about" but "who decided this
-       mattered". Only rails the catalogue actually holds titles from are
-       rendered, so this section disappears entirely on a fresh install. -->
-  <!-- Shown whenever EITHER kind of rail is available. Gating the whole
-       section on canon rails would have hidden "para vos" on any catalogue
-       that holds nothing from a curated list — which is most of them. -->
-  {#if !viewWatchlist && !semanticMode}
-    <section class="canon-rails">
-      <!-- One label for the whole row, always present. Previously it only
-           appeared alongside curated rails, so on a catalogue with none the
-           "para vos" chip rendered alone against the left edge and read as a
-           stray element rather than a control. -->
-      <span class="dim mini canon-rails-label">descubrir</span>
-      <!-- Sits with the rails because it answers the same shape of question —
-           "what should I watch" rather than "what matches these words" —
-           even though it is computed rather than curated. -->
-      <button
-        class="canon-chip foryou"
-        class:active={forYouMode}
-        title="rankea el catálogo contra el centroide de tu watchlist, tus vistas y tus puntuaciones"
-        on:click={toggleForYou}
-      >✦ para vos</button>
-      {#if canonRails.length > 0}
-        <span class="chip-sep" aria-hidden="true"></span>
-      {/if}
-      {#each canonRails as rail (rail.key)}
-        <button
-          class="canon-chip"
-          class:active={activeRail === rail.key}
-          title={`${rail.blurb} — el catálogo tiene ${rail.held} de ${rail.members}`}
-          on:click={() => toggleRail(rail.key)}
-        >
-          {rail.label}
-          <span class="canon-chip-count">{rail.held}</span>
-        </button>
-      {/each}
-      {#if activeRail}
-        <button class="ghost sm" on:click={() => toggleRail(activeRail)}>× limpiar</button>
-      {/if}
-    </section>
+       What this replaces: four control systems (nav chips, a wrapping
+       filter row, canon rails, thirty tag chips) rendered at the same
+       visual weight, in four different chip languages, taking ~400px —
+       the whole fold — before a single poster appeared. Nothing has been
+       removed; it has been ordered, and the parts that are consulted
+       rather than scanned now live behind one click.
 
-    <!-- Why the rail came back empty. The two causes need different actions
-         from the user, so collapsing them into "no results" would leave them
-         with nothing to do about it. -->
-    {#if forYouMode && forYouReason !== 'ok' && forYouReason !== ''}
-      <section class="foryou-note">
-        {#if forYouReason === 'no_profile'}
-          Guardá o puntuá algunas películas y este carril empieza a funcionar
-          — van {forYouProfileSize}, hacen falta al menos 3.
-        {:else if forYouReason === 'no_vectors'}
-          El catálogo todavía no está indexado. Corré el indexador de embeddings
-          y volvé a probar.
+       Every band is laid out on --gutter. The old tag row was not: it
+       carried its own margin AND its own padding and started 12px further
+       in than every band above it, which read as a rendering fault. -->
+  <header class="chrome" class:condensed>
+    <!-- ── ① identity + global actions ──────────────────────────── -->
+    <div class="band band-id">
+      <h1 class="wordmark">cinema<span class="caret" aria-hidden="true">▌</span></h1>
+      <p class="subtitle">
+        {#if viewWatchlist}
+          {$t('header.watchlist', { n: watchlist.length })}
+        {:else if busy && items.length === 0}
+          {$t('header.loading')}
+        {:else if query.trim()}
+          {$t('header.results', { n: items.length, q: query.trim() })}
         {:else}
-          Tus puntuaciones se cancelan entre sí — no hay una dirección clara
-          para buscar todavía.
+          {$t('header.catalogue', { n: items.length })}
         {/if}
-      </section>
-    {/if}
-  {/if}
-
-  <!-- ── TAG CHIP ROW (top tags from the catalog) ─────────────── -->
-  {#if !viewWatchlist && !semanticMode && topTags.length > 0}
-    <section class="tag-chips" class:collapsed={!tagsExpanded}>
-      {#if activeTags.length > 0}
-        <!-- Active tags first, with X to remove individually -->
-        {#each activeTags as activeT (activeT)}
-          {@const meta = topTags.find(t => t.tag_norm === activeT)}
-          <button class="tag-chip on" on:click={() => pickTag(activeT)} title="remove this filter">
-            ✕ {meta?.tag_display ?? activeT}
-          </button>
-        {/each}
-        {#if activeTags.length >= 2}
-          <button
-            class="tag-chip tag-chip-mode"
-            on:click={toggleTagsMatch}
-            title="toggle between AND (all tags) / OR (any tag)"
-          >
-            {tagsMatch === 'all' ? '∧ all' : '∨ any'}
-          </button>
-        {/if}
-        <button class="tag-chip tag-chip-clear" on:click={clearTags} title="clear all tags">
-          ⊘ limpiar tags
+      </p>
+      <nav class="quick" aria-label={$t('nav.aria')}>
+        <button
+          type="button"
+          class="qbtn"
+          class:on={viewWatchlist}
+          aria-pressed={viewWatchlist}
+          title={$t('nav.watchlist.hint')}
+          on:click={() => (viewWatchlist = !viewWatchlist)}
+        >
+          <Icon name="star" size={13} />
+          <span>{$t('nav.watchlist')}</span>
+          {#if watchlist.length}<span class="qbadge">{watchlist.length}</span>{/if}
         </button>
-        <span class="tag-chip-sep"></span>
-      {/if}
-      {#each topTags.slice(0, 30) as tg (tg.tag_norm)}
-        {#if !activeTags.includes(tg.tag_norm)}
-          <button class="tag-chip" on:click={() => pickTag(tg.tag_norm)} title={`${tg.count.toLocaleString()} pelis · click para sumar al filtro`}>
-            {tg.tag_display}
-            <span class="tag-count dim">{tg.count > 999 ? (tg.count/1000).toFixed(1)+'k' : tg.count}</span>
-          </button>
-        {/if}
-      {/each}
+        <button
+          type="button"
+          class="qbtn"
+          class:on={embedPanelOpen}
+          aria-pressed={embedPanelOpen}
+          title={$t('nav.embeddings.hint')}
+          on:click={() => { embedPanelOpen = !embedPanelOpen; refreshEmbedStatus(); }}
+        >
+          <Icon name="cpu" size={13} />
+          <span>{$t('nav.embeddings')}</span>
+          {#if embedSnap?.status === 'running'}
+            <span class="qpulse" role="img" aria-label={$t('nav.embeddings.running')}></span>
+          {/if}
+        </button>
+        <a class="qbtn" href="/cinema/directories" title={$t('nav.directories.hint')}>
+          <Icon name="folder" size={13} />
+          <span>{$t('nav.directories')}</span>
+        </a>
+      </nav>
+    </div>
 
-      <!-- Tag autocomplete — long-tail tags not in the top 30 -->
-      <div class="tag-search-wrap">
-        <input
-          class="tag-search-input"
-          type="text"
-          bind:value={tagSearchQuery}
-          placeholder="🔎 search tag…"
-          on:input={onTagSearchInput}
-          on:focus={() => { tagSearchOpen = true; if (tagSearchQuery) onTagSearchInput(); }}
-          on:blur={closeTagSearchSoon}
-        />
-        {#if tagSearchOpen && (tagSearchHits.length > 0 || tagSearchBusy || tagSearchQuery.trim())}
-          <div class="tag-search-popover">
-            {#if tagSearchBusy}
-              <div class="tag-search-empty dim mini">…</div>
-            {:else if tagSearchHits.length === 0}
-              <div class="tag-search-empty dim mini">sin matches para "{tagSearchQuery}"</div>
+    {#if !viewWatchlist}
+      <!-- ── ② command bar ──────────────────────────────────────
+           The search box is the only element on this page that gets to be
+           large. It was previously one control among eight on a wrapping
+           row, which put a year spinner and a checkbox at the same weight
+           as the thing the page exists to do. The submit button is gone:
+           Enter already searched, and the button was what pushed itself
+           onto a second row once the toggles stretched the first. -->
+      <div class="band band-cmd">
+        <div class="searchbox">
+          <span class="searchbox-icon"><Icon name="search" size={16} /></span>
+          <input
+            type="text"
+            bind:value={query}
+            placeholder={$t('search.placeholder')}
+            aria-label={$t('search.aria')}
+            aria-describedby="cinema-search-hint"
+            on:keydown={(e) => e.key === 'Enter' && runSearch()}
+          />
+          {#if query}
+            <button
+              type="button"
+              class="searchbox-clear"
+              title={$t('search.clear')}
+              aria-label={$t('search.clear')}
+              on:click={() => { query = ''; runSearch(); }}
+            >
+              <Icon name="x" size={13} />
+            </button>
+          {/if}
+          <kbd class="searchbox-key" aria-hidden="true">↵</kbd>
+        </div>
+        <span id="cinema-search-hint" class="sr-only">{$t('search.enter.hint')}</span>
+        <button
+          type="button"
+          class="filters-btn"
+          class:on={filtersOpen}
+          aria-expanded={filtersOpen}
+          aria-controls="cinema-filters"
+          title={filtersOpen ? $t('filters.close') : $t('filters.toggle.hint')}
+          on:click={toggleFilters}
+        >
+          <Icon name="sliders" size={15} />
+          <span>{$t('filters.toggle')}</span>
+          {#if panelFilterCount > 0}
+            <span class="count-badge" aria-label={$t('filters.toggle.count', { n: panelFilterCount })}>
+              {panelFilterCount}
+            </span>
+          {/if}
+          <span class="caret-icon" class:open={filtersOpen}><Icon name="chevronDown" size={13} /></span>
+        </button>
+      </div>
+
+      <!-- ── filters panel ──────────────────────────────────────
+           Inline, not floating: it pushes the grid down instead of
+           covering it, so you can watch the result set change while you
+           change it. Every control has a visible label — the row this
+           replaces used placeholder text ("year ≥", "language", "+ views")
+           as labels, which vanish the moment a value is entered. -->
+      {#if filtersOpen}
+        <div class="fpanel" id="cinema-filters" transition:slide={{ duration: 180, easing: cubicOut }}>
+          <div class="fgrid">
+            <div class="field" role="group" aria-labelledby="f-year-label">
+              <span class="field-label" id="f-year-label">{$t('filters.year')}</span>
+              <div class="field-pair">
+                <input
+                  type="number" bind:value={yearMin} min="1888" max="2099"
+                  placeholder={$t('filters.year.from.ph')}
+                  aria-label={$t('filters.year.from')}
+                  on:change={runSearch}
+                />
+                <span class="field-dash" aria-hidden="true">–</span>
+                <input
+                  type="number" bind:value={yearMax} min="1888" max="2099"
+                  placeholder={$t('filters.year.to.ph')}
+                  aria-label={$t('filters.year.to')}
+                  on:change={runSearch}
+                />
+              </div>
+            </div>
+
+            <label class="field">
+              <span class="field-label">{$t('filters.language')}</span>
+              <select bind:value={langFilter} on:change={runSearch}>
+                <option value="">{$t('filters.language.any')}</option>
+                {#each CONTENT_LANGUAGES as code (code)}
+                  <option value={code}>{languageName(code, $uiLocale)}</option>
+                {/each}
+              </select>
+            </label>
+
+            <label class="field">
+              <span class="field-label">{$t('filters.kind')}</span>
+              <select bind:value={kindFilter} on:change={runSearch}>
+                <option value="">{$t('filters.kind.any')}</option>
+                <option value="film">{$t('filters.kind.film')}</option>
+                <option value="series">{$t('filters.kind.series')}</option>
+              </select>
+            </label>
+
+            <label class="field">
+              <span class="field-label">{$t('filters.sort')}</span>
+              <select bind:value={sortMode} on:change={runSearch}>
+                <option value="best">{$t('filters.sort.best')}</option>
+                <option value="downloads">{$t('filters.sort.downloads')}</option>
+                <option value="rating">{$t('filters.sort.rating')}</option>
+                <option value="year_desc">{$t('filters.sort.year_desc')}</option>
+                <option value="year_asc">{$t('filters.sort.year_asc')}</option>
+                <option value="added_desc">{$t('filters.sort.added_desc')}</option>
+              </select>
+              <span class="field-help">{$t('filters.sort.hint')}</span>
+            </label>
+
+            <label class="field">
+              <span class="field-label">{$t('filters.duration')}</span>
+              <select bind:value={minMinutes} on:change={runSearch}>
+                <option value={0}>{$t('filters.duration.any')}</option>
+                <option value={20}>{$t('filters.duration.20')}</option>
+                <option value={40}>{$t('filters.duration.40')}</option>
+                <option value={60}>{$t('filters.duration.60')}</option>
+              </select>
+              <span class="field-help">{$t('filters.duration.hint')}</span>
+            </label>
+
+            <div class="field field-wide" role="group" aria-labelledby="f-content-label">
+              <span class="field-label" id="f-content-label">{$t('filters.content')}</span>
+              <div class="toggles">
+                <label class="toggle" title={$t('toggle.collapse.hint')}>
+                  <input type="checkbox" bind:checked={collapseWorks} on:change={runSearch} />
+                  <span class="toggle-box"><Icon name="check" size={11} /></span>
+                  <Icon name="layers" size={14} />
+                  <span>{$t('toggle.collapse')}</span>
+                </label>
+                <label class="toggle" title={$t('toggle.playable.hint')}>
+                  <input type="checkbox" bind:checked={playableOnly} on:change={runSearch} />
+                  <span class="toggle-box"><Icon name="check" size={11} /></span>
+                  <Icon name="play" size={14} />
+                  <span>{$t('toggle.playable')}</span>
+                </label>
+                <label class="toggle" title={$t('toggle.subs.hint')}>
+                  <input type="checkbox" bind:checked={subsOnly} on:change={runSearch} />
+                  <span class="toggle-box"><Icon name="check" size={11} /></span>
+                  <Icon name="captions" size={14} />
+                  <span>{$t('toggle.subs')}</span>
+                </label>
+                <label class="toggle" title={$t('toggle.identified.hint')}>
+                  <input type="checkbox" bind:checked={identifiedOnly} on:change={runSearch} />
+                  <span class="toggle-box"><Icon name="check" size={11} /></span>
+                  <Icon name="verified" size={14} />
+                  <span>{$t('toggle.identified')}</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+      {/if}
+
+      <!-- ── ③ what is currently narrowing the grid ─────────────
+           The band this page never had. Seven controls, a rail and a set
+           of tags could all be filtering at once with nothing on screen
+           saying which — reading the state meant reading every control.
+           Each chip removes exactly its own filter. -->
+      {#if activeChips.length > 0}
+        <div class="band band-active" role="group" aria-label={$t('active.aria')}>
+          <span class="eyebrow">{$t('active.label')}</span>
+          <div class="active-list">
+            {#each activeChips as chip (chip.id)}
+              <button
+                type="button"
+                class="chip chip-removable"
+                data-tone={chip.tone}
+                title={$t('active.remove', { x: chip.label })}
+                aria-label={$t('active.remove', { x: chip.label })}
+                on:click={() => removeActive(chip)}
+              >
+                <span class="chip-text">{chip.label}</span>
+                <Icon name="x" size={11} />
+              </button>
+            {/each}
+            {#if activeTags.length >= 2}
+              <button
+                type="button"
+                class="chip chip-mode"
+                title={$t('active.match.hint')}
+                on:click={toggleTagsMatch}
+              >
+                {tagsMatch === 'all' ? $t('active.match.all') : $t('active.match.any')}
+              </button>
+            {/if}
+          </div>
+          <button type="button" class="linkbtn" on:click={clearAllFilters}>
+            <Icon name="eraser" size={13} />
+            <span>{$t('active.clear')}</span>
+          </button>
+        </div>
+      {/if}
+
+      {#if !semanticMode}
+        <!-- ── ④ discover ──────────────────────────────────────
+             Above the tags because it answers the stronger question: not
+             "what is this about" but "who decided this mattered". The
+             eyebrow makes it read as a shelf; without it the "for you"
+             chip sat alone against the gutter looking like a stray
+             control on catalogues holding nothing from a curated list. -->
+        <div class="band band-rail band-collapsible" role="group" aria-label={$t('discover.aria')}>
+          <span class="eyebrow">{$t('discover.label')}</span>
+          <div class="band-scroll">
+            <button
+              type="button"
+              class="chip chip-computed"
+              class:on={forYouMode}
+              aria-pressed={forYouMode}
+              title={$t('discover.forYou.hint')}
+              on:click={toggleForYou}
+            >
+              <Icon name="sparkles" size={13} />
+              <span class="chip-text">{$t('discover.forYou')}</span>
+            </button>
+            {#if canonRails.length > 0}
+              <span class="band-sep" aria-hidden="true"></span>
+            {/if}
+            {#each canonRails as rail (rail.key)}
+              <button
+                type="button"
+                class="chip chip-editorial"
+                class:on={activeRail === rail.key}
+                aria-pressed={activeRail === rail.key}
+                title={$t('discover.rail.hint', { blurb: rail.blurb, held: rail.held, members: rail.members })}
+                on:click={() => toggleRail(rail.key)}
+              >
+                <span class="chip-text">{rail.label}</span>
+                <span class="chip-count">{rail.held}</span>
+              </button>
+            {/each}
+          </div>
+        </div>
+
+        <!-- Why the rail came back empty. The three causes need different
+             things from the user, so "no results" would leave them with
+             nothing to do about it. -->
+        {#if forYouMode && forYouReason !== 'ok' && forYouReason !== ''}
+          <p class="band band-note">
+            {#if forYouReason === 'no_profile'}
+              {$t('foryou.noProfile', { n: forYouProfileSize })}
+            {:else if forYouReason === 'no_vectors'}
+              {$t('foryou.noVectors')}
             {:else}
-              {#each tagSearchHits as tg (tg.tag_norm)}
-                <button
-                  class="tag-search-row"
-                  class:active={activeTags.includes(tg.tag_norm)}
-                  on:mousedown|preventDefault={() => pickTagFromSearch(tg)}
-                  title={`${tg.count.toLocaleString()} pelis · #${tg.rank}`}
-                >
-                  <span class="tag-search-name">
-                    {#if activeTags.includes(tg.tag_norm)}✓{/if}
-                    {tg.tag_display}
-                  </span>
-                  <span class="dim mini">{tg.count > 999 ? (tg.count/1000).toFixed(1)+'k' : tg.count}</span>
-                </button>
-              {/each}
+              {$t('foryou.noDirection')}
+            {/if}
+          </p>
+        {/if}
+
+        <!-- ── ⑤ tags ─────────────────────────────────────────
+             Tags are a browse axis, the sibling of DISCOVER above — not a
+             filter like year or language. They used to be both: this row,
+             AND a duplicate cloud nested inside the filters panel, two bands
+             apart, drawn from the same `topTags`. Opening one printed Drama,
+             Horror, Comedy and eleven more twice on the same screen, and the
+             "all tags" link sent you to a section in a different container.
+
+             One surface now. Collapsed it is ONE row that scrolls sideways
+             rather than thirty chips wrapping to four; "all tags" expands it
+             in place, right where you clicked, into the search box and the
+             full cloud. Any tag at all can also be typed as #tag in the
+             search box, which absorbs it as a filter. -->
+        {#if topTags.length > 0}
+          <div
+            class="band band-tags"
+            class:band-collapsible={!tagPanelOpen}
+            class:band-tags-open={tagPanelOpen}
+            role="group"
+            aria-label={$t('tags.aria')}
+          >
+            <span class="eyebrow">{$t('tags.label')}</span>
+
+            {#if !tagPanelOpen}
+              <div class="band-scroll band-scroll-fade">
+                {#each topTags.slice(0, 14) as tg (tg.tag_norm)}
+                  <button
+                    type="button"
+                    class="chip chip-tag"
+                    class:on={activeTags.includes(tg.tag_norm)}
+                    aria-pressed={activeTags.includes(tg.tag_norm)}
+                    title={$t('tags.hint', { n: tg.count.toLocaleString($uiLocale) })}
+                    on:click={() => pickTag(tg.tag_norm)}
+                  >
+                    <span class="chip-text">{tg.tag_display}</span>
+                    <span class="chip-count">{fmtDownloads(tg.count) || tg.count}</span>
+                  </button>
+                {/each}
+              </div>
+              <button
+                type="button"
+                class="linkbtn"
+                aria-expanded="false"
+                title={$t('tags.all.hint')}
+                on:click={openTagPanel}
+              >
+                <span>{$t('tags.all')}</span>
+                <Icon name="chevronRight" size={12} />
+              </button>
+            {:else}
+              <div class="band-tags-body" transition:slide={{ duration: 150, easing: cubicOut }}>
+                <div class="tag-search-wrap">
+                  <span class="tag-search-icon"><Icon name="search" size={14} /></span>
+                  <input
+                    class="tag-search-input"
+                    type="text"
+                    bind:value={tagSearchQuery}
+                    placeholder={$t('tags.search.placeholder')}
+                    aria-label={$t('tags.search.placeholder')}
+                    on:input={onTagSearchInput}
+                    on:focus={() => { tagSearchOpen = true; if (tagSearchQuery) onTagSearchInput(); }}
+                    on:blur={closeTagSearchSoon}
+                  />
+                  {#if tagSearchOpen && (tagSearchHits.length > 0 || tagSearchBusy || tagSearchQuery.trim())}
+                    <div class="tag-search-popover">
+                      {#if tagSearchBusy}
+                        <div class="tag-search-empty">{$t('tags.search.busy')}</div>
+                      {:else if tagSearchHits.length === 0}
+                        <div class="tag-search-empty">{$t('tags.search.empty', { q: tagSearchQuery })}</div>
+                      {:else}
+                        {#each tagSearchHits as tg (tg.tag_norm)}
+                          <button
+                            type="button"
+                            class="tag-search-row"
+                            class:active={activeTags.includes(tg.tag_norm)}
+                            on:mousedown|preventDefault={() => pickTagFromSearch(tg)}
+                          >
+                            <span class="tag-search-name">
+                              {#if activeTags.includes(tg.tag_norm)}<Icon name="check" size={12} />{/if}
+                              {tg.tag_display}
+                            </span>
+                            <span class="chip-count">{fmtDownloads(tg.count) || tg.count}</span>
+                          </button>
+                        {/each}
+                      {/if}
+                    </div>
+                  {/if}
+                </div>
+                <div class="tag-cloud">
+                  {#each topTags as tg (tg.tag_norm)}
+                    <button
+                      type="button"
+                      class="chip chip-tag"
+                      class:on={activeTags.includes(tg.tag_norm)}
+                      aria-pressed={activeTags.includes(tg.tag_norm)}
+                      title={$t('tags.hint', { n: tg.count.toLocaleString($uiLocale) })}
+                      on:click={() => pickTag(tg.tag_norm)}
+                    >
+                      <span class="chip-text">{tg.tag_display}</span>
+                      <span class="chip-count">{fmtDownloads(tg.count) || tg.count}</span>
+                    </button>
+                  {/each}
+                </div>
+              </div>
+              <button
+                type="button"
+                class="linkbtn"
+                aria-expanded="true"
+                title={$t('tags.less.hint')}
+                on:click={closeTagPanel}
+              >
+                <span>{$t('tags.less')}</span>
+                <Icon name="chevronDown" size={12} />
+              </button>
             {/if}
           </div>
         {/if}
-      </div>
-    </section>
-    <!-- Only offered when there is actually more to show. On a small
-         catalogue the tags fit in one row and this never appears. -->
-    {#if topTags.length > 8}
-      <button class="tag-more" on:click={() => tagsExpanded = !tagsExpanded}>
-        {tagsExpanded ? '▴ menos etiquetas' : `▾ ver las ${topTags.length} etiquetas`}
-      </button>
+      {/if}
     {/if}
-  {/if}
+  </header>
 
   <!-- ── EMBED ADMIN PANEL ────────────────────────────────────── -->
   {#if embedPanelOpen && embedSnap}
@@ -3431,20 +4161,89 @@
                   <KernlPlayer
                     bind:video={videoEl}
                     src={playSrc}
-                    poster={playItem ? thumbUrl(playItem.identifier) : ''}
+                    poster={playItem ? posterUrl(playItem.identifier) : ''}
                     live={false}
                     autoplay={true}
                     crossorigin="anonymous"
                     ctl={subsCtl}
                     tick={subsTick}
+                    ready={!startupBusy}
                   >
                     <!-- No gear. Subtitles are managed in the player's own
                          caption menu, which is the only place they live now. -->
 
                     <svelte:fragment slot="overlay">
 
-                  {#if codecFallbackHint}
-                    <div class="codec-fallback-banner" role="status">
+                  <!-- ── Startup preloader ──────────────────────────────
+                       The gap between "modal opened" and "first frame" is
+                       seconds long on a cold archive.org fetch and longer
+                       behind the transcoder. It used to be a black rectangle
+                       with a dead play glyph, which reads as broken.
+
+                       Reports the real thing: phase, elapsed, and the actual
+                       buffered fraction when the browser knows one. Hidden
+                       under the subtitle modals so two cards never stack. -->
+                  {#if startupBusy && !translateBusy && !transcribeBusy}
+                    <div class="vboot" role="status" aria-live="polite">
+                      <div class="vboot-card">
+                        <!-- Film leader: four sprocket bars chasing each other.
+                             Pure decoration, and the only part that is. -->
+                        <div class="vboot-reel" aria-hidden="true">
+                          <span></span><span></span><span></span><span></span>
+                        </div>
+
+                        <div class="vboot-label">
+                          {#if playNeedsTranscode}
+                            {$t('boot.transcoding')}
+                          {:else if startupPhase === 'connecting'}
+                            {$t('boot.connecting')}
+                          {:else}
+                            {$t('boot.buffering')}
+                          {/if}
+                        </div>
+
+                        <!-- Determinate whenever `video.buffered` gives us a
+                             real fraction; a sweeping phosphor line otherwise,
+                             so it never pretends to know a percentage. -->
+                        <div
+                          class="vboot-bar"
+                          class:indeterminate={startupIndeterminate}
+                          role="progressbar"
+                          aria-valuemin="0"
+                          aria-valuemax="100"
+                          aria-valuenow={startupIndeterminate ? undefined : Math.round(startupBufferedFrac * 100)}
+                        >
+                          <div
+                            class="vboot-fill"
+                            style={startupIndeterminate ? '' : `width:${(startupBufferedFrac * 100).toFixed(1)}%`}
+                          ></div>
+                        </div>
+
+                        <div class="vboot-meta">
+                          <span class="vboot-elapsed">{(startupElapsedMs / 1000).toFixed(1)}s</span>
+                          {#if !startupIndeterminate}
+                            <span class="vboot-sep">·</span>
+                            <span>{Math.round(startupBufferedFrac * 100)}% {$t('boot.buffered')}</span>
+                          {/if}
+                          {#if playNeedsTranscode}
+                            <span class="vboot-sep">·</span>
+                            <span class="vboot-note">{$t('boot.noSeek')}</span>
+                          {/if}
+                        </div>
+                      </div>
+                    </div>
+                  {/if}
+
+                  <!-- Suppressed while a subtitle modal owns the screen: the
+                       banner is `position:absolute; left/right:12px` and was
+                       drawing a full-width amber bar straight through the
+                       centred card. -->
+                  {#if codecFallbackHint && !translateBusy && !transcribeBusy}
+                    <div
+                      class="codec-fallback-banner"
+                      class:cfb-expected={codecFallbackExpected}
+                      role="status"
+                    >
                       <span class="cfb-spinner"></span>
                       {codecFallbackHint}
                     </div>
@@ -3528,123 +4327,17 @@
                     </svelte:fragment>
                   </KernlPlayer>
 
-                  <!-- ── ONE big centered modal for BOTH phases ────────
-                       transcribe → translate (the user wanted the same
-                       beautiful design for both, no tiny corner card).
-                       Title/meta/eta/hint all swap on translateMode. -->
-                  {#if transcribeBusy || translateBusy}
-                    {@const isTr = translateBusy && translateMode === 'translate'}
-                    {@const elapsedMs = isTr ? translateElapsedMs : transcribeElapsedMs}
-                    {@const hasKernelProgress = isTr
-                      ? translateCuesTotal > 0
-                      : (transcribeSubPhase !== '' || transcribeFrac > 0)}
-                    {@const ratio = isTr
-                      ? (translateCuesTotal > 0
-                          ? Math.min(1, translateCuesDone / translateCuesTotal)
-                          : 0)
-                      : Math.max(0, Math.min(1, transcribeFrac))}
-                    {@const indeterminate = !hasKernelProgress || (!isTr && transcribeFrac === 0)}
-                    {@const etaMs = isTr
-                      ? (translateEtaMs > 0 ? translateEtaMs : (estimateTranslateMs() ?? 0))
-                      : 0}
-                    {@const audioRate = (!isTr && transcribeSubPhase === 'transcribe' && transcribeProcessedSec > 0 && elapsedMs > 0)
-                      ? transcribeProcessedSec / (elapsedMs / 1000)
-                      : 0}
-                    {@const transcribeEtaMs = (!isTr && transcribeSubPhase === 'transcribe' && transcribeFrac > 0 && transcribeFrac < 1 && elapsedMs > 0)
-                      ? Math.max(0, (elapsedMs / transcribeFrac) - elapsedMs)
-                      : 0}
-                    {@const tgtName = subInfo?.languages.find(l => l.iso === subTargetLang)?.name ?? subTargetLang}
-                    <div class="transcribe-overlay" role="status" aria-live="polite">
-                      <div class="transcribe-card" class:translating={isTr}>
-                        <div class="transcribe-spinner" aria-hidden="true">
-                          <span></span><span></span><span></span><span></span>
-                        </div>
-                        <div class="transcribe-title">
-                          {isTr ? `Translating to ${tgtName}…` : transcribePhaseTitle()}
-                        </div>
-                        <!-- Meta line: just engine / model identity. Times moved
-                             below the bar so audio-progress and wall-clock can be
-                             clearly distinguished with their own labels. -->
-                        <div class="transcribe-meta">
-                          <span class="kbd">{isTr ? subEngine : transcribeEngine}</span>
-                          <span class="dim">·</span>
-                          <span class="kbd">{isTr ? `${subSourceLang} → ${subTargetLang}` : transcribeModel}</span>
-                          {#if !isTr && ratio > 0}
-                            <span class="dim">·</span>
-                            <span class="meta-pct">{(ratio * 100).toFixed(0)}%</span>
-                          {/if}
-                        </div>
-                        <div class="transcribe-bar" class:indeterminate>
-                          {#if !indeterminate}
-                            <div class="transcribe-bar-fill" style="width: {(ratio * 100).toFixed(1)}%"></div>
-                          {/if}
-                          <div class="transcribe-bar-shimmer"></div>
-                        </div>
-                        <!-- Stats grid: two clearly-labelled groups so the user
-                             never has to guess what each number means.
-                               🎬 AUDIO  — what whisper is chewing through
-                               ⏱  CLOCK  — what the user is actually waiting -->
-                        <div class="transcribe-stats">
-                          {#if isTr && hasKernelProgress}
-                            <span class="ts-chip ts-cues">
-                              <span class="ts-ico">📝</span>
-                              <span class="ts-lbl">cues</span>
-                              <strong>{translateCuesDone} / {translateCuesTotal}</strong>
-                            </span>
-                          {:else if !isTr && transcribeSubPhase === 'load-model' && (transcribeProcessedSec > 0 || transcribeTotalSec > 0)}
-                            <span class="ts-chip ts-download">
-                              <span class="ts-ico">⬇</span>
-                              <span class="ts-lbl">model</span>
-                              <strong>{transcribeProcessedSec.toFixed(1)}{transcribeTotalSec > 0 ? ` / ${transcribeTotalSec.toFixed(1)}` : ''} MB</strong>
-                            </span>
-                          {:else if !isTr && (transcribeSubPhase === 'extract' || transcribeSubPhase === 'transcribe') && (transcribeProcessedSec > 0 || transcribeTotalSec > 0)}
-                            <span class="ts-chip ts-audio">
-                              <span class="ts-ico">🎬</span>
-                              <span class="ts-lbl">audio</span>
-                              <strong>
-                                {#if transcribeProcessedSec > 0 && transcribeTotalSec > 0}
-                                  {fmtAudio(transcribeProcessedSec)} / {fmtAudio(transcribeTotalSec)}
-                                {:else if transcribeTotalSec > 0}
-                                  {fmtAudio(transcribeTotalSec)} total
-                                {/if}
-                              </strong>
-                              {#if audioRate > 0}
-                                <span class="ts-rate" title="Audio-seconds processed per wall-clock second">{audioRate.toFixed(audioRate < 1 ? 2 : 1)}×</span>
-                              {/if}
-                            </span>
-                          {/if}
-                          <span class="ts-chip ts-clock">
-                            <span class="ts-ico">⏱</span>
-                            <span class="ts-lbl">clock</span>
-                            <strong>{fmtElapsed(elapsedMs)}</strong>
-                            {#if !isTr && transcribeEtaMs > 0}
-                              <span class="ts-eta" title="Estimated wall-clock time remaining at current rate">~{fmtElapsed(transcribeEtaMs)} left</span>
-                            {:else if isTr && etaMs > 0}
-                              <span class="ts-eta" title={hasKernelProgress ? 'Estimated remaining' : 'Rough estimate (no kernel progress yet)'}>~{fmtElapsed(etaMs)} {hasKernelProgress ? 'left' : 'est.'}</span>
-                            {/if}
-                          </span>
-                        </div>
-                        <div class="transcribe-hint dim mini">
-                          {#if isTr && hasKernelProgress}
-                            {subEngine} translated {translateCuesDone} of {translateCuesTotal} cues — captions will refresh when ready
-                          {:else if isTr}
-                            {subEngine} translating {transcribeCueCount || ''} cues — captions will refresh when ready
-                          {:else if transcribeSubPhase === 'load-model'}
-                            first-time setup — the {transcribeModel} model will be cached for next time
-                          {:else if transcribeSubPhase === 'extract'}
-                            ffmpeg is streaming the audio from archive.org through the kernel proxy
-                          {:else if transcribeSubPhase === 'transcribe'}
-                            whisper.cpp running on CPU{transcribeHint ? ` · ${transcribeHint}` : ''} — captions will pop in when ready
-                          {:else}
-                            whisper runs locally — keep watching, the captions will pop in when ready
-                          {/if}
-                        </div>
-                        <button class="transcribe-cancel" on:click={cancelGenerateSubs}>
-                          ⊗ Cancel
-                        </button>
-                      </div>
-                    </div>
-                  {:else if transcribeJustDone}
+                  <!-- Progress for a running subtitle job is NOT drawn here.
+                       It belongs to the player: the chip in its bar is the
+                       glanceable summary and the block in its caption menu the
+                       detail, both read from the one `ctl.job` this page now
+                       feeds over `subscribeProgress`. A big centered modal used
+                       to sit on top of those two, built from separate local
+                       state — so one screen reported the same translation three
+                       times, and the two the modal covered said 0% because
+                       nothing was feeding them. What stays here is what the
+                       player has no way to know: the finished/failed toasts. -->
+                  {#if transcribeJustDone}
                     <div class="transcribe-toast" role="status">
                       <span class="check">✓</span>
                       subtitles ready{transcribeCueCount ? ` · ${transcribeCueCount} cues` : ''}
@@ -3665,8 +4358,16 @@
               {:else if active?.kind === 'image'}
                 <img src={playSrc} alt={active.name} />
               {/if}
-              {#if playNeedsTranscode}
-                <div class="transcode-note dim mini">⚙ live-transcoding {active?.name.split('.').pop()?.toUpperCase()} → mp4 via ffmpeg · seek disabled · 1-3s startup</div>
+              <!-- Only once playback is under way. While the preloader is up it
+                   already says both of these — and better: it shows the real
+                   elapsed time, where this line promised "1-3s startup" over a
+                   card reading 19.7s. Two notices, one of them wrong. What
+                   survives here is the part the preloader stops saying when it
+                   disappears: why the scrubber won't move. -->
+              {#if playNeedsTranscode && !startupBusy}
+                <div class="transcode-note dim mini">
+                  ⚙ {$t('transcode.note', { fmt: active?.name.split('.').pop()?.toUpperCase() ?? '' })}
+                </div>
               {/if}
               <!-- subs / engine / language / font / size all moved into the
                    custom player's settings popover (gear icon over video). -->
@@ -3914,112 +4615,772 @@
     overscroll-behavior: contain;
   }
 
-  /* ─── HERO ───────────────────────────────────────────────── */
-  .hero {
-    padding: 22px 32px 12px;
-    border-bottom: 1px solid var(--line, #1d3a26);
-    background: linear-gradient(180deg, rgba(255, 176, 0, 0.04), transparent);
+  /* ══ HEADER CHROME ═══════════════════════════════════════════════
+     One gutter, one chip language, one motion curve.
+
+     What this replaces: four separate chip systems (a lowercase 11.5px
+     green pill, a 12px gold square-cornered tab, a 12px white pill and a
+     native checkbox) rendered at the same visual weight, plus a tag row
+     that carried BOTH a 32px margin and a 12px padding and therefore
+     started 12px further in than every band above it. That offset is the
+     thing that read as "misaligned" — it was, by exactly 12px.
+
+     Contrast note: --text-3 (#4A4F6A) is ~2.3:1 on --bg and fails AA for
+     text at any size. The old header used it (via the --green-dim alias)
+     for chip labels, section labels and the "more tags" link. It survives
+     here only as a border and dash colour; anything readable uses
+     --text-2 (~5.6:1) or an accent. */
+  .chrome {
+    --gutter: 32px;
+    --chip-h: 27px;
+    /* One easing for the whole header. Mixed curves are why a set of
+       controls can feel like it came from three different products. */
+    --ease: cubic-bezier(0.2, 0.8, 0.25, 1);
+    /* Fixed column so the eyebrows of bands ③④⑤ put their chips on the
+       same x. Sized for the longest label across en/es; a longer word in
+       a future locale overflows into the 10px gap rather than pushing the
+       chips out of alignment, which is the failure worth avoiding. */
+    --eyebrow-w: 84px;
+
     position: sticky;
     top: 0;
     z-index: 5;
-    backdrop-filter: blur(8px);
+    background:
+      linear-gradient(180deg, color-mix(in srgb, var(--amber) 5%, transparent), transparent 70%),
+      color-mix(in srgb, var(--bg) 84%, transparent);
+    backdrop-filter: blur(14px) saturate(1.15);
+    border-bottom: 1px solid var(--line);
   }
-  .hero-inner { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; }
-  .hero h1 {
-    font-family: var(--font-display, monospace);
-    font-size: 30px;
-    letter-spacing: 0.06em;
-    color: var(--amber, #ffb000);
-    text-shadow: 0 0 12px rgba(255, 176, 0, 0.5);
+
+  .band {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 0 var(--gutter);
+    min-height: 40px;
+  }
+
+  /* Section label. Small caps rather than a chip, so it reads as the name
+     of a shelf and not as another thing to click — the previous "descubrir"
+     was styled like the dim chips beside it and got clicked. */
+  .eyebrow {
+    flex: 0 0 var(--eyebrow-w);
+    font-family: var(--font-display);
+    font-size: 9.5px;
+    font-weight: 700;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--text-2);
+    white-space: nowrap;
+    line-height: 1;
+  }
+
+  .sr-only {
+    position: absolute;
+    width: 1px; height: 1px;
+    padding: 0; margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
+
+  /* One focus treatment for every control in the header. The old one had
+     none at all: keyboard users could not see where they were. */
+  .chrome button:focus-visible,
+  .chrome a:focus-visible,
+  .chrome input:focus-visible,
+  .chrome select:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+  }
+
+  /* ─── ① identity + global actions ───────────────────────────── */
+  .band-id {
+    align-items: baseline;
+    gap: 14px;
+    padding-top: 15px;
+    padding-bottom: 11px;
+    transition: padding 0.24s var(--ease);
+  }
+  .wordmark {
     margin: 0;
+    font-family: var(--font-display);
+    font-size: 26px;
+    font-weight: 700;
+    letter-spacing: 0.035em;
+    line-height: 1;
+    color: var(--amber);
+    text-shadow: 0 0 20px color-mix(in srgb, var(--amber) 32%, transparent);
+    transition: font-size 0.24s var(--ease);
   }
-  .cur { animation: blink 1s steps(2) infinite; opacity: 0.7; }
+  .caret {
+    font-weight: 400;
+    opacity: 0.6;
+    animation: blink 1.1s steps(2) infinite;
+  }
   @keyframes blink { 50% { opacity: 0; } }
 
-  .chips { display: flex; gap: 6px; flex-wrap: wrap; }
-  .chip {
-    background: transparent;
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--green-dim, #4d8a5a);
-    padding: 4px 10px 4px 8px;
+  .subtitle {
+    flex: 1 1 auto;
+    min-width: 0;
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .quick {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  .qbtn {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 30px;
+    padding: 0 11px;
+    border: 1px solid transparent;
     border-radius: 999px;
-    cursor: pointer;
+    background: transparent;
+    color: var(--text-2);
     font: inherit;
-    font-size: 11.5px;
-    text-transform: lowercase;
-    letter-spacing: 0.04em;
-    transition: all 0.15s;
+    font-size: 12px;
+    text-decoration: none;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.14s var(--ease), background 0.14s var(--ease), border-color 0.14s var(--ease);
+  }
+  /* Pointer target grown to 44px without growing the drawn control — the
+     visual density this header needs and the touch minimum are not the
+     same number. -2px horizontally keeps neighbours from overlapping
+     inside the 2px gap. */
+  .qbtn::before { content: ''; position: absolute; inset: -7px -1px; }
+  .qbtn:hover {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 8%, transparent);
+  }
+  .qbtn.on {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 13%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 42%, transparent);
+  }
+  .qbadge {
+    min-width: 17px;
+    height: 17px;
+    padding: 0 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--amber) 20%, transparent);
+    color: var(--amber);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .qpulse {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--cyan);
+    animation: qpulse 1.7s var(--ease) infinite;
+  }
+  @keyframes qpulse {
+    0%, 100% { opacity: 1; box-shadow: 0 0 0 0 color-mix(in srgb, var(--cyan) 55%, transparent); }
+    70% { opacity: 0.75; box-shadow: 0 0 0 5px transparent; }
+  }
+
+  /* ─── ② command bar ─────────────────────────────────────────── */
+  .band-cmd {
+    align-items: stretch;
+    gap: 10px;
+    padding-bottom: 13px;
+    min-height: 0;
+  }
+  .searchbox {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 42px;
+    padding: 0 12px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+    color: var(--text-2);
+    transition: border-color 0.16s var(--ease), box-shadow 0.16s var(--ease),
+                background 0.16s var(--ease), color 0.16s var(--ease);
+  }
+  .searchbox:focus-within {
+    color: var(--amber);
+    background: var(--surface-2);
+    border-color: color-mix(in srgb, var(--amber) 65%, transparent);
+    box-shadow:
+      0 0 0 3px color-mix(in srgb, var(--amber) 13%, transparent),
+      0 8px 24px rgba(0, 0, 0, 0.4);
+  }
+  .searchbox-icon { display: inline-flex; flex: 0 0 auto; }
+  .searchbox input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    background: none;
+    outline: none;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text-1);
+  }
+  .searchbox input::placeholder { color: var(--text-2); opacity: 0.75; }
+  /* The box already shows focus; a second ring inside it is noise. */
+  .searchbox input:focus-visible { outline: none; }
+  .searchbox-clear {
+    position: relative;
+    display: inline-flex;
+    flex: 0 0 auto;
+    padding: 3px;
+    border: 0;
+    border-radius: 999px;
+    background: none;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: color 0.14s var(--ease), background 0.14s var(--ease);
+  }
+  .searchbox-clear::before { content: ''; position: absolute; inset: -9px; }
+  .searchbox-clear:hover { color: var(--red); background: color-mix(in srgb, var(--red) 14%, transparent); }
+  .searchbox-key {
+    flex: 0 0 auto;
+    padding: 2px 6px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--surface-3) 70%, transparent);
+    color: var(--text-2);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.4;
+  }
+
+  .filters-btn {
+    position: relative;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    height: 42px;
+    padding: 0 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: color-mix(in srgb, var(--surface-2) 80%, transparent);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.15s var(--ease), background 0.15s var(--ease), border-color 0.15s var(--ease);
+  }
+  .filters-btn:hover { color: var(--text-1); border-color: var(--border-h, #2A2E48); }
+  .filters-btn.on {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 11%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  }
+  .caret-icon {
+    display: inline-flex;
+    opacity: 0.7;
+    transition: transform 0.2s var(--ease);
+  }
+  .caret-icon.open { transform: rotate(180deg); }
+
+  .count-badge {
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 999px;
+    background: var(--amber);
+    color: var(--bg);
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* ─── filters panel ─────────────────────────────────────────── */
+  .fpanel {
+    padding: 0 var(--gutter) 16px;
+    border-top: 1px solid color-mix(in srgb, var(--line) 70%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--surface-1) 70%, transparent), transparent 90%);
+  }
+  .fgrid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+    gap: 15px 18px;
+    padding: 16px 0 4px;
+  }
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .field-wide { grid-column: 1 / -1; }
+  /* Visible, permanent labels. The row this replaces used placeholder text
+     as its labels ("year ≥", "language", "+ views"), which means the label
+     disappears exactly when a value exists to explain. */
+  .field-label {
+    font-family: var(--font-display);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.13em;
+    text-transform: uppercase;
+    color: var(--text-2);
+    line-height: 1;
+  }
+  .field select,
+  .field-pair input {
+    height: 34px;
+    box-sizing: border-box;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text-1);
+    font: inherit;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+  }
+  .field select { cursor: pointer; width: 100%; }
+  .field select:hover,
+  .field-pair input:hover { border-color: var(--border-h, #2A2E48); }
+  .field-pair { display: flex; align-items: center; gap: 8px; }
+  .field-pair input { width: 100%; min-width: 0; font-variant-numeric: tabular-nums; }
+  .field-dash { flex: 0 0 auto; color: var(--text-3); }
+  /* Persistent helper text for the two controls whose behaviour is not
+     guessable from their label — what "best" weights by, and that the
+     duration floor reads the item's real files. Both were tooltips, which
+     is to say invisible. */
+  .field-help {
+    font-size: 11px;
+    line-height: 1.45;
+    color: var(--text-2);
+    opacity: 0.85;
+  }
+
+  .toggles { display: flex; flex-wrap: wrap; gap: 8px; }
+  .toggle {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 32px;
+    padding: 0 12px 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-2) 65%, transparent);
+    color: var(--text-2);
+    font-size: 12px;
+    white-space: nowrap;
+    cursor: pointer;
+    user-select: none;
+    transition: color 0.14s var(--ease), background 0.14s var(--ease), border-color 0.14s var(--ease);
+  }
+  /* The native checkbox stays in the DOM for semantics, keyboard and
+     screen readers; only its painting is replaced. */
+  .toggle input {
+    position: absolute;
+    width: 1px; height: 1px;
+    opacity: 0;
+    margin: 0;
+  }
+  .toggle-box {
+    flex: 0 0 auto;
+    width: 15px;
+    height: 15px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid color-mix(in srgb, var(--text-2) 55%, transparent);
+    border-radius: 4px;
+    color: transparent;
+    transition: background 0.14s var(--ease), border-color 0.14s var(--ease), color 0.14s var(--ease);
+  }
+  .toggle:hover { color: var(--text-1); border-color: var(--border-h, #2A2E48); }
+  .toggle:focus-within { outline: 2px solid var(--amber); outline-offset: 2px; }
+  .toggle:has(input:checked) {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 12%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 45%, transparent);
+  }
+  .toggle:has(input:checked) .toggle-box {
+    background: var(--amber);
+    border-color: var(--amber);
+    color: var(--bg);
+  }
+
+  /* Expanded tag band — the searchable long tail, in place. */
+  .band-tags-body {
+    flex: 1 1 auto;
+    min-width: 0;
+    padding-bottom: 4px;
+  }
+  .tag-cloud {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 132px;
+    overflow-y: auto;
+    padding: 10px 2px 2px;
+  }
+
+  .tag-search-wrap {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 34px;
+    max-width: 320px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--surface-2);
+    color: var(--text-2);
+    transition: border-color 0.14s var(--ease);
+  }
+  .tag-search-wrap:focus-within { border-color: color-mix(in srgb, var(--amber) 60%, transparent); color: var(--amber); }
+  .tag-search-icon { display: inline-flex; flex: 0 0 auto; }
+  .tag-search-input {
+    flex: 1 1 auto;
+    min-width: 0;
+    border: 0;
+    background: none;
+    outline: none;
+    font: inherit;
+    font-size: 12.5px;
+    color: var(--text-1);
+  }
+  .tag-search-input::placeholder { color: var(--text-2); opacity: 0.75; }
+  .tag-search-input:focus-visible { outline: none; }
+  .tag-search-popover {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    right: 0;
+    z-index: 30;
+    max-height: 260px;
+    overflow-y: auto;
+    padding: 4px;
+    border: 1px solid var(--border-h, #2A2E48);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
+  }
+  .tag-search-empty { padding: 10px 8px; font-size: 11.5px; color: var(--text-2); }
+  .tag-search-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 8px;
+    border: 0;
+    border-radius: 4px;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 12.5px;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.1s var(--ease), color 0.1s var(--ease);
+  }
+  .tag-search-row:hover { background: var(--surface-3); color: var(--text-1); }
+  .tag-search-row.active { color: var(--amber); }
+  .tag-search-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* ─── the one chip language ─────────────────────────────────── */
+  .chip {
+    position: relative;
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: var(--chip-h);
+    padding: 0 10px;
+    border: 1px solid color-mix(in srgb, var(--text-2) 26%, transparent);
+    border-radius: 999px;
+    background: color-mix(in srgb, var(--surface-2) 55%, transparent);
+    color: var(--text-2);
+    font: inherit;
+    font-size: 12px;
+    line-height: 1;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: color 0.14s var(--ease), background 0.14s var(--ease),
+                border-color 0.14s var(--ease), transform 0.09s var(--ease);
+  }
+  .chip::before { content: ''; position: absolute; inset: -8px -2px; }
+  .chip:hover {
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--surface-2) 92%, transparent);
+    border-color: color-mix(in srgb, var(--text-2) 48%, transparent);
+  }
+  .chip:active { transform: scale(0.97); }
+  .chip-text {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 24ch;
+  }
+  .chip-count {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-variant-numeric: tabular-nums;
+    opacity: 0.6;
+  }
+
+  /* Tags — statistical. Neutral until picked. */
+  .chip-tag.on,
+  .chip-tag[aria-pressed='true'] {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 18%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 60%, transparent);
+  }
+
+  /* Editorial — decided by people. Gold: the page's accent belongs to the
+     strongest signal it has. */
+  .chip-editorial {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 7%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 30%, transparent);
+  }
+  .chip-editorial:hover {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 16%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 52%, transparent);
+  }
+  .chip-editorial.on {
+    background: color-mix(in srgb, var(--amber) 26%, transparent);
+    border-color: var(--amber);
+    font-weight: 600;
+  }
+
+  /* Computed rather than curated — a cooler tone so it does not read as
+     another editorial list. */
+  .chip-computed {
+    color: var(--cyan);
+    background: color-mix(in srgb, var(--cyan) 7%, transparent);
+    border-color: color-mix(in srgb, var(--cyan) 30%, transparent);
+  }
+  .chip-computed:hover {
+    color: var(--cyan);
+    background: color-mix(in srgb, var(--cyan) 16%, transparent);
+    border-color: color-mix(in srgb, var(--cyan) 52%, transparent);
+  }
+  .chip-computed.on {
+    background: color-mix(in srgb, var(--cyan) 24%, transparent);
+    border-color: var(--cyan);
+    font-weight: 600;
+  }
+
+  /* Active filters. Tinted by where the filter came from, so the row is
+     scannable; hovering any of them turns red, because clicking removes. */
+  .chip-removable { color: var(--text-1); }
+  .chip-removable[data-tone='query'] {
+    color: var(--green);
+    background: color-mix(in srgb, var(--green) 10%, transparent);
+    border-color: color-mix(in srgb, var(--green) 38%, transparent);
+  }
+  .chip-removable[data-tone='tag'],
+  .chip-removable[data-tone='rail'] {
+    color: var(--amber);
+    background: color-mix(in srgb, var(--amber) 12%, transparent);
+    border-color: color-mix(in srgb, var(--amber) 40%, transparent);
+  }
+  .chip-removable[data-tone='filter'] {
+    color: var(--text-1);
+    background: color-mix(in srgb, var(--surface-3) 80%, transparent);
+    border-color: color-mix(in srgb, var(--text-2) 34%, transparent);
+  }
+  .chip-removable:hover {
+    color: var(--red);
+    background: color-mix(in srgb, var(--red) 13%, transparent);
+    border-color: color-mix(in srgb, var(--red) 55%, transparent);
+  }
+  .chip-mode {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.02em;
+  }
+
+  /* ─── ③ active filters ──────────────────────────────────────── */
+  .band-active { padding-bottom: 10px; }
+  .active-list {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
+  .linkbtn {
+    position: relative;
+    flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     gap: 5px;
+    padding: 0 2px;
+    border: 0;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    font-size: 11.5px;
+    cursor: pointer;
+    transition: color 0.14s var(--ease);
   }
-  .chip:hover { color: var(--green, #33ff77); border-color: var(--green-dim, #4d8a5a); }
-  .chip.on {
-    background: rgba(255, 176, 0, 0.08);
-    border-color: var(--amber, #ffb000);
-    color: var(--amber, #ffb000);
-    text-shadow: 0 0 6px rgba(255, 176, 0, 0.6);
-  }
-  .chip-icon { font-size: 13px; }
+  .linkbtn::before { content: ''; position: absolute; inset: -13px -6px; }
+  .linkbtn:hover { color: var(--amber); }
 
-  /* ─── FILTERS BAR ────────────────────────────────────────── */
-  .filters {
+  /* ─── ④⑤ discover + tags ────────────────────────────────────── */
+  /* Horizontal scroll instead of wrapping. Thirty tag chips wrapped to
+     four rows and took the fold; one row that scrolls holds the same
+     content and costs 34px. */
+  .band-scroll {
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
-    align-items: stretch;            /* forces every control to take the row height */
-    gap: 8px;
-    padding: 12px 32px;
-    flex-wrap: wrap;
-    border-bottom: 1px dashed var(--line, #1d3a26);
-  }
-  /* All filter-bar controls share the same box: 32px tall, identical
-     padding, same font-size. Per-control width is the only thing that
-     varies. This keeps the row visually uniform whether it has inputs,
-     selects, or buttons. */
-  .filters > .search,
-  .filters > .years input,
-  .filters > .rows,
-  .filters > .lang-select,
-  .filters > .kind-select,
-  .filters > .sort-select,
-  .filters > .toggle-cluster,
-  .filters > button.primary {
-    height: 32px;
-    box-sizing: border-box;
-    padding: 0 12px;
-    font-size: 13px;
-    line-height: 30px;               /* visually centers text inside fixed height */
-    border-radius: var(--radius-sm);
-  }
-  .search {
-    flex: 1 1 320px;
-    background: var(--bg-2, #0b1f12);
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--green, #33ff77);
-    font: inherit;
-    outline: none;
-  }
-  .search:focus { border-color: var(--amber, #ffb000); box-shadow: 0 0 6px rgba(255, 176, 0, 0.2); }
-  .years {
-    display: flex;
-    align-items: stretch;
+    align-items: center;
     gap: 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: none;
+    /* Room for the 2px focus ring + its offset, which overflow:hidden
+       would otherwise clip off the top and bottom of a focused chip. */
+    padding: 5px 0;
+    scroll-padding-inline: 16px;
   }
-  .years input, .rows {
-    width: 80px;
-    background: var(--bg-2, #0b1f12);
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--green, #33ff77);
-    font: inherit;
-    outline: none;
-    height: 32px;
-    box-sizing: border-box;
-    padding: 0 10px;
-    font-size: 13px;
-    line-height: 30px;
+  .band-scroll::-webkit-scrollbar { display: none; }
+  /* Fades the right edge so a cut-off chip reads as "there is more" rather
+     than as a clipping bug. Dropped while anything inside has focus, since
+     the mask would also fade the focus ring. */
+  .band-scroll-fade {
+    /* Prefixed as well: unprefixed mask-image only landed in Chrome 120, and
+       without the fallback the row hard-cuts mid-chip, which is the exact
+       "is this broken?" reading the fade exists to prevent. */
+    -webkit-mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 40px), transparent 100%);
+    mask-image: linear-gradient(90deg, #000 0, #000 calc(100% - 40px), transparent 100%);
+    /* So the last chip can scroll clear of the fade instead of living inside
+       it forever. */
+    padding-right: 40px;
   }
-  .years .dim {
-    align-self: center;
+  .band-scroll-fade:focus-within {
+    -webkit-mask-image: none;
+    mask-image: none;
   }
+  .band-sep {
+    flex: 0 0 auto;
+    width: 1px;
+    height: 16px;
+    margin: 0 4px;
+    background: var(--line);
+  }
+  .band-note {
+    min-height: 0;
+    max-width: 70ch;
+    padding-top: 2px;
+    padding-bottom: 10px;
+    margin: 0;
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-2);
+  }
+  .band-rail { padding-bottom: 2px; }
+  .band-tags { padding-bottom: 8px; }
+  /* Expanded, the band stops being a 40px row: the eyebrow and the collapse
+     link stay pinned to the top while the search box and the cloud take the
+     height they need. `.band-collapsible` is dropped in the markup while
+     this is on, so nothing clips it to 56px. */
+  .band-tags-open {
+    align-items: flex-start;
+    padding-top: 4px;
+    padding-bottom: 12px;
+  }
+  .band-tags-open .eyebrow,
+  .band-tags-open .linkbtn { margin-top: 8px; }
+
+  /* ─── condensed on scroll ───────────────────────────────────── */
+  /* Once you are reading posters, the two discovery bands fold away and
+     the command bar plus the active-filter row stay pinned. Both are one
+     scroll-up away, and nothing that reports state is ever hidden. */
+  .band-collapsible {
+    overflow: hidden;
+    max-height: 56px;
+    transition: max-height 0.24s var(--ease), opacity 0.18s var(--ease);
+  }
+  .chrome.condensed .band-collapsible {
+    min-height: 0;
+    max-height: 0;
+    padding-top: 0;
+    padding-bottom: 0;
+    opacity: 0;
+    /* Delayed so the band is not pulled out of the tab order mid-animation,
+       and so a focused chip inside it does not vanish under the user. */
+    visibility: hidden;
+    transition:
+      max-height 0.24s var(--ease),
+      opacity 0.14s var(--ease),
+      visibility 0s linear 0.24s;
+  }
+  .chrome.condensed .band-id { padding-top: 9px; padding-bottom: 7px; }
+  .chrome.condensed .wordmark { font-size: 20px; }
+
+  /* ─── responsive ────────────────────────────────────────────── */
+  @media (max-width: 860px) {
+    .chrome { --gutter: 18px; }
+    .band-id { flex-wrap: wrap; }
+    .subtitle { order: 3; flex: 1 1 100%; }
+    .band-cmd { flex-wrap: wrap; }
+    .searchbox { flex: 1 1 100%; }
+    .filters-btn { flex: 1 1 auto; justify-content: center; }
+  }
+  @media (max-width: 620px) {
+    .chrome { --gutter: 14px; }
+    /* The eyebrow takes its own line rather than eating half the width of
+       a 360px viewport. */
+    .band-rail, .band-tags, .band-active { flex-wrap: wrap; }
+    .eyebrow { flex: 0 0 100%; }
+    .band-collapsible { max-height: 92px; }
+    .wordmark { font-size: 22px; }
+  }
+
+  /* ─── reduced motion ────────────────────────────────────────── */
+  @media (prefers-reduced-motion: reduce) {
+    .chrome,
+    .chrome *,
+    .chrome *::before {
+      transition-duration: 0.01ms !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+    }
+    .caret { opacity: 0.6; }
+  }
+
   .spacer { flex: 1; }
 
   /* ─── BUTTONS ────────────────────────────────────────────── */
@@ -4115,160 +5476,6 @@
     border-radius: var(--radius-sm);
     font-size: 0.92em;
   }
-  /* ── Tag chip row (top tags from catalog) ─────────────────── */
-  .tag-chips {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 6px;
-    margin: 4px 32px 12px;
-    padding: 8px 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.04);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    background: rgba(255, 255, 255, 0.015);
-  }
-  /* Collapsed to a single row by default.
-     Twenty-five chips wrapped to three rows and pushed the first poster
-     most of the way down the viewport — the catalogue's own content lost
-     the fold to its filters. The rest stay one click away. */
-  .tag-chips.collapsed {
-    max-height: 42px;
-    overflow: hidden;
-  }
-  .tag-more {
-    margin: -6px 32px 12px;
-    background: none;
-    border: none;
-    color: var(--green-dim, #4d8a5a);
-    font: inherit;
-    font-size: 11px;
-    cursor: pointer;
-    padding: 2px 12px;
-  }
-  .tag-more:hover { color: var(--amber, #ffb000); }
-  .tag-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 10px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: 999px;
-    color: var(--text-2, #c0c0c0);
-    font-size: 12px;
-    cursor: pointer;
-    transition: all 120ms;
-  }
-  .tag-chip:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.18);
-    color: var(--text-1, #fff);
-  }
-  .tag-chip.on {
-    background: rgba(255, 176, 0, 0.18);
-    border-color: var(--amber, #ffb000);
-    color: var(--amber, #ffb000);
-  }
-  .tag-count {
-    font-size: 10px;
-    opacity: 0.6;
-  }
-  /* ── Long-tail tag autocomplete ─────────────────────────── */
-  .tag-search-wrap {
-    position: relative;
-    display: inline-flex;
-  }
-  .tag-search-input {
-    height: 26px;
-    padding: 0 10px;
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.12);
-    color: var(--text-1, #e5e5e5);
-    border-radius: 999px;
-    font: inherit;
-    font-size: 12px;
-    outline: none;
-    width: 160px;
-    transition: width 200ms ease, border-color 120ms;
-  }
-  .tag-search-input:focus {
-    border-color: var(--amber, #ffb000);
-    width: 220px;
-  }
-  .tag-search-input::placeholder {
-    color: var(--dim-fg, #888);
-  }
-  .tag-search-popover {
-    position: absolute;
-    top: 100%;
-    left: 0;
-    margin-top: 4px;
-    min-width: 280px;
-    max-height: 320px;
-    overflow-y: auto;
-    background: var(--bg-1, #0a1812);
-    border: 1px solid var(--amber, #ffb000);
-    border-radius: 4px;
-    z-index: 20;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7);
-    padding: 4px 0;
-  }
-  .tag-search-empty {
-    padding: 8px 12px;
-  }
-  .tag-search-row {
-    width: 100%;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 6px 12px;
-    background: transparent;
-    border: none;
-    color: var(--text-1, #e5e5e5);
-    cursor: pointer;
-    font: inherit;
-    font-size: 12px;
-    text-align: left;
-  }
-  .tag-search-row:hover {
-    background: rgba(255, 176, 0, 0.1);
-    color: var(--amber, #ffb000);
-  }
-  .tag-search-row.active {
-    color: var(--amber, #ffb000);
-    background: rgba(255, 176, 0, 0.06);
-  }
-  .tag-search-name {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    flex: 1;
-    margin-right: 8px;
-  }
-  /* ── Inline filter selects ────────────────────────────────── */
-  /* Match exact dimensions of the year/rows inputs so the bar is a
-     single horizontal beam. Native <select> ignores line-height for
-     the option text but the dropdown arrow still aligns. */
-
-  .kind-select, .lang-select, .sort-select {
-    height: 32px;
-    box-sizing: border-box;
-    padding: 0 10px;
-    background: var(--bg-2, #0b1f12);
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--green, #33ff77);
-    font-family: inherit;
-    font-size: 13px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    /* Keep arrow space readable; native appearance varies per OS. */
-    appearance: auto;
-  }
-  .kind-select:focus, .lang-select:focus, .sort-select:focus {
-    border-color: var(--amber, #ffb000);
-    outline: none;
-    box-shadow: 0 0 6px rgba(255, 176, 0, 0.2);
-  }
-  /* ── Embed admin panel ────────────────────────────────────── */
   .embed-panel {
     margin: 0 32px 12px;
     padding: 12px 16px;
@@ -4615,55 +5822,6 @@
   }
   :global(.cc-fed-trustonly input) { accent-color: #F0B429; cursor: pointer; }
 
-  .canon-rails {
-    display: flex;
-    flex-wrap: wrap;
-    align-items: center;
-    gap: 6px;
-    /* 32px matches the gutter every other band on this page uses. Without it
-       this row started at x=0 while the filters and the grid began a third of
-       an inch in, which read as a rendering fault rather than a rail. */
-    padding: 10px 32px 4px;
-  }
-  .canon-rails-label { margin-right: 2px; }
-  .canon-chip {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    padding: 3px 9px;
-    font-size: 12px;
-    border-radius: var(--radius-sm);
-    cursor: pointer;
-    color: #ffe9a8;
-    background: rgba(255, 176, 0, 0.08);
-    border: 1px solid rgba(255, 176, 0, 0.35);
-  }
-  .canon-chip:hover { background: rgba(255, 176, 0, 0.18); }
-  .canon-chip.active {
-    background: rgba(255, 176, 0, 0.28);
-    border-color: var(--amber, #ffb000);
-    font-weight: 600;
-  }
-  .canon-chip-count { opacity: 0.65; font-size: 11px; }
-  /* Computed rather than curated — cooler tone so it does not read as
-     another editorial list. */
-  .canon-chip.foryou {
-    color: #cfe0ff;
-    background: rgba(120, 160, 255, 0.10);
-    border-color: rgba(160, 190, 255, 0.40);
-  }
-  .canon-chip.foryou:hover { background: rgba(120, 160, 255, 0.20); }
-  .canon-chip.foryou.active {
-    background: rgba(120, 160, 255, 0.30);
-    border-color: #9fc0ff;
-    font-weight: 600;
-  }
-  .foryou-note {
-    padding: 4px 0 2px;
-    font-size: 12px;
-    color: #b0c8b8;
-  }
-
   .similar-row { padding: 10px 0 2px; }
   .similar-head {
     font-size: 11px;
@@ -4706,44 +5864,6 @@
     -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
-  }
-
-  /* One box for the narrowing toggles, sharing the filter row's 32px height
-     so it sits on the same baseline as the selects rather than floating. */
-  .toggle-cluster {
-    display: inline-flex;
-    align-items: center;
-    gap: 14px;
-    padding: 0 12px;
-    background: var(--bg-2, #0b1f12);
-    border: 1px solid var(--line, #1d3a26);
-  }
-  .toggle-cluster label {
-    display: inline-flex;
-    align-items: center;
-    gap: 5px;
-    font-size: 12px;
-    line-height: 1;
-    color: #b0c8b8;
-    cursor: pointer;
-    user-select: none;
-    white-space: nowrap;
-  }
-  .toggle-cluster label:hover { color: var(--amber, #ffb000); }
-  .toggle-cluster input {
-    cursor: pointer;
-    margin: 0;
-    accent-color: var(--amber, #ffb000);
-  }
-  /* An active narrowing filter is worth seeing at a glance — otherwise an
-     empty grid looks like a broken catalogue rather than a filter doing its
-     job. */
-  .toggle-cluster label:has(input:checked) { color: var(--amber, #ffb000); }
-
-  @media (max-width: 900px) {
-    /* Below this the cluster would push the row into a third line; letting it
-       span full width keeps the toggles legible instead of squeezed. */
-    .filters > .toggle-cluster { flex: 1 1 100%; justify-content: flex-start; }
   }
 
   .check {
@@ -5367,6 +6487,115 @@
      Looks like a kernel notice — amber-on-black with a `> SYS:`
      prefix. The "spinner" is a horizontal sweep bar (sonar-style)
      instead of a generic round one.                              */
+  /* ── Startup preloader ───────────────────────────────────────────
+     Same phosphor vocabulary as .cfb-spinner, scaled up: amber on black,
+     square corners, monospace. Sits over the whole video area because at
+     this point there is nothing underneath it worth seeing. */
+  .vboot {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 7;                 /* under the codec banner (8), over the video */
+    background:
+      radial-gradient(ellipse at center, rgba(255, 176, 0, 0.05), transparent 62%),
+      rgba(0, 0, 0, 0.55);
+    pointer-events: none;       /* never eat a click meant for the player */
+    animation: vboot-in 260ms ease-out;
+  }
+  @keyframes vboot-in { from { opacity: 0; } to { opacity: 1; } }
+
+  .vboot-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    min-width: 236px;
+    padding: 22px 28px;
+    background: rgba(8, 5, 0, 0.86);
+    border: 1px solid rgba(255, 176, 0, 0.34);
+    box-shadow: 0 0 34px rgba(255, 176, 0, 0.13), inset 0 0 40px rgba(255, 176, 0, 0.04);
+    font-family: var(--font-mono, ui-monospace), monospace;
+  }
+
+  /* Four sprocket bars, chasing. Reads as film running through a gate. */
+  .vboot-reel {
+    display: flex;
+    align-items: flex-end;
+    gap: 5px;
+    height: 26px;
+  }
+  .vboot-reel span {
+    width: 6px;
+    height: 100%;
+    background: var(--amber, #ffb000);
+    transform-origin: bottom;
+    animation: vboot-reel 1.05s ease-in-out infinite;
+    box-shadow: 0 0 8px rgba(255, 176, 0, 0.55);
+  }
+  .vboot-reel span:nth-child(2) { animation-delay: 0.13s; }
+  .vboot-reel span:nth-child(3) { animation-delay: 0.26s; }
+  .vboot-reel span:nth-child(4) { animation-delay: 0.39s; }
+  @keyframes vboot-reel {
+    0%, 100% { transform: scaleY(0.28); opacity: 0.45; }
+    50%      { transform: scaleY(1);    opacity: 1; }
+  }
+
+  .vboot-label {
+    font-size: 11px;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--amber, #ffb000);
+    text-shadow: 0 0 6px rgba(255, 176, 0, 0.45);
+  }
+
+  .vboot-bar {
+    position: relative;
+    width: 100%;
+    height: 4px;
+    background: rgba(255, 176, 0, 0.13);
+    overflow: hidden;
+  }
+  .vboot-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 0;
+    background: var(--amber, #ffb000);
+    box-shadow: 0 0 10px rgba(255, 176, 0, 0.6);
+    transition: width 240ms linear;
+  }
+  /* No real percentage to show — sweep instead of inventing one. */
+  .vboot-bar.indeterminate .vboot-fill {
+    width: 34%;
+    transition: none;
+    animation: vboot-sweep 1.25s cubic-bezier(0.5, 0, 0.5, 1) infinite;
+  }
+  @keyframes vboot-sweep {
+    0%   { left: -34%; }
+    100% { left: 100%; }
+  }
+
+  .vboot-meta {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 10px;
+    letter-spacing: 0.06em;
+    color: rgba(255, 176, 0, 0.62);
+  }
+  .vboot-elapsed { font-variant-numeric: tabular-nums; }
+  .vboot-sep { opacity: 0.4; }
+  .vboot-note { opacity: 0.75; }
+
+  /* Motion is the whole point here, so reduced-motion gets a static, still
+     legible card rather than nothing to look at. */
+  @media (prefers-reduced-motion: reduce) {
+    .vboot { animation: none; }
+    .vboot-reel span { animation: none; transform: scaleY(0.7); opacity: 0.8; }
+    .vboot-bar.indeterminate .vboot-fill { animation: none; width: 100%; opacity: 0.45; }
+  }
+
   .codec-fallback-banner {
     position: absolute;
     top: 12px;
@@ -5396,6 +6625,16 @@
     letter-spacing: 0.12em;
     opacity: 0.7;
   }
+  /* Probe knew up front — routine routing, not a fault. Same slot, no siren:
+     dimmer, no glow, and it says what is happening rather than what broke. */
+  .cfb-expected {
+    background: rgba(0, 0, 0, 0.72);
+    border-color: rgba(255, 176, 0, 0.28);
+    color: rgba(255, 176, 0, 0.78);
+    box-shadow: none;
+    text-shadow: none;
+  }
+  .cfb-expected::before { content: "> "; opacity: 0.5; }
   @keyframes cfb-fade { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
   /* Sonar sweep bar — replaces the round spinner. A single phosphor line
      scans left-to-right inside a thin frame.                           */

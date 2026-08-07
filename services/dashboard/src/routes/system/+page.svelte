@@ -34,6 +34,7 @@
 <nav class="sys-subnav" aria-label="System pages">
   <a class="sub-tab active" href="/system" aria-current="page">Status</a>
   <a class="sub-tab" href="/sysoverview">Overview</a>
+  <a class="sub-tab" href="/automations">Automation</a>
   <a class="sub-tab" href="/architecture">Arch 3D</a>
   <a class="sub-tab" href="/friends">Friends</a>
 </nav>

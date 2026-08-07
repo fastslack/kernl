@@ -19,7 +19,7 @@
   */
   import { onDestroy, onMount } from 'svelte';
   import type { SubsController, SubTrack } from './subs-client';
-  import { phaseLabel, relativeAge } from './subs-client';
+  import { phaseLabel, relativeAge, fmtEta } from './subs-client';
   import {
     loadCaptionStyle, saveCaptionStyle, captionInlineStyle,
     type CaptionStyle,
@@ -43,6 +43,20 @@
   /** Playback speeds offered on demand. Empty disables the control. */
   export let speeds: number[] = [0.5, 1, 1.25, 1.5, 2];
   export let autoplay = true;
+  /**
+   * Is there anything to control yet?
+   *
+   * False hides the transport bar and the centre play affordance while the
+   * host is still getting the media on screen — connecting, buffering, or
+   * waiting on a transcode. Showing them early is worse than showing nothing:
+   * a bar reading `0:00 / 0:00` and a play button that does nothing look like
+   * a player that has finished loading and broken, which is precisely the
+   * moment the user gives up. The `overlay` slot still renders, so the host
+   * can put its own progress card in the space.
+   *
+   * Defaults true — a host that says nothing gets the old behaviour.
+   */
+  export let ready = true;
   /** Passed through for CORS-sensitive sources (torrent streams need it). */
   export let crossorigin: string | null = null;
 
@@ -80,6 +94,12 @@
   $: subsRunning = job?.status === 'running';
   $: subsFailed = job?.status === 'error';
   $: subsPct = Math.round((job?.progress ?? 0) * 100);
+  $: jobEta = fmtEta(job?.etaMs);
+  /** "354 / 863 cues · 1:18 left" — whichever halves the backend reported. */
+  $: jobDetail = [
+    job?.cuesTotal ? `${job.cuesDone ?? 0} / ${job.cuesTotal} cues` : '',
+    jobEta ? `${jobEta} left` : '',
+  ].filter(Boolean).join(' · ');
   $: offerable = languages.filter((l) => !tracks.some((t) => t.lang === l.code));
   $: models = (tick, ctl?.models ?? []);
   $: pickedModel = (tick, ctl?.model ?? '');
@@ -169,6 +189,19 @@
   }
   function trackLabel(t: SubTrack): string { return t.label || t.lang.toUpperCase(); }
 
+  /**
+   * Can this track be deleted?
+   *
+   * Only the ones we produced and cached locally. A `shipped` track is a file
+   * that came with the media — on archive.org it is part of the item, listed
+   * upstream. There is nothing on our side to remove, so the bin either 404s
+   * or quietly does nothing, and either way the row is still there afterwards.
+   * Offering an action that cannot work is worse than not offering it.
+   */
+  function deletable(t: SubTrack): boolean {
+    return t.kind !== 'shipped';
+  }
+
   onMount(() => {
     const onFs = () => { fullscreen = Boolean(document.fullscreenElement); };
     document.addEventListener('fullscreenchange', onFs);
@@ -182,6 +215,7 @@
 <!-- svelte-ignore a11y-no-static-element-interactions a11y-click-events-have-key-events -->
 <div
   class="kp"
+  class:kp-not-ready={!ready}
   class:idle
   class:live
   bind:this={shell}
@@ -208,8 +242,9 @@
     }}
   ></video>
 
-  <!-- Big centre affordance, on demand only. -->
-  {#if !live && !playing}
+  <!-- Big centre affordance, on demand only — and never before there is
+       something to play. -->
+  {#if ready && !live && !playing}
     <button class="kp-big" on:click={togglePlay} aria-label="Play">▶</button>
   {/if}
 
@@ -265,8 +300,8 @@
       <span class="kp-grow"></span>
 
       {#if subsRunning}
-        <span class="kp-job" title={job?.hint ?? ''}>
-          <span class="kp-spin"></span>{phaseLabel(job?.phase ?? '')} {subsPct}%
+        <span class="kp-job" title={jobDetail || job?.hint || ''}>
+          <span class="kp-spin"></span>{phaseLabel(job?.phase ?? '')} {subsPct}%{jobEta ? ` · ${jobEta}` : ''}
         </span>
       {/if}
 
@@ -371,12 +406,20 @@
         <div class="kp-menu-head">Subtitles</div>
 
         {#if subsRunning && job}
+          <!-- The one place the running job is reported in detail. The chip in
+               the bar is a glanceable summary of this same object; hosts used
+               to draw a third, separate modal from their own state, which is
+               how two of the three ended up showing 0% for a job the modal
+               knew was 41% done. -->
           <div class="kp-menu-job">
             <div class="kp-menu-job-top">
-              <span>{phaseLabel(job.phase)}</span><span class="kp-grow"></span><span>{subsPct}%</span>
+              <span>{phaseLabel(job.phase)}</span>
+              {#if job.route}<span class="kp-job-route">{job.route}</span>{/if}
+              <span class="kp-grow"></span><span>{subsPct}%</span>
               <button class="kp-x" title="Cancel" on:click={() => run(() => ctl.cancel())}>✕</button>
             </div>
             <div class="kp-menu-track"><span style="width:{Math.max(3, subsPct)}%"></span></div>
+            {#if jobDetail}<p class="kp-job-detail">{jobDetail}</p>{/if}
             {#if job.hint}<p class="kp-hint">{job.hint}</p>{/if}
           </div>
         {/if}
@@ -389,7 +432,7 @@
                 {trackLabel(t)}
                 {#if t.createdAt}<em>{relativeAge(t.createdAt)}</em>{/if}
               </button>
-              {#if allowManage}
+              {#if allowManage && deletable(t)}
                 <button class="kp-x" title="Delete" on:click={() => run(() => ctl.remove(t))}>🗑</button>
               {/if}
             </div>
@@ -479,6 +522,18 @@
     font-family:var(--font-mono, ui-monospace);
   }
   .kp.idle .kp-bar { opacity:0; transform:translateY(8px); pointer-events:none }
+  /* Nothing to control yet. `visibility` rather than `opacity` alone so the
+     bar leaves the tab order and the a11y tree too — a screen reader
+     announcing a 0:00/0:00 transport for media that has not arrived is the
+     same lie the sighted user was getting. Hidden as a whole rather than
+     per-control: the DOM stays intact, so it comes back the instant the
+     first frame does, with its menus and state untouched. */
+  .kp.kp-not-ready .kp-bar {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(8px);
+    pointer-events: none;
+  }
 
   .kp-seek { position:relative; height:4px; border-radius:3px; background:rgba(255,255,255,.18); cursor:pointer; margin-bottom:7px }
   .kp-seek.ro { cursor:default }
@@ -580,6 +635,8 @@
 
   .kp-menu-job { padding:6px; border-radius:6px; background:rgba(255,255,255,.05); margin-bottom:6px }
   .kp-menu-job-top { display:flex; align-items:center; gap:6px; font-size:9.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#F0B429 }
+  .kp-job-route { font-weight:600; letter-spacing:.06em; opacity:.7; text-transform:none }
+  .kp-job-detail { margin:5px 0 0; font-size:10px; color:rgba(255,255,255,.62); font-variant-numeric:tabular-nums }
   .kp-menu-track { height:3px; border-radius:2px; background:rgba(255,255,255,.12); overflow:hidden; margin-top:5px }
   .kp-menu-track span { display:block; height:100%; background:linear-gradient(90deg,#C98A1E,#F0B429); transition:width .6s ease }
   .kp-hint { font-size:9.5px; color:#8A8FA8; margin-top:5px }

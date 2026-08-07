@@ -10,6 +10,7 @@ import {
 } from "./translate.js";
 import { llm } from "../../../../../src/core/llm/client.js";
 import { transcribe, isGroqAvailable as isGroqWhisperAvailable, type TranscribeEngine } from "./transcribe.js";
+import { mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -19,6 +20,8 @@ import path from "node:path";
 // reused on the rare second call from the same client tab. Bounded by URL
 // uniqueness — entries are tiny and we only care about the last 5 min.
 const probeDurationCache = new Map<string, { value: number | null; at: number }>();
+/** Same 5-min window, but for the full probe (duration + codecs). */
+const probeInfoCache = new Map<string, { value: ProbeInfo; at: number }>();
 
 /** Normalize the user-supplied engine name. Legacy values that used to
  *  pick a specific provider (grok / lmstudio / ollama / openai / claude /
@@ -107,6 +110,53 @@ function publishSubsProgress(jobId: string, evt: SubsProgressEvent): void {
 // On 5xx we wait 500ms / 1500ms / 4000ms before each retry. Final failure
 // resolves to null so the caller can fall back gracefully (the cinema
 // player just shows "duration unknown" instead of crashing).
+/**
+ * Codec names the browsers we target can decode from a plain progressive
+ * download. Anything outside this list has to go through the transcoder.
+ *
+ * Deliberately conservative: MPEG-4 Part 2 (`mpeg4`, DivX/Xvid rips, which
+ * archive.org is full of), H.265, VC-1, MPEG-2 and friends all render as a
+ * black frame or fire a bare `src not supported`, and both failure modes cost
+ * a full load-fail-reload cycle to discover at runtime.
+ */
+const BROWSER_VIDEO_CODECS = new Set(["h264", "vp8", "vp9", "av1", "theora"]);
+const BROWSER_AUDIO_CODECS = new Set(["aac", "mp3", "opus", "vorbis", "flac"]);
+/** 10-bit and 4:2:2 profiles are not decodable in-browser even for h264. */
+const BROWSER_PIX_FMTS = new Set(["yuv420p", "yuvj420p"]);
+
+export interface ProbeInfo {
+  duration_sec: number | null;
+  video_codec: string;
+  audio_codec: string;
+  pix_fmt: string;
+  /** False when the browser will need the transcoder to play this. */
+  browser_playable: boolean;
+  /** Short human-readable reason when `browser_playable` is false. */
+  reason: string;
+}
+
+/** Decide, from ffprobe's stream data, whether a <video> can play this. */
+export function classifyPlayability(
+  videoCodec: string,
+  audioCodec: string,
+  pixFmt: string,
+): { playable: boolean; reason: string } {
+  // No video stream probed — say nothing rather than guess wrong. An unknown
+  // is treated as playable so a probe failure can never block a file that
+  // would have played fine.
+  if (!videoCodec) return { playable: true, reason: "" };
+  if (!BROWSER_VIDEO_CODECS.has(videoCodec)) {
+    return { playable: false, reason: `video codec ${videoCodec}` };
+  }
+  if (pixFmt && !BROWSER_PIX_FMTS.has(pixFmt)) {
+    return { playable: false, reason: `pixel format ${pixFmt}` };
+  }
+  if (audioCodec && !BROWSER_AUDIO_CODECS.has(audioCodec)) {
+    return { playable: false, reason: `audio codec ${audioCodec}` };
+  }
+  return { playable: true, reason: "" };
+}
+
 async function probeDurationWithRetry(
   parsed: URL,
   ua: string,
@@ -154,7 +204,14 @@ async function probeDurationWithRetry(
         log.warn(`ffprobe failed (${code}) for ${parsed.host}${parsed.pathname}: ${stderrSnip}`);
         resolve(null);
       });
-      probe.on("error", () => { clearTimeout(killer); resolve(null); });
+      probe.on("error", (e: NodeJS.ErrnoException) => {
+        clearTimeout(killer);
+        // A missing ffprobe used to look identical to an unprobeable file:
+        // both returned null and the duration silently stayed empty. Log it
+        // once with the install command so the cause is discoverable.
+        if (e?.code === "ENOENT") log.warn(mediaToolError("ffprobe", e).message);
+        resolve(null);
+      });
     });
     if (result === "retry") {
       await new Promise((r) => setTimeout(r, [500, 1500, 4000][attempt - 1] ?? 4000));
@@ -163,6 +220,85 @@ async function probeDurationWithRetry(
     return result;
   }
   return null;
+}
+
+/**
+ * One ffprobe call for everything the player needs before it picks a source:
+ * duration AND the codecs, so the browser is never handed a file it cannot
+ * decode.
+ *
+ * Without this the player was purely reactive — it loaded the raw file, waited
+ * for `<video on:error>` (or a 2.5s black-frame watchdog), then tore the
+ * element down and reloaded through the transcoder. Every unplayable file cost
+ * two loads, several seconds of black screen, and an alarming banner for what
+ * is a routine property of half the archive.org catalog.
+ *
+ * Failure is soft on purpose: a probe that does not come back reports
+ * `browser_playable: true`, which lands on the old reactive path rather than
+ * sending a perfectly good h264 file through ffmpeg for no reason.
+ */
+async function probeMediaInfo(parsed: URL, ua: string): Promise<ProbeInfo> {
+  const empty: ProbeInfo = {
+    duration_sec: null, video_codec: "", audio_codec: "", pix_fmt: "",
+    browser_playable: true, reason: "",
+  };
+  const { spawn } = await import("node:child_process");
+  const args = [
+    "-v", "error",
+    "-user_agent", `Kernl/${ua}`,
+    "-reconnect", "1",
+    "-reconnect_streamed", "1",
+    "-reconnect_delay_max", "5",
+    "-rw_timeout", "10000000",
+    "-show_entries", "format=duration:stream=codec_name,codec_type,pix_fmt",
+    "-of", "json",
+    parsed.toString(),
+  ];
+  const raw = await new Promise<string | null>((resolve) => {
+    const probe = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+    let out = "";
+    let stderr = "";
+    probe.stdout?.on("data", (c: Buffer) => { out += c.toString(); });
+    probe.stderr?.on("data", (c: Buffer) => { stderr += c.toString(); });
+    const killer = setTimeout(() => { try { probe.kill("SIGTERM"); } catch { /* */ } }, 20_000);
+    probe.on("exit", (code) => {
+      clearTimeout(killer);
+      if (code === 0) return resolve(out);
+      log.warn(`ffprobe(info) failed (${code}) for ${parsed.host}${parsed.pathname}: ${stderr.trim().slice(0, 200)}`);
+      resolve(null);
+    });
+    probe.on("error", (e: NodeJS.ErrnoException) => {
+      clearTimeout(killer);
+      if (e?.code === "ENOENT") log.warn(mediaToolError("ffprobe", e).message);
+      resolve(null);
+    });
+  });
+  if (!raw) return empty;
+
+  try {
+    const j = JSON.parse(raw) as {
+      format?: { duration?: string };
+      streams?: Array<{ codec_name?: string; codec_type?: string; pix_fmt?: string }>;
+    };
+    const streams = j.streams ?? [];
+    const v = streams.find((s) => s.codec_type === "video");
+    const a = streams.find((s) => s.codec_type === "audio");
+    const d = parseFloat(j.format?.duration ?? "");
+    const videoCodec = (v?.codec_name ?? "").toLowerCase();
+    const audioCodec = (a?.codec_name ?? "").toLowerCase();
+    const pixFmt = (v?.pix_fmt ?? "").toLowerCase();
+    const { playable, reason } = classifyPlayability(videoCodec, audioCodec, pixFmt);
+    return {
+      duration_sec: Number.isFinite(d) && d > 0 ? d : null,
+      video_codec: videoCodec,
+      audio_codec: audioCodec,
+      pix_fmt: pixFmt,
+      browser_playable: playable,
+      reason,
+    };
+  } catch {
+    return empty;
+  }
 }
 
 // Sidecar metadata for cached subtitle .vtt files. Written next to each
@@ -432,8 +568,9 @@ export function registerCinemaMediaRoutes(
       ff = spawn("ffmpeg", ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
       ff.on("error", (err) => {
-        log.error("torrents: transcode ffmpeg spawn failed", err);
-        try { server.json(res, 500, { error: `ffmpeg: ${(err as Error).message}` }); }
+        const friendly = mediaToolError("ffmpeg", err);
+        log.error("cinema: transcode ffmpeg spawn failed", friendly);
+        try { server.json(res, 500, { error: friendly.message }); }
         catch { /* headers already sent */ }
       });
       ff.stderr?.on("data", (chunk: Buffer) => {
@@ -488,15 +625,15 @@ export function registerCinemaMediaRoutes(
         return server.json(res, 400, { error: "only http(s) urls are allowed" });
       }
 
-      const cached = probeDurationCache.get(target);
+      const cached = probeInfoCache.get(target);
       if (cached && Date.now() - cached.at < 5 * 60_000) {
-        return server.json(res, 200, { duration_sec: cached.value, cached: true });
+        return server.json(res, 200, { ...cached.value, cached: true });
       }
 
-      const duration = await probeDurationWithRetry(parsed, "torrent-probe");
+      const info = await probeMediaInfo(parsed, "torrent-probe");
 
-      probeDurationCache.set(target, { value: duration, at: Date.now() });
-      server.json(res, 200, { duration_sec: duration, cached: false });
+      probeInfoCache.set(target, { value: info, at: Date.now() });
+      server.json(res, 200, { ...info, cached: false });
     } catch (err) {
       server.json(res, 502, { error: extractMessage(err) });
     }
@@ -713,8 +850,20 @@ export function registerCinemaMediaRoutes(
         }
         const identicalPct = (identical / translations.length) * 100;
         if (identicalPct > 50 && src !== tgt) {
+          // Distinguish the two ways this guard trips. "Batches that never got
+          // an answer keep their source text" and "the model echoed the input"
+          // look identical from the cue ratio alone, and only the first one
+          // tells you to go look at provider errors.
+          const fb = result.fallbackBatches ?? 0;
+          const tb = result.totalBatches ?? 0;
+          const because = fb > 0
+            ? `${fb}/${tb} batch(es) never got an answer from the provider and kept their source text`
+            : `the model echoed the input`;
+          log.warn(`translate-srt: rejecting run — ${identicalPct.toFixed(0)}% unchanged; ${because}`);
           return server.json(res, 502, {
-            error: `${engine}: ${identicalPct.toFixed(0)}% of cues unchanged (looks like passthrough — model failed silently).`,
+            error: `${engine}: ${identicalPct.toFixed(0)}% of cues unchanged — ${because}.`,
+            fallback_batches: fb,
+            total_batches: tb,
             sample,
           });
         }
@@ -1291,12 +1440,33 @@ export function registerCinemaMediaRoutes(
   });
 
   // ── GET /api/torrents/transcribe/info — engine availability ─────────
-  server.get("/api/cinema/media/transcribe/info", (_req, res) => {
+  // whispercpp used to be hardcoded `available: true`, so the picker offered
+  // an engine that could not run and the user found out only when the job
+  // failed. It is now probed (cached 60s in media-tools), and reports the
+  // install command for the host when it is missing.
+  server.get("/api/cinema/media/transcribe/info", async (_req, res) => {
+    const whisper = await probeMediaTool("whisper-cli");
+    const ffmpeg = await probeMediaTool("ffmpeg");
     server.json(res, 200, {
       engines: {
+        // Runs in-process via @huggingface/transformers — no external binary,
+        // which is why this one is genuinely always available.
         transformers: { available: true, model: "Xenova/whisper-base", offline: true, hint: "10-20 min for 90min film, no setup" },
-        whispercpp: { available: true, hint: "3-8 min for 90min film, requires whisper-cli binary" },
+        whispercpp: {
+          available: whisper.available,
+          version: whisper.version,
+          hint: whisper.available
+            ? "3-8 min for 90min film"
+            : `${whisper.reason}. ${whisper.hint}`,
+        },
         groq: { available: isGroqWhisperAvailable(), model: process.env.GROQ_WHISPER_MODEL ?? "whisper-large-v3", hint: "30s for 90min film via Groq Cloud API" },
+      },
+      // Every offline engine extracts its audio with ffmpeg first, so without
+      // it only Groq (which uploads the source URL) can run at all.
+      ffmpeg: {
+        available: ffmpeg.available,
+        version: ffmpeg.version,
+        hint: ffmpeg.available ? undefined : `${ffmpeg.reason}. ${ffmpeg.hint}`,
       },
       models: ["tiny", "base", "small", "medium", "large-v3"],
     });

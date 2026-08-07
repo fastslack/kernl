@@ -3,10 +3,10 @@
   "id": "com.kernl.ai-suite",
   "slug": "ai-suite",
   "name": "AI Suite",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "suite",
   "built_in": true,
-  "description": "Agents overview, 3D flow, evolutions, models, skills, marketplace, automations.",
+  "description": "Agents overview, 3D flow, evolutions, ranks, workspace and skills.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "ai",
@@ -57,13 +57,6 @@
         "order": 50
       },
       {
-        "id": "models",
-        "group": "ai",
-        "label": "Models",
-        "icon": "🔗",
-        "order": 60
-      },
-      {
         "id": "workspace",
         "group": "ai",
         "label": "Workspace",
@@ -76,20 +69,6 @@
         "label": "Skills",
         "icon": "⚡",
         "order": 80
-      },
-      {
-        "id": "marketplace",
-        "group": "ai",
-        "label": "Market",
-        "icon": "🏪",
-        "order": 90
-      },
-      {
-        "id": "automations",
-        "group": "ai",
-        "label": "Auto",
-        "icon": "🔁",
-        "order": 100
       }
     ]
   }

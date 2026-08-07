@@ -38,6 +38,8 @@ function builtinDir(): string {
 export interface BuiltinSeedSummary {
   seeded: string[];
   skipped: string[];
+  /** Rows that were `installed` and became `active` because their blocker lifted. */
+  promoted: string[];
   errors: Array<{ slug: string; error: string }>;
 }
 
@@ -73,7 +75,7 @@ async function collectExtensionDirs(root: string, depthRemaining = 3): Promise<s
 export async function seedBuiltinExtensions(
   service: ExtensionService,
 ): Promise<BuiltinSeedSummary> {
-  const summary: BuiltinSeedSummary = { seeded: [], skipped: [], errors: [] };
+  const summary: BuiltinSeedSummary = { seeded: [], skipped: [], promoted: [], errors: [] };
 
   const root = builtinDir();
 
@@ -100,6 +102,11 @@ export async function seedBuiltinExtensions(
         // to the on-disk manifest (e.g. flipping built_in → backend.entry)
         // take effect without a DB wipe. Status is preserved.
         const refreshed = await service.refreshFromDirectory(existing.id, dir);
+        // Parked on a missing package or an absent license last boot? If the
+        // blocker is gone — the background provisioner fetched the SDKs, or a
+        // license was added — activate it now, before anything is loaded, so
+        // it comes up wired like any other extension.
+        if (service.promoteIfUnblocked(existing.id)) summary.promoted.push(preview.slug);
         if (refreshed) {
           summary.seeded.push(preview.slug);
           log.info(`Built-in extension refreshed from disk: ${preview.slug}`);

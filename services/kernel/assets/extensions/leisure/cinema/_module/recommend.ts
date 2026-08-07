@@ -206,9 +206,11 @@ export async function similarTo(
   identifier: string,
   k = 12,
 ): Promise<RecommendHit[]> {
-  if (!graph?.capabilities.cypher) {
-    throw new Error("similar titles require an active graph driver — activate Neo4j in /extensions");
-  }
+  // No graph is a configuration state, not a failure. This used to throw, so
+  // opening any film on an install without Neo4j logged an ERR in the kernel
+  // and a 500 in the browser console — for a strip the page is documented to
+  // render without. Same answer as an un-embedded title: no rows.
+  if (!graph?.capabilities.cypher) return [];
   const vectors = await vectorsFor(graph, [identifier]);
   const self = vectors.get(identifier);
   if (!self) return [];

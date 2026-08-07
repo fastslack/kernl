@@ -59,6 +59,7 @@ import type {
 import { importLegacyExtensions } from "../../modules/extensions/legacy-import.js";
 import { seedBuiltinExtensions } from "../../modules/extensions/seed-builtin.js";
 import { loadActiveExtensions } from "../../modules/extensions/index.js";
+import { autoProvisionExtensions } from "../../modules/extensions/auto-provision.js";
 import { AgentsFacade } from "../../modules/agents/extension-facade.js";
 import { createDockerDriver } from "../sandbox/drivers/index.js";
 import type { MarketplaceModule } from "../../modules/marketplace/index.js";
@@ -189,6 +190,23 @@ export async function loadExtensions(args: {
         extLoad.failed.map((f) => `${f.slug} (${f.error})`).join("; "),
     );
   }
+
+  // 5. Fetch the packages the native payload leaves out, for the bundled
+  //    extensions still parked on them. Deliberately NOT awaited: the HTTP
+  //    server does not exist yet, and an npm install on the boot path would
+  //    leave the dashboard unreachable for minutes with nothing to explain it.
+  //    Nothing is activated here — the seeder promotes them on the next start,
+  //    where they come up wired like any other extension. See auto-provision.ts.
+  void autoProvisionExtensions({
+    service: extensionsModule.service,
+    extensionsDir: extensionsModule.service.extensionsDir,
+    enabled: process.env.KERNEL_EXT_AUTOPROVISION !== "0",
+  }).catch((err) => {
+    // Belt and braces: the pass already swallows per-extension failures, so
+    // reaching here means something structural. Still never fatal — the
+    // kernel runs fine with these extensions parked.
+    log.warn(`Extension auto-provision pass failed: ${err instanceof Error ? err.message : err}`);
+  });
 
   // ── Late-bind extension handles ────────────────────
   const getExt = <T,>(slug: string): T | null =>
