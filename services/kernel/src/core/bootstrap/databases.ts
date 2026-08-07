@@ -61,6 +61,20 @@ export async function initDatabases(config: KernelConfig): Promise<{
         label: "KERNEL_AUTH_TOKEN",
       });
       config.auth.token = secret.value;
+      // Publish it back into the environment.
+      //
+      // `KERNEL_AUTH_TOKEN` is how this process tells its own code — and the
+      // child processes it spawns — which token to present when it calls
+      // itself over loopback. Extensions read it directly (they have no handle
+      // on `config`), and ffmpeg gets it embedded in the URLs they build.
+      // Resolving the secret only into `config` left that variable empty on
+      // every install that did not pin the token in .env, so those self-calls
+      // went out with no Authorization header and came back 401: subtitle
+      // generation failed with `ffmpeg exited 1: … 401 Unauthorized` against
+      // the kernel's own /stream endpoint. The value is the same secret the
+      // process already holds, and it is already passed to ffmpeg on the
+      // command line, so this exposes nothing new.
+      process.env.KERNEL_AUTH_TOKEN = secret.value;
       if (secret.origin === "generated") {
         log.warn("──────────────────────────────────────────────────────────────");
         log.warn("SECURITY: KERNEL_AUTH_TOKEN was empty — generated a random API token.");
