@@ -1,0 +1,144 @@
+[
+  {
+    "name": "cinema header switches to Spanish live",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/login"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.removeItem('cinema:filtersOpen'); 'ok'"
+      },
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/cinema"
+      },
+      {
+        "type": "wait",
+        "selector": ".band-tags"
+      },
+      {
+        "type": "wait",
+        "value": "2500"
+      },
+      {
+        "type": "evaluate",
+        "value": "window.dispatchEvent(new CustomEvent('kernl:locale',{detail:{locale:'es'}})); 'sent'"
+      },
+      {
+        "type": "wait",
+        "value": "1200"
+      },
+      {
+        "type": "assert_text",
+        "text": "DESCUBRIR"
+      },
+      {
+        "type": "assert_text",
+        "text": "catálogo local"
+      },
+      {
+        "type": "assert_text",
+        "text": "ETIQUETAS"
+      },
+      {
+        "type": "assert_text",
+        "text": "mi lista"
+      },
+      {
+        "type": "assert_attribute",
+        "selector": ".searchbox input",
+        "value": "placeholder=Buscá una película, o describí una — «cine mudo con vampiros»"
+      },
+      {
+        "type": "screenshot",
+        "value": "cinema-es-live"
+      }
+    ],
+    "expect": [
+      "The whole cinema header is in Spanish: DESCUBRIR, ETIQUETAS, Filtros, mi lista, and the search placeholder reads 'Buscá una película, o describí una'",
+      "The layout is unchanged by the language switch — the page did not remount or lose its posters"
+    ]
+  },
+  {
+    "name": "cinema header condenses on scroll",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/login"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.removeItem('cinema:filtersOpen'); 'ok'"
+      },
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/cinema"
+      },
+      {
+        "type": "wait",
+        "selector": ".band-tags"
+      },
+      {
+        "type": "wait",
+        "value": "2500"
+      },
+      {
+        "type": "evaluate",
+        "value": "document.querySelector('.page').scrollTop = 700; 'scrolled'"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "screenshot",
+        "value": "cinema-condensed"
+      }
+    ],
+    "expect": [
+      "The sticky header is now short: only the wordmark row and the search bar remain",
+      "The DISCOVER and TAGS rows have folded away",
+      "Posters fill the rest of the viewport"
+    ]
+  },
+  {
+    "name": "saved Spanish applies on a hard load of /cinema",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/login"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','es'); 'ok'"
+      },
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/cinema"
+      },
+      {
+        "type": "wait",
+        "selector": ".band-tags"
+      },
+      {
+        "type": "wait",
+        "value": "3000"
+      },
+      {
+        "type": "assert_text",
+        "text": "catálogo local"
+      },
+      {
+        "type": "assert_text",
+        "text": "DESCUBRIR"
+      },
+      {
+        "type": "screenshot",
+        "value": "cinema-locale-boot"
+      }
+    ],
+    "expect": "The cinema page loads directly in Spanish without passing through the login page"
+  }
+]
