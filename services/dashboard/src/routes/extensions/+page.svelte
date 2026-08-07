@@ -898,7 +898,7 @@
   async function doUpload(): Promise<void> {
     uploadError = '';
     if (!uploadFile && !uploadPath) {
-      uploadError = 'Pick a .kernlext file or paste a server path.';
+      uploadError = 'Pick a .kernl file or paste a server path.';
       return;
     }
     uploading = true;
@@ -1476,7 +1476,7 @@
       aria-haspopup="menu"
       aria-expanded={showPlusMenu}
       on:click={() => (showPlusMenu = !showPlusMenu)}
-      title="Add a repository or install a .kernlext bundle"
+      title="Add a repository or install a .kernl bundle"
     >＋</button>
     {#if showPlusMenu}
       <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -1486,7 +1486,7 @@
           <span class="plus-menu-icon">↑</span>
           <span>
             <strong>Install bundle</strong>
-            <small>A <code>.kernlext</code> file from disk or a server path</small>
+            <small>A <code>.kernl</code> file from disk or a server path</small>
           </span>
         </button>
         <button role="menuitem" on:click={() => { showPlusMenu = false; showAddRepo = true; }}>
@@ -1718,7 +1718,7 @@
     {:else}
       <div class="empty-title">The catalog is empty</div>
       <p class="empty-sub">
-        Add a Git repository to fill it, or install a <code>.kernlext</code> bundle directly.
+        Add a Git repository to fill it, or install a <code>.kernl</code> bundle directly.
       </p>
       <div class="empty-actions">
         <button class="btn-install" on:click={() => (showAddRepo = true)}>Add repository</button>
@@ -2724,11 +2724,11 @@
       <h3>Install extension</h3>
 
       <div class="compose-row">
-        <label for="ext-file">Upload .kernlext file</label>
+        <label for="ext-file">Upload .kernl file</label>
         <input
           id="ext-file"
           type="file"
-          accept=".kernlext,.tar.gz,.tgz"
+          accept=".kernl,.kernlext,.tar.gz,.tgz"
           on:change={onFilePick}
           class="install-file"
         />
@@ -2748,7 +2748,7 @@
           id="ext-path"
           type="text"
           class="install-input"
-          placeholder="/absolute/path/to/extension.kernlext"
+          placeholder="/absolute/path/to/extension.kernl"
           bind:value={uploadPath}
         />
       </div>

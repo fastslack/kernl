@@ -29,7 +29,7 @@ como extensión" iniciada tras el SandboxDriverRegistry.
 1. **Todo contract vive en `services/kernel/src/core/`**. Interfaces, registries, routes.
 2. **Todo driver built-in vive en `services/kernel/src/core/<abstraction>-drivers/`**. Son parte
    del kernel pero consumen el contract.
-3. **Toda feature vertical es extensión**. Empaquetable como `.kernlext`, instalable
+3. **Toda feature vertical es extensión**. Empaquetable como `.kernl`, instalable
    via marketplace o upload.
 4. **Zero static imports entre features**. Los módulos se comunican por eventos
    (`event-bus`) o por registries.
@@ -62,8 +62,8 @@ Kernl (base mínima ~30k LOC)
 │   ├── api-registry/
 │   └── agents-core/                  # Tras Fase 7
 └── extensions/                       # (fuera del árbol del kernel)
-    ├── notes.kernlext
-    ├── trading-binance.kernlext
+    ├── notes.kernl
+    ├── trading-binance.kernl
     └── ...
 ```
 

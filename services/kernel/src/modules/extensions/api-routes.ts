@@ -3,7 +3,7 @@
  *
  * Mounted under `/api/extensions`. Used by the dashboard to list, install,
  * enable/disable, and remove extensions. Mirrors the MCP tools surface
- * but over HTTP so browsers can upload .kernlext bundles directly.
+ * but over HTTP so browsers can upload .kernl bundles directly.
  */
 
 import { writeFile, mkdir, rm } from "node:fs/promises";
@@ -13,6 +13,7 @@ import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import type { KernelHttpServer } from "../../core/http-server.js";
 import type { ExtensionService } from "./service.js";
+import { BUNDLE_EXT } from "./bundle.js";
 import type {
   ExtensionSource,
   ExtensionStatus,
@@ -297,8 +298,8 @@ export function registerExtensionsRoutes(
         server.json(res, 400, { error: "base64 payload required" });
         return;
       }
-      const name = body.filename ?? "upload.kernlext";
-      const stagingDir = join(tmpdir(), `kernlext-upload-${randomBytes(4).toString("hex")}`);
+      const name = body.filename ?? `upload${BUNDLE_EXT}`;
+      const stagingDir = join(tmpdir(), `kernl-upload-${randomBytes(4).toString("hex")}`);
       await mkdir(stagingDir, { recursive: true });
       const stagingPath = join(stagingDir, name);
       await writeFile(stagingPath, Buffer.from(body.base64, "base64"));

@@ -1,5 +1,5 @@
 /**
- * pack-agent-bundle.ts — empaqueta un directorio de agentes como .kernlext
+ * pack-agent-bundle.ts — empaqueta un directorio de agentes como .kernl
  *
  * Convención:
  *   assets/bundles/<slug>/    (public bundles, tracked in git, ships with kernel)
@@ -15,12 +15,12 @@
  *
  * EJEMPLO:
  *   bun run scripts/pack-agent-bundle.ts agents-system
- *   → dist/extensions/agents-system-1.0.0.kernlext
+ *   → dist/extensions/agents-system-1.0.0.kernl
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { resolve, dirname } from "node:path";
-import { packBundle } from "../src/modules/extensions/bundle.js";
+import { packBundle, bundleFileName } from "../src/modules/extensions/bundle.js";
 
 async function main() {
   const slug = process.argv[2];
@@ -95,7 +95,7 @@ async function main() {
 
   // Pack directly from the bundle dir (no staging — manifest + json files
   // are already in the canonical layout the installer reads).
-  const outPath = resolve(kernelRoot, outDir, `${slug}-${version}.kernlext`);
+  const outPath = resolve(kernelRoot, outDir, bundleFileName(slug, version));
   mkdirSync(dirname(outPath), { recursive: true });
   const result = await packBundle(bundleDir, outPath);
 
@@ -109,7 +109,7 @@ async function main() {
   console.log(`  BUNDLE=$(base64 -w0 ${outPath})`);
   console.log(`  curl -sS -X POST http://localhost:3087/api/extensions/upload \\`);
   console.log(`    -H 'Content-Type: application/json' \\`);
-  console.log(`    -d "$(jq -cn --arg b64 "\\$BUNDLE" '{filename:"${slug}-${version}.kernlext", base64:\\$b64}')"`);
+  console.log(`    -d "$(jq -cn --arg b64 "\\$BUNDLE" '{filename:"${bundleFileName(slug, version)}", base64:\\$b64}')"`);
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

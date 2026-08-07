@@ -1,7 +1,7 @@
 /**
  * End-to-end smoke test for the unified extensions pipeline.
  *
- * Builds a synthetic .kernlext, installs it, loads it dynamically, and
+ * Builds a synthetic .kernl, installs it, loads it dynamically, and
  * verifies the KernelModule's tool becomes callable through the
  * ModuleRegistry — exactly as a real bundled extension would behave.
  */
@@ -70,7 +70,7 @@ beforeAll(async () => {
   );
   await writeFile(join(staging, "backend/index.js"), BACKEND_SOURCE);
 
-  bundlePath = join(workRoot, "hello.kernlext");
+  bundlePath = join(workRoot, "hello.kernl");
   await packBundle(staging, bundlePath);
 });
 

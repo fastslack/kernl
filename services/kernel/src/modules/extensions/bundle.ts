@@ -1,5 +1,5 @@
 /**
- * .kernlext Bundle Format — pack / unpack / verify
+ * .kernl Bundle Format — pack / unpack / verify
  *
  * Layout (tarball root — NO wrapper directory):
  *   extension.json           ← manifest, required
@@ -11,7 +11,7 @@
  *   flows/*.json             ← optional
  *   assets/*                 ← optional (locales, images)
  *
- * Container: gzipped tar (.kernlext = .tar.gz by another name).
+ * Container: gzipped tar (.kernl = .tar.gz by another name).
  *
  * Integrity: the manifest's `integrity.sha256` field holds a canonical digest
  * over every file in the bundle, computed as:
@@ -31,6 +31,7 @@ import {
   rm,
   readdir,
   stat,
+  chmod,
 } from "node:fs/promises";
 import { join, relative, sep } from "node:path";
 import { createHash } from "node:crypto";
@@ -45,6 +46,75 @@ import {
 } from "./schema.js";
 
 const execFileAsync = promisify(execFile);
+
+// ── File naming ───────────────────────────────────────────────────────
+
+/**
+ * Canonical suffix for a packaged extension.
+ *
+ * Nothing in the kernel validates a bundle by its file name — the format is a
+ * gzipped tar and the installer reads the manifest inside it, so any suffix
+ * works and always has. This constant exists so that everything Kernl *emits*
+ * agrees on one spelling, which `.kernlext` and `.kernl` did not: the packer,
+ * the store and the marketplace wrote `.kernlext` while the signature module
+ * documented the format as `.kernl`.
+ */
+export const BUNDLE_EXT = ".kernl";
+
+/**
+ * The name bundles were emitted under before `.kernl` became canonical.
+ *
+ * Kept because bundles already in circulation carry it, and because nothing
+ * ever rejected a file by suffix they keep installing untouched. Producers must
+ * not use this; it is here so that UI file pickers and documentation can list
+ * what a user might legitimately still have on disk.
+ */
+export const LEGACY_BUNDLE_EXT = ".kernlext";
+
+/** Every suffix a user might reasonably hand us, canonical first. */
+export const BUNDLE_EXTS = [BUNDLE_EXT, LEGACY_BUNDLE_EXT, ".tar.gz", ".tgz"] as const;
+
+/**
+ * Conventional file name for a bundle. `version` is included by the packer so
+ * a directory of builds is self-describing; the store omits it because the
+ * slug alone identifies what was downloaded.
+ */
+export function bundleFileName(slug: string, version?: string): string {
+  return version ? `${slug}-${version}${BUNDLE_EXT}` : `${slug}${BUNDLE_EXT}`;
+}
+
+// ── tar, portably ─────────────────────────────────────────────────────
+
+/**
+ * Run `tar` with flags every implementation understands.
+ *
+ * Kernl runs on three different tars and they do NOT agree on options:
+ *
+ *   · GNU tar      — Linux hosts and the Debian-based kernel image
+ *   · bsdtar       — /usr/bin/tar on macOS (libarchive)
+ *   · busybox tar  — Alpine-based images
+ *
+ * Only the short POSIX flags (-c -x -t -z -f -C -O) exist in all three, so
+ * that is all this uses. The GNU long forms this replaced (`--extract`,
+ * `--list`, `--to-stdout`) are absent or unreliable on busybox, and
+ * `--no-overwrite-dir` — see unpackBundle — is GNU-only outright, which made
+ * installing ANY .kernl bundle fail on a native macOS install.
+ *
+ * `-f` must be followed by the archive path, and `-C` by the directory, so
+ * the flag cluster stays split rather than merged into one `-xzf`.
+ */
+function tarArgs(mode: "c" | "x" | "t", archive: string, rest: string[] = []): string[] {
+  return [`-${mode}`, "-z", "-f", archive, ...rest];
+}
+
+/** Every member path in an archive, trimmed, in archive order. */
+async function listMembers(archive: string): Promise<string[]> {
+  const { stdout } = await execFileAsync("tar", tarArgs("t", archive), {
+    timeout: 60_000,
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  return stdout.split("\n").map((l) => l.trim()).filter(Boolean);
+}
 
 // ── Manifest I/O ──────────────────────────────────────────────────────
 
@@ -161,13 +231,13 @@ export interface PackResult {
 }
 
 /**
- * Create a .kernlext bundle from `sourceDir`.
+ * Create a .kernl bundle from `sourceDir`.
  *
  * Requires `sourceDir/extension.json` to exist and be valid. The manifest's
  * `integrity.sha256` is (re)computed and written before packing, so the
  * bundle is self-describing and verifiable offline.
  *
- * `outPath` should end in `.kernlext`.
+ * `outPath` should end in `.kernl`.
  */
 export async function packBundle(
   sourceDir: string,
@@ -194,13 +264,11 @@ export async function packBundle(
 
   // Build the tarball. `-C sourceDir .` packs the directory contents
   // (not the directory itself) — no wrapper folder inside.
-  await execFileAsync("tar", [
-    "--create",
-    "--gzip",
-    "--file", outPath,
-    "-C", sourceDir,
-    ".",
-  ], { timeout: 60_000 });
+  await execFileAsync(
+    "tar",
+    tarArgs("c", outPath, ["-C", sourceDir, "."]),
+    { timeout: 60_000 },
+  );
 
   const { size } = await stat(outPath);
   return { bundlePath: outPath, sha256, sizeBytes: size };
@@ -217,7 +285,7 @@ export interface UnpackResult {
 }
 
 /**
- * Extract a .kernlext bundle into `targetDir` and verify its integrity.
+ * Extract a .kernl bundle into `targetDir` and verify its integrity.
  *
  * `strict=true` throws on any integrity failure; `strict=false` returns a
  * result with `integrityOk=false` so the caller can decide.
@@ -234,14 +302,7 @@ export async function unpackBundle(
     // are absolute or escape `targetDir` via `..`, BEFORE writing anything.
     // (Extraction otherwise runs before the integrity check, so a crafted
     // bundle could drop files outside the install dir.)
-    const { stdout: listing } = await execFileAsync(
-      "tar",
-      ["--list", "--gzip", "--file", bundlePath],
-      { timeout: 60_000, maxBuffer: 16 * 1024 * 1024 },
-    );
-    for (const raw of listing.split("\n")) {
-      const member = raw.trim();
-      if (!member) continue;
+    for (const member of await listMembers(bundlePath)) {
       const normalized = member.replace(/\\/g, "/");
       const isAbsolute = normalized.startsWith("/");
       const escapes = normalized.split("/").some((seg) => seg === "..");
@@ -255,17 +316,25 @@ export async function unpackBundle(
     // (used on the host and in the container) rejects it. Absolute and
     // `..`-escaping members are already rejected by the listing check above,
     // and GNU tar strips leading "/" by default anyway.
-    await execFileAsync("tar", [
-      "--extract",
-      "--gzip",
-      "--no-overwrite-dir",
-      "--file", bundlePath,
-      "-C", targetDir,
-    ], { timeout: 60_000 });
+    await execFileAsync(
+      "tar",
+      tarArgs("x", bundlePath, ["-C", targetDir]),
+      { timeout: 60_000 },
+    );
   } catch (err) {
     await rm(targetDir, { recursive: true, force: true }).catch(() => {});
     throw new Error(`Failed to extract bundle ${bundlePath}: ${err}`);
   }
+
+  // `--no-overwrite-dir` used to sit on the extract above to stop tar applying
+  // the archive's `./` entry — whose mode is whatever the packer's staging dir
+  // happened to have — to the install directory. The flag is GNU-only, so the
+  // intent is stated directly instead: the extension directory is read by the
+  // kernel and served over /ext-assets, and 0755 is what that needs.
+  await chmod(targetDir, 0o755).catch(() => {
+    /* Best-effort: a filesystem that refuses chmod (some mounts, Windows) is
+       not a reason to fail an otherwise good install. */
+  });
 
   const manifest = await readManifest(targetDir);
   const expected = manifest.integrity?.sha256 ?? null;
@@ -286,14 +355,27 @@ export async function unpackBundle(
 // ── Peek (read manifest without full extraction) ──────────────────────
 
 /**
- * Read the manifest from a .kernlext bundle WITHOUT extracting the whole
+ * Read the manifest from a .kernl bundle WITHOUT extracting the whole
  * thing. Useful for listing/validating a bundle before committing to an
- * install. Uses `tar --extract --to-stdout` against a single entry.
+ * install. Extracts a single entry to stdout with `-O`.
+ *
+ * The member name is resolved from the listing rather than hardcoded to
+ * `./extension.json`. packBundle always writes the `./` prefix, but a bundle
+ * packed by another tool may store a bare `extension.json`, and naming a
+ * member that is not in the archive makes tar exit non-zero — so hardcoding
+ * either spelling rejects half the valid bundles in the world.
  */
 export async function peekManifest(bundlePath: string): Promise<ExtensionManifest> {
+  const members = await listMembers(bundlePath);
+  const entry = members.find(
+    (m) => m === MANIFEST_FILE || m === `./${MANIFEST_FILE}`,
+  );
+  if (!entry) {
+    throw new Error(`Bundle ${bundlePath} has no ${MANIFEST_FILE} at its root`);
+  }
   const { stdout } = await execFileAsync(
     "tar",
-    ["--extract", "--gzip", "--file", bundlePath, "--to-stdout", `./${MANIFEST_FILE}`],
+    tarArgs("x", bundlePath, ["-O", entry]),
     { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
   );
   const json: unknown = JSON.parse(stdout);

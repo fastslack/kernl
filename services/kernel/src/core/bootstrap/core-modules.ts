@@ -269,7 +269,7 @@ export async function initCoreModules(args: {
   registry.register(createOfficeInfraModule());
 
   // Store: redeem a license into installed add-ons — downloads the entitled
-  // .kernlext / office blueprint from the licensed store and hands it to the
+  // .kernl / office blueprint from the licensed store and hands it to the
   // extensions installer or office-kit. Registered after agents so it can
   // resolve both services. Lazy getters: resolved at tool-run time.
   registry.register(

@@ -91,7 +91,7 @@ export const marketplaceMigrations: Migration[] = [
   },
   {
     // v2 — Subscribed catalog repos. Each row registers a remote git repo
-    // (Anthropic skills convention or our own .kernlext layout). On boot, every
+    // (Anthropic skills convention or our own .kernl layout). On boot, every
     // row is re-registered as a GitCatalogProvider so subscriptions survive
     // restarts. Manual + scheduled sync-all updates last_synced_at +
     // items_found, the latter for the dashboard counter.

@@ -13,7 +13,7 @@
 #     bin/{bun|bun.exe}           Bun runtime for the target platform
 #     bin/mcp-server.js           bundled kernel
 #     bin/static/                 static HTML pages
-#     bin/extensions/             pre-built .kernlext bundles
+#     bin/extensions/             pre-built .kernl bundles
 #     node_modules/               native deps (downloaded for $PLATFORM)
 #     dashboard/                  Svelte SPA build
 #     assets/                     extensions, agents, skills

@@ -101,7 +101,7 @@ graph brain (Neo4j) and key-free web search come bundled.
 | 🧠 **Real memory** | A graph-backed brain (Neo4j + GDS) links every module, so your AI finally *remembers*. |
 | 🤖 **Agents that act** | Not a chatbot — autonomous *offices* that work in loops and use your tools. |
 | 🔌 **Any LLM, any client** | Claude, OpenAI, Grok, or a local model via LM Studio. Any MCP client connects. |
-| 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernlext` package. |
+| 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernl` package. |
 | 📊 **103 tools installed, 71 modules available** | One surface for your whole life — not fifteen disconnected apps. Enable everything and you pass 290 tools. |
 
 ## ⚔️ Kernl vs. the usual options
@@ -118,7 +118,7 @@ graph brain (Neo4j) and key-free web search come bundled.
 
 **Your life, addressable by your AI** — tasks & projects, contacts/CRM, reminders, email (IMAP/SMTP), finance & budgets, calendar, notes, goals, health & training, shopping, travel, documents… 60+ modules, every one exposed as MCP tools.
 
-**A fleet of agents** — cooperating agents with chains, schedules and their own workspaces. Package a whole team as an installable `.kernlext` *office*, and watch them work in a live **3D office view**.
+**A fleet of agents** — cooperating agents with chains, schedules and their own workspaces. Package a whole team as an installable `.kernl` *office*, and watch them work in a live **3D office view**.
 
 **Pluggable everything**
 - **LLM providers** — Claude, OpenAI, Grok, LM Studio (local), and more via extensions.
@@ -155,7 +155,7 @@ The MCP HTTP transport is at `http://localhost:3086/mcp` by default (the officia
 
 ## 🛠️ Build your own
 
-An **extension** is a folder (or a packaged `.kernlext`) with a `manifest.json` plus any of: a backend module (new MCP tools + HTTP routes), agents & offices, agent-scoped skills, a theme, a channel, or a sandbox driver.
+An **extension** is a folder (or a packaged `.kernl`) with a `manifest.json` plus any of: a backend module (new MCP tools + HTTP routes), agents & offices, agent-scoped skills, a theme, a channel, or a sandbox driver.
 
 Keep operator-specific material — named agents, your WhatsApp, regional scrapers — private under `services/kernel/assets/personal-agents/` (gitignored, ideal for a private submodule).
 

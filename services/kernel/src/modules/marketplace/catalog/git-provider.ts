@@ -10,7 +10,7 @@
  * The first hit wins per directory; we stop descending once we identify a
  * skill/extension. That handles repos like `coreyhaines31/marketingskills`
  * (each top-level subfolder is a skill with SKILL.md) AND repos that ship
- * a single .kernlext-style extension at the root.
+ * a single .kernl-style extension at the root.
  *
  * Cache layout: <dataDir>/catalog-cache/<repo-slug>/  — `git pull` on sync,
  * `git clone --depth 1` on first add. Removing a repo deletes its dir.

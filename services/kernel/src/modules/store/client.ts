@@ -3,7 +3,7 @@
  *
  * Talks to the Kernl download store (default https://issuer.lifekernl.com):
  *   • GET  /store/catalog             — what paid extensions exist, with prices
- *   • GET  /store/download?slug=…     — the signed .kernlext, gated by the license
+ *   • GET  /store/download?slug=…     — the signed .kernl, gated by the license
  *                                       JWT sent as `Authorization: Bearer …`
  *   • POST /api/checkout/create       — open a Stripe Checkout for a price
  *   • GET  /api/license/by-session    — claim the license a checkout minted
@@ -14,13 +14,14 @@
 import { writeFile, mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { bundleFileName } from "../extensions/bundle.js";
 
 export interface StoreCatalogItem {
   slug: string;
   name: string;
   feature: string; // pro:<slug>
   version: string;
-  /** "extension" (.kernlext) or "office" (blueprint JSON). Default extension. */
+  /** "extension" (.kernl) or "office" (blueprint JSON). Default extension. */
   type?: "extension" | "office";
   /** Card copy — the kernel has no local manifest until the item is installed. */
   description?: string;
@@ -177,7 +178,7 @@ export async function downloadStoreBundle(args: {
   const res = await storeGet({ storeUrl: args.storeUrl, slug: args.slug, licenseJwt: args.licenseJwt, fetchImpl });
   const bytes = new Uint8Array(await res.arrayBuffer());
   const dir = await mkdtemp(join(tmpdir(), "kernl-store-"));
-  const path = join(dir, `${args.slug}.kernlext`);
+  const path = join(dir, bundleFileName(args.slug));
   await writeFile(path, bytes);
   return { path, bytes: bytes.byteLength, downloadUrl };
 }
