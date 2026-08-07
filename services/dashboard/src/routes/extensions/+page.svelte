@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { modelIds } from '$lib/llm-models.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
+  import SkillsHub from '$lib/components/SkillsHub.svelte';
 
   type ExtensionType =
     | 'module' | 'skill' | 'agent-bundle' | 'office' | 'flow'
@@ -188,7 +189,11 @@
   // the old page only ever searched the installed rows, so searching for
   // something you hadn't installed yet always came back empty.
 
-  type Tab = 'discover' | 'installed' | 'updates';
+  // 'skills' is not a slice of the same list as the others: it swaps the grid
+  // for the skills hub, which is organised by agent assignment rather than by
+  // install state. It lives here anyway because a skill IS an extension, and
+  // splitting it back out into its own page is exactly what we just undid.
+  type Tab = 'discover' | 'installed' | 'updates' | 'skills';
   type PriceFilter = '' | 'free' | 'paid';
   type CardStatus =
     | 'available' | 'for_sale' | 'owned'
@@ -609,6 +614,7 @@
   })();
 
   $: installedCount = items.length;
+  $: skillCount = items.filter((i) => i.type === 'skill').length;
   $: updatesCount = catalogItems.filter((e) => e.update_available).length;
   $: errorCount = items.filter((i) => i.status === 'error').length;
   /** Counts what Discover actually shows — not the whole catalog. */
@@ -971,6 +977,9 @@
 
   /** Re-query whatever backs the current tab. */
   async function refetchActive(): Promise<void> {
+    // The skills hub owns its own fetches (it needs agents too) — re-querying
+    // the catalog underneath it would only burn a store round-trip.
+    if (tab === 'skills') return;
     if (tab === 'installed') await fetchList();
     else await fetchCatalog();
   }
@@ -982,6 +991,23 @@
     // so Discover doesn't silently hide everything.
     if (next !== 'installed') filterStatus = '';
     void refetchActive();
+  }
+
+  // ── Skills hub wiring ────────────────────────────────────────────────
+  // The hub manages assignment; acquisition stays on the paths that already
+  // exist, so it delegates those two actions back up here.
+
+  /** "Browse catalog" from the hub → Discover, pre-filtered to skills. */
+  function skillsToDiscover(): void {
+    filterType = 'skill';
+    switchTab('discover');
+  }
+
+  /** Open the standard extension drawer for a skill row. */
+  function openSkillDetail(slug: string): void {
+    const row = items.find((i) => i.slug === slug);
+    if (row) selected = row;
+    else switchTab('installed');
   }
 
   function setType(t: ExtensionType | ''): void {
@@ -1430,6 +1456,11 @@
   $: if (selected?.slug === 'whatsapp') startWhatsAppPolling(); else stopWhatsAppPolling();
 
   onMount(() => {
+    // Deep link: /extensions?tab=skills is where the old /skills page and
+    // every "manage skills" link in the agent drawers now point.
+    const wanted = new URLSearchParams(location.search).get('tab');
+    if (wanted === 'skills' || wanted === 'installed' || wanted === 'updates') tab = wanted;
+
     fetchList();
     fetchRepos();
     fetchCatalog();
@@ -1460,9 +1491,11 @@
       type="text"
       bind:value={search}
       on:input={onSearchInput}
-      placeholder={tab === 'installed'
-        ? `Search ${installedCount} installed…`
-        : `Search ${discoverCount} extensions, skills, agents, themes…`}
+      placeholder={tab === 'skills'
+        ? `Search ${skillCount} installed skill${skillCount === 1 ? '' : 's'}…`
+        : tab === 'installed'
+          ? `Search ${installedCount} installed…`
+          : `Search ${discoverCount} extensions, skills, agents, themes…`}
       aria-label="Search extensions"
     />
     {#if search}
@@ -1527,9 +1560,16 @@
         <span class="tab-n tab-n-accent">{updatesCount}</span>
       </button>
     {/if}
+    <!-- Skills get their own tab, not just a type filter: what you do with a
+         skill (hand it to an agent) has nothing to do with what you do with
+         the rest of the grid. -->
+    <button class="tab tab-skill" class:tab-on={tab === 'skills'} on:click={() => switchTab('skills')}>
+      ✦ Skills
+      {#if skillCount}<span class="tab-n tab-n-skill">{skillCount}</span>{/if}
+    </button>
   </div>
 
-  <div class="tabs-right">
+  <div class="tabs-right" class:tabs-right-hidden={tab === 'skills'}>
     <!-- Type: a menu instead of twelve chips, listing only types that exist -->
     <div class="typesel">
       <button class="typesel-btn" aria-expanded={typeMenuOpen} on:click={() => (typeMenuOpen = !typeMenuOpen)}>
@@ -1675,7 +1715,15 @@
   the detail — the button acts without opening anything, so acquiring something
   is one click from the grid.
 -->
-{#if tab === 'installed' ? loading : catalogLoading}
+{#if tab === 'skills'}
+  <SkillsHub
+    query={search}
+    showSearch={false}
+    on:discover={skillsToDiscover}
+    on:addrepo={() => (showAddRepo = true)}
+    on:open={(e) => openSkillDetail(e.detail.slug)}
+  />
+{:else if tab === 'installed' ? loading : catalogLoading}
   <div class="loading">Loading{tab === 'installed' ? ' installed extensions' : ' the catalog'}…</div>
 {:else if tab === 'installed' ? loadError : catalogError}
   <div class="error-banner">Failed to load: {tab === 'installed' ? loadError : catalogError}</div>
@@ -2770,7 +2818,9 @@
 <style>
   :global(:root) {
     --ext-module:   #5B9BF7;
-    --ext-skill:    #3DD68C;
+    /* Aliases the global --skill token so the hub, the per-agent panel in the
+       agent drawers and this page's type badge can never drift apart. */
+    --ext-skill:    var(--skill);
     --ext-agent:    #D4A84B;
     --ext-flow:     #3DD6C8;
     --ext-theme:    #E85A9B;
@@ -2902,6 +2952,21 @@
   }
   .tab-n-accent { background: var(--ext-template); color: var(--bg); }
   .tab-accent { color: var(--ext-template); }
+
+  /* Skills tab — carries the skill tint so the tab, the type badge and the
+     hub below it are visibly the same subject. */
+  .tab-skill { color: var(--ext-skill); }
+  .tab-skill.tab-on {
+    background: color-mix(in srgb, var(--ext-skill) 14%, var(--surface-1));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ext-skill) 38%, transparent);
+    color: var(--ext-skill);
+  }
+  .tab-n-skill {
+    background: color-mix(in srgb, var(--ext-skill) 22%, transparent);
+    color: var(--ext-skill);
+  }
+  /* Type/price/status filters are meaningless inside the skills hub. */
+  .tabs-right-hidden { display: none; }
 
   .typesel { position: relative; }
   .typesel-btn {

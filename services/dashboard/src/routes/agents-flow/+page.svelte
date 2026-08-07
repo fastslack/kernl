@@ -8,6 +8,7 @@
   import MessageStream from './MessageStream.svelte';
   import AgentWorld3D from './AgentWorld3D.svelte';
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
+  import AgentSkillsPanel from '$lib/components/AgentSkillsPanel.svelte';
 
   // ── Commander integration ──────────────────────
   // Open the Filesystem Commander in the agent's workspace directory.
@@ -37,6 +38,8 @@
     builtin_handler: string;
     variables: string; // JSON key-value pairs
     flow_id: string;
+    /** JSON array of procedural-skill slugs — see <AgentSkillsPanel>. */
+    skills_json?: string;
   }
   interface ChainData {
     id: string; source_agent_id: string; target_agent_id: string;
@@ -311,6 +314,20 @@
     } finally {
       saving = false;
     }
+  }
+
+  /**
+   * The skills panel already persisted the change; patch `graphData` in place
+   * so the drawer reflects it. A full fetchGraph() here would also work but
+   * costs a re-layout of the 3D world for a field the world doesn't render.
+   */
+  function onSkillsChange(e: CustomEvent<{ skills: string[] }>): void {
+    if (!graphData || !selectedAgentId) return;
+    const skills_json = JSON.stringify(e.detail.skills);
+    graphData = {
+      ...graphData,
+      agents: graphData.agents.map((a) => (a.id === selectedAgentId ? { ...a, skills_json } : a)),
+    };
   }
 
   // Derived
@@ -1505,6 +1522,12 @@
               {/each}
             </div>
           {/if}
+
+          <!-- Same panel as the /agents drawer: an agent picked off the floor
+               is configured exactly like one picked off the list. -->
+          <div class="detail-section">
+            <AgentSkillsPanel agent={selectedAgent} compact on:change={onSkillsChange} />
+          </div>
         {/if}
 
         {#if selectedStats}

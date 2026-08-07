@@ -31,6 +31,12 @@
   --red: #F04770;
   --orange: #F0883E;
 
+  /* Semantic accent for procedural skills. Same hue the /extensions type
+     badge uses for `type='skill'`, promoted to a token so the skills hub,
+     the per-agent panel in the agent drawers and the extension card all
+     read as one system instead of three unrelated greens. */
+  --skill: var(--green);
+
   /* Geist — Vercel's display font: modern, precise, very legible at all
      sizes. Replaces the chunky Syne which rendered blurry on card titles.
      Stack falls back to Inter (a near-equivalent) and the system UI font

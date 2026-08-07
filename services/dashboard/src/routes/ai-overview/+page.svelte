@@ -51,7 +51,7 @@
 <!-- Quick Actions -->
 <div class="quick-actions">
   <QuickAction label="New Agent" icon={ICONS.newAgent} variant="primary" href="/agents" />
-  <QuickAction label="Browse Skills" icon={ICONS.browseSkills} variant="purple" href="/skills" />
+  <QuickAction label="Browse Skills" icon={ICONS.browseSkills} variant="purple" href="/extensions?tab=skills" />
   <QuickAction label="Skill Store" icon={ICONS.skillStore} variant="teal" href="/marketplace" />
 </div>
 
@@ -84,13 +84,13 @@
   </OverviewCard>
 
   <!-- Skills Card -->
-  <OverviewCard title="Installed Skills" icon={ICONS.skills} iconColor="var(--blue)" actions={[{ label: 'View Skills', href: '/skills' }, { label: 'Browse Store', href: '/marketplace' }]}>
+  <OverviewCard title="Installed Skills" icon={ICONS.skills} iconColor="var(--blue)" actions={[{ label: 'View Skills', href: '/extensions?tab=skills' }, { label: 'Browse Store', href: '/marketplace' }]}>
     {#if skillsList.length > 0}
       <ul class="card-list">
         {#each skillsList.slice(0, 4) as skill}
           <li>
-            <span class="card-list-title">{skill.name || skill.id}</span>
-            <span class="card-list-meta">{skill.category || ''}</span>
+            <span class="card-list-title">{skill.slug || skill.name || skill.id}</span>
+            <span class="card-list-meta">{skill.manifest?.category || skill.category || ''}</span>
           </li>
         {/each}
       </ul>

@@ -287,7 +287,10 @@
   async function fetchInitialData() {
     // Fetch init data — uses RPC when WS is connected, falls back to HTTP
     const [skills, marketplace, aiConfig, google, apiReg, rssReg, themeData] = await Promise.allSettled([
-      rpcOrCall('skills.list', {}, () => safeFetch('/api/skills')),
+      // Skills come from the extension registry, not the retired /api/skills
+      // one — that endpoint only ever saw the legacy JS-plugin flavour, so the
+      // AI overview counted 5 skills while the agents used a different set.
+      safeFetch('/api/extensions?type=skill&status=active'),
       rpcOrCall('marketplace.list', {}, () => safeFetch('/api/marketplace')),
       rpcOrCall('config.ai.get', {}, () => safeFetch('/api/config/ai')),
       rpcOrCall('google.status', {}, () => safeFetch('/api/google/status')),
@@ -296,7 +299,10 @@
       rpcOrCall('marketplace.theme.active', {}, () => safeFetch('/api/marketplace/theme/active')),
     ]);
 
-    if (skills.status === 'fulfilled' && skills.value) storeMap['skills'].set(skills.value);
+    // `items` from /api/extensions → `skills` so consumers keep their shape.
+    if (skills.status === 'fulfilled' && skills.value) {
+      storeMap['skills'].set({ skills: (skills.value as { items?: unknown[] }).items ?? [] });
+    }
     if (marketplace.status === 'fulfilled' && marketplace.value) storeMap['marketplace'].set(marketplace.value);
     if (aiConfig.status === 'fulfilled' && aiConfig.value) storeMap['aiConfig'].set(aiConfig.value);
     if (google.status === 'fulfilled' && google.value) storeMap['google'].set(google.value);

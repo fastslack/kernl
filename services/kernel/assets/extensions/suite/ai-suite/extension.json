@@ -3,10 +3,10 @@
   "id": "com.kernl.ai-suite",
   "slug": "ai-suite",
   "name": "AI Suite",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "type": "suite",
   "built_in": true,
-  "description": "Agents overview, 3D flow, evolutions, ranks, workspace and skills.",
+  "description": "Agents overview, 3D flow, evolutions, ranks and workspace.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "ai",
@@ -62,13 +62,6 @@
         "label": "Workspace",
         "icon": "📂",
         "order": 70
-      },
-      {
-        "id": "skills",
-        "group": "ai",
-        "label": "Skills",
-        "icon": "⚡",
-        "order": 80
       }
     ]
   }

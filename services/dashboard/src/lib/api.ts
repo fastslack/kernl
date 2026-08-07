@@ -365,21 +365,10 @@ export function rejectEvolution(runId: string) {
 }
 
 // ── Skills ─────────────────────────────────────────────────────────
-export function enableSkill(id: string) {
-	return rpcOrCall('skills.enable', { id }, () => post('/api/skills/enable', { id }));
-}
-
-export function disableSkill(id: string) {
-	return rpcOrCall('skills.disable', { id }, () => post('/api/skills/disable', { id }));
-}
-
-export function uninstallSkill(id: string) {
-	return rpcOrCall('skills.uninstall', { id }, () => del('/api/skills/uninstall?id=' + id));
-}
-
-export function installSkill(body: Record<string, unknown>) {
-	return rpcOrCall('skills.install', body, () => post('/api/skills/install', body));
-}
+// Nothing here: skills are extensions. Install/enable/uninstall go through
+// the /api/extensions endpoints the extensions page already uses, and the
+// per-agent attachment lives in $lib/skills.ts. The old /api/skills registry
+// calls were removed with the /skills page.
 
 // ── Marketplace ─────────────────────────────────────────────────────
 export function marketplaceInstall(id: string) {
