@@ -3,7 +3,7 @@
   "id": "com.kernl.shopping",
   "slug": "shopping",
   "name": "Shopping",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Shopping lists, products catalog, low-stock alerts.",
   "author": "Kernl",

@@ -4,24 +4,24 @@
     "sha256": "ab72feba72374247"
   },
   "crm/twitter": {
-    "version": "1.1.0",
-    "sha256": "c0b1609a6475fd34"
+    "version": "1.1.1",
+    "sha256": "d4e3b34752fbca16"
   },
   "finance/finance": {
-    "version": "1.1.0",
-    "sha256": "d2f9d1c5145b2994"
+    "version": "1.1.1",
+    "sha256": "7214182a42264334"
   },
   "finance/subscriptions": {
-    "version": "1.1.0",
-    "sha256": "a182108d86006790"
+    "version": "1.1.1",
+    "sha256": "98b727a201876a56"
   },
   "health/health": {
-    "version": "1.1.0",
-    "sha256": "21709250bf008500"
+    "version": "1.1.1",
+    "sha256": "5cfb35945c290e86"
   },
   "health/nutrition": {
-    "version": "1.1.0",
-    "sha256": "400098c096dcb5db"
+    "version": "1.1.1",
+    "sha256": "025551f575db2853"
   },
   "health/training": {
     "version": "1.1.0",
@@ -32,16 +32,16 @@
     "sha256": "72127dcae00e95d0"
   },
   "home/news": {
-    "version": "1.1.0",
-    "sha256": "0dd1f785e920eac0"
+    "version": "1.1.1",
+    "sha256": "2f760497c2bc9bc4"
   },
   "home/rss-reader": {
     "version": "1.1.0",
     "sha256": "799d5f3c10327720"
   },
   "home/shopping": {
-    "version": "1.1.0",
-    "sha256": "7a7336c894f7fa7c"
+    "version": "1.1.1",
+    "sha256": "14f3b8b79d145f17"
   },
   "leisure/books": {
     "version": "1.0.0",
@@ -52,24 +52,24 @@
     "sha256": "4dc2b143f5bbdcc9"
   },
   "people/comms": {
-    "version": "1.1.0",
-    "sha256": "45f63f6707152771"
+    "version": "1.1.1",
+    "sha256": "286476dc004b91df"
   },
   "people/crm": {
-    "version": "1.1.0",
-    "sha256": "7290f5f03fe55612"
+    "version": "1.1.1",
+    "sha256": "123e3aca659cfa78"
   },
   "people/events": {
-    "version": "1.1.0",
-    "sha256": "88f699dea33126cc"
+    "version": "1.1.1",
+    "sha256": "77c7cd1eb0f1c74a"
   },
   "productivity/issues": {
     "version": "1.1.0",
     "sha256": "86b00cee603265e8"
   },
   "productivity/reminders": {
-    "version": "1.1.0",
-    "sha256": "e7bd4e1e2962d2cf"
+    "version": "1.1.1",
+    "sha256": "c94a2971abd6bfef"
   },
   "productivity/tasks": {
     "version": "1.1.0",

@@ -3,7 +3,7 @@
   "id": "com.kernl.crm",
   "slug": "crm",
   "name": "CRM",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Contacts, companies, leads — the people graph.",
   "author": "Kernl",

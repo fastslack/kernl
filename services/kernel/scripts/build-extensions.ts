@@ -225,7 +225,22 @@ function buildFrontends(): void {
     const slug = extDir.slice(EXT_DIR.length + 1);
     const outfile = resolve(extDir, "frontend/entry.js");
     if (existsSync(outfile)) {
-      const srcMtime = newestMtime(resolve(extDir, "frontend/src"));
+      // `_shared/` counts as source. Almost every page imports from it —
+      // KernlPlayer, the Panel/Badge components, sanitize, i18n — so a change
+      // there changes the bundle just as surely as editing the page itself.
+      //
+      // Comparing against frontend/src alone declared an extension whose own
+      // files had not moved "fresh", and never rebuilt it. When the shared
+      // player changed, tv and torrents kept shipping the previous one — and
+      // nothing noticed, because the version guard below hashes whatever is on
+      // disk: an artefact that was never regenerated still matches its own
+      // recorded hash and reports no drift. Measured across 29 bundles, the
+      // two that had not rebuilt were exactly the two whose own sources were
+      // untouched while `_shared/media/KernlPlayer.svelte` moved.
+      const srcMtime = Math.max(
+        newestMtime(resolve(extDir, "frontend/src")),
+        newestMtime(resolve(EXT_DIR, "_shared")),
+      );
       if (statSync(outfile).mtimeMs >= srcMtime) { fresh++; continue; }
     }
     try {
