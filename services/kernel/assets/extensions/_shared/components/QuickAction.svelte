@@ -17,8 +17,8 @@
   }
 </script>
 
-<button class="quick-action qa-{variant}" on:click={handleClick}>
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+<button type="button" class="quick-action qa-{variant}" on:click={handleClick}>
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
     <path d={icon} />
   </svg>
   <span>{label}</span>
@@ -35,12 +35,27 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     cursor: pointer;
-    transition: all 0.2s;
+    /* Explicit property list: `transition: all` also animates border-color on
+       every variant swap and fights the focus ring. */
+    transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease;
     min-width: 100px;
+    touch-action: manipulation;
   }
   .quick-action:hover {
     transform: translateY(-2px);
     box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  }
+  .quick-action:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .quick-action {
+      transition: box-shadow 0.2s ease, border-color 0.2s ease;
+    }
+    .quick-action:hover {
+      transform: none;
+    }
   }
   .quick-action svg {
     width: 24px;

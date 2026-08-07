@@ -77,4 +77,16 @@
     background: var(--surface-3);
     transform: translateY(-1px);
   }
+  .empty-cta:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .empty-cta {
+      transition: border-color 0.15s ease, background 0.15s ease;
+    }
+    .empty-cta:hover {
+      transform: none;
+    }
+  }
 </style>
