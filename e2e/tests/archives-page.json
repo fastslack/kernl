@@ -1,0 +1,10 @@
+[{"name":"Archives tab renders the catalogue with provenance","actions":[
+ {"type":"goto","value":"http://localhost:3086/login"},
+ {"type":"evaluate","value":"localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','en'); 'ok'"},
+ {"type":"goto","value":"http://localhost:3086/archives"},
+ {"type":"wait","selector":".grid"},
+ {"type":"wait","value":"3000"},
+ {"type":"assert_text","text":"Library of Congress"},
+ {"type":"assert_text","text":"Europeana"},
+ {"type":"screenshot","value":"archives-page"}
+],"expect":["A grid of archive items with thumbnails, year and holding institution","Both sources are listed; Europeana explains it needs an API key","Each card links to the institution"]}]
