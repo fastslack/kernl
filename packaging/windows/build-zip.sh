@@ -34,6 +34,10 @@ cp "$SRC_TREE/bin/bun.exe"       "$PKG_DIR/bun.exe"
 cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 [ -d "$SRC_TREE/bin/static" ]     && cp -a "$SRC_TREE/bin/static"     "$PKG_DIR/"
 [ -d "$SRC_TREE/bin/extensions" ] && cp -a "$SRC_TREE/bin/extensions" "$PKG_DIR/"
+# whisper.cpp + its DLLs, flat, beside mcp-server.js — see the note in
+# macos/build-app.sh. Windows makes this one easy: the default DLL search
+# order already starts with the executable's own directory.
+[ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$PKG_DIR/"
 cp -a "$SRC_TREE/node_modules" "$PKG_DIR/"
 cp -a "$SRC_TREE/dashboard"    "$PKG_DIR/"
 cp -a "$SRC_TREE/assets"       "$PKG_DIR/"

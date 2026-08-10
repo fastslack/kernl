@@ -137,6 +137,12 @@ cp "$SRC_TREE/bin/$BUN_EXE"      "$APP_BUNDLE/Contents/Resources/bun"
 cp "$SRC_TREE/bin/mcp-server.js" "$APP_BUNDLE/Contents/Resources/"
 [ -d "$SRC_TREE/bin/static" ]     && cp -a "$SRC_TREE/bin/static"     "$APP_BUNDLE/Contents/Resources/"
 [ -d "$SRC_TREE/bin/extensions" ] && cp -a "$SRC_TREE/bin/extensions" "$APP_BUNDLE/Contents/Resources/"
+# whisper.cpp + its dylibs, as ONE flat directory beside mcp-server.js.
+# media-tools.ts resolves it relative to the bundled entry point, which is
+# what makes the same code work here, in /opt/kernl/bin on Linux, and at the
+# zip root on Windows. Do not split the dylibs out into a lib/ folder: the GPU
+# backends are dlopen-ed and the loader looks beside the executable.
+[ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/node_modules" "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/dashboard"    "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/assets"       "$APP_BUNDLE/Contents/Resources/"

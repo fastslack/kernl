@@ -100,6 +100,60 @@ else
 fi
 chmod 0755 "$SRC_TREE/bin/$BUN_EXE"
 
+# ── 2b) Vendor whisper.cpp for the target platform ──────────────────
+# Subtitles are the one feature that was silently PATH-dependent: the Docker
+# image apt-installs whisper.cpp, but a native install got whatever the user
+# happened to have, which for almost everyone was nothing. media-tools.ts
+# turned the resulting spawn ENOENT into a readable sentence; this makes the
+# sentence unnecessary.
+#
+# The bundles come from .github/workflows/whisper-binaries.yml — built there
+# rather than downloaded from upstream because the flags we need
+# (GGML_BACKEND_DL + GGML_CPU_ALL_VARIANTS: every GPU backend dlopen-ed at
+# runtime, every x86 CPU generation compiled side by side) are not something
+# anyone publishes.
+#
+# EVERYTHING GOES IN ONE FLAT DIRECTORY, deliberately. BACKEND_DL loads the
+# GPU backends with dlopen, which looks beside the executable and does NOT
+# consult LD_LIBRARY_PATH. A bin/ + lib/ split — the layout the Dockerfile
+# uses — makes the process abort with `GGML_ASSERT(device) failed` before it
+# reaches any audio.
+#
+# Best-effort: a release without the asset yet still produces a working
+# package, it just falls back to the user's PATH exactly as before. Failing
+# the build here would mean a whisper.cpp bump could block a Kernl release.
+WHISPER_BIN_TAG="${WHISPER_BIN_TAG:-whisper-v1.9.2}"
+WHISPER_TARBALL="whisper-${PLATFORM}.tar.gz"
+WHISPER_URL="https://github.com/${GITHUB_REPOSITORY:-fastslack/kernl}/releases/download/${WHISPER_BIN_TAG}/${WHISPER_TARBALL}"
+
+if [ -n "${WHISPER_BUNDLE_DIR:-}" ] && [ -d "$WHISPER_BUNDLE_DIR" ]; then
+  # Escape hatch for local builds and for CI jobs that just built the bundle
+  # in the same run: point at a directory instead of hitting the network.
+  echo "▶ vendoring whisper from $WHISPER_BUNDLE_DIR"
+  mkdir -p "$SRC_TREE/bin/whisper"
+  cp -a "$WHISPER_BUNDLE_DIR/." "$SRC_TREE/bin/whisper/"
+else
+  echo "▶ downloading whisper bundle ($PLATFORM, $WHISPER_BIN_TAG)"
+  TMP_W="$(mktemp -d)"
+  if curl -fsSL -o "$TMP_W/w.tar.gz" "$WHISPER_URL"; then
+    tar xzf "$TMP_W/w.tar.gz" -C "$TMP_W"
+    mkdir -p "$SRC_TREE/bin/whisper"
+    cp -a "$TMP_W/whisper/." "$SRC_TREE/bin/whisper/"
+  else
+    echo "  WARN: no whisper bundle at $WHISPER_URL"
+    echo "  WARN: package will fall back to whisper-cli on the user's PATH"
+  fi
+  rm -rf "$TMP_W"
+fi
+
+if [ -d "$SRC_TREE/bin/whisper" ]; then
+  case "$PLATFORM" in
+    win-x64) chmod 0755 "$SRC_TREE/bin/whisper/whisper-cli.exe" 2>/dev/null || true ;;
+    *)       chmod 0755 "$SRC_TREE/bin/whisper/whisper-cli"     2>/dev/null || true ;;
+  esac
+  echo "  whisper bundle: $(du -sh "$SRC_TREE/bin/whisper" | cut -f1)"
+fi
+
 # ── 3) Bundled kernel JS + static + built extensions ───────────────
 cp services/kernel/dist/mcp-server.js "$SRC_TREE/bin/mcp-server.js"
 [ -d services/kernel/dist/static ]     && cp -a services/kernel/dist/static     "$SRC_TREE/bin/static"

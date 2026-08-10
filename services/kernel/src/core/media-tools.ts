@@ -19,6 +19,8 @@
 
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -71,10 +73,48 @@ const SPECS: Record<MediaTool, ToolSpec> = {
   },
 };
 
-/** Resolved binary name for a tool, honouring its env override. */
+/**
+ * Binaries we ship ourselves, laid out beside the bundled entry point.
+ *
+ * The native packagers all end up with the same shape even though they get
+ * there differently — deb and rpm copy `bin/` wholesale to /opt/kernl/bin,
+ * the macOS packager flattens it into Contents/Resources, the Windows one
+ * into the zip root — so resolving relative to this module's own file works
+ * for all three without a per-platform table.
+ *
+ * The directory is flat on purpose. whisper.cpp is built with GGML_BACKEND_DL,
+ * which dlopens each GPU backend, and dlopen looks beside the executable
+ * rather than down LD_LIBRARY_PATH; separating the libraries into a lib/
+ * makes it abort with `GGML_ASSERT(device) failed`.
+ *
+ * Returns null when there is no bundle — running from source, or a package
+ * built before the whisper asset existed. Both fall back to PATH.
+ */
+function bundledToolPath(tool: MediaTool): string | null {
+  if (tool !== "whisper-cli") return null;
+  const exe = process.platform === "win32" ? "whisper-cli.exe" : "whisper-cli";
+  try {
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const candidate = path.join(here, "whisper", exe);
+    return existsSync(candidate) ? candidate : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Resolved binary for a tool.
+ *
+ * Order matters: an explicit env override wins, then whatever we shipped,
+ * then PATH. The override staying on top is what lets someone who built their
+ * own whisper — with CUDA, say, which we deliberately do not ship — point at
+ * it without unpacking ours.
+ */
 export function mediaToolBin(tool: MediaTool): string {
   const spec = SPECS[tool];
-  return process.env[spec.envVar]?.trim() || spec.defaultBin;
+  const override = process.env[spec.envVar]?.trim();
+  if (override) return override;
+  return bundledToolPath(tool) ?? spec.defaultBin;
 }
 
 /**

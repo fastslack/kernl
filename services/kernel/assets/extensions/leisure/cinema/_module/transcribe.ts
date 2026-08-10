@@ -11,6 +11,11 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "../../../../../src/core/logger.js";
 import { mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
+import {
+  parseBackendLog,
+  pickBackend,
+  recordObservedBackends,
+} from "../../../../../src/core/compute-backend.js";
 import type { SubCue } from "./subtitles.js";
 import { parseSubs, dropRepeatRuns } from "./subtitles.js";
 
@@ -353,6 +358,19 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
     await new Promise<void>((resolve, reject) => {
       const proc: ChildProcess = spawn(WHISPERCPP_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
       let stderr = "";
+      // Which backend actually ran, surfaced in the same one-word slot the
+      // extract phase uses for "ffmpeg". ggml announces this once at startup,
+      // before any audio is processed:
+      //
+      //   load_backend: loaded CUDA backend from …/libggml-cuda.so
+      //   load_backend: loaded CPU backend from …/libggml-cpu-zen4.so
+      //
+      // Worth showing because the alternative is invisible: a GPU library
+      // that fails to load is skipped silently, and the only symptom is that
+      // a film takes half an hour instead of a minute. "cpu" sitting under
+      // the progress bar on a machine with a graphics card is a bug report
+      // the user can file without knowing any of this.
+      let backendHint = "";
       // whisper.cpp's -pp lines are written to STDERR (not stdout) — the
       // previous code grepped the wrong stream, which is why the bar always
       // stayed at 0% and fell through to the wall-clock estimate.
@@ -368,6 +386,7 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
               frac,
               processedSec,
               totalSec: probedSec ?? undefined,
+              hint: backendHint || undefined,
             });
           }
         }
@@ -376,6 +395,23 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
       proc.stderr?.on("data", (b: Buffer) => {
         const chunk = b.toString();
         stderr += chunk;
+        // Parse against the accumulated buffer, not the chunk: the backend
+        // lines arrive early and can be split across reads. Only resolve once
+        // — after that `backendHint` is set and this is a cheap string test.
+        if (!backendHint) {
+          const seen = parseBackendLog(stderr);
+          if (seen.backends.length > 0) {
+            backendHint = pickBackend(seen.backends);
+            recordObservedBackends(stderr);
+            log.info(`whisper.cpp running on ${backendHint}`);
+            emit?.({
+              subPhase: "transcribe",
+              frac: 0,
+              totalSec: probedSec ?? undefined,
+              hint: backendHint,
+            });
+          }
+        }
         handleProgressChunk(chunk);
       });
       proc.on("error", (e) => reject(mediaToolError("whisper-cli", e)));
