@@ -382,7 +382,7 @@ interface LegacyCandidate {
 function enumerateLegacyKeyCandidates(target: string): LegacyCandidate[] {
   const out: LegacyCandidate[] = [];
   const wEngines = ["whispercpp", "transformers", "groq"] as const;
-  const wModels  = ["tiny", "base", "small", "medium", "large-v3"] as const;
+  const wModels  = ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"] as const;
   const tEngines = ["lmstudio", "ollama", "grok", "nllb"] as const;
   const langs    = ["en", "es", "fr", "pt", "de", "it", "ja", "zh", "ko"] as const;
 
@@ -950,8 +950,8 @@ export function registerCinemaMediaRoutes(
       const wModelParam = url.searchParams.get("transcribe_model") ?? "base";
       const wEngine: TranscribeEngine = ["whispercpp", "transformers", "groq"].includes(wEngineParam)
         ? (wEngineParam as TranscribeEngine) : "whispercpp";
-      const wModel = (["tiny", "base", "small", "medium", "large-v3"].includes(wModelParam) ? wModelParam : "base") as
-        "tiny" | "base" | "small" | "medium" | "large-v3";
+      const wModel = (["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"].includes(wModelParam) ? wModelParam : "base") as
+        "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
       // Legacy translate_engine values (grok/lmstudio/ollama/openai/claude)
       // all collapse to "llm" — the chain at /models picks the actual
       // provider and falls back automatically on quota/auth errors.
@@ -1164,7 +1164,7 @@ export function registerCinemaMediaRoutes(
       const target = url.searchParams.get("url") ?? "";
       const engineParam = (url.searchParams.get("engine") ?? "transformers").toLowerCase();
       const model = (url.searchParams.get("model") ?? "base") as
-        "tiny" | "base" | "small" | "medium" | "large-v3";
+        "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
       const language = url.searchParams.get("lang") || undefined;
 
       const engine: TranscribeEngine = ["whispercpp", "transformers", "groq"].includes(engineParam)
@@ -1468,7 +1468,7 @@ export function registerCinemaMediaRoutes(
         version: ffmpeg.version,
         hint: ffmpeg.available ? undefined : `${ffmpeg.reason}. ${ffmpeg.hint}`,
       },
-      models: ["tiny", "base", "small", "medium", "large-v3"],
+      models: ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"],
     });
   });
 

@@ -48,7 +48,11 @@ export interface TranscribeOpts {
   /** ISO-639-1 hint, e.g. "en". Empty = auto-detect (slower). */
   language?: string;
   /** Whisper model size. Affects all engines. */
-  model?: "tiny" | "base" | "small" | "medium" | "large-v3";
+  /** `large-v3-turbo` is the one to reach for on a GPU: roughly six times
+   *  faster than large-v3 for one to two points of accuracy, and accurate
+   *  enough that the repetition loop `-mc 0` and `-sns` exist to contain
+   *  stops happening on old, music-heavy prints. */
+  model?: "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
   /** Optional progress callback — fires as each sub-phase advances. */
   onProgress?: (p: TranscribeProgress) => void;
   signal?: AbortSignal;
