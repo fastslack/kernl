@@ -25,6 +25,7 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { Notifier } from "../../core/notify/notifier.js";
 import type { KernelConfig } from "../../core/config.js";
+import type { AgentDriverResult } from "../../core/types.js";
 import { log } from "../../core/logger.js";
 import { safeQuery, safeQueryOne } from "../../core/db/query-helpers.js";
 import { messagesFor, localeFor } from "./builtin-messages.js";
@@ -46,7 +47,12 @@ import { DEFAULT_STORE_URL } from "../store/index.js";
 
 // ── Types ──────────────────────────────────────
 
-export type BuiltinHandler = () => Promise<string>;
+/**
+ * A no-LLM handler body. Returning a string means the run SUCCEEDED; returning
+ * `{ ok: false, error }` (or throwing) marks the run failed and feeds the
+ * auto-pause circuit breaker. See `./driver-result.ts`.
+ */
+export type BuiltinHandler = () => Promise<AgentDriverResult>;
 
 export interface BuiltinHandlerContext {
   db: SqliteDb;

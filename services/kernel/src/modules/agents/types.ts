@@ -64,6 +64,17 @@ export interface Agent {
    * on demand via `kernel_skill_load(slug)`.
    */
   skills_json?: string;
+  /**
+   * Circuit breaker (migration v41). `consecutive_failures` advances on every
+   * failed run and resets on the first successful one; at
+   * `config.agents.autoPauseThreshold` the agent is auto-paused (`active = 0`)
+   * and the top agent is alerted. `auto_paused_at` is '' unless the breaker is
+   * what paused it — that's how the UI tells an automatic pause from the user
+   * pressing Pause. All three are cleared when the agent is reactivated.
+   */
+  consecutive_failures?: number;
+  auto_paused_at?: string;
+  auto_pause_reason?: string;
   created_at: string;
   updated_at: string;
 }

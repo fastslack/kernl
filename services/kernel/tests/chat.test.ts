@@ -48,7 +48,7 @@ function stubConfig(): KernelConfig {
     },
     resend: { apiKey: "" },
     mcp: { transport: "stdio" },
-    agents: { pollIntervalMs: 30000, maxConcurrentRuns: 3, minScheduleSeconds: 300, internalApiPort: 3087, defaultProvider: "", defaultModel: "", defaultModelChain: [], evalProvider: "", evalModel: "", learningCleanupIntervalMs: 3600000, learningMinConfidence: 0.15, maxInvokeDepth: 5, invokeTimeoutMs: 300000, inboxWakeQuietMs: 300000, subscriptionCooldownMs: 60000, useSemanticRanking: false, semanticRankingCosineWeight: 0.7, semanticRankingMinScore: 0.30 },
+    agents: { pollIntervalMs: 30000, maxConcurrentRuns: 3, minScheduleSeconds: 300, internalApiPort: 3087, defaultProvider: "", defaultModel: "", defaultModelChain: [], evalProvider: "", evalModel: "", learningCleanupIntervalMs: 3600000, learningMinConfidence: 0.15, maxInvokeDepth: 5, autoPauseThreshold: 3, invokeTimeoutMs: 300000, inboxWakeQuietMs: 300000, subscriptionCooldownMs: 60000, useSemanticRanking: false, semanticRankingCosineWeight: 0.7, semanticRankingMinScore: 0.30 },
     telegram: { enabled: false, botToken: "", allowedUserIds: [], defaultChatId: null },
     proactive: { enabled: false, morningTime: "07:00", eveningTime: "21:00" },
     channels: {

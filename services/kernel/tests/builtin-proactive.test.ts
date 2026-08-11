@@ -62,7 +62,10 @@ function makeCtx(opts: { language?: "es" | "en" } = {}): {
 const run = async (ctx: BuiltinHandlerContext, handler: string): Promise<string> => {
   const h = createBuiltinHandlers(ctx).get(handler);
   if (!h) throw new Error(`no builtin handler "${handler}"`);
-  return h();
+  const raw = await h();
+  // These handlers are expected to succeed; a failure shape here is a bug.
+  if (typeof raw !== "string") throw new Error(`handler "${handler}" failed: ${raw.error}`);
+  return raw;
 };
 
 // ── Channel routing ────────────────────────────────────────────────

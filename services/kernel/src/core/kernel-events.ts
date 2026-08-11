@@ -104,6 +104,20 @@ export interface AgentFlowRunCompletedPayload {
   error?: string;
 }
 
+/** Emitted once, when the circuit breaker pauses an agent (see AgentService.recordRunOutcome). */
+export interface AgentAutoPausedPayload {
+  agent_id: string;
+  agent_name: string;
+  /** '' for LLM agents. */
+  builtin_handler: string;
+  consecutive_failures: number;
+  /** Last error line that tripped the breaker. */
+  reason: string;
+  /** Run that produced the final failure. '' when unknown. */
+  run_id: string;
+  paused_at: string;
+}
+
 export interface AgentFlowResultPayload {
   agent_id: string;
   agent_name: string;
@@ -249,6 +263,7 @@ export interface KernelEvents {
   "agent.run.completed": AgentRunPayload & { durationMs: number; success: boolean };
   "agent.run.failed": AgentRunPayload & { error: string };
   "agent.alert": AgentAlertPayload;
+  "agent:auto_paused": AgentAutoPausedPayload;
 
   // Agent flow (real-time execution)
   "agent:flow:run_started": AgentFlowRunStartedPayload;

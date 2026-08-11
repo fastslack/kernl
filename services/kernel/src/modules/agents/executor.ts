@@ -14,6 +14,8 @@ import { RankingService } from "../../core/ranking/service.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 import type { Agent, AgentRun, AgentStep } from "./types.js";
 import type { AgentService } from "./service.js";
+import { normalizeDriverResult, driverThrewOutcome } from "./driver-result.js";
+import type { BuiltinHandler } from "./builtin-handlers.js";
 import type { AltExecutorLike, EvalServiceLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveAgentSystemPrompt, resolveAgentGoalTemplate, resolveAgentLanguage } from "./i18n.js";
@@ -195,8 +197,8 @@ export class AgentExecutor {
   }
 
   /** Builtin handlers — when set, agent.builtin_handler short-circuits LLM path. */
-  private builtinHandlers: Map<string, () => Promise<string>> = new Map();
-  setBuiltinHandlers(handlers: Map<string, () => Promise<string>>): void {
+  private builtinHandlers: Map<string, BuiltinHandler> = new Map();
+  setBuiltinHandlers(handlers: Map<string, BuiltinHandler>): void {
     this.builtinHandlers = handlers;
     log.info(`AgentExecutor: ${handlers.size} builtin handlers registered`);
   }
@@ -241,26 +243,40 @@ export class AgentExecutor {
         run_id: run.id,
         goal,
       });
-      try {
-        const result = await handler();
-        events?.emit("agent:flow:run_completed", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          status: "completed", steps_count: 1, tokens_used: 0,
-          result_preview: result.slice(0, 200),
+      // Same normalization as the scheduler's cron path: a handler that throws
+      // or returns { ok: false } fails the run, and either way the outcome
+      // feeds the persistent circuit breaker. Manual "Run now" must count
+      // exactly like a scheduled run — otherwise a broken agent could be kept
+      // alive (or paused) depending only on who triggered it.
+      const outcome = await handler()
+        .then((raw) => normalizeDriverResult(raw))
+        .catch((err) => {
+          log.error(`Builtin handler "${agent.builtin_handler}" threw:`, err);
+          return driverThrewOutcome(err);
         });
-        this.activeRuns.delete(run.id);
-        return { status: "completed", result, error: "", steps_count: 1, tokens_used: 0 };
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        log.error(`Builtin handler "${agent.builtin_handler}" failed:`, err);
-        events?.emit("agent:flow:run_completed", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          status: "failed", steps_count: 1, tokens_used: 0,
-          error: errMsg,
-        });
-        this.activeRuns.delete(run.id);
-        return { status: "failed", result: "", error: errMsg, steps_count: 1, tokens_used: 0 };
+
+      events?.emit("agent:flow:run_completed", {
+        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+        status: outcome.ok ? "completed" : "failed", steps_count: 1, tokens_used: 0,
+        result_preview: outcome.text.slice(0, 200),
+        error: outcome.error,
+      });
+      service.recordRunOutcome(agent.id, {
+        ok: outcome.ok,
+        error: outcome.error,
+        run_id: run.id,
+      });
+      this.activeRuns.delete(run.id);
+      if (!outcome.ok) {
+        log.error(`Builtin handler "${agent.builtin_handler}" failed — ${outcome.error}`);
       }
+      return {
+        status: outcome.ok ? "completed" : "failed",
+        result: outcome.text,
+        error: outcome.error,
+        steps_count: 1,
+        tokens_used: 0,
+      };
     }
 
     // Route a claude_code agents al SDK — keep declarative chains/auto-eval

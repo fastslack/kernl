@@ -105,6 +105,12 @@ export interface KernelConfig {
     learningMinConfidence: number;
     /** Max recursion depth for kernel_agents_invoke chains. */
     maxInvokeDepth: number;
+    /**
+     * Circuit breaker: consecutive failed runs before an agent is auto-paused
+     * (`active = 0`) and the top agent is alerted. Any successful run resets
+     * the counter. 0 disables auto-pausing entirely.
+     */
+    autoPauseThreshold: number;
     /** Hard timeout (ms) on a single kernel_agents_invoke await. */
     invokeTimeoutMs: number;
     /**
@@ -424,6 +430,7 @@ export function loadConfig(): KernelConfig {
       learningCleanupIntervalMs: parseInt(process.env.AGENTS_LEARNING_CLEANUP_INTERVAL_MS ?? "3600000", 10),
       learningMinConfidence: parseFloat(process.env.AGENTS_LEARNING_MIN_CONFIDENCE ?? "0.15"),
       maxInvokeDepth: parseInt(process.env.AGENTS_MAX_INVOKE_DEPTH ?? "5", 10),
+      autoPauseThreshold: parseInt(process.env.AGENTS_AUTO_PAUSE_THRESHOLD ?? "3", 10),
       invokeTimeoutMs: parseInt(process.env.AGENTS_INVOKE_TIMEOUT_MS ?? "300000", 10),
       inboxWakeQuietMs: parseInt(process.env.AGENTS_INBOX_WAKE_QUIET_MS ?? "300000", 10),
       subscriptionCooldownMs: parseInt(process.env.AGENTS_SUBSCRIPTION_COOLDOWN_MS ?? "60000", 10),

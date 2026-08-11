@@ -1,4 +1,4 @@
-import type { AgentDriver, KernelModule, ModuleContext, ResourceProvider, ToolDefinition } from "./types.js";
+import type { AgentDriver, AgentDriverResult, KernelModule, ModuleContext, ResourceProvider, ToolDefinition } from "./types.js";
 import type { DashboardRegistry } from "./dashboard-registry.js";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { RpcAction } from "./mtw/rpc-handler.js";
@@ -322,8 +322,8 @@ export class ModuleRegistry {
    * Same defensive style as collectAgentHandlers(): a module whose
    * getAgentDrivers() throws is skipped with a warning, never fatal.
    */
-  collectAgentDrivers(): { handlers: Map<string, () => Promise<string>>; defs: AgentDriver[] } {
-    const handlers = new Map<string, () => Promise<string>>();
+  collectAgentDrivers(): { handlers: Map<string, () => Promise<AgentDriverResult>>; defs: AgentDriver[] } {
+    const handlers = new Map<string, () => Promise<AgentDriverResult>>();
     const defs: AgentDriver[] = [];
     for (const mod of this.modules) {
       if (!this.initializedModules.has(mod.name)) continue;
