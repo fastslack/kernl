@@ -215,7 +215,19 @@ function buildFrontends(): void {
     : resolve(ROOT, "../dashboard");
   const builder = resolve(dashboardDir, "scripts/build-ext-frontend.mjs");
   if (!existsSync(resolve(dashboardDir, "node_modules"))) {
-    console.warn(`[build-extensions] frontend: dashboard/node_modules missing — skipping ${frontendDirs.length} frontend bundle(s) (run \`bun install\` in services/dashboard)`);
+    const msg = `frontend: dashboard/node_modules missing — ${frontendDirs.length} frontend bundle(s) cannot be built (run \`bun install\` in services/dashboard)`;
+    // Locally this is a warning: someone building only the backend should not
+    // be forced to install the dashboard's toolchain.
+    //
+    // In CI it is fatal. Skipping here produced a green release whose .deb and
+    // .rpm carried no extension pages at all — every page 404'd on install,
+    // and nothing in the build said so. A packaging job that cannot build what
+    // it is supposed to package has failed, however cleanly it exits.
+    if (process.env.CI) {
+      console.error(`[build-extensions] ${msg}`);
+      process.exit(1);
+    }
+    console.warn(`[build-extensions] ${msg}`);
     return;
   }
 

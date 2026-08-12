@@ -75,8 +75,15 @@ jobs:
 
       - name: Build kernel + dashboard
         run: |
-          (cd services/kernel && npm run build)
+          # Dashboard FIRST. `npm run build` in services/kernel ends in
+          # build-extensions, which compiles each extension page with the
+          # dashboard's toolchain — and when services/dashboard/node_modules
+          # is absent it skips every frontend bundle, warns, and exits 0.
+          # Built in the other order this job produced .deb and .rpm packages
+          # with no extension pages at all, and the release went green.
+          # The macOS and Windows jobs already order it this way.
           (cd services/dashboard && npm ci --no-audit --no-fund && npm run build)
+          (cd services/kernel && npm run build)
 
       - name: Build RPM
         run: PLATFORM=linux-x64 packaging/rpm/build-rpm.sh
