@@ -39,6 +39,7 @@ export class Neo4jGraphDriver implements GraphDriver {
   private connected = false;
   private gdsAvailable = false;
   private gdsVersion: string | null = null;
+  private nativeVectorAvailable = false;
   private config: Neo4jDriverConfig | null = null;
   private lastError: string | null = null;
 
@@ -50,7 +51,12 @@ export class Neo4jGraphDriver implements GraphDriver {
     return {
       cypher,
       gds,
-      vectorSimilarity: gds, // gds.similarity.cosine ships with GDS Community.
+      // Vector similarity is NOT a GDS-only feature: Neo4j ships
+      // `vector.similarity.cosine()` and native vector indexes in the core
+      // product (5.13+). Gating this on GDS used to deny a capability the
+      // server actually had, so it is probed directly instead — either source
+      // (native or GDS) satisfies it.
+      vectorSimilarity: cypher && (this.nativeVectorAvailable || this.gdsAvailable),
       mlPipelines: gds,      // Pipelines need GDS too (some are Enterprise-only,
                              // but we don't probe license here — the query fails
                              // loudly enough at runtime).
@@ -112,9 +118,35 @@ export class Neo4jGraphDriver implements GraphDriver {
 
   // ── Lifecycle ─────────────────────────────────────────────────────
 
+  /**
+   * Connection settings from the environment, or null when they're not fully
+   * present. Mirrors the `NEO4J_*` block in `core/config.ts` — the same three
+   * variables the shipped compose passes to the kernel.
+   */
+  canSelfConfigure(): boolean {
+    return this.envConfig() !== null;
+  }
+
+  private envConfig(): Neo4jDriverConfig | null {
+    const uri = (process.env.NEO4J_URI ?? "").trim();
+    const user = (process.env.NEO4J_USER ?? "").trim();
+    const password = process.env.NEO4J_PASSWORD ?? "";
+    if (!uri || !user || !password) return null;
+    return { uri, user, password };
+  }
+
   async start(): Promise<void> {
     if (!this.config) {
-      throw new Error("Neo4jGraphDriver: configure() must be called before start()");
+      // Nothing saved through /extensions yet. The bundled compose already
+      // sets NEO4J_URI/USER/PASSWORD and starts a Neo4j alongside the kernel,
+      // so falling back to those makes the shipped stack reach its own graph
+      // instead of failing activation and silently staying on the noop driver.
+      const fromEnv = this.envConfig();
+      if (!fromEnv) {
+        throw new Error("Neo4jGraphDriver: configure() must be called before start()");
+      }
+      this.config = fromEnv;
+      log.info(`Neo4jGraphDriver: no stored config — using NEO4J_* environment (${fromEnv.uri})`);
     }
     this.lastError = null;
     try {
@@ -132,11 +164,13 @@ export class Neo4jGraphDriver implements GraphDriver {
       this.connected = true;
       log.info(`Neo4jGraphDriver connected: ${this.config.uri}`);
       await this.probeGds();
+      await this.probeNativeVectors();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.lastError = msg;
       this.connected = false;
       this.gdsAvailable = false;
+      this.nativeVectorAvailable = false;
       log.warn(`Neo4jGraphDriver: start failed — ${msg}`);
       // Don't rethrow — the registry treats start() failures as "not ready"
       // and the rest of the system continues with capabilities all-false.
@@ -167,6 +201,33 @@ export class Neo4jGraphDriver implements GraphDriver {
     }
   }
 
+  /**
+   * Detect the core product's vector functions. Probed rather than inferred
+   * from a version string so the flag stays honest on any build that ships
+   * them (and on any that quietly drops them). Same tolerate-everything shape
+   * as `probeGds`.
+   */
+  private async probeNativeVectors(): Promise<void> {
+    if (!this.driver || !this.connected) return;
+    const session = this.driver.session();
+    try {
+      const result = await session.run(
+        "RETURN vector.similarity.cosine([1.0, 0.0], [1.0, 0.0]) AS score",
+      );
+      this.nativeVectorAvailable = result.records[0]?.get("score") != null;
+      if (this.nativeVectorAvailable) {
+        log.info("Neo4jGraphDriver: native vector functions detected");
+      } else {
+        log.info("Neo4jGraphDriver: native vector functions absent");
+      }
+    } catch {
+      this.nativeVectorAvailable = false;
+      log.info("Neo4jGraphDriver: native vector probe failed — falling back to GDS, if present");
+    } finally {
+      await session.close().catch(() => {});
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.driver) {
       await this.driver.close().catch(() => {});
@@ -175,6 +236,7 @@ export class Neo4jGraphDriver implements GraphDriver {
     this.connected = false;
     this.gdsAvailable = false;
     this.gdsVersion = null;
+    this.nativeVectorAvailable = false;
     log.info("Neo4jGraphDriver stopped");
   }
 

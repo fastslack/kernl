@@ -76,6 +76,15 @@ export interface BaseDbDriver {
   validateConfig(config: Record<string, unknown>): { valid: boolean; errors?: string[] };
   /** Apply config — called once before start(). */
   configure(config: Record<string, unknown>): void;
+  /**
+   * Whether this driver could start with no stored config, because the
+   * environment already describes a backend it can reach. Consulted only when
+   * seeding a fresh install, to pick which driver starts out active — a
+   * deployment that ships a graph server and its credentials should not have to
+   * be switched off the no-op driver by hand. Never overrides an existing
+   * choice. Drivers that always need explicit config may omit it.
+   */
+  canSelfConfigure?(): boolean;
 
   /** Open connection / spawn embedded process / verify reachability. */
   start(): Promise<void>;

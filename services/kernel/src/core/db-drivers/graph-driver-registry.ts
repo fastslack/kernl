@@ -34,6 +34,21 @@ interface RegisteredFactory {
 
 const KIND = "graph" as const;
 
+/**
+ * Whether a factory's driver says the environment already describes a backend
+ * it can reach. Used only to order seeding. Constructing a driver is cheap (no
+ * I/O until `start()`), but a throwing factory must not break seeding, so any
+ * failure just means "no preference".
+ */
+function preferredForSeeding(reg: RegisteredFactory): boolean {
+  if (reg.source !== "builtin") return false;
+  try {
+    return reg.factory().canSelfConfigure?.() === true;
+  } catch {
+    return false;
+  }
+}
+
 export class GraphDriverRegistry {
   private factories = new Map<string, RegisteredFactory>();
   private drivers = new Map<string, GraphDriver>();
@@ -135,14 +150,25 @@ export class GraphDriverRegistry {
 
   /**
    * Seed a stub `installed_extensions` row for every built-in factory that
-   * lacks one. The first built-in seeded becomes `status='active'`; later
-   * ones are seeded as `status='installed'`. Idempotent — re-running doesn't
-   * change existing rows.
+   * lacks one. Exactly one seeded row becomes `status='active'`; the rest are
+   * seeded as `status='installed'`. Idempotent — re-running doesn't change
+   * existing rows, so this never overrides a driver the operator picked.
+   *
+   * Preference goes to a driver that reports `canSelfConfigure()` — i.e. the
+   * environment already points at a backend it can reach. Without that, a
+   * stack that ships a graph server and its credentials would still seed the
+   * no-op driver active (whichever factory happened to register first) and
+   * every graph write would silently do nothing until someone noticed.
    */
   seedBuiltinRows(): void {
     if (!this.db) return;
     let anyActiveSeeded = this.hasActiveRow();
-    for (const [slug, reg] of this.factories) {
+    const ordered = [...this.factories].sort(([, a], [, b]) => {
+      const selfA = preferredForSeeding(a) ? 0 : 1;
+      const selfB = preferredForSeeding(b) ? 0 : 1;
+      return selfA - selfB;
+    });
+    for (const [slug, reg] of ordered) {
       if (reg.source !== "builtin") continue;
       try {
         const existing = this.db

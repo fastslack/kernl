@@ -221,9 +221,23 @@ services:
       # this at 8+ chars, and in sync with NEO4J_PASSWORD above and the
       # healthcheck below.
       NEO4J_AUTH: neo4j/kernlgraph
-      NEO4J_server_memory_heap_initial__size: 256m
-      NEO4J_server_memory_heap_max__size: 512m
-      NEO4J_server_memory_pagecache_size: 256m
+      # Graph Data Science. The image resolves a version compatible with the
+      # tag above and downloads it on first boot, so this needs outbound
+      # network once; set NEO4J_PLUGINS=[] to run without it (graph analytics
+      # go dark, plain Cypher and native vector search are unaffected).
+      NEO4J_PLUGINS: '${NEO4J_PLUGINS:-["graph-data-science"]}'
+      # Defaults stay small so the quick start fits a modest host. Raise them
+      # in .env once the graph holds real volume — GDS projections live in the
+      # heap, so analytics on a large graph is what usually needs the room.
+      # What the server tells Browser to connect to. Without this it advertises
+      # its own internal 7687, which on the host is whatever else is listening
+      # there — on a machine running a second Neo4j, Browser silently opens the
+      # wrong database. Must match the published bolt port below. Only affects
+      # what clients are told; the kernel dials bolt://neo4j:7687 directly.
+      NEO4J_server_bolt_advertised__address: localhost:${NEO4J_BOLT_PORT:-17687}
+      NEO4J_server_memory_heap_initial__size: ${NEO4J_HEAP_INITIAL:-256m}
+      NEO4J_server_memory_heap_max__size: ${NEO4J_HEAP_MAX:-512m}
+      NEO4J_server_memory_pagecache_size: ${NEO4J_PAGECACHE:-256m}
     # Health shows in `docker compose ps`; the kernel does NOT block on it (it
     # degrades gracefully), so a dead Neo4j never wedges startup.
     healthcheck:
@@ -232,6 +246,14 @@ services:
       timeout: 10s
       retries: 10
       start_period: 45s
+    # Neo4j Browser + Bolt, on loopback only. The kernel reaches Neo4j over the
+    # compose network and needs none of this; it is here so a human can open the
+    # browser and read the graph. Non-default host ports keep it clear of a
+    # second Neo4j on the same machine, and 127.0.0.1 keeps the database off the
+    # network — the password lives in this file, so it must not be reachable.
+    ports:
+      - "127.0.0.1:${NEO4J_HTTP_PORT:-17474}:7474"
+      - "127.0.0.1:${NEO4J_BOLT_PORT:-17687}:7687"
     volumes:
       - neo4j-data:/data
       - neo4j-logs:/logs

@@ -44,6 +44,7 @@ import { registerCinemaFriendsRoutes } from "./friends-routes.js";
 import { registerCinemaMediaRoutes } from "./media-routes.js";
 import { cinemaTools } from "./tools.js";
 import { EmbedRunner } from "./embed-runner.js";
+import { GraphProjectionRunner } from "./graph-projection-runner.js";
 import { TranslateRunner } from "./translate-runner.js";
 import { CanonicalService } from "./canonical/service.js";
 import { CanonicalRunner } from "./canonical/runner.js";
@@ -62,6 +63,7 @@ export interface CinemaModule extends ExtensibleModule {
   getDirectoriesProvider(): NostrDirectoriesProvider | null;
   getDiscoveryRegistry(): DiscoveryRegistry | null;
   getEmbedRunner(): EmbedRunner | null;
+  getGraphProjectionRunner(): GraphProjectionRunner | null;
   getTranslateRunner(): TranslateRunner | null;
   /** Wire the semantic-search dependencies. Called from index.ts AFTER
    *  the embeddings client is created (which itself depends on config
@@ -93,6 +95,7 @@ export function createCinemaModule(): CinemaModule {
   let graphRef: GraphDriver | null = null;
   let embeddingsRef: EmbeddingsClient | null = null;
   let embedRunner: EmbedRunner | null = null;
+  let graphProjectionRunner: GraphProjectionRunner | null = null;
   let translateRunner: TranslateRunner | null = null;
   let canonicalService: CanonicalService | null = null;
   let canonicalRunner: CanonicalRunner | null = null;
@@ -125,6 +128,12 @@ export function createCinemaModule(): CinemaModule {
       // stop / status) drive it. Lazy-resolves embedder + graph at run
       // time so it picks up post-bootstrap wiring.
       embedRunner = new EmbedRunner(service, () => embeddingsRef, () => graphRef);
+      // GraphProjectionRunner — projects the catalogue's structure (release
+      // groups, canonical identities, people, genres, subjects) into Neo4j as
+      // nodes and edges. Independent of the embedder: it MERGEs onto the same
+      // (:CinemaTitle) nodes, so vectors and edges converge without either
+      // pass waiting on the other.
+      graphProjectionRunner = new GraphProjectionRunner(ctx.sqlite, () => graphRef);
       // TranslateRunner — fills cinema_titles.description_es via the
       // kernel-wide llm() chain. No graph/embedder dependency; writes ES
       // text to SQLite and clears each row's embed bookkeeping so the
@@ -239,6 +248,10 @@ export function createCinemaModule(): CinemaModule {
       return embedRunner;
     },
 
+    getGraphProjectionRunner() {
+      return graphProjectionRunner;
+    },
+
     getTranslateRunner() {
       return translateRunner;
     },
@@ -303,6 +316,7 @@ export function createCinemaModule(): CinemaModule {
       const getCanonicalRunner = () => canonicalRunner;
       const getMediaRunner = () => mediaRunner;
       const getSqlite = () => sqliteRef;
+      const getGraphProjectionRunner = () => graphProjectionRunner;
       return {
         // No nav entry yet — /cinema is already registered from the
         // dashboard module's static routes. Stage 3 swaps the data
@@ -315,7 +329,7 @@ export function createCinemaModule(): CinemaModule {
               getGraph, getEmbedder, getRegistry, getEmbedRunner,
               getDirectories, getDirectoriesProvider, getLocalIdentity,
               getTranslateRunner, getCanonical, getCanonicalRunner,
-              getMediaRunner, getSqlite,
+              getMediaRunner, getSqlite, getGraphProjectionRunner,
             );
           }
           // Media-serving layer (archive.org proxy/transcode/probe + subtitle

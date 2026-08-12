@@ -24,6 +24,7 @@ import type { CinemaService } from "./service.js";
 import type { CinemaSubsService, PublisherTrust } from "./subs-service.js";
 import type { DiscoveryRegistry } from "./discovery/registry.js";
 import type { EmbedRunner } from "./embed-runner.js";
+import type { GraphProjectionRunner } from "./graph-projection-runner.js";
 import type { TranslateRunner } from "./translate-runner.js";
 import type { CanonicalService } from "./canonical/service.js";
 import type { CanonicalRunner, CanonicalPhase } from "./canonical/runner.js";
@@ -80,6 +81,7 @@ export function registerCinemaRoutes(
   canonicalRunnerRef: () => CanonicalRunner | null = () => null,
   mediaRunnerRef: () => MediaProbeRunner | null = () => null,
   sqliteRef: () => SqliteDb | null = () => null,
+  graphProjectionRunnerRef: () => GraphProjectionRunner | null = () => null,
 ): void {
   // ── GET /api/cinema/titles ──────────────────────────────────────
   server.get("/api/cinema/titles", async (req, res) => {
@@ -447,6 +449,44 @@ export function registerCinemaRoutes(
     try {
       const runner = embedRunnerRef();
       if (!runner) return server.json(res, 503, { error: "embed runner not wired" });
+      const snap = await runner.stop();
+      server.json(res, 200, snap);
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Catalogue → graph projection ─────────────────────────────────
+  // GET  /api/cinema/graph/status — per-entity cursors + rate
+  // POST /api/cinema/graph/start  { batch_size?, reset? }
+  // POST /api/cinema/graph/stop   (graceful, finishes current batch)
+  server.get("/api/cinema/graph/status", (_req, res) => {
+    try {
+      const runner = graphProjectionRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
+      server.json(res, 200, runner.snapshot());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/start", async (req, res) => {
+    try {
+      const runner = graphProjectionRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
+      const body = await server.parseBody<{ batch_size?: number; reset?: boolean }>(req);
+      const snap = runner.start({ batchSize: body?.batch_size, reset: body?.reset === true });
+      server.json(res, 200, snap);
+    } catch (err) {
+      log.error("cinema: graph projection start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/stop", async (_req, res) => {
+    try {
+      const runner = graphProjectionRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
       const snap = await runner.stop();
       server.json(res, 200, snap);
     } catch (err) {
