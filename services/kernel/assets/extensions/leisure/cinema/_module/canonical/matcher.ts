@@ -23,11 +23,18 @@ import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
 import { normalizeTitle, extractYear, trigrams, diceCoefficient } from "../title-norm.js";
 
 /**
- * Bumped whenever the logic below changes in a way that could produce a
- * different answer. Stored per decision so a re-run can invalidate machine
- * verdicts while leaving human ones untouched.
+ * Bumped whenever anything that could produce a different answer changes.
+ * Stored per decision so a re-run can invalidate machine verdicts while leaving
+ * human ones untouched.
+ *
+ * v3: not a change to the logic below but to what it searches — the Wikidata
+ * corpus gained short films and animated short films (see WORK_TYPES in
+ * canonical/wikidata.ts), ~45k works this catalogue is full of and previously
+ * could not match against. Every `none` reached without them was reached
+ * against an incomplete shelf, so those verdicts are stale in the same way a
+ * logic change would make them stale.
  */
-export const MATCHER_VERSION = 2;
+export const MATCHER_VERSION = 3;
 
 /** At or above this, accept without asking anyone. */
 export const AUTO_FLOOR = 0.95;

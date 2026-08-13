@@ -24,9 +24,8 @@
  *
  * Writes touch only rows the matcher left at `state='none'`. Human verdicts
  * (`confirmed`, `rejected`) and machine ones (`auto`, `review`) are never
- * overwritten, and everything written carries `matcher_version = GRAPH_PROPOSAL_VERSION`
- * so the whole contribution is one `DELETE ... WHERE matcher_version = …` away
- * from being undone.
+ * overwritten, and every row written is tagged `via: graph-fulltext` in its
+ * candidates, so the whole contribution can be withdrawn in one statement.
  */
 
 import { log } from "../../../../../src/core/logger.js";
@@ -37,11 +36,22 @@ import { MATCHER_VERSION, REVIEW_FLOOR, yearFactor } from "./canonical/matcher.j
 import { ALIAS_INDEX } from "./graph-projection.js";
 
 /**
- * Stamped on every row this path writes, well clear of `MATCHER_VERSION` so the
- * two never collide. Provenance is the point: a graph-derived proposal must be
- * distinguishable from a matcher verdict forever, not just until someone forgets.
+ * How a proposal from this path is recognised later.
+ *
+ * Provenance lives in `candidates_json`, not in `matcher_version`. The obvious
+ * move — a high version number, "well clear of MATCHER_VERSION" — is a trap: the
+ * matcher re-evaluates rows whose version is BELOW its own, so a proposal
+ * stamped 1000 would be skipped by every future re-match and outlive the corpus
+ * it was derived from. These rows are guesses awaiting better information, so
+ * they must be the first thing reconsidered, not the last.
+ *
+ * Hence version 0 — "no matcher has ruled on this" — which is exactly true, and
+ * puts the row at the front of the queue the moment the real matcher has
+ * something new to say.
  */
-export const GRAPH_PROPOSAL_VERSION = 1000;
+export const GRAPH_PROPOSAL_MARK = "graph-fulltext";
+/** Rows this path writes claim no matcher verdict. */
+const GRAPH_PROPOSAL_VERSION = 0;
 
 /** Full-text hits to consider per title before scoring. */
 const CANDIDATES_PER_TITLE = 8;
@@ -294,7 +304,7 @@ export async function resolveComponents(
     if (distinctQids.length === 1) {
       unrivalled++;
       const qid = distinctQids[0];
-      const candidatesJson = JSON.stringify([{ qid, via: "graph-fulltext" }]);
+      const candidatesJson = JSON.stringify([{ qid, via: GRAPH_PROPOSAL_MARK }]);
       for (const t of titles) {
         const score = Number(t.score ?? 0);
         insert.run(t.id, qid, score, candidatesJson, now);
@@ -334,7 +344,7 @@ export function revertGraphProposals(db: SqliteDb): number {
       `UPDATE cinema_title_matches
           SET qid = '', score = 0, state = 'none', candidates_json = '[]',
               matcher_version = ${MATCHER_VERSION}
-        WHERE matcher_version = ${GRAPH_PROPOSAL_VERSION} AND state = 'review'`,
+        WHERE state = 'review' AND candidates_json LIKE '%${GRAPH_PROPOSAL_MARK}%'`,
     )
     .run();
   return info.changes ?? 0;
@@ -349,7 +359,7 @@ export function clearStaleProposalStamps(db: SqliteDb): number {
     .prepare(
       `UPDATE cinema_title_matches
           SET matcher_version = ${MATCHER_VERSION}
-        WHERE matcher_version = ${GRAPH_PROPOSAL_VERSION} AND state = 'none'`,
+        WHERE state = 'none' AND candidates_json LIKE '%${GRAPH_PROPOSAL_MARK}%'`,
     )
     .run();
   return info.changes ?? 0;
