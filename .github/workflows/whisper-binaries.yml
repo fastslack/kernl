@@ -83,19 +83,19 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Clone whisper.cpp
-        shell: bash
-        run: git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp src
-
       # ── Vulkan toolchain ────────────────────────────────────────────────
-      # Not needed on macOS, which uses Metal.
+      # FIRST, before anything clones. The linux job runs in a bare bookworm
+      # container with no git until apt installs one, so cloning ahead of this
+      # exits 127 — which is exactly how this failed the first time it ran.
+      # macOS and Windows runners ship git preinstalled, so only linux ever
+      # saw it. Not needed on macOS at all, which uses Metal.
       #
       # spirv-headers and glslang-tools are the two that bite: cmake reports
       # "Found Vulkan ... missing components: glslangValidator" and then fails
       # on a missing SPIRV-HeadersConfig.cmake. libvulkan-dev and glslc alone
       # look sufficient and are not.
-      # No sudo, and no toolchain at all: this runs in a bare bookworm image,
-      # not on the runner.
+      #
+      # No sudo: this is a bare image, not the runner.
       - name: Toolchain + Vulkan deps (linux)
         if: matrix.platform == 'linux-x64'
         run: |
@@ -120,6 +120,12 @@ jobs:
             https://github.com/KhronosGroup/Vulkan-Headers /tmp/vh
           cmake -B /tmp/vh/build -S /tmp/vh -DCMAKE_INSTALL_PREFIX=/usr/local
           cmake --install /tmp/vh/build
+
+      # Now that every platform has a git, clone the source. This sits after
+      # the toolchain steps deliberately — see the note on them.
+      - name: Clone whisper.cpp
+        shell: bash
+        run: git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp src
 
       - name: Vulkan SDK (windows)
         if: matrix.platform == 'win-x64'
