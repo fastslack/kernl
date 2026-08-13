@@ -1,0 +1,22 @@
+{
+  "tests": [
+    {
+      "name": "Legacy /providers URL redirects into Settings → AI",
+      "actions": [
+        {
+          "comment": "Replaces 'Providers Google card renders'. That test waited on `.prov-google-card`, a class that exists nowhere in the codebase any more: /providers is now a stub whose only job is to redirect to /settings?section=ai, and the Google connection UI moved to /mail/accounts. The Gmail reconnect affordance it was really guarding is covered by mail-reauth-banner.json (`.gmail-reauth-banner` on /mail), so what is left worth testing here is that the legacy URL still lands somewhere sane instead of dead-ending.",
+          "$use": "goto-view",
+          "params": { "path": "/providers", "settle": "3000" }
+        },
+        {
+          "type": "evaluate",
+          "value": "document.body.innerText = 'URL ' + location.pathname + location.search; true;"
+        },
+        { "type": "assert_text", "selector": "body", "text": "/settings" },
+        { "type": "assert_text", "selector": "body", "text": "section=ai" },
+        { "type": "screenshot", "value": "providers-redirect" }
+      ],
+      "expect": ["Opening /providers does not dead-end: it redirects to /settings?section=ai, the unified AI section that superseded the old providers page."]
+    }
+  ]
+}

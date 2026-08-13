@@ -34,6 +34,46 @@ export interface ProviderInfo {
 	kind: 'local' | 'sftp' | 's3' | 'webdav' | 'archive';
 	label: string;
 	home?: string;
+	/** Every path this provider serves. Anything outside these is out of scope. */
+	roots?: FsRoot[];
+}
+
+export interface FsRoot {
+	path: string;
+	/** Probed at the kernel: false for :ro mounts, wrong owner, or bad mode. */
+	writable: boolean;
+}
+
+function trimSlash(p: string): string {
+	return p.endsWith('/') && p !== '/' ? p.slice(0, -1) : p;
+}
+
+/** True when `path` sits inside (or is) `root`. */
+export function isUnder(path: string, root: string): boolean {
+	const p = trimSlash(path);
+	const r = trimSlash(root);
+	return p === r || p.startsWith(r === '/' ? '/' : r + '/');
+}
+
+/** True when `path` sits inside any of `roots`. Empty roots means scope unknown. */
+export function isInScope(path: string, roots: FsRoot[]): boolean {
+	if (!roots.length) return true; // do not pretend to know better than the server
+	return roots.some((r) => isUnder(path, r.path));
+}
+
+/**
+ * Whether `path` can be written to.
+ *
+ * Unknown scope is treated as writable: refusing operations because the server
+ * did not tell us anything would break older backends that report no roots.
+ */
+export function isWritable(path: string, roots: FsRoot[]): boolean {
+	if (!roots.length) return true;
+	const owning = roots.filter((r) => isUnder(path, r.path));
+	if (!owning.length) return false; // out of scope entirely
+	// Nested roots: the most specific one wins.
+	owning.sort((a, b) => b.path.length - a.path.length);
+	return owning[0].writable;
 }
 
 export interface Bookmark {
@@ -78,6 +118,46 @@ export interface OpProgress {
 	itemsDone: number;
 }
 
+/**
+ * Structured transport error.
+ *
+ * The UI must never render a raw `GET /api/fs/list?… → 400 {"error":…}` string
+ * at the user: it leaks the transport, is unreadable, and offers no way out.
+ * This carries the pieces separately so the pane can show a human headline, a
+ * recovery action, and the raw detail folded away for debugging.
+ */
+export class FsApiError extends Error {
+	readonly status: number;
+	readonly detail: string;
+	readonly url: string;
+	readonly method: string;
+
+	constructor(method: string, url: string, status: number, detail: string) {
+		super(FsApiError.humanize(status, detail));
+		this.name = 'FsApiError';
+		this.method = method;
+		this.url = url;
+		this.status = status;
+		this.detail = detail;
+	}
+
+	/** Best-effort plain-language headline for a failed FS call. */
+	private static humanize(status: number, detail: string): string {
+		let inner = detail;
+		try {
+			const parsed = JSON.parse(detail) as { error?: string; message?: string };
+			inner = parsed.error ?? parsed.message ?? detail;
+		} catch {
+			// detail was not JSON — use it verbatim
+		}
+		if (/out of allowed scope/i.test(inner)) return 'This path is outside the allowed roots';
+		if (status === 401 || status === 403) return 'Not authorised to read this location';
+		if (status === 404) return 'This location no longer exists';
+		if (status === 0 || status >= 500) return 'The filesystem service is unreachable';
+		return inner || `Request failed (${status})`;
+	}
+}
+
 function authHeaders(): Record<string, string> {
 	const headers: Record<string, string> = {};
 	if (typeof localStorage !== 'undefined') {
@@ -88,19 +168,29 @@ function authHeaders(): Record<string, string> {
 }
 
 async function jsonGet<T>(url: string): Promise<T> {
-	const r = await fetch(url, { headers: authHeaders() });
-	if (!r.ok) throw new Error(`GET ${url} → ${r.status} ${await r.text()}`);
+	let r: Response;
+	try {
+		r = await fetch(url, { headers: authHeaders() });
+	} catch (err) {
+		throw new FsApiError('GET', url, 0, err instanceof Error ? err.message : String(err));
+	}
+	if (!r.ok) throw new FsApiError('GET', url, r.status, await r.text());
 	return r.json() as Promise<T>;
 }
 
 async function jsonSend<T>(url: string, method: string, body?: unknown): Promise<T> {
-	const r = await fetch(url, {
-		method,
-		headers: { 'Content-Type': 'application/json', ...authHeaders() },
-		body: body === undefined ? undefined : JSON.stringify(body)
-	});
+	let r: Response;
+	try {
+		r = await fetch(url, {
+			method,
+			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			body: body === undefined ? undefined : JSON.stringify(body)
+		});
+	} catch (err) {
+		throw new FsApiError(method, url, 0, err instanceof Error ? err.message : String(err));
+	}
 	if (!r.ok && r.status !== 207) {
-		throw new Error(`${method} ${url} → ${r.status} ${await r.text()}`);
+		throw new FsApiError(method, url, r.status, await r.text());
 	}
 	return r.json() as Promise<T>;
 }

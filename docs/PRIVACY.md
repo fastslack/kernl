@@ -84,13 +84,17 @@ Configure via `PII_FILTER_ENABLED` (default: `true`).
 
 Export all your data using the backup script:
 ```bash
-./scripts/backup.sh ~/my-backup.zip
+bash services/kernel/scripts/backup.sh ~/my-backup.zip
 ```
-This creates a portable zip containing your SQLite database, configuration, and attachments.
+This creates a portable zip containing your SQLite database, the generated
+secrets and your configuration. It finds the database the kernel is actually
+using — inside the Docker volume when the stack is running, otherwise the local
+data dir — and verifies the copy before reporting success.
 
 ## Data Deletion
 
-- **Delete everything**: Remove the `./data/` directory
+- **Delete everything**: remove the data directory. Under Docker that is the
+  volume, not `./data`: `docker compose down -v` (this also drops the graph).
 - **Delete specific records**: Use MCP tools (e.g., `kernel_crm_delete_contact`, `kernel_tasks_delete`)
 - **Soft deletes**: Home appliances, projects, incidents, vehicles, and documents use soft deletes (recoverable)
 - **Hard deletes**: Tasks, contacts, reminders, and most other records are permanently deleted

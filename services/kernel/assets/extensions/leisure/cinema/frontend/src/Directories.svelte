@@ -352,10 +352,20 @@
       </div>
     {:else}
       <div class="empty">
-        {#if busy}loading…
-        {:else if view === 'mine'}no directories — create the first one, top right.
-        {:else if view === 'following'}not following any yet — find them under "discover".
-        {:else}no results from Nostr — try ↻ search above.
+        {#if busy}Cargando…
+        {:else if view === 'mine'}
+          <p>Todavía no tenés directorios.</p>
+          <p class="empty-hint">
+            Un directorio es una lista de películas que podés compartir.
+            Creá el primero con <strong>+ nuevo directorio</strong>, o guardá
+            una película desde el catálogo con el botón 📁.
+          </p>
+        {:else if view === 'following'}
+          <p>No seguís ningún directorio.</p>
+          <p class="empty-hint">Buscá listas de otras personas en «descubrir».</p>
+        {:else}
+          <p>Sin resultados en Nostr.</p>
+          <p class="empty-hint">Probá otra búsqueda con ↻ arriba.</p>
         {/if}
       </div>
     {/each}
@@ -412,38 +422,77 @@
   <div class="modal-backdrop" on:click={() => createOpen = false} on:keydown={(e) => e.key === 'Escape' && (createOpen = false)} role="dialog" tabindex="-1">
     <div class="modal-card modal-form" on:click|stopPropagation>
       <div class="modal-header">
-        <h2>{editForm.id ? 'edit directory' : 'new directory'}</h2>
+        <h2>{editForm.id ? 'Editar directorio' : 'Nuevo directorio'}</h2>
         <span class="spacer-flex"></span>
-        <button class="ghost sm" on:click={() => createOpen = false}>×</button>
+        <button class="ghost sm" on:click={() => createOpen = false} aria-label="cerrar">×</button>
       </div>
-      <label>title<input type="text" bind:value={editForm.title} placeholder="Argentine cinema of the 80s" /></label>
-      <label>description<textarea rows="3" bind:value={editForm.description}></textarea></label>
-      <label>category<input type="text" bind:value={editForm.category} placeholder="e.g. cinema, animation, horror" /></label>
-      <label>archive.org identifier para portada (opcional)<input type="text" bind:value={editForm.cover_identifier} /></label>
-      <label>visibilidad
+      <!-- All Spanish. The form used to mix "title"/"description"/"category"
+           with "visibilidad"/"colaboradores"/"cancelar" in the same column,
+           which reads as unfinished rather than bilingual. -->
+      <label>Nombre
+        <input type="text" bind:value={editForm.title} placeholder="Cine argentino de los 80…" />
+      </label>
+      <label>Descripción <span class="hint">(opcional)</span>
+        <textarea rows="3" bind:value={editForm.description}
+                  placeholder="De qué se trata esta lista…"></textarea>
+      </label>
+      <label>Categoría <span class="hint">(opcional)</span>
+        <input type="text" bind:value={editForm.category} placeholder="terror, animación, documental…" />
+      </label>
+      <label>Portada <span class="hint">(opcional — identificador de archive.org)</span>
+        <input type="text" bind:value={editForm.cover_identifier} placeholder="night_of_the_living_dead" />
+      </label>
+      <label>Visibilidad
         <select bind:value={editForm.visibility}>
-          <option value="public">público</option>
-          <option value="unlisted">sin listar</option>
-          <option value="private">privado (no se publica)</option>
+          <option value="public">Pública — cualquiera puede encontrarla</option>
+          <option value="unlisted">Sin listar — sólo con el enlace</option>
+          <option value="private">Privada — no se publica</option>
         </select>
       </label>
-      <label>colaboradores (npubs hex separados por coma)<input type="text" bind:value={editForm.collaborators} /></label>
+      <label>Colaboradores <span class="hint">(opcional — claves npub separadas por coma)</span>
+        <input type="text" bind:value={editForm.collaborators} placeholder="npub1…, npub1…" />
+      </label>
       <div class="form-actions">
-        <button class="ghost" on:click={() => createOpen = false}>cancelar</button>
-        <button class="primary" on:click={saveForm} disabled={!editForm.title.trim()}>save</button>
+        <button class="ghost" on:click={() => createOpen = false}>Cancelar</button>
+        <button class="primary" on:click={saveForm} disabled={!editForm.title.trim()}>
+          {editForm.id ? 'Guardar cambios' : 'Crear directorio'}
+        </button>
       </div>
     </div>
   </div>
 {/if}
 
 <style>
-  .page { font-family: var(--font-mono, ui-monospace), monospace; min-height: 100vh; padding-bottom: 60px; }
+  /* Same bridge as Page.svelte: these names are not defined anywhere in the
+     token set, so every reference to them fell through to a hardcoded hex.
+     Declared once here as aliases of the real tokens, scoped to this page. */
+  .page {
+    --amber: var(--gold);
+    --green-dim: var(--text-3);
+    --cyan: var(--teal);
+    --bg-1: var(--surface-1);
+    --bg-2: var(--surface-2);
+    --line: var(--border);
+    --dim-fg: var(--text-2);
+
+    font-family: var(--font-body);
+    color: var(--text-1);
+    min-height: 100vh;
+    padding-bottom: 60px;
+  }
   .hero {
     padding: 24px 32px 12px;
     border-bottom: 1px dashed var(--line, #1d3a26);
   }
   .hero-inner { display: flex; align-items: baseline; gap: 16px; margin-bottom: 12px; }
-  h1 { margin: 0; font-size: 28px; color: var(--green, #33ff77); letter-spacing: 0.04em; }
+  h1 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 28px;
+    color: var(--text-1);
+    letter-spacing: 0.02em;
+    text-wrap: balance;
+  }
   .cur { animation: blink 1s steps(2, end) infinite; }
   @keyframes blink { 50% { opacity: 0; } }
   .dim { color: var(--dim-fg, #8aa); }
@@ -475,13 +524,24 @@
   .filters .search, .filters .primary { height: 32px; box-sizing: border-box; padding: 0 12px; font-size: 13px; line-height: 30px; border-radius: 2px; font: inherit; }
   .filters .search { flex: 1 1 240px; background: var(--bg-2, #0b1f12); border: 1px solid var(--line, #1d3a26); color: var(--green, #33ff77); outline: none; }
   .filters .search:focus { border-color: var(--amber, #ffb000); }
+  /* Padding, height and radius belong to the button itself.
+     They used to live only on `.filters .primary`, so a primary button
+     outside the filter bar — the one in this modal, for instance — got no
+     padding at all and its border drew tight against the glyphs, clipping
+     them. A component cannot depend on where it happens to be placed. */
   button.primary {
-    background: var(--green-deep, #0d2516);
-    border: 1px solid var(--green, #33ff77);
-    color: var(--green, #33ff77);
+    height: 32px;
+    box-sizing: border-box;
+    padding: 0 16px;
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--green) 14%, transparent);
+    border: 1px solid var(--green);
+    color: var(--green);
     cursor: pointer;
     font: inherit;
-    text-transform: lowercase;
+    font-size: 13px;
+    line-height: 1;
+    white-space: nowrap;
   }
   button.primary:hover:not(:disabled) {
     background: var(--green, #33ff77);
@@ -540,9 +600,20 @@
   .empty {
     grid-column: 1 / -1;
     text-align: center;
-    color: var(--dim-fg, #8aa);
-    padding: 60px 20px;
+    color: var(--text-1);
+    padding: 72px 20px;
+    font-size: 15px;
   }
+  /* An empty state should say what the thing IS and how to get one — the
+     first time you land here is exactly when you know least about it. */
+  .empty-hint {
+    margin: 8px auto 0;
+    max-width: 46ch;
+    color: var(--text-2);
+    font-size: 13px;
+    line-height: 1.6;
+  }
+  .empty-hint strong { color: var(--green); font-weight: 600; }
 
   /* ── Modal ─────────────────────────────────────────────── */
   .modal-backdrop {
@@ -553,17 +624,26 @@
     padding: 20px;
   }
   .modal-card {
-    background: var(--bg-1, #0a1812);
-    border: 1px solid var(--green-dim, #4d8a5a);
-    border-radius: 2px;
-    padding: 20px;
+    /* A step up the surface scale plus a real shadow. On a near-black page a
+       panel that is only marginally lighter and has a dim border does not
+       read as floating above anything — it reads as a patch. */
+    background: var(--surface-2);
+    border: 1px solid var(--border-h);
+    border-radius: var(--radius);
+    box-shadow: 0 24px 64px rgba(0, 0, 0, 0.75);
+    padding: 22px 24px;
     max-width: 1000px;
     width: 100%;
     max-height: 90vh;
     overflow-y: auto;
   }
   .modal-header { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
-  .modal-header h2 { margin: 0; font-size: 18px; color: var(--amber, #ffb000); }
+  .modal-header h2 {
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: 18px;
+    color: var(--text-1);
+  }
   .modal-desc { color: var(--text-2, #c0c0c0); font-size: 13px; line-height: 1.45; margin: 0 0 8px; }
   .modal-meta { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 14px; }
 
@@ -597,10 +677,18 @@
   /* ── Form ──────────────────────────────────────────────── */
   .modal-form { max-width: 540px; }
   .modal-form label {
-    display: flex; flex-direction: column; gap: 4px;
-    margin-bottom: 12px;
-    font-size: 12px;
-    color: var(--text-2, #c0c0c0);
+    display: flex; flex-direction: column; gap: 5px;
+    margin-bottom: 14px;
+    font-size: 12.5px;
+    /* --text-2 on this near-black surface was grey-on-black and effectively
+       unreadable. Field labels are not decoration: you cannot fill in a form
+       whose questions you have to squint at. */
+    color: var(--text-1);
+  }
+  /* The parenthetical hint, on the other hand, IS secondary. */
+  .modal-form label .hint {
+    color: var(--text-2);
+    font-weight: 400;
   }
   .modal-form input, .modal-form textarea, .modal-form select {
     background: var(--bg-2, #0b1f12);

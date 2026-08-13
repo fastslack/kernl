@@ -185,8 +185,8 @@ export interface ModuleContext {
    * Pro license gate. Free modules ignore this entirely. Pro modules
    * call `ctx.license.has('pro:<module>')` inside `initialize()` to decide
    * whether to register real tools or stub tools that direct users to
-   * github.com/fastslack/kernl/pro. Authoring docs for pro modules are
-   * maintained outside this repository.
+   * lifekernl.com/pricing. Authoring docs for pro modules are maintained
+   * outside this repository.
    */
   license: LicenseService;
   /**
@@ -211,8 +211,30 @@ export interface ModuleContext {
  *
  * `handler` must stay stable — existing DB rows resolve by `builtin_handler`.
  * `run` closes over the owning module's own services; it must return a short
- * result string for the agent run log.
+ * result string for the agent run log, or an `AgentDriverFailure` when the
+ * work did not succeed.
  */
+
+/**
+ * Explicit failure signal from a driver/builtin handler.
+ *
+ * A driver that returns a plain string is always recorded as a SUCCESSFUL run.
+ * When the work failed (dead upstream, bad credentials, unparseable feed) the
+ * driver must say so — either by throwing or by returning this shape — so the
+ * run is stored as `failed`, the consecutive-failure counter advances, and the
+ * agent gets auto-paused instead of burning its cron slot forever.
+ */
+export interface AgentDriverFailure {
+  ok: false;
+  /** Short, single-line reason. Lands in `agent_runs.error` and in the alert to the top agent. */
+  error: string;
+  /** Optional long body kept in `agent_runs.result` for the UI (hints, remediation, raw payload). */
+  detail?: string;
+}
+
+/** What a driver/builtin handler may return: result text (= success) or an explicit failure. */
+export type AgentDriverResult = string | AgentDriverFailure;
+
 export interface AgentDriver {
   /** Stable handler id, e.g. "cinema:cache-warmer". Matches agents.builtin_handler. */
   handler: string;
@@ -225,8 +247,11 @@ export interface AgentDriver {
   flow?: string;
   /** Per-run timeout for the seeded agent row. Defaults to 120s. */
   timeout_ms?: number;
-  /** The handler body — no LLM, returns a result string for the run log. */
-  run: () => Promise<string>;
+  /**
+   * The handler body — no LLM. Returns a result string for the run log, or
+   * `{ ok: false, error }` when the work failed. Throwing counts as a failure too.
+   */
+  run: () => Promise<AgentDriverResult>;
 }
 
 /** Contract every module must implement */

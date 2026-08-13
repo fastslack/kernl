@@ -144,7 +144,7 @@ export async function dispatchInstall(
  * Composable extras: an extension of ANY type may ALSO ship an office and/or
  * agents/flows — e.g. a `module` (like the DevOps extension) that seeds its
  * pre-configured agent team. Processed here unless the type switch already did,
- * so a `.kernlext` needn't be an "office" type just to carry one.
+ * so a `.kernl` needn't be an "office" type just to carry one.
  *
  * Runs on BOTH install and enable(): a builtin-seeded PAID extension is
  * registered but locked, and only materializes its office once the operator

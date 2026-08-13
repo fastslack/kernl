@@ -1,7 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import '$lib/styles/crt.css';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
   import { data, wsConnected, storeMap, lastRefresh, ensureStore, activeTheme, type ActiveTheme, notifications, unreadCount, serverTz } from '$lib/stores.js';
@@ -9,7 +9,6 @@
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
-  import { greeting } from '$lib/utils.js';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
@@ -18,6 +17,7 @@
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
   import { displayMode as musicDisplayMode, toggle as musicToggle, next as musicNext, prev as musicPrev, toggleMute as musicToggleMute, setVolume as musicSetVolume, volume as musicVolume, seek as musicSeek, currentTime as musicTime, duration as musicDuration, album as musicAlbum, setDisplayMode as musicSetMode } from '$lib/music-player.js';
   import { initMusicBridge } from '$lib/music-bridge.js';
+  import { initLocale } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
 
   // ── State ───────────────────────────────────────────────────────
@@ -28,10 +28,10 @@
   let notifOpen = false;
   let liveOpen = false;
 
-  // ── LIVE pill popover: show the LLM chain from /models with status ─
+  // ── LIVE pill popover: the configured LLM chain, with status ─────
   // Hits /api/llm/chain on open. Re-fetches on every open so the user
   // sees the current health (a 403 on Grok between yesterday and now
-  // would otherwise be invisible until they navigated to /models).
+  // would otherwise be invisible until they opened Settings → AI).
   interface ChainLink {
     slug: string; provider: string; model: string;
     status: 'active' | 'standby' | 'no-key' | 'quota' | 'rate-limit' | 'auth' | 'degraded';
@@ -101,11 +101,21 @@
   let manifestEndpoints: Array<{ url: string; store: string }> = [];
 
   // ── Clock ────────────────────────────────────────────────────────
+  // The rail clock is split into its own parts rather than reusing the
+  // header's single string: 72px of width cannot hold "Thu, Aug 6 04:19:29"
+  // on one line, and seconds ticking in the corner of the eye is noise when
+  // the point is "what time is it, roughly".
+  let railTime = '';
+  let railDate = '';
+
   function updateClock() {
     const now = new Date();
     const time = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit', timeZone: serverTimezone });
     const date = now.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: serverTimezone });
     clock = date + '  ' + time;
+
+    railTime = now.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', timeZone: serverTimezone });
+    railDate = now.toLocaleDateString('en-US', { weekday: 'short', day: 'numeric', month: 'short', timeZone: serverTimezone });
   }
 
   // ── Navigation ───────────────────────────────────────────────────
@@ -119,22 +129,69 @@
     providers: 'system',
     'api-registry': 'system',
     'rss-registry': 'system',
+    // Instance peering: identity and trusted instances. Lives under System
+    // because it is about who this kernel is, not about a person.
+    friends: 'system',
+    // Scheduled jobs / system agenda. Was a tab under AI ("Auto") reading the
+    // same systemAgenda store as /system — a third view of one dataset, filed
+    // under the wrong group. Now reached from /system's own sub-nav.
+    automations: 'system',
+    // Legacy registry, superseded by /extensions (the page says so itself).
+    marketplace: 'system',
+    // Redirect stubs onto Settings → AI. Kept routable for old bookmarks.
+    models: 'system',
+    // Pages with no nav item of their own. Both are reached from in-page
+    // links, and both were falling through to the old navGroups[0] fallback —
+    // which lit up Home and rendered Home's tab bar above them.
+    files: 'tools',
+    memory: 'ai',
   };
-  $: currentGroupId = viewToGroup[currentView] ?? ORPHAN_VIEW_GROUP[currentView] ?? navGroups[0].id;
+  // Empty string when the view belongs to no group: Chat is pinned to the rail
+  // on its own, and a handful of pages are link-only. Defaulting to
+  // navGroups[0] made every one of them impersonate Home.
+  $: currentGroupId = viewToGroup[currentView] ?? ORPHAN_VIEW_GROUP[currentView] ?? '';
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
-  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'crt-demo', 'cinema', 'books', 'music'];
+  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'crt-demo', 'cinema', 'books', 'music', 'commander'];
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
-  $: currentGroup = navGroups.find(g => g.id === currentGroupId) ?? navGroups[0];
+  $: currentGroup = navGroups.find(g => g.id === currentGroupId) ?? null;
   // Top-level sub-tabs of the group exclude items declared as children of
   // another view (via manifest `parent` field).
-  $: subViews = currentGroup.views.filter(v => !(v as any).parent);
+  $: subViews = currentGroup?.views.filter(v => !(v as any).parent) ?? [];
   // Sub-sub-tabs: views whose `parent` matches the currently-open view.
-  $: childViews = currentGroup.views.filter(v => (v as any).parent === currentView);
+  $: childViews = currentGroup?.views.filter(v => (v as any).parent === currentView) ?? [];
   $: sysGroup = navGroups[navGroups.length - 1];
+
+  // ── Header tab rail ─────────────────────────────────────────────
+  // The group's tabs live in the header now, in the band that used to sit
+  // empty between the logo and the right-hand clusters. A group can carry
+  // eight of them (Social) so the track scrolls; the fades below tell the
+  // user there is more in that direction, since the scrollbar is hidden.
+  $: headerTabs = currentView !== 'chat' && subViews.length > 1 ? subViews : [];
+  let tabRailEl: HTMLElement | null = null;
+  let railFadeL = false;
+  let railFadeR = false;
+
+  function updateRailFades() {
+    if (!tabRailEl) { railFadeL = railFadeR = false; return; }
+    const { scrollLeft, scrollWidth, clientWidth } = tabRailEl;
+    railFadeL = scrollLeft > 1;
+    railFadeR = scrollLeft + clientWidth < scrollWidth - 1;
+  }
+
+  // Keep the active tab visible: on a narrow window the current view can sit
+  // off-screen inside the track, which reads as "this group has no active tab".
+  async function syncRail() {
+    await tick();
+    if (!tabRailEl) return;
+    tabRailEl.querySelector('.tabrail-tab.active')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    updateRailFades();
+  }
+  $: currentView, headerTabs, syncRail();
 
   // ── Auto-subscribe to page-specific WebSocket channels ──
   let activePageChannels: string[] = [];
@@ -173,14 +230,18 @@
   }
 
   // Per-group landing override — sub-tab order stays as-is, but clicking the
-  // group icon opens this specific view instead of views[0]. Used to make the
-  // AI menu land on the 3D flow.
-  const GROUP_DEFAULT_VIEW: Record<string, string> = {
-    ai: 'agents-flow',
-  };
-
+  // group icon opens this specific view instead of views[0]. Declared by the
+  // group itself (`navGroups[].defaultView` in the manifest); this used to be
+  // a hardcoded `{ ai: 'agents-flow' }` map here, so the manifest field was
+  // parsed, stored, and never read — an extension could not pick its own
+  // landing page. The view still has to exist in the group.
   function navigateGroup(group: NavGroup) {
-    goto('/' + (GROUP_DEFAULT_VIEW[group.id] ?? group.views[0].id));
+    const preferred = group.defaultView;
+    const landing =
+      preferred && group.views.some(v => v.id === preferred)
+        ? preferred
+        : group.views[0]?.id;
+    if (landing) goto('/' + landing);
   }
 
   // ── Page transition loader ──
@@ -210,6 +271,19 @@
       const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
       if (token && !headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
       const res = await origFetch(input as any, { ...init, headers });
+
+      // 428 → the kernel has no LLM that can run an agent, and is refusing
+      // every feature route until one exists. Same shape as the 401 bounce
+      // below, including the guard against N parallel failures racing N
+      // redirects. /setup is where it gets fixed, so never bounce off it.
+      if (res.status === 428) {
+        if (!redirecting && !location.pathname.startsWith('/setup') && !location.pathname.startsWith('/login')) {
+          redirecting = true;
+          location.href = '/setup?blocked=llm';
+        }
+        return res;
+      }
+
       if (res.status !== 401) return res;
       // 401 → bounce to /login (carrying ?next= so we come back here).
       // Skip if we're already on /login itself (avoid redirect loops).
@@ -241,7 +315,10 @@
   async function fetchInitialData() {
     // Fetch init data — uses RPC when WS is connected, falls back to HTTP
     const [skills, marketplace, aiConfig, google, apiReg, rssReg, themeData] = await Promise.allSettled([
-      rpcOrCall('skills.list', {}, () => safeFetch('/api/skills')),
+      // Skills come from the extension registry, not the retired /api/skills
+      // one — that endpoint only ever saw the legacy JS-plugin flavour, so the
+      // AI overview counted 5 skills while the agents used a different set.
+      safeFetch('/api/extensions?type=skill&status=active'),
       rpcOrCall('marketplace.list', {}, () => safeFetch('/api/marketplace')),
       rpcOrCall('config.ai.get', {}, () => safeFetch('/api/config/ai')),
       rpcOrCall('google.status', {}, () => safeFetch('/api/google/status')),
@@ -250,7 +327,10 @@
       rpcOrCall('marketplace.theme.active', {}, () => safeFetch('/api/marketplace/theme/active')),
     ]);
 
-    if (skills.status === 'fulfilled' && skills.value) storeMap['skills'].set(skills.value);
+    // `items` from /api/extensions → `skills` so consumers keep their shape.
+    if (skills.status === 'fulfilled' && skills.value) {
+      storeMap['skills'].set({ skills: (skills.value as { items?: unknown[] }).items ?? [] });
+    }
     if (marketplace.status === 'fulfilled' && marketplace.value) storeMap['marketplace'].set(marketplace.value);
     if (aiConfig.status === 'fulfilled' && aiConfig.value) storeMap['aiConfig'].set(aiConfig.value);
     if (google.status === 'fulfilled' && google.value) storeMap['google'].set(google.value);
@@ -435,6 +515,9 @@
     'commander', 'agents', 'agents-flow', 'workspace', 'files', 'models',
     'providers', 'memory', 'skills',
     'autogenesis', 'issues',
+    // Instance peering. Core, not an extension: it is how this kernel knows
+    // who it is and which other instances it trusts.
+    'friends',
   ]);
 
   // Views granted by nav (hardcoded NAV_GROUPS base + manifest navItems),
@@ -459,8 +542,93 @@
     !allowedViews.has(routeSegment);
 
   // ── Lifecycle ────────────────────────────────────────────────────
+  //
+  // The shell's init (manifest, WebSocket, clock, notifications) is split out
+  // of onMount so it can also run when we *leave* a standalone page without a
+  // full page load.
+  //
+  // Why that matters: on a fresh install every /api/* route answers 428 until
+  // an LLM is configured, and the fetch interceptor above turns that into a
+  // hard `location.href = '/setup'`. The app therefore boots *at* /setup, the
+  // init is skipped, and the wizard's closing `goto()` is a client-side
+  // navigation that never remounts this layout. The result was a dashboard
+  // with no manifest — sidebar stuck on the two hardcoded base groups, so the
+  // rail showed a single "Social" icon — no WebSocket, no clock and no data,
+  // until the user pressed F5. Running init on the standalone→shell transition
+  // is what makes that first paint correct.
+  let shellInitialized = false;
+  let mounted = false;
+
+  // ── Update notice ────────────────────────────────────────────────────
+  //
+  // Read-only: the kernel answers from a six-hour cache, so this costs a
+  // request on load and nothing after. Everything here fails quiet — an
+  // update check has no business breaking the shell it renders into.
+  interface UpdateInfo {
+    current: string;
+    latest: string | null;
+    updateAvailable: boolean;
+    url: string | null;
+  }
+  let updateInfo: UpdateInfo | null = null;
+  // Keyed by version so dismissing 0.3.0 does not also hide 0.4.0.
+  let dismissedUpdate: string | null = null;
+
+  const UPDATE_DISMISS_KEY = 'kernl.update.dismissed';
+
+  function dismissUpdate(): void {
+    if (!updateInfo?.latest) return;
+    dismissedUpdate = updateInfo.latest;
+    try {
+      localStorage.setItem(UPDATE_DISMISS_KEY, updateInfo.latest);
+    } catch {
+      /* private mode — the banner simply returns next load */
+    }
+  }
+
+  async function loadUpdateInfo(): Promise<void> {
+    try {
+      dismissedUpdate = localStorage.getItem(UPDATE_DISMISS_KEY);
+    } catch {
+      dismissedUpdate = null;
+    }
+    try {
+      const base = (globalThis as { __API_BASE?: string }).__API_BASE ?? '';
+      const r = await fetch(`${base}/api/update/status`);
+      if (!r.ok) return;
+      updateInfo = (await r.json()) as UpdateInfo;
+    } catch {
+      /* offline, or an older kernel without the route — say nothing */
+    }
+  }
+
   onMount(() => {
-    if (isStandalonePage) return; // skip init entirely on shell-less pages (login, setup)
+    void loadUpdateInfo();
+    mounted = true;
+    // Resolve the saved language before anything else. This used to be called
+    // from /login only, so any hard load that did not pass through the login
+    // page — a bookmark, a refresh, a deep link — left the store on its "en"
+    // default and rendered the whole dashboard in English no matter what the
+    // user had chosen. Extension pages inherit the same value through
+    // ExtPageContext.locale, so they were mistranslated for the same reason.
+    // initLocale() reads localStorage first and is a no-op on repeat calls
+    // beyond re-setting the same value, so /login calling it too is harmless.
+    initLocale();
+    if (!isStandalonePage) initShell();
+    // Resizing changes whether the tab rail overflows, and the fades are the
+    // only cue that it does — without this they stay stale until the next
+    // scroll or navigation.
+    window.addEventListener('resize', updateRailFades);
+    return () => window.removeEventListener('resize', updateRailFades);
+  });
+
+  // Leaving /login or /setup without a page load → initialize now. Gated on
+  // `mounted` so init never runs before the router is live (it calls goto()).
+  $: if (mounted && !isStandalonePage && !shellInitialized) initShell();
+
+  function initShell() {
+    if (shellInitialized) return;
+    shellInitialized = true;
     // First-run redirect to the setup wizard — fire-and-forget, do NOT
     // early-return. The layout still needs to fetch the manifest, set
     // up the clock, and open the WebSocket so when the user dismisses
@@ -483,6 +651,28 @@
       /* localStorage disabled (privacy mode, sandboxed iframe) — skip the
          redirect rather than block the dashboard. */
     }
+
+    // ── Is there an LLM that can run an agent? ──────────────────────
+    //
+    // Asked up front so a blocked install lands on the screen that fixes it
+    // instead of on a dashboard whose every panel fails one by one. The 428
+    // handler on window.fetch is the backstop for anything that slips past;
+    // this is what makes the first paint correct.
+    //
+    // Deliberately NOT keyed off localStorage the way the first-run redirect
+    // above is: a flag in the browser is not evidence about the server, and
+    // clearing it was all it took to walk past that one.
+    fetch('/api/llm/readiness')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((v: { ok?: boolean } | null) => {
+        if (v && v.ok === false && !window.location.pathname.startsWith('/setup')) {
+          goto('/setup?blocked=llm', { replaceState: true });
+        }
+      })
+      .catch(() => {
+        /* Kernel unreachable — the existing offline handling covers it; a
+           readiness verdict we could not fetch is not evidence of anything. */
+      });
 
     // Fetch server timezone before starting clock
     rpcOrCall('server.health', {}, () => fetch('/api/health').then(r => r.json())).then((d: any) => {
@@ -542,7 +732,7 @@
     // Also try immediately (works when HTTP is already up)
     fetchInitialData();
     fetchNotifications();
-  });
+  }
 
   onDestroy(() => {
     clearInterval(clockInterval);
@@ -650,8 +840,24 @@
         // `requires` always show (never hides a legit feature); items that
         // name an absent module (paid extras, unbuilt stubs) are dropped.
         if (item.requires && !installedModules.has(item.requires)) continue;
-        const group = nextGroups.find(g => g.id === item.group);
-        if (!group) continue;
+        // Fail open, like the manifest gate above. Dropping an item because its
+        // group has not been merged yet hides real features with no trace: the
+        // nav silently collapsed to the three hardcoded base groups and 39 of
+        // 42 items vanished. An item that names an unknown group now creates
+        // it rather than disappearing.
+        let group = nextGroups.find(g => g.id === item.group);
+        if (!group) {
+          // Needs an icon and a readable label: without them the sidebar
+          // rendered the literal text "undefined" above the group.
+          group = {
+            id: item.group,
+            label: item.group.charAt(0).toUpperCase() + item.group.slice(1),
+            icon: '⚙️',
+            views: [],
+            order: 500,
+          } as any;
+          nextGroups.push(group);
+        }
         if (group.views.find(v => v.id === item.id)) continue;
         const view: any = { id: item.id, label: item.label, icon: item.icon };
         if (item.parent) view.parent = item.parent;
@@ -703,15 +909,68 @@
   <slot />
 {:else}
 <div class="app-shell">
+  <!-- Only renders when a newer release actually exists. It links out rather
+       than offering a button: applying an update runs forward-only migrations,
+       so it is a decision, not a click. Dismissal is remembered per version,
+       so saying "later" once does not hide the next release too. -->
+  {#if updateInfo?.updateAvailable && dismissedUpdate !== updateInfo.latest}
+    <div class="update-bar" role="status">
+      <span class="update-bar-dot" aria-hidden="true"></span>
+      <span>
+        Kernl <strong>{updateInfo.latest}</strong> is available — you are running
+        {updateInfo.current}
+      </span>
+      {#if updateInfo.url}
+        <a class="update-bar-link" href={updateInfo.url} target="_blank" rel="noreferrer">
+          What changed
+        </a>
+      {/if}
+      <button class="update-bar-close" title="Dismiss until the next release" on:click={dismissUpdate}>✕</button>
+    </div>
+  {/if}
   <!-- Header -->
   <header class="header">
     <div class="header-logo">
       <img class="header-logo-img" src="/mascot.png" alt="Kernl" />
     </div>
-    <div class="header-clock" on:click={() => navigate('planner')} role="button" tabindex="0" on:keypress={() => navigate('planner')}>
-      {clock}
-    </div>
-    <div class="header-greeting">{greeting()}</div>
+
+    <!-- Group tabs. They used to occupy a full 37px band across the top of
+         the content area while this strip of the header sat empty. Moved
+         here they cost no vertical space and sit next to the group name,
+         which the rail can only convey through a highlighted icon. -->
+    {#if headerTabs.length > 0}
+      <div class="header-nav">
+        {#if currentGroup}
+          <span class="header-nav-group">{currentGroup.label}</span>
+        {/if}
+        <!-- A nav, not a tablist: each of these changes the URL and is
+             deep-linkable, so `aria-current="page"` is the honest marker.
+             role="tab" would promise a tabpanel swapped in place. -->
+        <div class="tabrail" class:fade-l={railFadeL} class:fade-r={railFadeR}>
+          <nav
+            class="tabrail-track"
+            aria-label={currentGroup ? `${currentGroup.label} views` : 'Views'}
+            bind:this={tabRailEl}
+            on:scroll={updateRailFades}
+          >
+            {#each headerTabs as view (view.id)}
+              <button
+                class="tabrail-tab"
+                class:active={currentView === view.id}
+                aria-current={currentView === view.id ? 'page' : undefined}
+                on:click={() => navigate(view.id)}
+              >
+                {SUB_TAB_LABELS[view.id] ?? view.label}
+              </button>
+            {/each}
+          </nav>
+        </div>
+      </div>
+    {/if}
+    <!-- The clock lives at the foot of the rail now, where it is always in
+         the same place regardless of which page is open. Repeating it here,
+         alongside a greeting, spent the most valuable strip of the screen on
+         something neither actionable nor changing. -->
     <div class="header-right">
       <!-- Status cluster: live state of the kernel (tasks pending, mail drafts) -->
       <div class="hdr-cluster hdr-status">
@@ -767,7 +1026,7 @@
           {#if liveOpen}
             <div class="live-popover" role="dialog" aria-label="LLM chain status">
               <header class="lp-head">
-                <span class="lp-title">LLM chain · /models</span>
+                <span class="lp-title">LLM chain · Settings → AI</span>
                 <button type="button" class="lp-refresh" on:click={loadChain} title="Re-check provider health" disabled={chainLoading}>
                   ↻
                 </button>
@@ -804,7 +1063,9 @@
                   {/each}
                 </ul>
                 <footer class="lp-foot">
-                  <a href="/models" on:click={() => liveOpen = false}>configure at /models →</a>
+                  <!-- /models is a redirect stub onto the AI section of
+                       Settings; link the real destination. -->
+                  <a href="/settings?section=ai" on:click={() => liveOpen = false}>configure in Settings →</a>
                 </footer>
               {/if}
             </div>
@@ -859,24 +1120,26 @@
         <span class="nav-label">{sysGroup.label}</span>
       </button>
 
+      <!-- Clock, pinned below everything.
+           Clicking it goes to the planner, same as the header clock — a date
+           on screen that does nothing when you press it is a small lie. -->
+      <button
+        class="rail-clock"
+        on:click={() => navigate('planner')}
+        title={clock}
+        aria-label={`Ir a la agenda — ${clock}`}
+      >
+        <span class="rail-clock-time">{railTime}</span>
+        <span class="rail-clock-date">{railDate}</span>
+      </button>
+
     </div>
   </nav>
 
-  <!-- Main content with sub-tabs -->
+  <!-- Main content. The group tabs moved up into the header; only the
+       child tabs (extension-contributed, scoped to the open view) still
+       render here, where they belong to the page rather than the group. -->
   <main class="main-content" class:full-bleed-mode={isFullBleed}>
-    {#if subViews.length > 1 && currentView !== 'chat'}
-      <div class="sub-tabs">
-        {#each subViews as view}
-          <button
-            class="sub-tab"
-            class:active={currentView === view.id}
-            on:click={() => navigate(view.id)}
-          >
-            {SUB_TAB_LABELS[view.id] ?? view.label}
-          </button>
-        {/each}
-      </div>
-    {/if}
     {#if childViews.length > 0}
       <div class="sub-tabs sub-tabs-children">
         {#each childViews as view}

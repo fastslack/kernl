@@ -1,0 +1,89 @@
+[
+  {
+    "name": "Social group renders its rail in the header and marks the current view",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/people" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "comment": "The rail must be inside the header, and the old bar must be gone from the content area. Also assert the page never scrolls sideways because of it.", "type": "evaluate", "value": "const t=document.querySelector('.tabrail-track'), r=document.querySelector('.tabrail'); JSON.stringify({railInHeader: !!document.querySelector('header.header .tabrail-track'), oldBarInMain: !!document.querySelector('.main-content .sub-tabs:not(.sub-tabs-children)'), group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), current: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim(), fadesMatchOverflow: (t.scrollWidth > t.clientWidth+1) === (r.classList.contains('fade-l')||r.classList.contains('fade-r')), bodyScrollX: document.body.scrollWidth > window.innerWidth})" },
+      { "type": "screenshot", "value": "tabrail-social" }
+    ]
+  },
+  {
+    "name": "Clicking a tab navigates and moves the current marker",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/health" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "type": "evaluate", "value": "JSON.stringify({group: document.querySelector('.header-nav-group')?.textContent?.trim(), before: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim()})" },
+      { "type": "click", "selector": ".tabrail-tab:not([aria-current])" },
+      { "type": "wait", "value": "2500" },
+      { "type": "evaluate", "value": "JSON.stringify({url: location.pathname, after: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim()})" },
+      { "type": "screenshot", "value": "tabrail-after-click" }
+    ]
+  },
+  {
+    "name": "Leisure group renders its rail",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/books" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "type": "evaluate", "value": "JSON.stringify({group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), current: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim()})" },
+      { "type": "screenshot", "value": "tabrail-leisure" }
+    ]
+  },
+  {
+    "name": "Work group renders its rail",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/tasks" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "type": "evaluate", "value": "JSON.stringify({group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), current: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim()})" },
+      { "type": "screenshot", "value": "tabrail-work" }
+    ]
+  },
+  {
+    "name": "Finance group has only two views and still renders",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/finance" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "type": "evaluate", "value": "JSON.stringify({group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), current: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim()})" },
+      { "type": "screenshot", "value": "tabrail-finance" }
+    ]
+  },
+  {
+    "name": "A page with its own in-page tabs does not collide with the header rail",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/extensions" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "2500" },
+      { "type": "evaluate", "value": "JSON.stringify({group: document.querySelector('.header-nav-group')?.textContent?.trim(), headerTabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), inPageTabs: [...document.querySelectorAll('.tabs .tab')].map(b=>b.textContent.trim().split('\\n')[0])})" },
+      { "type": "screenshot", "value": "tabrail-extensions" }
+    ]
+  },
+  {
+    "name": "An orphan view shows its group rail with nothing marked current",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:5199/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:5199/sysoverview" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "comment": "sysoverview belongs to the System group but is not one of its tabs, so the rail renders with no current marker and no active pill.", "type": "evaluate", "value": "JSON.stringify({url: location.pathname, group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), current: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim() ?? null, activePill: document.querySelector('.tabrail-tab.active')?.textContent?.trim() ?? null})" },
+      { "type": "screenshot", "value": "tabrail-orphan" }
+    ]
+  }
+]

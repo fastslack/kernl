@@ -16,16 +16,30 @@
 
 import { readdir } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { log } from "../../core/logger.js";
+import { assetsDir } from "../../core/assets-root.js";
 import type { ExtensionService } from "./service.js";
 
-/** Directory under the repo root that holds shipped (in-tree) extension stubs. */
-const BUILTIN_DIR = resolve(process.cwd(), "assets/extensions");
+/**
+ * Directory holding the shipped (in-tree) extension stubs.
+ *
+ * Resolved through assetsDir() rather than `resolve(process.cwd(), ...)` at
+ * import time. Every native launcher chdirs into the user's data directory
+ * before starting the kernel, so the old path did not exist, this seeder
+ * returned silently, and a packaged install registered 12 extensions where
+ * Docker registered 81 — the 69 bundled modules shipped on disk and were
+ * never seen.
+ */
+function builtinDir(): string {
+  return assetsDir("extensions");
+}
 
 export interface BuiltinSeedSummary {
   seeded: string[];
   skipped: string[];
+  /** Rows that were `installed` and became `active` because their blocker lifted. */
+  promoted: string[];
   errors: Array<{ slug: string; error: string }>;
 }
 
@@ -61,15 +75,23 @@ async function collectExtensionDirs(root: string, depthRemaining = 3): Promise<s
 export async function seedBuiltinExtensions(
   service: ExtensionService,
 ): Promise<BuiltinSeedSummary> {
-  const summary: BuiltinSeedSummary = { seeded: [], skipped: [], errors: [] };
+  const summary: BuiltinSeedSummary = { seeded: [], skipped: [], promoted: [], errors: [] };
 
-  if (!existsSync(BUILTIN_DIR)) return summary;
+  const root = builtinDir();
 
-  const extensionDirs = await collectExtensionDirs(BUILTIN_DIR);
+  // Returning quietly here is what hid the packaging bug for so long: the
+  // dashboard came up with one menu entry and the boot log said nothing at
+  // all. If the directory is missing now, say which one was looked for.
+  if (!existsSync(root)) {
+    log.warn(`Builtin extensions: ${root} does not exist — no bundled modules will be registered`);
+    return summary;
+  }
+
+  const extensionDirs = await collectExtensionDirs(root);
 
   for (const dir of extensionDirs) {
     // Slug for error reporting in case we can't even read the manifest.
-    const name = dir.slice(BUILTIN_DIR.length + 1);
+    const name = dir.slice(root.length + 1);
     try {
       const preview = await previewManifest(dir);
       if (!preview) continue;
@@ -80,6 +102,11 @@ export async function seedBuiltinExtensions(
         // to the on-disk manifest (e.g. flipping built_in → backend.entry)
         // take effect without a DB wipe. Status is preserved.
         const refreshed = await service.refreshFromDirectory(existing.id, dir);
+        // Parked on a missing package or an absent license last boot? If the
+        // blocker is gone — the background provisioner fetched the SDKs, or a
+        // license was added — activate it now, before anything is loaded, so
+        // it comes up wired like any other extension.
+        if (service.promoteIfUnblocked(existing.id)) summary.promoted.push(preview.slug);
         if (refreshed) {
           summary.seeded.push(preview.slug);
           log.info(`Built-in extension refreshed from disk: ${preview.slug}`);

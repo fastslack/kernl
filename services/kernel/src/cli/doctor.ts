@@ -6,6 +6,7 @@
 import { existsSync, statSync } from "fs";
 import { log } from "../core/logger.js";
 import { loadConfig } from "../core/config.js";
+import { probeMediaTools } from "../core/media-tools.js";
 
 interface DiagnosticResult {
   name: string;
@@ -40,6 +41,7 @@ export async function runDoctor(): Promise<DoctorReport> {
   results.push(await checkDiscord());
   results.push(await checkMattermost());
   results.push(await checkVoice());
+  results.push(await checkMediaTools());
   results.push(await checkDashboard());
   results.push(await checkEnvironment());
 
@@ -364,6 +366,36 @@ async function checkDashboard(): Promise<DiagnosticResult> {
     name: "Dashboard",
     status: "warn",
     message: `Configured for port ${config.dashboard.port} but not running`,
+  };
+}
+
+/**
+ * ffmpeg / ffprobe / whisper-cli.
+ *
+ * A warning, never a failure: a kernel with no media extensions installed does
+ * not need any of them, and the Docker image ships them anyway. This exists so
+ * that someone on a native macOS or Windows install finds out here — where the
+ * answer is one brew command — instead of when a film refuses to play.
+ */
+async function checkMediaTools(): Promise<DiagnosticResult> {
+  const statuses = await probeMediaTools({ fresh: true });
+  const missing = statuses.filter((s) => !s.available);
+
+  if (missing.length === 0) {
+    return {
+      name: "Media tools",
+      status: "pass",
+      message: statuses.map((s) => s.bin).join(", ") + " available",
+    };
+  }
+
+  return {
+    name: "Media tools",
+    status: "warn",
+    message: `Missing: ${missing.map((s) => s.bin).join(", ")}`,
+    details: missing
+      .map((s) => `${s.bin} — needed for ${s.usedFor}. ${s.hint}`)
+      .join("\n"),
   };
 }
 

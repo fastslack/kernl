@@ -9,8 +9,23 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "social",
-  "tags": ["youtube", "social", "video", "marketing"],
+  "tags": [
+    "youtube",
+    "social",
+    "video",
+    "marketing"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "fs:read", "module:youtube"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "network",
+    "filesystem",
+    "module:youtube"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

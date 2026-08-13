@@ -1,0 +1,70 @@
+[
+  {
+    "name": "install modal offers .kernl and still accepts .kernlext",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/login"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','en'); 'ok'"
+      },
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/extensions"
+      },
+      {
+        "type": "wait",
+        "selector": ".plus-btn"
+      },
+      {
+        "type": "wait",
+        "value": "2000"
+      },
+      {
+        "type": "click",
+        "selector": ".plus-btn"
+      },
+      {
+        "type": "wait",
+        "selector": ".plus-menu"
+      },
+      {
+        "type": "click",
+        "text": "Install bundle"
+      },
+      {
+        "type": "wait",
+        "selector": "#ext-file"
+      },
+      {
+        "type": "assert_attribute",
+        "selector": "#ext-file",
+        "value": "accept=.kernl,.kernlext,.tar.gz,.tgz"
+      },
+      {
+        "type": "assert_text",
+        "text": "UPLOAD .KERNL FILE"
+      },
+      {
+        "type": "assert_attribute",
+        "selector": ".install-path-input, input[placeholder^='/absolute']",
+        "value": "placeholder=/absolute/path/to/extension.kernl"
+      },
+      {
+        "type": "assert_no_text",
+        "text": "UPLOAD .KERNLEXT FILE"
+      },
+      {
+        "type": "screenshot",
+        "value": "extensions-kernl"
+      }
+    ],
+    "expect": [
+      "The Install extension modal is open",
+      "The file field is labelled 'Upload .kernl file'",
+      "The server-path placeholder reads /absolute/path/to/extension.kernl"
+    ]
+  }
+]

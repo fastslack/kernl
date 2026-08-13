@@ -134,9 +134,12 @@ export class FsCommanderService {
     return [...this.providers.values()].map((p) => {
       const info: ProviderInfo = { id: p.id, kind: p.kind, label: p.label };
       if (p instanceof LocalProvider) {
-        info.home = p.getAllowedRoots()[0];
+        const roots = p.getRootsInfo();
+        info.home = roots[0]?.path;
+        info.roots = roots;
       } else {
         info.home = "/";
+        info.roots = [{ path: "/", writable: true }];
       }
       return info;
     });

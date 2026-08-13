@@ -3,16 +3,13 @@
   "description": "Navigate through core dashboard views (home, tasks, people, reminders) and verify each renders",
   "params": {},
   "actions": [
-    { "$use": "goto-dashboard" },
-    { "type": "assert_visible", "selector": ".sidebar-logo" },
-    { "type": "goto", "value": "/#tasks" },
-    { "type": "wait", "value": "1500" },
-    { "type": "assert_visible", "selector": ".sidebar-logo" },
-    { "type": "goto", "value": "/#people" },
-    { "type": "wait", "value": "1500" },
-    { "type": "assert_visible", "selector": ".sidebar-logo" },
-    { "type": "goto", "value": "/#reminders" },
-    { "type": "wait", "value": "1500" },
-    { "type": "assert_visible", "selector": ".sidebar-logo" }
+    { "$use": "goto-view", "params": { "path": "/home" } },
+    { "type": "assert_visible", "selector": ".nav-item" },
+    { "$use": "goto-view", "params": { "path": "/tasks" } },
+    { "type": "assert_visible", "selector": ".nav-item" },
+    { "$use": "goto-view", "params": { "path": "/people" } },
+    { "type": "assert_visible", "selector": ".nav-item" },
+    { "$use": "goto-view", "params": { "path": "/reminders" } },
+    { "type": "assert_visible", "selector": ".nav-item" }
   ]
 }

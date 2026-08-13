@@ -1,12 +1,12 @@
 /**
  * RemoteProvider — fetches a catalog from a remote kernel/marketplace and
- * downloads watermarked .kernlext bundles via /api/marketplace/catalog/download.
+ * downloads watermarked .kernl bundles via /api/marketplace/catalog/download.
  *
  * Wire model:
  *   - GET  {baseUrl}/api/marketplace/catalog?... → list of CatalogItem JSON
  *   - GET  {baseUrl}/api/marketplace/catalog/item/:slug → single CatalogItem
  *   - GET  {baseUrl}/api/marketplace/catalog/download/:slug?downloader_fp=fp
- *           → application/x-kernlext+gzip + X-MTW-Watermark header (base64 JSON)
+ *           → application/x-kernl+gzip + X-MTW-Watermark header (base64 JSON)
  *
  * Discovered items get `origin.directory` cleared (the source isn't local) and
  * gain a synthetic `origin.directory` only AFTER the consumer has invoked
@@ -26,6 +26,7 @@ import type {
   CatalogProvider,
 } from "./types.js";
 import type { RemoteWatermark } from "../../extensions/receipt.js";
+import { bundleFileName } from "../../extensions/bundle.js";
 
 export interface RemoteProviderOptions {
   /** Stable id for this provider (e.g. "remote:purma.community"). */
@@ -42,7 +43,7 @@ export interface RemoteProviderOptions {
 }
 
 export interface DownloadedBundle {
-  /** Path to the .kernlext on disk (caller is responsible for cleanup). */
+  /** Path to the .kernl on disk (caller is responsible for cleanup). */
   bundlePath: string;
   /** Watermark issued by the remote. The CatalogRegistry forwards this into
    *  installFromBundle(opts.remoteWatermark) so it lands in the install receipt. */
@@ -123,7 +124,7 @@ export class RemoteProvider implements CatalogProvider {
 
     const stagingDir = join(tmpdir(), `mtw-remote-dl-${randomBytes(4).toString("hex")}`);
     await mkdir(stagingDir, { recursive: true });
-    const bundlePath = join(stagingDir, `${slug}.kernlext`);
+    const bundlePath = join(stagingDir, bundleFileName(slug));
     const bytes = new Uint8Array(await res.arrayBuffer());
     await writeFile(bundlePath, bytes);
 

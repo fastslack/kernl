@@ -6,18 +6,14 @@ import type { SystemRegistry } from "../../core/system-registry.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import type { BuiltinHandler } from "./builtin-handlers.js";
+import { normalizeDriverResult, driverThrewOutcome } from "./driver-result.js";
 import { resolveGoal } from "./executor.js";
-
-/** Max consecutive failures before auto-pausing a schedule (circuit breaker). */
-const CIRCUIT_BREAKER_THRESHOLD = 5;
 
 export class AgentScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
   private registryId: string | null = null;
-  /** Consecutive failure counter per agent ID. Reset on success. */
-  private consecutiveFails = new Map<string, number>();
   private cleanupRegistryId: string | null = null;
   private builtinHandlers = new Map<string, BuiltinHandler>();
 
@@ -124,17 +120,10 @@ export class AgentScheduler {
             continue;
           }
 
-          // Circuit breaker: skip agent if it has failed too many times in a row.
-          const fails = this.consecutiveFails.get(agent.id) ?? 0;
-          if (fails >= CIRCUIT_BREAKER_THRESHOLD) {
-            log.warn(
-              `Agent scheduler: "${agent.name}" auto-paused after ${fails} consecutive failures. ` +
-              `Deactivating schedule ${schedule.id} to stop token burn.`,
-            );
-            this.service.deactivateSchedule?.(schedule.id);
-            this.consecutiveFails.delete(agent.id);
-            continue;
-          }
+          // The circuit breaker lives in AgentService.recordRunOutcome(): once
+          // it trips, the agent row itself is `active = 0` and the guard above
+          // already skipped it. The schedule row stays active on purpose, so
+          // reactivating the agent resumes it on the next slot.
 
           // Check if this agent has a builtin handler
           if (agent.builtin_handler && this.builtinHandlers.has(agent.builtin_handler)) {
@@ -193,50 +182,49 @@ export class AgentScheduler {
       builtin: true,
     });
 
-    try {
-      const result = await handler();
-
-      this.service.updateRun(run.id, {
-        status: "completed",
-        result,
-        steps_count: 1,
-        tokens_used: 0,
-        completed_at: isoNow(),
+    // A handler signals failure by throwing OR by returning { ok: false }.
+    // Both land in the same outcome shape, so a dead upstream is recorded as a
+    // failed run instead of a "completed" one carrying an error message in its
+    // body — which is what let broken pollers report 100% success forever.
+    const outcome = await handler()
+      .then((raw) => normalizeDriverResult(raw))
+      .catch((err) => {
+        log.error(`Agent scheduler (builtin): "${agent.name}" threw`, err);
+        return driverThrewOutcome(err);
       });
 
-      this.events.emit("agent:flow:run_completed", {
-        run_id: run.id,
-        agent_id: agent.id,
-        agent_name: agent.name,
-        status: "completed",
-        steps_count: 1,
-        tokens_used: 0,
-        result_preview: result.slice(0, 200),
-        builtin: true,
-      });
+    this.service.updateRun(run.id, {
+      status: outcome.ok ? "completed" : "failed",
+      result: outcome.text,
+      error: outcome.error,
+      steps_count: 1,
+      tokens_used: 0,
+      completed_at: isoNow(),
+    });
 
+    // Mirror the LLM path so the Error Auditor + UI see builtin failures too.
+    this.events.emit("agent:flow:run_completed", {
+      run_id: run.id,
+      agent_id: agent.id,
+      agent_name: agent.name,
+      status: outcome.ok ? "completed" : "failed",
+      steps_count: 1,
+      tokens_used: 0,
+      result_preview: outcome.text.slice(0, 200),
+      error: outcome.error,
+      builtin: true,
+    });
+
+    this.service.recordRunOutcome(agent.id, {
+      ok: outcome.ok,
+      error: outcome.error,
+      run_id: run.id,
+    });
+
+    if (outcome.ok) {
       log.debug(`Agent scheduler (builtin): "${agent.name}" completed`);
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.service.updateRun(run.id, {
-        status: "failed",
-        error: errorMsg,
-        completed_at: isoNow(),
-      });
-
-      // Mirror the LLM path so the Error Auditor + UI see builtin failures too.
-      this.events.emit("agent:flow:run_completed", {
-        run_id: run.id,
-        agent_id: agent.id,
-        agent_name: agent.name,
-        status: "failed",
-        steps_count: 1,
-        tokens_used: 0,
-        error: errorMsg,
-        builtin: true,
-      });
-
-      log.error(`Agent scheduler (builtin): "${agent.name}" failed`, err);
+    } else {
+      log.error(`Agent scheduler (builtin): "${agent.name}" failed — ${outcome.error}`);
     }
   }
 
@@ -290,14 +278,12 @@ export class AgentScheduler {
       tokens_used: result.tokens_used,
     });
 
-    // Circuit breaker tracking
-    if (result.status === "failed") {
-      const prev = this.consecutiveFails.get(agent.id) ?? 0;
-      this.consecutiveFails.set(agent.id, prev + 1);
-      log.warn(`Agent scheduler: "${agent.name}" failed (${prev + 1}/${CIRCUIT_BREAKER_THRESHOLD} before auto-pause)`);
-    } else {
-      this.consecutiveFails.delete(agent.id); // reset on success
-    }
+    // Circuit breaker tracking (persistent — see AgentService.recordRunOutcome)
+    this.service.recordRunOutcome(agent.id, {
+      ok: result.status !== "failed",
+      error: result.error,
+      run_id: run.id,
+    });
 
     log.info(`Agent scheduler: "${agent.name}" completed (${result.steps_count} steps, ${result.tokens_used}tk)`);
   }

@@ -5,13 +5,13 @@
 # (or missing) image and the first impression is "doesn't run". This publishes
 # both the kernel and the public dashboard image to GHCR for both arches.
 #
-# Triggers: version tags (release), manual dispatch, and main (for an :edge tag).
+# Triggers: version tags (release), manual dispatch, and stable (for an :edge tag).
 # Auth: GITHUB_TOKEN with packages:write — no extra secrets needed for GHCR.
 name: docker-images
 
 on:
   push:
-    branches: [main]
+    branches: [stable]
     tags: ["v*.*.*"]
   workflow_dispatch:
 
@@ -58,7 +58,7 @@ jobs:
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=ref,event=branch
-            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/main' }}
+            type=raw,value=edge,enable=${{ github.ref == 'refs/heads/stable' }}
             type=sha,format=short
 
       - name: Build and push (amd64 + arm64)

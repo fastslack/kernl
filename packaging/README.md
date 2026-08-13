@@ -92,6 +92,27 @@ dir, so multiple OS accounts get isolated kernels. The wrapper script
 (`/usr/bin/kernl` / `Contents/MacOS/kernl` / `start.bat`) handles
 the cd-to-data-dir + env loading transparently.
 
+## First run: the API token
+
+The HTTP API and `/mcp` always require a Bearer token — there is no
+unauthenticated mode in a shipped package. When `KERNEL_AUTH_TOKEN` is not set
+in the user's `.env`, the kernel **generates one on first boot** and persists it
+as `<data dir>/data/.kernel-auth-token` (mode 600).
+
+That creates a first-run trap: the dashboard opens, asks for a token, and the
+user has never been shown one. Each launcher handles it:
+
+| Platform | How the user gets in |
+|---|---|
+| macOS, Windows | The launcher waits for the kernel, reads the token file and opens `…/login#token=<token>`. The login page signs in and strips the fragment. |
+| Linux (rpm/deb) | The wrapper prints the dashboard URL and the token (or, on the very first boot, where to find it) before exec'ing the kernel. As a systemd service: `journalctl -u kernl \| grep -m1 'Token:'`. |
+| Docker | `docker compose exec kernel cat /app/data/.kernel-auth-token`, then paste it at `/login`. |
+
+The token rides in the URL **fragment**, never the query string: fragments are
+not sent to the server, so it stays out of access logs and `Referer`. It does
+land in browser history, which is why the login page clears it once consumed
+(`services/dashboard/src/lib/boot-token.ts`).
+
 ## Tier 1 vs Tier 2
 
 **Tier 1 — out of the box, every platform:**
@@ -123,11 +144,43 @@ without a kernel restart.
 | macOS | not yet | `codesign` + `notarytool` | $99/yr (Apple Developer) |
 | Windows | not yet | `signtool` | $300+/yr (EV cert) |
 
-The CI workflow has signing wired up via secrets — set the appropriate
-`*_CERT_DATA` / `*_PASSWORD` repository secrets and the workflow auto-signs.
-Without those secrets, releases ship unsigned and users see one-time
-warnings (Mac: right-click → Open; Windows: SmartScreen "Run anyway"; Linux:
-no warning, but `dnf` won't auto-update without a signed repo).
+The CI workflow signs when the secrets below exist and skips silently when they
+don't. Without them, releases ship unsigned and users see a one-time warning
+(Mac: right-click → Open; Windows: SmartScreen "Run anyway"; Linux: no warning,
+but `dnf` won't auto-update without a signed repo). If you ship unsigned, say so
+in the release notes with the bypass steps — a user who hits an unexplained
+"damaged app" dialog concludes the app is broken, not unsigned.
+
+> The signing steps used to be gated on `if: env.X != ''` with `X` defined in
+> the same step's `env:` block. A step's `if` is evaluated before its own env
+> exists, so those conditions were always false: signing never ran even with
+> every secret set, and the release still reported success. The secrets are now
+> mapped at the **job** level, which is in scope for step conditions. If you add
+> a new opt-in step, follow that pattern — `secrets` is not available in a
+> step-level `if` at all.
+
+### Secrets to create
+
+| Secret | Where it comes from |
+|---|---|
+| `APPLE_CERT_DATA` | "Developer ID Application" cert exported as .p12, then `base64 -i cert.p12` |
+| `APPLE_CERT_PASSWORD` | the password you set on that .p12 export |
+| `APPLE_TEAM_ID` | Apple Developer → Membership → Team ID |
+| `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, `APPLE_API_KEY` | App Store Connect → Users and Access → Integrations → an API key with the Developer role; the last is the .p8 file's contents |
+| `WINDOWS_CERT_DATA` | code-signing cert as .pfx, base64-encoded |
+| `WINDOWS_CERT_PASSWORD` | the .pfx password |
+
+Notarization (the Apple API key trio) is separate from signing and matters more
+than the signature: a signed-but-un-notarized app still trips Gatekeeper on
+first launch. Both, or the DMG is no better than unsigned.
+
+Verify once after the first signed run, since the failure mode is silence:
+
+```bash
+codesign --verify --deep --strict --verbose=2 Kernl.app   # macOS
+spctl -a -t exec -vv Kernl.app                            # what Gatekeeper sees
+signtool verify /pa /v kernl.msi                          # Windows
+```
 
 ## Distribution channels
 

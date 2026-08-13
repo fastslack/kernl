@@ -220,6 +220,15 @@ export class NostrDirectoriesProvider {
    *  caller's responsibility — the on-the-wire payload carries whatever
    *  version the local row has. Returns the signed event. */
   async publish(directory: CinemaDirectory): Promise<{ eventId: string; relays: string[] }> {
+    // A relay is a public place. `friends` and `private` directories travel
+    // the peering lane instead. Checked before anything else — including
+    // whether an identity exists — so the guarantee cannot depend on how the
+    // kernel happens to be configured.
+    if (directory.visibility === "friends" || directory.visibility === "private") {
+      throw new Error(
+        `directory ${directory.id} is ${directory.visibility} — it is never published to relays`,
+      );
+    }
     if (!this.identity) throw new Error("Nostr identity not configured — cannot publish");
     const payload: DirectoryPayload = {
       schema: 1,
@@ -258,12 +267,11 @@ export class NostrDirectoriesProvider {
     }
     log.debug?.(`cinema/dir-nostr: published ${event.id.slice(0, 12)} v${directory.version} to ${okRelays.length}/${outcomes.length} relays`);
     // Public/unlisted directories also get a kind-1 announcement so the
-    // social timeline (and any external Nostr client) surfaces them as
-    // a normal post. Private dirs skip the social leg entirely.
-    if (directory.visibility !== "private") {
-      // Fire-and-forget — caller already got the success path.
-      this.announceToSocial(directory, event.id).catch(() => undefined);
-    }
+    // social timeline (and any external Nostr client) surfaces them as a
+    // normal post. Nothing else can reach here: private and friends-only
+    // directories are refused at the top of this method.
+    // Fire-and-forget — the caller already got the success path.
+    this.announceToSocial(directory, event.id).catch(() => undefined);
     return { eventId: event.id, relays: okRelays };
   }
 

@@ -6,6 +6,7 @@
   import { onMount } from 'svelte';
   import { t, initLocale } from '$lib/i18n';
   import LangToggle from '$lib/components/LangToggle.svelte';
+  import { tokenFromHash } from '$lib/boot-token';
 
   const TOKEN_KEY = 'kernel_auth_token';
   let token = '';
@@ -17,6 +18,19 @@
     initLocale();
     const url = new URL(window.location.href);
     next = url.searchParams.get('next') || '/';
+
+    // First run from a desktop launcher: the token the kernel generated for
+    // this install arrives in the fragment. Take it, wipe it from the URL
+    // (fragments stick in history), and sign in without making the user hunt
+    // for a secret they were never shown.
+    const handed = tokenFromHash(window.location.hash);
+    if (handed) {
+      token = handed;
+      history.replaceState(null, '', url.pathname + url.search);
+      void save();
+      return;
+    }
+
     // Pre-fill if a stale token is already in localStorage so the user
     // can see what's there and edit instead of re-paste blindly.
     token = localStorage.getItem(TOKEN_KEY) ?? '';
@@ -95,7 +109,8 @@
     </div>
 
     <footer class="dim">
-      <p>{$t('login.tip_host')}<code>grep ^KERNEL_AUTH_TOKEN= .env</code></p>
+      <p>{$t('login.tip_host')}<code>cat data/.kernel-auth-token</code></p>
+      <p>{$t('login.tip_docker')}<code>docker compose exec kernel cat /app/data/.kernel-auth-token</code></p>
       <p class="hint">{$t('login.tip_oauth')}</p>
     </footer>
   </div>

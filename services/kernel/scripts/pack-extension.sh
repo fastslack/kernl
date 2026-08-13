@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# pack-extension.sh — empaqueta un módulo del kernel como .kernlext
+# pack-extension.sh — empaqueta un módulo del kernel como .kernl
 #
 # Produce un tarball que el runtime de `extensions` puede instalar via
 # POST /api/extensions/upload. El bundle contiene:
@@ -15,7 +15,7 @@
 #
 # EJEMPLO:
 #   scripts/pack-extension.sh notes
-#   → dist/extensions/notes-1.0.0.kernlext
+#   → dist/extensions/notes-1.0.0.kernl
 #
 # PREQ:
 #   - bun instalado en PATH
@@ -137,9 +137,9 @@ fi
 
 # ── Empaquetar ───────────────────────────────────────────────
 mkdir -p "$KERNEL_ROOT/$OUTDIR"
-OUTFILE="$KERNEL_ROOT/$OUTDIR/${SLUG}-${VERSION}.kernlext"
+OUTFILE="$KERNEL_ROOT/$OUTDIR/${SLUG}-${VERSION}.kernl"
 
-# .kernlext = tar.gz con extension.json en la raíz
+# .kernl = tar.gz con extension.json en la raíz
 tar -czf "$OUTFILE" -C "$STAGING" .
 OUT_SIZE="$(stat -c%s "$OUTFILE" 2>/dev/null || stat -f%z "$OUTFILE")"
 

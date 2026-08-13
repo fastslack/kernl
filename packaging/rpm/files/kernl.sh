@@ -37,4 +37,22 @@ cd "$DATA_DIR"
 # install dir — it just runs the JS. Quiet down its install attempts.
 export BUN_INSTALL="$APP_DIR"
 
+# The dashboard requires a Bearer token. When the user hasn't pinned one, the
+# kernel generates and persists it on first boot — and then the login screen
+# asks for a secret nobody ever showed them. Point at it. (On first run the
+# file doesn't exist yet; the kernel prints the token itself as it generates
+# it, which is what the journalctl line covers.)
+if [ -z "${KERNEL_AUTH_TOKEN:-}" ]; then
+  TOKEN_FILE="$DATA_DIR/data/.kernel-auth-token"
+  echo "kernl: dashboard at http://localhost:${DASHBOARD_PORT:-3086} — it will ask for an API token." >&2
+  if [ -f "$TOKEN_FILE" ]; then
+    echo "kernl:   your token:  $(cat "$TOKEN_FILE")" >&2
+    echo "kernl:   (stored in $TOKEN_FILE)" >&2
+  else
+    echo "kernl:   one is being generated now — it's in the log below, and in $TOKEN_FILE" >&2
+    echo "kernl:   as a service:  journalctl -u kernl | grep -m1 'Token:'" >&2
+  fi
+  echo "kernl:   pin your own with KERNEL_AUTH_TOKEN in $CONFIG_DIR/.env" >&2
+fi
+
 exec "$APP_DIR/bin/bun" "$APP_DIR/bin/mcp-server.js" "$@"

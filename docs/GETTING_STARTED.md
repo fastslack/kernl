@@ -93,7 +93,7 @@ Once running, try these via Claude or the dashboard:
 | **dashboard** | Web UI + life intelligence (weather, AQI, moon, clocks) |
 
 Additional Pro extensions (trading, web-intel, graph-intel, mesh, federation)
-are distributed separately with a [Kernl Pro license](https://github.com/fastslack/kernl/pro).
+are distributed separately with a [Kernl Pro license](https://lifekernl.com/pricing).
 
 ## Optional Features
 
@@ -110,6 +110,34 @@ TELEGRAM_ENABLED=true
 TELEGRAM_BOT_TOKEN=your-bot-token
 TELEGRAM_ALLOWED_USERS=your-user-id
 ```
+
+### Media tools (Cinema, TV, Torrents)
+
+The media extensions shell out to three programs. The **Docker image already
+contains them** — this section is only for native desktop installs (the macOS
+`.dmg`, the Windows installer, or a from-source run), which bundle the runtime
+and nothing else.
+
+| Binary | Needed for | Without it |
+|---|---|---|
+| `ffmpeg` | transcoding playback, extracting audio for subtitles | AVI/MPEG won't play; offline subtitles won't generate |
+| `ffprobe` | reading the real duration of a remote file | durations show empty; the duration filter matches nothing |
+| `whisper-cli` | generating subtitles offline (whisper.cpp) | only the in-process `transformers` engine and Groq remain |
+
+```bash
+# macOS
+brew install ffmpeg whisper-cpp
+
+# Debian / Ubuntu
+sudo apt install ffmpeg whisper.cpp
+```
+
+Already installed somewhere unusual? Point Kernl at it instead:
+`FFMPEG_BIN`, `FFPROBE_BIN`, `WHISPERCPP_BIN`.
+
+`bun run doctor` reports which of the three are present and prints the install
+command for your platform when one is missing. Nothing here is required to run
+Kernl — the media extensions simply degrade to what they can do without them.
 
 ### Security (recommended for network exposure)
 ```bash

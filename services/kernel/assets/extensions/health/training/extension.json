@@ -9,13 +9,29 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "health",
-  "tags": ["training", "fitness"],
+  "tags": [
+    "training",
+    "fitness"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["read:health", "write:health"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "read:health",
+    "write:health"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "training", "entry": "frontend/entry.js", "title": "Training" }
+      {
+        "view": "training",
+        "entry": "frontend/entry.js",
+        "title": "Training"
+      }
     ]
   }
 }

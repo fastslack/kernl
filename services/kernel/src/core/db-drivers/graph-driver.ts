@@ -29,7 +29,11 @@ export interface GraphCapabilities {
   cypher: boolean;
   /** Graph Data Science procedures (gds.pageRank, gds.louvain, gds.fastRP, …). */
   gds: boolean;
-  /** Vector similarity primitives (gds.similarity.cosine equivalent). */
+  /**
+   * Vector similarity primitives — `vector.similarity.cosine()` and native
+   * vector indexes, or the GDS equivalent. Independent of `gds`: Neo4j ships
+   * these in the core product, so a server without GDS can still satisfy it.
+   */
   vectorSimilarity: boolean;
   /** GDS ML pipelines (nodeClassification, linkPrediction, …). */
   mlPipelines: boolean;

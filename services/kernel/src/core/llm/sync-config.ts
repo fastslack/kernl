@@ -21,10 +21,28 @@ export function syncProvidersToKernelConfig(config: KernelConfig, registry: Conf
   const nvidia = registry.loadConfig("nvidia");
   const lmstudio = registry.loadConfig("lmstudio");
   const minimax = registry.loadConfig("minimax");
+  const claudeCode = registry.loadConfig("claude-code");
 
   // MiniMax has no config.webIntel home (it's a registry-native provider). The
   // chat adapter / web-intel read it from process.env, so mirror it there so a
   // value saved in the registry is visible after a restart even without .env.
+  // Claude Code authenticates with a subscription token rather than an API key.
+  // The adapter reads it from the environment, so a token saved in the registry
+  // has to be mirrored here or it is forgotten on every restart.
+  const ccToken = str(claudeCode.oauthToken);
+  if (ccToken !== undefined) process.env.CLAUDE_CODE_OAUTH_TOKEN = ccToken;
+  // Same round trip for the model. Only the token was mirrored, so the model
+  // chosen in Settings never reached the adapter — saved, shown back in the
+  // dropdown, and ignored on every call.
+  const ccModel = str(claudeCode.defaultModel);
+  if (ccModel !== undefined) {
+    process.env.CLAUDE_CODE_DEFAULT_MODEL = ccModel;
+    // The live config object was built at boot, so the env write alone would
+    // not take effect until the next restart.
+    const cc = (config as unknown as { claudeCode?: Record<string, unknown> }).claudeCode;
+    if (cc) cc.model = ccModel;
+  }
+
   const mmKey = str(minimax.apiKey);
   if (mmKey !== undefined) process.env.MINIMAX_API_KEY = mmKey;
   const mmBase = str(minimax.baseUrl);

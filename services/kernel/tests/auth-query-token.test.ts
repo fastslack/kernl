@@ -41,4 +41,30 @@ describe("isAuthenticated", () => {
   it("still rejects a wrong token on a media route", () => {
     expect(isAuthenticated(req("/api/torrents/transcode?url=x&auth=wrong"), TOKEN)).toBe(false);
   });
+
+  // ── Cinema's media routes — the free module's equivalents ──
+  //
+  // These were absent from the allowlist while the paid torrents ones were
+  // present, so every playback in cinema answered 401: a <video src> cannot
+  // send an Authorization header, and the frontend's `&auth=` was rejected.
+  // The player showed 0:00 with no error, because the request never reached a
+  // handler that could produce one.
+  it("accepts ?auth= on the cinema transcode route", () => {
+    expect(isAuthenticated(req(`/api/cinema/media/transcode?url=x&auth=${TOKEN}`, { accept: "*/*" }), TOKEN)).toBe(true);
+  });
+
+  it("accepts ?auth= on the cinema webseed-proxy route", () => {
+    expect(isAuthenticated(req(`/api/cinema/media/webseed-proxy?url=x&auth=${TOKEN}`), TOKEN)).toBe(true);
+  });
+
+  it("still rejects a wrong token on a cinema media route", () => {
+    expect(isAuthenticated(req("/api/cinema/media/transcode?url=x&auth=wrong"), TOKEN)).toBe(false);
+  });
+
+  it("does not open the rest of the cinema API to query tokens", () => {
+    // The fallback is for clients that cannot set a header, not a general
+    // way to put the token in a URL — and so in logs and history.
+    expect(isAuthenticated(req(`/api/cinema/search?q=x&auth=${TOKEN}`), TOKEN)).toBe(false);
+    expect(isAuthenticated(req(`/api/cinema/media/probe?url=x&auth=${TOKEN}`), TOKEN)).toBe(false);
+  });
 });

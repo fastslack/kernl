@@ -105,6 +105,12 @@ export interface KernelConfig {
     learningMinConfidence: number;
     /** Max recursion depth for kernel_agents_invoke chains. */
     maxInvokeDepth: number;
+    /**
+     * Circuit breaker: consecutive failed runs before an agent is auto-paused
+     * (`active = 0`) and the top agent is alerted. Any successful run resets
+     * the counter. 0 disables auto-pausing entirely.
+     */
+    autoPauseThreshold: number;
     /** Hard timeout (ms) on a single kernel_agents_invoke await. */
     invokeTimeoutMs: number;
     /**
@@ -204,6 +210,10 @@ export interface KernelConfig {
     /** CLAUDE_CODE_PATH — explicit path to the `claude` binary. Empty →
      *  auto-discover (which/PATH/known locations). */
     cliPath: string;
+    /** CLAUDE_CODE_DEFAULT_MODEL — the model chosen for this provider in
+     *  Settings, mirrored out of the registry. Empty → the kernel-wide
+     *  default. */
+    model: string;
   };
   // CORS configuration
   cors: {
@@ -347,14 +357,12 @@ export function loadConfig(): KernelConfig {
     dashboard: {
       enabled: (process.env.DASHBOARD_ENABLED ?? "true") === "true",
       port: parseInt(process.env.DASHBOARD_PORT ?? "3086", 10),
-      bind: resolveSecureBind(
-        process.env.KERNEL_DASHBOARD_BIND ?? "0.0.0.0",
-        process.env.KERNEL_AUTH_TOKEN ?? "",
-        {
-          allowUnauth: process.env.KERNEL_ALLOW_UNAUTH === "1",
-          bindIsExplicit: process.env.KERNEL_DASHBOARD_BIND !== undefined,
-        },
-      ),
+      // The operator's bind, verbatim. The fail-closed downgrade belongs at the
+      // bind site (KernelHttpServer), not here: bootstrap generates an auth
+      // token AFTER loadConfig runs, so deciding now would judge an empty token
+      // and permanently rewrite an explicit 0.0.0.0 to loopback — leaving an
+      // authenticated kernel unreachable from the nginx sibling container.
+      bind: process.env.KERNEL_DASHBOARD_BIND ?? "0.0.0.0",
       refreshIntervalMs: parseInt(process.env.DASHBOARD_REFRESH_MS ?? "30000", 10),
     },
     google: {
@@ -422,6 +430,7 @@ export function loadConfig(): KernelConfig {
       learningCleanupIntervalMs: parseInt(process.env.AGENTS_LEARNING_CLEANUP_INTERVAL_MS ?? "3600000", 10),
       learningMinConfidence: parseFloat(process.env.AGENTS_LEARNING_MIN_CONFIDENCE ?? "0.15"),
       maxInvokeDepth: parseInt(process.env.AGENTS_MAX_INVOKE_DEPTH ?? "5", 10),
+      autoPauseThreshold: parseInt(process.env.AGENTS_AUTO_PAUSE_THRESHOLD ?? "3", 10),
       invokeTimeoutMs: parseInt(process.env.AGENTS_INVOKE_TIMEOUT_MS ?? "300000", 10),
       inboxWakeQuietMs: parseInt(process.env.AGENTS_INBOX_WAKE_QUIET_MS ?? "300000", 10),
       subscriptionCooldownMs: parseInt(process.env.AGENTS_SUBSCRIPTION_COOLDOWN_MS ?? "60000", 10),
@@ -531,6 +540,9 @@ export function loadConfig(): KernelConfig {
       mcpBridgePath: process.env.KERNEL_MCP_BRIDGE ?? "",
       mcpTransport: (process.env.KERNEL_MCP_TRANSPORT ?? "stdio").toLowerCase(),
       cliPath: process.env.CLAUDE_CODE_PATH ?? "",
+      // Mirrored out of the provider registry by syncProvidersToKernelConfig,
+      // so the model chosen in Settings is the one the adapter sends.
+      model: process.env.CLAUDE_CODE_DEFAULT_MODEL ?? "",
     },
     cors: {
       allowedOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? "")

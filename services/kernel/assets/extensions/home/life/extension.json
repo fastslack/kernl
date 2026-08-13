@@ -11,7 +11,11 @@
   "category": "home",
   "frontend": {
     "pages": [
-      { "view": "life", "entry": "frontend/entry.js", "title": "Life" }
+      {
+        "view": "life",
+        "entry": "frontend/entry.js",
+        "title": "Life"
+      }
     ],
     "navItems": [
       {
@@ -23,5 +27,11 @@
       }
     ]
   },
-  "backend": { "entry": "backend/entry.js" }
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

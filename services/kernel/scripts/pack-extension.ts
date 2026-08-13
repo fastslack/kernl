@@ -1,5 +1,5 @@
 /**
- * pack-extension.ts — empaqueta un módulo del kernel como .kernlext
+ * pack-extension.ts — empaqueta un módulo del kernel como .kernl
  *
  * Usa el packBundle() oficial del módulo extensions, así respeta el formato
  * canónico (integrity.sha256 incluido) y evoluciona automáticamente si el
@@ -10,7 +10,7 @@
  *
  * EJEMPLO:
  *   bun run scripts/pack-extension.ts notes
- *   → dist/extensions/notes-1.0.0.kernlext
+ *   → dist/extensions/notes-1.0.0.kernl
  */
 
 import { mkdirSync, writeFileSync, existsSync, cpSync, rmSync, statSync } from "node:fs";
@@ -18,7 +18,7 @@ import { resolve, dirname } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { packBundle } from "../src/modules/extensions/bundle.js";
+import { packBundle, bundleFileName, BUNDLE_EXT } from "../src/modules/extensions/bundle.js";
 
 async function main() {
   const slug = process.argv[2];
@@ -38,7 +38,7 @@ async function main() {
   console.log(`   Source: ${moduleDir}`);
 
   // Staging dir
-  const staging = resolve(tmpdir(), `kernlext-stage-${randomBytes(4).toString("hex")}`);
+  const staging = resolve(tmpdir(), `kernl-stage-${randomBytes(4).toString("hex")}`);
   mkdirSync(staging, { recursive: true });
   mkdirSync(resolve(staging, "backend"), { recursive: true });
 
@@ -191,7 +191,7 @@ async function main() {
     if (existsSync(readme)) cpSync(readme, resolve(staging, "README.md"));
 
     // 6) Pack with the official packBundle (integrity.sha256 auto-stamped)
-    const outPath = resolve(kernelRoot, outDir, `${slug}-${version}.kernlext`);
+    const outPath = resolve(kernelRoot, outDir, bundleFileName(slug, version));
     mkdirSync(dirname(outPath), { recursive: true });
     const result = await packBundle(staging, outPath);
 
@@ -204,7 +204,7 @@ async function main() {
     console.log(`  BUNDLE=$(base64 -w0 ${outPath})`);
     console.log(`  curl -sS -X POST http://localhost:3086/api/extensions/upload \\`);
     console.log(`    -H 'Content-Type: application/json' \\`);
-    console.log(`    -d "$(jq -cn --arg b64 "\\$BUNDLE" '{filename:"${slug}-${version}.kernlext", base64:\\$b64}')"`);
+    console.log(`    -d "$(jq -cn --arg b64 "\\$BUNDLE" '{filename:"${bundleFileName(slug, version)}", base64:\\$b64}')"`);
   } finally {
     rmSync(staging, { recursive: true, force: true });
   }

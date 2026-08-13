@@ -9,8 +9,17 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "channels",
-  "tags": ["channel", "dashboard", "notifications"],
+  "tags": [
+    "channel",
+    "dashboard",
+    "notifications"
+  ],
   "kernel_min": "0.1.0",
   "permissions": [],
-  "backend": { "entry": "backend/entry.js" }
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0"
+    }
+  }
 }

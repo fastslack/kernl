@@ -3,19 +3,40 @@
   "id": "com.kernl.irc",
   "slug": "irc",
   "name": "IRC Server",
-  "version": "1.1.0",
+  "version": "1.3.0",
   "type": "module",
-  "description": "Modern, ultra-secure IRC server (IRCv3, TLS, SASL/CertFP, E2E channels, bouncer/CHATHISTORY) bridged to kernel offices, agents and channels.",
+  "description": "Modern, ultra-secure IRC server (IRCv3, TLS, SASL/CertFP, E2E channels, bouncer/CHATHISTORY) bridged to kernel offices, agents and channels, with an outbound bouncer to external networks (Libera, DALnet, QuakeNet…).",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "channels",
-  "tags": ["channel", "irc", "ircv3", "messaging", "tls", "e2e", "bouncer"],
+  "tags": [
+    "channel",
+    "irc",
+    "ircv3",
+    "messaging",
+    "tls",
+    "e2e",
+    "bouncer"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "network"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "ws": "8.21.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "irc", "entry": "frontend/entry.js", "title": "IRC" }
+      {
+        "view": "irc",
+        "entry": "frontend/entry.js",
+        "title": "IRC"
+      }
     ]
   }
 }

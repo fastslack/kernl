@@ -13,6 +13,17 @@ import DOMPurify from "isomorphic-dompurify";
 
 const CONFIG: Parameters<typeof DOMPurify.sanitize>[1] = {
   ALLOWED_TAGS: [
+    // DOMPurify treats text nodes as a tag named `#text`. It adds it for you
+    // by default, but supplying ALLOWED_TAGS replaces that default outright —
+    // and with KEEP_CONTENT: false below, a text node that is not on the list
+    // is removed like any other disallowed node.
+    //
+    // The result was total: every `{@html sanitizeHtml(...)}` surface rendered
+    // the tag skeleton with none of the words. The RSS reader showed empty
+    // bullets and blank paragraphs; a 9,958-character article came out the far
+    // side as 10 characters. Emails and agent output run through the same
+    // function and were losing their text the same way.
+    "#text",
     "a", "p", "br", "hr", "div", "span",
     "strong", "b", "em", "i", "u", "s", "small", "sub", "sup", "code", "pre",
     "blockquote", "q", "cite",
@@ -30,6 +41,9 @@ const CONFIG: Parameters<typeof DOMPurify.sanitize>[1] = {
   FORBID_TAGS: ["script", "style", "iframe", "frame", "object", "embed", "link", "meta", "form", "input", "button", "select", "textarea"],
   FORBID_ATTR: ["onerror", "onload", "onclick", "onmouseover", "onfocus", "onblur", "onchange", "onsubmit", "style", "srcdoc", "formaction"],
   ALLOW_DATA_ATTR: false,
+  // Kept false on purpose, now that `#text` is allowed: the text inside a
+  // *forbidden* tag still goes with it, so `<script>alert(1)</script>` leaves
+  // nothing behind rather than printing its source as prose.
   KEEP_CONTENT: false,
 };
 

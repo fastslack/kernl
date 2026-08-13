@@ -25,7 +25,10 @@ import { z } from "zod";
 import type { ToolDefinition, ToolResult } from "../types.js";
 import type { LicenseService } from "./types.js";
 
-const UPGRADE_URL = "https://github.com/fastslack/kernl/pro";
+// Where someone who hit a locked tool can actually buy it. Not a path inside
+// the GitHub repo — repos have no /pro, so the previous value 404'd for every
+// user who ever saw this message.
+const UPGRADE_URL = "https://lifekernl.com/pricing";
 
 function lockedResult(moduleName: string, feature: string): ToolResult {
   return {

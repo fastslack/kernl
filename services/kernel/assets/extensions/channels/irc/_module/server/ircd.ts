@@ -72,6 +72,15 @@ export class IrcServer {
   /** Set by the bridge layer to route user→channel/nick messages into the kernel. */
   onMessage: ((ev: InboundEvent) => void) | null = null;
 
+  /**
+   * Veto/observe hook for JOIN, set by the upstream relay. Returning false
+   * aborts the join; the hook owns telling the client why.
+   */
+  onBeforeJoin: ((client: IrcClient, channel: string) => boolean) | null = null;
+
+  /** Observed after a client parts a channel, so the relay can PART upstream. */
+  onPart: ((client: IrcClient, channel: string) => void) | null = null;
+
   constructor(
     private cfg: IrcServerConfig,
     private store: IrcStore,
@@ -325,6 +334,9 @@ export class IrcServer {
 
   private doJoin(client: IrcClient, name: string, opts: { silent?: boolean } = {}): void {
     if (!name.startsWith("#")) name = "#" + name;
+    // The upstream relay vetoes joins to networks the client does not own, and
+    // performs the upstream JOIN for the ones it does.
+    if (this.onBeforeJoin && !this.onBeforeJoin(client, name)) return;
     const key = name.toLowerCase();
     let chan = this.channels.get(key);
     if (!chan) {
@@ -397,6 +409,7 @@ export class IrcServer {
     this.broadcastToChannel(chan, { prefix: client.mask(), command: "PART", params: [chan.name, reason] });
     chan.members.delete(client.id);
     if (client.account) this.store.removeMembership(chan.name, client.account);
+    this.onPart?.(client, chan.name);
   }
 
   private cmd_NAMES(client: IrcClient, msg: IrcMessage): void {
@@ -786,6 +799,90 @@ export class IrcServer {
     this.nicks.set(nick.toLowerCase(), c);
     this.store.upsertAccount({ account, nick, is_agent: true });
     return c;
+  }
+
+  // ── upstream relay support ──────────────────────────────────
+
+  /** Ensure a plain (non-office) channel exists. Used for mirrored upstream channels. */
+  ensureChannel(name: string): void {
+    if (!name.startsWith("#")) name = "#" + name;
+    const key = name.toLowerCase();
+    if (this.channels.has(key)) return;
+    const row = this.store.upsertChannel({ name });
+    this.channels.set(key, {
+      name,
+      members: new Map(),
+      topic: row.topic,
+      topicBy: row.topic_by,
+      topicAt: row.topic_at,
+      e2e: row.e2e === 1,
+      noExternal: true,
+      isOffice: false,
+    });
+  }
+
+  /**
+   * Pseudo-client mirroring a user that lives on an upstream network, so
+   * NAMES/WHO/WHOIS work on upstream nicks. Flagged as non-real so it never
+   * counts as a connected client.
+   */
+  ensureRelayUser(nick: string): IrcClient {
+    const existing = this.nicks.get(nick.toLowerCase());
+    if (existing) return existing;
+    const c = new IrcClient({ host: "upstream", sink: () => {} });
+    c.nick = nick;
+    c.user = "relay";
+    c.realname = nick;
+    c.isAgent = true;
+    c.registered = true;
+    c.gotNick = true;
+    c.gotUser = true;
+    this.clients.set(c.id, c);
+    this.nicks.set(nick.toLowerCase(), c);
+    return c;
+  }
+
+  /** Put a relay pseudo-user in a mirrored channel's member list. */
+  addRelayMember(nick: string, channel: string, prefix = ""): void {
+    const chan = this.channels.get(channel.toLowerCase());
+    if (!chan) return;
+    const c = this.ensureRelayUser(nick);
+    if (!chan.members.has(c.id)) chan.members.set(c.id, { client: c, prefix });
+  }
+
+  /** Remove a relay pseudo-user from a mirrored channel. */
+  removeRelayMember(nick: string, channel: string): void {
+    const chan = this.channels.get(channel.toLowerCase());
+    const c = this.nicks.get(nick.toLowerCase());
+    if (!chan || !c) return;
+    chan.members.delete(c.id);
+  }
+
+  /** Drop a relay pseudo-user entirely (upstream QUIT). */
+  removeRelayUser(nick: string): void {
+    const c = this.nicks.get(nick.toLowerCase());
+    if (!c || !c.isAgent) return;
+    for (const chan of this.channels.values()) chan.members.delete(c.id);
+    this.nicks.delete(nick.toLowerCase());
+    this.clients.delete(c.id);
+  }
+
+  /** Every live session of an account — where a relayed private message goes. */
+  clientsForAccount(account: string): IrcClient[] {
+    if (!account) return [];
+    return [...this.clients.values()].filter((c) => c.account === account && !c.isAgent);
+  }
+
+  /**
+   * Sessions belonging to an upstream owner. An owner is a SASL account when
+   * the server has authentication configured, and a plain nick when it does
+   * not — otherwise a kernel with no SASL password has no way to own anything.
+   */
+  clientsForOwner(owner: string): IrcClient[] {
+    if (!owner) return [];
+    return [...this.clients.values()].filter(
+      (c) => !c.isAgent && (c.account ? c.account === owner : c.nick === owner),
+    );
   }
 
   /** Ensure an office channel exists and is mapped. */

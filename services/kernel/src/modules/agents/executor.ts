@@ -14,6 +14,8 @@ import { RankingService } from "../../core/ranking/service.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 import type { Agent, AgentRun, AgentStep } from "./types.js";
 import type { AgentService } from "./service.js";
+import { normalizeDriverResult, driverThrewOutcome } from "./driver-result.js";
+import type { BuiltinHandler } from "./builtin-handlers.js";
 import type { AltExecutorLike, EvalServiceLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveAgentSystemPrompt, resolveAgentGoalTemplate, resolveAgentLanguage } from "./i18n.js";
@@ -33,6 +35,35 @@ import {
 } from "../../core/i18n/prompts.js";
 
 type LlmToolDef = LlmLoopTool;
+
+/**
+ * Keep only the chain entries whose provider can actually run a tool loop.
+ *
+ * An agent run hands its whole tool catalogue to the provider. A provider that
+ * declares `supportsToolLoop: false` — today only the claude_code CLI shim,
+ * which runs a single turn with no tools — will not execute a single one of
+ * them; it fails with a turn-limit error that names neither tools nor the
+ * provider's limitation. Dropping it here turns a confusing runtime failure
+ * into a chain that either works or reports precisely why it cannot.
+ *
+ * With no tools in play the provider is perfectly good, so the filter only
+ * applies when the run is actually sending some.
+ */
+export function selectToolCapable<T extends { provider: ChatLlmProvider; configProvider: string }>(
+  chain: T[],
+  toolCount: number,
+): { chain: T[]; dropped: string[] } {
+  if (toolCount <= 0) return { chain, dropped: [] };
+  const dropped: string[] = [];
+  const kept = chain.filter((entry) => {
+    if (entry.provider.supportsToolLoop === false) {
+      dropped.push(entry.provider.name);
+      return false;
+    }
+    return true;
+  });
+  return { chain: kept, dropped };
+}
 
 export interface ExecutionResult {
   status: "completed" | "failed";
@@ -166,8 +197,8 @@ export class AgentExecutor {
   }
 
   /** Builtin handlers — when set, agent.builtin_handler short-circuits LLM path. */
-  private builtinHandlers: Map<string, () => Promise<string>> = new Map();
-  setBuiltinHandlers(handlers: Map<string, () => Promise<string>>): void {
+  private builtinHandlers: Map<string, BuiltinHandler> = new Map();
+  setBuiltinHandlers(handlers: Map<string, BuiltinHandler>): void {
     this.builtinHandlers = handlers;
     log.info(`AgentExecutor: ${handlers.size} builtin handlers registered`);
   }
@@ -212,26 +243,40 @@ export class AgentExecutor {
         run_id: run.id,
         goal,
       });
-      try {
-        const result = await handler();
-        events?.emit("agent:flow:run_completed", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          status: "completed", steps_count: 1, tokens_used: 0,
-          result_preview: result.slice(0, 200),
+      // Same normalization as the scheduler's cron path: a handler that throws
+      // or returns { ok: false } fails the run, and either way the outcome
+      // feeds the persistent circuit breaker. Manual "Run now" must count
+      // exactly like a scheduled run — otherwise a broken agent could be kept
+      // alive (or paused) depending only on who triggered it.
+      const outcome = await handler()
+        .then((raw) => normalizeDriverResult(raw))
+        .catch((err) => {
+          log.error(`Builtin handler "${agent.builtin_handler}" threw:`, err);
+          return driverThrewOutcome(err);
         });
-        this.activeRuns.delete(run.id);
-        return { status: "completed", result, error: "", steps_count: 1, tokens_used: 0 };
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        log.error(`Builtin handler "${agent.builtin_handler}" failed:`, err);
-        events?.emit("agent:flow:run_completed", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          status: "failed", steps_count: 1, tokens_used: 0,
-          error: errMsg,
-        });
-        this.activeRuns.delete(run.id);
-        return { status: "failed", result: "", error: errMsg, steps_count: 1, tokens_used: 0 };
+
+      events?.emit("agent:flow:run_completed", {
+        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+        status: outcome.ok ? "completed" : "failed", steps_count: 1, tokens_used: 0,
+        result_preview: outcome.text.slice(0, 200),
+        error: outcome.error,
+      });
+      service.recordRunOutcome(agent.id, {
+        ok: outcome.ok,
+        error: outcome.error,
+        run_id: run.id,
+      });
+      this.activeRuns.delete(run.id);
+      if (!outcome.ok) {
+        log.error(`Builtin handler "${agent.builtin_handler}" failed — ${outcome.error}`);
       }
+      return {
+        status: outcome.ok ? "completed" : "failed",
+        result: outcome.text,
+        error: outcome.error,
+        steps_count: 1,
+        tokens_used: 0,
+      };
     }
 
     // Route a claude_code agents al SDK — keep declarative chains/auto-eval
@@ -536,19 +581,46 @@ export class AgentExecutor {
     // Last-resort safety net: every chain entry pointed at an unavailable
     // provider (no key, never started, etc). Pick any provider that's
     // alive at all so the agent doesn't dead-end on config mistakes.
+    // Tool-capable only — grabbing "anything alive" is how a single-turn
+    // provider ended up being handed an agent's whole tool catalogue.
     if (effectiveChain.length === 0) {
       for (const [name, p] of this.providers) {
         if (!p.available()) continue;
+        if (llmTools.length > 0 && p.supportsToolLoop === false) continue;
         effectiveChain.push({ provider: p, model: "", configProvider: name });
         log.warn(`Agent "${agent.name}": entire chain unavailable, last-resort fallback to ${name}/(default)`);
         break;
       }
     }
+
+    // Drop providers that cannot execute the tools this run is about to send.
+    // Done after availability and before the health re-ordering, so a
+    // tool-incapable provider can never become effectiveChain[0].
+    const capable = selectToolCapable(effectiveChain, llmTools.length);
+    if (capable.dropped.length > 0) {
+      log.warn(
+        `Agent "${agent.name}": dropped ${capable.dropped.join(", ")} from the chain — ` +
+          `${llmTools.length} tools to run and those providers cannot execute a tool loop.`,
+      );
+      effectiveChain.length = 0;
+      effectiveChain.push(...capable.chain);
+    }
+
     if (effectiveChain.length === 0) {
+      const toolBlocked = capable.dropped.length > 0;
+      // This run just proved the cached readiness verdict wrong, or confirmed
+      // it. Either way the next gate check should re-probe rather than trust a
+      // verdict from before whatever broke.
+      void import("../../core/llm/readiness.js")
+        .then((m) => m.markLlmReadinessStale("an agent run found no usable provider"))
+        .catch(() => { /* readiness is optional wiring — never break a run over it */ });
       return {
         status: "failed",
         result: "",
-        error: `No available LLM provider for chain: ${rawChain.map(e => `${e.provider || "(default)"}/${e.model || "(default)"}`).join(", ")}`,
+        error: toolBlocked
+          ? `No LLM provider in the chain can run tool calls. Dropped: ${capable.dropped.join(", ")}. ` +
+            `Configure a provider that supports tools (Settings → AI), or set this agent's executor to "claude_code" to use the CLI's own tool loop.`
+          : `No available LLM provider for chain: ${rawChain.map(e => `${e.provider || "(default)"}/${e.model || "(default)"}`).join(", ")}`,
         steps_count: 0,
         tokens_used: 0,
       };

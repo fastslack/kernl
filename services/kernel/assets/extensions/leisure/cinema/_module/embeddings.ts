@@ -2,11 +2,9 @@
  * Cinema embeddings — turns rows in `cinema_titles` into vectors and
  * stores them on `(:CinemaTitle)` nodes in Neo4j with a vector index.
  *
- * Why a unique label: SNOMED CT shares the Neo4j database (per
- * CLAUDE.md), so kernel queries must always filter their own nodes.
- * SNOMED has no `:CinemaTitle` label — `MATCH (c:CinemaTitle)` is
- * automatically scoped without needing extra `WHERE c.foo IS NOT NULL`
- * gates.
+ * Why a unique label: `MATCH (c:CinemaTitle)` scopes every query to this
+ * module's own nodes without extra `WHERE c.foo IS NOT NULL` gates, and
+ * keeps them separate from whatever else the graph grows to hold.
  *
  * The vector index name is parameterized by the model id so changing
  * the embedding model creates a fresh index, lets us re-embed in the
@@ -96,6 +94,23 @@ export async function ensureCinemaVectorIndex(
   // identifier-name interpolation safe (sanitised in indexNameFor).
   const dim = Math.floor(client.dim);
   try {
+    // Uniqueness on the key this module MERGEs by. Without it, `MERGE` is only
+    // atomic within a transaction, so two batches writing the same identifier
+    // concurrently each create a node — the vector index then holds two
+    // half-populated copies and searches return the same film twice. Best
+    // effort: a graph that already carries duplicates rejects this, and the
+    // catalogue projection repairs and retries it.
+    await graph
+      .run(
+        `CREATE CONSTRAINT cinema_title_identifier IF NOT EXISTS
+         FOR (c:${CINEMA_LABEL}) REQUIRE c.identifier IS UNIQUE`,
+      )
+      .catch((err: unknown) => {
+        log.warn(
+          `cinema: could not assert uniqueness on ${CINEMA_LABEL}.identifier — ` +
+          `${err instanceof Error ? err.message : String(err)}`,
+        );
+      });
     await graph.run(
       `
       CREATE VECTOR INDEX \`${indexName}\` IF NOT EXISTS

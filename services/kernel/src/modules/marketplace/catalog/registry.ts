@@ -188,7 +188,7 @@ export class CatalogRegistry {
     }
 
     // Remote providers: download the watermarked bundle, install it, fold the
-    // watermark into the install receipt, then clean up the temp .kernlext.
+    // watermark into the install receipt, then clean up the temp .kernl.
     const remoteProvider = this.providers.find(
       (p): p is RemoteProvider => p.name === item.origin.provider && p instanceof RemoteProvider,
     );

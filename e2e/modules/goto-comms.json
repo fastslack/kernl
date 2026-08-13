@@ -4,21 +4,9 @@
   "params": {},
   "actions": [
     {
-      "type": "goto",
-      "value": "/"
-    },
-    {
-      "type": "wait",
-      "selector": "#app-ready",
-      "timeout": 45000
-    },
-    {
-      "type": "goto",
-      "value": "/#comms"
-    },
-    {
-      "type": "wait",
-      "value": "1000"
+      "comment": "Was `goto /` + wait for #app-ready + goto /#comms. Both halves were stale: #app-ready has never existed in this codebase, and the dashboard serves real SvelteKit routes, so the hash never resolved to a view. Comms is now an extension page (people-suite) mounted at /comms.",
+      "$use": "goto-view",
+      "params": { "path": "/comms", "settle": "1000" }
     }
   ]
 }

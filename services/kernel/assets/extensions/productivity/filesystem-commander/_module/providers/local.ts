@@ -6,7 +6,7 @@
  * pointing outside the scope is rejected with `PathOutOfScopeError`.
  */
 
-import { createReadStream, createWriteStream } from "node:fs";
+import { accessSync, constants, createReadStream, createWriteStream } from "node:fs";
 import {
   lstat,
   mkdir,
@@ -80,6 +80,27 @@ export class LocalProvider implements FsProvider {
 
   getAllowedRoots(): string[] {
     return [...this.roots];
+  }
+
+  /**
+   * Each root plus whether this process can actually write into it.
+   *
+   * Probed rather than configured: a root can be unwritable because the mount
+   * is read-only, because of ownership, or because of the mode bits, and the
+   * config knows about none of those. The UI uses it to disable operations
+   * that would otherwise fail only after the user committed to them.
+   */
+  getRootsInfo(): Array<{ path: string; writable: boolean }> {
+    return this.roots.map((path) => {
+      let writable = false;
+      try {
+        accessSync(path, constants.W_OK);
+        writable = true;
+      } catch {
+        // Read-only mount, wrong owner, or restrictive mode — all mean "no".
+      }
+      return { path, writable };
+    });
   }
 
   async list(path: string): Promise<FsListing> {

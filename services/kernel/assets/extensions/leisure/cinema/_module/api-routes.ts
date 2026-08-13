@@ -3,7 +3,8 @@
  *
  *   GET  /api/cinema/titles               list local catalog with filters
  *   GET  /api/cinema/title/:identifier    one title (full row)
- *   GET  /api/cinema/search?q=…           semantic search via Neo4j
+ *   GET  /api/cinema/search?q=…           local catalogue (fts | semantic | hybrid)
+ *   GET  /api/cinema/search?q=…&scope=remote   archive.org itself, no index needed
  *   POST /api/cinema/watchlist            { identifier, watchlist:bool }
  *   POST /api/cinema/watched              { identifier, watched:bool }
  *   GET  /api/cinema/ingest/status        recent ingest runs + counts
@@ -23,7 +24,17 @@ import type { CinemaService } from "./service.js";
 import type { CinemaSubsService, PublisherTrust } from "./subs-service.js";
 import type { DiscoveryRegistry } from "./discovery/registry.js";
 import type { EmbedRunner } from "./embed-runner.js";
+import type { GraphProjectionRunner } from "./graph-projection-runner.js";
+import type { GraphResolveRunner } from "./graph-resolve-runner.js";
+import { clearStaleProposalStamps, resolveComponents, revertGraphProposals } from "./graph-resolve.js";
 import type { TranslateRunner } from "./translate-runner.js";
+import type { CanonicalService } from "./canonical/service.js";
+import type { CanonicalRunner, CanonicalPhase } from "./canonical/runner.js";
+import type { MediaProbeRunner } from "./media-runner.js";
+import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { probeItem, recordFacts } from "./archive-files.js";
+import { canonRails, syncCanonLists, canonListByKey } from "./canonical/canon.js";
+import { similarTo, forYou } from "./recommend.js";
 import type {
   CinemaDirectoriesService,
   CreateDirectoryInput,
@@ -68,6 +79,12 @@ export function registerCinemaRoutes(
   dirsProviderRef: () => NostrDirectoriesProvider | null = () => null,
   localIdentityRef: () => NostrIdentity | null = () => null,
   translateRunnerRef: () => TranslateRunner | null = () => null,
+  canonicalRef: () => CanonicalService | null = () => null,
+  canonicalRunnerRef: () => CanonicalRunner | null = () => null,
+  mediaRunnerRef: () => MediaProbeRunner | null = () => null,
+  sqliteRef: () => SqliteDb | null = () => null,
+  graphProjectionRunnerRef: () => GraphProjectionRunner | null = () => null,
+  graphResolveRunnerRef: () => GraphResolveRunner | null = () => null,
 ): void {
   // ── GET /api/cinema/titles ──────────────────────────────────────
   server.get("/api/cinema/titles", async (req, res) => {
@@ -88,8 +105,29 @@ export function registerCinemaRoutes(
       const tagsMatch: "all" | "any" = tagsMatchRaw === "any" ? "any" : "all";
       const language = params.get("language") || undefined;
       const sortRaw = params.get("sort") ?? "downloads";
-      const sort = (["downloads", "year_desc", "year_asc", "added_desc", "rating"] as const)
+      const sort = (["downloads", "year_desc", "year_asc", "added_desc", "rating", "best"] as const)
         .find((s) => s === sortRaw) ?? "downloads";
+      const kindRaw = params.get("kind");
+      const kind = kindRaw === "film" || kindRaw === "series" ? kindRaw : undefined;
+      // Opt-in, never a default: the unidentified tail holds the industrial
+      // and educational cinema the archive is uniquely good at.
+      const identifiedOnly = params.get("identified_only") === "1";
+      // Collapse the many uploads of one film into one row. Also changes what
+      // the row's downloads and votes MEAN — they become the work's totals.
+      const collapse = params.get("collapse") === "1";
+      // File-level filters. `min_minutes` rather than seconds because that is
+      // the unit anyone thinks in when they say "at least a feature".
+      const minMinutes = parseInt(params.get("min_minutes") ?? "", 10);
+      const minDurationSec = Number.isFinite(minMinutes) && minMinutes > 0
+        ? minMinutes * 60
+        : undefined;
+      const minHeight = parseInt(params.get("min_height") ?? "", 10) || undefined;
+      const hasSubtitles = params.get("has_subtitles") === "1";
+      const playableOnly = params.get("playable_only") === "1";
+      // Only a rail that exists; an unknown key would otherwise silently
+      // return an empty grid with no hint as to why.
+      const canonList = canonListByKey(params.get("canon_list") ?? "")?.key;
+      const canonOnly = params.get("canon_only") === "1";
 
       const filter = {
         query,
@@ -101,6 +139,15 @@ export function registerCinemaRoutes(
         yearMin,
         yearMax,
         watchlist: watchlist || undefined,
+        kind,
+        identifiedOnly: identifiedOnly || undefined,
+        collapse: collapse || undefined,
+        minDurationSec,
+        minHeight,
+        hasSubtitles: hasSubtitles || undefined,
+        playableOnly: playableOnly || undefined,
+        canonList,
+        canonOnly: canonOnly || undefined,
         sort,
       } as const;
 
@@ -164,6 +211,38 @@ export function registerCinemaRoutes(
       const q = (url.searchParams.get("q") ?? "").trim();
       if (!q) return server.json(res, 400, { error: "query string `q` required" });
       const limit = clampInt(url.searchParams.get("limit"), 24, 1, 100);
+
+      // ── scope=remote — search archive.org instead of the local catalogue.
+      //
+      // The local table is only what the ingester has walked so far, and the
+      // semantic mode over it wants an embedding per row before the first
+      // query. archive.org runs a Solr index over everything it holds and
+      // answers for free, so finding a film needs neither.
+      if ((url.searchParams.get("scope") ?? "local").toLowerCase() === "remote") {
+        const { searchArchive } = await import("./archive-search.js");
+        const page = clampInt(url.searchParams.get("page"), 1, 1, 500);
+        const yearFrom = clampInt(url.searchParams.get("year_from"), 0, 0, 2999);
+        const yearTo = clampInt(url.searchParams.get("year_to"), 0, 0, 2999);
+        const remote = await searchArchive({
+          q, rows: limit, page,
+          yearFrom: yearFrom || undefined,
+          yearTo: yearTo || undefined,
+          language: url.searchParams.get("language") ?? undefined,
+          sort: (url.searchParams.get("sort") as "downloads" | "newest" | null) ?? undefined,
+          everywhere: url.searchParams.get("everywhere") === "1",
+        });
+        // Rows already in the catalogue are marked, so the UI can show what is
+        // downloadable versus what would have to be added first.
+        const items = remote.items.map((t) => ({
+          ...t,
+          _local: !!service.getByIdentifier(t.identifier),
+        }));
+        return server.json(res, 200, {
+          items, query: q, mode: "archive", scope: "remote",
+          total: items.length, totalRemote: remote.total, page,
+        });
+      }
+
       const modeRaw = (url.searchParams.get("mode") ?? "hybrid").toLowerCase();
       const mode: "hybrid" | "semantic" | "fts" =
         modeRaw === "semantic" ? "semantic" :
@@ -380,6 +459,106 @@ export function registerCinemaRoutes(
     }
   });
 
+  // ── Catalogue → graph projection ─────────────────────────────────
+  // GET  /api/cinema/graph/status — per-entity cursors + rate
+  // POST /api/cinema/graph/start  { batch_size?, reset? }
+  // POST /api/cinema/graph/stop   (graceful, finishes current batch)
+  server.get("/api/cinema/graph/status", (_req, res) => {
+    try {
+      const runner = graphProjectionRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
+      server.json(res, 200, runner.snapshot());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/start", async (req, res) => {
+    try {
+      const runner = graphProjectionRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
+      const body = await server.parseBody<{ batch_size?: number; reset?: boolean }>(req);
+      const snap = runner.start({ batchSize: body?.batch_size, reset: body?.reset === true });
+      server.json(res, 200, snap);
+    } catch (err) {
+      log.error("cinema: graph projection start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/stop", async (_req, res) => {
+    try {
+      const runner = graphProjectionRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
+      const snap = await runner.stop();
+      server.json(res, 200, snap);
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Graph-assisted identity recovery ─────────────────────────────
+  // GET  /api/cinema/graph/resolve/status
+  // POST /api/cinema/graph/resolve/start      { batch_size?, reset? }
+  // POST /api/cinema/graph/resolve/stop
+  // POST /api/cinema/graph/resolve/components  run WCC, send proposals to review
+  // POST /api/cinema/graph/resolve/revert      undo every graph proposal
+  server.get("/api/cinema/graph/resolve/status", (_req, res) => {
+    try {
+      const runner = graphResolveRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "resolve runner not wired" });
+      server.json(res, 200, runner.snapshot());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/start", async (req, res) => {
+    try {
+      const runner = graphResolveRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "resolve runner not wired" });
+      const body = await server.parseBody<{ batch_size?: number; reset?: boolean }>(req);
+      server.json(res, 200, runner.start({ batchSize: body?.batch_size, reset: body?.reset === true }));
+    } catch (err) {
+      log.error("cinema: resolve start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/stop", async (_req, res) => {
+    try {
+      const runner = graphResolveRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "resolve runner not wired" });
+      server.json(res, 200, await runner.stop());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/components", async (_req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "sqlite not wired" });
+      const t0 = Date.now();
+      const result = await resolveComponents(db, graphRef());
+      server.json(res, 200, { ...result, duration_ms: Date.now() - t0 });
+    } catch (err) {
+      log.error("cinema: component resolution failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/revert", (_req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "sqlite not wired" });
+      const reverted = revertGraphProposals(db);
+      server.json(res, 200, { reverted, stamps_cleared: clearStaleProposalStamps(db) });
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
   // ── Translation runner ───────────────────────────────────────────
   // GET  /api/cinema/translate/status — snapshot for the UI progress bar
   // POST /api/cinema/translate/start  { concurrency? }
@@ -414,6 +593,263 @@ export function registerCinemaRoutes(
       const snap = await runner.stop();
       server.json(res, 200, snap);
     } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Discovery from the vectors ───────────────────────────────────
+  // GET /api/cinema/similar/:identifier  the route from one film to the next
+  // GET /api/cinema/for-you              the catalogue against your taste
+  //
+  // Both hydrate to full rows via filterByIds, so the grid renders them with
+  // exactly the same card as everything else — badges, canon rails and all.
+  server.get("/api/cinema/similar/:identifier", async (req, res) => {
+    try {
+      const embedder = embedderRef();
+      if (!embedder) return server.json(res, 503, { error: "embeddings client not wired" });
+      const identifier =
+        ((req as unknown as { params: { identifier: string } }).params.identifier ?? "").trim();
+      if (!identifier) return server.json(res, 400, { error: "identifier required" });
+
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const limit = clampInt(url.searchParams.get("limit"), 12, 1, 60);
+      const hits = await similarTo(embedder, graphRef(), identifier, limit);
+      // filterByIds preserves the caller's order, so cosine ranking survives.
+      const items = service.filterByIds(hits.map((h) => h.identifier), {});
+      server.json(res, 200, { items, total: items.length });
+    } catch (err) {
+      log.error("cinema: similar failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.get("/api/cinema/for-you", async (req, res) => {
+    try {
+      const db = sqliteRef();
+      const embedder = embedderRef();
+      if (!db) return server.json(res, 503, { error: "database not wired" });
+      if (!embedder) return server.json(res, 503, { error: "embeddings client not wired" });
+
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const limit = clampInt(url.searchParams.get("limit"), 24, 1, 60);
+      const result = await forYou(db, embedder, graphRef(), limit);
+      const items = service.filterByIds(result.hits.map((h) => h.identifier), {});
+      // `reason` is passed through rather than collapsed into an empty list:
+      // "save a few films first" and "run the embed runner" are different
+      // messages and the page needs to tell them apart.
+      server.json(res, 200, {
+        items,
+        total: items.length,
+        profile_size: result.profile_size,
+        reason: result.reason,
+      });
+    } catch (err) {
+      log.error("cinema: for-you failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Canon rails ──────────────────────────────────────────────────
+  // GET  /api/cinema/canon/rails  the lists, and how much of each is held
+  // POST /api/cinema/canon/sync   refresh membership from Wikidata
+  server.get("/api/cinema/canon/rails", (_req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "database not wired" });
+      // `held` lets the page hide a rail the catalogue has nothing from,
+      // rather than offering an empty shelf.
+      server.json(res, 200, { rails: canonRails(db) });
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/canon/sync", async (_req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "database not wired" });
+      const t0 = Date.now();
+      const result = await syncCanonLists(db);
+      server.json(res, 200, { ...result, duration_ms: Date.now() - t0 });
+    } catch (err) {
+      log.error("cinema: canon sync failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── File-level probe ─────────────────────────────────────────────
+  // GET  /api/cinema/media/status      how much of the catalogue is probed
+  // POST /api/cinema/media/start       { concurrency? }
+  // POST /api/cinema/media/stop
+  // POST /api/cinema/media/probe       { identifier } — one item, now
+  server.get("/api/cinema/media/status", (_req, res) => {
+    try {
+      const runner = mediaRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "media runner not wired" });
+      server.json(res, 200, runner.snapshot());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/media/start", async (req, res) => {
+    try {
+      const runner = mediaRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "media runner not wired" });
+      const body = await server.parseBody<{ concurrency?: number }>(req);
+      server.json(res, 200, runner.start({ concurrency: body?.concurrency }));
+    } catch (err) {
+      log.error("cinema: media probe start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/media/stop", async (_req, res) => {
+    try {
+      const runner = mediaRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "media runner not wired" });
+      server.json(res, 200, await runner.stop());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // On-demand probe, so opening a title's page fills in its facts without
+  // waiting for the background walk to reach it.
+  server.post("/api/cinema/media/probe", async (req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "database not wired" });
+      const body = await server.parseBody<{ identifier?: string }>(req);
+      const identifier = (body?.identifier ?? "").trim();
+      if (!identifier) return server.json(res, 400, { error: "identifier required" });
+      const facts = await probeItem(identifier);
+      recordFacts(db, identifier, facts);
+      server.json(res, 200, { identifier, ...facts });
+    } catch (err) {
+      log.error("cinema: media probe failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Work-level dedupe ────────────────────────────────────────────
+  // POST /api/cinema/works/rebuild        regroup the whole catalogue
+  // GET  /api/cinema/works/stats          how much duplication there is
+  // GET  /api/cinema/works/copies/:id     the other uploads of this film
+  server.post("/api/cinema/works/rebuild", async (_req, res) => {
+    try {
+      const t0 = Date.now();
+      const result = service.rebuildWorks();
+      server.json(res, 200, { ...result, duration_ms: Date.now() - t0 });
+    } catch (err) {
+      log.error("cinema: works rebuild failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.get("/api/cinema/works/stats", (_req, res) => {
+    try {
+      server.json(res, 200, service.worksStats());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.get("/api/cinema/works/copies/:identifier", (req, res) => {
+    try {
+      const identifier =
+        ((req as unknown as { params: { identifier: string } }).params.identifier ?? "").trim();
+      if (!identifier) return server.json(res, 400, { error: "identifier required" });
+      const items = service.siblingCopies(identifier);
+      server.json(res, 200, { items, total: items.length });
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Canonical identification ─────────────────────────────────────
+  // GET  /api/cinema/canonical/status  corpus + match + ratings progress
+  // POST /api/cinema/canonical/start   { phase?, slices_per_pass?, batch_size? }
+  // POST /api/cinema/canonical/stop    (graceful, finishes current batch)
+  // GET  /api/cinema/canonical/review  the grey zone awaiting a human
+  // POST /api/cinema/canonical/decide  { identifier, qid }  — "" qid = reject
+  server.get("/api/cinema/canonical/status", (_req, res) => {
+    try {
+      const runner = canonicalRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "canonical runner not wired" });
+      server.json(res, 200, runner.snapshot());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/canonical/start", async (req, res) => {
+    try {
+      const runner = canonicalRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "canonical runner not wired" });
+      const body = await server.parseBody<{
+        phase?: string; slices_per_pass?: number; batch_size?: number;
+      }>(req);
+      // Only a phase the runner actually has; anything else starts from the
+      // beginning rather than throwing at the user.
+      const phase = (["corpus", "match", "ratings"] as const)
+        .find((p) => p === body?.phase) as CanonicalPhase | undefined;
+      const snap = runner.start({
+        phase,
+        slicesPerPass: body?.slices_per_pass,
+        batchSize: body?.batch_size,
+      });
+      server.json(res, 200, snap);
+    } catch (err) {
+      log.error("cinema: canonical start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/canonical/stop", async (_req, res) => {
+    try {
+      const runner = canonicalRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "canonical runner not wired" });
+      server.json(res, 200, await runner.stop());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.get("/api/cinema/canonical/review", (req, res) => {
+    try {
+      const canonical = canonicalRef();
+      if (!canonical) return server.json(res, 503, { error: "canonical service not wired" });
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const limit = clampInt(url.searchParams.get("limit"), 50, 1, 200);
+      const offset = clampInt(url.searchParams.get("offset"), 0, 0, 1_000_000);
+      server.json(res, 200, {
+        items: canonical.reviewQueue(limit, offset),
+        total: canonical.countReview(),
+        limit,
+        offset,
+      });
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/canonical/decide", async (req, res) => {
+    try {
+      const canonical = canonicalRef();
+      if (!canonical) return server.json(res, 503, { error: "canonical service not wired" });
+      const body = await server.parseBody<{ identifier?: string; qid?: string }>(req);
+      const identifier = (body?.identifier ?? "").trim();
+      if (!identifier) return server.json(res, 400, { error: "identifier required" });
+      // An empty qid is a deliberate "none of these", not a missing field —
+      // it records a rejection so the matcher stops proposing the same
+      // candidates on every re-run.
+      const qid = (body?.qid ?? "").trim();
+      const ok = canonical.decide(identifier, qid);
+      if (!ok) return server.json(res, 404, { error: "no match row for that identifier" });
+      server.json(res, 200, { identifier, qid, state: qid ? "confirmed" : "rejected" });
+    } catch (err) {
+      log.error("cinema: canonical decide failed", err);
       server.json(res, 500, { error: extractMessage(err) });
     }
   });

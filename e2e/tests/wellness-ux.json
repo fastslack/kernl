@@ -1,0 +1,152 @@
+[
+  {
+    "name": "overview renders live data from every module",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/wellness",
+          "settle": "4000"
+        }
+      },
+      {
+        "type": "screenshot",
+        "value": "wellness-overview"
+      },
+      {
+        "type": "assert_text",
+        "text": "Log Water"
+      },
+      {
+        "type": "assert_count",
+        "selector": ".kpi-row .kpi",
+        "value": ">= 6"
+      }
+    ],
+    "expect": [
+      "Six KPI cards: Weight, Steps, Workouts, Streak, Calories, Medications",
+      "Weight reads 78.4 kg with a date underneath, not a dash",
+      "Steps reads an em-dash with 'not logged yet' — the placeholder, so the grid keeps six columns",
+      "Calories shows a non-zero total",
+      "Nutrition card shows three labelled macro boxes and a water progress bar",
+      "Training card lists a Running session with duration and distance",
+      "The three overview cards end at the same height, so their footer buttons align"
+    ]
+  },
+  {
+    "name": "log water saves via preset chip",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/wellness",
+          "settle": "4000"
+        }
+      },
+      {
+        "type": "click",
+        "text": "Log Water"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      },
+      {
+        "type": "screenshot",
+        "value": "wellness-modal-water"
+      },
+      {
+        "type": "assert_visible",
+        "selector": "[role='dialog']"
+      },
+      {
+        "type": "click",
+        "text": "750 ml"
+      },
+      {
+        "type": "wait",
+        "value": "300"
+      },
+      {
+        "type": "click",
+        "text": "Save Water"
+      },
+      {
+        "type": "wait",
+        "value": "2500"
+      },
+      {
+        "type": "screenshot",
+        "value": "wellness-water-saved"
+      },
+      {
+        "type": "assert_no_text",
+        "text": "Save Water"
+      }
+    ],
+    "expect": [
+      "The water dialog shows four preset chips (250/330/500/750 ml) and a custom field",
+      "The chosen chip is visibly selected",
+      "After saving, the dialog closes, a toast confirms the amount, and the water bar advances"
+    ]
+  },
+  {
+    "name": "page renders in Spanish when the shell locale is es",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "/login"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}'); localStorage.setItem('kernl.welcomeSeen','true'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernel_locale','es'); true;"
+      },
+      {
+        "type": "goto",
+        "value": "/wellness"
+      },
+      {
+        "type": "wait",
+        "selector": ".sidebar"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "screenshot",
+        "value": "wellness-es"
+      },
+      {
+        "type": "assert_text",
+        "text": "Registrar comida"
+      }
+    ],
+    "expect": [
+      "The page is in Spanish: title Bienestar, quick actions Registrar medición / entreno / comida / agua",
+      "KPI labels read Peso, Pasos, Entrenos, Racha, Calorías, Medicamentos",
+      "The macro boxes read Proteínas, Carbohidratos, Grasas"
+    ]
+  },
+  {
+    "name": "empty module shows a guiding empty state",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/wellness",
+          "settle": "4000"
+        }
+      },
+      {
+        "type": "evaluate",
+        "value": "document.querySelectorAll('.empty-state').length"
+      }
+    ],
+    "expect": "Reports how many rich empty states are on the page — expected 0 now that all three modules have data."
+  }
+]

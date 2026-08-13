@@ -75,7 +75,7 @@ export async function runStoreUpdates(deps: StoreUpdateDeps): Promise<StoreUpdat
   const report: StoreUpdateReport = { checked: 0, updated: [], skipped: 0, errors: 0 };
 
   for (const item of catalog) {
-    if (item.type === "office") continue; // offices are blueprints, not .kernlext upgrades
+    if (item.type === "office") continue; // offices are blueprints, not .kernl upgrades
     if (!deps.licenseHas(item.feature)) continue;
 
     const installed = svc.getBySlug(item.slug);

@@ -3,12 +3,12 @@
     "name": "Home (agents-flow) perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -30,12 +30,12 @@
     "name": "Tasks perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/tasks"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/tasks",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -57,12 +57,12 @@
     "name": "CRM perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/crm"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/crm",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -81,15 +81,15 @@
     "expect": "PERF banner visible"
   },
   {
-    "name": "Trading perf",
+    "name": "Finance perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/trading"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Replaces the old '/trading' probe. There is no trading view in this build — no extension declares that nav id and no route serves it, so the navigation resolved to the manifest route guard instead of a page. /finance is the live finance-suite surface. Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/finance",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -102,21 +102,21 @@
       },
       {
         "type": "screenshot",
-        "value": "perf-trading"
+        "value": "perf-finance"
       }
     ],
-    "expect": "PERF banner visible; trading UI rendered"
+    "expect": "PERF banner visible; finance UI rendered"
   },
   {
-    "name": "Analytics perf",
+    "name": "System overview perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/analytics"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Replaces the old '/analytics' probe. `analytics` survives only as a WebSocket channel name; there is no analytics route or page in this build. /sysoverview is the equivalent live overview surface. Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/sysoverview",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -129,7 +129,7 @@
       },
       {
         "type": "screenshot",
-        "value": "perf-analytics"
+        "value": "perf-sysoverview"
       }
     ],
     "expect": "PERF banner visible"
@@ -138,12 +138,12 @@
     "name": "Comms perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/comms"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/comms",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -165,12 +165,12 @@
     "name": "Workspace perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/workspace"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/workspace",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",
@@ -192,12 +192,12 @@
     "name": "Marketplace perf",
     "actions": [
       {
-        "type": "goto",
-        "value": "/marketplace"
-      },
-      {
-        "type": "wait",
-        "value": "4000"
+        "comment": "Was a bare `goto` with no session. Every route here is behind the kernel token and the setup wizard now, so each probe measured the /login redirect rather than the view it names. goto-view seeds the session and waits for the shell first.",
+        "$use": "goto-view",
+        "params": {
+          "path": "/marketplace",
+          "settle": "4000"
+        }
       },
       {
         "type": "evaluate",

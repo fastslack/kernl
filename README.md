@@ -34,7 +34,7 @@ Every conversation starts from zero. Your LLM can't see your tasks, read your in
 
 ## What is Kernl?
 
-Kernl is a **self-hosted** server that plugs your real life into **any** LLM through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One endpoint exposes **~290 tools across 60+ modules** — tasks, contacts, email, finance, calendar, notes, health, shopping, travel and more — to Claude, Cursor, or any MCP client.
+Kernl is a **self-hosted** server that plugs your real life into **any** LLM through the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). One endpoint exposes **103 tools out of the box** — rising past 290 as you enable more of the **71 bundled modules**: tasks, contacts, email, finance, calendar, notes, health, shopping, travel and more — to Claude, Cursor, or any MCP client.
 
 Then it goes past a data bridge: Kernl runs **agents** — autonomous teams (it calls them *offices*) that work in loops, call your tools, and finish jobs while you're away.
 
@@ -58,10 +58,16 @@ Real data. Real actions. On your machine — not in someone else's cloud.
 
 ## 🎬 See it in action
 
-<div align="center">
-<img src="docs/assets/demo.gif" alt="Kernl 3D office — watch your agents work" width="800">
-<br><i>Watch your agents walk between desks and get work done in the live 3D dashboard.</i>
-</div>
+Kernl ships a live 3D view of your agent teams — you watch them move between
+desks and pick up work as it happens. It is at `/agents-flow` once you are
+running, which the quick start below gets you to in about two minutes.
+
+<!-- The recording that belongs here is not made yet. This section used to
+     embed docs/assets/demo.gif, a file that has never existed in the
+     repository, so every visitor landed on a broken image directly under a
+     caption promising a demo. A missing recording is a gap; a broken image is
+     a claim that the project does not look after itself. Put the file here and
+     restore the embed. -->
 
 ## ⚡ Quick start
 
@@ -71,11 +77,21 @@ Zero config. One command. A full stack in ~2 minutes:
 git clone https://github.com/fastslack/kernl.git
 cd kernl
 docker compose up -d --build
+
+# Kernl generates an API token on first boot. Grab it:
+docker compose exec kernel cat /app/data/.kernel-auth-token
 ```
 
 → Dashboard at **http://localhost:3086** · MCP endpoint at **http://localhost:3086/mcp**
 
-No API keys, no host paths, no accounts. Add your LLM keys and channels later from **Settings → AI**. The graph brain (Neo4j) and key-free web search come bundled.
+Paste that token once into the dashboard's login screen and you're in — it's kept in your browser and reused for every request. To pin your own instead, set `KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`.
+
+No host paths, no accounts, nothing to sign up for. First run walks you through
+a four-step setup, and one of those steps is picking an LLM — a cloud key, or a
+local model through LM Studio or Ollama if you would rather nothing left the
+machine at all. The kernel waits for that choice before serving the rest of the
+API, so the dashboard cannot hand you a screen whose every button fails. The
+graph brain (Neo4j) and key-free web search come bundled.
 
 ## 🔥 Why Kernl
 
@@ -85,8 +101,8 @@ No API keys, no host paths, no accounts. Add your LLM keys and channels later fr
 | 🧠 **Real memory** | A graph-backed brain (Neo4j + GDS) links every module, so your AI finally *remembers*. |
 | 🤖 **Agents that act** | Not a chatbot — autonomous *offices* that work in loops and use your tools. |
 | 🔌 **Any LLM, any client** | Claude, OpenAI, Grok, or a local model via LM Studio. Any MCP client connects. |
-| 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernlext` package. |
-| 📊 **~290 tools, 60+ modules** | One surface for your whole life — not fifteen disconnected apps. |
+| 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernl` package. |
+| 📊 **103 tools installed, 71 modules available** | One surface for your whole life — not fifteen disconnected apps. Enable everything and you pass 290 tools. |
 
 ## ⚔️ Kernl vs. the usual options
 
@@ -102,7 +118,7 @@ No API keys, no host paths, no accounts. Add your LLM keys and channels later fr
 
 **Your life, addressable by your AI** — tasks & projects, contacts/CRM, reminders, email (IMAP/SMTP), finance & budgets, calendar, notes, goals, health & training, shopping, travel, documents… 60+ modules, every one exposed as MCP tools.
 
-**A fleet of agents** — cooperating agents with chains, schedules and their own workspaces. Package a whole team as an installable `.kernlext` *office*, and watch them work in a live **3D office view**.
+**A fleet of agents** — cooperating agents with chains, schedules and their own workspaces. Package a whole team as an installable `.kernl` *office*, and watch them work in a live **3D office view**.
 
 **Pluggable everything**
 - **LLM providers** — Claude, OpenAI, Grok, LM Studio (local), and more via extensions.
@@ -139,7 +155,7 @@ The MCP HTTP transport is at `http://localhost:3086/mcp` by default (the officia
 
 ## 🛠️ Build your own
 
-An **extension** is a folder (or a packaged `.kernlext`) with a `manifest.json` plus any of: a backend module (new MCP tools + HTTP routes), agents & offices, agent-scoped skills, a theme, a channel, or a sandbox driver.
+An **extension** is a folder (or a packaged `.kernl`) with a `manifest.json` plus any of: a backend module (new MCP tools + HTTP routes), agents & offices, agent-scoped skills, a theme, a channel, or a sandbox driver.
 
 Keep operator-specific material — named agents, your WhatsApp, regional scrapers — private under `services/kernel/assets/personal-agents/` (gitignored, ideal for a private submodule).
 
@@ -182,16 +198,21 @@ bun run dev                # stdio MCP + HTTP router (delega a services/kernel)
 
 ## Configuration
 
-Everything is environment-driven — copy `.env.example` to `.env`. Minimum keys for Docker runs:
+Everything is environment-driven, and the quick start needs **none of it** —
+`docker compose up` boots with working defaults. Copy `.env.example` to `.env`
+only when you want to override something.
 
-| Variable | Purpose |
+Two secrets are generated and persisted on first boot if you don't set them:
+
+| Variable | If unset |
 |---|---|
-| `HOST_HOME` | Your host home, mounted read-only into the kernel container |
-| `HOST_KERNEL_ROOT` | Absolute host path of this repo (Docker-in-Docker path translation) |
-| `HOST_PROJECTS_ROOT` | Parent dir of sibling repos, mounted at `/host-projects` |
-| `KERNEL_ENCRYPTION_KEY` | 32-byte hex (`openssl rand -hex 32`) for encrypting stored secrets |
+| `KERNEL_AUTH_TOKEN` | A random token is generated and stored as `data/.kernel-auth-token` (mode 600). The API always requires it — there is no unauthenticated mode. |
+| `KERNEL_ENCRYPTION_KEY` | A random 32-byte key is generated and stored as `data/.kernel-encryption-key`. **Back this file up** — without it, encrypted secrets in the database are unrecoverable. |
 
-Everything else (LLM keys, Neo4j creds, feature toggles) is documented inline in `.env.example`.
+The host-path variables (`HOST_HOME`, `HOST_KERNEL_ROOT`, `HOST_PROJECTS_ROOT`)
+belong to the full stack in `docker-compose.full.yml`, not the default one.
+Everything else — LLM keys, Neo4j creds, feature toggles — is documented inline
+in `.env.example`.
 
 ## Scripts
 
@@ -203,6 +224,28 @@ Everything else (LLM keys, Neo4j creds, feature toggles) is documented inline in
 | `bun test` | Run the test suite |
 | `bun run build` | Bundle to `services/kernel/dist/` |
 | `bun run reload` | Rebuild + restart the kernel container |
+
+## Known limitations
+
+Worth knowing before you commit your life to it. None of these are secret — we'd
+rather you read them here than discover them at an awkward moment.
+
+- **Single user.** One kernel, one person. There is user and password
+  infrastructure inside, but no per-user data isolation: everyone who has the
+  API token sees everything. Give each person their own instance; don't share
+  one across a team. ([`docs/MULTI_USER.md`](./docs/MULTI_USER.md))
+- **No auto-update.** Kernl doesn't check for new versions or update itself.
+  Watch releases if you want to know when something ships.
+- **Installers are unsigned.** macOS needs right-click → Open the first time,
+  Windows needs "More info → Run anyway". The signing pipeline is wired but the
+  certificates aren't bought yet. Docker and source installs are unaffected.
+- **Back it up yourself, and check the exit code.** `backup.sh` is solid and
+  verifies its own output, but nothing runs it for you. See
+  [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md).
+- **Neo4j is hungry.** The bundled graph wants ~1–2 GB of RAM on its own. On a
+  small VPS, run the stack without it — Kernl degrades gracefully.
+- **No telemetry, which cuts both ways.** Nothing phones home, so nothing tells
+  us when your install breaks. Bug reports are the only signal we get.
 
 ## Documentation
 

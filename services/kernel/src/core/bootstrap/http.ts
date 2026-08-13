@@ -54,7 +54,7 @@ import {
 import { registerSkillRoutes } from "../../modules/skills/api-routes.js";
 import { registerAgentRoutes } from "../../modules/agents/api-routes.js";
 import { registerSandboxDriverRoutes } from "../sandbox/routes.js";
-import { registerLlmProviderRoutes } from "../llm/provider-routes.js";
+import { registerLlmProviderRoutes, registerClaudeCodeAuthRoutes } from "../llm/provider-routes.js";
 import { registerDbDriverRoutes } from "../db-drivers/api-routes.js";
 import { registerAiConfigRoutes } from "../../modules/config/ai-routes.js";
 import { registerSettingsRoutes } from "../../modules/config/settings-routes.js";
@@ -66,6 +66,7 @@ import type { DashboardProviderLike, WebChatProviderLike, IrcProviderLike } from
 import type { LifeModule, NewsModule, LifeService, NewsService } from "../types/extensions/index.js";
 import type { LicenseService } from "../license/index.js";
 import { registerLicenseRoutes } from "../license/routes.js";
+import { checkForUpdate } from "../update/check.js";
 
 export interface HttpResult {
   httpServer: KernelHttpServer | null;
@@ -241,6 +242,7 @@ export async function initHttpAndMcp(args: {
       }
 
       const llmEnvPath = resolvePath(process.cwd(), ".env");
+      registerClaudeCodeAuthRoutes(httpServer, llmRegistry);
       registerLlmProviderRoutes(httpServer, llmRegistry, modelBlocklist, (slug) => {
         syncProvidersToKernelConfig(config, llmRegistry);
         const envUpdates = providerEnvUpdates(slug, llmRegistry.loadConfig(slug));
@@ -250,6 +252,54 @@ export async function initHttpAndMcp(args: {
         }
         try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* */ }
         reloadLlmClient(config);
+        markLlmReadinessStale(`provider "${slug}" was reconfigured`);
+      });
+
+      // Mirror the stored provider settings into KernelConfig once at boot.
+      // This only ran from the save callback, so anything living solely in the
+      // registry — the Claude Code token, and the model picked for it — was
+      // absent on every fresh start until someone happened to press Save.
+      try {
+        syncProvidersToKernelConfig(config, llmRegistry);
+        // The chat service and the llm() singleton read this config in their
+        // constructors, which already ran — so mirroring alone changes nothing
+        // until they are rebuilt. Same two calls the save path makes.
+        try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* chat may be disabled */ }
+        reloadLlmClient(config);
+      } catch (err) {
+        log.warn("Provider settings could not be mirrored into config at boot", err);
+      }
+
+      // ── Can an agent actually run? ────────────────────────────────
+      //
+      // `isReady()` on a provider only means "installed": the claude-code CLI
+      // ships inside the Agent SDK, so it reports ready on a machine with no
+      // account, and it cannot carry a tool loop at all. The gate below refuses
+      // the API until some provider proves it can take a tool call, and the
+      // probe rebuilds its providers from `config` on every run so a key saved
+      // a second ago is the one being tested.
+      const { initLlmReadiness, ensureLlmReadiness, markLlmReadinessStale } =
+        await import("../llm/readiness.js");
+      const { createLlmReadinessGate } = await import("../llm/readiness-gate.js");
+      const { createChatProviders } = await import("../llm/chat-adapters.js");
+      initLlmReadiness(() =>
+        createChatProviders({
+          anthropicApiKey: config.webIntel.anthropicApiKey,
+          openaiApiKey: config.webIntel.openaiApiKey,
+          lmstudioBaseUrl: config.webIntel.lmstudioBaseUrl,
+          grokApiKey: config.webIntel.grokApiKey,
+          grokDefaultModel: config.webIntel.grokDefaultModel,
+          nvidiaApiKey: config.webIntel.nvidiaApiKey,
+          nvidiaDefaultModel: config.webIntel.nvidiaDefaultModel,
+          claudeCode: config.claudeCode,
+        }),
+      );
+      httpServer.addPrecondition(createLlmReadinessGate());
+      // Fill the cache in the background: boot must not wait on a provider,
+      // and the gate refuses by default until the answer arrives.
+      void ensureLlmReadiness().then((r) => {
+        if (r.ok) log.info(`LLM readiness: ${r.provider} can run agent tools`);
+        else log.warn(`LLM readiness: blocked (${r.reason}) — ${r.detail ?? ""}`);
       });
       // Persist health tracker to sqlite so a kernel restart doesn't
       // re-discover quota/auth/timeout failures from scratch — the next
@@ -273,6 +323,36 @@ export async function initHttpAndMcp(args: {
       const { registerPairingAdminRoutes } = await import("../pairing-admin-routes.js");
       registerPairingAdminRoutes(httpServer, pairingManager);
 
+      // Peering: this instance's signed identity, its friends, and the
+      // transports that reach them. The layer is kernel-wide; cinema's
+      // friends-only directories are simply its first consumer.
+      try {
+        const { PeeringService } = await import("../peering/service.js");
+        const { registerPeeringRoutes } = await import("../peering/routes.js");
+        const { NostrRelayPool } = await import("../nostr/nostr-relay-pool.js");
+        const peering = PeeringService.create({
+          sqlite,
+          encryptionKey: config.encryption.key,
+          version: process.env.KERNEL_VERSION ?? "0",
+          port: config.dashboard.port,
+          // Presence goes to public relays: a few hundred bytes every few
+          // hours, which is what lets a friend find us after we move.
+          pool: process.env.KERNEL_PEERING_ANNOUNCE === "0" ? undefined : new NostrRelayPool(),
+        });
+        if (peering) {
+          void peering.start();
+          registerPeeringRoutes(httpServer, {
+            friends: peering.friends,
+            resolver: peering.resolver,
+            client: peering.client,
+            currentDescriptor: () => peering.currentDescriptor(),
+            selfNpub: () => peering.selfNpub(),
+          });
+        }
+      } catch (err) {
+        log.warn("peering: failed to initialise — instance sharing disabled", err);
+      }
+
       // Auto-register routes from self-registering modules.
       dashboardRegistry.registerAllRoutes(httpServer, sqlite, neo4j);
       // Manifest endpoint for frontend dynamic configuration. Passes the
@@ -280,6 +360,17 @@ export async function initHttpAndMcp(args: {
       // active extensions get merged in on every request.
       httpServer.get("/api/manifest", (_req, res) => {
         httpServer!.json(res, 200, dashboardRegistry.getManifest(extensionsModule.service));
+      });
+
+      // Is a newer Kernl published? Read-only: it never downloads or applies
+      // anything, because migrations run at boot and only go forward, so an
+      // update has to be a moment the user chose. `?fresh=1` skips the 6h
+      // cache for an explicit "check now".
+      httpServer.get("/api/update/status", async (req, res) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        httpServer!.json(res, 200, await checkForUpdate({
+          fresh: url.searchParams.get("fresh") === "1",
+        }));
       });
 
       // Architecture endpoints (topology + metrics)

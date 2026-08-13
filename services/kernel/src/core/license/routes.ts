@@ -40,6 +40,29 @@ export function registerLicenseRoutes(
     });
   });
 
+  // ── GET /api/license/export ──────────────────────────────────────
+  //
+  // The raw JWT, deliberately kept out of /status. It exists because the
+  // licence carries no machine binding — the same token is valid on every
+  // install the owner runs — so moving it to a second machine is a normal
+  // thing to want, and the only way to do it was `docker exec … cat` or
+  // digging through Application Support for a file whose path differs per
+  // platform.
+  //
+  // Separate from /status on purpose: /status is polled by the settings pane
+  // and its response ends up in logs and error reports, and a bearer token
+  // good until 2036 should not ride along with every poll. This route is
+  // reached only when someone asks for it, and the UI copies the result to
+  // the clipboard rather than rendering it on screen.
+  server.get("/api/license/export", (_req, res) => {
+    const jwt = license.jwt();
+    if (!jwt) {
+      server.json(res, 404, { error: "No license installed" });
+      return;
+    }
+    server.json(res, 200, { jwt });
+  });
+
   // ── POST /api/license/set ────────────────────────────────────────
   // Body: { jwt: string }. Validates + persists atomically. Returns 400 on
   // any rejection with the typed `status` so the UI can render the right

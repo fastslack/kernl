@@ -7,7 +7,8 @@
  */
 
 import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { cpSync } from "node:fs";
+import { join, relative, resolve, sep } from "node:path";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { Identity } from "../../core/attestation.js";
 import { newId, isoNow } from "../../core/helpers.js";
@@ -21,6 +22,7 @@ import type {
 } from "./types.js";
 import type { ExtensionManifest } from "./schema.js";
 import { peekManifest, unpackBundle } from "./bundle.js";
+import { ensureExtensionPackages, needsPackageInstall } from "./ensure-packages.js";
 import { verifyBundleSignature } from "./bundle-signature.js";
 import {
   checkBundleAuthenticity,
@@ -77,8 +79,14 @@ export class ExtensionService {
     this.opts = { ...this.opts, identity };
   }
 
-  private hasLicense(feature: string): boolean {
+  /** Public so /api/extensions can tell the UI *why* a paid row is inactive. */
+  hasLicense(feature: string): boolean {
     return this.opts.licenseHas?.(feature) ?? false;
+  }
+
+  /** Writable root where extensions are materialized — `<data>/extensions`. */
+  get extensionsDir(): string {
+    return this.opts.extensionsDir;
   }
 
   private verifySignature(sha256Hex: string, signatureB64: string): Promise<boolean> {
@@ -128,7 +136,7 @@ export class ExtensionService {
   // ── Install ─────────────────────────────────────────────────────────
 
   /**
-   * Install from a .kernlext bundle on disk. Orchestrates: peek manifest →
+   * Install from a .kernl bundle on disk. Orchestrates: peek manifest →
    * check conflicts → extract to dest dir → persist row → dispatch
    * type-specific handler. Any failure rolls back the extracted dir and
    * leaves the DB untouched.
@@ -190,7 +198,7 @@ export class ExtensionService {
     try {
       this.insertRow(row);
       await dispatchInstall(manifest, installPath, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest);
+      const finalStatus = this.postInstallStatus(manifest, installPath);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
       await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
@@ -203,7 +211,7 @@ export class ExtensionService {
   }
 
   /**
-   * Upgrade an already-installed extension in place from a newer .kernlext
+   * Upgrade an already-installed extension in place from a newer .kernl
    * bundle. Mirrors installFromBundle's peek → auth → apply → receipt flow,
    * but operates on an EXISTING row/dir instead of creating a new one, and
    * preserves user state (settings, id, installed_at) across the swap.
@@ -350,7 +358,7 @@ export class ExtensionService {
     this.insertRow(row);
     try {
       await dispatchInstall(manifest, sourceDir, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest);
+      const finalStatus = this.postInstallStatus(manifest, sourceDir);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
       await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
@@ -418,7 +426,7 @@ export class ExtensionService {
     this.insertRow(row);
     try {
       await dispatchInstall(manifest, installPath, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest);
+      const finalStatus = this.postInstallStatus(manifest, installPath);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
       await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
@@ -430,17 +438,60 @@ export class ExtensionService {
   }
 
   /**
-   * Re-read the manifest at `sourceDir` and overwrite the row's manifest_json
-   * + install_path. Status/settings are preserved. Used by the in-tree extension
-   * seeder to propagate edits to `assets/extensions/<slug>/extension.json`
-   * without requiring a DB wipe. Returns true if anything changed.
+   * Re-read the manifest at `sourceDir` and overwrite the row's manifest_json.
+   * Status/settings are preserved. Used by the in-tree extension seeder to
+   * propagate edits to `assets/extensions/<slug>/extension.json` without
+   * requiring a DB wipe. Returns true if anything changed.
+   *
+   * `install_path` is only rewritten when the row still points at the shipped
+   * bundle. An extension that needed packages was copied into the writable
+   * extensions dir by `ensureExtensionPackages`, and its node_modules live
+   * there; pointing it back at the read-only bundle — where nothing resolves —
+   * broke it on the next boot. That is what made enabling Cinema (or anything
+   * else declaring an on-demand SDK) work until the first restart and then
+   * land in `error` on a native install.
+   *
+   * Keeping the path pinned would trade that bug for a quieter one: a kernel
+   * upgrade ships new extension code in the bundle, and a materialized copy
+   * would keep running last version's forever. So when the shipped version
+   * moves, the code is re-copied over the materialized dir — everything except
+   * the node_modules and the synthesized package.json that make it work.
    */
   async refreshFromDirectory(id: string, sourceDir: string): Promise<boolean> {
     const row = this.mustGet(id);
     const { readManifest } = await import("./bundle.js");
     const manifest = await readManifest(sourceDir);
     const newManifestJson = JSON.stringify(manifest);
-    if (row.manifest_json === newManifestJson && row.install_path === sourceDir) {
+    const materialized =
+      !!row.install_path &&
+      resolve(row.install_path).startsWith(resolve(this.opts.extensionsDir));
+    const nextPath = materialized ? row.install_path : sourceDir;
+
+    if (materialized && manifest.version !== row.version) {
+      try {
+        cpSync(sourceDir, nextPath, {
+          recursive: true,
+          force: true,
+          filter: (src) => {
+            const rel = relative(sourceDir, src);
+            if (!rel) return true;
+            const head = rel.split(sep)[0];
+            return head !== "node_modules" && head !== "package.json" && head !== ".bun-cache";
+          },
+        });
+        log.info(
+          `Extension ${row.slug}: refreshed materialized copy to ${manifest.version} (was ${row.version})`,
+        );
+      } catch (err) {
+        // Non-fatal: the extension keeps running the version it has, which is
+        // strictly better than a half-copied directory.
+        log.warn(
+          `Extension ${row.slug}: could not refresh materialized copy — ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    if (row.manifest_json === newManifestJson && row.install_path === nextPath) {
       return false;
     }
     const now = isoNow();
@@ -450,7 +501,76 @@ export class ExtensionService {
             SET manifest_json = ?, install_path = ?, version = ?, type = ?, updated_at = ?
           WHERE id = ?`,
       )
-      .run(newManifestJson, sourceDir, manifest.version, manifest.type, now, id);
+      .run(newManifestJson, nextPath, manifest.version, manifest.type, now, id);
+    return true;
+  }
+
+  /**
+   * Point a row at a new directory. Used after `ensureExtensionPackages`
+   * materializes an extension out of the read-only bundle so its node_modules
+   * can live beside it — the loader imports from `install_path`, so it has to
+   * follow or the extension resolves nothing on the next boot.
+   */
+  setInstallPath(id: string, installPath: string): void {
+    this.db
+      .prepare("UPDATE installed_extensions SET install_path = ?, updated_at = ? WHERE id = ?")
+      .run(installPath, isoNow(), id);
+  }
+
+  /**
+   * Rows sitting in `installed` *only* because their declared packages are not
+   * on disk — the on-demand SDKs the native payload leaves out.
+   *
+   * Everything else that produces an `installed` row is excluded on purpose:
+   * `requires_activation` is an explicit "ask me first", a paid extension
+   * without its license is not ours to unlock, and `disabled` is a user
+   * decision this must never walk back.
+   */
+  pendingPackageInstalls(): InstalledExtension[] {
+    return this.list({ status: "installed" }).filter((row) => {
+      if (!row.install_path) return false;
+      let manifest: ExtensionManifest;
+      try {
+        manifest = this.parseManifest(row);
+      } catch {
+        return false;
+      }
+      if ((manifest as ExtensionManifest & { requires_activation?: boolean }).requires_activation) {
+        return false;
+      }
+      if (isPaidExtension(manifest) && !this.hasLicense(requiredFeature(manifest))) return false;
+      return needsPackageInstall(manifest, row.install_path);
+    });
+  }
+
+  /**
+   * Promote a row parked in `installed` to `active` when whatever was blocking
+   * it is gone — its packages resolve now, or its license showed up.
+   *
+   * This is the other half of the on-demand package story. An extension whose
+   * SDKs are not in the payload is installed-but-inactive on first boot; the
+   * background provisioner fetches them without touching the status, because
+   * flipping it mid-boot would advertise a feature whose backend routes were
+   * already registered (or rather, not) for this process. Promotion therefore
+   * happens here, at the next boot, before anything is loaded — so the
+   * extension comes up wired exactly like one that was never blocked.
+   *
+   * Deliberately narrow: only `installed` rows are considered, so a `disabled`
+   * extension (a user decision) and an `error` one (needs a look) are left
+   * alone. Returns true if the row was promoted.
+   */
+  promoteIfUnblocked(id: string): boolean {
+    const row = this.get(id);
+    if (!row || row.status !== "installed" || !row.install_path) return false;
+    const manifest = this.parseManifest(row);
+    // An explicit requires_activation is a standing "ask me first" — never
+    // overridden by this, no matter what resolves.
+    if ((manifest as ExtensionManifest & { requires_activation?: boolean }).requires_activation) {
+      return false;
+    }
+    if (this.postInstallStatus(manifest, row.install_path) !== "active") return false;
+    this.setStatus(id, "active");
+    log.info(`Extension promoted to active (no longer blocked): ${row.slug}`);
     return true;
   }
 
@@ -465,6 +585,29 @@ export class ExtensionService {
           `Add your license at /settings/license, then enable it.`,
       );
     }
+    // Fetch anything the backend imports that is not already resolvable. The
+    // heavy SDKs are left out of the payload deliberately — this is where they
+    // arrive, for the people who actually use them. Runs BEFORE the status
+    // flips: enabling an extension whose dependencies are missing yields
+    // something that reads as installed and throws on first use, so a failure
+    // here has to keep it disabled and say why.
+    if (row.install_path) {
+      const result = await ensureExtensionPackages({
+        manifest,
+        slug: row.slug,
+        installPath: row.install_path,
+        extensionsDir: this.opts.extensionsDir,
+      });
+      // Materializing out of the read-only bundle moves the extension; the
+      // loader imports from install_path, so it has to follow.
+      if (result.installPath !== row.install_path) {
+        this.db
+          .prepare("UPDATE installed_extensions SET install_path = ? WHERE id = ?")
+          .run(result.installPath, id);
+        row.install_path = result.installPath;
+      }
+    }
+
     this.setStatus(id, "active");
     log.info(`Extension enabled: ${row.slug} (${row.type})`);
 
@@ -594,9 +737,17 @@ export class ExtensionService {
    * instead of 'active' — the user has to consciously activate via
    * kernel_extensions_activate or the dashboard.
    */
-  private postInstallStatus(manifest: ExtensionManifest): ExtensionStatus {
-    const requiresActivation = !!(manifest as ExtensionManifest & { requires_activation?: boolean })
-      .requires_activation;
+  private postInstallStatus(manifest: ExtensionManifest, installPath = ""): ExtensionStatus {
+    // An extension whose packages are not on disk yet has to wait to be asked
+    // for, exactly like one that declares requires_activation. Activating it on
+    // sight means the loader imports it at boot, fails on the missing package,
+    // and files it under `error` — which is how a fresh install came up showing
+    // ten broken extensions that were only ever waiting for someone to enable
+    // them. Derived rather than another manifest flag: the condition is simply
+    // whether the packages are there.
+    const requiresActivation =
+      !!(manifest as ExtensionManifest & { requires_activation?: boolean }).requires_activation ||
+      needsPackageInstall(manifest, installPath);
     // Paid extensions install but stay inactive until their `pro:<slug>` license
     // is present. Free extensions activate as before.
     return activationStatus(manifest, (f) => this.hasLicense(f), requiresActivation);

@@ -1,0 +1,82 @@
+{
+  "channels/irc": {
+    "version": "1.3.0",
+    "sha256": "ab72feba72374247"
+  },
+  "crm/twitter": {
+    "version": "1.1.1",
+    "sha256": "d4e3b34752fbca16"
+  },
+  "finance/finance": {
+    "version": "1.1.1",
+    "sha256": "7214182a42264334"
+  },
+  "finance/subscriptions": {
+    "version": "1.1.1",
+    "sha256": "98b727a201876a56"
+  },
+  "health/health": {
+    "version": "1.1.1",
+    "sha256": "5cfb35945c290e86"
+  },
+  "health/nutrition": {
+    "version": "1.1.1",
+    "sha256": "025551f575db2853"
+  },
+  "health/training": {
+    "version": "1.1.0",
+    "sha256": "afe5b4b337598b67"
+  },
+  "home/life": {
+    "version": "1.1.0",
+    "sha256": "72127dcae00e95d0"
+  },
+  "home/news": {
+    "version": "1.1.1",
+    "sha256": "2f760497c2bc9bc4"
+  },
+  "home/rss-reader": {
+    "version": "1.1.0",
+    "sha256": "799d5f3c10327720"
+  },
+  "home/shopping": {
+    "version": "1.1.1",
+    "sha256": "14f3b8b79d145f17"
+  },
+  "leisure/books": {
+    "version": "1.0.0",
+    "sha256": "98d0f0cb9d1ff029"
+  },
+  "leisure/music": {
+    "version": "1.1.0",
+    "sha256": "4dc2b143f5bbdcc9"
+  },
+  "people/comms": {
+    "version": "1.1.1",
+    "sha256": "286476dc004b91df"
+  },
+  "people/crm": {
+    "version": "1.1.1",
+    "sha256": "123e3aca659cfa78"
+  },
+  "people/events": {
+    "version": "1.1.1",
+    "sha256": "77c7cd1eb0f1c74a"
+  },
+  "productivity/issues": {
+    "version": "1.1.0",
+    "sha256": "86b00cee603265e8"
+  },
+  "productivity/reminders": {
+    "version": "1.1.1",
+    "sha256": "c94a2971abd6bfef"
+  },
+  "productivity/tasks": {
+    "version": "1.1.0",
+    "sha256": "f21c67cf1a80da80"
+  },
+  "leisure/cinema": {
+    "version": "1.32.0",
+    "sha256": "9e92f7ff6cbd9ebf"
+  }
+}

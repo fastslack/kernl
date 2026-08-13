@@ -4,7 +4,7 @@
  * ExtensionManifest is the superset of plugin.json (src/modules/plugins/types.ts),
  * SKILL.json (src/skills/types.ts), and the six MarketplacePackage variants
  * (src/modules/marketplace/types.ts). One manifest format, one bundle format
- * (.kernlext), one install path.
+ * (.kernl), one install path.
  *
  * A single extension can contribute any combination of artifacts: backend
  * modules, frontend descriptors, agents, skills, flows, themes, templates,
@@ -35,8 +35,8 @@ export type ExtensionStatus = "installed" | "active" | "disabled" | "error";
 /** Where the bundle came from. */
 export type ExtensionSource =
   | { type: "bundled" }                                // Shipped with the kernel
-  | { type: "local"; path: string }                    // From a local .kernlext file or dir
-  | { type: "file"; filename: string }                 // Uploaded .kernlext tarball
+  | { type: "local"; path: string }                    // From a local .kernl file or dir
+  | { type: "file"; filename: string }                 // Uploaded .kernl tarball
   | { type: "url"; url: string }                       // Downloaded from URL
   | { type: "git"; url: string; ref?: string }         // Cloned from git
   | { type: "marketplace"; remote: string; id: string }; // Fetched from a remote marketplace
@@ -185,7 +185,7 @@ export interface IntegrityBlock {
 // ── The manifest itself ───────────────────────────────────────────────
 
 /**
- * extension.json — lives at the root of every .kernlext bundle and of every
+ * extension.json — lives at the root of every .kernl bundle and of every
  * installed extension directory. This is the single source of truth about
  * what an extension is, provides, and requires.
  */

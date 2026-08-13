@@ -68,7 +68,7 @@ cat <<EOF
 EOF
 
 # ── 0. Sanity ────────────────────────────────────────────────────────
-[[ "$(uname -s)" == "Darwin" ]] || die "This installer is for macOS only. Use scripts/install.sh on Linux."
+[[ "$(uname -s)" == "Darwin" ]] || die "This installer is for macOS only. Use install-linux.sh on Linux."
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"

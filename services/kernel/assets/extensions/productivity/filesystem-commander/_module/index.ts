@@ -69,19 +69,12 @@ export function createFilesystemCommanderModule(): FilesystemCommanderModule {
             group: "tools",
             order: 10,
           },
-          // Sub-tab showcased under /commander: jumps straight into the
-          // agent workspaces root. Uses the `path` override to carry query
-          // string, and `parent` so it only appears while the Commander
-          // page is open.
-          {
-            id: "commander-workspaces",
-            label: "Workspaces",
-            icon: "🗂",          // 🗂
-            group: "tools",
-            parent: "commander",
-            path: "/commander?provider=local&path=%2Fapp%2Fdata%2Fworkspaces&label=Agent%20workspaces",
-            order: 20,
-          },
+          // A "Workspaces" child tab used to live here, deep-linking the
+          // Commander at /app/data/workspaces. It was a second door onto
+          // AI → Workspace, under a different group and a different name, so
+          // the same directory appeared twice in the sidebar with no way to
+          // tell the two entries apart. The Commander reaches that path from
+          // its own tree; the nav entry is AI → Workspace.
         ],
         registerRoutes: (server) => {
           if (service && config) {

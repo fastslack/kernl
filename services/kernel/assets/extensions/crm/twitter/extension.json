@@ -3,19 +3,36 @@
   "id": "com.kernl.twitter",
   "slug": "twitter",
   "name": "Twitter / X",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Twitter/X account management, draft queue, scheduled publishing.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "crm",
-  "tags": ["twitter", "x", "social"],
+  "tags": [
+    "twitter",
+    "x",
+    "social"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "module:twitter"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "network",
+    "module:twitter"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "x-manager", "entry": "frontend/entry.js", "title": "X Manager" }
+      {
+        "view": "x-manager",
+        "entry": "frontend/entry.js",
+        "title": "X Manager"
+      }
     ]
   }
 }

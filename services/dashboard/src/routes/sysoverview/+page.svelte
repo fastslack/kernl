@@ -37,7 +37,9 @@
 <nav class="sys-subnav" aria-label="System pages">
   <a class="sub-tab" href="/system">Status</a>
   <a class="sub-tab active" href="/sysoverview" aria-current="page">Overview</a>
+  <a class="sub-tab" href="/automations">Automation</a>
   <a class="sub-tab" href="/architecture">Arch 3D</a>
+  <a class="sub-tab" href="/friends">Friends</a>
 </nav>
 
 <ViewHeader title="System" sub="Processes, providers, and configuration" />

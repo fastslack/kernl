@@ -27,7 +27,7 @@ for slug in "${BUNDLES[@]}"; do
   echo ""
   echo "=== $slug ==="
   bun run scripts/pack-agent-bundle.ts "$slug" > /dev/null 2>&1 || { echo "  pack failed"; continue; }
-  bundle_path="dist/extensions/${slug}-1.0.0.kernlext"
+  bundle_path="dist/extensions/${slug}-1.0.0.kernl"
   [ -f "$bundle_path" ] || { echo "  missing $bundle_path"; continue; }
 
   # Uninstall old copy (ok if 404).
@@ -37,7 +37,7 @@ for slug in "${BUNDLES[@]}"; do
   b64=$(base64 -w0 "$bundle_path")
   resp=$(curl -sS -X POST "$KERNEL/api/extensions/upload" \
     -H 'Content-Type: application/json' \
-    -d "$(jq -cn --arg b64 "$b64" --arg fn "${slug}-1.0.0.kernlext" '{filename:$fn, base64:$b64}')")
+    -d "$(jq -cn --arg b64 "$b64" --arg fn "${slug}-1.0.0.kernl" '{filename:$fn, base64:$b64}')")
   ok=$(echo "$resp" | jq -r '.success // false')
   status=$(echo "$resp" | jq -r '.item.status // "?"')
   echo "  ok=$ok status=$status"

@@ -321,6 +321,34 @@ export async function ingestNextChunk(
       status: result.finished ? "done" : "running",
       finished_at: result.finished ? new Date().toISOString() : null,
     });
+
+    // Refresh the derived tag table whenever this pass actually added titles.
+    //
+    // `cinema_tags` is built from subject_json and had no automatic trigger at
+    // all — only a manual POST /api/cinema/tags/rebuild that nothing calls. So
+    // it sat at zero rows on a catalogue of 68,255 tagged titles, and the chip
+    // row the page uses for browsing was simply absent. A full rebuild is a
+    // single scan: 72,618 tags in 310ms on this catalogue, which is far cheaper
+    // than the network pass that just ran.
+    if (result.inserted + result.updated > 0) {
+      try {
+        const { tags } = service.rebuildTags();
+        log.info(`cinema ingest: tag index rebuilt — ${tags} tags`);
+      } catch (err) {
+        // Never fail an ingest over a derived index.
+        log.warn("cinema ingest: tag rebuild failed", err);
+      }
+      // Work grouping is derived the same way and goes stale the same way: a
+      // newly ingested copy can join an existing film's group and can even
+      // become the copy that represents it, so the grouping has to be
+      // reconsidered whenever titles land.
+      try {
+        const { works, duplicates } = service.rebuildWorks();
+        log.info(`cinema ingest: works rebuilt — ${works} works, ${duplicates} duplicate copies folded in`);
+      } catch (err) {
+        log.warn("cinema ingest: works rebuild failed", err);
+      }
+    }
     return result;
   } catch (err) {
     // ingestPass already flagged the run as 'paused' before re-throwing.

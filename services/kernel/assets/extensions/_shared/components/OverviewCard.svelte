@@ -11,7 +11,7 @@
 <div class="overview-card">
   <div class="overview-card-header">
     <div class="overview-card-title">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color: {iconColor}">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="color: {iconColor}" aria-hidden="true">
         <path d={icon} />
       </svg>
       <span>{title}</span>
@@ -23,7 +23,7 @@
   {#if actions.length > 0}
     <div class="overview-card-actions">
       {#each actions as action}
-        <button class="overview-card-btn" on:click={() => navigate(action.href)}>{action.label}</button>
+        <button type="button" class="overview-card-btn" on:click={() => navigate(action.href)}>{action.label}</button>
       {/each}
     </div>
   {/if}
@@ -73,11 +73,17 @@
     font-size: 11px;
     font-weight: 500;
     cursor: pointer;
-    transition: all 0.2s;
+    min-height: 32px;
+    touch-action: manipulation;
+    transition: background 0.2s ease, border-color 0.2s ease, color 0.2s ease;
   }
   .overview-card-btn:hover {
     background: var(--bg-2);
     border-color: var(--text-3);
     color: var(--text-1);
+  }
+  .overview-card-btn:focus-visible {
+    outline: 2px solid var(--gold);
+    outline-offset: 2px;
   }
 </style>

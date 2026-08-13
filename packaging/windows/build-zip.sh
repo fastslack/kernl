@@ -34,6 +34,10 @@ cp "$SRC_TREE/bin/bun.exe"       "$PKG_DIR/bun.exe"
 cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 [ -d "$SRC_TREE/bin/static" ]     && cp -a "$SRC_TREE/bin/static"     "$PKG_DIR/"
 [ -d "$SRC_TREE/bin/extensions" ] && cp -a "$SRC_TREE/bin/extensions" "$PKG_DIR/"
+# whisper.cpp + its DLLs, flat, beside mcp-server.js — see the note in
+# macos/build-app.sh. Windows makes this one easy: the default DLL search
+# order already starts with the executable's own directory.
+[ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$PKG_DIR/"
 cp -a "$SRC_TREE/node_modules" "$PKG_DIR/"
 cp -a "$SRC_TREE/dashboard"    "$PKG_DIR/"
 cp -a "$SRC_TREE/assets"       "$PKG_DIR/"
@@ -88,7 +92,17 @@ unix2dos "$PKG_DIR/README.txt" 2>/dev/null || sed -i 's/$/\r/' "$PKG_DIR/README.
 # stale $ZIP_OUT would keep files from previous builds (e.g. the Linux
 # sharp binaries from a linux-x64 run). Start from a clean archive.
 rm -f "$ZIP_OUT"
-( cd "$STAGE_DIR" && zip -qr "$ZIP_OUT" "$(basename "$PKG_DIR")" )
+# GitHub's windows-latest runner has no `zip` — the Git-bash environment this
+# script runs under ships neither. 7-Zip is preinstalled there, so prefer zip
+# when present (Linux/macOS hosts, local builds) and fall back to 7z.
+if command -v zip >/dev/null 2>&1; then
+  ( cd "$STAGE_DIR" && zip -qr "$ZIP_OUT" "$(basename "$PKG_DIR")" )
+elif command -v 7z >/dev/null 2>&1; then
+  ( cd "$STAGE_DIR" && 7z a -tzip -bso0 -bsp0 "$ZIP_OUT" "$(basename "$PKG_DIR")" >/dev/null )
+else
+  echo "ERROR: need either 'zip' or '7z' on PATH to build the portable archive." >&2
+  exit 1
+fi
 
 # Cleanup.
 rm -rf "$STAGE_DIR"

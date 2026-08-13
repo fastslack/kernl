@@ -9,8 +9,23 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "social",
-  "tags": ["linkedin", "social", "b2b", "marketing"],
+  "tags": [
+    "linkedin",
+    "social",
+    "b2b",
+    "marketing"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["network", "fs:read", "module:linkedin"],
-  "backend": { "entry": "backend/entry.js" }
+  "permissions": [
+    "network",
+    "filesystem",
+    "module:linkedin"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  }
 }

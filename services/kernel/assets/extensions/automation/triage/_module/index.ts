@@ -1,6 +1,5 @@
 import type {
   ExtensibleModule,
-  DashboardDescriptor,
   ModuleContext,
   ToolDefinition,
 } from "../../../../../src/core/types.js";
@@ -52,19 +51,14 @@ export function createTriageModule(): TriageModule {
       return service;
     },
 
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        nav: [
-          {
-            id: "triage",
-            label: "Triage",
-            icon: "🩺",
-            group: "automation",
-            order: 50,
-          },
-        ],
-      };
-    },
+    // No dashboard descriptor on purpose.
+    //
+    // This module used to declare a whole "Automation" sidebar group whose
+    // single item pointed at /triage — a view with no page behind it: no
+    // static route, no `frontend.pages` bundle. The catch-all route resolved
+    // it to <ExtensionGate/>, so the group was a rail icon leading only to an
+    // "extension not installed" screen. Triage is backend-only (tools + the
+    // repo-provider event bus); it earns a nav entry the day it ships a page.
 
     async shutdown() {},
   };

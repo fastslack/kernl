@@ -36,7 +36,10 @@ export interface TranslateProgress {
 export interface TranslateOpts {
   src: string;       // ISO-639-1 (e.g. "en") or NLLB Flores ("eng_Latn")
   tgt: string;
+  /** Aborts between batches. In-flight batches finish; nothing new starts. */
   signal?: AbortSignal;
+  /** Batches in flight at once. Defaults per engine — see LLM_CONCURRENCY. */
+  concurrency?: number;
   /** Per-batch progress hook. Fires after every batch (not just log
    *  heartbeats), so SSE subscribers see a steady stream. */
   onProgress?: (p: TranslateProgress) => void;
@@ -52,6 +55,9 @@ export interface TranslateResult {
   providerUsed?: string;
   /** Model string returned by the provider (or the offline NLLB model id). */
   modelUsed?: string;
+  /** Batches that never got an answer and kept their source text. */
+  fallbackBatches?: number;
+  totalBatches?: number;
 }
 
 // ── NLLB-200 (offline) ──────────────────────────────────────────────────
@@ -179,87 +185,253 @@ const LLM_BATCH  = 22;   // Cloud-or-local OpenAI-compatible: tight enough
                           // in context, large enough that per-call latency
                           // amortises across many cues.
 
+/**
+ * How many batches are in flight at once.
+ *
+ * LLM batches are network-bound — one call spends 15-30s waiting on a remote
+ * model — so running them one at a time wasted the entire wall-clock on
+ * latency: a 683-cue feature film took 12.5 minutes at 32 sequential batches.
+ * The chain below already sequentialises per link's rate limit and carries a
+ * 429 concurrency limiter, so issuing several at once is safe and is exactly
+ * what TranslateRunner does for descriptions.
+ *
+ * NLLB stays at 1: it runs locally on CPU and is memory-bound, so parallel
+ * batches contend for the same cores and thrash rather than overlap.
+ */
+const LLM_CONCURRENCY = 4;
+const NLLB_CONCURRENCY = 1;
+const MAX_CONCURRENCY = 16;
+/** Attempts per batch before falling back to the source text. */
+const BATCH_ATTEMPTS = 2;
+const BATCH_RETRY_MS = 800;
+
+/**
+ * Did the provider decline on content grounds rather than fail?
+ *
+ * The distinction matters twice over. A refusal is deterministic — the same
+ * cues sent to the same model produce the same refusal, so retrying burns a
+ * call and doubles the time to failure for nothing. And it is not fixed by
+ * waiting or by a healthier link: it needs a different model, which is a
+ * different sentence to put in front of the user than "the batch failed".
+ *
+ * Old films are exactly where this bites. A 1980 disaster picture's dialogue
+ * carries plague, corpses and war, and a safety-tuned model will decline to
+ * translate a block of it while happily doing the rest of the reel.
+ */
+export function isContentRefusal(msg: string): boolean {
+  return /usage policy|content[ _-]?policy|unable to respond to this request|\baup\b|\brefus(e|ed|al)\b|declined to (answer|respond)/i
+    .test(msg);
+}
+
+/** One batch, one call. Injected so the pool can be tested without a provider. */
+export type BatchRunner = (
+  chunk: string[],
+  opts: TranslateOpts,
+) => Promise<{ translations: string[]; provider?: string; model?: string }>;
+
 export async function translateBatch(
   engine: TranslateEngine,
   texts: string[],
   opts: TranslateOpts,
 ): Promise<TranslateResult> {
+  const runner: BatchRunner = engine === "llm"
+    ? async (chunk, o) => {
+        const r = await translateBatchLlm(chunk, o);
+        return { translations: r.translations, provider: r.provider, model: r.model };
+      }
+    : async (chunk, o) => ({
+        translations: await translateBatchNllb(chunk, o),
+        model: NLLB_MODEL,
+      });
+  return runBatchPool(engine, texts, opts, runner);
+}
+
+/**
+ * The concurrency pool. Split out from `translateBatch` so the ordering,
+ * the retry/abort rules and the progress arithmetic can be tested against a
+ * fake runner instead of a live model.
+ */
+export async function runBatchPool(
+  engine: TranslateEngine,
+  texts: string[],
+  opts: TranslateOpts,
+  runBatch: BatchRunner,
+): Promise<TranslateResult> {
   const batchSize = engine === "llm" ? LLM_BATCH : NLLB_BATCH;
-  const out: string[] = [];
   const totalBatches = Math.ceil(texts.length / batchSize);
+  const concurrency = Math.max(
+    1,
+    Math.min(
+      MAX_CONCURRENCY,
+      opts.concurrency ?? (engine === "llm" ? LLM_CONCURRENCY : NLLB_CONCURRENCY),
+      totalBatches,
+    ),
+  );
+  // Pre-sized so out-of-order completions land at their own offset. Pushing
+  // was only correct while batches finished in order.
+  const out: string[] = new Array(texts.length).fill("");
   const logEvery = Math.max(1, Math.floor(totalBatches / 12));
   const startedAt = Date.now();
   let lastProvider: string | undefined;
   let lastModel: string | undefined;
-  // Track consecutive batch failures. If every batch in the chain blew up,
-  // the chain is exhausted (every key dead / every quota burnt) — bail
-  // instead of returning a fully untranslated SRT.
-  let consecutiveFailures = 0;
-  for (let i = 0; i < texts.length; i += batchSize) {
-    const chunk = texts.slice(i, i + batchSize);
-    const batchIdx = Math.floor(i / batchSize) + 1;
-    const batchStartMs = Date.now();
-    let translated: string[];
-    try {
-      if (engine === "llm") {
-        const r = await translateBatchLlm(chunk, opts);
-        translated = r.translations;
-        lastProvider = r.provider;
-        lastModel = r.model;
-      } else {
-        translated = await translateBatchNllb(chunk, opts);
-        lastModel = NLLB_MODEL;
+  // Failures since the last success. Same intent as the old "3 consecutive
+  // failures = the chain is exhausted", expressed in a way that survives
+  // out-of-order completion: any success anywhere resets it.
+  let failuresSinceSuccess = 0;
+  let batchesDone = 0;
+  let cuesDone = 0;
+  /** Batches that exhausted their retries and kept the source text. */
+  let fallbackBatches = 0;
+  let aborted: Error | null = null;
+  /** Set when the provider declined on content grounds — see isContentRefusal. */
+  let refused = false;
+  let cursor = 0;
+
+  const abortRequested = () =>
+    aborted ?? (opts.signal?.aborted
+      ? new Error(`translate ${engine}: cancelled`)
+      : null);
+
+  async function worker(): Promise<void> {
+    for (;;) {
+      if (abortRequested()) return;
+      const i = cursor;
+      if (i >= texts.length) return;
+      cursor += batchSize;
+
+      const chunk = texts.slice(i, i + batchSize);
+      const batchNo = Math.floor(i / batchSize) + 1;
+      const batchStartMs = Date.now();
+      let translated: string[] | null = null;
+      let lastErr = "";
+
+      // Retry before giving up on a batch. Running N calls at once makes
+      // transient rejections (rate limit, a provider dropping one request in a
+      // burst) meaningfully more likely than they were one-at-a-time, and the
+      // fallback below is to keep the SOURCE text — which the route then reads
+      // as "the model silently passed through" and rejects the whole file with
+      // a 502. One in-place retry is far cheaper than losing 30 good batches.
+      for (let attempt = 1; attempt <= BATCH_ATTEMPTS && translated === null; attempt++) {
+        if (abortRequested()) return;
+        try {
+          const r = await runBatch(chunk, opts);
+          translated = r.translations;
+          if (r.provider) lastProvider = r.provider;
+          if (r.model) lastModel = r.model;
+        } catch (err) {
+          lastErr = (err as Error).message;
+          if (isContentRefusal(lastErr)) {
+            // Deterministic. Retrying re-sends the same cues to the same model
+            // for the same answer, and no other batch will fare better — the
+            // model is not going to change its mind about this film. Stop the
+            // whole run now with something the user can act on, instead of
+            // three rounds of retries ending in "3 consecutive batch failures",
+            // which reads like the provider was down.
+            refused = true;
+            aborted = new Error(
+              `translate ${engine}: the model declined to translate this subtitle text ` +
+              `(content policy). Pick a different model for subtitles at Settings → AI, ` +
+              `or use engine=nllb, which runs offline and does not moderate. ` +
+              `Provider said: ${lastErr}`,
+            );
+            return;
+          }
+          if (attempt < BATCH_ATTEMPTS) {
+            log.warn(
+              `translate ${engine}: batch #${batchNo} attempt ${attempt}/${BATCH_ATTEMPTS} failed, retrying: ${lastErr}`,
+            );
+            await new Promise((r) => setTimeout(r, BATCH_RETRY_MS * attempt));
+          }
+        }
       }
-      consecutiveFailures = 0;
-    } catch (err) {
-      consecutiveFailures++;
-      const msg = (err as Error).message;
-      log.warn(`translate ${engine}: batch ${i}-${i + chunk.length} failed: ${msg}`);
-      // 3 consecutive failures = whole chain is dead (or NLLB is broken).
-      // Abort instead of producing N more identical errors and a fully
-      // untranslated VTT — the caller's catch will surface the real cause
-      // to the SSE channel + the UI.
-      if (consecutiveFailures >= 3) {
-        throw new Error(
-          `translate ${engine}: aborted after ${consecutiveFailures} consecutive batch failures — ${msg}`,
+
+      if (translated === null) {
+        failuresSinceSuccess++;
+        fallbackBatches++;
+        log.warn(`translate ${engine}: batch #${batchNo} (cues ${i}-${i + chunk.length}) gave up: ${lastErr}`);
+        // Whole chain dead (every key dead / every quota burnt) — stop rather
+        // than produce N more identical errors and a fully untranslated VTT.
+        // The caller's catch surfaces the real cause to SSE and the UI.
+        if (failuresSinceSuccess >= 3) {
+          aborted = new Error(
+            `translate ${engine}: aborted after ${failuresSinceSuccess} consecutive batch failures — ${lastErr}`,
+          );
+          return;
+        }
+        translated = chunk;   // fall back to the source text for this batch
+      } else {
+        failuresSinceSuccess = 0;
+      }
+
+      // Normalize length before writing so a short/long model reply cannot
+      // shift every later cue out of sync.
+      if (translated.length < chunk.length) {
+        while (translated.length < chunk.length) translated.push(chunk[translated.length]);
+      } else if (translated.length > chunk.length) {
+        translated = translated.slice(0, chunk.length);
+      }
+      for (let j = 0; j < chunk.length; j++) out[i + j] = translated[j];
+
+      const batchMs = Date.now() - batchStartMs;
+      const elapsedMs = Date.now() - startedAt;
+      batchesDone++;
+      cuesDone += chunk.length;
+      // Throughput-based, so it stays honest under concurrency: batchesDone
+      // accrues N times faster, which is exactly the speed-up to project.
+      const remainingBatches = totalBatches - batchesDone;
+      const etaMs = batchesDone > 0
+        ? Math.round((elapsedMs / batchesDone) * remainingBatches)
+        : 0;
+      if (opts.onProgress) {
+        try {
+          opts.onProgress({
+            batchIdx: batchesDone,
+            totalBatches,
+            cuesDone,
+            cuesTotal: texts.length,
+            lastBatchMs: batchMs,
+            elapsedMs,
+            etaMs,
+          });
+        } catch { /* hook errors must not break translation */ }
+      }
+      if (batchesDone === totalBatches || batchesDone % logEvery === 0) {
+        const tag = engine === "llm" && lastProvider ? `${engine}:${lastProvider}` : engine;
+        log.info(
+          `translate ${tag}: batch ${batchesDone}/${totalBatches} (${cuesDone}/${texts.length} cues, ` +
+          `x${concurrency}) — last ${batchMs}ms · elapsed ${(elapsedMs / 1000).toFixed(1)}s · ` +
+          `eta ${(etaMs / 1000).toFixed(1)}s · #${batchNo}`,
         );
       }
-      translated = chunk;
-    }
-    if (translated.length < chunk.length) {
-      while (translated.length < chunk.length) translated.push(chunk[translated.length]);
-    } else if (translated.length > chunk.length) {
-      translated = translated.slice(0, chunk.length);
-    }
-    out.push(...translated);
-    const batchMs = Date.now() - batchStartMs;
-    const elapsedMs = Date.now() - startedAt;
-    const remainingBatches = totalBatches - batchIdx;
-    const avgPerBatch = elapsedMs / batchIdx;
-    const etaMs = Math.round(avgPerBatch * remainingBatches);
-    const cuesDone = i + chunk.length;
-    if (opts.onProgress) {
-      try {
-        opts.onProgress({
-          batchIdx,
-          totalBatches,
-          cuesDone,
-          cuesTotal: texts.length,
-          lastBatchMs: batchMs,
-          elapsedMs,
-          etaMs,
-        });
-      } catch { /* hook errors must not break translation */ }
-    }
-    if (batchIdx === totalBatches || batchIdx % logEvery === 0) {
-      const tag = engine === "llm" && lastProvider ? `${engine}:${lastProvider}` : engine;
-      log.info(
-        `translate ${tag}: batch ${batchIdx}/${totalBatches} (${cuesDone}/${texts.length} cues) — ` +
-        `last ${batchMs}ms · elapsed ${(elapsedMs / 1000).toFixed(1)}s · eta ${(etaMs / 1000).toFixed(1)}s`,
-      );
     }
   }
-  return { translations: out, engineUsed: engine, providerUsed: lastProvider, modelUsed: lastModel };
+
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+
+  const abortErr = abortRequested();
+  if (abortErr) throw abortErr;
+
+  if (refused) {
+    log.warn(`translate ${engine}: run stopped — provider declined on content grounds`);
+  }
+  if (fallbackBatches > 0) {
+    // Says out loud what the caller would otherwise only infer from a high
+    // identical-cue ratio — and misattribute to "the model passed the text
+    // through" rather than "N batches never got an answer".
+    log.warn(
+      `translate ${engine}: ${fallbackBatches}/${totalBatches} batch(es) kept their source text after ` +
+      `${BATCH_ATTEMPTS} attempts each — the output is partially untranslated`,
+    );
+  }
+
+  return {
+    translations: out,
+    engineUsed: engine,
+    providerUsed: lastProvider,
+    modelUsed: lastModel,
+    fallbackBatches,
+    totalBatches,
+  };
 }
 
 /** Is at least one chain link usable? Used by the route gate to fail fast

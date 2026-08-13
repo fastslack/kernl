@@ -64,10 +64,35 @@ echo "▶ heat: harvesting $PKG_DIR"
   -var var.SourceDir \
   -out "$HARVESTED"
 
+# MSI has no way to express a prerelease. Product/@Version must be numeric
+# x.x.x.x with each field ≤ 65534, so a tag like 0.2.0-rc.1 aborts candle with:
+#
+#     error CNDL0108 : The Product/@Version attribute's value, '0.2.0-rc.1',
+#     is not a valid version.
+#
+# Windows Installer only compares the first three fields for upgrade decisions
+# anyway, so the prerelease suffix is dropped here and survives only in the
+# artifact's filename ($MSI_OUT keeps the full version). The consequence is
+# that 0.2.0-rc.1 and 0.2.0 look identical to the upgrade logic — acceptable,
+# because a prerelease is meant to be replaced by its final build.
+MSI_VERSION="${VERSION%%-*}"
+[ "$MSI_VERSION" != "$VERSION" ] && \
+  echo "▶ MSI ProductVersion: $MSI_VERSION (prerelease suffix dropped from $VERSION)"
+
+# The MSI carried no icon at all, so both the Start Menu entry and the
+# Add/Remove Programs listing showed Windows' generic box. Not optional, and
+# not something to discover after publishing.
+ICON_FILE="$REPO_ROOT/packaging/icons/kernl.ico"
+if [ ! -f "$ICON_FILE" ]; then
+  echo "ERROR: missing $ICON_FILE — the application icon is not optional." >&2
+  exit 1
+fi
+
 # Compile static product.wxs + harvested fragment.
 echo "▶ candle: compiling .wxs → .wixobj"
 "$CANDLE" -nologo -arch x64 \
-  -dVersion="$VERSION" \
+  -dVersion="$MSI_VERSION" \
+  -dIconFile="$ICON_FILE" \
   -dSourceDir="$PKG_DIR" \
   -out "$STAGE_DIR/" \
   "$REPO_ROOT/packaging/windows/product.wxs" \

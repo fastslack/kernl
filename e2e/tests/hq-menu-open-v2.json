@@ -3,12 +3,14 @@
     "name": "open hq dropdown",
     "actions": [
       {
-        "type": "goto",
-        "value": "http://localhost:3086/agents-flow"
+        "comment": "Was a bare `goto http://localhost:3086/agents-flow` followed by a wait on `.hq-bar`. Unauthenticated the app redirects to /login or /setup, so `.hq-bar` never rendered and the wait burned its whole timeout. goto-view seeds the token + onboarding flags and waits for the shell first.",
+        "$use": "goto-view",
+        "params": { "path": "/agents-flow", "settle": "1000" }
       },
       {
         "type": "wait",
-        "selector": ".hq-bar"
+        "selector": ".hq-bar",
+        "timeout": 30000
       },
       {
         "type": "wait",
@@ -27,6 +29,6 @@
         "value": "hq-dropdown-open"
       }
     ],
-    "expect": "hq-dropdown shows Create + View sections with 4 toggles"
+    "expect": "hq-dropdown shows Create + View sections, the View section listing 5 toggles"
   }
 ]

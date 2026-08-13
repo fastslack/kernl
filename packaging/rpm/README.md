@@ -40,7 +40,7 @@ The script:
 | `/opt/kernl/bin/bun` | Vendored Bun runtime |
 | `/opt/kernl/bin/mcp-server.js` | Bundled kernel |
 | `/opt/kernl/bin/static/` | Static HTML pages served by the kernel |
-| `/opt/kernl/bin/extensions/` | Built-in `.kernlext` bundles |
+| `/opt/kernl/bin/extensions/` | Built-in `.kernl` bundles |
 | `/opt/kernl/node_modules/` | Pruned native modules |
 | `/opt/kernl/dashboard/` | Svelte SPA (served at `/`) |
 | `/opt/kernl/assets/` | Agents, skills, agent-bundles |

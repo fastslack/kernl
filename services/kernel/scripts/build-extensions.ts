@@ -11,9 +11,10 @@
  * Cheap (<1s per extension) so don't over-engineer.
  */
 
-import { readdirSync, existsSync, statSync, writeFileSync, cpSync } from "node:fs";
+import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, cpSync } from "node:fs";
 import { resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const EXT_DIR = resolve(ROOT, "assets/extensions");
@@ -115,6 +116,92 @@ function newestMtime(dir: string): number {
  * when services/dashboard/node_modules is missing; skips incrementally when
  * entry.js is newer than every file under frontend/src/.
  */
+/**
+ * A frontend bundle that changed must ship a new version.
+ *
+ * The dashboard loads extension pages from
+ * `/ext-assets/<slug>/<entry>?v=<version>`, and the kernel answers that URL
+ * with `Cache-Control: public, max-age=31536000, immutable`. The version IS
+ * the cache key: rebuild the bundle without touching it and every browser
+ * that has already loaded the page keeps running the old code forever, with
+ * no error and nothing in any log to say so. It has bitten this repo twice in
+ * one session — a redesigned TV page and a rebuilt cinema page both looked
+ * like "the change did nothing".
+ *
+ * So the build refuses. The lockfile records the hash each version shipped;
+ * a differing hash under an unchanged version is the mistake, and the fix is
+ * one line in extension.json.
+ */
+const LOCKFILE = resolve(EXT_DIR, ".frontend-versions.json");
+
+interface LockEntry { version: string; sha256: string }
+
+function readLock(): Record<string, LockEntry> {
+  if (!existsSync(LOCKFILE)) return {};
+  try {
+    return JSON.parse(readFileSync(LOCKFILE, "utf-8")) as Record<string, LockEntry>;
+  } catch {
+    // A corrupt lockfile must not block a build; it re-records below.
+    console.warn("[build-extensions] frontend-versions lockfile unreadable — re-recording");
+    return {};
+  }
+}
+
+function manifestVersion(extDir: string): string {
+  try {
+    const m = JSON.parse(readFileSync(resolve(extDir, "extension.json"), "utf-8")) as { version?: string };
+    return m.version ?? "";
+  } catch {
+    return "";
+  }
+}
+
+function sha256(file: string): string {
+  return createHash("sha256").update(readFileSync(file)).digest("hex").slice(0, 16);
+}
+
+/**
+ * Compare every built bundle against the version it was last recorded under.
+ * Returns the number of extensions that changed without a version bump.
+ */
+function checkFrontendVersions(frontendDirs: string[]): number {
+  const lock = readLock();
+  const next: Record<string, LockEntry> = { ...lock };
+  const offenders: string[] = [];
+
+  for (const extDir of frontendDirs) {
+    const slug = extDir.slice(EXT_DIR.length + 1);
+    const outfile = resolve(extDir, "frontend/entry.js");
+    if (!existsSync(outfile)) continue;
+
+    const version = manifestVersion(extDir);
+    if (!version) continue;                       // nothing to key a cache on
+    const hash = sha256(outfile);
+    const prev = lock[slug];
+
+    if (prev && prev.sha256 !== hash && prev.version === version) {
+      offenders.push(
+        `  ${slug}\n` +
+        `    bundle changed but version is still ${version}\n` +
+        `    → bump "version" in assets/extensions/${slug}/extension.json`,
+      );
+      continue;                                    // do not record the mistake
+    }
+    next[slug] = { version, sha256: hash };
+  }
+
+  writeFileSync(LOCKFILE, JSON.stringify(next, null, 2) + "\n");
+
+  if (offenders.length > 0) {
+    console.error(
+      `\n[build-extensions] ${offenders.length} frontend bundle(s) changed without a version bump.\n` +
+      `Browsers cache these immutably by version, so the change would reach nobody:\n\n` +
+      offenders.join("\n\n") + "\n",
+    );
+  }
+  return offenders.length;
+}
+
 function buildFrontends(): void {
   const frontendDirs = collectFrontendDirs(EXT_DIR);
   if (frontendDirs.length === 0) return;
@@ -128,7 +215,19 @@ function buildFrontends(): void {
     : resolve(ROOT, "../dashboard");
   const builder = resolve(dashboardDir, "scripts/build-ext-frontend.mjs");
   if (!existsSync(resolve(dashboardDir, "node_modules"))) {
-    console.warn(`[build-extensions] frontend: dashboard/node_modules missing — skipping ${frontendDirs.length} frontend bundle(s) (run \`bun install\` in services/dashboard)`);
+    const msg = `frontend: dashboard/node_modules missing — ${frontendDirs.length} frontend bundle(s) cannot be built (run \`bun install\` in services/dashboard)`;
+    // Locally this is a warning: someone building only the backend should not
+    // be forced to install the dashboard's toolchain.
+    //
+    // In CI it is fatal. Skipping here produced a green release whose .deb and
+    // .rpm carried no extension pages at all — every page 404'd on install,
+    // and nothing in the build said so. A packaging job that cannot build what
+    // it is supposed to package has failed, however cleanly it exits.
+    if (process.env.CI) {
+      console.error(`[build-extensions] ${msg}`);
+      process.exit(1);
+    }
+    console.warn(`[build-extensions] ${msg}`);
     return;
   }
 
@@ -138,7 +237,22 @@ function buildFrontends(): void {
     const slug = extDir.slice(EXT_DIR.length + 1);
     const outfile = resolve(extDir, "frontend/entry.js");
     if (existsSync(outfile)) {
-      const srcMtime = newestMtime(resolve(extDir, "frontend/src"));
+      // `_shared/` counts as source. Almost every page imports from it —
+      // KernlPlayer, the Panel/Badge components, sanitize, i18n — so a change
+      // there changes the bundle just as surely as editing the page itself.
+      //
+      // Comparing against frontend/src alone declared an extension whose own
+      // files had not moved "fresh", and never rebuilt it. When the shared
+      // player changed, tv and torrents kept shipping the previous one — and
+      // nothing noticed, because the version guard below hashes whatever is on
+      // disk: an artefact that was never regenerated still matches its own
+      // recorded hash and reports no drift. Measured across 29 bundles, the
+      // two that had not rebuilt were exactly the two whose own sources were
+      // untouched while `_shared/media/KernlPlayer.svelte` moved.
+      const srcMtime = Math.max(
+        newestMtime(resolve(extDir, "frontend/src")),
+        newestMtime(resolve(EXT_DIR, "_shared")),
+      );
       if (statSync(outfile).mtimeMs >= srcMtime) { fresh++; continue; }
     }
     try {
@@ -152,6 +266,84 @@ function buildFrontends(): void {
     }
   }
   console.log(`[build-extensions] frontend built=${built} fresh=${fresh}`);
+
+  // Checked for every extension, not only the ones rebuilt this run: a bundle
+  // can be left changed by an interrupted build or an edit to entry.js itself.
+  if (checkFrontendVersions(frontendDirs) > 0) process.exitCode = 1;
+}
+
+/**
+ * Record, in each extension's manifest, the npm packages its built backend
+ * imports and the exact version this build resolved.
+ *
+ * Everything in EXTERNALS is deliberately left unbundled and resolved at
+ * runtime, which only works if the package is actually present. It was not:
+ * a native install shipped a node_modules pruned to the kernel's own needs,
+ * so 50 of 79 extensions failed to load on `Cannot find package 'uuid'`.
+ * Docker hid it because /app/node_modules is a full install.
+ *
+ * Deriving this from the built artifact rather than maintaining it by hand is
+ * the point — an extension that starts importing something new cannot quietly
+ * ship broken, because the manifest is regenerated from the code every build.
+ *
+ * Versions are exact. With ranges, two people enabling the same channel end up
+ * on different releases and a bug report stops being reproducible.
+ */
+function recordBackendPackages(): void {
+  const VALID = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*$/;
+  const external = new Set(EXTERNALS);
+  let written = 0;
+
+  // Every directory carrying a manifest. Deliberately not collectExtensionDirs
+  // — that one skips anything with an extension.json, because it hunts for
+  // wrappers to build. Here the manifest is exactly what we are looking for.
+  const manifestDirs: string[] = [];
+  (function walk(dir: string, depth = 4): void {
+    if (depth < 0) return;
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      if (!e.isDirectory() || e.name.startsWith("_") || e.name === "node_modules") continue;
+      const sub = resolve(dir, e.name);
+      if (existsSync(resolve(sub, "extension.json"))) manifestDirs.push(sub);
+      else walk(sub, depth - 1);
+    }
+  })(EXT_DIR);
+
+  for (const extDir of manifestDirs) {
+    const manifestPath = resolve(extDir, "extension.json");
+    const entry = resolve(extDir, "backend/entry.js");
+    if (!existsSync(manifestPath) || !existsSync(entry)) continue;
+
+    const src = readFileSync(entry, "utf-8");
+    const packages: Record<string, string> = {};
+    // These bundles embed SQL, and `FROM communications` matches an import
+    // regex just as well as a real one — hence the name validation and the
+    // EXTERNALS membership test rather than trusting the match.
+    for (const m of src.matchAll(/(?:\bfrom|\brequire\()\s*["']([^"'\n]+)["']/g)) {
+      const spec = m[1];
+      if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("node:")) continue;
+      const name = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
+      if (!VALID.test(name) || !external.has(name)) continue;
+      const pj = resolve(ROOT, "node_modules", name, "package.json");
+      if (!existsSync(pj)) {
+        console.warn(`[build-extensions] ${name} imported but not installed — not recorded`);
+        continue;
+      }
+      packages[name] = JSON.parse(readFileSync(pj, "utf-8")).version;
+    }
+
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf-8"));
+    if (!manifest.backend) continue;
+
+    const sorted = Object.fromEntries(Object.entries(packages).sort(([a], [b]) => a.localeCompare(b)));
+    const before = JSON.stringify(manifest.backend.packages ?? {});
+    if (JSON.stringify(sorted) === before) continue;
+
+    if (Object.keys(sorted).length) manifest.backend.packages = sorted;
+    else delete manifest.backend.packages;
+    writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + "\n", "utf-8");
+    written++;
+  }
+  console.log(`[build-extensions] manifests updated with backend.packages: ${written}`);
 }
 
 function main(): void {
@@ -199,6 +391,9 @@ function main(): void {
 
   // Frontend page bundles (D2 — frontend/src/index.ts → frontend/entry.js).
   buildFrontends();
+
+  // Must run after the backends are built: it reads the emitted entry.js.
+  recordBackendPackages();
 
   // Keep TypeScript happy with a harmless export so `bun run` doesn't treat
   // this as a "no-output" script in certain configurations.

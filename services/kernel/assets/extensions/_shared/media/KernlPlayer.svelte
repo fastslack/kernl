@@ -19,7 +19,7 @@
   */
   import { onDestroy, onMount } from 'svelte';
   import type { SubsController, SubTrack } from './subs-client';
-  import { phaseLabel, relativeAge } from './subs-client';
+  import { phaseLabel, relativeAge, fmtEta } from './subs-client';
   import {
     loadCaptionStyle, saveCaptionStyle, captionInlineStyle,
     type CaptionStyle,
@@ -43,6 +43,20 @@
   /** Playback speeds offered on demand. Empty disables the control. */
   export let speeds: number[] = [0.5, 1, 1.25, 1.5, 2];
   export let autoplay = true;
+  /**
+   * Is there anything to control yet?
+   *
+   * False hides the transport bar and the centre play affordance while the
+   * host is still getting the media on screen — connecting, buffering, or
+   * waiting on a transcode. Showing them early is worse than showing nothing:
+   * a bar reading `0:00 / 0:00` and a play button that does nothing look like
+   * a player that has finished loading and broken, which is precisely the
+   * moment the user gives up. The `overlay` slot still renders, so the host
+   * can put its own progress card in the space.
+   *
+   * Defaults true — a host that says nothing gets the old behaviour.
+   */
+  export let ready = true;
   /** Passed through for CORS-sensitive sources (torrent streams need it). */
   export let crossorigin: string | null = null;
 
@@ -80,6 +94,12 @@
   $: subsRunning = job?.status === 'running';
   $: subsFailed = job?.status === 'error';
   $: subsPct = Math.round((job?.progress ?? 0) * 100);
+  $: jobEta = fmtEta(job?.etaMs);
+  /** "354 / 863 cues · 1:18 left" — whichever halves the backend reported. */
+  $: jobDetail = [
+    job?.cuesTotal ? `${job.cuesDone ?? 0} / ${job.cuesTotal} cues` : '',
+    jobEta ? `${jobEta} left` : '',
+  ].filter(Boolean).join(' · ');
   $: offerable = languages.filter((l) => !tracks.some((t) => t.lang === l.code));
   $: models = (tick, ctl?.models ?? []);
   $: pickedModel = (tick, ctl?.model ?? '');
@@ -169,6 +189,30 @@
   }
   function trackLabel(t: SubTrack): string { return t.label || t.lang.toUpperCase(); }
 
+  /** Where a track came from, in one word. */
+  function kindLabel(kind: SubTrack['kind']): string {
+    switch (kind) {
+      case 'shipped':    return 'incluido';
+      case 'transcribe': return 'whisper';
+      case 'translation':return 'traducido';
+      case 'federated':  return 'comunidad';
+      default:           return '';
+    }
+  }
+
+  /**
+   * Can this track be deleted?
+   *
+   * Only the ones we produced and cached locally. A `shipped` track is a file
+   * that came with the media — on archive.org it is part of the item, listed
+   * upstream. There is nothing on our side to remove, so the bin either 404s
+   * or quietly does nothing, and either way the row is still there afterwards.
+   * Offering an action that cannot work is worse than not offering it.
+   */
+  function deletable(t: SubTrack): boolean {
+    return t.kind !== 'shipped';
+  }
+
   onMount(() => {
     const onFs = () => { fullscreen = Boolean(document.fullscreenElement); };
     document.addEventListener('fullscreenchange', onFs);
@@ -182,6 +226,7 @@
 <!-- svelte-ignore a11y-no-static-element-interactions a11y-click-events-have-key-events -->
 <div
   class="kp"
+  class:kp-not-ready={!ready}
   class:idle
   class:live
   bind:this={shell}
@@ -208,8 +253,9 @@
     }}
   ></video>
 
-  <!-- Big centre affordance, on demand only. -->
-  {#if !live && !playing}
+  <!-- Big centre affordance, on demand only — and never before there is
+       something to play. -->
+  {#if ready && !live && !playing}
     <button class="kp-big" on:click={togglePlay} aria-label="Play">▶</button>
   {/if}
 
@@ -265,8 +311,8 @@
       <span class="kp-grow"></span>
 
       {#if subsRunning}
-        <span class="kp-job" title={job?.hint ?? ''}>
-          <span class="kp-spin"></span>{phaseLabel(job?.phase ?? '')} {subsPct}%
+        <span class="kp-job" title={jobDetail || job?.hint || ''}>
+          <span class="kp-spin"></span>{phaseLabel(job?.phase ?? '')} {subsPct}%{jobEta ? ` · ${jobEta}` : ''}
         </span>
       {/if}
 
@@ -371,29 +417,69 @@
         <div class="kp-menu-head">Subtitles</div>
 
         {#if subsRunning && job}
+          <!-- The one place the running job is reported in detail. The chip in
+               the bar is a glanceable summary of this same object; hosts used
+               to draw a third, separate modal from their own state, which is
+               how two of the three ended up showing 0% for a job the modal
+               knew was 41% done. -->
           <div class="kp-menu-job">
             <div class="kp-menu-job-top">
-              <span>{phaseLabel(job.phase)}</span><span class="kp-grow"></span><span>{subsPct}%</span>
+              <span>{phaseLabel(job.phase)}</span>
+              {#if job.route}<span class="kp-job-route">{job.route}</span>{/if}
+              <span class="kp-grow"></span><span>{subsPct}%</span>
               <button class="kp-x" title="Cancel" on:click={() => run(() => ctl.cancel())}>✕</button>
             </div>
             <div class="kp-menu-track"><span style="width:{Math.max(3, subsPct)}%"></span></div>
+            {#if jobDetail}<p class="kp-job-detail">{jobDetail}</p>{/if}
             {#if job.hint}<p class="kp-hint">{job.hint}</p>{/if}
           </div>
         {/if}
 
         {#if tracks.length > 0}
-          <button class="kp-item" class:sel={!showing} on:click={() => ctl.off()}>Off</button>
-          {#each tracks as t (t.id)}
-            <div class="kp-item-row">
-              <button class="kp-item" class:sel={showing && activeTrack?.id === t.id} on:click={() => run(() => ctl.show(t))}>
-                {trackLabel(t)}
-                {#if t.createdAt}<em>{relativeAge(t.createdAt)}</em>{/if}
-              </button>
-              {#if allowManage}
-                <button class="kp-x" title="Delete" on:click={() => run(() => ctl.remove(t))}>🗑</button>
-              {/if}
-            </div>
-          {/each}
+          <!-- These are mutually exclusive choices, so they carry radio
+               semantics and a visible mark. They used to be bare 12px labels
+               whose only selected cue was a faint background tint — on a dark
+               menu that is not a state, it is a guess. -->
+          <div class="kp-menu-head kp-sub">Pistas</div>
+          <div class="kp-tracks" role="radiogroup" aria-label="pista de subtítulos">
+            <button
+              class="kp-item kp-track"
+              class:sel={!showing}
+              role="radio"
+              aria-checked={!showing}
+              on:click={() => ctl.off()}
+            >
+              <span class="kp-mark" aria-hidden="true"></span>
+              <span class="kp-track-main"><span class="kp-track-name">Off</span></span>
+            </button>
+            {#each tracks as t (t.id)}
+              {@const on = showing && activeTrack?.id === t.id}
+              <div class="kp-item-row">
+                <button
+                  class="kp-item kp-track"
+                  class:sel={on}
+                  role="radio"
+                  aria-checked={on}
+                  on:click={() => run(() => ctl.show(t))}
+                >
+                  <span class="kp-mark" aria-hidden="true"></span>
+                  <span class="kp-track-main">
+                    <span class="kp-track-name">{trackLabel(t)}</span>
+                    <span class="kp-track-sub">
+                      <!-- Where the track came from. Four kinds used to be
+                           four indistinguishable rows of text. -->
+                      <span class="kp-kind kp-kind-{t.kind}">{kindLabel(t.kind)}</span>
+                      {#if t.createdAt}<em>{relativeAge(t.createdAt)}</em>{/if}
+                    </span>
+                  </span>
+                </button>
+                {#if allowManage && deletable(t)}
+                  <button class="kp-x" title="Delete" aria-label="Delete {trackLabel(t)}"
+                          on:click={() => run(() => ctl.remove(t))}>🗑</button>
+                {/if}
+              </div>
+            {/each}
+          </div>
         {/if}
 
         {#if !subsRunning}
@@ -444,6 +530,16 @@
           {/if}
           {#if subsFailed && job?.error}<p class="kp-err">{job.error}</p>{/if}
         {/if}
+
+        <!-- Host-supplied sources.
+             Cinema has two the player cannot know about: the .srt shipped
+             inside the archive.org item, and the community layer shared over
+             Nostr. They used to live in a second, separate subtitle panel
+             behind a gear icon, which meant two places to manage one thing.
+             They belong in this menu; the slot lets them in without the
+             shared player learning anything about archive.org or Nostr, so
+             TV and torrents are unaffected — they simply do not fill it. -->
+        <slot name="cc-extra" />
       </div>
     {/if}
   </div>
@@ -469,6 +565,18 @@
     font-family:var(--font-mono, ui-monospace);
   }
   .kp.idle .kp-bar { opacity:0; transform:translateY(8px); pointer-events:none }
+  /* Nothing to control yet. `visibility` rather than `opacity` alone so the
+     bar leaves the tab order and the a11y tree too — a screen reader
+     announcing a 0:00/0:00 transport for media that has not arrived is the
+     same lie the sighted user was getting. Hidden as a whole rather than
+     per-control: the DOM stays intact, so it comes back the instant the
+     first frame does, with its menus and state untouched. */
+  .kp.kp-not-ready .kp-bar {
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(8px);
+    pointer-events: none;
+  }
 
   .kp-seek { position:relative; height:4px; border-radius:3px; background:rgba(255,255,255,.18); cursor:pointer; margin-bottom:7px }
   .kp-seek.ro { cursor:default }
@@ -518,10 +626,16 @@
 
   /* ── Menus ──────────────────────────────────────────────────── */
   .kp-menu {
-    position:absolute; bottom:52px; min-width:190px; max-height:min(58vh,340px); overflow-y:auto;
+    position:absolute; bottom:52px;
+    /* 190px could not hold "44 / 409 cues · 2:56 left" without wrapping it
+       into a second cramped line. A min/max pair lets the menu take the room
+       it needs while staying a menu, not a panel. */
+    min-width:250px; max-width:320px;
+    max-height:min(62vh,420px); overflow-y:auto;
     padding:7px; border-radius:9px;
     background:rgba(10,11,16,.95); backdrop-filter:blur(14px);
     border:1px solid rgba(255,255,255,.12); box-shadow:0 18px 44px -18px #000;
+    overscroll-behavior:contain;
   }
   .kp-menu-right { right:10px }
   .kp-menu-head {
@@ -538,6 +652,44 @@
   .kp-item:hover { background:rgba(255,255,255,.08) }
   .kp-item.sel { background:rgba(240,180,41,.15); color:#F0B429 }
   .kp-item em { font-style:normal; font-size:9.5px; color:#4A4F6A; margin-left:6px }
+  .kp-item:focus-visible { outline:2px solid #F0B429; outline-offset:-2px }
+
+  /* ── Track rows ─────────────────────────────────────────────────── */
+  .kp-tracks { display:flex; flex-direction:column; gap:2px }
+  .kp-track {
+    display:flex; align-items:center; gap:9px;
+    /* 34px, up from ~26. Comfortable to hit, and it gives the second line
+       room so the origin of a track is readable rather than crammed. */
+    min-height:34px; padding:5px 8px;
+  }
+  /* The mark is the state. A background tint alone reads as hover on a dark
+     surface, and hover was the only other thing that painted a background. */
+  .kp-mark {
+    flex:0 0 auto; width:13px; height:13px; border-radius:50%;
+    border:1.5px solid rgba(224,226,234,.35);
+    position:relative; transition:border-color .15s ease;
+  }
+  .kp-track.sel .kp-mark { border-color:#F0B429 }
+  .kp-track.sel .kp-mark::after {
+    content:""; position:absolute; inset:2.5px; border-radius:50%; background:#F0B429;
+  }
+  .kp-track:hover .kp-mark { border-color:rgba(224,226,234,.7) }
+  .kp-track-main { min-width:0; display:flex; flex-direction:column; gap:1px }
+  .kp-track-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+  .kp-track-sub { display:flex; align-items:center; gap:6px; font-size:9.5px; color:#4A4F6A }
+  .kp-track-sub em { margin:0 }
+  /* Origin badge — colour plus the word, never colour alone. */
+  .kp-kind {
+    padding:0 5px; border-radius:3px; letter-spacing:.04em;
+    background:rgba(224,226,234,.08); color:#8A8FA8;
+  }
+  .kp-kind-shipped     { background:rgba(120,180,255,.14); color:#9ec5ff }
+  .kp-kind-transcribe  { background:rgba(240,180,41,.14);  color:#F0B429 }
+  .kp-kind-translation { background:rgba(77,208,225,.14);  color:#6fd9e8 }
+  .kp-kind-federated   { background:rgba(160,140,255,.14); color:#b8a6ff }
+  @media (prefers-reduced-motion: reduce) {
+    .kp-mark { transition:none }
+  }
   .kp-primary { background:#F0B429; color:#0B0C10; text-align:center; font-weight:700 }
   .kp-primary:hover { background:#F0B429; filter:brightness(1.1) }
   .kp-x { background:none; border:0; color:#4A4F6A; cursor:pointer; font-size:11px; padding:3px 5px; border-radius:4px }
@@ -568,11 +720,39 @@
   }
   .kp-lang:hover { border-color:#F0B429; color:#F0B429 }
 
-  .kp-menu-job { padding:6px; border-radius:6px; background:rgba(255,255,255,.05); margin-bottom:6px }
+  /* The running job. It leads the menu because while it runs it is the only
+     thing you came here for; a left accent bar marks it as live state rather
+     than another option in the list. */
+  .kp-menu-job {
+    padding:8px 9px 9px; border-radius:6px; margin-bottom:8px;
+    background:rgba(240,180,41,.07);
+    border:1px solid rgba(240,180,41,.22);
+    border-left:2px solid #F0B429;
+  }
   .kp-menu-job-top { display:flex; align-items:center; gap:6px; font-size:9.5px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#F0B429 }
-  .kp-menu-track { height:3px; border-radius:2px; background:rgba(255,255,255,.12); overflow:hidden; margin-top:5px }
-  .kp-menu-track span { display:block; height:100%; background:linear-gradient(90deg,#C98A1E,#F0B429); transition:width .6s ease }
+  .kp-job-route { font-weight:600; letter-spacing:.06em; opacity:.7; text-transform:none }
+  .kp-job-detail { margin:6px 0 0; font-size:10.5px; color:rgba(255,255,255,.7); font-variant-numeric:tabular-nums }
+  /* 3px was a hairline that read as a divider. 5px with a soft glow reads as
+     a progress bar you can actually track out of the corner of your eye. */
+  .kp-menu-track { height:5px; border-radius:3px; background:rgba(0,0,0,.4); overflow:hidden; margin-top:7px }
+  .kp-menu-track span {
+    display:block; height:100%; border-radius:3px;
+    background:linear-gradient(90deg,#C98A1E,#F0B429);
+    box-shadow:0 0 8px rgba(240,180,41,.5);
+    transition:width .6s ease;
+  }
   .kp-hint { font-size:9.5px; color:#8A8FA8; margin-top:5px }
+  /* Cancel is destructive and was an 11px glyph in a 3px-padded box — under
+     any reasonable target size, and easy to miss entirely. */
+  .kp-menu-job .kp-x {
+    min-width:24px; min-height:24px;
+    display:inline-flex; align-items:center; justify-content:center;
+    border:1px solid rgba(255,255,255,.14);
+  }
+  .kp-menu-job .kp-x:hover { border-color:#F04770; background:rgba(240,71,112,.12) }
+  @media (prefers-reduced-motion: reduce) {
+    .kp-menu-track span { transition:none }
+  }
   .kp-err { font-family:var(--font-body, system-ui); font-size:10.5px; color:#F04770; padding:4px 6px; line-height:1.4 }
 
   /* ── Caption overlay (we paint it, so it can be styled) ─────── */

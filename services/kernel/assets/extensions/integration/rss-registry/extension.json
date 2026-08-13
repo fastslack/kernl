@@ -10,9 +10,21 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "integration",
-  "tags": ["rss", "atom", "feeds", "ingestion"],
-  "permissions": ["network", "module:rss-registry"],
+  "tags": [
+    "rss",
+    "atom",
+    "feeds",
+    "ingestion"
+  ],
+  "permissions": [
+    "network",
+    "module:rss-registry"
+  ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
   }
 }

@@ -16,8 +16,11 @@
 
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { rebuildWorks, type RebuildWorksResult } from "./works.js";
 import type {
   ArchiveScrapeRow,
+  CinemaCanonical,
+  CinemaMedia,
   CinemaListFilter,
   CinemaTagRow,
   CinemaTitle,
@@ -129,7 +132,256 @@ interface TitleRow {
   ingested_at: string;
   last_seen_at: string;
   deleted_at: string | null;
+  // Canonical identity, present only on queries that join it in. Absent (not
+  // null) on the plain `SELECT *` paths, which is why every read of these is
+  // optional-chained rather than null-checked.
+  canon_state?: string | null;
+  canon_qid?: string | null;
+  canon_label?: string | null;
+  canon_year?: number | null;
+  canon_director?: string | null;
+  canon_country?: string | null;
+  canon_imdb_id?: string | null;
+  canon_ext_rating?: number | null;
+  canon_ext_votes?: number | null;
+  // Work aggregates, present only on collapsed queries.
+  work_copies?: number | null;
+  work_downloads?: number | null;
+  work_week_downloads?: number | null;
+  work_num_reviews?: number | null;
+  work_avg_rating?: number | null;
+  // File-level facts, present on any query that joins cinema_title_media.
+  // All null when the title has not been probed yet.
+  media_duration_sec?: number | null;
+  media_width?: number | null;
+  media_height?: number | null;
+  media_has_video?: number | null;
+  media_has_streamable?: number | null;
+  media_has_subtitles?: number | null;
+  media_best_format?: string | null;
+  media_probed_at?: string | null;
+  /** Comma-separated CANON_LISTS keys, from the group_concat subquery. */
+  canon_lists?: string | null;
 }
+
+/**
+ * The canonical layer, attached to a title row.
+ *
+ * A LEFT JOIN in both directions: a title may have no match row at all, and a
+ * match row may be a `review`/`none` verdict carrying no work. The
+ * `mt.qid <> ''` guard on the second join keeps those from joining to a
+ * phantom work.
+ */
+const CANONICAL_JOIN = `
+  LEFT JOIN cinema_title_matches mt ON mt.identifier = t.identifier
+  LEFT JOIN cinema_canonical_works w ON w.qid = mt.qid AND mt.qid <> ''
+`;
+
+const CANONICAL_COLUMNS = `
+  mt.state AS canon_state, mt.qid AS canon_qid,
+  w.label AS canon_label, w.year AS canon_year,
+  w.director AS canon_director, w.country AS canon_country,
+  w.imdb_id AS canon_imdb_id,
+  w.ext_rating AS canon_ext_rating, w.ext_votes AS canon_ext_votes
+`;
+
+/** What "identified" means, as SQL. Machine-accepted or human-confirmed. */
+const IDENTIFIED_SQL = `mt.state IN ('auto','confirmed')`;
+
+/**
+ * Curated-list membership, as a scalar subquery.
+ *
+ * A subquery rather than a join because a work can sit on several rails at
+ * once, and joining would multiply the row. `group_concat` collapses them
+ * into one comma-separated cell, which the shaper splits back out. The
+ * (qid, list_key) primary key makes each lookup an index seek.
+ *
+ * Keyed off the MATCH's qid, so an upload inherits the rails of the work it
+ * was identified as — the Library of Congress selected a film, not somebody's
+ * transfer of it.
+ */
+/*
+ * Gated on the match STATE, not merely on a non-empty qid. A row a human
+ * rejected keeps the candidate qid — the rejection is recorded as the state,
+ * not by clearing the field — so without this a title someone explicitly said
+ * is NOT Citizen Kane would still inherit Citizen Kane's rails. Same rule
+ * `shapeCanonical` applies to the identity itself.
+ */
+const CANON_COLUMN = `
+  (SELECT group_concat(cn.list_key)
+     FROM cinema_canon cn
+    WHERE cn.qid = mt.qid AND mt.qid <> ''
+      AND ${IDENTIFIED_SQL}) AS canon_lists
+`;
+
+/**
+ * Restrict to a rail. Requires CANONICAL_JOIN to be in scope.
+ *
+ * `EXISTS` rather than a join, for the same reason: membership on two rails
+ * must not duplicate the row.
+ */
+function canonExistsSql(list?: string): string {
+  const listClause = list ? ` AND cn.list_key = ?` : "";
+  return `EXISTS (
+    SELECT 1 FROM cinema_canon cn
+     WHERE cn.qid = mt.qid AND mt.qid <> ''
+       AND ${IDENTIFIED_SQL}${listClause}
+  )`;
+}
+
+/**
+ * Append whatever media conditions the filter asks for, and say whether the
+ * media table needs joining at all.
+ *
+ * Shared rather than repeated because `list`, `countAll` and `filterByIds`
+ * each build their own WHERE, and a listing whose conditions drifted from its
+ * count would report a total that does not match what it shows.
+ *
+ * Every condition is written so an UNPROBED title fails it. That is the
+ * honest reading: asking for "at least 60 minutes" cannot be answered for an
+ * item nobody has looked inside, and quietly including it would defeat the
+ * filter during the hours the probe is still walking.
+ */
+function pushCanonClauses(
+  filter: CinemaListFilter,
+  where: string[],
+  params: unknown[],
+): boolean {
+  if (!filter.canonList && !filter.canonOnly) return false;
+  where.push(canonExistsSql(filter.canonList));
+  if (filter.canonList) params.push(filter.canonList);
+  return true;
+}
+
+function pushMediaClauses(
+  filter: CinemaListFilter,
+  where: string[],
+  params: unknown[],
+): boolean {
+  let needed = false;
+  if (filter.minDurationSec && filter.minDurationSec > 0) {
+    where.push("md.duration_sec >= ?");
+    params.push(filter.minDurationSec);
+    needed = true;
+  }
+  if (filter.minHeight && filter.minHeight > 0) {
+    where.push("md.height >= ?");
+    params.push(filter.minHeight);
+    needed = true;
+  }
+  if (filter.hasSubtitles) {
+    where.push("md.has_subtitles = 1");
+    needed = true;
+  }
+  if (filter.playableOnly) {
+    where.push("md.has_streamable = 1");
+    needed = true;
+  }
+  return needed;
+}
+
+/**
+ * Collapse to one row per film.
+ *
+ * An INNER join on `primary_identifier` is the whole mechanism: every title
+ * belongs to exactly one work and every work names exactly one copy, so
+ * joining on that column keeps the chosen copy and drops the rest. No GROUP
+ * BY, no window function, and the row that survives is still a full
+ * `cinema_titles` row that every downstream consumer already understands.
+ */
+const WORKS_JOIN = `JOIN cinema_works cw ON cw.primary_identifier = t.identifier`;
+
+/**
+ * File-level facts. LEFT, because an unprobed title must not vanish from the
+ * catalogue — the probe walks 74k items over hours and the grid has to keep
+ * working throughout.
+ */
+const MEDIA_JOIN = `LEFT JOIN cinema_title_media md ON md.identifier = t.identifier`;
+
+const MEDIA_COLUMNS = `
+  md.duration_sec AS media_duration_sec,
+  md.width AS media_width, md.height AS media_height,
+  md.has_video AS media_has_video, md.has_streamable AS media_has_streamable,
+  md.has_subtitles AS media_has_subtitles,
+  md.best_format AS media_best_format, md.probed_at AS media_probed_at
+`;
+
+/**
+ * The aggregates a collapsed row reports.
+ *
+ * Selected as well as ordered by, because the two must agree: ranking a row
+ * on its work's 51,000 summed downloads while the card shows the chosen
+ * copy's own 200 would be its own kind of lie.
+ */
+const WORKS_COLUMNS = `
+  cw.copies AS work_copies,
+  cw.downloads AS work_downloads,
+  cw.week_downloads AS work_week_downloads,
+  cw.num_reviews AS work_num_reviews,
+  cw.avg_rating AS work_avg_rating
+`;
+
+/**
+ * How much an unidentified title is discounted in the "best" order.
+ *
+ * A discount rather than a filter: the user asked for good material to rise,
+ * not for the rest to disappear. At 0.85 an unidentified title sits below an
+ * identified one of equal measured quality but still above a badly-reviewed
+ * identified one, which is the right relationship — being catalogued is
+ * evidence, not a verdict.
+ */
+const UNIDENTIFIED_FACTOR = 0.85;
+
+/**
+ * Collections where being unidentified says nothing, so the discount is not
+ * applied.
+ *
+ * Measured against the live catalogue rather than assumed. Identification
+ * rates by collection:
+ *
+ *   silent_films          61%
+ *   SciFi_Horror          48%
+ *   feature_films         44%
+ *   classic_cartoons       0%   (81 of 81 unidentified)
+ *   animationandcartoons   0%
+ *
+ * Zero is not a quality signal, it is an absence: Wikidata catalogues
+ * features and does not catalogue theatrical animated shorts, so every
+ * Popeye and Betty Boop entry fails identification no matter how good it is.
+ * Discounting them would demote the most-downloaded material in the
+ * catalogue — the top item is a Popeye short with over a million downloads —
+ * on the strength of a fact about Wikidata's coverage rather than about the
+ * film.
+ *
+ * A static list rather than a computed rate, matching how this module already
+ * handles COLLECTION_ITEM_BLOCKLIST and NOISE_COLLECTION_BLOCKLIST: the
+ * behaviour stays predictable, and the reasoning is recorded where the next
+ * person will look for it.
+ */
+const DISCOUNT_EXEMPT_COLLECTIONS = [
+  "classic_cartoons",
+  "animationandcartoons",
+  "vintage_cartoons",
+  "educationalfilms",
+  "culturalandacademicfilms",
+  "prelinger",
+  "short_films",
+];
+
+/** True when the row belongs to a collection the discount does not apply to. */
+const DISCOUNT_EXEMPT_SQL = `(${
+  DISCOUNT_EXEMPT_COLLECTIONS
+    .map((c) => `t.collection_json LIKE '%"${c}"%'`)
+    .join(" OR ")
+})`;
+
+/**
+ * TMDb rates 0..10 and archive.org rates 0..5. Everything downstream — the
+ * global mean, the weighted score, the UI — speaks the 0..5 scale, so the
+ * external number is halved at the point it enters rather than in six places
+ * afterwards.
+ */
+const EXT_RATING_TO_LOCAL_SCALE = 2.0;
 
 interface RunRow {
   id: string;
@@ -255,7 +507,13 @@ export class CinemaService {
 
   getByIdentifier(identifier: string): CinemaTitle | null {
     const row = this.db
-      .prepare("SELECT * FROM cinema_titles WHERE identifier = ? AND deleted_at IS NULL")
+      .prepare(`
+        SELECT t.*, ${CANONICAL_COLUMNS}, ${CANON_COLUMN}, ${MEDIA_COLUMNS}
+        FROM cinema_titles t
+        ${CANONICAL_JOIN}
+        ${MEDIA_JOIN}
+        WHERE t.identifier = ? AND t.deleted_at IS NULL
+      `)
       .get(identifier) as TitleRow | undefined;
     return row ? this.shape(row) : null;
   }
@@ -277,6 +535,13 @@ export class CinemaService {
     if (filter.collection) {
       where.push("t.collection_json LIKE ?");
       params.push(`%"${filter.collection}"%`);
+    }
+    // Films vs series. The archive files serials under the television
+    // collections, so membership is the only thing that distinguishes them.
+    if (filter.kind === "series") {
+      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
+    } else if (filter.kind === "film") {
+      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
     }
     if (filter.yearMin) {
       where.push("t.year >= ?");
@@ -300,8 +565,24 @@ export class CinemaService {
       for (const tag of tagList) params.push(`%"${tag}"%`);
     }
 
+    if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
+    pushCanonClauses(filter, where, params);
+    pushMediaClauses(filter, where, params);
+
+    // Collapsing a search result keeps only the copy that represents each
+    // work. The search ranked every copy independently, so without this a
+    // query for "metropolis" returns the same film six times.
+    const collapse = filter.collapse === true;
+
     const rows = this.db
-      .prepare(`SELECT t.* FROM cinema_titles t WHERE ${where.join(" AND ")}`)
+      .prepare(`
+        SELECT t.*, ${CANONICAL_COLUMNS}, ${CANON_COLUMN}, ${MEDIA_COLUMNS}${collapse ? `, ${WORKS_COLUMNS}` : ""}
+        FROM cinema_titles t
+        ${collapse ? WORKS_JOIN : ""}
+        ${CANONICAL_JOIN}
+        ${MEDIA_JOIN}
+        WHERE ${where.join(" AND ")}
+      `)
       .all(...params) as TitleRow[];
     // Reorder by the input id sequence so the caller's ranking wins.
     const byId = new Map(rows.map((r) => [r.identifier, r]));
@@ -309,6 +590,31 @@ export class CinemaService {
     for (const id of ids) {
       const r = byId.get(id);
       if (r) out.push(this.shape(r));
+    }
+
+    // …unless the caller asked for quality explicitly.
+    //
+    // Search order is text relevance, which answers "does this match the
+    // words". "The best sci-fi series" asks something else, and the two have
+    // to compose: the query decides WHICH titles, the sort decides in what
+    // order. Sci-fi series are only findable by text — they live in the
+    // television collections with no sci-fi collection of their own — so
+    // without this, that question had no way to be asked at all.
+    if (filter.sort === "best") {
+      const C = this.meanRating();
+      const m = 5;
+      // Mirrors qualityScore() in SQL — same votes-from-wherever-they-exist
+      // rule, same discount for an unidentified title. The two must agree, or
+      // "best" would mean one thing when browsing and another when searching.
+      const score = (t: CinemaTitle) => {
+        const canon = t.canonical;
+        const base = canon && canon.ext_votes > 0
+          ? ((canon.ext_votes * canon.ext_rating) + (m * C)) / (canon.ext_votes + m)
+          : ((t.num_reviews * t.avg_rating) + (m * C)) / (t.num_reviews + m);
+        const exempt = t.collection.some((c) => DISCOUNT_EXEMPT_COLLECTIONS.includes(c));
+        return base * (canon || exempt ? 1 : UNIDENTIFIED_FACTOR);
+      };
+      out.sort((a, b) => score(b) - score(a) || b.num_reviews - a.num_reviews);
     }
     return out;
   }
@@ -351,6 +657,13 @@ export class CinemaService {
       where.push("t.collection_json LIKE ?");
       params.push(`%"${filter.collection}"%`);
     }
+    // Films vs series. The archive files serials under the television
+    // collections, so membership is the only thing that distinguishes them.
+    if (filter.kind === "series") {
+      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
+    } else if (filter.kind === "film") {
+      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
+    }
     if (filter.yearMin) {
       where.push("t.year >= ?");
       params.push(filter.yearMin);
@@ -378,6 +691,17 @@ export class CinemaService {
       for (const tag of tagList) params.push(`%"${tag}"%`);
     }
 
+    if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
+    pushCanonClauses(filter, where, params);
+    pushMediaClauses(filter, where, params);
+
+    // Collapsed queries read their numbers off the work rather than off the
+    // one copy that represents it.
+    const collapse = filter.collapse === true;
+    const worksJoin = collapse ? WORKS_JOIN : "";
+    const worksCols = collapse ? `, ${WORKS_COLUMNS}` : "";
+    const local = collapse ? "cw" : "t";
+
     const limit = Math.max(1, Math.min(filter.limit ?? 60, 500));
     const offset = Math.max(0, filter.offset ?? 0);
 
@@ -397,9 +721,12 @@ export class CinemaService {
       }
       const rows = this.db
         .prepare(`
-          SELECT t.*
+          SELECT t.*, ${CANONICAL_COLUMNS}, ${CANON_COLUMN}, ${MEDIA_COLUMNS}${worksCols}
           FROM cinema_titles_fts f
           JOIN cinema_titles t ON t.rowid = f.rowid
+          ${worksJoin}
+          ${CANONICAL_JOIN}
+          ${MEDIA_JOIN}
           WHERE ${where.join(" AND ")}
             AND cinema_titles_fts MATCH ?
           ORDER BY bm25(cinema_titles_fts, 5.0, 2.0, 3.0, 1.0)
@@ -415,14 +742,27 @@ export class CinemaService {
         case "year_asc":  return "t.year ASC, t.downloads DESC";
         case "added_desc": return "t.addeddate DESC";
         case "rating":    return "t.avg_rating DESC, t.num_reviews DESC";
+        // "Best", which is not the same as "highest average".
+        //
+        // A raw average ranks a 5.0 from three reviewers above a 4.6 from
+        // thirty — on the sci-fi shelf that put VIOLENCE JACK ALL OVAs and War
+        // Of The Monsters ahead of Das Kabinett des Doktor Caligari. The
+        // weighted form pulls a title toward the global mean in proportion to
+        // how little is known about it, so confidence has to be earned by
+        // votes. Same shape IMDb uses for its Top 250.
+        case "best":      return `${this.qualityScore(local)} DESC, ${local}.num_reviews DESC`;
         case "downloads":
-        default:          return "t.downloads DESC";
+        default:          return `${local}.downloads DESC`;
       }
     })();
 
     const rows = this.db
       .prepare(`
-        SELECT t.* FROM cinema_titles t
+        SELECT t.*, ${CANONICAL_COLUMNS}, ${CANON_COLUMN}, ${MEDIA_COLUMNS}${worksCols}
+        FROM cinema_titles t
+        ${worksJoin}
+        ${CANONICAL_JOIN}
+        ${MEDIA_JOIN}
         WHERE ${where.join(" AND ")}
         ORDER BY ${order}
         LIMIT ? OFFSET ?
@@ -441,6 +781,13 @@ export class CinemaService {
     if (filter.collection) {
       where.push("t.collection_json LIKE ?");
       params.push(`%"${filter.collection}"%`);
+    }
+    // Films vs series. The archive files serials under the television
+    // collections, so membership is the only thing that distinguishes them.
+    if (filter.kind === "series") {
+      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
+    } else if (filter.kind === "film") {
+      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
     }
     if (filter.yearMin) {
       where.push("t.year >= ?");
@@ -463,6 +810,24 @@ export class CinemaService {
       where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
       for (const tag of tagList) params.push(`%"${tag}"%`);
     }
+    // The canonical join is only paid for when the filter actually asks about
+    // identity — a count is otherwise a pure scan over cinema_titles and there
+    // is no reason to make it join two more tables.
+    // The canon clauses reference `mt`, so asking about a rail is another
+    // reason the canonical join has to be present.
+    const needsCanon = pushCanonClauses(filter, where, params);
+    const needsCanonical = filter.identifiedOnly === true || needsCanon;
+    if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
+    const needsMedia = pushMediaClauses(filter, where, params);
+    // Collapsed, the count is of FILMS rather than uploads — the same join
+    // that drops duplicate rows from the listing drops them from the total,
+    // so the two never disagree about how many results there are.
+    const join = [
+      filter.collapse === true ? WORKS_JOIN : "",
+      needsCanonical ? CANONICAL_JOIN : "",
+      needsMedia ? MEDIA_JOIN : "",
+    ].filter(Boolean).join("\n");
+
     if (filter.query && filter.query.trim()) {
       const ftsQuery = sanitizeFtsQuery(filter.query);
       if (!ftsQuery) return 0;
@@ -471,13 +836,14 @@ export class CinemaService {
           SELECT COUNT(*) AS n
           FROM cinema_titles_fts f
           JOIN cinema_titles t ON t.rowid = f.rowid
+          ${join}
           WHERE ${where.join(" AND ")} AND cinema_titles_fts MATCH ?
         `)
         .get(...params, ftsQuery) as { n: number };
       return row.n;
     }
     const row = this.db
-      .prepare(`SELECT COUNT(*) AS n FROM cinema_titles t WHERE ${where.join(" AND ")}`)
+      .prepare(`SELECT COUNT(*) AS n FROM cinema_titles t ${join} WHERE ${where.join(" AND ")}`)
       .get(...params) as { n: number };
     return row.n;
   }
@@ -786,16 +1152,48 @@ export class CinemaService {
   // ── Tags ──────────────────────────────────────────────────────
 
   /** Top N tags by count, optionally filtered by name prefix for autocomplete. */
+  /**
+   * Tags worth putting on a chip.
+   *
+   * The raw ranking is by frequency, and the most frequent subjects on
+   * archive.org are not genres — they are what the uploader typed into the
+   * form. On this catalogue the top of the list reads Movie (14,265), trailer
+   * (11,596), video, Youtube, IGN, Entertainment: true of almost everything,
+   * useful for finding nothing. Filtering them out is what turns the row from
+   * a frequency histogram into a way to browse.
+   *
+   * Only the browse row filters. An explicit `search` still matches anything,
+   * because someone typing "trailer" means it.
+   */
+  private static readonly META_TAGS = new Set<string>([
+    "movie", "movies", "film", "films", "video", "videos", "trailer",
+    "trailers", "movie trailer", "movie trailers", "feature film",
+    "full movie", "clip", "clips", "youtube", "archive", "internet archive",
+    "entertainment", "ign", "media", "upload", "uploads", "public domain",
+    "television", "tv", "tv show", "tv series", "series", "episode",
+    "episodes", "hd", "1080p", "720p", "dvd", "vhs", "color", "b&w",
+    "black and white", "english", "spanish", "subtitles", "audio",
+  ]);
+
   topTags(limit: number, search?: string): CinemaTagRow[] {
     const params: unknown[] = [];
     let sql = `SELECT tag_norm, tag_display, count, rank FROM cinema_tags`;
     if (search && search.trim()) {
       sql += ` WHERE tag_norm LIKE ?`;
       params.push(`${search.trim().toLowerCase()}%`);
+      sql += ` ORDER BY rank LIMIT ?`;
+      params.push(Math.max(1, Math.min(limit, 500)));
+      return this.db.prepare(sql).all(...params) as CinemaTagRow[];
     }
+
+    // Over-fetch, then drop the metadata ones, so a filtered row still fills.
     sql += ` ORDER BY rank LIMIT ?`;
-    params.push(Math.max(1, Math.min(limit, 500)));
-    return this.db.prepare(sql).all(...params) as CinemaTagRow[];
+    const want = Math.max(1, Math.min(limit, 500));
+    params.push(Math.min(want * 4 + 40, 2000));
+    const rows = this.db.prepare(sql).all(...params) as CinemaTagRow[];
+    return rows
+      .filter((r) => !CinemaService.META_TAGS.has(r.tag_norm))
+      .slice(0, want);
   }
 
   /**
@@ -872,7 +1270,136 @@ export class CinemaService {
     return { tags: items.length, titlesScanned };
   }
 
+  /**
+   * Rebuild the derived work tables.
+   *
+   * Delegates to works.ts, which owns the grouping rules; this exists so
+   * callers (the API route, the ingest hook) have one door and do not each
+   * import the rebuild directly.
+   */
+  rebuildWorks(): RebuildWorksResult {
+    return rebuildWorks(this.db);
+  }
+
+  /**
+   * The other uploads of the same film.
+   *
+   * Ordered the way the primary copy was chosen, so the list reads as
+   * "the best copy first" rather than in whatever order SQLite returns.
+   */
+  siblingCopies(identifier: string): CinemaTitle[] {
+    const rows = this.db.prepare(`
+      SELECT t.*, ${CANONICAL_COLUMNS}
+      FROM cinema_work_members me
+      JOIN cinema_work_members sib ON sib.work_key = me.work_key
+      JOIN cinema_titles t ON t.identifier = sib.identifier
+      ${CANONICAL_JOIN}
+      WHERE me.identifier = ?
+        AND sib.identifier <> ?
+        AND t.deleted_at IS NULL
+      ORDER BY t.has_torrent DESC,
+               CASE WHEN t.runtime_sec > 0 THEN 0 ELSE 1 END,
+               t.runtime_sec DESC,
+               t.downloads DESC,
+               t.identifier
+    `).all(identifier, identifier) as TitleRow[];
+    return rows.map((r) => this.shape(r));
+  }
+
+  /** Snapshot of how much duplication the catalogue actually carries. */
+  worksStats(): { works: number; titles: number; collapsed: number; duplicates: number } {
+    const one = (sql: string): number =>
+      ((this.db.prepare(sql).get() as { n: number } | undefined)?.n ?? 0);
+    const works = one(`SELECT COUNT(*) AS n FROM cinema_works`);
+    const titles = one(`SELECT COUNT(*) AS n FROM cinema_work_members`);
+    return {
+      works,
+      titles,
+      collapsed: one(`SELECT COUNT(*) AS n FROM cinema_works WHERE copies > 1`),
+      duplicates: Math.max(0, titles - works),
+    };
+  }
+
   // ── internal ──────────────────────────────────────────────────
+
+  /**
+   * Weighted rating, as a SQL expression.
+   *
+   * `(v/(v+m)) * R + (m/(v+m)) * C` — a title with few votes sits near the
+   * global mean C and climbs only as votes accumulate. C is read once per
+   * process: it moves with the catalogue, not with the query, and recomputing
+   * it per request would cost a full scan for a number that barely changes.
+   */
+  private globalMean: number | null = null;
+  /** The catalogue's mean rating — the value both ranking paths pull toward. */
+  private meanRating(): number {
+    if (this.globalMean === null) {
+      const row = this.db
+        .prepare("SELECT AVG(avg_rating) AS m FROM cinema_titles WHERE num_reviews > 0")
+        .get() as { m: number | null } | undefined;
+      this.globalMean = row?.m ?? 3.5;
+    }
+    return this.globalMean;
+  }
+  private bayesianScore(minVotes = 5): string {
+    if (this.globalMean === null) {
+      const row = this.db
+        .prepare("SELECT AVG(avg_rating) AS m FROM cinema_titles WHERE num_reviews > 0")
+        .get() as { m: number | null } | undefined;
+      this.globalMean = row?.m ?? 3.5;
+    }
+    const C = this.globalMean;
+    return `(((t.num_reviews * t.avg_rating) + (${minVotes} * ${C})) / (t.num_reviews + ${minVotes}))`;
+  }
+
+  /**
+   * "Best", once the catalogue has a canonical identity to lean on.
+   *
+   * The weighted rating alone could not answer this question. Almost every
+   * row carries zero reviews, so with v=0 the score collapses to the global
+   * mean for the entire catalogue and the sort silently degenerates into
+   * "whatever happened to get commented on" — the tiebreak, not the score,
+   * was doing all the work.
+   *
+   * Two changes fix that:
+   *
+   *   1. Votes now come from wherever they exist. A film TMDb has scored with
+   *      four thousand votes is measured; the same film with no archive.org
+   *      reviews was previously indistinguishable from an unwatched upload.
+   *   2. Being identified at all is itself evidence. A work catalogued in
+   *      Wikidata was released, credited, and written about; an uploader's
+   *      home movie was not. That is the single strongest signal available
+   *      here, and it is available for every row rather than the ~1% that
+   *      carry reviews.
+   *
+   * Requires CANONICAL_JOIN to be in scope.
+   *
+   * `local` selects where the archive.org-side votes come from. Collapsed
+   * queries pass `cw`, so the score sees the work's summed votes rather than
+   * one copy's share of them — which is the third way this catalogue's
+   * ratings were being under-counted, alongside missing reviews and missing
+   * identity.
+   */
+  private qualityScore(local: "t" | "cw" = "t", minVotes = 5): string {
+    const C = this.meanRating();
+    return `
+      (CASE
+         WHEN w.ext_votes > 0 THEN
+           ((w.ext_votes * (w.ext_rating / ${EXT_RATING_TO_LOCAL_SCALE})) + (${minVotes} * ${C}))
+           / (w.ext_votes + ${minVotes})
+         ELSE
+           ((${local}.num_reviews * ${local}.avg_rating) + (${minVotes} * ${C}))
+           / (${local}.num_reviews + ${minVotes})
+       END)
+      * (CASE
+           WHEN ${IDENTIFIED_SQL} THEN 1.0
+           -- Unidentified, but in a collection Wikidata does not catalogue.
+           -- Nothing was learned, so nothing is charged.
+           WHEN ${DISCOUNT_EXEMPT_SQL} THEN 1.0
+           ELSE ${UNIDENTIFIED_FACTOR}
+         END)
+    `;
+  }
 
   private shape(row: TitleRow): CinemaTitle {
     return {
@@ -907,6 +1434,78 @@ export class CinemaService {
       embedded_dim: row.embedded_dim,
       ingested_at: row.ingested_at,
       last_seen_at: row.last_seen_at,
+      canonical: shapeCanonical(row),
+      media: shapeMedia(row),
+      canon: row.canon_lists ? row.canon_lists.split(",").filter(Boolean) : [],
+      ...shapeWork(row),
     };
   }
+}
+
+/**
+ * The file-level facts for a row, or null.
+ *
+ * Null means "nobody has looked inside this item yet", which is different
+ * from "this item is empty" — the latter is a probed row with `has_video`
+ * false, and the UI needs to tell those apart rather than showing a warning
+ * on every unprobed title.
+ */
+function shapeMedia(row: TitleRow): CinemaMedia | null {
+  if (!row.media_probed_at) return null;
+  return {
+    duration_sec: row.media_duration_sec ?? 0,
+    width: row.media_width ?? 0,
+    height: row.media_height ?? 0,
+    has_video: row.media_has_video === 1,
+    has_streamable: row.media_has_streamable === 1,
+    has_subtitles: row.media_has_subtitles === 1,
+    best_format: row.media_best_format ?? "",
+    probed_at: row.media_probed_at,
+  };
+}
+
+/**
+ * The work-level view of a collapsed row.
+ *
+ * Overrides the copy's own downloads and votes with the work's totals — the
+ * numbers that were always true and were only ever split because the archive
+ * holds one film as six items. Returns nothing at all on an uncollapsed
+ * query, so those rows keep reporting exactly what they did before.
+ */
+function shapeWork(row: TitleRow): Partial<CinemaTitle> {
+  if (row.work_copies == null) return {};
+  return {
+    copies: row.work_copies,
+    downloads: row.work_downloads ?? 0,
+    week_downloads: row.work_week_downloads ?? 0,
+    num_reviews: row.work_num_reviews ?? 0,
+    avg_rating: row.work_avg_rating ?? 0,
+  };
+}
+
+/**
+ * The canonical block for a row, or null.
+ *
+ * Null covers three different situations that all mean the same thing to a
+ * caller: the query did not join the canonical tables, the title was never
+ * matched, or it was matched to a verdict that carries no work (`review`,
+ * `none`, `rejected`). Only an accepted identity produces a block.
+ *
+ * The external rating is halved here, once, so everything downstream reads a
+ * 0..5 number like the rest of the catalogue.
+ */
+function shapeCanonical(row: TitleRow): CinemaCanonical | null {
+  const state = row.canon_state;
+  if (state !== "auto" && state !== "confirmed") return null;
+  if (!row.canon_qid) return null;
+  return {
+    qid: row.canon_qid,
+    label: row.canon_label ?? "",
+    year: row.canon_year ?? 0,
+    director: row.canon_director ?? "",
+    country: row.canon_country ?? "",
+    imdb_id: row.canon_imdb_id ?? "",
+    ext_rating: (row.canon_ext_rating ?? 0) / EXT_RATING_TO_LOCAL_SCALE,
+    ext_votes: row.canon_ext_votes ?? 0,
+  };
 }

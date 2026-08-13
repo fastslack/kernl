@@ -18,7 +18,7 @@
    * which +layout.svelte checks to skip re-prompting on subsequent visits.
    */
   import { onMount } from 'svelte';
-  import { goto } from '$app/navigation';
+  import OfficeStep from '$lib/components/setup/OfficeStep.svelte';
   import { t, locale, setUserLocale, type Locale } from '$lib/i18n/index.js';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
 
@@ -50,7 +50,10 @@
   }
 
   // ── Wizard state ──────────────────────────────────────────────
-  const TOTAL = 3;
+  // 4 steps: language -> provider -> hire a team -> done. The team step exists
+  // because finishing setup on an empty 3D floor is the worst first impression
+  // this product can make.
+  const TOTAL = 4;
   let step = 0;
 
   // Step 0 — language
@@ -74,6 +77,8 @@
   let llmErrMsg = '';
   let llmModels: string[] = [];
   let llmModelChoice = '';
+  /** Why the kernel says no agent can run yet. Empty when it can. */
+  let readinessMsg = '';
   let probedSlug: string | null = null; // which slug the current ✓ belongs to
 
   $: selectedRow = providerRows.find((p) => p.slug === chosen) ?? null;
@@ -185,11 +190,9 @@
   }
 
   async function commitLLMAndContinue(): Promise<void> {
-    if (chosen === 'skip') {
-      next();
-      return;
-    }
+    if (chosen === 'skip') return; // no longer reachable — the card is gone
     llmSaving = true;
+    readinessMsg = '';
     try {
       // Next without a prior successful probe runs the probe itself.
       if (probedSlug !== chosen) {
@@ -208,10 +211,37 @@
         headers: jsonHeaders,
         body: JSON.stringify(body),
       }).catch(() => null);
+
+      // The connection test above proves the credential answers. It does not
+      // prove the provider will execute a tool call, and an agent that cannot
+      // call tools cannot do anything at all — which is the failure this whole
+      // step exists to prevent. Ask the kernel to prove it before stepping on.
+      const verdict = await recheckReadiness();
+      if (!verdict.ok) {
+        readinessMsg = verdict.detail || $t('setup.llm_not_agent_ready');
+        return;
+      }
       // Slight delay so the user sees the success state before stepping on.
       setTimeout(next, 400);
     } finally {
       llmSaving = false;
+    }
+  }
+
+  /**
+   * Ask the kernel to run a real tool call against the configured chain.
+   *
+   * Separate from `testLLM` on purpose: that one lists models and proves the
+   * key is accepted, this one proves an agent can run. Claude Code passes the
+   * first and fails the second — its `capabilities.tools` is false.
+   */
+  async function recheckReadiness(): Promise<{ ok: boolean; detail?: string }> {
+    try {
+      const r = await fetch('/api/llm/readiness/recheck', { method: 'POST', headers: jsonHeaders });
+      if (!r.ok) return { ok: false, detail: `readiness check failed (HTTP ${r.status})` };
+      return (await r.json()) as { ok: boolean; detail?: string };
+    } catch (e) {
+      return { ok: false, detail: e instanceof Error ? e.message : String(e) };
     }
   }
 
@@ -225,13 +255,18 @@
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
-  function finish(): void {
+  function finish(dest = '/settings?welcome=1'): void {
     try {
       localStorage.setItem('kernl.setupComplete', '1');
       // Mirror the legacy welcomeSeen flag so /welcome doesn't re-trigger.
       localStorage.setItem('kernl.welcomeSeen', '1');
     } catch { /* private browsing */ }
-    goto('/settings?welcome=1');
+    // Hard navigation, like /login does on success — not goto(). The wizard
+    // runs in the shell-less layout, and the kernel it just configured only
+    // starts answering /api/* once an LLM exists. A full load guarantees the
+    // dashboard comes up against the post-setup server state instead of
+    // whatever the pre-setup session had (or had not) fetched.
+    window.location.href = dest;
   }
 
   onMount(() => {
@@ -253,7 +288,10 @@
   });
 
   $: stepLabel =
-    step === 0 ? $t('setup.step_language') : step === 1 ? $t('setup.step_llm') : $t('setup.step_done');
+    step === 0 ? $t('setup.step_language')
+    : step === 1 ? $t('setup.step_llm')
+    : step === 2 ? 'Your team'
+    : $t('setup.step_done');
 </script>
 
 <svelte:head>
@@ -433,17 +471,9 @@
               </button>
             {/each}
 
-            <button
-              type="button"
-              class="option-card"
-              class:selected={chosen === 'skip'}
-              on:click={() => pickProvider('skip')}>
-              <span class="opt-radio" aria-hidden="true"></span>
-              <div class="opt-body">
-                <div class="opt-title">{$t('setup.llm_skip')}</div>
-                <div class="opt-desc">{$t('setup.llm_skip_desc')}</div>
-              </div>
-            </button>
+            <!-- The "continue without a provider" card used to live here. It
+                 produced an install where every agent failed on its first run,
+                 which is not a state worth offering as a choice. -->
           </div>
 
           {#if chosen !== 'skip' && selectedRow}
@@ -475,18 +505,35 @@
           {:else if llmStatus === 'err'}
             <p class="status err">⚠ {llmErrMsg}</p>
           {/if}
+
+          <!-- The key was accepted and the provider still could not run a tool
+               call, so no agent would work. Says which, so the next move is
+               obvious instead of guesswork. -->
+          {#if readinessMsg}
+            <p class="status err">⚠ {readinessMsg}</p>
+          {/if}
         {/if}
 
         <div class="nav">
           <button class="btn-ghost" on:click={back}>{$t('setup.btn_back')}</button>
-          <button class="btn-primary" on:click={commitLLMAndContinue} disabled={llmSaving || llmTesting || provLoading}>
+          <button
+            class="btn-primary"
+            on:click={commitLLMAndContinue}
+            disabled={llmSaving || llmTesting || provLoading || chosen === 'skip'}
+            title={chosen === 'skip' ? $t('setup.llm_required_hint') : ''}>
             {llmSaving ? $t('setup.btn_saving') : $t('setup.btn_next')}
           </button>
         </div>
       </section>
 
+    {:else if step === 2}
+      <!-- ───────────────────── Step 3 ─ Hire a team ─── -->
+      <section class="step-card">
+        <OfficeStep on:done={next} />
+      </section>
+
     {:else}
-      <!-- ─────────────────────────── Step 3 ─ Done ─── -->
+      <!-- ─────────────────────────── Step 4 ─ Done ─── -->
       <section class="step-card done">
         <div class="done-medal" aria-hidden="true">
           <svg viewBox="0 0 64 64">
@@ -511,18 +558,17 @@
           </div>
           <div class="summary-row">
             <span class="summary-k">{$t('setup.done_llm')}</span>
-            <span class="summary-v">
-              {chosen === 'skip'
-                ? $t('setup.done_llm_skipped')
-                : (selectedRow?.name ?? chosen)}
-            </span>
+            <!-- No "skipped" branch: reaching this step means a provider ran a
+                 tool call, so there is always a name to show. -->
+            <span class="summary-v">{selectedRow?.name ?? chosen}</span>
           </div>
         </div>
 
         <SetupChecklist />
 
         <div class="nav center">
-          <button class="btn-primary big" on:click={finish}>{$t('setup.done_cta')}</button>
+          <button class="btn-primary big" on:click={() => finish('/agents-flow')}>{$t('setup.done_cta_office')}</button>
+          <button class="btn-ghost big" on:click={() => finish('/settings?welcome=1')}>{$t('setup.done_cta_settings')}</button>
         </div>
 
         <p class="reset-hint">
@@ -561,7 +607,7 @@
 
   /* ── Top bar ───────────────────────────────────────────── */
   .topbar {
-    max-width: 720px;
+    max-width: 1040px;
     margin: 8px auto 32px;
     display: flex;
     align-items: center;
@@ -601,7 +647,7 @@
 
   /* ── Progress bar ──────────────────────────────────────── */
   .progress-shell {
-    max-width: 720px;
+    max-width: 1040px;
     margin: 0 auto 32px;
   }
   .progress-meta {
@@ -637,7 +683,7 @@
 
   /* ── Content shell ─────────────────────────────────────── */
   .content {
-    max-width: 720px;
+    max-width: 1040px;
     margin: 0 auto;
   }
 
@@ -657,6 +703,7 @@
     color: #fff;
   }
   .step-lede {
+    max-width: 64ch;
     color: #b8bdd1;
     font-size: 14px;
     line-height: 1.6;
@@ -666,10 +713,17 @@
   /* ── Option cards (radio cards) ────────────────────────── */
   .option-grid {
     display: grid;
-    gap: 12px;
+    gap: 10px;
   }
-  .option-grid.two { grid-template-columns: 1fr 1fr; }
-  .option-grid.one { grid-template-columns: 1fr; }
+  /* Two-choice steps stay narrow and centred — stretching two cards across a
+     1040px shell reads as a mistake. */
+  .option-grid.two { grid-template-columns: 1fr 1fr; max-width: 720px; }
+  /* The provider step has six options. As a single column it needed scrolling
+     on every laptop; auto-fit turns the spare width into columns so the whole
+     choice is visible at once, which is the point of a chooser. */
+  /* stretch, not start: ragged card heights inside a row read as broken. */
+  .option-grid.one { grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); align-items: stretch; }
+  .option-grid.one > * { height: 100%; }
   @media (max-width: 600px) {
     .option-grid.two { grid-template-columns: 1fr; }
   }
@@ -906,15 +960,24 @@
   }
 
   /* ── Buttons ───────────────────────────────────────────── */
+  /* Sticks to the bottom of the card. The provider step is tall enough that
+     Back/Continue fell below the fold on a laptop — the two controls that move
+     the wizard forward were the ones you could not see. */
   .nav {
     display: flex;
     justify-content: space-between;
     align-items: center;
     gap: 16px;
-    margin-top: 32px;
-    padding-top: 24px;
+    margin-top: 24px;
+    padding-top: 16px;
     border-top: 1px solid #1d2138;
+    position: sticky;
+    bottom: 0;
+    background: linear-gradient(to top, #10132a 72%, rgba(16,19,42,0));
+    padding-bottom: 4px;
+    z-index: 2;
   }
+  .nav > * { flex: none; }
   .nav.center { justify-content: center; border-top: 0; padding-top: 16px; }
   .nav.end { justify-content: flex-end; }
 

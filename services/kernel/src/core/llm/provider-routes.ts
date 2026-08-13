@@ -20,6 +20,21 @@ import { ModelBlocklist } from "./model-blocklist.js";
 import { recent as recentCalls } from "./call-log.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
 
+/** Enough of the value to recognise it, never enough to use it. */
+const MASK = "***";
+function maskSecret(value: string): string {
+  if (!value) return "";
+  if (value.length <= 8) return value.slice(0, 2) + MASK;
+  return value.slice(0, 8) + MASK + value.slice(-4);
+}
+/** A value that came back out of `maskSecret` — i.e. the client never saw the
+ *  real one and is echoing our own placeholder. Must not be persisted. */
+function isMasked(value: string): boolean {
+  return value.includes(MASK);
+}
+import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
+import { ClaudeCodeAuthService } from "./claude-code-auth-service.js";
+
 function slugOf(req: unknown): string | null {
   const params = (req as { params?: Record<string, string> }).params;
   const slug = params?.slug;
@@ -106,10 +121,29 @@ export function registerLlmProviderRoutes(
     }
   });
 
+  /**
+   * Masked. This used to return `settings_json` verbatim, so a plain GET
+   * handed back the Claude Code OAuth token and every provider API key in
+   * cleartext to anything holding a dashboard session.
+   *
+   * It read raw for a reason — the dashboard does read-modify-write and needs
+   * the old secret to send back unchanged — so the PUT below now does that
+   * merge server-side instead. The secret never has to leave the kernel.
+   */
   server.get("/api/llm-providers/:slug/config", (req, res) => {
     const slug = slugOf(req);
     if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    server.json(res, 200, { config: registry.loadConfig(slug) });
+    const raw = registry.loadConfig(slug);
+    const schema = registry.getConfigSchema(slug) ?? [];
+    const secretKeys = new Set(schema.filter((f) => f.type === "password").map((f) => f.key));
+    // oauthToken has no schema field (it is set by the sign-in dialog, not the
+    // form) and is the most sensitive value here, so name it explicitly.
+    secretKeys.add("oauthToken");
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(raw)) {
+      out[k] = secretKeys.has(k) && typeof v === "string" ? maskSecret(v) : v;
+    }
+    server.json(res, 200, { config: out });
   });
 
   server.put("/api/llm-providers/:slug/config", async (req, res) => {
@@ -131,6 +165,20 @@ export function registerLlmProviderRoutes(
     }
     const schema = registry.getConfigSchema(slug);
     if (!schema) { server.json(res, 404, { error: "provider not found" }); return; }
+
+    // Merge secrets server-side. `saveConfig` replaces wholesale, so before the
+    // GET was masked the client had to fetch the real token and send it back
+    // just to change a model name. Now an omitted, empty or still-masked
+    // secret means "leave it alone" — a config save can no longer wipe a
+    // credential, and the credential never travels.
+    const stored = registry.loadConfig(slug);
+    const secretKeys = new Set(schema.filter((f) => f.type === "password").map((f) => f.key));
+    secretKeys.add("oauthToken");
+    for (const key of secretKeys) {
+      const incoming = config[key];
+      const keep = typeof incoming !== "string" || incoming === "" || isMasked(incoming);
+      if (keep && typeof stored[key] === "string" && stored[key]) config[key] = stored[key];
+    }
 
     const ok = registry.saveConfig(slug, config);
     if (!ok) { server.json(res, 500, { error: "failed to persist config" }); return; }
@@ -480,5 +528,83 @@ export function registerLlmProviderRoutes(
       primary: describe(chain.primary, true),
       fallbacks: chain.fallbacks.map(l => describe(l, false)),
     });
+  });
+}
+
+/**
+ * Claude Code sign-in, driven from the dashboard.
+ *
+ * This provider runs on the operator's Claude subscription instead of a metered
+ * key, which makes it the one provider that works with nothing configured — and
+ * the one that silently stops working when its session goes. A container
+ * recreate used to be enough to lose it, with no way to sign back in short of
+ * an interactive shell inside the container. These four routes are that way in.
+ */
+export function registerClaudeCodeAuthRoutes(
+  server: KernelHttpServer,
+  registry: LlmProviderRegistry,
+): void {
+  const SLUG = "claude-code";
+  const auth = new ClaudeCodeAuthService(
+    () => new ChatClaudeCodeProvider().binaryPath(),
+    () => {
+      const cfg = registry.loadConfig(SLUG);
+      const t = cfg.oauthToken;
+      return typeof t === "string" && t ? t : undefined;
+    },
+    (token) => {
+      registry.saveConfig(SLUG, { ...registry.loadConfig(SLUG), oauthToken: token });
+      // Mirror into the environment so the adapter picks it up on the very next
+      // call. It is built without config, so the registry alone is invisible.
+      if (token) process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
+      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
+    },
+  );
+
+  server.get("/api/llm/claude-code/auth", (_req, res) => {
+    server.json(res, 200, auth.status());
+  });
+
+  server.post("/api/llm/claude-code/auth/login", async (_req, res) => {
+    const r = await auth.startLogin();
+    if ("error" in r) return server.json(res, 400, { error: r.error });
+    server.json(res, 200, r.session);
+  });
+
+  server.post("/api/llm/claude-code/auth/code", async (req, res) => {
+    const body = await server.parseBody<{ session?: string; code?: string }>(req);
+    const r = await auth.submitCode(String(body?.session ?? ""), String(body?.code ?? ""));
+    // A completed sign-in changes the answer to "can an agent run", so the
+    // next check must ask again instead of serving a pre-login verdict.
+    if (r.ok) (await import("./readiness.js")).markLlmReadinessStale("claude-code signed in");
+    server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
+  });
+
+  server.post("/api/llm/claude-code/auth/token", async (req, res) => {
+    const body = await server.parseBody<{ token?: string }>(req);
+    const r = auth.saveToken(String(body?.token ?? ""));
+    if (r.ok) (await import("./readiness.js")).markLlmReadinessStale("claude-code token saved");
+    server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
+  });
+
+  server.post("/api/llm/claude-code/auth/cancel", async (req, res) => {
+    const body = await server.parseBody<{ session?: string }>(req);
+    auth.cancel(String(body?.session ?? ""));
+    server.json(res, 200, { ok: true });
+  });
+
+  // ── Readiness ────────────────────────────────────────────────────
+  //
+  // Exempt from the gate it feeds (see readiness-gate.ts) — a blocked
+  // dashboard has to be able to ask why it is blocked.
+  server.get("/api/llm/readiness", async (_req, res) => {
+    const { ensureLlmReadiness } = await import("./readiness.js");
+    server.json(res, 200, await ensureLlmReadiness());
+  });
+
+  /** Re-probe on demand. This spends a real call, so it is a POST. */
+  server.post("/api/llm/readiness/recheck", async (_req, res) => {
+    const { ensureLlmReadiness } = await import("./readiness.js");
+    server.json(res, 200, await ensureLlmReadiness(true));
   });
 }

@@ -1,0 +1,65 @@
+[
+  {
+    "name": "starred item survives reload and renders in the favoritos view",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/torrents",
+          "settle": "6000"
+        }
+      },
+      {
+        "type": "screenshot",
+        "value": "tfav-catalog-with-star"
+      },
+      {
+        "type": "assert_count",
+        "selector": ".mode",
+        "value": ">= 3"
+      },
+      {
+        "type": "assert_count",
+        "selector": ".star",
+        "value": ">= 5"
+      },
+      {
+        "type": "assert_count",
+        "selector": ".star.on",
+        "value": ">= 1"
+      },
+      {
+        "type": "click",
+        "text": "favoritos"
+      },
+      {
+        "type": "wait",
+        "value": "3500"
+      },
+      {
+        "type": "screenshot",
+        "value": "tfav-favorites-view"
+      },
+      {
+        "type": "assert_count",
+        "selector": ".row",
+        "value": ">= 1"
+      },
+      {
+        "type": "assert_count",
+        "selector": ".star.on",
+        "value": ">= 1"
+      },
+      {
+        "type": "assert_text",
+        "text": "guardados"
+      }
+    ],
+    "expect": [
+      "The catalogue shows the previously starred row with a FILLED amber ★ after a fresh page load — the state came from the server, not from this session",
+      "The ★ favoritos tab carries a (1) count",
+      "Switching to favoritos lists that item with the same badges and actions as the catalogue row, its star filled",
+      "The header subtitle reads 'guardados · 1 ítem · lo último marcado primero'"
+    ]
+  }
+]

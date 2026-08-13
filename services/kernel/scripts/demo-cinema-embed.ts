@@ -48,7 +48,7 @@ async function main(): Promise<void> {
   console.log(`neo4j.available = ${neo4j.available}`);
   if (neo4j.available) {
     // Drop our test label clean before each run so the demo is repeatable.
-    // Only deletes nodes WE wrote (label-scoped — won't touch SNOMED).
+    // Label-scoped, so it only deletes the nodes this demo wrote.
     await neo4j.run("MATCH (c:CinemaTitle) DETACH DELETE c");
     console.log("neo4j: cleared previous CinemaTitle nodes");
   }

@@ -668,6 +668,27 @@ export const agentsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // v41 — persistent circuit breaker. The scheduler used to count consecutive
+    // failures in an in-memory Map, so the count died on every restart and the
+    // "paused" state was invisible to the UI (it only deactivated the schedule
+    // row while the agent kept reading as active).
+    //
+    //   - consecutive_failures → advanced on every failed run, reset to 0 by
+    //     any successful one. At >= threshold the agent is auto-paused (active = 0).
+    //   - auto_paused_at       → ISO timestamp of the auto-pause; '' = not auto-paused.
+    //     Distinguishes "the user hit Pause" from "the breaker tripped".
+    //   - auto_pause_reason    → last error line, shown in the UI and in the
+    //     alert sent to the top agent.
+    //
+    // Cleared when the agent is reactivated (see AgentService.updateAgent).
+    version: 41,
+    sql: `
+      ALTER TABLE agents ADD COLUMN consecutive_failures INTEGER NOT NULL DEFAULT 0;
+      ALTER TABLE agents ADD COLUMN auto_paused_at       TEXT    NOT NULL DEFAULT '';
+      ALTER TABLE agents ADD COLUMN auto_pause_reason    TEXT    NOT NULL DEFAULT '';
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

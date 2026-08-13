@@ -2,8 +2,11 @@
   {
     "name": "Chat page loads with sidebar and input visible",
     "actions": [
-      { "type": "goto", "value": "/chat" },
-      { "type": "wait", "value": "2500" },
+      {
+        "comment": "Was a bare `goto /chat`. /chat keeps the app shell but still sits behind the token + setup gates, so unauthenticated it redirected to /login and the screenshot captured the login form.",
+        "$use": "goto-view",
+        "params": { "path": "/chat", "settle": "2500" }
+      },
       { "type": "screenshot", "value": "chat-loaded" }
     ],
     "expect": "Chat page shows sidebar with conversation list on left, main area on right with input field visible at bottom"
@@ -11,8 +14,10 @@
   {
     "name": "Click conversation with messages shows messages and input",
     "actions": [
-      { "type": "goto", "value": "/chat" },
-      { "type": "wait", "value": "2000" },
+      {
+        "$use": "goto-view",
+        "params": { "path": "/chat", "settle": "2000" }
+      },
       { "type": "click", "selector": ".cx-ep:nth-child(3)" },
       { "type": "wait", "value": "2000" },
       { "type": "screenshot", "value": "chat-with-messages" }

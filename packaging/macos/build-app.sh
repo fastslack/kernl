@@ -80,15 +80,54 @@ cd "$DATA_DIR"
 
 # Open the dashboard once the kernel is up (background; doesn't block the
 # kernel process which becomes the .app's foreground task).
+#
+# First run has no token the user could possibly know: the kernel generates one
+# at boot and persists it next to the DB. Hand it over in the URL *fragment* —
+# never sent to the server, so it stays out of logs — and the login page signs
+# in with it and wipes it from the URL. Without this the first thing a new user
+# sees is a login form asking for a secret nobody showed them.
 (
   for _ in $(seq 1 30); do
     if curl -sf "http://localhost:${DASHBOARD_PORT:-3086}/api/manifest" >/dev/null 2>&1; then
-      open "http://localhost:${DASHBOARD_PORT:-3086}"
+      URL="http://localhost:${DASHBOARD_PORT:-3086}"
+      TOKEN="${KERNEL_AUTH_TOKEN:-}"
+      if [ -z "$TOKEN" ] && [ -f "$DATA_DIR/data/.kernel-auth-token" ]; then
+        TOKEN="$(cat "$DATA_DIR/data/.kernel-auth-token")"
+      fi
+      if [ -n "$TOKEN" ]; then
+        open "$URL/login#token=$TOKEN"
+      else
+        open "$URL"
+      fi
       break
     fi
     sleep 1
   done
 ) &
+
+# Keep a record of the boot.
+#
+# The wrapper has always created logs/ and nothing has ever written to it. The
+# kernel logs to stdout, and stdout from a Finder launch goes nowhere — so a
+# .app that failed to start left no trace at all, and the only way to see a
+# boot was to know you could run this script from a terminal. That is a bad
+# trade for a desktop app: the people most likely to hit a startup problem are
+# the least likely to know that.
+#
+# tee rather than a plain redirect, so running this from a terminal still
+# prints to the terminal. One rotation deep: the interesting log is almost
+# always the current boot or the one before it, and an unbounded file in a
+# user's Application Support directory is its own bug.
+#
+# 0600 because boot output can carry environment detail. The dashboard token
+# is deliberately not in here — it travels in a URL fragment, which is exactly
+# why that was chosen (see above) — but a log nobody expected to exist is the
+# wrong place to be relaxed about permissions.
+LOG_FILE="$DATA_DIR/logs/kernl.log"
+[ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
+: > "$LOG_FILE"
+chmod 0600 "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
 
 exec "$APP_DIR/bun" "$APP_DIR/mcp-server.js" "$@"
 WRAPPER
@@ -122,33 +161,38 @@ cp "$SRC_TREE/bin/$BUN_EXE"      "$APP_BUNDLE/Contents/Resources/bun"
 cp "$SRC_TREE/bin/mcp-server.js" "$APP_BUNDLE/Contents/Resources/"
 [ -d "$SRC_TREE/bin/static" ]     && cp -a "$SRC_TREE/bin/static"     "$APP_BUNDLE/Contents/Resources/"
 [ -d "$SRC_TREE/bin/extensions" ] && cp -a "$SRC_TREE/bin/extensions" "$APP_BUNDLE/Contents/Resources/"
+# whisper.cpp + its dylibs, as ONE flat directory beside mcp-server.js.
+# media-tools.ts resolves it relative to the bundled entry point, which is
+# what makes the same code work here, in /opt/kernl/bin on Linux, and at the
+# zip root on Windows. Do not split the dylibs out into a lib/ folder: the GPU
+# backends are dlopen-ed and the loader looks beside the executable.
+[ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/node_modules" "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/dashboard"    "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/assets"       "$APP_BUNDLE/Contents/Resources/"
 cp    "$SRC_TREE/package.json" "$APP_BUNDLE/Contents/Resources/"
 cp    "$REPO_ROOT/packaging/rpm/files/env.example" "$APP_BUNDLE/Contents/Resources/env.example"
 
-# Icon — generate from the SVG favicon when iconutil is available
-# (macOS host); else placeholder. CI overrides this with the proper .icns.
-if command -v iconutil &>/dev/null && [ -f "$REPO_ROOT/services/dashboard/static/favicon.svg" ]; then
-  ICONSET="$STAGE_DIR/kernl.iconset"
-  mkdir -p "$ICONSET"
-  for size in 16 32 64 128 256 512 1024; do
-    convert -background none -density "$((size * 4))" -resize "${size}x${size}" \
-      "$REPO_ROOT/services/dashboard/static/favicon.svg" "$ICONSET/icon_${size}x${size}.png" 2>/dev/null || true
-  done
-  iconutil -c icns "$ICONSET" -o "$APP_BUNDLE/Contents/Resources/kernl.icns" 2>/dev/null || true
-elif [ -f "$REPO_ROOT/services/dashboard/static/favicon.svg" ] && command -v convert &>/dev/null; then
-  # Fallback: render a 512x512 PNG and cp as .icns (macOS will warn but display)
-  convert -background none -density 1024 -resize 512x512 \
-    "$REPO_ROOT/services/dashboard/static/favicon.svg" "$APP_BUNDLE/Contents/Resources/kernl.icns" 2>/dev/null || \
-    touch "$APP_BUNDLE/Contents/Resources/kernl.icns"
-else
-  touch "$APP_BUNDLE/Contents/Resources/kernl.icns"
+# Icon: a committed .icns, not one rendered here.
+#
+# The previous version needed iconutil AND ImageMagick, and quietly ran
+# `touch kernl.icns` when either was missing. The macOS runners have neither,
+# so every .app ever built carried an empty file where its icon should be —
+# Info.plist pointed at kernl.icns and Finder found nothing. Nothing failed,
+# which is exactly why nobody noticed.
+ICNS_SRC="$REPO_ROOT/packaging/icons/kernl.icns"
+if [ ! -f "$ICNS_SRC" ]; then
+  echo "ERROR: missing $ICNS_SRC — the application icon is not optional." >&2
+  exit 1
 fi
+cp "$ICNS_SRC" "$APP_BUNDLE/Contents/Resources/kernl.icns"
 
 # ── Tarball for distribution ─────────────────────────────────────────
-( cd "$REPO_ROOT" && tar czf "$TARBALL" "$(basename "$APP_BUNDLE")" )
+# cd into the directory that actually holds the bundle — it lives in
+# packaging/out/, not at the repo root, so tar'ing basename from $REPO_ROOT
+# fails with "Cannot stat". Deriving the directory from $APP_BUNDLE keeps the
+# two in step if the output location ever moves.
+( cd "$(dirname "$APP_BUNDLE")" && tar czf "$TARBALL" "$(basename "$APP_BUNDLE")" )
 
 # Cleanup staging.
 rm -rf "$STAGE_DIR"

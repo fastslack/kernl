@@ -1,0 +1,85 @@
+[
+  {
+    "name": "dialog traps focus and restores it on close",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/wellness",
+          "settle": "4000"
+        }
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const b=[...document.querySelectorAll('.quick-action')].find(x=>x.textContent.includes('Log Metric')); b.focus(); b.click(); return 'opened';})()"
+      },
+      {
+        "type": "wait",
+        "value": "900"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const d=document.querySelector('.wl-box'); return JSON.stringify({focusInside:d.contains(document.activeElement), focused:document.activeElement.id||document.activeElement.className, ariaModal:d.getAttribute('aria-modal'), labelledBy:d.getAttribute('aria-labelledby'), titleText:document.getElementById('wl-title').textContent, bodyOverflow:document.body.style.overflow});})()"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const d=document.querySelector('.wl-box'); const f=[...d.querySelectorAll('a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled])')]; f[f.length-1].focus(); const was=document.activeElement.className; d.dispatchEvent(new KeyboardEvent('keydown',{key:'Tab',bubbles:true})); return JSON.stringify({lastControl:was, afterTab:document.activeElement.id||document.activeElement.className, stillInside:d.contains(document.activeElement)});})()"
+      },
+      {
+        "type": "press",
+        "value": "Escape"
+      },
+      {
+        "type": "wait",
+        "value": "800"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>JSON.stringify({dialogGone:!document.querySelector('.wl-box'), focusBackOnTrigger:(document.activeElement.textContent||'').includes('Log Metric'), bodyOverflow:document.body.style.overflow||'(restored)'}))()"
+      }
+    ],
+    "expect": "Focus starts inside the dialog, Tab from the last control wraps back inside instead of escaping, Escape closes it, focus returns to the Log Metric trigger and body scroll is restored."
+  },
+  {
+    "name": "every dialog control has an accessible name",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/wellness",
+          "settle": "4000"
+        }
+      },
+      {
+        "type": "click",
+        "text": "Log Meal"
+      },
+      {
+        "type": "wait",
+        "value": "900"
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const d=document.querySelector('.wl-box'); const bad=[]; d.querySelectorAll('input,select,textarea').forEach(el=>{const lab=el.id&&d.querySelector('label[for=\"'+el.id+'\"]'); if(!lab&&!el.getAttribute('aria-label')&&!el.getAttribute('aria-labelledby')) bad.push(el.id||el.outerHTML.slice(0,50));}); const btns=[]; d.querySelectorAll('button').forEach(b=>{if(!b.textContent.trim()&&!b.getAttribute('aria-label')) btns.push(b.outerHTML.slice(0,60));}); const svgs=[...d.querySelectorAll('svg')].filter(s=>s.getAttribute('aria-hidden')!=='true').length; return JSON.stringify({unlabelledFields:bad, unnamedIconButtons:btns, svgsMissingAriaHidden:svgs, fieldCount:d.querySelectorAll('input,select').length});})()"
+      }
+    ],
+    "expect": "Reports unlabelledFields: [], unnamedIconButtons: [], svgsMissingAriaHidden: 0 for the meal dialog."
+  },
+  {
+    "name": "page KPI and card region is announced and keyboard reachable",
+    "actions": [
+      {
+        "$use": "goto-view",
+        "params": {
+          "path": "/wellness",
+          "settle": "4000"
+        }
+      },
+      {
+        "type": "evaluate",
+        "value": "(()=>{const live=document.querySelector('.toast-region'); const bad=[]; document.querySelectorAll('.quick-action,.overview-card-btn').forEach(b=>{if(b.tabIndex<0) bad.push(b.textContent.trim());}); return JSON.stringify({liveRegionPresent:!!live, livePoliteness:live&&live.getAttribute('aria-live'), unreachableButtons:bad, progressbar:!!document.querySelector('[role=\"progressbar\"]'), progressLabel:(document.querySelector('[role=\"progressbar\"]')||{}).ariaLabel});})()"
+      }
+    ],
+    "expect": "The aria-live toast region exists and is polite, no interactive control is keyboard-unreachable, and the water bar exposes a labelled progressbar role."
+  }
+]

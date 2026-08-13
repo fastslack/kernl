@@ -19,7 +19,7 @@ import type { CatalogFilter } from "./catalog/types.js";
 import type { ExtensionType } from "../extensions/types.js";
 import { queryMarketplace } from "./dashboard-query.js";
 import { buildDownloadWatermark } from "../extensions/receipt.js";
-import { packBundle } from "../extensions/bundle.js";
+import { packBundle, bundleFileName } from "../extensions/bundle.js";
 
 export function registerMarketplaceRoutes(
   server: KernelHttpServer,
@@ -95,7 +95,7 @@ export function registerMarketplaceRoutes(
   //
   // GET /api/marketplace/catalog/download/:slug?downloader_fp=<fingerprint>
   //
-  // Build a per-download .kernlext bundle for `slug`:
+  // Build a per-download .kernl bundle for `slug`:
   //   1. Locate the bundle directory via the catalog (must be a bundled provider
   //      item with origin.directory set — we don't proxy remote-of-remote).
   //   2. Stage a copy to a temp dir.
@@ -135,7 +135,7 @@ export function registerMarketplaceRoutes(
 
       // Stage a copy of the source dir, embed watermark into extension.json,
       // pack into a tarball. Original assets/ dir is never mutated.
-      // The .kernlext output MUST live OUTSIDE the staging dir — otherwise tar
+      // The .kernl output MUST live OUTSIDE the staging dir — otherwise tar
       // complains "file changed as we read it" when it reaches its own output.
       stagingDir = mkdtempSync(join(tmpdir(), `mtw-dl-${item.slug}-`));
       outDir = mkdtempSync(join(tmpdir(), `mtw-dl-out-${item.slug}-`));
@@ -153,15 +153,15 @@ export function registerMarketplaceRoutes(
       manifestObj.tracking = { download: watermark };
       writeFileSync(manifestPath, JSON.stringify(manifestObj, null, 2), "utf-8");
 
-      const bundlePath = join(outDir, `${item.slug}.kernlext`);
+      const bundlePath = join(outDir, bundleFileName(item.slug));
       const packed = await packBundle(stagingDir, bundlePath);
       const buf = readFileSync(bundlePath);
       const size = statSync(bundlePath).size;
 
       res.writeHead(200, {
-        "Content-Type": "application/x-kernlext+gzip",
+        "Content-Type": "application/x-kernl+gzip",
         "Content-Length": String(size),
-        "Content-Disposition": `attachment; filename="${item.slug}.kernlext"`,
+        "Content-Disposition": `attachment; filename="${bundleFileName(item.slug)}"`,
         "X-MTW-Watermark": Buffer.from(JSON.stringify(watermark)).toString("base64"),
         "X-MTW-Bundle-Sha256": packed.sha256,
       });

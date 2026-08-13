@@ -671,7 +671,24 @@ export class ChatService {
     //     model was still requesting tools, run a *synthesis pass*: one
     //     final completion with tools disabled and a system note telling
     //     the model to write its final answer from the data it already has.
-    const hasTools = this.llmTools.length > 0;
+    // A provider that cannot carry a tool loop is handed no tools.
+    //
+    // This path used to pass all 66 straight into claude_code's single-shot
+    // shim, which drops them and logs a warning nobody reads — so the chat
+    // answered in prose while every tool it claimed to have was inert. The
+    // dashboard reaches here whenever an attachment is present, because the
+    // streaming SDK route cannot take images.
+    //
+    // Dropping them is still the only option, but silently is not: the reply
+    // says so, otherwise "look at this screenshot and file a task" comes back
+    // as a confident description of a task that was never created.
+    const toolsDropped = this.llmTools.length > 0 && provider.supportsToolLoop === false;
+    const hasTools = this.llmTools.length > 0 && !toolsDropped;
+    if (toolsDropped) {
+      log.warn(
+        `Chat: ${provider.name} cannot run a tool loop — answering without the ${this.llmTools.length} kernel tools.`,
+      );
+    }
     log.info(`Chat LLM call: provider=${provider.name} hasTools=${hasTools} toolCount=${this.llmTools.length} chainLen=${fallbackChain.length}`);
     let iterations = 0;
     let totalTokens = 0;
@@ -784,10 +801,17 @@ export class ChatService {
       tools_used: toolsUsed,
     });
 
+    // Say it in the reply, not only in a server log the user will never see.
+    // An answer produced with no tools available reads exactly like one
+    // produced with them — right up until you check whether anything happened.
+    const replyContent = toolsDropped
+      ? `${finalContent}\n\n---\n_Answered without tools: ${provider.name} cannot run a tool loop, so nothing was created, changed or looked up. Attachments force this path; send the message without one to get the full tool loop._`
+      : finalContent;
+
     const assistantMsg = this.storeMessage(
       episodeId,
       "assistant",
-      finalContent,
+      replyContent,
       totalTokens,
       contextUsed,
     );

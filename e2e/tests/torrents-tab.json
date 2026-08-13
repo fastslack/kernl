@@ -1,0 +1,55 @@
+[
+  {
+    "name": "Torrents shows up as a Leisure tab and its page mounts",
+    "actions": [
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/login"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','es'); 'ok'"
+      },
+      {
+        "type": "goto",
+        "value": "http://localhost:3086/cinema"
+      },
+      {
+        "type": "wait",
+        "selector": ".band-tags"
+      },
+      {
+        "type": "wait",
+        "value": "2500"
+      },
+      {
+        "type": "assert_text",
+        "text": "TORRENTS"
+      },
+      {
+        "type": "screenshot",
+        "value": "torrents-tab"
+      },
+      {
+        "type": "navigate",
+        "value": "/torrents"
+      },
+      {
+        "type": "wait",
+        "value": "4000"
+      },
+      {
+        "type": "assert_url",
+        "value": "/torrents"
+      },
+      {
+        "type": "screenshot",
+        "value": "torrents-page"
+      }
+    ],
+    "expect": [
+      "A TORRENTS tab appears in the Leisure sub-tab row, after MUSIC",
+      "Clicking it navigates to /torrents and the page renders"
+    ]
+  }
+]

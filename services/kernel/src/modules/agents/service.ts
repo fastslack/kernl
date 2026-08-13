@@ -48,6 +48,12 @@ const TOPIC_STOPWORDS = new Set<string>([
   "sobre", "entre", "desde", "hasta", "muy", "más", "menos",
 ]);
 
+/** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
+const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
+
+/** Stable topic so every auto-pause alert for the same pair lands in one thread. */
+const AUTO_PAUSE_ALERT_TOPIC = "Agent auto-pause alerts";
+
 export class AgentService {
   /**
    * Embeddings client — set lazily by bootstrap once createEmbeddingsClient
@@ -729,7 +735,16 @@ export class AgentService {
     if (input.model !== undefined) { sets.push("model = ?"); params.push(input.model); }
     if (input.max_iterations !== undefined) { sets.push("max_iterations = ?"); params.push(input.max_iterations); }
     if (input.timeout_ms !== undefined) { sets.push("timeout_ms = ?"); params.push(input.timeout_ms); }
-    if (input.active !== undefined) { sets.push("active = ?"); params.push(input.active ? 1 : 0); }
+    if (input.active !== undefined) {
+      sets.push("active = ?");
+      params.push(input.active ? 1 : 0);
+      // Reactivating clears the breaker: the user un-pausing an agent is
+      // telling us the underlying problem is handled, so it gets the full
+      // failure budget again instead of tripping on its next stumble.
+      if (input.active) {
+        sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
+      }
+    }
     if (input.max_tokens !== undefined) { sets.push("max_tokens = ?"); params.push(input.max_tokens); }
     if (input.max_errors !== undefined) { sets.push("max_errors = ?"); params.push(input.max_errors); }
     if (input.variables !== undefined) { sets.push("variables = ?"); params.push(JSON.stringify(input.variables)); }
@@ -779,6 +794,164 @@ export class AgentService {
     this.db.prepare("UPDATE agents SET active = 0, updated_at = ? WHERE id = ?").run(isoNow(), id);
     this.events.emit("data.changed", { module: "agents", action: "agent_deleted" });
     return true;
+  }
+
+  // ── Circuit breaker (auto-pause + top-agent alert) ───
+
+  /**
+   * Consecutive failures tolerated before auto-pausing. 0 disables the breaker.
+   * Falls back to the default when no live config was injected (tests, demos).
+   */
+  private autoPauseThreshold(): number {
+    const raw = this.config?.agents?.autoPauseThreshold;
+    return typeof raw === "number" && Number.isFinite(raw) ? raw : DEFAULT_AUTO_PAUSE_THRESHOLD;
+  }
+
+  /**
+   * Record how a run ended and trip the breaker when an agent keeps failing.
+   *
+   * Single entry point for every execution path — the scheduler's cron loop
+   * (builtin and LLM) and the executor's builtin short-circuit — so a manual
+   * "Run now" counts exactly like a scheduled one, and the counter survives
+   * restarts (it lives in `agents`, not in memory).
+   *
+   * On the Nth consecutive failure the agent is paused (`active = 0`, which
+   * `AgentScheduler.tick()` already skips), tagged with the reason, and the top
+   * agent gets a message in its thread. Alerting happens ONLY on the transition
+   * into the paused state — a dead upstream must not mail the commander every
+   * 15 minutes forever.
+   */
+  recordRunOutcome(
+    agentId: string,
+    outcome: { ok: boolean; error?: string; run_id?: string },
+  ): { paused: boolean; consecutive_failures: number } {
+    const agent = this.getAgent(agentId);
+    if (!agent) return { paused: false, consecutive_failures: 0 };
+
+    if (outcome.ok) {
+      // Only write when there is something to clear — a healthy agent should
+      // not emit a data.changed on every single tick.
+      const dirty = (agent.consecutive_failures ?? 0) > 0 || (agent.auto_paused_at ?? "") !== "";
+      if (dirty) this.clearAutoPause(agentId);
+      return { paused: false, consecutive_failures: 0 };
+    }
+
+    const fails = (agent.consecutive_failures ?? 0) + 1;
+    const reason = (outcome.error ?? "").trim().slice(0, 500) || "run failed without an error message";
+    const threshold = this.autoPauseThreshold();
+    const shouldPause = threshold > 0 && fails >= threshold && agent.active === 1;
+
+    if (!shouldPause) {
+      this.db
+        .prepare("UPDATE agents SET consecutive_failures = ?, updated_at = ? WHERE id = ?")
+        .run(fails, isoNow(), agentId);
+      log.warn(
+        `Agent "${agent.name}": failure ${fails}/${threshold > 0 ? threshold : "∞"} — ${reason.slice(0, 120)}`,
+      );
+      return { paused: false, consecutive_failures: fails };
+    }
+
+    const now = isoNow();
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET consecutive_failures = ?, active = 0, auto_paused_at = ?,
+                auto_pause_reason = ?, updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(fails, now, reason, now, agentId);
+
+    log.error(`Agent "${agent.name}" auto-paused after ${fails} consecutive failures: ${reason.slice(0, 200)}`);
+
+    this.events.emit("agent:auto_paused", {
+      agent_id: agent.id,
+      agent_name: agent.name,
+      builtin_handler: agent.builtin_handler,
+      consecutive_failures: fails,
+      reason,
+      run_id: outcome.run_id ?? "",
+      paused_at: now,
+    });
+    this.events.emit("data.changed", { module: "agents", action: "agent_auto_paused" });
+
+    this.alertTopAgentAutoPaused(agent, { fails, reason, run_id: outcome.run_id ?? "" });
+
+    return { paused: true, consecutive_failures: fails };
+  }
+
+  /**
+   * Clear the breaker state. Called on any successful run and whenever the
+   * agent is reactivated, so an agent the user un-pauses starts from a clean
+   * slate instead of tripping again on its very next failure.
+   */
+  clearAutoPause(agentId: string): void {
+    this.db
+      .prepare(
+        `UPDATE agents
+            SET consecutive_failures = 0, auto_paused_at = '', auto_pause_reason = '', updated_at = ?
+          WHERE id = ?`,
+      )
+      .run(isoNow(), agentId);
+    this.events.emit("data.changed", { module: "agents", action: "agent_auto_pause_cleared" });
+  }
+
+  /**
+   * Drop a message in the top agent's thread about an auto-pause.
+   *
+   * Best-effort by construction: a missing commander, a broken conversation
+   * row, anything — is logged and swallowed. Failing to deliver an alert must
+   * never turn into a second failure on top of the one being reported.
+   */
+  private alertTopAgentAutoPaused(
+    agent: Agent,
+    ctx: { fails: number; reason: string; run_id: string },
+  ): void {
+    try {
+      const chief = this.getTopAgent();
+      if (!chief) {
+        log.warn(`Auto-pause of "${agent.name}" not reported: no top agent (no ranked active agent found)`);
+        return;
+      }
+      if (chief.id === agent.id) return; // the commander doesn't mail himself
+
+      const convo = this.findOrCreateChatConversation({
+        topic: AUTO_PAUSE_ALERT_TOPIC,
+        participants: [agent.id, chief.id],
+        initiator_agent_id: agent.id,
+      });
+
+      const handlerLine = agent.builtin_handler
+        ? `Handler: \`${agent.builtin_handler}\``
+        : `Executor: ${agent.executor_type ?? "native"}`;
+      const body = [
+        `**Auto-paused** — "${agent.name}" stopped after ${ctx.fails} consecutive failures.`,
+        "",
+        handlerLine,
+        `Last error: ${ctx.reason}`,
+        "",
+        "The schedule is untouched: reactivate the agent and it resumes on its next cron slot.",
+      ].join("\n");
+
+      this.postMessage({
+        conversation_id: convo.id,
+        from_agent_id: agent.id,
+        to_agent_id: chief.id,
+        role: "stmt",
+        body,
+        run_id: ctx.run_id,
+        meta: {
+          kind: "auto_pause",
+          agent_id: agent.id,
+          builtin_handler: agent.builtin_handler,
+          consecutive_failures: ctx.fails,
+          reason: ctx.reason,
+        },
+      });
+    } catch (err) {
+      log.warn(
+        `Auto-pause alert for "${agent.name}" could not be delivered: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
   }
 
   // ── Run management ──────────────────────────────────
@@ -1283,11 +1456,10 @@ export class AgentService {
       .run(nextRunAt, lastRunAt, id);
   }
 
-  deactivateSchedule(id: string): void {
-    this.db.prepare("UPDATE agent_schedules SET active = 0 WHERE id = ?").run(id);
-    log.warn(`Schedule ${id} deactivated (circuit breaker)`);
-    this.events.emit("data.changed", { module: "agents", action: "schedule_deactivated" });
-  }
+  // NOTE: `deactivateSchedule()` lived here for the old in-memory circuit
+  // breaker, its only caller. The breaker now pauses the AGENT
+  // (`recordRunOutcome`) and deliberately leaves the schedule row alone, so
+  // reactivating an agent resumes it without having to repair its cron too.
 
   // ── Feedback ──────────────────────────────────────
 

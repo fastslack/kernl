@@ -10,7 +10,7 @@
  *      verifies against install_sha256.
  *
  * Phase 2 — server-side watermark + remote download (B), in-process loopback:
- *   5. Pack a synthetic .kernlext (we use the morning-briefing dir but write a
+ *   5. Pack a synthetic .kernl (we use the morning-briefing dir but write a
  *      proper extension.json so packBundle is happy).
  *   6. Build a watermark via buildDownloadWatermark from a "source" identity.
  *   7. Verify the watermark signature.
@@ -144,7 +144,7 @@ async function main(): Promise<void> {
 
   bar("Phase 3 — pack + install with watermark threaded through");
 
-  // Build a synthetic .kernlext from a copy of morning-briefing with a real
+  // Build a synthetic .kernl from a copy of morning-briefing with a real
   // extension.json (the bundled SKILL.json layout doesn't have one).
   const stagingDir = mkdtempSync(`${tmpdir()}/mtw-receipt-pack-`);
   copyDirSync(resolve(process.cwd(), "assets/skills/morning-briefing"), stagingDir);
@@ -167,7 +167,7 @@ async function main(): Promise<void> {
   );
 
   const bundleOutDir = mkdtempSync(`${tmpdir()}/mtw-receipt-out-`);
-  const bundlePath = join(bundleOutDir, "morning-briefing-demo.kernlext");
+  const bundlePath = join(bundleOutDir, "morning-briefing-demo.kernl");
   const packed = await packBundle(stagingDir, bundlePath);
   console.log(`  packed: ${packed.bundlePath} (${packed.sizeBytes} bytes, sha=${packed.sha256.slice(0, 16)}…)`);
 

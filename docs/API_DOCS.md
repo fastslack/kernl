@@ -4,13 +4,27 @@ All endpoints are served at `http://localhost:3086` (or your configured port).
 
 ## Authentication
 
-If `KERNEL_AUTH_TOKEN` is set, all `/api/*` endpoints require:
+Every `/api/*` endpoint and `/mcp` requires a Bearer token. There is no
+unauthenticated mode: leave `KERNEL_AUTH_TOKEN` unset and the kernel generates
+one on first boot rather than running open.
 
 ```
 Authorization: Bearer <your-token>
 ```
 
-Exempt: `/api/health`, `/api/auth/verify`
+Find the generated token in `<data dir>/.kernel-auth-token` (mode 600), or on
+the Docker stack:
+
+```bash
+docker compose exec kernel cat /app/data/.kernel-auth-token
+```
+
+Exempt: `/api/health`, `/api/metrics`, `/api/auth/verify`.
+
+Responses carry `Access-Control-Allow-Origin` only for an origin listed in
+`CORS_ALLOWED_ORIGINS`. With that unset — the default — the API answers
+same-origin callers only, which is all the bundled dashboard needs. A browser
+client served from a different origin needs its origin added there explicitly.
 
 ## Health & Auth
 

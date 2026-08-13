@@ -9,8 +9,18 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "channels",
-  "tags": ["channel", "webchat", "messaging"],
+  "tags": [
+    "channel",
+    "webchat",
+    "messaging"
+  ],
   "kernel_min": "0.1.0",
   "permissions": [],
-  "backend": { "entry": "backend/entry.js" }
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "ws": "8.21.0"
+    }
+  }
 }

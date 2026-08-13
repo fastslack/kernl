@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
+  import { modelIds } from '$lib/llm-models.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
+  import SkillsHub from '$lib/components/SkillsHub.svelte';
 
   type ExtensionType =
     | 'module' | 'skill' | 'agent-bundle' | 'office' | 'flow'
@@ -20,6 +22,9 @@
     updated_at: string;
     last_loaded_at: string | null;
     error: string;
+    /** Null for free extensions. Present for paid ones whether licensed or
+     *  not, so the card can say which feature a locked row is waiting on. */
+    entitlement: { required_feature: string; licensed: boolean } | null;
     manifest: {
       description?: string;
       author?: string;
@@ -187,7 +192,11 @@
   // the old page only ever searched the installed rows, so searching for
   // something you hadn't installed yet always came back empty.
 
-  type Tab = 'discover' | 'installed' | 'updates';
+  // 'skills' is not a slice of the same list as the others: it swaps the grid
+  // for the skills hub, which is organised by agent assignment rather than by
+  // install state. It lives here anyway because a skill IS an extension, and
+  // splitting it back out into its own page is exactly what we just undid.
+  type Tab = 'discover' | 'installed' | 'updates' | 'skills';
   type PriceFilter = '' | 'free' | 'paid';
   type CardStatus =
     | 'available' | 'for_sale' | 'owned'
@@ -608,6 +617,7 @@
   })();
 
   $: installedCount = items.length;
+  $: skillCount = items.filter((i) => i.type === 'skill').length;
   $: updatesCount = catalogItems.filter((e) => e.update_available).length;
   $: errorCount = items.filter((i) => i.status === 'error').length;
   /** Counts what Discover actually shows — not the whole catalog. */
@@ -897,7 +907,7 @@
   async function doUpload(): Promise<void> {
     uploadError = '';
     if (!uploadFile && !uploadPath) {
-      uploadError = 'Pick a .kernlext file or paste a server path.';
+      uploadError = 'Pick a .kernl file or paste a server path.';
       return;
     }
     uploading = true;
@@ -970,6 +980,9 @@
 
   /** Re-query whatever backs the current tab. */
   async function refetchActive(): Promise<void> {
+    // The skills hub owns its own fetches (it needs agents too) — re-querying
+    // the catalog underneath it would only burn a store round-trip.
+    if (tab === 'skills') return;
     if (tab === 'installed') await fetchList();
     else await fetchCatalog();
   }
@@ -981,6 +994,23 @@
     // so Discover doesn't silently hide everything.
     if (next !== 'installed') filterStatus = '';
     void refetchActive();
+  }
+
+  // ── Skills hub wiring ────────────────────────────────────────────────
+  // The hub manages assignment; acquisition stays on the paths that already
+  // exist, so it delegates those two actions back up here.
+
+  /** "Browse catalog" from the hub → Discover, pre-filtered to skills. */
+  function skillsToDiscover(): void {
+    filterType = 'skill';
+    switchTab('discover');
+  }
+
+  /** Open the standard extension drawer for a skill row. */
+  function openSkillDetail(slug: string): void {
+    const row = items.find((i) => i.slug === slug);
+    if (row) selected = row;
+    else switchTab('installed');
   }
 
   function setType(t: ExtensionType | ''): void {
@@ -1071,7 +1101,7 @@
         const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/models`);
         if (r.ok) {
           const body = await r.json();
-          llmModels = (body.models ?? []) as string[];
+          llmModels = modelIds(body.models);
         }
       } catch { /* ignore */ }
       llmLoadingModels = false;
@@ -1123,7 +1153,7 @@
     llmLoadingModels = true;
     try {
       const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/models`);
-      if (r.ok) llmModels = ((await r.json()).models ?? []) as string[];
+      if (r.ok) llmModels = modelIds((await r.json()).models);
     } catch { /* ignore */ }
     llmLoadingModels = false;
   }
@@ -1429,6 +1459,11 @@
   $: if (selected?.slug === 'whatsapp') startWhatsAppPolling(); else stopWhatsAppPolling();
 
   onMount(() => {
+    // Deep link: /extensions?tab=skills is where the old /skills page and
+    // every "manage skills" link in the agent drawers now point.
+    const wanted = new URLSearchParams(location.search).get('tab');
+    if (wanted === 'skills' || wanted === 'installed' || wanted === 'updates') tab = wanted;
+
     fetchList();
     fetchRepos();
     fetchCatalog();
@@ -1459,9 +1494,11 @@
       type="text"
       bind:value={search}
       on:input={onSearchInput}
-      placeholder={tab === 'installed'
-        ? `Search ${installedCount} installed…`
-        : `Search ${discoverCount} extensions, skills, agents, themes…`}
+      placeholder={tab === 'skills'
+        ? `Search ${skillCount} installed skill${skillCount === 1 ? '' : 's'}…`
+        : tab === 'installed'
+          ? `Search ${installedCount} installed…`
+          : `Search ${discoverCount} extensions, skills, agents, themes…`}
       aria-label="Search extensions"
     />
     {#if search}
@@ -1475,7 +1512,7 @@
       aria-haspopup="menu"
       aria-expanded={showPlusMenu}
       on:click={() => (showPlusMenu = !showPlusMenu)}
-      title="Add a repository or install a .kernlext bundle"
+      title="Add a repository or install a .kernl bundle"
     >＋</button>
     {#if showPlusMenu}
       <!-- svelte-ignore a11y-no-static-element-interactions -->
@@ -1485,7 +1522,7 @@
           <span class="plus-menu-icon">↑</span>
           <span>
             <strong>Install bundle</strong>
-            <small>A <code>.kernlext</code> file from disk or a server path</small>
+            <small>A <code>.kernl</code> file from disk or a server path</small>
           </span>
         </button>
         <button role="menuitem" on:click={() => { showPlusMenu = false; showAddRepo = true; }}>
@@ -1526,9 +1563,16 @@
         <span class="tab-n tab-n-accent">{updatesCount}</span>
       </button>
     {/if}
+    <!-- Skills get their own tab, not just a type filter: what you do with a
+         skill (hand it to an agent) has nothing to do with what you do with
+         the rest of the grid. -->
+    <button class="tab tab-skill" class:tab-on={tab === 'skills'} on:click={() => switchTab('skills')}>
+      ✦ Skills
+      {#if skillCount}<span class="tab-n tab-n-skill">{skillCount}</span>{/if}
+    </button>
   </div>
 
-  <div class="tabs-right">
+  <div class="tabs-right" class:tabs-right-hidden={tab === 'skills'}>
     <!-- Type: a menu instead of twelve chips, listing only types that exist -->
     <div class="typesel">
       <button class="typesel-btn" aria-expanded={typeMenuOpen} on:click={() => (typeMenuOpen = !typeMenuOpen)}>
@@ -1674,7 +1718,15 @@
   the detail — the button acts without opening anything, so acquiring something
   is one click from the grid.
 -->
-{#if tab === 'installed' ? loading : catalogLoading}
+{#if tab === 'skills'}
+  <SkillsHub
+    query={search}
+    showSearch={false}
+    on:discover={skillsToDiscover}
+    on:addrepo={() => (showAddRepo = true)}
+    on:open={(e) => openSkillDetail(e.detail.slug)}
+  />
+{:else if tab === 'installed' ? loading : catalogLoading}
   <div class="loading">Loading{tab === 'installed' ? ' installed extensions' : ' the catalog'}…</div>
 {:else if tab === 'installed' ? loadError : catalogError}
   <div class="error-banner">Failed to load: {tab === 'installed' ? loadError : catalogError}</div>
@@ -1717,7 +1769,7 @@
     {:else}
       <div class="empty-title">The catalog is empty</div>
       <p class="empty-sub">
-        Add a Git repository to fill it, or install a <code>.kernlext</code> bundle directly.
+        Add a Git repository to fill it, or install a <code>.kernl</code> bundle directly.
       </p>
       <div class="empty-actions">
         <button class="btn-install" on:click={() => (showAddRepo = true)}>Add repository</button>
@@ -1904,6 +1956,21 @@
 
           <p class="card-desc">{vm.description || '(no description)'}</p>
         </button>
+
+        <!-- A paid extension that installed cleanly but has no licence looks
+             identical to a working one: the card is there, the version is
+             there, and only its tools are missing. Say which feature is
+             absent, and link to the page that fixes it — the failure is one
+             click from its own remedy and nothing used to connect them. -->
+        {#if vm.installed?.entitlement && !vm.installed.entitlement.licensed}
+          <a class="card-locked" href="/settings/license">
+            <span class="card-locked-icon" aria-hidden="true">🔒</span>
+            <span>
+              Requires <code>{vm.installed.entitlement.required_feature}</code> —
+              your licence does not include it. Add a licence
+            </span>
+          </a>
+        {/if}
 
         <div class="card-foot">
           <button
@@ -2723,11 +2790,11 @@
       <h3>Install extension</h3>
 
       <div class="compose-row">
-        <label for="ext-file">Upload .kernlext file</label>
+        <label for="ext-file">Upload .kernl file</label>
         <input
           id="ext-file"
           type="file"
-          accept=".kernlext,.tar.gz,.tgz"
+          accept=".kernl,.kernlext,.tar.gz,.tgz"
           on:change={onFilePick}
           class="install-file"
         />
@@ -2747,7 +2814,7 @@
           id="ext-path"
           type="text"
           class="install-input"
-          placeholder="/absolute/path/to/extension.kernlext"
+          placeholder="/absolute/path/to/extension.kernl"
           bind:value={uploadPath}
         />
       </div>
@@ -2769,7 +2836,9 @@
 <style>
   :global(:root) {
     --ext-module:   #5B9BF7;
-    --ext-skill:    #3DD68C;
+    /* Aliases the global --skill token so the hub, the per-agent panel in the
+       agent drawers and this page's type badge can never drift apart. */
+    --ext-skill:    var(--skill);
     --ext-agent:    #D4A84B;
     --ext-flow:     #3DD6C8;
     --ext-theme:    #E85A9B;
@@ -2901,6 +2970,21 @@
   }
   .tab-n-accent { background: var(--ext-template); color: var(--bg); }
   .tab-accent { color: var(--ext-template); }
+
+  /* Skills tab — carries the skill tint so the tab, the type badge and the
+     hub below it are visibly the same subject. */
+  .tab-skill { color: var(--ext-skill); }
+  .tab-skill.tab-on {
+    background: color-mix(in srgb, var(--ext-skill) 14%, var(--surface-1));
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ext-skill) 38%, transparent);
+    color: var(--ext-skill);
+  }
+  .tab-n-skill {
+    background: color-mix(in srgb, var(--ext-skill) 22%, transparent);
+    color: var(--ext-skill);
+  }
+  /* Type/price/status filters are meaningless inside the skills hub. */
+  .tabs-right-hidden { display: none; }
 
   .typesel { position: relative; }
   .typesel-btn {
@@ -3401,6 +3485,26 @@
   .card-dot-installed { background: var(--gold); }
   .card-dot-disabled  { background: var(--text-3); }
   .card-dot-error     { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  .card-locked {
+    display: flex; align-items: flex-start; gap: 7px;
+    margin: 0 12px 10px; padding: 8px 10px;
+    border: 1px solid rgba(240, 180, 41, 0.32);
+    border-radius: 6px;
+    background: rgba(240, 180, 41, 0.07);
+    color: var(--gold);
+    font-size: 11.5px; line-height: 1.45;
+    text-decoration: none;
+  }
+  .card-locked:hover { border-color: rgba(240, 180, 41, 0.6); }
+  .card-locked code {
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.25);
+  }
+  .card-locked-icon { flex: none; }
 
   .card-desc {
     font-size: 12px; line-height: 1.5; color: var(--text-2);

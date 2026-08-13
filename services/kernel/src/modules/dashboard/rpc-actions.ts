@@ -86,7 +86,7 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
 
   // Auto-generate `dashboard.<channel>` RpcActions for every channel registered
   // in the DashboardRegistry. Replaces the per-module hardcoded cases this file
-  // used to carry. New modules (including `.kernlext` extensions) become
+  // used to carry. New modules (including `.kernl` extensions) become
   // available over RPC without touching this file.
   const autoActions: RpcAction[] = [];
   if (dashboardRegistry) {

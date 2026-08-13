@@ -20,7 +20,12 @@
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
-export type DirectoryVisibility = "public" | "unlisted" | "private";
+/**
+ * `friends` is the lane that never touches a public relay: those directories
+ * stay on this kernel and are handed only to instances that authenticate as
+ * trusted friends. `private` is not shared with anyone, ever.
+ */
+export type DirectoryVisibility = "public" | "unlisted" | "private" | "friends";
 export type DirectoryOrigin = "local" | "federated";
 
 export interface DirectoryItem {
@@ -263,6 +268,83 @@ export class CinemaDirectoriesService {
     const offset = Math.max(0, filter.offset ?? 0);
     const rows = this.db.prepare(sql).all(...params, limit, offset) as DirectoryRow[];
     return rows.map((r) => this.shape(r));
+  }
+
+  /**
+   * What a trusted friend is allowed to see: everything public, plus what we
+   * marked for friends. `unlisted` is deliberately included — it means "not
+   * indexed", not "not shared" — while `private` never leaves this kernel.
+   */
+  listForFriend(limit = 200): CinemaDirectory[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM cinema_directories
+          WHERE deleted_at IS NULL
+            AND origin = 'local'
+            AND visibility IN ('public','unlisted','friends')
+          ORDER BY updated_at DESC
+          LIMIT ?`,
+      )
+      .all(Math.max(1, Math.min(limit, 500))) as DirectoryRow[];
+    return rows.map((r) => this.shape(r));
+  }
+
+  /**
+   * Store a directory pulled from a friend. Kept apart from the Nostr import
+   * path on purpose: here the provenance is the friend's npub rather than a
+   * relay event, and last-write-wins is decided by the payload version.
+   */
+  upsertFromFriend(dir: CinemaDirectory, sourceNpub: string): "created" | "updated" | "ignored" {
+    const existing = this.get(dir.id);
+    if (existing) {
+      if (existing.origin === "local") return "ignored"; // never clobber our own
+      if ((existing.version ?? 0) >= (dir.version ?? 0)) return "ignored";
+      this.db
+        .prepare(
+          `UPDATE cinema_directories
+              SET title=?, description=?, category=?, cover_identifier=?, visibility=?,
+                  items_json=?, collaborators_json=?, version=?, updated_at=?, source_npub=?
+            WHERE id=?`,
+        )
+        .run(
+          dir.title,
+          dir.description,
+          dir.category,
+          dir.cover_identifier,
+          dir.visibility,
+          JSON.stringify(dir.items ?? []),
+          JSON.stringify(dir.collaborators ?? []),
+          dir.version ?? 1,
+          isoNow(),
+          sourceNpub,
+          dir.id,
+        );
+      return "updated";
+    }
+    this.db
+      .prepare(
+        `INSERT INTO cinema_directories
+           (id, owner_pubkey, title, description, category, cover_identifier, visibility,
+            items_json, collaborators_json, origin, nostr_event_id, source_npub, version,
+            created_at, updated_at, published_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'federated', '', ?, ?, ?, ?, NULL)`,
+      )
+      .run(
+        dir.id,
+        dir.owner_pubkey,
+        dir.title,
+        dir.description,
+        dir.category,
+        dir.cover_identifier,
+        dir.visibility,
+        JSON.stringify(dir.items ?? []),
+        JSON.stringify(dir.collaborators ?? []),
+        sourceNpub,
+        dir.version ?? 1,
+        dir.created_at ?? isoNow(),
+        isoNow(),
+      );
+    return "created";
   }
 
   // ── Subscriptions ────────────────────────────────────────────

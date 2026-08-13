@@ -1,0 +1,351 @@
+# Build the whisper.cpp bundles that ship inside the native packages.
+#
+# Why this exists as its own workflow, instead of a step in release.yml:
+# nobody publishes the build we need. Upstream's binaries are single-backend
+# and built for one CPU generation; ours pairs GGML_BACKEND_DL (every backend
+# as a separately dlopen-ed shared library, chosen at runtime) with
+# GGML_CPU_ALL_VARIANTS (sse42 through zen4 compiled side by side, dispatched
+# at load). That combination is what lets one artifact serve a 2015 laptop and
+# a current desktop without asking the user anything.
+#
+# It runs on its own cadence — a whisper.cpp bump, not a Kernl release —
+# because the output changes maybe twice a year and each run costs four
+# runners. `stage-payload.sh` downloads the published assets the same way it
+# downloads Bun.
+#
+# ── What is deliberately NOT here: CUDA ────────────────────────────────────
+# Measured on an RTX 4070, large-v3-turbo, an 80.5-minute film: CUDA 47 s,
+# Vulkan 54 s. Fifteen percent — seven seconds on a feature film — and both
+# transcripts agree to within five cues. CUDA costs ~930 MB of runtime
+# (libcublasLt alone is 539 MB) and covers only NVIDIA, where Vulkan is 42 MB
+# and covers NVIDIA, AMD and Intel. stage-payload.sh already makes the same
+# call for onnxruntime, dropping its CUDA and TensorRT providers for pulling
+# "massive driver dependencies". Same trade, same answer.
+#
+# ── Unverified on first landing ────────────────────────────────────────────
+# The Linux job is a port of a build verified locally end to end (three backends
+# loaded, benchmarked, transcript checked). The macOS and Windows jobs are
+# written from the same recipe but have never run — there is no way to
+# exercise them without the runners. Treat the first invocation as the test.
+
+name: whisper-binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      whisper_ref:
+        description: "whisper.cpp git tag to build"
+        required: true
+        default: "v1.9.2"
+  push:
+    tags:
+      - "whisper-v*"
+
+permissions:
+  contents: write
+
+env:
+  # Overridden by the dispatch input when run manually. Pinned rather than
+  # tracking master: the artifact has to be reproducible, and a silent
+  # upstream change to backend loading is exactly the kind of thing that
+  # would surface as "subtitles got slow" months later.
+  WHISPER_REF: ${{ github.event.inputs.whisper_ref || 'v1.9.2' }}
+
+jobs:
+  build:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    # Empty for the macOS and Windows entries, which run on the runner itself.
+    container: ${{ matrix.container }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Built INSIDE bookworm, not on the runner. ubuntu-latest is 24.04
+          # (glibc 2.39) and a binary linked there refuses to start on Debian
+          # 12 or Ubuntu 22.04 — most of the installed base — with
+          # `GLIBC_2.38 not found`. The runtime image is bookworm, so this
+          # matches it exactly: glibc 2.36, and the same recipe already
+          # verified in services/kernel/Dockerfile.
+          - platform: linux-x64
+            runner: ubuntu-latest
+            container: debian:bookworm-slim
+          # Runner names match release.yml. macos-15 is arm64; the Intel image
+          # is a separate label and NOT a `-latest` alias, which is how an x64
+          # build silently stops running when the alias moves.
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: darwin-x64
+            runner: macos-15-intel
+          - platform: win-x64
+            runner: windows-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Clone whisper.cpp
+        shell: bash
+        run: git clone --depth 1 --branch "$WHISPER_REF" https://github.com/ggml-org/whisper.cpp src
+
+      # ── Vulkan toolchain ────────────────────────────────────────────────
+      # Not needed on macOS, which uses Metal.
+      #
+      # spirv-headers and glslang-tools are the two that bite: cmake reports
+      # "Found Vulkan ... missing components: glslangValidator" and then fails
+      # on a missing SPIRV-HeadersConfig.cmake. libvulkan-dev and glslc alone
+      # look sufficient and are not.
+      # No sudo, and no toolchain at all: this runs in a bare bookworm image,
+      # not on the runner.
+      - name: Toolchain + Vulkan deps (linux)
+        if: matrix.platform == 'linux-x64'
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            git cmake build-essential ca-certificates curl \
+            libvulkan-dev glslc spirv-tools spirv-headers glslang-tools
+
+      # Bookworm ships Vulkan headers 1.3.239; ggml-vulkan needs
+      # VK_EXT_layer_settings (1.3.272+) and fails with
+      # `'LayerSettingEXT' is not a member of 'vk'`.
+      #
+      # Upgrading the headers is the fix that does not cost anything:
+      # header-only, the loader stays bookworm's, and — the point of building
+      # in this container in the first place — glibc stays 2.36. Moving to a
+      # newer base to get newer headers is what breaks the binary for everyone
+      # on an older distro.
+      - name: Vulkan headers (linux)
+        if: matrix.platform == 'linux-x64'
+        run: |
+          git clone --depth 1 --branch v1.3.296 \
+            https://github.com/KhronosGroup/Vulkan-Headers /tmp/vh
+          cmake -B /tmp/vh/build -S /tmp/vh -DCMAKE_INSTALL_PREFIX=/usr/local
+          cmake --install /tmp/vh/build
+
+      - name: Vulkan SDK (windows)
+        if: matrix.platform == 'win-x64'
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.313.0
+          install_runtime: true
+          cache: true
+
+      # ── Configure ───────────────────────────────────────────────────────
+      # GGML_CPU_ALL_VARIANTS is an x86 feature: it enumerates x86-64
+      # microarchitecture levels. On Apple Silicon there is one target and
+      # cmake rejects the flag, so arm64 gets a plain build plus Metal.
+      #
+      # GGML_NCCL=OFF matters even without CUDA: a runner that happens to have
+      # NCCL present will link against it, and then the shipped .so fails its
+      # dlopen on a machine that does not — which BACKEND_DL handles by
+      # skipping the backend silently. A silently skipped backend is the
+      # failure mode this whole build exists to eliminate.
+      # CMAKE_INSTALL_RPATH='$ORIGIN' is load-bearing and easy to miss, because
+      # it fails only AFTER packaging. cmake otherwise bakes the build tree's
+      # absolute path into RUNPATH (`/src/build/bin`), which resolves fine on
+      # the runner and on any machine that still has the build directory —
+      # i.e. nobody's. The user gets exit 127, `libwhisper.so.1: cannot open
+      # shared object file`, and subtitle generation dies right after audio
+      # extraction with no other clue.
+      #
+      # This is a DIFFERENT problem from backend colocation and needs its own
+      # fix. Colocation is about the GPU backends, which are dlopen-ed; RUNPATH
+      # is about the libraries whisper-cli is linked against. Getting one right
+      # and not the other still leaves a broken package.
+      #
+      # BUILD_WITH_INSTALL_RPATH makes it apply to the binaries in build/,
+      # which is where the collect step reads them from — without it the value
+      # is only stamped in during `cmake --install`, which we never run.
+      - name: Configure (linux)
+        if: matrix.platform == 'linux-x64'
+        run: |
+          cmake -B build -S src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='$ORIGIN' \
+            -DVulkan_INCLUDE_DIR=/usr/local/include \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_VULKAN=ON \
+            -DGGML_CUDA=OFF \
+            -DGGML_NCCL=OFF \
+            -DWHISPER_BUILD_TESTS=OFF
+
+      - name: Configure (macos arm64)
+        if: matrix.platform == 'darwin-arm64'
+        run: |
+          cmake -B build -S src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_TESTS=OFF
+
+      # Intel Macs: Metal exists but is weak on the integrated parts these
+      # machines shipped with, and the CPU variants carry the load. Kept ON
+      # anyway — a Mac Pro with a discrete AMD card is the one case where it
+      # pays, and the library is small.
+      - name: Configure (macos x64)
+        if: matrix.platform == 'darwin-x64'
+        run: |
+          cmake -B build -S src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
+            -DCMAKE_INSTALL_RPATH='@loader_path' \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_METAL=ON \
+            -DGGML_METAL_EMBED_LIBRARY=ON \
+            -DWHISPER_BUILD_TESTS=OFF
+
+      - name: Configure (windows)
+        if: matrix.platform == 'win-x64'
+        shell: bash
+        run: |
+          cmake -B build -S src \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_SHARED_LIBS=ON \
+            -DGGML_BACKEND_DL=ON \
+            -DGGML_NATIVE=OFF \
+            -DGGML_CPU_ALL_VARIANTS=ON \
+            -DGGML_VULKAN=ON \
+            -DGGML_CUDA=OFF \
+            -DWHISPER_BUILD_TESTS=OFF
+
+      - name: Build
+        shell: bash
+        run: cmake --build build --config Release -j 4
+
+      # ── Collect ─────────────────────────────────────────────────────────
+      # Everything lands in ONE flat directory. This is not tidiness, it is a
+      # requirement: BACKEND_DL resolves backends with dlopen, which does not
+      # consult LD_LIBRARY_PATH the way the linker does — it looks beside the
+      # executable. Splitting bin/ from lib/ makes the process abort with
+      # `GGML_ASSERT(device) failed` before it transcribes anything.
+      - name: Collect (unix)
+        if: matrix.platform != 'win-x64'
+        shell: bash
+        run: |
+          mkdir -p out/whisper
+          cp build/bin/whisper-cli out/whisper/
+          find build -name '*.so*' -o -name '*.dylib' | while read -r f; do
+            cp -a "$f" out/whisper/
+          done
+          # Look beside me, not at wherever this was built.
+          if [ "${{ runner.os }}" = "macOS" ]; then
+            install_name_tool -add_rpath @loader_path out/whisper/whisper-cli || true
+          fi
+          ls -la out/whisper
+
+      - name: Collect (windows)
+        if: matrix.platform == 'win-x64'
+        shell: bash
+        run: |
+          mkdir -p out/whisper
+          cp build/bin/Release/whisper-cli.exe out/whisper/
+          cp build/bin/Release/*.dll out/whisper/
+          ls -la out/whisper
+
+      # ── Sign (macOS) ────────────────────────────────────────────────────
+      # Every dylib, not just the binary. Under hardened runtime the loader
+      # validates each library it dlopens; an unsigned libggml-metal.dylib
+      # fails to load and BACKEND_DL moves on without it, leaving a Mac
+      # transcribing on the CPU with no error anywhere. Signing them all with
+      # the same Team ID satisfies library validation without needing the
+      # disable-library-validation entitlement.
+      - name: Sign libraries (macos)
+        if: runner.os == 'macOS' && env.APPLE_CERT_DATA != ''
+        env:
+          APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
+          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          echo "$APPLE_CERT_DATA" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import /tmp/cert.p12 -k build.keychain \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k actions build.keychain
+          for f in out/whisper/*; do
+            codesign --force --timestamp --options runtime \
+              --sign "$APPLE_TEAM_ID" "$f"
+          done
+          codesign --verify --verbose out/whisper/whisper-cli
+
+      # ── Smoke test ──────────────────────────────────────────────────────
+      # Both packaging failures this build can have are invisible until an end
+      # user hits them, so they get caught here or not at all:
+      #
+      #   - wrong RUNPATH  → exit 127, "libwhisper.so.1: cannot open shared
+      #     object file", and the pipeline dies right after audio extraction
+      #   - lost backend   → no error at all; the machine just transcribes on
+      #     the CPU forever and nobody knows why it is slow
+      #
+      # Deliberately run with a scrubbed environment. Inheriting the runner's
+      # LD_LIBRARY_PATH would make a broken RUNPATH pass here and fail in the
+      # field, which is precisely the trap being tested for.
+      - name: Smoke test the collected bundle
+        if: matrix.platform != 'win-x64'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL -o /tmp/ggml-tiny.bin \
+            https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.bin
+          curl -fsSL -o /tmp/jfk.wav \
+            https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav
+          env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH \
+            ./out/whisper/whisper-cli -m /tmp/ggml-tiny.bin -f /tmp/jfk.wav -l en \
+            > /tmp/smoke.txt 2>&1
+          echo "── loaded backends ──"
+          grep "load_backend: loaded" /tmp/smoke.txt || true
+          # A CPU backend always exists. Demanding a second one is what proves
+          # the GPU library shipped with its dependencies intact.
+          if [ "$(grep -c 'load_backend: loaded' /tmp/smoke.txt)" -lt 2 ]; then
+            echo "FAIL: only the CPU backend loaded — a GPU backend is missing a dependency" >&2
+            cat /tmp/smoke.txt >&2
+            exit 1
+          fi
+
+      - name: Package
+        shell: bash
+        run: |
+          cd out
+          tar czf "whisper-${{ matrix.platform }}.tar.gz" whisper
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: whisper-${{ matrix.platform }}
+          path: out/whisper-${{ matrix.platform }}.tar.gz
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    # Only tag pushes publish. A manual dispatch builds and leaves the
+    # artifacts attached to the run, so the macOS and Windows jobs can be
+    # exercised without minting a release nobody asked for.
+    if: startsWith(github.ref, 'refs/tags/whisper-v')
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { path: dist, merge-multiple: true }
+      - run: ls -laR dist
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.tar.gz
+          tag_name: ${{ github.ref_name }}
+          body: |
+            whisper.cpp `${{ env.WHISPER_REF }}` built with `GGML_BACKEND_DL`
+            + `GGML_CPU_ALL_VARIANTS`, consumed by `packaging/stage-payload.sh`.
+
+            Backends per platform: linux/windows Vulkan + CPU variants,
+            macOS Metal (+ CPU variants on Intel). No CUDA — see the workflow
+            header for the measurement behind that.

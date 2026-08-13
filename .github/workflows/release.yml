@@ -10,8 +10,12 @@
 #   darwin-arm64    Kernl-<v>-arm64.dmg             drag to /Applications
 #                   Kernl-<v>-arm64-macos.tar.gz    portable
 #   darwin-x64      Kernl-<v>-x64.dmg               (Intel Macs)
-#   win-x64         Kernl-<v>-windows-x64.msi       msiexec / installer
-#                   Kernl-<v>-windows-x64.zip       portable
+#   win-x64         kernl-<v>-windows-x64.msi       msiexec / installer
+#                   kernl-<v>-windows-x64.zip       portable
+#
+# Note the casing: macOS artifacts are "Kernl-*", linux and windows ones are
+# "kernl-*". That is what the packagers actually emit, and the publish job
+# runs on Linux where the distinction is load-bearing.
 #
 # All artifacts use the same `packaging/stage-payload.sh` pipeline. Native
 # modules are installed fresh on each runner so prebuilds match the host.
@@ -26,9 +30,33 @@ on:
   workflow_dispatch:
 
 env:
-  NODE_VERSION: "20"
+  NODE_VERSION: "22"
 
 jobs:
+  # ── Guard: the tag must match the version the packages are built from ──
+  # install.sh resolves assets by exact filename, deriving the version from the
+  # release TAG, while every packager derives it from services/kernel/
+  # package.json. If those drift, the build is green, the release publishes,
+  # and every native install path 404s — the failure lands on users, not here.
+  # Fail loudly instead, before anything is built.
+  version-check:
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Tag matches package.json
+        run: |
+          PKG="$(node -p "require('./services/kernel/package.json').version")"
+          TAG="${GITHUB_REF_NAME#v}"
+          echo "package.json: $PKG"
+          echo "tag:          $TAG"
+          if [ "$PKG" != "$TAG" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $PKG."
+            echo "::error::Packages would be named kernl-$PKG-* while install.sh looks for kernl-$TAG-*."
+            echo "::error::Bump services/kernel/package.json to $TAG, or tag v$PKG."
+            exit 1
+          fi
+
   # ── Linux: RPM + DEB (Ubuntu runner) ────────────────────────────
   linux:
     runs-on: ubuntu-latest
@@ -47,8 +75,15 @@ jobs:
 
       - name: Build kernel + dashboard
         run: |
-          (cd services/kernel && npm run build)
+          # Dashboard FIRST. `npm run build` in services/kernel ends in
+          # build-extensions, which compiles each extension page with the
+          # dashboard's toolchain — and when services/dashboard/node_modules
+          # is absent it skips every frontend bundle, warns, and exits 0.
+          # Built in the other order this job produced .deb and .rpm packages
+          # with no extension pages at all, and the release went green.
+          # The macOS and Windows jobs already order it this way.
           (cd services/dashboard && npm ci --no-audit --no-fund && npm run build)
+          (cd services/kernel && npm run build)
 
       - name: Build RPM
         run: PLATFORM=linux-x64 packaging/rpm/build-rpm.sh
@@ -63,7 +98,7 @@ jobs:
           echo "rpm=$RPM" >> $GITHUB_OUTPUT
           echo "deb=$DEB" >> $GITHUB_OUTPUT
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-x64
           path: |
@@ -75,13 +110,31 @@ jobs:
     strategy:
       matrix:
         include:
+          # macos-13 was retired and macos-14 is deprecated: a job asking for a
+          # retired label is not rejected, it queues until it expires — which is
+          # exactly how the x64 build silently never ran. Both pinned to the
+          # current GA image instead.
           - arch: arm64
-            runner: macos-14
+            runner: macos-15
             platform: darwin-arm64
           - arch: x64
-            runner: macos-13
+            runner: macos-15-intel
             platform: darwin-x64
     runs-on: ${{ matrix.runner }}
+    # Signing secrets are mapped at the JOB level on purpose. A step's `if:` is
+    # evaluated before that step's own `env:` block exists, so the previous
+    # `if: env.APPLE_CERT_DATA != ''` next to `env: APPLE_CERT_DATA: ${{ ... }}`
+    # was always false — signing and notarization silently never ran, and the
+    # release still succeeded with unsigned artifacts. Job-level env IS in
+    # scope for step conditions. (`secrets` itself is not available in a
+    # step-level `if`, which is why the mapping exists at all.)
+    env:
+      APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+      APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+      APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -106,9 +159,6 @@ jobs:
       # Apple-notarized bundle that opens with a normal double-click.
       - name: Import signing certificate
         if: env.APPLE_CERT_DATA != ''
-        env:
-          APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
         run: |
           echo "$APPLE_CERT_DATA" | base64 --decode > cert.p12
           security create-keychain -p '' build.keychain
@@ -121,8 +171,6 @@ jobs:
 
       - name: Sign .app
         if: env.APPLE_TEAM_ID != ''
-        env:
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           APP="packaging/out/Kernl-$(node -p "require('./services/kernel/package.json').version")-${{ matrix.arch }}.app"
           codesign --deep --force --options runtime \
@@ -141,10 +189,6 @@ jobs:
 
       - name: Notarize
         if: env.APPLE_API_KEY_ID != ''
-        env:
-          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
-          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
         run: |
           VERSION=$(node -p "require('./services/kernel/package.json').version")
           DMG="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.dmg"
@@ -157,7 +201,7 @@ jobs:
           xcrun stapler staple "$DMG"
           rm AuthKey.p8
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: darwin-${{ matrix.arch }}
           path: |
@@ -167,6 +211,11 @@ jobs:
   # ── Windows: .zip portable + .msi installer ─────────────────────
   windows:
     runs-on: windows-latest
+    # Job-level, so the signing step's `if:` can actually see it — see the note
+    # on the macos job.
+    env:
+      WINDOWS_CERT_DATA: ${{ secrets.WINDOWS_CERT_DATA }}
+      WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
@@ -196,12 +245,132 @@ jobs:
         shell: bash
         run: PLATFORM=win-x64 packaging/windows/build-msi.sh
 
+      # ── Smoke-test the MSI on the runner ────────────────────────
+      # Building an installer proves nothing about whether it installs. The
+      # Linux packages were green for four builds while every one of them
+      # served a 500 at / because the kernel could not find the dashboard in
+      # the packaged layout — an error no build step can catch. This installs
+      # the artifact for real and asks the running server for a page.
+      #
+      # Note this cannot see the SmartScreen prompt: /quiet bypasses it. That
+      # part of the experience still needs a human on a real desktop.
+      - name: Install the MSI and check it serves
+        shell: pwsh
+        run: |
+          $msi = (Get-ChildItem packaging/out/*.msi | Select-Object -First 1).FullName
+          Write-Host "Installing $msi"
+          $p = Start-Process msiexec.exe -Wait -PassThru `
+                 -ArgumentList "/i","`"$msi`"","/quiet","/norestart","/l*v","$PWD\msi-install.log"
+          if ($p.ExitCode -ne 0) {
+            Write-Host "::error::msiexec exited $($p.ExitCode)"
+            Get-Content msi-install.log -Tail 40
+            exit 1
+          }
+
+          $dir = "C:\Program Files\Kernl"
+          foreach ($f in @("bun.exe","mcp-server.js","start.bat","dashboard\index.html")) {
+            if (-not (Test-Path (Join-Path $dir $f))) {
+              Write-Host "::error::missing after install: $f"
+              exit 1
+            }
+            Write-Host "  present: $f"
+          }
+
+          # Launch through start.bat, which is what the Start Menu shortcut
+          # runs. It is not a wrapper around "bun.exe mcp-server.js": it
+          # creates %LOCALAPPDATA%\Kernl, seeds and then sources the user's
+          # .env, and chdirs into the data directory before starting the
+          # kernel. Invoking bun directly tests a path no user takes.
+          $log = "$PWD\kernl-run.log"
+          Start-Process cmd.exe -ArgumentList "/c", "`"`"$dir\start.bat`" > `"$log`" 2>&1`"" `
+            -WindowStyle Hidden
+
+          # /api/manifest is the readiness probe start.bat itself waits on, so
+          # it is the product's own definition of "up".
+          # 5 minutes. The first boot seeds agents, offices and drivers and
+          # loads an ONNX embedding model, none of which is instant on a cold
+          # runner — and a timeout that fires early is indistinguishable from
+          # a hang, which is the thing being diagnosed.
+          # -SkipHttpErrorCheck matters here. Without it Invoke-WebRequest
+          # throws on any 4xx, and start.bat does not pass KERNEL_ALLOW_UNAUTH:
+          # the kernel mints its own token and answers 401. A 401 means the
+          # server is up and talking — treating it as "not ready" polled a
+          # perfectly healthy server 150 times and then called it a hang.
+          $ready = $false
+          foreach ($i in 1..150) {
+            try {
+              $probe = Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/manifest" `
+                         -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
+              if ($probe.StatusCode -gt 0) {
+                Write-Host "kernel answered $($probe.StatusCode) on /api/manifest"
+                $ready = $true; break
+              }
+            } catch { Start-Sleep -Seconds 2 }
+          }
+
+          if (-not $ready) {
+            Write-Host "::error::kernel never became ready on :3086"
+
+            # Hung or dead? The log ending mid-boot looks identical either way,
+            # so ask the OS whether anything is still running before reading it.
+            $procs = Get-Process -Name "bun" -ErrorAction SilentlyContinue
+            if ($procs) {
+              Write-Host "bun.exe is STILL RUNNING (pid $($procs.Id -join ',')) — it hung rather than crashed"
+            } else {
+              Write-Host "no bun.exe process alive — it exited during boot"
+            }
+            Write-Host "listening sockets on 3086:"
+            netstat -ano | Select-String ":3086" | ForEach-Object { Write-Host "  $_" }
+
+            if (Test-Path $log) {
+              Write-Host "---- kernel log (full) ----"
+              Get-Content $log
+            } else {
+              Write-Host "(no log was produced — start.bat did not run)"
+            }
+            exit 1
+          }
+          Write-Host "kernel is up"
+
+          # The dashboard itself. A 200 here is the whole point: the Linux
+          # packages answered on the API while serving 500 at / for four
+          # builds, because the SPA was not where the server looked for it.
+          $r = Invoke-WebRequest -Uri "http://127.0.0.1:3086/" `
+                 -UseBasicParsing -TimeoutSec 15 -SkipHttpErrorCheck
+          $code = $r.StatusCode
+          Write-Host "GET / -> $code"
+
+          # 200 is the SPA (the login page is part of it — auth is on, since
+          # start.bat does not disable it). 500 is the failure this step exists
+          # to catch: the server running while the dashboard files are not
+          # where it looks for them.
+          if ($code -ne 200) {
+            Write-Host "::error::dashboard returned $code at / (expected 200)"
+            if ($code -eq 500) {
+              Write-Host "500 means the SPA was not found in the packaged layout."
+              Write-Host "Contents of the install directory:"
+              Get-ChildItem $dir | ForEach-Object { Write-Host "  $($_.Name)" }
+            }
+            if (Test-Path $log) { Write-Host "---- kernel log ----"; Get-Content $log -Tail 40 }
+            exit 1
+          }
+          Write-Host "dashboard served the SPA"
+
+          # "It answers 200" is not the same as "it works". A native install
+          # once served a perfectly good dashboard whose menu had one entry,
+          # because the bundled catalog root fell back to cwd — the user's data
+          # directory — and 71 modules went undiscovered. Every check passed:
+          # installed, started, 200. Empty, but green.
+          if (Select-String -Path $log -Pattern "assets/ not found from any known location" -Quiet) {
+            Write-Host "::error::the kernel could not locate assets/ — the module catalog will be empty"
+            Get-Content $log | Select-String -Pattern "assets/ not found" -Context 0,2
+            exit 1
+          }
+          Write-Host "bundled catalog root resolved"
+
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
         if: env.WINDOWS_CERT_DATA != ''
-        env:
-          WINDOWS_CERT_DATA: ${{ secrets.WINDOWS_CERT_DATA }}
-          WINDOWS_CERT_PASSWORD: ${{ secrets.WINDOWS_CERT_PASSWORD }}
         shell: bash
         run: |
           echo "$WINDOWS_CERT_DATA" | base64 --decode > cert.pfx
@@ -211,32 +380,49 @@ jobs:
           done
           rm cert.pfx
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: win-x64
+          # Lowercase: build-zip.sh / build-msi.sh name these from $NAME, which
+          # is "kernl". The capitalised pattern only ever matched because the
+          # Windows filesystem ignores case — the publish job below runs on
+          # Linux, where it silently matches nothing.
           path: |
-            packaging/out/Kernl-*-windows-x64.zip
-            packaging/out/Kernl-*-windows-x64.msi
+            packaging/out/kernl-*-windows-x64.zip
+            packaging/out/kernl-*-windows-x64.msi
 
   # ── Publish: assemble GitHub Release from all artifacts ─────────
   release:
-    needs: [linux, macos, windows]
+    # version-check is included so a mismatched tag blocks publication rather
+    # than merely turning the run red beside a release that already shipped.
+    # On workflow_dispatch it is skipped, but so is this job (see `if` below),
+    # so nothing is held up.
+    needs: [version-check, linux, macos, windows]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: artifacts
       - name: Flatten artifact tree
         run: find artifacts -type f -exec mv -t . {} +
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
+          # Case matters here: this job runs on Linux. macOS artifacts are
+          # built as "Kernl-*" (APP_NAME) while linux and windows ones use
+          # "kernl-*" ($NAME). Both spellings are deliberate, not a typo.
           files: |
             kernl-*.rpm
             kernl_*.deb
             Kernl-*.dmg
             Kernl-*-macos.tar.gz
-            Kernl-*-windows-x64.msi
-            Kernl-*-windows-x64.zip
+            kernl-*-windows-x64.msi
+            kernl-*-windows-x64.zip
           generate_release_notes: true
+          # Any tag carrying a prerelease suffix (v0.1.1-rc.1, -beta.2 …) is
+          # published as a prerelease. This is what keeps `install.sh` honest:
+          # it resolves through the API's /releases/latest, which excludes
+          # prereleases — so an RC never gets served to someone who just ran
+          # the one-liner expecting a stable build.
+          prerelease: ${{ contains(github.ref_name, '-') }}

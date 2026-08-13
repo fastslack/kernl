@@ -1,16 +1,12 @@
 {
   "$module": "goto-dashboard",
-  "description": "Navigate to the Kernl dashboard and wait for it to fully load",
+  "description": "Sign in with the kernel's API token and open an authenticated dashboard shell",
   "params": {},
   "actions": [
     {
-      "type": "goto",
-      "value": "/"
-    },
-    {
-      "type": "wait",
-      "selector": "#app-ready",
-      "timeout": 45000
+      "comment": "Two stale assumptions fixed here. (1) This module used to wait on #app-ready — an element that appears nowhere in the dashboard source or build, and `git log -S` shows it never did; every test using the module therefore sat here for its full timeout regardless of what the app did. It now delegates to goto-view, which waits on `.sidebar`, an element the layout actually renders, and keeps the login + onboarding seeding in one place. (2) It used to land on `/`, back when `/` was the dashboard home. `/` now just redirects to /agents-flow — the 3D office, the single heaviest page in the app — which is a slow and misleading proxy for 'the dashboard is up'. Callers of this module only need an authenticated shell, so it lands on /sysoverview: a core route (always allowed by the manifest guard, no extension dependency) that renders the same shell in a fraction of the time. Tests that specifically want the home view or the 3D office should $use goto-view with that path instead.",
+      "$use": "goto-view",
+      "params": { "path": "/sysoverview" }
     }
   ]
 }

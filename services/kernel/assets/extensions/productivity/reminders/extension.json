@@ -3,19 +3,37 @@
   "id": "com.kernl.reminders",
   "slug": "reminders",
   "name": "Reminders",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Time-based reminders with notification scheduler.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
-  "tags": ["reminders", "notifications", "core"],
+  "tags": [
+    "reminders",
+    "notifications",
+    "core"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["read:reminders", "write:reminders", "notifications"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "read:reminders",
+    "write:reminders",
+    "notifications"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "reminders", "entry": "frontend/entry.js", "title": "Reminders" }
+      {
+        "view": "reminders",
+        "entry": "frontend/entry.js",
+        "title": "Reminders"
+      }
     ]
   }
 }

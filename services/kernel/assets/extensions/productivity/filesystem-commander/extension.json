@@ -3,14 +3,21 @@
   "id": "com.kernl.filesystem-commander",
   "slug": "filesystem-commander",
   "name": "Filesystem Commander",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "type": "module",
   "description": "Dual-pane file manager with preview, editor, archives, and SFTP/S3/WebDAV remotes.",
   "long_description": "A Midnight Commander-inspired file manager for the kernel dashboard. Ships with a local provider; remotes (SFTP, S3, WebDAV) and archives (zip/tar) add in later versions. Exposes MCP tools (kernel_fs_*) so agents can navigate and mutate the filesystem with the same abstraction the UI uses.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
-  "tags": ["filesystem", "file-manager", "commander", "sftp", "s3", "webdav"],
+  "tags": [
+    "filesystem",
+    "file-manager",
+    "commander",
+    "sftp",
+    "s3",
+    "webdav"
+  ],
   "kernel_min": "0.1.0",
   "permissions": [
     "filesystem",
@@ -18,7 +25,16 @@
     "module:filesystem-commander"
   ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "@aws-sdk/client-s3": "3.1036.0",
+      "@aws-sdk/lib-storage": "3.1036.0",
+      "ssh2-sftp-client": "11.0.0",
+      "uuid": "11.1.0",
+      "webdav": "5.9.0",
+      "yauzl": "3.3.0",
+      "zod": "3.25.76"
+    }
   },
   "frontend": {
     "navGroups": [
@@ -37,15 +53,6 @@
         "label": "Commander",
         "icon": "⧉",
         "order": 10
-      },
-      {
-        "id": "commander-workspaces",
-        "group": "tools",
-        "label": "Workspaces",
-        "icon": "🗂",
-        "parent": "commander",
-        "path": "/commander?provider=local&path=%2Fapp%2Fdata%2Fworkspaces&label=Agent%20workspaces",
-        "order": 20
       }
     ]
   }

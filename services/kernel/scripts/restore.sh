@@ -1,190 +1,87 @@
 #!/bin/bash
-# Kernl Full Restore — clone repo + restore data from backup zip
-# Usage: bash restore.sh <backup-zip> [target-dir]
+# Kernl Restore — restore a backup archive produced by scripts/backup.sh.
 #
-# Example:
-#   bash restore.sh kernl-backup-20260318.zip ~/Kernl
+#   Docker:  bash restore.sh <backup.zip> --docker /path/to/kernl-repo [--yes]
+#   Native:  bash restore.sh <backup.zip> --native /path/to/data-dir   [--yes]
+#
+# This is a thin wrapper: every archive carries its own `restore.sh`, and that
+# embedded copy is the single implementation. Restoring with the script that
+# shipped alongside the data also avoids the classic failure where a newer tool
+# quietly mishandles an older archive.
+#
+# What it deliberately does NOT do: clone the repo, install dependencies, build
+# the dashboard or start services. The previous version did all of that, and its
+# restore step copied the database into the repo's own ./data — which the Docker
+# deployment never reads. It printed a green "restore complete" while restoring
+# nothing. Getting the app running is the quick start's job; this moves data,
+# and tells you where it went.
 
-set -e
+set -euo pipefail
 
 ZIP="${1:-}"
-TARGET="${2:-$(pwd)/Kernl}"
+MODE="${2:-}"
+TARGET="${3:-}"
+ASSUME_YES="${4:-}"
 
-if [ -z "$ZIP" ]; then
-  echo "Usage: bash restore.sh <backup-zip> [target-dir]"
-  echo ""
-  echo "Example:"
-  echo "  bash restore.sh kernl-backup-20260318.zip ~/Kernl"
-  exit 1
-fi
+die() { echo "ERROR: $*" >&2; exit 1; }
 
-if [ ! -f "$ZIP" ]; then
-  echo "ERROR: Backup file not found: $ZIP"
+usage() {
+  cat >&2 <<'USAGE'
+Usage:
+  restore.sh <backup.zip> --docker <kernl-repo-dir> [--yes]
+  restore.sh <backup.zip> --native <data-dir>       [--yes]
+
+  --docker   the docker-compose.yml stack; restores into the kernel container's
+             /app/data volume, stopping the kernel first.
+  --native   a package or source install; <data-dir> is the directory that
+             holds kernel.db (e.g. ~/.local/share/kernl/data).
+  --yes      skip the confirmation prompt (for cron / automation).
+USAGE
   exit 1
-fi
+}
+
+[ -n "$ZIP" ] || usage
+[ -f "$ZIP" ] || die "backup file not found: $ZIP"
+case "$MODE" in
+  --docker|--native) ;;
+  *) usage ;;
+esac
+[ -n "$TARGET" ] || usage
+command -v unzip >/dev/null 2>&1 || die "unzip not found."
 
 ZIP="$(cd "$(dirname "$ZIP")" && pwd)/$(basename "$ZIP")"
 
-echo "=== Kernl Full Restore ==="
-echo "Backup: $ZIP"
-echo "Target: $TARGET"
+WORK="$(mktemp -d)"
+# Directory cleanup without `rm -r`: delete the files, then the empty dirs.
+cleanup() {
+  [ -d "$WORK" ] || return 0
+  find "$WORK" -type f -delete 2>/dev/null || true
+  find "$WORK" -depth -type d -empty -delete 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+echo "=== Kernl Restore ==="
+echo "Archive: $ZIP"
 echo ""
 
-# ── Step 1: Clone or verify repo ──
-if [ -d "$TARGET/.git" ]; then
-  echo "[1/7] Project exists — pulling latest..."
-  cd "$TARGET"
-  git pull --ff-only 2>/dev/null || echo "      Pull skipped (local changes)"
-elif [ -d "$TARGET/package.json" ]; then
-  echo "[1/7] Project exists (no git) — using as-is"
-  cd "$TARGET"
+unzip -q "$ZIP" -d "$WORK" || die "could not extract $ZIP"
+
+EMBEDDED="$(find "$WORK" -name restore.sh -type f | head -1)"
+if [ -z "$EMBEDDED" ]; then
+  # An archive from before the embedded restore existed. Don't guess where its
+  # payload belongs — point at it so the data is still recoverable by hand.
+  DB="$(find "$WORK" -name kernel.db -type f | head -1)"
+  [ -n "$DB" ] && die "this archive predates the embedded restore script. Its database is at:
+  $DB
+Stop the kernel, copy that file into place, and delete any kernel.db-wal /
+kernel.db-shm sitting beside it."
+  die "this archive has no database and no restore script — there is nothing to restore."
+fi
+
+# `bash` rather than exec-ing the file directly: the extracted copy may not
+# carry its executable bit through every zip implementation.
+if [ -n "$ASSUME_YES" ]; then
+  exec bash "$EMBEDDED" "$MODE" "$TARGET" "$ASSUME_YES"
 else
-  echo "[1/7] Cloning repository..."
-  REPO_URL=$(git -C "$(dirname "$0")" remote get-url origin 2>/dev/null || echo "")
-  if [ -z "$REPO_URL" ]; then
-    echo "      No remote URL found — create target dir manually and clone your repo there"
-    mkdir -p "$TARGET"
-    cd "$TARGET"
-  else
-    git clone "$REPO_URL" "$TARGET"
-    cd "$TARGET"
-  fi
+  exec bash "$EMBEDDED" "$MODE" "$TARGET"
 fi
-
-# ── Step 2: Install dependencies ──
-echo "[2/7] Installing dependencies..."
-if command -v bun &>/dev/null; then
-  bun install --frozen-lockfile 2>/dev/null || bun install
-else
-  echo "      WARNING: bun not found. Install it: curl -fsSL https://bun.sh/install | bash"
-  echo "      Trying npm as fallback..."
-  npm install 2>/dev/null || echo "      npm install failed — install bun first"
-fi
-
-# ── Step 3: Extract backup ──
-echo "[3/7] Extracting backup..."
-TMPDIR=$(mktemp -d)
-unzip -q "$ZIP" -d "$TMPDIR"
-
-# Find the backup directory (could be nested)
-BACKUP_DIR=$(find "$TMPDIR" -name "kernel.db" -o -name ".env" | head -1 | xargs dirname 2>/dev/null)
-if [ -z "$BACKUP_DIR" ]; then
-  BACKUP_DIR=$(find "$TMPDIR" -type d -name "kernl-backup" | head -1)
-fi
-if [ -z "$BACKUP_DIR" ]; then
-  BACKUP_DIR="$TMPDIR"
-fi
-
-echo "      Found backup at: $BACKUP_DIR"
-
-# ── Step 4: Restore database ──
-if [ -f "$BACKUP_DIR/data/kernel.db" ]; then
-  echo "[4/7] Restoring database..."
-  mkdir -p data
-  cp "$BACKUP_DIR/data/kernel.db" data/
-  SIZE=$(ls -lh data/kernel.db | awk '{print $5}')
-  echo "      kernel.db restored ($SIZE)"
-else
-  echo "[4/7] No database in backup — starting fresh"
-fi
-
-# ── Step 5: Restore config ──
-if [ -f "$BACKUP_DIR/.env" ]; then
-  echo "[5/7] Restoring .env..."
-  cp "$BACKUP_DIR/.env" .
-  KEYS=$(grep -c "=" .env 2>/dev/null || echo 0)
-  echo "      .env restored ($KEYS variables)"
-else
-  echo "[5/7] No .env in backup — create one from .env.example"
-fi
-
-# ── Step 6: Restore extras ──
-echo "[6/7] Restoring extras..."
-EXTRAS=0
-
-# WhatsApp auth
-if [ -d "$BACKUP_DIR/data/whatsapp-auth" ]; then
-  mkdir -p data
-  cp -r "$BACKUP_DIR/data/whatsapp-auth" data/
-  echo "      WhatsApp auth restored"
-  EXTRAS=$((EXTRAS + 1))
-fi
-
-# Custom agents
-if [ -d "$BACKUP_DIR/assets" ] && [ "$(ls -A "$BACKUP_DIR/assets" 2>/dev/null)" ]; then
-  cp -r "$BACKUP_DIR/assets" .
-  AGENT_COUNT=$(ls assets/plugins/ 2>/dev/null | wc -l)
-  echo "      $AGENT_COUNT custom agent(s) restored"
-  EXTRAS=$((EXTRAS + 1))
-fi
-
-# Chat images
-if [ -d "$BACKUP_DIR/data/chat-images" ]; then
-  mkdir -p data
-  cp -r "$BACKUP_DIR/data/chat-images" data/
-  echo "      Chat images restored"
-  EXTRAS=$((EXTRAS + 1))
-fi
-
-# Security data
-if [ -d "$BACKUP_DIR/data/security" ]; then
-  mkdir -p data
-  cp -r "$BACKUP_DIR/data/security" data/
-  echo "      Security data restored"
-  EXTRAS=$((EXTRAS + 1))
-fi
-
-if [ "$EXTRAS" -eq 0 ]; then
-  echo "      No extras to restore"
-fi
-
-# Cleanup
-rm -rf "$TMPDIR"
-
-# ── Step 7: Build dashboard + start services ──
-echo "[7/7] Building dashboard..."
-if [ -d "services/dashboard" ]; then
-  cd services/dashboard
-  npm install --silent 2>/dev/null || bun install 2>/dev/null
-  npm run build --silent 2>/dev/null || echo "      Dashboard build failed — not critical"
-  cd ..
-fi
-
-# Start Neo4j + restore dump if available
-if command -v docker &>/dev/null; then
-  echo "      Starting Neo4j..."
-  docker compose up -d 2>/dev/null || echo "      Docker Compose failed — Neo4j is optional"
-
-  if [ -f "$BACKUP_DIR/neo4j/neo4j.dump" ]; then
-    echo "      Restoring Neo4j dump (waiting for Neo4j to start)..."
-    sleep 10
-    # Stop Neo4j, load dump, restart
-    docker compose exec -T neo4j neo4j-admin database load neo4j --from-stdin --overwrite-destination < "$BACKUP_DIR/neo4j/neo4j.dump" 2>/dev/null
-    if [ $? -eq 0 ]; then
-      docker compose restart neo4j 2>/dev/null
-      echo "      Neo4j data restored"
-    else
-      echo "      Neo4j restore failed — graph will rebuild from SQLite automatically"
-    fi
-  fi
-else
-  echo "      Docker not found — Neo4j optional (system works without it)"
-fi
-
-echo ""
-echo "=========================================="
-echo "  Kernl restore complete!"
-echo "=========================================="
-echo ""
-echo "  Project: $TARGET"
-echo ""
-echo "  Start:"
-echo "    cd $TARGET"
-echo "    bun run services/kernel/bin/mcp-server.ts"
-echo ""
-echo "  Dashboard: http://localhost:3086"
-echo "  Neo4j:     http://localhost:17474"
-echo ""
-echo "  MCP config (Claude Desktop):"
-echo "    {\"mcpServers\": {\"Kernl\": {\"command\": \"bun\", \"args\": [\"run\", \"$TARGET/services/kernel/bin/mcp-server.ts\"]}}}"
-echo ""

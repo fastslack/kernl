@@ -3,12 +3,9 @@
     "name": "Click parent reveals subcategories",
     "actions": [
       {
-        "type": "goto",
-        "value": "http://localhost:3086/rss-reader"
-      },
-      {
-        "type": "wait",
-        "value": "2500"
+        "comment": "Was a bare `goto http://localhost:3086/rss-reader`. The page is behind the token + setup gates now, so unauthenticated it landed on /login. Also switched off the hardcoded host so the run honours e2e.config.json's baseUrl.",
+        "$use": "goto-view",
+        "params": { "path": "/rss-reader", "settle": "2500" }
       },
       {
         "type": "click",
@@ -17,6 +14,10 @@
       {
         "type": "wait",
         "value": "800"
+      },
+      {
+        "type": "screenshot",
+        "value": "rss-tree-expanded"
       }
     ],
     "expect": [

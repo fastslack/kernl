@@ -9,13 +9,24 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "automation",
-  "tags": ["gitlab", "backend", "repo-provider"],
+  "tags": [
+    "gitlab",
+    "backend",
+    "repo-provider"
+  ],
   "dependencies": [
     "com.kernl.gitlab",
     "com.kernl.triage"
   ],
-  "permissions": ["network", "module:gitlab-channel"],
+  "permissions": [
+    "network",
+    "module:gitlab-channel"
+  ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
   }
 }

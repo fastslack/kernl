@@ -115,9 +115,10 @@ export function createChatModule(): ChatModule {
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
-        nav: [
-          { id: "chat", label: "Chat", icon: "\uD83D\uDCAC", group: "people", order: 40 },
-        ],
+        // No `nav` entry: the dashboard pins Chat to the sidebar rail itself,
+        // above the System group, so it is reachable from every page. A nav
+        // item here put a second "Chat" in the Social tab bar pointing at the
+        // same route \u2014 and at order 40, colliding with Comms.
         channels: [
           { name: "chat", query: (db) => queryChat(db) },
         ],

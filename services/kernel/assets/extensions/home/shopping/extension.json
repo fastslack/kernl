@@ -3,19 +3,37 @@
   "id": "com.kernl.shopping",
   "slug": "shopping",
   "name": "Shopping",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "type": "module",
   "description": "Shopping lists, products catalog, low-stock alerts.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "home",
-  "tags": ["shopping", "lists", "core"],
+  "tags": [
+    "shopping",
+    "lists",
+    "core"
+  ],
   "kernel_min": "0.1.0",
-  "permissions": ["module:shopping"],
-  "backend": { "entry": "backend/entry.js" },
+  "permissions": [
+    "module:shopping"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "@anthropic-ai/claude-agent-sdk": "0.2.114",
+      "@modelcontextprotocol/sdk": "1.26.0",
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
+  },
   "frontend": {
     "pages": [
-      { "view": "shopping", "entry": "frontend/entry.js", "title": "Shopping" }
+      {
+        "view": "shopping",
+        "entry": "frontend/entry.js",
+        "title": "Shopping"
+      }
     ]
   }
 }

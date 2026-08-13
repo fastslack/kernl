@@ -13,7 +13,7 @@
 #     bin/{bun|bun.exe}           Bun runtime for the target platform
 #     bin/mcp-server.js           bundled kernel
 #     bin/static/                 static HTML pages
-#     bin/extensions/             pre-built .kernlext bundles
+#     bin/extensions/             pre-built .kernl bundles
 #     node_modules/               native deps (downloaded for $PLATFORM)
 #     dashboard/                  Svelte SPA build
 #     assets/                     extensions, agents, skills
@@ -100,6 +100,60 @@ else
 fi
 chmod 0755 "$SRC_TREE/bin/$BUN_EXE"
 
+# ── 2b) Vendor whisper.cpp for the target platform ──────────────────
+# Subtitles are the one feature that was silently PATH-dependent: the Docker
+# image apt-installs whisper.cpp, but a native install got whatever the user
+# happened to have, which for almost everyone was nothing. media-tools.ts
+# turned the resulting spawn ENOENT into a readable sentence; this makes the
+# sentence unnecessary.
+#
+# The bundles come from .github/workflows/whisper-binaries.yml — built there
+# rather than downloaded from upstream because the flags we need
+# (GGML_BACKEND_DL + GGML_CPU_ALL_VARIANTS: every GPU backend dlopen-ed at
+# runtime, every x86 CPU generation compiled side by side) are not something
+# anyone publishes.
+#
+# EVERYTHING GOES IN ONE FLAT DIRECTORY, deliberately. BACKEND_DL loads the
+# GPU backends with dlopen, which looks beside the executable and does NOT
+# consult LD_LIBRARY_PATH. A bin/ + lib/ split — the layout the Dockerfile
+# uses — makes the process abort with `GGML_ASSERT(device) failed` before it
+# reaches any audio.
+#
+# Best-effort: a release without the asset yet still produces a working
+# package, it just falls back to the user's PATH exactly as before. Failing
+# the build here would mean a whisper.cpp bump could block a Kernl release.
+WHISPER_BIN_TAG="${WHISPER_BIN_TAG:-whisper-v1.9.2}"
+WHISPER_TARBALL="whisper-${PLATFORM}.tar.gz"
+WHISPER_URL="https://github.com/${GITHUB_REPOSITORY:-fastslack/kernl}/releases/download/${WHISPER_BIN_TAG}/${WHISPER_TARBALL}"
+
+if [ -n "${WHISPER_BUNDLE_DIR:-}" ] && [ -d "$WHISPER_BUNDLE_DIR" ]; then
+  # Escape hatch for local builds and for CI jobs that just built the bundle
+  # in the same run: point at a directory instead of hitting the network.
+  echo "▶ vendoring whisper from $WHISPER_BUNDLE_DIR"
+  mkdir -p "$SRC_TREE/bin/whisper"
+  cp -a "$WHISPER_BUNDLE_DIR/." "$SRC_TREE/bin/whisper/"
+else
+  echo "▶ downloading whisper bundle ($PLATFORM, $WHISPER_BIN_TAG)"
+  TMP_W="$(mktemp -d)"
+  if curl -fsSL -o "$TMP_W/w.tar.gz" "$WHISPER_URL"; then
+    tar xzf "$TMP_W/w.tar.gz" -C "$TMP_W"
+    mkdir -p "$SRC_TREE/bin/whisper"
+    cp -a "$TMP_W/whisper/." "$SRC_TREE/bin/whisper/"
+  else
+    echo "  WARN: no whisper bundle at $WHISPER_URL"
+    echo "  WARN: package will fall back to whisper-cli on the user's PATH"
+  fi
+  rm -rf "$TMP_W"
+fi
+
+if [ -d "$SRC_TREE/bin/whisper" ]; then
+  case "$PLATFORM" in
+    win-x64) chmod 0755 "$SRC_TREE/bin/whisper/whisper-cli.exe" 2>/dev/null || true ;;
+    *)       chmod 0755 "$SRC_TREE/bin/whisper/whisper-cli"     2>/dev/null || true ;;
+  esac
+  echo "  whisper bundle: $(du -sh "$SRC_TREE/bin/whisper" | cut -f1)"
+fi
+
 # ── 3) Bundled kernel JS + static + built extensions ───────────────
 cp services/kernel/dist/mcp-server.js "$SRC_TREE/bin/mcp-server.js"
 [ -d services/kernel/dist/static ]     && cp -a services/kernel/dist/static     "$SRC_TREE/bin/static"
@@ -119,6 +173,63 @@ HOST_ARCH="$(uname -m)"
 [ "$HOST_OS" = "darwin" ] && [ "$HOST_ARCH" = "x86_64" ] && HOST_PLATFORM="darwin-x64"
 
 mkdir -p "$SRC_TREE/node_modules"
+
+# ── 4a) What the bundled extensions import ─────────────────────────
+# The staged node_modules used to carry only what the KERNEL needs. The
+# bundled extensions under assets/extensions/ import their own packages, and
+# in a native install nothing resolves them: the tree is pruned and there is
+# no parent node_modules to walk up into. Docker never showed this because
+# /app/node_modules is a full install.
+#
+# The result was 50 of 79 registered extensions failing to load — mostly on
+# `uuid` — so the dashboard listed them and none of them worked.
+#
+# Derived from the built entry points rather than hardcoded, so adding an
+# extension that pulls a new package does not silently ship broken. Names are
+# validated against npm's grammar because these files embed SQL, and `FROM
+# communications` reads exactly like an import to a naive regex.
+echo "▶ scanning bundled extensions for external imports"
+EXT_DEPS="$(node -e "
+  const fs = require('node:fs'), path = require('node:path');
+  const builtins = new Set(require('node:module').builtinModules);
+  const VALID = /^(@[a-z0-9-~][a-z0-9-._~]*\/)?[a-z0-9-~][a-z0-9-._~]*\$/;
+  // Deliberately NOT staged. Together these pull ~100 MB of transitive
+  // closure — a third of the whole package — to serve the minority who
+  // connect Discord, Slack or S3. Each extension records them in
+  // backend.packages and the kernel installs them into the extension's own
+  // directory the moment someone enables it. Adding one here trades the
+  // install size of everyone for the convenience of a few; before doing that,
+  // measure it.
+  const ON_DEMAND = new Set([
+    'discord.js', 'grammy', '@slack/bolt',
+    '@aws-sdk/client-s3', '@aws-sdk/lib-storage',
+    '@anthropic-ai/claude-agent-sdk', '@modelcontextprotocol/sdk',
+  ]);
+  const root = 'services/kernel/assets/extensions';
+  const found = new Set();
+  if (fs.existsSync(root)) (function walk(d) {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (e.name.endsWith('.js')) {
+        const src = fs.readFileSync(p, 'utf8');
+        for (const m of src.matchAll(/(?:\bfrom|\brequire\()\s*[\"']([^\"'\n]+)[\"']/g)) {
+          const spec = m[1];
+          if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('node:')) continue;
+          const name = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
+          if (builtins.has(name) || !VALID.test(name)) continue;
+          // Anything not actually installed is a false positive from the same
+          // string-matching problem; the consumers below skip it anyway.
+          if (!fs.existsSync(path.join('services/kernel/node_modules', name))) continue;
+          if (ON_DEMAND.has(name)) continue;
+          found.add(name);
+        }
+      }
+    }
+  })(root);
+  console.log(JSON.stringify([...found].sort()));
+")"
+echo "  $(node -e "console.log(JSON.parse(process.argv[1]).length)" "$EXT_DEPS") packages: $(node -e "console.log(JSON.parse(process.argv[1]).join(', '))" "$EXT_DEPS")"
 
 if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/better-sqlite3 ]; then
   echo "▶ reusing host node_modules (PLATFORM matches host)"
@@ -144,6 +255,7 @@ if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/b
     }
     walk('better-sqlite3'); walk('onnxruntime-node');
     walk('@huggingface/transformers'); walk('neo4j-driver');
+    for (const d of $EXT_DEPS) walk(d);
     console.log(JSON.stringify([...seen]));
   ")"
   node -e "
@@ -169,7 +281,8 @@ else
   node -e "
     const fs = require('node:fs');
     const pkg = require('./services/kernel/package.json');
-    const names = ['better-sqlite3', 'onnxruntime-node', '@huggingface/transformers', 'neo4j-driver'];
+    const names = ['better-sqlite3', 'onnxruntime-node', '@huggingface/transformers', 'neo4j-driver',
+                   ...$EXT_DEPS];
     const dependencies = {};
     for (const name of names) {
       let version = pkg.dependencies?.[name];
@@ -197,7 +310,14 @@ else
     npm_config_platform="$NPM_PLATFORM" \
     npm_config_arch="$NPM_ARCH" \
     npm_config_runtime="node" \
+    # --legacy-peer-deps: this tree exists only to have files copied out of
+    #   it, never to run. Staging the extensions' packages alongside the
+    #   kernel's puts unrelated libraries in one synthetic package.json, and
+    #   npm refuses on their peer ranges (zod, via the Anthropic and MCP SDKs).
+    #   Peer resolution is meaningless here — the host tree already resolved
+    #   these versions and they are what ships.
     npm install --os="$NPM_PLATFORM" --cpu="$NPM_ARCH" \
+      --legacy-peer-deps \
       --omit=dev --no-audit --no-fund --loglevel=error
   )
   cp -a "$NATIVE_TMP/node_modules/." "$SRC_TREE/node_modules/"

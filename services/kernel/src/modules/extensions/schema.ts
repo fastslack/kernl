@@ -55,6 +55,24 @@ const backendSchema = z.object({
   entry: z.string().min(1),
   migrations: z.string().min(1).optional(),
   uninstall: z.string().min(1).optional(),
+
+  /**
+   * npm packages this extension's backend imports, as `name -> exact version`.
+   *
+   * Distinct from the top-level `dependencies`, which lists other extensions
+   * by reverse-DNS id. These are libraries fetched from a registry.
+   *
+   * Written by `scripts/build-extensions.ts`, which reads the built entry
+   * point and records the version the build actually resolved — never hand
+   * maintained, so it cannot drift from what the code imports. Versions are
+   * exact on purpose: with ranges two users enabling the same channel end up
+   * on different releases, and bug reports stop being reproducible.
+   *
+   * Heavy, rarely-used SDKs (discord.js, @slack/bolt, the AWS clients) are not
+   * shipped in the payload — they are installed into the extension's own
+   * directory when the user enables it, which is why this list has to exist.
+   */
+  packages: z.record(z.string().min(1), z.string().min(1)).optional(),
 });
 
 const navItemSchema = z.object({
@@ -130,6 +148,57 @@ const frontendSchema = z.object({
   assets: z.string().min(1).optional(),
   /** Compiled frontend page bundles (full Svelte pages inside extensions). */
   pages: z.array(frontendPageSchema).optional(),
+});
+
+/** Localizable text: a plain string, or a { locale: text } map. */
+const localizedTextSchema = z.union([
+  z.string().min(1).max(500),
+  z.record(z.string().min(2).max(8), z.string().min(1).max(500)),
+]);
+
+/**
+ * One user-configurable value contributed by an extension.
+ *
+ * Mirrors `ExtensionSettingsField` in types.ts, which is what
+ * `config/extension-settings.ts` already consumes — the registry namespaces
+ * `key` to `ext.<slug>.<name>` unless it is env-style, marks `secret` fields
+ * sensitive, and seeds `default` into the settings store.
+ *
+ * `default` is a string for every type, including booleans: settings are
+ * persisted as strings, so a boolean's default is "0"/"1", not `false`.
+ */
+const settingsFieldSchema = z.object({
+  key: z.string().min(1).max(128),
+  type: z.enum(["string", "number", "boolean", "secret", "json"]),
+  label: localizedTextSchema,
+  description: localizedTextSchema.optional(),
+  default: z.string().max(2000).optional(),
+});
+
+/**
+ * Settings an extension contributes to the dashboard's Settings UI.
+ *
+ * The consuming registry has existed all along; only this schema entry was
+ * missing. Zod strips unknown keys, so every `settings` block authors wrote was
+ * silently dropped while parsing the manifest and never reached an installed
+ * extension — the feature looked implemented from both ends and worked from
+ * neither.
+ *
+ * Deliberately permissive: the registry skips malformed fields with a warning
+ * rather than failing, so rejecting a whole install here would be stricter than
+ * the runtime it feeds.
+ */
+const settingsSchema = z.object({
+  /** Optional — the registry falls back to the extension's slug and name. */
+  section: z
+    .object({
+      id: z.string().min(1).max(64).optional(),
+      label: localizedTextSchema.optional(),
+      /** Emoji or icon name; the dashboard decides how to resolve it. */
+      icon: z.string().min(1).max(64).optional(),
+    })
+    .optional(),
+  fields: z.array(settingsFieldSchema).min(1).max(64),
 });
 
 const themeSchema = z.object({
@@ -233,6 +302,8 @@ export const extensionManifestSchema = z.object({
   office: z.string().optional(),
   chains: z.array(z.string()).optional(),
   theme: themeSchema.optional(),
+  /** User-configurable values surfaced on the dashboard's settings page. */
+  settings: settingsSchema.optional(),
   templates: z.array(templateSchema).optional(),
   channels: z.array(channelSchema).optional(),
   db: dbDriverSchema.optional(),

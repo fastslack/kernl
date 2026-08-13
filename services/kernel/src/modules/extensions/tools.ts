@@ -31,7 +31,7 @@ export function extensionsTools(service: ExtensionService): ToolDefinition[] {
     }),
     defineTool({
       name: "kernel_extensions_install_bundle",
-      description: "Install an extension from a local .kernlext bundle path.",
+      description: "Install an extension from a local .kernl bundle path.",
       schema: z.object({
         bundle_path: z.string().min(1),
       }),
@@ -47,7 +47,7 @@ export function extensionsTools(service: ExtensionService): ToolDefinition[] {
     }),
     defineTool({
       name: "kernel_extensions_update",
-      description: "Upgrade an installed extension in place from a local .kernlext bundle path.",
+      description: "Upgrade an installed extension in place from a local .kernl bundle path.",
       schema: z.object({
         bundle_path: z.string().min(1),
         force: z.boolean().optional(),

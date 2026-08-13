@@ -1,0 +1,80 @@
+# GPU passthrough for subtitle generation. Opt-in, never loaded by default:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d kernel
+#
+# It lives in its own file rather than as a commented block in
+# docker-compose.yml because applying it RECREATES the kernel container. That
+# should be a decision someone makes on purpose, not something that happens
+# because a stray `compose up` picked up an edit.
+#
+# ── What it buys ───────────────────────────────────────────────────────────
+# whisper.cpp in the image is built with GGML_BACKEND_DL and ships a Vulkan
+# backend alongside 14 CPU variants. Without a device passed through, ggml
+# registers no Vulkan device and transcribes on the CPU — correct behaviour,
+# and visible: the subtitle progress bar shows the backend name, so it reads
+# "cpu" until this file is applied.
+#
+# Measured on an RTX 4070, large-v3-turbo, an 80.5-minute film: 54 s on the
+# GPU. The same work on the CPU path with the old ggml-base build was on the
+# order of half an hour.
+#
+# ── Host prerequisites ─────────────────────────────────────────────────────
+# NVIDIA: nvidia-container-toolkit installed and the `nvidia` runtime
+# registered in /etc/docker/daemon.json. Verify with:
+#   docker info | grep -i runtimes
+#
+# `capabilities` is the part that is easy to get wrong. The usual `[gpu]`
+# resolves to compute+utility, which is enough for CUDA and NOT enough for
+# Vulkan: the Vulkan ICD json under /usr/share/vulkan/icd.d is only mounted
+# into the container when `graphics` is requested. With `[gpu]` alone the
+# loader finds no driver, ggml skips the backend, and the only symptom is that
+# it still says "cpu" after you went to the trouble of passing a GPU.
+services:
+  kernel:
+    # Both halves are needed, and the second is the one that is easy to miss.
+    #
+    # `capabilities: [gpu, graphics]` below is what compose sends as a device
+    # REQUEST. Verified on this host, it does hand the container the devices —
+    # /dev/nvidia0, /dev/dri/renderD128 all appear — but it did NOT set
+    # NVIDIA_DRIVER_CAPABILITIES inside, so nvidia-container-toolkit mounted
+    # the compute stack only: no /usr/share/vulkan/icd.d, no GLX libraries.
+    # The Vulkan loader then finds no driver, ggml registers no device, and
+    # whisper runs on the CPU on a machine with a perfectly good GPU passed
+    # into it — with nothing in any log to explain why.
+    #
+    # Setting the variable explicitly is what actually mounts the ICD.
+    # `runtime: nvidia` is the piece that makes the variables below mean
+    # anything. NVIDIA_DRIVER_CAPABILITIES is read by the nvidia-container
+    # runtime HOOK; under plain runc nothing reads it. Verified here: with the
+    # devices requested but the runtime left at the daemon default, the
+    # container came up with /dev/nvidia0 present, both variables set in its
+    # environment, and still no /usr/share/vulkan/icd.d and no GLX libraries —
+    # because no hook ever ran to mount them.
+    #
+    # daemon.json on this host registers the `nvidia` runtime but leaves
+    # `runc` as the default, so it has to be asked for by name.
+    runtime: nvidia
+    environment:
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu, graphics]
+
+# ── AMD / Intel ────────────────────────────────────────────────────────────
+# Mesa's Vulkan drivers need the render node and the video group instead, and
+# no runtime. Replace the `deploy:` block above with:
+#
+# services:
+#   kernel:
+#     devices:
+#       - /dev/dri:/dev/dri
+#     group_add:
+#       - video
+#
+# The image already carries libvulkan1 (the loader); what it cannot carry is
+# the host's driver, which is why this is passthrough rather than a package.

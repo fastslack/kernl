@@ -4,51 +4,39 @@
 	export let leftTab: CommanderTab | null;
 	export let rightTab: CommanderTab | null;
 	export let activeSide: 'left' | 'right';
+	/** How many entries a copy/move would act on right now. */
+	export let targetCount = 0;
 
-	function fmtBytes(n: number): string {
-		if (!n) return '0 B';
-		const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-		let v = n;
-		let i = 0;
-		while (v >= 1024 && i < units.length - 1) {
-			v /= 1024;
-			i++;
-		}
-		return `${v.toFixed(1)} ${units[i]}`;
+	$: source = activeSide === 'left' ? leftTab : rightTab;
+	$: destination = activeSide === 'left' ? rightTab : leftTab;
+
+	/** Trim long paths from the left — the tail is the part that identifies it. */
+	function ellipsize(p: string | undefined, max = 46): string {
+		if (!p) return '—';
+		return p.length <= max ? p : '…' + p.slice(-(max - 1));
 	}
-
-	function summary(tab: CommanderTab | null): {
-		count: number;
-		selected: number;
-		size: number;
-	} {
-		if (!tab) return { count: 0, selected: 0, size: 0 };
-		let size = 0;
-		for (const e of tab.entries) if (tab.selection.has(e.name)) size += e.size;
-		return { count: tab.entries.length, selected: tab.selection.size, size };
-	}
-
-	$: active = activeSide === 'left' ? leftTab : rightTab;
-	$: s = summary(active);
 </script>
 
-<div class="cmd-statusbar">
-	<span>
-		<span class="count-hi">{s.count}</span> items
-	</span>
-	{#if s.selected > 0}
-		<span class="sep">·</span>
-		<span>
-			<span class="count-hi">{s.selected}</span> selected
-			<span class="sep">·</span>
-			{fmtBytes(s.size)}
-		</span>
+<!--
+	Counts live in each pane's footer now. This bar answers the one question the
+	panes cannot: where an F5/F6 would send the current selection. It is the
+	direction of the operation made explicit, so a transfer is never a surprise.
+-->
+<div class="cmd-statusbar" aria-live="polite">
+	<span class="sb-label">Transfer</span>
+	{#if targetCount === 0}
+		<span class="sb-idle">Select entries to copy or move</span>
+	{:else}
+		<span class="sb-count">{targetCount}</span>
+		<span class="sb-path from" title={source?.path}>{ellipsize(source?.path)}</span>
+		<span class="sb-arrow" aria-hidden="true">→</span>
+		<span class="sb-path to" title={destination?.path}>{ellipsize(destination?.path)}</span>
+		<span class="sb-side">({activeSide === 'left' ? 'left → right' : 'right → left'})</span>
 	{/if}
-	<span class="sep">·</span>
-	<span>L: {leftTab?.path ?? '-'}</span>
-	<span class="sep">·</span>
-	<span>R: {rightTab?.path ?? '-'}</span>
-	<span style="margin-left:auto;color:var(--text-3)">
-		active: <span class="count-hi">{activeSide === 'left' ? 'L' : 'R'}</span>
+	<span class="sb-spacer"></span>
+	<span class="sb-active">
+		Active pane
+		<span class="sb-active-val">{activeSide}</span>
+		<kbd>Tab</kbd> to switch
 	</span>
 </div>

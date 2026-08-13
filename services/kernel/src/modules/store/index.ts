@@ -4,7 +4,7 @@
  * The free kernel ships the *mechanism* to buy add-ons, never the paid code:
  *   • kernel_store_browse   — list purchasable extensions + which your license
  *                             already covers.
- *   • kernel_store_install  — download the entitled .kernlext from the store
+ *   • kernel_store_install  — download the entitled .kernl from the store
  *                             (authenticated with your license JWT) and install
  *                             it. The key IS the download credential.
  *
@@ -37,7 +37,7 @@ import { runMigrations } from "../../core/db/migrations.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
 export interface StoreModuleDeps {
-  /** Resolves the extensions service used to install downloaded .kernlext bundles. */
+  /** Resolves the extensions service used to install downloaded .kernl bundles. */
   getExtensionService: () => ExtensionService | null;
   /** Resolves the agents service used to materialize downloaded office blueprints. */
   getAgentService: () => AgentService | null;
@@ -119,7 +119,7 @@ function buildTools(
     defineTool({
       name: "kernel_store_install",
       description:
-        "Download and install a paid extension from the Kernl store. Requires a license that includes the extension; the license authenticates the download. Installs the signed .kernlext and activates it if entitled.",
+        "Download and install a paid extension from the Kernl store. Requires a license that includes the extension; the license authenticates the download. Installs the signed .kernl and activates it if entitled.",
       schema: z.object({
         slug: z.string().min(1).describe("Extension slug, e.g. 'trading' (see kernel_store_browse)"),
       }),

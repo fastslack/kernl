@@ -72,10 +72,23 @@ Same pattern used in many other tables (communications, events, etc.)
 **Google sync source column:**
 `source` column lives in `google_sync_map` table, NOT in `contacts` — join via `local_id = contacts.id`.
 
-**Neo4j shared database (SNOMED CT):**
-The Neo4j database is shared with a medical ontology (~3.4M nodes).
-**All queries MUST filter by Kernl nodes** using `p.relationship IS NOT NULL` or similar properties.
-Never use unfiltered `MATCH (n)` — it will scan SNOMED nodes too.
+**Neo4j is Kernl's own, and it starts empty:**
+The stack brings up a dedicated Neo4j (`kernl-public-neo4j`) that holds nothing
+but Kernl's data. It is *not* shared with any other dataset — an earlier version
+of this file claimed it shared a database with a SNOMED CT medical ontology and
+that every query had to filter Kernl nodes; that belonged to a different
+project's stack and never applied here.
+
+Still label your queries (`MATCH (c:CinemaTitle)`, not `MATCH (n)`) — that is
+ordinary hygiene on a graph that grows, not a workaround for foreign data.
+
+**Graph capabilities are probed, not assumed:**
+GDS ships via `NEO4J_PLUGINS` in the compose file, and vector similarity comes
+from the core product (`vector.similarity.cosine`, native since 5.13) — the two
+are independent, so check the capability you actually need. If no graph driver
+config is stored, the Neo4j driver falls back to `NEO4J_URI`/`NEO4J_USER`/
+`NEO4J_PASSWORD`. Exactly one graph driver carries `status='active'`; if it is
+`noop`, `capabilities.cypher` is false and every graph write silently no-ops.
 
 **LifeService created in bootstrap:**
 `LifeService` is created in `bootstrap()` (services/kernel/src/index.ts), not inside a module — passed to `registerDashboardRoutes()`.

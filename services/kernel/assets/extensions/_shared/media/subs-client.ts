@@ -55,11 +55,28 @@ export interface SubsJobStatus {
   processedSec: number;
   totalSec: number;
   error: string;
+  /** Cues translated so far / in total. Translation jobs only. */
+  cuesDone?: number;
+  cuesTotal?: number;
+  /** Backend's own estimate of the time left, ms. Beats guessing from a %. */
+  etaMs?: number;
+  /** Where the work is happening, e.g. "llm" / "nllb", and "en → es". */
+  engine?: string;
+  route?: string;
 }
 
 export const IDLE_STATUS: SubsJobStatus = {
   status: "idle", progress: 0, phase: "", hint: "", processedSec: 0, totalSec: 0, error: "",
 };
+
+/** "1:18" / "45s" — time left, for a job that knows its own ETA. */
+export function fmtEta(ms: number | undefined): string {
+  if (!ms || ms <= 0) return "";
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  return `${m}:${String(s % 60).padStart(2, "0")}`;
+}
 
 /**
  * What a player must teach the controller about its own backend. Everything

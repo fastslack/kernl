@@ -10,15 +10,31 @@
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "home",
-  "tags": ["rss", "reader", "news", "inbox"],
-  "dependencies": ["com.kernl.rss-registry"],
-  "permissions": ["module:rss-reader"],
+  "tags": [
+    "rss",
+    "reader",
+    "news",
+    "inbox"
+  ],
+  "dependencies": [
+    "com.kernl.rss-registry"
+  ],
+  "permissions": [
+    "module:rss-reader"
+  ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0"
+    }
   },
   "frontend": {
     "pages": [
-      { "view": "rss-reader", "entry": "frontend/entry.js", "title": "RSS Reader" }
+      {
+        "view": "rss-reader",
+        "entry": "frontend/entry.js",
+        "title": "RSS Reader"
+      }
     ]
   }
 }

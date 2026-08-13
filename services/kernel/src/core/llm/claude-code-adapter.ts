@@ -34,6 +34,7 @@ import {
 import { log } from "../logger.js";
 import { newId } from "../helpers.js";
 import { resolveDefaultSocketPath as resolveKernelMcpSocketPath } from "../mcp-unix-socket.js";
+import { claudeAuthEnv } from "./claude-code-auth.js";
 import type {
   ChatMessage,
   ChatCompletionResult,
@@ -61,6 +62,22 @@ export interface ClaudeCodeProviderOptions {
   mcpTransport?: string;
   /** CLAUDE_CODE_PATH — explicit path to the `claude` binary. */
   cliPath?: string;
+  /**
+   * A long-lived token from `claude setup-token`, for hosts where the
+   * interactive login cannot run (no PTY). Injected as CLAUDE_CODE_OAUTH_TOKEN.
+   */
+  oauthToken?: string;
+  /**
+   * CLAUDE_CODE_DEFAULT_MODEL — the model picked for this provider in
+   * Settings.
+   *
+   * It needs its own home because the constructor's `defaultModel` argument
+   * carries the kernel-wide default. Without it the per-provider choice was
+   * stored, rendered back in the dropdown, and read by nobody: you selected
+   * claude-opus-4-7, saved, and every call still went out on
+   * claude-sonnet-4-5.
+   */
+  model?: string;
 }
 
 /**
@@ -166,15 +183,35 @@ export interface ChatStreamCallOptions {
 
 export class ChatClaudeCodeProvider {
   readonly name = "claude_code";
+  /**
+   * `chatCompletion()` below is a single-turn shim: maxTurns 1, allowedTools
+   * empty, kernel tools explicitly ignored. It cannot carry a tool loop, and
+   * handing it one produces "Reached maximum number of turns (1)" rather than
+   * a clear refusal. Callers that need tools skip this provider on this flag.
+   * The full SDK loop lives in the streaming path, which agents reach through
+   * executor_type "claude_code" instead.
+   */
+  readonly supportsToolLoop = false;
   private cachedBin: string | null | undefined = undefined;
 
   constructor(
-    private defaultModel: string = DEFAULT_MODEL,
+    defaultModel: string = DEFAULT_MODEL,
     private cfg: ClaudeCodeProviderOptions = {},
-  ) {}
+  ) {
+    // The provider's own setting wins over the kernel-wide default; the
+    // argument is the fallback for when nothing was chosen for this provider.
+    this.defaultModel = cfg.model || defaultModel || DEFAULT_MODEL;
+  }
+
+  private defaultModel: string;
 
   available(): boolean {
     return !!this.findBinary();
+  }
+
+  /** Where the CLI was resolved to, for the sign-in dialog to report. */
+  binaryPath(): string | undefined {
+    return this.findBinary();
   }
 
   /**
@@ -553,6 +590,11 @@ export class ChatClaudeCodeProvider {
     childEnv.ANTHROPIC_API_KEY = undefined;
     childEnv.ANTHROPIC_AUTH_TOKEN = undefined;
     if (process.env.HOST_HOME) childEnv.HOME = process.env.HOST_HOME;
+    // Credentials live in the kernel's own config dir, not $HOME — under Docker
+    // $HOME is the image layer, so a `--force-recreate` threw the login away and
+    // every LLM feature started failing with "Not logged in". Assigned last so
+    // it also wins over the HOST_HOME redirect above.
+    Object.assign(childEnv, claudeAuthEnv({ oauthToken: this.cfg.oauthToken }));
     return childEnv;
   }
 

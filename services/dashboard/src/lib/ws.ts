@@ -4,6 +4,22 @@ import { WS_CHANNEL_MAP } from './constants.js';
 let ws: WebSocket | null = null;
 let retryDelay = 1000;
 const MAX_DELAY = 30000;
+/**
+ * Give up on /mtw after this many failures IF it has never once connected.
+ *
+ * Not every deployment runs the mtw-request server — the public stack says so
+ * in nginx.public.conf and omits the `/mtw` block entirely. There the socket
+ * can never connect, and retrying forever printed four console lines per
+ * attempt (`connecting`, the browser's own failure notice, an `error`, and
+ * `closed: 1006`) for the life of the tab. Polling already covers the data.
+ *
+ * A socket that HAS connected before is a different story: that is a restart
+ * or a blip, and it keeps retrying with backoff indefinitely.
+ */
+const MAX_COLD_ATTEMPTS = 4;
+let everConnected = false;
+let coldAttempts = 0;
+let gaveUp = false;
 let fallbackTimer: ReturnType<typeof setInterval> | null = null;
 
 // Dynamic channel map — starts with hardcoded defaults, extended by manifest
@@ -327,6 +343,8 @@ function connectMtwRequest(onMessage?: () => void) {
 		wsConnected.set(true);
 		console.log('[WS] connected');
 		retryDelay = 1000;
+		everConnected = true;
+		coldAttempts = 0;
 		if (fallbackTimer) {
 			clearInterval(fallbackTimer);
 			fallbackTimer = null;
@@ -358,7 +376,10 @@ function connectMtwRequest(onMessage?: () => void) {
 		disconnected(onMessage);
 	};
 
-	mtwWs.onerror = (ev) => { console.error('[WS] error:', ev); if (mtwWs) mtwWs.close(); };
+	// Not console.error: on a deployment without /mtw this fires on every
+	// attempt, and a red row for an optional transport that has a working
+	// fallback trains people to ignore the console.
+	mtwWs.onerror = () => { if (mtwWs) mtwWs.close(); };
 }
 
 // ── Public API ─────────────────────────────────────────────
@@ -379,6 +400,16 @@ function disconnected(onMessage?: () => void) {
 }
 
 function scheduleRetry(onMessage?: () => void) {
+	if (gaveUp) return;
+	if (!everConnected && ++coldAttempts >= MAX_COLD_ATTEMPTS) {
+		gaveUp = true;
+		console.info(
+			`[WS] /mtw never connected after ${coldAttempts} attempts — this deployment ` +
+			`likely does not run the mtw-request server. Falling back to polling; ` +
+			`reload to try again.`,
+		);
+		return;   // the 60s poll started in disconnected() keeps the data flowing
+	}
 	setTimeout(() => connectMtwRequest(onMessage), retryDelay);
 	retryDelay = Math.min(retryDelay * 2, MAX_DELAY);
 }

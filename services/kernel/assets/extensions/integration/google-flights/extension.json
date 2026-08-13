@@ -11,12 +11,22 @@
   "license": "Apache-2.0",
   "category": "integration",
   "logo": "logo.svg",
-  "tags": ["google", "flights", "travel", "search", "fares"],
+  "tags": [
+    "google",
+    "flights",
+    "travel",
+    "search",
+    "fares"
+  ],
   "kernel_min": "0.1.0",
   "permissions": [
     "network"
   ],
   "backend": {
-    "entry": "backend/entry.js"
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.0",
+      "zod": "3.25.76"
+    }
   }
 }

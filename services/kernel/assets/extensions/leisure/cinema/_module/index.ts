@@ -40,10 +40,18 @@ import { NostrSubsProvider } from "./discovery/nostr-provider.js";
 import { ArchiveSubsProvider } from "./discovery/archive-provider.js";
 import { NostrDirectoriesProvider } from "./discovery/nostr-directories-provider.js";
 import { registerCinemaRoutes } from "./api-routes.js";
+import { registerCinemaFriendsRoutes } from "./friends-routes.js";
 import { registerCinemaMediaRoutes } from "./media-routes.js";
 import { cinemaTools } from "./tools.js";
 import { EmbedRunner } from "./embed-runner.js";
+import { GraphProjectionRunner } from "./graph-projection-runner.js";
+import { GraphResolveRunner } from "./graph-resolve-runner.js";
 import { TranslateRunner } from "./translate-runner.js";
+import { CanonicalService } from "./canonical/service.js";
+import { CanonicalRunner } from "./canonical/runner.js";
+import { tmdbFromEnv } from "./canonical/tmdb.js";
+import { MediaProbeRunner } from "./media-runner.js";
+import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
 import type { AgentDriver } from "../../../../../src/core/types.js";
@@ -56,6 +64,8 @@ export interface CinemaModule extends ExtensibleModule {
   getDirectoriesProvider(): NostrDirectoriesProvider | null;
   getDiscoveryRegistry(): DiscoveryRegistry | null;
   getEmbedRunner(): EmbedRunner | null;
+  getGraphProjectionRunner(): GraphProjectionRunner | null;
+  getGraphResolveRunner(): GraphResolveRunner | null;
   getTranslateRunner(): TranslateRunner | null;
   /** Wire the semantic-search dependencies. Called from index.ts AFTER
    *  the embeddings client is created (which itself depends on config
@@ -87,7 +97,13 @@ export function createCinemaModule(): CinemaModule {
   let graphRef: GraphDriver | null = null;
   let embeddingsRef: EmbeddingsClient | null = null;
   let embedRunner: EmbedRunner | null = null;
+  let graphProjectionRunner: GraphProjectionRunner | null = null;
+  let graphResolveRunner: GraphResolveRunner | null = null;
   let translateRunner: TranslateRunner | null = null;
+  let canonicalService: CanonicalService | null = null;
+  let canonicalRunner: CanonicalRunner | null = null;
+  let mediaRunner: MediaProbeRunner | null = null;
+  let sqliteRef: SqliteDb | null = null;
   let directoriesService: CinemaDirectoriesService | null = null;
   let directoriesProvider: NostrDirectoriesProvider | null = null;
   /** Local kernel's Nostr identity. Held here so we can reuse it for
@@ -115,11 +131,38 @@ export function createCinemaModule(): CinemaModule {
       // stop / status) drive it. Lazy-resolves embedder + graph at run
       // time so it picks up post-bootstrap wiring.
       embedRunner = new EmbedRunner(service, () => embeddingsRef, () => graphRef);
+      // GraphProjectionRunner — projects the catalogue's structure (release
+      // groups, canonical identities, people, genres, subjects) into Neo4j as
+      // nodes and edges. Independent of the embedder: it MERGEs onto the same
+      // (:CinemaTitle) nodes, so vectors and edges converge without either
+      // pass waiting on the other.
+      graphProjectionRunner = new GraphProjectionRunner(ctx.sqlite, () => graphRef);
+      // GraphResolveRunner — recovers identities the year-blocked matcher cannot
+      // reach, via the alias full-text index. Proposals only; nothing auto-accepted.
+      graphResolveRunner = new GraphResolveRunner(ctx.sqlite, () => graphRef);
       // TranslateRunner — fills cinema_titles.description_es via the
       // kernel-wide llm() chain. No graph/embedder dependency; writes ES
       // text to SQLite and clears each row's embed bookkeeping so the
       // EmbedRunner re-processes against the Spanish profile.
       translateRunner = new TranslateRunner(service);
+      // Canonical identification — resolves catalogue rows against a local
+      // copy of Wikidata's film corpus, which is what gives the "best" order
+      // something real to rank by. The runner owns all three phases (corpus
+      // pull, matching, optional TMDb ratings) and, like the others, is
+      // driven from the API rather than started on boot: the first pass is a
+      // long network walk and that is the user's call to make.
+      // Asks archive.org what each item actually contains. Independent of the
+      // canonical runner — identity comes from Wikidata, contents come from
+      // the item — so the two run without waiting on each other.
+      sqliteRef = ctx.sqlite;
+      mediaRunner = new MediaProbeRunner(ctx.sqlite);
+      canonicalService = new CanonicalService(ctx.sqlite);
+      canonicalRunner = new CanonicalRunner(
+        ctx.sqlite,
+        canonicalService,
+        tmdbFromEnv,
+        new Date().getFullYear(),
+      );
       // Community directories — local CRUD now, Nostr publish/discover
       // wires up once setNostrIdentity lands.
       directoriesService = new CinemaDirectoriesService(ctx.sqlite);
@@ -211,6 +254,14 @@ export function createCinemaModule(): CinemaModule {
       return embedRunner;
     },
 
+    getGraphProjectionRunner() {
+      return graphProjectionRunner;
+    },
+
+    getGraphResolveRunner() {
+      return graphResolveRunner;
+    },
+
     getTranslateRunner() {
       return translateRunner;
     },
@@ -271,6 +322,12 @@ export function createCinemaModule(): CinemaModule {
       const getDirectories = () => directoriesService;
       const getDirectoriesProvider = () => directoriesProvider;
       const getLocalIdentity = () => localIdentity;
+      const getCanonical = () => canonicalService;
+      const getCanonicalRunner = () => canonicalRunner;
+      const getMediaRunner = () => mediaRunner;
+      const getSqlite = () => sqliteRef;
+      const getGraphProjectionRunner = () => graphProjectionRunner;
+      const getGraphResolveRunner = () => graphResolveRunner;
       return {
         // No nav entry yet — /cinema is already registered from the
         // dashboard module's static routes. Stage 3 swaps the data
@@ -282,13 +339,20 @@ export function createCinemaModule(): CinemaModule {
               server, svc, subs,
               getGraph, getEmbedder, getRegistry, getEmbedRunner,
               getDirectories, getDirectoriesProvider, getLocalIdentity,
-              getTranslateRunner,
+              getTranslateRunner, getCanonical, getCanonicalRunner,
+              getMediaRunner, getSqlite, getGraphProjectionRunner,
+              getGraphResolveRunner,
             );
           }
           // Media-serving layer (archive.org proxy/transcode/probe + subtitle
           // pipeline). Standalone — no service deps, so register unconditionally
           // so the cinema player works even before the graph/embedder wire up.
           registerCinemaMediaRoutes(server);
+
+          // Friends lane: serving friends-only directories to another kernel
+          // and pulling theirs. Registered unconditionally — it reports 503
+          // by itself while peering or the directories service is missing.
+          registerCinemaFriendsRoutes(server, getDirectories);
         },
       };
     },

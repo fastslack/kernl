@@ -35,20 +35,59 @@
 %global         __requires_exclude (libonnxruntime|libonnxruntime_providers_cuda|libonnxruntime_providers_tensorrt|libonnxruntime_providers_shared|libcuda|libcublas|libcudart|libcudnn|libcufft|libcurand|libnvinfer|libnvinfer_plugin|libnvonnxparser|libnvrtc)
 %global         __provides_exclude (libonnxruntime|libonnxruntime_providers)
 
+# Everything under the app directory is a vendored, self-contained tree: a bun
+# binary plus prebuilt native node modules. Letting rpm scan it for deps is
+# not just noise, it produces an uninstallable package — the prebuilt objects
+# link against the unversioned `libdl.so` and `libm.so` development sonames,
+# which no modern distro provides (glibc 2.34 merged both into libc). The
+# result installs nowhere:
+#
+#     nothing provides libdl.so()(64bit) needed by kernl-0.1.0-1.x86_64
+#
+# The real runtime dependencies are declared explicitly as Requires: below,
+# so exclude the bundle from automatic generation entirely rather than chase
+# sonames one at a time.
+%global         __requires_exclude_from ^%{appdir}/.*$
+%global         __provides_exclude_from ^%{appdir}/.*$
+
+# The release builder runs on ubuntu-latest, whose rpm does not define
+# %%_userunitdir — it is a Fedora/RHEL macro. Left undefined it is not expanded
+# at all, so the unit lands in a directory named after the literal macro text
+# and systemd never sees it. Define it only when the builder hasn't.
+%{!?_userunitdir: %global _userunitdir /usr/lib/systemd/user}
+
+# node_modules ships prebuilt binaries for foreign architectures
+# (bare-os/prebuilds/android-arm, android-arm64, linux-arm64, ...). brp-strip
+# cannot parse them, and its failure aborts %install outright. Nothing here is
+# worth stripping anyway: the payload is a JS tree plus a vendored bun binary,
+# not compiled objects we own.
+%global         __os_install_post %{nil}
+
 Name:           %{appname}
-Version:        0.1.0
+Version:        0.1.1
 Release:        1%{?dist}
 Summary:        Personal life-management MCP server with dashboard
-License:        AGPLv3
+License:        Apache-2.0
 URL:            https://github.com/fastslack/kernl
 Source0:        %{name}-%{version}.tar.gz
 BuildArch:      x86_64
 
-# Runtime deps — kernel won't start without these.
-# (sqlite is for the better-sqlite3 native module; libstdc++ for onnxruntime.)
+# Runtime deps — kernel won't start without these. libstdc++ is for
+# onnxruntime. There is deliberately no sqlite dependency: better-sqlite3
+# compiles SQLite into better_sqlite3.node, so `ldd` on it shows only libc,
+# libgcc_s, libm, libpthread and libstdc++ — no libsqlite3 at all.
+#
+# Requiring it was worse than redundant. On RHEL and its rebuilds the package
+# named `sqlite` is the CLI, is not installed by default, and nothing pulls it
+# in, so `rpm -i` refused outright:
+#
+#     error: Failed dependencies: sqlite is needed by kernl-0.1.1-1.x86_64
+#
+# That took out Rocky, Alma and CentOS Stream while Fedora installed fine.
+# Verified with --nodeps on rockylinux:9: the kernel starts, opens its
+# database and serves the dashboard.
 Requires:       glibc >= 2.34
 Requires:       libstdc++
-Requires:       sqlite
 
 # Optional but strongly recommended — features degrade gracefully when
 # missing. ffmpeg powers cinema/torrents transcoding; bubblewrap backs

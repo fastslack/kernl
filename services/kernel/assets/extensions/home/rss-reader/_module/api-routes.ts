@@ -39,12 +39,34 @@ export function registerRssReaderRoutes(
     }
   });
 
-  server.get("/api/reader/rss/items/:id", (req, res) => {
+  /**
+   * The single item, with its body — fetched from the source if the feed did
+   * not carry one.
+   *
+   * The reader already calls this whenever the listed content is under 200
+   * characters, which was doing nothing useful: it re-read the same summary
+   * out of the same row. Feeds that publish title-and-link only (Hugging Face
+   * blog, and most news feeds) left the pane blank. The article is fetched
+   * once here and cached onto the item, so this costs one request per article
+   * ever, not one per open.
+   */
+  server.get("/api/reader/rss/items/:id", async (req, res) => {
     try {
       const id = (req as IncomingMessage & { params?: Record<string, string> }).params?.id;
       if (!id) { server.json(res, 400, { error: "Missing item ID" }); return; }
       const item = service.getItem(id);
       if (!item) { server.json(res, 404, { error: "Not found" }); return; }
+
+      const bodyLength = (item.content ?? "").replace(/<[^>]+>/g, "").trim().length;
+      if (bodyLength < 200 && item.link) {
+        const { fetchArticle } = await import("./article.js");
+        const article = await fetchArticle(item.link);
+        if (article) {
+          service.saveFetchedContent(id, article.html);
+          item.content = article.html;
+        }
+      }
+
       server.json(res, 200, { item });
     } catch (err) {
       server.json(res, 500, { error: String(err) });
