@@ -29,6 +29,14 @@ on:
       - "v*.*.*"
   workflow_dispatch:
 
+# Without this the GITHUB_TOKEN is read-only, and the whole thing fails at the
+# last step: every platform builds, every artifact is produced, and attaching
+# them to the release dies with "Resource not accessible by integration". That
+# is what happened to v0.2.0 — five green jobs and a release with nothing in
+# it, which reads as a successful release until someone tries to install it.
+permissions:
+  contents: write
+
 env:
   NODE_VERSION: "22"
 
