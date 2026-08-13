@@ -102,6 +102,138 @@ html, body {
   width: auto;
   display: block;
 }
+
+/* ── Header tab rail ────────────────────────────────────────────────────────
+   The group's views, as a segmented control living in the header band that
+   used to be empty. Deliberately built from the same primitives as the other
+   header chips (30px tall, 8px radius, surface-2 fill, 1px border) so the
+   strip reads as one row of controls instead of a tab bar glued onto a
+   toolbar. It takes the free middle space and shrinks before the right-hand
+   clusters do. */
+.header-nav {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 1 1 auto;
+  min-width: 0; /* without this the track refuses to shrink and pushes the
+                   right clusters off-screen instead of scrolling */
+}
+.header-nav-group {
+  position: relative;
+  flex-shrink: 0;
+  padding-right: 14px;
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-3);
+  white-space: nowrap;
+}
+/* Same hairline the header clusters use to separate themselves. */
+.header-nav-group::after {
+  content: '';
+  position: absolute;
+  right: 0; top: 50%;
+  height: 18px;
+  width: 1px;
+  background: var(--border);
+  transform: translateY(-50%);
+}
+
+.tabrail {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+.tabrail-track {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  max-width: 100%;
+  padding: 3px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.tabrail-track::-webkit-scrollbar { height: 0; width: 0; }
+
+.tabrail-tab {
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 12px;
+  border: none;
+  border-radius: 6px;
+  background: none;
+  color: var(--text-2);
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.tabrail-tab:hover { background: var(--surface-3); color: var(--text-1); }
+/* Active = soft gold wash + gold text + a gold hairline. Colour alone does
+   not carry the state: the fill and the ring do too. */
+.tabrail-tab.active {
+  background: color-mix(in srgb, var(--gold) 16%, transparent);
+  color: var(--gold);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--gold) 30%, transparent);
+}
+.tabrail-tab.active:hover {
+  background: color-mix(in srgb, var(--gold) 22%, transparent);
+  color: var(--gold);
+}
+.tabrail-tab:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 1px;
+}
+
+/* Edge fades: the scrollbar is hidden, so these are the only cue that the
+   track continues. Toggled from JS on scroll position. */
+.tabrail::before,
+.tabrail::after {
+  content: '';
+  position: absolute;
+  top: 1px;
+  bottom: 1px;
+  width: 26px;
+  z-index: 1;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.18s ease-out;
+}
+.tabrail::before {
+  left: 1px;
+  border-radius: 7px 0 0 7px;
+  background: linear-gradient(90deg, var(--surface-2) 30%, transparent);
+}
+.tabrail::after {
+  right: 1px;
+  border-radius: 0 7px 7px 0;
+  background: linear-gradient(270deg, var(--surface-2) 30%, transparent);
+}
+.tabrail.fade-l::before,
+.tabrail.fade-r::after { opacity: 1; }
+
+/* Narrow windows: the group name is already conveyed by the lit rail icon,
+   so it is the first thing to go — the tabs themselves are not. */
+@media (max-width: 900px) {
+  .header-nav-group { display: none; }
+  .header-nav { gap: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tabrail-tab,
+  .tabrail::before,
+  .tabrail::after { transition: none; }
+}
 /* .header-clock and .header-greeting removed with their markup — the clock
    moved to the foot of the rail. `.header-greeting` carried the `flex: 1`
    that pushed this cluster right, but `.header-right` already sets
@@ -111,6 +243,9 @@ html, body {
   align-items: center;
   margin-left: auto;
   gap: 0;
+  /* The tab rail is the elastic element in this row; these controls keep
+     their size and the rail scrolls instead. */
+  flex-shrink: 0;
 }
 /* Three semantic clusters separated by hairline rules. Reads left→right as:
    1. status (what the kernel is doing)  2. actions (what you ask of it)
@@ -606,9 +741,13 @@ html, body {
 .sub-tab:hover  { color: var(--text-2); }
 .sub-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
 
-/* Child sub-tabs — extension-contributed, rendered under the page they belong to. */
+/* Child sub-tabs — extension-contributed, rendered under the page they belong
+   to. These are the only tabs still living in the content area; the group
+   tabs moved to the header rail, so this bar is now the first element in
+   .main-content and bleeds to its top edge rather than tucking under a
+   parent bar. */
 .sub-tabs-children {
-  margin-top: -16px;
+  margin-top: -24px;
   padding-left: 48px;
   background: color-mix(in srgb, var(--gold) 4%, transparent);
   border-bottom-color: color-mix(in srgb, var(--border) 60%, transparent);
@@ -1247,3 +1386,27 @@ html, body {
 .fw-hdr { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 700; color: var(--text-1); margin-bottom: 8px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
 .fw-dot-ok { width: 7px; height: 7px; border-radius: 50%; background: var(--green); box-shadow: 0 0 6px var(--green); }
 .fw-pre { font-size: 10px; line-height: 1.5; color: var(--text-2); white-space: pre-wrap; word-break: break-word; max-height: 280px; overflow-y: auto; margin: 0; font-family: 'SF Mono', 'Fira Code', monospace; scrollbar-width: thin; }
+
+/* ── Update notice ──────────────────────────────────────────────────────
+   Sits above the shell, full width, only when a newer release exists. Gold
+   rather than red: a version behind is information, not a failure, and the
+   error colour is spent on things that are actually broken. */
+.update-bar {
+  display: flex; align-items: center; gap: 10px;
+  padding: 8px 16px;
+  background: rgba(240, 180, 41, 0.10);
+  border-bottom: 1px solid rgba(240, 180, 41, 0.30);
+  color: var(--gold);
+  font-size: 12px;
+}
+.update-bar-dot {
+  flex: none; width: 7px; height: 7px; border-radius: 50%;
+  background: var(--gold); box-shadow: 0 0 6px var(--gold);
+}
+.update-bar strong { font-weight: 700; }
+.update-bar-link { margin-left: auto; color: var(--gold); text-decoration: underline; }
+.update-bar-close {
+  flex: none; background: none; border: none; cursor: pointer;
+  color: var(--gold); opacity: 0.65; font-size: 13px; line-height: 1; padding: 2px 4px;
+}
+.update-bar-close:hover { opacity: 1; }

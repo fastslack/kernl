@@ -66,6 +66,7 @@ import type { DashboardProviderLike, WebChatProviderLike, IrcProviderLike } from
 import type { LifeModule, NewsModule, LifeService, NewsService } from "../types/extensions/index.js";
 import type { LicenseService } from "../license/index.js";
 import { registerLicenseRoutes } from "../license/routes.js";
+import { checkForUpdate } from "../update/check.js";
 
 export interface HttpResult {
   httpServer: KernelHttpServer | null;
@@ -359,6 +360,17 @@ export async function initHttpAndMcp(args: {
       // active extensions get merged in on every request.
       httpServer.get("/api/manifest", (_req, res) => {
         httpServer!.json(res, 200, dashboardRegistry.getManifest(extensionsModule.service));
+      });
+
+      // Is a newer Kernl published? Read-only: it never downloads or applies
+      // anything, because migrations run at boot and only go forward, so an
+      // update has to be a moment the user chose. `?fresh=1` skips the 6h
+      // cache for an explicit "check now".
+      httpServer.get("/api/update/status", async (req, res) => {
+        const url = new URL(req.url ?? "/", "http://localhost");
+        httpServer!.json(res, 200, await checkForUpdate({
+          fresh: url.searchParams.get("fresh") === "1",
+        }));
       });
 
       // Architecture endpoints (topology + metrics)

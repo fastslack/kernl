@@ -79,7 +79,8 @@ export class ExtensionService {
     this.opts = { ...this.opts, identity };
   }
 
-  private hasLicense(feature: string): boolean {
+  /** Public so /api/extensions can tell the UI *why* a paid row is inactive. */
+  hasLicense(feature: string): boolean {
     return this.opts.licenseHas?.(feature) ?? false;
   }
 

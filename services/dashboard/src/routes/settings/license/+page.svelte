@@ -21,6 +21,8 @@
   let pasteValue = '';
   let saving = false;
   let clearing = false;
+  let copying = false;
+  let copied = false;
   let msg = '';
   let msgType: 'ok' | 'err' = 'ok';
 
@@ -83,6 +85,45 @@
       flash(`Failed to save license: ${err instanceof Error ? err.message : String(err)}`, 'err');
     } finally {
       saving = false;
+    }
+  }
+
+  /**
+   * Put the raw JWT on the clipboard so it can be pasted into another
+   * install. Never rendered on screen: a token valid until 2036 does not
+   * belong in a screenshot or a shoulder-surfed settings pane, and the paste
+   * box below is the only place a licence needs to be visible.
+   *
+   * The clipboard API needs a secure context, which a kernel reached over
+   * plain http on a LAN address is not — so the fallback matters more here
+   * than it usually would.
+   */
+  async function copyLicense() {
+    copying = true;
+    try {
+      const res = await fetch(`${BASE}/api/license/export`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const { jwt } = (await res.json()) as { jwt: string };
+      try {
+        await navigator.clipboard.writeText(jwt);
+      } catch {
+        const ta = document.createElement('textarea');
+        ta.value = jwt;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        document.execCommand('copy');
+        document.body.removeChild(ta);
+      }
+      copied = true;
+      flash('License copied. Paste it into the other install and restart it.', 'ok');
+      setTimeout(() => (copied = false), 2500);
+    } catch (err) {
+      flash(`Could not copy: ${err instanceof Error ? err.message : String(err)}`, 'err');
+    } finally {
+      copying = false;
     }
   }
 
@@ -153,6 +194,9 @@
         </dd>
       </dl>
       <div class="actions">
+        <button class="btn btn-secondary" disabled={copying} on:click={copyLicense}>
+          {copied ? 'Copied' : copying ? 'Copying…' : 'Copy license'}
+        </button>
         <button class="btn btn-secondary" on:click={() => loadStatus()}>Refresh</button>
         <button class="btn btn-danger" disabled={clearing} on:click={clearLicense}>
           {clearing ? 'Clearing…' : 'Remove license'}

@@ -1,7 +1,7 @@
 <script lang="ts">
   import '../app.css';
   import '$lib/styles/crt.css';
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
   import { data, wsConnected, storeMap, lastRefresh, ensureStore, activeTheme, type ActiveTheme, notifications, unreadCount, serverTz } from '$lib/stores.js';
@@ -164,6 +164,34 @@
   // Sub-sub-tabs: views whose `parent` matches the currently-open view.
   $: childViews = currentGroup?.views.filter(v => (v as any).parent === currentView) ?? [];
   $: sysGroup = navGroups[navGroups.length - 1];
+
+  // ── Header tab rail ─────────────────────────────────────────────
+  // The group's tabs live in the header now, in the band that used to sit
+  // empty between the logo and the right-hand clusters. A group can carry
+  // eight of them (Social) so the track scrolls; the fades below tell the
+  // user there is more in that direction, since the scrollbar is hidden.
+  $: headerTabs = currentView !== 'chat' && subViews.length > 1 ? subViews : [];
+  let tabRailEl: HTMLElement | null = null;
+  let railFadeL = false;
+  let railFadeR = false;
+
+  function updateRailFades() {
+    if (!tabRailEl) { railFadeL = railFadeR = false; return; }
+    const { scrollLeft, scrollWidth, clientWidth } = tabRailEl;
+    railFadeL = scrollLeft > 1;
+    railFadeR = scrollLeft + clientWidth < scrollWidth - 1;
+  }
+
+  // Keep the active tab visible: on a narrow window the current view can sit
+  // off-screen inside the track, which reads as "this group has no active tab".
+  async function syncRail() {
+    await tick();
+    if (!tabRailEl) return;
+    tabRailEl.querySelector('.tabrail-tab.active')
+      ?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    updateRailFades();
+  }
+  $: currentView, headerTabs, syncRail();
 
   // ── Auto-subscribe to page-specific WebSocket channels ──
   let activePageChannels: string[] = [];
@@ -531,7 +559,51 @@
   let shellInitialized = false;
   let mounted = false;
 
+  // ── Update notice ────────────────────────────────────────────────────
+  //
+  // Read-only: the kernel answers from a six-hour cache, so this costs a
+  // request on load and nothing after. Everything here fails quiet — an
+  // update check has no business breaking the shell it renders into.
+  interface UpdateInfo {
+    current: string;
+    latest: string | null;
+    updateAvailable: boolean;
+    url: string | null;
+  }
+  let updateInfo: UpdateInfo | null = null;
+  // Keyed by version so dismissing 0.3.0 does not also hide 0.4.0.
+  let dismissedUpdate: string | null = null;
+
+  const UPDATE_DISMISS_KEY = 'kernl.update.dismissed';
+
+  function dismissUpdate(): void {
+    if (!updateInfo?.latest) return;
+    dismissedUpdate = updateInfo.latest;
+    try {
+      localStorage.setItem(UPDATE_DISMISS_KEY, updateInfo.latest);
+    } catch {
+      /* private mode — the banner simply returns next load */
+    }
+  }
+
+  async function loadUpdateInfo(): Promise<void> {
+    try {
+      dismissedUpdate = localStorage.getItem(UPDATE_DISMISS_KEY);
+    } catch {
+      dismissedUpdate = null;
+    }
+    try {
+      const base = (globalThis as { __API_BASE?: string }).__API_BASE ?? '';
+      const r = await fetch(`${base}/api/update/status`);
+      if (!r.ok) return;
+      updateInfo = (await r.json()) as UpdateInfo;
+    } catch {
+      /* offline, or an older kernel without the route — say nothing */
+    }
+  }
+
   onMount(() => {
+    void loadUpdateInfo();
     mounted = true;
     // Resolve the saved language before anything else. This used to be called
     // from /login only, so any hard load that did not pass through the login
@@ -543,6 +615,11 @@
     // beyond re-setting the same value, so /login calling it too is harmless.
     initLocale();
     if (!isStandalonePage) initShell();
+    // Resizing changes whether the tab rail overflows, and the fades are the
+    // only cue that it does — without this they stay stale until the next
+    // scroll or navigation.
+    window.addEventListener('resize', updateRailFades);
+    return () => window.removeEventListener('resize', updateRailFades);
   });
 
   // Leaving /login or /setup without a page load → initialize now. Gated on
@@ -832,11 +909,64 @@
   <slot />
 {:else}
 <div class="app-shell">
+  <!-- Only renders when a newer release actually exists. It links out rather
+       than offering a button: applying an update runs forward-only migrations,
+       so it is a decision, not a click. Dismissal is remembered per version,
+       so saying "later" once does not hide the next release too. -->
+  {#if updateInfo?.updateAvailable && dismissedUpdate !== updateInfo.latest}
+    <div class="update-bar" role="status">
+      <span class="update-bar-dot" aria-hidden="true"></span>
+      <span>
+        Kernl <strong>{updateInfo.latest}</strong> is available — you are running
+        {updateInfo.current}
+      </span>
+      {#if updateInfo.url}
+        <a class="update-bar-link" href={updateInfo.url} target="_blank" rel="noreferrer">
+          What changed
+        </a>
+      {/if}
+      <button class="update-bar-close" title="Dismiss until the next release" on:click={dismissUpdate}>✕</button>
+    </div>
+  {/if}
   <!-- Header -->
   <header class="header">
     <div class="header-logo">
       <img class="header-logo-img" src="/mascot.png" alt="Kernl" />
     </div>
+
+    <!-- Group tabs. They used to occupy a full 37px band across the top of
+         the content area while this strip of the header sat empty. Moved
+         here they cost no vertical space and sit next to the group name,
+         which the rail can only convey through a highlighted icon. -->
+    {#if headerTabs.length > 0}
+      <div class="header-nav">
+        {#if currentGroup}
+          <span class="header-nav-group">{currentGroup.label}</span>
+        {/if}
+        <!-- A nav, not a tablist: each of these changes the URL and is
+             deep-linkable, so `aria-current="page"` is the honest marker.
+             role="tab" would promise a tabpanel swapped in place. -->
+        <div class="tabrail" class:fade-l={railFadeL} class:fade-r={railFadeR}>
+          <nav
+            class="tabrail-track"
+            aria-label={currentGroup ? `${currentGroup.label} views` : 'Views'}
+            bind:this={tabRailEl}
+            on:scroll={updateRailFades}
+          >
+            {#each headerTabs as view (view.id)}
+              <button
+                class="tabrail-tab"
+                class:active={currentView === view.id}
+                aria-current={currentView === view.id ? 'page' : undefined}
+                on:click={() => navigate(view.id)}
+              >
+                {SUB_TAB_LABELS[view.id] ?? view.label}
+              </button>
+            {/each}
+          </nav>
+        </div>
+      </div>
+    {/if}
     <!-- The clock lives at the foot of the rail now, where it is always in
          the same place regardless of which page is open. Repeating it here,
          alongside a greeting, spent the most valuable strip of the screen on
@@ -1006,21 +1136,10 @@
     </div>
   </nav>
 
-  <!-- Main content with sub-tabs -->
+  <!-- Main content. The group tabs moved up into the header; only the
+       child tabs (extension-contributed, scoped to the open view) still
+       render here, where they belong to the page rather than the group. -->
   <main class="main-content" class:full-bleed-mode={isFullBleed}>
-    {#if subViews.length > 1 && currentView !== 'chat'}
-      <div class="sub-tabs">
-        {#each subViews as view}
-          <button
-            class="sub-tab"
-            class:active={currentView === view.id}
-            on:click={() => navigate(view.id)}
-          >
-            {SUB_TAB_LABELS[view.id] ?? view.label}
-          </button>
-        {/each}
-      </div>
-    {/if}
     {#if childViews.length > 0}
       <div class="sub-tabs sub-tabs-children">
         {#each childViews as view}

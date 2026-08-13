@@ -14,6 +14,11 @@ import { tmpdir } from "node:os";
 import type { KernelHttpServer } from "../../core/http-server.js";
 import type { ExtensionService } from "./service.js";
 import { BUNDLE_EXT } from "./bundle.js";
+import {
+  isPaidExtension,
+  requiredFeature,
+  type EntitlementManifest,
+} from "./entitlement.js";
 import type {
   ExtensionSource,
   ExtensionStatus,
@@ -48,14 +53,29 @@ export function registerExtensionsRoutes(
       }
 
       // Return parsed manifests inline so the UI doesn't have to call each item.
-      const items = rows.map((r) => ({
-        ...r,
-        manifest: safeParse(r.manifest_json),
-        source: safeParse(r.source_json),
-        granted_permissions: safeParse(r.granted_permissions_json),
-        settings: safeParse(r.settings_json),
-        install_receipt: safeParse(r.install_receipt_json),
-      }));
+      //
+      // `entitlement` says why a paid extension that installed cleanly is not
+      // running. The kernel already knew — entitlement.ts derives the feature
+      // and downgrades the row to "installed" — but it kept that to itself, so
+      // the UI showed a healthy-looking card whose tools simply did not exist.
+      // Nothing named the missing feature, and nothing pointed at
+      // /settings/license, which is the page that fixes it.
+      const items = rows.map((r) => {
+        const manifest = safeParse(r.manifest_json);
+        const paid = manifest ? isPaidExtension(manifest as EntitlementManifest) : false;
+        const feature = paid ? requiredFeature(manifest as EntitlementManifest) : null;
+        return {
+          ...r,
+          manifest,
+          source: safeParse(r.source_json),
+          granted_permissions: safeParse(r.granted_permissions_json),
+          settings: safeParse(r.settings_json),
+          install_receipt: safeParse(r.install_receipt_json),
+          entitlement: feature
+            ? { required_feature: feature, licensed: service.hasLicense(feature) }
+            : null,
+        };
+      });
 
       server.json(res, 200, {
         items,

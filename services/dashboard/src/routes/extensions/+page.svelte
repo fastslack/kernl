@@ -22,6 +22,9 @@
     updated_at: string;
     last_loaded_at: string | null;
     error: string;
+    /** Null for free extensions. Present for paid ones whether licensed or
+     *  not, so the card can say which feature a locked row is waiting on. */
+    entitlement: { required_feature: string; licensed: boolean } | null;
     manifest: {
       description?: string;
       author?: string;
@@ -1954,6 +1957,21 @@
           <p class="card-desc">{vm.description || '(no description)'}</p>
         </button>
 
+        <!-- A paid extension that installed cleanly but has no licence looks
+             identical to a working one: the card is there, the version is
+             there, and only its tools are missing. Say which feature is
+             absent, and link to the page that fixes it — the failure is one
+             click from its own remedy and nothing used to connect them. -->
+        {#if vm.installed?.entitlement && !vm.installed.entitlement.licensed}
+          <a class="card-locked" href="/settings/license">
+            <span class="card-locked-icon" aria-hidden="true">🔒</span>
+            <span>
+              Requires <code>{vm.installed.entitlement.required_feature}</code> —
+              your licence does not include it. Add a licence
+            </span>
+          </a>
+        {/if}
+
         <div class="card-foot">
           <button
             class="card-act"
@@ -3467,6 +3485,26 @@
   .card-dot-installed { background: var(--gold); }
   .card-dot-disabled  { background: var(--text-3); }
   .card-dot-error     { background: var(--red); box-shadow: 0 0 8px var(--red); }
+
+  .card-locked {
+    display: flex; align-items: flex-start; gap: 7px;
+    margin: 0 12px 10px; padding: 8px 10px;
+    border: 1px solid rgba(240, 180, 41, 0.32);
+    border-radius: 6px;
+    background: rgba(240, 180, 41, 0.07);
+    color: var(--gold);
+    font-size: 11.5px; line-height: 1.45;
+    text-decoration: none;
+  }
+  .card-locked:hover { border-color: rgba(240, 180, 41, 0.6); }
+  .card-locked code {
+    font-family: var(--font-mono, monospace);
+    font-size: 11px;
+    padding: 0 3px;
+    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.25);
+  }
+  .card-locked-icon { flex: none; }
 
   .card-desc {
     font-size: 12px; line-height: 1.5; color: var(--text-2);
