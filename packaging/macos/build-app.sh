@@ -105,6 +105,30 @@ cd "$DATA_DIR"
   done
 ) &
 
+# Keep a record of the boot.
+#
+# The wrapper has always created logs/ and nothing has ever written to it. The
+# kernel logs to stdout, and stdout from a Finder launch goes nowhere — so a
+# .app that failed to start left no trace at all, and the only way to see a
+# boot was to know you could run this script from a terminal. That is a bad
+# trade for a desktop app: the people most likely to hit a startup problem are
+# the least likely to know that.
+#
+# tee rather than a plain redirect, so running this from a terminal still
+# prints to the terminal. One rotation deep: the interesting log is almost
+# always the current boot or the one before it, and an unbounded file in a
+# user's Application Support directory is its own bug.
+#
+# 0600 because boot output can carry environment detail. The dashboard token
+# is deliberately not in here — it travels in a URL fragment, which is exactly
+# why that was chosen (see above) — but a log nobody expected to exist is the
+# wrong place to be relaxed about permissions.
+LOG_FILE="$DATA_DIR/logs/kernl.log"
+[ -f "$LOG_FILE" ] && mv -f "$LOG_FILE" "$LOG_FILE.1"
+: > "$LOG_FILE"
+chmod 0600 "$LOG_FILE"
+exec > >(tee -a "$LOG_FILE") 2>&1
+
 exec "$APP_DIR/bun" "$APP_DIR/mcp-server.js" "$@"
 WRAPPER
 chmod 0755 "$APP_BUNDLE/Contents/MacOS/kernl"

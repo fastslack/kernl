@@ -41,9 +41,28 @@ if "%1"=="--open-when-ready" goto OPEN_WHEN_READY
 
 start "" /b cmd /c ""%~f0" --open-when-ready"
 
+REM Keep a record of the boot.
+REM
+REM logs\ has always been created here and never written to. The kernel logs to
+REM stdout, and when this runs from a shortcut the console closes with the
+REM process — so a launcher that failed to start left nothing behind, and the
+REM only way to see a boot was to already know you could run this from a
+REM terminal. One rotation deep: the log that matters is this boot or the one
+REM before it, and an unbounded file under %LOCALAPPDATA% is its own bug.
+set "LOG_FILE=%DATA_DIR%\logs\kernl.log"
+if exist "%LOG_FILE%" move /y "%LOG_FILE%" "%LOG_FILE%.1" >nul 2>&1
+
 REM Foreground: run the kernel. Console window stays open so the user
 REM can see logs / Ctrl-C to stop.
-"%APP_DIR%bun.exe" "%APP_DIR%mcp-server.js" %*
+REM
+REM cmd has no tee, so the output goes through PowerShell's Tee-Object to stay
+REM visible in the console AND land in the file. The cost is the exit code:
+REM after a pipe, ERRORLEVEL belongs to the last stage, so this reports the
+REM tee's status rather than the kernel's. Nothing consumes that status today —
+REM the console simply closes — and losing it is the cheaper half of the trade
+REM against having no log at all. Redirect instead of piping if that changes,
+REM and accept a console that shows nothing.
+"%APP_DIR%bun.exe" "%APP_DIR%mcp-server.js" %* 2>&1 | powershell -NoProfile -NonInteractive -Command "$input | Tee-Object -FilePath '%LOG_FILE%'"
 exit /b %ERRORLEVEL%
 
 :OPEN_WHEN_READY
