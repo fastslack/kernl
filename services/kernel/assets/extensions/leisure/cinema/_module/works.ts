@@ -58,7 +58,7 @@ export interface WorkCandidateRow {
  * "Family Guy" with the same year. They are not thirty-eight uploads of one
  * thing, and summing their downloads into one row is simply wrong.
  */
-const DEDUPE_EXCLUDED_COLLECTIONS = ["movie_trailers", "movie_trailers_unsorted"];
+export const DEDUPE_EXCLUDED_COLLECTIONS = ["movie_trailers", "movie_trailers_unsorted"];
 
 /**
  * Above this many members, a group is not believed.

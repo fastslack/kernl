@@ -33,6 +33,7 @@
 import { log } from "../../../../../src/core/logger.js";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { DEDUPE_EXCLUDED_COLLECTIONS } from "./works.js";
 
 /** Rows pulled from SQLite per batch. Sized so one batch is a few MB of
  *  parameters — large enough that per-round-trip cost disappears, small
@@ -528,12 +529,93 @@ const facetsProjector: Projector = {
   },
 };
 
+// ── Title-level matches ────────────────────────────────────────────────
+
+/**
+ * What each individual upload was matched to, which the work-level rollup
+ * cannot represent.
+ *
+ * `rebuildWorks` drops trailers from grouping on purpose: a trailer that
+ * claimed its film's identity would inherit that film's rating and ranking,
+ * which is the exact failure the matcher exists to prevent. Correct — under a
+ * model whose only relation is "is a copy of". But the match itself is real
+ * information (a trailer for Nosferatu *is* about Nosferatu) and today it is
+ * discarded entirely: 34k decisions with nowhere to live.
+ *
+ * A graph has no such constraint. `TRAILER_FOR` and `COPY_OF` are different
+ * edges, so both facts can be held at once without either contaminating the
+ * other — a copy-of traversal never sees a trailer, and "everything about this
+ * film" finally can.
+ */
+const matchesProjector: Projector = {
+  entity: "matches",
+  label: "CinemaTitle",
+  async run(db, graph, cursor, limit) {
+    const rows = db
+      .prepare(
+        `SELECT m.identifier, m.qid, m.score, t.collection_json
+           FROM cinema_title_matches m
+           JOIN cinema_titles t ON t.identifier = m.identifier
+          WHERE m.identifier > ?
+            AND m.state IN ('auto','confirmed')
+            AND m.qid <> ''
+            AND t.deleted_at IS NULL
+       ORDER BY m.identifier
+          LIMIT ?`,
+      )
+      .all(cursor, limit) as Array<{
+      identifier: string; qid: string; score: number; collection_json: string;
+    }>;
+    if (rows.length === 0) return { rows: 0, cursor, nodes: 0, rels: 0 };
+
+    const isTrailer = (json: string) =>
+      DEDUPE_EXCLUDED_COLLECTIONS.some((c) => (json || "").includes(`"${c}"`));
+
+    const trailers = rows.filter((r) => isTrailer(r.collection_json))
+      .map((r) => ({ identifier: r.identifier, qid: r.qid, score: r.score }));
+    const copies = rows.filter((r) => !isTrailer(r.collection_json))
+      .map((r) => ({ identifier: r.identifier, qid: r.qid, score: r.score }));
+
+    let rels = 0;
+    if (trailers.length > 0) {
+      await graph.run(
+        `UNWIND $trailers AS m
+         MERGE (t:CinemaTitle {identifier: m.identifier})
+         MERGE (c:CanonicalWork {qid: m.qid})
+         MERGE (t)-[r:TRAILER_FOR]->(c)
+         SET r.score = m.score`,
+        { trailers },
+      );
+      rels += trailers.length;
+    }
+    if (copies.length > 0) {
+      await graph.run(
+        `UNWIND $copies AS m
+         MERGE (t:CinemaTitle {identifier: m.identifier})
+         MERGE (c:CanonicalWork {qid: m.qid})
+         MERGE (t)-[r:COPY_OF]->(c)
+         SET r.score = m.score`,
+        { copies },
+      );
+      rels += copies.length;
+    }
+
+    return {
+      rows: rows.length,
+      cursor: rows[rows.length - 1].identifier,
+      nodes: 0,
+      rels,
+    };
+  },
+};
+
 /** Dependency order — see the module header. */
 export const PROJECTORS: Projector[] = [
   canonicalProjector,
   worksProjector,
   membersProjector,
   facetsProjector,
+  matchesProjector,
 ];
 
 // ── Cursors ────────────────────────────────────────────────────────────
@@ -568,7 +650,10 @@ export function writeCursor(db: SqliteDb, entity: string, cursor: string, projec
  *  rows that changed after a sweep finished. MERGE makes the re-walk
  *  idempotent, so this costs time and nothing else. */
 export function resetCursors(db: SqliteDb): void {
-  db.prepare("UPDATE cinema_graph_cursors SET cursor = '', done = 0, updated_at = ?")
+  // `projected` counts the rows of the current sweep, so it rewinds with the
+  // cursor. Letting it accumulate made it read as "rows in the table" while
+  // actually reporting "rows ever written", which is double after one reset.
+  db.prepare("UPDATE cinema_graph_cursors SET cursor = '', projected = 0, done = 0, updated_at = ?")
     .run(new Date().toISOString());
 }
 

@@ -165,17 +165,53 @@ function qidOf(uri: string): string {
 }
 
 /**
- * Facts for one year.
+ * The work types the corpus is built from.
  *
  * `wdt:P31/wdt:P279* wd:Q11424` would also catch documentaries and animated
  * films filed under subclasses, but the transitive closure is what makes this
  * query time out. The explicit union of the handful of types that matter is
  * both faster and more predictable about what ends up in the corpus.
+ *
+ * Short films (Q24862) and animated short films (Q17517379) were added after
+ * measuring what the first six missed: this catalogue is largely shorts —
+ * newsreels, theatrical cartoons, educational and industrial films — and those
+ * were the uploads with no canonical identity to find. Asking Wikidata which
+ * types it holds for a sample year, restricted to items carrying an IMDb id,
+ * ranked them second and fifth.
+ *
+ * Everything above them in that ranking is episodic television — 858 series
+ * episodes against 80 shorts — and is deliberately left out. An episode is not
+ * a film with copies, and the matcher already has to defend itself against
+ * episodic pile-ups (see MAX_GROUP_SIZE in works.ts); feeding thirty episodes
+ * of one series into the corpus under near-identical titles would manufacture
+ * exactly the ambiguity it exists to refuse.
+ */
+const WORK_TYPES = [
+  "wd:Q11424",    // film
+  "wd:Q93204",    // documentary film
+  "wd:Q202866",   // animated film
+  "wd:Q24869",    // feature film
+  "wd:Q506240",   // television film
+  "wd:Q226730",   // silent film
+  "wd:Q24862",    // short film
+  "wd:Q17517379", // animated short film
+].join(" ");
+
+/**
+ * Bumped whenever WORK_TYPES changes in a way that would put different works in
+ * the corpus. A slice pulled under an older version is not "done" — it is
+ * missing whatever the new definition added — so bumping this re-opens every
+ * slice without anyone having to clear a table by hand.
+ */
+export const CORPUS_VERSION = 2;
+
+/**
+ * Facts for one year.
  */
 function factsQuery(year: number): string {
   return `
     SELECT DISTINCT ?work ?workLabel ?imdb ?directorLabel ?countryLabel ?genreLabel ?duration WHERE {
-      VALUES ?type { wd:Q11424 wd:Q93204 wd:Q202866 wd:Q24869 wd:Q506240 wd:Q226730 }
+      VALUES ?type { ${WORK_TYPES} }
       ?work wdt:P31 ?type ;
             wdt:P577 ?date .
       FILTER(YEAR(?date) = ${year})
@@ -194,7 +230,7 @@ function aliasQuery(year: number): string {
   const langs = ALIAS_LANGS.map((l) => `"${l}"`).join(", ");
   return `
     SELECT DISTINCT ?work ?label WHERE {
-      VALUES ?type { wd:Q11424 wd:Q93204 wd:Q202866 wd:Q24869 wd:Q506240 wd:Q226730 }
+      VALUES ?type { ${WORK_TYPES} }
       ?work wdt:P31 ?type ;
             wdt:P577 ?date .
       FILTER(YEAR(?date) = ${year})
@@ -366,10 +402,16 @@ export function persistSlice(
  */
 export function pendingSlices(db: SqliteDb, currentYear: number): string[] {
   const rows = db.prepare(
-    `SELECT slice, status, attempts FROM cinema_canonical_sync`,
-  ).all() as Array<{ slice: string; status: string; attempts: number }>;
+    `SELECT slice, status, attempts, corpus_version FROM cinema_canonical_sync`,
+  ).all() as Array<{ slice: string; status: string; attempts: number; corpus_version: number }>;
 
-  const done = new Set(rows.filter((r) => r.status === "done").map((r) => r.slice));
+  // Done under an OLDER corpus definition is not done: the slice is missing
+  // whatever the current WORK_TYPES added since. Those rows fall back into the
+  // pending queue on their own.
+  const done = new Set(
+    rows.filter((r) => r.status === "done" && r.corpus_version === CORPUS_VERSION)
+      .map((r) => r.slice),
+  );
   // Given up on. Still failing after this many tries is a property of the
   // slice, not of the moment, and continuing to owe it keeps the corpus phase
   // open forever — which blocks matching, the part that matters.
@@ -404,11 +446,13 @@ export async function syncSlice(db: SqliteDb, slice: string): Promise<SliceResul
   // crosses MAX_SLICE_ATTEMPTS and stops being owed. A success resets it,
   // because a slice that recovers is not a slice with a history.
   const mark = db.prepare(`
-    INSERT INTO cinema_canonical_sync (slice, works, aliases, status, error, updated_at, attempts)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO cinema_canonical_sync
+      (slice, works, aliases, status, error, updated_at, attempts, corpus_version)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ${CORPUS_VERSION})
     ON CONFLICT(slice) DO UPDATE SET
       works = excluded.works, aliases = excluded.aliases,
       status = excluded.status, error = excluded.error, updated_at = excluded.updated_at,
+      corpus_version = excluded.corpus_version,
       attempts = CASE
         WHEN excluded.status = 'done' THEN 0
         ELSE cinema_canonical_sync.attempts + 1

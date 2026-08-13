@@ -113,10 +113,7 @@ export async function ensureExtensionPackages(args: {
   const names = Object.keys(declared);
   if (!names.length) return { installPath, installed: [] };
 
-  const missing = names.filter((n) => !isResolvable(n, installPath));
-  if (!missing.length) return { installPath, installed: [] };
-
-  log.info(`${slug}: ${missing.length} package(s) to fetch: ${missing.join(", ")}`);
+  if (!names.some((n) => !isResolvable(n, installPath))) return { installPath, installed: [] };
 
   // Copy out of the read-only bundle so node_modules can sit beside the code.
   // Already-writable extensions (anything installed from the marketplace) stay
@@ -130,9 +127,20 @@ export async function ensureExtensionPackages(args: {
     log.info(`${slug}: materialized into ${target}`);
   }
 
-  // Only the missing ones. Re-resolving what already works would drag the
+  // Ask again, here. Resolution walks up the directory tree, and the two
+  // places share no ancestry: the bundle sits inside the payload's
+  // node_modules, so everything that ships with it resolves from there and
+  // never looks missing, while <data>/extensions/<slug> has nothing above it.
+  // Deciding at the source leaves exactly those packages out of the copy — the
+  // extension activates, and the next boot dies on its first bare import.
+  const needed = names.filter((n) => !isResolvable(n, target));
+  if (!needed.length) return { installPath: target, installed: [] };
+
+  log.info(`${slug}: ${needed.length} package(s) to fetch: ${needed.join(", ")}`);
+
+  // Only the ones missing here. Re-resolving what already works would drag the
   // whole set over the network for one absent package.
-  const deps = Object.fromEntries(missing.map((n) => [n, declared[n]]));
+  const deps = Object.fromEntries(needed.map((n) => [n, declared[n]]));
   writeFileSync(
     join(target, "package.json"),
     JSON.stringify({ name: `kernl-ext-${slug}`, version: "0.0.0", private: true, dependencies: deps }, null, 2),
@@ -143,18 +151,21 @@ export async function ensureExtensionPackages(args: {
     await runBunInstall(target, timeoutMs);
   } catch (err) {
     throw new Error(
-      `${slug} needs ${missing.join(", ")} and they could not be installed: ` +
+      `${slug} needs ${needed.join(", ")} and they could not be installed: ` +
         `${err instanceof Error ? err.message : err}`,
     );
   }
 
   // Trust nothing: a zero exit code with an unresolvable package still leaves
   // the extension broken at first use, which is the failure being prevented.
-  const stillMissing = missing.filter((n) => !isResolvable(n, target));
+  // Checked against everything declared, not just what was fetched — the
+  // install rewrites node_modules here, and the point is that the extension
+  // can import all of it from where it is about to be loaded.
+  const stillMissing = names.filter((n) => !isResolvable(n, target));
   if (stillMissing.length) {
     throw new Error(`${slug}: ${stillMissing.join(", ")} still cannot be resolved after installing`);
   }
 
-  log.info(`${slug}: installed ${missing.join(", ")}`);
-  return { installPath: target, installed: missing };
+  log.info(`${slug}: installed ${needed.join(", ")}`);
+  return { installPath: target, installed: needed };
 }

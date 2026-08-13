@@ -26,6 +26,8 @@ import type { ModuleContext } from "../src/core/types.js";
 import { EventBus } from "../src/core/event-bus.js";
 import { createExtensionsModule } from "../src/modules/extensions/index.js";
 import { makeTempDir } from "../src/modules/extensions/bundle.js";
+import { ensureExtensionPackages, isResolvable } from "../src/modules/extensions/ensure-packages.js";
+import type { ExtensionManifest } from "../src/modules/extensions/schema.js";
 import type { ExtensionService } from "../src/modules/extensions/service.js";
 
 const SDK = "@example/heavy-sdk";
@@ -243,4 +245,69 @@ describe("refreshFromDirectory and materialized extensions", () => {
     expect(service.get(row.id)?.version).toBe("2.0.0");
     expect(service.get(row.id)?.status).toBe("active");
   });
+});
+
+describe("ensureExtensionPackages", () => {
+  // Two roots, deliberately. Sharing one puts the bundle's node_modules in the
+  // destination's ancestry, the destination resolves what it has no business
+  // resolving, and the bug this covers becomes invisible.
+  let bundleRoot: string;
+  let dataRoot: string;
+
+  beforeEach(async () => {
+    bundleRoot = await makeTempDir("extprov-bundle");
+    dataRoot = await makeTempDir("extprov-data");
+  });
+
+  afterEach(async () => {
+    await rm(bundleRoot, { recursive: true, force: true }).catch(() => {});
+    await rm(dataRoot, { recursive: true, force: true }).catch(() => {});
+  });
+
+  /** A local package `bun install` can satisfy without a network. */
+  async function localPackage(name: string): Promise<string> {
+    const dir = join(bundleRoot, "registry", name);
+    await mkdir(dir, { recursive: true });
+    await writeFile(join(dir, "package.json"), JSON.stringify({ name, version: "1.0.0" }));
+    return `file:${dir}`;
+  }
+
+  it(
+    "re-resolves at the destination, not at the bundle it came from",
+    async () => {
+      const manifest = {
+        ...manifestFor({}),
+        backend: {
+          entry: "backend/entry.js",
+          packages: {
+            "shipped-lib": await localPackage("shipped-lib"),
+            "heavy-sdk": await localPackage("heavy-sdk"),
+          },
+        },
+      } as unknown as ExtensionManifest;
+
+      // The shipped bundle sits inside the payload's node_modules, the way
+      // assets/extensions/<slug> does inside the .app. `shipped-lib` resolves
+      // by walking up out of it; only `heavy-sdk` looks missing.
+      const bundle = join(bundleRoot, "assets", "extensions", "parked");
+      await writeExtensionDir(bundle, manifest);
+      await plantPackage(bundleRoot, "shipped-lib");
+
+      const extensionsDir = join(dataRoot, "extensions");
+      const result = await ensureExtensionPackages({
+        manifest,
+        slug: "parked",
+        installPath: bundle,
+        extensionsDir,
+      });
+
+      expect(result.installPath).toBe(join(extensionsDir, "parked"));
+      // The copy has no such ancestry, so what resolved at the bundle has to
+      // be fetched again here — this is the one that used to be left behind,
+      // and the extension died on its first bare import at the next boot.
+      expect(isResolvable("shipped-lib", result.installPath)).toBe(true);
+      expect(isResolvable("heavy-sdk", result.installPath)).toBe(true);
+    },
+    60_000,
+  );
 });

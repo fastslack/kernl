@@ -25,6 +25,8 @@ import type { CinemaSubsService, PublisherTrust } from "./subs-service.js";
 import type { DiscoveryRegistry } from "./discovery/registry.js";
 import type { EmbedRunner } from "./embed-runner.js";
 import type { GraphProjectionRunner } from "./graph-projection-runner.js";
+import type { GraphResolveRunner } from "./graph-resolve-runner.js";
+import { clearStaleProposalStamps, resolveComponents, revertGraphProposals } from "./graph-resolve.js";
 import type { TranslateRunner } from "./translate-runner.js";
 import type { CanonicalService } from "./canonical/service.js";
 import type { CanonicalRunner, CanonicalPhase } from "./canonical/runner.js";
@@ -82,6 +84,7 @@ export function registerCinemaRoutes(
   mediaRunnerRef: () => MediaProbeRunner | null = () => null,
   sqliteRef: () => SqliteDb | null = () => null,
   graphProjectionRunnerRef: () => GraphProjectionRunner | null = () => null,
+  graphResolveRunnerRef: () => GraphResolveRunner | null = () => null,
 ): void {
   // ── GET /api/cinema/titles ──────────────────────────────────────
   server.get("/api/cinema/titles", async (req, res) => {
@@ -489,6 +492,68 @@ export function registerCinemaRoutes(
       if (!runner) return server.json(res, 503, { error: "graph projection runner not wired" });
       const snap = await runner.stop();
       server.json(res, 200, snap);
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── Graph-assisted identity recovery ─────────────────────────────
+  // GET  /api/cinema/graph/resolve/status
+  // POST /api/cinema/graph/resolve/start      { batch_size?, reset? }
+  // POST /api/cinema/graph/resolve/stop
+  // POST /api/cinema/graph/resolve/components  run WCC, send proposals to review
+  // POST /api/cinema/graph/resolve/revert      undo every graph proposal
+  server.get("/api/cinema/graph/resolve/status", (_req, res) => {
+    try {
+      const runner = graphResolveRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "resolve runner not wired" });
+      server.json(res, 200, runner.snapshot());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/start", async (req, res) => {
+    try {
+      const runner = graphResolveRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "resolve runner not wired" });
+      const body = await server.parseBody<{ batch_size?: number; reset?: boolean }>(req);
+      server.json(res, 200, runner.start({ batchSize: body?.batch_size, reset: body?.reset === true }));
+    } catch (err) {
+      log.error("cinema: resolve start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/stop", async (_req, res) => {
+    try {
+      const runner = graphResolveRunnerRef();
+      if (!runner) return server.json(res, 503, { error: "resolve runner not wired" });
+      server.json(res, 200, await runner.stop());
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/components", async (_req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "sqlite not wired" });
+      const t0 = Date.now();
+      const result = await resolveComponents(db, graphRef());
+      server.json(res, 200, { ...result, duration_ms: Date.now() - t0 });
+    } catch (err) {
+      log.error("cinema: component resolution failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  server.post("/api/cinema/graph/resolve/revert", (_req, res) => {
+    try {
+      const db = sqliteRef();
+      if (!db) return server.json(res, 503, { error: "sqlite not wired" });
+      const reverted = revertGraphProposals(db);
+      server.json(res, 200, { reverted, stamps_cleared: clearStaleProposalStamps(db) });
     } catch (err) {
       server.json(res, 500, { error: extractMessage(err) });
     }

@@ -14,6 +14,7 @@ import { cinemaCanonMigration } from "./013_canon.js";
 import { cinemaSyncAttemptsMigration } from "./014_sync_attempts.js";
 import { cinemaFriendsVisibilityMigration } from "./015_friends_visibility.js";
 import { cinemaGraphProjectionMigration } from "./016_graph_projection.js";
+import { cinemaCorpusVersionMigration } from "./017_corpus_version.js";
 
 export const cinemaMigrations: Migration[] = [
   {
@@ -105,4 +106,5 @@ export const cinemaMigrations: Migration[] = [
   cinemaSyncAttemptsMigration,
   cinemaFriendsVisibilityMigration,
   cinemaGraphProjectionMigration,
+  cinemaCorpusVersionMigration,
 ];
