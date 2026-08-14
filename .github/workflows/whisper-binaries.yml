@@ -313,12 +313,39 @@ jobs:
             > /tmp/smoke.txt 2>&1
           echo "── loaded backends ──"
           grep "load_backend: loaded" /tmp/smoke.txt || true
-          # A CPU backend always exists. Demanding a second one is what proves
-          # the GPU library shipped with its dependencies intact.
-          if [ "$(grep -c 'load_backend: loaded' /tmp/smoke.txt)" -lt 2 ]; then
-            echo "FAIL: only the CPU backend loaded — a GPU backend is missing a dependency" >&2
+
+          # The bundle has to TRANSCRIBE. That is what proves the RUNPATH and
+          # the flat layout are right — a broken one dies at exit 127 long
+          # before it reaches audio.
+          grep -qi "ask not what your country" /tmp/smoke.txt || {
+            echo "FAIL: the bundle ran but produced no transcript" >&2
             cat /tmp/smoke.txt >&2
             exit 1
+          }
+
+          # Every shipped library must resolve its dependencies.
+          #
+          # An earlier version of this demanded that a GPU backend LOAD, on the
+          # theory that a CPU-only result meant a missing dependency. That is
+          # wrong on a CI runner, which has no GPU at all: the Vulkan backend
+          # cannot initialise for want of a device, and the check failed a
+          # perfectly good build. macOS and Windows passed only because their
+          # runners happen to expose one.
+          #
+          # The real failure being guarded against is a library shipped without
+          # something it links against — libnccl was exactly that, and
+          # GGML_BACKEND_DL skips such a backend SILENTLY. Resolving the links
+          # detects it without needing hardware CI does not have.
+          if [ "${{ runner.os }}" = "Linux" ]; then
+            MISSING=0
+            for so in out/whisper/*.so; do
+              if ldd "$so" 2>/dev/null | grep -q "not found"; then
+                echo "FAIL: $so has unresolved dependencies:" >&2
+                ldd "$so" | grep "not found" >&2
+                MISSING=1
+              fi
+            done
+            [ "$MISSING" -eq 0 ] || exit 1
           fi
 
       - name: Package
