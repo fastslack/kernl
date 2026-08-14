@@ -1,0 +1,26 @@
+[
+  {
+    "name": "The rail, the header tabs and the settings fields all render in Spanish",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:3086/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','es'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:3086/settings" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "3000" },
+      { "comment": "The three surfaces the operator reported: left rail groups, header tabs, and the core settings field labels. leakedEnglish must be empty.", "type": "evaluate", "value": "const rail=[...document.querySelectorAll('.sidebar .nav-label')].map(n=>n.textContent.trim()); const tabs=[...document.querySelectorAll('.tabrail-tab')].map(n=>n.textContent.trim()); const fields=[...document.querySelectorAll('.fld-lang-label, .st-fld-label, label')].map(n=>n.textContent.trim()).filter(Boolean).slice(0,12); const body=document.body.innerText; JSON.stringify({ rail, tabs, groupChip: document.querySelector('.header-nav-group')?.textContent?.trim(), search: document.querySelector('.search-label')?.textContent?.trim(), leakedEnglish: ['Home','Work','Wellness','Leisure','Tools','Settings','Extensions','Notifications','Timezone','Default language','Search'].filter(s=>body.includes(s)) })" },
+      { "type": "screenshot", "value": "shell-i18n-es" }
+    ]
+  },
+  {
+    "name": "Switching the shell back to English restores the English labels",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:3086/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','en'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:3086/settings" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "3000" },
+      { "type": "evaluate", "value": "JSON.stringify({ rail: [...document.querySelectorAll('.sidebar .nav-label')].map(n=>n.textContent.trim()), tabs: [...document.querySelectorAll('.tabrail-tab')].map(n=>n.textContent.trim()), search: document.querySelector('.search-label')?.textContent?.trim() })" },
+      { "type": "screenshot", "value": "shell-i18n-en" }
+    ]
+  }
+]
