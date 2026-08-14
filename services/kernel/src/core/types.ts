@@ -321,9 +321,13 @@ export interface DashboardChannel {
 }
 
 /** Navigation item for the frontend sidebar */
+export type LocalizedText = string | Record<string, string>;
+
 export interface DashboardNavItem {
   id: string;
-  label: string;
+  /** Plain string, or a `{ locale: text }` map when the manifest localizes it.
+   *  The dashboard resolves it; the kernel only carries it. */
+  label: LocalizedText;
   icon: string;
   group: string;
   order?: number;
@@ -352,7 +356,8 @@ export interface DashboardNavItem {
 /** Top-level sidebar group. Extensions can contribute new groups dynamically. */
 export interface DashboardNavGroup {
   id: string;
-  label: string;
+  /** Plain string, or a `{ locale: text }` map — see DashboardNavItem.label. */
+  label: LocalizedText;
   icon: string;
   order?: number;
   /** If true, clicking the group header opens this specific view instead of the first. */

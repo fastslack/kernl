@@ -1,3 +1,5 @@
+import type { LocalizedText } from "../extensions/types.js";
+
 export type SettingType = "string" | "number" | "boolean" | "secret" | "json";
 export type SettingCategory =
   | "general"
@@ -26,8 +28,15 @@ export interface AppSetting {
 /** Catalog entry: defines metadata for every known env-var / setting */
 export interface SettingDef {
   key: string;
-  label: string;
-  description: string;
+  /**
+   * Either a plain string or a `{ locale: text }` map — the same shape
+   * extension-contributed settings already used (`localizedTextSchema`), and
+   * the one the dashboard's resolveText() has always accepted. The core
+   * catalog shipped bare English while the extension fields beside it were
+   * translatable, so a Spanish install rendered its own settings in English.
+   */
+  label: LocalizedText;
+  description: LocalizedText;
   category: SettingCategory;
   type: SettingType;
   sensitive?: boolean;

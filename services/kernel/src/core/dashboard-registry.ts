@@ -339,7 +339,11 @@ export class DashboardRegistry {
               }
               const item: DashboardNavItem = {
                 id,
-                label: String(raw.label),
+                // NOT String(): a localized label is a { locale: text } map and
+                // stringifying it yields "[object Object]" on the user's dial.
+                label: (typeof raw.label === "object" && raw.label !== null
+                  ? (raw.label as Record<string, string>)
+                  : String(raw.label)),
                 icon: String(raw.icon),
                 group: String(raw.group),
                 order: typeof raw.order === "number" ? raw.order : undefined,

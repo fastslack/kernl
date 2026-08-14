@@ -190,7 +190,10 @@ export interface IntegrityBlock {
  * what an extension is, provides, and requires.
  */
 /** Localizable text: plain string or a { locale: text } map (e.g. { es, en }). */
-export type LocalizedText = string | Record<string, string>;
+// Single definition lives in core/types.ts — re-exported so the extension
+// surface keeps naming it without a second, drifting copy.
+import type { LocalizedText } from "../../core/types.js";
+export type { LocalizedText };
 
 /** A single settings field contributed by an extension. */
 export interface ExtensionSettingsField {
