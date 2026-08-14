@@ -1,6 +1,7 @@
 import { describe, it, expect } from "bun:test";
 import { DashboardRegistry } from "../src/core/dashboard-registry.js";
 import type { KernelModule, ExtensibleModule, DashboardDescriptor, ModuleContext } from "../src/core/types.js";
+import type { ExtensionServiceLike } from "../src/core/dashboard-registry.js";
 
 // ── Helpers ────────────────────────────────────────────
 
@@ -120,5 +121,99 @@ describe("DashboardRegistry", () => {
 
     // Last one wins
     expect(reg.getChannelNames()).toEqual(["shared"]);
+  });
+});
+
+/*
+ * A view id is the URL segment, and the dashboard maps each one to exactly one
+ * group (`viewToGroup`). Letting the same id land in two groups therefore can
+ * never render correctly: the tab appears on both dials, but only one of them
+ * can own the view, so on the other it never highlights.
+ *
+ * This is not hypothetical — the torrents extension declared `torrents` under
+ * `people` from its module descriptor and under `leisure` from its manifest,
+ * and both survived a dedup keyed on (id, group).
+ */
+describe("DashboardRegistry — one view id, one group", () => {
+  function extStub(manifests: Array<Record<string, unknown>>): ExtensionServiceLike {
+    return {
+      list: () =>
+        manifests.map((m, i) => ({
+          id: `ext${i}`,
+          slug: String(m.slug ?? `ext${i}`),
+          status: "active",
+          manifest_json: JSON.stringify(m),
+        })),
+    };
+  }
+
+  it("keeps the module's nav item when an extension manifest claims the same id for another group", () => {
+    const reg = new DashboardRegistry();
+    reg.registerModule(
+      makeExtensibleModule("torrents", {
+        nav: [{ id: "torrents", label: "Torrents", icon: "🧲", group: "people", order: 6 }],
+      }),
+    );
+
+    const manifest = reg.getManifest(
+      extStub([
+        {
+          slug: "torrents",
+          frontend: {
+            navItems: [{ id: "torrents", label: "Torrents", icon: "🧲", group: "leisure", order: 40 }],
+          },
+        },
+      ]),
+    );
+
+    const torrents = manifest.navItems.filter((i) => i.id === "torrents");
+    expect(torrents).toHaveLength(1);
+    expect(torrents[0].group).toBe("people"); // first registration wins
+  });
+
+  it("does not let two extensions claim one view id for different groups", () => {
+    const reg = new DashboardRegistry();
+    const manifest = reg.getManifest(
+      extStub([
+        { slug: "a", frontend: { navItems: [{ id: "shared", label: "A", icon: "①", group: "leisure" }] } },
+        { slug: "b", frontend: { navItems: [{ id: "shared", label: "B", icon: "②", group: "people" }] } },
+      ]),
+    );
+
+    const shared = manifest.navItems.filter((i) => i.id === "shared");
+    expect(shared).toHaveLength(1);
+    expect(shared[0].group).toBe("leisure");
+  });
+
+  it("does not let two in-process modules claim one view id", () => {
+    const reg = new DashboardRegistry();
+    reg.registerModule(
+      makeExtensibleModule("a", { nav: [{ id: "shared", label: "A", icon: "①", group: "leisure" }] }),
+    );
+    reg.registerModule(
+      makeExtensibleModule("b", { nav: [{ id: "shared", label: "B", icon: "②", group: "people" }] }),
+    );
+
+    const shared = reg.getManifest().navItems.filter((i) => i.id === "shared");
+    expect(shared).toHaveLength(1);
+    expect(shared[0].group).toBe("leisure");
+  });
+
+  it("still allows distinct ids inside the same group", () => {
+    const reg = new DashboardRegistry();
+    const manifest = reg.getManifest(
+      extStub([
+        {
+          slug: "a",
+          frontend: {
+            navItems: [
+              { id: "one", label: "One", icon: "①", group: "leisure" },
+              { id: "two", label: "Two", icon: "②", group: "leisure" },
+            ],
+          },
+        },
+      ]),
+    );
+    expect(manifest.navItems.map((i) => i.id).sort()).toEqual(["one", "two"]);
   });
 });
