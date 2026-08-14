@@ -40,6 +40,7 @@
   import NewOfficeModal from './NewOfficeModal.svelte';
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
+  import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
 
   // Tabs contribuidos por extensiones (declarados en su manifest, expuestos por
@@ -7938,6 +7939,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                   </div>
                   <div class="or-card-body">{r.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{r.text.length > 140 ? '...' : ''}</div>
                 </button>
+                <!-- The 140-char preview cuts exactly where the kernel says how
+                     to fix it, so the fix travels as a chip instead of prose.
+                     Outside the card: an <a> inside a <button> is invalid. -->
+                {#if isLlmConfigError(r.text)}
+                  <a class="llm-fix llm-fix-row" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
+                {/if}
               {/if}
 
               <!-- Recent activity (handoff + completed, last 5) -->
@@ -8054,6 +8061,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                   </div>
                   <div class="or-card-body">{report.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{report.text.length > 140 ? '...' : ''}</div>
                 </button>
+                {#if isLlmConfigError(report.text)}
+                  <a class="llm-fix llm-fix-row" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
+                {/if}
               {/each}
             </div>
           {/if}
@@ -8111,6 +8121,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           <button class="rm-action" on:click={() => openReport && copy(displayReportText, 'report-' + openReport.ts)}>
             {copiedKey === 'report-' + openReport?.ts ? '✓ copied' : '⧉ Copy full text'}
           </button>
+          {#if isLlmConfigError(displayReportText)}
+            <a class="rm-action rm-action-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
+          {/if}
           <button class="rm-action" on:click={() => {
             if (openReport) {
               selectedAgent = openReport.agentId;
@@ -8914,6 +8927,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                     </div>
                     {#if msg.role === 'agent'}
                       <div class="chat-text ip-out-md" on:click={handleOutputClick} role="presentation">{@html formatRunOutput(msg.text)}</div>
+                      {#if isLlmConfigError(msg.text)}
+                        <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
+                      {/if}
                     {:else}
                       <span class="chat-text">{msg.text}</span>
                     {/if}
@@ -8938,6 +8954,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
               <div class="chat-err" role="alert">
                 <span class="chat-err-ico" aria-hidden="true">⚠</span>
                 <span>{chatError}</span>
+                {#if isLlmConfigError(chatError)}
+                  <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
+                {/if}
               </div>
             {/if}
 
@@ -10347,6 +10366,23 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .chat-err-ico{flex-shrink:0}
 
+  /* ── "Configure LLM" chip ──
+     A run that dies with no provider configured is not a report, it is a task.
+     The kernel already names the screen in prose ("Settings → AI"); this is
+     that sentence as something you can click, wherever the failure surfaces:
+     the chat error banner, the failed reply, and the office error card. */
+  .llm-fix{
+    flex-shrink:0;align-self:center;
+    padding:3px 9px;border-radius:999px;text-decoration:none;white-space:nowrap;
+    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
+    background:rgba(201,168,76,.10);
+    border:1px solid rgba(201,168,76,.45);
+    color:#d4a84b;transition:background .12s,border-color .12s;
+  }
+  .llm-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b}
+  /* Under a card rather than beside a message: own line, indented to the card. */
+  .llm-fix-row{display:inline-block;align-self:flex-start;margin:6px 0 2px 12px}
+
   /* ── Script agents ──
      The tab stays, the input does not. Same call as the office environment:
      an affordance that cannot work is explained, not silently removed. */
@@ -11375,6 +11411,13 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     color:#c0c5d8;cursor:pointer;transition:all .12s;
   }
   .rm-action:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.4);color:#fff}
+  /* Same row, same shape — but it is a link, and it is the one action that
+     fixes the cause rather than routing the symptom somewhere. */
+  .rm-action-fix{
+    display:inline-flex;align-items:center;text-decoration:none;
+    background:rgba(201,168,76,.10);border-color:rgba(201,168,76,.45);color:#d4a84b;
+  }
+  .rm-action-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b;color:#f0d9a0}
   .rm-action:disabled{opacity:.5;cursor:not-allowed}
 
   /* Send-to-fixer split button + dropdown */
