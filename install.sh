@@ -57,6 +57,22 @@ fi
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 
+# Pick the asset by matching what the release actually published, rather than
+# rebuilding its filename from a template.
+#
+# The template version broke on the very first real release: packages carry a
+# package-release number the version string does not know about, so
+# `kernl-0.2.0.rpm` was really `kernl-0.2.0-1.x86_64.rpm` and the download
+# 404'd. Anything that reconstructs a name has to be kept in step with the
+# packagers forever; matching a suffix does not.
+pick_asset() {
+  printf '%s' "$JSON" \
+    | tr ',' '\n' \
+    | sed -n 's/.*"browser_download_url"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    | grep -i -- "$1" \
+    | head -1
+}
+
 case "$OS" in
   Linux)
     case "$ARCH" in
@@ -66,17 +82,17 @@ case "$OS" in
     # Prefer the packaging the machine already understands, so updates and
     # removal go through the tool that owns /opt/kernl.
     if command -v dpkg >/dev/null 2>&1; then
-      ASSET="kernl_${VERSION}_amd64.deb"; KIND="deb"
+      URL="$(pick_asset '_amd64\.deb$')"; KIND="deb"
     elif command -v rpm >/dev/null 2>&1; then
-      ASSET="kernl-${VERSION}.rpm"; KIND="rpm"
+      URL="$(pick_asset '\.x86_64\.rpm$')"; KIND="rpm"
     else
       die "no dpkg or rpm found. Grab a package from https://github.com/$REPO/releases/latest"
     fi
     ;;
   Darwin)
     case "$ARCH" in
-      arm64) ASSET="Kernl-${VERSION}-arm64-macos.tar.gz" ;;
-      x86_64) ASSET="Kernl-${VERSION}-x64-macos.tar.gz" ;;
+      arm64)  URL="$(pick_asset 'arm64-macos\.tar\.gz$')" ;;
+      x86_64) URL="$(pick_asset 'x64-macos\.tar\.gz$')" ;;
       *) die "no macOS build for $ARCH." ;;
     esac
     KIND="macos"
@@ -87,7 +103,9 @@ case "$OS" in
     ;;
 esac
 
-URL="https://github.com/$REPO/releases/download/$TAG/$ASSET"
+[ -n "${URL:-}" ] || die "release $TAG has no build for this platform.
+    See https://github.com/$REPO/releases/tag/$TAG"
+ASSET="${URL##*/}"
 TMP="$(mktemp -d)"
 # shellcheck disable=SC2064
 trap "rm -rf '$TMP'" EXIT INT TERM
