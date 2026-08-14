@@ -131,6 +131,16 @@ export class ReactiveEngine {
         completed_at: isoNow(),
       });
 
+      // Feed the circuit breaker. Event-triggered runs used to skip it
+      // entirely, so an agent that only ever fires on events could fail
+      // identically forever without tripping — the breaker only saw the
+      // scheduler's cron paths and the executor's builtin short-circuit.
+      this.service.recordRunOutcome(agent.id, {
+        ok: result.status === "completed",
+        error: result.error,
+        run_id: run.id,
+      });
+
       this.events.emit("agent.run.completed", {
         run_id: run.id,
         agent_id: agent.id,
@@ -147,6 +157,10 @@ export class ReactiveEngine {
         error: errorMsg,
         completed_at: isoNow(),
       });
+
+      // A throw counts against the breaker exactly like a returned failure —
+      // from the operator's side both are "this agent did not work".
+      this.service.recordRunOutcome(agent.id, { ok: false, error: errorMsg, run_id: run.id });
 
       this.events.emit("agent.run.failed", {
         run_id: run.id,
