@@ -440,7 +440,7 @@ export function cinemaAgentDrivers(deps: CinemaDriverDeps): AgentDriver[] {
               vtt_path: vttPath,
               sha256: meta.key,
               size_bytes: 0, // file size — could stat() but not load-bearing
-              webseed_url: publicBase ? `${publicBase}/api/torrents/subs/file?key=${meta.key}` : "",
+              webseed_url: publicBase ? `${publicBase}/api/cinema/media/subs/file?key=${meta.key}` : "",
               manifest: { auto_published_at: new Date().toISOString() },
             });
             recorded++;
