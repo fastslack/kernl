@@ -74,6 +74,12 @@
     // How long the kernel lets a run go. The chat waits on the agent's own
     // budget instead of a hardcoded one.
     timeout_ms?: number;
+    // Circuit-breaker state, written by AgentService.recordRunOutcome() when
+    // the kernel stops an agent that keeps failing. `active: 0` alone reads the
+    // same as a pause the operator asked for; the stamp is what separates them.
+    consecutive_failures?: number;
+    auto_paused_at?: string;
+    auto_pause_reason?: string;
   }> = [];
   export let chains: Array<{
     id: string; source_agent_id: string; target_agent_id: string;
@@ -4866,6 +4872,23 @@
   // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps/Repos
   // office? If so, offer a deep-link to the paid DevOps control panel (/devops).
   $: selDevopsOffice = !!selData && /^(devops|repos)/i.test((flows.find(f => f.id === selData.flow_id)?.name) || '');
+  // The circuit breaker in AgentService.recordRunOutcome() stamps these three
+  // when it stops an agent itself. `active === 0` alone cannot tell that apart
+  // from a pause the operator asked for, so key the distinction on the stamp.
+  $: selAutoPaused = !!selData && selData.active !== 1 && !!(selData.auto_paused_at || '');
+  $: selAutoPausedAgo = selAutoPaused ? sinceLabel(selData?.auto_paused_at ?? '') : '';
+
+  /** "3h ago" / "2d ago" — coarse on purpose; the exact stamp is in the title. */
+  function sinceLabel(iso: string): string {
+    const t = Date.parse(iso || '');
+    if (!Number.isFinite(t)) return '';
+    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+    if (s < 90) return 'just now';
+    if (s < 3600) return `${Math.round(s / 60)}m ago`;
+    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
+    return `${Math.round(s / 86400)}d ago`;
+  }
+
   $: selStats = selectedAgent ? stats[selectedAgent] : null;
   $: selChains = selectedAgent ? chains.filter(c => c.source_agent_id === selectedAgent || c.target_agent_id === selectedAgent) : [];
   $: selFlow = selData ? flows.find(f => f.id === selData.flow_id) : null;
@@ -8241,10 +8264,17 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
            Resume change, so it belongs with them and not floating in the body. -->
       <div class="ip-actions">
         <span class="ip-state" class:ip-state-on={selData.active === 1} class:ip-state-off={selData.active !== 1}
+              class:ip-state-tripped={selAutoPaused}
               title={selData.active === 1
                 ? 'Schedule and event triggers are live'
-                : 'Paused — schedule and triggers are off. Manual runs still work.'}>
-          <span class="led" class:on={selData.active === 1}></span>{selData.active ? 'active' : 'paused'}
+                : selAutoPaused
+                  ? `Auto-paused after ${selData.consecutive_failures} consecutive failures. Resume clears the counter.`
+                  : 'Paused — schedule and triggers are off. Manual runs still work.'}>
+          <span class="led" class:on={selData.active === 1}></span>{selData.active
+            ? 'active'
+            : selAutoPaused
+              ? 'auto-paused'
+              : 'paused'}
         </span>
         <button class="ip-btn ip-btn-primary" on:click={startAgent} disabled={starting} title={selData.active !== 1 ? 'Manual run — overrides pause' : 'Run this agent now'}>
           <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
@@ -8283,6 +8313,26 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           <span class="ip-start-msg" class:ok={startMsg.startsWith('✓')} class:err={startMsg.startsWith('✗')} class:pause={startMsg.startsWith('⏸')}>{startMsg}</span>
         {/if}
       </div>
+
+      <!-- Why the breaker tripped. The state chip above can only say "paused",
+           which reads identically to a pause the operator asked for — so an
+           agent the kernel stopped on its own looked like one someone stopped
+           on purpose, and the reason it stopped was never on screen at all. -->
+      {#if selAutoPaused}
+        <div class="ip-tripped" role="status">
+          <span class="ip-tripped-ico" aria-hidden="true">⛔</span>
+          <div class="ip-tripped-body">
+            <span class="ip-tripped-head">
+              Auto-paused after {selData.consecutive_failures} consecutive failures
+              {#if selAutoPausedAgo}<span class="ip-tripped-when">· {selAutoPausedAgo}</span>{/if}
+            </span>
+            {#if selData.auto_pause_reason}
+              <pre class="ip-tripped-why">{selData.auto_pause_reason}</pre>
+            {/if}
+            <span class="ip-tripped-hint">Resume re-enables the schedule and clears the counter.</span>
+          </div>
+        </div>
+      {/if}
 
       <!-- Tabs -->
       <div class="ip-tabs">
@@ -9860,6 +9910,28 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-state-on{color:#78dc8c}
   .ip-state-off{color:#fbbf24}
+  /* An agent the kernel stopped reads as a fault, not as a warning: the
+     operator did not choose this state and something upstream is broken. */
+  .ip-state-tripped{color:#f87171}
+
+  .ip-tripped{
+    display:flex; gap:9px; align-items:flex-start;
+    margin:8px 0 0; padding:9px 11px;
+    background:rgba(248,113,113,.08);
+    border:1px solid rgba(248,113,113,.28);
+    border-radius:8px;
+  }
+  .ip-tripped-ico{font-size:13px; line-height:1.3; flex:none}
+  .ip-tripped-body{display:flex; flex-direction:column; gap:4px; min-width:0}
+  .ip-tripped-head{font-size:11.5px; font-weight:600; color:#f87171}
+  .ip-tripped-when{font-weight:400; opacity:.75}
+  .ip-tripped-why{
+    margin:0; padding:6px 8px; max-height:88px; overflow:auto;
+    font-family:var(--font-mono); font-size:10.5px; line-height:1.45;
+    white-space:pre-wrap; word-break:break-word;
+    color:var(--text-2); background:rgba(0,0,0,.28); border-radius:5px;
+  }
+  .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
   .ip-state .led{
     width:6px;height:6px;border-radius:50%;
     background:#fbbf24;

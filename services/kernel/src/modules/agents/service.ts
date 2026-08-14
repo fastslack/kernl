@@ -1793,6 +1793,7 @@ export class AgentService {
     options: Array<{ label: string; value?: string }>;
   }): { id: string } {
     const id = newId();
+    const askedAt = isoNow();
     this.db
       .prepare(
         `INSERT INTO agent_questions
@@ -1808,9 +1809,25 @@ export class AgentService {
         input.question,
         input.context ?? "",
         JSON.stringify(input.options),
-        isoNow(),
+        askedAt,
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });
+
+    // A question blocks the agent until someone answers it, and the only place
+    // it showed up was a panel you had to already be looking at — so an agent
+    // could sit waiting on the operator indefinitely with nothing said. Unlike
+    // agent-to-agent chatter, a question is addressed to a human by
+    // construction, which is what makes it safe to ring the bell for.
+    this.events.emit("agent:question_asked", {
+      question_id: id,
+      agent_id: input.from_agent_id,
+      agent_name: this.getAgent(input.from_agent_id)?.name ?? "An agent",
+      question: input.question,
+      context: input.context ?? "",
+      options: input.options.map((o) => o.label),
+      run_id: input.run_id ?? "",
+      asked_at: askedAt,
+    });
     return { id };
   }
 
