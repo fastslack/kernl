@@ -64,6 +64,23 @@ export function macAppBundlePath(): string | null {
   return candidate.endsWith(".app/Contents") ? dirname(candidate) : null;
 }
 
+/**
+ * Would macOS open this bundle? `codesign --verify` answers for the signature;
+ * it does not prove notarization, which is the other half. Good enough as a
+ * gate: an unsigned bundle is certainly refused, so refusing to update is
+ * right. A signed-but-unnotarized one may still be blocked, which is why the
+ * failure message points at a manual download rather than promising success.
+ */
+async function isSignedBundle(bundle: string): Promise<boolean> {
+  return new Promise((ok) => {
+    const p = spawn("codesign", ["--verify", "--deep", "--strict", bundle], {
+      stdio: "ignore",
+    });
+    p.on("error", () => ok(false));
+    p.on("exit", (code) => ok(code === 0));
+  });
+}
+
 /** The asset name the release publishes for this machine. */
 function macAssetFor(version: string): string {
   return process.arch === "arm64"
@@ -139,6 +156,26 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
     return {
       ok: false,
       reason: "This does not look like an installed .app, so there is nothing to replace.",
+    };
+  }
+
+  // Refuse when this build is not signed, rather than half-doing it.
+  //
+  // The swap itself would succeed; the relaunch is what fails. Gatekeeper will
+  // not open a replacement bundle whose developer it cannot verify, so the
+  // user ends up with the app closed, a new one that will not start, and a
+  // backup this code already deleted. Stripping the quarantine xattr — which
+  // the helper does — is not the same as being trusted.
+  //
+  // Probed, not assumed: the day the release is signed and notarized this
+  // check passes and the button starts working with no further change.
+  if (!(await isSignedBundle(bundle))) {
+    return {
+      ok: false,
+      reason:
+        "This build is not signed by Apple, so macOS would refuse to open the " +
+        "updated app. Download the new version manually instead.",
+      useInstead: `https://github.com/${REPO}/releases/latest`,
     };
   }
 

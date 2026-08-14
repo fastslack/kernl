@@ -149,6 +149,19 @@ esac
 
 printf '\nKernl %s installed.\n' "$VERSION"
 case "$KIND" in
-  macos) printf 'Open it from /Applications.\n\n' ;;
-  *)     printf 'Start it with:  kernl\n\n' ;;
+  macos)
+    printf 'Open it from /Applications.\n'
+    # Say this BEFORE they double-click and get told the developer cannot be
+    # verified — a security warning nobody warned you about reads as "this is
+    # malware", and the reflex is to delete it. Checked rather than assumed, so
+    # the notice disappears by itself the day the release is signed.
+    if ! codesign --verify --deep --strict /Applications/Kernl.app >/dev/null 2>&1; then
+      printf '\n'
+      printf 'Note: this build is not signed by Apple, so the first launch is blocked.\n'
+      printf 'To allow it: System Settings → Privacy & Security → scroll down →\n'
+      printf '"Open Anyway". You only do this once.\n'
+    fi
+    printf '\n'
+    ;;
+  *) printf 'Start it with:  kernl\n\n' ;;
 esac
