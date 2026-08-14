@@ -37,6 +37,56 @@ function anchor(href: string, label: string): string {
   return `<a href="${href.replace(/"/g, "%22")}" target="_blank" rel="noopener noreferrer">${label}</a>`;
 }
 
+/**
+ * Reasoning-model scratchpads.
+ *
+ * Several models stream their chain of thought inline, wrapped in
+ * `<think>…</think>`, and the transcript rendered it raw — the user saw
+ *
+ *     <think>
+ *     We need answer Spanish. Just hola. No need tool.
+ *     </think>
+ *     ¡Hola! ¿En qué te ayudo?
+ *
+ * sitting above every reply. Folded into a `<details>` instead: collapsed by
+ * default, one click to read, and no JavaScript or component state to carry.
+ *
+ * Operates on already-escaped text, so the tags arrive as `&lt;think&gt;`.
+ * That is what lets the small renderer in OfficeCreatorChat share it — both
+ * escape the same three characters before anything else runs.
+ *
+ * The closing tag is deliberately optional. While a reply streams, the opening
+ * tag lands seconds before the closing one; matching only balanced pairs would
+ * leave the raw scratchpad on screen for exactly the moment the user is
+ * watching it appear.
+ */
+const THINK_RE = /&lt;(think|thinking)&gt;\s*([\s\S]*?)(?:\s*&lt;\/\1&gt;|$)/gi;
+
+export function foldThinking(
+  escaped: string,
+  stash: (html: string) => string = (h) => h,
+): string {
+  return escaped.replace(THINK_RE, (_m, _tag: string, body: string) => {
+    const text = body.trim();
+    if (!text) return "";
+    const words = text.split(/\s+/).filter(Boolean).length;
+    // Newlines become <br> here rather than being left to the paragraph pass:
+    // in formatMd this block is stashed, so no later pass will ever see them.
+    const inner = text.replace(/\n{2,}/g, "<br><br>").replace(/\n/g, "<br>");
+    return stash(
+      '<details class="think">' +
+        '<summary class="think-head">' +
+        '<span class="think-icon" aria-hidden="true">💭</span>' +
+        '<span class="think-label">Razonamiento</span>' +
+        `<span class="think-count">${words} palabra${words === 1 ? "" : "s"}</span>` +
+        '<span class="think-chevron" aria-hidden="true">❯</span>' +
+        "</summary>" +
+        `<div class="think-body">${inner}</div>` +
+        "</details>",
+    );
+  });
+}
+
 export function formatMd(text: string): string {
   if (!text) return "";
 
@@ -44,6 +94,11 @@ export function formatMd(text: string): string {
   const keep = (fragment: string): string => `${MARK}${stash.push(fragment) - 1}${MARK}`;
 
   let html = text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  // Before every other pass: the reasoning scratchpad is folded away and
+  // stashed, so nothing below can reformat its contents or autolink URLs the
+  // model was only thinking out loud about.
+  html = foldThinking(html, keep);
 
   // Code blocks (```lang\n...\n```)
   html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang, code) => {

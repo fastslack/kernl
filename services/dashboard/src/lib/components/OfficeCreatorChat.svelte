@@ -14,6 +14,7 @@
   import { onMount, tick, createEventDispatcher } from 'svelte';
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
+  import { foldThinking } from '$lib/chat-md';
   import {
     startChatEpisode,
     sendChatMessageStream,
@@ -435,6 +436,10 @@ Office creation sequence (only when explicitly asked to create an office):
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;');
+    // Reasoning models stream <think>…</think> inline. Shared with /chat so both
+    // transcripts fold it the same way; safe to run here because the block it
+    // emits carries no newlines for the paragraph pass below to break apart.
+    html = foldThinking(html);
     html = html.replace(/`([^`]+)`/g, '<code>$1</code>');
     html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
     html = html.replace(/\n\n/g, '</p><p>');
@@ -940,6 +945,55 @@ Office creation sequence (only when explicitly asked to create an office):
     border-radius: 4px;
     font-family: ui-monospace, monospace;
     font-size: 12px;
+  }
+
+  /* Reasoning scratchpad — same fold as /chat, tightened for this panel:
+     it is docked and narrow, so the label carries the meaning and the word
+     count is dropped to keep the header on one line. */
+  .oc-text :global(details.think) {
+    margin: 0 0 6px;
+    border: 1px solid var(--border, #2a2a2a);
+    border-left: 2px solid var(--purple, #a78bfa);
+    border-radius: 5px;
+    background: rgba(0, 0, 0, 0.25);
+    overflow: hidden;
+  }
+  .oc-text :global(details.think .think-head) {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 8px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 10px;
+    list-style: none;
+  }
+  .oc-text :global(details.think .think-head::-webkit-details-marker) { display: none; }
+  .oc-text :global(details.think .think-head:hover) { background: rgba(255, 255, 255, 0.04); }
+  .oc-text :global(details.think .think-icon) { font-size: 11px; opacity: 0.85; }
+  .oc-text :global(details.think .think-label) {
+    color: var(--purple, #a78bfa);
+    font-weight: 600;
+  }
+  .oc-text :global(details.think .think-count) { display: none; }
+  .oc-text :global(details.think .think-chevron) {
+    margin-left: auto;
+    color: var(--text-3, #6b7280);
+    font-size: 8px;
+    transition: transform 0.18s ease;
+  }
+  .oc-text :global(details.think[open] .think-chevron) {
+    transform: rotate(90deg);
+    color: var(--purple, #a78bfa);
+  }
+  .oc-text :global(details.think .think-body) {
+    padding: 7px 9px 8px;
+    border-top: 1px solid var(--border, #2a2a2a);
+    font-family: ui-monospace, monospace;
+    font-size: 10px;
+    line-height: 1.6;
+    color: var(--text-2, #9ca3af);
+    overflow-wrap: anywhere;
   }
   .oc-msg-user .oc-text {
     background: rgba(99, 102, 241, 0.14);

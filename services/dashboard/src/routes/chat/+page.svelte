@@ -2113,6 +2113,81 @@
     letter-spacing: 0.05em;
   }
 
+  /* ── Reasoning scratchpad (<think> folded by chat-md) ──────────────
+     Collapsed by default and deliberately quiet: it sits above the actual
+     answer, so anything louder than this competes with the thing the user
+     came to read. <details> carries the open/closed state itself — no
+     component state, and it survives a re-render mid-stream. */
+  .cx-msg-content :global(details.think) {
+    margin: 0 0 8px;
+    border: 1px solid var(--border);
+    border-left: 2px solid var(--purple);
+    border-radius: var(--radius-sm);
+    background: var(--surface-1);
+    overflow: hidden;
+  }
+
+  .cx-msg-content :global(details.think .think-head) {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    cursor: pointer;
+    user-select: none;
+    font-size: 11px;
+    line-height: 1.4;
+    transition: background 0.15s;
+  }
+
+  /* Both spellings — the default triangle would sit beside our own chevron. */
+  .cx-msg-content :global(details.think .think-head::-webkit-details-marker) { display: none; }
+  .cx-msg-content :global(details.think .think-head) { list-style: none; }
+
+  .cx-msg-content :global(details.think .think-head:hover) { background: var(--surface-2); }
+
+  .cx-msg-content :global(details.think .think-icon) {
+    font-size: 12px;
+    opacity: 0.85;
+    filter: saturate(0.9);
+  }
+
+  .cx-msg-content :global(details.think .think-label) {
+    color: var(--purple);
+    font-weight: 600;
+    letter-spacing: 0.02em;
+  }
+
+  .cx-msg-content :global(details.think .think-count) {
+    color: var(--text-3);
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+
+  /* Pushed right, rotates to point down when the block is open. */
+  .cx-msg-content :global(details.think .think-chevron) {
+    margin-left: auto;
+    color: var(--text-3);
+    font-size: 9px;
+    transition: transform 0.18s ease, color 0.15s;
+  }
+  .cx-msg-content :global(details.think[open] .think-chevron) {
+    transform: rotate(90deg);
+    color: var(--purple);
+  }
+  .cx-msg-content :global(details.think .think-head:hover .think-chevron) { color: var(--purple); }
+
+  .cx-msg-content :global(details.think .think-body) {
+    padding: 8px 10px 9px;
+    border-top: 1px solid var(--border);
+    font-family: var(--font-mono);
+    font-size: 11px;
+    line-height: 1.65;
+    color: var(--text-2);
+    white-space: normal;
+    /* Long uninterrupted reasoning must not widen the transcript. */
+    overflow-wrap: anywhere;
+  }
+
   .cx-msg-content :global(.cb) {
     background: var(--bg);
     padding: 12px 14px;
