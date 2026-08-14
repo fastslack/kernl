@@ -1042,7 +1042,7 @@ export function registerCinemaRoutes(
   // file to the SAME cache the legacy torrents/subs pipeline uses
   // (data/subtitles/<sha1>.vtt + sidecar), then inserts a cinema_subs
   // row marked origin=federated|archive_org so the player can serve it
-  // back via /api/torrents/subs/file?key=<sha1> with no extra plumbing.
+  // back via /api/cinema/media/subs/file?key=<sha1> with no extra plumbing.
   server.post("/api/cinema/subs/download", async (req, res) => {
     try {
       const body = await server.parseBody<{ rowId: string }>(req);
@@ -1113,7 +1113,7 @@ export function registerCinemaRoutes(
       const vtt = encodeVtt(cues);
 
       // sha1 key matches the legacy cache convention so the existing
-      // /api/torrents/subs/file?key=… serves these without changes.
+      // /api/cinema/media/subs/file?key=… serves these without changes.
       const cacheKey = createHash("sha1").update(vtt, "utf8").digest("hex");
       const cacheDir = path.join(process.cwd(), "data", "subtitles");
       await mkdir(cacheDir, { recursive: true });
@@ -1159,7 +1159,7 @@ export function registerCinemaRoutes(
       server.json(res, 200, {
         local,
         cache_key: cacheKey,
-        play_url: `/api/torrents/subs/file?key=${cacheKey}`,
+        play_url: `/api/cinema/media/subs/file?key=${cacheKey}`,
         cue_count: cues.length,
       });
     } catch (err) {

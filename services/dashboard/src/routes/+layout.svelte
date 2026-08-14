@@ -17,7 +17,7 @@
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
   import { displayMode as musicDisplayMode, toggle as musicToggle, next as musicNext, prev as musicPrev, toggleMute as musicToggleMute, setVolume as musicSetVolume, volume as musicVolume, seek as musicSeek, currentTime as musicTime, duration as musicDuration, album as musicAlbum, setDisplayMode as musicSetMode } from '$lib/music-player.js';
   import { initMusicBridge } from '$lib/music-bridge.js';
-  import { initLocale } from '$lib/i18n/index.js';
+  import { initLocale, t } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
 
   // ── State ───────────────────────────────────────────────────────
@@ -164,6 +164,25 @@
   // Sub-sub-tabs: views whose `parent` matches the currently-open view.
   $: childViews = currentGroup?.views.filter(v => (v as any).parent === currentView) ?? [];
   $: sysGroup = navGroups[navGroups.length - 1];
+
+  // ── Nav labels ──────────────────────────────────────────────────
+  // Group and view labels arrive from manifests as plain English strings —
+  // `navItemSchema.label` is a bare z.string(), unlike the settings fields next
+  // to it, which are localizable. So the shell translates them by id here and
+  // falls back to whatever the manifest said when a key is missing, which is
+  // what keeps a freshly installed third-party extension readable instead of
+  // rendering a raw key at the user.
+  //
+  // Groups and views live in separate key spaces on purpose: the id sets
+  // overlap (`work` is a group AND a view inside it).
+  function labelFor(key: string, fallback: string): string {
+    const out = $t(key);
+    return out === key ? fallback : out;
+  }
+  $: groupLabel = (g: { id: string; label: string }) => labelFor(`nav.group.${g.id}`, g.label);
+  $: viewLabel = (v: { id: string; label: string }) =>
+    labelFor(`nav.view.${v.id}`, SUB_TAB_LABELS[v.id] ?? v.label);
+
 
   // ── Header tab rail ─────────────────────────────────────────────
   // The group's tabs live in the header now, in the band that used to sit
@@ -990,7 +1009,7 @@
     {#if headerTabs.length > 0}
       <div class="header-nav">
         {#if currentGroup}
-          <span class="header-nav-group">{currentGroup.label}</span>
+          <span class="header-nav-group">{groupLabel(currentGroup)}</span>
         {/if}
         <!-- A nav, not a tablist: each of these changes the URL and is
              deep-linkable, so `aria-current="page"` is the honest marker.
@@ -998,7 +1017,7 @@
         <div class="tabrail" class:fade-l={railFadeL} class:fade-r={railFadeR}>
           <nav
             class="tabrail-track"
-            aria-label={currentGroup ? `${currentGroup.label} views` : 'Views'}
+            aria-label={currentGroup ? $t('nav.groupViews', { group: groupLabel(currentGroup) }) : $t('nav.views')}
             bind:this={tabRailEl}
             on:scroll={updateRailFades}
           >
@@ -1009,7 +1028,7 @@
                 aria-current={currentView === view.id ? 'page' : undefined}
                 on:click={() => navigate(view.id)}
               >
-                {SUB_TAB_LABELS[view.id] ?? view.label}
+                {viewLabel(view)}
               </button>
             {/each}
           </nav>
@@ -1053,7 +1072,7 @@
       <div class="hdr-cluster hdr-actions">
         <button class="search-trigger" on:click={openCmd}>
           <span class="search-icon" aria-hidden="true">⌕</span>
-          <span class="search-label">Search</span>
+          <span class="search-label">{$t('header.search')}</span>
           <kbd>⌘K</kbd>
         </button>
       </div>
@@ -1133,10 +1152,10 @@
           class="nav-item"
           class:active={currentGroupId === group.id}
           on:click={() => navigateGroup(group)}
-          title={group.label}
+          title={groupLabel(group)}
         >
           <span class="nav-icon">{group.icon}</span>
-          <span class="nav-label">{group.label}</span>
+          <span class="nav-label">{groupLabel(group)}</span>
           {#if group.id === 'work' && taskOverdue > 0}
             <span class="nav-badge nb-red">{taskOverdue}</span>
           {:else if group.id === 'people' && commDrafts > 0}
@@ -1155,7 +1174,7 @@
         title="Chat"
       >
         <span class="nav-icon">💬</span>
-        <span class="nav-label">Chat</span>
+        <span class="nav-label">{$t('nav.view.chat')}</span>
       </button>
 
       <!-- System group pinned at bottom -->
@@ -1163,10 +1182,10 @@
         class="nav-item"
         class:active={currentGroupId === sysGroup.id}
         on:click={() => navigateGroup(sysGroup)}
-        title={sysGroup.label}
+        title={groupLabel(sysGroup)}
       >
         <span class="nav-icon">{sysGroup.icon}</span>
-        <span class="nav-label">{sysGroup.label}</span>
+        <span class="nav-label">{groupLabel(sysGroup)}</span>
       </button>
 
       <!-- Clock, pinned below everything.
@@ -1196,7 +1215,7 @@
             class="sub-tab child"
             on:click={() => navigate(view.id)}
           >
-            {view.icon ?? ''} {view.label}
+            {view.icon ?? ''} {viewLabel(view)}
           </button>
         {/each}
       </div>

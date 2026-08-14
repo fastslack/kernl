@@ -75,10 +75,23 @@ const backendSchema = z.object({
   packages: z.record(z.string().min(1), z.string().min(1)).optional(),
 });
 
+/** Localizable text: a plain string, or a { locale: text } map.
+ *  Declared here, above its first use: nav labels below reference it, and a
+ *  const is in the temporal dead zone until its own line runs. */
+const localizedTextSchema = z.union([
+  z.string().min(1).max(500),
+  z.record(z.string().min(2).max(8), z.string().min(1).max(500)),
+]);
+
 const navItemSchema = z.object({
   id: z.string().min(1).optional(),           // defaults to slug when omitted
   group: z.string().min(1),
-  label: z.string().min(1),
+  /** Localizable, same as the settings fields below — see localizedTextSchema.
+   *  This was a bare z.string() while `settingsFieldSchema.label` next to it
+   *  was localizable, so an extension could translate its settings but not its
+   *  own tab. The shell also translates by id (`nav.view.<id>`); what an
+   *  extension declares here is the fallback for ids the shell has no key for. */
+  label: localizedTextSchema,
   icon: z.string().min(1),
   order: z.number().int().optional(),
   /** URL override (absolute path, may include query string). */
@@ -92,7 +105,8 @@ const navItemSchema = z.object({
 
 const navGroupSchema = z.object({
   id: z.string().min(1),
-  label: z.string().min(1),
+  /** Localizable — see navItemSchema.label. */
+  label: localizedTextSchema,
   icon: z.string().min(1),
   order: z.number().int().optional(),
   defaultView: z.string().min(1).optional(),
@@ -150,11 +164,6 @@ const frontendSchema = z.object({
   pages: z.array(frontendPageSchema).optional(),
 });
 
-/** Localizable text: a plain string, or a { locale: text } map. */
-const localizedTextSchema = z.union([
-  z.string().min(1).max(500),
-  z.record(z.string().min(2).max(8), z.string().min(1).max(500)),
-]);
 
 /**
  * One user-configurable value contributed by an extension.

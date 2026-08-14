@@ -1,0 +1,33 @@
+[
+  {
+    "name": "TV renders in Spanish when the shell locale is es",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:3086/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','es'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:3086/tv" },
+      { "type": "wait", "selector": ".tv .rail-label", "timeout": 45000 },
+      { "type": "wait", "value": "3000" },
+      { "comment": "Masthead, dial and up-next rail must all be in Spanish, and no English string may survive next to them.", "type": "evaluate", "value": "const txt = document.querySelector('.tv')?.innerText || ''; JSON.stringify({ railLabels: [...document.querySelectorAll('.tv .rail-label')].map(n=>n.textContent.trim()), station: document.querySelector('.station-id')?.textContent?.trim(), newChannel: document.querySelector('.chan-new .chan-name')?.textContent?.trim(), newChannelSub: document.querySelector('.chan-new .chan-now')?.textContent?.trim(), leakedEnglish: ['Up next','Dial','New channel','no signal','public domain','Warming up'].filter(s => txt.includes(s)) })" },
+      { "type": "screenshot", "value": "tv-i18n-es" }
+    ]
+  },
+  {
+    "name": "The compose modal opens in Spanish and its Compose button arms only with a brief",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:3086/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','es'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:3086/tv" },
+      { "type": "wait", "selector": ".chan-new", "timeout": 45000 },
+      { "type": "wait", "value": "2500" },
+      { "type": "click", "selector": ".chan-new" },
+      { "type": "wait", "selector": ".modal .brief", "timeout": 15000 },
+      { "type": "wait", "value": "1200" },
+      { "comment": "Empty brief: the button must be disabled and the hint must say so — the failure the user hit.", "type": "evaluate", "value": "const b=document.querySelector('.modal .foot .btn.solid'); JSON.stringify({ title: document.querySelector('.modal-title')?.textContent?.trim(), placeholder: document.querySelector('.brief')?.getAttribute('placeholder'), hint: document.querySelector('.brief-hint')?.textContent?.trim(), cta: b?.textContent?.trim(), ctaDisabled: b?.disabled, tooltip: b?.parentElement?.getAttribute('title'), examples: [...document.querySelectorAll('.chip')].map(c=>c.textContent.trim()) })" },
+      { "type": "screenshot", "value": "tv-i18n-compose-empty" },
+      { "comment": "Picking an example must arm the button and flip the hint.", "type": "click", "selector": ".chip" },
+      { "type": "wait", "value": "800" },
+      { "type": "evaluate", "value": "const b=document.querySelector('.modal .foot .btn.solid'); JSON.stringify({ brief: document.querySelector('.brief')?.value, hint: document.querySelector('.brief-hint')?.textContent?.trim(), ctaDisabled: b?.disabled, tooltip: b?.parentElement?.getAttribute('title') })" },
+      { "type": "screenshot", "value": "tv-i18n-compose-armed" }
+    ]
+  }
+]

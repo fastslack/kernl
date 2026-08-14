@@ -995,7 +995,13 @@ ${catalog.map((t) => `- ${t.name} — ${t.description}`).join("\n")}`;
       });
       service.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
 
-      // Run async — don't await
+      // Run async — don't await.
+      //
+      // Both branches feed the circuit breaker. A manual run counts exactly
+      // like a scheduled one: recordRunOutcome() is the single entry point by
+      // design, and the LLM path here was the one place that skipped it, so a
+      // "Run now" that kept failing never advanced the counter — and a "Run
+      // now" that finally worked never cleared it either.
       executor.execute({ agent, goal, run, service, events }).then(result => {
         service.updateRun(run.id, {
           status: result.status,
@@ -1005,8 +1011,14 @@ ${catalog.map((t) => `- ${t.name} — ${t.description}`).join("\n")}`;
           tokens_used: result.tokens_used,
           completed_at: new Date().toISOString(),
         });
+        service.recordRunOutcome(agent.id, {
+          ok: result.status === "completed",
+          error: result.error,
+          run_id: run.id,
+        });
       }).catch(err => {
         service.updateRun(run.id, { status: "failed", error: String(err), completed_at: new Date().toISOString() });
+        service.recordRunOutcome(agent.id, { ok: false, error: String(err), run_id: run.id });
       });
 
       server.json(res, 200, { success: true, run_id: run.id, status: "running" });

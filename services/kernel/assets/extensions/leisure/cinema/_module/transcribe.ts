@@ -67,7 +67,7 @@ const FFMPEG_BIN = process.env.FFMPEG_BIN ?? "ffmpeg";
  * Stream a video/audio URL through ffmpeg → temp WAV file (16kHz mono s16le).
  * Returns the file path; caller must delete it.
  *
- * Routes external http(s) URLs through our local /api/torrents/webseed-proxy
+ * Routes external http(s) URLs through our local /api/cinema/media/webseed-proxy
  * because ffmpeg's libavformat HTTP client trips on archive.org's SSL/302
  * redirect chain (returns 5XX). Our proxy already handles UA, redirects,
  * and Range correctly — and ffmpeg connecting to localhost is bulletproof.
@@ -186,7 +186,7 @@ async function probeUpstreamDuration(url: string): Promise<number | null> {
 function wrapThroughProxy(url: string): string {
   if (!/^https?:\/\//i.test(url)) return url;
   // Already proxied? leave it.
-  if (url.includes("/api/torrents/webseed-proxy?")) return url;
+  if (url.includes("/api/cinema/media/webseed-proxy?")) return url;
   const port = process.env.DASHBOARD_PORT ?? process.env.KERNEL_HTTP_PORT ?? "3086";
   const token = process.env.KERNEL_AUTH_TOKEN ?? "";
 
@@ -211,7 +211,7 @@ function wrapThroughProxy(url: string): string {
   }
 
   const authParam = token ? `&auth=${encodeURIComponent(token)}` : "";
-  return `http://127.0.0.1:${port}/api/torrents/webseed-proxy?url=${encodeURIComponent(url)}${authParam}`;
+  return `http://127.0.0.1:${port}/api/cinema/media/webseed-proxy?url=${encodeURIComponent(url)}${authParam}`;
 }
 
 async function rmDirOf(filePath: string): Promise<void> {

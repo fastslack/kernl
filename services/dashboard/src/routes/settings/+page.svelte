@@ -607,6 +607,21 @@
   // leave the content area blank.
   $: if (cardTabs.length && !cardTabs.some((t) => t.id === activeCard)) activeCard = cardTabs[0].id;
 
+  /**
+   * `?card=` opens a specific card, so somewhere else in the app can send a
+   * reader to the exact thing they have to fix — `?section=ai&card=providers`
+   * from an agent run that died with no LLM configured, for instance. Applied
+   * once per value: after that the tab strip is the user's to drive.
+   */
+  let appliedCardParam = '';
+  $: {
+    const wanted = $page.url.searchParams.get('card') ?? '';
+    if (wanted && wanted !== appliedCardParam && cardTabs.some((t) => t.id === wanted)) {
+      appliedCardParam = wanted;
+      activeCard = wanted;
+    }
+  }
+
   /** Search jumps to a field; open the card holding it or the jump lands nowhere. */
   function revealCard(id: string): void {
     if (cardTabs.some((t) => t.id === id)) activeCard = id;

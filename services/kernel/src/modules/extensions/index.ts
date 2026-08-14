@@ -11,6 +11,7 @@ import { extensionsMigrations } from "./migrations.js";
 import { ExtensionService } from "./service.js";
 import { extensionsTools } from "./tools.js";
 import { registerExtensionsRoutes } from "./api-routes.js";
+import { linkPayloadModules } from "./ensure-packages.js";
 import type { InstallerDeps } from "./installer.js";
 
 export { loadActiveExtensions } from "./loader.js";
@@ -52,8 +53,15 @@ export function createExtensionsModule(
         llmProviderRegistry: options.installerDeps?.llmProviderRegistry ?? null,
       };
 
+      const extensionsDir = join(options.dataPath, "extensions");
+      // Before anything loads: an extension materialized into this directory
+      // sits outside the payload's node_modules, and every package it imports
+      // without declaring stops resolving there. Re-pointed each boot because
+      // the payload path moves with the app version.
+      linkPayloadModules(extensionsDir);
+
       service = new ExtensionService(ctx.sqlite, {
-        extensionsDir: join(options.dataPath, "extensions"),
+        extensionsDir,
         installerDeps: deps,
         licenseHas: (feature) => ctx.license.has(feature),
       });

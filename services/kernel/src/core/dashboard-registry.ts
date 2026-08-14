@@ -102,7 +102,21 @@ export class DashboardRegistry {
     }
 
     if (desc.nav) {
-      this.navItems.push(...desc.nav);
+      // Same rule the extension-manifest merge enforces, and the same one
+      // `navGroups` below already had: one view id, one owner. Two modules
+      // claiming it would put the tab on two dials with only one able to own
+      // the route.
+      for (const item of desc.nav) {
+        const claimed = this.navItems.find((x) => x.id === item.id);
+        if (claimed) {
+          log.warn(
+            `DashboardRegistry: duplicate nav id "${item.id}" from module "${mod.name}" ` +
+              `(already registered under group "${claimed.group}"), ignoring`,
+          );
+          continue;
+        }
+        this.navItems.push(item);
+      }
     }
 
     if (desc.navGroups) {
@@ -301,10 +315,35 @@ export class DashboardRegistry {
             for (const raw of contributed) {
               const id = (typeof raw.id === "string" && raw.id) || row.slug;
               if (!raw.group || !raw.label || !raw.icon) continue;
-              if (navItems.find((x) => x.id === id && x.group === raw.group)) continue;
+              // One view id belongs to exactly one group. The id is the URL
+              // segment and the dashboard maps each segment to a single group
+              // (`viewToGroup`), so the same id in two groups cannot render
+              // correctly: it shows up on both dials while only one of them can
+              // own the view, leaving the tab permanently unlit on the other.
+              //
+              // Keyed on (id, group) this check let exactly that through —
+              // torrents shipped under `people` from its module descriptor and
+              // `leisure` from its manifest, and both survived. First
+              // registration wins; a second claim is dropped and reported,
+              // because silently picking one is how the original went unnoticed.
+              const claimed = navItems.find((x) => x.id === id);
+              if (claimed) {
+                if (claimed.group !== raw.group) {
+                  log.warn(
+                    `DashboardRegistry: extension ${row.slug} claims nav id "${id}" for group ` +
+                      `"${String(raw.group)}", but it is already registered under "${claimed.group}". ` +
+                      `Ignoring the duplicate — declare the tab in exactly one place.`,
+                  );
+                }
+                continue;
+              }
               const item: DashboardNavItem = {
                 id,
-                label: String(raw.label),
+                // NOT String(): a localized label is a { locale: text } map and
+                // stringifying it yields "[object Object]" on the user's dial.
+                label: (typeof raw.label === "object" && raw.label !== null
+                  ? (raw.label as Record<string, string>)
+                  : String(raw.label)),
                 icon: String(raw.icon),
                 group: String(raw.group),
                 order: typeof raw.order === "number" ? raw.order : undefined,

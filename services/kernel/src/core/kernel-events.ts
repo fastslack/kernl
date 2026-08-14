@@ -118,6 +118,24 @@ export interface AgentAutoPausedPayload {
   paused_at: string;
 }
 
+/**
+ * Emitted when an agent asks the operator something and blocks on the answer
+ * (see AgentService.createQuestion). A question is addressed to a human by
+ * definition, so unlike agent-to-agent chatter it always deserves the bell.
+ */
+export interface AgentQuestionAskedPayload {
+  question_id: string;
+  agent_id: string;
+  agent_name: string;
+  question: string;
+  /** Free-text context the agent attached. '' when none. */
+  context: string;
+  /** Multiple-choice options, [] for an open question. */
+  options: string[];
+  run_id: string;
+  asked_at: string;
+}
+
 export interface AgentFlowResultPayload {
   agent_id: string;
   agent_name: string;
@@ -264,6 +282,7 @@ export interface KernelEvents {
   "agent.run.failed": AgentRunPayload & { error: string };
   "agent.alert": AgentAlertPayload;
   "agent:auto_paused": AgentAutoPausedPayload;
+  "agent:question_asked": AgentQuestionAskedPayload;
 
   // Agent flow (real-time execution)
   "agent:flow:run_started": AgentFlowRunStartedPayload;
