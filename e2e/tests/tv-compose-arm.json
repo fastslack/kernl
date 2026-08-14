@@ -1,0 +1,17 @@
+[
+  {
+    "name": "Picking an example arms the Compose button and flips the hint",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:3086/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernel_locale','es'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:3086/tv" },
+      { "type": "wait", "selector": ".chan-new", "timeout": 40000 },
+      { "type": "click", "selector": ".chan-new" },
+      { "type": "wait", "selector": ".modal .chip", "timeout": 15000 },
+      { "type": "click", "selector": ".modal .chip" },
+      { "type": "wait", "value": "700" },
+      { "type": "evaluate", "value": "const b=document.querySelector('.modal .foot .btn.solid'); JSON.stringify({ brief: (document.querySelector('.brief')||{}).value, hint: document.querySelector('.brief-hint')?.textContent?.trim(), hintArmed: document.querySelector('.brief-hint')?.classList.contains('armed'), ctaDisabled: b?.disabled, tooltip: b?.parentElement?.getAttribute('title') })" },
+      { "type": "screenshot", "value": "tv-compose-armed" }
+    ]
+  }
+]

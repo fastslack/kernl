@@ -1,0 +1,20 @@
+[
+  {
+    "name": "Torrents is a Leisure tab only, and it highlights when open",
+    "actions": [
+      { "type": "goto", "value": "http://localhost:3086/login" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','22eaf5ad9d78032bfbf8ece522a1431755acc6df806444d322c565a57350f13f'); localStorage.setItem('kernl.setupComplete','1'); localStorage.setItem('kernl.welcomeSeen','1'); 'ok'" },
+      { "type": "goto", "value": "http://localhost:3086/people" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "1500" },
+      { "comment": "Social must no longer carry a Torrents tab.", "type": "evaluate", "value": "JSON.stringify({ group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), hasTorrents: [...document.querySelectorAll('.tabrail-tab')].some(b=>/torrent/i.test(b.textContent)) })" },
+      { "type": "screenshot", "value": "nav-social-no-torrents" },
+
+      { "type": "goto", "value": "http://localhost:3086/torrents" },
+      { "type": "wait", "selector": ".header .tabrail-tab", "timeout": 40000 },
+      { "type": "wait", "value": "2500" },
+      { "comment": "Opening /torrents must land in Leisure with the Torrents tab actually lit — the half that used to break, because viewToGroup could only map the view to one of the two groups.", "type": "evaluate", "value": "JSON.stringify({ url: location.pathname, group: document.querySelector('.header-nav-group')?.textContent?.trim(), tabs: [...document.querySelectorAll('.tabrail-tab')].map(b=>b.textContent.trim()), current: document.querySelector('.tabrail-tab[aria-current=\"page\"]')?.textContent?.trim(), activePill: document.querySelector('.tabrail-tab.active')?.textContent?.trim(), litRailGroup: document.querySelector('.sidebar .nav-item.active .nav-label')?.textContent?.trim() })" },
+      { "type": "screenshot", "value": "nav-torrents-leisure" }
+    ]
+  }
+]
