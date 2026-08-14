@@ -67,6 +67,7 @@ import type { LifeModule, NewsModule, LifeService, NewsService } from "../types/
 import type { LicenseService } from "../license/index.js";
 import { registerLicenseRoutes } from "../license/routes.js";
 import { checkForUpdate } from "../update/check.js";
+import { applyUpdate } from "../update/apply.js";
 
 export interface HttpResult {
   httpServer: KernelHttpServer | null;
@@ -366,6 +367,21 @@ export async function initHttpAndMcp(args: {
       // anything, because migrations run at boot and only go forward, so an
       // update has to be a moment the user chose. `?fresh=1` skips the 6h
       // cache for an explicit "check now".
+      // The button. Downloads, stages, and hands off to a helper that swaps
+      // the bundle once this process is gone — so a 202 here means "we are
+      // about to exit", not "done". Only ever reached because someone clicked.
+      httpServer.post("/api/update/apply", async (_req, res) => {
+        const outcome = await applyUpdate();
+        if (!outcome.ok) {
+          httpServer!.json(res, 400, outcome);
+          return;
+        }
+        httpServer!.json(res, 202, outcome);
+        // Give the response time to reach the browser before the helper's
+        // wait-for-exit loop gets what it is waiting for.
+        setTimeout(() => process.exit(0), 750);
+      });
+
       httpServer.get("/api/update/status", async (req, res) => {
         const url = new URL(req.url ?? "/", "http://localhost");
         httpServer!.json(res, 200, await checkForUpdate({

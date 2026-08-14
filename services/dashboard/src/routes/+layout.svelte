@@ -586,6 +586,44 @@
     }
   }
 
+  let updating = false;
+  let updateError = '';
+  let updateHint = '';
+
+  /**
+   * Ask the kernel to update itself. A 202 means it is about to exit and a
+   * helper will swap the bundle and relaunch — so the honest thing to show is
+   * "the app is restarting", not a progress bar for something this page will
+   * not be around to watch.
+   *
+   * A 400 is the useful case: on Linux the package manager owns the install,
+   * and the answer is the command rather than a button that fights dpkg.
+   */
+  async function applyUpdateNow(): Promise<void> {
+    updating = true;
+    updateError = '';
+    updateHint = '';
+    try {
+      const base = (globalThis as { __API_BASE?: string }).__API_BASE ?? '';
+      const r = await fetch(`${base}/api/update/apply`, { method: 'POST' });
+      const body = (await r.json()) as { reason?: string; useInstead?: string };
+      if (r.status === 202) {
+        updateInfo = null;
+        updateError = 'Kernl is restarting to finish the update. This page will reconnect.';
+        return;
+      }
+      updateError = body.reason ?? `Update failed (HTTP ${r.status}).`;
+      updateHint = body.useInstead ?? '';
+    } catch {
+      // The kernel exiting mid-request looks exactly like this, and on the
+      // success path that is what is supposed to happen.
+      updateError = 'Kernl is restarting to finish the update. This page will reconnect.';
+      updateInfo = null;
+    } finally {
+      updating = false;
+    }
+  }
+
   async function loadUpdateInfo(): Promise<void> {
     try {
       dismissedUpdate = localStorage.getItem(UPDATE_DISMISS_KEY);
@@ -925,7 +963,18 @@
           What changed
         </a>
       {/if}
+      <button class="update-bar-go" disabled={updating} on:click={applyUpdateNow}>
+        {updating ? 'Updating…' : 'Update now'}
+      </button>
       <button class="update-bar-close" title="Dismiss until the next release" on:click={dismissUpdate}>✕</button>
+    </div>
+  {/if}
+
+  {#if updateError}
+    <div class="update-bar update-bar-err" role="alert">
+      <span>{updateError}</span>
+      {#if updateHint}<code>{updateHint}</code>{/if}
+      <button class="update-bar-close" on:click={() => (updateError = '')}>✕</button>
     </div>
   {/if}
   <!-- Header -->
