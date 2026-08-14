@@ -19,11 +19,76 @@
  * the screen.
  */
 
-import { existsSync, mkdirSync, writeFileSync, cpSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import {
+  existsSync,
+  mkdirSync,
+  writeFileSync,
+  cpSync,
+  lstatSync,
+  readlinkSync,
+  symlinkSync,
+  rmSync,
+} from "node:fs";
+import { dirname, join, resolve, sep } from "node:path";
 import { spawn } from "node:child_process";
 import { log } from "../../core/logger.js";
+import { assetsRoot } from "../../core/assets-root.js";
 import type { ExtensionManifest } from "./schema.js";
+
+/**
+ * Make the payload's own node_modules reachable from a materialized extension.
+ *
+ * Resolution walks up from the extension directory. Inside the shipped bundle
+ * that walk reaches the payload's node_modules, so everything the package ships
+ * — @huggingface/transformers, sharp, onnxruntime-node — resolves for free.
+ * `<data>/extensions/<slug>` has no such ancestor, so the moment an extension is
+ * materialized every payload package it did not declare stops resolving.
+ * Cinema's subtitle job died exactly there, on
+ * `Cannot find module '@huggingface/transformers'`, after ffmpeg had already
+ * spent three minutes pulling the audio down.
+ *
+ * Declaring them per extension is not the answer: transformers alone is 47 MB
+ * and onnxruntime-node another 31 MB, both already sitting in the payload. One
+ * symlink at `<data>/extensions/node_modules` restores exactly the link the
+ * copy broke, and sits far enough down the walk that an extension's own
+ * node_modules still wins for whatever it does declare.
+ *
+ * Refreshed on every boot on purpose: on macOS the payload path carries the app
+ * version (/Applications/Kernl-<version>-arm64.app), so an upgrade leaves the
+ * previous link dangling and the failure comes back with no message anywhere.
+ */
+export function linkPayloadModules(extensionsDir: string): void {
+  const root = assetsRoot();
+  const payload = resolve(root, "node_modules");
+  if (!existsSync(payload)) return;
+
+  // Docker (/app/data/extensions) and dev (services/kernel/data/extensions)
+  // keep the data dir inside the tree that owns node_modules, so the walk
+  // already reaches it. Nothing to link, and linking would be self-referential.
+  if (resolve(extensionsDir).startsWith(resolve(root) + sep)) return;
+
+  const link = join(extensionsDir, "node_modules");
+  try {
+    mkdirSync(extensionsDir, { recursive: true });
+    const current = lstatSync(link, { throwIfNoEntry: false });
+    if (current?.isSymbolicLink()) {
+      if (readlinkSync(link) === payload) return; // already correct
+      rmSync(link, { force: true });
+    } else if (current) {
+      // A real directory here belongs to someone else — never clobber it.
+      return;
+    }
+    symlinkSync(payload, link, "dir");
+    log.info(`Extensions: payload node_modules linked at ${link}`);
+  } catch (err) {
+    // Not fatal on its own: extensions that declare everything they import
+    // still work. Say so, because the symptom otherwise surfaces much later.
+    log.warn(
+      `Extensions: could not link payload node_modules into ${extensionsDir} — ` +
+        `${err instanceof Error ? err.message : err}`,
+    );
+  }
+}
 
 /** Walk up from `startDir` looking for `node_modules/<pkg>/package.json`. */
 export function isResolvable(pkg: string, startDir: string): boolean {
