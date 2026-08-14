@@ -1,8 +1,11 @@
 <script lang="ts">
   import { onMount, tick, afterUpdate } from 'svelte';
   import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
+  import ToolCard from '$lib/components/ToolCard.svelte';
   import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
   import { modelIds } from '$lib/llm-models.js';
+  import { formatMd } from '$lib/chat-md.js';
+  import { formatToolInput } from '$lib/tool-presentation.js';
 
   /** The provider's session lapsed — offer the fix instead of a dead instruction. */
   let ccAuthOpen = false;
@@ -187,65 +190,6 @@
     }
   }
 
-  // Enhanced markdown with better rendering
-  function formatMd(text: string): string {
-    if (!text) return '';
-    let html = text
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-
-    // Code blocks (```lang\n...\n```)
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, (_m, lang, code) => {
-      const langLabel = lang ? `<span class="cb-lang">${lang}</span>` : '';
-      return `<div class="cb-wrap">${langLabel}<pre class="cb"><code>${code.trim()}</code></pre></div>`;
-    });
-
-    // Inline code
-    html = html.replace(/`([^`]+)`/g, '<code class="ic">$1</code>');
-
-    // Bold and italic
-    html = html.replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>');
-    html = html.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/\*([^*]+)\*/g, '<em>$1</em>');
-
-    // Headers
-    html = html.replace(/^### (.+)$/gm, '<h4>$1</h4>');
-    html = html.replace(/^## (.+)$/gm, '<h3>$1</h3>');
-    html = html.replace(/^# (.+)$/gm, '<h2>$1</h2>');
-
-    // Unordered lists
-    html = html.replace(/^[-*] (.+)$/gm, '<li>$1</li>');
-    html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
-
-    // Ordered lists
-    html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-
-    // Blockquotes
-    html = html.replace(/^&gt; (.+)$/gm, '<blockquote>$1</blockquote>');
-
-    // Links — validate the scheme so LLM-authored markdown can't emit a
-    // `javascript:` URL (XSS) or break out of the href attribute. Only
-    // http(s)/mailto survive; anything else renders as plain text.
-    html = html.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
-      try {
-        const u = new URL(url, window.location.href);
-        if (u.protocol !== 'http:' && u.protocol !== 'https:' && u.protocol !== 'mailto:') return label;
-        const safe = u.toString().replace(/"/g, '%22');
-        return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${label}</a>`;
-      } catch {
-        return label;
-      }
-    });
-
-    // Paragraphs (double newline)
-    html = html.replace(/\n\n/g, '</p><p>');
-    // Single newlines
-    html = html.replace(/\n/g, '<br>');
-
-    return `<p>${html}</p>`.replace(/<p><\/p>/g, '');
-  }
-
   async function doSend() {
     if (sending || !selectedEpisodeId) return;
     const msg = input.trim();
@@ -411,13 +355,6 @@
       const arr = JSON.parse(raw);
       return Array.isArray(arr) ? arr : [];
     } catch { return []; }
-  }
-
-  function fmtToolInput(input: any): string {
-    try {
-      const s = JSON.stringify(input, null, 2);
-      return s.length > 1200 ? s.slice(0, 1200) + '…' : s;
-    } catch { return String(input); }
   }
 
   async function handleFiles(files: FileList | File[]) {
@@ -984,16 +921,7 @@
                       {#if b.type === 'text'}
                         {@html formatMd(b.text || '')}
                       {:else if b.type === 'tool_use'}
-                        <details class="cx-tool-card" class:cx-tool-error={b._is_error}>
-                          <summary>
-                            <span class="cx-tool-badge">{b.name}</span>
-                            <span class="cx-tool-summary">{Object.keys(b.input || {}).slice(0,3).join(', ')}</span>
-                          </summary>
-                          <div class="cx-tool-input"><pre>{fmtToolInput(b.input)}</pre></div>
-                          {#if b._result}
-                            <div class="cx-tool-result"><pre>{b._result}</pre></div>
-                          {/if}
-                        </details>
+                        <ToolCard name={b.name} input={b.input} result={b._result} isError={!!b._is_error} />
                       {/if}
                     {/each}
                   </div>
@@ -1030,18 +958,7 @@
                   {#if b.type === 'text'}
                     {@html formatMd(b.text)}
                   {:else}
-                    <details class="cx-tool-card" class:cx-tool-error={b.is_error} open={!b.result}>
-                      <summary>
-                        <span class="cx-tool-badge">{b.name}</span>
-                        <span class="cx-tool-summary">
-                          {#if !b.result}running…{:else}{Object.keys(b.input || {}).slice(0,3).join(', ')}{/if}
-                        </span>
-                      </summary>
-                      <div class="cx-tool-input"><pre>{fmtToolInput(b.input)}</pre></div>
-                      {#if b.result}
-                        <div class="cx-tool-result"><pre>{b.result}</pre></div>
-                      {/if}
-                    </details>
+                    <ToolCard name={b.name} input={b.input} result={b.result} isError={!!b.is_error} />
                   {/if}
                 {/each}
               </div>
@@ -1169,7 +1086,7 @@
     </div>
     <div class="cx-perm-body">
       <div class="cx-perm-label">Input</div>
-      <pre class="cx-perm-input">{fmtToolInput(pendingPermission.input)}</pre>
+      <pre class="cx-perm-input">{formatToolInput(pendingPermission.input)}</pre>
     </div>
     <div class="cx-perm-actions">
       <button class="cx-perm-deny" on:click={() => approvePermission(false)}>Deny</button>
@@ -2587,66 +2504,6 @@
   }
 
   @keyframes spin { to { transform: rotate(360deg); } }
-
-  /* ── Tool-use cards ─────────────────────────────────────── */
-  .cx-tool-card {
-    margin: 6px 0;
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    background: rgba(255,255,255,0.02);
-    font-size: 12px;
-    overflow: hidden;
-  }
-  .cx-tool-card.cx-tool-error {
-    border-color: rgba(255, 80, 80, 0.4);
-    background: rgba(255, 80, 80, 0.04);
-  }
-  .cx-tool-card > summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 6px 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    user-select: none;
-  }
-  .cx-tool-card > summary::-webkit-details-marker { display: none; }
-  .cx-tool-badge {
-    background: var(--gold);
-    color: #1a1a1a;
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-weight: 600;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-  }
-  .cx-tool-summary {
-    color: var(--text-2);
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .cx-tool-input,
-  .cx-tool-result {
-    padding: 6px 10px;
-    border-top: 1px solid var(--border);
-    background: rgba(0,0,0,0.18);
-  }
-  .cx-tool-input pre,
-  .cx-tool-result pre {
-    margin: 0;
-    white-space: pre-wrap;
-    word-break: break-word;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    color: var(--text-2);
-    max-height: 240px;
-    overflow: auto;
-  }
-  .cx-tool-result pre { color: var(--text-1); }
-  .cx-tool-card.cx-tool-error .cx-tool-result pre { color: #ff8080; }
 
   /* ── Permission modal ───────────────────────────────────── */
   .cx-perm-scrim {
