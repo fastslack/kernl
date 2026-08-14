@@ -31,6 +31,24 @@
 # it still says "cpu" after you went to the trouble of passing a GPU.
 services:
   kernel:
+    # Build the CUDA whisper here rather than leaving it to a --build-arg
+    # someone has to remember: this file is already the "I have an NVIDIA GPU"
+    # switch, and an image built without it cannot use the devices the rest of
+    # this file passes through. The Vulkan backend the default image ships is
+    # measured working on bare metal and measured NOT working inside a
+    # container on this host — see the WHISPER_CUDA comment in the Dockerfile,
+    # which documents what was ruled out. CUDA is the escape hatch for that,
+    # and is faster anyway: 47 s against 54 s on the same 80.5-minute film.
+    #
+    # The cost is real and one-way: ~700 MB of toolkit in the image, and an
+    # image that only helps NVIDIA. That is why it lives here and not in
+    # docker-compose.yml.
+    build:
+      args:
+        WHISPER_CUDA: "ON"
+        # Ada only — the RTX 40 series. Every extra architecture multiplies
+        # nvcc time and the size of libggml-cuda.so.
+        CUDA_ARCHS: "89"
     # Both halves are needed, and the second is the one that is easy to miss.
     #
     # `capabilities: [gpu, graphics]` below is what compose sends as a device

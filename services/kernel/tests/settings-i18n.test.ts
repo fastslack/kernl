@@ -4,6 +4,13 @@ import { ConfigService } from "../src/modules/config/service.js";
 import { extensionManifestSchema } from "../src/modules/extensions/schema.js";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { configMigrations } from "../src/modules/config/migrations/001_config.js";
+import { EventBus } from "../src/core/event-bus.js";
+import { loadConfig } from "../src/core/config.js";
+
+/** ConfigService needs a live config + bus; neither is exercised by these tests. */
+function svcOn(db: Database) {
+  return new ConfigService(db, loadConfig(), new EventBus());
+}
 
 /*
  * The dashboard renders every settings label through resolveText(), which takes
@@ -12,7 +19,7 @@ import { configMigrations } from "../src/modules/config/migrations/001_config.js
  * a Spanish install rendered the kernel's own settings in English.
  */
 describe("core settings catalog is localizable", () => {
-  const catalog = new ConfigService(new Database(":memory:")).getCatalog();
+  const catalog = svcOn(new Database(":memory:")).getCatalog();
 
   it("carries a Spanish label and description for every entry", () => {
     const bare = catalog.filter((d) => typeof d.label === "string");
@@ -41,7 +48,7 @@ describe("core settings catalog is localizable", () => {
   it("seeds without tripping over the localized labels", () => {
     const db = new Database(":memory:");
     runMigrations(db, "config", configMigrations);
-    const svc = new ConfigService(db);
+    const svc = svcOn(db);
     expect(() => svc.seed()).not.toThrow();
 
     const row = db.prepare("SELECT label FROM app_settings WHERE key = ?").get("TIMEZONE") as
