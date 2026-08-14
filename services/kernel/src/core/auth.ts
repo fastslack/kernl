@@ -12,7 +12,17 @@ export const AUTH_EXEMPT_PATHS = ["/api/health", "/api/metrics", "/api/auth/veri
  * no reason to hold this kernel's token, and handing one out would defeat the
  * purpose. Exempt from the token, never from authentication.
  */
-export const PEER_AUTH_PATHS = ["/api/cinema/directories/friend-view", "/api/peering/relay"];
+export const PEER_AUTH_PATHS = [
+  "/api/cinema/directories/friend-view",
+  "/api/peering/relay",
+  // A phone pushing HealthKit samples. Same reasoning as the peering routes:
+  // it presents a token minted for this one endpoint and nothing else, and
+  // requiring the kernel's master token as well would mean putting the key to
+  // mail, files and agents into a third-party iOS app to sync step counts.
+  // The route verifies its own credential — exempt from the token, never from
+  // authentication.
+  "/api/apple-health/push",
+];
 
 /** True when the path authenticates itself and should skip the token gate. */
 export function isPeerAuthenticatedPath(pathname: string): boolean {
