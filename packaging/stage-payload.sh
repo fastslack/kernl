@@ -252,6 +252,16 @@ if [ "${HOST_PLATFORM:-}" = "$PLATFORM" ] && [ -d services/kernel/node_modules/b
       seen.add(name);
       const p = JSON.parse(fs.readFileSync(pj));
       for (const dep of Object.keys(p.dependencies ?? {})) walk(dep);
+      // optionalDependencies too — that is how native packages ship their
+      // per-platform binaries. sharp declares @img/colour as a real dependency
+      // (so it travelled) and all 24 @img/sharp-<platform> builds as optional
+      // (so none did), and the payload got a sharp that throws
+      //   Could not load the \"sharp\" module using the darwin-arm64 runtime
+      // on first use. That is every subtitle job, since @huggingface/transformers
+      // pulls sharp in. walk() already returns early when the package is not on
+      // disk, so this copies only the variants the host actually installed:
+      // the target platform's, and nothing else.
+      for (const dep of Object.keys(p.optionalDependencies ?? {})) walk(dep);
     }
     walk('better-sqlite3'); walk('onnxruntime-node');
     walk('@huggingface/transformers'); walk('neo4j-driver');
