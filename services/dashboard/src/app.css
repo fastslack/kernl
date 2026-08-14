@@ -70,11 +70,23 @@ html, body {
 ::-webkit-scrollbar-thumb { background: var(--border-h); border-radius: 2px; }
 
 /* ── Layout Shell ──────────────────────────────────────────────── */
+/* Wraps the notice strips + the shell so a full-width banner is not a cell
+   inside the shell's two-column grid. The shell keeps its own scrolling; this
+   just owns the viewport height so a visible banner shortens it instead of
+   pushing the app past the fold. */
+.app-root {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  overflow: hidden;
+}
+
 .app-shell {
   display: grid;
   grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: var(--header-h) 1fr;
-  height: 100vh;
+  flex: 1;
+  min-height: 0;
   overflow: hidden;
 }
 

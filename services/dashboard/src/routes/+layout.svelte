@@ -965,11 +965,13 @@
 {#if isStandalonePage}
   <slot />
 {:else}
-<div class="app-shell">
-  <!-- Only renders when a newer release actually exists. It links out rather
-       than offering a button: applying an update runs forward-only migrations,
-       so it is a decision, not a click. Dismissal is remembered per version,
-       so saying "later" once does not hide the next release too. -->
+<!-- The notices sit OUTSIDE .app-shell on purpose. That element is a
+     two-column grid (sidebar + content), so a child of it becomes a cell in
+     the sidebar column: the banner rendered ~70px wide with one word per line
+     and the button spilling out of it. The header escapes this with
+     `grid-column: 1 / -1`; a full-width strip that is not part of the app
+     chrome is simpler to keep above the grid entirely. -->
+<div class="app-root">
   {#if updateInfo?.updateAvailable && dismissedUpdate !== updateInfo.latest}
     <div class="update-bar" role="status">
       <span class="update-bar-dot" aria-hidden="true"></span>
@@ -996,6 +998,8 @@
       <button class="update-bar-close" on:click={() => (updateError = '')}>✕</button>
     </div>
   {/if}
+
+<div class="app-shell">
   <!-- Header -->
   <header class="header">
     <div class="header-logo">
@@ -1233,6 +1237,7 @@
       {/if}
     </div>
   </main>
+</div>
 </div>
 
 <!-- Command Palette -->
