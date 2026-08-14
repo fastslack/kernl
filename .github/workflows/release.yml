@@ -415,6 +415,27 @@ jobs:
           path: artifacts
       - name: Flatten artifact tree
         run: find artifacts -type f -exec mv -t . {} +
+
+      # Checksums for everything published.
+      #
+      # The in-app updater downloads a replacement bundle and swaps the running
+      # app for it. Until now it verified nothing — it fetched over HTTPS from
+      # GitHub and trusted whatever came back. That is a worse gap than the
+      # missing code signature: the user already consented once, and a
+      # compromised release or an intercepting proxy would be installed without
+      # a word. install.sh had the same hole.
+      #
+      # Generated here rather than per-platform so one file covers every
+      # artifact, and so the sums are computed from exactly what gets attached.
+      - name: Generate SHA256SUMS
+        run: |
+          sha256sum \
+            kernl-*.rpm kernl_*.deb \
+            Kernl-*.dmg Kernl-*-macos.tar.gz \
+            kernl-*-windows-x64.msi kernl-*-windows-x64.zip \
+            > SHA256SUMS
+          cat SHA256SUMS
+
       - uses: softprops/action-gh-release@v3
         with:
           # Case matters here: this job runs on Linux. macOS artifacts are
@@ -427,6 +448,7 @@ jobs:
             Kernl-*-macos.tar.gz
             kernl-*-windows-x64.msi
             kernl-*-windows-x64.zip
+            SHA256SUMS
           generate_release_notes: true
           # Any tag carrying a prerelease suffix (v0.1.1-rc.1, -beta.2 …) is
           # published as a prerelease. This is what keeps `install.sh` honest:

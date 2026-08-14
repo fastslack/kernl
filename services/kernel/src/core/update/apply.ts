@@ -37,7 +37,8 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { chmod, mkdtemp, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -197,6 +198,42 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
       return { ok: false, reason: `Could not download ${asset} (HTTP ${res.status}).` };
     }
     await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tarball));
+
+    // Verify before unpacking anything.
+    //
+    // This replaces the running application, so trusting an HTTPS fetch on its
+    // own is the wrong shape: the user consented to "update", not to "install
+    // whatever this connection returns". A compromised release, a stale CDN
+    // object, or an intercepting proxy all look identical to a good download
+    // without this.
+    //
+    // Refuses when SHA256SUMS is absent rather than proceeding unverified —
+    // releases published before that file existed simply cannot be applied
+    // from inside the app, which is the safe direction to fail.
+    const sums = await fetch(
+      `https://github.com/${REPO}/releases/download/v${status.latest}/SHA256SUMS`,
+    );
+    if (!sums.ok) {
+      return {
+        ok: false,
+        reason: "This release publishes no checksums, so the download cannot be verified.",
+        useInstead: `https://github.com/${REPO}/releases/latest`,
+      };
+    }
+    const expected = (await sums.text())
+      .split("\n")
+      .map((l) => l.trim().split(/\s+/))
+      .find(([, name]) => name?.replace(/^\*/, "") === asset)?.[0];
+    if (!expected) {
+      return { ok: false, reason: `SHA256SUMS does not list ${asset}.` };
+    }
+    const actual = createHash("sha256").update(await readFile(tarball)).digest("hex");
+    if (actual !== expected) {
+      return {
+        ok: false,
+        reason: "The download did not match its published checksum, so it was discarded.",
+      };
+    }
 
     // Unpack beside the download, then find what came out. Trusting the
     // archive to contain a predictably-named directory is how you end up
