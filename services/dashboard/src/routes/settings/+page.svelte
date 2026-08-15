@@ -26,6 +26,8 @@
   import StatusPill from '$lib/components/settings/StatusPill.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
+  import SideNav from '$lib/components/SideNav.svelte';
+  import type { SideNavItem } from '$lib/components/SideNav.svelte';
 
   // ── Types ────────────────────────────────────
   interface CatalogItem {
@@ -218,6 +220,19 @@
   const CORE_SECTIONS = ['general', 'ai', 'channels', 'integrations', 'security', 'advanced'];
   $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`) }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
+
+  // Un solo array para el rail. El divisor cuelga del primer item de
+  // extensión en vez de ser un nodo aparte, que es lo que permite que el
+  // rail sea una lista plana y no una estructura de grupos.
+  $: sideNavItems = [
+    ...navSections.map((s): SideNavItem => ({ id: s.id, label: s.label })),
+    ...extNav.map((s, i): SideNavItem => ({
+      id: s.id,
+      label: s.label,
+      icon: s.icon || undefined,
+      divider: i === 0 ? $t('settings.nav.extensions') : undefined,
+    })),
+  ];
 
   $: activeSection = (() => {
     const q = $page.url.searchParams.get('section');
@@ -961,50 +976,53 @@
   {#if loading}
     <div class="st-loading">{$t('settings.loading')}</div>
   {:else}
-    <div class="st-layout">
+    <div class="sidenav-layout">
       <!-- ═══ Sidebar ═══ -->
-      <nav class="st-nav">
-        <input
-          class="st-search"
-          type="text"
-          placeholder={$t('settings.search')}
-          bind:value={searchQuery}
-          spellcheck="false"
-        />
-
-        {#if searchQuery.trim()}
-          <div class="st-results">
-            {#if groupedResults.length === 0}
-              <div class="st-noresults">{$t('settings.search_none')}</div>
-            {:else}
-              {#each groupedResults as g (g.section)}
-                <div class="st-result-group">{g.label}</div>
-                {#each g.items as r (r.key)}
-                  <button class="st-result" on:click={() => jumpTo(r)}>
-                    <span class="st-result-label">{r.label}</span>
-                    <span class="st-result-key">{r.key}</span>
-                  </button>
+      {#if searchQuery.trim()}
+        <SideNav items={[]} active="" onSelect={() => {}} ariaLabel={$t('settings.search')}>
+          <svelte:fragment slot="top">
+            <input
+              class="st-search"
+              type="text"
+              placeholder={$t('settings.search')}
+              bind:value={searchQuery}
+              spellcheck="false"
+            />
+            <div class="st-results">
+              {#if groupedResults.length === 0}
+                <div class="st-noresults">{$t('settings.search_none')}</div>
+              {:else}
+                {#each groupedResults as g (g.section)}
+                  <div class="st-result-group">{g.label}</div>
+                  {#each g.items as r (r.key)}
+                    <button class="st-result" on:click={() => jumpTo(r)}>
+                      <span class="st-result-label">{r.label}</span>
+                      <span class="st-result-key">{r.key}</span>
+                    </button>
+                  {/each}
                 {/each}
-              {/each}
-            {/if}
-          </div>
-        {:else}
-          {#each navSections as s (s.id)}
-            <button class="st-nav-item" class:active={activeSection === s.id} on:click={() => gotoSection(s.id)}>
-              {s.label}
-            </button>
-          {/each}
-          {#if extNav.length}
-            <div class="st-nav-divider">{$t('settings.nav.extensions')}</div>
-            {#each extNav as s (s.id)}
-              <button class="st-nav-item ext" class:active={activeSection === s.id} on:click={() => gotoSection(s.id)}>
-                {#if s.icon}<span class="st-nav-icon">{s.icon}</span>{/if}
-                {s.label}
-              </button>
-            {/each}
-          {/if}
-        {/if}
-      </nav>
+              {/if}
+            </div>
+          </svelte:fragment>
+        </SideNav>
+      {:else}
+        <SideNav
+          items={sideNavItems}
+          active={activeSection}
+          onSelect={gotoSection}
+          ariaLabel={$t('settings.search')}
+        >
+          <svelte:fragment slot="top">
+            <input
+              class="st-search"
+              type="text"
+              placeholder={$t('settings.search')}
+              bind:value={searchQuery}
+              spellcheck="false"
+            />
+          </svelte:fragment>
+        </SideNav>
+      {/if}
 
       <!-- ═══ Content ═══ -->
       <div class="st-content">
@@ -1486,35 +1504,16 @@
     background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25); color: #f87171;
   }
 
-  /* Layout */
-  .st-layout { flex: 1; min-height: 0; display: grid; grid-template-columns: 210px 1fr; gap: 12px; }
-
-  /* Sidebar */
-  .st-nav {
-    display: flex; flex-direction: column; gap: 2px;
-    background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px;
-    padding: 8px; height: fit-content; max-height: 100%; overflow-y: auto;
-    scrollbar-width: thin;
-  }
+  /* El layout (`.sidenav-layout`) vive en app.css y el rail en
+     $lib/components/SideNav.svelte. Lo que queda acá es el buscador y sus
+     resultados, que Settings inyecta por el slot `top` del rail: indexan
+     claves del catálogo, no items de navegación. */
   .st-search {
     width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 11px;
     border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1);
     font-family: var(--font-body); outline: none; box-sizing: border-box; margin-bottom: 6px;
   }
   .st-search:focus { border-color: var(--teal); }
-  .st-nav-item {
-    display: flex; align-items: center; gap: 7px; padding: 7px 10px; border-radius: 6px;
-    border: none; background: none; cursor: pointer; text-align: left; font-family: inherit;
-    color: var(--text-2); transition: all 0.15s; width: 100%;
-    font-size: 12px; font-weight: 600;
-  }
-  .st-nav-item:hover { background: var(--surface-2); }
-  .st-nav-item.active { background: var(--surface-3); color: var(--text-1); }
-  .st-nav-icon { font-size: 13px; flex-shrink: 0; }
-  .st-nav-divider {
-    font: 700 8px var(--font-mono); text-transform: uppercase; letter-spacing: 1px;
-    color: var(--text-3); margin: 8px 4px 4px; padding-top: 8px; border-top: 1px solid var(--border);
-  }
 
   /* Search results */
   .st-results { display: flex; flex-direction: column; gap: 1px; }
@@ -1741,8 +1740,6 @@
   .fld-lang-key { font: 400 9px var(--font-mono); color: var(--text-3); }
 
   @media (max-width: 700px) {
-    .st-layout { grid-template-columns: 1fr; }
-    .st-nav { flex-direction: column; max-height: 220px; }
     .prov-row { grid-template-columns: 1fr; }
     .prov-actions { justify-content: flex-start; max-width: none; }
     .wa-qr-box { flex-direction: column; align-items: center; }

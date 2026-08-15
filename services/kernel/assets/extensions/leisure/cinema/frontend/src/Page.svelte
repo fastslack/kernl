@@ -1329,6 +1329,80 @@
   // pointing at the cached transcribe output (modal swaps to
   // "Translating to X…"). Installs cues at the end. Each phase has
   // its own modal state so the visual swap matches reality.
+  /**
+   * Turn a proxy's status code into something that names the actual problem.
+   *
+   * These codes never come from the kernel — it answers `{error}` JSON. A bare
+   * 502 or 504 with an HTML body is nginx (or a dev-server proxy) reporting on
+   * the kernel's behalf, and "transcribe http 502" told the user nothing about
+   * which of the two very different situations they were in.
+   */
+  function transcribeHttpHint(status: number): string {
+    if (status === 502 || status === 503) {
+      return 'el kernel no respondió (502) — se está reiniciando o se cayó';
+    }
+    if (status === 504) {
+      return 'el proxy cortó la espera (504) antes de que el kernel contestara';
+    }
+    return `transcribe http ${status}`;
+  }
+
+  /**
+   * Follow a transcription run to its end.
+   *
+   * Polls rather than holding a socket, so the run is decoupled from any one
+   * request. Transport failures are NOT terminal here on purpose: a restarting
+   * kernel answers 502 for a few seconds, and the whole point of putting the
+   * job in the database was that it is still there afterwards. Only a run that
+   * reports a terminal state, or a stretch of silence long enough that nothing
+   * is plausibly coming back, ends the wait.
+   *
+   * Returns null when the user aborted.
+   */
+  async function awaitTranscribeJob(
+    key: string,
+    signal: AbortSignal,
+  ): Promise<{ status: string; error?: string; cueCount?: number } | null> {
+    const POLL_MS = 2000;
+    // ~2 minutes of consecutive unreachable polls. A kernel restart is ten
+    // seconds; anything past this is not coming back on its own.
+    const MAX_CONSECUTIVE_FAILURES = 60;
+    let failures = 0;
+
+    while (!signal.aborted) {
+      await new Promise((r) => setTimeout(r, POLL_MS));
+      if (signal.aborted) return null;
+      try {
+        const r = await apiFetch(
+          `/api/cinema/media/transcribe/status?key=${encodeURIComponent(key)}`,
+          { credentials: 'omit', signal },
+        );
+        if (!r.ok) {
+          // 404 means the row is gone and no cache file exists — for a job we
+          // just started that is a restart that lost it before the first
+          // write, which the next boot will have marked interrupted anyway.
+          failures += 1;
+          if (failures >= MAX_CONSECUTIVE_FAILURES) {
+            return { status: 'error', error: transcribeHttpHint(r.status) };
+          }
+          continue;
+        }
+        failures = 0;
+        const s = await r.json();
+        if (s?.status === 'ready' || s?.status === 'error' || s?.status === 'interrupted') {
+          return s;
+        }
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return null;
+        failures += 1;
+        if (failures >= MAX_CONSECUTIVE_FAILURES) {
+          return { status: 'error', error: `no se pudo consultar el trabajo: ${err?.message ?? String(err)}` };
+        }
+      }
+    }
+    return null;
+  }
+
   async function runAutoTranslatePipeline(): Promise<void> {
     const item = playItem; const file = playFiles[playActiveIdx];
     if (!item || !file) return;
@@ -1384,20 +1458,53 @@
       // startProgress('transcribe') opened the SSE — forward its jobId so
       // the kernel pushes whisper.cpp's per-percent progress to the bar.
       if (subsJobId) transcribeParams.set('jobId', subsJobId);
-      const transcribeRoute = `/api/cinema/media/transcribe?${transcribeParams.toString()}`;
       // For Phase 2, translate-srt will fetch the cached transcribe via
-      // the kernel's own URL (handled by its localhost-rewrite logic).
+      // the kernel's own URL (handled by its localhost-rewrite logic). By
+      // then the run has finished, so this route answers from cache instead
+      // of holding anything open.
+      const transcribeRoute = `/api/cinema/media/transcribe?${transcribeParams.toString()}`;
       phase1UpstreamUrl = `${window.location.origin}${transcribeRoute}`;
       try {
-        const r = await apiFetch(transcribeRoute, { credentials: 'omit', signal: myAbort.signal });
-        if (!r.ok) {
-          const e = await r.json().catch(() => ({} as any));
-          stopProgress(e.error ?? `transcribe http ${r.status}`);
+        // Start the run and let go of the request. Captioning a feature is
+        // ten to fifteen minutes; holding one fetch open for that long meant
+        // a proxy read timeout, a reload, or a kernel restart all landed as
+        // an unexplained gateway error AND threw the work away. Now the run
+        // is server-side state we can poll, reconnect to, and describe.
+        const started = await apiFetch(
+          `/api/cinema/media/transcribe/start?${transcribeParams.toString()}`,
+          { credentials: 'omit', signal: myAbort.signal },
+        );
+        if (!started.ok) {
+          const e = await started.json().catch(() => ({} as any));
+          stopProgress(e.error ?? transcribeHttpHint(started.status));
           return;
         }
-        transcribedVtt = await r.text();
-        const cueHdr = r.headers.get('x-transcribe-cues');
-        if (cueHdr) transcribeCueCount = parseInt(cueHdr, 10);
+        const job = await started.json();
+        const jobKey: string = job?.key ?? '';
+        if (!jobKey) { stopProgress('el kernel no devolvió una clave de trabajo'); return; }
+
+        const settled = await awaitTranscribeJob(jobKey, myAbort.signal);
+        if (!settled) return;                     // aborted by the user
+        if (settled.status === 'interrupted') {
+          stopProgress('la transcripción se cortó porque el kernel se reinició — reintentá');
+          return;
+        }
+        if (settled.status !== 'ready') {
+          stopProgress(settled.error || `la transcripción terminó en ${settled.status}`);
+          return;
+        }
+        transcribeCueCount = settled.cueCount ?? 0;
+
+        const vttRes = await apiFetch(
+          `/api/cinema/media/subs/file?key=${encodeURIComponent(jobKey)}`,
+          { credentials: 'omit', signal: myAbort.signal },
+        );
+        if (!vttRes.ok) {
+          const e = await vttRes.json().catch(() => ({} as any));
+          stopProgress(e.error ?? `no se pudo leer el VTT generado (http ${vttRes.status})`);
+          return;
+        }
+        transcribedVtt = await vttRes.text();
         transcribeAvailable = true;
       } catch (err: any) {
         if (err?.name === 'AbortError') return;
@@ -2643,7 +2750,12 @@
    */
   $: startupBusy = playOpen && !playLoading && !playError && !!playSrc && startupPhase !== 'ready';
   /** A transcode has no seekable buffer to report — say so instead of faking one. */
-  $: startupIndeterminate = playNeedsTranscode || startupBufferedFrac <= 0;
+  // A conversion DOES know its fraction — bytes downloaded, then seconds
+  // encoded — so it gets a real bar rather than the sweeping line reserved
+  // for "we genuinely cannot say".
+  $: startupIndeterminate = convertBusy
+    ? convertFrac <= 0
+    : (playNeedsTranscode || startupBufferedFrac <= 0);
 
   $: if (typeof window !== 'undefined' && trackUrl) {
     setTimeout(enableAllTextTracks, 120);
@@ -2651,8 +2763,27 @@
 
   // The first .srt file in the playFiles list (archive.org typically ships
   // English subs only for these old films).
+  /**
+   * Is this listing entry a subtitle file with something in it?
+   *
+   * The two places that look for shipped subtitles — `findSrtFile` for the
+   * reactive track URL and `detectShippedSubs` for the track list — used to
+   * each decide for themselves, and fixing only one left the other still
+   * offering `AboutBan1935.asr.srt`: an entry archive.org lists at size 0
+   * because its speech-recognition pass produced nothing. Both go through
+   * here now, so the rule has one definition.
+   *
+   * The floor sits above zero on purpose: one well-formed SRT cue is roughly
+   * 40 bytes, so anything smaller is a stub rather than subtitles.
+   */
+  const MIN_SUB_BYTES = 32;
+
+  function hasSubtitleContent(f: PlayFile): boolean {
+    return (f.size ?? 0) >= MIN_SUB_BYTES;
+  }
+
   function findSrtFile(files: PlayFile[]): PlayFile | null {
-    return files.find(f => /\.srt$/i.test(f.name)) ?? null;
+    return files.find(f => /\.srt$/i.test(f.name) && hasSubtitleContent(f)) ?? null;
   }
   function srtUpstreamUrl(item: ArchiveItem, srt: PlayFile): string {
     return archiveDownloadUrl(item.identifier, srt.name);
@@ -2672,10 +2803,15 @@
   //   subtitulos.es.srt    → es
   //   foo.srt              → unknown (assumed = subSourceLang for fallback)
   interface ShippedSub { file: PlayFile; lang: string; key: string; }
+  /**
+   * A subtitle file has to be listed AND have something in it — see
+   * `hasSubtitleContent`, which both finders share so they cannot drift.
+   */
   function detectShippedSubs(files: PlayFile[]): ShippedSub[] {
     const subs: ShippedSub[] = [];
     for (const f of files) {
       if (!/\.(srt|vtt|ass|ssa|sub)$/i.test(f.name)) continue;
+      if (!hasSubtitleContent(f)) continue;
       const lang = sniffLangFromFilename(f.name);
       subs.push({
         file: f,
@@ -2797,7 +2933,68 @@
   const KIND_ORDER: Record<string, number> = {
     video: 0, audio: 1, image: 2, text: 3, other: 4,
   };
+  /**
+   * What archive.org's `format` field tells us about browser decodability.
+   *
+   * The extension is not the answer: an archive.org item routinely ships
+   * several .mp4 files and only some of them hold h264. "About Bananas" has
+   * three — `AboutBan1935.mp4` (h264 640x480), `AboutBan1935_512kb.mp4` (h264
+   * 320x240) and `AboutBan1935_edit.mp4` (MPEG-4 Part 2, which no browser
+   * decodes). Picking by extension and size took the third: it is the largest,
+   * so it won, and every playback of that item went through a live transcode
+   * that cannot keep up with the source download.
+   *
+   * The names mislead in both directions, so these were verified with ffprobe
+   * rather than read off the label — `512Kb MPEG4` is h264 despite the name,
+   * while `HiRes MPEG4` really is Part 2. Match exact-ish formats: a loose
+   * /mpeg4/ test would reject the one derivative that works.
+   */
+  const BROWSER_FORMAT_RANK: Array<{ test: RegExp; rank: number }> = [
+    { test: /^h\.?\s*264/i,        rank: 0 },   // archive.org's primary mp4 derivative
+    { test: /^512kb\s+mpeg4$/i,    rank: 1 },   // h264 despite the label (verified)
+    { test: /^webm/i,              rank: 2 },
+    { test: /^ogg\s+video$/i,      rank: 3 },
+  ];
+  /** Formats we know the browser cannot decode — these force the transcoder. */
+  const OPAQUE_FORMAT = /^(hi\s*res\s+mpeg4|mpeg\s*-?\s*[12]|cinepack|cinepak|windows\s+media|quicktime|divx|xvid|asf|matroska|3gp)/i;
+
+  /** Rank for sorting: lower is better, unknown formats sit between good and bad. */
+  function formatRank(format: string): number {
+    const f = (format ?? '').trim();
+    for (const { test, rank } of BROWSER_FORMAT_RANK) if (test.test(f)) return rank;
+    if (OPAQUE_FORMAT.test(f)) return 90;
+    return 50;                                   // unknown — try it before a known-bad one
+  }
+
+  /** True when this file will need the transcoder to reach the browser. */
+  function needsTranscodeFor(file: PlayFile | undefined): boolean {
+    if (!file) return false;
+    const ext = file.name.toLowerCase().split('.').pop() ?? '';
+    if (TRANSCODABLE.includes(ext)) return true;
+    return OPAQUE_FORMAT.test((file.format ?? '').trim());
+  }
+
   function pickDefaultPlayIdx(files: PlayFile[]): number {
+    const videos = files
+      .map((f, idx) => ({ f, idx }))
+      .filter((e) => e.f.kind === 'video');
+
+    if (videos.length > 0) {
+      // Best decodable format first; among equals the biggest, which on
+      // archive.org is reliably the higher-resolution derivative.
+      const best = videos
+        .slice()
+        .sort((a, b) => {
+          const ra = formatRank(a.f.format);
+          const rb = formatRank(b.f.format);
+          if (ra !== rb) return ra - rb;
+          return (b.f.size ?? 0) - (a.f.size ?? 0);
+        })[0];
+      if (best && formatRank(best.f.format) < 90) return best.idx;
+      // Everything is opaque: fall through and let the old extension order
+      // choose, then the transcoder earns its keep.
+    }
+
     // Prefer mp4 > webm > mov > mkv > ogv > mpg/avi (transcoded) > audio
     const order = ['mp4', 'webm', 'mov', 'm4v', 'mkv', 'ogv', 'mpg', 'mpeg', 'avi', 'm2v', 'mp3', 'flac', 'ogg', 'opus'];
     for (const ext of order) {
@@ -2824,8 +3021,10 @@
   }
   function buildPlayUrl(item: ArchiveItem, file: PlayFile, forceTranscode = false): { src: string; needsTranscode: boolean } {
     const upstream = archiveDownloadUrl(item.identifier, file.name);
-    const ext = file.name.toLowerCase().split('.').pop() ?? '';
-    const needsTranscode = forceTranscode || TRANSCODABLE.includes(ext);
+    // Format, not just extension: a .mp4 holding MPEG-4 Part 2 is not
+    // playable either, and discovering that by letting the browser fail and
+    // reloading costs a visible stall on every single play.
+    const needsTranscode = forceTranscode || needsTranscodeFor(file);
     const origin = (typeof window !== 'undefined' ? window.location.origin : '');
     const endpoint = needsTranscode ? '/api/cinema/media/transcode' : '/api/cinema/media/webseed-proxy';
     return { src: `${origin}${endpoint}?url=${encodeURIComponent(upstream)}${authQuery()}`, needsTranscode };
@@ -2867,21 +3066,100 @@
    * tried and failed, the user watched a black frame, and saying so is
    * warranted.
    */
+  // ── Conversion fallback ────────────────────────────────────────────────
+  // Reached only when nothing in the item is decodable — pickDefaultPlayIdx
+  // takes the h264 derivative whenever one exists, which is most of the time.
+  // What happens here is a download-then-convert job, not a live transcode:
+  // streaming ffmpeg straight from archive.org runs at 0.0665x realtime
+  // because it reopens a TLS connection per seek, so it never finishes. The
+  // job fetches once (sequential, ~6x faster), converts off local disk, and
+  // leaves a cached file that plays and, unlike the stream, seeks.
+  let convertKey = '';
+  let convertPhase = '';
+  let convertFrac = 0;
+  let convertBusy = false;
+  let convertError = '';
+  let convertPoll: ReturnType<typeof setInterval> | null = null;
+
+  function stopConvertPoll(): void {
+    if (convertPoll) { clearInterval(convertPoll); convertPoll = null; }
+  }
+
+  /** Human phase label for the overlay. */
+  $: convertLabel =
+    convertPhase === 'download' ? 'Descargando el original'
+    : convertPhase === 'convert' ? 'Convirtiendo para tu navegador'
+    : 'Preparando';
+
+  async function startConversion(upstream: string): Promise<void> {
+    stopConvertPoll();
+    convertBusy = true;
+    convertError = '';
+    convertFrac = 0;
+    convertPhase = 'download';
+    try {
+      const r = await apiFetch(`/api/cinema/media/convert/start?url=${encodeURIComponent(upstream)}`);
+      if (!r.ok) {
+        const e = await r.json().catch(() => ({} as any));
+        convertError = e.error ?? `no se pudo iniciar la conversión (http ${r.status})`;
+        convertBusy = false;
+        return;
+      }
+      const job = await r.json();
+      convertKey = job?.key ?? '';
+      if (!convertKey) { convertError = 'el kernel no devolvió una clave'; convertBusy = false; return; }
+      if (job?.status === 'ready') { adoptConverted(); return; }
+
+      convertPoll = setInterval(async () => {
+        try {
+          const s = await apiFetch(`/api/cinema/media/convert/status?key=${encodeURIComponent(convertKey)}`);
+          if (!s.ok) return;                      // transient: a restart answers 5xx briefly
+          const j = await s.json();
+          convertPhase = j?.phase ?? convertPhase;
+          convertFrac = typeof j?.frac === 'number' ? j.frac : convertFrac;
+          if (j?.status === 'ready') { adoptConverted(); }
+          else if (j?.status === 'error') {
+            stopConvertPoll();
+            convertBusy = false;
+            convertError = j?.error || 'la conversión falló';
+          } else if (j?.status === 'interrupted') {
+            stopConvertPoll();
+            convertBusy = false;
+            convertError = 'la conversión se cortó porque el kernel se reinició — reintentá';
+          }
+        } catch { /* keep polling; the job outlives a hiccup */ }
+      }, 2000);
+    } catch (err: any) {
+      convertBusy = false;
+      convertError = `no se pudo iniciar la conversión: ${err?.message ?? String(err)}`;
+    }
+  }
+
+  /** Point the <video> at the finished file. Seekable, cached, local. */
+  function adoptConverted(): void {
+    stopConvertPoll();
+    convertBusy = false;
+    convertFrac = 1;
+    const origin = (typeof window !== 'undefined' ? window.location.origin : '');
+    playSrc = `${origin}/api/cinema/media/convert/file?key=${encodeURIComponent(convertKey)}${authQuery()}`;
+    // No longer a forward-only stream, so the scrubber works again.
+    playNeedsTranscode = false;
+  }
+
   function switchToTranscode(reason: string, opts?: { expected?: boolean }): void {
     if (codecFallbackUsed) return;
     if (!playItem || !playFiles[playActiveIdx]) return;
     codecFallbackUsed = true;
     const expected = opts?.expected === true;
     codecFallbackHint = expected
-      ? `${reason} — transcoding for the browser`
-      : `Codec not supported (${reason}) — switching to live transcode…`;
+      ? `${reason} — preparando una copia reproducible`
+      : `Codec not supported (${reason}) — preparando una copia reproducible…`;
     codecFallbackExpected = expected;
-    if (expected) dbg('[cinema] transcoding up front:', reason);
+    if (expected) dbg('[cinema] converting up front:', reason);
     else console.warn('[cinema] codec fallback:', reason);
-    const built = buildPlayUrl(playItem, playFiles[playActiveIdx], true);
-    playSrc = built.src;
     playNeedsTranscode = true;
-    // Auto-clear once the transcode load is under way. The expected case is
+    void startConversion(archiveDownloadUrl(playItem.identifier, playFiles[playActiveIdx].name));
+    // Auto-clear once the job is under way. The expected case is
     // informational, so it goes sooner.
     setTimeout(() => { codecFallbackHint = ''; }, expected ? 3500 : 6000);
   }
@@ -3132,6 +3410,15 @@
     playNeedsTranscode = built.needsTranscode;
   }
   function closePlayer() {
+    // Stop watching a conversion, but leave it running: it is server-side
+    // work whose result is cached, so reopening the title later is instant
+    // instead of starting the whole download again.
+    stopConvertPoll();
+    convertBusy = false;
+    convertError = '';
+    convertFrac = 0;
+    convertPhase = '';
+    convertKey = '';
     playOpen = false;
     playItem = null;
     playFiles = [];
@@ -4333,7 +4620,15 @@
                         </div>
 
                         <div class="vboot-label">
-                          {#if playNeedsTranscode}
+                          {#if convertBusy}
+                            <!-- Two phases with very different rates, so name
+                                 the one that is actually running and show its
+                                 real fraction. The old bar claimed to be
+                                 converting while it was still downloading. -->
+                            {convertLabel}{#if convertFrac > 0}&nbsp;· {Math.round(convertFrac * 100)}%{/if}
+                          {:else if convertError}
+                            {convertError}
+                          {:else if playNeedsTranscode}
                             {$t('boot.transcoding')}
                           {:else if startupPhase === 'connecting'}
                             {$t('boot.connecting')}
@@ -4486,7 +4781,13 @@
                     <div class="translate-error" role="alert">
                       <span class="t-err-icon">⚠</span>
                       <div class="t-err-body">
-                        <strong>Translation failed</strong>
+                        <!-- `translateError` carries whatever step of the
+                             subtitle chain gave up, so the heading follows
+                             `translateMode` rather than always claiming a
+                             translation. It read "Translation failed" over a
+                             passthrough of a shipped subtitle file, which is
+                             the one thing that was definitely not happening. -->
+                        <strong>{translateMode === 'transcribe' ? 'No se pudieron obtener subtítulos' : 'Falló la traducción'}</strong>
                         <div class="dim mini">{translateError}</div>
                       </div>
                       <button class="t-err-dismiss" on:click={() => translateError = ''} title="dismiss">×</button>

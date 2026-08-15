@@ -42,7 +42,7 @@ const es: Record<string, string> = {
   "nav.view.nutrition": "Comida",
   "nav.view.ai-overview": "Resumen",
   "nav.view.agents": "Agentes",
-  "nav.view.agents-flow": "Flujo",
+  "nav.view.agents-flow": "3D",
   "nav.view.autogenesis": "Evoluciones",
   "nav.view.ranks": "Rangos",
   "nav.view.models": "Modelos",

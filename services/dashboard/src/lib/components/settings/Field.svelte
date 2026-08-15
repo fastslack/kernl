@@ -10,6 +10,7 @@
    */
   import SecretInput from './SecretInput.svelte';
   import Toggle from './Toggle.svelte';
+  import { parseDescription } from '$lib/settings-links';
 
   export let fieldKey = '';
   export let label = '';
@@ -36,7 +37,16 @@
       <label class="lbl" for={`in-${fieldKey}`}>{label}</label>
       {#if readonly}<span class="ro">read-only</span>{/if}
     </div>
-    {#if description}<span class="desc">{description}</span>{/if}
+    <!-- Tokens, never `{@html}`: these strings come from extension manifests
+         and an installed extension must not be able to inject markup here. -->
+    {#if description}
+      <span class="desc">{#each parseDescription(description) as tk}{#if tk.kind === 'link'}<a
+            class="desc-link"
+            href={tk.href}
+            target="_blank"
+            rel="noopener noreferrer"
+          >{tk.text}</a>{:else}{tk.text}{/if}{/each}</span>
+    {/if}
     <span class="key">{fieldKey}</span>
   </div>
 
@@ -100,6 +110,16 @@
     color: var(--text-3); border: 1px solid var(--border); border-radius: 3px; padding: 1px 4px;
   }
   .desc { font-size: 10px; color: var(--text-2); line-height: 1.4; }
+  /* Underlined, not just recoloured: at 10px on a dim palette a colour shift
+     alone is easy to miss, and it is the only cue that this is clickable. */
+  .desc-link {
+    color: var(--accent, #7fd1c4);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    word-break: break-all;
+  }
+  .desc-link:hover { color: var(--text-1); }
+  .desc-link:focus-visible { outline: 1px solid var(--accent, #7fd1c4); outline-offset: 2px; }
   .key { font: 400 9px var(--font-mono); color: var(--text-3); word-break: break-all; }
 
   .ctrl { display: flex; flex-direction: column; gap: 3px; min-width: 0; }

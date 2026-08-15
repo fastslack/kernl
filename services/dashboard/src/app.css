@@ -753,25 +753,6 @@ html, body {
 .sub-tab:hover  { color: var(--text-2); }
 .sub-tab.active { color: var(--gold); border-bottom-color: var(--gold); }
 
-/* Child sub-tabs — extension-contributed, rendered under the page they belong
-   to. These are the only tabs still living in the content area; the group
-   tabs moved to the header rail, so this bar is now the first element in
-   .main-content and bleeds to its top edge rather than tucking under a
-   parent bar. */
-.sub-tabs-children {
-  margin-top: -24px;
-  padding-left: 48px;
-  background: color-mix(in srgb, var(--gold) 4%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--border) 60%, transparent);
-}
-.sub-tab.child {
-  font-size: 10px;
-  padding: 6px 14px;
-  color: var(--text-2);
-  text-transform: none;
-  letter-spacing: 0.03em;
-}
-.sub-tab.child:hover { color: var(--gold); }
 .sub-badge {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 14px; height: 14px;
@@ -807,15 +788,40 @@ html, body {
   flex-shrink: 0;
 }
 
+/* El frame que envuelve rail + contenido. Sin rail es un simple flex column,
+   así que las páginas que no tienen hermanos quedan exactamente como estaban. */
+.content-frame {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+.content-frame.with-rail {
+  display: grid;
+  grid-template-columns: 210px 1fr;
+  gap: 12px;
+  min-height: 0;
+}
+@media (max-width: 700px) {
+  .content-frame.with-rail { grid-template-columns: 1fr; }
+}
+
 /* Full-bleed content fills remaining space */
-.main-content.full-bleed-mode > :not(.sub-tabs) {
+.main-content.full-bleed-mode > .content-frame {
   flex: 1;
   min-height: 0;
   overflow: hidden;
 }
 
+/* En full-bleed el contenido sangra hasta el borde, pero el rail necesita su
+   propio aire: sin esto queda pegado al borde de la ventana en /architecture,
+   que es la única vista full-bleed con rail. */
+.main-content.full-bleed-mode > .content-frame.with-rail {
+  padding: 24px 0 24px 24px;
+}
+
 /* Inner wrapper must propagate flex height in full-bleed mode */
-.main-content.full-bleed-mode > .main-inner {
+.main-content.full-bleed-mode .main-inner {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -826,6 +832,18 @@ html, body {
 .main-inner {
   transition: opacity 0.15s;
   opacity: 1;
+}
+
+/* ── Side rail layout ──────────────────────────────────────────────
+   Compartido por /settings y las páginas de Sistema. Vivía como
+   `.st-layout` dentro de settings/+page.svelte; salió de ahí porque el
+   shell ahora lo usa para envolver el <slot/>. */
+.sidenav-layout {
+  flex: 1; min-height: 0;
+  display: grid; grid-template-columns: 210px 1fr; gap: 12px;
+}
+@media (max-width: 700px) {
+  .sidenav-layout { grid-template-columns: 1fr; }
 }
 .main-inner.navigating-fade {
   opacity: 0.5;

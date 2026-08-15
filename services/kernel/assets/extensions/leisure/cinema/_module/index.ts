@@ -41,7 +41,9 @@ import { ArchiveSubsProvider } from "./discovery/archive-provider.js";
 import { NostrDirectoriesProvider } from "./discovery/nostr-directories-provider.js";
 import { registerCinemaRoutes } from "./api-routes.js";
 import { registerCinemaFriendsRoutes } from "./friends-routes.js";
-import { registerCinemaMediaRoutes } from "./media-routes.js";
+import { registerCinemaMediaRoutes, createTranscribeRunner } from "./media-routes.js";
+import { TranscribeJobService } from "./transcribe-jobs.js";
+import { ConvertJobService } from "./convert-jobs.js";
 import { cinemaTools } from "./tools.js";
 import { EmbedRunner } from "./embed-runner.js";
 import { GraphProjectionRunner } from "./graph-projection-runner.js";
@@ -56,6 +58,7 @@ import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
 import type { AgentDriver } from "../../../../../src/core/types.js";
 import { log } from "../../../../../src/core/logger.js";
+import path from "node:path";
 
 export interface CinemaModule extends ExtensibleModule {
   getService(): CinemaService | null;
@@ -104,6 +107,10 @@ export function createCinemaModule(): CinemaModule {
   let canonicalRunner: CanonicalRunner | null = null;
   let mediaRunner: MediaProbeRunner | null = null;
   let sqliteRef: SqliteDb | null = null;
+  /** Captioning runs that outlive the request that started them. */
+  let transcribeJobs: TranscribeJobService | null = null;
+  /** Download-then-convert fallback for sources no browser decodes. */
+  let convertJobs: ConvertJobService | null = null;
   let directoriesService: CinemaDirectoriesService | null = null;
   let directoriesProvider: NostrDirectoriesProvider | null = null;
   /** Local kernel's Nostr identity. Held here so we can reuse it for
@@ -155,6 +162,23 @@ export function createCinemaModule(): CinemaModule {
       // canonical runner — identity comes from Wikidata, contents come from
       // the item — so the two run without waiting on each other.
       sqliteRef = ctx.sqlite;
+      // Captioning jobs. The sweep is the first thing it does: any row still
+      // claiming to run belongs to a process that is gone — the kernel was
+      // restarted mid-transcription — and leaving it as 'running' would show
+      // the player a progress bar waiting on nobody.
+      transcribeJobs = new TranscribeJobService(ctx.sqlite, createTranscribeRunner());
+      const interrupted = transcribeJobs.sweepInterrupted();
+      convertJobs = new ConvertJobService(
+        ctx.sqlite,
+        path.join(process.cwd(), "data", "converted"),
+      );
+      const halfConverted = convertJobs.sweepInterrupted();
+      if (halfConverted > 0) {
+        log.info(`cinema/convert: ${halfConverted} conversion(s) did not survive the last restart`);
+      }
+      if (interrupted > 0) {
+        log.info(`cinema/transcribe: ${interrupted} run(s) did not survive the last restart — marked interrupted`);
+      }
       mediaRunner = new MediaProbeRunner(ctx.sqlite);
       canonicalService = new CanonicalService(ctx.sqlite);
       canonicalRunner = new CanonicalRunner(
@@ -326,6 +350,8 @@ export function createCinemaModule(): CinemaModule {
       const getCanonicalRunner = () => canonicalRunner;
       const getMediaRunner = () => mediaRunner;
       const getSqlite = () => sqliteRef;
+      const getTranscribeJobs = () => transcribeJobs;
+      const getConvertJobs = () => convertJobs;
       const getGraphProjectionRunner = () => graphProjectionRunner;
       const getGraphResolveRunner = () => graphResolveRunner;
       return {
@@ -347,7 +373,7 @@ export function createCinemaModule(): CinemaModule {
           // Media-serving layer (archive.org proxy/transcode/probe + subtitle
           // pipeline). Standalone — no service deps, so register unconditionally
           // so the cinema player works even before the graph/embedder wire up.
-          registerCinemaMediaRoutes(server);
+          registerCinemaMediaRoutes(server, getTranscribeJobs, getConvertJobs);
 
           // Friends lane: serving friends-only directories to another kernel
           // and pulling theirs. Registered unconditionally — it reports 503

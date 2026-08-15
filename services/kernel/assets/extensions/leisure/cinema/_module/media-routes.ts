@@ -9,8 +9,15 @@ import {
   type TranslateProgress,
 } from "./translate.js";
 import { llm } from "../../../../../src/core/llm/client.js";
-import { transcribe, isGroqAvailable as isGroqWhisperAvailable, type TranscribeEngine } from "./transcribe.js";
-import { mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
+import {
+  transcribe,
+  isGroqAvailable as isGroqWhisperAvailable,
+  wrapThroughProxy,
+  type TranscribeEngine,
+} from "./transcribe.js";
+import { mediaToolBin, mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
+import type { TranscribeJobService, TranscribeRunner } from "./transcribe-jobs.js";
+import type { ConvertJobService } from "./convert-jobs.js";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
@@ -180,7 +187,7 @@ async function probeDurationWithRetry(
   ];
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     const result = await new Promise<number | null | "retry">((resolve) => {
-      const probe = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+      const probe = spawn(mediaToolBin("ffprobe"), args, { stdio: ["ignore", "pipe", "pipe"] });
       let out = "";
       let stderr = "";
       probe.stdout?.on("data", (c: Buffer) => { out += c.toString(); });
@@ -255,7 +262,7 @@ async function probeMediaInfo(parsed: URL, ua: string): Promise<ProbeInfo> {
     parsed.toString(),
   ];
   const raw = await new Promise<string | null>((resolve) => {
-    const probe = spawn("ffprobe", args, { stdio: ["ignore", "pipe", "pipe"] });
+    const probe = spawn(mediaToolBin("ffprobe"), args, { stdio: ["ignore", "pipe", "pipe"] });
     let out = "";
     let stderr = "";
     probe.stdout?.on("data", (c: Buffer) => { out += c.toString(); });
@@ -432,8 +439,161 @@ async function rmCacheKey(cacheDir: string, key: string): Promise<void> {
  * All routes are archive.org-generic — no P2P engine. The Pro torrents module
  * ships its own copy under /api/torrents/* for the seeding player.
  */
+/**
+ * Shape a transcribe request into the parameters every route below shares.
+ *
+ * The cache key is the identity of a run: same (url, engine, model, lang)
+ * means the same VTT, the same job row and the same on-disk file, whether
+ * you got there by starting a run, polling it, or asking twice.
+ */
+export function parseTranscribeRequest(reqUrl: string):
+  | { ok: false; status: number; error: string }
+  | {
+      ok: true;
+      target: string;
+      engine: TranscribeEngine;
+      model: "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
+      language: string | undefined;
+      jobId: string;
+      cacheKey: string;
+      cacheDir: string;
+      cachePath: string;
+    } {
+  const url = new URL(reqUrl || "/", "http://localhost");
+  const target = url.searchParams.get("url") ?? "";
+  const engineParam = (url.searchParams.get("engine") ?? "transformers").toLowerCase();
+  const model = (url.searchParams.get("model") ?? "base") as
+    "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
+  const language = url.searchParams.get("lang") || undefined;
+  const jobId = url.searchParams.get("jobId") ?? "";
+
+  const engine: TranscribeEngine = ["whispercpp", "transformers", "groq"].includes(engineParam)
+    ? (engineParam as TranscribeEngine) : "transformers";
+
+  if (!target) return { ok: false, status: 400, error: "url is required" };
+  if (engine === "groq" && !isGroqWhisperAvailable()) {
+    return { ok: false, status: 400, error: "groq engine selected but GROQ_API_KEY is not set" };
+  }
+
+  const cacheKey = createHash("sha1")
+    .update(`transcribe|${target}|${engine}|${model}|${language ?? "auto"}`)
+    .digest("hex");
+  const cacheDir = path.join(process.cwd(), "data", "subtitles");
+  return {
+    ok: true,
+    target, engine, model, language, jobId, cacheKey, cacheDir,
+    cachePath: path.join(cacheDir, `${cacheKey}.vtt`),
+  };
+}
+
+/**
+ * The work itself, minus any notion of who asked for it.
+ *
+ * Writes the VTT and its sidecar into the cache and returns the cue count.
+ * Both the job runner and the legacy blocking route go through here, so
+ * there is exactly one implementation of "transcribe and cache".
+ */
+export async function runTranscribeToCache(
+  p: {
+    target: string;
+    engine: TranscribeEngine;
+    model: "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
+    language: string | undefined;
+    jobId: string;
+    cacheKey: string;
+    cacheDir: string;
+    cachePath: string;
+  },
+  onProgress?: (q: {
+    subPhase: string; frac: number;
+    processedSec?: number; totalSec?: number; hint?: string;
+  }) => void,
+): Promise<{ cueCount: number; vtt: string }> {
+  const t0 = Date.now();
+  log.info(
+    `transcribe: ${shortUrl(p.target)} · engine=${p.engine} · model=${p.model} · lang=${p.language ?? "auto"}`,
+  );
+  publishSubsProgress(p.jobId, {
+    phase: "transcribe-start", engine: p.engine, model: p.model, lang: p.language ?? "auto",
+  });
+  const cues = await transcribe(p.engine, p.target, {
+    model: p.model,
+    language: p.language,
+    onProgress: (q) => {
+      // The SSE feed is what moves a watching tab's bar; the job row is what
+      // a tab that wasn't watching reads later. Both get every tick — the
+      // service decides how often to persist.
+      publishSubsProgress(p.jobId, {
+        phase: "transcribe-progress",
+        frac: q.frac,
+        subPhase: q.subPhase,
+        processedSec: q.processedSec,
+        totalSec: q.totalSec,
+        hint: q.hint,
+      });
+      onProgress?.(q);
+    },
+  });
+  log.info(`transcribe: ${cues.length} cues in ${Date.now() - t0}ms`);
+  const generated = encodeVtt(cues);
+  await mkdir(p.cacheDir, { recursive: true });
+  await writeFile(p.cachePath, generated, "utf8");
+  await writeSubsSidecar(p.cacheDir, {
+    key: p.cacheKey,
+    kind: "transcribe",
+    url: p.target,
+    src_lang: p.language ?? "auto",
+    tgt_lang: p.language ?? "auto",
+    engine: p.engine,
+    model: p.model,
+    cue_count: cues.length,
+    created_at: Date.now(),
+  });
+  publishSubsProgress(p.jobId, {
+    phase: "transcribe-done", cueCount: cues.length, elapsedMs: Date.now() - t0,
+  });
+  return { cueCount: cues.length, vtt: generated };
+}
+
+/**
+ * The runner the job service drives.
+ *
+ * Lives here rather than in the service because this is where the cache
+ * layout and the SSE fan-out are known; the service only cares that it gets a
+ * cue count back and an exception when the run fails.
+ */
+export function createTranscribeRunner(): TranscribeRunner {
+  return async (params, onProgress) => {
+    const cacheDir = path.join(process.cwd(), "data", "subtitles");
+    const { cueCount } = await runTranscribeToCache(
+      {
+        target: params.url,
+        engine: params.engine as TranscribeEngine,
+        model: params.model as "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo",
+        language: params.lang || undefined,
+        jobId: params.jobId ?? "",
+        cacheKey: params.key,
+        cacheDir,
+        cachePath: path.join(cacheDir, `${params.key}.vtt`),
+      },
+      onProgress,
+    );
+    return { cueCount };
+  };
+}
+
 export function registerCinemaMediaRoutes(
   server: KernelHttpServer,
+  /**
+   * Accessor rather than the service itself: routes are registered while the
+   * module is still wiring up, and the job service needs the sqlite handle
+   * that arrives with it. Returning null means "not ready" — the transcribe
+   * routes fall back to running inline, which is what they did before jobs
+   * existed.
+   */
+  getTranscribeJobs?: () => TranscribeJobService | null,
+  /** Same shape, for the download-then-convert fallback. */
+  getConvertJobs?: () => ConvertJobService | null,
 ): void {
   server.get("/api/cinema/media/webseed-proxy", async (req, res) => {
     try {
@@ -445,11 +605,42 @@ export function registerCinemaMediaRoutes(
       const fwd: Record<string, string> = { "user-agent": "Kernl/torrent-webseed-proxy" };
       const range = req.headers["range"];
       if (typeof range === "string") fwd["range"] = range;
-      const upstream = await fetch(parsed.toString(), {
+      // Clients abandon these constantly and by design: the browser seeks, a
+      // tab closes, and ffmpeg opens the file, reads the header, then drops
+      // the connection to re-request the tail where an MP4 keeps its moov.
+      // Without this the upstream fetch outlived every one of them and kept
+      // pulling the whole file — 188 MB per abandoned seek — for a reader
+      // that had already gone. Enough of those and archive.org throttles the
+      // host, at which point NEW requests start hanging or coming back 500,
+      // and the symptom shows up somewhere else entirely (a transcode that
+      // stalls at zero bytes with ffmpeg sitting at 0% CPU).
+      const abort = new AbortController();
+      const abortUpstream = () => { try { abort.abort(); } catch { /* already gone */ } };
+      res.on("close", abortUpstream);
+      res.on("error", abortUpstream);
+      // archive.org answers an occasional 5xx under load — observed twice in
+      // one evening on the same file that served fine either side of it. The
+      // browser does not retry a media request that fails: the <video> stops
+      // and stays stopped, so one hiccup ends playback for good. Retry the
+      // fetch itself, which is safe because this is a plain ranged GET.
+      let upstream = await fetch(parsed.toString(), {
         method: "GET",
         headers: fwd,
         redirect: "follow",
+        signal: abort.signal,
       });
+      for (let attempt = 1; attempt <= 2 && upstream.status >= 500 && !abort.signal.aborted; attempt++) {
+        log.warn(`webseed-proxy: upstream ${upstream.status} for ${parsed.host}${parsed.pathname} — retry ${attempt}/2`);
+        try { await upstream.body?.cancel(); } catch { /* nothing buffered yet */ }
+        await new Promise((r) => setTimeout(r, attempt * 400));
+        if (abort.signal.aborted) break;
+        upstream = await fetch(parsed.toString(), {
+          method: "GET",
+          headers: fwd,
+          redirect: "follow",
+          signal: abort.signal,
+        });
+      }
       const passthrough: Record<string, string> = {};
       for (const k of [
         "content-type",
@@ -480,21 +671,54 @@ export function registerCinemaMediaRoutes(
       }
       const reader = upstream.body.getReader();
       const pump = async () => {
-        while (true) {
+        while (!abort.signal.aborted && !res.writableEnded && !res.destroyed) {
           const { done, value } = await reader.read();
           if (done) break;
           if (value && !res.write(Buffer.from(value))) {
-            await new Promise<void>((r) => res.once("drain", () => r()));
+            // Waiting on `drain` alone is a permanent stall when the client
+            // is the thing that went away: a closed socket never drains. Race
+            // the backpressure against the end of the connection so the loop
+            // always has a way out.
+            await new Promise<void>((resolve) => {
+              const done = () => {
+                res.off("drain", done);
+                res.off("close", done);
+                res.off("error", done);
+                resolve();
+              };
+              res.once("drain", done);
+              res.once("close", done);
+              res.once("error", done);
+            });
           }
         }
-        res.end();
+        if (!res.writableEnded) res.end();
       };
       try { await pump(); }
       catch (err) {
-        log.error("torrents: webseed-proxy stream broke", err);
+        // An abort here is the normal end of an abandoned stream, not a
+        // fault: logging it as one buried the real breakages in noise.
+        if (!abort.signal.aborted) {
+          log.error("torrents: webseed-proxy stream broke", err);
+        }
         try { res.end(); } catch { /* */ }
+      } finally {
+        // Releases the upstream connection whichever way the loop ended.
+        try { await reader.cancel(); } catch { /* already closed */ }
       }
     } catch (err) {
+      // A `<video>` cancels range requests constantly — on seek, once it has
+      // buffered enough, when the tab goes away. Since the upstream fetch is
+      // now aborted along with them, those land here as AbortError, and
+      // answering 502 both logged a failure that did not happen and put a
+      // real-looking gateway error in the access log for every ordinary
+      // seek. Nobody is listening on a connection the client already closed.
+      const clientGone = res.writableEnded || res.destroyed ||
+        (err instanceof Error && err.name === "AbortError");
+      if (clientGone) {
+        try { res.end(); } catch { /* already gone */ }
+        return;
+      }
       log.error("torrents: webseed-proxy failed", err);
       try { server.json(res, 502, { error: extractMessage(err) }); } catch { /* */ }
     }
@@ -513,7 +737,16 @@ export function registerCinemaMediaRoutes(
   server.get("/api/cinema/media/transcode", async (req, res) => {
     let ff: import("node:child_process").ChildProcess | null = null;
     const cleanup = () => {
-      if (ff && !ff.killed) { try { ff.kill("SIGTERM"); } catch { /* */ } }
+      if (!ff || ff.killed) return;
+      try { ff.kill("SIGTERM"); } catch { /* */ }
+      // SIGTERM alone was not enough in practice: ffmpeg blocked on a read
+      // from a stalled upstream sat there long after the viewer had gone,
+      // still holding its connection. Observed several minutes later, at 0%
+      // CPU, with the browser tab long closed. Escalate rather than leak.
+      const hard = setTimeout(() => {
+        try { if (ff && ff.exitCode === null) ff.kill("SIGKILL"); } catch { /* */ }
+      }, 5_000);
+      hard.unref?.();
     };
     res.on("close", cleanup);
     res.on("error", cleanup);
@@ -559,13 +792,37 @@ export function registerCinemaMediaRoutes(
         "-reconnect_delay_max", "30",
         "-rw_timeout", "30000000",
         "-user_agent", "Kernl/torrent-transcode",
-        "-i", parsed.toString(),
+        // Through our own webseed proxy, never straight at the origin.
+        // ffmpeg's libavformat HTTP client cannot follow archive.org's
+        // SSL/302 redirect chain: it takes an HTTP 500, keeps the partial
+        // body, and then fails to read codec parameters for the video
+        // stream — at which point it silently DROPS the video and muxes an
+        // audio-only MP4. The browser gets a file it can never show a frame
+        // of, so the player sits on "converting for your browser" forever
+        // with nothing in any log to explain it. (Tell-tale in ffmpeg's
+        // stderr: `preset`/`crf` "not used for any stream" — no video
+        // encoder was ever instantiated.) The proxy already handles the UA,
+        // the redirects and Range correctly, which is why the transcribe
+        // path has gone through it from the start.
+        // A/B switch, temporary: CINEMA_TRANSCODE_DIRECT=1 restores the
+        // pre-existing behaviour (straight at the origin) so the two paths can
+        // be measured against each other on the same file at the same moment.
+        // Default through our own webseed proxy: measured against the origin
+        // on the same file, direct came back as an audio-only MP4 (ffmpeg took
+        // an HTTP 500 mid-probe, kept the partial body and dropped the video
+        // stream), while the proxied read produced a well-formed h264+aac
+        // stream. CINEMA_TRANSCODE_DIRECT=1 restores the old behaviour for
+        // comparison — neither is fast enough to play live, see the note on
+        // the location block in nginx.conf.
+        "-i", process.env.CINEMA_TRANSCODE_DIRECT === "1"
+          ? parsed.toString()
+          : wrapThroughProxy(parsed.toString()),
         "-c:v", "libx264", "-preset", "ultrafast", "-crf", "23",
         "-c:a", "aac", "-b:a", "128k",
         "-movflags", "frag_keyframe+default_base_moof",
         "-f", "mp4", "pipe:1",
       ];
-      ff = spawn("ffmpeg", ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
+      ff = spawn(mediaToolBin("ffmpeg"), ffArgs, { stdio: ["ignore", "pipe", "pipe"] });
 
       ff.on("error", (err) => {
         const friendly = mediaToolError("ffmpeg", err);
@@ -820,7 +1077,17 @@ export function registerCinemaMediaRoutes(
       }
       const raw = await upstream.text();
       const cues = parseSubs(raw);
-      if (!cues.length) return server.json(res, 422, { error: "no cues parsed" });
+      if (!cues.length) {
+        // Distinguish the two ways this happens. archive.org publishes
+        // zero-byte subtitle derivatives when its speech recognition pass
+        // produced nothing, and reporting that as a parse failure sent people
+        // looking for a bug in the parser instead of at an empty file.
+        return server.json(res, 422, {
+          error: raw.trim().length === 0
+            ? "the subtitle file is empty upstream — nothing to show"
+            : "no cues parsed — the file is not a subtitle format we read",
+        });
+      }
 
       let outCues = cues;
       let actualProvider: string | undefined;
@@ -1154,35 +1421,233 @@ export function registerCinemaMediaRoutes(
     }
   });
 
-  // ── GET /api/torrents/transcribe — generate SRT from a video URL ────
-  // Returns text/vtt directly (already converted from internal SubCue[]).
-  // Cache key: sha1(video_url + engine + model + language).
-  server.get("/api/cinema/media/transcribe", async (req, res) => {
-    const jobId = new URL(req.url ?? "/", "http://localhost").searchParams.get("jobId") ?? "";
+  /**
+   * Hand a request to the job service, or run it inline when there is no
+   * database to keep jobs in.
+   *
+   * The service is created during module init; a route that fires before that
+   * (or in a stripped-down embedding of these routes) still has to work, and
+   * running inline is exactly the old behaviour.
+   */
+  function startTranscribeJob(
+    p: Extract<ReturnType<typeof parseTranscribeRequest>, { ok: true }>,
+    cached: { cueCount: number } | null,
+  ) {
+    const jobs = getTranscribeJobs?.() ?? null;
+    if (!jobs) return null;
+    return jobs.start(
+      {
+        key: p.cacheKey,
+        url: p.target,
+        engine: p.engine,
+        model: p.model,
+        lang: p.language ?? "",
+        jobId: p.jobId,
+      },
+      cached,
+    );
+  }
+
+  // ── GET /api/cinema/media/convert/start?url=… — convert, don't stream ─
+  // The fallback for sources no browser decodes. Answers immediately; the
+  // download-then-convert runs server-side and the result is a cached, and
+  // crucially SEEKABLE, mp4 served by /convert/file.
+  server.get("/api/cinema/media/convert/start", async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
       const target = url.searchParams.get("url") ?? "";
-      const engineParam = (url.searchParams.get("engine") ?? "transformers").toLowerCase();
-      const model = (url.searchParams.get("model") ?? "base") as
-        "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
-      const language = url.searchParams.get("lang") || undefined;
-
-      const engine: TranscribeEngine = ["whispercpp", "transformers", "groq"].includes(engineParam)
-        ? (engineParam as TranscribeEngine) : "transformers";
-
       if (!target) return server.json(res, 400, { error: "url is required" });
-      if (engine === "groq" && !isGroqWhisperAvailable()) {
-        return server.json(res, 400, { error: "groq engine selected but GROQ_API_KEY is not set" });
+      const guard = await guardOutboundUrl(target);
+      if (!guard.ok) return server.json(res, 400, { error: guard.reason });
+
+      const jobs = getConvertJobs?.() ?? null;
+      if (!jobs) {
+        return server.json(res, 503, {
+          error: "conversion is not available yet — the cinema module is still starting",
+        });
+      }
+      const key = createHash("sha1").update(`convert|${target}`).digest("hex");
+      // Fetch through our own proxy for the same reason the transcribe path
+      // does: ffmpeg and fetch both trip on archive.org's redirect chain, and
+      // the proxy already gets the UA, the redirects and Range right.
+      const status = jobs.start(key, target, wrapThroughProxy(guard.parsed.toString()));
+      server.json(res, 200, status);
+    } catch (err) {
+      log.error("cinema: convert start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── GET /api/cinema/media/convert/status?key=… ───────────────────────
+  server.get("/api/cinema/media/convert/status", async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
+      if (!key || key.length !== 40) {
+        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
+      }
+      const jobs = getConvertJobs?.() ?? null;
+      const status = jobs?.status(key) ?? null;
+      if (!status) return server.json(res, 404, { error: "no such conversion" });
+      server.json(res, 200, status);
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── DELETE /api/cinema/media/convert?key=… — stop one ────────────────
+  server.delete("/api/cinema/media/convert", async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
+      if (!key || key.length !== 40) {
+        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
+      }
+      const jobs = getConvertJobs?.() ?? null;
+      server.json(res, 200, { cancelled: jobs?.cancel(key) ?? false });
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── GET /api/cinema/media/convert/file?key=… — serve the result ──────
+  // Range-aware on purpose. The whole point of converting to a file instead
+  // of streaming one is that the viewer can scrub, which needs 206s.
+  server.get("/api/cinema/media/convert/file", async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
+      if (!key || key.length !== 40) {
+        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
+      }
+      const jobs = getConvertJobs?.() ?? null;
+      const file = jobs?.outPath(key) ?? "";
+      if (!file || !existsSync(file)) {
+        return server.json(res, 404, { error: "not converted (yet)" });
+      }
+      const { statSync, createReadStream } = await import("node:fs");
+      const size = statSync(file).size;
+      const range = req.headers["range"];
+      const m = typeof range === "string" ? /bytes=(\d*)-(\d*)/.exec(range) : null;
+
+      if (m) {
+        const start = m[1] ? parseInt(m[1], 10) : 0;
+        const end = m[2] ? parseInt(m[2], 10) : size - 1;
+        if (Number.isNaN(start) || Number.isNaN(end) || start > end || start >= size) {
+          res.writeHead(416, { "content-range": `bytes */${size}` });
+          res.end();
+          return;
+        }
+        res.writeHead(206, {
+          "content-type": "video/mp4",
+          "content-length": String(end - start + 1),
+          "content-range": `bytes ${start}-${end}/${size}`,
+          "accept-ranges": "bytes",
+          "cache-control": "private, max-age=86400",
+        });
+        createReadStream(file, { start, end }).pipe(res);
+        return;
       }
 
-      const cacheKey = createHash("sha1")
-        .update(`transcribe|${target}|${engine}|${model}|${language ?? "auto"}`)
-        .digest("hex");
-      const cacheDir = path.join(process.cwd(), "data", "subtitles");
-      const cachePath = path.join(cacheDir, `${cacheKey}.vtt`);
+      res.writeHead(200, {
+        "content-type": "video/mp4",
+        "content-length": String(size),
+        "accept-ranges": "bytes",
+        "cache-control": "private, max-age=86400",
+      });
+      createReadStream(file).pipe(res);
+    } catch (err) {
+      log.error("cinema: convert file failed", err);
+      try { server.json(res, 500, { error: extractMessage(err) }); } catch { /* */ }
+    }
+  });
 
+  // ── GET /api/cinema/media/transcribe/start — kick off a run ──────────
+  // Answers immediately with the job status. The run continues server-side
+  // and its progress lands in cinema_transcribe_jobs, so losing this
+  // response — reload, navigation, flaky wifi — costs nothing: poll
+  // /transcribe/status with the returned key and pick the run back up.
+  server.get("/api/cinema/media/transcribe/start", async (req, res) => {
+    try {
+      const p = parseTranscribeRequest(req.url ?? "/");
+      if (!p.ok) return server.json(res, p.status, { error: p.error });
+
+      // A finished run is already durable on disk; report it ready rather
+      // than transcribing a film we have captions for.
+      let cached: { cueCount: number } | null = null;
+      if (existsSync(p.cachePath)) {
+        cached = { cueCount: parseSubs(await readFile(p.cachePath, "utf8")).length };
+      }
+
+      const jobs = getTranscribeJobs?.() ?? null;
+      if (!jobs) {
+        return server.json(res, 503, {
+          error: "transcribe jobs are not available yet — the cinema module is still starting",
+        });
+      }
+
+      const status = jobs.start(
+        {
+          key: p.cacheKey,
+          url: p.target,
+          engine: p.engine,
+          model: p.model,
+          lang: p.language ?? "",
+          jobId: p.jobId,
+        },
+        cached,
+      );
+      server.json(res, 200, { ...status, cached: Boolean(cached) });
+    } catch (err) {
+      log.error("cinema: transcribe start failed", err);
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── GET /api/cinema/media/transcribe/status?key=… — poll a run ───────
+  // Cheap and safe to call from any tab at any time. Falls back to the disk
+  // cache so a run finished by a previous process still reads as ready.
+  server.get("/api/cinema/media/transcribe/status", async (req, res) => {
+    try {
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
+      if (!key || key.length !== 40) {
+        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
+      }
+      const jobs = getTranscribeJobs?.() ?? null;
+      const status = jobs?.status(key) ?? null;
+      if (status) return server.json(res, 200, status);
+
+      // No row: either it was never started here, or it finished long ago and
+      // the row was pruned. The cache file is the older, stronger evidence.
+      const cachePath = path.join(process.cwd(), "data", "subtitles", `${key}.vtt`);
       if (existsSync(cachePath)) {
-        const cached = await readFile(cachePath, "utf8");
+        const cueCount = parseSubs(await readFile(cachePath, "utf8")).length;
+        return server.json(res, 200, { key, status: "ready", frac: 1, cueCount, error: "" });
+      }
+      server.json(res, 404, { error: "no such job" });
+    } catch (err) {
+      server.json(res, 500, { error: extractMessage(err) });
+    }
+  });
+
+  // ── GET /api/torrents/transcribe — generate SRT from a video URL ────
+  // Returns text/vtt directly (already converted from internal SubCue[]).
+  // Cache key: sha1(video_url + engine + model + language).
+  //
+  // The blocking shape, kept for callers that predate /transcribe/start —
+  // and honest about what it is: it holds the socket open for the length of
+  // the run, so a proxy read timeout or a restart still loses THIS response.
+  // What it no longer loses is the work: the run is a job like any other, so
+  // the caller can reconnect with /transcribe/status and collect the result.
+  server.get("/api/cinema/media/transcribe", async (req, res) => {
+    const jobId = new URL(req.url ?? "/", "http://localhost").searchParams.get("jobId") ?? "";
+    try {
+      const p = parseTranscribeRequest(req.url ?? "/");
+      if (!p.ok) return server.json(res, p.status, { error: p.error });
+
+      if (existsSync(p.cachePath)) {
+        const cached = await readFile(p.cachePath, "utf8");
         res.writeHead(200, {
           "content-type": "text/vtt; charset=utf-8",
           "access-control-allow-origin": "*",
@@ -1193,55 +1658,51 @@ export function registerCinemaMediaRoutes(
         return;
       }
 
-      // Coalesce concurrent runs for the same (url, engine, model, lang)
-      // — same rationale as the /subs handler above.
-      let vtt: string;
+      const jobs = getTranscribeJobs?.() ?? null;
       let cueCount: number;
-      const t0 = Date.now();
-      const existing = inflightTranscribes.get(cacheKey);
+      let vtt: string;
+
+      if (jobs) {
+        const joined = jobs.isRunning(p.cacheKey);
+        if (joined) log.info(`transcribe: joining in-flight ${p.engine}/${p.model} for ${shortUrl(p.target)}`);
+        startTranscribeJob(p, null);
+        await jobs.join(p.cacheKey);
+        const final = jobs.status(p.cacheKey);
+        if (final?.status === "error") throw new Error(final.error);
+        if (!existsSync(p.cachePath)) {
+          throw new Error(final?.error || "transcribe produced no output");
+        }
+        vtt = await readFile(p.cachePath, "utf8");
+        cueCount = final?.cueCount || parseSubs(vtt).length;
+        res.writeHead(200, {
+          "content-type": "text/vtt; charset=utf-8",
+          "access-control-allow-origin": "*",
+          "cache-control": "public, max-age=86400",
+          "x-transcribe-cache": joined ? "join" : "miss",
+          "x-transcribe-engine": p.engine,
+          "x-transcribe-model": p.model,
+          "x-transcribe-cues": String(cueCount),
+          "x-transcribe-key": p.cacheKey,
+        });
+        res.end(vtt);
+        return;
+      }
+
+      // No job service (module still starting): behave exactly as before,
+      // coalescing on the in-memory map.
+      const existing = inflightTranscribes.get(p.cacheKey);
       if (existing) {
-        log.info(`transcribe: joining in-flight ${engine}/${model} for ${shortUrl(target)}`);
+        log.info(`transcribe: joining in-flight ${p.engine}/${p.model} for ${shortUrl(p.target)}`);
         vtt = await existing;
         cueCount = parseSubs(vtt).length;
       } else {
-        log.info(`transcribe: ${shortUrl(target)} · engine=${engine} · model=${model} · lang=${language ?? "auto"}`);
-        const runPromise = (async () => {
-          publishSubsProgress(jobId, { phase: "transcribe-start", engine, model, lang: language ?? "auto" });
-          const cues = await transcribe(engine, target, {
-            model, language,
-            onProgress: jobId ? (p) => publishSubsProgress(jobId, {
-              phase: "transcribe-progress",
-              frac: p.frac,
-              subPhase: p.subPhase,
-              processedSec: p.processedSec,
-              totalSec: p.totalSec,
-              hint: p.hint,
-            }) : undefined,
-          });
-          log.info(`transcribe: ${cues.length} cues in ${Date.now() - t0}ms`);
-          const generated = encodeVtt(cues);
-          await mkdir(cacheDir, { recursive: true });
-          await writeFile(cachePath, generated, "utf8");
-          await writeSubsSidecar(cacheDir, {
-            key: cacheKey,
-            kind: "transcribe",
-            url: target,
-            src_lang: language ?? "auto",
-            tgt_lang: language ?? "auto",
-            engine,
-            model,
-            cue_count: cues.length,
-            created_at: Date.now(),
-          });
-          publishSubsProgress(jobId, { phase: "transcribe-done", cueCount: cues.length, elapsedMs: Date.now() - t0 });
-          return generated;
-        })();
-        inflightTranscribes.set(cacheKey, runPromise);
+        const runPromise = runTranscribeToCache(p).then((r) => r.vtt);
+        inflightTranscribes.set(p.cacheKey, runPromise);
         try {
           vtt = await runPromise;
           cueCount = parseSubs(vtt).length;
         } finally {
-          inflightTranscribes.delete(cacheKey);
+          inflightTranscribes.delete(p.cacheKey);
         }
       }
 
@@ -1250,9 +1711,10 @@ export function registerCinemaMediaRoutes(
         "access-control-allow-origin": "*",
         "cache-control": "public, max-age=86400",
         "x-transcribe-cache": existing ? "join" : "miss",
-        "x-transcribe-engine": engine,
-        "x-transcribe-model": model,
+        "x-transcribe-engine": p.engine,
+        "x-transcribe-model": p.model,
         "x-transcribe-cues": String(cueCount),
+        "x-transcribe-key": p.cacheKey,
       });
       res.end(vtt);
     } catch (err) {

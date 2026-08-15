@@ -1,0 +1,34 @@
+[
+  {
+    "name": "Campaign — agent operations overview",
+    "actions": [
+      { "$use": "goto-view", "params": { "path": "/agents-flow", "settle": "7000" } },
+      { "type": "assert_visible", "selector": ".hq-bar" },
+      { "type": "screenshot", "value": "campaign-agent-operations" }
+    ]
+  },
+  {
+    "name": "Campaign — observable 3D office",
+    "actions": [
+      { "$use": "goto-view", "params": { "path": "/agents-flow", "settle": "5000" } },
+      { "type": "click", "text": "3D" },
+      { "type": "wait", "value": "5000" },
+      { "type": "assert_visible", "selector": ".world3d-canvas" },
+      { "type": "screenshot", "value": "campaign-agent-office-3d" }
+    ]
+  },
+  {
+    "name": "Campaign — private system intelligence",
+    "actions": [
+      { "$use": "goto-view", "params": { "path": "/sysoverview", "settle": "5000" } },
+      { "type": "screenshot", "value": "campaign-system-intelligence" }
+    ]
+  },
+  {
+    "name": "Campaign — agent catalog",
+    "actions": [
+      { "$use": "goto-view", "params": { "path": "/agents", "settle": "5000" } },
+      { "type": "screenshot", "value": "campaign-agent-catalog" }
+    ]
+  }
+]

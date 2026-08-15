@@ -116,7 +116,7 @@ const MODULE_SCREENS: Record<string, ToolLink> = {
   fs: { href: "/files", label: "Files" },
   marketplace: { href: "/marketplace", label: "Marketplace" },
   memory: { href: "/memory", label: "Memory" },
-  models: { href: "/models", label: "Models" },
+  models: { href: "/settings?section=ai", label: "Models" },
   notifications: { href: "/notifications", label: "Notifications" },
   plugins: { href: "/extensions", label: "Extensions" },
   rss: { href: "/rss-registry", label: "RSS Registry" },
