@@ -130,8 +130,6 @@
     // Redirect stubs. Siguen ruteables para bookmarks viejos.
     sysoverview: 'system',
     automations: 'system',
-    providers: 'system',
-    models: 'system',
     // Legacy registry, superseded by /extensions (the page says so itself).
     marketplace: 'system',
     // Pages with no nav item of their own. Both are reached from in-page
