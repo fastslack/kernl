@@ -84,6 +84,10 @@ export function createRssRegistryModule(): RssRegistryModule {
             label: "RSS Sources",
             icon: "📡",
             group: "system",
+            // Cuelga del rail lateral de /system en vez de ocupar un tab de la
+            // barra de grupo: un registro de feeds es una pantalla de ajuste,
+            // no una de las cuatro áreas de primer nivel.
+            parent: "system",
             // After Extensions (90). A feed registry is a niche setting; it was
             // heading the System group purely because 65 sorts before 90.
             order: 120,

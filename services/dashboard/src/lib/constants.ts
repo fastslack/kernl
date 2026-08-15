@@ -101,15 +101,22 @@ export const NAV_GROUPS: NavGroup[] = [
 		id: 'system',
 		label: 'System',
 		icon: '⚙️',
-		// Slimmed to 4 tabs. The routes for sysoverview / architecture /
-		// providers / api-registry / rss-registry still exist — sysoverview
-		// and architecture are reachable via the internal sub-nav on
-		// /system, the rest via direct URL or in-page links.
+		// Cuatro tabs arriba, el resto en el rail lateral de /system.
+		// Los items con `parent` quedan fuera de la barra de grupo por el
+		// filtro de `subViews` en +layout.svelte y los recoge `railViewsFor`.
 		views: [
 			{ id: 'settings', label: 'Settings', icon: '⚙️', order: 10 },
 			{ id: 'system', label: 'System', icon: '🖥️', order: 20 },
 			{ id: 'extensions', label: 'Extensions', icon: '🧩', order: 30 },
-			{ id: 'notifications', label: 'Notifs', icon: '🔔', order: 40 }
+			{ id: 'notifications', label: 'Notifs', icon: '🔔', order: 40 },
+			// Rail de /system. Las extensiones se cuelgan acá declarando
+			// `parent: "system"` en su manifiesto (rss-registry, cloudflare).
+			{ id: 'architecture', label: 'Arch 3D', icon: '🧊', parent: 'system', order: 20 },
+			{ id: 'friends', label: 'Friends', icon: '🤝', parent: 'system', order: 30 },
+			// El label acá es solo fallback: `viewLabel` prefiere la clave i18n
+			// `nav.view.api-registry`, que existe en en y es. Lo dejamos igual
+			// para que el código no diga una cosa y la pantalla otra.
+			{ id: 'api-registry', label: 'API Registry', icon: '🔌', parent: 'system', order: 40 }
 		]
 	}
 ];
@@ -123,14 +130,13 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 	wellness: 'Overview', health: 'Health', training: 'Training', nutrition: 'Nutrition',
 	// `skills` has no tab any more — it redirects into /extensions?tab=skills.
 	// The label stays so the breadcrumb reads sanely during the redirect.
-	'ai-overview': 'Overview', agents: 'Agents', 'agents-flow': 'Flow', autogenesis: 'Evolutions', ranks: 'Ranks', models: 'Models', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
+	'ai-overview': 'Overview', agents: 'Agents', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', models: 'Models', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
 	cinema: 'Cinema',
 	books: 'Books',
 	music: 'Music',
-	automations: 'Automation',
 	settings: 'Settings', system: 'System', extensions: 'Extensions', notifications: 'Notifications',
-	// Off-tab system routes (still routable, linked from /system sub-nav):
-	sysoverview: 'Overview', architecture: 'Arch 3D', providers: 'AI Providers', friends: 'Friends',
+	// Rutas de sistema fuera de la tab bar, alcanzadas desde el rail de /system:
+	architecture: 'Arch 3D', providers: 'AI Providers', friends: 'Friends',
 	'api-registry': 'API Registry', 'rss-registry': 'RSS Feeds'
 };
 

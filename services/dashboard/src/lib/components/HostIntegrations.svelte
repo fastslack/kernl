@@ -720,7 +720,7 @@
   {#if loading}
     <div class="muted">Loading host inventory…</div>
   {:else if claudeCodeAgents === 0}
-    <div class="muted">No agents use the <code>claude_code</code> executor.<br>Enable one in <a href="/models">/models</a> first.</div>
+    <div class="muted">No agents use the <code>claude_code</code> executor.<br>Enable one in <a href="/settings?section=ai">Settings → AI</a> first.</div>
   {:else if extensions}
     <div class="kpis">
       <div class="kpi"><b>{extensions.counts.skills}</b><span>Skills disponibles</span></div>

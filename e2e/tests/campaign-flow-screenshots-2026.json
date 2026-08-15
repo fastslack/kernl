@@ -1,0 +1,22 @@
+[
+  {
+    "name": "Campaign — agent operations overview via UI",
+    "actions": [
+      { "$use": "goto-view", "params": { "path": "/agents", "settle": "2000" } },
+      { "type": "click", "text": "Flow" },
+      { "type": "wait", "value": "12000" },
+      { "type": "screenshot", "value": "campaign-agent-operations" }
+    ]
+  },
+  {
+    "name": "Campaign — observable 3D office via UI",
+    "actions": [
+      { "$use": "goto-view", "params": { "path": "/agents", "settle": "2000" } },
+      { "type": "click", "text": "Flow" },
+      { "type": "wait", "value": "12000" },
+      { "type": "click", "text": "3D" },
+      { "type": "wait", "value": "8000" },
+      { "type": "screenshot", "value": "campaign-agent-office-3d" }
+    ]
+  }
+]

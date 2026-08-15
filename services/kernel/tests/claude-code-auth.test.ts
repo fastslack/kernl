@@ -144,9 +144,31 @@ describe("extractLoginUrl", () => {
 });
 
 describe("ptyCommand", () => {
+  const hasScript = (c: string) => (c === "script" ? "/usr/bin/script" : null);
+
   it("borrows a PTY from script when it is available", () => {
-    const cmd = ptyCommand((c) => (c === "script" ? "/usr/bin/script" : null));
-    expect(cmd).toEqual(["/usr/bin/script", "-qec", "%CMD%", "/dev/null"]);
+    expect(ptyCommand(hasScript, "linux")).toEqual([
+      "/usr/bin/script", "-qec", "%CMD%", "/dev/null",
+    ]);
+  });
+
+  it("uses the BSD form on macOS, where script has no -c", () => {
+    // Sending the util-linux form to BSD script does not fail quietly: it
+    // prints `script: illegal option -- c` followed by its usage, and that
+    // usage is what the login dialog showed where the sign-in link belonged.
+    expect(ptyCommand(hasScript, "darwin")).toEqual([
+      "/usr/bin/script", "-qe", "/dev/null", "sh", "-c", "%CMD%",
+    ]);
+  });
+
+  it("keeps the command as one argv entry so the caller's shell string survives", () => {
+    // The caller substitutes %CMD% per argument. Split across two entries and
+    // `stty cols 400 2>/dev/null; claude setup-token` would arrive as
+    // separate argv words, losing the semicolon and the width fix with it.
+    for (const platform of ["darwin", "linux"]) {
+      const cmd = ptyCommand(hasScript, platform)!;
+      expect(cmd.filter((a) => a === "%CMD%")).toHaveLength(1);
+    }
   });
 
   it("falls back to socat on images without util-linux", () => {

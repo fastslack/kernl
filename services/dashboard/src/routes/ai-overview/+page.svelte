@@ -52,7 +52,7 @@
 <div class="quick-actions">
   <QuickAction label="New Agent" icon={ICONS.newAgent} variant="primary" href="/agents" />
   <QuickAction label="Browse Skills" icon={ICONS.browseSkills} variant="purple" href="/extensions?tab=skills" />
-  <QuickAction label="Skill Store" icon={ICONS.skillStore} variant="teal" href="/marketplace" />
+  <QuickAction label="Skill Store" icon={ICONS.skillStore} variant="teal" href="/extensions?tab=discover" />
 </div>
 
 <!-- KPI Row -->
@@ -84,7 +84,7 @@
   </OverviewCard>
 
   <!-- Skills Card -->
-  <OverviewCard title="Installed Skills" icon={ICONS.skills} iconColor="var(--blue)" actions={[{ label: 'View Skills', href: '/extensions?tab=skills' }, { label: 'Browse Store', href: '/marketplace' }]}>
+  <OverviewCard title="Installed Skills" icon={ICONS.skills} iconColor="var(--blue)" actions={[{ label: 'View Skills', href: '/extensions?tab=skills' }, { label: 'Browse Store', href: '/extensions?tab=discover' }]}>
     {#if skillsList.length > 0}
       <ul class="card-list">
         {#each skillsList.slice(0, 4) as skill}

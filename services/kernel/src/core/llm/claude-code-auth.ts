@@ -193,16 +193,33 @@ export function isCompleteLoginUrl(url: string): boolean {
 /**
  * Does this host look capable of giving the CLI a TTY?
  *
- * `script` (util-linux) is the dependency-free way to lend a PTY to a child —
- * no native module, nothing to compile, and it is already present in the
- * kernel image. Where it is missing the caller falls back to asking for a
- * pasted token, which needs no terminal at all.
+ * `script` is the dependency-free way to lend a PTY to a child — no native
+ * module, nothing to compile, and it is already present in the kernel image.
+ * Where it is missing the caller falls back to asking for a pasted token,
+ * which needs no terminal at all.
+ *
+ * Two programs share that name and nothing else. util-linux takes the command
+ * as a `-c` string; BSD (macOS) has no `-c` at all and takes the typescript
+ * file followed by an argv. Sending the util-linux form to the BSD one does
+ * not fail quietly — `script` prints its usage, that usage is what the login
+ * dialog rendered where the sign-in link belonged, and the flow was dead on
+ * every Mac:
+ *
+ *     script: illegal option -- c
+ *     usage: script [-aeFkpqr] [-t time] [file [command ...]]
+ *
+ * Both forms carry -q (no "Script started" banner in the parsed output) and
+ * -e (the child's exit status, not script's own).
  */
-export function ptyCommand(which: (cmd: string) => string | null): string[] | null {
+export function ptyCommand(
+  which: (cmd: string) => string | null,
+  platform: string = process.platform,
+): string[] | null {
   const script = which("script");
   if (script) {
-    // -q quiet, -e propagate the child's exit status, -c run this command.
-    // /dev/null discards the typescript file we do not want.
+    // The caller hands us one shell string, so BSD needs an explicit `sh -c`
+    // where util-linux's own -c already implies it.
+    if (platform === "darwin") return [script, "-qe", "/dev/null", "sh", "-c", "%CMD%"];
     return [script, "-qec", "%CMD%", "/dev/null"];
   }
   const socat = which("socat");

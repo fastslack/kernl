@@ -10,7 +10,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "../../../../../src/core/logger.js";
-import { mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
+import { mediaToolBin, mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
 import {
   parseBackendLog,
   pickBackend,
@@ -59,7 +59,6 @@ export interface TranscribeOpts {
 }
 
 const DEFAULT_MODEL = "base"; // tiny is too weak for old / noisy recordings
-const FFMPEG_BIN = process.env.FFMPEG_BIN ?? "ffmpeg";
 
 // ── Audio extraction (shared by all offline engines) ─────────────────────
 
@@ -85,9 +84,12 @@ export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Pr
   const dir = await mkdtemp(path.join(tmpdir(), "mtw-transcribe-"));
   const out = path.join(dir, "audio.wav");
   const inputUrl = wrapThroughProxy(url);
-  await new Promise<void>((resolve, reject) => {
-    const ff = spawn(FFMPEG_BIN, [
-      "-hide_banner", "-loglevel", "error",
+  /** Peak level of the SOURCE, before loudnorm touches it. See the check below. */
+  const sourcePeakDb = await new Promise<number | null>((resolve, reject) => {
+    const ff = spawn(mediaToolBin("ffmpeg"), [
+      // `info` rather than `error` so volumedetect's summary reaches stderr;
+      // `-nostats` already keeps the progress spam out.
+      "-hide_banner", "-loglevel", "info",
       "-user_agent", "Kernl/transcribe",
       "-headers", "Accept: */*\r\n",
       "-reconnect", "1",
@@ -98,11 +100,16 @@ export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Pr
       "-ac", "1",
       "-ar", "16000",
       "-c:a", "pcm_s16le",
+      // volumedetect runs FIRST, so it reports the source as it arrived —
+      // after loudnorm every input looks like a healthy -20 dB and a silent
+      // film is indistinguishable from a quiet one. Its summary is what the
+      // emptiness check below reads.
+      //
       // loudnorm normalizes weak sources (old films often mastered around
       // -50 dB, well below Whisper's recognition threshold) to ~-16 LUFS,
       // and the high/low-pass narrows to speech band so amplified noise
       // doesn't get hallucinated as ambient sound.
-      "-af", "loudnorm=I=-16:LRA=11:TP=-1.5,highpass=f=80,lowpass=f=4000",
+      "-af", "volumedetect,loudnorm=I=-16:LRA=11:TP=-1.5,highpass=f=80,lowpass=f=4000",
       // Machine-readable progress on stdout: ffmpeg writes key=value lines
       // ("out_time_us=12345000\n…") every 500ms. Separate stream from
       // -loglevel error stderr so we don't have to grep through warnings.
@@ -143,12 +150,49 @@ export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Pr
     // without naming the fix.
     ff.on("error", (e) => reject(mediaToolError("ffmpeg", e)));
     ff.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`ffmpeg exited ${code}: ${err.slice(0, 200)}`));
+      if (code !== 0) {
+        // stderr is verbose at `info`; keep the tail, where the error is.
+        reject(new Error(`ffmpeg exited ${code}: ${err.slice(-200)}`));
+        return;
+      }
+      const peak = /max_volume:\s*(-?\d+(?:\.\d+)?)\s*dB/.exec(err);
+      resolve(peak ? parseFloat(peak[1]!) : null);
     });
   });
+
+  /**
+   * Refuse to transcribe something with no audible content.
+   *
+   * Whisper does not return "nothing here" — fed amplified noise it invents
+   * fluent, confident dialogue. "About Bananas" (1935) is a silent film, and
+   * asking for captions produced seventeen cues of plausible English about
+   * going to the next station, none of it in the film. archive.org's own
+   * speech-recognition derivative for the same title is a zero-byte file: it
+   * hit exactly this and shipped the empty result rather than the invention.
+   *
+   * The test is the PEAK, not the average. A quiet-but-real soundtrack still
+   * spikes when someone speaks; loudnorm exists to rescue those and does it
+   * well. What has no rescue is a track whose loudest instant across the whole
+   * film is this far down — that is a noise floor, and there is no speech
+   * anywhere in it. Measured: this film peaks at -31 dB over eleven minutes,
+   * while ordinary dialogue peaks within a few dB of full scale.
+   */
+  if (sourcePeakDb !== null && sourcePeakDb < SILENT_PEAK_DB) {
+    await rmDirOf(out);
+    throw new Error(
+      `this video has no audible speech (loudest point ${sourcePeakDb.toFixed(1)} dB) — ` +
+      `it is most likely a silent film, so there is nothing to transcribe`,
+    );
+  }
   return out;
 }
+
+/**
+ * Peak below which a track cannot hold speech. Ordinary dialogue peaks within
+ * a few dB of 0; a very quiet archival print still reaches the -20s. -25 dB
+ * leaves that room and only catches tracks that are pure noise floor.
+ */
+const SILENT_PEAK_DB = -25;
 
 /**
  * Quick ffprobe call to discover the upstream duration so the extract phase
@@ -158,7 +202,7 @@ export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Pr
  */
 async function probeUpstreamDuration(url: string): Promise<number | null> {
   return await new Promise<number | null>((resolve) => {
-    const probe = spawn("ffprobe", [
+    const probe = spawn(mediaToolBin("ffprobe"), [
       "-v", "error",
       "-user_agent", "Kernl/transcribe",
       "-show_entries", "format=duration",
@@ -183,7 +227,7 @@ async function probeUpstreamDuration(url: string): Promise<number | null> {
  * header, so we append the auth token as `?auth=<token>` — src/core/auth.ts
  * accepts that query-string fallback specifically for non-fetch clients.
  */
-function wrapThroughProxy(url: string): string {
+export function wrapThroughProxy(url: string): string {
   if (!/^https?:\/\//i.test(url)) return url;
   // Already proxied? leave it.
   if (url.includes("/api/cinema/media/webseed-proxy?")) return url;
@@ -221,7 +265,6 @@ async function rmDirOf(filePath: string): Promise<void> {
 
 // ── whisper.cpp engine ──────────────────────────────────────────────────
 
-const WHISPERCPP_BIN = process.env.WHISPERCPP_BIN ?? "whisper-cli";
 const WHISPERCPP_MODELS_DIR =
   process.env.WHISPERCPP_MODELS_DIR ?? path.join(process.cwd(), "data", "whisper-models");
 
@@ -360,7 +403,7 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
     // ── Sub-phase 4: whisper.cpp transcribes ───────────────────────────
     emit?.({ subPhase: "transcribe", frac: 0, totalSec: probedSec ?? undefined });
     await new Promise<void>((resolve, reject) => {
-      const proc: ChildProcess = spawn(WHISPERCPP_BIN, args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc: ChildProcess = spawn(mediaToolBin("whisper-cli"), args, { stdio: ["ignore", "pipe", "pipe"] });
       let stderr = "";
       // Which backend actually ran, surfaced in the same one-word slot the
       // extract phase uses for "ffmpeg". ggml announces this once at startup,

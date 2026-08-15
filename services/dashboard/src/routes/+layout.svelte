@@ -9,6 +9,9 @@
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
+  import { railViewsFor } from '$lib/nav.js';
+  import SideNav from '$lib/components/SideNav.svelte';
+  import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
@@ -124,22 +127,13 @@
   // pages (reached via /system's internal sub-nav or direct URL). Without
   // this fallback they'd highlight the first group and render its tabs.
   const ORPHAN_VIEW_GROUP: Record<string, string> = {
+    // Redirect stubs. Siguen ruteables para bookmarks viejos.
     sysoverview: 'system',
-    architecture: 'system',
-    providers: 'system',
-    'api-registry': 'system',
-    'rss-registry': 'system',
-    // Instance peering: identity and trusted instances. Lives under System
-    // because it is about who this kernel is, not about a person.
-    friends: 'system',
-    // Scheduled jobs / system agenda. Was a tab under AI ("Auto") reading the
-    // same systemAgenda store as /system — a third view of one dataset, filed
-    // under the wrong group. Now reached from /system's own sub-nav.
     automations: 'system',
+    providers: 'system',
+    models: 'system',
     // Legacy registry, superseded by /extensions (the page says so itself).
     marketplace: 'system',
-    // Redirect stubs onto Settings → AI. Kept routable for old bookmarks.
-    models: 'system',
     // Pages with no nav item of their own. Both are reached from in-page
     // links, and both were falling through to the old navGroups[0] fallback —
     // which lit up Home and rendered Home's tab bar above them.
@@ -161,8 +155,15 @@
   // Top-level sub-tabs of the group exclude items declared as children of
   // another view (via manifest `parent` field).
   $: subViews = currentGroup?.views.filter(v => !(v as any).parent) ?? [];
-  // Sub-sub-tabs: views whose `parent` matches the currently-open view.
-  $: childViews = currentGroup?.views.filter(v => (v as any).parent === currentView) ?? [];
+  // Rail lateral: los hermanos de la vista abierta. Reemplaza tanto la fila
+  // `childViews` (que solo existía parada en el padre y nunca marcaba el item
+  // activo) como las tres copias de `.sys-subnav` que cada página se pintaba.
+  $: railViews = railViewsFor(currentGroup?.views ?? [], currentView);
+  $: railItems = railViews.map((v): SideNavItem => ({
+    id: v.id,
+    label: viewLabel(v),
+    icon: v.icon,
+  }));
   $: sysGroup = navGroups[navGroups.length - 1];
 
   // ── Nav labels ──────────────────────────────────────────────────
@@ -965,11 +966,13 @@
 {#if isStandalonePage}
   <slot />
 {:else}
-<div class="app-shell">
-  <!-- Only renders when a newer release actually exists. It links out rather
-       than offering a button: applying an update runs forward-only migrations,
-       so it is a decision, not a click. Dismissal is remembered per version,
-       so saying "later" once does not hide the next release too. -->
+<!-- The notices sit OUTSIDE .app-shell on purpose. That element is a
+     two-column grid (sidebar + content), so a child of it becomes a cell in
+     the sidebar column: the banner rendered ~70px wide with one word per line
+     and the button spilling out of it. The header escapes this with
+     `grid-column: 1 / -1`; a full-width strip that is not part of the app
+     chrome is simpler to keep above the grid entirely. -->
+<div class="app-root">
   {#if updateInfo?.updateAvailable && dismissedUpdate !== updateInfo.latest}
     <div class="update-bar" role="status">
       <span class="update-bar-dot" aria-hidden="true"></span>
@@ -996,6 +999,8 @@
       <button class="update-bar-close" on:click={() => (updateError = '')}>✕</button>
     </div>
   {/if}
+
+<div class="app-shell">
   <!-- Header -->
   <header class="header">
     <div class="header-logo">
@@ -1204,35 +1209,34 @@
     </div>
   </nav>
 
-  <!-- Main content. The group tabs moved up into the header; only the
-       child tabs (extension-contributed, scoped to the open view) still
-       render here, where they belong to the page rather than the group. -->
+  <!-- Main content. Los tabs del grupo viven en el header; la navegación de
+       segundo nivel es el rail lateral, que el shell dibuja una sola vez en
+       vez de que cada página se pinte la suya. -->
   <main class="main-content" class:full-bleed-mode={isFullBleed}>
-    {#if childViews.length > 0}
-      <div class="sub-tabs sub-tabs-children">
-        {#each childViews as view}
-          <button
-            class="sub-tab child"
-            on:click={() => navigate(view.id)}
-          >
-            {view.icon ?? ''} {viewLabel(view)}
-          </button>
-        {/each}
-      </div>
-    {/if}
     {#if navigating}
       <div style="position:absolute;top:0;left:0;right:0;height:2px;z-index:999;overflow:hidden">
         <div style="height:100%;background:var(--teal,#3dd6c8);animation:pageLoad 0.8s ease-in-out infinite;transform-origin:left"></div>
       </div>
     {/if}
-    <div class="main-inner" class:navigating-fade={navigating}>
-      {#if routeGated}
-        <ExtensionGate />
-      {:else}
-        <slot />
+    <div class="content-frame" class:with-rail={railItems.length > 0}>
+      {#if railItems.length > 0}
+        <SideNav
+          items={railItems}
+          active={currentView}
+          onSelect={navigate}
+          ariaLabel={currentGroup ? $t('nav.groupViews', { group: groupLabel(currentGroup) }) : $t('nav.views')}
+        />
       {/if}
+      <div class="main-inner" class:navigating-fade={navigating}>
+        {#if routeGated}
+          <ExtensionGate />
+        {:else}
+          <slot />
+        {/if}
+      </div>
     </div>
   </main>
+</div>
 </div>
 
 <!-- Command Palette -->

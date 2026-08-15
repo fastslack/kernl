@@ -15,6 +15,8 @@ import { cinemaSyncAttemptsMigration } from "./014_sync_attempts.js";
 import { cinemaFriendsVisibilityMigration } from "./015_friends_visibility.js";
 import { cinemaGraphProjectionMigration } from "./016_graph_projection.js";
 import { cinemaCorpusVersionMigration } from "./017_corpus_version.js";
+import { cinemaTranscribeJobsMigration } from "./018_transcribe_jobs.js";
+import { cinemaConvertJobsMigration } from "./019_convert_jobs.js";
 
 export const cinemaMigrations: Migration[] = [
   {
@@ -107,4 +109,6 @@ export const cinemaMigrations: Migration[] = [
   cinemaFriendsVisibilityMigration,
   cinemaGraphProjectionMigration,
   cinemaCorpusVersionMigration,
+  cinemaTranscribeJobsMigration,
+  cinemaConvertJobsMigration,
 ];

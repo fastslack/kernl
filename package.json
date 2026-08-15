@@ -15,6 +15,8 @@
     "dashboard:build": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml restart dashboard",
     "dashboard:reload": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml restart dashboard",
     "reload": "docker compose -f docker-compose.full.yml run --rm extensions-build && docker compose -f docker-compose.full.yml build kernel && docker compose -f docker-compose.full.yml up -d --force-recreate kernel",
+    "//reload:local": "Recarga el stack de docker-compose.yml + gpu.yml (proyecto kernl-public). Los reload de arriba usan full.yml, que es otra topología: bindea ./data en /app/data y no declara `name:`, así que abre un proyecto aparte. Los bundles se compilan acá porque el Dockerfile copia assets/ ya construido — dentro de la imagen no hay dashboard con el que buildear los frontends.",
+    "reload:local": "(cd services/kernel && bun run build:extensions) && docker compose -f docker-compose.yml -f docker-compose.gpu.yml build kernel && docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --force-recreate kernel",
     "reload:dashboard": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml restart dashboard",
     "reload:all": "docker compose -f docker-compose.full.yml run --rm dashboard-build && docker compose -f docker-compose.full.yml run --rm extensions-build && docker compose -f docker-compose.full.yml build kernel && docker compose -f docker-compose.full.yml up -d --force-recreate kernel && docker compose -f docker-compose.full.yml restart dashboard",
     "neo4j:up": "docker compose up -d",
