@@ -33,9 +33,34 @@ export interface DriverAgentDef {
   flow?: string;
   /** Per-run timeout. Defaults to 120s. */
   timeout_ms?: number;
+  /** Declared dead upstream — do not schedule, and park any existing row. */
+  retired?: boolean;
 }
 
 const DEFAULT_FLOW = "Automations";
+
+/**
+ * Split a driver list into the ones to seed and the handler ids to park.
+ *
+ * A driver marked `retired` is one whose upstream is gone, not whose code is
+ * broken — the module that owns it says so, rather than the kernel keeping a
+ * list of other people's handler ids. Dropping the def alone is not enough and
+ * that is the whole reason this exists: the `agents` row from previous boots
+ * keeps its schedule, and with no def to match, the scheduler falls through to
+ * the LLM executor and burns tokens on an agent with an empty prompt. The
+ * handler id has to reach `retireHandlers()` for the row to actually stop.
+ */
+export function splitRetiredDrivers(
+  defs: ReadonlyArray<DriverAgentDef>,
+): { active: DriverAgentDef[]; retiredHandlers: string[] } {
+  const active: DriverAgentDef[] = [];
+  const retiredHandlers: string[] = [];
+  for (const def of defs) {
+    if (def.retired) retiredHandlers.push(def.handler);
+    else active.push(def);
+  }
+  return { active, retiredHandlers };
+}
 
 /** Stable ids for well-known offices (matches the in-tree seeders). */
 const KNOWN_FLOW_IDS: Record<string, string> = {

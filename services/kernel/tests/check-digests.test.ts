@@ -7,7 +7,7 @@ import {
 } from "../src/modules/agents/builtin-checks.js";
 import { createBuiltinHandlers, KERNEL_AGENT_DEFS } from "../src/modules/agents/builtin-handlers.js";
 import { RETIRED_CHECK_HANDLERS } from "../src/modules/agents/builtin-checks.js";
-import { seedDriverAgents } from "../src/modules/agents/seed-driver-agents.js";
+import { seedDriverAgents, splitRetiredDrivers } from "../src/modules/agents/seed-driver-agents.js";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
@@ -190,6 +190,46 @@ describe("driver seeder retirement", () => {
   it("retires every check that a digest took over", () => {
     const digestMembers = CHECK_DIGEST_DEFS.flatMap((d) => d.members).map((k) => `check:${k}`);
     expect([...RETIRED_CHECK_HANDLERS].sort()).toEqual(digestMembers.sort());
+  });
+
+  // ── Drivers that declare themselves retired ────────────────────────────
+  // The same parking, but asked for by the module that owns the driver
+  // instead of by a list in the kernel. What prompted it: the Pirate Bay RSS
+  // poller, whose mirror stopped answering — it still resolves, so every run
+  // hung until the 12s abort and was recorded FAILED, four times an hour.
+  it("does not schedule a driver that declares itself retired", () => {
+    const { active, retiredHandlers } = splitRetiredDrivers([
+      { handler: "torrents:rss:eztv", name: "EZTV RSS", description: "", cron: "3 * * * *" },
+      { handler: "torrents:rss:piratebay", name: "Pirate Bay RSS", description: "", cron: "6 * * * *", retired: true },
+    ]);
+
+    expect(active.map((d) => d.handler)).toEqual(["torrents:rss:eztv"]);
+    expect(retiredHandlers).toEqual(["torrents:rss:piratebay"]);
+  });
+
+  it("parks the agent row a retired driver left behind", () => {
+    // Dropping the def alone would leave this row scheduled and handler-less,
+    // and the scheduler falls through to the LLM executor for exactly that —
+    // an agent with an empty prompt, burning tokens every 15 minutes.
+    const id = legacyAgent("torrents:rss:piratebay", "6,21,36,51 * * * *");
+    const { active, retiredHandlers } = splitRetiredDrivers([
+      { handler: "torrents:rss:piratebay", name: "Pirate Bay RSS", description: "", cron: "6 * * * *", retired: true },
+    ]);
+
+    seedDriverAgents(db as never, service as never, active, 1, retiredHandlers);
+
+    expect(activeOf(id)).toBe(0);
+    expect(scheduleActiveOf(id)).toBe(0);
+  });
+
+  it("keeps the run history of a retired driver readable", () => {
+    const id = legacyAgent("torrents:rss:piratebay", "6,21,36,51 * * * *");
+
+    seedDriverAgents(db as never, service as never, [], 1, ["torrents:rss:piratebay"]);
+
+    const row = db.prepare("SELECT id, builtin_handler FROM agents WHERE id = ?").get(id) as
+      { id: string; builtin_handler: string } | undefined;
+    expect(row?.builtin_handler).toBe("torrents:rss:piratebay");
   });
 });
 

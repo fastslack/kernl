@@ -248,6 +248,21 @@ export interface AgentDriver {
   /** Per-run timeout for the seeded agent row. Defaults to 120s. */
   timeout_ms?: number;
   /**
+   * Retired: keep the handler, stop scheduling it, and deactivate any agent
+   * row that still carries this id.
+   *
+   * For a driver whose upstream is gone rather than whose code is wrong —
+   * a tracker mirror that stopped answering, an API that shut down. Deleting
+   * the driver outright is worse in two ways: the existing `agents` row keeps
+   * its schedule and, with no handler left to match, the scheduler falls
+   * through to the LLM executor and burns tokens running an agent with an
+   * empty prompt; and the run history stops being readable. Retiring parks
+   * the row (inactive, off the office floor) while keeping the history and
+   * the handler, so an operator who supplies a working mirror can re-enable
+   * it by hand and have it actually work.
+   */
+  retired?: boolean;
+  /**
    * The handler body — no LLM. Returns a result string for the run log, or
    * `{ ok: false, error }` when the work failed. Throwing counts as a failure too.
    */
