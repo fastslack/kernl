@@ -31,6 +31,13 @@ cp "$SRC_TREE/bin/bun.exe"       "$PKG_DIR/bun.exe"
 cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 [ -d "$SRC_TREE/bin/static" ]     && cp -a "$SRC_TREE/bin/static"     "$PKG_DIR/"
 [ -d "$SRC_TREE/bin/extensions" ] && cp -a "$SRC_TREE/bin/extensions" "$PKG_DIR/"
+# whisper.cpp and ffmpeg, exactly as build-zip.sh stages them. The whisper copy
+# was missing here while the zip had it, so the MSI — the installer most
+# Windows users take — shipped without the transcription binary and fell back
+# to a PATH nobody has. heat harvests whatever is in $PKG_DIR, so these two
+# lines are the whole fix.
+[ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$PKG_DIR/"
+[ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$PKG_DIR/"
 cp -a "$SRC_TREE/node_modules" "$PKG_DIR/"
 cp -a "$SRC_TREE/dashboard"    "$PKG_DIR/"
 cp -a "$SRC_TREE/assets"       "$PKG_DIR/"

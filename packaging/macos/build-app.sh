@@ -61,6 +61,22 @@ APP_DIR="$(cd "$(dirname "$0")/../Resources" && pwd)"
 DATA_DIR="${KERNEL_DATA_DIR:-$HOME/Library/Application Support/Kernl}"
 CONFIG_DIR="$HOME/Library/Application Support/Kernl/config"
 
+# Put Homebrew on PATH before anything spawns a child process.
+#
+# A .app launched from Finder does not get the user's shell PATH — launchd
+# hands it `/usr/bin:/bin:/usr/sbin:/sbin` and nothing else. Homebrew installs
+# to /opt/homebrew/bin on Apple Silicon and /usr/local/bin on Intel, so
+# `brew install ffmpeg` produced a binary this app could not see, and subtitle
+# generation died on `spawn ffmpeg ENOENT` for people who had ffmpeg sitting
+# right there. Running the same bundle from a terminal worked, which is the
+# tell — and the reason this went unnoticed for as long as it did.
+#
+# Appended, not prepended: /usr/bin still wins, so this cannot shadow a system
+# tool with whatever a tap happens to have installed. Both paths are added on
+# both architectures — an Intel binary under Rosetta reads /usr/local, and a
+# machine can carry both prefixes.
+export PATH="$PATH:/opt/homebrew/bin:/usr/local/bin"
+
 mkdir -p "$DATA_DIR"/{data,logs} "$CONFIG_DIR"
 
 # First-run config seed.
@@ -147,7 +163,13 @@ cat > "$APP_BUNDLE/Contents/Info.plist" <<EOF
   <key>CFBundleExecutable</key>      <string>kernl</string>
   <key>CFBundleIconFile</key>        <string>kernl.icns</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
-  <key>LSMinimumSystemVersion</key>  <string>11.0</string>
+  <!-- 13.0, not 11.0. The vendored Bun is built against a 13.0 deployment
+       target, so the app has never been able to launch on 11 or 12 whatever
+       this key claimed; the bundled whisper-cli and ffmpeg are built to the
+       same floor. A plist that under-states the requirement does not make an
+       old Mac work, it just moves the failure from Finder ("requires macOS
+       13") to a dyld error nobody can read. -->
+  <key>LSMinimumSystemVersion</key>  <string>13.0</string>
   <key>LSUIElement</key>             <false/>
   <key>NSHighResolutionCapable</key> <true/>
   <key>NSHumanReadableCopyright</key> <string>© 2026 Matware. Licensed under Apache-2.0.</string>
@@ -167,6 +189,11 @@ cp "$SRC_TREE/bin/mcp-server.js" "$APP_BUNDLE/Contents/Resources/"
 # zip root on Windows. Do not split the dylibs out into a lib/ folder: the GPU
 # backends are dlopen-ed and the loader looks beside the executable.
 [ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$APP_BUNDLE/Contents/Resources/"
+# ffmpeg + ffprobe, same idea, their own directory. Every subtitle engine
+# extracts its audio with ffmpeg, so without this the .app cannot produce a
+# subtitle at all — which is precisely what it did until now, since macOS also
+# hides Homebrew from a Finder-launched app.
+[ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/node_modules" "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/dashboard"    "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/assets"       "$APP_BUNDLE/Contents/Resources/"

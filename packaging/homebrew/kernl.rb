@@ -50,7 +50,25 @@ cask "kernl" do
     strategy :github_latest
   end
 
+  # Matches what the .dmg actually contains. Through 0.2.3 that was the
+  # versioned build name (`Kernl-0.2.3-arm64.app`) and this line was wrong —
+  # a cask naming a bundle the image does not have fails the install outright.
+  # From the next release the image carries a plain `Kernl.app`, so that an
+  # upgrade replaces the install instead of stacking a second copy beside it.
+  # Bump `version` and both sums below in the same commit as the release.
   app "Kernl.app"
+
+  # Subtitles shell out to ffmpeg — every transcription engine extracts its
+  # audio with it, including the cloud one — and the .app now bundles its own
+  # copy, so strictly this is redundant.
+  #
+  # Kept as a belt-and-braces until a release actually ships with the bundle:
+  # `stage-payload.sh` treats a missing ffmpeg asset as non-fatal, so a release
+  # cut before the `ffmpeg-v*` tag exists produces a package that silently
+  # falls back to PATH. Drop this line once a tagged release carries
+  # Contents/Resources/ffmpeg — it costs cask users a ~100 MB formula they do
+  # not otherwise need.
+  depends_on formula: "ffmpeg"
 
   # The app writes here on first run. Removed only on `--zap`, never on a plain
   # uninstall: someone reinstalling should not lose their database, and an

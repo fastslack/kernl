@@ -53,9 +53,11 @@ import type { ExtensionManifest } from "./schema.js";
  * copy broke, and sits far enough down the walk that an extension's own
  * node_modules still wins for whatever it does declare.
  *
- * Refreshed on every boot on purpose: on macOS the payload path carries the app
- * version (/Applications/Kernl-<version>-arm64.app), so an upgrade leaves the
- * previous link dangling and the failure comes back with no message anywhere.
+ * Refreshed on every boot on purpose: the payload path can move under the link
+ * and leave it dangling, at which point the failure comes back with no message
+ * anywhere. The .dmg now installs a plain /Applications/Kernl.app so an
+ * upgrade lands on the same path, but the portable tarball still unpacks to
+ * Kernl-<version>-<arch>.app, and nothing stops anyone moving the bundle.
  */
 export function linkPayloadModules(extensionsDir: string): void {
   const root = assetsRoot();

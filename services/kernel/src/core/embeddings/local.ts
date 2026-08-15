@@ -4,11 +4,14 @@
  * graph-intel/embeddings.ts (Xenova/all-MiniLM-L6-v2, 384 dim) so swapping
  * back doesn't require re-embedding existing graphs.
  *
- * Cold-start: ~3-5s on first call (downloads ONNX model from HF if missing,
- * caches under HF_HOME). Subsequent calls reuse the loaded pipeline.
+ * Cold-start: ~3-5s on first call (downloads the ONNX model from HF if
+ * missing, into `<data>/data/transformers-cache` — see transformers-cache.ts
+ * for why that is not left to the library). Subsequent calls reuse the loaded
+ * pipeline.
  */
 
 import { log } from "../logger.js";
+import { loadTransformers } from "../transformers-cache.js";
 import type { EmbedOptions, EmbeddingsClient } from "./client.js";
 
 const FALLBACK_MODEL = "Xenova/all-MiniLM-L6-v2";
@@ -25,7 +28,7 @@ async function loadPipeline(): Promise<FeaturePipeline> {
   if (!pipelinePromise) {
     log.info(`embeddings/local: loading ${FALLBACK_MODEL} …`);
     pipelinePromise = (async () => {
-      const { pipeline } = await import("@huggingface/transformers");
+      const { pipeline } = await loadTransformers();
       return (await pipeline("feature-extraction", FALLBACK_MODEL, {
         dtype: "fp32",
       })) as unknown as FeaturePipeline;

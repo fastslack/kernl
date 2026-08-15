@@ -55,6 +55,17 @@ jobs:
   build:
     name: ${{ matrix.platform }}
     runs-on: ${{ matrix.runner }}
+    # Signing secrets are mapped at the JOB level on purpose. A step's `if:` is
+    # evaluated before that step's own `env:` block exists, so
+    # `if: env.APPLE_CERT_DATA != ''` sitting next to `env: APPLE_CERT_DATA:
+    # ${{ secrets… }}` is always false — the macOS libraries went out unsigned
+    # and the job passed. release.yml hit exactly this and fixed it there
+    # without the fix reaching here. Job-level env IS in scope for step
+    # conditions. (`secrets` itself is not, which is why the mapping exists.)
+    env:
+      APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     # Empty for the macOS and Windows entries, which run on the runner itself.
     container: ${{ matrix.container }}
     strategy:
@@ -178,12 +189,24 @@ jobs:
             -DGGML_NCCL=OFF \
             -DWHISPER_BUILD_TESTS=OFF
 
+      # CMAKE_OSX_DEPLOYMENT_TARGET is not cosmetic and not optional. Left
+      # unset, clang stamps in the RUNNER's version: the binary published as
+      # whisper-darwin-arm64 for v0.2.3 carries `minos 15.0`, so dyld refuses
+      # to load it on macOS 13 and 14 — and it fails at launch, with a dyld
+      # error the kernel surfaces as a spawn failure, not as anything naming a
+      # version. Nobody caught it because the bundled binary was never invoked
+      # at all (media-tools.ts looked for it in the wrong directory), so the
+      # fix to that resolution is what makes this one load-bearing.
+      #
+      # 13.0 because that is the floor the payload already has: the vendored
+      # Bun is built against it, so the app cannot run below 13 regardless.
       - name: Configure (macos arm64)
         if: matrix.platform == 'darwin-arm64'
         run: |
           cmake -B build -S src \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DGGML_BACKEND_DL=ON \
@@ -202,6 +225,7 @@ jobs:
           cmake -B build -S src \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_SHARED_LIBS=ON \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=13.0 \
             -DCMAKE_BUILD_WITH_INSTALL_RPATH=ON \
             -DCMAKE_INSTALL_RPATH='@loader_path' \
             -DGGML_BACKEND_DL=ON \
@@ -268,10 +292,6 @@ jobs:
       # disable-library-validation entitlement.
       - name: Sign libraries (macos)
         if: runner.os == 'macOS' && env.APPLE_CERT_DATA != ''
-        env:
-          APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
-          APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: |
           echo "$APPLE_CERT_DATA" | base64 --decode > /tmp/cert.p12
           security create-keychain -p actions build.keychain

@@ -113,31 +113,38 @@ TELEGRAM_ALLOWED_USERS=your-user-id
 
 ### Media tools (Cinema, TV, Torrents)
 
-The media extensions shell out to three programs. The **Docker image already
-contains them** — this section is only for native desktop installs (the macOS
-`.dmg`, the Windows installer, or a from-source run), which bundle the runtime
-and nothing else.
+The media extensions shell out to three programs, and **you should not have to
+install any of them**:
 
-| Binary | Needed for | Without it |
+| Binary | Needed for | Where it comes from |
 |---|---|---|
-| `ffmpeg` | transcoding playback, extracting audio for subtitles | AVI/MPEG won't play; offline subtitles won't generate |
-| `ffprobe` | reading the real duration of a remote file | durations show empty; the duration filter matches nothing |
-| `whisper-cli` | generating subtitles offline (whisper.cpp) | only the in-process `transformers` engine and Groq remain |
+| `ffmpeg` | transcoding playback, extracting audio for subtitles | bundled (macOS, Windows) · `apt`/`dnf` on Linux · in the Docker image |
+| `ffprobe` | reading the real duration of a remote file | ships with ffmpeg, same as above |
+| `whisper-cli` | generating subtitles offline (whisper.cpp) | bundled on every platform |
+
+`ffmpeg` is not optional for subtitles, whichever engine you pick. All three —
+`whispercpp`, the in-process `transformers` one, and Groq Cloud — start by
+extracting the audio with it, so a missing ffmpeg fails the run before the
+engine is even reached. That is why the macOS and Windows packages carry their
+own: neither platform has a package manager to lean on.
+
+Linux is the exception, deliberately — every distro packages ffmpeg, and the
+`.deb`/`.rpm` recommend it, so bundling would add ~160 MB to duplicate one
+command:
 
 ```bash
-# macOS
-brew install ffmpeg whisper-cpp
-
-# Debian / Ubuntu
-sudo apt install ffmpeg whisper.cpp
+sudo apt install ffmpeg      # Debian / Ubuntu
 ```
 
-Already installed somewhere unusual? Point Kernl at it instead:
-`FFMPEG_BIN`, `FFPROBE_BIN`, `WHISPERCPP_BIN`.
+If you would rather use your own build of any of the three — a whisper.cpp with
+CUDA, say, which we deliberately do not ship — point Kernl at it with
+`FFMPEG_BIN`, `FFPROBE_BIN` or `WHISPERCPP_BIN`. Those win over the bundled
+copies.
 
-`bun run doctor` reports which of the three are present and prints the install
-command for your platform when one is missing. Nothing here is required to run
-Kernl — the media extensions simply degrade to what they can do without them.
+`bun run doctor` reports which of the three are present, which path each
+resolved to, and prints the install command for your platform when one is
+missing. Nothing here is required to run Kernl — the media extensions simply
+degrade to what they can do without them.
 
 ### Security (recommended for network exposure)
 ```bash

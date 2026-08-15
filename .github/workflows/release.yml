@@ -187,13 +187,61 @@ jobs:
 
       - name: Build .dmg
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./services/kernel/package.json').version")
           APP="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.app"
           DMG="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.dmg"
-          # hdiutil ships with macOS — produces a compressed read-only image
-          # that Mac users recognise as "the standard Mac install file".
-          hdiutil create -volname "Kernl" -srcfolder "$APP" \
-            -ov -format UDZO "$DMG"
+
+          # The bundle goes into the image as plain `Kernl.app`, not under its
+          # versioned build name. The user drags whatever is in the window, so
+          # the name in here is the name that ends up in /Applications: with
+          # the version baked in, every upgrade installs a SECOND copy beside
+          # the old one, and the extensions layer — which links the payload's
+          # node_modules by absolute path — is left pointing at the previous
+          # version's directory (see ensure-packages.ts). Renaming a signed
+          # bundle is safe: the signature covers its contents, not the name of
+          # the directory holding them.
+          rm -rf packaging/dmg-stage
+          mkdir -p packaging/dmg-stage
+          # ditto, not cp: it is the copy that preserves a bundle's extended
+          # attributes and ACLs intact, which is what keeps the signature
+          # applied in the previous step verifiable.
+          ditto "$APP" packaging/dmg-stage/Kernl.app
+
+          # HiDPI background: one .tiff carrying the 1x and 2x PNGs. Without
+          # this the Retina Mac everyone actually owns scales the 1x up and
+          # the window looks soft.
+          tiffutil -cathidpicheck \
+            packaging/macos/dmg-background.png \
+            packaging/macos/dmg-background@2x.png \
+            -out packaging/dmg-stage/background.tiff
+
+          # dmgbuild writes the window's .DS_Store directly instead of driving
+          # Finder over AppleScript, which is what makes this work on a runner
+          # with no GUI session. See packaging/macos/dmg-settings.py.
+          #
+          # Into a venv on purpose. The runner's python3 is Homebrew's, which
+          # is an externally-managed environment: a plain `pip install` there
+          # fails outright under PEP 668, and `--break-system-packages` is the
+          # wrong answer for a tool used once.
+          python3 -m venv /tmp/dmgvenv
+          /tmp/dmgvenv/bin/pip install --quiet --disable-pip-version-check dmgbuild
+          /tmp/dmgvenv/bin/dmgbuild \
+            -s packaging/macos/dmg-settings.py \
+            -D app="$PWD/packaging/dmg-stage/Kernl.app" \
+            -D background="$PWD/packaging/dmg-stage/background.tiff" \
+            -D badge_icon="$PWD/packaging/icons/kernl.icns" \
+            "Kernl" "$DMG"
+
+          # A .dmg that mounts to a window with two icons in it, or the build
+          # failed in a way that still produced a file. Mount it and look.
+          MNT="$(mktemp -d)"
+          hdiutil attach "$DMG" -mountpoint "$MNT" -nobrowse -readonly
+          ls -la "$MNT"
+          test -d "$MNT/Kernl.app"     || { echo "FAIL: no Kernl.app in the image" >&2; exit 1; }
+          test -L "$MNT/Applications"  || { echo "FAIL: no Applications symlink — nothing to drag onto" >&2; exit 1; }
+          test -f "$MNT/.DS_Store"     || { echo "FAIL: no .DS_Store — the window will open unstyled" >&2; exit 1; }
+          hdiutil detach "$MNT"
 
       - name: Notarize
         if: env.APPLE_API_KEY_ID != ''
