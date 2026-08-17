@@ -166,6 +166,16 @@ jobs:
       # a change to the image can no longer alter what we ship. Everything
       # enabled below is either built by us (x264) or lives in /usr/lib or
       # /System on every supported macOS.
+      #
+      # iconv is deliberately NOT re-enabled. `--enable-iconv` alongside
+      # --disable-autodetect asserts the library is there without running the
+      # check that works out how to link it, so the build got all the way to
+      # the final link and died on undefined _iconv/_iconv_open/_iconv_close.
+      # It would come back with `--extra-libs=-liconv`, but the only thing it
+      # buys is charset conversion for DVB subtitle text — nothing this
+      # pipeline reads. Anything else named here needs the same thought: with
+      # autodetection off, enabling a library is a promise the linker has to
+      # keep.
       - name: Configure
         run: |
           set -euo pipefail
@@ -183,7 +193,6 @@ jobs:
             --enable-videotoolbox \
             --enable-zlib \
             --enable-bzlib \
-            --enable-iconv \
             --enable-runtime-cpudetect \
             --disable-ffplay \
             --disable-doc \
