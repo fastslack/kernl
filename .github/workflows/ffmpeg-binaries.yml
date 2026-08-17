@@ -153,6 +153,19 @@ jobs:
       # --disable-ffplay drops an SDL dependency for a binary we never ship.
       # --enable-videotoolbox costs nothing and gives hardware decode on both
       # Mac architectures.
+      #
+      # --disable-autodetect is what keeps the binary self-contained, and it is
+      # not paranoia: without it configure found the runner's Homebrew X11 and
+      # linked ffmpeg against libxcb, libX11, libXau and libXdmcp — for the
+      # xcbgrab screen-capture device, which we will never use — and the smoke
+      # test rejected the build for depending on four dylibs no user's Mac has.
+      #
+      # Disabling that one library by name would work until the next runner
+      # image ships another one. Turning autodetection off entirely inverts the
+      # default: nothing external gets linked unless it is named right here, so
+      # a change to the image can no longer alter what we ship. Everything
+      # enabled below is either built by us (x264) or lives in /usr/lib or
+      # /System on every supported macOS.
       - name: Configure
         run: |
           set -euo pipefail
@@ -163,10 +176,14 @@ jobs:
             --pkg-config-flags=--static \
             --extra-cflags="-I$GITHUB_WORKSPACE/deps/include -mmacosx-version-min=13.0" \
             --extra-ldflags="-L$GITHUB_WORKSPACE/deps/lib -mmacosx-version-min=13.0" \
+            --disable-autodetect \
             --enable-gpl \
             --enable-libx264 \
             --enable-securetransport \
             --enable-videotoolbox \
+            --enable-zlib \
+            --enable-bzlib \
+            --enable-iconv \
             --enable-runtime-cpudetect \
             --disable-ffplay \
             --disable-doc \
