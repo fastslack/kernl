@@ -122,7 +122,13 @@ chmod 0755 "$SRC_TREE/bin/$BUN_EXE"
 # Best-effort: a release without the asset yet still produces a working
 # package, it just falls back to the user's PATH exactly as before. Failing
 # the build here would mean a whisper.cpp bump could block a Kernl release.
-WHISPER_BIN_TAG="${WHISPER_BIN_TAG:-whisper-v1.9.2}"
+# `-2` is a rebuild of the same whisper.cpp v1.9.2, not a new upstream version.
+# The first build set no macOS deployment target, so clang stamped in the
+# runner's: the published darwin bundles carry `minos 15.0` and dyld refuses to
+# load them on macOS 13 and 14. A new tag rather than replacing the assets on
+# the old one, because the point of pinning is that a given tag keeps meaning
+# the same bytes.
+WHISPER_BIN_TAG="${WHISPER_BIN_TAG:-whisper-v1.9.2-2}"
 WHISPER_TARBALL="whisper-${PLATFORM}.tar.gz"
 WHISPER_URL="https://github.com/${GITHUB_REPOSITORY:-fastslack/kernl}/releases/download/${WHISPER_BIN_TAG}/${WHISPER_TARBALL}"
 
