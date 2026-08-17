@@ -137,11 +137,18 @@ jobs:
       # and their audio) and writes exactly two things — a 16 kHz mono WAV for
       # whisper, and h264+aac for browser playback.
       #
-      # --enable-openssl for https input. OpenSSL 3 is Apache-2.0 and therefore
-      # GPL-compatible, so this does NOT drag in --enable-nonfree the way an
-      # openssl 1.x build would have. That distinction is the whole reason this
-      # workflow exists; if a future bump makes configure demand nonfree, stop
-      # and switch TLS backends rather than adding the flag.
+      # TLS comes from SecureTransport, the system framework, NOT from openssl.
+      # Every source URL is https, so a TLS backend is not optional — but
+      # Homebrew's openssl is keg-only, so `--enable-openssl` either fails
+      # configure (pkg-config never finds it) or links the binary against
+      # /opt/homebrew/opt/openssl@3, which does not exist on a user's Mac. The
+      # `otool -L` check at the end of the smoke test is there to catch exactly
+      # that, and it would have failed this build.
+      #
+      # SecureTransport is deprecated by Apple but present on every macOS we
+      # support and linked as a framework, so the binary stays self-contained.
+      # If a future ffmpeg drops it, statically link openssl — do not switch to
+      # linking Homebrew's.
       #
       # --disable-ffplay drops an SDL dependency for a binary we never ship.
       # --enable-videotoolbox costs nothing and gives hardware decode on both
@@ -158,7 +165,7 @@ jobs:
             --extra-ldflags="-L$GITHUB_WORKSPACE/deps/lib -mmacosx-version-min=13.0" \
             --enable-gpl \
             --enable-libx264 \
-            --enable-openssl \
+            --enable-securetransport \
             --enable-videotoolbox \
             --enable-runtime-cpudetect \
             --disable-ffplay \
@@ -364,7 +371,7 @@ jobs:
             `packaging/stage-payload.sh`.
 
             macOS: FFmpeg `${{ env.FFMPEG_REF }}` built here, GPL v2+,
-            `--enable-gpl --enable-libx264 --enable-openssl`, deployment
+            `--enable-gpl --enable-libx264 --enable-securetransport`, deployment
             target 13.0. Windows: repackaged from BtbN `${{ env.BTBN_TAG }}`.
             Linux ships nothing — `apt install ffmpeg`, and the deb/rpm
             already recommend it.
