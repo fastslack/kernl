@@ -19,6 +19,7 @@
 
 import { log } from "../../../../../src/core/logger.js";
 import { llm } from "../../../../../src/core/llm/client.js";
+import { loadTransformers } from "../../../../../src/core/transformers-cache.js";
 import { nllbCode } from "./subtitles.js";
 
 export type TranslateEngine = "nllb" | "llm";
@@ -71,7 +72,7 @@ async function getNllb(): Promise<any> {
   if (nllbLoading) return nllbLoading;
   log.info(`Loading NLLB-200 (${NLLB_MODEL})… first call downloads ~600MB`);
   nllbLoading = (async () => {
-    const { pipeline } = await import("@huggingface/transformers");
+    const { pipeline } = await loadTransformers();
     nllbPipeline = await pipeline("translation", NLLB_MODEL, { dtype: "fp32" });
     return nllbPipeline;
   })();

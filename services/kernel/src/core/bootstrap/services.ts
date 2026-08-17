@@ -43,7 +43,7 @@ import { seedAgentRanks } from "../../modules/agents/ranks-seeder.js";
 import { seedTopAgent } from "../../modules/agents/top-agent-seeder.js";
 import { seedSkillSuggester } from "../../modules/agents/seed-skill-suggester.js";
 import { seedAgentFactory } from "../../modules/agents/seed-agent-factory.js";
-import { seedDriverAgents } from "../../modules/agents/seed-driver-agents.js";
+import { seedDriverAgents, splitRetiredDrivers } from "../../modules/agents/seed-driver-agents.js";
 import { seedModelDiscoveryAgent } from "../../modules/agents/seed-model-discovery-agent.js";
 
 import type { ExtensionHandles } from "./extensions.js";
@@ -323,10 +323,17 @@ export async function wireServices(args: {
       }
       builtinHandlers.set(key, run);
     }
+    // A driver marked `retired` keeps its handler in the map above — so a row
+    // an operator re-enables by hand still runs real code — but is excluded
+    // from seeding and its id is handed to the retirement pass, which parks
+    // any agent still carrying it. Declared by the module that owns the
+    // driver, so the kernel never has to keep a list of other people's
+    // handler ids.
+    const { active: liveDrivers, retiredHandlers } = splitRetiredDrivers(driverDefs);
     seedDriverAgents(sqlite, agentService as Parameters<typeof seedDriverAgents>[1], [
       ...KERNEL_AGENT_DEFS,
-      ...driverDefs,
-    ], config.agents.minScheduleSeconds, RETIRED_CHECK_HANDLERS);
+      ...liveDrivers,
+    ], config.agents.minScheduleSeconds, [...RETIRED_CHECK_HANDLERS, ...retiredHandlers]);
 
     // Demo handlers — register unconditionally; they only execute when an
     // agent has builtin_handler='demo:*' set (i.e. the demo seeder ran).

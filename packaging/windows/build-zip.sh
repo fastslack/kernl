@@ -38,6 +38,11 @@ cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 # macos/build-app.sh. Windows makes this one easy: the default DLL search
 # order already starts with the executable's own directory.
 [ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$PKG_DIR/"
+# ffmpeg + ffprobe. Windows has no package manager we can lean on the way the
+# deb leans on apt, and every subtitle engine starts by extracting audio with
+# ffmpeg, so an install without one generates no subtitles whatever the user
+# picks in the UI.
+[ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$PKG_DIR/"
 cp -a "$SRC_TREE/node_modules" "$PKG_DIR/"
 cp -a "$SRC_TREE/dashboard"    "$PKG_DIR/"
 cp -a "$SRC_TREE/assets"       "$PKG_DIR/"

@@ -11,6 +11,7 @@ import path from "node:path";
 import { existsSync } from "node:fs";
 import { log } from "../../../../../src/core/logger.js";
 import { mediaToolBin, mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
+import { loadTransformers } from "../../../../../src/core/transformers-cache.js";
 import {
   parseBackendLog,
   pickBackend,
@@ -491,7 +492,7 @@ async function getWhisperPipeline(model: string) {
   if (whisperLoading) return whisperLoading;
   log.info(`Loading Xenova/whisper-${model} (first call may download model)`);
   whisperLoading = (async () => {
-    const { pipeline } = await import("@huggingface/transformers");
+    const { pipeline } = await loadTransformers();
     const p = await pipeline("automatic-speech-recognition", `Xenova/whisper-${model}`, { dtype: "fp32" });
     (p as any).__model = `Xenova/whisper-${model}`;
     whisperPipeline = p;

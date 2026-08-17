@@ -122,7 +122,13 @@ chmod 0755 "$SRC_TREE/bin/$BUN_EXE"
 # Best-effort: a release without the asset yet still produces a working
 # package, it just falls back to the user's PATH exactly as before. Failing
 # the build here would mean a whisper.cpp bump could block a Kernl release.
-WHISPER_BIN_TAG="${WHISPER_BIN_TAG:-whisper-v1.9.2}"
+# `-2` is a rebuild of the same whisper.cpp v1.9.2, not a new upstream version.
+# The first build set no macOS deployment target, so clang stamped in the
+# runner's: the published darwin bundles carry `minos 15.0` and dyld refuses to
+# load them on macOS 13 and 14. A new tag rather than replacing the assets on
+# the old one, because the point of pinning is that a given tag keeps meaning
+# the same bytes.
+WHISPER_BIN_TAG="${WHISPER_BIN_TAG:-whisper-v1.9.2-2}"
 WHISPER_TARBALL="whisper-${PLATFORM}.tar.gz"
 WHISPER_URL="https://github.com/${GITHUB_REPOSITORY:-fastslack/kernl}/releases/download/${WHISPER_BIN_TAG}/${WHISPER_TARBALL}"
 
@@ -153,6 +159,67 @@ if [ -d "$SRC_TREE/bin/whisper" ]; then
   esac
   echo "  whisper bundle: $(du -sh "$SRC_TREE/bin/whisper" | cut -f1)"
 fi
+
+# ── 2c) Vendor ffmpeg + ffprobe for the target platform ─────────────
+# Every subtitle engine — whisper.cpp, the in-process transformers one, and
+# Groq Cloud — starts by extracting audio with ffmpeg, so a package without one
+# cannot generate a single subtitle whatever engine the user picks. The macOS
+# .app shipped without it and without any declared dependency, and because a
+# Finder-launched app gets launchd's PATH rather than the user's, even people
+# who had run `brew install ffmpeg` hit `spawn ffmpeg ENOENT`.
+#
+# Bundles come from .github/workflows/ffmpeg-binaries.yml — see its header for
+# why they are built rather than vendored from any of the published static
+# builds (the one that covers every platform is `--enable-nonfree`, which is
+# not redistributable at all).
+#
+# NOT staged for linux-x64, on purpose. `apt install ffmpeg` is one command,
+# every distro packages it, the deb and rpm already carry `Recommends: ffmpeg`
+# and the Docker image installs it — so bundling would add ~160 MB to serve a
+# case the platform already handles. whisper.cpp is bundled everywhere for the
+# opposite reason: nobody packages it.
+FFMPEG_BIN_TAG="${FFMPEG_BIN_TAG:-ffmpeg-v7.1.5}"
+
+case "$PLATFORM" in
+  linux-x64)
+    echo "▶ skipping ffmpeg bundle (linux uses the distro package)"
+    ;;
+  *)
+    FFMPEG_TARBALL="ffmpeg-${PLATFORM}.tar.gz"
+    FFMPEG_URL="https://github.com/${GITHUB_REPOSITORY:-fastslack/kernl}/releases/download/${FFMPEG_BIN_TAG}/${FFMPEG_TARBALL}"
+
+    if [ -n "${FFMPEG_BUNDLE_DIR:-}" ] && [ -d "$FFMPEG_BUNDLE_DIR" ]; then
+      # Same escape hatch as whisper: point at a directory instead of the
+      # network, for local builds and for a CI job that just built it.
+      echo "▶ vendoring ffmpeg from $FFMPEG_BUNDLE_DIR"
+      mkdir -p "$SRC_TREE/bin/ffmpeg"
+      cp -a "$FFMPEG_BUNDLE_DIR/." "$SRC_TREE/bin/ffmpeg/"
+    else
+      echo "▶ downloading ffmpeg bundle ($PLATFORM, $FFMPEG_BIN_TAG)"
+      TMP_F="$(mktemp -d)"
+      if curl -fsSL -o "$TMP_F/f.tar.gz" "$FFMPEG_URL"; then
+        tar xzf "$TMP_F/f.tar.gz" -C "$TMP_F"
+        mkdir -p "$SRC_TREE/bin/ffmpeg"
+        cp -a "$TMP_F/ffmpeg/." "$SRC_TREE/bin/ffmpeg/"
+      else
+        # Best-effort, like whisper: a release cut before the asset exists
+        # still produces a working package, it just falls back to the user's
+        # PATH. Failing here would let an ffmpeg bump block a Kernl release.
+        echo "  WARN: no ffmpeg bundle at $FFMPEG_URL"
+        echo "  WARN: package will fall back to ffmpeg on the user's PATH"
+      fi
+      rm -rf "$TMP_F"
+    fi
+
+    if [ -d "$SRC_TREE/bin/ffmpeg" ]; then
+      case "$PLATFORM" in
+        win-x64) chmod 0755 "$SRC_TREE/bin/ffmpeg/"*.exe 2>/dev/null || true ;;
+        *)       chmod 0755 "$SRC_TREE/bin/ffmpeg/ffmpeg" "$SRC_TREE/bin/ffmpeg/ffprobe" 2>/dev/null || true ;;
+      esac
+      echo "  ffmpeg bundle: $(du -sh "$SRC_TREE/bin/ffmpeg" | cut -f1)"
+    fi
+    ;;
+esac
 
 # ── 3) Bundled kernel JS + static + built extensions ───────────────
 cp services/kernel/dist/mcp-server.js "$SRC_TREE/bin/mcp-server.js"

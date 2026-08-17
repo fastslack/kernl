@@ -1,0 +1,377 @@
+# Build the ffmpeg/ffprobe bundles that ship inside the native packages.
+#
+# Sibling of whisper-binaries.yml, same cadence, same consumer
+# (`packaging/stage-payload.sh`), same reason for existing — with one
+# difference worth stating up front, because "just download a static build"
+# is the obvious objection:
+#
+# ── Why we build this instead of vendoring someone's static build ──────────
+# Every prebuilt that covers macOS arm64 was checked. They fail on one of two
+# counts:
+#
+#   eugeneware/ffmpeg-static  — covers all four platforms, pinned by tag, with
+#     SHA-256 digests. Built `--enable-gpl --enable-nonfree`. A binary with
+#     nonfree in it CANNOT BE REDISTRIBUTED — shipping it would make Kernl's
+#     own release undistributable. Read the config out of the binary itself
+#     (`strings ffmpeg-darwin-arm64 | grep configuration`) rather than trusting
+#     the repo description, which does not mention it.
+#   ffmpeg.martin-riedl.de   — clean (`--enable-gpl --enable-version3`, no
+#     nonfree), self-contained, correctly ad-hoc signed for arm64. But it
+#     publishes `latest` and nothing else: no version-pinned URL (the
+#     `/redirect/version/9.0/…` form 404s) and no checksums. An artifact that
+#     changes under us is exactly what the whisper workflow pins against.
+#   BtbN/FFmpeg-Builds       — clean GPL, pinned by autobuild tag. No macOS,
+#     which is the platform this whole exercise is about. Still used for
+#     Windows below: it is a good build, and cross-building ffmpeg for Windows
+#     is a MSYS2 project nobody needs to repeat.
+#
+# So: macOS is built here, Windows is repackaged from BtbN with its checksum
+# recorded, and Linux gets nothing — `apt install ffmpeg` is one command, the
+# deb and rpm already declare `Recommends: ffmpeg`, and the Docker image
+# installs it. whisper.cpp is bundled everywhere because no distro packages
+# it; ffmpeg is packaged by all of them. The asymmetry is deliberate.
+#
+# ── Licence ───────────────────────────────────────────────────────────────
+# The macOS build is `--enable-gpl --enable-libx264`, so the resulting binary
+# is GPL v2+ and the bundle carries FFmpeg's COPYING.GPLv2 plus a note naming
+# the exact source revision and configure line. Kernl itself stays Apache-2.0:
+# these are separate programs the package aggregates and invokes, not linked
+# code. libx264 is not optional — `media-routes.ts` transcodes playback with
+# `-c:v libx264`, and dropping it to keep an LGPL build would mean changing
+# runtime behaviour to chase a licence.
+#
+# ── Unverified on first landing ───────────────────────────────────────────
+# Same caveat the whisper workflow carried, for the same reason: there is no
+# way to exercise a macOS runner without one. The smoke test at the end runs
+# the two pipelines the kernel actually uses — the subtitle audio extraction
+# with its real filter chain, and an h264 encode — so a build that comes back
+# green has done the job at least once. Treat the first invocation as the test.
+
+name: ffmpeg-binaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      ffmpeg_ref:
+        description: "FFmpeg git tag to build (macOS jobs)"
+        required: true
+        default: "n7.1.5"
+  push:
+    tags:
+      - "ffmpeg-v*"
+
+permissions:
+  contents: write
+
+env:
+  FFMPEG_REF: ${{ github.event.inputs.ffmpeg_ref || 'n7.1.5' }}
+  # x264 cuts no releases; everyone pins a commit. This is `stable` from the
+  # long-standing GitHub mirror, pinned by SHA so the mirror being a mirror
+  # stops mattering — the content is fixed whatever the branch does later.
+  X264_COMMIT: 31e19f92f00c7003fa115047ce50978bc98c3a0d
+  # Pinned BtbN build for the Windows repack, with the archive's SHA-256 so a
+  # retagged or replaced asset fails the job instead of shipping unreviewed.
+  BTBN_TAG: autobuild-2026-08-14-13-16
+  BTBN_ASSET: ffmpeg-n7.1.5-12-g1fdbca85aa-win64-gpl-7.1.zip
+
+jobs:
+  macos:
+    name: ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Runner labels match release.yml and whisper-binaries.yml. macos-15
+          # is arm64; the Intel image is a separate label, not a `-latest`
+          # alias — which is how an x64 build silently stops running.
+          - platform: darwin-arm64
+            runner: macos-15
+          - platform: darwin-x64
+            runner: macos-15-intel
+    # Job level, so the signing step's `if:` can see it. A step's `if:` is
+    # evaluated before that step's own `env:` exists — the trap release.yml
+    # documents and whisper-binaries.yml sat on for a release.
+    env:
+      APPLE_CERT_DATA: ${{ secrets.APPLE_CERT_DATA }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      # Every binary in the payload has to start on the oldest macOS the app
+      # claims to support, and the floor is set by the bundled Bun (13.0), not
+      # by us. Left unset, clang stamps the RUNNER's version in: the shipped
+      # whisper-cli came back `minos 15.0`, meaning it refuses to launch on
+      # macOS 13 and 14 with a dyld error. Do not remove this.
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
+    steps:
+      - uses: actions/checkout@v5
+
+      # nasm assembles the x86 SIMD in both x264 and ffmpeg. Unused on arm64
+      # (which assembles its .S files with clang) but installing it there costs
+      # seconds and keeps the two jobs identical.
+      - name: Toolchain
+        run: brew install nasm pkg-config
+
+      - name: Clone sources
+        run: |
+          set -euo pipefail
+          git clone --depth 1 --branch "$FFMPEG_REF" https://github.com/FFmpeg/FFmpeg ffmpeg-src
+          git clone https://github.com/mirror/x264 x264-src
+          git -C x264-src checkout "$X264_COMMIT"
+
+      # Static, no CLI, PIC. Installed into a prefix inside the workspace so
+      # ffmpeg's configure finds it through pkg-config without touching the
+      # runner's /usr/local — which on the Intel image already has a Homebrew
+      # ffmpeg whose headers would otherwise be picked up.
+      - name: Build x264
+        run: |
+          set -euo pipefail
+          cd x264-src
+          ./configure --prefix="$GITHUB_WORKSPACE/deps" \
+            --enable-static --enable-pic --disable-cli --disable-opencl
+          make -j4
+          make install
+
+      # ── Configure ──────────────────────────────────────────────────────
+      # Deliberately a broad decoder set and a narrow encoder set: this thing
+      # reads whatever archive.org serves (mpeg2, mpeg4, h264, vp9, theora,
+      # and their audio) and writes exactly two things — a 16 kHz mono WAV for
+      # whisper, and h264+aac for browser playback.
+      #
+      # TLS comes from SecureTransport, the system framework, NOT from openssl.
+      # Every source URL is https, so a TLS backend is not optional — but
+      # Homebrew's openssl is keg-only, so `--enable-openssl` either fails
+      # configure (pkg-config never finds it) or links the binary against
+      # /opt/homebrew/opt/openssl@3, which does not exist on a user's Mac. The
+      # `otool -L` check at the end of the smoke test is there to catch exactly
+      # that, and it would have failed this build.
+      #
+      # SecureTransport is deprecated by Apple but present on every macOS we
+      # support and linked as a framework, so the binary stays self-contained.
+      # If a future ffmpeg drops it, statically link openssl — do not switch to
+      # linking Homebrew's.
+      #
+      # --disable-ffplay drops an SDL dependency for a binary we never ship.
+      # --enable-videotoolbox costs nothing and gives hardware decode on both
+      # Mac architectures.
+      - name: Configure
+        run: |
+          set -euo pipefail
+          cd ffmpeg-src
+          PKG_CONFIG_PATH="$GITHUB_WORKSPACE/deps/lib/pkgconfig" \
+          ./configure \
+            --prefix="$GITHUB_WORKSPACE/out-install" \
+            --pkg-config-flags=--static \
+            --extra-cflags="-I$GITHUB_WORKSPACE/deps/include -mmacosx-version-min=13.0" \
+            --extra-ldflags="-L$GITHUB_WORKSPACE/deps/lib -mmacosx-version-min=13.0" \
+            --enable-gpl \
+            --enable-libx264 \
+            --enable-securetransport \
+            --enable-videotoolbox \
+            --enable-runtime-cpudetect \
+            --disable-ffplay \
+            --disable-doc \
+            --disable-htmlpages \
+            --disable-manpages \
+            --disable-podpages \
+            --disable-txtpages \
+            --disable-debug
+          # Recorded verbatim into the bundle: the GPL obliges us to say what
+          # this is and how it was built, and it is also the first thing anyone
+          # debugging a codec problem will want.
+          cp ffbuild/config.log "$GITHUB_WORKSPACE/config.log" || true
+
+      - name: Build
+        run: make -C ffmpeg-src -j4
+
+      # ── Collect ────────────────────────────────────────────────────────
+      # Two self-contained binaries plus the paperwork. Flat, like the whisper
+      # bundle, and for a duller reason: there is nothing to dlopen here, it
+      # just keeps both packagers copying one directory.
+      - name: Collect
+        run: |
+          set -euo pipefail
+          mkdir -p out/ffmpeg
+          cp ffmpeg-src/ffmpeg  out/ffmpeg/
+          cp ffmpeg-src/ffprobe out/ffmpeg/
+          strip -S out/ffmpeg/ffmpeg out/ffmpeg/ffprobe
+          cp ffmpeg-src/COPYING.GPLv2 out/ffmpeg/
+          cp ffmpeg-src/COPYING.LGPLv2.1 out/ffmpeg/
+          {
+            echo "FFmpeg ${FFMPEG_REF} — GPL v2 or later."
+            echo ""
+            echo "Built by Kernl's .github/workflows/ffmpeg-binaries.yml for"
+            echo "${{ matrix.platform }}, statically linked against x264"
+            echo "(commit ${X264_COMMIT})."
+            echo ""
+            echo "Source: https://github.com/FFmpeg/FFmpeg at tag ${FFMPEG_REF}"
+            echo "        https://github.com/mirror/x264 at ${X264_COMMIT}"
+            echo ""
+            echo "Configure line:"
+            ./out/ffmpeg/ffmpeg -hide_banner -version | sed -n 's/^ *configuration: */  /p'
+          } > out/ffmpeg/README.Kernl
+          ls -la out/ffmpeg
+
+      # An arm64 Mach-O with no signature at all is killed by the kernel, not
+      # by Gatekeeper — the linker's ad-hoc signature normally covers that, but
+      # `strip` invalidates it, so re-sign unconditionally. When the Developer
+      # ID secrets are present the next step replaces this with the real thing.
+      - name: Ad-hoc sign
+        run: codesign --force --sign - out/ffmpeg/ffmpeg out/ffmpeg/ffprobe
+
+      - name: Sign (Developer ID)
+        if: env.APPLE_CERT_DATA != ''
+        run: |
+          set -euo pipefail
+          echo "$APPLE_CERT_DATA" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p actions build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p actions build.keychain
+          security import /tmp/cert.p12 -k build.keychain \
+            -P "$APPLE_CERT_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k actions build.keychain
+          for f in out/ffmpeg/ffmpeg out/ffmpeg/ffprobe; do
+            codesign --force --timestamp --options runtime --sign "$APPLE_TEAM_ID" "$f"
+          done
+          codesign --verify --verbose out/ffmpeg/ffmpeg
+
+      # ── Smoke test ─────────────────────────────────────────────────────
+      # Not `-version`. The two things this binary exists to do, run end to
+      # end, because both have failed silently before in ways a version string
+      # would have sailed past:
+      #
+      #   - the subtitle path needs volumedetect + loudnorm + the band-pass,
+      #     and a filter missing from a trimmed build reports itself as
+      #     "No such filter" mid-run, long after the download
+      #   - the playback path needs libx264, and an ffmpeg without it drops
+      #     the video stream and muxes an audio-only MP4 rather than failing
+      #     (see the note in media-routes.ts — this exact symptom cost a day)
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          FF=./out/ffmpeg/ffmpeg
+          FP=./out/ffmpeg/ffprobe
+
+          # A second of colour bars and a tone, as the stand-in for a film.
+          "$FF" -hide_banner -loglevel error \
+            -f lavfi -i testsrc=size=320x240:rate=15:duration=2 \
+            -f lavfi -i sine=frequency=440:duration=2 \
+            -c:v libx264 -preset ultrafast -c:a aac -shortest -y /tmp/sample.mp4
+
+          # 1. The transcribe filter chain, verbatim from transcribe.ts.
+          "$FF" -hide_banner -loglevel info -i /tmp/sample.mp4 \
+            -vn -ac 1 -ar 16000 -c:a pcm_s16le \
+            -af "volumedetect,loudnorm=I=-16:LRA=11:TP=-1.5,highpass=f=80,lowpass=f=4000" \
+            -f wav -y /tmp/out.wav 2>/tmp/ff.log
+          grep -q "mean_volume" /tmp/ff.log || {
+            echo "FAIL: volumedetect produced no summary — the emptiness check reads this" >&2
+            cat /tmp/ff.log >&2; exit 1; }
+
+          # 2. The playback encode, and it must really contain video.
+          "$FF" -hide_banner -loglevel error -i /tmp/sample.mp4 \
+            -c:v libx264 -preset ultrafast -crf 23 -c:a aac -b:a 128k \
+            -movflags frag_keyframe+default_base_moof -f mp4 -y /tmp/out.mp4
+          STREAMS=$("$FP" -v error -select_streams v -show_entries stream=codec_name \
+            -of csv=p=0 /tmp/out.mp4)
+          [ "$STREAMS" = "h264" ] || {
+            echo "FAIL: expected an h264 video stream, got '${STREAMS:-nothing}'" >&2
+            echo "      an ffmpeg without libx264 drops the video and muxes audio only" >&2
+            exit 1; }
+
+          # 3. https, since every source URL is remote.
+          "$FP" -v error -i https://raw.githubusercontent.com/ggml-org/whisper.cpp/master/samples/jfk.wav \
+            -show_entries format=duration -of csv=p=0
+
+          # 4. Nothing outside the OS may be needed at runtime.
+          if otool -L out/ffmpeg/ffmpeg | tail -n +2 \
+             | grep -vE '/usr/lib/|/System/Library/'; then
+            echo "FAIL: links something that will not exist on a user's Mac" >&2
+            exit 1
+          fi
+          echo "── built ──"; "$FF" -hide_banner -version | head -2
+
+      - name: Package
+        run: |
+          cd out
+          tar czf "ffmpeg-${{ matrix.platform }}.tar.gz" ffmpeg
+          ls -la
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-${{ matrix.platform }}
+          path: out/ffmpeg-${{ matrix.platform }}.tar.gz
+
+  # ── Windows: repackage BtbN's GPL build ──────────────────────────────
+  # Runs on Linux: this only downloads, verifies and re-tars. Building ffmpeg
+  # for Windows means MSYS2 and a day of yak-shaving to arrive at a binary
+  # that is not better than the one BtbN already publishes from a pinned tag.
+  windows:
+    name: win-x64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch, verify, repack
+        run: |
+          set -euo pipefail
+          URL="https://github.com/BtbN/FFmpeg-Builds/releases/download/${BTBN_TAG}/${BTBN_ASSET}"
+          curl -fsSL -o btbn.zip "$URL"
+
+          # Recorded on the way in rather than pinned to a constant here: BtbN
+          # publishes no checksums, so there is nothing authoritative to
+          # compare against. What this buys is a value printed in the log and
+          # written into the bundle, so the artifact can be tied back to an
+          # exact download after the fact.
+          SUM="$(sha256sum btbn.zip | cut -d' ' -f1)"
+          echo "sha256($BTBN_ASSET) = $SUM"
+
+          unzip -q btbn.zip -d btbn
+          ROOT="$(find btbn -maxdepth 1 -mindepth 1 -type d | head -1)"
+          mkdir -p out/ffmpeg
+          cp "$ROOT/bin/ffmpeg.exe"  out/ffmpeg/
+          cp "$ROOT/bin/ffprobe.exe" out/ffmpeg/
+          cp "$ROOT/LICENSE.txt"     out/ffmpeg/ 2>/dev/null || true
+          {
+            echo "FFmpeg for win-x64 — GPL, built by BtbN/FFmpeg-Builds."
+            echo ""
+            echo "Not built by Kernl: repackaged unmodified from"
+            echo "  $URL"
+            echo "  sha256 = $SUM"
+            echo ""
+            echo "Source and build scripts: https://github.com/BtbN/FFmpeg-Builds"
+          } > out/ffmpeg/README.Kernl
+
+          # `-version` needs Windows; a header check is what is available here
+          # and still catches a truncated or wrong-arch download.
+          for f in out/ffmpeg/*.exe; do
+            head -c2 "$f" | grep -q "MZ" || { echo "FAIL: $f is not a PE binary" >&2; exit 1; }
+          done
+          ls -la out/ffmpeg
+          cd out && tar czf ffmpeg-win-x64.tar.gz ffmpeg
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ffmpeg-win-x64
+          path: out/ffmpeg-win-x64.tar.gz
+
+  publish:
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    # Only tag pushes publish; a manual dispatch leaves the artifacts on the
+    # run so the macOS jobs can be exercised without minting a release.
+    if: startsWith(github.ref, 'refs/tags/ffmpeg-v')
+    steps:
+      - uses: actions/download-artifact@v8
+        with: { path: dist, merge-multiple: true }
+      - run: ls -laR dist
+      - uses: softprops/action-gh-release@v3
+        with:
+          files: dist/*.tar.gz
+          tag_name: ${{ github.ref_name }}
+          body: |
+            ffmpeg + ffprobe for the native packages, consumed by
+            `packaging/stage-payload.sh`.
+
+            macOS: FFmpeg `${{ env.FFMPEG_REF }}` built here, GPL v2+,
+            `--enable-gpl --enable-libx264 --enable-securetransport`, deployment
+            target 13.0. Windows: repackaged from BtbN `${{ env.BTBN_TAG }}`.
+            Linux ships nothing — `apt install ffmpeg`, and the deb/rpm
+            already recommend it.
