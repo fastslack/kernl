@@ -57,7 +57,7 @@ anything under `services/kernel/assets/extensions/*/_module/`.
 ## Project & support
 
 **Is this really open source, or open-core?**
-100% Apache-2.0. The full kernel — all 60+ modules and 290 tools — is in this
+100% Apache-2.0. The full kernel — all 71 modules and 290 tools — is in this
 repo with no paid-only features. A hosted option may exist for people who don't
 want to self-host, but it runs the same open code; nothing is held back from the
 repo.

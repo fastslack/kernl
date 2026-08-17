@@ -1,7 +1,7 @@
 # Architecture
 
 A map of Kernl for contributors. Read this before your first PR — it's the
-fastest way to understand a codebase with 60+ modules and 290 MCP tools without
+fastest way to understand a codebase with 71 modules and 290 MCP tools without
 reading all of it. For the full system guide (subsystem internals, data flows,
 deployment topologies), see [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md).
 

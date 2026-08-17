@@ -102,21 +102,21 @@ graph brain (Neo4j) and key-free web search come bundled.
 | 🤖 **Agents that act** | Not a chatbot — autonomous *offices* that work in loops and use your tools. |
 | 🔌 **Any LLM, any client** | Claude, OpenAI, Grok, or a local model via LM Studio. Any MCP client connects. |
 | 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernl` package. |
-| 📊 **103 tools installed, 71 modules available** | One surface for your whole life — not fifteen disconnected apps. Enable everything and you pass 290 tools. |
+| 📊 **103 tools installed, 71 modules bundled** | One surface for your whole life — not fifteen disconnected apps. Enable everything and you pass 290 tools. |
 
 ## ⚔️ Kernl vs. the usual options
 
 |  | Cloud AI assistants | A single MCP server | "Second brain" apps | **Kernl** |
 |---|:---:|:---:|:---:|:---:|
 | Your data stays on your machine | ❌ | ✅ | ⚠️ | ✅ |
-| Your real life — email, finance, tasks… | partial | one thing | ❌ | **60+ modules** |
+| Your real life — email, finance, tasks… | partial | one thing | ❌ | **71 modules** |
 | Agents that *act*, not just chat | limited | ❌ | ❌ | ✅ |
 | Works with any LLM & MCP client | ❌ | ✅ | ❌ | ✅ |
 | Yours to extend & fork | ❌ | ⚠️ | ❌ | ✅ |
 
 ## 🧩 What's inside
 
-**Your life, addressable by your AI** — tasks & projects, contacts/CRM, reminders, email (IMAP/SMTP), finance & budgets, calendar, notes, goals, health & training, shopping, travel, documents… 60+ modules, every one exposed as MCP tools.
+**Your life, addressable by your AI** — tasks & projects, contacts/CRM, reminders, email (IMAP/SMTP), finance & budgets, calendar, notes, goals, health & training, shopping, travel, documents… 71 modules, every one exposed as MCP tools.
 
 **A fleet of agents** — cooperating agents with chains, schedules and their own workspaces. Package a whole team as an installable `.kernl` *office*, and watch them work in a live **3D office view**.
 
