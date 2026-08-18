@@ -22,6 +22,10 @@
   import { initMusicBridge } from '$lib/music-bridge.js';
   import { initLocale, t } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
+  import {
+    updateInfo, updating, updateError, updateHint, showUpdateBanner,
+    initUpdateStore, refreshUpdateInfo, applyUpdate, dismissUpdate,
+  } from '$lib/update.js';
 
   // ── State ───────────────────────────────────────────────────────
   let serverTimezone = 'UTC'; // default, overridden by /api/health
@@ -579,87 +583,16 @@
 
   // ── Update notice ────────────────────────────────────────────────────
   //
-  // Read-only: the kernel answers from a six-hour cache, so this costs a
-  // request on load and nothing after. Everything here fails quiet — an
-  // update check has no business breaking the shell it renders into.
-  interface UpdateInfo {
-    current: string;
-    latest: string | null;
-    updateAvailable: boolean;
-    url: string | null;
-  }
-  let updateInfo: UpdateInfo | null = null;
-  // Keyed by version so dismissing 0.3.0 does not also hide 0.4.0.
-  let dismissedUpdate: string | null = null;
-
-  const UPDATE_DISMISS_KEY = 'kernl.update.dismissed';
-
-  function dismissUpdate(): void {
-    if (!updateInfo?.latest) return;
-    dismissedUpdate = updateInfo.latest;
-    try {
-      localStorage.setItem(UPDATE_DISMISS_KEY, updateInfo.latest);
-    } catch {
-      /* private mode — the banner simply returns next load */
-    }
-  }
-
-  let updating = false;
-  let updateError = '';
-  let updateHint = '';
-
-  /**
-   * Ask the kernel to update itself. A 202 means it is about to exit and a
-   * helper will swap the bundle and relaunch — so the honest thing to show is
-   * "the app is restarting", not a progress bar for something this page will
-   * not be around to watch.
-   *
-   * A 400 is the useful case: on Linux the package manager owns the install,
-   * and the answer is the command rather than a button that fights dpkg.
-   */
-  async function applyUpdateNow(): Promise<void> {
-    updating = true;
-    updateError = '';
-    updateHint = '';
-    try {
-      const base = (globalThis as { __API_BASE?: string }).__API_BASE ?? '';
-      const r = await fetch(`${base}/api/update/apply`, { method: 'POST' });
-      const body = (await r.json()) as { reason?: string; useInstead?: string };
-      if (r.status === 202) {
-        updateInfo = null;
-        updateError = 'Kernl is restarting to finish the update. This page will reconnect.';
-        return;
-      }
-      updateError = body.reason ?? `Update failed (HTTP ${r.status}).`;
-      updateHint = body.useInstead ?? '';
-    } catch {
-      // The kernel exiting mid-request looks exactly like this, and on the
-      // success path that is what is supposed to happen.
-      updateError = 'Kernl is restarting to finish the update. This page will reconnect.';
-      updateInfo = null;
-    } finally {
-      updating = false;
-    }
-  }
-
-  async function loadUpdateInfo(): Promise<void> {
-    try {
-      dismissedUpdate = localStorage.getItem(UPDATE_DISMISS_KEY);
-    } catch {
-      dismissedUpdate = null;
-    }
-    try {
-      const base = (globalThis as { __API_BASE?: string }).__API_BASE ?? '';
-      const r = await fetch(`${base}/api/update/status`);
-      if (!r.ok) return;
-      updateInfo = (await r.json()) as UpdateInfo;
-    } catch {
-      /* offline, or an older kernel without the route — say nothing */
-    }
-  }
+  // State, fetching and the apply POST all live in $lib/update.ts, because the
+  // About card in settings shows the same thing and drives the same buttons.
+  // Two copies of this would drift the moment either one refreshed: updating
+  // from About would leave this strip still announcing the release you just
+  // installed. Everything there fails quiet — an update check has no business
+  // breaking the shell it renders into.
 
   onMount(() => {
-    void loadUpdateInfo();
+    initUpdateStore();
+    void refreshUpdateInfo();
     mounted = true;
     // Resolve the saved language before anything else. This used to be called
     // from /login only, so any hard load that did not pass through the login
@@ -971,30 +904,35 @@
      `grid-column: 1 / -1`; a full-width strip that is not part of the app
      chrome is simpler to keep above the grid entirely. -->
 <div class="app-root">
-  {#if updateInfo?.updateAvailable && dismissedUpdate !== updateInfo.latest}
+  {#if $showUpdateBanner && $updateInfo}
     <div class="update-bar" role="status">
       <span class="update-bar-dot" aria-hidden="true"></span>
-      <span>
-        Kernl <strong>{updateInfo.latest}</strong> is available — you are running
-        {updateInfo.current}
+      <!-- The message is the flexible cell: it absorbs the free width so the
+           actions always end up against the right edge. The alignment used to
+           hang off `margin-left:auto` on the "What changed" link, which is
+           optional — with no release URL the buttons drifted back into the
+           middle of the bar, next to the sentence. -->
+      <span class="update-bar-msg">
+        Kernl <strong>{$updateInfo.latest}</strong> is available — you are running
+        {$updateInfo.current}
       </span>
-      {#if updateInfo.url}
-        <a class="update-bar-link" href={updateInfo.url} target="_blank" rel="noreferrer">
+      {#if $updateInfo.url}
+        <a class="update-bar-link" href={$updateInfo.url} target="_blank" rel="noreferrer">
           What changed
         </a>
       {/if}
-      <button class="update-bar-go" disabled={updating} on:click={applyUpdateNow}>
-        {updating ? 'Updating…' : 'Update now'}
+      <button class="update-bar-go" disabled={$updating} on:click={applyUpdate}>
+        {$updating ? 'Updating…' : 'Update now'}
       </button>
       <button class="update-bar-close" title="Dismiss until the next release" on:click={dismissUpdate}>✕</button>
     </div>
   {/if}
 
-  {#if updateError}
+  {#if $updateError}
     <div class="update-bar update-bar-err" role="alert">
-      <span>{updateError}</span>
-      {#if updateHint}<code>{updateHint}</code>{/if}
-      <button class="update-bar-close" on:click={() => (updateError = '')}>✕</button>
+      <span class="update-bar-msg">{$updateError}</span>
+      {#if $updateHint}<code>{$updateHint}</code>{/if}
+      <button class="update-bar-close" on:click={() => updateError.set('')}>✕</button>
     </div>
   {/if}
 
