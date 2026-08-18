@@ -56,6 +56,17 @@ export interface TranscribeOpts {
   model?: "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
   /** Optional progress callback — fires as each sub-phase advances. */
   onProgress?: (p: TranscribeProgress) => void;
+  /**
+   * Source duration in seconds, when the caller already knows it.
+   *
+   * archive.org's metadata carries `length` for every derivative and the
+   * player has it in hand before it ever asks for captions, so passing it
+   * here skips the ffprobe below. That matters when the upstream is slow:
+   * the probe gives up after 5s, and a node answering with a 16s TTFB left
+   * the extract bar without a denominator and therefore stuck at 0% for the
+   * whole pull. See `resolveExtractDuration`.
+   */
+  durationSec?: number;
   signal?: AbortSignal;
 }
 
@@ -194,6 +205,26 @@ export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Pr
  * leaves that room and only catches tracks that are pure noise floor.
  */
 const SILENT_PEAK_DB = -25;
+
+/**
+ * The denominator the extract bar divides by.
+ *
+ * Prefers what the caller already knows over what ffprobe can find out. The
+ * probe is capped at 5s on purpose — a slow CDN must not delay the start of a
+ * run — but that cap is exactly what fires on a degraded archive.org storage
+ * node, and a null here does not slow anything down, it silently pins the bar
+ * at 0% for the entire pull. The player has the real number from the item
+ * metadata, so ask it first and keep the probe for callers that don't.
+ */
+export async function resolveExtractDuration(
+  url: string,
+  suppliedSec?: number,
+): Promise<number | null> {
+  if (typeof suppliedSec === "number" && Number.isFinite(suppliedSec) && suppliedSec > 0) {
+    return suppliedSec;
+  }
+  return await probeUpstreamDuration(url);
+}
 
 /**
  * Quick ffprobe call to discover the upstream duration so the extract phase
@@ -348,7 +379,7 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
 
   // ── Sub-phase 2: probe duration so the extract bar has a denominator ─
   emit?.({ subPhase: "probe", frac: 0 });
-  const probedSec = await probeUpstreamDuration(url);
+  const probedSec = await resolveExtractDuration(url, opts.durationSec);
   emit?.({ subPhase: "probe", frac: 1, totalSec: probedSec ?? undefined });
 
   // ── Sub-phase 3: ffmpeg extracts the audio ──────────────────────────
@@ -528,7 +559,7 @@ async function decodeWavToFloat32(wavPath: string): Promise<Float32Array> {
 async function transcribeTransformers(url: string, opts: TranscribeOpts): Promise<SubCue[]> {
   const emit = opts.onProgress;
   emit?.({ subPhase: "probe", frac: 0 });
-  const probedSec = await probeUpstreamDuration(url);
+  const probedSec = await resolveExtractDuration(url, opts.durationSec);
   emit?.({ subPhase: "probe", frac: 1, totalSec: probedSec ?? undefined });
   emit?.({ subPhase: "extract", frac: 0, totalSec: probedSec ?? undefined, hint: "ffmpeg" });
   const wav = await extractAudioToWav(url, {
@@ -588,7 +619,7 @@ async function transcribeGroq(url: string, opts: TranscribeOpts): Promise<SubCue
   if (!isGroqAvailable()) throw new Error("GROQ_API_KEY not set");
   const emit = opts.onProgress;
   emit?.({ subPhase: "probe", frac: 0 });
-  const probedSec = await probeUpstreamDuration(url);
+  const probedSec = await resolveExtractDuration(url, opts.durationSec);
   emit?.({ subPhase: "probe", frac: 1, totalSec: probedSec ?? undefined });
   emit?.({ subPhase: "extract", frac: 0, totalSec: probedSec ?? undefined, hint: "ffmpeg" });
   const wav = await extractAudioToWav(url, {
