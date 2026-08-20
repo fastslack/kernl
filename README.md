@@ -62,12 +62,28 @@ Kernl ships a live 3D view of your agent teams — you watch them move between
 desks and pick up work as it happens. It is at `/agents-flow` once you are
 running, which the quick start below gets you to in about two minutes.
 
-<!-- The recording that belongs here is not made yet. This section used to
-     embed docs/assets/demo.gif, a file that has never existed in the
-     repository, so every visitor landed on a broken image directly under a
-     caption promising a demo. A missing recording is a gap; a broken image is
-     a claim that the project does not look after itself. Put the file here and
-     restore the embed. -->
+<div align="center">
+
+<img src="docs/assets/office3d.png" alt="Kernl's 3D agent office: an isometric floor plan with departments — Communications, Automations, DevOps, Operations, Management — where agent avatars sit at desks and finished work pops up as green DONE badges" width="900">
+
+<sub><b>A real instance.</b> 52 agents across eight departments, work landing live — nothing here is a mockup.</sub>
+
+</div>
+
+<!-- Captured from a running instance at /agents-flow with
+     e2e/tests/readme-office3d-shot.json — rerun that suite to refresh it, then
+     copy the newest e2e/screenshots/readme-office3d-*.png over this file. The
+     scene takes ~40s to build, which is why the test waits on `.hq-search-btn`
+     (it only exists once the world is mounted) instead of a fixed delay, and
+     why it strips `.update-bar` before shooting: a version banner dates a
+     screenshot the moment the next release ships.
+
+     Caveat: the suite REPORTS A TIMEOUT even though it writes the screenshot
+     correctly, about two minutes in. The run record comes back with zero
+     actions and zero duration, so the runner is discarding the action log
+     rather than the browser failing — the same "Test timed out after Nms" that
+     dominates this project's e2e history. Judge the run by the PNG it leaves
+     behind, not by its exit status. -->
 
 ## ⚡ Quick start
 

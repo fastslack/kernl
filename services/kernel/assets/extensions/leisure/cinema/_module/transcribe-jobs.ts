@@ -42,6 +42,12 @@ export interface TranscribeJobParams {
   lang: string;
   /** SSE channel the requesting tab is listening on, when it is. */
   jobId?: string;
+  /**
+   * Source length in seconds, when the asker knew it. A hint for the extract
+   * progress bar only — deliberately not persisted on the row, so a job the
+   * kernel is resuming after a restart simply falls back to probing.
+   */
+  durationSec?: number;
 }
 
 export interface TranscribeJobStatus {

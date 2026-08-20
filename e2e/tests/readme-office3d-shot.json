@@ -1,0 +1,25 @@
+{
+  "$schema": "https://e2e-runner.matware.dev/schema.json",
+  "hooks": {
+    "beforeEach": [
+      { "type": "goto", "value": "/login" },
+      { "type": "wait", "value": "1500" },
+      { "type": "evaluate", "value": "localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}'); localStorage.setItem('kernl.welcomeSeen','true'); localStorage.setItem('kernl.setupComplete','true'); true;" }
+    ]
+  },
+  "tests": [
+    {
+      "name": "3D office hero shot for the README",
+      "timeout": 180000,
+      "actions": [
+        { "type": "goto", "value": "/agents-flow" },
+        { "type": "wait", "selector": ".hq-search-btn", "timeout": 120000 },
+        { "type": "wait", "value": "12000" },
+        { "type": "evaluate", "value": "document.querySelectorAll('.update-bar').forEach((e) => e.remove()); true;" },
+        { "type": "assert_visible", "selector": ".world3d-wrapper" },
+        { "type": "assert_not_visible", "selector": ".boot" },
+        { "type": "screenshot", "value": "readme-office3d" }
+      ]
+    }
+  ]
+}

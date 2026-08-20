@@ -28,10 +28,9 @@ const BROWSER_FORMAT_RANK: Array<{ test: RegExp; rank: number }> = [
   { test: /^h\.?\s*264/i, rank: 0 },
   { test: /^512kb\s+mpeg4$/i, rank: 1 },
   { test: /^webm/i, rank: 2 },
-  { test: /^ogg\s+video$/i, rank: 3 },
 ];
 const OPAQUE_FORMAT =
-  /^(hi\s*res\s+mpeg4|mpeg\s*-?\s*[12]|cinepack|cinepak|windows\s+media|quicktime|divx|xvid|asf|matroska|3gp)/i;
+  /^(hi\s*res\s+mpeg4|mpeg\s*-?\s*[12]|ogg\s+video|theora|cinepack|cinepak|windows\s+media|quicktime|divx|xvid|asf|matroska|3gp)/i;
 
 interface PlayFile { name: string; size: number; format: string; length: string; kind: string }
 
@@ -126,6 +125,29 @@ describe("picking the file to play", () => {
     // rather than refusing to play at all.
     expect(needsTranscodeFor(chosen)).toBe(true);
     expect(["only.mpeg", "only.avi"]).toContain(chosen.name);
+  });
+
+  it("takes the original mp4 over archive.org's Theora derivative", () => {
+    // Real payload for `BattleForTheWorlds10415`. The item has no h264
+    // derivative at all: just the uploader's original, labelled with the bare
+    // `MPEG4` archive.org stamps on an unrecognised upload, and the .ogv the
+    // deriver made from it. Ranking Ogg Video as decodable put the 374 MB
+    // Theora ahead of the 335 MB original, and Chromium has not decoded
+    // Theora since M123 — so the browser showed black, the codec fallback
+    // fired, and the kernel re-encoded the whole 374 MB before a frame
+    // played. Whisper pulled the same oversized file for its audio.
+    const BATTLE: PlayFile[] = [
+      v("Battle_of_the_Worlds_1961.ogv", 374405845, "Ogg Video"),
+      v("Battle_of_the_Worlds_1961.mp4", 335541109, "MPEG4"),
+    ];
+    expect(BATTLE[pickDefaultPlayIdx(BATTLE)]!.name).toBe("Battle_of_the_Worlds_1961.mp4");
+  });
+
+  it("sends a Theora-only item straight to the transcoder", () => {
+    // Nothing else to pick. Routing it as decodable bought a black frame and
+    // a failed load first; the transcode was going to happen either way.
+    const ogvOnly = [v("only.ogv", 40_000_000, "Ogg Video")];
+    expect(needsTranscodeFor(ogvOnly[0])).toBe(true);
   });
 
   it("still picks something when the format field is empty", () => {

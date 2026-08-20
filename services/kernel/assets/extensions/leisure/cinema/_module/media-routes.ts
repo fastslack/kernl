@@ -458,6 +458,7 @@ export function parseTranscribeRequest(reqUrl: string):
       cacheKey: string;
       cacheDir: string;
       cachePath: string;
+      durationSec?: number;
     } {
   const url = new URL(reqUrl || "/", "http://localhost");
   const target = url.searchParams.get("url") ?? "";
@@ -466,6 +467,11 @@ export function parseTranscribeRequest(reqUrl: string):
     "tiny" | "base" | "small" | "medium" | "large-v3" | "large-v3-turbo";
   const language = url.searchParams.get("lang") || undefined;
   const jobId = url.searchParams.get("jobId") ?? "";
+  // `dur` is the source length the player already read off the item metadata.
+  // Purely an optimisation for the extract progress bar — deliberately NOT
+  // part of the cache key below, since the VTT is the same file either way.
+  const durParam = Number(url.searchParams.get("dur"));
+  const durationSec = Number.isFinite(durParam) && durParam > 0 ? durParam : undefined;
 
   const engine: TranscribeEngine = ["whispercpp", "transformers", "groq"].includes(engineParam)
     ? (engineParam as TranscribeEngine) : "transformers";
@@ -481,7 +487,7 @@ export function parseTranscribeRequest(reqUrl: string):
   const cacheDir = path.join(process.cwd(), "data", "subtitles");
   return {
     ok: true,
-    target, engine, model, language, jobId, cacheKey, cacheDir,
+    target, engine, model, language, jobId, cacheKey, cacheDir, durationSec,
     cachePath: path.join(cacheDir, `${cacheKey}.vtt`),
   };
 }
@@ -503,6 +509,8 @@ export async function runTranscribeToCache(
     cacheKey: string;
     cacheDir: string;
     cachePath: string;
+    /** Source duration from the item metadata, when the caller knows it. */
+    durationSec?: number;
   },
   onProgress?: (q: {
     subPhase: string; frac: number;
@@ -519,6 +527,7 @@ export async function runTranscribeToCache(
   const cues = await transcribe(p.engine, p.target, {
     model: p.model,
     language: p.language,
+    durationSec: p.durationSec,
     onProgress: (q) => {
       // The SSE feed is what moves a watching tab's bar; the job row is what
       // a tab that wasn't watching reads later. Both get every tick — the
@@ -574,6 +583,7 @@ export function createTranscribeRunner(): TranscribeRunner {
         jobId: params.jobId ?? "",
         cacheKey: params.key,
         cacheDir,
+        durationSec: params.durationSec,
         cachePath: path.join(cacheDir, `${params.key}.vtt`),
       },
       onProgress,
@@ -1223,6 +1233,11 @@ export function registerCinemaMediaRoutes(
       // all collapse to "llm" — the chain at /models picks the actual
       // provider and falls back automatically on quota/auth errors.
       const tEngine: TranslateEngine = normalizeEngine(url.searchParams.get("translate_engine"), "llm");
+      // Same hint the /transcribe route takes: the source length the player
+      // already read off the item metadata, so the extract bar has a
+      // denominator without waiting on a probe the upstream may not answer.
+      const durParam = Number(url.searchParams.get("dur"));
+      const durationSec = Number.isFinite(durParam) && durParam > 0 ? durParam : undefined;
 
       if (!target) return server.json(res, 400, { error: "url is required" });
       if (wEngine === "groq" && !isGroqWhisperAvailable()) {
@@ -1298,7 +1313,7 @@ export function registerCinemaMediaRoutes(
             const t0 = Date.now();
             publishSubsProgress(jobId, { phase: "transcribe-start", engine: wEngine, model: wModel, lang: srcLang });
             const cues = await transcribe(wEngine, target, {
-              model: wModel, language: srcLang,
+              model: wModel, language: srcLang, durationSec,
               onProgress: jobId ? (p) => publishSubsProgress(jobId, {
                 phase: "transcribe-progress",
                 frac: p.frac,
@@ -1443,6 +1458,7 @@ export function registerCinemaMediaRoutes(
         model: p.model,
         lang: p.language ?? "",
         jobId: p.jobId,
+        durationSec: p.durationSec,
       },
       cached,
     );
