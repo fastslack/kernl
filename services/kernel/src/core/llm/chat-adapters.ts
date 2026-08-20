@@ -1,4 +1,5 @@
 import { log } from "../logger.js";
+import { detectLmStudio } from "./lmstudio-detect.js";
 import type { SqliteDb } from "../db/sqlite.js";
 import { runMigrations, type Migration } from "../db/migrations.js";
 import * as providerHealth from "./provider-health.js";
@@ -649,6 +650,17 @@ export class ChatLmStudioProvider implements ChatLlmProvider {
     return this.baseUrl.length > 0;
   }
 
+  /** Cached across calls — LM Studio will not swap model mid-sentence. */
+  private resolved?: string;
+
+  private async resolveLoadedModel(): Promise<string> {
+    if (this.resolved !== undefined) return this.resolved;
+    const found = await detectLmStudio(this.baseUrl);
+    this.resolved = found.activeModel ?? "";
+    if (this.resolved) log.info(`LM Studio: no model given, using loaded "${this.resolved}"`);
+    return this.resolved;
+  }
+
   async chatCompletion(
     messages: ChatMessage[],
     opts?: ChatCompletionOptions,
@@ -667,7 +679,26 @@ export class ChatLmStudioProvider implements ChatLlmProvider {
     messages: ChatMessage[],
     opts?: ChatCompletionOptions,
   ): Promise<ChatCompletionResult> {
-    const model = opts?.model || this.defaultModel || "zai-org/glm-4.7-flash";
+    // No hardcoded fallback. This used to end in "zai-org/glm-4.7-flash" — a
+    // model that exists on nobody's machine but the one it was typed on. LM
+    // Studio serves only what is downloaded, so the phantom id came back as
+    //   Invalid model identifier "zai-org/glm-4.7-flash" (model_not_found)
+    // for every user, with nothing in Kernl's own config to explain where the
+    // name had come from. The provider now resolves the loaded model at start
+    // and passes it in as defaultModel; if that failed too, say so plainly
+    // rather than inventing a name.
+    // Resolve the model here when the caller named none. Two places build this
+    // adapter — the provider registry, which knows the model, and the chat
+    // provider map, which does not — so relying on the caller left the second
+    // one empty. It used to fall back to a hardcoded "zai-org/glm-4.7-flash",
+    // a model that exists on nobody's machine, and LM Studio answered
+    // `model_not_found` for every message sent through that path.
+    const model = opts?.model || this.defaultModel || (await this.resolveLoadedModel());
+    if (!model) {
+      throw new Error(
+        `No model is loaded in LM Studio at ${this.baseUrl} — load one in the app, or pick a model in the selector.`,
+      );
+    }
     const url = `${this.baseUrl.replace(/\/+$/, "")}/responses`;
 
     // Truncate aggressively to keep the locally-hosted model context manageable.
