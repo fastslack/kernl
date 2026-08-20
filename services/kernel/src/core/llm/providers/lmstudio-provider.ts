@@ -4,6 +4,15 @@
  */
 
 import { ChatLmStudioProvider } from "../chat-adapters.js";
+import { log } from "../../logger.js";
+import {
+  LMSTUDIO_DEFAULT_BASE,
+  detectLmStudio,
+  normalizeLmStudioBase,
+} from "../lmstudio-detect.js";
+
+export { LMSTUDIO_DEFAULT_BASE, detectLmStudio, normalizeLmStudioBase };
+export type { LmStudioDetection, LmStudioModel } from "../lmstudio-detect.js";
 import type {
   LlmProvider,
   LlmProviderCapabilities,
@@ -32,19 +41,55 @@ class LmStudioProviderImpl implements LlmProvider {
   private baseUrl = "http://localhost:1234/v1";
   private lastError?: string;
   private lastModel?: string;
+  /** Model resolved from LM Studio at start, used when the caller names none. */
+  private detected?: string;
 
   configure(config: Record<string, unknown>): void {
     if (typeof config.baseUrl === "string" && config.baseUrl) {
-      this.baseUrl = config.baseUrl;
+      this.baseUrl = normalizeLmStudioBase(config.baseUrl);
     } else if (process.env.LMSTUDIO_BASE_URL) {
-      this.baseUrl = process.env.LMSTUDIO_BASE_URL;
+      this.baseUrl = normalizeLmStudioBase(process.env.LMSTUDIO_BASE_URL);
     }
   }
 
   async start(): Promise<void> {
-    if (!this.baseUrl) this.baseUrl = process.env.LMSTUDIO_BASE_URL ?? "http://localhost:1234/v1";
-    this.impl = new ChatLmStudioProvider(this.baseUrl);
-    this.lastError = this.impl.available() ? undefined : "LM Studio not reachable at " + this.baseUrl;
+    this.baseUrl = normalizeLmStudioBase(
+      this.baseUrl || process.env.LMSTUDIO_BASE_URL || LMSTUDIO_DEFAULT_BASE,
+    );
+    const found = await detectLmStudio(this.baseUrl);
+
+    // Nothing at the configured address? Try the default before giving up.
+    // Someone who mistyped the port once should not have a dead provider
+    // forever while LM Studio sits listening where it always does.
+    if (!found.running && this.baseUrl !== LMSTUDIO_DEFAULT_BASE) {
+      const fallback = await detectLmStudio(LMSTUDIO_DEFAULT_BASE);
+      if (fallback.running) {
+        log.info(`LM Studio: nothing at ${this.baseUrl}, found it at ${LMSTUDIO_DEFAULT_BASE} — using that`);
+        this.baseUrl = fallback.baseUrl;
+        Object.assign(found, fallback);
+      }
+    }
+
+    // Resolve the model here so the adapter never has to invent one.
+    this.detected = found.activeModel ?? undefined;
+    this.impl = new ChatLmStudioProvider(this.baseUrl, this.detected ?? "");
+
+    // Three distinct failures, three distinct messages. A flat "not reachable"
+    // sent people hunting for a firewall while LM Studio ran the whole time
+    // with nothing loaded in it.
+    if (!found.running) {
+      this.lastError = `LM Studio is not answering at ${this.baseUrl} — is the local server started?`;
+    } else if (!this.detected) {
+      const why = found.models.length === 0 ? "no models downloaded" : "no chat-capable model available";
+      this.lastError = `LM Studio is running at ${this.baseUrl} but ${why}.`;
+    } else {
+      this.lastError = undefined;
+      const loaded = found.models.filter((m) => m.loaded).length;
+      log.info(
+        `LM Studio detected at ${this.baseUrl} — using "${this.detected}" ` +
+          `(${loaded} loaded of ${found.models.length} downloaded)`,
+      );
+    }
   }
 
   async stop(): Promise<void> {
@@ -61,7 +106,7 @@ class LmStudioProviderImpl implements LlmProvider {
       name: this.name,
       ready: this.isReady(),
       capabilities: this.capabilities,
-      lastModel: this.lastModel,
+      lastModel: this.lastModel ?? this.detected,
       error: this.lastError,
     };
   }
@@ -77,7 +122,7 @@ class LmStudioProviderImpl implements LlmProvider {
     if (!this.baseUrl) return [];
     // Errors propagate on purpose — see claude-provider.listModels. Lets the
     // setup wizard distinguish "LM Studio not running" from "no models loaded".
-    const url = `${this.baseUrl.replace(/\/+$/, "")}/models`;
+    const url = `${normalizeLmStudioBase(this.baseUrl)}/models`;
     const r = await fetch(url, { signal: AbortSignal.timeout(5_000) });
     if (!r.ok) {
       const detail = await r.text().catch(() => "");
