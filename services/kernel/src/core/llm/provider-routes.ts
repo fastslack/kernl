@@ -107,14 +107,29 @@ export function registerLlmProviderRoutes(
       // embeddings/audio/image/reranker models in /v1/models too) and
       // annotate each survivor with capability badges (vision/reasoning/
       // fast/long-context) so the UI can render icons in the dropdown.
+      // Which of them are actually in memory. Only local runtimes can answer
+      // this; everyone else reports nothing and the UI keeps its old shape.
+      let loadedIds: string[] = [];
+      const withLoaded = provider as { listLoadedModels?: () => Promise<string[]> };
+      if (typeof withLoaded.listLoadedModels === "function") {
+        loadedIds = await withLoaded.listLoadedModels().catch(() => []);
+      }
+      const loaded = new Set(loadedIds);
       const classified = visible.map((id) => ({ id, traits: classifyModel(slug, id) }));
       const chat = classified.filter((m) => m.traits.chat);
       const nonChat = classified.length - chat.length;
       server.json(res, 200, {
-        models: chat.map((m): { id: string; traits: ModelTraits } => ({ id: m.id, traits: m.traits })),
+        models: chat.map((m): { id: string; traits: ModelTraits; loaded?: boolean } =>
+          loaded.size > 0 ? { id: m.id, traits: m.traits, loaded: loaded.has(m.id) } : { id: m.id, traits: m.traits },
+        ),
         dynamic: true,
         blocked: all.length - visible.length,
         nonChatHidden: nonChat,
+        // Absent when the runtime cannot tell. Empty means "it can, and none
+        // are" — a different thing, and the UI needs to say so differently.
+        ...(loaded.size > 0 || typeof withLoaded.listLoadedModels === "function"
+          ? { loadedCount: chat.filter((m) => loaded.has(m.id)).length }
+          : {}),
       });
     } catch (err) {
       server.json(res, 200, { models: [], dynamic: true, blocked: 0, nonChatHidden: 0, error: String(err) });

@@ -43,6 +43,8 @@ class LmStudioProviderImpl implements LlmProvider {
   private lastModel?: string;
   /** Model resolved from LM Studio at start, used when the caller names none. */
   private detected?: string;
+  /** Context LM Studio actually loaded the model with, not what it could do. */
+  private detectedCtx?: number;
 
   configure(config: Record<string, unknown>): void {
     if (typeof config.baseUrl === "string" && config.baseUrl) {
@@ -72,6 +74,12 @@ class LmStudioProviderImpl implements LlmProvider {
 
     // Resolve the model here so the adapter never has to invent one.
     this.detected = found.activeModel ?? undefined;
+    // The window that matters is the one the model was LOADED with. LM Studio
+    // reports both: qwen3.8-27b tops out at 262144 but sits at 4096 unless you
+    // raise it in the app. Kernl advertised a flat 32000 either way, so it
+    // packed a prompt three times too big for the server that had to read it —
+    // and the kernel's own tool definitions alone overflow 4k.
+    this.detectedCtx = found.models.find((m) => m.id === this.detected)?.contextLength;
     this.impl = new ChatLmStudioProvider(this.baseUrl, this.detected ?? "");
 
     // Three distinct failures, three distinct messages. A flat "not reachable"
@@ -87,8 +95,15 @@ class LmStudioProviderImpl implements LlmProvider {
       const loaded = found.models.filter((m) => m.loaded).length;
       log.info(
         `LM Studio detected at ${this.baseUrl} — using "${this.detected}" ` +
-          `(${loaded} loaded of ${found.models.length} downloaded)`,
+          `(${loaded} loaded of ${found.models.length} downloaded, ` +
+          `context ${this.detectedCtx ?? "unknown"})`,
       );
+      if (this.detectedCtx && this.detectedCtx < 16_000) {
+        log.warn(
+          `LM Studio loaded "${this.detected}" with only ${this.detectedCtx} tokens of context — ` +
+            `the kernel's tool definitions alone may not fit. Raise the context length in LM Studio.`,
+        );
+      }
     }
   }
 
@@ -105,7 +120,9 @@ class LmStudioProviderImpl implements LlmProvider {
       slug: this.slug,
       name: this.name,
       ready: this.isReady(),
-      capabilities: this.capabilities,
+      capabilities: this.detectedCtx
+        ? { ...this.capabilities, contextWindow: this.detectedCtx }
+        : this.capabilities,
       lastModel: this.lastModel ?? this.detected,
       error: this.lastError,
     };
@@ -130,6 +147,19 @@ class LmStudioProviderImpl implements LlmProvider {
     }
     const body = (await r.json()) as { data?: Array<{ id?: string }> };
     return (body.data ?? []).map((m) => m.id ?? "").filter(Boolean).sort();
+  }
+
+  /**
+   * Which models are in memory right now, not merely downloaded.
+   *
+   * The picker listed all thirteen downloaded models — OCR engines included —
+   * and every one of them stalls for as long as it takes to page the weights
+   * off disk before answering. What someone wants to pick from is what is
+   * loaded.
+   */
+  async listLoadedModels(): Promise<string[]> {
+    const found = await detectLmStudio(this.baseUrl);
+    return found.models.filter((m) => m.loaded).map((m) => m.id);
   }
 
   async chatCompletion(
