@@ -1404,6 +1404,31 @@
     return null;
   }
 
+  /**
+   * A transcript in `lang` we ALREADY have materialized on disk.
+   *
+   * The controller's track list is the truth here, not the cache key the
+   * pipeline would compute. `/transcribe/start` short-circuits only on an
+   * exact (url, engine, model, lang) match, and `transcribeEngine` /
+   * `transcribeModel` are re-picked per session by loadSubInfo() — groq when
+   * a key is configured, whispercpp otherwise. So a film whose menu already
+   * showed "en · original" got its audio pulled and whisper re-run from
+   * scratch the moment the engine that produced it wasn't the engine this
+   * session would choose. Asking the list instead of the key skips whisper
+   * whenever ANY usable transcript exists, whoever made it.
+   *
+   * Only sha1-keyed tracks qualify: `shipped:` is handled by its own branch
+   * and `local:` entries are synthetic placeholders with no bytes behind them.
+   */
+  function cachedTranscriptKey(lang: string): string {
+    const hit = (subsCtl?.tracks ?? []).find((t) =>
+      t.kind === 'transcribe'
+      && /^[a-f0-9]{40}$/i.test(t.id)
+      && (t.srcLang || t.lang) === lang,
+    );
+    return hit?.id ?? '';
+  }
+
   async function runAutoTranslatePipeline(): Promise<void> {
     const item = playItem; const file = playFiles[playActiveIdx];
     if (!item || !file) return;
@@ -1417,19 +1442,43 @@
     const blockerUrl = trackSrc();
     if (blockerUrl) { inflightTrackUrl = blockerUrl; }
 
-    // ── Phase 1: SHIPPED-FIRST optimization OR whisper ─────────────
-    // If the archive item ships its own subtitle in the source language,
-    // SKIP whisper entirely and use that file (huge time saver — minutes
-    // → seconds). Otherwise run whisper from scratch. Both branches end
-    // with `transcribedVtt` populated and `phase1UpstreamUrl` pointing
-    // at the URL Phase 2's translate-srt should fetch as input.
+    // ── Phase 1: get the source-language transcript ────────────────
+    // Three ways, cheapest first, and only the last one touches whisper:
+    //   1. the archive item ships its own .srt (best text, seconds not minutes)
+    //   2. we already transcribed this file at some point (bytes on disk)
+    //   3. run whisper
+    // All three end with `transcribedVtt` populated and `phase1UpstreamUrl`
+    // pointing at the URL Phase 2's translate-srt should fetch as input.
     const shipped = detectShippedSubs(playFiles);
     const shippedSrc = shipped.find((s) => s.lang === subSourceLang)
       ?? shipped.find((s) => s.lang === '');
+    const cachedKey = shippedSrc ? '' : cachedTranscriptKey(subSourceLang);
     let transcribedVtt: string;
     let phase1UpstreamUrl: string;
     startProgress('transcribe');
-    if (shippedSrc) {
+    if (cachedKey) {
+      dbg('[cinema] runAutoTranslatePipeline: reusing cached transcript', cachedKey);
+      // Absolute, because translate-srt fetches this itself server-side (it
+      // rewrites loopback /api/ hits to the kernel's internal port).
+      phase1UpstreamUrl = `${window.location.origin}/api/cinema/media/subs/file?key=${cachedKey}`;
+      try {
+        const r = await apiFetch(
+          `/api/cinema/media/subs/file?key=${encodeURIComponent(cachedKey)}`,
+          { signal: myAbort.signal },
+        );
+        if (!r.ok) {
+          const e = await r.json().catch(() => ({} as any));
+          stopProgress(e.error ?? `cached transcript http ${r.status}`);
+          return;
+        }
+        transcribedVtt = await r.text();
+        transcribeAvailable = true;
+      } catch (err: any) {
+        if (err?.name === 'AbortError') return;
+        stopProgress(`no se pudo leer el transcript en cache: ${err?.message ?? String(err)}`);
+        return;
+      }
+    } else if (shippedSrc) {
       dbg('[cinema] runAutoTranslatePipeline: using shipped sub instead of whisper:', shippedSrc.file.name);
       const shippedUpstream = `https://archive.org/download/${encodeURIComponent(item.identifier)}/${shippedSrc.file.name.split('/').map(encodeURIComponent).join('/')}`;
       phase1UpstreamUrl = shippedUpstream;
@@ -1515,9 +1564,24 @@
       }
     }
 
-    // Phase 2: translate. Same regardless of whether Phase 1 used
-    // shipped or whisper — the translate-srt endpoint just needs an
-    // upstream URL it can fetch.
+    // Transcription was the whole job — `generate()` comes through here with
+    // translateActive false, and `subTargetLang` defaults to 'es', so running
+    // Phase 2 unconditionally silently translated captions nobody asked to
+    // have translated. Install what Phase 1 produced and stop.
+    if (!translateActive || subTargetLang === subSourceLang) {
+      if (inflightAbort === myAbort) inflightAbort = null;
+      stopProgress();
+      installVttCues(transcribedVtt);
+      if (blockerUrl) { lastLoadedTrackUrl = blockerUrl; }
+      inflightTrackUrl = '';
+      await refreshCachedSubs();
+      ensureCurrentSubInCacheList();
+      resumePlaybackIfArmed();
+      return;
+    }
+
+    // Phase 2: translate. Same regardless of how Phase 1 got its transcript
+    // — the translate-srt endpoint just needs an upstream URL it can fetch.
     stopProgress(undefined, 'phase-swap');
     startProgress('translate');
     const translateParams = new URLSearchParams({
