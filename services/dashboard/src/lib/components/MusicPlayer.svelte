@@ -368,7 +368,7 @@
     <header class="full-head" in:fly={{ y: -20, duration: 380, delay: 100, easing: expoOut }}>
       <div class="brand">
         <span class="brand-dot"></span>
-        <span class="brand-name">mtwKernel · Now Playing</span>
+        <span class="brand-name">Kernl · Now Playing</span>
       </div>
       <div class="full-actions">
         {#if sleepRemaining > 0}
