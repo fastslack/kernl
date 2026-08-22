@@ -217,7 +217,16 @@ export class GitCatalogProvider implements CatalogProvider {
     }
     if (existsSync(join(dir, "SKILL.md"))) {
       try {
-        const manifest = await readSkillMdAsExtensionManifest(dir);
+        // The clone root and the repo's label are what turn a leaf directory
+        // into a category: a skill at `finance/skills/cash-flow` is filed
+        // under finance by its author, and only the path says so.
+        const manifest = await readSkillMdAsExtensionManifest(dir, {
+          repoRoot: this.opts.cacheDir,
+          // `label` is the name the user gave the repo ("Marketing Skills");
+          // `name` is the provider id, which would read as a category of
+          // `git-github-com-coreyhaines31-marketingskills`.
+          repoName: this.opts.label || this.opts.url,
+        });
         return { manifest, directory: dir };
       } catch (err) {
         log.warn(`GitCatalogProvider ${this.name}: invalid SKILL.md at ${dir}: ${err}`);

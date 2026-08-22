@@ -8,7 +8,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import type { ExtensionManifest } from "../../extensions/schema.js";
 import type {
   ExtensionPermission,
@@ -176,6 +176,12 @@ interface SkillMdFrontmatter {
  * .md file under a discovered repo, so any non-skill markdown is silently
  * skipped.
  */
+/**
+ * Ceiling agentskills.io puts on `description`. It was 500 here, which cut
+ * the docx, pptx and xlsx skills of `anthropics/skills` mid-sentence.
+ */
+const SPEC_DESCRIPTION_MAX = 1024;
+
 function parseFrontmatter(raw: string): { fm: SkillMdFrontmatter; body: string } | null {
   if (!raw.startsWith("---")) return null;
   const end = raw.indexOf("\n---", 3);
@@ -184,11 +190,11 @@ function parseFrontmatter(raw: string): { fm: SkillMdFrontmatter; body: string }
   const body = raw.slice(end + 4).replace(/^\s*\n/, "");
 
   const fm: Record<string, unknown> = {};
-  let currentListKey: string | null = null;
+  const lines = fmText.split("\n").map((l) => l.replace(/\r$/, ""));
   let currentList: string[] | null = null;
 
-  for (const lineRaw of fmText.split("\n")) {
-    const line = lineRaw.replace(/\r$/, "");
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     if (!line.trim() || line.trim().startsWith("#")) continue;
 
     // Block-list continuation: "  - item"
@@ -198,7 +204,6 @@ function parseFrontmatter(raw: string): { fm: SkillMdFrontmatter; body: string }
       continue;
     }
     // Close any open list when we see a new top-level key.
-    currentListKey = null;
     currentList = null;
 
     const m = line.match(/^([A-Za-z_][A-Za-z0-9_-]*)\s*:\s*(.*)$/);
@@ -206,9 +211,33 @@ function parseFrontmatter(raw: string): { fm: SkillMdFrontmatter; body: string }
     const key = m[1];
     const valueRaw = m[2].trim();
 
-    if (valueRaw === "" || valueRaw === "|" || valueRaw === ">") {
+    // Block SCALAR opener: `key: |`, `key: >`, plus the indent digit and
+    // chomping indicator YAML allows (`|-`, `>-`, `|+`, `>2-`). The value is
+    // the indented run of lines that follows.
+    //
+    // This used to fall into the block-LIST branch below, which is a
+    // different thing entirely: `description: >` became `[]` and `description:
+    // |-` missed the equality check and became the literal string "|-".
+    // Both are truthy, so the "(no description)" fallback downstream never
+    // fired and the skill installed with no description — invisible to the
+    // model, since the description is the whole of what reaches the prompt.
+    const scalar = valueRaw.match(/^([|>])(\d*)([-+]?)$/);
+    if (scalar) {
+      const collected: string[] = [];
+      let j = i + 1;
+      for (; j < lines.length; j++) {
+        const next = lines[j]!;
+        if (next.trim() === "") { collected.push(""); continue; }
+        if (!/^\s/.test(next)) break;      // dedented: the block ended
+        collected.push(next);
+      }
+      i = j - 1;
+      fm[key] = readBlockScalar(collected, scalar[1] as "|" | ">", scalar[3] ?? "");
+      continue;
+    }
+
+    if (valueRaw === "") {
       // Block list opener: "permissions:"  followed by "  - item" lines
-      currentListKey = key;
       currentList = [];
       fm[key] = currentList;
       continue;
@@ -229,6 +258,41 @@ function parseFrontmatter(raw: string): { fm: SkillMdFrontmatter; body: string }
   return { fm: fm as SkillMdFrontmatter, body };
 }
 
+/**
+ * Resolve a YAML block scalar into its string value.
+ *
+ * `|` keeps the line breaks, `>` folds each run of lines into one line and
+ * leaves a blank line as a paragraph break. Trailing newlines are dropped
+ * unless the block asked to keep them with `+` — these values end up in
+ * manifests and prompt indexes, where a trailing newline is only noise.
+ */
+function readBlockScalar(rawLines: string[], style: "|" | ">", chomp: string): string {
+  const indents = rawLines
+    .filter((l) => l.trim() !== "")
+    .map((l) => (l.match(/^\s*/)?.[0].length ?? 0));
+  const strip = indents.length ? Math.min(...indents) : 0;
+  const body = rawLines.map((l) => (l.trim() === "" ? "" : l.slice(strip)));
+
+  let out: string;
+  if (style === "|") {
+    out = body.join("\n");
+  } else {
+    const parts: string[] = [];
+    let run: string[] = [];
+    for (const l of body) {
+      if (l === "") {
+        if (run.length) { parts.push(run.join(" ")); run = []; }
+        parts.push("");
+      } else {
+        run.push(l);
+      }
+    }
+    if (run.length) parts.push(run.join(" "));
+    out = parts.join("\n").replace(/\n{3,}/g, "\n\n");
+  }
+  return chomp === "+" ? out : out.replace(/\n+$/, "");
+}
+
 function stripQuotes(s: string): string {
   if ((s.startsWith('"') && s.endsWith('"')) || (s.startsWith("'") && s.endsWith("'"))) {
     return s.slice(1, -1);
@@ -240,8 +304,44 @@ function stripQuotes(s: string): string {
  * Read a Claude-Code-style SKILL.md and produce an ExtensionManifest.
  * The body becomes `long_description` so the dashboard can render the docs.
  */
+/**
+ * Folders that carry no meaning for a reader: packaging conventions and other
+ * agents' config directories. `alirezarezvani/claude-skills` uses
+ * `finance/skills/<name>`, so `skills` has to go for `finance` to surface;
+ * `.gemini/` is Gemini CLI's own directory and is not a category at all.
+ */
+const NON_CATEGORY_SEGMENTS = new Set(["skills", "skill", "src", "packages", "categories", "plugins"]);
+
+/**
+ * Category for a skill, taken from where its author filed it in the repo.
+ *
+ * The top folder under the repo root is the category — `finance/skills/x` is
+ * finance. A repo that keeps everything flat, or under a single `skills/`,
+ * has expressed no category, and the honest answer there is the repo itself
+ * rather than a guess per skill.
+ *
+ * Exported for the tests, and because the git provider is not the only caller
+ * that will want it.
+ */
+export function deriveSkillCategory(
+  skillDir: string,
+  repoRoot?: string,
+  repoName?: string,
+): string {
+  const fallback = repoName ? slugify(repoName) : "community";
+  if (!repoRoot) return fallback;
+  const rel = relative(repoRoot, skillDir);
+  if (!rel || rel.startsWith("..")) return fallback;
+  const segments = rel
+    .split(/[\\/]/)
+    .slice(0, -1)                                   // drop the skill's own folder
+    .filter((s) => s && !s.startsWith(".") && !NON_CATEGORY_SEGMENTS.has(s.toLowerCase()));
+  return segments.length ? slugify(segments[0]!) : fallback;
+}
+
 export async function readSkillMdAsExtensionManifest(
   skillDir: string,
+  opts?: { repoRoot?: string; repoName?: string },
 ): Promise<ExtensionManifest> {
   const raw = await readFile(join(skillDir, "SKILL.md"), "utf-8");
   const parsed = parseFrontmatter(raw);
@@ -251,6 +351,11 @@ export async function readSkillMdAsExtensionManifest(
   const { fm, body } = parsed;
   const inferredName =
     fm.name && fm.name.length > 0 ? fm.name : skillDir.split("/").pop() ?? "unnamed-skill";
+  // Coerced, not trusted: anything the parser hands back that is not a string
+  // must degrade to the placeholder rather than reach the manifest. That is
+  // the check whose absence hid the block-scalar bug — `[]` and `"|-"` both
+  // sailed past a plain `||` fallback.
+  const description = typeof fm.description === "string" ? fm.description.trim() : "";
   const slug = slugify(inferredName);
   const id = reverseDnsId(inferredName, "git.community.skill");
 
@@ -261,13 +366,16 @@ export async function readSkillMdAsExtensionManifest(
     name: inferredName,
     version: ensureSemver(fm.version),
     type: "skill",
-    description: (fm.description ?? "").slice(0, 500) || `(no description) — ${inferredName}`,
+    description: description.slice(0, SPEC_DESCRIPTION_MAX) || `(no description) — ${inferredName}`,
     long_description: body.slice(0, 10_000),
     author: fm.author ?? "community",
     license: fm.license ?? "Unknown",
     icon: fm.icon,
     homepage: fm.homepage,
-    category: fm.category ?? "community",
+    // Frontmatter still wins when the author wrote one; only the default
+    // changed. It used to be the literal "community", which put 433 of 565
+    // catalog items in one bucket and made the filter useless.
+    category: fm.category ?? deriveSkillCategory(skillDir, opts?.repoRoot, opts?.repoName),
     tags: Array.isArray(fm.tags)
       ? (fm.tags as unknown[]).filter((t): t is string => typeof t === "string")
       : [],
