@@ -9,11 +9,23 @@ import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeom
 
 /** Build meeting rooms in empty grid cells — conference table, chairs, whiteboard.
  *  hallCenter is the position of the Central Hall — doors face toward it. */
+/** Handle for the wall display inside a meeting room, so the host can write
+ *  the live meeting onto it instead of floating a billboard over the table. */
+export interface MeetingScreenHandle {
+  /** Index into the meetingRooms array this screen belongs to. */
+  index: number;
+  mesh: any;
+  material: any;
+  /** Pixel size of the canvas we paint, matched to the screen's aspect. */
+  px: { w: number; h: number };
+}
+
 export function buildMeetingRooms(
   scene: any,
   meetingRooms: Array<{ cx: number; cz: number; w: number; d: number }>,
   hallCenter?: { x: number; z: number },
-): void {
+): MeetingScreenHandle[] {
+  const screens: MeetingScreenHandle[] = [];
   const names = ['MEETING ROOM A', 'MEETING ROOM B', 'MEETING ROOM C', 'MEETING ROOM D', 'WAR ROOM', 'STRATEGY'];
 
   for (let i = 0; i < meetingRooms.length; i++) {
@@ -124,28 +136,33 @@ export function buildMeetingRooms(
       if (doorWall.id === 'left') return wc.id === 'right';
       return wc.id === 'left';
     })!;
-    const screenW2 = Math.min(oppWall.isX ? w * 0.5 : d * 0.5, 4);
+    // Bigger panel: it is the room's headline now, not decoration. Walls are
+    // WALL_H (3.5) tall and the screen is centred at 2.05, so 2.1 of height
+    // spans 1.0 → 3.1 and still clears the ceiling.
+    const screenW2 = Math.min(oppWall.isX ? w * 0.62 : d * 0.62, 5.5);
+    const screenH2 = 2.1;
     const screenMat = new rt.THREE.MeshStandardMaterial({
       color: 0x080810, emissive: new rt.THREE.Color(0x2255aa), emissiveIntensity: 0.2,
       roughness: 0.1,
     });
     applyPBR(screenMat, 'screen'); // wall display — emissive screen surface
     const screenGeo = oppWall.isX
-      ? new rt.THREE.BoxGeometry(screenW2, 1.5, 0.06)
-      : new rt.THREE.BoxGeometry(0.06, 1.5, screenW2);
+      ? new rt.THREE.BoxGeometry(screenW2, screenH2, 0.06)
+      : new rt.THREE.BoxGeometry(0.06, screenH2, screenW2);
     const screen = new rt.THREE.Mesh(screenGeo, screenMat);
     const sOff = WALL_T / 2 + 0.02;
     screen.position.set(
       oppWall.isX ? cx : oppWall.x + (oppWall.id === 'left' ? sOff : -sOff),
-      2.0,
+      2.05,
       oppWall.isX ? oppWall.z + (oppWall.id === 'bottom' ? sOff : -sOff) : cz,
     );
     scene.add(screen);
+    screens.push({ index: i, mesh: screen, material: screenMat, px: { w: 512, h: 192 } });
     const bezelMat = new rt.THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4 });
     applyPBR(bezelMat, 'plastic'); // screen bezel — dark plastic casing
     const bezelGeo = oppWall.isX
-      ? new rt.THREE.BoxGeometry(screenW2 + 0.15, 1.6, 0.04)
-      : new rt.THREE.BoxGeometry(0.04, 1.6, screenW2 + 0.15);
+      ? new rt.THREE.BoxGeometry(screenW2 + 0.15, screenH2 + 0.12, 0.04)
+      : new rt.THREE.BoxGeometry(0.04, screenH2 + 0.12, screenW2 + 0.15);
     const bezel = new rt.THREE.Mesh(bezelGeo, bezelMat);
     bezel.position.copy(screen.position);
     scene.add(bezel);
@@ -167,4 +184,126 @@ export function buildMeetingRooms(
     roomLight.matrixAutoUpdate = false; roomLight.updateMatrix();
     scene.add(roomLight);
   }
+  return screens;
+}
+
+// ── Live meeting on the wall display ──────────────────────────────────────
+//
+// The "meeting in progress" card used to be a CSS2D billboard floating over
+// the table: it always faced the camera, ignored perspective, and sat exactly
+// between an isometric viewer and the people it was describing. The room
+// already has a display mounted on the inside face of the wall opposite the
+// door, pointed at the table — so paint the meeting onto that instead. It
+// scales, skews and occludes like the rest of the scene because it IS part of
+// the scene.
+
+function wrapLines(
+  ctx: CanvasRenderingContext2D, text: string, maxW: number, maxLines: number,
+): string[] {
+  const words = String(text).split(/\s+/).filter(Boolean);
+  const lines: string[] = [];
+  let cur = "";
+  for (const word of words) {
+    const probe = cur ? `${cur} ${word}` : word;
+    if (ctx.measureText(probe).width <= maxW || !cur) {
+      cur = probe;
+    } else {
+      lines.push(cur);
+      cur = word;
+      if (lines.length === maxLines) break;
+    }
+  }
+  if (lines.length < maxLines && cur) lines.push(cur);
+  if (lines.length === maxLines && cur && lines[maxLines - 1] !== cur) {
+    let last = lines[maxLines - 1];
+    while (last.length > 1 && ctx.measureText(`${last}…`).width > maxW) last = last.slice(0, -1);
+    lines[maxLines - 1] = `${last}…`;
+  }
+  return lines;
+}
+
+export interface MeetingScreenContent {
+  /** Meeting topic. Wrapped to two lines, ellipsised after that. */
+  topic: string;
+  /** Status line under the topic ("Turn 3 · Iris (round 1)", "pensando…"). */
+  status?: string;
+  /** Red header instead of blue — urgent meetings. */
+  urgent?: boolean;
+}
+
+/** Paint a live meeting onto a room's wall display. */
+export function paintMeetingScreen(
+  handle: MeetingScreenHandle,
+  content: MeetingScreenContent,
+): void {
+  const THREE = rt.THREE;
+  const { w: W, h: H } = handle.px;
+  const cv = document.createElement("canvas");
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext("2d");
+  if (!ctx) return;
+
+  const accent = content.urgent ? "#ff4d6d" : "#ffd166";
+
+  ctx.fillStyle = "#0b1020";
+  ctx.fillRect(0, 0, W, H);
+  // Faint scanlines so it reads as a lit panel, not a printed sign.
+  ctx.fillStyle = "rgba(255,255,255,0.028)";
+  for (let y = 0; y < H; y += 4) ctx.fillRect(0, y, W, 1);
+
+  // Header bar
+  const headH = 40;
+  ctx.fillStyle = content.urgent ? "rgba(255,77,109,0.16)" : "rgba(255,209,102,0.13)";
+  ctx.fillRect(0, 0, W, headH);
+  ctx.fillStyle = accent;
+  ctx.fillRect(0, headH - 2, W, 2);
+  ctx.beginPath();
+  ctx.arc(26, headH / 2, 7, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.font = "700 20px 'Fira Code', monospace";
+  ctx.fillStyle = accent;
+  ctx.textBaseline = "middle";
+  ctx.fillText(content.urgent ? "REUNIÓN URGENTE" : "REUNIÓN EN CURSO", 44, headH / 2 + 1);
+
+  // Topic
+  ctx.font = "700 26px 'Manrope', sans-serif";
+  ctx.fillStyle = "#eef2fb";
+  const topicLines = wrapLines(ctx, content.topic || "", W - 48, 2);
+  let y = headH + 34;
+  for (const line of topicLines) { ctx.fillText(line, 24, y); y += 32; }
+
+  // Status
+  if (content.status) {
+    ctx.font = "600 20px 'Fira Code', monospace";
+    ctx.fillStyle = "#9fb0cc";
+    const statusLine = wrapLines(ctx, content.status, W - 48, 1)[0] ?? "";
+    ctx.fillText(statusLine, 24, H - 26);
+  }
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  const mat = handle.material;
+  mat.map?.dispose?.();
+  mat.emissiveMap?.dispose?.();
+  mat.map = tex;
+  mat.emissiveMap = tex;
+  mat.emissive = new THREE.Color(0xffffff);
+  mat.emissiveIntensity = 0.75;
+  mat.color = new THREE.Color(0xffffff);
+  mat.needsUpdate = true;
+}
+
+/** Put a screen back to its idle look after the meeting closes. */
+export function clearMeetingScreen(handle: MeetingScreenHandle): void {
+  const THREE = rt.THREE;
+  const mat = handle.material;
+  mat.map?.dispose?.();
+  mat.emissiveMap?.dispose?.();
+  mat.map = null;
+  mat.emissiveMap = null;
+  mat.color = new THREE.Color(0x080810);
+  mat.emissive = new THREE.Color(0x2255aa);
+  mat.emissiveIntensity = 0.2;
+  mat.needsUpdate = true;
 }

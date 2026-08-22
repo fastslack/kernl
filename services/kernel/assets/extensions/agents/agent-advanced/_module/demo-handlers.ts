@@ -25,6 +25,7 @@ import type { AgentService } from "../../../../../src/modules/agents/service.js"
 import type { Agent } from "../../../../../src/modules/agents/types.js";
 import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-handlers.js";
 import type { MeetingExecutor } from "./meeting-executor.js";
+import { BOARD_CRISIS_HANDLER, boardCrisisDirector } from "./demo-board-crisis.js";
 
 // ─── Story bank — short, deterministic, varied ─────────────────────────────
 
@@ -401,11 +402,20 @@ export function createDemoHandlers(deps: {
   service: AgentService;
   events: EventBus;
   meetingExecutor: MeetingExecutor;
+  /** System language, read fresh on each run. Optional so older callers compile. */
+  getLanguage?: () => "es" | "en";
 }): Map<string, BuiltinHandler> {
   const map = new Map<string, BuiltinHandler>();
   map.set("demo:newsroom:editor-roundup", newsroomEditorRoundup(deps));
   map.set("demo:engineering:standup",     engineeringStandup(deps));
   map.set("demo:ops:incident-watch",      opsIncidentWatch(deps));
+
+  // "Junta y Crisis" — the one-shot floor-wide demo. Unlike the handlers
+  // above it needs no seeded demo office: it casts itself from whatever
+  // offices and ranks the live instance already has. Registering it is free
+  // (handlers only ever fire for an agent that names them), and nothing
+  // schedules it — it runs when the operator asks for it and not before.
+  map.set(BOARD_CRISIS_HANDLER, boardCrisisDirector(deps));
 
   // One auto-respond handler per worker slug. The handler captures its own
   // slug so it knows which agent it is at runtime.

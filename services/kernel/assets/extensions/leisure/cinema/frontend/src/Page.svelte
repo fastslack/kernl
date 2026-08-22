@@ -1149,6 +1149,7 @@
             params.set('tgt', cs.tgt_lang);
             params.set('translate_engine', cs.engine || subEngine);
           }
+          setDurationParam(params, file);
           fetchUrl = `/api/cinema/media/subs?${params.toString()}`;
         } else {
           fetchUrl = `/api/cinema/media/subs/file?key=${cs.key}`;
@@ -1458,6 +1459,7 @@
       // startProgress('transcribe') opened the SSE — forward its jobId so
       // the kernel pushes whisper.cpp's per-percent progress to the bar.
       if (subsJobId) transcribeParams.set('jobId', subsJobId);
+      setDurationParam(transcribeParams, playFiles[playActiveIdx]);
       // For Phase 2, translate-srt will fetch the cached transcribe via
       // the kernel's own URL (handled by its localhost-rewrite logic). By
       // then the run has finished, so this route answers from cache instead
@@ -1750,6 +1752,7 @@
     const params = new URLSearchParams({ url: upstream, engine: transcribeEngine, model: transcribeModel });
     if (subSourceLang) params.set('lang', subSourceLang);
     if (subsJobId) params.set('jobId', subsJobId);
+    setDurationParam(params, file);
     return `/api/cinema/media/transcribe?${params.toString()}`;
   }
 
@@ -2890,6 +2893,7 @@
         params.set('tgt', subTargetLang);
         params.set('translate_engine', subEngine);
       }
+      setDurationParam(params, file);
       return `/api/cinema/media/subs?${params.toString()}`;
     }
 
@@ -2948,15 +2952,26 @@
    * rather than read off the label — `512Kb MPEG4` is h264 despite the name,
    * while `HiRes MPEG4` really is Part 2. Match exact-ish formats: a loose
    * /mpeg4/ test would reject the one derivative that works.
+   *
+   * `Ogg Video` used to sit in this table as decodable, and that is no longer
+   * true — Chromium dropped Theora in M123. It is worse than a plain miss,
+   * because archive.org's Theora derivative is routinely LARGER than the
+   * original it was made from: "Battle of the Worlds" ships a 374 MB .ogv
+   * beside the 335 MB .mp4 it derives from, and the item carries no h264 at
+   * all, so ranking Theora above the bare `MPEG4` label of an unrecognised
+   * original chose the biggest undecodable file in the item. The browser
+   * showed black, the codec fallback re-encoded all 374 MB before a frame
+   * played, and whisper pulled the same oversized file for its audio. It now
+   * lives in OPAQUE_FORMAT: an item whose only video is Theora goes straight
+   * to the transcoder instead of failing a load first.
    */
   const BROWSER_FORMAT_RANK: Array<{ test: RegExp; rank: number }> = [
     { test: /^h\.?\s*264/i,        rank: 0 },   // archive.org's primary mp4 derivative
     { test: /^512kb\s+mpeg4$/i,    rank: 1 },   // h264 despite the label (verified)
     { test: /^webm/i,              rank: 2 },
-    { test: /^ogg\s+video$/i,      rank: 3 },
   ];
   /** Formats we know the browser cannot decode — these force the transcoder. */
-  const OPAQUE_FORMAT = /^(hi\s*res\s+mpeg4|mpeg\s*-?\s*[12]|cinepack|cinepak|windows\s+media|quicktime|divx|xvid|asf|matroska|3gp)/i;
+  const OPAQUE_FORMAT = /^(hi\s*res\s+mpeg4|mpeg\s*-?\s*[12]|ogg\s+video|theora|cinepack|cinepak|windows\s+media|quicktime|divx|xvid|asf|matroska|3gp)/i;
 
   /** Rank for sorting: lower is better, unknown formats sit between good and bad. */
   function formatRank(format: string): number {
@@ -3010,6 +3025,21 @@
   function archiveDownloadUrl(identifier: string, filename: string): string {
     const encodedFile = filename.split('/').map(encodeURIComponent).join('/');
     return `https://archive.org/download/${encodeURIComponent(identifier)}/${encodedFile}`;
+  }
+  /**
+   * Hand the captioning routes the source length we already know.
+   *
+   * The kernel otherwise discovers it by running ffprobe against the upstream
+   * with a 5s cap. That cap is there so a slow CDN can't delay the start of a
+   * run, but when it fires the extract phase loses its denominator and the
+   * progress bar sits at exactly 0% for the whole audio pull — on a degraded
+   * archive.org node that was nine and a half minutes of a bar that looked
+   * dead while the run was in fact healthy. `length` comes back with every
+   * file in the item metadata, so there is no reason to go and ask again.
+   */
+  function setDurationParam(params: URLSearchParams, file: PlayFile | undefined): void {
+    const secs = Number(file?.length);
+    if (Number.isFinite(secs) && secs > 0) params.set('dur', String(secs));
   }
   // `<video src=…>` bypasses our global fetch interceptor, so the browser
   // can't add an Authorization header. The kernel accepts `?auth=<token>`

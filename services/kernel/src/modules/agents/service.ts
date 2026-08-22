@@ -1160,6 +1160,27 @@ export class AgentService {
     if (changes > 0) {
       log.info(`AgentService: cleaned up ${changes} stale runs`);
     }
+    // …and the meetings those runs were driving.
+    //
+    // A meeting or debate only exists inside a live process: MeetingExecutor
+    // loops in memory and closes the conversation when it finishes. Kill the
+    // process mid-meeting — a crash, or an operator redeploying — and the run
+    // was marked failed here while the conversation stayed `open` forever.
+    // Nothing ever closed it, and the dashboard hydrates open meetings on
+    // load, so the 3D office kept showing a phantom meeting in session, halo,
+    // banner, wall display and all, for a discussion that died days ago.
+    // A process that has just started cannot have a meeting in flight, so any
+    // open one is by definition abandoned.
+    const stranded = this.db
+      .prepare(
+        `UPDATE agent_conversations SET status = 'closed', closed_at = ?
+          WHERE status = 'open' AND kind IN ('meeting', 'debate')`,
+      )
+      .run(now);
+    const closed = stranded?.changes ?? 0;
+    if (closed > 0) {
+      log.info(`AgentService: closed ${closed} meeting(s) stranded by the last shutdown`);
+    }
     return changes;
   }
 

@@ -13,6 +13,7 @@ import type { KernelLanguage } from "../../core/config.js";
 import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { log } from "../../core/logger.js";
+import { promptAgentDesigner, promptAgentDesignerFlowHint } from "../../core/i18n/prompts.js";
 import type {
   WorkspaceServiceLike,
   ReflectionOptimizerLike,
@@ -206,60 +207,10 @@ export function registerAgentRoutes(
       })();
 
       const flowHint = body.flow_name
-        ? (reqLang === "es"
-            ? `The user wants to assign this agent to the "${body.flow_name}" office. Keep that context in mind when writing the prompt.`
-            : `The user wants this agent assigned to the "${body.flow_name}" office. Use that context when crafting the prompt.`)
+        ? promptAgentDesignerFlowHint(reqLang, body.flow_name)
         : "";
 
-      const systemPrompt = reqLang === "es"
-        ? `You are an agent designer. The user describes what they want an AI agent to do, and you produce a JSON spec in exactly this shape:
-
-{
-  "name": "<nombre humano corto, 2-4 palabras>",
-  "description": "<one-sentence description of what it does>",
-  "system_prompt": "<the full system prompt governing the agent's behaviour. Concrete, actionable, with a defined role. In English.>",
-  "goal_template": "<default goal prompt for runs. May use {{variables}} if needed.>",
-  "allowed_tools": ["kernel_xxx_yyy", ...],
-  "suggested_cron": "<optional: a cron expr like '0 9 * * *', or an empty string>",
-  "provider_preference": "<opcional: claude|openai|grok|lmstudio|''>",
-  "rationale": "<one sentence: why these tools, this schedule, this provider>"
-}
-
-Reglas:
-- Pick allowed_tools ONLY from the catalog below. Tools that aren't listed there don't work.
-- Prefer 3-8 tools at most. Granting extra tools makes the agent slower and more expensive.
-- If the task is event-driven (reacts to emails, a webhook, etc.) → suggested_cron = ''.
-- If it's periodic → suggest a cron matching the described cadence.
-- Devolvé SOLO el objeto JSON. Sin markdown, sin comentarios, sin \`\`\`.
-
-${flowHint}
-
-Tool catalog (name — description):
-${catalog.map((t) => `- ${t.name} — ${t.description}`).join("\n")}`
-        : `You are an agent designer. The user describes what they want an AI agent to do, and you produce a JSON spec matching this exact shape:
-
-{
-  "name": "<short human name, 2-4 words>",
-  "description": "<one-sentence description of what it does>",
-  "system_prompt": "<full system prompt text that will govern the agent's behavior. Concrete, actionable, role-defined. In English.>",
-  "goal_template": "<default goal prompt for runs. Can use {{variables}} if needed.>",
-  "allowed_tools": ["kernel_xxx_yyy", ...],
-  "suggested_cron": "<optional cron expr like '0 9 * * *', or empty string>",
-  "provider_preference": "<optional: claude|openai|grok|lmstudio|''>",
-  "rationale": "<one sentence: why these tools, this schedule, this provider>"
-}
-
-Rules:
-- Pick allowed_tools ONLY from the catalog below. Unlisted tools will not work.
-- Prefer 3-8 tools max. Over-granting tools makes agents slower and more expensive.
-- If the task is event-driven (respond to emails, webhook, etc.) → suggested_cron = ''.
-- If the task is periodic → suggest a cron that matches the described cadence.
-- Output ONLY the JSON object. No markdown, no commentary, no \`\`\`.
-
-${flowHint}
-
-Tool catalog (name — description):
-${catalog.map((t) => `- ${t.name} — ${t.description}`).join("\n")}`;
+      const systemPrompt = promptAgentDesigner(reqLang, { flowHint, catalog });
 
       const { llm } = await import("../../core/llm/client.js");
       const spec = await llm().chatJson<{

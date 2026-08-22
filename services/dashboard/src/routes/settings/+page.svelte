@@ -28,6 +28,10 @@
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
+  import {
+    updateInfo, checking, updating, updateError, updateHint,
+    refreshUpdateInfo, applyUpdate,
+  } from '$lib/update.js';
 
   // ── Types ────────────────────────────────────
   interface CatalogItem {
@@ -217,7 +221,7 @@
   }
 
   // ── Sections / routing ───────────────────────
-  const CORE_SECTIONS = ['general', 'ai', 'channels', 'integrations', 'security', 'advanced'];
+  const CORE_SECTIONS = ['general', 'ai', 'channels', 'integrations', 'security', 'advanced', 'about'];
   $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`) }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
 
@@ -579,6 +583,24 @@
     return row.capabilities?.tools !== false;
   }
 
+  /**
+   * Whether the provider ever claimed to expose tool calling.
+   *
+   * This separates two things the badge used to say with one word. A provider
+   * that declares `tools: false` is never handed a tool by the probe — see
+   * `test-providers.ts`, which asks it a plain question instead and then
+   * writes `toolCall: false` because nothing was tried, not because anything
+   * failed. Claude Code is the case: its SDK runs its own agent loop and does
+   * not surface raw tool calls to `chatCompletion`, so it cannot drive a
+   * native agent while running agents perfectly well through the
+   * `claude_code` executor. Reporting that identically to a provider that
+   * promised tools and then did not produce one reads as a fault, and it sent
+   * someone looking for a break that was not there.
+   */
+  function declaresTools(row: ProviderRow): boolean {
+    return row.capabilities?.tools !== false;
+  }
+
   // ── Can an agent actually run? ──────────────────────────────
   // The kernel's own verdict, from a real tool call. Read on load; the button
   // re-probes on demand because it spends a call.
@@ -611,7 +633,40 @@
       { id: 'channels-runtime', title: $t('settings.channels.runtime_title') },
       { id: 'whatsapp', title: 'WhatsApp' },
     ],
+    about: [
+      { id: 'about', title: $t('settings.about.title') },
+    ],
   } as Record<string, Array<{ id: string; title: string }>>;
+
+  // ── About ────────────────────────────────────────────────────────
+  //
+  // Facts about the program itself rather than settings to change, so the card
+  // is read-only (`showFooter={false}`) — there is nothing here to save.
+  //
+  // The version state is NOT fetched here: it lives in $lib/update.js, which
+  // the shell's notice strip already populates on mount. Sharing it is the
+  // point — updating from this card makes the strip above it go away by
+  // itself, and "Check for updates" refreshes both at once.
+  const ABOUT = {
+    name: 'Kernl',
+    license: 'Apache-2.0',
+    author: 'Matias Aguirre',
+    repo: 'https://github.com/fastslack/kernl',
+    releases: 'https://github.com/fastslack/kernl/releases',
+  };
+
+  /** "hace 5 min" for the cache stamp the kernel returns with a check. */
+  function checkedAgo(epoch: number | undefined, _lc: string): string {
+    if (!epoch) return '';
+    const s = Math.max(0, Math.round((Date.now() - epoch) / 1000));
+    if (s < 60) return $t('settings.about.checked_now');
+    if (s < 3600) return $t('settings.about.checked_min', { n: Math.round(s / 60) });
+    if (s < 86400) return $t('settings.about.checked_hour', { n: Math.round(s / 3600) });
+    return $t('settings.about.checked_day', { n: Math.round(s / 86400) });
+  }
+  // Recomputed on every locale switch AND whenever a check lands, so the stamp
+  // is never a frozen "just now" from the first render.
+  $: checkedLabel = checkedAgo($updateInfo?.checkedAt, $locale);
 
   $: cardTabs = [
     ...(richCards[activeSection] ?? []),
@@ -669,17 +724,26 @@
     { status: 'ok' | 'warn' | 'error' | 'neutral'; label: string } {
     const tr = tests[testIdFor(row.slug)];
     if (isTesting && !tr) return { status: 'neutral', label: '…' };
-    // Reachable and still useless to a native agent. Claude Code sits here: it
-    // answers, so every connectivity check passed it, but it cannot execute a
-    // tool call — which is the whole job. Green was a lie; this is the truth.
-    if (tr?.ok && !runsTools(row, tests)) return { status: 'warn', label: $t('settings.ai.no_tools') };
+    // Reachable and still unable to drive a native agent — but say WHICH of
+    // the two reasons. By design (Claude Code: its SDK owns the tool loop) is
+    // a shape, not a fault, and it still runs agents under the claude_code
+    // executor. A provider that claimed tools and produced none is the fault.
+    if (tr?.ok && !runsTools(row, tests)) {
+      return declaresTools(row)
+        ? { status: 'warn', label: $t('settings.ai.no_tools') }
+        : { status: 'neutral', label: $t('settings.ai.tools_via_sdk') };
+    }
     if (tr?.ok) return { status: 'ok', label: $t('settings.ai.ready') };
     if (tr && !tr.ok && hasKey(row)) return { status: 'error', label: $t('settings.ai.error') };
     // Never configured is not broken. This branch used to sit below `row.error`,
     // so every provider you had simply not set up glowed red as a failure.
     if (!hasKey(row)) return { status: 'neutral', label: $t('settings.ai.no_key') };
     if (row.error) return { status: 'error', label: $t('settings.ai.error') };
-    if (!runsTools(row, tests)) return { status: 'warn', label: $t('settings.ai.no_tools') };
+    if (!runsTools(row, tests)) {
+      return declaresTools(row)
+        ? { status: 'warn', label: $t('settings.ai.no_tools') }
+        : { status: 'neutral', label: $t('settings.ai.tools_via_sdk') };
+    }
     return { status: 'warn', label: $t('settings.ai.configured') };
   }
 
@@ -1201,8 +1265,14 @@
                   {#if !runsTools(row)}
                     <!-- Says the quiet part where the operator is looking, and
                          not only in the pill: this provider passes a
-                         connectivity test and still cannot drive an agent. -->
-                    <p class="prov-note">{$t('settings.ai.agents_need_tools')}</p>
+                         connectivity test and still cannot drive a native
+                         agent. Which sentence depends on whether that is a
+                         fault or the provider's design — see `declaresTools`. -->
+                    <p class="prov-note" class:prov-note-info={!declaresTools(row)}>
+                      {declaresTools(row)
+                        ? $t('settings.ai.agents_need_tools')
+                        : $t('settings.ai.tools_in_sdk_note')}
+                    </p>
                   {/if}
                   <div class="prov-fields">
                     {#each (provEdits[row.slug] ? row.schema ?? [] : []) as f (f.key)}
@@ -1429,6 +1499,99 @@
 
         {/if}
 
+        <!-- ═══ About (rich) ═══ -->
+        {#if activeSection === 'about' && activeCard === 'about'}
+          <SettingsCard
+            cardId="about"
+            title={$t('settings.about.title')}
+            description={$t('settings.about.desc')}
+            showFooter={false}
+          >
+            <div class="about">
+              <!-- Identity. The mascot is the same asset the header uses, so
+                   the program is recognisable here by the face it already
+                   wears everywhere else. -->
+              <div class="about-id">
+                <img class="about-logo" src="/mascot.png" alt="" />
+                <div class="about-id-text">
+                  <div class="about-name">{ABOUT.name}</div>
+                  <div class="about-version">
+                    {#if $updateInfo}
+                      v{$updateInfo.current}
+                    {:else}
+                      <span class="about-dim">{$t('settings.about.version_unknown')}</span>
+                    {/if}
+                  </div>
+                  <div class="about-tagline">{$t('settings.about.tagline')}</div>
+                </div>
+              </div>
+
+              <!-- Version state. Three outcomes, and the third one matters:
+                   a check that could not answer must read as "unknown", never
+                   as "you are up to date" — telling someone they are current
+                   when nobody asked the release host is the one wrong answer
+                   this card can give. -->
+              <div class="about-update" class:has-update={$updateInfo?.updateAvailable}>
+                {#if $updateInfo?.updateAvailable}
+                  <span class="about-update-dot" aria-hidden="true"></span>
+                  <span class="about-update-msg">
+                    {$t('settings.about.available', { version: $updateInfo.latest ?? '' })}
+                  </span>
+                  {#if $updateInfo.url}
+                    <a class="about-link" href={$updateInfo.url} target="_blank" rel="noreferrer">
+                      {$t('settings.about.changelog')}
+                    </a>
+                  {/if}
+                  <button class="btn-sm primary" disabled={$updating} on:click={applyUpdate}>
+                    {$updating ? $t('settings.about.updating') : $t('settings.about.update_now')}
+                  </button>
+                {:else if $updateInfo?.latest}
+                  <span class="about-update-msg">
+                    {$t('settings.about.current', { version: $updateInfo.current })}
+                  </span>
+                {:else if !$updateError}
+                  <!-- Only when nothing else explains the silence. A staged
+                       update clears updateInfo on purpose, and "could not
+                       check" is the wrong caption for "we are restarting" —
+                       the error line below is already saying the true thing. -->
+                  <span class="about-update-msg about-dim">{$t('settings.about.check_failed')}</span>
+                {/if}
+                <button class="btn-sm" disabled={$checking} on:click={() => refreshUpdateInfo(true)}>
+                  {$checking ? $t('settings.about.checking') : $t('settings.about.check')}
+                </button>
+                {#if checkedLabel}<span class="about-checked">{checkedLabel}</span>{/if}
+              </div>
+
+              {#if $updateError}
+                <p class="about-err">
+                  {$updateError}
+                  {#if $updateHint}<code>{$updateHint}</code>{/if}
+                </p>
+              {/if}
+
+              <!-- Details. -->
+              <dl class="about-facts">
+                <dt>{$t('settings.about.license')}</dt>
+                <dd>{ABOUT.license}</dd>
+                <dt>{$t('settings.about.author')}</dt>
+                <dd>{ABOUT.author}</dd>
+                <dt>{$t('settings.about.source')}</dt>
+                <dd>
+                  <a class="about-link" href={ABOUT.repo} target="_blank" rel="noreferrer">
+                    {ABOUT.repo.replace('https://', '')}
+                  </a>
+                </dd>
+                <dt>{$t('settings.about.releases')}</dt>
+                <dd>
+                  <a class="about-link" href={ABOUT.releases} target="_blank" rel="noreferrer">
+                    {$t('settings.about.releases_link')}
+                  </a>
+                </dd>
+              </dl>
+            </div>
+          </SettingsCard>
+        {/if}
+
         <!-- ═══ Generic catalog cards for the active section ═══ -->
         {#each (cardsBySection[activeSection] ?? []).filter((c) => c.id === activeCard) as card (card.id)}
           <SettingsCard
@@ -1588,6 +1751,9 @@
     margin: 4px 0 0; max-width: 62ch;
     font: 400 11px/1.5 var(--font-sans, inherit); color: #e8c070;
   }
+  /* Amber is for "something is wrong here". A provider whose SDK owns the tool
+     loop is not wrong, so this reads as information rather than a warning. */
+  .prov-note-info { color: var(--text-2); }
 
   /* ── Card tabs ──
      Section-level. Same wrap rule as the provider strip: never scroll
@@ -1727,6 +1893,66 @@
   }
   .int-name { font-size: 12px; font-weight: 700; color: var(--text-1); }
   .int-count { font: 400 11px var(--font-mono); color: var(--text-2); }
+
+  /* ── About ─────────────────────────────────────────────────────
+     A read-only card, so nothing here is a control except the two update
+     buttons — the rest is typography with a clear hierarchy: what you are
+     running first, whether it is current second, the fine print last. */
+  .about { display: flex; flex-direction: column; gap: 18px; }
+
+  .about-id { display: flex; align-items: center; gap: 14px; }
+  .about-logo { width: 52px; height: 52px; flex: none; border-radius: 10px; object-fit: contain; }
+  .about-id-text { min-width: 0; }
+  .about-name { font-size: 17px; font-weight: 700; color: var(--text-1); line-height: 1.2; }
+  .about-version { font: 700 13px var(--font-mono); color: var(--teal); margin-top: 2px; }
+  .about-tagline { font-size: 11.5px; color: var(--text-2); margin-top: 4px; max-width: 52ch; line-height: 1.5; }
+  .about-dim { color: var(--text-3); font-weight: 400; }
+
+  /* Same wrap-and-share-a-baseline treatment as the shell's update strip:
+     every control is `flex: none`, so without wrapping a narrow settings
+     column pushes the buttons out of the card. */
+  .about-update {
+    display: flex; align-items: center; flex-wrap: wrap; gap: 10px;
+    padding: 10px 12px; border-radius: var(--radius-sm, 6px);
+    background: var(--surface-2); border: 1px solid var(--border);
+    font-size: 12px; line-height: 20px; color: var(--text-2);
+  }
+  .about-update.has-update {
+    background: rgba(240, 180, 41, 0.10);
+    border-color: rgba(240, 180, 41, 0.30);
+    color: var(--gold);
+  }
+  .about-update-dot {
+    flex: none; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--gold); box-shadow: 0 0 6px var(--gold);
+  }
+  /* The flexible cell — it absorbs the free width so the buttons sit against
+     the right edge whether or not the changelog link is there to render. */
+  .about-update-msg { flex: 1 1 auto; min-width: 0; }
+  .about-checked { flex: none; font: 400 10px var(--font-mono); color: var(--text-3); }
+  .about-link { color: inherit; text-decoration: underline; flex: none; }
+
+  .about-err {
+    margin: 0; font-size: 11.5px; color: var(--red);
+    display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  }
+  .about-err code {
+    font: 400 11px var(--font-mono); padding: 2px 6px;
+    border-radius: 4px; background: rgba(0, 0, 0, 0.3);
+  }
+
+  /* A definition list, not a table: two columns that stay aligned down the
+     card and collapse to one on a narrow column. */
+  .about-facts {
+    display: grid; grid-template-columns: minmax(90px, max-content) 1fr;
+    gap: 7px 16px; margin: 0; font-size: 12px;
+  }
+  .about-facts dt { color: var(--text-3); }
+  .about-facts dd { margin: 0; color: var(--text-1); overflow-wrap: anywhere; }
+  @media (max-width: 520px) {
+    .about-facts { grid-template-columns: 1fr; gap: 2px 0; }
+    .about-facts dd { margin-bottom: 8px; }
+  }
 
   /* Language special field */
   .fld-lang {

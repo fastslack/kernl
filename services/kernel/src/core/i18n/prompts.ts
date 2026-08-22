@@ -690,3 +690,75 @@ export function promptStyleDirective(lang: KernelLanguage): string {
     ? "ESTILO: Respondé SIEMPRE en español rioplatense, salvo que el usuario te escriba en otro idioma o te pida explícitamente otro. Mensajes a colegas, summaries de workspace y outputs finales — todo en español."
     : "STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English.";
 }
+
+// ── Agent designer ─────────────────────────────────────────────────────
+
+/**
+ * System prompt for `POST /api/agents/propose-spec` — the "describe what you
+ * want and get a JSON agent spec" flow.
+ *
+ * It lived inline in `agents/api-routes.ts`, which is exactly the shape this
+ * module exists to undo: two full prompts, one per language, embedded in a
+ * route handler where nobody adding a third language would find them. The
+ * i18n linter flags it for that reason.
+ *
+ * Note what stays English in BOTH versions: the JSON keys, the tool names,
+ * and the instruction that `system_prompt` itself be written in English. The
+ * Spanish variant translates the guidance around the schema, not the schema —
+ * an agent's own prompt is addressed to a model, and the field names are a
+ * contract with `chatJson`.
+ */
+export function promptAgentDesigner(
+  lang: KernelLanguage,
+  opts: { flowHint: string; catalog: Array<{ name: string; description: string }> },
+): string {
+  const catalogBlock = opts.catalog.map((t) => `- ${t.name} — ${t.description}`).join("\n");
+  const shape = lang === "es"
+    ? `{
+  "name": "<nombre humano corto, 2-4 palabras>",
+  "description": "<one-sentence description of what it does>",
+  "system_prompt": "<the full system prompt governing the agent's behaviour. Concrete, actionable, with a defined role. In English.>",
+  "goal_template": "<default goal prompt for runs. May use {{variables}} if needed.>",
+  "allowed_tools": ["kernel_xxx_yyy", ...],
+  "suggested_cron": "<optional: a cron expr like '0 9 * * *', or an empty string>",
+  "provider_preference": "<opcional: claude|openai|grok|lmstudio|''>",
+  "rationale": "<one sentence: why these tools, this schedule, this provider>"
+}`
+    : `{
+  "name": "<short human name, 2-4 words>",
+  "description": "<one-sentence description of what it does>",
+  "system_prompt": "<full system prompt text that will govern the agent's behavior. Concrete, actionable, role-defined. In English.>",
+  "goal_template": "<default goal prompt for runs. Can use {{variables}} if needed.>",
+  "allowed_tools": ["kernel_xxx_yyy", ...],
+  "suggested_cron": "<optional cron expr like '0 9 * * *', or empty string>",
+  "provider_preference": "<optional: claude|openai|grok|lmstudio|''>",
+  "rationale": "<one sentence: why these tools, this schedule, this provider>"
+}`;
+
+  const rules = lang === "es"
+    ? `Reglas:
+- Pick allowed_tools ONLY from the catalog below. Tools that aren't listed there don't work.
+- Prefer 3-8 tools at most. Granting extra tools makes the agent slower and more expensive.
+- If the task is event-driven (reacts to emails, a webhook, etc.) → suggested_cron = ''.
+- If it's periodic → suggest a cron matching the described cadence.
+- Devolvé SOLO el objeto JSON. Sin markdown, sin comentarios, sin \`\`\`.`
+    : `Rules:
+- Pick allowed_tools ONLY from the catalog below. Unlisted tools will not work.
+- Prefer 3-8 tools max. Over-granting tools makes agents slower and more expensive.
+- If the task is event-driven (respond to emails, webhook, etc.) → suggested_cron = ''.
+- If the task is periodic → suggest a cron that matches the described cadence.
+- Output ONLY the JSON object. No markdown, no commentary, no \`\`\`.`;
+
+  const intro = lang === "es"
+    ? "You are an agent designer. The user describes what they want an AI agent to do, and you produce a JSON spec in exactly this shape:"
+    : "You are an agent designer. The user describes what they want an AI agent to do, and you produce a JSON spec matching this exact shape:";
+
+  return `${intro}\n\n${shape}\n\n${rules}\n\n${opts.flowHint}\n\nTool catalog (name — description):\n${catalogBlock}`;
+}
+
+/** The "assign this agent to office X" line, when the request names one. */
+export function promptAgentDesignerFlowHint(lang: KernelLanguage, flowName: string): string {
+  return lang === "es"
+    ? `The user wants to assign this agent to the "${flowName}" office. Keep that context in mind when writing the prompt.`
+    : `The user wants this agent assigned to the "${flowName}" office. Use that context when crafting the prompt.`;
+}

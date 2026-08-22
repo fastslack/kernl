@@ -1423,27 +1423,42 @@ html, body {
    error colour is spent on things that are actually broken. */
 .update-bar {
   display: flex; align-items: center; gap: 10px;
+  /* Wraps rather than crushing: the actions are all `flex: none`, so on a
+     narrow viewport an unwrappable row pushes the ✕ past the right edge — and
+     .app-root is `overflow: hidden`, which makes it unreachable, not just
+     ugly. Row-gap keeps the wrapped line off the one above it. */
+  flex-wrap: wrap; row-gap: 8px;
   padding: 8px 16px;
   background: rgba(240, 180, 41, 0.10);
   border-bottom: 1px solid rgba(240, 180, 41, 0.30);
   color: var(--gold);
   font-size: 12px;
+  /* One height for every control in the row, so the button, the link and the
+     ✕ share a centre line instead of each sitting on its own. */
+  line-height: 20px;
 }
 .update-bar-dot {
   flex: none; width: 7px; height: 7px; border-radius: 50%;
   background: var(--gold); box-shadow: 0 0 6px var(--gold);
 }
 .update-bar strong { font-weight: 700; }
-.update-bar-link { margin-left: auto; color: var(--gold); text-decoration: underline; }
+/* The flexible cell. `min-width: 0` lets it shrink below its text's intrinsic
+   width — without it a long message refuses to give ground and shoves the
+   actions out of the bar. */
+.update-bar-msg { flex: 1 1 auto; min-width: 0; }
+.update-bar-link { flex: none; color: var(--gold); text-decoration: underline; }
 .update-bar-close {
   flex: none; background: none; border: none; cursor: pointer;
-  color: var(--gold); opacity: 0.65; font-size: 13px; line-height: 1; padding: 2px 4px;
+  color: var(--gold); opacity: 0.65; font-size: 13px; line-height: 20px;
+  /* Square, so the glyph is centred in its own box rather than optically
+     drifting left of the button beside it. */
+  width: 20px; height: 20px; padding: 0; text-align: center;
 }
 .update-bar-close:hover { opacity: 1; }
 .update-bar-go {
-  flex: none; padding: 4px 12px; border-radius: 5px; cursor: pointer;
+  flex: none; padding: 0 12px; height: 22px; border-radius: 5px; cursor: pointer;
   border: 1px solid var(--gold); background: var(--gold); color: #0d0d10;
-  font-size: 11.5px; font-weight: 700;
+  font-size: 11.5px; line-height: 20px; font-weight: 700;
 }
 .update-bar-go:disabled { opacity: 0.6; cursor: wait; }
 .update-bar-err {
@@ -1452,6 +1467,7 @@ html, body {
   color: #f0a5a5;
 }
 .update-bar-err code {
+  flex: none;
   font-family: var(--font-mono, monospace); font-size: 11px;
-  padding: 2px 6px; border-radius: 4px; background: rgba(0, 0, 0, 0.3);
+  padding: 0 6px; line-height: 20px; border-radius: 4px; background: rgba(0, 0, 0, 0.3);
 }

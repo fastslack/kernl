@@ -17,6 +17,8 @@
     setupLighting, applyRendererGrading, applySceneGrading, GRADING,
     buildAmbiance, buildWallClock, buildActivityBoard, updateActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
     initRedAlertDecor, buildSandbagBarrier, buildCrates,
+    buildNameplate,
+    paintMeetingScreen, clearMeetingScreen, type MeetingScreenHandle,
     buildPowerConsole, setInfraBreaker, getInfraBreakerState, setInfraReadout,
     flipInfraLever, updateInfraConsole, getInfraOperatorPos, getInfraFacePos,
     resetInfraConsole, toggleInfraBoard, INFRA_VIS, type InfraState,
@@ -235,6 +237,10 @@
   // entry is the full slot {cx, cz, w, d} so we can compute chair seats around
   // the conference table, not just walk everyone to the center.
   let meetingRoomSlots: Array<{ cx: number; cz: number; w: number; d: number }> = [];
+  // Wall displays, one per meeting-room slot, indexed the same way.
+  let meetingScreens: MeetingScreenHandle[] = [];
+  /** meeting_id → the wall display currently showing it. */
+  const meetingScreenByMeeting = new Map<string, MeetingScreenHandle>();
   let meetingRoomHitboxes: any[] = [];
   // Map meeting_id → index in meetingRoomCenters so all participants walk to
   // the same room and re-clicking the room reopens that specific meeting.
@@ -1509,7 +1515,9 @@
 
     // Build Meeting Rooms (indices 0, 2, and 4+)
     const meetingSlots = meetingRooms.filter((_, i) => i !== 1 && i !== 3);
-    if (meetingSlots.length > 0) buildMeetingRooms(target, meetingSlots, hallCenter);
+    meetingScreens = meetingSlots.length > 0
+      ? (buildMeetingRooms(target, meetingSlots, hallCenter) ?? [])
+      : [];
 
     // Expose meeting-room slots so walkers can actually go there. Each slot
     // becomes the walk target for one autonomous agent meeting (round-robin
@@ -1638,38 +1646,30 @@
     // he already has unanswered messages (rebuildScene wipes the old mesh).
     paintTopAgentAlert(pendingQuestions.length > 0);
 
-    // Nameplate — RANK pill + insignia + agent name, anchored above his
-    // head. The pill text is the RANK name uppercased so renaming the
-    // rank in the dashboard re-labels the top agent automatically.
-    const div = document.createElement('div');
-    const insignia = topRank?.insignia ?? '✪';
-    const insColor = topRank?.color ?? '#7c3aed';
-    const rankName = topRank?.name ?? '';
-    const rankPill = rankName.toUpperCase();
-    // The seeder defaults the agent name to the rank name, so showing both
-    // would print the same label twice (rank pill above + name below).
-    // Drop the name line when it duplicates the rank — if the user renames
-    // the agent to anything else, both lines render again.
-    const showName =
-      holder.name.trim().toLowerCase() !== rankName.trim().toLowerCase();
-    div.innerHTML =
-      `<div style="text-align:center;pointer-events:none">` +
-      `<div style="display:inline-block;background:#c9a84c;color:#1a1a1a;` +
-      `font:900 9px 'Manrope',sans-serif;letter-spacing:1.2px;` +
-      `padding:2px 8px;border-radius:3px;margin-bottom:3px;` +
-      `box-shadow:0 0 8px rgba(201,168,76,0.7);` +
-      `text-shadow:none">${escapeHtml(rankPill)}</div>` +
-      `<div style="font:900 14px 'Manrope',sans-serif;color:${insColor};` +
-      `text-shadow:0 1px 2px rgba(0,0,0,0.85);line-height:1;${showName ? 'margin-bottom:2px' : ''}">${escapeHtml(insignia)}</div>` +
-      (showName
-        ? `<div style="font:700 11px 'Manrope',sans-serif;color:#f3e9c7;white-space:nowrap;` +
-          `text-shadow:0 1px 3px rgba(0,0,0,0.9);background:rgba(13,15,24,0.7);padding:2px 10px;` +
-          `border-radius:3px;border-bottom:2px solid #c9a84c">${escapeHtml(holder.name)}</div>`
-        : '') +
-      `</div>`;
+    // Nameplate — the SAME chip every other agent gets, from the shared
+    // builder, and registered in `deskLabels` like the rest.
+    //
+    // It used to be a bespoke gold plaque built inline here and anchored to
+    // this office forever. Two consequences, both of which read as bugs: the
+    // top agent's label was a different size and style from everyone else's,
+    // and because it never entered `deskLabels` it did not follow him. Walking
+    // into a meeting, the highest-ranked agent in the building arrived as the
+    // one unlabelled figure at the table. The office keeps its own door sign,
+    // so nothing is lost by making the person's tag look like a person's tag.
+    const div = buildNameplate({
+      agentId: holder.id,
+      name: holder.name,
+      color: topRank?.color ?? '#c9a84c',
+      active: holder.active === 1,
+      rank: topRank
+        ? { name: topRank.name, color: topRank.color, insignia: topRank.insignia, level: topRank.level }
+        : undefined,
+      powerChip: false,
+    });
     const label = new CSS2DObject(div);
     label.position.set(headPos.x, headPos.y + 0.5, headPos.z);
     target.add(label);
+    deskLabels.set(holder.id, label);
     topAgentLabel = label;
 
     // Anchor the top agent's deskPos so walkers (reports, chains, etc.) can
@@ -1704,6 +1704,13 @@
   function ensureTopAgentWiring(): void {
     if (!topAgentId || !topAgentSeatPos) return;
     if (!deskPos.has(topAgentId)) deskPos.set(topAgentId, topAgentSeatPos);
+    // …and his nameplate. buildDesks rebuilds `deskLabels` from the grid
+    // agents only, so every desk rebuild dropped the top agent's entry and
+    // his chip stopped following him — he went back to being the one
+    // unlabelled figure at the meeting table. The CSS2DObject itself survives
+    // (it isn't tagged isNameplate, so the purge leaves it), only the map
+    // entry is lost, so re-registering is enough.
+    if (topAgentLabel && !deskLabels.has(topAgentId)) deskLabels.set(topAgentId, topAgentLabel);
     if (!sittingWorkers.has(topAgentId) && topAgentHumanParts) {
       // Re-inject the SAME HumanoidParts struct that placeTopAgent built —
       // animateSitting reads .leftArm/.rightArm/.head off it. A bare
@@ -1756,38 +1763,54 @@
   }
 
   // ── Speech Bubbles ─────────────────────────────
-  function showBubble(aid: string, text: string, dur = 200) {
+  // ── One tag per agent ─────────────────────────────────────────────
+  //
+  // Event tags used to be their own CSS2DObject parented to the agent's desk
+  // group, which meant every agent doing anything carried TWO floating things:
+  // the nameplate chip and a second badge under it. They also needed a
+  // reparenting pass every frame to follow a walking agent, and they scaled
+  // independently of the chip.
+  //
+  // Now the tag is a span INSIDE the chip. It follows, scales and hides with
+  // the nameplate for free, and an agent never shows more than one label.
+  function mountAgentStatus(aid: string, el: HTMLElement, dur: number): void {
     const old = speechBubbles.get(aid);
     if (old) {
-      // Remove from parent (could be scene or desk group)
-      if (old.label.parent) old.label.parent.remove(old.label);
+      if (old.label?.parent) old.label.parent.remove(old.label);
       old.div.remove();
       animRegistry.cancelByTag(`bubble:${aid}`);
       speechBubbles.delete(aid);
     }
-    const deskGroup = deskGroups.get(aid);
-    if (!deskGroup) return;
-    const div = document.createElement('div');
-    // Bubble text is user chat input / agent output — escape to prevent XSS.
-    div.innerHTML = escapeHtml(text);
-    div.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
-      background:#f0f0e8;border:2px solid #222;padding:4px 10px;
-      border-radius:4px;max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-      box-shadow:2px 3px 0 #000;animation:bpop .15s ease-out;`;
-    const lbl = new CSS2DObject(div);
-    // Position above the worker's head (worker is at z=0.55, head at y~1.6, scaled 1.3x)
-    lbl.position.set(0, 3.2, 0.55);
-    deskGroup.add(lbl); // add to desk group so it follows the worker
-    speechBubbles.set(aid, { div, label: lbl, age: 0, maxAge: dur });
-    animRegistry.add(bubbleFade(div, {
+    const inner = deskLabels.get(aid)?.element?.firstElementChild as HTMLElement | null;
+    if (!inner) return;
+    inner.appendChild(el);
+    speechBubbles.set(aid, { div: el, label: null, age: 0, maxAge: dur });
+    animRegistry.add(bubbleFade(el, {
       maxAgeFrames: dur,
       tag: `bubble:${aid}`,
       onExpire: () => {
-        if (lbl.parent) lbl.parent.remove(lbl);
-        div.remove();
-        if (speechBubbles.get(aid)?.label === lbl) speechBubbles.delete(aid);
+        el.remove();
+        if (speechBubbles.get(aid)?.div === el) speechBubbles.delete(aid);
       },
     }));
+  }
+
+  /** Shared shell for the in-chip tag: a hairline separator then the content. */
+  function statusSpan(accent: string): HTMLSpanElement {
+    const sp = document.createElement('span');
+    sp.style.cssText =
+      `display:inline-flex;align-items:center;gap:4px;flex:none;` +
+      `margin-left:5px;padding-left:6px;border-left:1px solid ${accent}55;`;
+    return sp;
+  }
+
+  function showBubble(aid: string, text: string, dur = 200) {
+    const sp = statusSpan('#f0f0e8');
+    const t = document.createElement('span');
+    t.textContent = text;
+    t.style.cssText = "max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dfe4ef";
+    sp.appendChild(t);
+    mountAgentStatus(aid, sp, dur);
   }
 
   // ── Animated agent-event tag ────────────────────
@@ -1800,47 +1823,27 @@
   function showAnimatedTag(aid: string, opts: {
     icon: string;
     anim?: AnimatedTagAnim;
-    color?: string;            // border + glow color (CSS)
-    label?: string;            // optional small caption to the right of the icon
+    color?: string;            // accent for the separator + icon
+    label?: string;            // optional small caption next to the icon
     durationFrames?: number;   // lifetime (drives bubbleFade)
   }): void {
     if (!aid) return;
-    const old = speechBubbles.get(aid);
-    if (old) {
-      if (old.label.parent) old.label.parent.remove(old.label);
-      old.div.remove();
-      animRegistry.cancelByTag(`bubble:${aid}`);
-      speechBubbles.delete(aid);
-    }
-    const deskGroup = deskGroups.get(aid);
-    if (!deskGroup) return;
     const color = opts.color ?? flowColor(aid);
-    const anim = opts.anim ?? 'pulse';
-    const dur = opts.durationFrames ?? 200;
-    const labelHtml = opts.label
-      ? `<span style="font:700 9px/1 'Fira Code',monospace;color:${color};letter-spacing:1.5px;text-transform:uppercase;opacity:.9;">${opts.label}</span>`
-      : '';
-    const div = document.createElement('div');
-    div.className = `atag atag-anim-${anim}`;
-    div.style.cssText = `display:inline-flex;align-items:center;gap:7px;
-      background:linear-gradient(180deg,rgba(0,8,16,0.92),rgba(0,16,32,0.96));
-      border:2px solid ${color};padding:5px 10px;border-radius:14px;
-      box-shadow:0 0 12px ${color},0 2px 6px rgba(0,0,0,0.4);
-      pointer-events:none;color:#fff;will-change:opacity;`;
-    div.innerHTML = `<span class="atag-icon" style="font-size:18px;color:${color};">${opts.icon}</span>${labelHtml}`;
-    const lbl = new CSS2DObject(div);
-    lbl.position.set(0, 3.2, 0.55);
-    deskGroup.add(lbl);
-    speechBubbles.set(aid, { div, label: lbl, age: 0, maxAge: dur });
-    animRegistry.add(bubbleFade(div, {
-      maxAgeFrames: dur,
-      tag: `bubble:${aid}`,
-      onExpire: () => {
-        if (lbl.parent) lbl.parent.remove(lbl);
-        div.remove();
-        if (speechBubbles.get(aid)?.label === lbl) speechBubbles.delete(aid);
-      },
-    }));
+    const sp = statusSpan(color);
+    sp.className = `atag atag-anim-${opts.anim ?? 'pulse'}`;
+    const ico = document.createElement('span');
+    ico.textContent = opts.icon;
+    ico.style.cssText = `font-size:11px;line-height:1;color:${color}`;
+    sp.appendChild(ico);
+    if (opts.label) {
+      const lb = document.createElement('span');
+      lb.textContent = opts.label;
+      lb.style.cssText =
+        `font:700 8px/1 'Fira Code',monospace;letter-spacing:1px;` +
+        `text-transform:uppercase;color:${color};opacity:.95`;
+      sp.appendChild(lb);
+    }
+    mountAgentStatus(aid, sp, opts.durationFrames ?? 200);
   }
 
   // ── Meeting decor (halo + topic banner) ─────────
@@ -1904,9 +1907,40 @@
       showMyOfficePanel = false;
       selectedAgent = null;
     });
+    // The banner lives on the room's wall display now — a real textured
+    // surface inside the office, so it obeys perspective and occlusion like
+    // everything else. The CSS2D card is kept only as the clickable target
+    // (the transcript opens from it) and is parked off to the side, small,
+    // instead of hanging over the table.
     const bannerObj = new CSS2DObject(bannerEl);
-    bannerObj.position.set(room.cx, 6.5, room.cz);
-    scene.add(bannerObj);
+    // NEVER over the table. Whatever happens with the wall display below, the
+    // card does not go back to floating in the camera's line of sight — that
+    // is the thing being fixed, and making it conditional on the screen
+    // working is how it came back.
+    const doorPt = hallCenterPos ? meetingRoomDoorPoint(room, hallCenterPos) : null;
+    if (doorPt) {
+      const wx = room.cx * 2 - doorPt.x, wz = room.cz * 2 - doorPt.z;
+      const ix = room.cx - wx, iz = room.cz - wz;
+      const ilen = Math.hypot(ix, iz) || 1;
+      bannerObj.position.set(wx + (ix / ilen) * 0.6, 3.4, wz + (iz / ilen) * 0.6);
+    } else {
+      bannerObj.position.set(room.cx, 6.5, room.cz);
+    }
+    const screenIdx = meetingIdToRoom.get(meetingId);
+    const screen = screenIdx !== undefined ? meetingScreens[screenIdx] : undefined;
+    if (screen) {
+      meetingScreenByMeeting.set(meetingId, screen);
+      paintMeetingScreen(screen, { topic, status: 'comenzando…' });
+    } else {
+      // No wall display for this room — fall back to the card, on the wall.
+      scene.add(bannerObj);
+    }
+
+    // NOTE: do not try to hide the card with `bannerEl.style.display`.
+    // CSS2DRenderer rewrites that property every frame from the object's own
+    // `visible` flag, so the card reappeared on the next render — which is
+    // exactly how the floating banner came back after being "removed". Either
+    // the object is in the scene or it is not.
 
     meetingDecor.set(meetingId, { halo, bannerObj, bannerEl });
     // Breathe + slow spin while this meeting exists. The `while` predicate
@@ -1918,11 +1952,57 @@
     }));
   }
 
+  // Drive the tail-follow from the turn count of whichever meeting the panel
+  // is showing. Switching meetings (or reopening the panel) resets the
+  // baseline so the first paint jumps to the bottom instead of animating
+  // through the whole backlog.
+  $: if (activeMeetingId) { lmLastTurnCount = -1; }
+  $: if (showLiveMeeting && showTranscriptBody && activeMeetingId && liveMeetings[activeMeetingId]) {
+    lmFollowTail(liveMeetings[activeMeetingId].turns.length);
+  }
+
+  // ── Transcript auto-scroll ────────────────────────────────────────
+  // A turn lands every ~25s and the panel does not move, so a reader watching
+  // the meeting has to scroll by hand to see who just spoke. Follow the tail
+  // automatically — but only while the reader is already AT the tail. Yanking
+  // someone who scrolled up to re-read an earlier turn is worse than not
+  // scrolling at all, so a manual scroll away from the bottom opts out until
+  // they come back down.
+  let lmTranscriptEl: HTMLElement | null = null;
+  let lmLastTurnCount = -1;
+
+  function lmNearBottom(el: HTMLElement): boolean {
+    return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
+
+  function lmFollowTail(turnCount: number): void {
+    const el = lmTranscriptEl;
+    if (!el) return;
+    if (turnCount === lmLastTurnCount) return;
+    const wasFirstPaint = lmLastTurnCount < 0;
+    const stick = wasFirstPaint || lmNearBottom(el);
+    lmLastTurnCount = turnCount;
+    if (!stick) return;
+    // Wait for the new turn's DOM to exist before measuring.
+    requestAnimationFrame(() => {
+      if (!lmTranscriptEl) return;
+      lmTranscriptEl.scrollTo({
+        top: lmTranscriptEl.scrollHeight,
+        behavior: wasFirstPaint ? 'auto' : 'smooth',
+      });
+    });
+  }
+
   function updateMeetingDecorTurn(meetingId: string, turnText: string): void {
     const d = meetingDecor.get(meetingId);
     if (!d) return;
     const turnEl = d.bannerEl.querySelector('[data-role="turn"]') as HTMLElement | null;
     if (turnEl) turnEl.textContent = turnText;
+    const screen = meetingScreenByMeeting.get(meetingId);
+    if (screen) {
+      const lm = liveMeetings[meetingId];
+      paintMeetingScreen(screen, { topic: lm?.topic ?? '', status: turnText });
+    }
   }
 
   function disposeMeetingDecor(meetingId: string): void {
@@ -1937,6 +2017,8 @@
       if (d.bannerObj.parent) d.bannerObj.parent.remove(d.bannerObj);
     }
     if (d.bannerEl) d.bannerEl.remove();
+    const screen = meetingScreenByMeeting.get(meetingId);
+    if (screen) { clearMeetingScreen(screen); meetingScreenByMeeting.delete(meetingId); }
     meetingDecor.delete(meetingId);
   }
 
@@ -3162,7 +3244,14 @@
               scene, walkers, pid, seat, deskPos, roomMap, corGrid, agents,
               mClr, undefined, deskAabbs, 'meeting', sittingWorkers,
               meetingUrgent, doorPoint, undefined, false, meetingRoomSlots, roomIdx, true,
-              room ? undefined : (myOfficeDeskFacing ?? undefined), // face the desk if held in My Office
+              // Face the table. Without this the walker keeps whatever heading
+              // it happened to arrive on, so half the room sits with its back
+              // to the meeting. `talkFacingPos` was built for exactly this —
+              // its own comment says "the table centroid" — but no meeting
+              // call site ever passed one.
+              room
+                ? { x: room.cx, y: 0, z: room.cz }
+                : (myOfficeDeskFacing ?? undefined),
             );
           });
         }
@@ -3200,6 +3289,31 @@
           // panel — keeps the 3D view clean by default.
           activeMeetingId = mid;
           showMyOfficePanel = false;
+        }
+      }
+      // ── An agent is composing its turn ──────────────────────────
+      // Fired by the executor BEFORE the provider call. Median turn is ~25s
+      // (measured on this floor: 13s / 24s / 29s / 24s / 41s / 23s / 60s, plus
+      // one 5m20s outlier), and until now nothing on screen moved during that
+      // wait — a thinking room and a hung room looked identical.
+      else if (t === 'meeting_thinking') {
+        const thinkerId = String(e.data.agent_id ?? '');
+        const isMod = String(e.data.role ?? '') === 'moderator';
+        if (thinkerId) {
+          showAnimatedTag(thinkerId, {
+            icon: '💭',
+            anim: 'pulse',
+            color: isMod ? '#F0C674' : '#5B8DEF',
+            label: '···',
+            // Long enough to outlast a slow turn; `meeting_turn` replaces it
+            // as soon as the text lands, so it rarely runs to expiry.
+            durationFrames: 3600,
+          });
+        }
+        const mid = String(e.data.meeting_id ?? '');
+        if (mid && liveMeetings[mid]) {
+          const who = String(e.data.agent_name ?? '');
+          updateMeetingDecorTurn(mid, who ? `${who} está pensando…` : 'pensando…');
         }
       }
       else if (t === 'meeting_turn') {
@@ -3242,7 +3356,7 @@
             if (p.id && p.id !== spkId) {
               const old = speechBubbles.get(p.id);
               if (old) {
-                if (old.label.parent) old.label.parent.remove(old.label);
+                if (old.label?.parent) old.label.parent.remove(old.label);
                 old.div.remove();
                 animRegistry.cancelByTag(`bubble:${p.id}`);
                 speechBubbles.delete(p.id);
@@ -3615,35 +3729,14 @@
 
   // Richer variant used for eval grades and lesson drops — colored border + longer life
   function showGradeBubble(aid: string, text: string, color: string, dur = 250) {
-    const old = speechBubbles.get(aid);
-    if (old) {
-      if (old.label.parent) old.label.parent.remove(old.label);
-      old.div.remove();
-      animRegistry.cancelByTag(`bubble:${aid}`);
-      speechBubbles.delete(aid);
-    }
-    const deskGroup = deskGroups.get(aid);
-    if (!deskGroup) return;
-    const div = document.createElement('div');
-    div.innerHTML = text;
-    div.style.cssText = `font:700 10px 'Fira Code',monospace;color:#111;
-      background:#fff;border:2px solid ${color};padding:5px 12px;
-      border-radius:6px;max-width:240px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-      box-shadow:2px 3px 0 ${color},4px 5px 0 rgba(0,0,0,.3);
-      animation:gpop .3s cubic-bezier(.17,.88,.32,1.28);`;
-    const lbl = new CSS2DObject(div);
-    lbl.position.set(0, 3.6, 0.55);
-    deskGroup.add(lbl);
-    speechBubbles.set(aid, { div, label: lbl, age: 0, maxAge: dur });
-    animRegistry.add(bubbleFade(div, {
-      maxAgeFrames: dur,
-      tag: `bubble:${aid}`,
-      onExpire: () => {
-        if (lbl.parent) lbl.parent.remove(lbl);
-        div.remove();
-        if (speechBubbles.get(aid)?.label === lbl) speechBubbles.delete(aid);
-      },
-    }));
+    const sp = statusSpan(color);
+    const t = document.createElement('span');
+    t.innerHTML = text;
+    t.style.cssText =
+      `max-width:190px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;` +
+      `font:700 9px 'Fira Code',monospace;color:${color}`;
+    sp.appendChild(t);
+    mountAgentStatus(aid, sp, dur);
   }
 
   // ── Persistencia de UI en localStorage ─────────────────────────────
@@ -3975,6 +4068,7 @@
                   scene, walkers, p.id, seat, deskPos, roomMap, corGrid, agents,
                   flowColor(p.id), undefined, deskAabbs, 'meeting', sittingWorkers,
                   false, doorPoint, undefined, false, meetingRoomSlots, roomIdx, true,
+                  { x: room.cx, y: 0, z: room.cz }, // face the table
                 );
               });
             }
@@ -4248,8 +4342,15 @@
       for (const [aid, lbl] of deskLabels) {
         if (!lbl.visible) continue; // hidden / culled — skip the DOM scale write too
         let d = 30;
-        const p = deskPos.get(aid);
-        if (p) {
+        // Measure to where the label ACTUALLY is, not to the agent's desk.
+        // The follow-the-walker block above moves a label to its agent's
+        // current position, but this loop kept sizing it by desk distance —
+        // so six agents sitting around one meeting table were scaled by how
+        // far their home offices happen to be from the camera, and the same
+        // table showed six different label sizes. That is the "distintos
+        // tamaños" the operator sees; it has nothing to do with the styling.
+        const p = { x: lbl.position.x, z: lbl.position.z };
+        {
           const dx = camX - p.x, dy = camY - 1.6, dz = camZ - p.z;
           d = Math.sqrt(dx * dx + dy * dy + dz * dz);
         }
@@ -4356,31 +4457,9 @@
         }
       }
 
-      // Animated event tags (speechBubbles) — these are CSS2D children parented
-      // to deskGroup; when a walker spawns for this agent, REPARENT the label
-      // to walker.group so the tag follows the moving humanoid. Reparent back
-      // to the desk when the walker disposes. Position is in local coordinates
-      // relative to the new parent.
-      for (const [agentId, bubble] of speechBubbles) {
-        const w = walkerByAgent.get(agentId);
-        const dg = deskGroups.get(agentId);
-        const lbl = bubble.label as any;
-        const currentParent = lbl.parent;
-        if (w && !((w as any).returning && (w as any).progress >= 1)) {
-          const g = (w as any).group;
-          if (g && currentParent !== g) {
-            if (currentParent) currentParent.remove(lbl);
-            g.add(lbl);
-            // Above the walker's head — humanoid scale 1.3, head ~1.6 local,
-            // so 2.4 places the tag just above the head.
-            lbl.position.set(0, 2.4, 0);
-          }
-        } else if (dg && currentParent !== dg) {
-          if (currentParent) currentParent.remove(lbl);
-          dg.add(lbl);
-          lbl.position.set(0, 3.2, 0.55);
-        }
-      }
+      // NOTE: event tags used to be reparented here every frame so they would
+      // follow a walking agent. They are spans inside the nameplate now, so
+      // they follow it for free and this pass is gone.
     }
 
     // Delivery system — truck + driver animation (triggered by inbound events)
@@ -4809,12 +4888,24 @@
     deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid; meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
     // Build the scene; surface any fatal error on the loader instead of leaving
     // it spinning forever (the old behavior on a mid-build throw).
-    buildScene().catch((e: any) => {
-      console.error('[buildScene] failed:', e);
-      bootError = 'No se pudo construir la escena 3D: ' + (e?.message ?? String(e));
-    });
+    buildScene()
+      .then(() => {
+        // Hydration has to run AFTER the scene exists. It re-seats the
+        // attendees of a meeting that was already in progress when this page
+        // loaded, and to do that it needs `meetingRoomSlots` — which is only
+        // assigned while the scene is built. buildScene() is async and was
+        // never awaited, so hydration fired first, found zero rooms, skipped
+        // the whole re-seat + banner block, and never retried. Opening the
+        // dashboard while a meeting was running therefore showed an empty
+        // meeting room, no halo and no banner, for the rest of the session —
+        // which reads as "the meeting is broken" when it is running fine.
+        hydrateLiveState();
+      })
+      .catch((e: any) => {
+        console.error('[buildScene] failed:', e);
+        bootError = 'No se pudo construir la escena 3D: ' + (e?.message ?? String(e));
+      });
     restoreUiState();
-    hydrateLiveState();
     // Pull the repo registry now so the first scene build paints the rack
     // tags + directory panel; if the fetch resolves after buildScene we
     // trigger a one-shot rebuild so the racks light up without a full reload.
@@ -4855,7 +4946,7 @@
     if (labelRenderer?.domElement?.parentNode) labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
     for (const [, m] of deskGroups) m.traverse((c: any) => { c.geometry?.dispose(); c.material?.dispose(); });
     for (const h of hallwayLines) { h.line.geometry.dispose(); h.line.material.dispose(); }
-    for (const [, b] of speechBubbles) { scene?.remove(b.label); b.div.remove(); }
+    for (const [, b] of speechBubbles) { if (b.label) scene?.remove(b.label); b.div.remove(); }
     for (const id of [...meetingDecor.keys()]) disposeMeetingDecor(id);
     // Guard against SSR/prerender — SvelteKit may invoke onDestroy on the
     // server when tearing down a render pass. window only exists in the
@@ -6092,6 +6183,31 @@
   function linkifyUuids(html: string): string {
     return html.replace(UUID_RE, (m) => `<button type="button" class="ip-uuid-link" data-comm-id="${m}" title="Open ${m}">${m.slice(0, 8)}…</button>`);
   }
+  /**
+   * Inline markdown for a single-line list item.
+   *
+   * Decisions and action items were printed raw, so the `**bold**` the
+   * moderator writes showed up as literal asterisks in the summary — the one
+   * part of the meeting a reader actually skims. They can't go through
+   * formatRunOutput: that is a block renderer and would nest a <p> (and
+   * possibly a whole <ul>) inside each <li>. This does the inline subset and
+   * nothing else.
+   *
+   * It also drops a leading bullet marker. `extractBullets` strips one only
+   * when the line starts with it, so a NESTED item ("  - **Wren:** …") kept
+   * its dash and rendered as "- **Wren:** …" — visible in the summary as a
+   * stray hyphen before half the action items.
+   */
+  function formatInline(text: string | undefined | null): string {
+    if (!text) return '';
+    let t = String(text).trim().replace(/^[-*•]\s+/, '').trim();
+    t = escapeHtml(t);
+    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
+    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+    t = t.replace(/(^|[\s(])_([^_]+)_(?=[\s.,;:)]|$)/g, '$1<em>$2</em>');
+    return t;
+  }
+
   function formatRunOutput(text: string | undefined | null): string {
     if (!text) return '';
 
@@ -6793,6 +6909,7 @@ Boss says: "${msg}"`;
           scene, walkers, aid, seat, deskPos, roomMap, corGrid, agents,
           flowColor(aid), undefined, deskAabbs, 'meeting', sittingWorkers,
           false, doorPoint, undefined, false, meetingRoomSlots, roomIdx, true,
+          { x: mr.cx, y: 0, z: mr.cz }, // face the table
         );
         showAnimatedTag(aid, { icon: '🚶', anim: 'bounce', color: '#5B8DEF', label: 'TO MEETING', durationFrames: 250 });
         seatIdx++;
@@ -6894,17 +7011,24 @@ Boss says: "${msg}"`;
       }
     };
 
+    // The trailing arguments matter as much as the leading ones: without
+    // meetingRoomSlots + the exempt index this pair never gets the door-aware
+    // approach the other meetings get, and without the face point they sit
+    // back-to-back instead of across the table from each other.
+    const tableCentre = { x: room.cx, y: 0, z: room.cz };
     sendWalkerToPoint(
       scene, walkers, srcId, seats[0], deskPos, roomMap, corGrid,
       agents, color, undefined, deskAabbs,
       'meeting', sittingWorkers, false,
       doorPoint, onArrive, false,
+      meetingRoomSlots, roomIdx, false, tableCentre,
     );
     sendWalkerToPoint(
       scene, walkers, tgtId, seats[1], deskPos, roomMap, corGrid,
       agents, color, undefined, deskAabbs,
       'meeting', sittingWorkers, false,
       doorPoint, onArrive, false,
+      meetingRoomSlots, roomIdx, false, tableCentre,
     );
     // Safety: if one walker never arrives (path-build failure, off-screen
     // cleanup) the seated one stays put forever. This hard ceiling guarantees
@@ -6924,15 +7048,21 @@ Boss says: "${msg}"`;
     const tableD = Math.min(mr.d * 0.3, 3);
     const seats: Array<{ x: number; y: number; z: number }> = [];
     const numPerSide = Math.max(2, Math.floor(tableW / 1.5));
-    // Seats along both long sides of the table
+    // HEAD SEATS FIRST. Callers hand out seats in participant order and the
+    // moderator is always participant 0, so whoever chairs the meeting takes
+    // seats[0]. With the head seats appended last, the chair sat in the middle
+    // of a long side like everyone else and the table had nobody at its head —
+    // for the cross-office coordination path, seats[0] and seats[1] are now
+    // the two heads, which face each other across the table exactly as that
+    // code already intended.
+    seats.push({ x: mr.cx - tableW / 2 - 0.6, y: 0, z: mr.cz });
+    seats.push({ x: mr.cx + tableW / 2 + 0.6, y: 0, z: mr.cz });
+    // Then along both long sides.
     for (let i = 0; i < numPerSide; i++) {
       const x = mr.cx - tableW / 2 + (tableW / (numPerSide + 1)) * (i + 1);
       seats.push({ x, y: 0, z: mr.cz - tableD / 2 - 0.6 }); // front side
       seats.push({ x, y: 0, z: mr.cz + tableD / 2 + 0.6 }); // back side
     }
-    // Head seats
-    seats.push({ x: mr.cx - tableW / 2 - 0.6, y: 0, z: mr.cz });
-    seats.push({ x: mr.cx + tableW / 2 + 0.6, y: 0, z: mr.cz });
     return seats;
   }
 
@@ -7140,7 +7270,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           <span class="boot-blip boot-blip-3"></span>
         </div>
         <div class="boot-info">
-          <div class="boot-title">mtw<span>Kernel</span></div>
+          <div class="boot-title"><span>Kernl</span></div>
           <div class="boot-sub">H&middot;Q&nbsp;&nbsp;T A C T I C A L&nbsp;&nbsp;U P L I N K</div>
           {#if bootError || dataError}
             <div class="boot-err">
@@ -7667,7 +7797,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           <button class="lm-close" on:click={() => { showLiveMeeting = false; showTranscriptBody = false; }} title="Close">✕</button>
         </div>
 
-        <div class="lm-transcript">
+        <div class="lm-transcript" bind:this={lmTranscriptEl}>
           {#if !showTranscriptBody}
             <button class="lm-show-btn" on:click={() => showTranscriptBody = true}>
               Mostrar {lm.turns.length} turn{lm.turns.length === 1 ? '' : 's'}
@@ -7687,7 +7817,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                 </div>
                 <div class="copy-wrap lm-turn-body-wrap">
                   <CopyTextBtn text={t.body} title="Copy message" />
-                  <div class="lm-turn-body ip-out-md">{@html formatRunOutput(t.body.length > 1500 ? t.body.slice(0, 1500) + '\n\n…(truncado)' : t.body)}</div>
+                  <div class="lm-turn-body ip-out-md">{@html formatRunOutput(t.body.length > 6000 ? t.body.slice(0, 6000) + '\n\n…(truncado)' : t.body)}</div>
                 </div>
               </div>
             {/each}
@@ -7699,13 +7829,13 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             {#if lm.decisions && lm.decisions.length > 0}
               <div class="lm-summary-h">✅ Decisions</div>
               <ul class="lm-summary-list">
-                {#each lm.decisions as d}<li>{d}</li>{/each}
+                {#each lm.decisions as d}<li>{@html formatInline(d)}</li>{/each}
               </ul>
             {/if}
             {#if lm.action_items && lm.action_items.length > 0}
               <div class="lm-summary-h">▶ Action items</div>
               <ul class="lm-summary-list">
-                {#each lm.action_items as a}<li>{a}</li>{/each}
+                {#each lm.action_items as a}<li>{@html formatInline(a)}</li>{/each}
               </ul>
             {/if}
           </div>
@@ -11600,9 +11730,18 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   /* ── Live agent meeting side panel — does NOT cover the 3D ────── */
   .lm-side-panel{
-    position:absolute; top:64px; right:14px; bottom:14px; z-index:50;
+    /* Flush with the top of the 3D viewport, matching the 14px side margin.
+       It used to sit at top:64px, which cleared nothing on this side — the
+       stats pills and the 2D/3D toggle live at the far LEFT — and just left a
+       band of empty floor between the nav and the modal. */
+    position:absolute; top:14px; right:14px; z-index:50;
     width:min(640px, 52vw);
     min-width:420px;
+    /* Fit the content, don't always span to the bottom of the viewport. The
+       panel was pinned top AND bottom, so a meeting with one short turn drew
+       a full-height box that was mostly dead space. It still cannot grow past
+       the viewport — beyond that the transcript scrolls. */
+    max-height:calc(100% - 28px);
     pointer-events:auto;
     animation:lm-side-in .25s ease-out;
     /* Establish a real flex parent so .live-meeting-modal can size its
@@ -11614,7 +11753,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     to   { opacity:1; transform:translateX(0); }
   }
   .live-meeting-modal{
-    width:100%; height:100%;
+    width:100%;
+    height:auto;        /* was 100% — that is what forced the empty space */
+    max-height:100%;
     min-height:0; /* allow flex children below to overflow:auto correctly */
     display:flex; flex-direction:column; padding:0;
     border:1px solid #2a2f4a; background:#0f1018;
@@ -11667,19 +11808,48 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .lm-close:hover{ color:#e7e9f4; }
 
   .lm-transcript{
-    flex:1 1 0; min-height:0; /* required so overflow-y:auto actually scrolls */
-    overflow-y:auto; padding:12px 16px;
+    /* `0` basis forced it to eat all remaining height; `auto` lets it size to
+       its turns and only start scrolling once the panel hits its ceiling. */
+    flex:0 1 auto; min-height:0; /* min-height:0 so overflow-y actually scrolls */
+    overflow-y:auto;
+    /* Reserve the scrollbar on both sides so the turn cards stay centred.
+       Without this the bar eats 8px on the right only, and the column of
+       cards sits visibly off-centre with a dead strip down the right edge. */
+    scrollbar-gutter:stable both-edges;
+    padding:12px 10px;
     display:flex; flex-direction:column; gap:12px;
     scroll-behavior:smooth;
   }
   .lm-transcript::-webkit-scrollbar{ width:8px; }
   .lm-transcript::-webkit-scrollbar-thumb{ background:#2a2f4a; border-radius:4px; }
   .lm-transcript::-webkit-scrollbar-thumb:hover{ background:#3a3f5a; }
+  /* Meeting banner mounted on the room's wall display. Bigger than the old
+     floating badge — it is far from the camera now, and it no longer sits
+     between the viewer and the table, so it can afford the size. */
+  .mtg-banner-wall{
+    transform: scale(1.75);
+    transform-origin: center center;
+  }
+  /* A new turn slides in instead of appearing, so a glance at the panel tells
+     you something just arrived even if you were reading further up. */
+  @keyframes lm-turn-in{
+    from{ opacity:0; transform:translateY(8px); }
+    to  { opacity:1; transform:none; }
+  }
+  .lm-turn{ animation: lm-turn-in .28s ease-out both; }
+  @media (prefers-reduced-motion: reduce){
+    .lm-turn{ animation:none; }
+  }
   .lm-empty{
     text-align:center; color:#6b7090; padding:24px 0;
     font:500 12px 'JetBrains Mono',monospace;
   }
   .lm-turn{
+    /* Grow to the content and let the PANEL scroll. As a plain flex child the
+       card was shrinking to whatever was left over and scrolling internally,
+       so a long turn got a cramped box with its own scrollbar while the rest
+       of the panel sat empty underneath it. */
+    flex:0 0 auto;
     border:1px solid #1f2236; border-left:3px solid #2a2f4a;
     border-radius:6px; padding:10px 12px; background:#13152099;
     animation:lm-turn-in .25s ease-out;
@@ -11698,6 +11868,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .lm-turn-body{
     font:400 13px/1.55 'Manrope',sans-serif; color:#cbd0e8;
     word-break:break-word;
+    /* No inner scroll: the transcript is the only scroller in this panel. */
+    max-height:none; overflow:visible;
   }
   .lm-turn-body :global(p.md-p){ margin:.4em 0; }
   .lm-turn-body :global(h3.md-h){ margin:.7em 0 .25em; font:700 13px 'Manrope',sans-serif; color:#e7e9f4; }

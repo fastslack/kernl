@@ -217,6 +217,22 @@ export async function initHttpAndMcp(args: {
         log.warn("Config: could not rehydrate stored settings", err);
       }
 
+      // Same trap, second setting: the language. `parseLanguage` ran against
+      // an environment that did not yet contain KERNEL_DEFAULT_LANGUAGE, so a
+      // language chosen through POST /api/config/language was live until the
+      // process died and then came back English — stored in app_settings the
+      // whole time, just never read back into `config`. Every agent prompt,
+      // notification and meeting turn follows `config.language`, so the whole
+      // fleet quietly answered in English on an instance set to Spanish.
+      const restoredLanguage = process.env.KERNEL_DEFAULT_LANGUAGE;
+      if (
+        (restoredLanguage === "es" || restoredLanguage === "en") &&
+        config.language !== restoredLanguage
+      ) {
+        config.language = restoredLanguage;
+        log.info(`Language restored from settings: ${restoredLanguage}`);
+      }
+
       // The config object was built from the environment BEFORE the block
       // above ran, so re-derive the chain and rebuild the singleton.
       try {
