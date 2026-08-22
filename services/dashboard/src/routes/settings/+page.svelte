@@ -583,6 +583,24 @@
     return row.capabilities?.tools !== false;
   }
 
+  /**
+   * Whether the provider ever claimed to expose tool calling.
+   *
+   * This separates two things the badge used to say with one word. A provider
+   * that declares `tools: false` is never handed a tool by the probe — see
+   * `test-providers.ts`, which asks it a plain question instead and then
+   * writes `toolCall: false` because nothing was tried, not because anything
+   * failed. Claude Code is the case: its SDK runs its own agent loop and does
+   * not surface raw tool calls to `chatCompletion`, so it cannot drive a
+   * native agent while running agents perfectly well through the
+   * `claude_code` executor. Reporting that identically to a provider that
+   * promised tools and then did not produce one reads as a fault, and it sent
+   * someone looking for a break that was not there.
+   */
+  function declaresTools(row: ProviderRow): boolean {
+    return row.capabilities?.tools !== false;
+  }
+
   // ── Can an agent actually run? ──────────────────────────────
   // The kernel's own verdict, from a real tool call. Read on load; the button
   // re-probes on demand because it spends a call.
@@ -706,17 +724,26 @@
     { status: 'ok' | 'warn' | 'error' | 'neutral'; label: string } {
     const tr = tests[testIdFor(row.slug)];
     if (isTesting && !tr) return { status: 'neutral', label: '…' };
-    // Reachable and still useless to a native agent. Claude Code sits here: it
-    // answers, so every connectivity check passed it, but it cannot execute a
-    // tool call — which is the whole job. Green was a lie; this is the truth.
-    if (tr?.ok && !runsTools(row, tests)) return { status: 'warn', label: $t('settings.ai.no_tools') };
+    // Reachable and still unable to drive a native agent — but say WHICH of
+    // the two reasons. By design (Claude Code: its SDK owns the tool loop) is
+    // a shape, not a fault, and it still runs agents under the claude_code
+    // executor. A provider that claimed tools and produced none is the fault.
+    if (tr?.ok && !runsTools(row, tests)) {
+      return declaresTools(row)
+        ? { status: 'warn', label: $t('settings.ai.no_tools') }
+        : { status: 'neutral', label: $t('settings.ai.tools_via_sdk') };
+    }
     if (tr?.ok) return { status: 'ok', label: $t('settings.ai.ready') };
     if (tr && !tr.ok && hasKey(row)) return { status: 'error', label: $t('settings.ai.error') };
     // Never configured is not broken. This branch used to sit below `row.error`,
     // so every provider you had simply not set up glowed red as a failure.
     if (!hasKey(row)) return { status: 'neutral', label: $t('settings.ai.no_key') };
     if (row.error) return { status: 'error', label: $t('settings.ai.error') };
-    if (!runsTools(row, tests)) return { status: 'warn', label: $t('settings.ai.no_tools') };
+    if (!runsTools(row, tests)) {
+      return declaresTools(row)
+        ? { status: 'warn', label: $t('settings.ai.no_tools') }
+        : { status: 'neutral', label: $t('settings.ai.tools_via_sdk') };
+    }
     return { status: 'warn', label: $t('settings.ai.configured') };
   }
 
@@ -1238,8 +1265,14 @@
                   {#if !runsTools(row)}
                     <!-- Says the quiet part where the operator is looking, and
                          not only in the pill: this provider passes a
-                         connectivity test and still cannot drive an agent. -->
-                    <p class="prov-note">{$t('settings.ai.agents_need_tools')}</p>
+                         connectivity test and still cannot drive a native
+                         agent. Which sentence depends on whether that is a
+                         fault or the provider's design — see `declaresTools`. -->
+                    <p class="prov-note" class:prov-note-info={!declaresTools(row)}>
+                      {declaresTools(row)
+                        ? $t('settings.ai.agents_need_tools')
+                        : $t('settings.ai.tools_in_sdk_note')}
+                    </p>
                   {/if}
                   <div class="prov-fields">
                     {#each (provEdits[row.slug] ? row.schema ?? [] : []) as f (f.key)}
@@ -1718,6 +1751,9 @@
     margin: 4px 0 0; max-width: 62ch;
     font: 400 11px/1.5 var(--font-sans, inherit); color: #e8c070;
   }
+  /* Amber is for "something is wrong here". A provider whose SDK owns the tool
+     loop is not wrong, so this reads as information rather than a warning. */
+  .prov-note-info { color: var(--text-2); }
 
   /* ── Card tabs ──
      Section-level. Same wrap rule as the provider strip: never scroll
