@@ -3,6 +3,7 @@
   import { modelIds } from '$lib/llm-models.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
   import SkillsHub from '$lib/components/SkillsHub.svelte';
+  import { SUGGESTED_SKILL_REPOS, isSubscribed, type SuggestedRepo } from '$lib/skill-repos.js';
 
   type ExtensionType =
     | 'module' | 'skill' | 'agent-bundle' | 'office' | 'flow'
@@ -82,6 +83,10 @@
 
   let search = '';
   let filterType: ExtensionType | '' = '';
+  /** Which Discover shelf is showing. Extensions first — see `discoverPool`. */
+  let discoverKind: 'ext' | 'skill' = 'ext';
+  /** Sort for the skills shelf. Category is the default now that it means something. */
+  let skillSort: 'category' | 'name' | 'source' = 'category';
   let filterStatus: ExtensionStatus | '' = '';
 
   let selected: ExtensionItem | null = null;
@@ -254,6 +259,10 @@
     catalog: CatalogEntry | null;
     error: string;
     provider: string;
+    /** Manifest category — for community skills this is the folder the author filed it under. */
+    category: string;
+    /** Human name of the repo it came from, for the "by source" grouping. */
+    sourceLabel: string;
   }
 
   let tab: Tab = 'discover';
@@ -505,7 +514,23 @@
       catalog: e,
       error: '',
       provider: e.origin?.provider ?? '',
+      category: e.manifest.category ?? '',
+      sourceLabel: repoLabelFor(e),
     };
+  }
+
+  /**
+   * The name the user gave the repository an item came from.
+   *
+   * The catalog carries the clone URL; `repos` carries the label. Falling back
+   * to the URL keeps the grouping honest for anything that arrived from a
+   * bundled or remote provider instead of a subscribed repo.
+   */
+  function repoLabelFor(e: CatalogEntry): string {
+    const url = (e.origin?.source as { url?: string } | undefined)?.url;
+    if (!url) return '';
+    const norm = (u: string) => u.trim().replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
+    return repos.find((r) => norm(r.url) === norm(url))?.name || url.replace(/^https?:\/\/(www\.)?/, '');
   }
 
   function installedToVM(x: ExtensionItem): CardVM {
@@ -529,6 +554,8 @@
       catalog: null,
       error: x.error,
       provider: 'installed',
+      category: x.manifest?.category ?? '',
+      sourceLabel: '',
     };
   }
 
@@ -573,8 +600,22 @@
         .sort((a, b) => (a.status === 'owned' ? -1 : b.status === 'owned' ? 1 : b.priceCents - a.priceCents))
     : [];
 
-  /** Everything free and not yet installed. */
-  $: freeCards = tab === 'discover' ? cards.filter((vm) => vm.status === 'available') : [];
+  /**
+   * Discover holds two populations that do not belong in one grid.
+   *
+   * Extensions add capability to Kernl and there are a few dozen of them.
+   * Skills are procedural markdown, and one subscribed community repository
+   * contributes hundreds — after five repos the catalog carried 437 items, of
+   * which 20 were extensions. Alphabetically interleaved, Event Notifier and
+   * Water Tracker sat under a wall of `ab-testing`, `academy-guide`,
+   * `adversarial-reviewer`: the thing Kernl does was buried by the thing it
+   * imported. A filter does not fix a bad default, so the two are separate
+   * shelves and extensions are the one you land on.
+   */
+  $: discoverPool = tab === 'discover' ? cards.filter((vm) => vm.status === 'available') : [];
+  $: extCards = discoverPool.filter((vm) => vm.type !== 'skill');
+  $: skillCards = discoverPool.filter((vm) => vm.type === 'skill');
+  $: freeCards = discoverKind === 'skill' ? skillCards : extCards;
 
   /**
    * How many paid items the license still doesn't cover. This — not "does a
@@ -597,6 +638,64 @@
    * which keeps one card implementation for every tab.
    */
   $: gridCards = tab === 'discover' ? freeCards : cards;
+
+  /**
+   * What the grid iterates: section headers interleaved with cards.
+   *
+   * One `{#each}` over a flat list, rather than a nested each per section —
+   * the card markup is ~90 lines and Svelte 4 has no snippets, so nesting
+   * would mean either duplicating it or extracting a component, and neither
+   * is worth it to draw a heading. Headers span the full grid row.
+   */
+  $: renderList =
+    tab === 'discover' && discoverKind === 'skill'
+      ? skillSections.flatMap((s) => [
+          ...(s.label ? [{ kind: 'head' as const, key: `head:${s.key}`, label: s.label, n: s.cards.length }] : []),
+          ...s.cards.map((vm) => ({ kind: 'card' as const, key: vm.key, vm })),
+        ])
+      : gridCards.map((vm) => ({ kind: 'card' as const, key: vm.key, vm }));
+
+  /** Human label for a category slug: `compliance-os` → `Compliance os`. */
+  function categoryLabel(c: string): string {
+    const s = (c || 'uncategorised').replace(/[-_]+/g, ' ').trim();
+    return s.charAt(0).toUpperCase() + s.slice(1);
+  }
+
+  /**
+   * The skills shelf, cut into sections.
+   *
+   * Grouping only became possible once the catalog stopped defaulting every
+   * community skill to `category: "community"` — 433 of 565 items shared that
+   * one value, so a category filter sorted nothing. The categories now come
+   * from the folder each author filed the skill under.
+   *
+   * Sorting by name or source collapses to a single unnamed section, so the
+   * same block renders every mode and only the grouping key changes.
+   */
+  $: skillSections = (() => {
+    if (tab !== 'discover' || discoverKind !== 'skill') return [];
+    const keyOf = (vm: (typeof gridCards)[number]) =>
+      skillSort === 'source' ? (vm.sourceLabel || 'Unknown source') : (vm.category || 'uncategorised');
+    if (skillSort === 'name') {
+      return [{ key: '', label: '', cards: [...gridCards].sort((a, b) => a.name.localeCompare(b.name)) }];
+    }
+    const buckets = new Map<string, typeof gridCards>();
+    for (const vm of gridCards) {
+      const k = keyOf(vm);
+      const list = buckets.get(k);
+      if (list) list.push(vm);
+      else buckets.set(k, [vm]);
+    }
+    return [...buckets.entries()]
+      // Biggest section first: with 44 categories, alphabetical opens on
+      // whatever happens to start with "a" rather than on the bulk of them.
+      .sort((a, b) => b[1].length - a[1].length || a[0].localeCompare(b[0]))
+      .map(([key, list]) => ({
+        key,
+        label: skillSort === 'source' ? key : categoryLabel(key),
+        cards: list.sort((a, b) => a.name.localeCompare(b.name)),
+      }));
+  })();
 
   /** Split a formatted price into currency symbol and digits for the big numeral. */
   function priceParts(cents: number, currency: string): { sym: string; num: string } {
@@ -739,17 +838,37 @@
       });
       const body = await r.json();
       if (!r.ok || !body.success) throw new Error(body.error ?? `HTTP ${r.status}`);
+      await fetchRepos();
+      await fetchList();
+      // A repo that cloned cleanly and yielded nothing is the likeliest way
+      // to end up here confused: the request succeeded, the list grew, and
+      // the catalog looks identical. It is almost always an index — an
+      // "awesome" README linking to skills that live somewhere else — so say
+      // that instead of closing on a silent no-op.
+      if ((body.repo?.items_found ?? 0) === 0) {
+        repoError =
+          'Subscribed, but no skills were found. This repo has no SKILL.md folders — ' +
+          'it may be an index that links to skills hosted in other repositories.';
+        return;
+      }
       newRepoUrl = '';
       newRepoRef = '';
       newRepoName = '';
       showAddRepo = false;
-      await fetchRepos();
-      await fetchList();
     } catch (e) {
       repoError = (e as Error).message;
     } finally {
       addingRepo = false;
     }
+  }
+
+  /** One-click subscribe for a curated row. Reuses addRepo so there is a
+   *  single code path for cloning, error handling and refresh. */
+  async function addSuggested(s: SuggestedRepo): Promise<void> {
+    newRepoUrl = s.url;
+    newRepoRef = '';
+    newRepoName = s.name;
+    await addRepo();
   }
 
   async function syncRepo(id: string): Promise<void> {
@@ -1708,6 +1827,31 @@
         </button>
       </div>
     </div>
+
+    <!-- Known-good repos, so an empty catalog is one click from filling up
+         rather than a URL you have to already know. Every row was scanned
+         before it shipped; see $lib/skill-repos.ts. -->
+    <div class="addrepo-known">
+      <span class="addrepo-known-sep">or pick a known one</span>
+      <ul class="addrepo-known-list">
+        {#each SUGGESTED_SKILL_REPOS as s (s.url)}
+          {@const already = isSubscribed(s, repos)}
+          <li class="known-row" class:known-row-on={already}>
+            <div class="known-text">
+              <span class="known-name">{s.name}</span>
+              <span class="known-count">~{s.items} skills</span>
+              <span class="known-blurb">{s.blurb}</span>
+            </div>
+            <button
+              class="known-add"
+              on:click={() => addSuggested(s)}
+              disabled={addingRepo || already}
+              title={already ? 'Already subscribed' : `Subscribe ${s.url}`}
+            >{already ? 'added' : '+ add'}</button>
+          </li>
+        {/each}
+      </ul>
+    </div>
   </aside>
 {/if}
 
@@ -1893,11 +2037,34 @@
     </section>
   {/if}
 
-  {#if tab === 'discover' && gridCards.length > 0}
+  {#if tab === 'discover' && (extCards.length > 0 || skillCards.length > 0)}
     <header class="sec-head anim d1">
       <span class="sec-rule" aria-hidden="true"></span>
-      <h2 class="sec-title">Free</h2>
-      <span class="sec-n">{gridCards.length}</span>
+      <!-- Two shelves, not a filter over one list: extensions are what Kernl
+           runs, skills are imported markdown, and a subscribed repo can put
+           hundreds of the latter in front of the former. -->
+      <div class="shelf-seg" role="tablist" aria-label="Discover shelf">
+        <button
+          role="tab" aria-selected={discoverKind === 'ext'}
+          class="shelf-tab" class:shelf-tab-on={discoverKind === 'ext'}
+          on:click={() => (discoverKind = 'ext')}
+        >Extensions <span class="shelf-n">{extCards.length}</span></button>
+        <button
+          role="tab" aria-selected={discoverKind === 'skill'}
+          class="shelf-tab" class:shelf-tab-on={discoverKind === 'skill'}
+          on:click={() => (discoverKind = 'skill')}
+        >Skills <span class="shelf-n">{skillCards.length}</span></button>
+      </div>
+      {#if discoverKind === 'skill' && skillCards.length > 0}
+        <label class="shelf-sort">
+          <span>group by</span>
+          <select bind:value={skillSort}>
+            <option value="category">category</option>
+            <option value="source">source repo</option>
+            <option value="name">name only</option>
+          </select>
+        </label>
+      {/if}
       {#if hiddenInstalled > 0}
         <button class="sec-link" on:click={() => switchTab('installed')}>
           {hiddenInstalled} already installed — hidden
@@ -1907,7 +2074,15 @@
   {/if}
 
   <div class="grid anim d1">
-    {#each gridCards as vm (vm.key)}
+    {#each renderList as row (row.key)}
+    {#if row.kind === 'head'}
+      <h3 class="grid-sec">
+        <span class="grid-sec-name">{row.label}</span>
+        <span class="grid-sec-n">{row.n}</span>
+        <span class="grid-sec-rule" aria-hidden="true"></span>
+      </h3>
+    {:else}
+      {@const vm = row.vm}
       {@const meta = metaOf(vm.type)}
       {@const act = actionFor(vm)}
       {@const purchase = purchases[vm.slug]}
@@ -1998,6 +2173,7 @@
           <div class="card-error-msg">⚠︎ {vm.error}</div>
         {/if}
       </article>
+    {/if}
     {/each}
   </div>
 {/if}
@@ -4318,7 +4494,12 @@
     border: 1px solid var(--border);
     border-radius: 14px;
     padding: 22px 24px;
-    z-index: 100;
+    /* Above `.drawer-scrim` (300), below `.drawer` (400). The scrim was built
+       for the drawer and this modal borrows it; at the 100 it used to carry,
+       the scrim painted its 60% black and 4px blur straight over the dialog —
+       and, because the scrim closes on click and covers the viewport, ate
+       every click meant for the URL field and the subscribe button. */
+    z-index: 310;
     box-shadow: 0 20px 60px rgba(0,0,0,0.6);
   }
   .addrepo-head {
@@ -4363,6 +4544,92 @@
   .addrepo-actions {
     display: flex; gap: 8px; justify-content: flex-end; margin-top: 6px;
   }
+
+  /* ── Discover shelves + section headings ────────────────────────── */
+  .shelf-seg {
+    display: inline-flex; gap: 2px; padding: 2px;
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px;
+  }
+  .shelf-tab {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 4px 11px; border: 0; border-radius: 6px;
+    background: transparent; color: var(--text-2);
+    font-size: 12px; cursor: pointer;
+    transition: background .14s, color .14s;
+  }
+  .shelf-tab:hover { color: var(--text-1); }
+  .shelf-tab-on { background: var(--surface-1); color: var(--text-1); box-shadow: 0 1px 3px rgba(0,0,0,.35); }
+  .shelf-n {
+    font-family: var(--font-mono, monospace); font-size: 10px;
+    color: var(--text-3, var(--text-2));
+  }
+  .shelf-tab-on .shelf-n { color: var(--gold); }
+  .shelf-sort {
+    display: inline-flex; align-items: center; gap: 6px;
+    font-size: 11px; color: var(--text-2); margin-left: 10px;
+  }
+  .shelf-sort select {
+    background: var(--surface-2); color: var(--text-1);
+    border: 1px solid var(--border); border-radius: 6px;
+    padding: 3px 6px; font-size: 11.5px;
+  }
+  /* Full-width heading inside the card grid. */
+  .grid-sec {
+    grid-column: 1 / -1;
+    display: flex; align-items: center; gap: 9px;
+    margin: 14px 0 0; font-size: 12px; font-weight: 600;
+    color: var(--text-1); letter-spacing: .02em;
+  }
+  .grid-sec:first-child { margin-top: 0; }
+  .grid-sec-n {
+    font-family: var(--font-mono, monospace); font-size: 10px; color: var(--gold);
+    border: 1px solid color-mix(in srgb, var(--gold) 28%, transparent);
+    border-radius: 4px; padding: 0 5px;
+  }
+  .grid-sec-rule { flex: 1; height: 1px; background: var(--border); }
+
+  /* ── Suggested repos ────────────────────────────────────────────── */
+  .addrepo-known { margin-top: 18px; }
+  /* Rule that runs through the label, rather than a heading — this is a
+     shortcut past the field above, not a second section of the form. */
+  .addrepo-known-sep {
+    display: flex; align-items: center; gap: 10px;
+    font-size: 10.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--text-3, var(--text-2)); margin-bottom: 10px;
+  }
+  .addrepo-known-sep::before, .addrepo-known-sep::after {
+    content: ''; flex: 1; height: 1px; background: var(--border);
+  }
+  .addrepo-known-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+  .known-row {
+    display: flex; align-items: center; gap: 12px;
+    padding: 9px 11px;
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    transition: border-color .14s, background .14s;
+  }
+  .known-row:hover:not(.known-row-on) { border-color: color-mix(in srgb, var(--gold) 45%, var(--border)); }
+  .known-row-on { opacity: .55; }
+  .known-text { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; min-width: 0; }
+  .known-name { font-size: 12.5px; color: var(--text-1); font-weight: 600; }
+  .known-count {
+    font-size: 10.5px; color: var(--gold);
+    font-family: var(--font-mono, monospace);
+    border: 1px solid color-mix(in srgb, var(--gold) 30%, transparent);
+    border-radius: 4px; padding: 0 5px;
+  }
+  .known-blurb { flex-basis: 100%; font-size: 11.5px; color: var(--text-2); line-height: 1.45; }
+  .known-add {
+    flex: none; margin-left: auto; align-self: center;
+    padding: 5px 12px;
+    background: transparent; color: var(--text-2);
+    border: 1px solid var(--border); border-radius: 6px;
+    font-size: 11.5px; cursor: pointer;
+    transition: border-color .14s, color .14s, background .14s;
+  }
+  .known-add:hover:not(:disabled) { border-color: var(--gold); color: var(--gold); background: color-mix(in srgb, var(--gold) 10%, transparent); }
+  .known-add:disabled { cursor: default; opacity: .7; }
 
   .btn-install-ghost {
     background: transparent;
