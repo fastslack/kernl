@@ -352,6 +352,7 @@ export async function initMtw(args: {
     "agent:flow:meeting_requested",
     "agent:flow:meeting_started",
     "agent:flow:meeting_turn",
+    "agent:flow:meeting_thinking",
     "agent:flow:meeting_ended",
     "agent:flow:agent_edited",
     "agent:flow:escalation",

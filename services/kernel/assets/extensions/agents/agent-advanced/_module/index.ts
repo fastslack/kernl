@@ -237,6 +237,10 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
         service,
         events: ctx.events,
         meetingExecutor: meetingExecutorRef,
+        // Read at call time, not captured: the operator can flip the system
+        // language at runtime via POST /api/config/language and the next run
+        // has to pick it up.
+        getLanguage: () => ctx.config.language,
       });
     },
 

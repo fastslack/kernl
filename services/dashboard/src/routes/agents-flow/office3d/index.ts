@@ -1,3 +1,5 @@
+export { paintMeetingScreen, clearMeetingScreen, type MeetingScreenHandle, type MeetingScreenContent } from './office/meeting-rooms.js';
+export { buildNameplate, NAMEPLATE_HEIGHT, type NameplateOpts, type NameplateRank } from './nameplate.js';
 export { computeFloorPlan, nearestCorridorNode, type CorridorGrid, type CorridorSegment } from './floor-plan.js';
 export { initHumanoid, createHumanoid, animateWalk, animateRun, animateSitting } from './humanoid.js';
 export { initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool } from './humanoid-pool.js';

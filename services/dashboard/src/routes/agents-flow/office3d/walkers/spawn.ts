@@ -16,6 +16,10 @@ import {
   nearestHCorrZ,
   nearestVCorrX,
   nearestVCorrXBetween,
+  exitViaDoor,
+  enterViaDoor,
+  rectAsRoom,
+  meetingTableAabb,
 } from './pathfinding.js';
 
 // Local helper — resolve the agent's skin from the shared registry, then
@@ -274,12 +278,20 @@ export function sendWalkerToPoint(
   const deskObstacles: Aabb2D[] = deskAabbs
     ? Array.from(deskAabbs.values()).filter(b => b.agentId !== srcId)
     : [];
+  // The table inside the room we are walking INTO is solid. Every other
+  // meeting room is already excluded wholesale by meetingRoomAabbs, so only
+  // the exempt one needs its furniture spelled out.
+  const exemptSlot =
+    meetingRoomObstacles && meetingRoomObstacleExempt !== undefined && meetingRoomObstacleExempt >= 0
+      ? meetingRoomObstacles[meetingRoomObstacleExempt]
+      : undefined;
   const obstacles: Aabb2D[] = [
     ...deskObstacles,
     ...roomAabbs(rooms, new Set([srcRoom, targetRoom])),
     ...(meetingRoomObstacles
       ? meetingRoomAabbs(meetingRoomObstacles, meetingRoomObstacleExempt ?? -1)
       : []),
+    ...(exemptSlot ? [meetingTableAabb(exemptSlot)] : []),
   ];
 
   // Build path: desk → door → corridor → target point (using real corridor positions)
@@ -291,16 +303,24 @@ export function sendWalkerToPoint(
     const srcDoorX = (srcRoom as any).doorX ?? srcRoom.cx;
     const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
 
-    // Inside room → walk to door
-    pts.push({ x: srcDoorX, y: 0, z: from.z });
-    pts.push({ x: srcDoorX, y: 0, z: srcDoorZ });
+    // Inside room → line up on the opening → out through the door. This used
+    // to be a hardcoded X-first L-shape, which is only correct for a door on
+    // a ±Z wall. Six of the nine offices on the live floor have side doors,
+    // and their desks sit further off-centre than the opening is wide, so
+    // every walker leaving one of them stepped through solid wall.
+    pts.push(...exitViaDoor(from, srcRoom));
 
     // Step into nearest corridor
     const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, corridorGrid);
     pts.push({ ...srcCorrNode });
 
-    // Walk corridors to target
-    const tgtCorrNode = nearestCorridorNode(targetPoint, corridorGrid);
+    // Walk corridors to target. Aim at the DOORWAY, not at the destination
+    // itself: picking the corridor node nearest the seat can land the walker
+    // on the far side of the room from its only door, and the leg from there
+    // to the doorway then cuts back across the room. buildPath has always
+    // aimed at the door; this one aimed at the target.
+    const approach = viaPoint ?? targetPoint;
+    const tgtCorrNode = nearestCorridorNode(approach, corridorGrid);
     if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1 || Math.abs(srcCorrNode.z - tgtCorrNode.z) > 1) {
       const srcHZ = nearestHCorrZ(srcCorrNode.z, corridorGrid);
       const tgtHZ = nearestHCorrZ(tgtCorrNode.z, corridorGrid);
@@ -319,11 +339,31 @@ export function sendWalkerToPoint(
     }
     pts.push({ ...tgtCorrNode });
   }
-  // Door waypoint — when entering a meeting room, route via the door so the
-  // path doesn't cut through walls. The viaPoint should be the room's door
-  // midpoint (just outside, then we step inside before reaching the seat).
-  if (viaPoint) {
-    pts.push({ ...viaPoint });
+  // Getting IN is the same problem as getting out, and it was never solved
+  // here at all: the path went corridor → destination in one straight shot.
+  // For anything sitting inside an office — the power console in the data
+  // centre, a visitor's chair — that shot crosses the office wall wherever it
+  // happens to land. Route through that room's own door instead.
+  if (targetRoom) {
+    pts.push(...enterViaDoor(targetPoint, targetRoom));
+  } else if (viaPoint) {
+    // Meeting rooms aren't in the `rooms` map — they hand us their door
+    // midpoint instead. Wrap the slot so the walker gets the same treatment
+    // an office gets: square up on the doorway, step through, and only then
+    // turn toward the seat. Dropping the raw door point in and heading
+    // straight for the chair leaves on a diagonal that scrapes the wall.
+    const slot =
+      meetingRoomObstacles && meetingRoomObstacleExempt !== undefined && meetingRoomObstacleExempt >= 0
+        ? meetingRoomObstacles[meetingRoomObstacleExempt]
+        : undefined;
+    if (slot) {
+      // stopInsideDoor: the table sits on the room's centreline, so the
+      // generic slide waypoint would land on it. Stop at the doorway and
+      // let the avoidance pass walk around the table to the chair.
+      pts.push(...enterViaDoor(targetPoint, rectAsRoom(slot, viaPoint), { stopInsideDoor: true }));
+    } else {
+      pts.push({ ...viaPoint });
+    }
   }
   pts.push({ ...targetPoint });
 
@@ -464,16 +504,7 @@ export function sendCommuteWalker(opts: CommuteWalkerOpts): void {
   if (opts.corridorGrid.segments.length > 0) {
     const srcDoorX = (srcRoom as any).doorX ?? srcRoom.cx;
     const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
-    const srcDoorDir = (srcRoom as any).doorDir;
-    // Mirror buildPath: ±X doors must align Z first to exit through the
-    // opening, ±Z doors align X first. Going through the wall otherwise.
-    if (srcDoorDir === 'left' || srcDoorDir === 'right') {
-      pts.push({ x: desk.x, y: 0, z: srcDoorZ });
-      pts.push({ x: srcDoorX, y: 0, z: srcDoorZ });
-    } else {
-      pts.push({ x: srcDoorX, y: 0, z: desk.z });
-      pts.push({ x: srcDoorX, y: 0, z: srcDoorZ });
-    }
+    pts.push(...exitViaDoor(desk, srcRoom));
     const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, opts.corridorGrid);
     pts.push({ ...srcCorrNode });
 

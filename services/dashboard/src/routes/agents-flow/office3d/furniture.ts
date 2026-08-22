@@ -1,6 +1,6 @@
 /** Build desks, chairs, monitors, and seated workers */
 
-import { esc } from './esc.js';
+import { buildNameplate, NAMEPLATE_HEIGHT } from './nameplate.js';
 import type { AgentData, Vec3, HumanoidParts, Aabb2D, RankData } from './types.js';
 import { resolveFlowColor, type FlowData } from './types.js';
 import type { SittingHumanoidPool } from './humanoid-pool.js';
@@ -441,74 +441,21 @@ export function buildDesks(
     const zBack = S * 0.9 + 0.25;
     deskAabbs.set(agent.id, { minX: pos.x - sx, maxX: pos.x + sx, minZ: pos.z - zFront, maxZ: pos.z + zBack, agentId: agent.id });
 
-    // Nameplate — insignia (rank icon only, no rank name text) + agent name.
-    // Previously rendered an UPPERCASE rank-name line above
-    // the agent name; visually that read as a duplicate title alongside the
-    // agent-name chip. Insignia stars carry the rank info on their own.
+    // Nameplate — built by the shared builder so the desks and the top
+    // agent's office render the same chip. See office3d/nameplate.ts.
     const rank = agent.rank_id ? ranksById.get(agent.rank_id) : undefined;
-    const nd = document.createElement('div');
-    nd.className = 'agent-nameplate';   // tag so buildDesks can wipe stale copies
-    let insigniaHtml = '';
-    let labelHeight = 2.5;
-    if (rank) {
-      // Level 1→11 maps to ~7→18 px for the insignia.
-      const size = Math.max(7, 6 + Math.min(rank.level, 12) * 1.0);
-      // text-shadow is a SINGLE subtle drop shadow now — the previous 3-layer
-      // stack (8px color glow + 2px black inner + 1px drop) created a visible
-      // duplicate-looking halo when the inner wrapper was scaled up by CSS
-      // transform on close-up zoom (the color glow rendered as a "second
-      // smaller logo behind" the main insignia).
-      insigniaHtml =
-        `<div style="font:900 ${size}px 'Manrope',sans-serif;color:${rank.color};` +
-        `text-shadow:0 1px 2px rgba(0,0,0,0.85);` +
-        `letter-spacing:0;line-height:1;margin-bottom:2px;" title="${esc(rank.name)}">${esc(rank.insignia)}</div>`;
-      // Slight raise so the badge doesn't clip into the humanoid's head
-      labelHeight = 2.6 + Math.min(rank.level, 12) * 0.03;
-    }
-    // Pending-approval pill — shown above the agent name when the agent is
-    // inactive AND was likely created automatically (active=0 + worker spawned
-    // by a manager). We can't distinguish "freshly spawned, awaits approval"
-    // from "paused by user" perfectly without a separate column, but the badge
-    // still works as "this agent is dormant — click to do something with it".
-    const pendingBadge = !isActive
-      ? `<div style="display:inline-block;background:#facc15;color:#1a1a1a;` +
-        `font:700 8px 'Manrope',sans-serif;letter-spacing:0.4px;` +
-        `padding:1px 6px;border-radius:3px;margin-bottom:2px;` +
-        `box-shadow:0 0 6px rgba(250,204,21,0.6);` +
-        `text-shadow:none">PENDING</div>`
-      : '';
-    // Revision pill — orthogonal to PENDING. Set when the agent is flagged
-    // for human review (consolidation, deprecation, etc.). Orange to read
-    // against the rest of the 3D office palette.
-    const revisionBadge = (agent as { under_revision?: number }).under_revision
-      ? `<div style="display:inline-block;background:#fb923c;color:#1a1a1a;` +
-        `font:700 8px 'Manrope',sans-serif;letter-spacing:0.4px;` +
-        `padding:1px 6px;border-radius:3px;margin-bottom:2px;margin-left:3px;` +
-        `box-shadow:0 0 6px rgba(251,146,60,0.65);` +
-        `text-shadow:none">REVISION</div>`
-      : '';
-    // Status dot (green=active / grey=inactive) before the name + a power
-    // chip ⏻ after it. The chip is hidden by default and revealed on hover /
-    // selection by the parent (updatePowerChips); pointer-events:auto lets it
-    // receive DOM clicks even though the CSS2D layer is pointer-events:none.
-    // The parent wires a delegated click handler keyed on data-agent.
-    const dot =
-      `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;vertical-align:middle;` +
-      `margin-right:5px;background:${isActive ? '#3dd68c' : '#6b7088'};` +
-      `box-shadow:${isActive ? '0 0 5px #3dd68c' : 'none'}"></span>`;
-    const powerChip =
-      `<button class="dl-power" data-agent="${agent.id}" data-active="${isActive ? 1 : 0}" ` +
-      `title="${isActive ? 'Deactivate agent' : 'Activate agent'}" ` +
-      `style="pointer-events:auto;cursor:pointer;display:none;margin-left:7px;vertical-align:middle;` +
-      `border:none;border-radius:4px;padding:1px 6px;font:700 10px 'Manrope',sans-serif;` +
-      `background:${isActive ? 'rgba(239,68,68,0.18)' : 'rgba(61,214,140,0.20)'};` +
-      `color:${isActive ? '#ff6b6b' : '#3dd68c'};">⏻</button>`;
-    nd.innerHTML =
-      `<div style="text-align:center">${pendingBadge}${revisionBadge}${insigniaHtml}` +
-      `<div style="font:600 10px 'Manrope',sans-serif;color:${isActive ? '#e0e2ea' : '#9097a8'};white-space:nowrap;` +
-      `text-shadow:0 1px 3px rgba(0,0,0,0.8);background:rgba(13,15,24,${isActive ? '0.65' : '0.45'});padding:2px 8px;` +
-      `border-radius:3px;border-bottom:2px solid ${rank?.color ?? color + (isActive ? '50' : '25')};` +
-      `opacity:${isActive ? 1 : 0.7}">${dot}${esc(agent.name)}${powerChip}</div></div>`;
+    const nd = buildNameplate({
+      agentId: agent.id,
+      name: agent.name,
+      color,
+      active: isActive,
+      rank: rank
+        ? { name: rank.name, color: rank.color, insignia: rank.insignia, level: rank.level }
+        : undefined,
+      underRevision: !!(agent as { under_revision?: number }).under_revision,
+      powerChip: true,
+    });
+    const labelHeight = NAMEPLATE_HEIGHT;
     const nl = new CSS2DObject(nd);
     nl.userData.isNameplate = true;   // marker for the purge at the top of buildDesks
     nl.position.set(pos.x, labelHeight, pos.z);

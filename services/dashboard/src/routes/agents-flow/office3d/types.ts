@@ -134,7 +134,12 @@ export interface FloorPlan {
 }
 
 export interface SpeechBubble {
-  div: HTMLDivElement; label: any; age: number; maxAge: number;
+  div: HTMLElement;
+  /** CSS2DObject when the tag was its own scene node. Null now that the tag
+   *  lives inside the agent's nameplate chip. */
+  label: any | null;
+  age: number;
+  maxAge: number;
 }
 
 export const FLOW_COLORS = [

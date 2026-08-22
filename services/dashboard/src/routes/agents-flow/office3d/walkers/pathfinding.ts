@@ -47,20 +47,9 @@ export function buildPath(
     const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
     const tgtDoorX = (tgtRoom as any).doorX ?? tgtRoom.cx;
     const tgtDoorZ = (tgtRoom as any).doorCZ ?? tgtRoom.doorZ;
-    const srcDoorDir = (srcRoom as any).doorDir;
-    const tgtDoorDir = (tgtRoom as any).doorDir;
 
-    // 1. Inside source room → walk to door.
-    //    If the door is on a ±X wall (left/right), align Z first so we exit
-    //    THROUGH the door opening instead of grazing the wall at some random Z.
-    //    For ±Z walls (top/bottom), the original X-first L-shape is correct.
-    if (srcDoorDir === 'left' || srcDoorDir === 'right') {
-      pts.push({ x: from.x, y: 0, z: srcDoorZ }); // align to door Z first
-      pts.push({ x: srcDoorX, y: 0, z: srcDoorZ }); // exit through door
-    } else {
-      pts.push({ x: srcDoorX, y: 0, z: from.z }); // align to door X first
-      pts.push({ x: srcDoorX, y: 0, z: srcDoorZ }); // exit through door
-    }
+    // 1. Inside source room → line up on the opening → out through the door.
+    pts.push(...exitViaDoor(from, srcRoom));
 
     // 2. Step out into nearest corridor
     const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, grid);
@@ -92,20 +81,12 @@ export function buildPath(
     // 4. Approach target door from corridor
     pts.push({ ...tgtCorrNode });
 
-    // 5. Enter through the target door
-    pts.push({ x: tgtDoorX, y: 0, z: tgtDoorZ });
-
-    // 6. Walk to desk inside target room.
-    //    Mirror of step 1: for X-side doors (left/right), move X inside the
-    //    room first, then Z to the desk. For Z-side doors (top/bottom), the
-    //    original Z-first order is correct.
-    if (tgtDoorDir === 'left' || tgtDoorDir === 'right') {
-      pts.push({ x: to.x, y: 0, z: tgtDoorZ });
-      pts.push({ ...to });
-    } else {
-      pts.push({ x: to.x, y: 0, z: tgtDoorZ });
-      pts.push({ ...to });
-    }
+    // 5 + 6. In through the target door, then along the inside of the room to
+    //        the desk. Both branches of the old code were identical and both
+    //        slid along X at the wall's own Z — i.e. inside the wall — for a
+    //        top/bottom door. enterViaDoor crosses perpendicular instead.
+    pts.push(...enterViaDoor(to, tgtRoom));
+    pts.push({ ...to });
   } else {
     pts.push({ ...to });
   }
@@ -123,8 +104,196 @@ export function buildPath(
   return avoidDesks(clean, obstacles);
 }
 
+// ── Doors ────────────────────────────────────────────────────────────────
+//
+// Everything about walking through a doorway lives here, in ONE place, because
+// it did not used to. The same "leave your office" routing was written out by
+// hand in three different builders (buildPath, sendWalkerToPoint, and the
+// arrive/leave commuter), and only two of them ever learned that a door on a
+// ±X wall has to be approached by aligning Z first. The third kept marching
+// straight out sideways at whatever Z the desk happened to sit at, which on
+// the live floor plan — 6 of 9 offices have side doors, desks 2.25 units off
+// centre, opening only ±1.25 wide — means walking out through solid wall.
+// Fixing one copy always left the others, which is why this bug kept coming
+// back. Route through these helpers; never hand-roll the door leg again.
+
+/** Half-width of the gap the wall builder cuts. Mirrors `doorW / 2` in office/rooms.ts. */
+export const DOOR_HALF = 1.25;
+
+/** How far past the wall face the doorstep waypoint sits, so the corridor leg
+ *  starts clear of the wall instead of turning while still inside it. */
+const DOORSTEP = 1.0;
+
+type DoorDir = 'left' | 'right' | 'top' | 'bottom';
+
+interface DoorGeom {
+  dir: DoorDir;
+  /** Point dead centre of the opening, on the wall plane. */
+  x: number;
+  z: number;
+  /** Outward normal (+1/-1) along the door's axis. */
+  out: number;
+  /** True when the door is on a ±X wall, so the walker crosses in X. */
+  sideways: boolean;
+}
+
+function doorGeom(room: RoomInfo): DoorGeom {
+  const r = room as unknown as { doorDir?: DoorDir; doorX?: number; doorCZ?: number; side?: number };
+  const dir: DoorDir = r.doorDir ?? (r.side === 1 ? 'top' : 'bottom');
+  const sideways = dir === 'left' || dir === 'right';
+  return {
+    dir,
+    x: r.doorX ?? room.cx,
+    z: r.doorCZ ?? room.doorZ,
+    out: dir === 'right' || dir === 'top' ? 1 : -1,
+    sideways,
+  };
+}
+
+/** The span of floor the doorway actually leaves open, on the wall it sits in. */
+export function doorOpening(room: RoomInfo): { minX: number; maxX: number; minZ: number; maxZ: number } {
+  const d = doorGeom(room);
+  return d.sideways
+    ? { minX: d.x, maxX: d.x, minZ: d.z - DOOR_HALF, maxZ: d.z + DOOR_HALF }
+    : { minX: d.x - DOOR_HALF, maxX: d.x + DOOR_HALF, minZ: d.z, maxZ: d.z };
+}
+
+/**
+ * Waypoints taking a walker from an interior point out through its own door,
+ * ending one step outside the wall. Does NOT include `from`.
+ *
+ * The order is what matters: line up on the door's centreline while still
+ * inside the room, and only then cross. Crossing first and sliding along the
+ * wall afterwards is the same thing as walking through it.
+ */
+export function exitViaDoor(from: Vec3, room: RoomInfo): Vec3[] {
+  const d = doorGeom(room);
+  if (d.sideways) {
+    return [
+      { x: from.x, y: 0, z: d.z },                    // align to the opening, inside
+      { x: d.x, y: 0, z: d.z },                       // through the gap
+      { x: d.x + d.out * DOORSTEP, y: 0, z: d.z },    // doorstep, clear of the wall
+    ];
+  }
+  return [
+    { x: d.x, y: 0, z: from.z },
+    { x: d.x, y: 0, z: d.z },
+    { x: d.x, y: 0, z: d.z + d.out * DOORSTEP },
+  ];
+}
+
+/**
+ * Mirror of `exitViaDoor` for arriving: from the doorstep, through the gap,
+ * then along the inside of the room until it is lined up with `to`. Does NOT
+ * include `to` — append it yourself.
+ */
+export function enterViaDoor(
+  to: Vec3,
+  room: RoomInfo,
+  opts: {
+    /**
+     * Stop one step inside the doorway instead of sliding across the room to
+     * line up with `to`. Use it when the room has furniture in the middle: the
+     * slide waypoint aims at the room's own centreline, which in a meeting
+     * room is the table — and a waypoint sitting ON an obstacle breaks the
+     * avoidance pass, which assumes its endpoints are clear. Stopping at the
+     * door hands a clean start point to `avoidDesks`, which then walks around
+     * the table on its own.
+     */
+    stopInsideDoor?: boolean;
+  } = {},
+): Vec3[] {
+  const d = doorGeom(room);
+  const legs: Vec3[] = d.sideways
+    ? [
+        { x: d.x + d.out * DOORSTEP, y: 0, z: d.z },
+        { x: d.x, y: 0, z: d.z },
+        { x: d.x - d.out * DOORSTEP, y: 0, z: d.z },  // one step inside
+      ]
+    : [
+        { x: d.x, y: 0, z: d.z + d.out * DOORSTEP },
+        { x: d.x, y: 0, z: d.z },
+        { x: d.x, y: 0, z: d.z - d.out * DOORSTEP },
+      ];
+  if (opts.stopInsideDoor) return legs;
+  // Otherwise line up with the destination before the caller appends it.
+  legs.push(d.sideways ? { x: to.x, y: 0, z: d.z } : { x: d.x, y: 0, z: to.z });
+  return legs;
+}
+
+/**
+ * Wrap a bare rectangle (a meeting-room slot) as something `exitViaDoor` /
+ * `enterViaDoor` can route through, given the door's midpoint on one of its
+ * walls.
+ *
+ * Meeting rooms are cut a 2.5-wide doorway just like offices are
+ * (office/meeting-rooms.ts, `addWallWithDoor`), on whichever wall faces the
+ * central hall. But they live in their own `meetingRooms` array instead of the
+ * `rooms` map, so none of the door-aware routing applied to them and every
+ * attendee approached their seat on a diagonal straight from the doorway —
+ * clipping the inside of the wall on the way past it. Measured on the live
+ * floor: 38 of 40 seats across the four rooms. Meetings are the thing most
+ * worth watching in this scene, so that was most of what anyone ever saw.
+ */
+export function rectAsRoom(
+  rect: { cx: number; cz: number; w: number; d: number },
+  doorPoint: { x: number; z: number },
+): RoomInfo {
+  // Which wall is the door on? Whichever plane it sits closest to.
+  const dLeft = Math.abs(doorPoint.x - (rect.cx - rect.w / 2));
+  const dRight = Math.abs(doorPoint.x - (rect.cx + rect.w / 2));
+  const dBottom = Math.abs(doorPoint.z - (rect.cz - rect.d / 2));
+  const dTop = Math.abs(doorPoint.z - (rect.cz + rect.d / 2));
+  const min = Math.min(dLeft, dRight, dBottom, dTop);
+  const dir: DoorDir =
+    min === dLeft ? 'left' : min === dRight ? 'right' : min === dBottom ? 'bottom' : 'top';
+  return {
+    cx: rect.cx, cz: rect.cz, w: rect.w, d: rect.d,
+    color: '', name: '', side: 1,
+    doorZ: doorPoint.z, doorX: doorPoint.x, doorCZ: doorPoint.z, doorDir: dir,
+  } as unknown as RoomInfo;
+}
+
+/**
+ * The conference table, as a solid obstacle.
+ *
+ * Walkers routed door → seat in a straight line, and for any seat on the far
+ * side that line goes clean across the table top. The table was never in any
+ * obstacle list — only desks, office walls and other meeting rooms were — so
+ * as far as the router was concerned the middle of the room was open floor.
+ *
+ * Dimensions mirror office/meeting-rooms.ts exactly (`min(w*0.5, 6)` by
+ * `min(d*0.3, 3)`, centred). The chairs sit 0.6 beyond each edge, so a seat is
+ * always outside this box and stays a legal path endpoint.
+ */
+export function meetingTableAabb(
+  rect: { cx: number; cz: number; w: number; d: number },
+  margin = 0.25,
+): Aabb2D {
+  const tableW = Math.min(rect.w * 0.5, 6);
+  const tableD = Math.min(rect.d * 0.3, 3);
+  return {
+    minX: rect.cx - tableW / 2 - margin,
+    maxX: rect.cx + tableW / 2 + margin,
+    minZ: rect.cz - tableD / 2 - margin,
+    maxZ: rect.cz + tableD / 2 + margin,
+  };
+}
+
+/** Which room, if any, physically contains this point. */
+export function roomContaining(
+  point: Vec3,
+  rooms: Map<string, RoomInfo> | Iterable<RoomInfo>,
+): RoomInfo | undefined {
+  const list: RoomInfo[] = rooms instanceof Map ? [...rooms.values()] : [...rooms];
+  return list.find(r =>
+    point.x >= r.cx - r.w / 2 && point.x <= r.cx + r.w / 2 &&
+    point.z >= r.cz - r.d / 2 && point.z <= r.cz + r.d / 2,
+  );
+}
+
 /** Segment-vs-AABB intersection test in the XZ plane (Liang-Barsky). */
-function segHitsAabb(p1: Vec3, p2: Vec3, box: Aabb2D): boolean {
+export function segHitsAabb(p1: Vec3, p2: Vec3, box: Aabb2D): boolean {
   const dx = p2.x - p1.x, dz = p2.z - p1.z;
   let t0 = 0, t1 = 1;
   // X slab

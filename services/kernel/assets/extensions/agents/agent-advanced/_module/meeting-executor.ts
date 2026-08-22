@@ -39,6 +39,9 @@ import {
   promptStyleDirective,
 } from "../../../../../src/core/i18n/prompts.js";
 
+/** Default walker grace period — see `MeetingRequest.travel_ms`. */
+const DEFAULT_TRAVEL_MS = 4000;
+
 export interface MeetingRequest {
   topic: string;
   /** The agent who called the meeting (moderator). */
@@ -51,6 +54,14 @@ export interface MeetingRequest {
   rounds?: number;
   /** "normal" | "urgent" — affects 3D animation color. */
   urgency?: string;
+  /**
+   * Grace period between `meeting_requested` and `meeting_started`, in ms —
+   * the time the 3D walkers get to reach the table before the first turn is
+   * spoken. Defaults to DEFAULT_TRAVEL_MS, which suits attendees from the
+   * same corner of the floor; a meeting that pulls delegates in from the far
+   * offices should raise it or the discussion opens to an empty room.
+   */
+  travel_ms?: number;
   /**
    * 'meeting' = synthetic group discussion (default).
    * 'debate'  = adversarial: every attendee defends their stated position,
@@ -222,7 +233,7 @@ export class MeetingExecutor {
     });
 
     // Wait for walkers to arrive before starting discussion
-    await sleep(4000);
+    await sleep(Math.max(0, request.travel_ms ?? DEFAULT_TRAVEL_MS));
 
     events.emit("agent:flow:meeting_started", {
       meeting_id: meetingId,
@@ -279,6 +290,12 @@ export class MeetingExecutor {
                 ? this.buildModeratorSynthesizePrompt(request, transcript, round, moderatorLang)
                 : this.buildModeratorClosePrompt(request, transcript, moderatorLang));
 
+        // Announce the turn BEFORE the call. Every turn is a fresh single-shot
+        // through the provider and the median is ~25 seconds, so without this
+        // the room simply sits still between turns and the operator cannot
+        // tell a thinking agent from a stuck one. `meeting_turn` still lands
+        // when the text is ready and replaces the indicator.
+        emitThinking(events, meetingId, moderator, "moderator", round);
         const modTurn = await this.callAgent(
           moderator, service, modPrompt, transcript, isDebate,
           service.buildHierarchyBlock(moderator.id),
@@ -331,10 +348,34 @@ export class MeetingExecutor {
               ? this.buildDebateAttendeePrompt(request, transcript, round, attendee, attendeeLang)
               : this.buildAttendeePrompt(request, transcript, round, attendee, attendeeLang);
 
-            const attTurn = await this.callAgent(
-              attendee, service, attPrompt, transcript, isDebate,
-              service.buildHierarchyBlock(attendee.id),
-            );
+            // One attendee whose provider chain fails must not take the whole
+            // meeting down with it. Without this the throw reached the outer
+            // catch: the meeting ended `failed`, `meeting_ended` went out with
+            // no participants list, and the 3D — which falls back to
+            // "dismiss every meeting walker" in exactly that case — emptied
+            // the room and stamped a failure tag on everyone who was sitting
+            // in it. A 10-person, 2-round meeting is 22 sequential LLM calls;
+            // demanding that all 22 succeed to see any of them was the single
+            // most likely way for a long meeting to end with nothing on screen.
+            let attTurn: { content: string; tokens: number };
+            emitThinking(events, meetingId, attendee, "attendee", round);
+            try {
+              attTurn = await this.callAgent(
+                attendee, service, attPrompt, transcript, isDebate,
+                service.buildHierarchyBlock(attendee.id),
+              );
+            } catch (err) {
+              const why = err instanceof Error ? err.message : String(err);
+              log.warn(
+                `Meeting ${meetingId}: ${attendee.name} could not take their turn — ${why}`,
+              );
+              attTurn = {
+                content: attendeeLang === "es"
+                  ? "(sin respuesta — este asistente no pudo intervenir en esta ronda)"
+                  : "(no reply — this attendee could not take their turn this round)",
+                tokens: 0,
+              };
+            }
             transcript.push({
               agent_id: attendee.id,
               agent_name: attendee.name,
@@ -374,6 +415,64 @@ export class MeetingExecutor {
             });
           }
         }
+      }
+
+      // A single-round meeting never closes. The in-loop branch picks OPEN for
+      // `round === 1`, SYNTHESIZE while `round < rounds`, and CLOSE only on the
+      // last round — so with rounds === 1 the one and only moderator turn is
+      // the opening, the loop ends, and `summary` below (the last moderator
+      // turn) resolves to that same opening. The meeting then "ends" by
+      // restating its own agenda, `extractBullets` finds no Decisions section,
+      // and the caller gets zero decisions and zero action items. Run the
+      // closing turn explicitly; rounds >= 2 already produced one in-loop.
+      if (rounds === 1) {
+        emitThinking(events, meetingId, moderator, "moderator", rounds);
+        const closeTurn = await this.callAgent(
+          moderator,
+          service,
+          isDebate
+            ? this.buildDebateClosePrompt(request, moderatorLang)
+            : this.buildModeratorClosePrompt(request, transcript, moderatorLang),
+          transcript,
+          isDebate,
+          service.buildHierarchyBlock(moderator.id),
+        );
+        transcript.push({
+          agent_id: moderator.id,
+          agent_name: moderator.name,
+          role: "moderator",
+          round: rounds,
+          content: closeTurn.content,
+          tokens: closeTurn.tokens,
+        });
+        totalTokens += closeTurn.tokens;
+        stepNumber++;
+        service.addStep({
+          run_id: run.id,
+          step_number: stepNumber,
+          type: "thought",
+          content: `[Close - ${moderator.name} (moderator)] ${closeTurn.content}`,
+          tokens: closeTurn.tokens,
+        });
+        events.emit("agent:flow:meeting_turn", {
+          meeting_id: meetingId,
+          agent_id: moderator.id,
+          agent_name: moderator.name,
+          round: rounds,
+          role: "moderator",
+          content_preview: closeTurn.content.slice(0, 120),
+          body: closeTurn.content,
+          tokens: closeTurn.tokens,
+        });
+        service.postMessage({
+          conversation_id: meetingId,
+          from_agent_id: moderator.id,
+          role: "stmt",
+          body: closeTurn.content,
+          tokens: closeTurn.tokens,
+          run_id: run.id,
+          meta: { meeting_role: "moderator", round: rounds, closing: true },
+        });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -621,9 +720,37 @@ export class MeetingExecutor {
 
     return match[1]
       .split("\n")
-      .map(l => l.replace(/^[-*•]\s*/, "").trim())
+      // Trim FIRST. Stripping the marker off the raw line only matched
+      // top-level bullets, so every nested item ("  - **Wren:** …") kept its
+      // dash and surfaced in the dashboard summary as a stray hyphen.
+      .map(l => l.trim().replace(/^[-*•]\s*/, "").trim())
       .filter(l => l.length > 3);
   }
+}
+
+/**
+ * "This agent is composing its turn."
+ *
+ * The 3D office had no way to show it: the only per-turn signal was
+ * `meeting_turn`, which fires when the answer is already written. Between two
+ * turns — typically 25 seconds, and up to five minutes when a call stalls —
+ * the scene was frozen and indistinguishable from a hung meeting.
+ */
+function emitThinking(
+  events: EventBus,
+  meetingId: string,
+  agent: Agent,
+  role: "moderator" | "attendee",
+  round: number,
+): void {
+  events.emit("agent:flow:meeting_thinking", {
+    meeting_id: meetingId,
+    agent_id: agent.id,
+    agent_name: agent.name,
+    role,
+    round,
+    ts: new Date().toISOString(),
+  });
 }
 
 function sleep(ms: number): Promise<void> {
