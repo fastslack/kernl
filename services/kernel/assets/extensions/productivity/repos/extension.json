@@ -27,5 +27,16 @@
       "uuid": "11.1.0",
       "zod": "3.25.76"
     }
+  },
+  "frontend": {
+    "navItems": [
+      {
+        "id": "repos",
+        "group": "tools",
+        "label": "Repos",
+        "icon": "\ud83d\udcc1",
+        "order": 20
+      }
+    ]
   }
 }

@@ -12,7 +12,6 @@ import { createConfigModule } from "../src/modules/config/index.js";
 import { createDashboardModule } from "../src/modules/dashboard/index.js";
 import { createChatModule } from "../src/modules/chat/index.js";
 import { createAgentsModule } from "../src/modules/agents/index.js";
-import { createOfficeInfraModule } from "../src/modules/office-infra/index.js";
 import { createMarketplaceModule } from "../src/modules/marketplace/index.js";
 import { createBrainModule } from "../src/modules/brain/index.js";
 import { createToolMemoryModule } from "../src/modules/tool-memory/index.js";
@@ -155,7 +154,8 @@ describe("tool catalog", () => {
       { name: "dashboard", make: () => createDashboardModule() },
       { name: "chat", make: () => createChatModule() },
       { name: "agents", make: () => createAgentsModule() },
-      { name: "office-infra", make: () => createOfficeInfraModule() },
+      // office-infra moved to the paid DevOps extension; its catalogue is
+      // covered by the paid suite (overlay-build.sh --test).
       { name: "marketplace", make: () => createMarketplaceModule(null, null) },
       { name: "brain", make: () => createBrainModule(() => Promise.resolve(mockEmbeddings)) },
       { name: "tool-memory", make: () => createToolMemoryModule(() => Promise.resolve(mockEmbeddings)) },
