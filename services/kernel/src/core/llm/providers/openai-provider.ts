@@ -45,7 +45,7 @@ class OpenAiProviderImpl implements LlmProvider {
 
   async start(): Promise<void> {
     if (!this.apiKey) this.apiKey = process.env.OPENAI_API_KEY ?? "";
-    this.impl = new ChatOpenAiProvider(this.apiKey, this.defaultModel, this.baseUrl);
+    this.impl = new ChatOpenAiProvider(this.apiKey, this.baseUrl, this.defaultModel);
     this.lastError = this.impl.available() ? undefined : "No API key configured";
   }
 

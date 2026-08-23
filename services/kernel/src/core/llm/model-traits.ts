@@ -60,9 +60,28 @@ export function classifyModel(slug: string, modelId: string): ModelTraits {
   if (/(protein|esm[12]?\b|alphafold|biomedclip|molmim|diffdock|rfdiffusion)/i.test(id)) {
     return { chat: false };
   }
-  // OpenAI image/audio quirks
-  if (/^chatgpt-image|^gpt-image|^gpt-4o-(audio|transcribe|tts|search)|^gpt-4o-mini-(audio|tts|transcribe|search)/i.test(id)) {
-    return { chat: false, image: /image/.test(id), audio: /audio|tts|transcribe/.test(id) };
+  // OpenAI models that live on a different endpoint than /v1/chat/completions.
+  //
+  // This used to be anchored on `gpt-4o-*`, the 2024 naming. Everything OpenAI
+  // has shipped since under a bare `gpt-` prefix — gpt-realtime (WebSocket /
+  // WebRTC), gpt-transcribe and gpt-live-transcribe (/v1/audio/transcriptions),
+  // gpt-image (/v1/images/generations) — sailed through as chat models. On a
+  // live account that put 11 of them in the picker, every one a guaranteed 400
+  // the first time an agent used it.
+  //
+  // Anchored with ^ and matched on whole segments so the rule can't reach a
+  // chat model: `gpt-5.6-terra` and `gpt-5.1-codex-max` must survive it.
+  if (
+    /^(chatgpt|gpt)-image/i.test(id) ||
+    /^gpt-realtime/i.test(id) ||
+    /^gpt-(live-)?transcribe/i.test(id) ||
+    /^gpt-4o(-mini)?-(audio|transcribe|tts|search)/i.test(id)
+  ) {
+    return {
+      chat: false,
+      image: /image/.test(id),
+      audio: /audio|tts|transcribe|realtime/.test(id),
+    };
   }
 
   // ── It's a chat model. Now annotate capability badges. ────────────

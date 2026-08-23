@@ -7,6 +7,7 @@ import { resolve } from "node:path";
 import type { ServerResponse } from "node:http";
 import type { KernelHttpServer } from "../../core/http-server.js";
 import type { ChatService } from "./service.js";
+import { EpisodeLockedError } from "./service.js";
 import type { MemoryDistiller } from "./memory-distiller.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { PermissionBus } from "./permission-bus.js";
@@ -269,6 +270,12 @@ export function registerChatRoutes(
       events.emit("data.changed", { module: "chat", action: "episode_provider" });
       server.json(res, 200, updated);
     } catch (err) {
+      // A started conversation's model is fixed — that's a conflict with the
+      // episode's state, not a malformed request, so it gets its own status.
+      if (err instanceof EpisodeLockedError) {
+        server.json(res, 409, { error: err.message, locked: true, message_count: err.messageCount });
+        return;
+      }
       server.json(res, 400, { error: err instanceof Error ? err.message : "Bad request" });
     }
   });

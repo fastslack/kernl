@@ -22,7 +22,7 @@ import {
   readinessForGate,
   resetLlmReadinessForTests,
 } from "../src/core/llm/readiness.js";
-import { isReadinessExempt, createLlmReadinessGate } from "../src/core/llm/readiness-gate.js";
+import { isLlmGated, createLlmReadinessGate } from "../src/core/llm/readiness-gate.js";
 import type { ChatLlmProvider } from "../src/core/llm/chat-adapters.js";
 import type { ChatCompletionResult } from "../src/core/llm/chat-types.js";
 
@@ -220,41 +220,75 @@ describe("readiness cache", () => {
 });
 
 describe("the gate", () => {
-  it("refuses a feature route with 428 while the probe has not passed", () => {
+  it("refuses an LLM-backed route with 428 while the probe has not passed", () => {
     const gate = createLlmReadinessGate();
-    const failure = gate("/api/agents", "GET");
+    // `/api/agents` (the listing) is deliberately NOT gated any more — only
+    // the routes that actually call a model are.
+    const failure = gate("/api/agents/run", "POST");
     expect(failure?.status).toBe(428);
     expect((failure?.body as { error: string }).error).toBe("llm_not_configured");
   });
 
-  it("lets a feature route through once a provider passes", async () => {
+  it("lets an LLM-backed route through once a provider passes", async () => {
     initLlmReadiness(() => mapOf(fake({ name: "openai" })));
     await ensureLlmReadiness();
-    expect(createLlmReadinessGate()("/api/agents", "GET")).toBeNull();
+    expect(createLlmReadinessGate()("/api/agents/run", "POST")).toBeNull();
   });
 
-  it("keeps open everything needed to fix the problem", () => {
-    // Gate these and the install cannot be repaired through its own UI: every
-    // button on the blocking screen would 428.
+  it("serves the local-data API even while the probe is failing", () => {
+    const gate = createLlmReadinessGate();
+    for (const p of ["/api/agents", "/api/dashboard/life", "/api/chat/messages", "/mcp"]) {
+      expect(gate(p, "GET")).toBeNull();
+    }
+  });
+
+  it("gates only the routes that actually call a model", () => {
     for (const p of [
-      "/api/health",
-      "/api/auth/verify",
-      "/api/llm/readiness",
-      "/api/llm/readiness/recheck",
-      "/api/llm/claude-code/auth/login",
-      "/api/llm/chain/test",
-      "/api/llm-providers",
-      "/api/llm-providers/openai/config",
-      "/api/config/ai",
-      "/api/config/ai/test",
+      "/api/chat/message",
+      "/api/chat/message/stream",
+      "/api/agents/run",
+      "/api/agents/trigger",
+      "/api/agents/generate-from-prompt",
+      "/api/offices/create",
     ]) {
-      expect(isReadinessExempt(p)).toBe(true);
+      expect(isLlmGated(p)).toBe(true);
     }
   });
 
-  it("does not exempt the feature routes it is meant to block", () => {
-    for (const p of ["/api/agents", "/api/tasks", "/api/contacts", "/api/dashboard/rpc"]) {
-      expect(isReadinessExempt(p)).toBe(false);
+  it("leaves the local-data API alone — it never needed a model", () => {
+    // The regression this inversion exists for: twenty extension categories
+    // and the whole life/CRM surface used to 428 because a *different*
+    // subsystem had no key.
+    for (const p of [
+      "/api/tasks",
+      "/api/contacts",
+      "/api/dashboard/life",
+      "/api/dashboard/calendar",
+      "/api/notifications",
+      "/api/pii/status",
+      "/api/dashboard/rpc",
+      "/mcp",
+      "/api/health",
+      "/api/llm-providers",
+      "/api/config/ai",
+    ]) {
+      expect(isLlmGated(p)).toBe(false);
     }
+  });
+
+  it("reading a conversation you already have is not gated", () => {
+    // `/api/chat/message` must not swallow `/api/chat/messages` by prefix —
+    // that would make your own history unreadable without a provider.
+    expect(isLlmGated("/api/chat/messages")).toBe(false);
+    expect(isLlmGated("/api/chat/episodes")).toBe(false);
+    expect(isLlmGated("/api/chat/images")).toBe(false);
+    expect(isLlmGated("/api/chat/distilled-facts")).toBe(false);
+    expect(isLlmGated("/api/chat/start")).toBe(false);
+  });
+
+  it("a run listing is not a run", () => {
+    expect(isLlmGated("/api/agents/runs/active")).toBe(false);
+    expect(isLlmGated("/api/agents/42/runs")).toBe(false);
+    expect(isLlmGated("/api/agents")).toBe(false);
   });
 });
