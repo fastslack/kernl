@@ -688,6 +688,19 @@ export class ExtensionService {
       .run(status, error, isoNow(), id);
   }
 
+  /**
+   * Record why an extension is still parked, without moving it out of
+   * `installed`. `setStatus` would work, but it is the wrong verb here: the
+   * extension is not in `error`, it is waiting — the row just needs to carry
+   * the reason so the UI can say what is missing instead of showing a feature
+   * that silently does not exist.
+   */
+  setProvisionError(id: string, error: string): void {
+    this.db
+      .prepare(`UPDATE installed_extensions SET error = ?, updated_at = ? WHERE id = ?`)
+      .run(error.slice(0, 500), isoNow(), id);
+  }
+
   markLoaded(id: string): void {
     this.db
       .prepare("UPDATE installed_extensions SET last_loaded_at = ? WHERE id = ?")

@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolDefinition } from "../../../../../src/core/types.js";
 import { textResult, errorResult } from "../../../../../src/core/helpers.js";
+import { getRequestContext } from "../../../../../src/core/request-context.js";
 import type { RepoService } from "./service.js";
 import { RepoService as RepoServiceClass } from "./service.js";
 import type { Repo } from "./types.js";
@@ -29,10 +30,36 @@ const repoSelectorSchema = {
   name: z.string().optional().describe("Repo name slug (e.g. `kernl`). One of `id` or `name` is required."),
 };
 
-function resolveRepoOrError(service: RepoService, args: { id?: string; name?: string }): { ok: true; repo: Repo } | { ok: false; error: string } {
+/**
+ * Which agent is calling, across both executors.
+ *
+ * The native executor injects `__caller_agent_id` into the tool's args
+ * (`AgentExecutor.executeTool`); a subprocess agent arrives over MCP and its
+ * id is lifted off `X-Caller-Agent-Id` into the request context. Neither is
+ * reachable from outside the process — `stripInternalArgs` removes `__` keys
+ * from externally-supplied args, so this cannot be spoofed by an MCP client.
+ *
+ * An empty string means a human at the dashboard or a kernel-internal call.
+ */
+function callerAgentId(args: Record<string, unknown>): string {
+  const injected = typeof args.__caller_agent_id === "string" ? args.__caller_agent_id : "";
+  return injected || getRequestContext().callerAgentId || "";
+}
+
+function resolveRepoOrError(
+  service: RepoService,
+  args: { id?: string; name?: string },
+  caller = "",
+): { ok: true; repo: Repo } | { ok: false; error: string } {
   if (!args.id && !args.name) return { ok: false, error: "Either `id` or `name` is required" };
   const repo = service.resolve(args);
   if (!repo) return { ok: false, error: `Repo not found: ${args.id ?? args.name}` };
+  if (!service.canAccess(repo, caller)) {
+    // Said plainly rather than disguised as "not found": the caller already
+    // supplied the exact name, and an operator reading agent logs needs to see
+    // that this was a scope decision, not a typo.
+    return { ok: false, error: `Repo "${repo.name}" is not shared with this agent.` };
+  }
   return { ok: true, repo };
 }
 
@@ -90,7 +117,7 @@ function globToRegex(glob: string): RegExp {
   return new RegExp(`^${esc}$`);
 }
 
-export function repoTools(service: RepoService): ToolDefinition[] {
+export function repoTools(service: RepoService, visibleRoots: string[] = []): ToolDefinition[] {
   return [
     // ── kernel_repos_register ─────────────────────────────────
     {
@@ -108,7 +135,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { name: string; path: string; description?: string; tags?: string; shared?: boolean };
-        const res = service.create(a);
+        const res = service.create(a, { visibleRoots });
         if (!res.ok) return errorResult(res.error);
         const r = res.repo;
         const lines = [
@@ -137,7 +164,13 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { tag?: string; query?: string; limit?: number };
-        const rows = service.list({ tag: a.tag, query: a.query, limit: a.limit ?? 50 });
+        // Scoped, not filtered after the fact: a repo this agent cannot reach
+        // never enters the payload, so its name and path do not leak into a
+        // model's context on the way to being dropped.
+        const rows = service.listForCaller(
+          callerAgentId(args as Record<string, unknown>),
+          { tag: a.tag, query: a.query, limit: a.limit ?? 50 },
+        );
         if (rows.length === 0) return textResult("No repos registered. Use `kernel_repos_register` to add one.");
         const lines = rows.map((r) => `- ${formatRepoLine(r)} — id=${r.id}${r.description ? `\n    ${r.description}` : ""}`);
         return textResult(`${rows.length} repo(s):\n\n${lines.join("\n")}`);
@@ -150,7 +183,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       description: "Get full details + a freshly probed git status (branch, head sha, dirty flag) for one repo.",
       inputSchema: z.object({ ...repoSelectorSchema }),
       handler: async (args) => {
-        const r = resolveRepoOrError(service, args as { id?: string; name?: string });
+        const r = resolveRepoOrError(service, args as { id?: string; name?: string }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         const repo = r.repo;
         let branch = "", head = "", dirty: "clean" | "dirty" | "unknown" = "unknown";
@@ -191,7 +224,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; description?: string; tags?: string; shared?: boolean };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         try {
           const updated = service.update(r.repo.id, {
@@ -216,7 +249,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
         "Re-register with the same path to bring it back.",
       inputSchema: z.object({ ...repoSelectorSchema }),
       handler: async (args) => {
-        const r = resolveRepoOrError(service, args as { id?: string; name?: string });
+        const r = resolveRepoOrError(service, args as { id?: string; name?: string }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         service.unregister(r.repo.id);
         return textResult(`Unregistered repo **${r.repo.name}** (path \`${r.repo.path}\` untouched).`);
@@ -237,7 +270,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; path?: string; depth?: number; glob?: string };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.path ?? "");
         if (!jailed.ok) return errorResult(jailed.error);
@@ -267,7 +300,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; file: string; offset?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.file);
         if (!jailed.ok) return errorResult(jailed.error);
@@ -301,7 +334,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; file: string; content: string };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.file);
         if (!jailed.ok) return errorResult(jailed.error);
@@ -330,7 +363,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; query: string; glob?: string; max_results?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         if (!a.query) return errorResult("query required");
         const cap = Math.min(MAX_SEARCH_RESULTS, Math.max(1, a.max_results ?? 100));
@@ -384,7 +417,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; command: string; timeout_ms?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         const cmd = (a.command ?? "").trim();
         if (!cmd) return errorResult("command required");
@@ -422,7 +455,7 @@ export function repoTools(service: RepoService): ToolDefinition[] {
       }),
       handler: async (args) => {
         const a = args as { id?: string; name?: string; op: string; ref?: string; path?: string; limit?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name });
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
         if (!r.ok) return errorResult(r.error);
         const cwd = r.repo.path;
         let argv: string[];

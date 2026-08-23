@@ -134,6 +134,7 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 	cinema: 'Cinema',
 	books: 'Books',
 	music: 'Music',
+	repos: 'Repos',
 	settings: 'Settings', system: 'System', extensions: 'Extensions', notifications: 'Notifications',
 	// Rutas de sistema fuera de la tab bar, alcanzadas desde el rail de /system:
 	architecture: 'Arch 3D', friends: 'Friends',

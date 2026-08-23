@@ -1052,19 +1052,27 @@ export function registerCinemaMediaRoutes(
         return;
       }
 
-      // Rewrite self-references — when the frontend passes the upstream as
-      // `http://localhost:3086/api/torrents/transcribe?...` (the nginx
-      // wrapper port the browser sees), the kernel container can't reach
-      // its own host:port; `localhost` inside the container is the
-      // container itself, and 3086 is bound on the dashboard container.
-      // Route loopback hits straight to the internal HTTP port instead.
+      // Rewrite self-references — the frontend passes the upstream as the
+      // origin the BROWSER sees (`http://localhost:3086/api/cinema/...`),
+      // which under docker-compose is nginx's port on another container and
+      // is not reachable from in here. Send loopback hits to the port this
+      // process is actually listening on instead.
+      //
+      // That port used to be guessed as `DOCKER_DASHBOARD_PORT || PORT ||
+      // "3087"`. The guess only ever agreed with reality under compose, where
+      // DASHBOARD_PORT is set in the container env so both sides read the same
+      // number. The packaged .app sets nothing: the bind falls back to 3086
+      // and the guess to 3087, so every translation died on a refused
+      // connection — surfaced in the player as "Unable to connect. Is the
+      // computer able to access the url?". Ask the server, don't guess.
       let fetchTarget = target;
       try {
         const u = new URL(target);
         if ((u.hostname === "localhost" || u.hostname === "127.0.0.1") && u.pathname.startsWith("/api/")) {
-          const internalPort = process.env.DOCKER_DASHBOARD_PORT
-            || process.env.PORT
-            || "3087";
+          // The live socket, not a config value and not an env guess: it is
+          // the only thing that cannot disagree with where we are listening.
+          const addr = server.nodeServer?.address();
+          const internalPort = addr && typeof addr === "object" ? addr.port : 3086;
           fetchTarget = `http://127.0.0.1:${internalPort}${u.pathname}${u.search}`;
           log.info(`translate-srt: rewrote self-fetch ${u.host} → 127.0.0.1:${internalPort}`);
         }
@@ -1163,7 +1171,23 @@ export function registerCinemaMediaRoutes(
       try {
         const u = new URL(target);
         const inner = u.searchParams.get("url");
-        if (inner && u.pathname.includes("/api/cinema/media/transcribe")) sidecarUrl = inner;
+        if (inner && u.pathname.includes("/api/cinema/media/transcribe")) {
+          sidecarUrl = inner;
+        } else if (u.pathname.includes("/api/cinema/media/subs/file")) {
+          // A cached transcript is addressed by KEY, not by the video URL, so
+          // there is no inner `url` to lift here — read the video URL off that
+          // transcript's own sidecar. Without this the translation is filed
+          // under the cache URL, and /subs/list (which matches on the video
+          // URL) never shows it: the run finishes, costs its minutes, and the
+          // track simply never appears in the menu.
+          const k = (u.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
+          if (/^[a-f0-9]{40}$/.test(k) && existsSync(path.join(cacheDir, `${k}.json`))) {
+            const parent = JSON.parse(
+              await readFile(path.join(cacheDir, `${k}.json`), "utf8"),
+            ) as SubsSidecar;
+            if (parent?.url) sidecarUrl = parent.url;
+          }
+        }
       } catch { /* keep target as-is */ }
       await writeSubsSidecar(cacheDir, {
         key: cacheKey,

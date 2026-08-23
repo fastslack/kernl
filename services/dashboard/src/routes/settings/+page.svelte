@@ -22,6 +22,8 @@
   import Field from '$lib/components/settings/Field.svelte';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import SelectField from '$lib/components/settings/SelectField.svelte';
+  import SearchableSelect from '$lib/components/settings/SearchableSelect.svelte';
+  import { providerTestId } from '$lib/llm-models.js';
   import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
   import StatusPill from '$lib/components/settings/StatusPill.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
@@ -73,6 +75,9 @@
     answered?: boolean;
     /** It executed a tool call — the thing an agent actually needs. */
     toolCall?: boolean;
+    /** Capability tags by model id — vision / reasoning / fast / long context,
+     *  computed by the kernel and, until now, never sent to this page. */
+    traits?: Record<string, Record<string, boolean>>;
   }
   interface ChainLink { provider: string; model: string }
 
@@ -527,18 +532,38 @@
     } catch { /* best effort */ }
   }
 
-  /** registry slug → /api/config/ai/test result id */
-  function testIdFor(slug: string): string {
-    return slug === 'claude' ? 'anthropic' : slug;
-  }
-  function modelOptions(provider: string): string[] {
+  function modelOptions(
+    provider: string,
+    tests: Record<string, TestResult>,
+    lm: string[],
+  ): string[] {
     if (!provider) return [];
     if (provider === 'lmstudio') {
-      return lmModels.length ? lmModels : (testResults.lmstudio?.models ?? []);
+      return lm.length ? lm : (tests.lmstudio?.models ?? []);
     }
-    const id = provider === 'anthropic' ? 'anthropic' : testIdFor(provider);
-    return testResults[id]?.models ?? [];
+    // providerTestId bridges the naming conventions — aiConfig stores
+    // `claude_code`, the probe files that provider under `claude-code`, and
+    // a miss here silently degrades the dropdown to a free-text box.
+    return tests[providerTestId(provider)]?.models ?? [];
   }
+
+  /**
+   * The brains card calls this from the markup. It has to be a reactive
+   * *value* rather than a plain function: Svelte only re-runs a template
+   * expression when something the expression itself names changes, and
+   * a bare `modelOptions(chatProvider)` names neither `testResults` nor `lmModels`.
+   * So the card decided "no catalogue → render a text box" on first paint, and
+   * nothing re-rendered it when the probe came back seconds later. Rebinding
+   * the closure here is what re-runs every call site, the ones inside the
+   * fallback-chain `{#each}` included.
+   */
+  $: modelOptsFor = ((tests, lm) => (provider: string) => modelOptions(provider, tests, lm))(
+    testResults,
+    lmModels,
+  );
+  /** Same reactivity trick, for the badges. */
+  $: modelTraitsFor = ((tests) => (provider: string) =>
+    tests[providerTestId(provider)]?.traits ?? {})(testResults);
   $: providerOptions = providerRows.map((p) => ({ value: p.slug, label: p.name || p.slug }));
 
   // ═══════════════════════════════════════════════
@@ -578,7 +603,7 @@
    * prediction to fall back on before anyone pressed Test.
    */
   function runsTools(row: ProviderRow, tests: Record<string, TestResult> = testResults): boolean {
-    const tr = tests[testIdFor(row.slug)];
+    const tr = tests[providerTestId(row.slug)];
     if (tr?.ok && tr.toolCall !== undefined) return tr.toolCall;
     return row.capabilities?.tools !== false;
   }
@@ -722,7 +747,7 @@
 
   function rowStatus(row: ProviderRow, tests: Record<string, TestResult>, isTesting: boolean):
     { status: 'ok' | 'warn' | 'error' | 'neutral'; label: string } {
-    const tr = tests[testIdFor(row.slug)];
+    const tr = tests[providerTestId(row.slug)];
     if (isTesting && !tr) return { status: 'neutral', label: '…' };
     // Reachable and still unable to drive a native agent — but say WHICH of
     // the two reasons. By design (Claude Code: its SDK owns the tool loop) is
@@ -775,7 +800,7 @@
       if (!f) return [row.slug, []];
       const models = row.slug === 'lmstudio'
         ? (lmModels.length ? lmModels : (testResults.lmstudio?.models ?? []))
-        : (testResults[testIdFor(row.slug)]?.models ?? []);
+        : (testResults[providerTestId(row.slug)]?.models ?? []);
       if (!models.length) return [row.slug, []];
       const auto = f.placeholder ? `${$t('settings.ai.model_auto')} — ${f.placeholder}` : $t('settings.ai.model_auto');
       return [row.slug, [{ value: '', label: auto }, ...models.map((m) => ({ value: m, label: m }))]];
@@ -1134,8 +1159,8 @@
                 <span class="brain-label">{$t('settings.ai.chat_brain')}</span>
                 <div class="brain-ctrls">
                   <SelectField bind:value={chatProvider} options={providerOptions} />
-                  {#if modelOptions(chatProvider).length}
-                    <SelectField bind:value={chatModel} options={modelOptions(chatProvider).map((m) => ({ value: m, label: m }))} />
+                  {#if modelOptsFor(chatProvider).length}
+                    <SearchableSelect bind:value={chatModel} options={modelOptsFor(chatProvider).map((m) => ({ value: m, label: m }))} traits={modelTraitsFor(chatProvider)} placeholder={$t('settings.ai.search_models')} />
                   {:else}
                     <input class="brain-in" type="text" bind:value={chatModel} placeholder={$t('settings.ai.model')} spellcheck="false" />
                   {/if}
@@ -1147,8 +1172,8 @@
                 <span class="brain-label">{$t('settings.ai.agents_brain')}</span>
                 <div class="brain-ctrls">
                   <SelectField bind:value={agentsProvider} options={providerOptions} />
-                  {#if modelOptions(agentsProvider).length}
-                    <SelectField bind:value={agentsModel} options={modelOptions(agentsProvider).map((m) => ({ value: m, label: m }))} />
+                  {#if modelOptsFor(agentsProvider).length}
+                    <SearchableSelect bind:value={agentsModel} options={modelOptsFor(agentsProvider).map((m) => ({ value: m, label: m }))} traits={modelTraitsFor(agentsProvider)} placeholder={$t('settings.ai.search_models')} />
                   {:else}
                     <input class="brain-in" type="text" bind:value={agentsModel} placeholder={$t('settings.ai.model')} spellcheck="false" />
                   {/if}
@@ -1169,8 +1194,8 @@
                     <div class="chain-row">
                       <span class="chain-idx">{i + 1}</span>
                       <SelectField bind:value={link.provider} options={providerOptions} />
-                      {#if modelOptions(link.provider).length}
-                        <SelectField bind:value={link.model} options={modelOptions(link.provider).map((m) => ({ value: m, label: m }))} />
+                      {#if modelOptsFor(link.provider).length}
+                        <SearchableSelect bind:value={link.model} options={modelOptsFor(link.provider).map((m) => ({ value: m, label: m }))} traits={modelTraitsFor(link.provider)} placeholder={$t('settings.ai.search_models')} />
                       {:else}
                         <input class="brain-in" type="text" bind:value={link.model} placeholder={$t('settings.ai.model')} spellcheck="false" />
                       {/if}
@@ -1249,7 +1274,7 @@
             <div class="prov-table">
               {#each providerRows.filter((r) => r.slug === provTab) as row (row.slug)}
                 {@const st = rowStatus(row, testResults, testing)}
-                {@const trow = testResults[testIdFor(row.slug)]}
+                {@const trow = testResults[providerTestId(row.slug)]}
                 <div class="prov-row">
                   <div class="prov-id">
                     <span class="prov-name">{row.name || row.slug}</span>
@@ -1288,7 +1313,7 @@
                         {:else if isModelField(f.key)}
                           {@const opts = providerModelOpts[row.slug] ?? []}
                           {#if opts.length}
-                            <SelectField bind:value={provEdits[row.slug][f.key]} options={opts} />
+                            <SearchableSelect bind:value={provEdits[row.slug][f.key]} options={opts} placeholder={$t('settings.ai.search_models')} />
                           {:else}
                             <!-- No catalog yet (no key, or the probe hasn't run). Fall back to
                                  free text so the row stays configurable instead of dead. -->

@@ -29,7 +29,9 @@ import {
   symlinkSync,
   rmSync,
 } from "node:fs";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
+import { existsSync as fsExists } from "node:fs";
+import { delimiter as PATH_DELIM } from "node:path";
 import { spawn } from "node:child_process";
 import { log } from "../../core/logger.js";
 import { assetsRoot } from "../../core/assets-root.js";
@@ -103,12 +105,52 @@ export function isResolvable(pkg: string, startDir: string): boolean {
   }
 }
 
+/**
+ * Find something that can install npm packages.
+ *
+ * This used to assume `process.execPath` was the bun CLI, which holds when the
+ * kernel is started as `bun dist/mcp-server.js` — i.e. in Docker. A native
+ * package ships a bun-COMPILED single binary instead, so `process.execPath` is
+ * the kernel itself, and a compiled binary has no `install` subcommand: the
+ * spawn either fails or gets interpreted as kernel arguments. The provisioner
+ * then reported a failure nobody could act on, and the extensions it was meant
+ * to unblock — Cinema among them — stayed parked forever on exactly the
+ * platforms that need provisioning most.
+ *
+ * Order: the running binary when it really is bun, then bun on PATH, then npm.
+ */
+function findPackageManager(): { cmd: string; args: string[] } | null {
+  const exec = process.execPath;
+  if (/^bun(\.exe)?$/i.test(basename(exec))) return { cmd: exec, args: ["install", "--no-progress"] };
+
+  const onWindows = process.platform === "win32";
+  const dirs = (process.env.PATH ?? "").split(PATH_DELIM).filter(Boolean);
+  const candidates: Array<{ names: string[]; args: string[] }> = [
+    { names: onWindows ? ["bun.exe"] : ["bun"], args: ["install", "--no-progress"] },
+    { names: onWindows ? ["npm.cmd", "npm.exe"] : ["npm"], args: ["install", "--no-audit", "--no-fund"] },
+  ];
+  for (const c of candidates) {
+    for (const dir of dirs) {
+      for (const name of c.names) {
+        const full = join(dir, name);
+        if (fsExists(full)) return { cmd: full, args: c.args };
+      }
+    }
+  }
+  return null;
+}
+
 function runBunInstall(cwd: string, timeoutMs: number): Promise<void> {
   return new Promise((resolvePromise, reject) => {
-    // process.execPath is the bun binary running the kernel — the packages
-    // vendor their own runtime, so there is always one, and it is the same
-    // one the extension will be loaded with.
-    const child = spawn(process.execPath, ["install", "--no-progress"], {
+    const pm = findPackageManager();
+    if (!pm) {
+      reject(new Error(
+        "no package manager available — install bun or npm and make it reachable on PATH, " +
+        "then enable the extension again",
+      ));
+      return;
+    }
+    const child = spawn(pm.cmd, pm.args, {
       cwd,
       stdio: ["ignore", "pipe", "pipe"],
       env: { ...process.env, BUN_INSTALL_CACHE_DIR: join(cwd, ".bun-cache") },

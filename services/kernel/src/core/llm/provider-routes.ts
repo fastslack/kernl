@@ -118,6 +118,22 @@ export function registerLlmProviderRoutes(
       const classified = visible.map((id) => ({ id, traits: classifyModel(slug, id) }));
       const chat = classified.filter((m) => m.traits.chat);
       const nonChat = classified.length - chat.length;
+      // The hidden ones by name, not just a count. Someone who types "image"
+      // into a model picker is asking a real question, and "no model matches"
+      // is a worse answer than "these exist, and here is why they can't answer
+      // a conversation". Capped — this is for explaining, not for browsing.
+      const nonChatModels = classified
+        .filter((m) => !m.traits.chat)
+        .slice(0, 80)
+        .map((m) => ({
+          id: m.id,
+          kind: m.traits.image ? "image"
+            : m.traits.audio ? "audio"
+            : m.traits.embedding ? "embedding"
+            : m.traits.reranker ? "reranker"
+            : m.traits.safety ? "safety"
+            : "other",
+        }));
       server.json(res, 200, {
         models: chat.map((m): { id: string; traits: ModelTraits; loaded?: boolean } =>
           loaded.size > 0 ? { id: m.id, traits: m.traits, loaded: loaded.has(m.id) } : { id: m.id, traits: m.traits },
@@ -125,6 +141,7 @@ export function registerLlmProviderRoutes(
         dynamic: true,
         blocked: all.length - visible.length,
         nonChatHidden: nonChat,
+        nonChatModels,
         // Absent when the runtime cannot tell. Empty means "it can, and none
         // are" — a different thing, and the UI needs to say so differently.
         ...(loaded.size > 0 || typeof withLoaded.listLoadedModels === "function"

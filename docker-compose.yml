@@ -79,6 +79,15 @@ services:
       DASHBOARD_ENABLED: "false"   # nginx (dashboard service) serves the SPA
       DASHBOARD_PORT: "3087"
       SQLITE_PATH: /app/data/kernel.db
+      # ── Agent sandbox ──
+      # The driver runs in here but the daemon runs out there, so it needs the
+      # operator's real home to locate the Claude CLI and credentials to mount;
+      # HOME inside this container is /home/bun, which does not exist on the
+      # host. KERNEL_DATA_VOLUME lets it mount agent workspaces by volume name
+      # instead of by a host path that a named volume simply does not have.
+      HOST_HOME: ${HOST_HOME:-/home/fastslack}
+      KERNEL_DATA_VOLUME: ${KERNEL_DATA_VOLUME:-kernl-public_kernel-data}
+      KERNEL_AGENT_DOCKER_NETWORK: ${KERNEL_AGENT_DOCKER_NETWORK:-kernl-public_default}
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: neo4j
       NEO4J_PASSWORD: kernlgraph
@@ -176,6 +185,18 @@ services:
       # user sees in a terminal. Read-only: this API exposes delete and move
       # over HTTP, so write access is a deliberate later step, not a default.
       - /home/fastslack/mtwProjects/LABS:/home/fastslack/mtwProjects/LABS:ro
+      # Host identity for the sandbox driver. Every -v it emits is resolved by
+      # the daemon on the HOST, so it needs the operator's real home to find
+      # the Claude CLI and credentials; inside the container HOME is /home/bun,
+      # which does not exist out there.
+      #   (declared in `environment:` below, kept here as a pointer)
+      # Docker engine socket — this is what lets the agent sandbox drivers run.
+      # Without it `SandboxDriverRegistry: start("docker") failed` at boot, the
+      # only way to run an agent that touches real files was unsandboxed, and
+      # the executor hard-denies that unless the operator opts in. The image
+      # already adds `bun` to group 981, which is the host's `docker` group, so
+      # the socket is readable without running as root.
+      - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
       neo4j:
         condition: service_started

@@ -294,15 +294,13 @@
       if (token && !headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
       const res = await origFetch(input as any, { ...init, headers });
 
-      // 428 → the kernel has no LLM that can run an agent, and is refusing
-      // every feature route until one exists. Same shape as the 401 bounce
-      // below, including the guard against N parallel failures racing N
-      // redirects. /setup is where it gets fixed, so never bounce off it.
+      // 428 → this particular request needed a model and there isn't one.
+      // It used to bounce the whole app to /setup; the kernel now refuses only
+      // the routes that actually call a model, so a 428 is news about one
+      // action, not about the install. Record it — the banner explains it and
+      // links to the fix — and hand the response back to the caller.
       if (res.status === 428) {
-        if (!redirecting && !location.pathname.startsWith('/setup') && !location.pathname.startsWith('/login')) {
-          redirecting = true;
-          location.href = '/setup?blocked=llm';
-        }
+        void refreshLlmReadiness();
         return res;
       }
 
@@ -530,6 +528,26 @@
   // is down.
   let manifestReady = false;
 
+  // ── LLM readiness, as information rather than a wall ──────────────
+  //
+  // `null` = not asked yet or unreachable, which is not evidence of anything
+  // and must not paint a warning. Only a verdict that says `ok: false` does.
+  let llmVerdict: { ok: boolean; reason?: string; detail?: string } | null = null;
+  let llmBannerDismissed = false;
+  $: llmMissing = llmVerdict?.ok === false;
+
+  async function refreshLlmReadiness() {
+    try {
+      const r = await fetch('/api/llm/readiness');
+      if (!r.ok) return;
+      const v = await r.json();
+      if (v && typeof v.ok === 'boolean') llmVerdict = v;
+    } catch {
+      /* Kernel unreachable — the offline handling covers it. */
+    }
+  }
+
+
   // Core routes that are ALWAYS allowed regardless of the manifest.
   const CORE_ROUTES = new Set([
     'settings', 'system', 'sysoverview', 'architecture', 'extensions',
@@ -643,25 +661,15 @@
 
     // ── Is there an LLM that can run an agent? ──────────────────────
     //
-    // Asked up front so a blocked install lands on the screen that fixes it
-    // instead of on a dashboard whose every panel fails one by one. The 428
-    // handler on window.fetch is the backstop for anything that slips past;
-    // this is what makes the first paint correct.
+    // Asked up front, but it no longer decides whether you get a dashboard.
+    // Chat and agents need a model; tasks, CRM, finance, health, the calendar
+    // and every other local-data screen do not, and used to be pushed off the
+    // road because a different subsystem had no key. So the verdict drives a
+    // banner and the state of two nav entries, not a redirect.
     //
     // Deliberately NOT keyed off localStorage the way the first-run redirect
-    // above is: a flag in the browser is not evidence about the server, and
-    // clearing it was all it took to walk past that one.
-    fetch('/api/llm/readiness')
-      .then((r) => (r.ok ? r.json() : null))
-      .then((v: { ok?: boolean } | null) => {
-        if (v && v.ok === false && !window.location.pathname.startsWith('/setup')) {
-          goto('/setup?blocked=llm', { replaceState: true });
-        }
-      })
-      .catch(() => {
-        /* Kernel unreachable — the existing offline handling covers it; a
-           readiness verdict we could not fetch is not evidence of anything. */
-      });
+    // above is: a flag in the browser is not evidence about the server.
+    void refreshLlmReadiness();
 
     // Fetch server timezone before starting clock
     rpcOrCall('server.health', {}, () => fetch('/api/health').then(r => r.json())).then((d: any) => {
@@ -1152,6 +1160,21 @@
     {#if navigating}
       <div style="position:absolute;top:0;left:0;right:0;height:2px;z-index:999;overflow:hidden">
         <div style="height:100%;background:var(--teal,#3dd6c8);animation:pageLoad 0.8s ease-in-out infinite;transform-origin:left"></div>
+      </div>
+    {/if}
+
+    <!-- What used to be a redirect. Says which features are off and where to
+         fix it, and gets out of the way of the ones that still work. -->
+    {#if llmMissing && !llmBannerDismissed && !isStandalonePage}
+      <div class="llm-banner" role="status">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>
+        <span class="llm-banner-text">
+          No LLM can run an agent yet — <strong>chat and agents are off</strong>.
+          Everything else works.
+          {#if llmVerdict?.detail}<span class="llm-banner-detail">{llmVerdict.detail}</span>{/if}
+        </span>
+        <a class="llm-banner-fix" href="/setup?blocked=llm">Configure a provider →</a>
+        <button class="llm-banner-x" title="Dismiss" aria-label="Dismiss" on:click={() => (llmBannerDismissed = true)}>✕</button>
       </div>
     {/if}
     <div class="content-frame" class:with-rail={railItems.length > 0}>

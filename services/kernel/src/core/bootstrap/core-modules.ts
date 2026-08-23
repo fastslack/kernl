@@ -37,7 +37,6 @@ import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modul
 import { createStoreModule } from "../../modules/store/index.js";
 import { createChatModule } from "../../modules/chat/index.js";
 import { createAgentsModule } from "../../modules/agents/index.js";
-import { createOfficeInfraModule } from "../../modules/office-infra/index.js";
 import { configureAudit as configurePromptSanitizerAudit } from "../prompt-sanitizer.js";
 import { applyPerformanceIndexes } from "../db/performance-indexes.js";
 import type { MeshModule } from "../types/extensions/index.js";
@@ -266,7 +265,10 @@ export async function initCoreModules(args: {
   registry.register(chatModule);
   const agentsModule = createAgentsModule();
   registry.register(agentsModule);
-  registry.register(createOfficeInfraModule());
+  // Office environments moved to the paid DevOps extension. The shared
+  // container an office's agents run commands in is a DevOps capability, not a
+  // base-install one; that extension registers it behind `pro:devops`, so an
+  // install without the licence simply has no such routes.
 
   // Store: redeem a license into installed add-ons — downloads the entitled
   // .kernl / office blueprint from the licensed store and hands it to the

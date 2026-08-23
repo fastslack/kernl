@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { modelIds, selectableModels } from "./llm-models.js";
+import { modelIds, selectableModels, providerTestId, modelEntries } from "./llm-models.js";
 
 describe("modelIds", () => {
   it("reads the shape the endpoint actually returns", () => {
@@ -57,5 +57,50 @@ describe("selectableModels", () => {
     const r = selectableModels([{ id: "a", loaded: false }, { id: "b", loaded: false }]);
     expect(r.ids).toEqual(["a", "b"]);
     expect(r.auto).toBeNull();
+  });
+});
+
+describe("providerTestId", () => {
+  it("maps Anthropic's three names onto the probe's key", () => {
+    expect(providerTestId("claude")).toBe("anthropic");
+    expect(providerTestId("anthropic")).toBe("anthropic");
+  });
+
+  it("bridges snake_case config slugs to the kebab-case probe keys", () => {
+    // The bug: aiConfig stores claude_code, the probe files it under
+    // claude-code, so the settings model dropdown came back empty.
+    expect(providerTestId("claude_code")).toBe("claude-code");
+    expect(providerTestId("claude-code")).toBe("claude-code");
+  });
+
+  it("leaves single-word slugs alone", () => {
+    for (const s of ["openai", "grok", "nvidia", "lmstudio", "minimax"]) {
+      expect(providerTestId(s)).toBe(s);
+    }
+  });
+
+  it("is total for junk input", () => {
+    expect(providerTestId("")).toBe("");
+    expect(providerTestId("  OpenAI ")).toBe("openai");
+  });
+});
+
+describe("modelEntries", () => {
+  it("keeps the traits the kernel computed", () => {
+    expect(modelEntries([{ id: "gpt-5", traits: { chat: true, vision: true } }]))
+      .toEqual([{ id: "gpt-5", traits: { chat: true, vision: true } }]);
+  });
+
+  it("still accepts the bare-string shape older providers return", () => {
+    expect(modelEntries(["gpt-4o", ""])).toEqual([{ id: "gpt-4o" }]);
+  });
+
+  it("drops entries with no usable id instead of rendering [object Object]", () => {
+    expect(modelEntries([{ traits: { chat: true } }, null, 7])).toEqual([]);
+  });
+
+  it("is total for junk", () => {
+    expect(modelEntries(null)).toEqual([]);
+    expect(modelEntries("nope")).toEqual([]);
   });
 });

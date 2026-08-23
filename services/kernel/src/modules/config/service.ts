@@ -349,6 +349,63 @@ const SETTING_CATALOG: SettingDef[] = [
     applyToConfig: (v, c) => { c.language = v === "en" ? "en" : "es"; },
   },
 
+  // ── Agent sandboxing ──────────────────────────────────────────────────────
+  {
+    key: "AGENTS_DEFAULT_SANDBOX_DRIVER",
+    label: { en: "Default agent sandbox", es: "Sandbox por defecto de los agentes" },
+    description: {
+      en: "Sandbox driver used by agents that do not pick one themselves — normally \"docker\". Leave blank to run agents directly on the kernel container, which is only safe if none of them can use Bash. Requires the Docker socket to be mounted into the kernel.",
+      es: "Driver de sandbox que usan los agentes que no eligen uno — normalmente \"docker\". Dejalo vacío para que corran directamente en el contenedor del kernel, lo que sólo es seguro si ninguno puede usar Bash. Necesita que el socket de Docker esté montado en el kernel.",
+    },
+    category: "agents",
+    type: "string",
+    applyToConfig: (v) => { process.env.AGENTS_DEFAULT_SANDBOX_DRIVER = v; },
+  },
+  {
+    key: "KERNEL_AGENT_DOCKER_NETWORK",
+    label: { en: "Agent sandbox network", es: "Red del sandbox de agentes" },
+    description: {
+      en: "Docker network the sandbox containers join, so an agent can reach the kernel and its services. Must match the network this stack actually created — `docker network ls` shows it, and it is the compose project name plus \"_default\". A wrong name fails the run with \"network not found\".",
+      es: "Red de Docker a la que se conectan los contenedores del sandbox, para que un agente pueda llegar al kernel y sus servicios. Tiene que coincidir con la red que este stack creó — `docker network ls` la muestra, y es el nombre del proyecto de compose más \"_default\". Un nombre incorrecto hace fallar la corrida con \"network not found\".",
+    },
+    category: "agents",
+    type: "string",
+    applyToConfig: (v) => { process.env.KERNEL_AGENT_DOCKER_NETWORK = v; },
+  },
+  {
+    key: "ARCHIVE_INGEST_MAX_ROWS",
+    label: { en: "Media catalog row limit", es: "Límite de filas del catálogo de medios" },
+    description: {
+      en: "Stop the archive.org ingesters once a catalog holds this many titles. They walk a cursor every few minutes and never stopped on their own, and each title also writes three full-text index rows, so the database grows roughly four rows per title. Blank or 0 means no limit. Lowering it below the current count parks the ingesters; it does not delete anything.",
+      es: "Frena los ingestadores de archive.org cuando un catálogo llega a esta cantidad de títulos. Avanzan un cursor cada pocos minutos y nunca paraban solos, y cada título escribe además tres filas de índice de texto completo, así que la base crece cerca de cuatro filas por título. Vacío o 0 es sin límite. Bajarlo por debajo del total actual deja los ingestadores parados; no borra nada.",
+    },
+    category: "advanced",
+    type: "number",
+    applyToConfig: (v) => { process.env.ARCHIVE_INGEST_MAX_ROWS = v; },
+  },
+  {
+    key: "KERNEL_DATA_VOLUME",
+    label: { en: "Kernel data volume", es: "Volumen de datos del kernel" },
+    description: {
+      en: "Name of the Docker volume backing /app/data, e.g. \"kernl-public_kernel-data\" (`docker volume ls`). Sandbox containers mount agent workspaces out of it by name. Leave blank only when /app/data is a host bind mount, in which case HOST_KERNEL_ROOT is used instead.",
+      es: "Nombre del volumen de Docker que respalda /app/data, por ejemplo \"kernl-public_kernel-data\" (`docker volume ls`). Los contenedores del sandbox montan desde ahí los workspaces de los agentes, por nombre. Dejalo vacío sólo si /app/data es un bind mount del host, y en ese caso se usa HOST_KERNEL_ROOT.",
+    },
+    category: "agents",
+    type: "string",
+    applyToConfig: (v) => { process.env.KERNEL_DATA_VOLUME = v; },
+  },
+  {
+    key: "KERNEL_ALLOW_UNSANDBOXED_AGENTS",
+    label: { en: "Allow unsandboxed agents", es: "Permitir agentes sin sandbox" },
+    description: {
+      en: "DANGEROUS. Lets an agent that declares __sandbox__: false run straight on the host filesystem. Such an agent with Bash enabled is remote code execution on this machine with your privileges. Turn this on only if you cannot use a sandbox driver and you trust every agent that exists.",
+      es: "PELIGROSO. Permite que un agente que declara __sandbox__: false corra directo sobre el sistema de archivos del host. Un agente así con Bash habilitado es ejecución remota de código en esta máquina y con tus privilegios. Activalo sólo si no podés usar un driver de sandbox y confiás en todos los agentes que existan.",
+    },
+    category: "security",
+    type: "boolean",
+    applyToConfig: (v) => { process.env.KERNEL_ALLOW_UNSANDBOXED_AGENTS = v === "true" ? "1" : ""; },
+  },
+
   // ── Security / PII ────────────────────────────────────────────────────────
   {
     key: "PII_FILTER_ENABLED",

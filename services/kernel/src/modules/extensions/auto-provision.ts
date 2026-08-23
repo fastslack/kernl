@@ -111,6 +111,11 @@ export async function autoProvisionExtensions(args: {
       const error = err instanceof Error ? err.message : String(err);
       result.failed.push({ slug: target.slug, error });
       log.warn(`Extension auto-provision: ${target.slug} not provisioned — ${error}`);
+      // Record it on the row. A failure that only reaches the log leaves the
+      // extension sitting in `installed` with an empty reason, so the UI shows
+      // a feature that is simply absent and the operator has nothing to act
+      // on — which is exactly how a parked Cinema looked like a broken build.
+      try { service.setProvisionError(target.id, error); } catch { /* best effort */ }
     }
   }
 

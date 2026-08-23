@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "bun:test";
 import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { chatMigrations } from "../src/modules/chat/migrations/001_chat.js";
-import { ChatService } from "../src/modules/chat/service.js";
+import { ChatService, EpisodeLockedError } from "../src/modules/chat/service.js";
 import { EventBus } from "../src/core/event-bus.js";
 import type { KernelConfig } from "../src/core/config.js";
 import {
@@ -318,6 +318,28 @@ describe("ChatService", () => {
 
     it("returns undefined when archiving nonexistent episode", () => {
       expect(service.archiveEpisode("nonexistent")).toBeFalsy();
+    });
+
+    // ── Model lock ──────────────────────────────────
+    // The model an episode answers with is fixed by its first message: the
+    // transcript above a switch was produced by a different model, so a
+    // mid-conversation swap makes the history a lie. The dashboard hides the
+    // picker once a chat starts; this is the rule the UI can't be trusted with.
+
+    it("switches provider while the episode has no messages", () => {
+      const ep = service.createEpisode({ provider: "openai", model: "gpt-4o" });
+      const updated = service.updateEpisodeProvider(ep.id, "openai", "gpt-4o-mini");
+      expect(updated?.llm_model).toBe("gpt-4o-mini");
+    });
+
+    it("refuses to switch provider once the episode has messages", () => {
+      const ep = service.createEpisode({ provider: "openai", model: "gpt-4o" });
+      db.prepare("UPDATE chat_episodes SET message_count = 2 WHERE id = ?").run(ep.id);
+
+      expect(() => service.updateEpisodeProvider(ep.id, "grok", "grok-4-fast-non-reasoning"))
+        .toThrow(EpisodeLockedError);
+      expect(service.getEpisode(ep.id)?.llm_provider).toBe("openai");
+      expect(service.getEpisode(ep.id)?.llm_model).toBe("gpt-4o");
     });
   });
 

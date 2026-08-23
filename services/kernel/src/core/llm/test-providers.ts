@@ -23,13 +23,22 @@
  */
 
 import type { LlmProviderRegistry } from "./provider-registry.js";
-import { classifyModel } from "./model-traits.js";
+import { classifyModel, type ModelTraits } from "./model-traits.js";
 
 export interface ProviderTestResult {
   ok: boolean;
   latencyMs: number;
   error?: string;
   models?: string[];
+  /**
+   * Per-model capability tags, keyed by the ids in `models`.
+   *
+   * The kernel already classifies every model it lists (vision / reasoning /
+   * fast / long-context), and the settings dropdowns — whose only source is
+   * this probe — were throwing that away and rendering bare ids. Sent as a
+   * separate map rather than changing `models` so older frontends keep working.
+   */
+  traits?: Record<string, ModelTraits>;
   /**
    * Did a real completion come back? Listing models proves a catalogue exists,
    * not that the provider answers — and for claude-code the catalogue is a
@@ -81,7 +90,19 @@ const PROVIDER_MAP: Array<{ id: string; slug: string; modelFilter?: (id: string)
   { id: "minimax",   slug: "minimax"   /* OpenAI-compatible /v1/models                         */ },
 ];
 
-const MAX_MODELS = 30;
+/**
+ * Sanity bound on the catalogue each probe carries back, not a display limit.
+ *
+ * It was 30, applied after an alphabetical sort — which quietly amputated the
+ * newest half of a real catalogue: with OpenAI listing 78 chat models, the
+ * settings dropdowns (their only source for this list) stopped at
+ * `gpt-5-nano-…` and never offered gpt-5-pro, gpt-5.1, gpt-5.2, gpt-5.4 or
+ * anything above. Nothing said so; the models simply were not there.
+ *
+ * The number is here to stop a local runtime that advertises thousands from
+ * bloating one JSON response, so it belongs far above any real chat catalogue.
+ */
+const MAX_MODELS = 200;
 
 export async function testAllProviders(
   registry: LlmProviderRegistry,
@@ -106,6 +127,7 @@ export async function testAllProviders(
       // claude-code `listModels()` returns a constant, so a green light built
       // on it meant nothing had been contacted.
       let models: string[] = [];
+      let traits: Record<string, ModelTraits> = {};
       let catalogError = "";
       if (typeof provider.listModels === "function") {
         try {
@@ -114,7 +136,12 @@ export async function testAllProviders(
           // Drop non-chat models (embeddings/audio/image/etc) — the
           // /providers page is showing "what can I chat with", not
           // "what does this provider expose".
-          models = filtered.filter((m) => classifyModel(slug, m).chat).slice(0, MAX_MODELS);
+          const classified = filtered
+            .map((m) => [m, classifyModel(slug, m)] as const)
+            .filter(([, t]) => t.chat)
+            .slice(0, MAX_MODELS);
+          models = classified.map(([m]) => m);
+          traits = Object.fromEntries(classified);
         } catch (err) {
           catalogError = err instanceof Error ? err.message : String(err);
         }
@@ -151,6 +178,7 @@ export async function testAllProviders(
           ok: true,
           latencyMs: Date.now() - start,
           models,
+          traits,
           answered: true,
           toolCall: declaresTools
             ? (result.tool_calls?.some((c) => c.name === PROBE_TOOL.name) ?? false)
@@ -161,6 +189,7 @@ export async function testAllProviders(
           ok: false,
           latencyMs: Date.now() - start,
           models,
+          traits,
           answered: false,
           error: err instanceof Error ? err.message : String(err) || catalogError,
         };

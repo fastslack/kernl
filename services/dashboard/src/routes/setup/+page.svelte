@@ -190,7 +190,16 @@
   }
 
   async function commitLLMAndContinue(): Promise<void> {
-    if (chosen === 'skip') return; // no longer reachable — the card is gone
+    if (chosen === 'skip') {
+      // Nothing to save and nothing to probe. Step 3 hires a team of agents,
+      // which is meaningless without a model, so it is skipped too — the
+      // wizard finishes and the dashboard explains what is off.
+      // Straight to the dashboard rather than /settings: the point of this
+      // path is that the product works now, and the banner carries the link
+      // to a provider whenever they want one.
+      finish('/');
+      return;
+    }
     llmSaving = true;
     readinessMsg = '';
     try {
@@ -262,10 +271,9 @@
       localStorage.setItem('kernl.welcomeSeen', '1');
     } catch { /* private browsing */ }
     // Hard navigation, like /login does on success — not goto(). The wizard
-    // runs in the shell-less layout, and the kernel it just configured only
-    // starts answering /api/* once an LLM exists. A full load guarantees the
-    // dashboard comes up against the post-setup server state instead of
-    // whatever the pre-setup session had (or had not) fetched.
+    // runs in the shell-less layout, and a full load guarantees the dashboard
+    // comes up against the post-setup server state instead of whatever the
+    // pre-setup session had (or had not) fetched.
     window.location.href = dest;
   }
 
@@ -465,15 +473,30 @@
                           {/if}
                         </label>
                       {/each}
-                    </div>
+          </div>
                   {/if}
                 </div>
               </button>
             {/each}
 
-            <!-- The "continue without a provider" card used to live here. It
-                 produced an install where every agent failed on its first run,
-                 which is not a state worth offering as a choice. -->
+            <!-- Leaving without a provider is a legitimate way to install.
+                 This card was removed once, because it produced an install
+                 where every agent failed on its first run. That was true of
+                 agents, and the gate has since been narrowed to the routes
+                 that actually call a model — so the rest of the product (tasks,
+                 CRM, finance, health, calendar) works, and the dashboard says
+                 in a banner which two things are off. -->
+            <button
+              type="button"
+              class="option-card option-card-later"
+              class:selected={chosen === 'skip'}
+              on:click={() => (chosen = 'skip')}>
+              <span class="opt-radio" aria-hidden="true"></span>
+              <div class="opt-body">
+                <div class="opt-title">{$t('setup.llm_later_title')}</div>
+                <div class="opt-sub">{$t('setup.llm_later_sub')}</div>
+              </div>
+            </button>
           </div>
 
           {#if chosen !== 'skip' && selectedRow}
@@ -519,9 +542,11 @@
           <button
             class="btn-primary"
             on:click={commitLLMAndContinue}
-            disabled={llmSaving || llmTesting || provLoading || chosen === 'skip'}
-            title={chosen === 'skip' ? $t('setup.llm_required_hint') : ''}>
-            {llmSaving ? $t('setup.btn_saving') : $t('setup.btn_next')}
+            disabled={llmSaving || llmTesting || provLoading}
+            title={chosen === 'skip' ? $t('setup.llm_later_hint') : ''}>
+            {llmSaving ? $t('setup.btn_saving')
+              : chosen === 'skip' ? $t('setup.llm_later_btn')
+              : $t('setup.btn_next')}
           </button>
         </div>
       </section>

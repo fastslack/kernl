@@ -43,7 +43,7 @@ class GrokProviderImpl implements LlmProvider {
 
   async start(): Promise<void> {
     if (!this.apiKey) this.apiKey = process.env.GROK_API_KEY ?? "";
-    this.impl = new ChatGrokProvider(this.apiKey, this.defaultModel);
+    this.impl = new ChatGrokProvider(this.apiKey, undefined, this.defaultModel);
     this.lastError = this.impl.available() ? undefined : "No API key configured";
   }
 

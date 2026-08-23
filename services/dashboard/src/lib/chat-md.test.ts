@@ -120,3 +120,22 @@ describe("formatMd — <think> folding", () => {
     expect(formatMd("just a reply")).toBe("<p>just a reply</p>");
   });
 });
+
+describe("lists", () => {
+  it("keeps items tight instead of separating them with <br>", () => {
+    const html = formatMd("- uno\n- dos\n- tres");
+    expect(html).toContain("<ul><li>uno</li><li>dos</li><li>tres</li></ul>");
+    expect(html).not.toContain("</li><br>");
+  });
+
+  it("wraps ordered lists too", () => {
+    const html = formatMd("1. uno\n2. dos");
+    expect(html).toContain("<ul><li>uno</li><li>dos</li></ul>");
+  });
+
+  it("does not leave the list inside a paragraph", () => {
+    const html = formatMd("Herramientas:\n\n- notas\n- eventos\n\n¿Cuál querés?");
+    expect(html).not.toMatch(/<p>[^<]*<ul>/);
+    expect(html).toContain("¿Cuál querés?");
+  });
+});

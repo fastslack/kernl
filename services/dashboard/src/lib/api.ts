@@ -640,3 +640,22 @@ export async function officeEnvAction(
 ): Promise<{ status: OfficeEnvStatus }> {
 	return post('/api/office-env/' + action, { flow_id: flowId }) as Promise<{ status: OfficeEnvStatus }>;
 }
+
+/**
+ * An RPC action, over the WS bus when it is up and over HTTP when it is not.
+ *
+ * Every module's `getRpcActions()` is also mounted at `POST /api/rpc/<action>`,
+ * which the extension host has used as its fallback for a while. Callers that
+ * only used the WS `rpc()` were WS-only for no reason — the repos register form
+ * carried a comment saying "no matching HTTP route exists today", and the whole
+ * repos surface went dark whenever the bridge was down.
+ */
+export function rpcPost(action: string, args: Record<string, unknown> = {}): Promise<any> {
+	return rpcOrCall(action, args, () =>
+		apiFetch('/api/rpc/' + encodeURIComponent(action), {
+			method: 'POST',
+			headers: { 'content-type': 'application/json' },
+			body: JSON.stringify(args),
+		}),
+	);
+}

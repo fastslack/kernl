@@ -76,8 +76,19 @@ export class RepoService {
     return null;
   }
 
-  /** Normalize + sanity-check a path: absolute, exists, is a directory. */
-  static validatePath(p: string): { ok: true; path: string } | { ok: false; error: string } {
+  /**
+   * Normalize + sanity-check a path: absolute, exists, is a directory.
+   *
+   * `visibleRoots` is what makes the failure honest. This check runs inside
+   * the kernel's container, which sees only what was mounted into it — so a
+   * perfectly real path on the operator's machine fails here, and the old
+   * message ("path does not exist") told them something they knew to be
+   * false. When the roots are known, say what the kernel can actually reach.
+   */
+  static validatePath(
+    p: string,
+    visibleRoots: string[] = [],
+  ): { ok: true; path: string } | { ok: false; error: string } {
     if (!p) return { ok: false, error: "path is required" };
     const abs = resolve(p);
     if (abs !== p && !p.startsWith("/")) {
@@ -85,18 +96,36 @@ export class RepoService {
       // ones against the kernel CWD, which is rarely what they want.
       return { ok: false, error: `path must be absolute (got: ${p})` };
     }
-    if (!existsSync(abs)) return { ok: false, error: `path does not exist: ${abs}` };
+    if (!existsSync(abs)) {
+      const roots = visibleRoots.filter(Boolean);
+      if (roots.length > 0) {
+        const under = roots.some((r) => abs === r || abs.startsWith(r.replace(/\/+$/, "") + "/"));
+        return {
+          ok: false,
+          error: under
+            ? `path does not exist: ${abs}`
+            : `the kernel cannot see ${abs}. It runs in a container and only has ` +
+              `${roots.join(", ")} mounted, so paths outside that are invisible to it ` +
+              `even when they exist on your machine. Move the checkout under one of ` +
+              `those roots, or add a mount for it.`,
+        };
+      }
+      return { ok: false, error: `path does not exist: ${abs}` };
+    }
     let st;
     try { st = statSync(abs); } catch (e) { return { ok: false, error: `stat failed: ${String(e)}` }; }
     if (!st.isDirectory()) return { ok: false, error: `path is not a directory: ${abs}` };
     return { ok: true, path: abs.replace(/\/+$/, "") };
   }
 
-  create(input: CreateRepoInput): { ok: true; repo: Repo } | { ok: false; error: string } {
+  create(
+    input: CreateRepoInput,
+    opts?: { visibleRoots?: string[] },
+  ): { ok: true; repo: Repo } | { ok: false; error: string } {
     const nameErr = RepoService.validateName(input.name);
     if (nameErr) return { ok: false, error: nameErr };
 
-    const pathCheck = RepoService.validatePath(input.path);
+    const pathCheck = RepoService.validatePath(input.path, opts?.visibleRoots ?? []);
     if (!pathCheck.ok) return pathCheck;
 
     const existingByName = this.getByName(input.name);
@@ -154,6 +183,95 @@ export class RepoService {
     if (ref.id) return this.getById(ref.id);
     if (ref.name) return this.getByName(ref.name);
     return undefined;
+  }
+
+  // ── Access ────────────────────────────────────────────────────────
+  //
+  // `shared = 1` (the default, and every pre-existing row) means any agent.
+  // `shared = 0` means only the agents listed in `repo_access`.
+  //
+  // A caller with no agent id is a human at the dashboard or a kernel-internal
+  // call, and sees everything — the same convention the agents module already
+  // uses ("Human calls bypass the gate"), and the only one under which the
+  // dashboard can manage a repo it just made private.
+
+  setAccess(repoId: string, agentIds: string[]): void {
+    const now = isoNow();
+    const unique = [...new Set(agentIds.map((a) => a.trim()).filter(Boolean))];
+    const trx = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM repo_access WHERE repo_id = ?").run(repoId);
+      const ins = this.db.prepare(
+        "INSERT OR IGNORE INTO repo_access (repo_id, agent_id, created_at) VALUES (?, ?, ?)",
+      );
+      for (const a of unique) ins.run(repoId, a, now);
+    });
+    trx();
+  }
+
+  getAccess(repoId: string): string[] {
+    return (
+      this.db
+        .prepare("SELECT agent_id FROM repo_access WHERE repo_id = ? ORDER BY agent_id")
+        .all(repoId) as Array<{ agent_id: string }>
+    ).map((r) => r.agent_id);
+  }
+
+  /** May `callerAgentId` reach this repo? An empty caller is a human. */
+  canAccess(repo: Pick<Repo, "id" | "shared">, callerAgentId: string): boolean {
+    if (!callerAgentId) return true;
+    if (repo.shared) return true;
+    const row = this.db
+      .prepare("SELECT 1 FROM repo_access WHERE repo_id = ? AND agent_id = ?")
+      .get(repo.id, callerAgentId);
+    return !!row;
+  }
+
+  /**
+   * Repos this caller may reach. Filtering in SQL rather than after the fact,
+   * so a private repo never rides along in a payload and gets dropped by the
+   * consumer — the name and path are the sensitive part.
+   */
+  listForCaller(callerAgentId: string, filters?: { tag?: string; query?: string; limit?: number }): Repo[] {
+    const all = this.list(filters);
+    if (!callerAgentId) return all;
+    const allowed = new Set(
+      (
+        this.db
+          .prepare("SELECT repo_id FROM repo_access WHERE agent_id = ?")
+          .all(callerAgentId) as Array<{ repo_id: string }>
+      ).map((r) => r.repo_id),
+    );
+    return all.filter((r) => r.shared || allowed.has(r.id));
+  }
+
+  /**
+   * Git checkouts the kernel can actually see, so the register form can offer
+   * a list instead of a free-text box that fails on paths it was never able
+   * to reach. Depth-limited: a repo three levels below a mounted root is
+   * findable, a full filesystem walk is not worth the stat storm.
+   */
+  static discoverCandidates(roots: string[], maxDepth = 3): Array<{ path: string; name: string }> {
+    const out: Array<{ path: string; name: string }> = [];
+    const seen = new Set<string>();
+    const walk = (dir: string, depth: number) => {
+      if (depth > maxDepth || out.length >= 200) return;
+      let entries;
+      try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      if (entries.some((e) => e.name === ".git")) {
+        const abs = dir.replace(/\/+$/, "");
+        if (!seen.has(abs)) {
+          seen.add(abs);
+          out.push({ path: abs, name: abs.slice(abs.lastIndexOf("/") + 1) });
+        }
+        return; // Don't descend into a checkout looking for more checkouts.
+      }
+      for (const e of entries) {
+        if (!e.isDirectory() || e.name.startsWith(".") || e.name === "node_modules") continue;
+        walk(`${dir}/${e.name}`, depth + 1);
+      }
+    };
+    for (const r of roots.filter(Boolean)) walk(resolve(r), 0);
+    return out.sort((a, b) => a.name.localeCompare(b.name));
   }
 
   list(filters?: { tag?: string; query?: string; limit?: number }): Repo[] {

@@ -101,6 +101,23 @@ function countToolUses(blocks: ContentBlock[]): number {
   return n;
 }
 
+/**
+ * Thrown when something tries to change the model of an episode that already
+ * has messages. Its own type so the HTTP layer can answer 409 (a conflict with
+ * the episode's state) instead of the blanket 400 every other bad request gets.
+ */
+export class EpisodeLockedError extends Error {
+  readonly messageCount: number;
+  constructor(messageCount: number) {
+    super(
+      `This conversation already has ${messageCount} message${messageCount === 1 ? "" : "s"} — ` +
+      `its model is fixed. Start a new conversation to use a different one.`,
+    );
+    this.name = "EpisodeLockedError";
+    this.messageCount = messageCount;
+  }
+}
+
 export class ChatService {
   private providers: Map<string, ChatLlmProvider>;
   private defaultProvider: string;
@@ -321,6 +338,13 @@ export class ChatService {
   /** Update which LLM provider (and optional model) an episode uses going forward.
    *  Subsequent `chat()` calls on this episode will resolve through the new provider.
    *
+   *  Only while the episode is still empty. Once it has a message the model is
+   *  fixed: everything above a mid-conversation swap was written by a different
+   *  model, so the transcript would attribute one model's answers to another.
+   *  Callers that want a different model start a new episode. The dashboard
+   *  hides the picker after the first message, but the rule lives here — a
+   *  stale tab or a direct POST must not be able to rewrite history's author.
+   *
    *  Important: when no `model` is passed, the episode's `llm_model` is CLEARED.
    *  Otherwise the previous provider's model id (e.g. "gpt-4o") would carry over
    *  to the new provider (e.g. grok) which doesn't recognize it. With an empty
@@ -330,6 +354,9 @@ export class ChatService {
     if (!episode) return undefined;
     if (!this.providers.has(provider)) {
       throw new Error(`Unknown provider "${provider}"`);
+    }
+    if (episode.message_count > 0) {
+      throw new EpisodeLockedError(episode.message_count);
     }
     const now = isoNow();
     const nextModel = model ?? "";
