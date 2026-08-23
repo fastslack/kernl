@@ -1374,7 +1374,14 @@ export class ClaudeCodeExecutor {
       return vars.__sandbox_driver__;
     }
     if (vars.__container_sandbox__) return "docker";
-    return null;
+    // Instance-wide default. Without it, an agent only ran sandboxed if it
+    // thought to ask for a driver by name — and an agent created by another
+    // agent never does. It asked for `__sandbox__: false` instead, hit the
+    // hard-deny, and the operator's only obvious way out was to switch the
+    // deny off globally. Setting a default here means "sandboxed" is what you
+    // get for free and unsandboxed stays the deliberate exception.
+    const fallback = (process.env.AGENTS_DEFAULT_SANDBOX_DRIVER ?? "").trim();
+    return fallback !== "" ? fallback : null;
   }
 
   /**

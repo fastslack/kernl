@@ -34,6 +34,16 @@ const DEFAULT_PAGES_PER_PASS = 1;
 const DEFAULT_PAGE_DELAY_MS = 800;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
+/**
+ * Row ceiling for the catalog, from the config or the instance-wide default.
+ * Returns 0 for "no limit", which is what an unset value means.
+ */
+function resolveMaxRows(explicit?: number): number {
+  if (typeof explicit === "number" && explicit > 0) return Math.floor(explicit);
+  const env = Number(process.env.ARCHIVE_INGEST_MAX_ROWS ?? "");
+  return Number.isFinite(env) && env > 0 ? Math.floor(env) : 0;
+}
+
 interface ScrapeResponse {
   items?: ArchiveScrapeRow[];
   count?: number;
@@ -97,6 +107,8 @@ export async function ingestPass(
     : `mediatype:${config.mediatype}`;
   const query = `${baseFilter} AND collection:${run.collection}`;
 
+  const maxRows = resolveMaxRows(config.maxRows);
+
   let cursor = run.cursor;
   let fetched = 0;
   let inserted = 0;
@@ -105,6 +117,19 @@ export async function ingestPass(
   let finished = false;
 
   for (let p = 0; p < maxPages; p++) {
+    // Check before each page, not just at the top: one pass can span several
+    // pages and the point is to stop AT the ceiling, not a few thousand rows
+    // past it.
+    if (maxRows > 0 && catalog.countAll() >= maxRows) {
+      log.info(
+        `archive-ingester[${uaTag}]: ${run.collection} parked — catalog is at ` +
+        `${catalog.countAll()} rows, ceiling is ${maxRows}`,
+      );
+      catalog.updateRun(run.id, { cursor, status: "paused", error: "row ceiling reached" });
+      finished = true;
+      break;
+    }
+
     let resp: ScrapeResponse;
     try {
       resp = await fetchScrapePage(query, cursor, pageSize, timeoutMs, uaTag);
@@ -177,6 +202,12 @@ export async function ingestNextChunk(
   uaTag = "archive-ingester",
 ): Promise<IngestPassResult | null> {
   if (collections.length === 0) return null;
+
+  // Cheapest possible exit: if the catalog is already at its ceiling there is
+  // nothing to schedule, so don't even wake a run or hit archive.org.
+  const ceiling = resolveMaxRows(config.maxRows);
+  if (ceiling > 0 && catalog.countAll() >= ceiling) return null;
+
   const snapshot = collections.map((c) => ({ collection: c, latest: catalog.latestRun(c) }));
 
   const paused = snapshot.find((s) => s.latest?.status === "paused");

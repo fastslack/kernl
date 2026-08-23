@@ -183,7 +183,6 @@ export class DockerSandboxDriver implements SandboxDriver {
       ?? process.env.HOST_CLAUDE_CREDS
       ?? join(hostHome, ".claude/.credentials.json");
 
-    const hostWorkspace = opts.workspace.hostPath || kernelPathToHost(opts.workspace.kernelPath);
 
     const envFlags: string[] = [];
     for (const [k, v] of Object.entries(opts.env)) {
@@ -195,7 +194,9 @@ export class DockerSandboxDriver implements SandboxDriver {
     const skillNames: string[] = [];
     const mounts: string[] = [
       `  --tmpfs /sandbox-home:uid=1000,gid=1000,mode=0700 \\`,
-      `  -v ${shellQuote(hostWorkspace)}:/workspace \\`,
+      opts.workspace.hostPath
+        ? `  -v ${shellQuote(opts.workspace.hostPath)}:/workspace \\`
+        : mountForKernelPath(opts.workspace.kernelPath, "/workspace"),
       `  -v ${shellQuote(claudeCli)}:/usr/local/bin/claude:ro \\`,
       `  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`,
       `  -v ${shellQuote(claudeCreds)}:/mnt/credentials.json:ro \\`,
@@ -233,7 +234,7 @@ export class DockerSandboxDriver implements SandboxDriver {
     ].join("\n");
     writeFileSync(bootstrapPath, bootstrap, { encoding: "utf-8" });
     chmodSync(bootstrapPath, 0o755);
-    mounts.push(`  -v ${shellQuote(kernelPathToHost(bootstrapPath))}:/bootstrap.sh:ro \\`);
+    mounts.push(mountForKernelPath(bootstrapPath, "/bootstrap.sh", { readonly: true }));
 
     for (const m of opts.extraMounts ?? []) {
       mounts.push(`  -v ${shellQuote(m.host)}:${shellQuote(m.container)}${m.readonly ? ":ro" : ""} \\`);
@@ -299,6 +300,42 @@ function resolveNetwork(n: SandboxRunOptions["network"]): string {
   // agent-controlled `__sandbox_network__` can't inject extra docker flags.
   if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(n)) return "bridge";
   return n;
+}
+
+/**
+ * Where `/app/data` actually lives, from the daemon's point of view.
+ *
+ * The driver runs inside the kernel container but talks to the Docker daemon
+ * on the HOST, so every `-v` it emits is resolved by the host. That works when
+ * `/app/data` is a bind mount — the topology `docker-compose.full.yml` uses,
+ * and what `kernelPathToHost()` was written for. On a stack where `/app/data`
+ * is a NAMED VOLUME there is no host path to translate to: the driver handed
+ * the daemon `/app/data/...`, the daemon found nothing there, created an empty
+ * directory and mounted that. The symptom is the sandbox starting and then
+ * dying on `exec: /bootstrap.sh: Permission denied`.
+ *
+ * Docker can mount a volume by name and pick a path inside it
+ * (`--mount volume-subpath=`, 25.0+), which needs no host path at all. So when
+ * the operator names the volume, use it; otherwise fall back to the old
+ * bind-path behaviour.
+ */
+function dataVolume(): string {
+  return (process.env.KERNEL_DATA_VOLUME ?? "").trim();
+}
+
+/** A `docker run` mount flag for a path the KERNEL can see. */
+export function mountForKernelPath(
+  kernelPath: string,
+  containerPath: string,
+  opts: { readonly?: boolean } = {},
+): string {
+  const vol = dataVolume();
+  const ro = opts.readonly ? ",readonly" : "";
+  if (vol && kernelPath.startsWith("/app/data/")) {
+    const sub = kernelPath.slice("/app/data/".length);
+    return `  --mount type=volume,src=${shellQuote(vol)},dst=${shellQuote(containerPath)},volume-subpath=${shellQuote(sub)}${ro} \\`;
+  }
+  return `  -v ${shellQuote(kernelPathToHost(kernelPath))}:${shellQuote(containerPath)}${opts.readonly ? ":ro" : ""} \\`;
 }
 
 export function kernelPathToHost(p: string): string {

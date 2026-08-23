@@ -119,12 +119,18 @@ export function formatMd(text: string): string {
   html = html.replace(/^## (.+)$/gm, "<h3>$1</h3>");
   html = html.replace(/^# (.+)$/gm, "<h2>$1</h2>");
 
-  // Unordered lists
+  // Lists. Mark BOTH kinds first, then wrap the runs — the ordered pass used
+  // to run after the wrapper, so `1. foo` produced a bare <li> with no list
+  // around it at all.
   html = html.replace(/^[-*] (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
-
-  // Ordered lists
   html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+  // Drop the newlines BETWEEN items while wrapping. They used to survive into
+  // the `\n` → <br> pass below, so every list rendered as
+  // `<li>a</li><br><li>b</li><br>…` — a blank line under each bullet, which is
+  // what turned a fifteen-item answer into a page of scrolling.
+  html = html.replace(/(?:<li>[^\n]*<\/li>\n?)+/g, (match) =>
+    `<ul>${match.replace(/\n/g, "")}</ul>`,
+  );
 
   // Blockquotes
   html = html.replace(/^&gt; (.+)$/gm, "<blockquote>$1</blockquote>");
@@ -152,6 +158,14 @@ export function formatMd(text: string): string {
   html = html.replace(/\n/g, "<br>");
 
   html = `<p>${html}</p>`.replace(/<p><\/p>/g, "");
+
+  // A <ul> cannot live inside a <p>: the browser closes the paragraph early
+  // and the stray <br> around the list adds another blank line on each side.
+  html = html
+    .replace(/<br>\s*(<ul>)/g, "$1")
+    .replace(/(<\/ul>)\s*<br>/g, "$1")
+    .replace(/<p>\s*(<ul>)/g, "$1")
+    .replace(/(<\/ul>)\s*<\/p>/g, "$1");
 
   // Restore. A stashed anchor can hold a stashed code span in its label, so
   // keep swapping until nothing is left rather than assuming one pass.

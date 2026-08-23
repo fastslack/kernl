@@ -120,6 +120,18 @@ export interface IngestPassConfig {
   maxPages?: number;       // pages per pass (default 1)
   pageDelayMs?: number;    // sleep between pages (default 800ms)
   requestTimeoutMs?: number;
+  /**
+   * Hard ceiling on how many rows this catalog may hold. Once reached the
+   * ingester stops walking the cursor and leaves the run parked.
+   *
+   * There was no ceiling at all: `maxPages` throttles ONE pass, but the cursor
+   * survives across ticks, so a collection kept growing every 15 minutes until
+   * archive.org ran out of items. Each title also carries three FTS shadow
+   * rows, so the on-disk cost is roughly four rows per title.
+   *
+   * 0 or unset = unlimited (previous behaviour).
+   */
+  maxRows?: number;
 }
 
 export interface IngestPassResult {

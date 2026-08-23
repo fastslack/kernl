@@ -8,6 +8,32 @@ RUN bun install
 COPY services/dashboard/ ./
 RUN bun run build
 
+# Extension page bundles.
+#
+# These are built by the dashboard's vite builder, and this is the only stage
+# that has it. The kernel stage runs `build-extensions.ts`, but there is no
+# ../dashboard there, so its frontend pass hits the "dashboard/node_modules
+# missing" branch, warns, and returns — silently shipping an image with zero
+# extension pages. It only ever looked fine because `frontend/entry.js` is
+# gitignored and whoever built the image happened to have stale copies lying
+# around on disk; a clean checkout produced an image where every extension page
+# died with "Failed to fetch dynamically imported module".
+# The package.json comes along because the bundler walks up from the extension
+# directory looking for one; without it every extension fails with
+# "Cannot find package.json".
+COPY services/kernel/package.json /build/kernel/package.json
+COPY services/kernel/assets/ /build/kernel/assets/
+RUN set -eu; \
+    found=0; \
+    for src in /build/kernel/assets/extensions/*/*/frontend/src/index.ts; do \
+      [ -f "$src" ] || continue; \
+      dir=$(dirname "$(dirname "$(dirname "$src")")"); \
+      bun scripts/build-ext-frontend.mjs "$dir"; \
+      found=$((found+1)); \
+    done; \
+    echo "[docker] built $found extension frontend bundle(s)"; \
+    [ "$found" -gt 0 ]
+
 # ── Stage 2: Build kernel (TypeScript → single bundle) ─
 FROM oven/bun:1.2 AS kernel-build
 
@@ -21,7 +47,10 @@ RUN bun install --frozen-lockfile || bun install
 COPY services/kernel/tsconfig.json services/kernel/bunfig.toml ./
 COPY services/kernel/bin/ bin/
 COPY services/kernel/src/ src/
-COPY services/kernel/assets/ assets/
+# Assets come from the dashboard stage, which has the extension page bundles
+# compiled into them. Taking them straight from the build context instead is
+# what shipped images with no extension pages.
+COPY --from=dashboard-build /build/kernel/assets/ assets/
 COPY services/kernel/scripts/ scripts/
 
 RUN bun build bin/mcp-server.ts --outdir dist --target bun \
