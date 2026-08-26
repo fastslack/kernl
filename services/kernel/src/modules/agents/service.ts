@@ -677,6 +677,25 @@ export class AgentService {
       .get(slug) as Agent | undefined;
   }
 
+  /**
+   * Installed skills, as the scorer wants them. Lives here rather than in the
+   * route because the route has no business holding SQL, and the daily
+   * suggester reads the same shape (skill-suggester.ts:186).
+   */
+  listInstalledSkillRows(): Array<{ slug: string; name: string; manifest_json: string }> {
+    try {
+      return this.db
+        .prepare(
+          `SELECT slug, name, manifest_json
+             FROM installed_extensions
+            WHERE type = 'skill' AND status = 'active'`,
+        )
+        .all() as Array<{ slug: string; name: string; manifest_json: string }>;
+    } catch {
+      return [];
+    }
+  }
+
   listAgents(filters?: { active?: boolean }): Agent[] {
     let sql = "SELECT * FROM agents WHERE 1=1";
     const params: unknown[] = [];

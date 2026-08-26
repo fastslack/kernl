@@ -19,6 +19,7 @@ import type {
   ReflectionOptimizerLike,
   WorkspaceEvolverLike,
 } from "./advanced-types.js";
+import { rankSkillsForAgent, skillRowText, agentRowText } from "./skill-scoring.js";
 
 /**
  * Conservative prompt-injection red-flag patterns scanned in cloned marketplace
@@ -1170,6 +1171,57 @@ export function registerAgentRoutes(
       if (!body.content) { server.json(res, 400, { error: "content required" }); return; }
       service.addMemory(id, (body.role as "user" | "assistant") ?? "user", body.content);
       server.json(res, 200, { ok: true });
+    } catch (err) {
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  // GET /api/agents/:id/skill-suggestions — which installed skills would suit
+  // this agent, scored live. Same maths as the daily suggester cron; this is
+  // the path the drawer's SKILLS tab calls, so the ranking reaches the agent
+  // it is about instead of a note nobody reads.
+  server.get("/api/agents/:id/skill-suggestions", (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+
+      const agent = service.getAgent(id);
+      if (!agent) { server.json(res, 404, { error: "agent not found" }); return; }
+
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const minScore = Number(url.searchParams.get("min_score") ?? "1") || 0;
+      const topN = Math.min(Number(url.searchParams.get("top_n") ?? "8") || 8, 50);
+
+      const rows = service.listInstalledSkillRows();
+      if (rows.length === 0) { server.json(res, 200, { suggestions: [] }); return; }
+
+      let attached: string[] = [];
+      try { attached = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { attached = []; }
+
+      const ranked = rankSkillsForAgent(
+        {
+          text: agentRowText({
+            name: agent.name,
+            description: agent.description ?? "",
+            system_prompt: agent.system_prompt ?? "",
+            flow_name: null,
+          }),
+          attached: new Set(attached.map(String)),
+        },
+        rows.map((r) => ({ slug: r.slug, text: skillRowText(r) })),
+        { minScore, topN },
+      );
+
+      const nameBySlug = new Map(rows.map((r) => [r.slug, r.name]));
+      server.json(res, 200, {
+        suggestions: ranked.map((m) => ({
+          slug: m.slug,
+          name: nameBySlug.get(m.slug) ?? m.slug,
+          score: Number(m.score.toFixed(2)),
+          matches: m.matches,
+          installed: true,
+        })),
+      });
     } catch (err) {
       server.json(res, 500, { error: String(err) });
     }
