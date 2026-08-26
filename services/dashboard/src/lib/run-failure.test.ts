@@ -32,7 +32,14 @@ describe("analyzeRunFailure", () => {
   });
 
   it("surfaces which providers were dropped", () => {
-    expect(analyzeRunFailure(TOOL_BLOCKED).detail).toContain("claude_code");
+    expect(analyzeRunFailure(TOOL_BLOCKED).detail).toBe("Descartado: claude_code");
+  });
+
+  it("handles multiple dropped providers", () => {
+    const multiDrop =
+      'No LLM provider in the chain can run tool calls. Dropped: claude_code, lmstudio. ' +
+      'Configure a provider that supports tools (Settings → AI).';
+    expect(analyzeRunFailure(multiDrop).detail).toBe("Descartado: claude_code, lmstudio");
   });
 
   it("offers provider configuration when the chain is empty for another reason", () => {
@@ -42,8 +49,18 @@ describe("analyzeRunFailure", () => {
     expect(kinds).not.toContain("switch-executor-claude-code");
   });
 
-  it("keeps the Google re-auth remedy the panel already had", () => {
-    const f = analyzeRunFailure("Google token expired: invalid_grant");
+  it("detects Google auth expiry from google-client 401 responses", () => {
+    const f = analyzeRunFailure("Authentication expired. Run kernel_google_auth to re-authenticate.");
+    expect(f.remedies.map((r) => r.kind)).toContain("reauth-google");
+  });
+
+  it("detects Google auth missing from getAccessToken", () => {
+    const f = analyzeRunFailure("Not authenticated. Run kernel_google_auth first.");
+    expect(f.remedies.map((r) => r.kind)).toContain("reauth-google");
+  });
+
+  it("detects Google OAuth refresh failure", () => {
+    const f = analyzeRunFailure("invalid_grant");
     expect(f.remedies.map((r) => r.kind)).toContain("reauth-google");
   });
 

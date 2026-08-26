@@ -64,7 +64,10 @@ export function analyzeRunFailure(error: string): RunFailure {
     };
   }
 
-  if (/invalid_grant|google.{0,20}token.{0,20}expired/i.test(text)) {
+  // invalid_grant is a generic OAuth2 code (RFC 6749), not Google-specific.
+  // Harmless today since no other integration emits it, but this ambiguity
+  // matters when a second OAuth integration lands.
+  if (/kernel_google_auth|invalid_grant|Authentication expired|Not authenticated|Token (refresh failed|has been expired or revoked)/i.test(text)) {
     return {
       title: "El token de Google venció",
       detail: text,
