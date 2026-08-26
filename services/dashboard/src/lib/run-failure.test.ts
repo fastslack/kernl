@@ -73,4 +73,11 @@ describe("analyzeRunFailure", () => {
   it("does not crash on an empty error", () => {
     expect(analyzeRunFailure("").remedies.map((r) => r.kind)).toEqual(["retry"]);
   });
+
+  it("does not confuse Claude Code SDK auth with Google auth (regression)", () => {
+    const f = analyzeRunFailure('LLM Claude-Code-SDK 401 not authenticated: invalid credentials (run `claude` and /login)');
+    const kinds = f.remedies.map((r) => r.kind);
+    expect(kinds).not.toContain("reauth-google");
+    expect(kinds).toEqual(["retry"]);
+  });
 });

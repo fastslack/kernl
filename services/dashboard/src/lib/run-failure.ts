@@ -64,10 +64,12 @@ export function analyzeRunFailure(error: string): RunFailure {
     };
   }
 
-  // invalid_grant is a generic OAuth2 code (RFC 6749), not Google-specific.
-  // Harmless today since no other integration emits it, but this ambiguity
-  // matters when a second OAuth integration lands.
-  if (/kernel_google_auth|invalid_grant|Authentication expired|Not authenticated|Token (refresh failed|has been expired or revoked)/i.test(text)) {
+  // Anchor on the tool name and concrete OAuth shapes, not English phrases.
+  // "Not authenticated" in client.ts:616 is about Claude Code SDK login, not
+  // Google. Matching on generic phrases sends the user down the wrong path.
+  // invalid_grant is RFC 6749 OAuth2, not Google-specific, but no other
+  // integration emits it today; matters when a second OAuth integration lands.
+  if (/kernel_google_auth|invalid_grant|Token (refresh failed|has been expired or revoked)/i.test(text)) {
     return {
       title: "El token de Google venció",
       detail: text,
