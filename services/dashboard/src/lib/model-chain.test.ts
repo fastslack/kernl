@@ -100,35 +100,45 @@ describe("round trip", () => {
 });
 
 describe("corruption edge cases", () => {
-  describe("readChain coerces non-string values to strings", () => {
-    it("coerces numeric provider to string", () => {
+  describe("readChain coerces non-string values to empty sentinel", () => {
+    it("coerces numeric provider to empty string (not configured)", () => {
       const chain = JSON.stringify([{ provider: 123, model: "opus" }]);
       const result = readChain({ model_chain: chain });
-      expect(result).toEqual([{ provider: "123", model: "opus" }]);
+      expect(result).toEqual([{ provider: "", model: "opus" }]);
       expect(typeof result[0].provider).toBe("string");
       expect(typeof result[0].model).toBe("string");
     });
 
-    it("coerces boolean model to string", () => {
+    it("coerces boolean model to empty string (not configured)", () => {
       const chain = JSON.stringify([{ provider: "grok", model: true }]);
       const result = readChain({ model_chain: chain });
-      expect(result).toEqual([{ provider: "grok", model: "true" }]);
+      expect(result).toEqual([{ provider: "grok", model: "" }]);
       expect(typeof result[0].provider).toBe("string");
       expect(typeof result[0].model).toBe("string");
+    });
+
+    it("degrades to loose pair when link is fully corrupted", () => {
+      const chain = JSON.stringify([{ provider: true, model: true }]);
+      const result = readChain({
+        model_chain: chain,
+        provider: "claude",
+        model: "opus",
+      });
+      expect(result).toEqual([{ provider: "claude", model: "opus" }]);
     });
   });
 
-  describe("writeChain coerces non-string values to strings", () => {
-    it("coerces numeric provider to string", () => {
+  describe("writeChain coerces non-string values to empty sentinel", () => {
+    it("coerces numeric provider to empty string (not configured)", () => {
       const result = writeChain([{ provider: 123 as any, model: "opus" }]);
-      expect(result.provider).toBe("123");
+      expect(result.provider).toBe("");
       expect(typeof result.provider).toBe("string");
       expect(typeof result.model).toBe("string");
     });
 
-    it("coerces boolean model to string", () => {
+    it("coerces boolean model to empty string (not configured)", () => {
       const result = writeChain([{ provider: "grok", model: true as any }]);
-      expect(result.model).toBe("true");
+      expect(result.model).toBe("");
       expect(typeof result.model).toBe("string");
       expect(typeof result.provider).toBe("string");
     });

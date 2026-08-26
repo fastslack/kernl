@@ -10,6 +10,12 @@
  * Writing a chain also mirrors its head into the loose pair on purpose:
  * executor.ts:640 documents that `provider` is kept for downstream code, so
  * leaving it stale would make the rest of the kernel disagree with the UI.
+ *
+ * Non-string provider/model values coerce to `""`, not `String(v)`, because
+ * the executor uses `""` as the sentinel for "not configured" (executor.ts:565's
+ * `entry.provider || this.defaultProvider` fallback). Corrupted values like
+ * `{provider: true, model: true}` become `{provider: "", model: ""}` and
+ * correctly fail isUsable, allowing readChain to degrade to the loose pair.
  */
 
 export interface ChainLink {
@@ -23,35 +29,15 @@ export const MAX_CHAIN_LINKS = 3;
 function isUsable(link: unknown): boolean {
   if (!link || typeof link !== "object") return false;
   const l = link as { provider?: unknown; model?: unknown };
-  const provider =
-    l.provider !== null && l.provider !== undefined
-      ? typeof l.provider === "string"
-        ? l.provider
-        : String(l.provider)
-      : "";
-  const model =
-    l.model !== null && l.model !== undefined
-      ? typeof l.model === "string"
-        ? l.model
-        : String(l.model)
-      : "";
+  const provider = typeof l.provider === "string" ? l.provider : "";
+  const model = typeof l.model === "string" ? l.model : "";
   return provider !== "" || model !== "";
 }
 
 function normalize(link: unknown): ChainLink {
   const l = link as { provider?: unknown; model?: unknown };
-  const provider =
-    l.provider !== null && l.provider !== undefined
-      ? typeof l.provider === "string"
-        ? l.provider
-        : String(l.provider)
-      : "";
-  const model =
-    l.model !== null && l.model !== undefined
-      ? typeof l.model === "string"
-        ? l.model
-        : String(l.model)
-      : "";
+  const provider = typeof l.provider === "string" ? l.provider : "";
+  const model = typeof l.model === "string" ? l.model : "";
   return { provider, model };
 }
 
