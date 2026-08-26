@@ -98,3 +98,39 @@ describe("round trip", () => {
     expect(readChain(writeChain(links))).toEqual(links);
   });
 });
+
+describe("corruption edge cases", () => {
+  describe("readChain coerces non-string values to strings", () => {
+    it("coerces numeric provider to string", () => {
+      const chain = JSON.stringify([{ provider: 123, model: "opus" }]);
+      const result = readChain({ model_chain: chain });
+      expect(result).toEqual([{ provider: "123", model: "opus" }]);
+      expect(typeof result[0].provider).toBe("string");
+      expect(typeof result[0].model).toBe("string");
+    });
+
+    it("coerces boolean model to string", () => {
+      const chain = JSON.stringify([{ provider: "grok", model: true }]);
+      const result = readChain({ model_chain: chain });
+      expect(result).toEqual([{ provider: "grok", model: "true" }]);
+      expect(typeof result[0].provider).toBe("string");
+      expect(typeof result[0].model).toBe("string");
+    });
+  });
+
+  describe("writeChain coerces non-string values to strings", () => {
+    it("coerces numeric provider to string", () => {
+      const result = writeChain([{ provider: 123 as any, model: "opus" }]);
+      expect(result.provider).toBe("123");
+      expect(typeof result.provider).toBe("string");
+      expect(typeof result.model).toBe("string");
+    });
+
+    it("coerces boolean model to string", () => {
+      const result = writeChain([{ provider: "grok", model: true as any }]);
+      expect(result.model).toBe("true");
+      expect(typeof result.model).toBe("string");
+      expect(typeof result.provider).toBe("string");
+    });
+  });
+});

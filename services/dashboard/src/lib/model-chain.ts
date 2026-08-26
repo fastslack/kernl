@@ -20,16 +20,39 @@ export interface ChainLink {
 /** Primary + two fallbacks. What the executor uses today. */
 export const MAX_CHAIN_LINKS = 3;
 
-function isUsable(link: unknown): link is ChainLink {
+function isUsable(link: unknown): boolean {
   if (!link || typeof link !== "object") return false;
   const l = link as { provider?: unknown; model?: unknown };
-  const provider = typeof l.provider === "string" ? l.provider : "";
-  const model = typeof l.model === "string" ? l.model : "";
+  const provider =
+    l.provider !== null && l.provider !== undefined
+      ? typeof l.provider === "string"
+        ? l.provider
+        : String(l.provider)
+      : "";
+  const model =
+    l.model !== null && l.model !== undefined
+      ? typeof l.model === "string"
+        ? l.model
+        : String(l.model)
+      : "";
   return provider !== "" || model !== "";
 }
 
-function normalize(link: ChainLink): ChainLink {
-  return { provider: link.provider ?? "", model: link.model ?? "" };
+function normalize(link: unknown): ChainLink {
+  const l = link as { provider?: unknown; model?: unknown };
+  const provider =
+    l.provider !== null && l.provider !== undefined
+      ? typeof l.provider === "string"
+        ? l.provider
+        : String(l.provider)
+      : "";
+  const model =
+    l.model !== null && l.model !== undefined
+      ? typeof l.model === "string"
+        ? l.model
+        : String(l.model)
+      : "";
+  return { provider, model };
 }
 
 /**
