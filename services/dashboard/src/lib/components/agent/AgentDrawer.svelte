@@ -283,9 +283,16 @@
 
       <!-- El cuerpo de cada tab sigue en quien monta el drawer. El slot se
            renderiza sólo con su tab abierto, así que el contenido se crea y se
-           destruye igual que con el {#if panelTab === …} que había acá. -->
+           destruye igual que con el {#if panelTab === …} que había acá.
+
+           `overview` además publica `store` (let:store): las secciones que
+           Tasks 9/12 montan ahí adentro (RuntimeSection y las demás) leen y
+           escriben el agente a través de este store, que el drawer sigue
+           siendo dueño de crear y recrear. Ningún otro slot lo necesita
+           todavía — SkillsTab (Task 11) trabaja con agentId/agent y avisa por
+           evento `change`, no con el store directo. -->
       {#if panelTab === 'info'}
-        <slot name="overview" />
+        <slot name="overview" store={detail} />
       {/if}
 
       {#if panelTab === 'live'}

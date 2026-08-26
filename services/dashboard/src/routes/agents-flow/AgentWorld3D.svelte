@@ -8567,7 +8567,13 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     >
 
       <!-- ──────────────── OVERVIEW TAB ──────────────── -->
-      <svelte:fragment slot="overview">
+      <!-- `let:store` recibe el handle de sólo lectura que AgentDrawer publica
+           sobre el store que crea y sigue siendo dueño de él. Nada lo consume
+           todavía — este cuerpo sigue leyendo `selData`/`selPrompt`/etc, como
+           antes de Task 8 — pero la variable se declara para probar que el
+           cableado compila; Task 9 monta ahí adentro la primera sección que sí
+           lo necesita (RuntimeSection). -->
+      <svelte:fragment slot="overview" let:store>
         <div class="ip-body">
           <!-- ─── Mandate ───
                What the agent was told to be. The role used to hang loose under
