@@ -33,7 +33,7 @@
     runTradeExecution,
     type AnimationRegistry,
     type DeliveryInfo,
-    resolveFlowColor, agentType, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL,
+    resolveFlowColor, agentType, CLAUDE_CODE_DEFAULT_MODEL,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
   import { setTextureAnisotropy } from './office3d/textures.js';
@@ -42,6 +42,7 @@
   import NewOfficeModal from './NewOfficeModal.svelte';
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
+  import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
 
@@ -5044,25 +5045,6 @@
   });
 
   $: selData = selectedAgent ? agents.find(a => a.id === selectedAgent) : null;
-  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps/Repos
-  // office? If so, offer a deep-link to the paid DevOps control panel (/devops).
-  $: selDevopsOffice = !!selData && /^(devops|repos)/i.test((flows.find(f => f.id === selData.flow_id)?.name) || '');
-  // The circuit breaker in AgentService.recordRunOutcome() stamps these three
-  // when it stops an agent itself. `active === 0` alone cannot tell that apart
-  // from a pause the operator asked for, so key the distinction on the stamp.
-  $: selAutoPaused = !!selData && selData.active !== 1 && !!(selData.auto_paused_at || '');
-  $: selAutoPausedAgo = selAutoPaused ? sinceLabel(selData?.auto_paused_at ?? '') : '';
-
-  /** "3h ago" / "2d ago" — coarse on purpose; the exact stamp is in the title. */
-  function sinceLabel(iso: string): string {
-    const t = Date.parse(iso || '');
-    if (!Number.isFinite(t)) return '';
-    const s = Math.max(0, Math.round((Date.now() - t) / 1000));
-    if (s < 90) return 'just now';
-    if (s < 3600) return `${Math.round(s / 60)}m ago`;
-    if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-    return `${Math.round(s / 86400)}d ago`;
-  }
 
   $: selStats = selectedAgent ? stats[selectedAgent] : null;
   $: selChains = selectedAgent ? chains.filter(c => c.source_agent_id === selectedAgent || c.target_agent_id === selectedAgent) : [];
@@ -5690,6 +5672,7 @@
     panelTab = tab;
     if (tab === 'history') loadAgentRuns();
     if (tab === 'info') loadLatestRun();
+    if (tab === 'workspace') loadWorkspaceFiles();
     // Re-read the thread from the server every time the tab is opened, not
     // only when the selected agent changes. The reply is persisted by the
     // executor the moment the run ends, so this is what makes an answer
@@ -8557,166 +8540,34 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   {/if}
 
   {#if selData}
-    <div class="info-panel" style={selFlow?.color ? `--flow-color:${selFlow.color}` : ''}>
-      <!-- Header: type glyph + name + role + close -->
-      <div class="ip-head">
-        <div class="ip-head-left">
-          <div class="ip-glyph">{agentType(selData) === 'llm' ? '◆' : agentType(selData) === 'claude_code' ? '◇' : agentType(selData) === 'function' ? '▣' : '▲'}</div>
-          <div class="ip-head-txt">
-            {#if editingName}
-              <div class="ip-name-edit">
-                <!-- svelte-ignore a11y-autofocus -->
-                <input
-                  type="text"
-                  class="ip-name-input"
-                  bind:value={editNameValue}
-                  autofocus
-                  disabled={savingName}
-                  on:keydown={(e) => {
-                    if (e.key === 'Enter') { e.preventDefault(); saveEditName(); }
-                    else if (e.key === 'Escape') { e.preventDefault(); cancelEditName(); }
-                  }}
-                />
-                <button class="ip-name-btn ip-name-btn-ok" title="Save (Enter)"
-                  on:click={saveEditName} disabled={savingName}>✓</button>
-                <button class="ip-name-btn ip-name-btn-cancel" title="Cancel (Esc)"
-                  on:click={cancelEditName} disabled={savingName}>×</button>
-              </div>
-            {:else}
-              <div class="ip-name">
-                {selData.name}
-                <button class="ip-name-edit-btn" title="Rename agent" on:click={beginEditName}>✎</button>
-              </div>
-            {/if}
-            <div class="ip-sub">
-              {#if selFlow}<span class="ip-flow" style="--f:{selFlow.color}">{selFlow.name}</span>{/if}
-              <span class="ip-dot"></span>
-              <span class="ip-id" title="agent id">
-                {selData.id.slice(0, 8)}
-                <button class="ip-copy-inline" on:click|stopPropagation={() => copy(selData.id, 'agent-id')} title="copy full agent id">{copiedKey === 'agent-id' ? '✓' : '⧉'}</button>
-              </span>
-            </div>
-            <div class="ip-tags">
-              {#if agentType(selData) === 'llm'}
-                {@const fb = modelChainFallbacks(selData.model_chain)}
-                <span class="ip-tag ip-tag-llm" title="LLM-powered agent (native runToolLoop)">LLM</span>
-                {#if selData.model}
-                  <span class="ip-tag ip-tag-model" title={selData.provider ? `${selData.provider} / ${selData.model}` : selData.model}>{selData.model}</span>
-                {/if}
-                {#if fb > 0}
-                  <span class="ip-tag ip-tag-fallback" title="model_chain fallbacks configured">+{fb} fallback{fb > 1 ? 's' : ''}</span>
-                {/if}
-              {:else if agentType(selData) === 'claude_code'}
-                <span class="ip-tag ip-tag-sdk" title="Runs through the Claude Agent SDK (claude_code executor)">Claude Code SDK</span>
-                <span class="ip-tag ip-tag-model" title={selData.model ? `SDK model: ${selData.model}` : `SDK default model: ${CLAUDE_CODE_DEFAULT_MODEL}`}>
-                  {selData.model || CLAUDE_CODE_DEFAULT_MODEL}{!selData.model ? ' (default)' : ''}
-                </span>
-              {:else}
-                <span class="ip-tag ip-tag-script" title="Native script / builtin handler — no LLM">SCRIPT</span>
-                {#if selData.builtin_handler}
-                  <span class="ip-tag ip-tag-handler" title="builtin handler id">{selData.builtin_handler}</span>
-                {/if}
-              {/if}
-            </div>
-          </div>
-        </div>
-        <button class="ip-close" on:click={() => { selectedAgent = null; }} aria-label="close">×</button>
-      </div>
-
-      <!-- Primary actions. The run state leads the row: it is what Pause and
-           Resume change, so it belongs with them and not floating in the body. -->
-      <div class="ip-actions">
-        <span class="ip-state" class:ip-state-on={selData.active === 1} class:ip-state-off={selData.active !== 1}
-              class:ip-state-tripped={selAutoPaused}
-              title={selData.active === 1
-                ? 'Schedule and event triggers are live'
-                : selAutoPaused
-                  ? `Auto-paused after ${selData.consecutive_failures} consecutive failures. Resume clears the counter.`
-                  : 'Paused — schedule and triggers are off. Manual runs still work.'}>
-          <span class="led" class:on={selData.active === 1}></span>{selData.active
-            ? 'active'
-            : selAutoPaused
-              ? 'auto-paused'
-              : 'paused'}
-        </span>
-        <button class="ip-btn ip-btn-primary" on:click={startAgent} disabled={starting} title={selData.active !== 1 ? 'Manual run — overrides pause' : 'Run this agent now'}>
-          <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
-          <span>{starting ? 'starting…' : 'Run now'}</span>
-        </button>
-        {#if selData.active === 1}
-          <button class="ip-btn ip-btn-warn" on:click={togglePause} disabled={togglingPause} title="Pause: stop schedule + event triggers. Manual Run still works.">
-            <span class="ip-btn-ico">⏸</span>
-            <span>{togglingPause ? '…' : 'Pause'}</span>
-          </button>
-        {:else}
-          <button class="ip-btn ip-btn-resume" on:click={togglePause} disabled={togglingPause} title="Resume: re-enable schedule + event triggers.">
-            <span class="ip-btn-ico">▶</span>
-            <span>{togglingPause ? '…' : 'Resume'}</span>
-          </button>
-        {/if}
-        <button class="ip-btn ip-btn-ghost" on:click={() => selectPanelTab('chat')}>
-          <span class="ip-btn-ico">✎</span><span>Message</span>
-        </button>
-        {#if selDevopsOffice}
-          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title="Open the DevOps control panel — repos, backlog, dev stacks">
-            <span class="ip-btn-ico">🛠</span><span>DevOps panel</span>
-          </a>
-        {/if}
-        {#if selData.under_revision}
-          <button class="ip-btn ip-btn-accept" on:click={() => resolveRevision('accept')} disabled={revisionBusy}
-                  title="Accept — clear REVISION flag, keep agent as-is">
-            <span class="ip-btn-ico">✓</span><span>{revisionBusy ? '…' : 'Accept'}</span>
-          </button>
-          <button class="ip-btn ip-btn-reject" on:click={() => resolveRevision('reject')} disabled={revisionBusy}
-                  title="Reject — deactivate (active=0). Row stays in DB, easy rollback.">
-            <span class="ip-btn-ico">✗</span><span>{revisionBusy ? '…' : 'Reject'}</span>
-          </button>
-        {/if}
-        {#if startMsg}
-          <span class="ip-start-msg" class:ok={startMsg.startsWith('✓')} class:err={startMsg.startsWith('✗')} class:pause={startMsg.startsWith('⏸')}>{startMsg}</span>
-        {/if}
-      </div>
-
-      <!-- Why the breaker tripped. The state chip above can only say "paused",
-           which reads identically to a pause the operator asked for — so an
-           agent the kernel stopped on its own looked like one someone stopped
-           on purpose, and the reason it stopped was never on screen at all. -->
-      {#if selAutoPaused}
-        <div class="ip-tripped" role="status">
-          <span class="ip-tripped-ico" aria-hidden="true">⛔</span>
-          <div class="ip-tripped-body">
-            <span class="ip-tripped-head">
-              Auto-paused after {selData.consecutive_failures} consecutive failures
-              {#if selAutoPausedAgo}<span class="ip-tripped-when">· {selAutoPausedAgo}</span>{/if}
-            </span>
-            {#if selData.auto_pause_reason}
-              <pre class="ip-tripped-why">{selData.auto_pause_reason}</pre>
-            {/if}
-            <span class="ip-tripped-hint">Resume re-enables the schedule and clears the counter.</span>
-          </div>
-        </div>
-      {/if}
-
-      <!-- Tabs -->
-      <div class="ip-tabs">
-        <button class="ip-tab" class:active={panelTab === 'info'} on:click={() => selectPanelTab('info')}>Overview</button>
-        {#if liveIsRunning}
-          <button class="ip-tab ip-tab-live" class:active={panelTab === 'live'} on:click={() => selectPanelTab('live')}>
-            <span class="live-dot"></span>LIVE
-          </button>
-        {/if}
-        <button class="ip-tab" class:active={panelTab === 'history'} on:click={() => selectPanelTab('history')}>
-          History{#if agentRuns.length}<span class="ip-tab-count">{agentRuns.length}</span>{/if}
-        </button>
-        {#each myPanelTabs as tab (tab.id)}
-          <button class="ip-tab ip-tab-ext" class:active={panelTab === tab.id} on:click={() => selectPanelTab(tab.id)}>{tab.label}</button>
-        {/each}
-        <button class="ip-tab" class:active={panelTab === 'chat'} on:click={() => selectPanelTab('chat')}>Message</button>
-        <button class="ip-tab" class:active={panelTab === 'workspace'} on:click={() => { panelTab = 'workspace'; loadWorkspaceFiles(); }}>Workspace{#if visibleWorkspaceFiles.length}<span class="ip-tab-count">{visibleWorkspaceFiles.length}</span>{/if}</button>
-      </div>
+    <AgentDrawer
+      agentId={selData.id}
+      listRow={selData}
+      flow={selFlow ?? null}
+      extraTabs={myPanelTabs}
+      running={liveIsRunning}
+      historyCount={agentRuns.length}
+      workspaceCount={visibleWorkspaceFiles.length}
+      {starting}
+      {startMsg}
+      {togglingPause}
+      {revisionBusy}
+      {savingName}
+      bind:editingName
+      bind:editNameValue
+      bind:panelTab
+      on:close={() => { selectedAgent = null; }}
+      on:tab={(e) => selectPanelTab(e.detail.tab)}
+      on:run={startAgent}
+      on:resume={togglePause}
+      on:revision={(e) => resolveRevision(e.detail.mode)}
+      on:rename-begin={beginEditName}
+      on:rename-cancel={cancelEditName}
+      on:rename-save={saveEditName}
+    >
 
       <!-- ──────────────── OVERVIEW TAB ──────────────── -->
-      {#if panelTab === 'info'}
+      <svelte:fragment slot="overview">
         <div class="ip-body">
           <!-- ─── Mandate ───
                What the agent was told to be. The role used to hang loose under
@@ -9034,10 +8885,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             <div class="ip-loading">Loading full details…</div>
           {/if}
         </div>
-      {/if}
+      </svelte:fragment>
 
       <!-- ──────────────── LIVE TAB ──────────────── -->
-      {#if panelTab === 'live'}
+      <svelte:fragment slot="live">
         <div class="ip-body live-body">
           <div class="live-hero">
             <div class="live-hero-head">
@@ -9150,10 +9001,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             </ol>
           {/if}
         </div>
-      {/if}
+      </svelte:fragment>
 
       <!-- ──────────────── HISTORY TAB ──────────────── -->
-      {#if panelTab === 'history'}
+      <svelte:fragment slot="history">
         <div class="ip-body">
           {#if runsLoading}
             <div class="ip-loading">Loading runs…</div>
@@ -9271,19 +9122,17 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             </div>
           {/if}
         </div>
-      {/if}
+      </svelte:fragment>
 
       <!-- ──────────────── TABS CONTRIBUIDOS POR EXTENSIONES ──────────────── -->
-      {#each myPanelTabs as tab (tab.id)}
-        {#if panelTab === tab.id}
-          <div class="ip-body ip-ext-body">
-            <svelte:component this={panelTabComponents[tab.id]} />
-          </div>
-        {/if}
-      {/each}
+      <svelte:fragment slot="extra" let:tabId>
+        <div class="ip-body ip-ext-body">
+          <svelte:component this={panelTabComponents[tabId]} />
+        </div>
+      </svelte:fragment>
 
       <!-- ──────────────── CHAT TAB ──────────────── -->
-      {#if panelTab === 'chat'}
+      <svelte:fragment slot="chat">
         <div class="chat-section">
           {#if !chatCanConverse}
             <!-- A builtin agent never sees what you type: the executor calls
@@ -9384,9 +9233,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             />
           {/if}
         </div>
-      {/if}
+      </svelte:fragment>
 
-      {#if panelTab === 'workspace'}
+      <!-- ──────────────── WORKSPACE TAB ──────────────── -->
+      <svelte:fragment slot="workspace">
         <div class="ws-panel">
           {#if selWorkspaceInfo}
             {@const vars = safeParse(selData?.variables) || {}}
@@ -9479,8 +9329,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
             </div>
           {/if}
         </div>
-      {/if}
-    </div>
+      </svelte:fragment>
+    </AgentDrawer>
   {/if}
 
   {#if runningAgentIds.size > 0}
@@ -10072,29 +9922,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     word-break:break-word;
     display:inline-flex;align-items:center;gap:8px;
   }
-  .ip-name-edit-btn{
-    border:none;background:transparent;color:#7a7f92;cursor:pointer;
-    font-size:13px;padding:2px 4px;border-radius:3px;opacity:0;
-    transition:opacity .12s, color .12s, background .12s;
-  }
-  .ip-name:hover .ip-name-edit-btn{opacity:1}
-  .ip-name-edit-btn:hover{color:#ecc968;background:rgba(201,168,76,0.12)}
-  .ip-name-edit{display:flex;align-items:center;gap:6px}
-  .ip-name-input{
-    font:600 17px/1.1 'Syne',sans-serif;color:#f0f2f7;
-    background:rgba(10,12,22,0.7);
-    border:1px solid rgba(201,168,76,0.4);
-    border-radius:3px;padding:3px 8px;min-width:180px;flex:1;outline:none;
-  }
-  .ip-name-input:focus{border-color:#c9a84c;box-shadow:0 0 0 2px rgba(201,168,76,0.2)}
-  .ip-name-btn{
-    border:1px solid rgba(255,255,255,0.15);background:rgba(20,24,38,0.8);
-    color:#c9d0e0;cursor:pointer;font-size:13px;
-    padding:3px 8px;border-radius:3px;line-height:1;
-  }
-  .ip-name-btn-ok:hover{border-color:#3dd68c;color:#3dd68c;background:rgba(61,214,140,0.1)}
-  .ip-name-btn-cancel:hover{border-color:#f04770;color:#f04770;background:rgba(240,71,112,0.1)}
-  .ip-name-btn:disabled{opacity:0.5;cursor:wait}
   /* Wraps instead of overflowing: a long flow name plus an id used to push the
      row past the panel edge. */
   .ip-sub{
@@ -10102,49 +9929,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     font:500 10px 'JetBrains Mono',monospace;
     color:#7a7f92;
   }
-  .ip-flow{
-    color:var(--f, var(--flow-color));
-    font-weight:600;text-transform:uppercase;letter-spacing:.6px;
-    font-size:10px;line-height:1.5;padding:3px 8px;border-radius:5px;
-    background:color-mix(in srgb, var(--f, var(--flow-color)) 10%, transparent);
-    border:1px solid color-mix(in srgb, var(--f, var(--flow-color)) 25%, transparent);
-  }
   .ip-dot{width:3px;height:3px;border-radius:50%;background:#4a4f66}
-  .ip-tags{
-    display:flex;align-items:center;gap:6px;flex-wrap:wrap;
-  }
-  /* Same metrics as .ip-flow so every chip in the header sits on one baseline
-     and reads as one family. */
-  .ip-tag{
-    font:700 10px/1.5 'JetBrains Mono',monospace;letter-spacing:.6px;
-    padding:3px 8px;border-radius:5px;text-transform:uppercase;
-    border:1px solid transparent;white-space:nowrap;
-  }
-  .ip-tag-llm{
-    color:#6fe4b8;background:rgba(111,228,184,0.1);border-color:rgba(111,228,184,0.35);
-  }
-  .ip-tag-model{
-    color:#c9d0e0;background:rgba(70,90,130,0.18);border-color:rgba(120,140,180,0.25);
-    font-weight:500;letter-spacing:0;text-transform:none;
-  }
-  .ip-tag-script{
-    color:#f0a040;background:rgba(240,160,64,0.1);border-color:rgba(240,160,64,0.4);
-  }
-  .ip-tag-handler{
-    color:#b8a060;background:rgba(184,160,96,0.08);border-color:rgba(184,160,96,0.22);
-    font-weight:500;letter-spacing:0;text-transform:none;
-  }
-  .ip-tag-sdk{
-    color:#c8a8ff;background:rgba(160,120,240,0.12);border-color:rgba(160,120,240,0.4);
-  }
-  .ip-tag-fallback{
-    color:#8a8fa8;background:rgba(80,90,120,0.12);border-color:rgba(120,130,160,0.22);
-    font-weight:500;letter-spacing:0;text-transform:none;
-  }
   /* Containers that host a <CopyTextBtn /> overlay. The component positions
      itself absolutely in the top-right corner and fades in on hover. */
   :global(.copy-wrap){position:relative}
-  .ip-id{display:inline-flex;align-items:center;gap:4px;color:#8a8fa8}
   .ip-close{
     background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.12);
     color:#8a8fa8;
@@ -10158,12 +9946,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .ip-close:hover{background:rgba(239,93,110,.12);border-color:rgba(239,93,110,.3);color:#ef5d6e}
 
   /* ── Primary actions ─────────── */
-  .ip-actions{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-    padding:12px 18px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
-  }
   .ip-btn{
     display:inline-flex;align-items:center;gap:6px;
     padding:8px 14px;border-radius:8px;
@@ -10184,44 +9966,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     color:#d8dae3;
   }
   .ip-btn-ghost:hover{background:rgba(255,255,255,.06);border-color:rgba(120,130,160,.35)}
-  .ip-btn-warn{
-    background:rgba(251,191,36,.08);
-    border-color:rgba(251,191,36,.35);
-    color:#fbbf24;
-  }
-  .ip-btn-warn:hover:not(:disabled){background:rgba(251,191,36,.18);border-color:rgba(251,191,36,.55)}
-  .ip-btn-warn:disabled{opacity:.5;cursor:wait}
-  .ip-btn-resume{
-    background:rgba(120,220,140,.08);
-    border-color:rgba(120,220,140,.35);
-    color:#78dc8c;
-  }
-  .ip-btn-resume:hover:not(:disabled){background:rgba(120,220,140,.18);border-color:rgba(120,220,140,.55)}
-  .ip-btn-resume:disabled{opacity:.5;cursor:wait}
-  /* REVISION resolution buttons — only shown when agent.under_revision = 1.
-   * Green accept (mirror of ip-btn-resume), orange reject (matches the REVISION
-   * pill that lives over the agent's head in the 3D office). */
-  .ip-btn-accept{
-    background:rgba(120,220,140,.08);
-    border-color:rgba(120,220,140,.35);
-    color:#78dc8c;
-  }
-  .ip-btn-accept:hover:not(:disabled){background:rgba(120,220,140,.18);border-color:rgba(120,220,140,.55)}
-  .ip-btn-accept:disabled{opacity:.5;cursor:wait}
-  .ip-btn-reject{
-    background:rgba(251,146,60,.08);
-    border-color:rgba(251,146,60,.4);
-    color:#fb923c;
-  }
-  .ip-btn-reject:hover:not(:disabled){background:rgba(251,146,60,.2);border-color:rgba(251,146,60,.6)}
-  .ip-btn-reject:disabled{opacity:.5;cursor:wait}
-  .ip-start-msg{
-    font:500 10px 'JetBrains Mono',monospace;
-    color:#8a8fa8;margin-left:4px;
-  }
-  .ip-start-msg.ok{color:#78dc8c}
-  .ip-start-msg.err{color:#ef5d6e}
-  .ip-start-msg.pause{color:#fbbf24}
 
   /* ── Tabs ─────────────────────── */
   .ip-tabs{
@@ -10244,11 +9988,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     content:'';position:absolute;bottom:-1px;left:12px;right:12px;height:2px;
     background:var(--flow-color);border-radius:2px 2px 0 0;
   }
-  .ip-tab-count{
-    font:600 9px 'JetBrains Mono',monospace;
-    padding:1px 5px;border-radius:6px;
-    background:rgba(120,130,160,.15);color:#a0a5b8;
-  }
 
   /* ── Body (scrollable) ────────── */
   .ip-body{
@@ -10260,49 +9999,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
   .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}
 
-  /* ── Run state ─────────────────
-     Leads the action row and is separated from the buttons by a rule, so it
-     reads as the state those buttons act on rather than a fourth control.
-     Same 8px/14px box as .ip-btn so both sit on one baseline. */
-  .ip-state{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:8px 12px 8px 0;margin-right:4px;
-    border-right:1px solid rgba(120,130,160,.15);
-    font:600 10px 'JetBrains Mono',monospace;
-    text-transform:lowercase;letter-spacing:.4px;
-  }
-  .ip-state-on{color:#78dc8c}
-  .ip-state-off{color:#fbbf24}
-  /* An agent the kernel stopped reads as a fault, not as a warning: the
-     operator did not choose this state and something upstream is broken. */
-  .ip-state-tripped{color:#f87171}
-
-  .ip-tripped{
-    display:flex; gap:9px; align-items:flex-start;
-    margin:8px 0 0; padding:9px 11px;
-    background:rgba(248,113,113,.08);
-    border:1px solid rgba(248,113,113,.28);
-    border-radius:8px;
-  }
-  .ip-tripped-ico{font-size:13px; line-height:1.3; flex:none}
-  .ip-tripped-body{display:flex; flex-direction:column; gap:4px; min-width:0}
-  .ip-tripped-head{font-size:11.5px; font-weight:600; color:#f87171}
-  .ip-tripped-when{font-weight:400; opacity:.75}
-  .ip-tripped-why{
-    margin:0; padding:6px 8px; max-height:88px; overflow:auto;
-    font-family:var(--font-mono); font-size:10.5px; line-height:1.45;
-    white-space:pre-wrap; word-break:break-word;
-    color:var(--text-2); background:rgba(0,0,0,.28); border-radius:5px;
-  }
-  .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
-  .ip-state .led{
-    width:6px;height:6px;border-radius:50%;
-    background:#fbbf24;
-  }
-  .ip-state .led.on{
-    background:#78dc8c;box-shadow:0 0 6px #78dc8c;
-    animation:led-pulse 2s ease-in-out infinite;
-  }
   @keyframes led-pulse{50%{opacity:.55}}
 
   /* ── Mandate ───────────────────
@@ -11272,24 +10968,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .ip-auth-ico{font-size:13px;line-height:1}
 
   /* ── LIVE tab ── */
-  .ip-tab-live{
-    position:relative;display:flex;align-items:center;gap:6px;
-    color:#ef5d6e !important;
-    background:linear-gradient(180deg, rgba(239,93,110,.12), rgba(239,93,110,.04)) !important;
-    border-color:rgba(239,93,110,.35) !important;
-    font-weight:700;letter-spacing:.5px;
-  }
-  .ip-tab-live.active{
-    background:rgba(239,93,110,.22) !important;
-    border-color:#ef5d6e !important;
-    color:#fff !important;
-    box-shadow:0 0 12px rgba(239,93,110,.35);
-  }
-  .live-dot{
-    width:7px;height:7px;border-radius:50%;background:#ef5d6e;
-    box-shadow:0 0 8px #ef5d6e;
-    animation:live-pulse 1s ease-in-out infinite;
-  }
   @keyframes live-pulse{
     0%,100%{opacity:1;transform:scale(1)}
     50%{opacity:.45;transform:scale(.82)}
