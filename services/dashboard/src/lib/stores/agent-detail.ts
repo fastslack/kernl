@@ -38,6 +38,11 @@ export interface AgentDetailState {
  * Not a spread: `{...list, ...detail}` lets an absent detail field overwrite a
  * present list value with `undefined`. An explicit empty string is a real
  * value and must survive; a missing key must not.
+ *
+ * An explicit `null` in the detail row wins too, same as `""` — deliberate,
+ * not overlooked. It cannot happen today (provider/model/flow_id are all
+ * `TEXT NOT NULL DEFAULT ''` — services/kernel/src/modules/agents/migrations.ts:27-30),
+ * so there is no live case to special-case around.
  */
 export function mergeAgent(list: Row | null, detail: Row | null): Row | null {
   if (!list && !detail) return null;
@@ -46,6 +51,21 @@ export function mergeAgent(list: Row | null, detail: Row | null): Row | null {
     if (v !== undefined) out[k] = v;
   }
   return out;
+}
+
+/**
+ * Roll back just the given keys of `current` to their prior values.
+ *
+ * Pulled out of `patch()`'s catch branch as a pure function, and kept as the
+ * only way that branch touches state: a failed write must undo only the
+ * field(s) it touched, never the whole agent. Overlapping patches on
+ * different fields are the normal case here (autosave-per-field on adjacent
+ * runtime-control inputs), so replacing the whole object on one field's
+ * failure would silently clobber a sibling field's already-applied — or
+ * still in-flight — value.
+ */
+export function rollbackFields(current: Row | null, prevValues: Row): Row {
+  return { ...(current ?? {}), ...prevValues };
 }
 
 export function createAgentDetailStore(agentId: string) {
@@ -60,16 +80,22 @@ export function createAgentDetailStore(agentId: string) {
     saving: new Set(),
   });
 
+  // Raw rows, kept separately so every merge starts from the source data —
+  // never from a previous merge result. Feeding the already-merged `agent`
+  // back in as one side would let a stale value from an earlier merge win
+  // forever, since the detail side always wins ties.
   let listRow: Row | null = null;
+  let detailRow: Row | null = null;
 
   async function reload(): Promise<void> {
     store.update((s) => ({ ...s, loading: true, error: "" }));
     try {
       const r = await fetch(`/api/agents/${agentId}`);
       const body = await r.json();
+      detailRow = (body.agent ?? null) as Row | null;
       store.update((s) => ({
         ...s,
-        agent: mergeAgent(listRow, (body.agent ?? null) as Row | null),
+        agent: mergeAgent(listRow, detailRow),
         runs: body.runs ?? [],
         triggers: body.triggers ?? [],
         schedules: body.schedules ?? [],
@@ -84,7 +110,7 @@ export function createAgentDetailStore(agentId: string) {
   /** Seed the list row the world already has, so the drawer paints instantly. */
   function seed(row: Row): void {
     listRow = row;
-    store.update((s) => ({ ...s, agent: mergeAgent(row, s.agent) }));
+    store.update((s) => ({ ...s, agent: mergeAgent(listRow, detailRow) }));
   }
 
   /**
@@ -94,13 +120,14 @@ export function createAgentDetailStore(agentId: string) {
    */
   async function patch(fields: Record<string, unknown>): Promise<void> {
     const keys = Object.keys(fields);
-    let previous: Row | null = null;
+    const prevValues: Row = {};
 
     store.update((s) => {
-      previous = s.agent;
+      const agent = s.agent ?? {};
+      for (const k of keys) prevValues[k] = agent[k];
       const saving = new Set(s.saving);
       for (const k of keys) saving.add(k);
-      return { ...s, agent: { ...(s.agent ?? {}), ...fields }, saving, error: "" };
+      return { ...s, agent: { ...agent, ...fields }, saving, error: "" };
     });
 
     try {
@@ -109,7 +136,7 @@ export function createAgentDetailStore(agentId: string) {
       // así que un patch parcial actualiza solo las columnas que manda.
       await updateAgent(agentId, fields);
     } catch (e) {
-      store.update((s) => ({ ...s, agent: previous, error: String(e) }));
+      store.update((s) => ({ ...s, agent: rollbackFields(s.agent, prevValues), error: String(e) }));
     } finally {
       store.update((s) => {
         const saving = new Set(s.saving);
