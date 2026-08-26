@@ -91,6 +91,13 @@ export function registerAgentRoutes(
   workspaceEvolver?: WorkspaceEvolverLike,
   /** Kernel-wide default language for the agent designer + i18n proposals. */
   defaultLanguage?: KernelLanguage,
+  /**
+   * Skill candidates from subscribed catalogue repos, for the per-agent
+   * suggestions route. Injected rather than imported so the agents module
+   * keeps not depending on marketplace: absent → suggestions fall back to
+   * installed skills only, which is a degraded answer, not an error.
+   */
+  catalogSkills?: () => Promise<Array<{ slug: string; name: string; text: string }>>,
 ): void {
   const designerLang: KernelLanguage = defaultLanguage ?? "es";
 
@@ -1176,11 +1183,14 @@ export function registerAgentRoutes(
     }
   });
 
-  // GET /api/agents/:id/skill-suggestions — which installed skills would suit
-  // this agent, scored live. Same maths as the daily suggester cron; this is
-  // the path the drawer's SKILLS tab calls, so the ranking reaches the agent
-  // it is about instead of a note nobody reads.
-  server.get("/api/agents/:id/skill-suggestions", (req, res) => {
+  // GET /api/agents/:id/skill-suggestions — which skills would suit this
+  // agent, scored live, across installed extensions AND subscribed catalogue
+  // repos. Same maths as the daily suggester cron; this is the path the
+  // drawer's SKILLS tab calls, so the ranking reaches the agent it is about
+  // instead of a note nobody reads. A skill not yet installed is included
+  // flagged `installed: false` — that is what turns a recommendation into an
+  // installer.
+  server.get("/api/agents/:id/skill-suggestions", async (req, res) => {
     try {
       const id = (req as unknown as { params: Record<string, string> }).params?.id;
       if (!id) { server.json(res, 400, { error: "id required" }); return; }
@@ -1190,10 +1200,40 @@ export function registerAgentRoutes(
 
       const url = new URL(req.url ?? "/", "http://localhost");
       const minScore = Number(url.searchParams.get("min_score") ?? "1") || 0;
-      const topN = Math.min(Number(url.searchParams.get("top_n") ?? "8") || 8, 50);
+      // Clamp into [0, 50]; fall back to 8 only when the param is absent or
+      // genuinely not a number. `top_n=0` must return zero results, not the
+      // default — and a negative value must not reach Array.slice(0, -n),
+      // which truncates from the end instead of erroring.
+      const topNRaw = url.searchParams.get("top_n");
+      const topNParsed = topNRaw === null ? NaN : Number(topNRaw);
+      const topN = Number.isFinite(topNParsed) ? Math.min(Math.max(topNParsed, 0), 50) : 8;
 
       const rows = service.listInstalledSkillRows();
-      if (rows.length === 0) { server.json(res, 200, { suggestions: [] }); return; }
+      const installedSlugs = new Set(rows.map((r) => r.slug));
+
+      const candidates: Array<{ slug: string; name: string; text: string; installed: boolean }> =
+        rows.map((r) => ({
+          slug: r.slug,
+          name: r.name,
+          text: skillRowText(r),
+          installed: true,
+        }));
+
+      // The catalogue can never take down the tab: a dead repo, no network,
+      // or a slow provider degrades to "installed skills only", logged as a
+      // warning — never a 500.
+      if (catalogSkills) {
+        try {
+          for (const c of await catalogSkills()) {
+            if (installedSlugs.has(c.slug)) continue; // the installed row wins
+            candidates.push({ slug: c.slug, name: c.name, text: c.text, installed: false });
+          }
+        } catch (e) {
+          log.warn(`skill-suggestions: catalogue source failed — ${String(e)}`);
+        }
+      }
+
+      if (candidates.length === 0) { server.json(res, 200, { suggestions: [] }); return; }
 
       let attached: string[] = [];
       try { attached = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { attached = []; }
@@ -1208,19 +1248,22 @@ export function registerAgentRoutes(
           }),
           attached: new Set(attached.map(String)),
         },
-        rows.map((r) => ({ slug: r.slug, text: skillRowText(r) })),
+        candidates.map((c) => ({ slug: c.slug, text: c.text })),
         { minScore, topN },
       );
 
-      const nameBySlug = new Map(rows.map((r) => [r.slug, r.name]));
+      const byslug = new Map(candidates.map((c) => [c.slug, c]));
       server.json(res, 200, {
-        suggestions: ranked.map((m) => ({
-          slug: m.slug,
-          name: nameBySlug.get(m.slug) ?? m.slug,
-          score: Number(m.score.toFixed(2)),
-          matches: m.matches,
-          installed: true,
-        })),
+        suggestions: ranked.map((m) => {
+          const c = byslug.get(m.slug);
+          return {
+            slug: m.slug,
+            name: c?.name ?? m.slug,
+            score: Number(m.score.toFixed(2)),
+            matches: m.matches,
+            installed: c?.installed ?? false,
+          };
+        }),
       });
     } catch (err) {
       server.json(res, 500, { error: String(err) });

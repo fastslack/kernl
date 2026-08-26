@@ -442,6 +442,27 @@ export async function initHttpAndMcp(args: {
         agentsModule.getReflectionOptimizer() as Parameters<typeof registerAgentRoutes>[5],
         agentsModule.getWorkspaceEvolver() as Parameters<typeof registerAgentRoutes>[6],
         config.language,
+        // Skill candidates from subscribed catalogue repos, for the per-agent
+        // suggestions route. The marketplace module exposes getService(), not
+        // browseCatalog() directly, hence the double hop. Absent module → []
+        // → the suggestions route degrades to installed skills only.
+        async () => {
+          const mp = registry.getModule("marketplace") as {
+            getService?: () => {
+              browseCatalog(f: { type?: string; limit?: number }): Promise<
+                Array<{ slug: string; manifest?: { name?: string; description?: string; long_description?: string } }>
+              >;
+            } | null;
+          } | null;
+          const svc = mp?.getService?.() ?? null;
+          if (!svc) return [];
+          const items = await svc.browseCatalog({ type: "skill", limit: 500 });
+          return items.map((i) => ({
+            slug: i.slug,
+            name: i.manifest?.name ?? i.slug,
+            text: `${i.slug} ${i.manifest?.name ?? ""} ${i.manifest?.description ?? ""} ${i.manifest?.long_description ?? ""}`,
+          }));
+        },
       );
     }
 
