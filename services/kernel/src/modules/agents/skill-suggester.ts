@@ -29,6 +29,12 @@
 import type { BuiltinHandler, BuiltinHandlerContext } from "./builtin-handlers.js";
 import { log } from "../../core/logger.js";
 import { safeQuery, safeQueryOne } from "../../core/db/query-helpers.js";
+import {
+  tokenize,
+  rankSkillsForAgent,
+  skillRowText,
+  agentRowText,
+} from "./skill-scoring.js";
 
 const HANDLER_KEY = "script:agents:skill-suggest";
 
@@ -104,46 +110,6 @@ function rotateWindow<T>(arr: T[], cursor: number, size: number): T[] {
   return head;
 }
 
-// ── Tokenisation + IDF scoring ────────────────────────────────
-
-// Bilingual stopword list. Tuned to the kernel's voice (mix EN/ES) and to
-// strip kernel-domain noise words ("agent", "tool", "kernel") that would
-// otherwise match every skill.
-const STOPWORDS = new Set([
-  // English
-  "the","a","an","and","or","but","of","to","in","on","for","is","at","by","with","as","from",
-  "that","this","be","are","was","were","you","your","when","then","what","which","who","how","why",
-  "not","no","do","does","done","its","it","has","have","had","into","over","under","also",
-  // Spanish
-  "el","la","los","las","de","del","y","o","en","con","por","para","un","una","es","son","ser",
-  "como","cuando","entonces","que","cual","quien","si","se","su","sus","les","les","esa","ese",
-  // Kernel-domain noise
-  "use","using","used","get","got","run","runs","call","calls","tool","tools",
-  "agent","agents","kernel","skill","skills","script","handler","module","modules",
-  "when","also","etc","just","only","very","first","next","more","most","best",
-]);
-
-function tokenize(text: string): string[] {
-  return text.toLowerCase()
-    .replace(/[^a-z0-9_\-\s]/g, " ")
-    .split(/\s+/)
-    .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
-}
-
-function computeIdf(skillTokens: Map<string, Set<string>>, N: number): Map<string, number> {
-  // df[token] = # of skills that contain it.
-  const df = new Map<string, number>();
-  for (const tokens of skillTokens.values()) {
-    for (const t of tokens) df.set(t, (df.get(t) ?? 0) + 1);
-  }
-  // Smoothed IDF — log((N+1)/(df+1)) + 1, never goes negative, never zero.
-  const idf = new Map<string, number>();
-  for (const [t, n] of df) {
-    idf.set(t, Math.log((N + 1) / (n + 1)) + 1);
-  }
-  return idf;
-}
-
 // ── DB row shapes ─────────────────────────────────────────────
 
 interface AgentRow {
@@ -200,50 +166,8 @@ function getAttachedSlugs(agent: AgentRow): Set<string> {
   } catch { return new Set(); }
 }
 
-function skillText(s: SkillRow): string {
-  let desc = ""; let longDesc = "";
-  try {
-    const m = JSON.parse(s.manifest_json || "{}");
-    desc = typeof m.description === "string" ? m.description : "";
-    longDesc = typeof m.long_description === "string" ? m.long_description : "";
-  } catch { /* ignore */ }
-  return `${s.slug} ${s.name} ${desc} ${longDesc}`;
-}
-
-function agentText(a: AgentRow): string {
-  // Cap the system_prompt — operator prompts can be 5-10k chars; the
-  // useful signal is in the first ~2k (role, domain, stack).
-  const sp = (a.system_prompt || "").slice(0, 2000);
-  return `${a.name} ${a.description || ""} ${sp} ${a.flow_name || ""}`;
-}
-
 interface Suggestion { slug: string; score: number; matches: string[] }
 interface AgentSuggestion { agentId: string; agentName: string; suggestions: Suggestion[] }
-
-function scoreSkill(
-  agentTokens: Set<string>,
-  skillTokens: Set<string>,
-  idf: Map<string, number>,
-  skillSlug: string,
-  agentBlob: string,
-): { score: number; matches: string[] } {
-  const matched: string[] = [];
-  let s = 0;
-  for (const t of skillTokens) {
-    if (agentTokens.has(t)) {
-      const w = idf.get(t) ?? 1;
-      s += w;
-      matched.push(t);
-    }
-  }
-  // Slug appears verbatim in the agent's prompt/description → strong signal.
-  // Often happens when the user already mentions the skill but hasn't attached it.
-  if (skillSlug.length >= 4 && agentBlob.toLowerCase().includes(skillSlug.toLowerCase())) {
-    s += 5;
-    matched.unshift(`slug:${skillSlug}`);
-  }
-  return { score: s, matches: matched.slice(0, 5) };
-}
 
 function writeSupervisorNote(
   ctx: BuiltinHandlerContext,
@@ -298,29 +222,18 @@ export function skillSuggesterHandler(ctx: BuiltinHandlerContext): BuiltinHandle
     const windowAgents = rotateWindow(agents, cursor, vars.agentsPerRun);
     saveCursor(ctx, (cursor + windowAgents.length) % agents.length);
 
-    // Tokenise each skill once per run; IDF computed against the full skill corpus.
-    const skillTokens = new Map<string, Set<string>>();
-    for (const s of skills) skillTokens.set(s.slug, new Set(tokenize(skillText(s))));
-    const idf = computeIdf(skillTokens, skills.length);
+    const scorableSkills = skills.map((s) => ({ slug: s.slug, text: skillRowText(s) }));
 
     const results: AgentSuggestion[] = [];
     for (const a of windowAgents) {
-      const blob = agentText(a);
-      const aTokens = new Set(tokenize(blob));
-      if (aTokens.size === 0) continue;
-      const attached = getAttachedSlugs(a);
+      const blob = agentRowText(a);
+      if (tokenize(blob).length === 0) continue;
 
-      const scored = skills
-        .filter((s) => !attached.has(s.slug))
-        .map((s) => {
-          const tokens = skillTokens.get(s.slug);
-          if (!tokens || tokens.size === 0) return { slug: s.slug, score: 0, matches: [] };
-          const { score, matches } = scoreSkill(aTokens, tokens, idf, s.slug, blob);
-          return { slug: s.slug, score, matches };
-        })
-        .filter((x) => x.score >= vars.minScore)
-        .sort((x, y) => y.score - x.score)
-        .slice(0, vars.topNPerAgent);
+      const scored = rankSkillsForAgent(
+        { text: blob, attached: getAttachedSlugs(a) },
+        scorableSkills,
+        { minScore: vars.minScore, topN: vars.topNPerAgent },
+      );
 
       if (scored.length > 0) {
         results.push({ agentId: a.id, agentName: a.name, suggestions: scored });
