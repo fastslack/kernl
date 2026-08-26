@@ -245,6 +245,18 @@ export function initLlmReadiness(source: () => Map<string, ChatLlmProvider>): vo
   stale = true;
 }
 
+/**
+ * The live chat-adapter map, or null before bootstrap wired it.
+ *
+ * Same source the readiness probe uses. Exposed because tool-loop capability
+ * is declared on the adapter and the provider status route has to join
+ * against it — the registry's drivers are a different hierarchy and never
+ * carry the flag.
+ */
+export function getChatProviders(): Map<string, ChatLlmProvider> | null {
+  return providerSource ? providerSource() : null;
+}
+
 /** The last verdict, or null before the first probe finishes. */
 export function getLlmReadiness(): LlmReadiness | null {
   return cached;

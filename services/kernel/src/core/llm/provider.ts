@@ -109,6 +109,14 @@ export interface LlmProviderStatus {
   lastModel?: string;
   /** Capabilities reportadas por el driver. */
   capabilities?: LlmProviderCapabilities;
+  /**
+   * Whether this slug's chat adapter can sustain a multi-turn tool loop.
+   * `false` only for shims that run a single turn ignoring tools — the agent
+   * executor drops those from a chain (selectToolCapable) and the dashboard
+   * needs the flag to warn before a model is picked, not after a run fails.
+   * `undefined` when no chat adapter exists for the slug.
+   */
+  supportsToolLoop?: boolean;
 }
 
 // ── Driver contract ───────────────────────────────────────────────────
