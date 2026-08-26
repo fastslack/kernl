@@ -72,11 +72,19 @@
   // mostrando `active` viejo después de un Pause/Resume, que hoy se ve al
   // instante. Tasks 9-13 lo encienden cuando muden los cuerpos que sí
   // necesitan el detalle (prompt, triggers, schedules).
-  let detail = createAgentDetailStore(agentId);
+  //
+  // `onPatched` is how a write inside the drawer reaches the surface that
+  // mounted it. The 3D world paints each agent's node from its own list; a
+  // provider changed in RuntimeSection would otherwise stay invisible out
+  // there until the next full refetch. Raised only when the write landed.
+  const newStore = (id: string) =>
+    createAgentDetailStore(id, { onPatched: (agent) => dispatch('changed', { agent }) });
+
+  let detail = newStore(agentId);
   let storeFor = agentId;
   $: if (agentId !== storeFor) {
     storeFor = agentId;
-    detail = createAgentDetailStore(agentId);
+    detail = newStore(agentId);
   }
   $: if (listRow) detail.seed(listRow);
   $: agent = $detail.agent ?? listRow;

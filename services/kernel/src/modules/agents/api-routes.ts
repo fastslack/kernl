@@ -4,6 +4,7 @@
  */
 
 import type { ServerResponse } from "node:http";
+import { normalizeModelChainInput, normalizeExecutorType } from "./chain-input.js";
 import type { KernelHttpServer } from "../../core/http-server.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
@@ -896,8 +897,18 @@ export function registerAgentRoutes(
         builtin_handler?: string;
         under_revision?: boolean;
         skills?: string[];
+        /** JSON array, or the array itself. See chain-input.ts. */
+        model_chain?: string | Array<{ provider?: string; model?: string }>;
+        executor_type?: string;
       }>(req);
-      const updated = service.updateAgent(id, body);
+      // The chain, the engine and the loose pair are one edit for the person
+      // making it, so they have to be one write here — otherwise `provider`
+      // and the chain head can end up disagreeing between two requests.
+      const updated = service.updateAgent(id, {
+        ...body,
+        model_chain: normalizeModelChainInput(body.model_chain),
+        executor_type: normalizeExecutorType(body.executor_type),
+      });
       if (!updated) { server.json(res, 404, { error: "Agent not found" }); return; }
       server.json(res, 200, { success: true, agent: updated });
     } catch (err) {

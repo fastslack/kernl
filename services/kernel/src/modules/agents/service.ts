@@ -734,6 +734,12 @@ export class AgentService {
       progressive_discovery: boolean;
       skin_id: string;
       under_revision: boolean;
+      /**
+       * Engine for this agent: the kernel's own tool loop, or the CLI's.
+       * Editable here as well as through POST /api/agents/:id/executor-type,
+       * so a panel can send it in the same write as the chain it belongs with.
+       */
+      executor_type: "native" | "claude_code";
       /** Procedural skills (slugs from installed_extensions where type='skill'). */
       skills: string[];
     }>,
@@ -778,6 +784,10 @@ export class AgentService {
     if (input.progressive_discovery !== undefined) { sets.push("progressive_discovery = ?"); params.push(input.progressive_discovery ? 1 : 0); }
     if (input.skin_id !== undefined) { sets.push("skin_id = ?"); params.push(input.skin_id); }
     if (input.under_revision !== undefined) { sets.push("under_revision = ?"); params.push(input.under_revision ? 1 : 0); }
+    if (input.executor_type === "native" || input.executor_type === "claude_code") {
+      sets.push("executor_type = ?");
+      params.push(input.executor_type);
+    }
     if (input.skills !== undefined) { sets.push("skills_json = ?"); params.push(JSON.stringify(input.skills)); }
 
     if (sets.length === 0) return agent;

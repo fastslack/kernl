@@ -43,6 +43,7 @@
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
+  import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
 
@@ -5109,6 +5110,61 @@
   // Fire whenever a new agent is selected
   $: if (selectedAgent) loadAgentDetail(selectedAgent); else agentDetail = null;
 
+  // The row the drawer's store is seeded with.
+  //
+  // `selData` is the world's list row and it is the one that refreshes — a
+  // Pause writes into it optimistically — so it wins every key it has. What it
+  // does not carry are the three limits that only GET /api/agents/:id returns
+  // (max_iterations, max_tokens, max_errors), and RuntimeSection edits those.
+  // Layering the detail underneath fills them in without letting a stale
+  // detail row overwrite anything the list already knows.
+  $: selRow = selData
+    ? (agentDetail?.agent?.id === selData.id
+        ? { ...agentDetail.agent, ...selData }
+        : selData)
+    : null;
+
+  /**
+   * A write from inside the drawer, reflected in the world's own list.
+   *
+   * Without this the node keeps its old colour and the header its old model
+   * chip until the parent's next refetch pushes `agents` back down. Only the
+   * keys the world's rows actually carry are copied — the drawer's agent is a
+   * superset and the extra columns have no meaning out here.
+   */
+  function patchWorldAgent(next: Record<string, any> | null | undefined) {
+    if (!next?.id) return;
+    const keys = [
+      'name', 'description', 'provider', 'model', 'model_chain', 'executor_type',
+      'active', 'timeout_ms', 'role', 'rank_id', 'flow_id', 'system_prompt',
+      'allowed_tools', 'consecutive_failures', 'auto_paused_at', 'auto_pause_reason',
+    ];
+    agents = agents.map((a) => {
+      if (a.id !== next.id) return a;
+      const merged: Record<string, any> = { ...a };
+      for (const k of keys) if (next[k] !== undefined) merged[k] = next[k];
+      return merged as typeof a;
+    });
+    // Keep the panel's own detail row in step too, so the limits it owns do
+    // not snap back to their pre-edit values on the next reactive pass.
+    const detail = agentDetail;
+    if (detail && detail.agent && detail.agent.id === next.id) {
+      agentDetail = { ...detail, agent: { ...detail.agent, ...next } };
+    }
+    // And ask the parent for server truth, exactly as the rename does.
+    //
+    // The optimistic update above only lives until the parent's 60s poll
+    // re-pushes `graphData.agents` — and that poll compares `id + active`
+    // only, so a changed model chain is "no structural diff" and it hands
+    // back the very array this function just edited around. Observed: a
+    // removed fallback reappeared about five seconds after it was removed,
+    // with the database already correct. Debounced because autosave on the
+    // numeric fields would otherwise refetch the whole graph per edit.
+    clearTimeout(worldRefreshTimer);
+    worldRefreshTimer = setTimeout(() => dispatch('refresh'), 1200);
+  }
+  let worldRefreshTimer: ReturnType<typeof setTimeout>;
+
   // Parse helpers tolerant of JSON string columns
   function safeParse(raw: unknown): any {
     if (raw == null) return null;
@@ -8542,7 +8598,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   {#if selData}
     <AgentDrawer
       agentId={selData.id}
-      listRow={selData}
+      listRow={selRow}
       flow={selFlow ?? null}
       extraTabs={myPanelTabs}
       running={liveIsRunning}
@@ -8564,6 +8620,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       on:rename-begin={beginEditName}
       on:rename-cancel={cancelEditName}
       on:rename-save={saveEditName}
+      on:changed={(e) => patchWorldAgent(e.detail.agent)}
     >
 
       <!-- ──────────────── OVERVIEW TAB ──────────────── -->
@@ -8792,19 +8849,11 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
               </section>
             {/if}
 
-            <!-- Runtime — where the loose provider/model chips landed, beside
-                 the limits that govern the same loop. -->
-            <section class="ip-sec">
-              <h3 class="ip-sec-h">Runtime</h3>
-              <div class="ip-kv-grid">
-                <div class="ip-kv"><span>provider</span><code>{selData.provider || (agentType(selData) === 'claude_code' ? 'claude-code-sdk' : '—')}</code></div>
-                <div class="ip-kv"><span>model</span><code>{selData.model || (agentType(selData) === 'claude_code' ? CLAUDE_CODE_DEFAULT_MODEL : '—')}</code></div>
-                <div class="ip-kv"><span>max iterations</span><code>{ag.max_iterations ?? '—'}</code></div>
-                <div class="ip-kv"><span>token budget</span><code>{fmtTokens(ag.max_tokens)}</code></div>
-                <div class="ip-kv"><span>timeout</span><code>{fmtDuration(ag.timeout_ms)}</code></div>
-                <div class="ip-kv"><span>max errors</span><code>{ag.max_errors ?? '—'}</code></div>
-              </div>
-            </section>
+            <!-- Runtime — the chain and the limits that govern the same loop,
+                 now editable in place. See RuntimeSection's header for why the
+                 six read-only chips that used to sit here were the wrong shape
+                 for the error the panel reports right above them. -->
+            <RuntimeSection store={store} running={liveIsRunning} />
 
             {@const tools = safeParse(ag.allowed_tools) || []}
             {#if Array.isArray(tools) && tools.length}

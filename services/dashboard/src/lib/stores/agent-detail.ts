@@ -68,7 +68,21 @@ export function rollbackFields(current: Row | null, prevValues: Row): Row {
   return { ...(current ?? {}), ...prevValues };
 }
 
-export function createAgentDetailStore(agentId: string) {
+export interface AgentDetailStoreOptions {
+  /**
+   * Raised with the merged agent after a write that actually landed.
+   *
+   * The drawer is not the only surface showing this agent: the 3D world
+   * paints its node from its own `agents` array. While nothing inside the
+   * drawer wrote, nothing had to tell it. The runtime controls do write, so
+   * without this the world keeps painting the old provider until its next
+   * full refetch. Raised only on success — a rolled-back write must repaint
+   * nothing.
+   */
+  onPatched?: (agent: Row) => void;
+}
+
+export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOptions = {}) {
   const store = writable<AgentDetailState>({
     agent: null,
     runs: [],
@@ -130,19 +144,26 @@ export function createAgentDetailStore(agentId: string) {
       return { ...s, agent: { ...agent, ...fields }, saving, error: "" };
     });
 
+    let landed = false;
     try {
       // updateAgent(id, body) → rpcOrCall('agents.update', {id, ...body}) con
       // fallback a PUT /api/agents/:id (lib/api.ts:314). El body viaja tal cual,
       // así que un patch parcial actualiza solo las columnas que manda.
       await updateAgent(agentId, fields);
+      landed = true;
     } catch (e) {
       store.update((s) => ({ ...s, agent: rollbackFields(s.agent, prevValues), error: String(e) }));
     } finally {
+      let merged: Row | null = null;
       store.update((s) => {
         const saving = new Set(s.saving);
         for (const k of keys) saving.delete(k);
+        merged = s.agent;
         return { ...s, saving };
       });
+      // Outside the updater: a subscriber that writes back into this store
+      // from inside `update()` would re-enter it mid-notification.
+      if (landed && merged && opts.onPatched) opts.onPatched(merged);
     }
   }
 

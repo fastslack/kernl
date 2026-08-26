@@ -142,3 +142,31 @@ describe("createAgentDetailStore: patch() rollback", () => {
     expect(state.error).toContain("boom");
   });
 });
+
+describe("createAgentDetailStore: onPatched", () => {
+  it("hands the merged agent to the mounting surface after a write lands", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const store = createAgentDetailStore("a", { onPatched: (agent) => seen.push(agent) });
+    store.seed({ id: "a", provider: "claude_code", model: "sonnet", model_chain: "" });
+
+    updateAgentImpl = async () => ({});
+    await store.patch({ provider: "openai", model: "gpt-5", model_chain: "" });
+
+    expect(seen.length).toBe(1);
+    expect(seen[0].provider).toBe("openai");
+    // The whole row, not just the patched keys — the world repaints from it.
+    expect(seen[0].id).toBe("a");
+  });
+
+  it("stays silent when the write failed and the field rolled back", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const store = createAgentDetailStore("a", { onPatched: (agent) => seen.push(agent) });
+    store.seed({ id: "a", provider: "claude_code" });
+
+    updateAgentImpl = async () => { throw new Error("boom"); };
+    await store.patch({ provider: "openai" });
+
+    expect(seen).toEqual([]);
+    expect(get(store).agent!.provider).toBe("claude_code");
+  });
+});
