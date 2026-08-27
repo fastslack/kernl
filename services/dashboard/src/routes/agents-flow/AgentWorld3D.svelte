@@ -44,6 +44,7 @@
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
+  import MandateSection from '$lib/components/agent/sections/MandateSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
@@ -5236,7 +5237,7 @@
   }
 
   // Collapsible section state (persists per-agent session)
-  let collapsed = { tools: true, variables: false };
+  let collapsed = { tools: true, variables: false, mandate: true };
   function toggleSection(k: keyof typeof collapsed) {
     collapsed = { ...collapsed, [k]: !collapsed[k] };
   }
@@ -8671,36 +8672,16 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           <VerdictLine agent={selData} stats={selStats} lastRun={latestRun} />
 
           <!-- ─── Mandate ───
-               What the agent was told to be. The role used to hang loose under
-               the tabs and the system prompt sat last and collapsed, so the
-               panel opened on infrastructure instead of on the agent. Both now
-               live in one block, and it leads. -->
-          <section class="ip-sec ip-mandate">
-            <div class="ip-sec-hrow">
-              <h3 class="ip-sec-h">
-                Mandate
-                {#if selPrompt}<span class="ip-sec-c">{selPrompt.length} chars</span>{/if}
-              </h3>
-              {#if selPrompt}
-                <button class="ip-icon-btn" title="copy system prompt" on:click={() => copy(selPrompt, 'sys')}>{copiedKey === 'sys' ? '✓ copied' : '⧉ copy'}</button>
-              {/if}
-            </div>
-            {#if selData.description}
-              <p class="ip-role">{selData.description}</p>
-            {/if}
-            {#if selPrompt}
-              <pre class="ip-pre ip-pre-scroll">{selPrompt}</pre>
-            {:else if selData.builtin_handler}
-              <div class="ip-mandate-alt">
-                Runs a builtin handler — no system prompt.
-                <code class="ip-code">{selData.builtin_handler}</code>
-              </div>
-            {:else if detailLoading}
-              <div class="ip-mandate-alt">Loading system prompt…</div>
-            {:else}
-              <div class="ip-mandate-alt">No system prompt set.</div>
-            {/if}
-          </section>
+               What the agent was told to be. `selPrompt` and `detailLoading`
+               still come from here: this component's own detail fetch is what
+               resolves the prompt today, and the section prefers what it is
+               given over the store's row. -->
+          <MandateSection
+            {store}
+            prompt={selPrompt}
+            loading={detailLoading}
+            bind:collapsed={collapsed.mandate}
+          />
 
           {#if dependsOnGoogleAuth(selData)}
             <div class="ip-auth-cta" title="This agent talks to Google — re-login any time tokens expire.">
@@ -10104,25 +10085,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   @keyframes led-pulse{50%{opacity:.55}}
 
-  /* ── Mandate ───────────────────
-     The block that opens Overview: the role the agent was given and the prompt
-     that spells it out. The role is the lead line of the card it belongs to,
-     not a loose paragraph under the tabs. */
-  .ip-mandate{
-    padding-left:12px;
-    border-left:2px solid color-mix(in srgb, var(--flow-color) 55%, transparent);
-  }
-  .ip-mandate .ip-role{
-    font:500 13px/1.5 'Manrope',sans-serif;
-    color:#dfe2ec;margin:0 0 8px;
-  }
-  .ip-mandate-alt{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-    padding:10px 12px;border-radius:8px;
-    background:rgba(120,130,160,.05);
-    border:1px dashed rgba(120,130,160,.18);
-    font:400 11px 'Manrope',sans-serif;color:#8a8fa8;
-  }
+  /* ── Mandate ─── moved to components/agent/sections/MandateSection.svelte */
 
   /* ── KPI grid ────────────────── */
   .ip-kpis{
@@ -10269,7 +10232,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     font:400 11px/1.55 'JetBrains Mono',monospace;
     color:#d8dae3;white-space:pre-wrap;word-break:break-word;
   }
-  .ip-pre-scroll{max-height:260px;overflow-y:auto}
 
   /* ── Icon buttons ─────────── */
   .ip-icon-btn{
