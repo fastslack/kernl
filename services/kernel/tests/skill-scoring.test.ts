@@ -25,6 +25,26 @@ describe("tokenize", () => {
   it("keeps hyphens and underscores, which carry slug shape", () => {
     expect(tokenize("web-design guidelines")).toEqual(["web-design", "guidelines"]);
   });
+
+  it("keeps accented Spanish words intact instead of shredding them", () => {
+    // Regression: the old ASCII-only class treated the accent itself as a
+    // separator, so "diseño" tokenized to "dise" + "o" and the length
+    // filter then dropped both — every accented content word vanished.
+    // This office's agents are prompted in Spanish, so this was not rare.
+    expect(tokenize("diseño configuración gestión análisis código")).toEqual([
+      "diseño",
+      "configuración",
+      "gestión",
+      "análisis",
+      "código",
+    ]);
+  });
+
+  it("does not split a single accented word into fragments", () => {
+    expect(tokenize("diseño")).toEqual(["diseño"]);
+    expect(tokenize("El diseño del sistema")).toContain("diseño");
+    expect(tokenize("El diseño del sistema")).not.toContain("dise");
+  });
 });
 
 describe("computeIdf", () => {

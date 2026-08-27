@@ -30,8 +30,16 @@ const STOPWORDS = new Set([
 ]);
 
 export function tokenize(text: string): string[] {
+  // Unicode-aware: keep any letter/number in any script (\p{L} / \p{N}),
+  // not just a-z0-9. The old ASCII-only class treated an accented letter as
+  // a separator, so "diseño" split into "dise" + "o" and the length filter
+  // below then dropped both — silently shredding every accented Spanish
+  // content word (this office's agents are prompted in Spanish). Widening
+  // the class rather than folding accents to base letters (diseño→diseno)
+  // avoids inventing accidental collisions between unrelated words that
+  // only look alike once stripped (e.g. "año" → "ano" is a different word).
   return text.toLowerCase()
-    .replace(/[^a-z0-9_\-\s]/g, " ")
+    .replace(/[^\p{L}\p{N}_\-\s]/gu, " ")
     .split(/\s+/)
     .filter((t) => t.length >= 3 && !STOPWORDS.has(t));
 }

@@ -28,13 +28,19 @@
   neither was visible anywhere before. Attaching fifteen skills "just in
   case" should stop looking free.
 
-  ── Three states, not two ─────────────────────────────────────────────
-  An attached slug can be live, INACTIVE, or ORPHANED. SkillBodyResolver
-  accepts `status IN ('active','installed')`, but the shared
-  `loadInstalledSkills()` asks the API for `status=active` only — so
-  classifying orphans off that one list flags a merely-inactive skill as
-  uninstalled, which is a lie the user would act on by detaching a skill that
-  works. Hence the second, wider inventory fetch below.
+  ── Four states, not two ──────────────────────────────────────────────
+  An attached slug can be LIVE (active), INACTIVE (installed but not yet
+  active — still live), SKIPPED (disabled/error — an extension row exists
+  but the executor won't touch it), or ORPHANED (no row at all).
+  SkillBodyResolver.resolve() accepts exactly `status IN ('active',
+  'installed')` (skill-resolver.ts:65); anything else — disabled, error, or
+  a status this tab doesn't recognise — is dropped by the SAME clause an
+  orphan is dropped by, and must be priced and labelled as such. The shared
+  `loadInstalledSkills()` asks the API for `status=active` only, so
+  classifying off that one list would flag a merely-inactive skill as
+  uninstalled (a lie the user would act on by detaching something that
+  works) — hence the second, wider inventory fetch below, which is also what
+  makes SKIPPED distinguishable from LIVE in the first place.
 
   Props:
     agent    — { id, name, skills_json, … }; null renders nothing
@@ -98,12 +104,33 @@
   let inventoryLoading = false;
   let inventoryError = '';
 
-  $: activeSlugs = new Set(installed.map((s) => s.slug));
   $: bySlug = new Map(inventory.map((s) => [s.slug, s]));
 
-  /** Attached, installed, but not active — the executor still loads it. */
+  /**
+   * Statuses SkillBodyResolver.resolve() actually loads — its WHERE clause
+   * is `status IN ('active','installed')` (skill-resolver.ts:65). Anything
+   * else present in the inventory (disabled, error, or a status this list
+   * doesn't know about) is skipped by the executor exactly like an
+   * uninstalled skill, and must not be priced or labelled as loaded.
+   */
+  const LIVE_STATUSES = new Set(['active', 'installed']);
+  function isLive(item: SkillItem | undefined): item is SkillItem {
+    return !!item && LIVE_STATUSES.has(item.status ?? '');
+  }
+
+  /** Attached, status='installed' (not yet 'active') — the executor still loads it. */
   $: inactiveSlugs = inventoryLoaded && !inventoryError
-    ? attached.filter((s) => !activeSlugs.has(s) && bySlug.has(s))
+    ? attached.filter((s) => bySlug.get(s)?.status === 'installed')
+    : [];
+  /**
+   * Attached, an extension row exists, but its status is outside what the
+   * resolver accepts (disabled, error, …). The executor skips these on every
+   * run exactly like an orphan — the row just happens to still exist. These
+   * were previously lumped in with "installed but not active" and billed for,
+   * which reported a broken skill as working.
+   */
+  $: skippedSlugs = inventoryLoaded && !inventoryError
+    ? attached.filter((s) => { const item = bySlug.get(s); return !!item && !isLive(item); })
     : [];
   /**
    * Attached with no extension row at all: the skill was uninstalled while
@@ -372,11 +399,22 @@
     ? SKILL_INDEX_PREAMBLE_TOKENS +
       attached.reduce((sum, slug) => {
         const item = bySlug.get(slug);
-        // An orphan contributes nothing — the resolver drops it before the
-        // index is built, which is the one upside of being broken.
-        return item ? sum + skillIndexTokens(slug, skillDescription(item)) : sum;
+        // Only a live status is actually written into the index — an
+        // orphan, a disabled row, or an errored one all contribute nothing,
+        // because the resolver's own WHERE clause drops them before the
+        // index is built.
+        return item && isLive(item) ? sum + skillIndexTokens(slug, skillDescription(item)) : sum;
       }, 0)
     : 0;
+
+  /**
+   * `indexCost` is only meaningful once the wider inventory fetch has
+   * actually resolved statuses — before that (or after a failed fetch)
+   * every slug reads as "not live" and the number silently drops to
+   * whatever the preamble alone costs. A confidently wrong small number is
+   * worse than no number, so the pill renders "—" instead.
+   */
+  $: costUnknown = !inventoryLoaded || !!inventoryError;
 
   function bodyCost(slug: string): number {
     const item = bySlug.get(slug);
@@ -428,10 +466,12 @@
         </h3>
         <span
           class="sk-toll"
-          class:sk-toll-hot={indexCost >= 400}
-          title="What these skills cost on EVERY run. The executor writes one index line per attached skill into the system prompt whether the skill is used or not. The body is only read when the model calls kernel_skill_load — that is the per-row figure."
+          class:sk-toll-hot={!costUnknown && indexCost >= 400}
+          title={costUnknown
+            ? 'The installed-skill inventory has not loaded yet (or failed to), so which attached slugs are actually live is unknown — the figure cannot be computed truthfully.'
+            : 'What these skills cost on EVERY run. The executor writes one index line per attached skill into the system prompt whether the skill is used or not. The body is only read when the model calls kernel_skill_load — that is the per-row figure.'}
         >
-          {indexCost ? `~${fmtTok(indexCost)} tok / run` : 'no per-run cost'}
+          {costUnknown ? '— tok / run (unknown)' : indexCost ? `~${fmtTok(indexCost)} tok / run` : 'no per-run cost'}
         </span>
       </header>
 
@@ -446,15 +486,24 @@
           {#each attached as slug (slug)}
             {@const item = bySlug.get(slug)}
             {@const isOrphan = orphans.includes(slug)}
+            {@const isSkipped = skippedSlugs.includes(slug)}
             {@const isInactive = inactiveSlugs.includes(slug)}
-            <li class="sk-row" class:sk-row-orphan={isOrphan} class:sk-row-warn={isInactive}>
+            <li
+              class="sk-row"
+              class:sk-row-orphan={isOrphan || isSkipped}
+              class:sk-row-warn={isInactive}
+            >
               <span class="sk-glyph" aria-hidden="true"
-                >{isOrphan ? '⚠' : isInactive ? '◐' : '▸'}</span
+                >{isOrphan ? '⚠' : isSkipped ? '⊘' : isInactive ? '◐' : '▸'}</span
               >
               <span class="sk-main">
                 <span class="sk-slug">{slug}</span>
                 {#if isOrphan}
                   <span class="sk-note sk-note-bad">not installed — every run skips it</span>
+                {:else if isSkipped}
+                  <span class="sk-note sk-note-bad"
+                    >installed but {item?.status ?? 'skipped'} — every run skips it</span
+                  >
                 {:else if isInactive}
                   <span class="sk-note sk-note-warn">installed but not active</span>
                 {:else if item && skillDescription(item)}
@@ -489,12 +538,22 @@
             {orphans.length === 1 ? 'it' : 'them'} from the catalogue below.
           </p>
         {/if}
+        {#if skippedSlugs.length}
+          <p class="sk-warn">
+            {skippedSlugs.length} attached slug{skippedSlugs.length === 1 ? '' : 's'} ({skippedSlugs.join(
+              ', '
+            )}) {skippedSlugs.length === 1 ? 'is' : 'are'} installed but disabled or errored. The
+            executor skips {skippedSlugs.length === 1 ? 'it' : 'them'} on every run just like an
+            uninstalled skill — detach, or fix {skippedSlugs.length === 1 ? 'it' : 'them'} from
+            <a href="/extensions?tab=skills">Extensions → Skills</a>.
+          </p>
+        {/if}
       {/if}
 
       {#if inventoryError}
         <p class="sk-err">
           Could not read the installed skills ({inventoryError}) — the marks above cannot be
-          trusted until this loads.
+          trusted until this loads, and the per-run cost pill above is unknown, not zero.
         </p>
       {/if}
     </section>
@@ -930,6 +989,10 @@
     background: rgba(239, 93, 110, 0.07);
     font: 500 10.5px/1.45 'Manrope', sans-serif;
     color: #ef8f9b;
+  }
+  .sk-warn a {
+    color: inherit;
+    text-decoration: underline;
   }
   .sk-err {
     margin: 0;
