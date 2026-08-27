@@ -29,7 +29,13 @@
   $: dotClass = autoPaused || lastFailed ? 'vl-dot-red' : !agent || agent.active !== 1 ? 'vl-dot-yellow' : 'vl-dot-green';
 
   function runsClause(s: typeof stats): string {
-    if (!s || !s.total_runs) return 'sin runs aún';
+    // No stats at all is not the same as zero runs. /agents has no per-agent
+    // run counters to hand over (its WS payload only carries dashboard-wide
+    // aggregates), and answering "sin runs aún" there would state something
+    // this line has no way to know. Nothing is said instead; the last-run
+    // clause still carries the signal that matters.
+    if (!s) return '';
+    if (!s.total_runs) return 'sin runs aún';
     const n = s.total_runs;
     const c = s.completed ?? 0;
     const runsWord = n === 1 ? '1 run' : `${n} runs`;

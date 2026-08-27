@@ -414,7 +414,8 @@
      surfaces still look like one drawer. */
   .ip-compact{
     position:relative;inset:auto;
-    width:auto;min-width:0;height:100%;
+    width:auto;min-width:0;
+    flex:1;min-height:0;
     animation:none;
   }
 
