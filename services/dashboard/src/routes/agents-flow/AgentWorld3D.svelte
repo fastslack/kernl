@@ -43,16 +43,12 @@
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
-  import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
-  import MandateSection from '$lib/components/agent/sections/MandateSection.svelte';
-  import TriggeringSection from '$lib/components/agent/sections/TriggeringSection.svelte';
-  import GoalSection from '$lib/components/agent/sections/GoalSection.svelte';
-  import ToolsSection from '$lib/components/agent/sections/ToolsSection.svelte';
-  import VariablesSection from '$lib/components/agent/sections/VariablesSection.svelte';
-  import AppearanceSection from '$lib/components/agent/sections/AppearanceSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
+  import OverviewTab from '$lib/components/agent/tabs/OverviewTab.svelte';
+  // Type only: OverviewTab mounts it now, but `runtimeSectionRef` — the handle
+  // the run-failure remedies steer — is still typed and held here.
+  import type RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
-  import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
   import type { RemedyKind } from '$lib/run-failure.js';
   import { goto } from '$app/navigation';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
@@ -8658,154 +8654,124 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       on:changed={(e) => patchWorldAgent(e.detail.agent)}
     >
 
-      <!-- ──────────────── OVERVIEW TAB ──────────────── -->
-      <!-- `let:store` recibe el handle de sólo lectura que AgentDrawer publica
-           sobre el store que crea y sigue siendo dueño de él. Nada lo consume
-           todavía — este cuerpo sigue leyendo `selData`/`selPrompt`/etc, como
-           antes de Task 8 — pero la variable se declara para probar que el
-           cableado compila; Task 9 monta ahí adentro la primera sección que sí
-           lo necesita (RuntimeSection). -->
+      <!-- ──────────────── OVERVIEW TAB ────────────────
+           `let:store` is the read-only handle AgentDrawer publishes over the
+           store it owns. Every section below reads the agent from it; what
+           this component still passes down is what only it has — its own
+           detail fetch, the chain rows resolved against the world's agent
+           list, the skin registry, and the three blocks that call back into
+           this scope, which go in as slots so they keep their place in the
+           order instead of being pushed to the end. -->
       <svelte:fragment slot="overview" let:store>
-        <div class="ip-body">
-          <!-- ─── Verdict ───
-               "Is this agent OK?" answered in one line, above everything
-               else. Replaces the four KPI tiles that used to lead here —
-               they moved to HISTORY, where a series belongs. -->
-          <VerdictLine agent={selData} stats={selStats} lastRun={latestRun} />
-
-          <!-- ─── Mandate ───
-               What the agent was told to be. `selPrompt` and `detailLoading`
-               still come from here: this component's own detail fetch is what
-               resolves the prompt today, and the section prefers what it is
-               given over the store's row. -->
-          <MandateSection
-            {store}
-            prompt={selPrompt}
-            loading={detailLoading}
-            bind:collapsed={collapsed.mandate}
-          />
-
-          {#if dependsOnGoogleAuth(selData)}
-            <div class="ip-auth-cta" title="This agent talks to Google — re-login any time tokens expire.">
-              <span class="ip-auth-hint">Depends on Google auth</span>
-              <button
-                class="ip-auth-btn"
-                disabled={reauthLoading}
-                on:click={() => startReauth('google')}
-              >
-                <span class="ip-auth-ico">🔑</span>
-                <span>{reauthLoading ? '… opening Google' : 'Re-login Google'}</span>
-              </button>
-            </div>
-          {/if}
-
-          <!-- ─── Latest result hero card ─── -->
-          {#if latestRun && (latestRun.result || latestRun.error)}
-            <div class="result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'}>
-              <div class="result-hero-top">
-                <div class="result-hero-badge">
-                  <span class="result-hero-icon">{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
-                  <span class="result-hero-lbl">Last result</span>
+        <OverviewTab
+          {store}
+          stats={selStats}
+          lastRun={latestRun}
+          prompt={selPrompt}
+          loading={detailLoading}
+          chains={selChainRows}
+          triggers={agentDetail?.triggers ?? null}
+          schedules={agentDetail?.schedules ?? null}
+          connections={agentDetail?.adhocConnections ?? null}
+          running={liveIsRunning}
+          skins={availableSkins}
+          {savingSkin}
+          ready={!!agentDetail?.agent}
+          bind:collapsed
+          bind:runtimeSection={runtimeSectionRef}
+          on:skin={(e) => changeSkin(e.detail.skinId)}
+        >
+          <!-- ─── Latest result hero card ───
+               The failure card lives in here, so it only appears when the last
+               run failed — and the same card carries the output when it did
+               not. Everything it calls (`formatRunOutput`, the remedy handler,
+               the jump to HISTORY) is this component's. -->
+          <svelte:fragment slot="result">
+            {#if latestRun && (latestRun.result || latestRun.error)}
+              <div class="result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'}>
+                <div class="result-hero-top">
+                  <div class="result-hero-badge">
+                    <span class="result-hero-icon">{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
+                    <span class="result-hero-lbl">Last result</span>
+                  </div>
+                  <div class="result-hero-date">
+                    {fmtRelTime(latestRun.created_at)}
+                    {#if latestRun.created_at}
+                      <span class="result-hero-date-full">{String(latestRun.created_at).slice(0,16).replace('T',' ')}</span>
+                    {/if}
+                  </div>
+                  <div class="result-hero-meta">
+                    <span class="result-hero-trigger" style="--c:{triggerColor(latestRun.trigger_type)}">{latestRun.trigger_type}</span>
+                    <span class="result-hero-dot">·</span>
+                    <span>{latestRun.steps_count} steps</span>
+                    <span class="result-hero-dot">·</span>
+                    <span>{fmtTokens(latestRun.tokens_used)} tok</span>
+                  </div>
                 </div>
-                <div class="result-hero-date">
-                  {fmtRelTime(latestRun.created_at)}
-                  {#if latestRun.created_at}
-                    <span class="result-hero-date-full">{String(latestRun.created_at).slice(0,16).replace('T',' ')}</span>
-                  {/if}
-                </div>
-                <div class="result-hero-meta">
-                  <span class="result-hero-trigger" style="--c:{triggerColor(latestRun.trigger_type)}">{latestRun.trigger_type}</span>
-                  <span class="result-hero-dot">·</span>
-                  <span>{latestRun.steps_count} steps</span>
-                  <span class="result-hero-dot">·</span>
-                  <span>{fmtTokens(latestRun.tokens_used)} tok</span>
+                {#if latestRun.error}
+                  <div class="result-hero-body result-hero-err copy-wrap">
+                    <CopyTextBtn text={latestRun.error} title="Copy error" />
+                    <RunFailureCard
+                      error={latestRun.error}
+                      agentType={agentType(selData)}
+                      on:remedy={(e) => handleRunFailureRemedy(e.detail.kind)}
+                    />
+                  </div>
+                {:else if latestRun.result}
+                  <div class="result-hero-body ip-out-md copy-wrap" on:click={handleOutputClick} role="presentation">
+                    <CopyTextBtn text={latestRun.result} title="Copy result" />
+                    {@html formatRunOutput(latestRun.result)}
+                  </div>
+                {/if}
+                <div class="result-hero-actions">
+                  <button class="result-hero-action" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
+                    {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
+                  </button>
+                  <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
                 </div>
               </div>
-              {#if latestRun.error}
-                <div class="result-hero-body result-hero-err copy-wrap">
-                  <CopyTextBtn text={latestRun.error} title="Copy error" />
-                  <RunFailureCard
-                    error={latestRun.error}
-                    agentType={agentType(selData)}
-                    on:remedy={(e) => handleRunFailureRemedy(e.detail.kind)}
-                  />
-                </div>
-              {:else if latestRun.result}
-                <div class="result-hero-body ip-out-md copy-wrap" on:click={handleOutputClick} role="presentation">
-                  <CopyTextBtn text={latestRun.result} title="Copy result" />
-                  {@html formatRunOutput(latestRun.result)}
-                </div>
-              {/if}
-              <div class="result-hero-actions">
-                <button class="result-hero-action" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
-                  {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
+            {:else if latestRunLoading}
+              <div class="result-hero result-hero-loading">Loading last result…</div>
+            {/if}
+          </svelte:fragment>
+
+          <svelte:fragment slot="auth">
+            {#if dependsOnGoogleAuth(selData)}
+              <div class="ip-auth-cta" title="This agent talks to Google — re-login any time tokens expire.">
+                <span class="ip-auth-hint">Depends on Google auth</span>
+                <button
+                  class="ip-auth-btn"
+                  disabled={reauthLoading}
+                  on:click={() => startReauth('google')}
+                >
+                  <span class="ip-auth-ico">🔑</span>
+                  <span>{reauthLoading ? '… opening Google' : 'Re-login Google'}</span>
                 </button>
-                <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
               </div>
-            </div>
-          {:else if latestRunLoading}
-            <div class="result-hero result-hero-loading">Loading last result…</div>
-          {/if}
+            {/if}
+          </svelte:fragment>
 
-          <!-- The status/executor/model chips that used to sit here said what
-               the header tags already say. The run state moved up next to the
-               Pause control; provider and model are rows in Runtime below. -->
+          <svelte:fragment slot="footer">
+            <!-- ─── Office environment ───
+                 Office-scoped, not agent-scoped, and this panel is its only entry
+                 point in the dashboard — so it is never hidden, only folded. It
+                 opens for agents that can reach a shell or a filesystem, and for
+                 any office whose container is already up; for a pure LLM agent
+                 with a dormant environment it stays one quiet line. -->
+            {#if selData.flow_id}
+              <OfficeInfraPanel
+                flowId={selData.flow_id}
+                officeName={flows.find((f) => f.id === selData.flow_id)?.name ?? ''}
+                color={flowColor(selData.id)}
+                startCollapsed={!canUseOfficeEnv}
+              />
+            {/if}
 
-          <!-- ─── Triggering ───
-               Connections, Schedule and Event triggers were three sections
-               because they are three tables. One question, one section now;
-               see TriggeringSection. The chain rows are resolved here because
-               naming the other end needs the world's whole agent list. -->
-          <TriggeringSection
-            {store}
-            chains={selChainRows}
-            triggers={agentDetail?.triggers ?? null}
-            schedules={agentDetail?.schedules ?? null}
-            connections={agentDetail?.adhocConnections ?? null}
-          />
-
-          {#if agentDetail?.agent}
-            {@const ag = agentDetail.agent}
-
-            <GoalSection {store} />
-
-            <!-- Runtime — the chain and the limits that govern the same loop,
-                 now editable in place. See RuntimeSection's header for why the
-                 six read-only chips that used to sit here were the wrong shape
-                 for the error the panel reports right above them. -->
-            <RuntimeSection bind:this={runtimeSectionRef} store={store} running={liveIsRunning} />
-
-            <ToolsSection {store} bind:collapsed={collapsed.tools} />
-
-            <VariablesSection {store} bind:collapsed={collapsed.variables} />
-
-            <AppearanceSection
-              {store}
-              skins={availableSkins}
-              saving={savingSkin}
-              on:change={(e) => changeSkin(e.detail.skinId)}
-            />
-          {/if}
-
-          <!-- ─── Office environment ───
-               Office-scoped, not agent-scoped, and this panel is its only entry
-               point in the dashboard — so it is never hidden, only folded. It
-               opens for agents that can reach a shell or a filesystem, and for
-               any office whose container is already up; for a pure LLM agent
-               with a dormant environment it stays one quiet line. -->
-          {#if selData.flow_id}
-            <OfficeInfraPanel
-              flowId={selData.flow_id}
-              officeName={flows.find((f) => f.id === selData.flow_id)?.name ?? ''}
-              color={flowColor(selData.id)}
-              startCollapsed={!canUseOfficeEnv}
-            />
-          {/if}
-
-          {#if detailLoading && !agentDetail}
-            <div class="ip-loading">Loading full details…</div>
-          {/if}
-        </div>
+            {#if detailLoading && !agentDetail}
+              <div class="ip-loading">Loading full details…</div>
+            {/if}
+          </svelte:fragment>
+        </OverviewTab>
       </svelte:fragment>
 
       <!-- ──────────────── SKILLS TAB ────────────────
