@@ -46,6 +46,7 @@
   import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
   import MandateSection from '$lib/components/agent/sections/MandateSection.svelte';
   import TriggeringSection from '$lib/components/agent/sections/TriggeringSection.svelte';
+  import GoalSection from '$lib/components/agent/sections/GoalSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
@@ -8773,15 +8774,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           {#if agentDetail?.agent}
             {@const ag = agentDetail.agent}
 
-            {#if ag.goal_template}
-              <section class="ip-sec">
-                <div class="ip-sec-hrow">
-                  <h3 class="ip-sec-h">Default goal</h3>
-                  <button class="ip-icon-btn" title="copy" on:click={() => copy(ag.goal_template, 'goal')}>{copiedKey === 'goal' ? '✓ copied' : '⧉ copy'}</button>
-                </div>
-                <pre class="ip-pre">{ag.goal_template}</pre>
-              </section>
-            {/if}
+            <GoalSection {store} />
 
             <!-- Runtime — the chain and the limits that govern the same loop,
                  now editable in place. See RuntimeSection's header for why the
@@ -10113,14 +10106,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     min-width:0;text-align:right;overflow-wrap:anywhere;
   }
 
-  /* ── Pre blocks ─────────────── */
-  .ip-pre{
-    margin:0;padding:12px;border-radius:8px;
-    background:rgba(0,0,0,.3);
-    border:1px solid rgba(120,130,160,.1);
-    font:400 11px/1.55 'JetBrains Mono',monospace;
-    color:#d8dae3;white-space:pre-wrap;word-break:break-word;
-  }
+  /* ── Pre blocks ─── moved to sections/MandateSection + GoalSection */
 
   /* ── Icon buttons ─────────── */
   .ip-icon-btn{
