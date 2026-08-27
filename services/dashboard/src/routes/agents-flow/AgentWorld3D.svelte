@@ -9955,6 +9955,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   /* Skin picker ─── moved to sections/AppearanceSection.svelte */
 
   /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
+  .ip-code{
+    font:500 11px 'JetBrains Mono',monospace;
+    background:rgba(0,0,0,.3);color:#d8dae3;
+    padding:2px 7px;border-radius:4px;
+    border:1px solid rgba(120,130,160,.12);
+  }
 
   /* ── KV grid (limits etc) ────── */
   .ip-kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
