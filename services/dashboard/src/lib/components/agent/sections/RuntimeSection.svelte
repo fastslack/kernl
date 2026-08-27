@@ -133,7 +133,28 @@
   function saveChain(next: ChainLink[]) {
     return write(writeChain(next));
   }
-  /** Any of the three chain columns busy means the chain is busy. */
+  /**
+   * Any of the three chain columns busy means the chain is busy — and while
+   * it is, every control that writes the chain is DISABLED, not merely
+   * decorated.
+   *
+   * The distinction cost a round trip's worth of correctness. `ModelPicker`
+   * takes both a `busy` and a `disabled` prop, and only `disabled` refuses
+   * the click; `busy` draws a wait cursor and a different caret. So two
+   * clicks inside one round trip — remove a fallback twice, pick two models
+   * quickly — used to issue two patches over the SAME three keys.
+   *
+   * Overlapping patches are normally safe here: `agent-detail.ts` leaves a
+   * key alone when another write still has it in flight. But that guard is
+   * `if (k in fields || !s.saving.has(k))`, and `k in fields` is true for
+   * exactly the keys the two patches share — so patch A's response overwrites
+   * patch B's newer value, and on failure `rollbackFields` restores A's
+   * pre-edit chain over B's. The removed row reappears, then vanishes.
+   *
+   * The four numerics below do not have this problem: they debounce, and each
+   * one writes its own key. The chain writes three keys per click with no
+   * debounce, so it is closed by construction instead.
+   */
   $: chainSaving =
     !!$store?.saving &&
     (['provider', 'model', 'model_chain'] as const).some((k) => $store.saving.has(k));
@@ -281,6 +302,7 @@
             {providers}
             {requiresTools}
             busy={chainSaving}
+            disabled={chainSaving}
             error={i === 0 ? chainError : ''}
             on:change={(e) => setLink(i, e.detail)}
           />
@@ -293,6 +315,7 @@
         {#if links.length > 1}
           <button
             class="rt-x"
+            disabled={chainSaving}
             title={i === 0
               ? 'Remove the primary — row 2 is promoted in its place'
               : 'Remove this fallback'}
@@ -311,16 +334,18 @@
             model={draft.model}
             {providers}
             {requiresTools}
+            busy={chainSaving}
+            disabled={chainSaving}
             placeholder="choose a fallback"
             on:change={(e) => commitDraft(e.detail)}
           />
         </div>
-        <button class="rt-x" title="Cancel" on:click={() => (draft = null)}>×</button>
+        <button class="rt-x" disabled={chainSaving} title="Cancel" on:click={() => (draft = null)}>×</button>
       </div>
     {/if}
 
     {#if canAdd}
-      <button class="rt-add" on:click={() => (draft = { provider: '', model: '' })}>
+      <button class="rt-add" disabled={chainSaving} on:click={() => (draft = { provider: '', model: '' })}>
         + add fallback
       </button>
     {/if}
@@ -430,13 +455,17 @@
     background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.18);
     color:#8a8fa8;cursor:pointer;line-height:1;font:400 14px/1 'Syne',sans-serif;
   }
-  .rt-x:hover{color:#ef5d6e;border-color:rgba(239,93,110,.4);background:rgba(239,93,110,.1)}
+  .rt-x:hover:not(:disabled){color:#ef5d6e;border-color:rgba(239,93,110,.4);background:rgba(239,93,110,.1)}
+  /* Gated while the chain is being written — see `chainSaving`. Matches
+     ModelPicker's own disabled trigger so the whole row reads as one state. */
+  .rt-x:disabled{opacity:.5;cursor:wait}
   .rt-add{
     align-self:flex-start;margin-left:24px;
     background:none;border:none;cursor:pointer;padding:2px 0;
     color:#7f93c8;font:600 10px 'JetBrains Mono',monospace;
   }
-  .rt-add:hover{color:#a9bcf0;text-decoration:underline}
+  .rt-add:hover:not(:disabled){color:#a9bcf0;text-decoration:underline}
+  .rt-add:disabled{opacity:.5;cursor:wait}
 
   .rt-seg{display:flex;gap:0;border-radius:6px;overflow:hidden;border:1px solid rgba(120,130,160,.28);width:100%}
   .rt-seg-b{
