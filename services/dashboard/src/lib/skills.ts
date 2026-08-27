@@ -172,3 +172,37 @@ export function skillMatches(s: SkillItem, query: string): boolean {
 	if (!q) return true;
 	return `${s.slug} ${s.name} ${skillDescription(s)}`.toLowerCase().includes(q);
 }
+
+/**
+ * What ONE attached skill costs on EVERY run.
+ *
+ * Not the same number as `estimateSkillTokens()`, and the difference is the
+ * whole point of showing both: the executor injects
+ * `- **<slug>** — <description sliced to 240>` per attached skill into the
+ * system_prompt (SkillBodyResolver.buildPromptIndex), and only pulls the body
+ * when the model calls `kernel_skill_load`. So this is the fixed toll and
+ * `estimateSkillTokens()` is the variable one.
+ *
+ * Same chars/4 approximation the resolver uses for its own estimate.
+ */
+export function skillIndexTokens(slug: string, description: string): number {
+	// "- **" + slug + "** — " + desc + "\n"  → 10 chars of scaffolding.
+	return Math.ceil((slug.length + (description ?? '').slice(0, 240).length + 10) / 4);
+}
+
+/**
+ * The preamble buildPromptIndex writes once above the per-skill lines. Paid
+ * on every run as soon as the agent carries at least one skill, so a header
+ * that claims to show the fixed cost has to count it.
+ */
+export const SKILL_INDEX_PREAMBLE_TOKENS = Math.ceil(
+	[
+		'',
+		'## Available skills',
+		'These procedural skills are loaded for this agent. Each lists its',
+		'trigger pattern. When a user request matches, call `kernel_skill_load`',
+		'with the slug to read the full step-by-step playbook before acting.',
+		'',
+		'',
+	].join('\n').length / 4,
+);

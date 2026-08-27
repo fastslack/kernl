@@ -44,6 +44,7 @@
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
+  import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
   import type { RemedyKind } from '$lib/run-failure.js';
@@ -79,6 +80,8 @@
     // mandate and gate the office environment without a second fetch.
     system_prompt?: string;
     allowed_tools?: string;
+    /** JSON array of attached skill slugs — the SKILLS tab reads and writes it. */
+    skills_json?: string;
     // How long the kernel lets a run go. The chat waits on the agent's own
     // budget instead of a hardcoded one.
     timeout_ms?: number;
@@ -5142,6 +5145,10 @@
       'name', 'description', 'provider', 'model', 'model_chain', 'executor_type',
       'active', 'timeout_ms', 'role', 'rank_id', 'flow_id', 'system_prompt',
       'allowed_tools', 'consecutive_failures', 'auto_paused_at', 'auto_pause_reason',
+      // Sin esta clave el attach del tab Skills se descartaba acá en silencio:
+      // la escritura llegaba a la base, pero la fila del mundo (y con ella el
+      // badge del tab) seguía mostrando la lista vieja hasta el próximo fetch.
+      'skills_json',
     ];
     agents = agents.map((a) => {
       if (a.id !== next.id) return a;
@@ -5361,7 +5368,7 @@
 
   // ── Agent panel tabs ───────────────────────────
   // Core ids are literals; extension-contributed tabs use dynamic ids.
-  let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | (string & {}) = 'info';
+  let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
   let agentRuns: Array<{ id: string; status: string; steps_count: number; tokens_used: number; trigger_type: string; created_at: string; result?: string; error?: string }> = [];
   let agentMemory: Array<{ role: string; content: string; created_at: string }> = [];
   let workspaceFiles: Array<{ path: string; type: string; size: number }> = [];
@@ -6598,7 +6605,7 @@
   let _deepLinkTab: typeof panelTab | null = (() => {
     try {
       const t = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
-      return t && ['info', 'live', 'history', 'memory', 'chat', 'workspace'].includes(t) ? (t as typeof panelTab) : null;
+      return t && ['info', 'live', 'history', 'memory', 'chat', 'workspace', 'skills'].includes(t) ? (t as typeof panelTab) : null;
     } catch { return null; }
   })();
   $: if (selectedAgent && selectedAgent !== lastSelectedAgent) {
@@ -8941,6 +8948,21 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           {#if detailLoading && !agentDetail}
             <div class="ip-loading">Loading full details…</div>
           {/if}
+        </div>
+      </svelte:fragment>
+
+      <!-- ──────────────── SKILLS TAB ────────────────
+           `selRow` and not `selData`: the drawer's own store is seeded from
+           the same row, so both read one `skills_json`. The change event goes
+           through patchWorldAgent like every other write in here, which is
+           what keeps the tab's badge and the world's list in step without a
+           refetch. -->
+      <svelte:fragment slot="skills">
+        <div class="ip-body">
+          <SkillsTab
+            agent={selRow}
+            on:change={(e) => patchWorldAgent({ id: selData.id, skills_json: JSON.stringify(e.detail.skills) })}
+          />
         </div>
       </svelte:fragment>
 

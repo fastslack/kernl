@@ -18,6 +18,9 @@
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
+  // Sólo para el badge del tab Skills: el conteo sale del agente que el shell
+  // ya tiene, no de un prop más que el padre tenga que mantener.
+  import { parseAttachedSkills } from '$lib/skills.js';
   // Directo a types.js y no a office3d/index.js: el índice arrastra three.js
   // entero, y de acá sólo salen tres helpers puros.
   import { agentType, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
@@ -54,7 +57,7 @@
   // Vive acá; el padre lo espeja con bind: porque todavía decide el tab
   // inicial (live si el agente está corriendo, o el ?tab= del deep-link) y
   // consulta cuál está abierto cuando llega el fin de un run.
-  export let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | (string & {}) = 'info';
+  export let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
 
   function selectTab(tab: typeof panelTab) {
     panelTab = tab;
@@ -88,6 +91,11 @@
   }
   $: if (listRow) detail.seed(listRow);
   $: agent = $detail.agent ?? listRow;
+
+  // Badge del tab Skills. Se deriva del agente y no de un prop, así que un
+  // attach hecho dentro del propio tab lo mueve en cuanto el padre refleja
+  // `skills_json` — el mismo camino que ya recorre cualquier otra escritura.
+  $: skillCount = parseAttachedSkills(agent).length;
 
   // El circuit breaker de AgentService.recordRunOutcome() estampa estos tres
   // cuando es el kernel el que frena al agente. `active === 0` solo no
@@ -279,6 +287,9 @@
             <span class="live-dot"></span>LIVE
           </button>
         {/if}
+        <button class="ip-tab" class:active={panelTab === 'skills'} on:click={() => selectTab('skills')}>
+          Skills{#if skillCount}<span class="ip-tab-count">{skillCount}</span>{/if}
+        </button>
         <button class="ip-tab" class:active={panelTab === 'history'} on:click={() => selectTab('history')}>
           History{#if historyCount}<span class="ip-tab-count">{historyCount}</span>{/if}
         </button>
@@ -297,10 +308,14 @@
            Tasks 9/12 montan ahí adentro (RuntimeSection y las demás) leen y
            escriben el agente a través de este store, que el drawer sigue
            siendo dueño de crear y recrear. Ningún otro slot lo necesita
-           todavía — SkillsTab (Task 11) trabaja con agentId/agent y avisa por
-           evento `change`, no con el store directo. -->
+           todavía — SkillsTab trabaja con el agente que le pasa el padre y
+           avisa por evento `change`, no con el store directo. -->
       {#if panelTab === 'info'}
         <slot name="overview" store={detail} />
+      {/if}
+
+      {#if panelTab === 'skills'}
+        <slot name="skills" />
       {/if}
 
       {#if panelTab === 'live'}
