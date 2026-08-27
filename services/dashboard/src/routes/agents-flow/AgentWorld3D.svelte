@@ -47,6 +47,7 @@
   import MandateSection from '$lib/components/agent/sections/MandateSection.svelte';
   import TriggeringSection from '$lib/components/agent/sections/TriggeringSection.svelte';
   import GoalSection from '$lib/components/agent/sections/GoalSection.svelte';
+  import ToolsSection from '$lib/components/agent/sections/ToolsSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
@@ -8782,24 +8783,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                  for the error the panel reports right above them. -->
             <RuntimeSection bind:this={runtimeSectionRef} store={store} running={liveIsRunning} />
 
-            {@const tools = safeParse(ag.allowed_tools) || []}
-            {#if Array.isArray(tools) && tools.length}
-              <section class="ip-sec">
-                <div class="ip-sec-hrow">
-                  <button class="ip-sec-h ip-sec-btn" on:click={() => toggleSection('tools')}>
-                    <span class="ip-caret" class:open={!collapsed.tools}>▸</span>
-                    Allowed tools <span class="ip-sec-c">{tools.length}</span>
-                  </button>
-                </div>
-                {#if !collapsed.tools}
-                  <div class="ip-tools">
-                    {#each tools as t}
-                      <code class="ip-tool">{t}</code>
-                    {/each}
-                  </div>
-                {/if}
-              </section>
-            {/if}
+            <ToolsSection {store} bind:collapsed={collapsed.tools} />
 
             {@const vars = safeParse(ag.variables) || {}}
             {#if vars && Object.keys(vars).length}
@@ -10130,15 +10114,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-copy-inline:hover{color:#d8dae3;background:rgba(120,130,160,.1)}
 
-  /* ── Tool chips ─────────────── */
-  .ip-tools{display:flex;flex-wrap:wrap;gap:4px}
-  .ip-tool{
-    font:500 10px 'JetBrains Mono',monospace;
-    color:#b0b5c8;
-    padding:3px 8px;border-radius:4px;
-    background:rgba(120,130,160,.06);
-    border:1px solid rgba(120,130,160,.12);
-  }
+  /* ── Tool chips ─── moved to sections/ToolsSection.svelte */
 
   /* ── Variables ────────────────── */
   .ip-vars{display:flex;flex-direction:column;gap:4px}
