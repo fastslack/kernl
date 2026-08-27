@@ -49,6 +49,7 @@
   import GoalSection from '$lib/components/agent/sections/GoalSection.svelte';
   import ToolsSection from '$lib/components/agent/sections/ToolsSection.svelte';
   import VariablesSection from '$lib/components/agent/sections/VariablesSection.svelte';
+  import AppearanceSection from '$lib/components/agent/sections/AppearanceSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
@@ -5311,14 +5312,6 @@
   let availableSkins: SkinDefinition[] = [];
   let savingSkin = false;
 
-  /** DOM handler — Svelte template attributes can't contain TS `as` casts,
-   *  so we route the change event through this wrapper that does the cast in
-   *  the script block. */
-  function onSkinChange(e: Event): void {
-    const sel = e.target as HTMLSelectElement;
-    if (sel?.value) changeSkin(sel.value);
-  }
-
   /** Persist a new skin choice for the currently-selected agent. The kernel
    *  saves it; the dashboard's reactive scene rebuild renders the new look on
    *  the next fingerprint diff. */
@@ -8786,29 +8779,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
             <VariablesSection {store} bind:collapsed={collapsed.variables} />
 
-            {#if availableSkins.length > 1}
-              <section class="ip-sec">
-                <h3 class="ip-sec-h">Appearance</h3>
-                <div class="skin-picker">
-                  <label class="skin-lbl">skin</label>
-                  <select
-                    class="skin-sel"
-                    disabled={savingSkin}
-                    value={selData?.skin_id || ag.skin_id || 'office-worker'}
-                    on:change={onSkinChange}
-                  >
-                    {#each availableSkins as s}
-                      <option value={s.manifest.id}>{s.manifest.name}</option>
-                    {/each}
-                  </select>
-                </div>
-                {#each availableSkins as s}
-                  {#if (selData?.skin_id || ag.skin_id || 'office-worker') === s.manifest.id && s.manifest.description}
-                    <p class="skin-desc">{s.manifest.description}</p>
-                  {/if}
-                {/each}
-              </section>
-            {/if}
+            <AppearanceSection
+              {store}
+              skins={availableSkins}
+              saving={savingSkin}
+              on:change={(e) => changeSkin(e.detail.skinId)}
+            />
           {/if}
 
           <!-- ─── Office environment ───
@@ -10008,37 +9984,16 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     color:#6a6f82;text-transform:uppercase;letter-spacing:.5px;
   }
 
-  /* ── Sections ────────────────── */
-  .ip-sec{margin-bottom:18px}
-  .ip-sec-h{
-    font:600 10px 'Syne',sans-serif;
-    color:#8a8fa8;text-transform:uppercase;letter-spacing:1.5px;
-    margin:0 0 8px;display:inline-flex;align-items:center;gap:6px;
-  }
+  /* ── Sections ─── the section frame moved with them, to
+     components/agent/sections/*. The count badge stays: the LIVE and HISTORY
+     tab bodies still print it. */
   .ip-sec-c{
     font:600 9px 'JetBrains Mono',monospace;
     padding:1px 6px;border-radius:4px;
     background:rgba(120,130,160,.15);color:#a0a5b8;
     letter-spacing:0;text-transform:none;
   }
-  /* Skin picker — Appearance section dropdown */
-  .skin-picker{display:flex;align-items:center;gap:10px}
-  .skin-lbl{
-    font:700 10px 'JetBrains Mono',monospace;letter-spacing:1.5px;
-    color:#8a8fa8;text-transform:uppercase;min-width:38px;
-  }
-  .skin-sel{
-    flex:1;background:rgba(20,24,38,.85);color:#dde0ea;
-    border:1px solid rgba(120,130,160,.3);border-radius:6px;
-    padding:6px 10px;font:600 12px 'Manrope',sans-serif;
-    cursor:pointer;outline:none;
-  }
-  .skin-sel:hover{border-color:rgba(120,130,160,.55)}
-  .skin-sel:focus{border-color:rgba(120,170,255,.6);box-shadow:0 0 0 2px rgba(120,170,255,.12)}
-  .skin-sel:disabled{opacity:.5;cursor:not-allowed}
-  .skin-desc{
-    margin:6px 0 0;font:400 11px/1.4 'Manrope',sans-serif;color:#8a8fa8;
-  }
+  /* Skin picker ─── moved to sections/AppearanceSection.svelte */
 
   /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
 
