@@ -48,6 +48,7 @@
   import TriggeringSection from '$lib/components/agent/sections/TriggeringSection.svelte';
   import GoalSection from '$lib/components/agent/sections/GoalSection.svelte';
   import ToolsSection from '$lib/components/agent/sections/ToolsSection.svelte';
+  import VariablesSection from '$lib/components/agent/sections/VariablesSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
@@ -5246,11 +5247,9 @@
     }
   }
 
-  // Collapsible section state (persists per-agent session)
+  // Collapsible section state. It lives here and not inside each section so
+  // that closing and reopening the drawer does not forget it.
   let collapsed = { tools: true, variables: false, mandate: true };
-  function toggleSection(k: keyof typeof collapsed) {
-    collapsed = { ...collapsed, [k]: !collapsed[k] };
-  }
 
   // ── Talk to agent ──────────────────────────────
   const dispatch = createEventDispatcher();
@@ -8785,27 +8784,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
             <ToolsSection {store} bind:collapsed={collapsed.tools} />
 
-            {@const vars = safeParse(ag.variables) || {}}
-            {#if vars && Object.keys(vars).length}
-              <section class="ip-sec">
-                <div class="ip-sec-hrow">
-                  <button class="ip-sec-h ip-sec-btn" on:click={() => toggleSection('variables')}>
-                    <span class="ip-caret" class:open={!collapsed.variables}>▸</span>
-                    Variables <span class="ip-sec-c">{Object.keys(vars).length}</span>
-                  </button>
-                </div>
-                {#if !collapsed.variables}
-                  <div class="ip-vars">
-                    {#each Object.entries(vars) as [k, v]}
-                      <div class="ip-var">
-                        <span class="ip-var-k">{k}</span>
-                        <span class="ip-var-v">{typeof v === 'string' ? v : JSON.stringify(v)}</span>
-                      </div>
-                    {/each}
-                  </div>
-                {/if}
-              </section>
-            {/if}
+            <VariablesSection {store} bind:collapsed={collapsed.variables} />
 
             {#if availableSkins.length > 1}
               <section class="ip-sec">
@@ -10031,18 +10010,11 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   /* ── Sections ────────────────── */
   .ip-sec{margin-bottom:18px}
-  .ip-sec-h, .ip-sec-btn{
+  .ip-sec-h{
     font:600 10px 'Syne',sans-serif;
     color:#8a8fa8;text-transform:uppercase;letter-spacing:1.5px;
     margin:0 0 8px;display:inline-flex;align-items:center;gap:6px;
   }
-  .ip-sec-btn{
-    background:none;border:none;cursor:pointer;padding:0;
-    color:#8a8fa8;font:inherit;letter-spacing:inherit;
-  }
-  .ip-sec-btn:hover{color:#d8dae3}
-  .ip-sec-hrow{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-  .ip-sec-hrow .ip-sec-h{margin-bottom:0}
   .ip-sec-c{
     font:600 9px 'JetBrains Mono',monospace;
     padding:1px 6px;border-radius:4px;
@@ -10067,11 +10039,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .skin-desc{
     margin:6px 0 0;font:400 11px/1.4 'Manrope',sans-serif;color:#8a8fa8;
   }
-  .ip-caret{
-    display:inline-block;font:400 9px monospace;
-    transition:transform .2s;color:#6a6f82;
-  }
-  .ip-caret.open{transform:rotate(90deg)}
 
   /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
 
@@ -10116,17 +10083,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   /* ── Tool chips ─── moved to sections/ToolsSection.svelte */
 
-  /* ── Variables ────────────────── */
-  .ip-vars{display:flex;flex-direction:column;gap:4px}
-  .ip-var{
-    display:grid;grid-template-columns:140px 1fr;gap:12px;
-    padding:7px 10px;border-radius:6px;
-    background:rgba(120,130,160,.04);
-    border:1px solid rgba(120,130,160,.08);
-    align-items:start;
-  }
-  .ip-var-k{font:500 10px 'JetBrains Mono',monospace;color:#8a8fa8}
-  .ip-var-v{font:500 11px 'Manrope',sans-serif;color:#d8dae3;word-break:break-word;line-height:1.45}
+  /* ── Variables ─── moved to sections/VariablesSection.svelte */
 
   .hud{position:absolute;bottom:12px;left:12px;background:rgba(14,16,24,.9);backdrop-filter:blur(12px);border:1px solid rgba(16,185,129,.2);border-radius:10px;padding:10px 14px;z-index:10}
   .hud-t{display:flex;align-items:center;gap:6px;font:700 8px 'Syne',sans-serif;color:var(--green,#3dd68c);letter-spacing:1.5px;margin-bottom:6px}
