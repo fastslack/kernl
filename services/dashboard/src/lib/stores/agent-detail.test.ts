@@ -21,7 +21,14 @@ mock.module("../api.js", () => ({
   updateAgent: (id: string, body: Record<string, unknown>) => updateAgentImpl(id, body),
 }));
 
-import { mergeAgent, rollbackFields, createAgentDetailStore } from "./agent-detail.js";
+import {
+  mergeAgent,
+  rollbackFields,
+  createAgentDetailStore,
+  agentFromResponse,
+  sameValue,
+  driftedKeys,
+} from "./agent-detail.js";
 
 describe("mergeAgent", () => {
   it("prefers the detail row when both carry a field", () => {
@@ -168,5 +175,174 @@ describe("createAgentDetailStore: onPatched", () => {
 
     expect(seen).toEqual([]);
     expect(get(store).agent!.provider).toBe("claude_code");
+  });
+});
+
+/**
+ * Reconciling a write against what came back.
+ *
+ * The bug this exists to catch is not hypothetical — it is the one this
+ * feature shipped on top of. `agents.update` did not read `model_chain` or
+ * `executor_type` at all, and `PUT /api/agents/:id` read `model_chain` and
+ * then `JSON.stringify`d a string that was already JSON, so the column got a
+ * double-encoded value that `readChain` parses back to a string and discards.
+ * Both answered `{ success: true }`. A `patch()` that treats "did not throw"
+ * as "landed" reports a save in both cases.
+ *
+ * Every one of those would have been caught here, with no browser involved.
+ */
+
+describe("agentFromResponse", () => {
+  it("finds the row the HTTP writer returns", () => {
+    expect(agentFromResponse({ success: true, agent: { id: "a" } })).toEqual({ id: "a" });
+  });
+
+  it("finds it one level deeper, where the WS bridge can leave it", () => {
+    expect(agentFromResponse({ data: { success: true, agent: { id: "a" } } })).toEqual({ id: "a" });
+  });
+
+  it("returns null when there is no row to reconcile against", () => {
+    expect(agentFromResponse({ success: true })).toBeNull();
+    expect(agentFromResponse(null)).toBeNull();
+    expect(agentFromResponse("ok")).toBeNull();
+    expect(agentFromResponse({ agent: [] })).toBeNull();
+  });
+});
+
+describe("sameValue", () => {
+  it("ignores representation: a number column read back as text is the same answer", () => {
+    expect(sameValue(12, "12")).toBe(true);
+    expect(sameValue("300000", 300000)).toBe(true);
+  });
+
+  it("knows a boolean goes out and 0/1 comes back", () => {
+    expect(sameValue(true, 1)).toBe(true);
+    expect(sameValue(false, 0)).toBe(true);
+    expect(sameValue(true, 0)).toBe(false);
+  });
+
+  it("does not let a dropped field pass as saved", () => {
+    expect(sameValue('[{"provider":"openai","model":"gpt-5"}]', "")).toBe(false);
+    expect(sameValue("claude_code", "native")).toBe(false);
+    expect(sameValue("x", undefined)).toBe(false);
+  });
+});
+
+describe("driftedKeys", () => {
+  it("names the fields the kernel silently dropped", () => {
+    const sent = { provider: "openai", model: "gpt-5", model_chain: '[{"provider":"openai"}]' };
+    const saved = { provider: "openai", model: "gpt-5", model_chain: "" };
+    expect(driftedKeys(sent, saved)).toEqual(["model_chain"]);
+  });
+
+  it("catches the double-encoded chain, which is not the string that was sent", () => {
+    const chain = '[{"provider":"openai","model":"gpt-5"}]';
+    expect(driftedKeys({ model_chain: chain }, { model_chain: JSON.stringify(chain) }))
+      .toEqual(["model_chain"]);
+  });
+
+  it("is empty when everything came back as sent", () => {
+    expect(driftedKeys({ max_iterations: 12 }, { max_iterations: 12, updated_at: "now" })).toEqual([]);
+  });
+
+  it("says nothing about a key the row does not carry", () => {
+    expect(driftedKeys({ skills: ["a"] }, { id: "a" })).toEqual([]);
+  });
+});
+
+describe("createAgentDetailStore: patch() reconciles against the response", () => {
+  it("reports a silently dropped field instead of showing the value that was asked for", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const store = createAgentDetailStore("a", { onPatched: (agent) => seen.push(agent) });
+    store.seed({ id: "a", provider: "claude_code", model: "sonnet", model_chain: "" });
+
+    // Exactly what `agents.update` did before this branch: accepts provider and
+    // model, ignores model_chain, answers success either way.
+    updateAgentImpl = async (_id, body) => ({
+      success: true,
+      agent: { id: "a", provider: body.provider, model: body.model, model_chain: "" },
+    });
+
+    await store.patch({
+      provider: "openai",
+      model: "gpt-5",
+      model_chain: '[{"provider":"openai","model":"gpt-5"},{"provider":"grok","model":""}]',
+    });
+
+    const state = get(store);
+    expect(state.error).toContain("model_chain");
+    expect(state.error).toContain("Not saved");
+    // The panel shows what the kernel holds, never what the user hoped for.
+    expect(state.agent!.model_chain).toBe("");
+    // The keys that did land are the server's values.
+    expect(state.agent!.provider).toBe("openai");
+    // And nothing repaints the world as if the write had succeeded.
+    expect(seen).toEqual([]);
+  });
+
+  it("takes the server row as authoritative when everything landed", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const store = createAgentDetailStore("a", { onPatched: (agent) => seen.push(agent) });
+    store.seed({ id: "a", provider: "claude_code", model: "sonnet", updated_at: "old" });
+
+    updateAgentImpl = async (_id, body) => ({
+      success: true,
+      agent: { id: "a", provider: body.provider, model: body.model, updated_at: "new" },
+    });
+
+    await store.patch({ provider: "openai", model: "gpt-5" });
+
+    const state = get(store);
+    expect(state.error).toBe("");
+    expect(state.agent!.provider).toBe("openai");
+    // A field nobody sent, refreshed from the row that came back.
+    expect(state.agent!.updated_at).toBe("new");
+    expect(seen.length).toBe(1);
+  });
+
+  it("normalises through the transport that nests the body one level deeper", async () => {
+    const store = createAgentDetailStore("a");
+    store.seed({ id: "a", max_iterations: 5 });
+    updateAgentImpl = async () => ({ data: { success: true, agent: { id: "a", max_iterations: 12 } } });
+
+    await store.patch({ max_iterations: 12 });
+
+    expect(get(store).agent!.max_iterations).toBe(12);
+    expect(get(store).error).toBe("");
+  });
+
+  it("does not let the reconciled row undo a sibling write still in flight", async () => {
+    const store = createAgentDetailStore("a");
+    store.seed({ id: "a", provider: "old-provider", model: "old-model" });
+
+    updateAgentImpl = async (_id, body) => {
+      if ("model" in body) {
+        // Slow: still in flight while `provider`'s response is reconciled, and
+        // its response row therefore predates it.
+        await new Promise((r) => setTimeout(r, 20));
+        return { success: true, agent: { id: "a", provider: "new-provider", model: "new-model" } };
+      }
+      return { success: true, agent: { id: "a", provider: "new-provider", model: "old-model" } };
+    };
+
+    const modelPatch = store.patch({ model: "new-model" });
+    const providerPatch = store.patch({ provider: "new-provider" });
+    await Promise.all([modelPatch, providerPatch]);
+
+    const state = get(store);
+    expect(state.agent!.provider).toBe("new-provider");
+    expect(state.agent!.model).toBe("new-model");
+    expect(state.error).toBe("");
+  });
+
+  it("keeps the optimistic value when the response carries no row at all", async () => {
+    const store = createAgentDetailStore("a");
+    store.seed({ id: "a", provider: "claude_code" });
+    updateAgentImpl = async () => ({ success: true });
+
+    await store.patch({ provider: "openai" });
+
+    expect(get(store).agent!.provider).toBe("openai");
+    expect(get(store).error).toBe("");
   });
 });

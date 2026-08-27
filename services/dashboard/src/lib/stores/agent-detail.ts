@@ -54,6 +54,61 @@ export function mergeAgent(list: Row | null, detail: Row | null): Row | null {
 }
 
 /**
+ * The agent row a successful write handed back, wherever it put it.
+ *
+ * Both writers return one: `agents.update` (rpc-actions.ts) and
+ * `PUT /api/agents/:id` (api-routes.ts) each answer
+ * `{ success: true, agent: <row> }`. The WebSocket bridge resolves an RPC with
+ * `payload.data ?? payload` (ws.ts:231), so the same body can arrive one level
+ * deeper — hence both shapes, rather than guessing which transport ran.
+ *
+ * Returns null when there is no row to reconcile against, which is a real
+ * answer and not a failure: the caller keeps its optimistic value and says
+ * nothing it cannot back up.
+ */
+export function agentFromResponse(res: unknown): Row | null {
+  if (!res || typeof res !== "object") return null;
+  const top = (res as Record<string, unknown>).agent;
+  if (top && typeof top === "object" && !Array.isArray(top)) return top as Row;
+  const data = (res as Record<string, unknown>).data;
+  if (data && typeof data === "object") {
+    const nested = (data as Record<string, unknown>).agent;
+    if (nested && typeof nested === "object" && !Array.isArray(nested)) return nested as Row;
+  }
+  return null;
+}
+
+/**
+ * Is the value that came back the value that was sent?
+ *
+ * Deliberately loose about representation, strict about meaning. The column is
+ * TEXT and the control is a number input, so `12` and `"12"` are the same
+ * answer; `active` is a boolean going out and `1` coming back. What must NOT
+ * pass is a field that was ignored — the value the row already had.
+ */
+export function sameValue(sent: unknown, saved: unknown): boolean {
+  if (sent === saved) return true;
+  if (typeof sent === "boolean") return saved === (sent ? 1 : 0);
+  if (sent === null || sent === undefined || saved === null || saved === undefined) return false;
+  if (typeof sent === "object" || typeof saved === "object") return false;
+  return String(sent) === String(saved);
+}
+
+/**
+ * The keys a write claimed to accept and did not.
+ *
+ * This is the check that makes "saved" mean something. Without it `patch()`
+ * read "the call did not throw" as "the value landed" — and against a kernel
+ * that silently drops a column (which is exactly what both agent writers did
+ * with `model_chain` and `executor_type` before this branch, one by omitting
+ * it and one by double-encoding it) the panel would report a save that never
+ * happened. Which is the same lie this whole task exists to remove.
+ */
+export function driftedKeys(sent: Record<string, unknown>, saved: Row): string[] {
+  return Object.keys(sent).filter((k) => k in saved && !sameValue(sent[k], saved[k]));
+}
+
+/**
  * Roll back just the given keys of `current` to their prior values.
  *
  * Pulled out of `patch()`'s catch branch as a pure function, and kept as the
@@ -128,9 +183,14 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
   }
 
   /**
-   * Optimistic write. The field shows its new value immediately; if the PUT
-   * fails the previous value comes back and `error` carries the reason. No
-   * toast — the state belongs on the control that was touched.
+   * Optimistic write, reconciled against what the server actually saved.
+   *
+   * The field shows its new value immediately. If the call fails the previous
+   * value comes back and `error` carries the reason. If the call succeeds the
+   * optimistic value is NOT taken on trust: the row that comes back is
+   * authoritative, and any field that came back different from what was sent
+   * is reported on that field exactly like a failure — because it is one. No
+   * toast; the state belongs on the control that was touched.
    */
   async function patch(fields: Record<string, unknown>): Promise<void> {
     const keys = Object.keys(fields);
@@ -149,8 +209,36 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
       // updateAgent(id, body) → rpcOrCall('agents.update', {id, ...body}) con
       // fallback a PUT /api/agents/:id (lib/api.ts:314). El body viaja tal cual,
       // así que un patch parcial actualiza solo las columnas que manda.
-      await updateAgent(agentId, fields);
-      landed = true;
+      const res = await updateAgent(agentId, fields);
+      const saved = agentFromResponse(res);
+
+      if (!saved) {
+        // Nothing to reconcile against. The optimistic value stands, which is
+        // the old behaviour — kept only for a transport that answers without a
+        // row, never as the normal path.
+        landed = true;
+      } else {
+        const drifted = driftedKeys(fields, saved);
+        store.update((s) => {
+          const agent = { ...(s.agent ?? {}) };
+          // Take the server's value for every key this write sent, plus any
+          // key no other write is still in flight for (so `updated_at` and
+          // friends refresh). A key inside another patch's `saving` set is
+          // left alone: that row predates the sibling's value and would undo
+          // it — the same reason the rollback is per-key.
+          for (const [k, v] of Object.entries(saved)) {
+            if (k in fields || !s.saving.has(k)) agent[k] = v;
+          }
+          return {
+            ...s,
+            agent,
+            error: drifted.length
+              ? `Not saved: ${drifted.join(", ")} — the kernel answered with a different value.`
+              : s.error,
+          };
+        });
+        landed = drifted.length === 0;
+      }
     } catch (e) {
       store.update((s) => ({ ...s, agent: rollbackFields(s.agent, prevValues), error: String(e) }));
     } finally {

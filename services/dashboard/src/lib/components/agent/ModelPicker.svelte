@@ -19,9 +19,10 @@
   panel edge. Same reason, same fix as the chat picker.
 -->
 <script lang="ts">
-  import { createEventDispatcher, tick } from 'svelte';
+  import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import { buildCatalog, commonModels, rankModels, type ModelEntry } from '$lib/model-catalog.js';
   import { toolCapable, findProvider, type ProviderStatus } from '$lib/provider-health.js';
+  import { bindListeners } from '$lib/outside-listeners.js';
 
   /** Provider name as the agent stores it — may be `claude_code`, not the slug. */
   export let provider = '';
@@ -89,6 +90,13 @@
     pos = { top, left: Math.min(r.left, window.innerWidth - width - 8), width };
   }
 
+  /**
+   * The window listeners this menu owns while it is open — and the only way
+   * off them. Held in one handle so `close()` and `onDestroy` can both drop
+   * them without either knowing whether the other already did.
+   */
+  let unbindOuter: (() => void) | null = null;
+
   /** Opened from outside — Task 10's `pick-tool-capable-provider` remedy. */
   export function openMenu(): void {
     if (disabled) return;
@@ -97,16 +105,29 @@
     place();
     open = true;
     void tick().then(() => searchEl?.focus());
-    window.addEventListener('scroll', onOuterScroll, { capture: true, passive: true });
-    window.addEventListener('resize', close);
+    unbindOuter?.();
+    unbindOuter = bindListeners(window, [
+      { type: 'scroll', handler: onOuterScroll, options: { capture: true, passive: true } },
+      { type: 'resize', handler: close },
+    ]);
   }
 
   function close() {
     if (!open) return;
     open = false;
-    window.removeEventListener('scroll', onOuterScroll, { capture: true });
-    window.removeEventListener('resize', close);
+    unbindOuter?.();
+    unbindOuter = null;
   }
+
+  // A component can be destroyed with its menu still open: the drawer closes,
+  // the selected agent changes, or a chain row is removed — and the rows are
+  // keyed by index, so removing one destroys and rebuilds the components after
+  // it. `close()` alone would never run in any of those, and both listeners
+  // would stay on `window` holding this component and a detached trigger.
+  onDestroy(() => {
+    unbindOuter?.();
+    unbindOuter = null;
+  });
 
   /**
    * Follow the trigger, and only give up when it actually leaves.

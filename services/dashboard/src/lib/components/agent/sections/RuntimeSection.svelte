@@ -173,25 +173,30 @@
   /** What the user has typed but not yet had saved, per field. */
   let pending: Record<string, string> = {};
 
+  /** Send what is pending for one field. Called by the timer, and by destroy. */
+  function commitNumber(key: string) {
+    delete timers[key];
+    const raw = pending[key] ?? '';
+    const n = Number(raw);
+    if (raw.trim() === '' || !Number.isFinite(n)) {
+      // Nothing usable typed — drop the draft rather than writing NaN.
+      delete pending[key];
+      pending = pending;
+      return;
+    }
+    const spec = NUMERICS.find((s) => s.key === key);
+    const clamped = spec ? Math.max(spec.min, Math.round(n)) : Math.round(n);
+    void write({ [key]: clamped }).finally(() => {
+      delete pending[key];
+      pending = pending;
+    });
+  }
+
   function onNumber(key: string, raw: string) {
     pending[key] = raw;
     pending = pending;
     clearTimeout(timers[key]);
-    timers[key] = setTimeout(() => {
-      const n = Number(raw);
-      if (raw.trim() === '' || !Number.isFinite(n)) {
-        // Nothing usable typed — drop the draft rather than writing NaN.
-        delete pending[key];
-        pending = pending;
-        return;
-      }
-      const spec = NUMERICS.find((s) => s.key === key);
-      const clamped = spec ? Math.max(spec.min, Math.round(n)) : Math.round(n);
-      void write({ [key]: clamped }).finally(() => {
-        delete pending[key];
-        pending = pending;
-      });
-    }, DEBOUNCE_MS);
+    timers[key] = setTimeout(() => commitNumber(key), DEBOUNCE_MS);
   }
 
   function numValue(key: string): string {
@@ -200,8 +205,16 @@
     return v === undefined || v === null || v === '' ? '' : String(v);
   }
 
+  // Flush, do not drop. Typing into a numeric and closing the drawer inside
+  // the debounce window used to discard the edit — after the label had already
+  // said it was about to save. Silent loss of a keystroke is the exact failure
+  // this section exists to remove, so the pending write goes out on the way
+  // down. It is a plain fetch and does not need the component to survive it.
   onDestroy(() => {
-    for (const t of Object.values(timers)) clearTimeout(t);
+    for (const key of Object.keys(timers)) {
+      clearTimeout(timers[key]);
+      commitNumber(key);
+    }
   });
 
   // ── Steering from outside ────────────────────────────────────────
@@ -259,7 +272,13 @@
           </span>
         {/if}
         {#if links.length > 1}
-          <button class="rt-x" title="Remove this fallback" on:click={() => removeLink(i)}>×</button>
+          <button
+            class="rt-x"
+            title={i === 0
+              ? 'Remove the primary — row 2 is promoted in its place'
+              : 'Remove this fallback'}
+            on:click={() => removeLink(i)}
+          >×</button>
         {/if}
       </div>
     {/each}
