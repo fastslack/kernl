@@ -5227,13 +5227,6 @@
     return (n / 1000).toFixed(1) + 'k';
   }
 
-  function fmtDuration(ms?: number): string {
-    if (!ms) return '—';
-    if (ms < 1000) return ms + 'ms';
-    if (ms < 60_000) return (ms / 1000).toFixed(1) + 's';
-    return Math.round(ms / 60_000) + 'm ' + Math.round((ms % 60_000) / 1000) + 's';
-  }
-
   function triggerColor(t: string): string {
     switch (t) {
       case 'manual': return '#a78bfa';
@@ -6203,9 +6196,9 @@
   }
 
   // ── Meta chips: Δt + token usage ────────────────────────────────────
-  /** Compact duration for the LIVE chips. Reuses the same shape as
-   *  `fmtDuration` above but returns '' (not '—') on zero so we can use
-   *  `{#if str}` for conditional rendering. */
+  /** Compact duration for the LIVE chips. Same shape as the trigger
+   *  cooldowns' formatter (now TriggeringSection's) but returns '' (not '—')
+   *  on zero so we can use `{#if str}` for conditional rendering. */
   function liveFmtDelta(ms: number): string {
     if (!Number.isFinite(ms) || ms < 0) return '';
     if (ms < 1000) return `${Math.round(ms)}ms`;
