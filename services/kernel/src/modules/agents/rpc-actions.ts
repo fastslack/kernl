@@ -3,7 +3,7 @@
  */
 
 import type { RpcAction } from "../../core/mtw/rpc-handler.js";
-import { normalizeModelChainInput, normalizeExecutorType } from "./chain-input.js";
+import { normalizeModelChainInput, normalizeExecutorType, normalizeSkillsInput } from "./chain-input.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import type { EventBus } from "../../core/event-bus.js";
@@ -81,6 +81,12 @@ export function agentsRpcActions(deps: AgentsRpcDeps): RpcAction[] {
           // that `provider` keeps of the chain head can drift.
           model_chain: normalizeModelChainInput(args.model_chain),
           executor_type: normalizeExecutorType(args.executor_type),
+          // The SKILLS tab is the only attach surface left, and it writes
+          // through here: an explicit key list silently drops whatever is not
+          // on it, which is what happened to the chain columns above before
+          // they were added. Normalized rather than passed through — see
+          // normalizeSkillsInput.
+          skills: normalizeSkillsInput(args.skills),
         });
         if (!updated) throw new Error("Agent not found");
         return { success: true, agent: updated };

@@ -4,7 +4,7 @@
  */
 
 import type { ServerResponse } from "node:http";
-import { normalizeModelChainInput, normalizeExecutorType } from "./chain-input.js";
+import { normalizeModelChainInput, normalizeExecutorType, normalizeSkillsInput } from "./chain-input.js";
 import type { KernelHttpServer } from "../../core/http-server.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
@@ -908,6 +908,10 @@ export function registerAgentRoutes(
         ...body,
         model_chain: normalizeModelChainInput(body.model_chain),
         executor_type: normalizeExecutorType(body.executor_type),
+        // Was reaching the column through the spread, unchecked. The two
+        // writers have to accept the same thing or the fallback path becomes
+        // a way around the validation the primary one does.
+        skills: normalizeSkillsInput(body.skills),
       });
       if (!updated) { server.json(res, 404, { error: "Agent not found" }); return; }
       server.json(res, 200, { success: true, agent: updated });

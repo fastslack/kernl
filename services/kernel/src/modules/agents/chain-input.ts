@@ -71,3 +71,63 @@ export function normalizeModelChainInput(value: unknown): ModelChainEntry[] | un
 export function normalizeExecutorType(value: unknown): "native" | "claude_code" | undefined {
   return value === "native" || value === "claude_code" ? value : undefined;
 }
+
+/**
+ * Accepting the procedural-skill slug list from the outside.
+ *
+ * Same job as the chain normalizer above, for the other column the agent
+ * drawer writes. `agents.update` was building an explicit key list and
+ * `skills` was not on it, so every attach made through the RPC — which is
+ * the normal path, the dashboard only falls back to HTTP when its socket is
+ * down — was dropped in silence while the UI reported success.
+ *
+ * It is validated rather than passed through because `skills_json` is not
+ * inert storage. `service.updateAgent` JSON.stringifies whatever it is given,
+ * and from there each slug travels two ways:
+ *
+ *   - back to the dashboard, where `parseAttachedSkills` runs `String()` over
+ *     every member. A non-string element would come back as an unmatchable
+ *     slug (`"[object Object]"`, `"null"`) and be reported forever as an
+ *     orphaned skill the user cannot detach by name.
+ *   - into the agent's own system prompt: `SkillBodyResolver.buildPromptIndex`
+ *     writes `- **<slug>** — <description>` per attached slug on every run.
+ *     An unbounded string from an untrusted caller is prompt surface, so the
+ *     length cap is the point of it, not tidiness.
+ *
+ * SQL injection is not among the risks — the slug only ever reaches the DB as
+ * a bound parameter — which is why this trims and drops instead of rejecting
+ * the whole write.
+ */
+
+/** How many skills one agent may carry. Far above any real use; a stop, not a budget. */
+export const MAX_AGENT_SKILLS = 64;
+/** Longest slug accepted. Extension slugs are directory names. */
+const MAX_SKILL_SLUG_LEN = 128;
+
+/**
+ * The slug list to persist, or `undefined` for "the caller said nothing".
+ *
+ * Same contract as `normalizeModelChainInput`: `undefined` must stay
+ * distinguishable from `[]`, because `updateAgent` writes only the keys it is
+ * given and a value it cannot read must not be taken as "detach everything".
+ * An explicit empty array does mean detach everything.
+ */
+export function normalizeSkillsInput(value: unknown): string[] | undefined {
+  if (value === undefined || value === null) return undefined;
+  if (!Array.isArray(value)) return undefined;
+
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const raw of value) {
+    if (typeof raw !== "string") continue;
+    const slug = raw.trim();
+    if (!slug || slug.length > MAX_SKILL_SLUG_LEN) continue;
+    // A repeated slug bills twice in the drawer's token estimate and repeats
+    // its line in the prompt index. Once is the only meaningful answer.
+    if (seen.has(slug)) continue;
+    seen.add(slug);
+    out.push(slug);
+    if (out.length >= MAX_AGENT_SKILLS) break;
+  }
+  return out;
+}
