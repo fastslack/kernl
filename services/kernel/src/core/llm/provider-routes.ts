@@ -13,12 +13,15 @@
 
 import type { KernelHttpServer } from "../http-server.js";
 import type { LlmProviderRegistry } from "./provider-registry.js";
+import type { LlmProviderStatus } from "./provider.js";
+import type { ChatLlmProvider } from "./chat-adapters.js";
 import { clearProviderExhausted } from "./chat-adapters.js";
 import { llm } from "./client.js";
 import { getAllHealth } from "./provider-health.js";
 import { ModelBlocklist } from "./model-blocklist.js";
 import { recent as recentCalls } from "./call-log.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
+import { getChatProviders } from "./readiness.js";
 
 /** Enough of the value to recognise it, never enough to use it. */
 const MASK = "***";
@@ -42,6 +45,25 @@ function slugOf(req: unknown): string | null {
   return slug;
 }
 
+/**
+ * Join provider statuses against the chat adapters that carry
+ * `supportsToolLoop`. Pure, so the join is testable without a live kernel.
+ * A slug with no adapter keeps the flag undefined: "we don't know" is the
+ * truth there, and claiming `true` would let the UI green-light a provider
+ * that never gets built.
+ */
+export function decorateToolLoop(
+  statuses: LlmProviderStatus[],
+  providers: Map<string, ChatLlmProvider> | null,
+): LlmProviderStatus[] {
+  if (!providers) return statuses;
+  return statuses.map((s) => {
+    const adapter = providers.get(s.slug);
+    if (!adapter) return s;
+    return { ...s, supportsToolLoop: adapter.supportsToolLoop !== false };
+  });
+}
+
 export function registerLlmProviderRoutes(
   server: KernelHttpServer,
   registry: LlmProviderRegistry,
@@ -55,7 +77,9 @@ export function registerLlmProviderRoutes(
   onConfigSaved?: (slug: string) => void | Promise<void>,
 ): void {
   server.get("/api/llm-providers", (_req, res) => {
-    server.json(res, 200, { providers: registry.getStatuses() });
+    server.json(res, 200, {
+      providers: decorateToolLoop(registry.getStatuses(), getChatProviders()),
+    });
   });
 
   // POST /api/llm-providers/clear-exhausted — wipes the per-provider quota

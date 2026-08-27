@@ -19,6 +19,7 @@
  */
 
 import { updateAgent } from './api.js';
+import { agentFromResponse } from './stores/agent-detail.js';
 
 export interface SkillItem {
 	id: string;
@@ -120,12 +121,53 @@ export function parseAttachedSkills(agent: { skills_json?: string } | null | und
 	}
 }
 
+/** Same list, same order? Order is part of the value: it is the column verbatim. */
+export function sameSlugList(a: string[], b: string[]): boolean {
+	return a.length === b.length && a.every((s, i) => s === b[i]);
+}
+
 /**
  * Persist the slug list for one agent and keep the local cache in sync so
  * the other surface (hub ↔ drawer) reflects it without a refetch.
+ *
+ * Throws when the write did not land — including when the call itself
+ * SUCCEEDED. That is not defensive padding; it is the whole point of this
+ * function now. `agents.update` accepted `{id, skills}` and answered
+ * `{success: true, agent}` while quietly dropping the column, because its
+ * handler built an explicit key list that `skills` was not on. Every caller
+ * here read "did not throw" as "saved": the tab set `attached`, moved
+ * `seenJson`, dispatched `change`, and the badge, the row and the token
+ * estimate all updated for a skill the agent never got.
+ *
+ * So the response row is checked instead of assumed, the same way
+ * `agent-detail.ts`'s `patch()` reconciles every other field the drawer
+ * writes. The check lives HERE rather than in that store because the store is
+ * only under one of the three surfaces that mount SkillsTab; this is the one
+ * place all of them go through.
+ *
+ * A response with no row at all is not treated as a failure — some transports
+ * answer without one, and a check that cannot run must not invent a verdict.
+ * That is the only path left where success is taken on trust.
  */
 export async function saveAgentSkills(agentId: string, slugs: string[]): Promise<void> {
-	await updateAgent(agentId, { skills: slugs });
+	const res = await updateAgent(agentId, { skills: slugs });
+	const saved = agentFromResponse(res);
+
+	if (saved) {
+		const landed = parseAttachedSkills(saved as { skills_json?: string });
+		if (!sameSlugList(landed, slugs)) {
+			// Deliberately says what came back. Against a kernel that drops the
+			// column the landed list is the agent's PREVIOUS one, and seeing it
+			// is what tells the user the attach did nothing rather than that it
+			// half-worked.
+			throw new Error(
+				`Not saved: skills — the kernel answered with ${
+					landed.length ? landed.join(', ') : 'an empty list'
+				}. This kernel build may not accept skill changes.`
+			);
+		}
+	}
+
 	if (agentsCache) {
 		agentsCache = agentsCache.map((a) =>
 			a.id === agentId ? { ...a, skills_json: JSON.stringify(slugs) } : a
@@ -172,3 +214,37 @@ export function skillMatches(s: SkillItem, query: string): boolean {
 	if (!q) return true;
 	return `${s.slug} ${s.name} ${skillDescription(s)}`.toLowerCase().includes(q);
 }
+
+/**
+ * What ONE attached skill costs on EVERY run.
+ *
+ * Not the same number as `estimateSkillTokens()`, and the difference is the
+ * whole point of showing both: the executor injects
+ * `- **<slug>** — <description sliced to 240>` per attached skill into the
+ * system_prompt (SkillBodyResolver.buildPromptIndex), and only pulls the body
+ * when the model calls `kernel_skill_load`. So this is the fixed toll and
+ * `estimateSkillTokens()` is the variable one.
+ *
+ * Same chars/4 approximation the resolver uses for its own estimate.
+ */
+export function skillIndexTokens(slug: string, description: string): number {
+	// "- **" + slug + "** — " + desc + "\n"  → 10 chars of scaffolding.
+	return Math.ceil((slug.length + (description ?? '').slice(0, 240).length + 10) / 4);
+}
+
+/**
+ * The preamble buildPromptIndex writes once above the per-skill lines. Paid
+ * on every run as soon as the agent carries at least one skill, so a header
+ * that claims to show the fixed cost has to count it.
+ */
+export const SKILL_INDEX_PREAMBLE_TOKENS = Math.ceil(
+	[
+		'',
+		'## Available skills',
+		'These procedural skills are loaded for this agent. Each lists its',
+		'trigger pattern. When a user request matches, call `kernel_skill_load`',
+		'with the slug to read the full step-by-step playbook before acting.',
+		'',
+		'',
+	].join('\n').length / 4,
+);
