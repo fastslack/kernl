@@ -44,6 +44,10 @@
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
+  import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
+  import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
+  import type { RemedyKind } from '$lib/run-failure.js';
+  import { goto } from '$app/navigation';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
 
@@ -5756,19 +5760,6 @@
     latestRunLoading = false;
   }
 
-  // ── Re-auth helper for OAuth providers ─────────────────
-  // Some integrations surface auth-expired errors as run *results* (not
-  // throws), so we scan both result/error text. When the pattern matches a
-  // known provider, the LAST RESULT card surfaces an inline re-auth button
-  // — saves the user the trip to /providers to fix it.
-  function detectExpiredAuthProvider(text: string | null | undefined): 'google' | null {
-    if (!text) return null;
-    // Google: explicit tool name, OAuth error code, refresh-failure phrase
-    if (/kernel_google_auth|google_auth|invalid_grant|Token (refresh failed|has been expired or revoked)/i.test(text)) {
-      return 'google';
-    }
-    return null;
-  }
   // Agents whose builtin_handler starts with `gsync:` (contacts/gmail/calendar/
   // graph-enrich) speak to Google APIs. Surface a permanent inline Re-login
   // button in their description so the user can fix expired auth proactively —
@@ -5776,6 +5767,40 @@
   function dependsOnGoogleAuth(a: any): boolean {
     const h = a?.builtin_handler;
     return typeof h === 'string' && h.startsWith('gsync:');
+  }
+
+  // ── RunFailureCard wiring (Task 10) ─────────────────────
+  // The card only renders and dispatches a `kind`; it does not know how to
+  // fix anything. This is where each of the five remedies actually lands —
+  // `runtimeSectionRef` and `startAgent`/`startReauth` only exist in this
+  // component's scope, so the mapping has to live here rather than inside
+  // the card.
+  let runtimeSectionRef: RuntimeSection | null = null;
+  function handleRunFailureRemedy(kind: RemedyKind): void {
+    switch (kind) {
+      case 'pick-tool-capable-provider':
+        void runtimeSectionRef?.focusPrimaryPicker({ requireTools: true });
+        break;
+      case 'switch-executor-claude-code':
+        // Routed through RuntimeSection's own `setExecutor`, not
+        // `store.patch()` directly. Both send the same write, but only
+        // RuntimeSection's wrapper reads the reconciled result back into the
+        // field that shows it (`.rt-err` under Executor) — a direct
+        // `store.patch()` here would set the store's `error` and nothing
+        // would ever render it, silently losing exactly the drift this
+        // remedy exists to report.
+        void runtimeSectionRef?.setExecutor('claude_code');
+        break;
+      case 'configure-provider':
+        void goto(LLM_SETTINGS_HREF);
+        break;
+      case 'reauth-google':
+        void startReauth('google');
+        break;
+      case 'retry':
+        void startAgent();
+        break;
+    }
   }
 
   let reauthLoading = false;
@@ -8632,6 +8657,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
            lo necesita (RuntimeSection). -->
       <svelte:fragment slot="overview" let:store>
         <div class="ip-body">
+          <!-- ─── Verdict ───
+               "Is this agent OK?" answered in one line, above everything
+               else. Replaces the four KPI tiles that used to lead here —
+               they moved to HISTORY, where a series belongs. -->
+          <VerdictLine agent={selData} stats={selStats} lastRun={latestRun} />
+
           <!-- ─── Mandate ───
                What the agent was told to be. The role used to hang loose under
                the tabs and the system prompt sat last and collapsed, so the
@@ -8703,8 +8734,11 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
               {#if latestRun.error}
                 <div class="result-hero-body result-hero-err copy-wrap">
                   <CopyTextBtn text={latestRun.error} title="Copy error" />
-                  <div class="result-hero-err-lbl">⚠ Error</div>
-                  <pre class="result-hero-err-txt">{latestRun.error}</pre>
+                  <RunFailureCard
+                    error={latestRun.error}
+                    agentType={agentType(selData)}
+                    on:remedy={(e) => handleRunFailureRemedy(e.detail.kind)}
+                  />
                 </div>
               {:else if latestRun.result}
                 <div class="result-hero-body ip-out-md copy-wrap" on:click={handleOutputClick} role="presentation">
@@ -8717,16 +8751,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                   {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
                 </button>
                 <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
-                {#if detectExpiredAuthProvider(latestRun.error ?? latestRun.result) === 'google'}
-                  <button
-                    class="result-hero-action result-hero-reauth"
-                    disabled={reauthLoading}
-                    on:click={() => startReauth('google')}
-                    title="Re-authenticate Google account to fix the expired token"
-                  >
-                    {reauthLoading ? '… opening Google' : '🔑 Re-auth Google'}
-                  </button>
-                {/if}
               </div>
             </div>
           {:else if latestRunLoading}
@@ -8736,28 +8760,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           <!-- The status/executor/model chips that used to sit here said what
                the header tags already say. The run state moved up next to the
                Pause control; provider and model are rows in Runtime below. -->
-
-          <!-- KPIs -->
-          {#if selStats}
-            <div class="ip-kpis">
-              <div class="ip-kpi">
-                <div class="ip-kpi-v">{selStats.total_runs}</div>
-                <div class="ip-kpi-l">Total runs</div>
-              </div>
-              <div class="ip-kpi">
-                <div class="ip-kpi-v" style="color:#78dc8c">{selStats.completed}</div>
-                <div class="ip-kpi-l">Completed</div>
-              </div>
-              <div class="ip-kpi">
-                <div class="ip-kpi-v" style="color:#ef5d6e">{selStats.failed}</div>
-                <div class="ip-kpi-l">Failed</div>
-              </div>
-              <div class="ip-kpi">
-                <div class="ip-kpi-v">{Math.round(selStats.success_rate)}<span class="ip-kpi-unit">%</span></div>
-                <div class="ip-kpi-l">Success</div>
-              </div>
-            </div>
-          {/if}
 
           <!-- Connections (chains + ad-hoc invocations) -->
           {#if selChains.length || (agentDetail?.adhocConnections?.invokedBy?.length ?? 0) + (agentDetail?.adhocConnections?.invoked?.length ?? 0) > 0}
@@ -8853,7 +8855,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                  now editable in place. See RuntimeSection's header for why the
                  six read-only chips that used to sit here were the wrong shape
                  for the error the panel reports right above them. -->
-            <RuntimeSection store={store} running={liveIsRunning} />
+            <RuntimeSection bind:this={runtimeSectionRef} store={store} running={liveIsRunning} />
 
             {@const tools = safeParse(ag.allowed_tools) || []}
             {#if Array.isArray(tools) && tools.length}
@@ -9061,6 +9063,30 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       <!-- ──────────────── HISTORY TAB ──────────────── -->
       <svelte:fragment slot="history">
         <div class="ip-body">
+          <!-- KPIs — moved here from Overview. A count over the agent's whole
+               run history belongs next to the series it summarizes, not
+               leading a panel that otherwise talks about right now. -->
+          {#if selStats}
+            <div class="ip-kpis">
+              <div class="ip-kpi">
+                <div class="ip-kpi-v">{selStats.total_runs}</div>
+                <div class="ip-kpi-l">Total runs</div>
+              </div>
+              <div class="ip-kpi">
+                <div class="ip-kpi-v" style="color:#78dc8c">{selStats.completed}</div>
+                <div class="ip-kpi-l">Completed</div>
+              </div>
+              <div class="ip-kpi">
+                <div class="ip-kpi-v" style="color:#ef5d6e">{selStats.failed}</div>
+                <div class="ip-kpi-l">Failed</div>
+              </div>
+              <div class="ip-kpi">
+                <div class="ip-kpi-v">{Math.round(selStats.success_rate)}<span class="ip-kpi-unit">%</span></div>
+                <div class="ip-kpi-l">Success</div>
+              </div>
+            </div>
+          {/if}
+
           {#if runsLoading}
             <div class="ip-loading">Loading runs…</div>
           {:else if agentRuns.length === 0}
@@ -10970,8 +10996,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
   .result-hero-err{padding:10px 12px;border-radius:8px;background:rgba(239,93,110,.08);border:1px solid rgba(239,93,110,.22)}
-  .result-hero-err-lbl{font:700 10px 'Syne',sans-serif;color:#ef5d6e;letter-spacing:.8px;margin-bottom:6px}
-  .result-hero-err-txt{margin:0;font:400 11px/1.55 'JetBrains Mono',monospace;color:#ffb3bc;white-space:pre-wrap;word-break:break-word}
   .result-hero-actions{
     display:flex;justify-content:flex-end;gap:8px;margin-top:10px;
     padding-top:8px;border-top:1px dashed rgba(120,130,160,.12);
@@ -10983,16 +11007,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     color:#c0c5d8;cursor:pointer;transition:all .12s;
   }
   .result-hero-action:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.38);color:#fff}
-  .result-hero-action[disabled]{opacity:.55;cursor:wait}
-  .result-hero-reauth{
-    /* Amber call-to-action — pops out when the user lands on an auth-expired run. */
-    background:linear-gradient(180deg, rgba(245,158,11,.22), rgba(245,158,11,.08));
-    border-color:rgba(245,158,11,.55);color:#ffd175;
-  }
-  .result-hero-reauth:hover{
-    background:linear-gradient(180deg, rgba(245,158,11,.32), rgba(245,158,11,.12));
-    border-color:rgba(245,158,11,.85);color:#fff;
-  }
 
   /* ── Inline "Re-login Google" CTA in the description area ── */
   /* Always visible for gsync:* agents, regardless of last-run status. */

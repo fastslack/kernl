@@ -152,8 +152,18 @@
     return saveChain([...links, next]);
   }
 
-  function setExecutor(next: 'native' | 'claude_code') {
-    if (next === executor) return;
+  /**
+   * Exported so Task 10's `switch-executor-claude-code` remedy can drive this
+   * same control from outside instead of calling `store.patch()` on its own.
+   *
+   * It has to: `write()` is what reads the store's post-patch `error` back
+   * into `fieldError.executor_type` so it lands as `.rt-err` under THIS
+   * field. A caller that patched the store directly would set the store's
+   * top-level `error` and nothing would ever render it — the same failure
+   * this section exists to fix, just moved one level up.
+   */
+  export function setExecutor(next: 'native' | 'claude_code') {
+    if (next === executor) return Promise.resolve();
     return write({ executor_type: next });
   }
 
@@ -229,7 +239,16 @@
    */
   export async function focusPrimaryPicker(opts: { requireTools?: boolean } = {}): Promise<void> {
     if (opts.requireTools) forceTools = true;
-    sectionEl?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Instant, not smooth: ModelPicker's own menu closes itself on a scroll
+    // that leaves its trigger off-screen (onOuterScroll, ModelPicker.svelte)
+    // — right behaviour for a user scrolling the drawer while the menu is
+    // open, wrong when the DRAWER's own smooth-scroll animation is still
+    // mid-flight the instant `openMenu()` binds that listener. With a smooth
+    // scroll the trigger is still off-center on the very next animation
+    // frame, so the menu opened and immediately closed itself. An instant
+    // jump finishes before `openMenu()` runs, so there is no animation left
+    // to race.
+    sectionEl?.scrollIntoView({ behavior: 'auto', block: 'center' });
     await tick();
     pickers[0]?.openMenu();
   }
