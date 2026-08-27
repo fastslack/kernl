@@ -32,14 +32,14 @@ describe("analyzeRunFailure", () => {
   });
 
   it("surfaces which providers were dropped", () => {
-    expect(analyzeRunFailure(TOOL_BLOCKED).detail).toBe("Descartado: claude_code");
+    expect(analyzeRunFailure(TOOL_BLOCKED).detail).toBe("Dropped: claude_code");
   });
 
   it("handles multiple dropped providers", () => {
     const multiDrop =
       'No LLM provider in the chain can run tool calls. Dropped: claude_code, lmstudio. ' +
       'Configure a provider that supports tools (Settings → AI).';
-    expect(analyzeRunFailure(multiDrop).detail).toBe("Descartado: claude_code, lmstudio");
+    expect(analyzeRunFailure(multiDrop).detail).toBe("Dropped: claude_code, lmstudio");
   });
 
   it("offers provider configuration when the chain is empty for another reason", () => {
@@ -72,6 +72,29 @@ describe("analyzeRunFailure", () => {
 
   it("does not crash on an empty error", () => {
     expect(analyzeRunFailure("").remedies.map((r) => r.kind)).toEqual(["retry"]);
+  });
+
+  // The overview tab reads title-then-buttons, and these were the last two
+  // Spanish strings in an otherwise English drawer. Pinned so a future edit
+  // cannot half-translate them back.
+  it("speaks the same English as the rest of the drawer", () => {
+    const blocked = analyzeRunFailure(TOOL_BLOCKED);
+    expect(blocked.title).toBe("No provider in the chain can run tools");
+    expect(blocked.remedies.map((r) => r.label)).toEqual([
+      "Pick a tool-capable provider",
+      "Switch executor to claude_code",
+      "Retry",
+    ]);
+
+    const noProvider = analyzeRunFailure(NO_PROVIDER);
+    expect(noProvider.title).toBe("No provider in the chain is available");
+    expect(noProvider.remedies.map((r) => r.label)).toEqual(["Configure providers", "Retry"]);
+
+    const google = analyzeRunFailure("invalid_grant");
+    expect(google.title).toBe("Google token expired");
+    expect(google.remedies.map((r) => r.label)).toEqual(["Re-authenticate Google", "Retry"]);
+
+    expect(analyzeRunFailure("ECONNRESET").title).toBe("The run failed");
   });
 
   it("does not confuse Claude Code SDK auth with Google auth (regression)", () => {

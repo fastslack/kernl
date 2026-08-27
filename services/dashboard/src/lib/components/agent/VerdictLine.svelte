@@ -7,7 +7,7 @@
   whole band of the panel to say little. The question people actually open
   the drawer with is answered in one line:
 
-    ● Pausado · 2 runs, ninguno exitoso · falló hace 3d
+    ● Paused · 2 runs, none successful · failed 3d ago
 
   The tiles are not gone — Task 10 moves them into the HISTORY tab, where a
   series belongs. This line stays in the overview and leads it.
@@ -21,7 +21,7 @@
   // cannot tell an operator's Pause from the kernel's circuit breaker, and the
   // breaker tripping is the one case that means something is actually broken.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent?.auto_paused_at || '');
-  $: statusWord = !agent ? '' : agent.active === 1 ? 'Activo' : autoPaused ? 'Auto-pausado' : 'Pausado';
+  $: statusWord = !agent ? '' : agent.active === 1 ? 'Active' : autoPaused ? 'Auto-paused' : 'Paused';
 
   $: lastFailed = lastRun?.status === 'failed';
   // Worst signal wins: a tripped breaker or a failed last run reads as red
@@ -31,38 +31,38 @@
   function runsClause(s: typeof stats): string {
     // No stats at all is not the same as zero runs. /agents has no per-agent
     // run counters to hand over (its WS payload only carries dashboard-wide
-    // aggregates), and answering "sin runs aún" there would state something
+    // aggregates), and answering "no runs yet" there would state something
     // this line has no way to know. Nothing is said instead; the last-run
     // clause still carries the signal that matters.
     if (!s) return '';
-    if (!s.total_runs) return 'sin runs aún';
+    if (!s.total_runs) return 'no runs yet';
     const n = s.total_runs;
     const c = s.completed ?? 0;
     const runsWord = n === 1 ? '1 run' : `${n} runs`;
-    if (c === 0) return `${runsWord}, ninguno exitoso`;
-    if (c >= n) return `${runsWord}, todos exitosos`;
-    return `${runsWord}, ${c} exitoso${c === 1 ? '' : 's'}`;
+    if (c === 0) return `${runsWord}, none successful`;
+    if (c >= n) return `${runsWord}, all successful`;
+    return `${runsWord}, ${c} successful`;
   }
 
-  /** Coarse Spanish relative time — the exact stamp lives in the run itself. */
-  function relEs(iso: string | undefined): string {
+  /** Coarse relative time — the exact stamp lives in the run itself. */
+  function rel(iso: string | undefined): string {
     if (!iso) return '';
     const t = new Date(iso).getTime();
     if (!Number.isFinite(t)) return '';
     const d = Math.max(0, Date.now() - t);
-    if (d < 60_000) return 'recién';
-    if (d < 3_600_000) return `hace ${Math.round(d / 60_000)}m`;
-    if (d < 86_400_000) return `hace ${Math.round(d / 3_600_000)}h`;
-    return `hace ${Math.round(d / 86_400_000)}d`;
+    if (d < 60_000) return 'just now';
+    if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
+    if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
+    return `${Math.round(d / 86_400_000)}d ago`;
   }
 
   function lastRunClause(r: typeof lastRun): string {
     if (!r) return '';
-    const rel = relEs(r.created_at);
-    if (r.status === 'failed') return `falló ${rel}`;
-    if (r.status === 'running') return 'corriendo ahora';
-    if (r.status === 'completed') return `ok ${rel}`;
-    return `${r.status} ${rel}`.trim();
+    const when = rel(r.created_at);
+    if (r.status === 'failed') return `failed ${when}`;
+    if (r.status === 'running') return 'running now';
+    if (r.status === 'completed') return `ok ${when}`;
+    return `${r.status} ${when}`.trim();
   }
 
   $: parts = [statusWord, runsClause(stats), lastRunClause(lastRun)].filter(Boolean);

@@ -9,6 +9,14 @@
  * Deliberately a lookup table, not an engine. Two executor signatures today
  * (executor.ts:621 and :623) plus the Google one. When a third appears, add a
  * row.
+ *
+ * Titles and labels are English, and specifically the same English the rest
+ * of the drawer already uses: "cannot run tools" is what RuntimeSection's
+ * per-row health chip says (provider-health.ts) about the very providers this
+ * failure names, and "Dropped:" is the executor's own word for them. This
+ * file and VerdictLine were the last two Spanish surfaces in the drawer, and
+ * they happen to be the first two blocks of the overview tab — the first
+ * thing anyone reads.
  */
 
 export type RemedyKind =
@@ -29,7 +37,7 @@ export interface RunFailure {
   remedies: Remedy[];
 }
 
-const RETRY: Remedy = { kind: "retry", label: "Reintentar" };
+const RETRY: Remedy = { kind: "retry", label: "Retry" };
 
 /** Providers the executor dropped, as named in the tool-blocked message. */
 function droppedProviders(error: string): string {
@@ -43,11 +51,11 @@ export function analyzeRunFailure(error: string): RunFailure {
   if (text.includes("No LLM provider in the chain can run tool calls")) {
     const dropped = droppedProviders(text);
     return {
-      title: "Ningún provider de la cadena puede ejecutar tools",
-      detail: dropped ? `Descartado: ${dropped}` : text,
+      title: "No provider in the chain can run tools",
+      detail: dropped ? `Dropped: ${dropped}` : text,
       remedies: [
-        { kind: "pick-tool-capable-provider", label: "Elegir provider con tools" },
-        { kind: "switch-executor-claude-code", label: "Cambiar executor a claude_code" },
+        { kind: "pick-tool-capable-provider", label: "Pick a tool-capable provider" },
+        { kind: "switch-executor-claude-code", label: "Switch executor to claude_code" },
         RETRY,
       ],
     };
@@ -55,10 +63,10 @@ export function analyzeRunFailure(error: string): RunFailure {
 
   if (text.includes("No available LLM provider for chain")) {
     return {
-      title: "Ningún provider de la cadena está disponible",
+      title: "No provider in the chain is available",
       detail: text,
       remedies: [
-        { kind: "configure-provider", label: "Configurar providers" },
+        { kind: "configure-provider", label: "Configure providers" },
         RETRY,
       ],
     };
@@ -71,14 +79,14 @@ export function analyzeRunFailure(error: string): RunFailure {
   // integration emits it today; matters when a second OAuth integration lands.
   if (/kernel_google_auth|invalid_grant|Token (refresh failed|has been expired or revoked)/i.test(text)) {
     return {
-      title: "El token de Google venció",
+      title: "Google token expired",
       detail: text,
       remedies: [
-        { kind: "reauth-google", label: "Re-autenticar Google" },
+        { kind: "reauth-google", label: "Re-authenticate Google" },
         RETRY,
       ],
     };
   }
 
-  return { title: "El run falló", detail: text, remedies: [RETRY] };
+  return { title: "The run failed", detail: text, remedies: [RETRY] };
 }
