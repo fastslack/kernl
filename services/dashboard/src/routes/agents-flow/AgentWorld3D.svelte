@@ -45,6 +45,7 @@
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
   import MandateSection from '$lib/components/agent/sections/MandateSection.svelte';
+  import TriggeringSection from '$lib/components/agent/sections/TriggeringSection.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
   import VerdictLine from '$lib/components/agent/VerdictLine.svelte';
@@ -5058,6 +5059,13 @@
   $: selStats = selectedAgent ? stats[selectedAgent] : null;
   $: selChains = selectedAgent ? chains.filter(c => c.source_agent_id === selectedAgent || c.target_agent_id === selectedAgent) : [];
   $: selFlow = selData ? flows.find(f => f.id === selData.flow_id) : null;
+  /** Declared chains, with the other end already named — TriggeringSection
+   *  prints them and has no agent list of its own to resolve an id with. */
+  $: selChainRows = selChains.map((c) => {
+    const isOut = c.source_agent_id === selectedAgent;
+    const otherId = isOut ? c.target_agent_id : c.source_agent_id;
+    return { out: isOut, name: agents.find((a) => a.id === otherId)?.name ?? '?', label: c.label };
+  });
 
   // ── What defines the selected agent ────────────────────────────────────
   // The system prompt for an LLM agent, the builtin handler for a scripted
@@ -8749,82 +8757,18 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                the header tags already say. The run state moved up next to the
                Pause control; provider and model are rows in Runtime below. -->
 
-          <!-- Connections (chains + ad-hoc invocations) -->
-          {#if selChains.length || (agentDetail?.adhocConnections?.invokedBy?.length ?? 0) + (agentDetail?.adhocConnections?.invoked?.length ?? 0) > 0}
-            <section class="ip-sec">
-              <h3 class="ip-sec-h">Connections <span class="ip-sec-c">{selChains.length}{#if (agentDetail?.adhocConnections?.invokedBy?.length ?? 0) + (agentDetail?.adhocConnections?.invoked?.length ?? 0) > 0} + {(agentDetail?.adhocConnections?.invokedBy?.length ?? 0) + (agentDetail?.adhocConnections?.invoked?.length ?? 0)} ad-hoc{/if}</span></h3>
-              <div class="ip-chain-list">
-                {#each selChains as c}
-                  {@const isOut = c.source_agent_id === selectedAgent}
-                  <div class="ip-chain" class:out={isOut}>
-                    <span class="ip-chain-dir">{isOut ? '↗ out' : '↙ in'}</span>
-                    <span class="ip-chain-name">{isOut ? (agents.find(a => a.id === c.target_agent_id)?.name ?? '?') : (agents.find(a => a.id === c.source_agent_id)?.name ?? '?')}</span>
-                    {#if c.label}<span class="ip-chain-label">{c.label}</span>{/if}
-                  </div>
-                {/each}
-                {#if agentDetail?.adhocConnections?.invokedBy?.length}
-                  {#each agentDetail.adhocConnections.invokedBy as inv}
-                    <div class="ip-chain ip-chain-adhoc">
-                      <span class="ip-chain-dir ip-chain-dir-adhoc">↙ called by</span>
-                      <span class="ip-chain-name">{inv.agent_name}</span>
-                      <span class="ip-chain-label">{inv.count}× · {fmtRelTime(inv.last_at)}</span>
-                    </div>
-                  {/each}
-                {/if}
-                {#if agentDetail?.adhocConnections?.invoked?.length}
-                  {#each agentDetail.adhocConnections.invoked as inv}
-                    <div class="ip-chain ip-chain-adhoc out">
-                      <span class="ip-chain-dir ip-chain-dir-adhoc">↗ called</span>
-                      <span class="ip-chain-name">{inv.agent_name}</span>
-                      <span class="ip-chain-label">{inv.count}× · {fmtRelTime(inv.last_at)}</span>
-                    </div>
-                  {/each}
-                {/if}
-              </div>
-            </section>
-          {/if}
-
-          {#if agentDetail?.schedules && agentDetail.schedules.length}
-            <section class="ip-sec">
-              <h3 class="ip-sec-h">Schedule</h3>
-              {#each agentDetail.schedules as s}
-                <div class="ip-sched">
-                  <div class="ip-sched-row">
-                    <span class="ip-sched-lbl">cron</span>
-                    <code class="ip-code">{s.cron_expression || `every ${Math.round((s.interval_ms ?? 0) / 1000)}s`}</code>
-                  </div>
-                  {#if s.next_run_at}
-                    <div class="ip-sched-row">
-                      <span class="ip-sched-lbl">next</span>
-                      <span class="ip-sched-v">{fmtRelTime(s.next_run_at)}</span>
-                      <span class="ip-sched-abs">{s.next_run_at.slice(5, 16).replace('T', ' ')}</span>
-                    </div>
-                  {/if}
-                  {#if s.last_run_at}
-                    <div class="ip-sched-row">
-                      <span class="ip-sched-lbl">last</span>
-                      <span class="ip-sched-v">{fmtRelTime(s.last_run_at)}</span>
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </section>
-          {/if}
-
-          {#if agentDetail?.triggers && agentDetail.triggers.length}
-            <section class="ip-sec">
-              <h3 class="ip-sec-h">Event triggers <span class="ip-sec-c">{agentDetail.triggers.length}</span></h3>
-              <div class="ip-trig-list">
-                {#each agentDetail.triggers as t}
-                  <div class="ip-trig">
-                    <span class="ip-trig-evt">{t.event_name}</span>
-                    {#if t.cooldown_ms && t.cooldown_ms > 0}<span class="ip-trig-cd">cooldown {fmtDuration(t.cooldown_ms)}</span>{/if}
-                    <span class="ip-trig-st" class:on={t.active}>{t.active ? 'on' : 'off'}</span>
-                  </div>
-                {/each}
-              </div>
-            </section>
-          {/if}
+          <!-- ─── Triggering ───
+               Connections, Schedule and Event triggers were three sections
+               because they are three tables. One question, one section now;
+               see TriggeringSection. The chain rows are resolved here because
+               naming the other end needs the world's whole agent list. -->
+          <TriggeringSection
+            {store}
+            chains={selChainRows}
+            triggers={agentDetail?.triggers ?? null}
+            schedules={agentDetail?.schedules ?? null}
+            connections={agentDetail?.adhocConnections ?? null}
+          />
 
           {#if agentDetail?.agent}
             {@const ag = agentDetail.agent}
@@ -10152,62 +10096,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-caret.open{transform:rotate(90deg)}
 
-  /* ── Chains (connections) ────── */
-  .ip-chain-list{display:flex;flex-direction:column;gap:4px}
-  .ip-chain{
-    display:grid;grid-template-columns:48px 1fr auto;gap:10px;
-    padding:8px 10px;border-radius:6px;
-    background:rgba(120,130,160,.04);
-    border:1px solid rgba(120,130,160,.08);
-    align-items:center;
-  }
-  .ip-chain.out{border-left:2px solid var(--flow-color)}
-  .ip-chain:not(.out){border-left:2px solid #a78bfa}
-  .ip-chain-dir{font:600 9px 'JetBrains Mono',monospace;color:#6a6f82}
-  .ip-chain.out .ip-chain-dir{color:var(--flow-color)}
-  .ip-chain:not(.out) .ip-chain-dir{color:#a78bfa}
-  .ip-chain-name{font:500 12px 'Manrope',sans-serif;color:#d8dae3}
-  .ip-chain-label{
-    font:500 9px 'JetBrains Mono',monospace;color:#8a8fa8;
-    padding:2px 6px;border-radius:4px;background:rgba(120,130,160,.1);
-  }
-
-  .ip-chain-adhoc{border-left-style:dashed !important;opacity:.85}
-  .ip-chain-adhoc.out{border-left-color:#f59e0b !important}
-  .ip-chain-adhoc:not(.out){border-left-color:#f59e0b !important}
-  .ip-chain-dir-adhoc{color:#f59e0b !important;font-style:italic}
-
-  /* ── Schedule ────────────────── */
-  .ip-sched{
-    padding:10px 12px;border-radius:8px;
-    background:rgba(251,191,36,.04);
-    border:1px solid rgba(251,191,36,.15);
-    border-left:3px solid #fbbf24;
-  }
-  .ip-sched-row{display:flex;align-items:baseline;gap:10px;padding:3px 0}
-  .ip-sched-lbl{font:600 9px 'JetBrains Mono',monospace;color:#fbbf24;text-transform:uppercase;letter-spacing:.5px;min-width:38px}
-  .ip-sched-v{font:500 12px 'Manrope',sans-serif;color:#d8dae3}
-  .ip-sched-abs{font:500 10px 'JetBrains Mono',monospace;color:#6a6f82;margin-left:auto}
-  .ip-code{
-    font:500 11px 'JetBrains Mono',monospace;
-    background:rgba(0,0,0,.3);color:#d8dae3;
-    padding:2px 7px;border-radius:4px;
-    border:1px solid rgba(120,130,160,.12);
-  }
-
-  /* ── Triggers ────────────────── */
-  .ip-trig-list{display:flex;flex-direction:column;gap:4px}
-  .ip-trig{
-    display:flex;align-items:center;gap:10px;
-    padding:7px 10px;border-radius:6px;
-    background:rgba(244,114,182,.04);
-    border:1px solid rgba(244,114,182,.12);
-    border-left:2px solid #f472b6;
-  }
-  .ip-trig-evt{font:500 11px 'JetBrains Mono',monospace;color:#f0f2f7;flex:1}
-  .ip-trig-cd{font:500 9px 'JetBrains Mono',monospace;color:#6a6f82}
-  .ip-trig-st{font:600 9px 'JetBrains Mono',monospace;color:#6a6f82;text-transform:uppercase}
-  .ip-trig-st.on{color:#78dc8c}
+  /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
 
   /* ── KV grid (limits etc) ────── */
   .ip-kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
