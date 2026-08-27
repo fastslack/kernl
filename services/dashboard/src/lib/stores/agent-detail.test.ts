@@ -7,7 +7,11 @@
  * profiles, which is survivable while everything is read-only and is not once
  * fields become editable.
  *
- * The detail row wins because it is the one the write path returns.
+ * Precedence between the two is by recency, not by source: `mergeAgent`'s
+ * second argument wins, and the store picks which row goes there. The detail
+ * row is what a fresh fetch just returned; the list row is what the surface
+ * just handed over after a Pause, a Resume or a rename. Whichever spoke last
+ * is the one that is right.
  */
 
 import { describe, it, expect, mock } from "bun:test";
@@ -31,31 +35,31 @@ import {
 } from "./agent-detail.js";
 
 describe("mergeAgent", () => {
-  it("prefers the detail row when both carry a field", () => {
+  it("prefers the newer row when both carry a field", () => {
     const out = mergeAgent({ id: "a", model: "stale" }, { id: "a", model: "fresh" });
     expect(out!.model).toBe("fresh");
   });
 
-  it("keeps list-only fields the detail row does not carry", () => {
+  it("keeps fields only the older row carries", () => {
     const out = mergeAgent({ id: "a", flow_id: "f1" }, { id: "a", model: "opus" });
     expect(out!.flow_id).toBe("f1");
   });
 
-  it("does not let an undefined detail field blank a list value", () => {
+  it("does not let an undefined field in the newer row blank an older value", () => {
     const out = mergeAgent({ id: "a", model: "opus" }, { id: "a", model: undefined });
     expect(out!.model).toBe("opus");
   });
 
-  it("keeps an intentional empty string from the detail row", () => {
+  it("keeps an intentional empty string from the newer row", () => {
     const out = mergeAgent({ id: "a", model: "opus" }, { id: "a", model: "" });
     expect(out!.model).toBe("");
   });
 
-  it("works with only a list row", () => {
+  it("works with only an older row", () => {
     expect(mergeAgent({ id: "a", model: "opus" }, null)!.model).toBe("opus");
   });
 
-  it("works with only a detail row", () => {
+  it("works with only a newer row", () => {
     expect(mergeAgent(null, { id: "a", model: "opus" })!.model).toBe("opus");
   });
 
@@ -104,6 +108,67 @@ describe("createAgentDetailStore: seed() staleness", () => {
       expect(get(store).agent!.model).toBe("opus");
     } finally {
       global.fetch = originalFetch;
+    }
+  });
+});
+
+describe("createAgentDetailStore: a Pause after the detail landed", () => {
+  it("lets the seeded list row win over the detail row's stale `active`", async () => {
+    const originalFetch = global.fetch;
+    global.fetch = (async () =>
+      ({
+        json: async () => ({ agent: { id: "a", active: 1, model: "opus" } }),
+      }) as unknown as Response) as unknown as typeof fetch;
+
+    try {
+      const store = createAgentDetailStore("a");
+      store.seed({ id: "a", active: 1 });
+      await store.reload();
+      expect(get(store).agent!.active).toBe(1);
+
+      // The surface paused the agent and handed its updated row back. The
+      // detail row still says `active: 1` — it was read before the pause —
+      // and must not win. This is the exact freeze that kept reload() off.
+      store.seed({ id: "a", active: 0 });
+
+      expect(get(store).agent!.active).toBe(0);
+      // …without losing what only the detail row carried.
+      expect(get(store).agent!.model).toBe("opus");
+    } finally {
+      global.fetch = originalFetch;
+    }
+  });
+});
+
+describe("createAgentDetailStore: a write during the opening fetch", () => {
+  it("does not let the arriving detail row revert it", async () => {
+    const originalFetch = global.fetch;
+    let releaseFetch!: () => void;
+    const gate = new Promise<void>((r) => { releaseFetch = r; });
+    global.fetch = (async () => {
+      await gate;
+      return {
+        json: async () => ({ agent: { id: "a", model: "before-the-edit", max_errors: 3 } }),
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    updateAgentImpl = async (_id, body) => ({ agent: { id: "a", ...body } });
+
+    try {
+      const store = createAgentDetailStore("a");
+      store.seed({ id: "a", model: "before-the-edit" });
+
+      const loading = store.reload();
+      // The user edits the model while the drawer is still loading.
+      await store.patch({ model: "after-the-edit" });
+      releaseFetch();
+      await loading;
+
+      expect(get(store).agent!.model).toBe("after-the-edit");
+      // The rest of the row that only the fetch carries still arrives.
+      expect(get(store).agent!.max_errors).toBe(3);
+    } finally {
+      global.fetch = originalFetch;
+      updateAgentImpl = async () => ({});
     }
   });
 });

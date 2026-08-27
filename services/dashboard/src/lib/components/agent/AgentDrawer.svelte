@@ -9,15 +9,23 @@
   El drawer es dueño de su agente (ver stores/agent-detail.ts). Quien lo monta
   pasa un id y, si lo tiene a mano, la fila de lista para pintar sin esperar.
 
-  Este primer paso saca SOLO el shell: cabecera, fila de acciones y barra de
-  tabs. El cuerpo de cada tab sigue viviendo en quien monta el drawer y entra
-  por un slot con nombre, así conserva el scope del padre y sigue leyendo
-  `selData`, `agentDetail`, `selChains`… sin recablear nada. Tasks 9-13 los
-  van mudando de a uno.
+  El cuerpo de cada tab entra por un slot con nombre, así conserva el scope
+  del padre para lo que sólo él tiene (el render de salida del mundo 3D, su
+  chat, sus archivos). El tab Overview ya no: tiene contenido por defecto —
+  `OverviewTab` sobre el store propio — así que montar el drawer sin pasarle
+  nada muestra el agente entero y no un panel vacío.
+
+  Un tab cuyo slot nadie llenó no se ofrece: `$$slots` decide qué botones se
+  pintan. /agents no tiene ni la vista LIVE ni el chat ni el workspace del
+  mundo 3D, y un tab que abre en blanco es peor que no estar.
 -->
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onMount } from 'svelte';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
+  // Contenido por defecto del tab Overview. Quien monta el drawer puede
+  // reemplazarlo por el suyo (el mundo 3D lo hace, para meterle sus tres
+  // bloques propios en el orden que corresponde), pero no está obligado.
+  import OverviewTab from './tabs/OverviewTab.svelte';
   // Sólo para el badge del tab Skills: el conteo sale del agente que el shell
   // ya tiene, no de un prop más que el padre tenga que mantener.
   import { parseAttachedSkills } from '$lib/skills.js';
@@ -34,7 +42,11 @@
   export let flow: { id?: string; name?: string; color?: string } | null = null;
   /** Tabs extra que aporta una extensión (panelTabRegistry). */
   export let extraTabs: Array<{ id: string; label: string }> = [];
-  /** Reservado para el montaje embebido de /agents (Task 13). Hoy no cambia nada. */
+  /**
+   * Montaje embebido: el drawer deja de ser el overlay flotante del mundo 3D
+   * y llena la columna que lo contiene. También aprieta el interlineado de
+   * las secciones, que en 560px de ancho respiran de más.
+   */
   export let compact = false;
 
   // ── Estado que sigue siendo de quien monta el drawer ──────────────
@@ -69,13 +81,6 @@
   // al cambio de selección en el mundo 3D, y un store atado al id anterior
   // escribiría sobre el agente equivocado.
   //
-  // Ojo: NO se llama a reload() todavía. El shell no muestra ningún campo que
-  // sólo traiga GET /api/agents/:id, y en mergeAgent() la fila de detalle le
-  // gana a la de lista — así que un detalle cacheado se quedaría pegado
-  // mostrando `active` viejo después de un Pause/Resume, que hoy se ve al
-  // instante. Tasks 9-13 lo encienden cuando muden los cuerpos que sí
-  // necesitan el detalle (prompt, triggers, schedules).
-  //
   // `onPatched` is how a write inside the drawer reaches the surface that
   // mounted it. The 3D world paints each agent's node from its own list; a
   // provider changed in RuntimeSection would otherwise stay invisible out
@@ -90,6 +95,24 @@
     detail = newStore(agentId);
   }
   $: if (listRow) detail.seed(listRow);
+
+  // The drawer loads its own agent. Triggering is the block that needs it —
+  // `triggers`, `schedules` and `adhocConnections` come only from
+  // GET /api/agents/:id; the rest of the panel the list row already carries,
+  // because `listAgents()` is a SELECT *.
+  //
+  // Declared AFTER the seed above on purpose: the store treats anything that
+  // moves the agent while the fetch is in flight as newer than what comes
+  // back, and the opening seed is not that. Behind `mounted` so it is a
+  // browser fetch and not a render-time one.
+  let mounted = false;
+  let loadedFor = '';
+  onMount(() => { mounted = true; });
+  $: if (mounted && storeFor !== loadedFor) {
+    loadedFor = storeFor;
+    detail.reload();
+  }
+
   $: agent = $detail.agent ?? listRow;
 
   // Badge del tab Skills. Se deriva del agente y no de un prop, así que un
@@ -236,9 +259,11 @@
             <span>{togglingPause ? '…' : 'Resume'}</span>
           </button>
         {/if}
-        <button class="ip-btn ip-btn-ghost" on:click={() => selectTab('chat')}>
-          <span class="ip-btn-ico">✎</span><span>Message</span>
-        </button>
+        {#if $$slots.chat}
+          <button class="ip-btn ip-btn-ghost" on:click={() => selectTab('chat')}>
+            <span class="ip-btn-ico">✎</span><span>Message</span>
+          </button>
+        {/if}
         {#if devopsOffice}
           <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title="Open the DevOps control panel — repos, backlog, dev stacks">
             <span class="ip-btn-ico">🛠</span><span>DevOps panel</span>
@@ -282,7 +307,7 @@
       <!-- Tabs -->
       <div class="ip-tabs">
         <button class="ip-tab" class:active={panelTab === 'info'} on:click={() => selectTab('info')}>Overview</button>
-        {#if running}
+        {#if running && $$slots.live}
           <button class="ip-tab ip-tab-live" class:active={panelTab === 'live'} on:click={() => selectTab('live')}>
             <span class="live-dot"></span>LIVE
           </button>
@@ -296,22 +321,32 @@
         {#each extraTabs as tab (tab.id)}
           <button class="ip-tab ip-tab-ext" class:active={panelTab === tab.id} on:click={() => selectTab(tab.id)}>{tab.label}</button>
         {/each}
-        <button class="ip-tab" class:active={panelTab === 'chat'} on:click={() => selectTab('chat')}>Message</button>
-        <button class="ip-tab" class:active={panelTab === 'workspace'} on:click={() => selectTab('workspace')}>Workspace{#if workspaceCount}<span class="ip-tab-count">{workspaceCount}</span>{/if}</button>
+        {#if $$slots.chat}
+          <button class="ip-tab" class:active={panelTab === 'chat'} on:click={() => selectTab('chat')}>Message</button>
+        {/if}
+        {#if $$slots.workspace}
+          <button class="ip-tab" class:active={panelTab === 'workspace'} on:click={() => selectTab('workspace')}>Workspace{#if workspaceCount}<span class="ip-tab-count">{workspaceCount}</span>{/if}</button>
+        {/if}
       </div>
 
       <!-- El cuerpo de cada tab sigue en quien monta el drawer. El slot se
            renderiza sólo con su tab abierto, así que el contenido se crea y se
            destruye igual que con el {#if panelTab === …} que había acá.
 
-           `overview` además publica `store` (let:store): las secciones que
-           Tasks 9/12 montan ahí adentro (RuntimeSection y las demás) leen y
-           escriben el agente a través de este store, que el drawer sigue
-           siendo dueño de crear y recrear. Ningún otro slot lo necesita
-           todavía — SkillsTab trabaja con el agente que le pasa el padre y
-           avisa por evento `change`, no con el store directo. -->
+           `overview` además publica `store` (let:store): las secciones que se
+           montan ahí adentro (RuntimeSection y las demás) leen y escriben el
+           agente a través de este store, que el drawer sigue siendo dueño de
+           crear y recrear. Ningún otro slot lo necesita — SkillsTab trabaja
+           con el agente que le pasa el padre y avisa por evento `change`, no
+           con el store directo.
+
+           `overview` es el único con contenido por defecto, porque es el
+           único que se puede armar sin nada del padre: sale entero del store.
+           Sobrescribirlo es para agregar, no para llenar un hueco. -->
       {#if panelTab === 'info'}
-        <slot name="overview" store={detail} />
+        <slot name="overview" store={detail}>
+          <OverviewTab store={detail} {compact} {running} />
+        </slot>
       {/if}
 
       {#if panelTab === 'skills'}
@@ -370,6 +405,18 @@
     opacity:.75;pointer-events:none;
   }
   @keyframes slide{from{transform:translateX(20px);opacity:0}}
+
+  /* Embedded mount (/agents). The floating geometry above belongs to the 3D
+     world, where the panel is an overlay over a canvas. In a column layout it
+     has to be an ordinary block that fills what contains it — otherwise it
+     positions itself against whatever ancestor happens to be relative and
+     covers the page. Everything else about the panel is unchanged, so the two
+     surfaces still look like one drawer. */
+  .ip-compact{
+    position:relative;inset:auto;
+    width:auto;min-width:0;height:100%;
+    animation:none;
+  }
 
   /* ── Header ───────────────────── */
   .ip-head{

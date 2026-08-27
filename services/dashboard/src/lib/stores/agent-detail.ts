@@ -33,21 +33,35 @@ export interface AgentDetailState {
 }
 
 /**
- * Merge the list row and the detail row into one agent.
+ * Merge two views of the same agent row. The SECOND argument wins.
  *
- * Not a spread: `{...list, ...detail}` lets an absent detail field overwrite a
- * present list value with `undefined`. An explicit empty string is a real
- * value and must survive; a missing key must not.
+ * Not a spread: `{...older, ...newer}` lets an absent field in `newer`
+ * overwrite a present value with `undefined`. An explicit empty string is a
+ * real value and must survive; a missing key must not.
  *
- * An explicit `null` in the detail row wins too, same as `""` — deliberate,
- * not overlooked. It cannot happen today (provider/model/flow_id are all
+ * An explicit `null` in `newer` wins too, same as `""` — deliberate, not
+ * overlooked. It cannot happen today (provider/model/flow_id are all
  * `TEXT NOT NULL DEFAULT ''` — services/kernel/src/modules/agents/migrations.ts:27-30),
  * so there is no live case to special-case around.
+ *
+ * Precedence is by RECENCY, not by source, which is why the parameters are
+ * named for age instead of for where the row came from. Both sides are
+ * `SELECT *` of the same table (`listAgents()` behind `getAgentGraph`, and
+ * `GET /api/agents/:id`), so neither is inherently richer — the only thing
+ * that separates them is which one was read last. The store below decides
+ * that at each call site: `reload()` puts the freshly fetched detail row
+ * second, `seed()` puts the list row the surface just handed over second.
+ *
+ * Pinning it to the source instead is what kept `reload()` switched off for
+ * twelve tasks: with the detail row always winning, a Pause or Resume applied
+ * to the surface's list row came back in through `seed()` and was immediately
+ * overwritten by the `active` captured at open, so the button did nothing
+ * visible.
  */
-export function mergeAgent(list: Row | null, detail: Row | null): Row | null {
-  if (!list && !detail) return null;
-  const out: Row = { ...(list ?? {}) };
-  for (const [k, v] of Object.entries(detail ?? {})) {
+export function mergeAgent(older: Row | null, newer: Row | null): Row | null {
+  if (!older && !newer) return null;
+  const out: Row = { ...(older ?? {}) };
+  for (const [k, v] of Object.entries(newer ?? {})) {
     if (v !== undefined) out[k] = v;
   }
   return out;
@@ -152,11 +166,20 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
   // Raw rows, kept separately so every merge starts from the source data —
   // never from a previous merge result. Feeding the already-merged `agent`
   // back in as one side would let a stale value from an earlier merge win
-  // forever, since the detail side always wins ties.
+  // forever.
   let listRow: Row | null = null;
   let detailRow: Row | null = null;
 
+  // Counts everything that has moved the agent since this store was created:
+  // a new list row from the surface, and every optimistic write. `reload()`
+  // reads it before its fetch and again after, because the row it is about to
+  // install was read from the kernel BEFORE anything that happened in
+  // between — installing it anyway would silently revert an edit made while
+  // the drawer was still loading.
+  let mutations = 0;
+
   async function reload(): Promise<void> {
+    const at = mutations;
     store.update((s) => ({ ...s, loading: true, error: "" }));
     try {
       const r = await fetch(`/api/agents/${agentId}`);
@@ -164,7 +187,10 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
       detailRow = (body.agent ?? null) as Row | null;
       store.update((s) => ({
         ...s,
-        agent: mergeAgent(listRow, detailRow),
+        // Nothing moved while the fetch ran: the row that just came back is
+        // the newer of the two and wins. Something did: it is now the older
+        // one, and only fills the gaps.
+        agent: mutations === at ? mergeAgent(listRow, detailRow) : mergeAgent(detailRow, s.agent),
         runs: body.runs ?? [],
         triggers: body.triggers ?? [],
         schedules: body.schedules ?? [],
@@ -176,10 +202,19 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
     }
   }
 
-  /** Seed the list row the world already has, so the drawer paints instantly. */
+  /**
+   * Seed the list row the surface already has, so the drawer paints instantly.
+   *
+   * Called again every time that row changes, which is how a Pause, a Resume
+   * or a rename done outside the drawer reaches it — so the row arriving here
+   * is the newer of the two and goes second in the merge. The detail row is
+   * a snapshot taken when the drawer opened; it must not win against
+   * something that happened after it.
+   */
   function seed(row: Row): void {
     listRow = row;
-    store.update((s) => ({ ...s, agent: mergeAgent(listRow, detailRow) }));
+    mutations++;
+    store.update((s) => ({ ...s, agent: mergeAgent(detailRow, listRow) }));
   }
 
   /**
@@ -195,6 +230,7 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
   async function patch(fields: Record<string, unknown>): Promise<void> {
     const keys = Object.keys(fields);
     const prevValues: Row = {};
+    mutations++;
 
     store.update((s) => {
       const agent = s.agent ?? {};

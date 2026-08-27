@@ -20,11 +20,12 @@
   panel all read state and call functions that only exist out there. They keep
   their place in the order instead of being pushed to the end.
 
-  Everything else reads the agent from the store. The props that duplicate what
-  the store already has a slot for (`prompt`, `triggers`, `schedules`,
-  `connections`, `loading`) exist because nothing calls `reload()` on the store
-  yet — the world does its own detail fetch — and each of them falls back to
-  the store when left null. See AgentDrawer for why reload() is still off.
+  Everything else reads the agent from the store, which now loads its own
+  detail row. The props that duplicate what the store already has
+  (`prompt`, `triggers`, `schedules`, `connections`, `loading`) stay because
+  the 3D world keeps its own detail fetch — it feeds more than this tab — and
+  each of them falls back to the store when left null. Left null is what the
+  embedded mount on /agents does, and it is the shorter path.
 -->
 <script lang="ts">
   import { createEventDispatcher } from 'svelte';
