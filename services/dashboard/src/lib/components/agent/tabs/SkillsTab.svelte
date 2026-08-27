@@ -2,11 +2,13 @@
   SkillsTab — the one screen where an agent's skills are decided.
 
   Before this tab, "get a skill" and "give it to this agent" were two
-  different screens: /extensions installs, and AgentSkillsPanel (mounted only
-  on /agents, despite its own comment claiming otherwise) attaches what is
-  already installed. The 3D drawer had neither. So the answer to "this agent
-  should know how to do X" was: leave the agent, find X in a catalogue of
-  ~500, install it, come back, open a picker, find it again.
+  different screens: /extensions installs, and a separate attach-only panel
+  (mounted on /agents and on the 2D agent list, despite its own comment
+  claiming it was shared with the 3D drawer) picked from what was already
+  installed. The 3D drawer had neither. So the answer to "this agent should
+  know how to do X" was: leave the agent, find X in a catalogue of ~500,
+  install it, come back, open a picker, find it again. That panel is gone;
+  this tab is the only one left.
 
   Three zones, ordered by how often they are used:
 
@@ -65,7 +67,13 @@
     type SkillAgent
   } from '$lib/skills.js';
 
-  export let agent: (SkillAgent & Record<string, unknown>) | null = null;
+  // `SkillAgent` and nothing more: this tab reads `id`, `name` and
+  // `skills_json`, and the three surfaces that mount it each hand over a
+  // differently-shaped row (a raw list row, the drawer's merged one, the flow
+  // page's `AgentData` interface). Intersecting with `Record<string, unknown>`
+  // rejected the last of those for no gain — an interface has no index
+  // signature — while widening nothing this file actually uses.
+  export let agent: SkillAgent | null = null;
   export let compact = false;
 
   const dispatch = createEventDispatcher<{ change: { skills: string[] } }>();
@@ -135,8 +143,9 @@
   /**
    * Attached with no extension row at all: the skill was uninstalled while
    * still attached. The executor drops it in silence, so this tab is the only
-   * place it is visible. (Same detection as AgentSkillsPanel.svelte:59,
-   * widened so an inactive row no longer counts as a missing one.)
+   * place it is visible. It is the check the deleted attach-only panel made
+   * against the active-only list, widened here so a merely inactive row no
+   * longer counts as a missing one.
    */
   $: orphans = inventoryLoaded && !inventoryError
     ? attached.filter((s) => !bySlug.has(s))
