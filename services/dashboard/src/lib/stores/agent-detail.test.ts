@@ -411,3 +411,67 @@ describe("createAgentDetailStore: patch() reconciles against the response", () =
     expect(get(store).error).toBe("");
   });
 });
+
+describe("createAgentDetailStore: seed() during an in-flight write", () => {
+  /**
+   * `seed()` rebuilds `agent` from the two RAW rows, so a value that exists
+   * only optimistically — which is what an in-flight write is — is present in
+   * neither and was dropped. `AgentDrawer` re-fires `seed()` on every identity
+   * change of the mounter's row, and both surfaces mounting it today happen to
+   * echo `onPatched` back into that row, which is the only reason it never
+   * showed. That made `on:changed` a correctness requirement, while the
+   * drawer's own header advertises mounting it with nothing passed.
+   */
+  it("does not let a re-seed revert a field whose write has not answered yet", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    updateAgentImpl = async (_id, body) => {
+      await gate;
+      return { success: true, agent: { id: "a", ...body } };
+    };
+
+    const store = createAgentDetailStore("a");
+    store.seed({ id: "a", provider: "openai", name: "Scout" });
+
+    const writing = store.patch({ provider: "grok" });
+    expect(get(store).agent!.provider).toBe("grok");
+
+    // The surface re-seeds — a rename, a refresh — with a row that predates
+    // the edit and does NOT echo it back.
+    store.seed({ id: "a", provider: "openai", name: "Scout 2" });
+
+    expect(get(store).agent!.provider).toBe("grok");
+    // The re-seed still delivers everything it is the source of truth for.
+    expect(get(store).agent!.name).toBe("Scout 2");
+
+    release();
+    await writing;
+    expect(get(store).agent!.provider).toBe("grok");
+    expect(get(store).agent!.name).toBe("Scout 2");
+  });
+
+  it("stops holding the field back once the write has answered", async () => {
+    updateAgentImpl = async (_id, body) => ({ success: true, agent: { id: "a", ...body } });
+
+    const store = createAgentDetailStore("a");
+    store.seed({ id: "a", provider: "openai" });
+    await store.patch({ provider: "grok" });
+
+    // Nothing is in flight now, so a Pause or a rename done outside the drawer
+    // must still win — the guard is for in-flight keys only, not a lock.
+    store.seed({ id: "a", provider: "anthropic" });
+    expect(get(store).agent!.provider).toBe("anthropic");
+  });
+
+  it("lets a rolled-back write's field be re-seeded normally", async () => {
+    updateAgentImpl = async () => { throw new Error("HTTP 500"); };
+
+    const store = createAgentDetailStore("a");
+    store.seed({ id: "a", provider: "openai" });
+    await store.patch({ provider: "grok" });
+    expect(get(store).agent!.provider).toBe("openai");
+
+    store.seed({ id: "a", provider: "anthropic" });
+    expect(get(store).agent!.provider).toBe("anthropic");
+  });
+});

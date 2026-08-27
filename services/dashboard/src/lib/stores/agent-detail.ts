@@ -210,11 +210,29 @@ export function createAgentDetailStore(agentId: string, opts: AgentDetailStoreOp
    * is the newer of the two and goes second in the merge. The detail row is
    * a snapshot taken when the drawer opened; it must not win against
    * something that happened after it.
+   *
+   * A key with a write IN FLIGHT is held back from that merge, the same rule
+   * reconciliation and rollback already follow. The merge is built from the
+   * two RAW rows, so an optimistic value present in neither — which is
+   * exactly what an in-flight write is — would be dropped by it. It worked
+   * only because both surfaces that mount the drawer today echo `onPatched`
+   * back into the row they seed, which quietly turned `on:changed` from a
+   * convenience into a correctness requirement — and the drawer's own header
+   * advertises mounting it with nothing passed, where there is no echo.
    */
   function seed(row: Row): void {
     listRow = row;
     mutations++;
-    store.update((s) => ({ ...s, agent: mergeAgent(detailRow, listRow) }));
+    store.update((s) => {
+      const merged = mergeAgent(detailRow, listRow);
+      const current = s.agent;
+      if (merged && current) {
+        for (const k of s.saving) {
+          if (k in current) merged[k] = current[k];
+        }
+      }
+      return { ...s, agent: merged };
+    });
   }
 
   /**
