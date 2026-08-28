@@ -9,13 +9,15 @@
 
   Two named remedies, both one control away in this drawer, and the panel
   used to print that sentence as inert prose. `analyzeRunFailure` (Task 6)
-  is the lookup table that turns the text into `{title, detail, remedies[]}`;
+  is the lookup table that turns the text into `{titleKey, detail, remedies[]}` —
+  keys, not prose, so the matching stays testable without a locale loaded;
   this component is only the rendering + the `remedy` event. It does not know
   HOW to fix anything — the store, RuntimeSection and navigation all belong
   to whoever mounts this, same as the Google re-auth button it replaces used
   to reach into `AgentWorld3D.svelte`'s own `startReauth`.
 -->
 <script lang="ts">
+  import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher } from 'svelte';
   import { analyzeRunFailure, type RemedyKind } from '$lib/run-failure.js';
 
@@ -45,10 +47,10 @@
   <div class="rfc">
     <div class="rfc-head">
       <span class="rfc-ico" aria-hidden="true">⚠</span>
-      <span class="rfc-title">{failure.title}</span>
+      <span class="rfc-title">{$t(failure.titleKey)}</span>
     </div>
     {#if failure.detail}
-      <p class="rfc-detail">{failure.detail}</p>
+      <p class="rfc-detail">{failure.droppedKey ? $t(failure.droppedKey, { providers: failure.detail }) : failure.detail}</p>
     {/if}
     <div class="rfc-actions">
       {#each remedies as r (r.kind)}
@@ -58,7 +60,7 @@
           class:rfc-btn-fix={r.kind !== 'retry'}
           on:click={() => fire(r.kind)}
         >
-          {r.label}
+          {$t(r.labelKey)}
         </button>
       {/each}
     </div>

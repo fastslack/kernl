@@ -32,14 +32,15 @@ describe("analyzeRunFailure", () => {
   });
 
   it("surfaces which providers were dropped", () => {
-    expect(analyzeRunFailure(TOOL_BLOCKED).detail).toBe("Dropped: claude_code");
+    expect(analyzeRunFailure(TOOL_BLOCKED).detail).toBe("claude_code");
+    expect(analyzeRunFailure(TOOL_BLOCKED).droppedKey).toBe("agent.failure.dropped");
   });
 
   it("handles multiple dropped providers", () => {
     const multiDrop =
       'No LLM provider in the chain can run tool calls. Dropped: claude_code, lmstudio. ' +
       'Configure a provider that supports tools (Settings → AI).';
-    expect(analyzeRunFailure(multiDrop).detail).toBe("Dropped: claude_code, lmstudio");
+    expect(analyzeRunFailure(multiDrop).detail).toBe("claude_code, lmstudio");
   });
 
   it("offers provider configuration when the chain is empty for another reason", () => {
@@ -77,24 +78,24 @@ describe("analyzeRunFailure", () => {
   // The overview tab reads title-then-buttons, and these were the last two
   // Spanish strings in an otherwise English drawer. Pinned so a future edit
   // cannot half-translate them back.
-  it("speaks the same English as the rest of the drawer", () => {
+  it("returns i18n keys, not prose, so either locale can render it", () => {
     const blocked = analyzeRunFailure(TOOL_BLOCKED);
-    expect(blocked.title).toBe("No provider in the chain can run tools");
-    expect(blocked.remedies.map((r) => r.label)).toEqual([
-      "Pick a tool-capable provider",
-      "Switch executor to claude_code",
-      "Retry",
+    expect(blocked.titleKey).toBe("agent.failure.no_tool_capable");
+    expect(blocked.remedies.map((r) => r.labelKey)).toEqual([
+      "agent.failure.pick_provider",
+      "agent.failure.switch_executor",
+      "agent.failure.retry",
     ]);
 
     const noProvider = analyzeRunFailure(NO_PROVIDER);
-    expect(noProvider.title).toBe("No provider in the chain is available");
-    expect(noProvider.remedies.map((r) => r.label)).toEqual(["Configure providers", "Retry"]);
+    expect(noProvider.titleKey).toBe("agent.failure.no_provider_available");
+    expect(noProvider.remedies.map((r) => r.labelKey)).toEqual(["agent.failure.configure_providers", "agent.failure.retry"]);
 
     const google = analyzeRunFailure("invalid_grant");
-    expect(google.title).toBe("Google token expired");
-    expect(google.remedies.map((r) => r.label)).toEqual(["Re-authenticate Google", "Retry"]);
+    expect(google.titleKey).toBe("agent.failure.google_expired");
+    expect(google.remedies.map((r) => r.labelKey)).toEqual(["agent.failure.reauth_google", "agent.failure.retry"]);
 
-    expect(analyzeRunFailure("ECONNRESET").title).toBe("The run failed");
+    expect(analyzeRunFailure("ECONNRESET").titleKey).toBe("agent.failure.generic");
   });
 
   it("does not confuse Claude Code SDK auth with Google auth (regression)", () => {

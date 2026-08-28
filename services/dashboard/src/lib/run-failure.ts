@@ -28,16 +28,26 @@ export type RemedyKind =
 
 export interface Remedy {
   kind: RemedyKind;
-  label: string;
+  /** i18n key for the button. Resolved by the component, not here. */
+  labelKey: string;
 }
 
 export interface RunFailure {
-  title: string;
+  /** i18n key for the heading. */
+  titleKey: string;
+  /**
+   * The kernel's own error text, or a short phrase built from it. NOT a
+   * translation key: this is the machine's words, and translating them would
+   * hide the string an operator needs to search for. `droppedKey` covers the
+   * one part that is ours.
+   */
   detail: string;
+  /** i18n key wrapping `detail` when the executor named dropped providers. */
+  droppedKey?: string;
   remedies: Remedy[];
 }
 
-const RETRY: Remedy = { kind: "retry", label: "Retry" };
+const RETRY: Remedy = { kind: "retry", labelKey: "agent.failure.retry" };
 
 /** Providers the executor dropped, as named in the tool-blocked message. */
 function droppedProviders(error: string): string {
@@ -51,11 +61,12 @@ export function analyzeRunFailure(error: string): RunFailure {
   if (text.includes("No LLM provider in the chain can run tool calls")) {
     const dropped = droppedProviders(text);
     return {
-      title: "No provider in the chain can run tools",
-      detail: dropped ? `Dropped: ${dropped}` : text,
+      titleKey: "agent.failure.no_tool_capable",
+      detail: dropped || text,
+      droppedKey: dropped ? "agent.failure.dropped" : undefined,
       remedies: [
-        { kind: "pick-tool-capable-provider", label: "Pick a tool-capable provider" },
-        { kind: "switch-executor-claude-code", label: "Switch executor to claude_code" },
+        { kind: "pick-tool-capable-provider", labelKey: "agent.failure.pick_provider" },
+        { kind: "switch-executor-claude-code", labelKey: "agent.failure.switch_executor" },
         RETRY,
       ],
     };
@@ -63,10 +74,10 @@ export function analyzeRunFailure(error: string): RunFailure {
 
   if (text.includes("No available LLM provider for chain")) {
     return {
-      title: "No provider in the chain is available",
+      titleKey: "agent.failure.no_provider_available",
       detail: text,
       remedies: [
-        { kind: "configure-provider", label: "Configure providers" },
+        { kind: "configure-provider", labelKey: "agent.failure.configure_providers" },
         RETRY,
       ],
     };
@@ -79,14 +90,14 @@ export function analyzeRunFailure(error: string): RunFailure {
   // integration emits it today; matters when a second OAuth integration lands.
   if (/kernel_google_auth|invalid_grant|Token (refresh failed|has been expired or revoked)/i.test(text)) {
     return {
-      title: "Google token expired",
+      titleKey: "agent.failure.google_expired",
       detail: text,
       remedies: [
-        { kind: "reauth-google", label: "Re-authenticate Google" },
+        { kind: "reauth-google", labelKey: "agent.failure.reauth_google" },
         RETRY,
       ],
     };
   }
 
-  return { title: "The run failed", detail: text, remedies: [RETRY] };
+  return { titleKey: "agent.failure.generic", detail: text, remedies: [RETRY] };
 }

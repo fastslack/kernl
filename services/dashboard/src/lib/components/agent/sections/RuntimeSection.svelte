@@ -31,6 +31,7 @@
     problem as Settings was.
 -->
 <script lang="ts">
+  import { t } from '$lib/i18n/index.js';
   import { onDestroy, tick } from 'svelte';
   import { get, type Readable } from 'svelte/store';
   import ModelPicker from '../ModelPicker.svelte';
@@ -277,16 +278,16 @@
 
 <section class="rt" class:rt-compact={compact} bind:this={sectionEl}>
   <div class="rt-head">
-    <h3 class="rt-h">Runtime</h3>
+    <h3 class="rt-h">{$t('agent.runtime.title')}</h3>
     {#if running}
-      <span class="rt-next" role="status">changes apply to the next run</span>
+      <span class="rt-next" role="status">{$t('agent.runtime.applies_next_run')}</span>
     {/if}
   </div>
 
   <!-- ── Model chain ── -->
   <div class="rt-field">
     <div class="rt-lbl">
-      <span>Model</span>
+      <span>{$t('agent.runtime.model')}</span>
       {#if links.length > 1}<span class="rt-lbl-note">primary + {links.length - 1} fallback{links.length > 2 ? 's' : ''}</span>{/if}
     </div>
 
@@ -336,11 +337,11 @@
             {requiresTools}
             busy={chainSaving}
             disabled={chainSaving}
-            placeholder="choose a fallback"
+            placeholder={$t('agent.runtime.choose_fallback')}
             on:change={(e) => commitDraft(e.detail)}
           />
         </div>
-        <button class="rt-x" disabled={chainSaving} title="Cancel" on:click={() => (draft = null)}>×</button>
+        <button class="rt-x" disabled={chainSaving} title={$t('agent.runtime.cancel')} on:click={() => (draft = null)}>×</button>
       </div>
     {/if}
 
@@ -363,20 +364,20 @@
   <!-- ── Executor ── -->
   <div class="rt-field">
     <div class="rt-lbl">
-      <span>Executor</span>
-      {#if $store?.saving?.has('executor_type')}<span class="rt-lbl-note">saving…</span>{/if}
+      <span>{$t('agent.runtime.executor')}</span>
+      {#if $store?.saving?.has('executor_type')}<span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>{/if}
     </div>
-    <div class="rt-seg" role="group" aria-label="executor">
+    <div class="rt-seg" role="group" aria-label={$t('agent.runtime.executor_aria')}>
       <button
         class="rt-seg-b"
         class:on={executor === 'native'}
-        title="The kernel runs the tool loop against the chain above."
+        title={$t('agent.runtime.native_hint')}
         on:click={() => setExecutor('native')}
       >native</button>
       <button
         class="rt-seg-b"
         class:on={executor === 'claude_code'}
-        title="The CLI runs its own tool loop. The chain above is not used for tools."
+        title={$t('agent.runtime.claude_code_hint')}
         on:click={() => setExecutor('claude_code')}
       >claude_code</button>
     </div>
@@ -393,7 +394,7 @@
       <div class="rt-lbl">
         <span>{n.label}</span>
         {#if $store?.saving?.has(n.key)}
-          <span class="rt-lbl-note">saving…</span>
+          <span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>
         {:else if n.key in pending}
           <span class="rt-lbl-note">…</span>
         {/if}

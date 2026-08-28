@@ -13,6 +13,7 @@
   series belongs. This line stays in the overview and leads it.
 -->
 <script lang="ts">
+  import { t } from '$lib/i18n/index.js';
   export let agent: Record<string, any> | null = null;
   export let stats: { total_runs: number; completed: number; failed: number; success_rate: number } | null = null;
   export let lastRun: { status: string; created_at: string } | null = null;
@@ -21,51 +22,51 @@
   // cannot tell an operator's Pause from the kernel's circuit breaker, and the
   // breaker tripping is the one case that means something is actually broken.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent?.auto_paused_at || '');
-  $: statusWord = !agent ? '' : agent.active === 1 ? 'Active' : autoPaused ? 'Auto-paused' : 'Paused';
+  $: statusWord = !agent ? '' : agent.active === 1 ? $t('agent.verdict.active') : autoPaused ? $t('agent.verdict.auto_paused') : $t('agent.verdict.paused');
 
   $: lastFailed = lastRun?.status === 'failed';
   // Worst signal wins: a tripped breaker or a failed last run reads as red
   // even if the operator's own pause is what shows in the word next to it.
   $: dotClass = autoPaused || lastFailed ? 'vl-dot-red' : !agent || agent.active !== 1 ? 'vl-dot-yellow' : 'vl-dot-green';
 
-  function runsClause(s: typeof stats): string {
+  function runsClause(s: typeof stats, tr: (k: string, p?: Record<string, string | number>) => string): string {
     // No stats at all is not the same as zero runs. /agents has no per-agent
     // run counters to hand over (its WS payload only carries dashboard-wide
     // aggregates), and answering "no runs yet" there would state something
     // this line has no way to know. Nothing is said instead; the last-run
     // clause still carries the signal that matters.
     if (!s) return '';
-    if (!s.total_runs) return 'no runs yet';
+    if (!s.total_runs) return tr('agent.verdict.no_runs');
     const n = s.total_runs;
     const c = s.completed ?? 0;
-    const runsWord = n === 1 ? '1 run' : `${n} runs`;
-    if (c === 0) return `${runsWord}, none successful`;
-    if (c >= n) return `${runsWord}, all successful`;
-    return `${runsWord}, ${c} successful`;
+    const runsWord = n === 1 ? tr('agent.verdict.runs_one') : tr('agent.verdict.runs_other', { n });
+    if (c === 0) return tr('agent.verdict.none_successful', { runs: runsWord });
+    if (c >= n) return tr('agent.verdict.all_successful', { runs: runsWord });
+    return tr('agent.verdict.some_successful', { runs: runsWord, c });
   }
 
   /** Coarse relative time — the exact stamp lives in the run itself. */
-  function rel(iso: string | undefined): string {
+  function rel(iso: string | undefined, tr: (k: string, p?: Record<string, string | number>) => string): string {
     if (!iso) return '';
     const t = new Date(iso).getTime();
     if (!Number.isFinite(t)) return '';
     const d = Math.max(0, Date.now() - t);
-    if (d < 60_000) return 'just now';
-    if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
-    if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
-    return `${Math.round(d / 86_400_000)}d ago`;
+    if (d < 60_000) return tr('agent.verdict.just_now');
+    if (d < 3_600_000) return tr('agent.verdict.minutes_ago', { n: Math.round(d / 60_000) });
+    if (d < 86_400_000) return tr('agent.verdict.hours_ago', { n: Math.round(d / 3_600_000) });
+    return tr('agent.verdict.days_ago', { n: Math.round(d / 86_400_000) });
   }
 
-  function lastRunClause(r: typeof lastRun): string {
+  function lastRunClause(r: typeof lastRun, tr: (k: string, p?: Record<string, string | number>) => string): string {
     if (!r) return '';
-    const when = rel(r.created_at);
-    if (r.status === 'failed') return `failed ${when}`;
-    if (r.status === 'running') return 'running now';
-    if (r.status === 'completed') return `ok ${when}`;
+    const when = rel(r.created_at, tr);
+    if (r.status === 'failed') return tr('agent.verdict.failed_when', { when });
+    if (r.status === 'running') return tr('agent.verdict.running_now');
+    if (r.status === 'completed') return tr('agent.verdict.ok_when', { when });
     return `${r.status} ${when}`.trim();
   }
 
-  $: parts = [statusWord, runsClause(stats), lastRunClause(lastRun)].filter(Boolean);
+  $: parts = [statusWord, runsClause(stats, $t), lastRunClause(lastRun, $t)].filter(Boolean);
 </script>
 
 {#if agent}

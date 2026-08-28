@@ -519,6 +519,103 @@ const en: Record<string, string> = {
   "welcome.action_extensions": "Configure /extensions",
   "welcome.action_docs": "Documentation",
   "welcome.reset_hint_prefix": "This page is shown only once. To see it again:",
+
+  // ── Agent drawer ──────────────────────────────────────────────
+  // The panel that opens on an agent. Its verdict line and failure card are
+  // the first two blocks a user reads, so they carry most of these.
+  //
+  // Plurals get one key per form rather than a count placeholder: Spanish and
+  // English agree on 1-vs-many here, but the composed clause differs enough
+  // ("2 runs, none successful" / "2 corridas, ninguna exitosa") that a single
+  // template with a {n} would force one language's word order on the other.
+  "agent.verdict.active": "Active",
+  "agent.verdict.paused": "Paused",
+  "agent.verdict.auto_paused": "Auto-paused",
+  "agent.verdict.no_runs": "no runs yet",
+  "agent.verdict.runs_one": "1 run",
+  "agent.verdict.runs_other": "{n} runs",
+  "agent.verdict.none_successful": "{runs}, none successful",
+  "agent.verdict.all_successful": "{runs}, all successful",
+  "agent.verdict.some_successful": "{runs}, {c} successful",
+  "agent.verdict.just_now": "just now",
+  "agent.verdict.minutes_ago": "{n}m ago",
+  "agent.verdict.hours_ago": "{n}h ago",
+  "agent.verdict.days_ago": "{n}d ago",
+  "agent.verdict.failed_when": "failed {when}",
+  "agent.verdict.running_now": "running now",
+  "agent.verdict.ok_when": "ok {when}",
+  // Failure card. `titleKey`/`labelKey` come from lib/run-failure.ts, which
+  // returns keys rather than text so the matching stays testable without a
+  // locale loaded.
+  "agent.failure.retry": "Retry",
+  "agent.failure.dropped": "Dropped: {providers}",
+  "agent.failure.no_tool_capable": "No provider in the chain can run tools",
+  "agent.failure.pick_provider": "Pick a tool-capable provider",
+  "agent.failure.switch_executor": "Switch executor to claude_code",
+  "agent.failure.no_provider_available": "No provider in the chain is available",
+  "agent.failure.configure_providers": "Configure providers",
+  "agent.failure.google_expired": "Google token expired",
+  "agent.failure.reauth_google": "Re-authenticate Google",
+  "agent.failure.generic": "The run failed",
+
+  // Runtime section — the editable provider/model chain and the four limits.
+  "agent.runtime.title": "Runtime",
+  "agent.runtime.applies_next_run": "changes apply to the next run",
+  "agent.runtime.model": "Model",
+  "agent.runtime.executor": "Executor",
+  "agent.runtime.saving": "saving…",
+  "agent.runtime.cancel": "Cancel",
+  "agent.runtime.choose_fallback": "choose a fallback",
+  "agent.runtime.executor_aria": "executor",
+  "agent.runtime.native_hint": "The kernel runs the tool loop against the chain above.",
+  "agent.runtime.claude_code_hint": "The CLI runs its own tool loop. The chain above is not used for tools.",
+
+  // Agent drawer shell — header chips, action buttons, tab bar.
+  // The kind chips (LLM / SCRIPT / "Claude Code SDK") stay untranslated:
+  // they name an executor type and a product, not a concept.
+  "agent.drawer.tab_overview": "Overview",
+  "agent.drawer.tab_message": "Message",
+  "agent.drawer.devops_panel": "DevOps panel",
+  "agent.drawer.devops_title": "Open the DevOps control panel — repos, backlog, dev stacks",
+  "agent.drawer.resume_hint": "Resume re-enables the schedule and clears the counter.",
+  "agent.drawer.pause_title": "Pause: stop schedule + event triggers. Manual Run still works.",
+  "agent.drawer.resume_title": "Resume: re-enable schedule + event triggers.",
+  "agent.drawer.accept_title": "Accept — clear REVISION flag, keep agent as-is",
+  "agent.drawer.reject_title": "Reject — deactivate (active=0). Row stays in DB, easy rollback.",
+  "agent.drawer.rename_title": "Rename agent",
+  "agent.drawer.save_title": "Save (Enter)",
+  "agent.drawer.cancel_title": "Cancel (Esc)",
+  "agent.drawer.close_title": "close",
+  "agent.drawer.agent_id_title": "agent id",
+  "agent.drawer.builtin_id_title": "builtin handler id",
+  "agent.drawer.copy_id_title": "copy full agent id",
+  "agent.drawer.fallbacks_title": "model_chain fallbacks configured",
+  "agent.drawer.kind_llm_title": "LLM-powered agent (native runToolLoop)",
+  "agent.drawer.kind_script_title": "Native script / builtin handler — no LLM",
+  "agent.drawer.kind_claude_code_title": "Runs through the Claude Agent SDK (claude_code executor)",
+
+  // Skills tab. "Extensions → Skills" is a route, not prose — left as-is.
+  "agent.skills.recommended": "Recommended for this agent",
+  "agent.skills.scoring": "Scoring the catalogue against this agent's prompt…",
+  "agent.skills.search_heading": "Search the catalogue",
+  "agent.skills.search_placeholder": "Search every subscribed repo by slug, name or description…",
+  "agent.skills.searching": "searching…",
+  "agent.skills.paid": "paid",
+  "agent.skills.get_it": "get it →",
+  "agent.skills.not_installed": "not installed — every run skips it",
+  "agent.skills.installed_inactive": "installed but not active",
+  "agent.skills.attach_title": "Attach — already installed",
+  "agent.skills.detach_title": "Detach",
+  "agent.skills.install_attach_title": "Install this skill, then attach it",
+  "agent.skills.score_title": "Keyword overlap against this agent's prompt",
+
+  "agent.skills.ranked_hint": "ranked, not generated",
+  "agent.skills.ranked_hint_title": "Deterministic keyword + IDF overlap between this agent's prompt and each skill's text. No model is called.",
+  "agent.skills.no_route_before": "This kernel has no",
+  "agent.skills.no_route_after": "route, so there is nothing to rank with. Search the catalogue below instead.",
+  "agent.skills.empty_before": "No skills are installed on this kernel yet. A",
+  "agent.skills.empty_mid": "row installs itself when you attach it — nothing has to be set up first. Whole repositories are subscribed in",
+  "agent.skills.catalogue_word": "catalogue",
 };
 
 export default en;

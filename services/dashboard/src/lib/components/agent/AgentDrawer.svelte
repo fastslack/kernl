@@ -20,6 +20,7 @@
   mundo 3D, y un tab que abre en blanco es peor que no estar.
 -->
 <script lang="ts">
+  import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onMount } from 'svelte';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
   // Contenido por defecto del tab Overview. Quien monta el drawer puede
@@ -31,7 +32,7 @@
   import { parseAttachedSkills } from '$lib/skills.js';
   // Directo a types.js y no a office3d/index.js: el índice arrastra three.js
   // entero, y de acá sólo salen tres helpers puros.
-  import { agentType, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
+  import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
 
   const dispatch = createEventDispatcher();
 
@@ -115,6 +116,29 @@
 
   $: agent = $detail.agent ?? listRow;
 
+  // ── ¿Este agente puede usar skills? ───────────────────────────────
+  // Un agente con `builtin_handler` registrado corta el camino LLM en
+  // executor.ts:238 y retorna con `tokens_used: 0`; el índice de skills se
+  // inyecta 400 líneas después, en :656. Nunca llega. Attachar una skill a un
+  // script es un no-op, y con el contador del tab mostraría un costo por run
+  // que jamás se paga.
+  //
+  // El kernel ya tomó esta decisión en otro lado: el skill-suggester filtra
+  // `builtin_handler != ?` y expone una lista de prefijos excluibles, así que
+  // el recomendador nunca les sugiere nada. El tab quedaba incoherente con eso.
+  //
+  // Sólo se excluye 'function'/'cli' (los builtin). 'claude_code' se deja
+  // pasar a propósito: ese executor lo registra una extensión vía
+  // registerAltExecutor, su implementación no está en este repo, y no se puede
+  // demostrar que ignore las skills. Esconder un tab que quizá funciona es peor
+  // que dejar uno que no.
+  $: canUseSkills = !agent || agentUsesSkills(agent);
+
+  // Si el tab desaparece bajo los pies —deep link ?tab=skills, o cambiar la
+  // selección de un agente LLM a un script sin cerrar el drawer— el cuerpo
+  // quedaría montado sin botón para salir.
+  $: if (!canUseSkills && panelTab === 'skills') panelTab = 'info';
+
   // Badge del tab Skills. Se deriva del agente y no de un prop, así que un
   // attach hecho dentro del propio tab lo mueve en cuanto el padre refleja
   // `skills_json` — el mismo camino que ya recorre cualquier otra escritura.
@@ -178,50 +202,50 @@
                     else if (e.key === 'Escape') { e.preventDefault(); dispatch('rename-cancel'); }
                   }}
                 />
-                <button class="ip-name-btn ip-name-btn-ok" title="Save (Enter)"
+                <button class="ip-name-btn ip-name-btn-ok" title={$t('agent.drawer.save_title')}
                   on:click={() => dispatch('rename-save')} disabled={savingName}>✓</button>
-                <button class="ip-name-btn ip-name-btn-cancel" title="Cancel (Esc)"
+                <button class="ip-name-btn ip-name-btn-cancel" title={$t('agent.drawer.cancel_title')}
                   on:click={() => dispatch('rename-cancel')} disabled={savingName}>×</button>
               </div>
             {:else}
               <div class="ip-name">
                 {agent.name}
-                <button class="ip-name-edit-btn" title="Rename agent" on:click={() => dispatch('rename-begin')}>✎</button>
+                <button class="ip-name-edit-btn" title={$t('agent.drawer.rename_title')} on:click={() => dispatch('rename-begin')}>✎</button>
               </div>
             {/if}
             <div class="ip-sub">
               {#if flow}<span class="ip-flow" style="--f:{flow.color}">{flow.name}</span>{/if}
               <span class="ip-dot"></span>
-              <span class="ip-id" title="agent id">
+              <span class="ip-id" title={$t('agent.drawer.agent_id_title')}>
                 {agent.id.slice(0, 8)}
-                <button class="ip-copy-inline" on:click|stopPropagation={() => copy(agent.id, 'agent-id')} title="copy full agent id">{copiedKey === 'agent-id' ? '✓' : '⧉'}</button>
+                <button class="ip-copy-inline" on:click|stopPropagation={() => copy(agent.id, 'agent-id')} title={$t('agent.drawer.copy_id_title')}>{copiedKey === 'agent-id' ? '✓' : '⧉'}</button>
               </span>
             </div>
             <div class="ip-tags">
               {#if agentType(agent) === 'llm'}
                 {@const fb = modelChainFallbacks(agent.model_chain)}
-                <span class="ip-tag ip-tag-llm" title="LLM-powered agent (native runToolLoop)">LLM</span>
+                <span class="ip-tag ip-tag-llm" title={$t('agent.drawer.kind_llm_title')}>LLM</span>
                 {#if agent.model}
                   <span class="ip-tag ip-tag-model" title={agent.provider ? `${agent.provider} / ${agent.model}` : agent.model}>{agent.model}</span>
                 {/if}
                 {#if fb > 0}
-                  <span class="ip-tag ip-tag-fallback" title="model_chain fallbacks configured">+{fb} fallback{fb > 1 ? 's' : ''}</span>
+                  <span class="ip-tag ip-tag-fallback" title={$t('agent.drawer.fallbacks_title')}>+{fb} fallback{fb > 1 ? 's' : ''}</span>
                 {/if}
               {:else if agentType(agent) === 'claude_code'}
-                <span class="ip-tag ip-tag-sdk" title="Runs through the Claude Agent SDK (claude_code executor)">Claude Code SDK</span>
+                <span class="ip-tag ip-tag-sdk" title={$t('agent.drawer.kind_claude_code_title')}>Claude Code SDK</span>
                 <span class="ip-tag ip-tag-model" title={agent.model ? `SDK model: ${agent.model}` : `SDK default model: ${CLAUDE_CODE_DEFAULT_MODEL}`}>
                   {agent.model || CLAUDE_CODE_DEFAULT_MODEL}{!agent.model ? ' (default)' : ''}
                 </span>
               {:else}
-                <span class="ip-tag ip-tag-script" title="Native script / builtin handler — no LLM">SCRIPT</span>
+                <span class="ip-tag ip-tag-script" title={$t('agent.drawer.kind_script_title')}>SCRIPT</span>
                 {#if agent.builtin_handler}
-                  <span class="ip-tag ip-tag-handler" title="builtin handler id">{agent.builtin_handler}</span>
+                  <span class="ip-tag ip-tag-handler" title={$t('agent.drawer.builtin_id_title')}>{agent.builtin_handler}</span>
                 {/if}
               {/if}
             </div>
           </div>
         </div>
-        <button class="ip-close" on:click={() => dispatch('close')} aria-label="close">×</button>
+        <button class="ip-close" on:click={() => dispatch('close')} aria-label={$t('agent.drawer.close_title')}>×</button>
       </div>
 
       <!-- Primary actions. The run state leads the row: it is what Pause and
@@ -249,33 +273,33 @@
           <span>{starting ? 'starting…' : 'Run now'}</span>
         </button>
         {#if agent.active === 1}
-          <button class="ip-btn ip-btn-warn" on:click={() => dispatch('resume')} disabled={togglingPause} title="Pause: stop schedule + event triggers. Manual Run still works.">
+          <button class="ip-btn ip-btn-warn" on:click={() => dispatch('resume')} disabled={togglingPause} title={$t('agent.drawer.pause_title')}>
             <span class="ip-btn-ico">⏸</span>
             <span>{togglingPause ? '…' : 'Pause'}</span>
           </button>
         {:else}
-          <button class="ip-btn ip-btn-resume" on:click={() => dispatch('resume')} disabled={togglingPause} title="Resume: re-enable schedule + event triggers.">
+          <button class="ip-btn ip-btn-resume" on:click={() => dispatch('resume')} disabled={togglingPause} title={$t('agent.drawer.resume_title')}>
             <span class="ip-btn-ico">▶</span>
             <span>{togglingPause ? '…' : 'Resume'}</span>
           </button>
         {/if}
         {#if $$slots.chat}
           <button class="ip-btn ip-btn-ghost" on:click={() => selectTab('chat')}>
-            <span class="ip-btn-ico">✎</span><span>Message</span>
+            <span class="ip-btn-ico">✎</span><span>{$t('agent.drawer.tab_message')}</span>
           </button>
         {/if}
         {#if devopsOffice}
-          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title="Open the DevOps control panel — repos, backlog, dev stacks">
-            <span class="ip-btn-ico">🛠</span><span>DevOps panel</span>
+          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
+            <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
           </a>
         {/if}
         {#if agent.under_revision}
           <button class="ip-btn ip-btn-accept" on:click={() => dispatch('revision', { mode: 'accept' })} disabled={revisionBusy}
-                  title="Accept — clear REVISION flag, keep agent as-is">
+                  title={$t('agent.drawer.accept_title')}>
             <span class="ip-btn-ico">✓</span><span>{revisionBusy ? '…' : 'Accept'}</span>
           </button>
           <button class="ip-btn ip-btn-reject" on:click={() => dispatch('revision', { mode: 'reject' })} disabled={revisionBusy}
-                  title="Reject — deactivate (active=0). Row stays in DB, easy rollback.">
+                  title={$t('agent.drawer.reject_title')}>
             <span class="ip-btn-ico">✗</span><span>{revisionBusy ? '…' : 'Reject'}</span>
           </button>
         {/if}
@@ -299,22 +323,24 @@
             {#if agent.auto_pause_reason}
               <pre class="ip-tripped-why">{agent.auto_pause_reason}</pre>
             {/if}
-            <span class="ip-tripped-hint">Resume re-enables the schedule and clears the counter.</span>
+            <span class="ip-tripped-hint">{$t('agent.drawer.resume_hint')}</span>
           </div>
         </div>
       {/if}
 
       <!-- Tabs -->
       <div class="ip-tabs">
-        <button class="ip-tab" class:active={panelTab === 'info'} on:click={() => selectTab('info')}>Overview</button>
+        <button class="ip-tab" class:active={panelTab === 'info'} on:click={() => selectTab('info')}>{$t('agent.drawer.tab_overview')}</button>
         {#if running && $$slots.live}
           <button class="ip-tab ip-tab-live" class:active={panelTab === 'live'} on:click={() => selectTab('live')}>
             <span class="live-dot"></span>LIVE
           </button>
         {/if}
-        <button class="ip-tab" class:active={panelTab === 'skills'} on:click={() => selectTab('skills')}>
-          Skills{#if skillCount}<span class="ip-tab-count">{skillCount}</span>{/if}
-        </button>
+        {#if canUseSkills}
+          <button class="ip-tab" class:active={panelTab === 'skills'} on:click={() => selectTab('skills')}>
+            Skills{#if skillCount}<span class="ip-tab-count">{skillCount}</span>{/if}
+          </button>
+        {/if}
         <button class="ip-tab" class:active={panelTab === 'history'} on:click={() => selectTab('history')}>
           History{#if historyCount}<span class="ip-tab-count">{historyCount}</span>{/if}
         </button>
@@ -322,7 +348,7 @@
           <button class="ip-tab ip-tab-ext" class:active={panelTab === tab.id} on:click={() => selectTab(tab.id)}>{tab.label}</button>
         {/each}
         {#if $$slots.chat}
-          <button class="ip-tab" class:active={panelTab === 'chat'} on:click={() => selectTab('chat')}>Message</button>
+          <button class="ip-tab" class:active={panelTab === 'chat'} on:click={() => selectTab('chat')}>{$t('agent.drawer.tab_message')}</button>
         {/if}
         {#if $$slots.workspace}
           <button class="ip-tab" class:active={panelTab === 'workspace'} on:click={() => selectTab('workspace')}>Workspace{#if workspaceCount}<span class="ip-tab-count">{workspaceCount}</span>{/if}</button>
@@ -349,7 +375,7 @@
         </slot>
       {/if}
 
-      {#if panelTab === 'skills'}
+      {#if panelTab === 'skills' && canUseSkills}
         <slot name="skills" />
       {/if}
 

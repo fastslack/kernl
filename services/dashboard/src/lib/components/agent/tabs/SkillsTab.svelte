@@ -53,6 +53,7 @@
                mounted the drawer can patch its own copy without a refetch
 -->
 <script lang="ts">
+  import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import {
     loadInstalledSkills,
@@ -508,13 +509,13 @@
               <span class="sk-main">
                 <span class="sk-slug">{slug}</span>
                 {#if isOrphan}
-                  <span class="sk-note sk-note-bad">not installed — every run skips it</span>
+                  <span class="sk-note sk-note-bad">{$t('agent.skills.not_installed')}</span>
                 {:else if isSkipped}
                   <span class="sk-note sk-note-bad"
                     >installed but {item?.status ?? 'skipped'} — every run skips it</span
                   >
                 {:else if isInactive}
-                  <span class="sk-note sk-note-warn">installed but not active</span>
+                  <span class="sk-note sk-note-warn">{$t('agent.skills.installed_inactive')}</span>
                 {:else if item && skillDescription(item)}
                   <span class="sk-desc">{skillDescription(item)}</span>
                 {/if}
@@ -529,7 +530,7 @@
               {/if}
               <button
                 class="sk-x"
-                title="Detach"
+                title={$t('agent.skills.detach_title')}
                 on:click={() => detach(slug)}
                 disabled={!!busy[slug]}>{busy[slug] === 'detaching' ? '…' : '×'}</button
               >
@@ -570,22 +571,21 @@
     <!-- ═══ RECOMMENDED ═══ -->
     <section class="sk-zone">
       <header class="sk-zh">
-        <h3 class="sk-h">Recommended for this agent</h3>
+        <h3 class="sk-h">{$t('agent.skills.recommended')}</h3>
         <span
           class="sk-hint"
-          title="Deterministic keyword + IDF overlap between this agent's prompt and each skill's text. No model is called."
+          title={$t('agent.skills.ranked_hint_title')}
         >
-          ranked, not generated
+          {$t('agent.skills.ranked_hint')}
         </span>
       </header>
 
       {#if sugUnsupported}
         <p class="sk-empty">
-          This kernel has no <code>/api/agents/:id/skill-suggestions</code> route, so there is
-          nothing to rank with. Search the catalogue below instead.
+          {$t('agent.skills.no_route_before')} <code>/api/agents/:id/skill-suggestions</code> {$t('agent.skills.no_route_after')}
         </p>
       {:else if sugLoading}
-        <p class="sk-empty">Scoring the catalogue against this agent's prompt…</p>
+        <p class="sk-empty">{$t('agent.skills.scoring')}</p>
       {:else if sugError}
         <p class="sk-err">Could not load recommendations: {sugError}</p>
       {:else if recommended.length === 0}
@@ -597,13 +597,13 @@
         <ul class="sk-list">
           {#each visibleRecs as s (s.slug)}
             <li class="sk-row">
-              <span class="sk-score" title="Keyword overlap against this agent's prompt"
+              <span class="sk-score" title={$t('agent.skills.score_title')}
                 >{s.score.toFixed(1)}</span
               >
               <span class="sk-main">
                 <span class="sk-slug">
                   {s.slug}
-                  {#if !s.installed}<span class="sk-tag">catalogue</span>{/if}
+                  {#if !s.installed}<span class="sk-tag">{$t('agent.skills.catalogue_word')}</span>{/if}
                 </span>
                 {#if s.matches?.length}
                   <span class="sk-matches">
@@ -617,14 +617,14 @@
                 <span class="sk-cost">~{fmtTok(bodyCost(s.slug))} if loaded</span>
                 <button
                   class="sk-add"
-                  title="Attach — already installed"
+                  title={$t('agent.skills.attach_title')}
                   on:click={() => attach(s.slug)}
                   disabled={!!busy[s.slug]}>{busy[s.slug] ? '…' : '+'}</button
                 >
               {:else}
                 <button
                   class="sk-add sk-add-dl"
-                  title="Install this skill, then attach it"
+                  title={$t('agent.skills.install_attach_title')}
                   on:click={() => installAndAttach(s.slug, s.slug)}
                   disabled={!!busy[s.slug]}
                   >{busy[s.slug] === 'installing' ? '… installing' : busy[s.slug] ? '…' : '↓+'}</button
@@ -647,9 +647,9 @@
 
       {#if emptyInventory}
         <p class="sk-empty">
-          No skills are installed on this kernel yet. A <em>catalogue</em> row installs itself
-          when you attach it — nothing has to be set up first. Whole repositories are subscribed
-          in <a href="/extensions?tab=skills">Extensions → Skills</a>.
+          {$t('agent.skills.empty_before')} <em>{$t('agent.skills.catalogue_word')}</em>
+          {$t('agent.skills.empty_mid')}
+          <a href="/extensions?tab=skills">Extensions → Skills</a>.
         </p>
       {/if}
     </section>
@@ -657,8 +657,8 @@
     <!-- ═══ SEARCH ═══ -->
     <section class="sk-zone">
       <header class="sk-zh">
-        <h3 class="sk-h">Search the catalogue</h3>
-        {#if searching}<span class="sk-hint">searching…</span>{/if}
+        <h3 class="sk-h">{$t('agent.skills.search_heading')}</h3>
+        {#if searching}<span class="sk-hint">{$t('agent.skills.searching')}</span>{/if}
       </header>
 
       <input
@@ -666,7 +666,7 @@
         type="text"
         bind:value={search}
         on:input={onSearchInput}
-        placeholder="Search every subscribed repo by slug, name or description…"
+        placeholder={$t('agent.skills.search_placeholder')}
       />
 
       {#if searchError}
@@ -683,26 +683,26 @@
               <span class="sk-main">
                 <span class="sk-slug">
                   {e.slug}
-                  {#if paid}<span class="sk-tag sk-tag-paid">paid</span>{/if}
+                  {#if paid}<span class="sk-tag sk-tag-paid">{$t('agent.skills.paid')}</span>{/if}
                 </span>
                 {#if e.manifest?.description}
                   <span class="sk-desc">{e.manifest.description}</span>
                 {/if}
               </span>
               {#if paid}
-                <a class="sk-buy" href="/extensions?tab=skills">get it →</a>
+                <a class="sk-buy" href="/extensions?tab=skills">{$t('agent.skills.get_it')}</a>
               {:else if isInstalled}
                 <span class="sk-cost">~{fmtTok(bodyCost(e.slug))} if loaded</span>
                 <button
                   class="sk-add"
-                  title="Attach — already installed"
+                  title={$t('agent.skills.attach_title')}
                   on:click={() => attach(e.slug)}
                   disabled={!!busy[e.slug]}>{busy[e.slug] ? '…' : '+'}</button
                 >
               {:else}
                 <button
                   class="sk-add sk-add-dl"
-                  title="Install this skill, then attach it"
+                  title={$t('agent.skills.install_attach_title')}
                   on:click={() => installAndAttach(e.slug, e.id)}
                   disabled={!!busy[e.slug]}
                   >{busy[e.slug] === 'installing' ? '… installing' : busy[e.slug] ? '…' : '↓+'}</button
