@@ -156,6 +156,29 @@ export function agentType(a: AgentData): 'llm' | 'claude_code' | 'function' | 'c
   return 'llm';
 }
 
+/**
+ * Can this agent actually use procedural skills?
+ *
+ * No, when a builtin handler is set. `executor.ts:238` short-circuits the LLM
+ * path for those and returns with `tokens_used: 0`; the skills index is only
+ * assembled ~400 lines later, at `:656`. A script agent never reaches it, so
+ * attaching a skill to one is a no-op — and the SKILLS tab would quote a
+ * per-run token cost that is never paid.
+ *
+ * The kernel already encodes this judgement elsewhere: the skill suggester
+ * filters `builtin_handler != ?` and takes an operator-supplied list of
+ * excluded prefixes, so builtins are never recommended anything.
+ *
+ * `claude_code` deliberately counts as yes. That executor is registered by an
+ * extension through `registerAltExecutor`, its implementation is not in this
+ * repo, and nothing here proves it ignores skills. Hiding a tab that may work
+ * is worse than showing one that does not.
+ */
+export function agentUsesSkills(a: AgentData): boolean {
+  const t = agentType(a);
+  return t !== 'function' && t !== 'cli';
+}
+
 /** Number of fallback entries in a model_chain JSON string (excluding the primary). */
 export function modelChainFallbacks(chain: string | undefined): number {
   if (!chain) return 0;
