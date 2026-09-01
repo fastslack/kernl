@@ -35,6 +35,8 @@ export interface StoreInstallDeps {
   getAgentService?: () => AgentService | null;
   sqlite?: SqliteDb;
   fetchImpl?: typeof fetch;
+  /** Override the store timeout. Tests use it; callers should not need to. */
+  timeoutMs?: number;
 }
 
 /**
@@ -62,17 +64,30 @@ async function installExtension(
   const service = deps.getExtensionService();
   if (!service) throw new Error("Extensions service is not available.");
 
+  // Already there? Then this is an UPGRADE, not an install.
+  //
+  // The dashboard's "Update to vX" button lands here — `acquire()` sees an
+  // owned item and posts to /api/store/install — and this used to go straight
+  // to `installFromBundle`, which refuses outright when the slug exists and
+  // tells the user to "use update()", which is not something a person clicking
+  // a button can do. `ExtensionService.update()` was written for exactly this
+  // and nothing called it: it compares versions and re-checks entitlement
+  // against the INCOMING manifest, so an upgrade cannot smuggle in a feature
+  // the licence does not cover.
+  const existing = service.getBySlug(item.slug);
+
   const dl = await downloadStoreBundle({
     storeUrl: deps.storeUrl,
     slug: item.slug,
     licenseJwt: deps.licenseJwt,
     fetchImpl: deps.fetchImpl,
+    timeoutMs: deps.timeoutMs,
   });
 
-  const installed = await service.installFromBundle(dl.path, {
-    type: "url",
-    url: dl.downloadUrl,
-  });
+  const source = { type: "url" as const, url: dl.downloadUrl };
+  const installed = existing
+    ? (await service.update(dl.path, source)).extension
+    : await service.installFromBundle(dl.path, source);
   return { kind: "extension", item, installed };
 }
 
@@ -89,6 +104,7 @@ async function installOffice(
     slug: item.slug,
     licenseJwt: deps.licenseJwt,
     fetchImpl: deps.fetchImpl,
+    timeoutMs: deps.timeoutMs,
   });
 
   let def;
