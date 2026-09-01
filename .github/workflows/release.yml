@@ -98,6 +98,27 @@ jobs:
       - name: Build DEB
         run: PLATFORM=linux-x64 packaging/deb/build-deb.sh
 
+      # Portable tarball — what in-app update downloads on Linux.
+      #
+      # .deb and .rpm cannot serve that purpose: their files belong to dpkg or
+      # rpm, and replacing them from inside the app leaves a machine whose next
+      # `apt upgrade` reverts the update. So a package install is told to use
+      # its package manager, and everyone else gets this. Without it the
+      # feature could not work on Linux no matter what the code did — there was
+      # nothing self-contained to download.
+      - name: Build portable tarball
+        id: tarball
+        run: |
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          STAGE=$(mktemp -d)
+          STAGE_DIR="$STAGE" PLATFORM=linux-x64 packaging/stage-payload.sh
+          mkdir -p packaging/out
+          OUT="packaging/out/Kernl-${VERSION}-x64-linux.tar.gz"
+          # One top-level directory inside, which is what the updater expects
+          # to find when it unpacks.
+          tar -czf "$OUT" -C "$STAGE" "kernl-${VERSION}"
+          echo "path=$OUT" >> $GITHUB_OUTPUT
+
       - name: Locate artifacts
         id: locate
         run: |
@@ -112,6 +133,7 @@ jobs:
           path: |
             ${{ steps.locate.outputs.rpm }}
             ${{ steps.locate.outputs.deb }}
+            ${{ steps.tarball.outputs.path }}
 
   # ── macOS: .app → .dmg, both archs (macOS runners) ─────────────
   macos:

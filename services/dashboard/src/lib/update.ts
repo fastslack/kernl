@@ -101,20 +101,46 @@ export async function refreshUpdateInfo(fresh = false): Promise<void> {
   }
 }
 
+export interface UpdateProgress {
+  phase: "idle" | "checking" | "downloading" | "verifying" | "unpacking" | "handoff" | "failed" | "done";
+  received: number;
+  total: number;
+  version?: string;
+  reason?: string;
+}
+
+/** What the kernel is doing right now, while the apply request is in flight. */
+export const updateProgress = writable<UpdateProgress | null>(null);
+
 /**
  * Ask the kernel to update itself.
  *
- * A 202 means it is about to exit and a helper will swap the bundle and
- * relaunch — so the honest thing to show is "the app is restarting", not a
- * progress bar for something this page will not be around to watch.
+ * A 202 means it is about to exit and a helper will swap the directory and
+ * relaunch.
  *
- * A 400 is the useful case: on Linux the package manager owns the install,
- * and the answer is the command rather than a button that fights dpkg.
+ * The progress poll is worth the extra request: everything slow — downloading
+ * tens of megabytes, checksumming it, unpacking it — happens BEFORE the exit,
+ * so the page is very much around to watch it. This used to show nothing at
+ * all for that whole stretch, which is indistinguishable from a hung button.
+ *
+ * A 400 is the useful case: on a package-managed Linux install dpkg owns the
+ * files, and the answer is the command rather than a button that fights it.
  */
 export async function applyUpdate(): Promise<void> {
   updating.set(true);
   updateError.set("");
   updateHint.set("");
+  updateProgress.set(null);
+
+  const poll = setInterval(async () => {
+    try {
+      const r = await fetch(`${apiBase()}/api/update/progress`);
+      if (r.ok) updateProgress.set((await r.json()) as UpdateProgress);
+    } catch {
+      // The kernel exiting mid-poll is the success path, not an error.
+    }
+  }, 400);
+
   try {
     const r = await fetch(`${apiBase()}/api/update/apply`, { method: "POST" });
     const body = (await r.json()) as { reason?: string; useInstead?: string };
@@ -131,6 +157,7 @@ export async function applyUpdate(): Promise<void> {
     updateInfo.set(null);
     updateError.set("Kernl is restarting to finish the update. This page will reconnect.");
   } finally {
+    clearInterval(poll);
     updating.set(false);
   }
 }

@@ -67,7 +67,7 @@ import type { LifeModule, NewsModule, LifeService, NewsService } from "../types/
 import type { LicenseService } from "../license/index.js";
 import { registerLicenseRoutes } from "../license/routes.js";
 import { checkForUpdate } from "../update/check.js";
-import { applyUpdate } from "../update/apply.js";
+import { applyUpdate, updateProgress } from "../update/apply.js";
 
 export interface HttpResult {
   httpServer: KernelHttpServer | null;
@@ -396,6 +396,14 @@ export async function initHttpAndMcp(args: {
         // Give the response time to reach the browser before the helper's
         // wait-for-exit loop gets what it is waiting for.
         setTimeout(() => process.exit(0), 750);
+      });
+
+      // Polled while the POST above is still in flight. Separate on purpose:
+      // applying ends with this process exiting, so the request that started
+      // it cannot also report how it went — and a multi-megabyte download with
+      // no progress reads as a hung button.
+      httpServer.get("/api/update/progress", (_req, res) => {
+        httpServer!.json(res, 200, updateProgress());
       });
 
       httpServer.get("/api/update/status", async (req, res) => {
