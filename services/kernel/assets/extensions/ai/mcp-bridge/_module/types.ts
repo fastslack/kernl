@@ -17,12 +17,48 @@ export interface McpStdioConfig {
   env?: Record<string, string>;
 }
 
+/**
+ * OAuth 2 client-credentials settings for an HTTP MCP server.
+ *
+ * Servers behind OAuth 2.1 (Upwork's, for one) issue short-lived bearer
+ * tokens, so a static `token` goes stale: the transport keeps sending a dead
+ * header and every tool call fails until someone edits MCP_BRIDGE_SERVERS by
+ * hand and restarts the kernel. Give `oauth` instead and the bridge mints its
+ * own tokens and refreshes them before they expire.
+ */
+export interface McpOAuthConfig {
+  /** Token endpoint, e.g. https://www.upwork.com/api/v3/oauth2/token */
+  tokenUrl: string;
+  clientId: string;
+  clientSecret: string;
+  /** Optional space-separated scopes, passed through untouched. */
+  scope?: string;
+  /**
+   * Renew this many seconds before the server-stated expiry, so a token never
+   * dies mid-request. Default 60.
+   */
+  refreshSkewSeconds?: number;
+}
+
 export interface McpHttpConfig {
   type: "http";
   /** Full URL to the MCP Streamable HTTP endpoint */
   url: string;
-  /** Optional Bearer token for authentication */
+  /**
+   * Static Bearer token. Ignored when `oauth` is set — that path mints and
+   * rotates its own.
+   */
   token?: string;
+  /** OAuth 2 client-credentials config; takes precedence over `token`. */
+  oauth?: McpOAuthConfig;
+  /**
+   * A ready-made token source, built by the caller. Wins over both `oauth` and
+   * `token`. This is how the connection registry supplies an
+   * authorization_code provider that reads and rotates tokens through the
+   * store — that provider needs database access, which a JSON config in an
+   * environment variable cannot express.
+   */
+  tokenProvider?: { getToken(force?: boolean): Promise<string> };
   /** Optional extra headers */
   headers?: Record<string, string>;
 }

@@ -78,5 +78,9 @@
   "leisure/cinema": {
     "version": "1.37.6",
     "sha256": "bf08fb288bdbc057"
+  },
+  "ai/mcp-bridge": {
+    "version": "2.0.0",
+    "sha256": "0bfc21e7bea851d3"
   }
 }

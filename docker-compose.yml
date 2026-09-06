@@ -93,6 +93,12 @@ services:
       NEO4J_PASSWORD: kernlgraph
       SEARXNG_BASE_URL: http://searxng:8080
       TIMEZONE: ${TIMEZONE:-UTC}
+      # ── MCP Bridge (external MCP servers) ──
+      # JSON array of remote/local MCP servers whose tools get injected into
+      # the kernel pipeline as mcp_{name}_{tool}. Documented in .env.example;
+      # without this line the var stays on the host and never reaches the
+      # kernel, so the bridge always logs "no servers configured".
+      MCP_BRIDGE_SERVERS: ${MCP_BRIDGE_SERVERS:-}
       # Rust bridge — OFF by default, so the stack still boots with nothing
       # but the kernel. Turn both on (in .env or inline) together with
       # `--profile torrents` to get the real torrent engine.

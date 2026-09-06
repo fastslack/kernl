@@ -2,17 +2,19 @@
   "$schema": "kernl://extension/v1",
   "id": "com.kernl.mcp-bridge",
   "slug": "mcp-bridge",
-  "name": "MCP Bridge",
-  "version": "1.0.0",
+  "name": "MCP Connections",
+  "version": "2.0.0",
   "type": "module",
-  "description": "Connects to external MCP servers and injects their tools into the kernel pipeline.",
+  "description": "Connect Kernl to external MCP servers and use their tools from chat and your agents. Paste a URL and it works out the transport, the auth scheme and the OAuth endpoints on its own; sign in from the dashboard, see each connection's real status, and hand a server's tools to a specific agent. Connections reconnect without restarting the kernel.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "ai",
   "tags": [
     "mcp",
     "bridge",
-    "tools"
+    "tools",
+    "oauth",
+    "integrations"
   ],
   "kernel_min": "0.1.0",
   "permissions": [
@@ -23,7 +25,18 @@
     "entry": "backend/entry.js",
     "packages": {
       "@modelcontextprotocol/sdk": "1.26.0",
+      "uuid": "11.1.0",
       "zod": "3.25.76"
     }
+  },
+  "frontend": {
+    "pages": [
+      {
+        "view": "mcp-bridge",
+        "entry": "frontend/entry.js",
+        "title": "MCP",
+        "channels": []
+      }
+    ]
   }
 }
