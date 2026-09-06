@@ -609,6 +609,21 @@ const en: Record<string, string> = {
   "agent.skills.install_attach_title": "Install this skill, then attach it",
   "agent.skills.score_title": "Keyword overlap against this agent's prompt",
 
+  // Adding a repo from inside the tab. The caution line is not boilerplate:
+  // a skill is text that lands in the model's prompt, so this box loads a
+  // stranger's instructions on the user's say-so.
+  "agent.skills.repo_toggle": "Add skills from a repo URL",
+  "agent.skills.repo_url_placeholder": "https://github.com/owner/skills-repo",
+  "agent.skills.repo_ref_placeholder": "branch or tag (optional)",
+  "agent.skills.repo_submit": "subscribe",
+  "agent.skills.repo_cloning": "… cloning",
+  "agent.skills.repo_caution": "Skills are instructions that go into this agent's prompt. Only add repositories you trust.",
+  "agent.skills.repo_failed": "Could not subscribe:",
+  "agent.skills.repo_from": "From",
+  "agent.skills.repo_already": "Already subscribed — showing what it carries.",
+  "agent.skills.repo_no_skills": "Subscribed, but no skills were found. This repo has no SKILL.md folders — it may be an index that links to skills hosted in other repositories.",
+  "agent.skills.repo_all_attached": "Every skill in this repo is already attached to this agent.",
+
   "agent.skills.ranked_hint": "ranked, not generated",
   "agent.skills.ranked_hint_title": "Deterministic keyword + IDF overlap between this agent's prompt and each skill's text. No model is called.",
   "agent.skills.no_route_before": "This kernel has no",

@@ -1,0 +1,101 @@
+{
+  "hooks": {
+    "beforeEach": [
+      {
+        "type": "goto",
+        "value": "/login"
+      },
+      {
+        "type": "wait",
+        "value": "1500"
+      },
+      {
+        "type": "evaluate",
+        "value": "localStorage.setItem('kernel_auth_token','{{var.KERNEL_AUTH_TOKEN}}'); localStorage.setItem('kernl.welcomeSeen','1'); localStorage.setItem('kernl.setupComplete','1'); true;"
+      }
+    ]
+  },
+  "tests": [
+    {
+      "name": "Skills tab takes a repo URL and lists what the repo carries",
+      "actions": [
+        {
+          "type": "goto",
+          "value": "/agents"
+        },
+        {
+          "type": "wait",
+          "value": "5000"
+        },
+        {
+          "type": "click",
+          "text": "Web Manager"
+        },
+        {
+          "type": "wait",
+          "value": "3500"
+        },
+        {
+          "type": "evaluate",
+          "value": "window.scrollTo(0, document.body.scrollHeight); true;"
+        },
+        {
+          "type": "wait",
+          "value": "800"
+        },
+        {
+          "type": "evaluate",
+          "value": "for (const el of [document.documentElement, document.body, document.querySelector('.app-shell'), document.querySelector('.layout'), document.querySelector('.content'), document.querySelector('.app-main'), document.querySelector('main')]) { if (el) { el.style.height='auto'; el.style.maxHeight='none'; el.style.minHeight='0'; el.style.overflow='visible'; } } true;"
+        },
+        {
+          "type": "wait",
+          "value": "300"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".sk-search"
+        },
+        {
+          "type": "click",
+          "text": "Agregar skills desde una URL"
+        },
+        {
+          "type": "wait",
+          "value": "500"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".sk-repo-form"
+        },
+        {
+          "type": "screenshot",
+          "value": "skills-repo-01-form-open"
+        },
+        {
+          "type": "evaluate",
+          "value": "const i = document.querySelector('.sk-repo-form input[type=url]'); const set = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype,'value').set; set.call(i,'https://github.com/anthropics/skills'); i.dispatchEvent(new Event('input',{bubbles:true})); true;"
+        },
+        {
+          "type": "wait",
+          "value": "400"
+        },
+        {
+          "type": "click",
+          "selector": ".sk-repo-go"
+        },
+        {
+          "type": "wait",
+          "value": "8000"
+        },
+        {
+          "type": "assert_visible",
+          "selector": ".sk-repo-head"
+        },
+        {
+          "type": "screenshot",
+          "value": "skills-repo-02-listed"
+        }
+      ]
+    }
+  ]
+}

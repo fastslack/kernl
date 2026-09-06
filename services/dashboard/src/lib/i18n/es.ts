@@ -610,6 +610,21 @@ const es: Record<string, string> = {
   "agent.skills.install_attach_title": "Instalar esta skill y después attacharla",
   "agent.skills.score_title": "Coincidencia de palabras contra el prompt de este agente",
 
+  // Alta de repo desde el propio tab. La línea de precaución no es relleno:
+  // una skill es texto que entra al prompt del modelo, así que esta caja
+  // carga instrucciones de un tercero.
+  "agent.skills.repo_toggle": "Agregar skills desde una URL",
+  "agent.skills.repo_url_placeholder": "https://github.com/owner/skills-repo",
+  "agent.skills.repo_ref_placeholder": "branch o tag (opcional)",
+  "agent.skills.repo_submit": "suscribir",
+  "agent.skills.repo_cloning": "… clonando",
+  "agent.skills.repo_caution": "Las skills son instrucciones que entran al prompt de este agente. Agregá solo repositorios en los que confíes.",
+  "agent.skills.repo_failed": "No se pudo suscribir:",
+  "agent.skills.repo_from": "De",
+  "agent.skills.repo_already": "Ya estaba suscrito — mostrando lo que trae.",
+  "agent.skills.repo_no_skills": "Suscrito, pero no se encontraron skills. Este repo no tiene carpetas con SKILL.md — puede ser un índice que enlaza a skills alojadas en otros repositorios.",
+  "agent.skills.repo_all_attached": "Todas las skills de este repo ya están asignadas a este agente.",
+
   "agent.skills.ranked_hint": "rankeadas, no generadas",
   "agent.skills.ranked_hint_title": "Coincidencia determinística de palabras + IDF entre el prompt de este agente y el texto de cada skill. No se llama a ningún modelo.",
   "agent.skills.no_route_before": "Este kernel no tiene la ruta",

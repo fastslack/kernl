@@ -63,10 +63,14 @@
     skillDescription,
     skillIndexTokens,
     invalidateSkillsCache,
+    subscribeRepo,
+    loadRepoSkills,
     SKILL_INDEX_PREAMBLE_TOKENS,
     type SkillItem,
-    type SkillAgent
+    type SkillAgent,
+    type CatalogSkill
   } from '$lib/skills.js';
+  import { normalizeRepoUrl } from '$lib/skill-repos.js';
 
   // `SkillAgent` and nothing more: this tab reads `id`, `name` and
   // `skills_json`, and the three surfaces that mount it each hand over a
@@ -403,6 +407,80 @@
     if (searchedFor) await runSearch(search);
   }
 
+  // ── Add a repo by URL ─────────────────────────────────────────────
+  // The search above can only offer what some subscribed repo already
+  // carries, and subscribing used to live only on /extensions — so the
+  // answer to "this agent should know three.js" was: leave the agent, add
+  // the repo over there, come back and search again. This is that same POST,
+  // one screen earlier.
+  //
+  // What it deliberately does NOT do is manage repos. Sync, unsubscribe and
+  // install-all stay on /extensions: this tab decides one agent's skills, it
+  // is not a second catalogue admin screen.
+  //
+  // A skill is text that goes into the model's prompt, so a box that accepts
+  // any URL is a box that loads a stranger's instructions. `prompt-sanitizer`
+  // scrubs what it can and that is not the same as the content being safe —
+  // hence the caution line in the form.
+  let showAddRepo = false;
+  let repoUrl = '';
+  let repoRef = '';
+  let repoBusy = false;
+  let repoError = '';
+  let repoNotice = '';
+  /**
+   * "Already subscribed" and "this repo has no skills" are both notices, but
+   * only one of them is a problem. Rendering both in the error red said the
+   * ordinary case had gone wrong.
+   */
+  let repoNoticeKind: 'info' | 'warn' = 'warn';
+  let repoSkills: CatalogSkill[] = [];
+  let repoLabel = '';
+
+  /** "cloudai-x/threejs-skills" — the half of a clone URL worth a heading. */
+  function repoDisplayName(url: string): string {
+    const parts = normalizeRepoUrl(url).split('/').filter(Boolean);
+    return parts.slice(-2).join('/') || url;
+  }
+
+  async function addRepo(): Promise<void> {
+    const url = repoUrl.trim();
+    if (!url || repoBusy) return;
+    repoBusy = true;
+    repoError = '';
+    repoNotice = '';
+    repoSkills = [];
+    try {
+      const sub = await subscribeRepo(url, repoRef);
+      repoLabel = repoDisplayName(url);
+      // Zero found is the "awesome list" case: a README of links whose
+      // targets live in other repositories. It clones cleanly and reports
+      // success, so without this the screen just looks unchanged.
+      if (sub.itemsFound === 0) {
+        repoNoticeKind = 'warn';
+        repoNotice = $t('agent.skills.repo_no_skills');
+        return;
+      }
+      repoSkills = await loadRepoSkills(url);
+      // Counted items but none of them skills — a repo of plugins, offices
+      // or themes. Say so instead of an empty heading under a success line.
+      if (repoSkills.length === 0) {
+        repoNoticeKind = 'warn';
+        repoNotice = $t('agent.skills.repo_no_skills');
+      } else if (sub.alreadySubscribed) {
+        repoNoticeKind = 'info';
+        repoNotice = $t('agent.skills.repo_already');
+      }
+    } catch (e) {
+      repoError = (e as Error).message;
+    } finally {
+      repoBusy = false;
+    }
+  }
+
+  /** Same rule as the search list: what is attached is not on offer. */
+  $: repoRows = repoSkills.filter((e) => !attached.includes(e.slug));
+
   // ── Costs ─────────────────────────────────────────────────────────
   /** Fixed, paid on every run: the index block the executor injects. */
   $: indexCost = attached.length
@@ -668,6 +746,106 @@
         on:input={onSearchInput}
         placeholder={$t('agent.skills.search_placeholder')}
       />
+
+      <!-- The search above is bounded by what is already subscribed; this is
+           how that boundary gets moved without leaving the agent. -->
+      <button
+        class="sk-more"
+        type="button"
+        aria-expanded={showAddRepo}
+        on:click={() => (showAddRepo = !showAddRepo)}
+      >
+        {showAddRepo ? '⊖' : '⊕'}
+        {$t('agent.skills.repo_toggle')}
+      </button>
+
+      {#if showAddRepo}
+        <form class="sk-repo-form" on:submit|preventDefault={addRepo}>
+          <input
+            class="sk-search"
+            type="url"
+            bind:value={repoUrl}
+            disabled={repoBusy}
+            placeholder={$t('agent.skills.repo_url_placeholder')}
+          />
+          <div class="sk-repo-line">
+            <input
+              class="sk-search sk-repo-ref"
+              type="text"
+              bind:value={repoRef}
+              disabled={repoBusy}
+              placeholder={$t('agent.skills.repo_ref_placeholder')}
+            />
+            <button
+              class="sk-add sk-add-dl sk-repo-go"
+              type="submit"
+              disabled={repoBusy || !repoUrl.trim()}
+            >
+              {repoBusy ? $t('agent.skills.repo_cloning') : $t('agent.skills.repo_submit')}
+            </button>
+          </div>
+          <p class="sk-empty">{$t('agent.skills.repo_caution')}</p>
+        </form>
+      {/if}
+
+      {#if repoError}
+        <p class="sk-err">{$t('agent.skills.repo_failed')} {repoError}</p>
+      {/if}
+      {#if repoNotice}
+        <p class="sk-warn" class:sk-note={repoNoticeKind === 'info'}>{repoNotice}</p>
+      {/if}
+
+      {#if repoSkills.length}
+        <header class="sk-zh sk-repo-head">
+          <h3 class="sk-h">
+            {$t('agent.skills.repo_from')}
+            {repoLabel}
+            <span class="sk-c">{repoSkills.length}</span>
+          </h3>
+        </header>
+        {#if repoRows.length === 0}
+          <p class="sk-empty">{$t('agent.skills.repo_all_attached')}</p>
+        {:else}
+          <ul class="sk-list">
+            {#each repoRows as e (e.id)}
+              {@const isInstalled = bySlug.has(e.slug)}
+              <li class="sk-row">
+                <span class="sk-glyph" aria-hidden="true">{isInstalled ? '▸' : '⬇'}</span>
+                <span class="sk-main">
+                  <span class="sk-slug">{e.slug}</span>
+                  {#if e.manifest?.description}
+                    <span class="sk-desc">{e.manifest.description}</span>
+                  {/if}
+                </span>
+                {#if isInstalled}
+                  <span class="sk-cost">~{fmtTok(bodyCost(e.slug))} if loaded</span>
+                  <button
+                    class="sk-add"
+                    title={$t('agent.skills.attach_title')}
+                    on:click={() => attach(e.slug)}
+                    disabled={!!busy[e.slug]}>{busy[e.slug] ? '…' : '+'}</button
+                  >
+                {:else}
+                  <button
+                    class="sk-add sk-add-dl"
+                    title={$t('agent.skills.install_attach_title')}
+                    on:click={() => installAndAttach(e.slug, e.id)}
+                    disabled={!!busy[e.slug]}
+                    >{busy[e.slug] === 'installing'
+                      ? '… installing'
+                      : busy[e.slug]
+                        ? '…'
+                        : '↓+'}</button
+                  >
+                {/if}
+              </li>
+              {#if rowError[e.slug]}
+                <li class="sk-rowerr">{rowError[e.slug]}</li>
+              {/if}
+            {/each}
+          </ul>
+        {/if}
+      {/if}
 
       {#if searchError}
         <p class="sk-err">Catalogue search failed: {searchError}</p>
@@ -976,6 +1154,39 @@
   }
   .sk-search::placeholder {
     color: #535a6e;
+  }
+
+  /* Inline rather than a modal on purpose: this tab is mounted in the 3D
+     drawer, and a dialog layered over that canvas fights the pointer. */
+  .sk-repo-form {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .sk-repo-line {
+    display: flex;
+    gap: 6px;
+  }
+  .sk-repo-ref {
+    flex: 1;
+    min-width: 0;
+  }
+  .sk-repo-go {
+    flex: none;
+    width: auto;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
+  .sk-repo-head {
+    margin-top: 4px;
+  }
+  /* Same shape as .sk-warn, repainted: nothing went wrong here. Written as a
+     two-class selector because .sk-warn is declared further down — at equal
+     specificity it would win on source order and the notice would stay red. */
+  .sk-warn.sk-note {
+    border-color: rgba(120, 170, 255, 0.28);
+    background: rgba(120, 170, 255, 0.07);
+    color: #9fb4e8;
   }
 
   .sk-empty {

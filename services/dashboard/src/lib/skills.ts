@@ -20,6 +20,7 @@
 
 import { updateAgent } from './api.js';
 import { agentFromResponse } from './stores/agent-detail.js';
+import { normalizeRepoUrl } from './skill-repos.js';
 
 export interface SkillItem {
 	id: string;
@@ -248,3 +249,86 @@ export const SKILL_INDEX_PREAMBLE_TOKENS = Math.ceil(
 		'',
 	].join('\n').length / 4,
 );
+
+// ── Catalog repos, from inside an agent ───────────────────────────────
+//
+// Subscribing to a git repo of skills has always been possible, but only on
+// /extensions. That is the wrong place to be standing when the thought is
+// "this agent should know three.js": the answer was to leave the agent, add
+// the repo, and come back. These two functions put the same POST behind the
+// agent's Skills tab, and let it show what the repo actually brought.
+
+/** A catalogue row, narrowed to what the repo list renders and filters on. */
+export interface CatalogSkill {
+	id: string;
+	slug: string;
+	status?: string;
+	manifest?: { name?: string; description?: string } | null;
+	origin?: { provider?: string; source?: { type?: string; url?: string } };
+}
+
+export interface RepoSubscription {
+	/** True when the URL was already on the list and no clone was asked for. */
+	alreadySubscribed: boolean;
+	/**
+	 * Skills the kernel found in the repo. Zero is the "awesome list" case —
+	 * a README of links whose targets live in other repositories. It clones
+	 * cleanly and reports success, so this count is the only way to tell.
+	 */
+	itemsFound: number;
+}
+
+/**
+ * Subscribe to a git repo of skills, or report that it was already there.
+ *
+ * The pre-check is not an optimisation: `POST /api/marketplace/repos` on a
+ * known URL re-clones it, so without this the user waits through a shallow
+ * clone to arrive exactly where they started.
+ */
+export async function subscribeRepo(url: string, ref?: string): Promise<RepoSubscription> {
+	const target = normalizeRepoUrl(url);
+
+	const listed = await fetch('/api/marketplace/repos');
+	if (listed.ok) {
+		const body = (await listed.json().catch(() => ({}))) as {
+			repos?: { url: string; items_found?: number }[];
+		};
+		const existing = (body.repos ?? []).find((r) => normalizeRepoUrl(r.url) === target);
+		if (existing) {
+			return { alreadySubscribed: true, itemsFound: existing.items_found ?? 0 };
+		}
+	}
+
+	const r = await fetch('/api/marketplace/repos', {
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json' },
+		body: JSON.stringify({ url: url.trim(), ...(ref?.trim() ? { ref: ref.trim() } : {}) })
+	});
+	const body = (await r.json().catch(() => ({}))) as {
+		success?: boolean;
+		error?: string;
+		repo?: { items_found?: number };
+	};
+	if (!r.ok || !body.success) throw new Error(String(body.error ?? `HTTP ${r.status}`));
+
+	return { alreadySubscribed: false, itemsFound: body.repo?.items_found ?? 0 };
+}
+
+/**
+ * The skills one subscribed repo contributed to the catalogue.
+ *
+ * Filtered here rather than server-side because `CatalogFilter` has no repo
+ * field — `origin.source.url` is the only thread back to the repo an item
+ * came from. The whole skill shelf is a few hundred rows off a local kernel,
+ * so the cost of over-fetching is smaller than the cost of a kernel change
+ * that every dashboard would then have to require.
+ */
+export async function loadRepoSkills(url: string): Promise<CatalogSkill[]> {
+	const target = normalizeRepoUrl(url);
+	const r = await fetch('/api/marketplace/catalog?type=skill&limit=1000');
+	if (!r.ok) throw new Error(`HTTP ${r.status}`);
+	const body = (await r.json()) as { items?: CatalogSkill[] };
+	return (body.items ?? []).filter(
+		(i) => i.origin?.source?.url && normalizeRepoUrl(i.origin.source.url) === target
+	);
+}
