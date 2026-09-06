@@ -28,6 +28,28 @@ if [ -f "$CONFIG_DIR/.env" ]; then
   set +o allexport
 fi
 
+# `kernl token` — print the API token and exit.
+#
+# The launcher hands the token to the browser it opens, but that covers exactly
+# one browser on one machine. Opening the dashboard from a second browser, a
+# private window, or a phone on the LAN lands on a login form, and the only
+# answer used to be "read this dotfile", which assumes the user knows the file
+# exists and where the data dir went. One command, printable, pipeable.
+if [ "${1:-}" = "token" ]; then
+  if [ -n "${KERNEL_AUTH_TOKEN:-}" ]; then
+    echo "$KERNEL_AUTH_TOKEN"
+    exit 0
+  fi
+  TOKEN_FILE="$DATA_DIR/data/.kernel-auth-token"
+  if [ -f "$TOKEN_FILE" ]; then
+    cat "$TOKEN_FILE"
+    exit 0
+  fi
+  echo "kernl: no token yet — it is generated on the first boot." >&2
+  echo "kernl: start the kernel once (systemctl --user start kernl), then re-run this." >&2
+  exit 1
+fi
+
 # The kernel resolves data/* relative to its working directory (see
 # config.ts: `sqlite.path = ./data/kernel.db`). Anchor it to the per-user
 # data dir so each Linux account gets its own isolated DB.
@@ -50,8 +72,9 @@ if [ -z "${KERNEL_AUTH_TOKEN:-}" ]; then
     echo "kernl:   (stored in $TOKEN_FILE)" >&2
   else
     echo "kernl:   one is being generated now — it's in the log below, and in $TOKEN_FILE" >&2
-    echo "kernl:   as a service:  journalctl -u kernl | grep -m1 'Token:'" >&2
+    echo "kernl:   once it's up, print it with:  kernl token" >&2
   fi
+  echo "kernl:   print it any time with:  kernl token" >&2
   echo "kernl:   pin your own with KERNEL_AUTH_TOKEN in $CONFIG_DIR/.env" >&2
 fi
 

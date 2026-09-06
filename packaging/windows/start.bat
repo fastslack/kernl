@@ -33,6 +33,15 @@ cd /d "%DATA_DIR%"
 
 if "%DASHBOARD_PORT%"=="" set DASHBOARD_PORT=3086
 
+REM `start.bat token` — print the API token and exit.
+REM
+REM The launcher hands the token to the browser it opens, but that is one
+REM browser on one machine. A second browser, an InPrivate window or a phone on
+REM the LAN all land on the login form, and "read a dotfile under
+REM %LOCALAPPDATA%" assumes the user knows the file is there. Checked before
+REM anything is launched, so it never starts a kernel.
+if /i "%1"=="token" goto SHOW_TOKEN
+
 REM This script re-invokes itself with --open-when-ready as the browser-opening
 REM background task. Same file, so there is nothing extra to package; the flag
 REM is checked here, after the config above has been sourced, so the child sees
@@ -67,8 +76,17 @@ exit /b %ERRORLEVEL%
 
 :OPEN_WHEN_READY
 REM Wait for the kernel, then open the dashboard.
+REM
+REM Probe /api/health, not /api/manifest. Everything under /api/ needs the
+REM Bearer token except the three paths in AUTH_EXEMPT_PATHS (health, metrics,
+REM auth/verify), and this script does not pass KERNEL_ALLOW_UNAUTH — so the
+REM kernel mints a token and answers 401. `curl -sf` treats a 401 as failure,
+REM so the loop below ran its full 30 seconds and exited WITHOUT opening
+REM anything: no browser, no token hand-off, and the user was left to find
+REM localhost:3086 themselves and face a login form for a secret they had
+REM never been shown. The endpoint has to be one that answers before auth.
 for /l %%i in (1,1,30) do (
-  curl.exe -sf http://localhost:%DASHBOARD_PORT%/api/manifest >nul 2>&1 && goto OPEN_NOW
+  curl.exe -sf http://localhost:%DASHBOARD_PORT%/api/health >nul 2>&1 && goto OPEN_NOW
   timeout /t 1 /nobreak >nul
 )
 exit /b
@@ -90,3 +108,16 @@ if "%TOK%"=="" (
   start "" "http://localhost:%DASHBOARD_PORT%/login#token=!TOK!"
 )
 exit /b
+
+:SHOW_TOKEN
+if not "!KERNEL_AUTH_TOKEN!"=="" (
+  echo !KERNEL_AUTH_TOKEN!
+  exit /b 0
+)
+if exist "%DATA_DIR%\data\.kernel-auth-token" (
+  type "%DATA_DIR%\data\.kernel-auth-token"
+  exit /b 0
+)
+echo kernl: no token yet - it is generated on the first boot. 1>&2
+echo kernl: run start.bat once, then re-run this. 1>&2
+exit /b 1

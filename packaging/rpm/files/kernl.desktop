@@ -4,7 +4,7 @@ Type=Application
 Name=Kernl
 GenericName=Personal MCP Server
 Comment=Tasks, contacts, reminders, finances, notes — all in one
-Exec=sh -c '(systemctl --user is-active --quiet kernl || systemctl --user start kernl) && for i in $(seq 1 30); do curl -sf http://localhost:${DASHBOARD_PORT:-3086}/api/manifest >/dev/null 2>&1 && break; sleep 1; done && xdg-open http://localhost:${DASHBOARD_PORT:-3086}'
+Exec=sh -c '(systemctl --user is-active --quiet kernl || systemctl --user start kernl) && P=${DASHBOARD_PORT:-3086}; for i in $(seq 1 30); do curl -sf http://localhost:$P/api/health >/dev/null 2>&1 && break; sleep 1; done; D=${KERNEL_DATA_DIR:-$HOME/.local/share/kernl}; T=${KERNEL_AUTH_TOKEN:-$(cat $D/data/.kernel-auth-token 2>/dev/null)}; if [ -n "$T" ]; then xdg-open http://localhost:$P/login#token=$T; else xdg-open http://localhost:$P; fi'
 Icon=kernl
 Terminal=false
 StartupNotify=true

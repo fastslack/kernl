@@ -451,8 +451,8 @@ const en: Record<string, string> = {
   "login.button_save": "save & enter",
   "login.button_verifying": "verifying…",
   "login.button_clear": "clear",
-  "login.tip_host": "your kernel generated a token on first boot — from its data dir, ",
-  "login.tip_docker": "on the Docker stack, ",
+  "login.where": "your kernel generated a token on first boot — print it with:",
+  "login.where_other": "other installs",
   "login.tip_oauth": "stage 1 of the roadmap replaces this form with \"Continue with Google\".",
 
   // ── Welcome (post-install onboarding) ─────────────────────────────────

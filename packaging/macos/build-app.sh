@@ -91,6 +91,27 @@ if [ -f "$CONFIG_DIR/.env" ]; then
   set +o allexport
 fi
 
+# `Kernl.app/Contents/MacOS/kernl token` — print the API token and exit.
+#
+# The launcher hands the token to the browser it opens, but that is one browser
+# on one machine. A second browser, a private window or a phone on the LAN all
+# land on the login form, and "read a dotfile inside Application Support"
+# assumes the user knows the file exists. Runs before the data dir is anchored
+# and before anything is spawned, so it is instant and never starts a kernel.
+if [ "${1:-}" = "token" ]; then
+  if [ -n "${KERNEL_AUTH_TOKEN:-}" ]; then
+    echo "$KERNEL_AUTH_TOKEN"
+    exit 0
+  fi
+  if [ -f "$DATA_DIR/data/.kernel-auth-token" ]; then
+    cat "$DATA_DIR/data/.kernel-auth-token"
+    exit 0
+  fi
+  echo "kernl: no token yet — it is generated on the first boot." >&2
+  echo "kernl: open Kernl once, then re-run this." >&2
+  exit 1
+fi
+
 # Anchor SQLite + workspaces under the per-user data dir.
 cd "$DATA_DIR"
 
@@ -102,9 +123,17 @@ cd "$DATA_DIR"
 # never sent to the server, so it stays out of logs — and the login page signs
 # in with it and wipes it from the URL. Without this the first thing a new user
 # sees is a login form asking for a secret nobody showed them.
+#
+# The readiness probe must be /api/health, not /api/manifest. Everything under
+# /api/ requires the Bearer token except the three paths in AUTH_EXEMPT_PATHS
+# (health, metrics, auth/verify), and this launcher does not pass
+# KERNEL_ALLOW_UNAUTH — so the kernel mints a token and answers 401. `curl -sf`
+# counts a 401 as failure, so this loop ran all 30 seconds and exited WITHOUT
+# calling `open` at all: no browser, no hand-off, and the careful fragment
+# logic below never executed once. Probe something that answers before auth.
 (
   for _ in $(seq 1 30); do
-    if curl -sf "http://localhost:${DASHBOARD_PORT:-3086}/api/manifest" >/dev/null 2>&1; then
+    if curl -sf "http://localhost:${DASHBOARD_PORT:-3086}/api/health" >/dev/null 2>&1; then
       URL="http://localhost:${DASHBOARD_PORT:-3086}"
       TOKEN="${KERNEL_AUTH_TOKEN:-}"
       if [ -z "$TOKEN" ] && [ -f "$DATA_DIR/data/.kernel-auth-token" ]; then

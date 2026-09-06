@@ -12,14 +12,47 @@ one on first boot rather than running open.
 Authorization: Bearer <your-token>
 ```
 
-Find the generated token in `<data dir>/.kernel-auth-token` (mode 600), or on
-the Docker stack:
+The desktop launchers hand the token to the browser they open (in the URL
+fragment, which never reaches the server), so a normal first run never asks for
+it. You need it by hand when you open the dashboard from a *second* browser, a
+private window, or another device on the LAN — the token lives in that first
+browser's `localStorage` and nowhere else.
 
-```bash
-docker compose exec kernel cat /app/data/.kernel-auth-token
-```
+To print it:
+
+| Install | Command |
+|---------|---------|
+| Linux (.deb/.rpm) | `kernl token` |
+| macOS (.app) | `/Applications/Kernl.app/Contents/MacOS/kernl token` |
+| Windows (.msi/.zip) | `type %LOCALAPPDATA%\Kernl\data\.kernel-auth-token` |
+| Docker | `docker compose exec kernel cat /app/data/.kernel-auth-token` |
+| From source | `cat data/.kernel-auth-token` |
+
+It is generated on the first boot and persisted at `<data dir>/.kernel-auth-token`
+(mode 600), so it survives restarts. Pin your own with `KERNEL_AUTH_TOKEN` in
+`.env` (at least 32 chars — the kernel exits on a shorter one).
+
+Data dirs per platform:
+
+| Platform | `<data dir>` |
+|----------|--------------|
+| Linux | `~/.local/share/kernl/data` |
+| macOS | `~/Library/Application Support/Kernl/data` |
+| Windows | `%LOCALAPPDATA%\Kernl\data` |
+| Docker | `/app/data` (inside the container) |
 
 Exempt: `/api/health`, `/api/metrics`, `/api/auth/verify`.
+
+**The one way to run open** is `KERNEL_ALLOW_UNAUTH=1`, and it is loopback-only
+by construction: with no token configured, `resolveSecureBind()` forces the
+listener to `127.0.0.1` unless you *also* set `KERNEL_DASHBOARD_BIND`
+explicitly. Understand what that costs before using it — there is no CSRF
+defense behind the token. Nothing checks `Origin` or `Referer`, and
+`parseBody()` parses JSON regardless of `Content-Type`, so with auth off any
+web page the user has open can POST to `localhost:3086` with a simple
+cross-origin request and reach mail, files, agents and stored provider keys. In
+a browser, localhost is not a security boundary. Keep it for containers and
+tests, not for desktop installs.
 
 Responses carry `Access-Control-Allow-Origin` only for an origin listed in
 `CORS_ALLOWED_ORIGINS`. With that unset — the default — the API answers

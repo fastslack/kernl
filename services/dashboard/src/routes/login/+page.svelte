@@ -14,8 +14,40 @@
   let error = '';
   let next = '/';
 
+  /**
+   * How to print the token, per install.
+   *
+   * The old footer said `cat data/.kernel-auth-token` — a relative path, which
+   * is only actionable if you already know which directory to stand in. On a
+   * desktop install nobody does: the data dir is buried under
+   * %LOCALAPPDATA% or ~/Library/Application Support, and neither is anywhere
+   * the user has been. These are absolute, and the Linux and macOS ones are the
+   * `token` subcommand the launcher scripts now expose.
+   *
+   * Not translated: they are commands to type, not prose.
+   */
+  const TOKEN_HINTS = [
+    { id: 'windows', label: 'Windows', cmd: 'type %LOCALAPPDATA%\\Kernl\\data\\.kernel-auth-token' },
+    { id: 'macos',   label: 'macOS',   cmd: '/Applications/Kernl.app/Contents/MacOS/kernl token' },
+    { id: 'linux',   label: 'Linux',   cmd: 'kernl token' },
+    { id: 'docker',  label: 'Docker',  cmd: 'docker compose exec kernel cat /app/data/.kernel-auth-token' },
+  ] as const;
+
+  // Guess from the user agent so the line that applies is the one on screen,
+  // and put the rest one click away rather than in a wall of four. A wrong
+  // guess costs a click, never an answer — every option stays reachable.
+  let guessed: string = 'linux';
+  function guessPlatform(ua: string): string {
+    if (/Win/i.test(ua)) return 'windows';
+    if (/Mac/i.test(ua)) return 'macos';
+    return 'linux';
+  }
+  $: primary = TOKEN_HINTS.find((h) => h.id === guessed) ?? TOKEN_HINTS[2];
+  $: others = TOKEN_HINTS.filter((h) => h.id !== primary.id);
+
   onMount(() => {
     initLocale();
+    guessed = guessPlatform(navigator.userAgent);
     const url = new URL(window.location.href);
     next = url.searchParams.get('next') || '/';
 
@@ -109,8 +141,14 @@
     </div>
 
     <footer class="dim">
-      <p>{$t('login.tip_host')}<code>cat data/.kernel-auth-token</code></p>
-      <p>{$t('login.tip_docker')}<code>docker compose exec kernel cat /app/data/.kernel-auth-token</code></p>
+      <p>{$t('login.where')}</p>
+      <p><code>{primary.cmd}</code></p>
+      <details class="where-more">
+        <summary>{$t('login.where_other')}</summary>
+        {#each others as h (h.id)}
+          <p class="where-row"><span class="where-os">{h.label}</span><code>{h.cmd}</code></p>
+        {/each}
+      </details>
       <p class="hint">{$t('login.tip_oauth')}</p>
     </footer>
   </div>
@@ -195,5 +233,19 @@
   footer { font-size: 10px; line-height: 1.6; }
   footer p { margin: 0; }
   footer code { background: #0B0D12; padding: 1px 5px; border-radius: 2px; }
+  /* The command is meant to be typed or copied — let it wrap rather than
+     overflow the card, and make it selectable as one run. */
+  footer code { display: inline-block; max-width: 100%; overflow-wrap: anywhere; }
+  .where-more { margin-top: 6px; }
+  .where-more summary {
+    cursor: pointer;
+    opacity: 0.75;
+    list-style: none;
+  }
+  .where-more summary::before { content: '+ '; }
+  .where-more[open] summary::before { content: '− '; }
+  .where-more summary::-webkit-details-marker { display: none; }
+  .where-row { display: flex; gap: 6px; align-items: baseline; margin-top: 3px !important; }
+  .where-os { flex: 0 0 48px; opacity: 0.7; }
   .hint { margin-top: 6px !important; font-style: italic; }
 </style>

@@ -16,7 +16,12 @@ Kernl installed.
 
   Start:        systemctl --user enable --now kernl
                 (or just run \`kernl\` from a terminal)
-  Open:         xdg-open http://localhost:3086
+  Open:         the Kernl launcher in your desktop menu — it waits for the
+                kernel and signs the browser in for you.
+  Your token:   kernl token
+                The API needs a Bearer token, generated on first boot. The
+                launcher hands it over automatically; you only need to see it
+                to sign in from a second browser or another device.
   Configure:    cp /etc/kernl/env.example ~/.config/kernl/.env
                 then edit (port, encryption key, LLM API keys, etc.)
 

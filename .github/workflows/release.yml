@@ -363,8 +363,11 @@ jobs:
           Start-Process cmd.exe -ArgumentList "/c", "`"`"$dir\start.bat`" > `"$log`" 2>&1`"" `
             -WindowStyle Hidden
 
-          # /api/manifest is the readiness probe start.bat itself waits on, so
-          # it is the product's own definition of "up".
+          # /api/health is the readiness probe start.bat itself waits on, so
+          # it is the product's own definition of "up". Keep the two the same:
+          # this job passed for months against /api/manifest while start.bat
+          # could never get past it, because the workaround below hid the 401
+          # here and there is no equivalent for `curl -sf` over there.
           # 5 minutes. The first boot seeds agents, offices and drivers and
           # loads an ONNX embedding model, none of which is instant on a cold
           # runner — and a timeout that fires early is indistinguishable from
@@ -377,10 +380,10 @@ jobs:
           $ready = $false
           foreach ($i in 1..150) {
             try {
-              $probe = Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/manifest" `
+              $probe = Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/health" `
                          -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
               if ($probe.StatusCode -gt 0) {
-                Write-Host "kernel answered $($probe.StatusCode) on /api/manifest"
+                Write-Host "kernel answered $($probe.StatusCode) on /api/health"
                 $ready = $true; break
               }
             } catch { Start-Sleep -Seconds 2 }

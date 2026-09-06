@@ -251,7 +251,7 @@ Two secrets are generated and persisted on first boot if you don't set them:
 
 | Variable | If unset |
 |---|---|
-| `KERNEL_AUTH_TOKEN` | A random token is generated and stored as `data/.kernel-auth-token` (mode 600). The API always requires it — there is no unauthenticated mode. |
+| `KERNEL_AUTH_TOKEN` | A random token is generated and stored as `data/.kernel-auth-token` (mode 600). The API requires it; the desktop launchers hand it to the browser they open, so you only type it when signing in from a second browser or another device. Print it with `kernl token` (Linux), `/Applications/Kernl.app/Contents/MacOS/kernl token` (macOS), or `type %LOCALAPPDATA%\Kernl\data\.kernel-auth-token` (Windows). `KERNEL_ALLOW_UNAUTH=1` runs open, but only ever on `127.0.0.1` — see [API_DOCS](docs/API_DOCS.md#authentication) for why that is still a worse trade than it looks. |
 | `KERNEL_ENCRYPTION_KEY` | A random 32-byte key is generated and stored as `data/.kernel-encryption-key`. **Back this file up** — without it, encrypted secrets in the database are unrecoverable. |
 
 The host-path variables (`HOST_HOME`, `HOST_KERNEL_ROOT`, `HOST_PROJECTS_ROOT`)
