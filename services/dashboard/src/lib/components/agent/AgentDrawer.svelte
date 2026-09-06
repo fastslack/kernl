@@ -152,6 +152,50 @@
   // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps/Repos
   // office? If so, offer a deep-link to the paid DevOps control panel (/devops).
   $: devopsOffice = /^(devops|repos)/i.test(flow?.name || '');
+  // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
+  // office is watching it happen — so the drawer offers the way through. The
+  // link carries no piece id on purpose: Scene Studio opens whichever piece is
+  // moving, which is the one the operator came to see.
+  $: creativosOffice = /^creativos/i.test(flow?.name || '');
+
+  // ── Live scene preview ──────────────────────────────────────
+  //
+  // An iframe onto a page the Scene Studio extension serves, rather than 3D
+  // rendered here: the free dashboard has no business importing a paid
+  // extension's renderer, and the extension already owns one that is kept in
+  // step with the kernel's scene semantics.
+  //
+  // The iframe is only created while the modal is open, so a closed preview
+  // holds no WebGL context and no SSE connection.
+  let sceneOpen = false;
+  let sceneBig = false;
+  let scenePanel: HTMLDivElement | null = null;
+  let sceneFull = false;
+
+  function closeScene(): void {
+    sceneOpen = false;
+    sceneBig = false;
+  }
+
+  async function toggleSceneFullscreen(): Promise<void> {
+    try {
+      if (document.fullscreenElement) await document.exitFullscreen();
+      else if (scenePanel) await scenePanel.requestFullscreen();
+    } catch {
+      // Refused by the browser (permissions policy, or no user gesture in the
+      // chain). The enlarge toggle still works, so this is not worth an alert.
+    }
+  }
+
+  function onSceneKeydown(e: KeyboardEvent): void {
+    // Escape already exits fullscreen on its own; only close the modal once
+    // the page is back to normal, or one press would do both.
+    if (e.key === 'Escape' && !document.fullscreenElement) closeScene();
+  }
+
+  function syncFullscreenFlag(): void {
+    sceneFull = Boolean(document.fullscreenElement);
+  }
 
   /** "3h ago" / "2d ago" — coarse on purpose; the exact stamp is in the title. */
   function sinceLabel(iso: string): string {
@@ -293,6 +337,12 @@
             <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
           </a>
         {/if}
+        {#if creativosOffice}
+          <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
+                  title="Watch this office draw, live, without leaving the office">
+            <span class="ip-btn-ico">🎬</span><span>Ver en vivo</span>
+          </button>
+        {/if}
         {#if agent.under_revision}
           <button class="ip-btn ip-btn-accept" on:click={() => dispatch('revision', { mode: 'accept' })} disabled={revisionBusy}
                   title={$t('agent.drawer.accept_title')}>
@@ -400,6 +450,30 @@
       {/if}
     </div>
   {/if}
+
+<svelte:window on:keydown={onSceneKeydown} on:fullscreenchange={syncFullscreenFlag} />
+
+{#if sceneOpen}
+  <!-- Live preview of whatever this office is drawing right now. The iframe
+       points at a page the Scene Studio extension serves; the dashboard never
+       touches the 3D itself. -->
+  <div class="sc-veil" role="presentation" on:click={closeScene}></div>
+  <div class="sc-panel" class:big={sceneBig} class:full={sceneFull}
+       bind:this={scenePanel} role="dialog" aria-modal="true" aria-label="Live scene preview">
+    <header class="sc-head">
+      <span class="sc-title">🎬 Scene Studio</span>
+      <span class="sc-sub">en vivo</span>
+      <span class="sc-spacer"></span>
+      <button class="sc-act" on:click={() => (sceneBig = !sceneBig)}
+              title={sceneBig ? 'Reducir' : 'Agrandar'}>{sceneBig ? '⤡' : '⤢'}</button>
+      <button class="sc-act" on:click={toggleSceneFullscreen}
+              title="Pantalla completa">{sceneFull ? '⤓' : '⛶'}</button>
+      <a class="sc-act" href="/scene" title="Abrir Scene Studio">↗</a>
+      <button class="sc-act sc-close" on:click={closeScene} title="Cerrar">×</button>
+    </header>
+    <iframe class="sc-frame" src="/ext-assets/scene/embed.html" title="Live scene preview"></iframe>
+  </div>
+{/if}
 
 <style>
   /* ═══════════════════════════════════════════════════════════════
@@ -595,6 +669,14 @@
   }
   .ip-btn-resume:hover:not(:disabled){background:rgba(120,220,140,.18);border-color:rgba(120,220,140,.55)}
   .ip-btn-resume:disabled{opacity:.5;cursor:wait}
+  /* Watch-live link (CREATIVOS → Scene Studio). Violet to match that office's
+     colour, so the way through is findable without reading the label. */
+  .ip-btn-live{
+    background:rgba(168,85,247,.10);
+    border-color:rgba(168,85,247,.38);
+    color:#c9a2fb;
+  }
+  .ip-btn-live:hover{background:rgba(168,85,247,.20);border-color:rgba(168,85,247,.60)}
   /* REVISION resolution buttons — only shown when agent.under_revision = 1.
    * Green accept (mirror of ip-btn-resume), orange reject (matches the REVISION
    * pill that lives over the agent's head in the 3D office). */
@@ -722,5 +804,62 @@
   @keyframes live-pulse{
     0%,100%{opacity:1;transform:scale(1)}
     50%{opacity:.45;transform:scale(.82)}
+  }
+
+  /* ═══════════════════════════════════════════════════════════════
+     LIVE SCENE PREVIEW — modal over the 3D office
+     ═══════════════════════════════════════════════════════════════ */
+  .sc-veil{
+    position:fixed;inset:0;z-index:9998;
+    background:rgba(4,6,12,.72);
+    backdrop-filter:blur(2px);
+  }
+  .sc-panel{
+    position:fixed;z-index:9999;
+    top:50%;left:50%;transform:translate(-50%,-50%);
+    width:min(760px,92vw);height:min(520px,80vh);
+    display:flex;flex-direction:column;
+    background:#0b0d14;
+    border:1px solid rgba(168,85,247,.35);
+    border-radius:12px;
+    box-shadow:0 24px 70px rgba(0,0,0,.6);
+    overflow:hidden;
+    transition:width .18s ease,height .18s ease;
+  }
+  .sc-panel.big{width:94vw;height:90vh}
+  /* In fullscreen the element IS the viewport: centring transforms would push
+     it off-screen. */
+  .sc-panel.full{
+    top:0;left:0;transform:none;
+    width:100vw;height:100vh;border:none;border-radius:0;
+  }
+  .sc-head{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 10px;flex:none;
+    background:#12141c;
+    border-bottom:1px solid #232736;
+  }
+  .sc-title{font:600 12px/1 'Syne',sans-serif;color:#e8eaf2}
+  .sc-sub{
+    font:600 9px/1 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;
+    color:#4ade80;background:rgba(74,222,128,.10);
+    border:1px solid rgba(74,222,128,.30);border-radius:999px;padding:3px 7px;
+  }
+  .sc-spacer{flex:1}
+  .sc-act{
+    display:inline-flex;align-items:center;justify-content:center;
+    min-width:28px;height:28px;padding:0 7px;
+    background:rgba(255,255,255,.04);
+    border:1px solid rgba(255,255,255,.10);
+    border-radius:7px;color:#c3cadd;cursor:pointer;
+    font-size:13px;line-height:1;text-decoration:none;
+    transition:background .12s,border-color .12s;
+  }
+  .sc-act:hover{background:rgba(255,255,255,.10);border-color:rgba(255,255,255,.22)}
+  .sc-act:focus-visible{outline:2px solid #a855f7;outline-offset:2px}
+  .sc-close:hover{background:rgba(248,113,113,.14);border-color:rgba(248,113,113,.45);color:#f87171}
+  .sc-frame{
+    flex:1;min-height:0;width:100%;
+    border:0;display:block;background:#0b0d14;
   }
 </style>

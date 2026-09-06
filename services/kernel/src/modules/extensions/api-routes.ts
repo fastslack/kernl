@@ -214,6 +214,15 @@ export function registerExtensionsRoutes(
   // level as the SPA chunks. Data access still goes through /api/* with auth.
 
   const EXT_ASSET_MIME: Record<string, string> = {
+    // HTML lets an extension ship a standalone page the dashboard can embed in
+    // an iframe — how Scene Studio shows a live preview inside the agent
+    // drawer without the free shell needing to know anything about three.js.
+    // Not a new trust boundary: these same directories already serve the
+    // JavaScript that runs inside the dashboard, which is strictly more
+    // powerful than a document served beside it. Same-origin is the point —
+    // the page reads the auth token from localStorage instead of taking one
+    // through the URL.
+    html: "text/html; charset=utf-8",
     js: "application/javascript; charset=utf-8",
     mjs: "application/javascript; charset=utf-8",
     css: "text/css; charset=utf-8",
