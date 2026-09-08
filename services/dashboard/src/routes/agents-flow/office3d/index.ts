@@ -30,7 +30,7 @@ export type { AgentData, ChainData, FlowData, StatsData, Vec3, Walker, RoomInfo,
 export {
   createAnimationRegistry, initAnimEffects,
   cameraTween, haloPulse, risingParticles, bubbleFade, materialPulse,
-  floatingGlyph, shake, convergingParticles, fallingGlyph, spinningGear,
+  floatingGlyph, shake, convergingParticles, fallingGlyph,
   curvedArrow, paperPlane, pillarOfLight,
   tickerCard, candlestick, coinTrail, priceLine, chyronLabel,
   createNoteStack,

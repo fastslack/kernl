@@ -27,7 +27,7 @@
     initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis,
     createAnimationRegistry, initAnimEffects,
     cameraTween, haloPulse, risingParticles, bubbleFade, materialPulse,
-    floatingGlyph, shake, convergingParticles, fallingGlyph, spinningGear,
+    floatingGlyph, shake, convergingParticles, fallingGlyph,
     curvedArrow, paperPlane, pillarOfLight, coinTrail, chyronLabel,
     createNoteStack, type NoteStack,
     runTradeExecution,
@@ -322,16 +322,13 @@
     fn();
   }
 
-  // ── Ambient FX budget ──────────────────────────────────────────────────
-  // The "thinking" gears (one per active agent's tool call / thought) are the
-  // only effect with an unbounded population — every running agent could spawn
-  // one each frame. Cap concurrent ambient FX so a 200-agent stampede can't
-  // flood the registry. Combined with the per-tag debounce + frustum cull, the
-  // visible cost stays bounded. The counter is incremented at spawn and
-  // decremented when the effect's lifetime elapses (setTimeout matching the
-  // effect's durationSec — simplest reliable decrement).
-  const MAX_AMBIENT_FX = 12;
-  let ambientFxCount = 0;
+  // ── Ambient FX population ──────────────────────────────────────────────
+  // Thinking used to spawn one floating glyph per agent per event, which is
+  // unbounded — hence the old concurrent-FX counter. It no longer is: thinking
+  // now lives in the agent's own tag, and an agent has exactly one tag, so a
+  // 200-agent stampede costs 200 CSS animations the browser composites for
+  // free. What survives here is the frustum cull, which still keeps the
+  // per-desk monitor pulse off desks nobody is looking at.
   const _deskViewVec = { x: 0, y: 0, z: 0 };
   /** True if the agent's desk world position is inside the camera frustum.
    *  Mirrors the seated-worker cull (humanoidPool.update → frustum.containsPoint).
@@ -356,27 +353,21 @@
   let seenAgentIds = new Set<string>();
   let onboardingPrimed = false;
 
-  /** (#F1) Spawn the "thinking" 3D effect over an agent's desk: a small spinning
-   *  gear above the head + a brief monitor-screen emissive pulse. Gated by the
-   *  frustum cull + ambient-FX cap + a ~1.5s per-agent debounce. */
-  function spawnThinkingFx(aid: string): void {
+  /** (#F1) The desk half of "this agent is thinking": a brief emissive pulse on
+   *  its monitor, so the office itself flickers with activity. The readable
+   *  half is `showThinkingTag`, in the agent's own nameplate.
+   *
+   *  There used to be a spinning ⚙️ floating over the head here too. It was the
+   *  loudest thing on screen and, at the distance this camera actually sits, a
+   *  rotating glyph reads as a vibrating speck — so it is gone, not restyled.
+   *
+   *  Gated by the frustum cull + a ~1.5s per-agent debounce. */
+  function pulseThinkingMonitor(aid: string): void {
     if (!aid || !scene || !THREE) return;
     if (!deskInView(aid)) return;
-    if (ambientFxCount >= MAX_AMBIENT_FX) return;
     const dg = deskGroups.get(aid);
     if (!dg) return;
     tryFireAnim(`think:${aid}`, 1.5, () => {
-      const gearDur = 1.4;
-      ambientFxCount++;
-      animRegistry.add(spinningGear(dg, {
-        startY: 3.2,
-        durationSec: gearDur,
-        color: flowColor(aid),
-        tag: `think:${aid}`,
-      }));
-      // Decrement the budget when the gear's lifetime elapses. The registry
-      // disposes the ticker itself; this only frees the slot counter.
-      setTimeout(() => { ambientFxCount = Math.max(0, ambientFxCount - 1); }, gearDur * 1000 + 50);
       // Monitor-screen pulse — reach the per-desk monitor material tagged by
       // buildDesks (group.userData._monitor). Pulse emissiveIntensity briefly.
       const monMat = dg.userData?._monitor?.material;
@@ -387,7 +378,7 @@
           min: Math.max(0.05, base * 0.7),
           max: Math.min(1.0, base + 0.5),
           speed: 6,
-          durationSec: gearDur,
+          durationSec: 1.4,
           tag: `think-mon:${aid}`,
         }));
       }
@@ -1931,6 +1922,10 @@
     const sp = statusSpan(color);
     sp.className = `atag atag-anim-${opts.anim ?? 'pulse'}`;
     const ico = document.createElement('span');
+    // The keyframes hang off `.atag-anim-<x> .atag-icon`. Without this class
+    // every tag rendered as a static glyph — the animations below were dead
+    // code, which is why the floating gear was the only motion on screen.
+    ico.className = 'atag-icon';
     ico.textContent = opts.icon;
     ico.style.cssText = `font-size:11px;line-height:1;color:${color}`;
     sp.appendChild(ico);
@@ -1943,6 +1938,34 @@
       sp.appendChild(lb);
     }
     mountAgentStatus(aid, sp, opts.durationFrames ?? 200);
+  }
+
+  /** The "thinking" tag: three dots breathing in sequence inside the agent's
+   *  own nameplate, in its flow colour.
+   *
+   *  Dots rather than a glyph on purpose. This chip is ~11px at a camera that
+   *  usually sits well back, so anything with internal detail (a gear, a 💭)
+   *  turns to mush; three moving dots survive the distance because the motion
+   *  IS the shape. They also read as "working, not stuck" without claiming a
+   *  step happened — which is exactly what a thought is.
+   *
+   *  Pure CSS: the browser composites it off the main thread, so a room full
+   *  of thinking agents costs no per-frame JS. */
+  function showThinkingTag(aid: string, durationFrames = 150): void {
+    if (!aid) return;
+    const color = flowColor(aid);
+    const sp = statusSpan(color);
+    sp.className = 'atag atag-think';
+    sp.style.gap = '3px';   // inline: statusSpan's own inline gap would win otherwise
+    for (let i = 0; i < 3; i++) {
+      const dot = document.createElement('i');
+      dot.className = 'atag-think-dot';
+      // Colour drives background + glow through currentColor; the stagger is
+      // what turns three pulsing dots into one travelling wave.
+      dot.style.cssText = `color:${color};animation-delay:${(i * 0.16).toFixed(2)}s`;
+      sp.appendChild(dot);
+    }
+    mountAgentStatus(aid, sp, durationFrames);
   }
 
   // ── Meeting decor (halo + topic banner) ─────────
@@ -3019,8 +3042,10 @@
 
       if (t === 'run_started') {
         showAnimatedTag(aid, { icon: '▶️', anim: 'pulse', label: 'RUN', durationFrames: 300 });
-        // (#F1) "Thinking" 3D — kick the head gear when the run kicks off.
-        spawnThinkingFx(aid);
+        // (#F1) "Thinking" — dots in the agent's tag + a monitor flicker, so a
+        // run that has produced no step yet still looks alive.
+        showThinkingTag(aid);
+        pulseThinkingMonitor(aid);
         // External message arriving → dispatch a delivery truck that drops a
         // package at reception, then the recipient agent picks it up.
         triggerDeliveryForAgent(aid, sceneTimeSec);
@@ -3156,19 +3181,21 @@
       } else if (t === 'step') {
         const st = String(e.data.type ?? '');
         if (st === 'tool_call') {
-          // (#2) Animated category icon spinning inside the tag.
+          // (#2) Category icon breathing inside the tag. It used to spin: an
+          // emoji rotating about its own centre at this size reads as a
+          // wobbling blob, and the glyph is the point — you should be able to
+          // tell 📧 from 🔍 at a glance, which a spin actively prevents.
           const toolName = String(e.data.tool_name ?? 'tool');
           tryFireAnim(`tool:${aid}`, 1.0, () => {
             showAnimatedTag(aid, {
-              icon: toolGlyph(toolName), anim: 'spin',
+              icon: toolGlyph(toolName), anim: 'pulse',
               label: toolName.slice(0, 16),
               durationFrames: 130,
             });
           });
-          // (#F1) "Thinking" 3D — a small spinning gear above the agent's head
-          // plus a brief monitor-screen pulse. Capped + frustum-culled +
-          // debounced so a roomful of busy agents stays cheap.
-          spawnThinkingFx(aid);
+          // (#F1) The desk flickers along with it. No tag here — the tool tag
+          // above already owns the chip, and an agent only ever shows one.
+          pulseThinkingMonitor(aid);
           // ── Top-agent-only command effects ────────────────────────
           // When the top agent fires an agent/flow CRUD tool, mark
           // it visually so the user can see the order being issued. A
@@ -3200,12 +3227,13 @@
             }
           }
         } else if (st === 'thought') {
-          // (#1) 💭 pulses inside the tag.
+          // (#1) The thinking dots. They replace a pulsing 💭: at office
+          // distance the emoji was a grey smudge, and a thought is the one
+          // event with nothing concrete to name — so show rhythm, not a noun.
           tryFireAnim(`thought:${aid}`, 1.0, () => {
-            showAnimatedTag(aid, { icon: '💭', anim: 'pulse', durationFrames: 110 });
+            showThinkingTag(aid, 110);
           });
-          // (#F1) "Thinking" 3D — also fire the head gear on raw thoughts.
-          spawnThinkingFx(aid);
+          pulseThinkingMonitor(aid);
         }
       }
       // ── Autonomy loop animations (auto-eval + learning lifecycle) ──
@@ -3527,10 +3555,11 @@
             sendWalker(scene, walkers, mgrId, tgtId, deskPos, roomMap, corGrid, agents, '#C67FE8', undefined, sittingWorkers, deskAabbs);
           }
         }
-        // (#6) ⚙️ spins inside the target's tag — the gear animates via CSS
-        // keyframes, no separate floating-glyph layer needed.
+        // (#6) A pencil tilting inside the target's tag. It was a spinning ⚙️:
+        // the gear is what an agent's config looks like in a settings menu, not
+        // what "someone just rewrote your brain" looks like over a desk.
         if (tgtId) tryFireAnim(`edit:${tgtId}`, 2.0, () => {
-          showAnimatedTag(tgtId, { icon: '⚙️', anim: 'spin', color: '#C67FE8', label: 'EDITED', durationFrames: 260 });
+          showAnimatedTag(tgtId, { icon: '✎', anim: 'wobble', color: '#C67FE8', label: 'EDITED', durationFrames: 260 });
         });
         pushMgmtLog({
           kind: 'edit',
@@ -11452,14 +11481,40 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     animation-timing-function: ease-in-out;
     will-change: transform, filter;
   }
-  :global(.atag-anim-pulse   .atag-icon) { animation-name: -global-tag-pulse;   animation-duration: 1.0s; }
-  :global(.atag-anim-spin    .atag-icon) { animation-name: -global-tag-spin;    animation-duration: 1.6s; animation-timing-function: linear; }
-  :global(.atag-anim-shake   .atag-icon) { animation-name: -global-tag-shake;   animation-duration: .55s; animation-iteration-count: 3; }
-  :global(.atag-anim-wobble  .atag-icon) { animation-name: -global-tag-wobble;  animation-duration: .8s; }
-  :global(.atag-anim-bounce  .atag-icon) { animation-name: -global-tag-bounce;  animation-duration: .65s; }
-  :global(.atag-anim-sparkle .atag-icon) { animation-name: -global-tag-sparkle; animation-duration: .9s; }
-  :global(.atag-anim-pop     .atag-icon) { animation-name: -global-tag-pop;     animation-duration: .45s; animation-iteration-count: 1; }
-  :global(.atag) { animation: -global-tag-card-in .22s cubic-bezier(.17,.88,.32,1.28); }
+  :global(.atag-anim-pulse   .atag-icon) { animation-name: tag-pulse;   animation-duration: 1.0s; }
+  :global(.atag-anim-spin    .atag-icon) { animation-name: tag-spin;    animation-duration: 1.6s; animation-timing-function: linear; }
+  :global(.atag-anim-shake   .atag-icon) { animation-name: tag-shake;   animation-duration: .55s; animation-iteration-count: 3; }
+  :global(.atag-anim-wobble  .atag-icon) { animation-name: tag-wobble;  animation-duration: .8s; }
+  :global(.atag-anim-bounce  .atag-icon) { animation-name: tag-bounce;  animation-duration: .65s; }
+  :global(.atag-anim-sparkle .atag-icon) { animation-name: tag-sparkle; animation-duration: .9s; }
+  :global(.atag-anim-pop     .atag-icon) { animation-name: tag-pop;     animation-duration: .45s; animation-iteration-count: 1; }
+  :global(.atag) { animation: tag-card-in .22s cubic-bezier(.17,.88,.32,1.28); }
+  /* ── "Thinking" dots ───────────────────────────────────────────────
+     Three dots lifting and brightening in sequence, 160ms apart, so the
+     highlight travels left-to-right and loops without a seam. The dot is
+     never fully out — it drops to 38% and 72% scale, which keeps three
+     dots legible as three dots at distance instead of blinking down to a
+     single moving speck. `currentColor` carries the agent's flow colour
+     into both the fill and the glow, so the tag matches the walkers and
+     beams that agent already owns elsewhere in the scene. */
+  @keyframes -global-tag-think-dot {
+    0%, 70%, 100% { transform: translateY(0) scale(.72);     opacity: .38; }
+    35%           { transform: translateY(-2px) scale(1);    opacity: 1; }
+  }
+  :global(.atag-think-dot) {
+    display: inline-block; flex: none;
+    width: 4px; height: 4px; border-radius: 50%;
+    background: currentColor;
+    box-shadow: 0 0 5px currentColor;
+    animation: tag-think-dot 1.15s ease-in-out infinite;
+    will-change: transform, opacity;
+  }
+  /* Someone who asked for less motion gets the colour and the glow, which
+     still say "busy", without the loop. */
+  @media (prefers-reduced-motion: reduce) {
+    :global(.atag-think-dot) { animation: none; opacity: .85; }
+    :global(.atag-icon) { animation: none; }
+  }
 
   /* ── Live agent meeting side panel — does NOT cover the 3D ────── */
   .lm-side-panel{
