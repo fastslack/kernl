@@ -235,11 +235,21 @@ function resolveKernelMcpServerConfig(caller: {
     const httpUrl = caller.usingDockerSandbox
       ? (process.env.KERNEL_MCP_URL_FROM_SANDBOX ?? "http://kernel:3087/mcp")
       : resolveKernelMcpUrl();
-    log.info(`claude_code MCP: http transport for agent=${caller.agentId.slice(0,8)} url=${httpUrl} sandbox=${caller.usingDockerSandbox ? "docker" : "bwrap-or-none"}`);
+    // The kernel's HTTP API is fail-closed: without an Authorization header
+    // /mcp answers 401, the "kernel" MCP server never finishes initializing,
+    // and EVERY mcp__kernel__* tool is silently missing from the run — the
+    // agent still starts, finds only its built-ins, and improvises. The token
+    // is the same secret this process already holds; bootstrap republishes it
+    // to KERNEL_AUTH_TOKEN precisely so the children it spawns can present it
+    // (see core/bootstrap/databases.ts). Omitted when auth is disabled, so an
+    // unauthenticated kernel keeps working.
+    const authToken = process.env.KERNEL_AUTH_TOKEN?.trim();
+    log.info(`claude_code MCP: http transport for agent=${caller.agentId.slice(0,8)} url=${httpUrl} sandbox=${caller.usingDockerSandbox ? "docker" : "bwrap-or-none"} auth=${authToken ? "bearer" : "none"}`);
     return {
       type: "http" as const,
       url: httpUrl,
       headers: {
+        ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
         "X-Caller-Agent-Id": caller.agentId,
         "X-Caller-Run-Id": caller.runId,
         "X-Caller-Depth": String(caller.depth),
