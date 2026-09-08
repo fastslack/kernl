@@ -144,12 +144,43 @@ without a kernel restart.
 | macOS | not yet | `codesign` + `notarytool` | $99/yr (Apple Developer) |
 | Windows | not yet | `signtool` | $300+/yr (EV cert) |
 
-The CI workflow signs when the secrets below exist and skips silently when they
-don't. Without them, releases ship unsigned and users see a one-time warning
+The CI workflow signs when the secrets below exist and skips when they don't.
+Without them, releases ship unsigned and users see a one-time warning
 (Mac: right-click → Open; Windows: SmartScreen "Run anyway"; Linux: no warning,
 but `dnf` won't auto-update without a signed repo). If you ship unsigned, say so
 in the release notes with the bypass steps — a user who hits an unexplained
 "damaged app" dialog concludes the app is broken, not unsigned.
+
+It is all six macOS secrets or none: the job fails at the top if only some are
+set. Partial secrets used to produce a signed-but-un-notarized build, which
+Gatekeeper rejects exactly like an unsigned one, and shipped it green.
+
+What the macOS job does once the secrets exist, in order — the sequence matters
+more than any individual command:
+
+1. Signs every nested Mach-O first (binaries, `.dylib`, `.node`), then the
+   bundle, so the outer seal covers the inner signatures. Not `--deep`: Apple
+   deprecated it for signing and it never applies entitlements to nested code,
+   which for a payload shipping its own bun, ffmpeg and whisper is the whole
+   ball game.
+2. Applies `packaging/macos/entitlements.plist` with `--options runtime` and
+   `--timestamp`. The hardened runtime is required for notarization and it kills
+   a JIT; the entitlements are what let bun keep running. A missing timestamp is
+   rejected by Apple minutes later rather than by codesign immediately.
+3. Notarizes and staples **the .app**, before it goes into the disk image, so
+   the bundle the user drags to /Applications carries its own ticket and opens
+   with no network.
+4. Builds, signs, notarizes and staples the **.dmg** as well.
+5. Repacks the portable `.tar.gz` from the signed bundle — `build-app.sh` writes
+   that tarball before any signing happens, so it used to ship the unsigned app
+   next to a signed dmg on the same release page — then unpacks it again and
+   re-verifies, because an archive that quietly drops the ticket is the same
+   bug one layer down.
+
+The identity is `--sign "Developer ID Application"`, matched as a substring of
+the certificate's common name. Do not write the team id there: the name is
+`Developer ID Application: <Name> (TEAMID)`, so `"Developer ID Application:
+$APPLE_TEAM_ID"` matches nothing and the step dies with "no identity found".
 
 > The signing steps used to be gated on `if: env.X != ''` with `X` defined in
 > the same step's `env:` block. A step's `if` is evaluated before its own env
@@ -200,7 +231,9 @@ discoverable). Add Copr + apt-mirror later if Linux usage grows.
 - [ ] Run the cross-built Windows zip on a real Windows box (`start.bat` →
       dashboard on :3086) — nothing has ever executed it
 - [ ] GPG key + Copr repo for Linux signed releases
-- [ ] Apple Developer cert + notarization profile
+- [ ] Apple Developer cert + notarization profile — the CI side is written and
+      waiting (see above); what is missing is the $99/yr membership, the
+      Developer ID certificate and the App Store Connect API key
 - [ ] Windows code-signing cert (or self-signed for unsigned MVP)
 - [ ] `Sparkle.framework` + appcast.xml for macOS auto-updates
 - [ ] WiX Bootstrapper or Squirrel.Windows for `.msi` auto-updates
