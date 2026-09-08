@@ -7,6 +7,216 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-08
+
+Everything an agent is — its prompt, its runtime, its tools, its skills, what
+wakes it up — used to be spread across a panel welded into the 3D world and a
+second, half-duplicated panel on the agents page. This release pulls it into one
+drawer that both pages mount, and then spends most of its commits filling that
+drawer in.
+
+### Added
+
+- **The agent drawer.** A single panel, extracted out of the 3D world into its
+  own shell with its own store, mounted on the agents page as well. Its tree
+  carries the mandate, the default goal, allowed tools, variables, appearance
+  and the runtime — the runtime being editable from the panel itself rather than
+  from a settings page three clicks away.
+- **A skills tab per agent** that recommends, installs and attaches in one
+  place. Suggestions are served over HTTP from a scoring core lifted out of the
+  suggester cron, and catalogue skills are scored alongside the ones already
+  installed, so the ranking answers "what should this agent learn next" instead
+  of "what does it already have".
+- **Skills from a repo URL**, added without leaving the tab.
+- **MCP Connections from the dashboard**: add a server, sign in, and have it
+  stay working, instead of editing a config file and restarting.
+- **In-app update on Linux and Windows**, with progress. macOS already had it.
+- **A verdict on failed agent runs**, leading the panel, with each failure
+  mapped to the control that actually fixes it.
+- **Model chains** convert between the panel's list and the agent's columns.
+- **Tool-loop capability** is reported in the LLM provider status, so a provider
+  that cannot drive a tool loop says so before an agent is pointed at it.
+- **Watch the creative office draw**, from the agent drawer.
+- **macOS builds are signed and notarized, in the right order.** Every nested
+  Mach-O is signed before the bundle that seals it, the `.app` is notarized and
+  stapled *before* it enters the disk image — so it opens with no network — and
+  the portable tarball is repacked from the signed bundle instead of the
+  unsigned one written minutes earlier. The job now fails when the six Apple
+  secrets are only partly set, rather than shipping a signed-but-un-notarized
+  app that Gatekeeper rejects exactly like an unsigned one. A release built
+  without the secrets is unsigned as before, and says so.
+- **Host support for headless rendering**, for the Blender bridge that ships as
+  an extension. The kernel image carries the libraries a render needs with no
+  display — libEGL above all, whose absence killed a job *after* it was queued
+  and the scene was built — and a rendered frame can be shown with `<img src>`
+  through `?auth=`, which cannot set a header. The allowlist stays one route
+  wide: the job listing beside it still refuses a token in the URL.
+
+### Changed
+
+- **The dashboard opens signed in on every platform.** The token handoff worked
+  on one and left the others at a login screen for an instance the user had just
+  installed themselves.
+- **Connections, schedule and event triggers are one "triggering" section.**
+  They were three places to answer one question: what starts this agent.
+- The Windows installer bundles the agent and MCP SDKs, so a fresh Windows
+  install can run an agent without a separate toolchain.
+- The skills tab is hidden for script agents, which cannot use skills, and the
+  drawer is translated.
+- The README leads with the agent office and a live instance count.
+- The duplicated agent skills panel is gone.
+- **The "thinking" indicator lives in the agent's own tag.** It was a ⚙️ glyph
+  spinning over the agent's head — at office camera distance a rotating glyph
+  reads as a vibrating speck. It is now three dots breathing in sequence inside
+  the nameplate, in the agent's flow colour.
+
+### Fixed
+
+- **The store's update button did not update.** It reported success.
+- **Every `mcp__kernel__*` tool was missing from a `claude_code` run.** The
+  kernel's HTTP API is fail-closed and the MCP server reached it with no
+  Authorization header, so `/mcp` answered 401 and the server never finished
+  initializing — silently. The agent started regardless, found only its
+  built-ins and improvised. It now presents the token the process already
+  holds.
+- **A failed run left the chat thread silent.** The panel fell back to the run
+  row only when the thread held no agent message at all, so from the second
+  failure onward the failure vanished entirely: the operator saw their own
+  message, no reply, and no error. The reason is now persisted the way the
+  native executor does it, and rendered as a line that names the control which
+  actually fixes it — a step budget that ran out says which setting moves it,
+  rather than "Reached maximum number of turns (15)".
+- **Every animated event tag was dead.** The icon never carried the class its
+  keyframes hang off, and the keyframes themselves were referenced by a name
+  Svelte had already rewritten — so pulse, spin, shake, wobble, bounce, sparkle
+  and pop had never once played.
+- Array and object arguments an executor had serialised into strings are
+  recovered instead of reaching the tool as `"[object Object]"`.
+- The Google re-auth detection matched Claude Code SDK errors and demanded a
+  re-login that fixed nothing; it now matches the kernel's own error signatures.
+- Model-chain coercion turned non-string values into `undefined` rather than
+  strings, and now uses an explicit empty-string sentinel.
+- The drawer store: stale `seed()`, per-field patch rollback, in-flight fields
+  overwritten when the drawer was re-seeded, writes not reconciled against the
+  saved row, and a leaked menu listener per open.
+- Skill status classification, the unknown-cost display, and tokenization of
+  accented text.
+- Chain controls stay disabled while the chain is being written.
+
+## [0.2.6] - 2026-08-23
+
+### Added
+
+- Repos are scoped to agents and surfaced in the UI; office environments moved
+  to DevOps.
+- Agent sandbox mounts, extension bundling, and markdown lists.
+
+### Fixed
+
+- The OpenAI provider, the model picker, and a readiness gate that was too wide.
+- Cinema subtitle translation reuses cached transcripts and reaches our own port.
+
+### Changed
+
+- Stopped publishing container images nobody pulled.
+
+## [0.2.5] - 2026-08-22
+
+### Added
+
+- LM Studio is found on its own, along with the model it has loaded and that
+  model's real context window.
+- Discover has a shelf for extensions and one for skills.
+- An About section in settings, with an update check.
+
+### Changed
+
+- Agents walk through doorways, and each one carries a single label in the
+  office.
+- Community `SKILL.md` files are read the way their authors wrote them.
+- Archive.org originals are preferred over the Theora derivative.
+
+### Fixed
+
+- A provider's design was reported as a fault.
+- The music player is called by the product's name.
+
+## [0.2.4] - 2026-08-17
+
+### Fixed
+
+- The ffmpeg build linked the runner's Homebrew libraries, could not link
+  iconv, and took TLS from Homebrew's openssl instead of SecureTransport —
+  producing binaries that did not run on a clean machine.
+- Subtitle generation works in the native packages.
+- A module can retire an agent driver whose upstream is gone.
+
+### Changed
+
+- A rebuilt whisper bundle for macOS 13 and 14.
+- The standalone Models and AI Providers pages are gone.
+
+## [0.2.3] - 2026-08-15
+
+### Added
+
+- `scripts/release.sh` — the release sequence, which until now lived in shell
+  history.
+- A `reload:local` script for the docker-compose.yml stack.
+
+### Fixed
+
+- Archive.org originals play, and subtitles are no longer invented for silent
+  films.
+- The Apple Health push route is exempt from the master token gate.
+- The PTY is borrowed the way BSD `script` wants it on macOS.
+
+### Changed
+
+- The more-like-this strip in the cinema player, redesigned.
+- The update notice is out of the sidebar column.
+
+## [0.2.2] - 2026-08-14
+
+### Fixed
+
+- `ConfigService` was constructed with arguments it does not take.
+- sharp's binaries are locked for every platform we build on.
+
+### Added
+
+- The CUDA whisper is built when the GPU overlay is applied.
+- The updater verifies what it downloads, and offers brew as the other route.
+
+## [0.2.1] - 2026-08-14
+
+### Added
+
+- The navigation is translated instead of rendering the manifest's English, and
+  settings and nav labels carry a language.
+- The kernel says when it paused an agent, and when one is waiting on an answer.
+- E2E coverage for the Torrents group and the TV Spanish copy.
+
+### Fixed
+
+- An update macOS would refuse is refused here first, and said so before the
+  first launch.
+- Every agent run outcome is reported to the circuit breaker; some were not,
+  so the breaker never opened.
+- The download resolves from the release rather than from a template.
+- sharp's platform binary ships in the payload, and the payload's packages stay
+  resolvable from a materialized extension.
+- Cinema's subtitle pipeline points at cinema's own routes.
+- The dev server stays on loopback, like the dashboard it stands in for.
+
+### Changed
+
+- The reasoning scratchpad is folded instead of printed.
+- "Configure a provider" is a button, not prose.
+- A tool call in chat is readable and its result reachable.
+
+## [0.2.0] - 2026-08-14
+
 ### Security
 
 - **The default Docker stack no longer runs unauthenticated.** `docker-compose.yml`

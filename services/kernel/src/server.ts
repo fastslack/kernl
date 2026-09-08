@@ -49,21 +49,34 @@ import type { MeshServiceLike } from "./core/extension-seams.js";
 const taskRegistries = new WeakMap<Server, TaskRegistry>();
 
 /**
- * Apply forgiving coercion for the two LLM mistakes that show up most often
- * in tool-call validation:
+ * Apply forgiving coercion for the LLM mistakes that show up most often in
+ * tool-call validation:
  *   - `Expected number, received string`  → parse numeric string with Number()
  *   - `Expected boolean, received string` → "true"/"false" → boolean
+ *   - `Expected array, received string`   → JSON.parse when it yields an array
+ *   - `Expected object, received string`  → JSON.parse when it yields an object
  *
  * Mutates a shallow clone of `args` along the issue's `path` and returns the
  * new object. Returns `null` when no path was coercible — caller should give
  * up and let the original ZodError surface so the LLM sees the error and can
  * self-correct on the next iteration.
  *
+ * The array/object cases are not cosmetic. Some agent executors serialise
+ * nested arguments before the call arrives here, so `at: [5, 8, 4]` reaches
+ * validation as the string `"[5, 8, 4]"` and EVERY array or object parameter in
+ * the kernel fails for those agents. That failure is unrecoverable from the
+ * agent's side: it cannot observe how its arguments were serialised, the error
+ * names the value it believes it sent, and every retry fails the same way — a
+ * drawing agent hit exactly this and could create a scene but never put an
+ * object into one.
+ *
  * Enum / unknown-field / range issues are intentionally NOT coerced — those
  * indicate genuine LLM hallucinations (e.g. inventing a `"pending"` status),
- * and silently dropping them would mask broken behaviour.
+ * and silently dropping them would mask broken behaviour. Same principle
+ * bounds the JSON cases: the string must actually parse, and parse to the
+ * shape that was asked for, or it is left alone for the error to surface.
  */
-function coerceCommonZodIssues(args: unknown, issues: Array<{
+export function coerceCommonZodIssues(args: unknown, issues: Array<{
   code: string; path: (string | number)[]; expected?: string; received?: string;
 }>): Record<string, unknown> | null {
   if (!args || typeof args !== "object") return null;
@@ -96,6 +109,23 @@ function coerceCommonZodIssues(args: unknown, issues: Array<{
       const v = raw.trim().toLowerCase();
       if (v === "true" || v === "1" || v === "yes")       { parent[leaf as keyof typeof parent] = true;  mutated = true; }
       else if (v === "false" || v === "0" || v === "no")  { parent[leaf as keyof typeof parent] = false; mutated = true; }
+    } else if (iss.expected === "array" || iss.expected === "object") {
+      // Only touch text that is trying to be JSON of the requested shape. The
+      // opening-bracket check keeps `JSON.parse` away from prose and from bare
+      // scalars like "7" or "null" — the latter being an object by `typeof`
+      // and, unhandled, a null that fails further from its cause.
+      const trimmed = raw.trim();
+      const opener = iss.expected === "array" ? "[" : "{";
+      if (!trimmed.startsWith(opener)) continue;
+      try {
+        const value = JSON.parse(trimmed);
+        const fits = iss.expected === "array"
+          ? Array.isArray(value)
+          : value !== null && typeof value === "object" && !Array.isArray(value);
+        if (fits) { parent[leaf as keyof typeof parent] = value; mutated = true; }
+      } catch {
+        // Not JSON after all — leave it for the original error to explain.
+      }
     }
   }
 

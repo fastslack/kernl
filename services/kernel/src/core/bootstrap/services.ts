@@ -109,32 +109,49 @@ export async function wireServices(args: {
 
   // ── Assemble the global tool surface ────────────────
   const chatService = chatModule.getService();
-  const bridgedTools = (
-    (registry.getModule("ext:mcp-bridge") as { getBridgedTools?: () => ToolDefinition[] } | null)
-      ?.getBridgedTools?.() ?? []
-  );
-  const allTools = [
+  const mcpBridge = registry.getModule("ext:mcp-bridge") as {
+    getBridgedTools?: () => ToolDefinition[];
+    setRepublish?: (fn: () => void) => void;
+  } | null;
+
+  // Read live rather than snapshotting. A captured array is what made a
+  // freshly connected MCP server invisible until the kernel was restarted:
+  // the tools existed, but every catalog had already been built without them.
+  const composeTools = (): ToolDefinition[] => [
     ...registryAllTools(),
     ...skillTools,
     ...ext.emailTools,
     ...ext.triageTools,
-    ...bridgedTools,
+    ...(mcpBridge?.getBridgedTools?.() ?? []),
   ];
+
+  const allTools = composeTools();
   // Now that we know the full surface, point the meta module's catalog slot
   // at it so kernel_tool_search / kernel_code_run see every tool.
-  metaCatalogSlot.value = () => [
-    ...registryAllTools(),
-    ...skillTools,
-    ...ext.emailTools,
-    ...ext.triageTools,
-    ...bridgedTools,
-  ];
+  metaCatalogSlot.value = composeTools;
+
+  // Filled in below, once the sandbox-agents extension has contributed. Held
+  // as a mutable reference so republishing picks up agent tools too — pushing
+  // only the MCP half would silently drop them from chat.
+  let agentContribToolsRef: ToolDefinition[] = [];
   if (chatService) {
     chatService.setKernelTools(allTools);
   }
 
   // ── Inject tools into AgentExecutor + start reactive engine + scheduler ──
   const agentExecutor = agentsModule.getExecutor();
+
+  // The seam that makes connecting an MCP server usable without a restart.
+  // setKernelTools converts eagerly (convertToolsForLlm + buildToolExecutor)
+  // and keeps no reference, so mutating a shared array achieves nothing — the
+  // catalogs have to be handed the new surface explicitly.
+  const republishToolSurface = (): void => {
+    const next = [...composeTools(), ...agentContribToolsRef];
+    chatService?.setKernelTools(next);
+    agentExecutor?.setKernelTools(next);
+  };
+  mcpBridge?.setRepublish?.(republishToolSurface);
+
   if (agentExecutor) {
     agentExecutor.setKernelTools(allTools);
     // Procedural skills resolver — turns agent.skills_json slugs into
@@ -356,6 +373,8 @@ export async function wireServices(args: {
   const sandboxAgentsExt = registry.getModule("ext:sandbox-agents") as SandboxAgentsModule | null;
   await sandboxAgentsExt?.initializeSandboxes(allTools);
   const agentContribTools = sandboxAgentsExt?.getAgentTools() ?? [];
+  // Keep the republish path aware of them from here on.
+  agentContribToolsRef = agentContribTools;
   if (agentContribTools.length > 0) {
     // Inject agent-contributed tools into chat and agent executor
     const allToolsWithAgents = [...allTools, ...agentContribTools];

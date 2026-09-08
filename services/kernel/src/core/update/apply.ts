@@ -37,7 +37,7 @@
 
 import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -46,6 +46,8 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { log } from "../logger.js";
 import { checkForUpdate } from "./check.js";
+import { assetFor, installKind, installRootFrom, isSwappable } from "./platform.js";
+import { helperFor, helperFilename } from "./helper.js";
 
 export type ApplyOutcome =
   | { ok: true; restarting: true }
@@ -140,24 +142,97 @@ open "${args.bundle}"
  * only if the handoff did NOT happen — on success this process is about to be
  * asked to exit.
  */
-export async function applyUpdate(): Promise<ApplyOutcome> {
-  if (process.platform === "linux") {
-    return {
-      ok: false,
-      reason: "On Linux your package manager owns the install.",
-      useInstead: "sudo apt upgrade kernl   (or dnf upgrade kernl)",
-    };
+/**
+ * Where the current attempt is up to.
+ *
+ * Kept in the module rather than returned, because the caller cannot wait for
+ * the answer: applying an update ends with this process exiting, so the HTTP
+ * route starts the work and returns immediately and the browser polls here.
+ * Without it the button had nothing to say for the length of a multi-megabyte
+ * download — the same silence that made the extension update look broken.
+ */
+export type UpdatePhase =
+  | "idle" | "checking" | "downloading" | "verifying" | "unpacking" | "handoff"
+  | "failed" | "done";
+
+export interface UpdateProgress {
+  phase: UpdatePhase;
+  /** Bytes written so far. */
+  received: number;
+  /** Total bytes, or 0 when the server sends no content-length. */
+  total: number;
+  version?: string;
+  reason?: string;
+}
+
+let progress: UpdateProgress = { phase: "idle", received: 0, total: 0 };
+
+export function updateProgress(): UpdateProgress {
+  return { ...progress };
+}
+
+function phase(next: Partial<UpdateProgress>): void {
+  progress = { ...progress, ...next };
+}
+
+/** Record the refusal on the way out, so the poller sees why it stopped. */
+function refuse(reason: string, useInstead?: string): ApplyOutcome {
+  phase({ phase: "failed", reason });
+  return { ok: false, reason, ...(useInstead ? { useInstead } : {}) };
+}
+
+/** Extract an archive. `tar` reads zip as well as tar.gz on every target. */
+async function extract(archive: string, into: string): Promise<void> {
+  await new Promise<void>((ok, bad) => {
+    const p = spawn("tar", ["-xf", archive, "-C", into], { stdio: "ignore" });
+    p.on("error", bad);
+    p.on("exit", (c) => (c === 0 ? ok() : bad(new Error(`tar exited ${c}`))));
+  });
+}
+
+/**
+ * What came out of the archive.
+ *
+ * Read with `readdir` rather than shelling out to `find`, which does not exist
+ * on Windows — the kind of detail that turns "cross-platform" into a function
+ * that only ever ran on one.
+ */
+async function stagedFrom(dir: string, macApp: boolean): Promise<string | null> {
+  const entries = await readdir(dir, { withFileTypes: true });
+  const dirs = entries.filter((e) => e.isDirectory());
+  if (macApp) {
+    const app = dirs.find((e) => e.name.endsWith(".app"));
+    return app ? join(dir, app.name) : null;
   }
-  if (process.platform !== "darwin") {
-    return { ok: false, reason: "In-app update is only wired for macOS so far." };
+  // A release archive holds exactly one top-level directory. Anything else is
+  // an archive we do not understand, and guessing which entry to move into an
+  // install location is not a guess worth making.
+  return dirs.length === 1 && dirs[0] ? join(dir, dirs[0].name) : null;
+}
+
+/**
+ * Download the newest build, stage it, and hand off to the helper. Returns
+ * only if the handoff did NOT happen — on success this process is about to be
+ * asked to exit.
+ */
+export async function applyUpdate(): Promise<ApplyOutcome> {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const kind = installKind(here, process.platform);
+  phase({ phase: "checking", received: 0, total: 0, reason: undefined });
+
+  if (kind === "linux-package") {
+    return refuse(
+      "On Linux your package manager owns the install.",
+      "sudo apt upgrade kernl   (or dnf upgrade kernl)",
+    );
+  }
+  if (!isSwappable(kind)) {
+    return refuse("This does not look like an installed copy, so there is nothing to replace.");
   }
 
-  const bundle = macAppBundlePath();
-  if (!bundle) {
-    return {
-      ok: false,
-      reason: "This does not look like an installed .app, so there is nothing to replace.",
-    };
+  const target = kind === "macos-app" ? macAppBundlePath() : installRootFrom(here, kind);
+  if (!target) {
+    return refuse("Could not work out which directory to replace, so nothing was touched.");
   }
 
   // Refuse when this build is not signed, rather than half-doing it.
@@ -167,37 +242,55 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
   // user ends up with the app closed, a new one that will not start, and a
   // backup this code already deleted. Stripping the quarantine xattr — which
   // the helper does — is not the same as being trusted.
-  //
-  // Probed, not assumed: the day the release is signed and notarized this
-  // check passes and the button starts working with no further change.
-  if (!(await isSignedBundle(bundle))) {
-    return {
-      ok: false,
-      reason:
-        "This build is not signed by Apple, so macOS would refuse to open the " +
+  if (kind === "macos-app" && !(await isSignedBundle(target))) {
+    return refuse(
+      "This build is not signed by Apple, so macOS would refuse to open the " +
         "updated app. Download the new version manually instead.",
-      useInstead: `https://github.com/${REPO}/releases/latest`,
-    };
+      `https://github.com/${REPO}/releases/latest`,
+    );
   }
 
   const status = await checkForUpdate();
   if (!status.updateAvailable || !status.latest) {
-    return { ok: false, reason: "Already on the newest release." };
+    return refuse("Already on the newest release.");
   }
 
-  const asset = macAssetFor(status.latest);
+  const asset = assetFor(status.latest, process.platform, process.arch);
+  if (!asset) {
+    return refuse(
+      `The release publishes no build for ${process.platform}/${process.arch}.`,
+      `https://github.com/${REPO}/releases/latest`,
+    );
+  }
   const url = `https://github.com/${REPO}/releases/download/v${status.latest}/${asset}`;
 
   let staged: string;
   try {
     const dir = await mkdtemp(join(tmpdir(), "kernl-update-"));
-    const tarball = join(dir, asset);
+    const archive = join(dir, asset);
 
+    phase({ phase: "downloading", version: status.latest, received: 0 });
     const res = await fetch(url);
     if (!res.ok || !res.body) {
-      return { ok: false, reason: `Could not download ${asset} (HTTP ${res.status}).` };
+      return refuse(`Could not download ${asset} (HTTP ${res.status}).`);
     }
-    await pipeline(Readable.fromWeb(res.body as never), createWriteStream(tarball));
+    phase({ total: Number(res.headers.get("content-length") ?? 0) });
+
+    // Counted by hand rather than piped, so the browser has something to draw.
+    const out = createWriteStream(archive);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      received += value.byteLength;
+      phase({ received });
+      if (!out.write(Buffer.from(value))) {
+        await new Promise<void>((ok) => out.once("drain", ok));
+      }
+    }
+    await new Promise<void>((ok) => out.end(ok));
 
     // Verify before unpacking anything.
     //
@@ -206,70 +299,58 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
     // whatever this connection returns". A compromised release, a stale CDN
     // object, or an intercepting proxy all look identical to a good download
     // without this.
-    //
-    // Refuses when SHA256SUMS is absent rather than proceeding unverified —
-    // releases published before that file existed simply cannot be applied
-    // from inside the app, which is the safe direction to fail.
+    phase({ phase: "verifying" });
     const sums = await fetch(
       `https://github.com/${REPO}/releases/download/v${status.latest}/SHA256SUMS`,
     );
     if (!sums.ok) {
-      return {
-        ok: false,
-        reason: "This release publishes no checksums, so the download cannot be verified.",
-        useInstead: `https://github.com/${REPO}/releases/latest`,
-      };
+      return refuse(
+        "This release publishes no checksums, so the download cannot be verified.",
+        `https://github.com/${REPO}/releases/latest`,
+      );
     }
     const expected = (await sums.text())
       .split("\n")
       .map((l) => l.trim().split(/\s+/))
       .find(([, name]) => name?.replace(/^\*/, "") === asset)?.[0];
-    if (!expected) {
-      return { ok: false, reason: `SHA256SUMS does not list ${asset}.` };
-    }
-    const actual = createHash("sha256").update(await readFile(tarball)).digest("hex");
+    if (!expected) return refuse(`SHA256SUMS does not list ${asset}.`);
+
+    const actual = createHash("sha256").update(await readFile(archive)).digest("hex");
     if (actual !== expected) {
-      return {
-        ok: false,
-        reason: "The download did not match its published checksum, so it was discarded.",
-      };
+      return refuse("The download did not match its published checksum, so it was discarded.");
     }
 
-    // Unpack beside the download, then find what came out. Trusting the
-    // archive to contain a predictably-named directory is how you end up
-    // moving the wrong thing into /Applications.
-    await new Promise<void>((ok, bad) => {
-      const p = spawn("tar", ["xzf", tarball, "-C", dir], { stdio: "ignore" });
-      p.on("error", bad);
-      p.on("exit", (c) => (c === 0 ? ok() : bad(new Error(`tar exited ${c}`))));
-    });
-
-    const found = await new Promise<string>((ok, bad) => {
-      const p = spawn("find", [dir, "-maxdepth", "2", "-name", "*.app", "-print"], {
-        stdio: ["ignore", "pipe", "ignore"],
-      });
-      let out = "";
-      p.stdout.on("data", (b: Buffer) => (out += b.toString()));
-      p.on("error", bad);
-      p.on("exit", () => ok(out.split("\n")[0]?.trim() ?? ""));
-    });
-    if (!found) return { ok: false, reason: "The downloaded archive had no .app inside it." };
+    phase({ phase: "unpacking" });
+    await extract(archive, dir);
+    const found = await stagedFrom(dir, kind === "macos-app");
+    if (!found) return refuse("The downloaded archive did not contain what was expected.");
     staged = found;
   } catch (err) {
-    return { ok: false, reason: `Download failed: ${err instanceof Error ? err.message : String(err)}` };
+    return refuse(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  const script = join(dirname(staged), "finish-update.sh");
+  phase({ phase: "handoff" });
+  const script = join(dirname(staged), helperFilename(kind));
   await writeFile(
     script,
-    helperScript({ pid: process.pid, staged, bundle, backup: `${bundle}.previous` }),
+    helperFor(kind, {
+      pid: process.pid,
+      staged,
+      target,
+      backup: `${target}.previous`,
+      relaunch: target,
+    }),
   );
-  await chmod(script, 0o755);
+  if (kind !== "windows-dir") await chmod(script, 0o755);
 
   // Detached and fully severed: it has to outlive us, and it will be running
   // when this process no longer exists to own its output.
-  spawn("/bin/sh", [script], { detached: true, stdio: "ignore" }).unref();
+  const runner = kind === "windows-dir"
+    ? spawn("cmd.exe", ["/c", script], { detached: true, stdio: "ignore", windowsHide: true })
+    : spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
+  runner.unref();
 
+  phase({ phase: "done" });
   log.info(`Update to ${status.latest} staged; handing off and exiting.`);
   return { ok: true, restarting: true };
 }

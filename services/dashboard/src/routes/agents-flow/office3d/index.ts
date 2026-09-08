@@ -22,7 +22,7 @@ export {
   registerSkin, resolveSkin, listSkins, setDefaultSkin, initAllSkins, clearSkins,
   type SkinDefinition, type SkinManifest, type SkinPalette, type SkinCreateOpts,
 } from './skins/index.js';
-export { resolveFlowColor, agentType, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL, FLOW_COLORS } from './types.js';
+export { resolveFlowColor, agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL, FLOW_COLORS } from './types.js';
 export type { AgentData, ChainData, FlowData, StatsData, Vec3, Walker, RoomInfo, CorridorInfo, FloorPlan, SpeechBubble, HumanoidParts, Aabb2D } from './types.js';
 
 // Animation system — pose math, easing, path navigation, effects, registry.
@@ -30,7 +30,7 @@ export type { AgentData, ChainData, FlowData, StatsData, Vec3, Walker, RoomInfo,
 export {
   createAnimationRegistry, initAnimEffects,
   cameraTween, haloPulse, risingParticles, bubbleFade, materialPulse,
-  floatingGlyph, shake, convergingParticles, fallingGlyph, spinningGear,
+  floatingGlyph, shake, convergingParticles, fallingGlyph,
   curvedArrow, paperPlane, pillarOfLight,
   tickerCard, candlestick, coinTrail, priceLine, chyronLabel,
   createNoteStack,

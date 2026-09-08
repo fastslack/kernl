@@ -67,7 +67,7 @@ import type { LifeModule, NewsModule, LifeService, NewsService } from "../types/
 import type { LicenseService } from "../license/index.js";
 import { registerLicenseRoutes } from "../license/routes.js";
 import { checkForUpdate } from "../update/check.js";
-import { applyUpdate } from "../update/apply.js";
+import { applyUpdate, updateProgress } from "../update/apply.js";
 
 export interface HttpResult {
   httpServer: KernelHttpServer | null;
@@ -398,6 +398,14 @@ export async function initHttpAndMcp(args: {
         setTimeout(() => process.exit(0), 750);
       });
 
+      // Polled while the POST above is still in flight. Separate on purpose:
+      // applying ends with this process exiting, so the request that started
+      // it cannot also report how it went — and a multi-megabyte download with
+      // no progress reads as a hung button.
+      httpServer.get("/api/update/progress", (_req, res) => {
+        httpServer!.json(res, 200, updateProgress());
+      });
+
       httpServer.get("/api/update/status", async (req, res) => {
         const url = new URL(req.url ?? "/", "http://localhost");
         httpServer!.json(res, 200, await checkForUpdate({
@@ -442,6 +450,27 @@ export async function initHttpAndMcp(args: {
         agentsModule.getReflectionOptimizer() as Parameters<typeof registerAgentRoutes>[5],
         agentsModule.getWorkspaceEvolver() as Parameters<typeof registerAgentRoutes>[6],
         config.language,
+        // Skill candidates from subscribed catalogue repos, for the per-agent
+        // suggestions route. The marketplace module exposes getService(), not
+        // browseCatalog() directly, hence the double hop. Absent module → []
+        // → the suggestions route degrades to installed skills only.
+        async () => {
+          const mp = registry.getModule("marketplace") as {
+            getService?: () => {
+              browseCatalog(f: { type?: string; limit?: number }): Promise<
+                Array<{ slug: string; manifest?: { name?: string; description?: string; long_description?: string } }>
+              >;
+            } | null;
+          } | null;
+          const svc = mp?.getService?.() ?? null;
+          if (!svc) return [];
+          const items = await svc.browseCatalog({ type: "skill", limit: 500 });
+          return items.map((i) => ({
+            slug: i.slug,
+            name: i.manifest?.name ?? i.slug,
+            text: `${i.slug} ${i.manifest?.name ?? ""} ${i.manifest?.description ?? ""} ${i.manifest?.long_description ?? ""}`,
+          }));
+        },
       );
     }
 

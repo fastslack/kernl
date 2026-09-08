@@ -129,9 +129,52 @@ export async function fetchLicenseBySession(args: {
 
 /** Authenticated GET against the store's download endpoint. Throws the store's
  *  own error message on 401/403/404. Shared by the bundle + text downloaders. */
-async function storeGet(args: { storeUrl: string; slug: string; licenseJwt: string; fetchImpl: FetchLike }): Promise<Response> {
+/**
+ * How long to wait for the store before giving up.
+ *
+ * Generous — a bundle is megabytes over whatever connection the user has — but
+ * finite, which is the point. With no timeout at all a stalled request never
+ * settles, so the caller's `finally` never runs and the dashboard sits on
+ * "Installing…" with nothing to report and no way back.
+ */
+export const STORE_TIMEOUT_MS = 120_000;
+
+async function storeGet(args: {
+  storeUrl: string;
+  slug: string;
+  licenseJwt: string;
+  fetchImpl: FetchLike;
+  timeoutMs?: number;
+}): Promise<Response> {
   const url = `${base(args.storeUrl)}/store/download?slug=${encodeURIComponent(args.slug)}`;
-  const res = await args.fetchImpl(url, { headers: { Authorization: `Bearer ${args.licenseJwt}` } });
+  const ms = args.timeoutMs ?? STORE_TIMEOUT_MS;
+
+  // Both a signal AND a race, and the pair is deliberate.
+  //
+  // The signal is what actually aborts a real request and frees the socket.
+  // But `fetchImpl` is injectable, and a signal only does anything if the
+  // implementation honours it — so on its own it is a request, not a
+  // guarantee. The race is the guarantee: whatever the fetch does, the caller
+  // gets an answer and can clean up. That distinction IS the bug — the
+  // dashboard's `finally` never ran, so its button stayed on "Installing…"
+  // with nothing to report.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`store request timed out after ${ms}ms`)), ms);
+  });
+
+  let res: Response;
+  try {
+    res = await Promise.race([
+      args.fetchImpl(url, {
+        headers: { Authorization: `Bearer ${args.licenseJwt}` },
+        signal: AbortSignal.timeout(ms),
+      }),
+      expired,
+    ]);
+  } finally {
+    clearTimeout(timer);
+  }
   if (!res.ok) {
     let msg = `HTTP ${res.status}`;
     try {
@@ -151,6 +194,7 @@ export async function downloadStoreText(args: {
   slug: string;
   licenseJwt: string;
   fetchImpl?: FetchLike;
+  timeoutMs?: number;
 }): Promise<string> {
   const res = await storeGet({ ...args, fetchImpl: args.fetchImpl ?? fetch });
   return res.text();
@@ -172,10 +216,17 @@ export async function downloadStoreBundle(args: {
   slug: string;
   licenseJwt: string;
   fetchImpl?: FetchLike;
+  timeoutMs?: number;
 }): Promise<DownloadedBundle> {
   const fetchImpl = args.fetchImpl ?? fetch;
   const downloadUrl = `${base(args.storeUrl)}/store/download?slug=${encodeURIComponent(args.slug)}`;
-  const res = await storeGet({ storeUrl: args.storeUrl, slug: args.slug, licenseJwt: args.licenseJwt, fetchImpl });
+  const res = await storeGet({
+    storeUrl: args.storeUrl,
+    slug: args.slug,
+    licenseJwt: args.licenseJwt,
+    fetchImpl,
+    timeoutMs: args.timeoutMs,
+  });
   const bytes = new Uint8Array(await res.arrayBuffer());
   const dir = await mkdtemp(join(tmpdir(), "kernl-store-"));
   const path = join(dir, bundleFileName(args.slug));

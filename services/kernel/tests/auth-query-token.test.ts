@@ -38,6 +38,22 @@ describe("isAuthenticated", () => {
     expect(isAuthenticated(req(`/api/torrents/webseed-proxy?url=x&auth=${TOKEN}`), TOKEN)).toBe(true);
   });
 
+  // A rendered frame is shown with <img src>, which cannot set a header.
+  it("accepts ?auth= on a rendered Blender frame", () => {
+    expect(isAuthenticated(req(`/api/blender/jobs/abc-123/frame/frame.png?auth=${TOKEN}`), TOKEN)).toBe(true);
+  });
+
+  it("still refuses ?auth= on the job listing beside it", () => {
+    // Widening the allowlist to the whole extension would put the token in a
+    // URL for ordinary JSON, which is what keeping it narrow avoids.
+    expect(isAuthenticated(req(`/api/blender/jobs/abc-123?auth=${TOKEN}`), TOKEN)).toBe(false);
+    expect(isAuthenticated(req(`/api/blender/settings?auth=${TOKEN}`), TOKEN)).toBe(false);
+  });
+
+  it("does not let a crafted path escape the frame route", () => {
+    expect(isAuthenticated(req(`/api/blender/jobs/a/frame/x/../../settings?auth=${TOKEN}`), TOKEN)).toBe(false);
+  });
+
   it("still rejects a wrong token on a media route", () => {
     expect(isAuthenticated(req("/api/torrents/transcode?url=x&auth=wrong"), TOKEN)).toBe(false);
   });

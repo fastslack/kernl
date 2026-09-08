@@ -257,8 +257,8 @@ const es: Record<string, string> = {
   "settings.integrations.feeds": "{count} feeds registrados",
   "settings.ai.brains_title": "Brains",
   "settings.ai.brains_desc": "Qué provider/modelo alimenta chat, agentes y la cadena de fallback",
-  "settings.ai.chat_brain": "Chat brain",
-  "settings.ai.agents_brain": "Agents brain",
+  "settings.ai.chat_brain": "Cerebro del chat",
+  "settings.ai.agents_brain": "Cerebro de los agentes",
   "settings.ai.fallback_chain": "Cadena de fallback",
   "settings.ai.chain_hint": "Lista ordenada — responde el primer eslabón sano",
   "settings.ai.chain_empty": "Sin eslabones de fallback configurados",
@@ -451,8 +451,8 @@ const es: Record<string, string> = {
   "login.button_save": "guardar y entrar",
   "login.button_verifying": "verificando…",
   "login.button_clear": "limpiar",
-  "login.tip_host": "tu kernel generó un token en el primer arranque — desde su data dir, ",
-  "login.tip_docker": "en el stack Docker, ",
+  "login.where": "tu kernel generó un token en el primer arranque — imprimilo con:",
+  "login.where_other": "otras instalaciones",
   "login.tip_oauth": "stage 1 del roadmap reemplaza este form por \"Continue with Google\".",
 
   // ── Welcome (post-install onboarding) ─────────────────────────────────
@@ -519,6 +519,119 @@ const es: Record<string, string> = {
   "welcome.action_extensions": "Configurar /extensions",
   "welcome.action_docs": "Documentación",
   "welcome.reset_hint_prefix": "Esta página se muestra una sola vez. Para volver a verla:",
+
+  // ── Drawer del agente ─────────────────────────────────────────
+  // El panel que se abre sobre un agente. Su línea de veredicto y su tarjeta
+  // de error son los dos primeros bloques que se leen, así que concentran
+  // casi todas estas claves.
+  //
+  // Los plurales van con una clave por forma y no con un {n}: el orden de
+  // palabras de la cláusula compuesta difiere lo suficiente entre los dos
+  // idiomas como para que una sola plantilla le imponga a uno la sintaxis
+  // del otro.
+  "agent.verdict.active": "Activo",
+  "agent.verdict.paused": "Pausado",
+  "agent.verdict.auto_paused": "Auto-pausado",
+  "agent.verdict.no_runs": "sin corridas aún",
+  "agent.verdict.runs_one": "1 corrida",
+  "agent.verdict.runs_other": "{n} corridas",
+  "agent.verdict.none_successful": "{runs}, ninguna exitosa",
+  "agent.verdict.all_successful": "{runs}, todas exitosas",
+  "agent.verdict.some_successful": "{runs}, {c} exitosas",
+  "agent.verdict.just_now": "recién",
+  "agent.verdict.minutes_ago": "hace {n}m",
+  "agent.verdict.hours_ago": "hace {n}h",
+  "agent.verdict.days_ago": "hace {n}d",
+  "agent.verdict.failed_when": "falló {when}",
+  "agent.verdict.running_now": "corriendo ahora",
+  "agent.verdict.ok_when": "ok {when}",
+  // Tarjeta de error. `titleKey`/`labelKey` salen de lib/run-failure.ts, que
+  // devuelve claves y no texto para que el matcheo se pueda testear sin
+  // cargar un locale.
+  "agent.failure.retry": "Reintentar",
+  "agent.failure.dropped": "Descartado: {providers}",
+  "agent.failure.no_tool_capable": "Ningún provider de la cadena puede ejecutar tools",
+  "agent.failure.pick_provider": "Elegir provider con tools",
+  "agent.failure.switch_executor": "Cambiar executor a claude_code",
+  "agent.failure.no_provider_available": "Ningún provider de la cadena está disponible",
+  "agent.failure.configure_providers": "Configurar providers",
+  "agent.failure.google_expired": "El token de Google venció",
+  "agent.failure.reauth_google": "Re-autenticar Google",
+  "agent.failure.generic": "El run falló",
+
+  // Sección Runtime — la cadena provider/modelo editable y los cuatro límites.
+  "agent.runtime.title": "Runtime",
+  "agent.runtime.applies_next_run": "los cambios aplican en la próxima corrida",
+  "agent.runtime.model": "Modelo",
+  "agent.runtime.executor": "Executor",
+  "agent.runtime.saving": "guardando…",
+  "agent.runtime.cancel": "Cancelar",
+  "agent.runtime.choose_fallback": "elegí un fallback",
+  "agent.runtime.executor_aria": "executor",
+  "agent.runtime.native_hint": "El kernel corre el tool loop contra la cadena de arriba.",
+  "agent.runtime.claude_code_hint": "El CLI corre su propio tool loop. La cadena de arriba no se usa para tools.",
+
+  // Shell del drawer — chips del header, botones de acción, barra de tabs.
+  // Los chips de tipo (LLM / SCRIPT / "Claude Code SDK") NO se traducen:
+  // nombran un executor y un producto, no un concepto.
+  "agent.drawer.tab_overview": "Resumen",
+  "agent.drawer.tab_message": "Mensaje",
+  "agent.drawer.devops_panel": "Panel DevOps",
+  "agent.drawer.devops_title": "Abrir el panel de control DevOps — repos, backlog, stacks de desarrollo",
+  "agent.drawer.resume_hint": "Reanudar rehabilita el schedule y limpia el contador.",
+  "agent.drawer.pause_title": "Pausar: corta el schedule y los triggers. Correr a mano sigue andando.",
+  "agent.drawer.resume_title": "Reanudar: rehabilita el schedule y los triggers.",
+  "agent.drawer.accept_title": "Aceptar — limpia la marca REVISION y deja el agente como está",
+  "agent.drawer.reject_title": "Rechazar — desactiva (active=0). La fila queda en la base, se revierte fácil.",
+  "agent.drawer.rename_title": "Renombrar agente",
+  "agent.drawer.save_title": "Guardar (Enter)",
+  "agent.drawer.cancel_title": "Cancelar (Esc)",
+  "agent.drawer.close_title": "cerrar",
+  "agent.drawer.agent_id_title": "id del agente",
+  "agent.drawer.builtin_id_title": "id del handler builtin",
+  "agent.drawer.copy_id_title": "copiar el id completo del agente",
+  "agent.drawer.fallbacks_title": "fallbacks de model_chain configurados",
+  "agent.drawer.kind_llm_title": "Agente con LLM (runToolLoop nativo)",
+  "agent.drawer.kind_script_title": "Script nativo / handler builtin — sin LLM",
+  "agent.drawer.kind_claude_code_title": "Corre a través del Claude Agent SDK (executor claude_code)",
+
+  // Tab de skills. "Extensions → Skills" es una ruta, no prosa — queda igual.
+  "agent.skills.recommended": "Recomendadas para este agente",
+  "agent.skills.scoring": "Puntuando el catálogo contra el prompt de este agente…",
+  "agent.skills.search_heading": "Buscar en el catálogo",
+  "agent.skills.search_placeholder": "Buscar en todos los repos suscriptos por slug, nombre o descripción…",
+  "agent.skills.searching": "buscando…",
+  "agent.skills.paid": "paga",
+  "agent.skills.get_it": "conseguila →",
+  "agent.skills.not_installed": "no instalada — cada corrida la saltea",
+  "agent.skills.installed_inactive": "instalada pero no activa",
+  "agent.skills.attach_title": "Attachar — ya está instalada",
+  "agent.skills.detach_title": "Detachar",
+  "agent.skills.install_attach_title": "Instalar esta skill y después attacharla",
+  "agent.skills.score_title": "Coincidencia de palabras contra el prompt de este agente",
+
+  // Alta de repo desde el propio tab. La línea de precaución no es relleno:
+  // una skill es texto que entra al prompt del modelo, así que esta caja
+  // carga instrucciones de un tercero.
+  "agent.skills.repo_toggle": "Agregar skills desde una URL",
+  "agent.skills.repo_url_placeholder": "https://github.com/owner/skills-repo",
+  "agent.skills.repo_ref_placeholder": "branch o tag (opcional)",
+  "agent.skills.repo_submit": "suscribir",
+  "agent.skills.repo_cloning": "… clonando",
+  "agent.skills.repo_caution": "Las skills son instrucciones que entran al prompt de este agente. Agregá solo repositorios en los que confíes.",
+  "agent.skills.repo_failed": "No se pudo suscribir:",
+  "agent.skills.repo_from": "De",
+  "agent.skills.repo_already": "Ya estaba suscrito — mostrando lo que trae.",
+  "agent.skills.repo_no_skills": "Suscrito, pero no se encontraron skills. Este repo no tiene carpetas con SKILL.md — puede ser un índice que enlaza a skills alojadas en otros repositorios.",
+  "agent.skills.repo_all_attached": "Todas las skills de este repo ya están asignadas a este agente.",
+
+  "agent.skills.ranked_hint": "rankeadas, no generadas",
+  "agent.skills.ranked_hint_title": "Coincidencia determinística de palabras + IDF entre el prompt de este agente y el texto de cada skill. No se llama a ningún modelo.",
+  "agent.skills.no_route_before": "Este kernel no tiene la ruta",
+  "agent.skills.no_route_after": ", así que no hay con qué rankear. Buscá en el catálogo de abajo.",
+  "agent.skills.empty_before": "Todavía no hay skills instaladas en este kernel. Una fila del",
+  "agent.skills.empty_mid": "se instala sola cuando la attachás — no hay nada que configurar antes. Los repositorios enteros se suscriben en",
+  "agent.skills.catalogue_word": "catálogo",
 };
 
 export default es;

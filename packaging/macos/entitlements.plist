@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime exceptions for the Kernl .app.
+
+  Notarization requires the hardened runtime (codesign, options runtime), and
+  the hardened runtime kills exactly the things a JavaScript runtime does for a
+  living. Each entry below is here because the payload needs it, not as a
+  blanket loosening:
+
+    allow-jit / allow-unsigned-executable-memory
+        Bun and Node compile JavaScript to machine code at runtime and execute
+        pages they wrote themselves. Without these the process is killed on the
+        first hot function with EXC_BAD_ACCESS, which looks like a crash on
+        launch rather than like a signing problem. Worth naming here for
+        whoever debugs it at 2am.
+
+    disable-library-validation
+        The payload dlopen()s native addons (.node) and ships its own ffmpeg
+        and whisper binaries. Library validation refuses any code not signed by
+        the same Team ID: CI signs everything it ships, but a user extension
+        bringing its own prebuilt addon would be refused at runtime.
+
+    allow-dyld-environment-variables
+        The launcher sets DYLD_* so the payload finds its bundled dylibs.
+
+  If a future build drops the bundled binaries and the native addons, drop
+  disable-library-validation with them. A smaller entitlement set is a smaller
+  attack surface, and nothing here is free.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.cs.allow-jit</key>
+	<true/>
+	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	<key>com.apple.security.cs.allow-dyld-environment-variables</key>
+	<true/>
+</dict>
+</plist>

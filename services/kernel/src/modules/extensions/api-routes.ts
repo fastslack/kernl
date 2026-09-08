@@ -214,6 +214,15 @@ export function registerExtensionsRoutes(
   // level as the SPA chunks. Data access still goes through /api/* with auth.
 
   const EXT_ASSET_MIME: Record<string, string> = {
+    // HTML lets an extension ship a standalone page the dashboard can embed in
+    // an iframe — how Scene Studio shows a live preview inside the agent
+    // drawer without the free shell needing to know anything about three.js.
+    // Not a new trust boundary: these same directories already serve the
+    // JavaScript that runs inside the dashboard, which is strictly more
+    // powerful than a document served beside it. Same-origin is the point —
+    // the page reads the auth token from localStorage instead of taking one
+    // through the URL.
+    html: "text/html; charset=utf-8",
     js: "application/javascript; charset=utf-8",
     mjs: "application/javascript; charset=utf-8",
     css: "text/css; charset=utf-8",
@@ -288,6 +297,41 @@ export function registerExtensionsRoutes(
         filename: body.bundle_path,
       });
       server.json(res, 200, { success: true, item: row });
+    } catch (err) {
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  /**
+   * Upgrade an installed extension from a local bundle.
+   *
+   * `install` refuses when the slug already exists and tells the caller to
+   * "use update()" — advice with no way to follow it, because `update()` had
+   * no route. Anyone shipping a v2 had to uninstall first, which throws away
+   * the install receipt and briefly leaves the extension gone.
+   *
+   * `force` skips the newer-version check, for re-applying a rebuilt bundle at
+   * the same version during development. Entitlement is re-checked against the
+   * INCOMING manifest either way, so this cannot be used to sidestep a licence.
+   */
+  server.post("/api/extensions/item/:id/update", async (req, res) => {
+    try {
+      const body = await server.parseBody<{ bundle_path?: string; force?: boolean }>(req);
+      if (!body.bundle_path) {
+        server.json(res, 400, { error: "bundle_path required" });
+        return;
+      }
+      const result = await service.update(
+        body.bundle_path,
+        { type: "file", filename: body.bundle_path },
+        { force: body.force === true },
+      );
+      server.json(res, 200, {
+        success: true,
+        from: result.from,
+        to: result.to,
+        item: result.extension,
+      });
     } catch (err) {
       server.json(res, 500, { error: String(err) });
     }

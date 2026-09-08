@@ -272,6 +272,24 @@ EXT_DEPS="$(node -e "
     '@aws-sdk/client-s3', '@aws-sdk/lib-storage',
     '@anthropic-ai/claude-agent-sdk', '@modelcontextprotocol/sdk',
   ]);
+  // ...except the two SDKs the bundled extensions actually depend on, on
+  // Windows, where they ship inside the package instead.
+  //
+  // Ten bundled extensions declare one of these -- Cinema, Shop, Comms and
+  // filesystem-commander among them -- so leaving them out parks all of them
+  // in 'installed', and a parked extension does not even serve its own page:
+  // /ext-assets/<slug>/* answers 404 unless status is 'active'. The user gets
+  // a failed dynamic import and a feature that looks simply broken. The
+  // auto-provisioner is meant to close that gap after boot, but it depends on
+  // reaching the npm registry from the user machine on first run, and when
+  // that fails there is nothing to fall back to.
+  //
+  // Deliberate trade: ~100 MB of installer so the features work offline and on
+  // first boot. Windows only for now -- measure before extending it.
+  if (process.env.PLATFORM && process.env.PLATFORM.startsWith('win')) {
+    ON_DEMAND.delete('@anthropic-ai/claude-agent-sdk');
+    ON_DEMAND.delete('@modelcontextprotocol/sdk');
+  }
   const root = 'services/kernel/assets/extensions';
   const found = new Set();
   if (fs.existsSync(root)) (function walk(d) {

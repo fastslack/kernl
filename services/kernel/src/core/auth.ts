@@ -60,7 +60,7 @@ export function isPeerAuthenticatedPath(pathname: string): boolean {
  * `&auth=<token>` (Page.svelte:2100); only this list had not been told.
  */
 const AUTH_QUERY_PATH_RE =
-  /^\/api\/(torrents\/(transcode|webseed-proxy|[^/?#]+\/file\/\d+\/stream)|cinema\/media\/(transcode|webseed-proxy))/;
+  /^\/api\/(torrents\/(transcode|webseed-proxy|[^/?#]+\/file\/\d+\/stream)|cinema\/media\/(transcode|webseed-proxy)|blender\/jobs\/[^/?#]+\/frame\/[^/?#]+$)/;
 
 export function isAuthenticated(req: IncomingMessage, token: string): boolean {
   const authHeader = req.headers.authorization;

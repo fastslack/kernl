@@ -1,80 +1,115 @@
 /**
  * MCP Bridge Module
  *
- * Connects to external MCP servers at startup and injects their tools into
- * the kernel's tool pipeline. Configured via the MCP_BRIDGE_SERVERS env var.
+ * Connects to external MCP servers and injects their tools into the kernel's
+ * pipeline, so chat and agents can call them like any other tool.
  *
- * Example .env:
- *   MCP_BRIDGE_SERVERS='[
- *     {"name":"fs","type":"stdio","command":"npx","args":["-y","@modelcontextprotocol/server-filesystem","/tmp"]},
- *     {"name":"myapi","type":"http","url":"http://localhost:9000/mcp","token":"secret"}
- *   ]'
+ * Servers used to live only in the MCP_BRIDGE_SERVERS environment variable.
+ * They now live in the database, which is what lets them be added,
+ * authenticated, reconnected and removed from the dashboard instead of by
+ * editing `.env` and restarting. The variable is still read once, to import
+ * whatever it holds on first boot, so no existing configuration is lost.
  */
 
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
+import type { KernelModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
+import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
 import { log } from "../../../../../src/core/logger.js";
+import { runMigrations } from "../../../../../src/core/db/migrations.js";
 import { parseMcpBridgeServers } from "./types.js";
-import { connectMcpServer, type McpBridgeConnection } from "./client.js";
+import { mcpMigrations } from "./migrations/001_mcp.js";
+import { McpStore } from "./store.js";
+import { McpRegistry } from "./registry.js";
+import { mcpRpcActions } from "./rpc-actions.js";
+import { registerMcpOAuthRoutes } from "./oauth-routes.js";
 
 export type McpBridgeModule = KernelModule & {
-  /** Returns all tools bridged from external MCP servers */
+  /** Every tool from every connected server. Read live by the tool surface. */
   getBridgedTools(): ToolDefinition[];
+  /** Injected by bootstrap so a connection change can refresh chat + agents. */
+  setRepublish(fn: () => void): void;
+  getStore(): McpStore | null;
+  getRegistry(): McpRegistry | null;
 };
 
 export function createMcpBridgeModule(): McpBridgeModule {
-  let bridgedTools: ToolDefinition[] = [];
-  let connections: McpBridgeConnection[] = [];
+  let store: McpStore | null = null;
+  let registry: McpRegistry | null = null;
+  let sqlite: ModuleContext["sqlite"] | null = null;
+  let republish: () => void = () => {};
 
   return {
     name: "mcp-bridge",
 
-    async initialize(_ctx: ModuleContext) {
-      const raw = process.env.MCP_BRIDGE_SERVERS ?? "";
-      const servers = parseMcpBridgeServers(raw);
+    async initialize(ctx: ModuleContext) {
+      sqlite = ctx.sqlite;
+      runMigrations(ctx.sqlite, "mcp-bridge", mcpMigrations);
+      store = new McpStore(ctx.sqlite);
 
-      if (servers.length === 0) {
-        log.info("MCP Bridge: no servers configured (MCP_BRIDGE_SERVERS not set)");
-        return;
+      // One-time import; a no-op once the table has rows.
+      const imported = store.importFromEnv(parseMcpBridgeServers(process.env.MCP_BRIDGE_SERVERS ?? ""));
+      if (imported.length > 0) {
+        log.info(`MCP Bridge: imported ${imported.length} server(s) from MCP_BRIDGE_SERVERS → ${imported.join(", ")}`);
       }
 
-      log.info(`MCP Bridge: connecting to ${servers.length} server(s)…`);
+      store.sweepOAuthState();
 
-      const results = await Promise.allSettled(
-        servers.map((cfg) => connectMcpServer(cfg)),
-      );
+      registry = new McpRegistry({
+        store,
+        // Indirect so bootstrap can install the real one after this runs.
+        republish: () => republish(),
+      });
 
-      for (let i = 0; i < results.length; i++) {
-        const result = results[i];
-        if (result.status === "fulfilled") {
-          connections.push(result.value);
-          bridgedTools.push(...result.value.tools);
-        } else {
-          log.error(
-            `MCP Bridge: failed to connect to "${servers[i].name}":`,
-            result.reason,
-          );
-        }
-      }
-
-      log.info(
-        `MCP Bridge: ready — ${bridgedTools.length} external tools from ${connections.length} server(s)`,
-      );
+      await registry.connectAll();
     },
 
     getTools(): ToolDefinition[] {
-      // The bridge tools are injected into allTools in index.ts via getBridgedTools().
-      // We return them here too so they appear in the MCP server's ListTools response.
-      return bridgedTools;
+      // Also returned here so bridged tools appear in the kernel's own MCP
+      // ListTools response, not only in chat and agents.
+      return registry?.getTools() ?? [];
     },
 
     getBridgedTools(): ToolDefinition[] {
-      return bridgedTools;
+      return registry?.getTools() ?? [];
+    },
+
+    setRepublish(fn: () => void) {
+      republish = fn;
+    },
+
+    getRpcActions(): RpcAction[] {
+      if (!sqlite || !store || !registry) return [];
+      return mcpRpcActions(sqlite, { store, registry });
+    },
+
+    getDashboardDescriptor(): DashboardDescriptor | null {
+      if (!store || !registry) return null;
+      const s = store;
+      const r = registry;
+      return {
+        registerRoutes: (server) => {
+          registerMcpOAuthRoutes(server, {
+            store: s,
+            registry: r,
+            // Only used to parse the callback's own URL; the redirect the
+            // provider was given came from the browser at login time.
+            publicOrigin: () => "http://127.0.0.1",
+          });
+        },
+      };
+    },
+
+    getStore() {
+      return store;
+    },
+
+    getRegistry() {
+      return registry;
     },
 
     async shutdown() {
-      await Promise.allSettled(connections.map((c) => c.disconnect()));
-      connections = [];
-      bridgedTools = [];
+      await registry?.shutdown();
+      registry = null;
+      store = null;
     },
   };
 }

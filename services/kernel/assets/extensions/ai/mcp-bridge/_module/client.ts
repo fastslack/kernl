@@ -13,6 +13,39 @@ import { z } from "zod";
 import { log } from "../../../../../src/core/logger.js";
 import type { ToolDefinition, ToolResult } from "../../../../../src/core/types.js";
 import type { McpServerConfig } from "./types.js";
+import { createClientCredentialsProvider, type TokenProvider } from "./oauth.js";
+
+/**
+ * Wraps fetch so every request carries a freshly-resolved bearer token.
+ *
+ * On a 401 the token is re-minted once and the request replayed — but only
+ * when the body is safe to send twice. A stream body is already consumed by
+ * the first attempt, so replaying it would send an empty request and turn a
+ * clear auth error into a confusing protocol one; those surface the 401 as-is.
+ */
+function buildAuthFetch(provider: TokenProvider) {
+  return async function authFetch(
+    input: string | URL | Request,
+    init?: RequestInit,
+  ): Promise<Response> {
+    const send = async (token: string): Promise<Response> => {
+      const headers = new Headers(init?.headers);
+      headers.set("Authorization", `Bearer ${token}`);
+      return fetch(input as RequestInfo, { ...init, headers });
+    };
+
+    const response = await send(await provider.getToken());
+    if (response.status !== 401) return response;
+
+    const body = init?.body;
+    const replayable =
+      body === undefined || body === null || typeof body === "string";
+    if (!replayable) return response;
+
+    log.info("MCP Bridge: got 401, re-minting token and retrying once");
+    return send(await provider.getToken(true));
+  };
+}
 
 /** Wraps a remote JSON Schema as a passthrough Zod schema */
 function schemaFromJsonSchema(jsonSchema: Record<string, unknown>): z.ZodType<unknown> {
@@ -50,11 +83,21 @@ export async function connectMcpServer(
     });
   } else {
     const headers: Record<string, string> = { ...(config.headers ?? {}) };
-    if (config.token) {
+    const dynamicAuth = config.tokenProvider ?? (config.oauth ? createClientCredentialsProvider(config.oauth, config.name) : null);
+    if (config.token && !dynamicAuth) {
       headers["Authorization"] = `Bearer ${config.token}`;
     }
+
+    // With a token provider the Authorization header cannot be baked into
+    // requestInit: it has to be resolved per request, or the transport would
+    // keep replaying whichever token happened to be current at connect() time.
+    // A custom fetch stamps a fresh one on every call and re-mints once on a
+    // 401, which covers a token revoked ahead of its stated expiry.
+    const authFetch = dynamicAuth ? buildAuthFetch(dynamicAuth) : undefined;
+
     transport = new StreamableHTTPClientTransport(new URL(config.url), {
       requestInit: { headers },
+      ...(authFetch ? { fetch: authFetch } : {}),
     });
   }
 

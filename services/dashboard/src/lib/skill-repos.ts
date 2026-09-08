@@ -87,8 +87,29 @@ export const SUGGESTED_SKILL_REPOS: SuggestedRepo[] = [
 	},
 ];
 
+/**
+ * One spelling of a repo URL, so two of them can be compared.
+ *
+ * The kernel files a repo under the URL exactly as posted, and GitHub answers
+ * to four spellings of the same repository. This also backs SkillsTab's
+ * "skills from this repo" list, which matches a catalog item's
+ * `origin.source.url` against what the user typed — an unnormalised compare
+ * there shows an empty list for a repo that subscribed perfectly well.
+ *
+ * The trailing-slash pass runs on both sides of the `.git` strip on purpose:
+ * `…/skills.git/` ends in a slash, so `/\.git$/` alone never fires and the
+ * suffix survives.
+ */
+export function normalizeRepoUrl(url: string): string {
+	return url
+		.trim()
+		.toLowerCase()
+		.replace(/\/+$/, '')
+		.replace(/\.git$/, '')
+		.replace(/\/+$/, '');
+}
+
 /** True when this repo is already subscribed, comparing without the noise. */
 export function isSubscribed(repo: SuggestedRepo, subscribed: { url: string }[]): boolean {
-	const norm = (u: string) => u.trim().replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
-	return subscribed.some((r) => norm(r.url) === norm(repo.url));
+	return subscribed.some((r) => normalizeRepoUrl(r.url) === normalizeRepoUrl(repo.url));
 }

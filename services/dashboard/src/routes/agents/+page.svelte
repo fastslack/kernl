@@ -2,9 +2,14 @@
   import { agents } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
   import Badge from '$lib/components/Badge.svelte';
-  import AgentSkillsPanel from '$lib/components/AgentSkillsPanel.svelte';
+  // El mismo drawer que monta /agents-flow. Esta página tenía el suyo: una
+  // grilla de solo lectura, sin skills, sin triggers y sin nada editable.
+  import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
+  import OverviewTab from '$lib/components/agent/tabs/OverviewTab.svelte';
+  import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import { fmtTime, timeAgo } from '$lib/utils.js';
-  import { runAgent, stopAgent, deleteAgent, createAgent } from '$lib/api.js';
+  import { runAgent, stopAgent, deleteAgent, createAgent, updateAgent } from '$lib/api.js';
+  import { agentFromResponse } from '$lib/stores/agent-detail.js';
 
   $: ag = ($agents as any);
   $: allAgents = ag?.agents ?? [];
@@ -83,11 +88,114 @@
   let selectedRunSteps: any[] = [];
   let loadingDetail = false;
 
+  // ── Drawer plumbing ─────────────────────────────
+  // AgentDrawer owns the agent and every edit inside it; what stays here is
+  // what only this page can do — the writes that also have to move its own
+  // list row, and the tab the run drill-down navigates away from and back to.
+  let panelTab: string = 'info';
+  let starting = false;
+  let startMsg = '';
+  let togglingPause = false;
+  let revisionBusy = false;
+  let savingName = false;
+  let editingName = false;
+  let editNameValue = '';
+  let msgTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Apply a saved row (or the fields of one) to the agent the drawer is
+   * showing.
+   *
+   * This is the only way a write reaches the drawer from out here, and the
+   * store treats what arrives as newer than the detail row it fetched when it
+   * opened — which is what makes a Pause taken here show up as paused instead
+   * of being overwritten by the `active` captured at open.
+   */
+  /**
+   * The office the drawer paints its accent and header chip from. The 3D
+   * world hands over the flow object it already has; here it is looked up by
+   * name, which is what the list row carries.
+   */
+  $: selectedFlow = selectedAgent?.flow_name
+    ? (flows.find((f: any) => f.name === selectedAgent.flow_name) ?? { name: selectedAgent.flow_name })
+    : null;
+
+  function refreshRow(patch: Record<string, unknown> | null | undefined): void {
+    if (!selectedAgent || !patch) return;
+    selectedAgent = { ...selectedAgent, ...patch };
+  }
+
+  /** Transient line in the drawer's action row; it is not worth an alert. */
+  function flash(msg: string): void {
+    startMsg = msg;
+    if (msgTimer) clearTimeout(msgTimer);
+    msgTimer = setTimeout(() => { startMsg = ''; }, 4000);
+  }
+
+  async function runSelected() {
+    if (!selectedAgent) return;
+    starting = true;
+    startMsg = '';
+    try { await runAgent(selectedAgent.id); flash('✓ started'); }
+    catch (e: any) { flash('✗ ' + (e?.message ?? String(e))); }
+    finally { starting = false; }
+  }
+
+  /** Pause and Resume are one toggle; which way it goes is read off the row. */
+  async function togglePause() {
+    if (!selectedAgent) return;
+    const resume = selectedAgent.active !== 1;
+    togglingPause = true;
+    try {
+      const saved = agentFromResponse(await updateAgent(selectedAgent.id, { active: resume }));
+      // The saved row when there is one: if the kernel refused the change,
+      // the button must not claim it took.
+      refreshRow(saved ?? { active: resume ? 1 : 0 });
+      flash(resume ? '▶ resumed' : '⏸ paused');
+    } catch (e: any) {
+      flash('✗ ' + (e?.message ?? String(e)));
+    } finally { togglingPause = false; }
+  }
+
+  async function resolveRevision(mode: 'accept' | 'reject') {
+    if (!selectedAgent) return;
+    revisionBusy = true;
+    try {
+      const done = mode === 'accept'
+        ? await doAcceptRevision(selectedAgent.id, selectedAgent.name)
+        : await doRejectRevision(selectedAgent.id, selectedAgent.name);
+      if (done) refreshRow(mode === 'accept' ? { under_revision: 0 } : { under_revision: 0, active: 0 });
+    } finally { revisionBusy = false; }
+  }
+
+  function beginEditName() {
+    editNameValue = selectedAgent?.name ?? '';
+    editingName = true;
+  }
+
+  function cancelEditName() { editingName = false; }
+
+  async function saveEditName() {
+    const next = (editNameValue || '').trim();
+    if (!selectedAgent || !next || next === selectedAgent.name) { editingName = false; return; }
+    savingName = true;
+    try {
+      const saved = agentFromResponse(await updateAgent(selectedAgent.id, { name: next }));
+      refreshRow(saved ?? { name: next });
+      editingName = false;
+    } catch (e: any) {
+      flash('✗ ' + (e?.message ?? String(e)));
+    } finally { savingName = false; }
+  }
+
   async function selectAgent(agent: any) {
     selectedAgent = agent;
     selectedRun = null;
     selectedRunSteps = [];
     detailView = 'agent';
+    panelTab = 'info';
+    editingName = false;
+    startMsg = '';
     loadingDetail = true;
     try {
       const data = await rpcOrCall('agents.detail', { id: agent.id }, async () => {
@@ -95,7 +203,10 @@
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         return res.json();
       });
-      selectedAgent = data.agent ?? agent;
+      // Merged, not replaced: the detail row is a raw `agents` row, while the
+      // list row arrives with `flow_name` joined onto it — and that is what
+      // names the office in the drawer's header.
+      selectedAgent = { ...agent, ...(data.agent ?? {}) };
       selectedAgentRuns = data.runs ?? [];
     } catch { selectedAgentRuns = []; }
     loadingDetail = false;
@@ -305,26 +416,32 @@
   // REVISION resolution:
   //   accept = keep this agent, just clear the review flag (it's not actually a duplicate)
   //   reject = deactivate this agent (soft delete — DB row stays for rollback)
-  async function doAcceptRevision(id: string, name: string) {
-    if (!confirm(`Keep "${name}"? This clears the REVISION flag and leaves the agent running as-is.`)) return;
+  //
+  // Both answer whether the change actually went through, so the drawer's copy
+  // of the row is only updated when it did — a declined confirm or a failed
+  // PUT must leave the REVISION badge exactly where it is.
+  async function doAcceptRevision(id: string, name: string): Promise<boolean> {
+    if (!confirm(`Keep "${name}"? This clears the REVISION flag and leaves the agent running as-is.`)) return false;
     try {
       const res = await fetch(`/api/agents/${id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ under_revision: false }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch (e: any) { alert('Error: ' + e.message); }
+      return true;
+    } catch (e: any) { alert('Error: ' + e.message); return false; }
   }
 
-  async function doRejectRevision(id: string, name: string) {
-    if (!confirm(`Reject "${name}"? It will be DEACTIVATED (active=0). The row stays in the DB so you can re-enable it later.`)) return;
+  async function doRejectRevision(id: string, name: string): Promise<boolean> {
+    if (!confirm(`Reject "${name}"? It will be DEACTIVATED (active=0). The row stays in the DB so you can re-enable it later.`)) return false;
     try {
       const res = await fetch(`/api/agents/${id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ active: false, under_revision: false }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    } catch (e: any) { alert('Error: ' + e.message); }
+      return true;
+    } catch (e: any) { alert('Error: ' + e.message); return false; }
   }
 
   async function doCreateAgent() {
@@ -358,22 +475,6 @@
     if (ms < 1000) return `${ms}ms`;
     if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
     return `${(ms / 60000).toFixed(1)}m`;
-  }
-
-  function parseTools(raw: string): string[] {
-    try {
-      const p = JSON.parse(raw || '[]');
-      if (typeof p === 'string') return JSON.parse(p);
-      return Array.isArray(p) ? p : [];
-    } catch { return []; }
-  }
-
-  // Procedural skills live in <AgentSkillsPanel>: the same panel the 3D flow
-  // drawer mounts, so attaching a skill works identically wherever an agent
-  // is open. Installing them is /extensions → Skills.
-  function onSkillsChange(e: CustomEvent<{ skills: string[] }>): void {
-    if (!selectedAgent) return;
-    selectedAgent = { ...selectedAgent, skills_json: JSON.stringify(e.detail.skills) };
   }
 
   function stepIcon(type: string): string {
@@ -558,120 +659,87 @@
       <!-- Right Column -->
       <div class="ag-right">
         {#if detailView === 'agent' && selectedAgent}
-          <!-- ═══ Agent Detail ═══ -->
-          <div class="ag-panel ag-panel-detail">
-            <div class="ag-panel-header">
-              <button class="back-btn" on:click={backToOverview}>←</button>
-              <span class="ag-panel-title">{selectedAgent.name}</span>
-              <span class="ag-panel-dot" style="background:{selectedAgent.active ? 'var(--green)' : 'var(--surface-3)'}"></span>
-            </div>
-            <div class="ag-panel-body">
-              {#if loadingDetail}
-                <div class="ag-empty"><div class="ag-empty-sub">Loading...</div></div>
-              {:else}
-                <!-- Config -->
-                <div class="detail-section">
-                  <div class="detail-grid">
-                    <div class="detail-item">
-                      <span class="detail-label">Provider</span>
-                      <span class="detail-value">{selectedAgent.provider || 'default'}</span>
-                    </div>
-                    <div class="detail-item">
-                      <span class="detail-label">Model</span>
-                      <span class="detail-value mono">{selectedAgent.model || 'default'}</span>
-                    </div>
-                    <div class="detail-item">
-                      <span class="detail-label">Max Iter</span>
-                      <span class="detail-value">{selectedAgent.max_iterations}</span>
-                    </div>
-                    <div class="detail-item">
-                      <span class="detail-label">Timeout</span>
-                      <span class="detail-value">{(selectedAgent.timeout_ms / 1000).toFixed(0)}s</span>
-                    </div>
-                    <div class="detail-item">
-                      <span class="detail-label">Max Tokens</span>
-                      <span class="detail-value">{fmtTokens(selectedAgent.max_tokens ?? 0)}</span>
-                    </div>
-                    <div class="detail-item">
-                      <span class="detail-label">Max Errors</span>
-                      <span class="detail-value">{selectedAgent.max_errors ?? 3}</span>
-                    </div>
+          <!-- ═══ Agent Detail — the shared drawer ═══
+               Same component /agents-flow mounts, so an agent is read and
+               configured identically wherever it is opened. What this page
+               still supplies is what only it has: its run list (which is also
+               the way into the run drill-down below) and the prompt preview.
+               `compact` makes the drawer fill this column instead of floating
+               over a 3D canvas. -->
+          <AgentDrawer
+            agentId={selectedAgent.id}
+            listRow={selectedAgent}
+            flow={selectedFlow}
+            compact
+            running={runningAgentIds.has(selectedAgent.id)}
+            historyCount={selectedAgentRuns.length}
+            {starting}
+            {startMsg}
+            {togglingPause}
+            {revisionBusy}
+            {savingName}
+            bind:editingName
+            bind:editNameValue
+            bind:panelTab
+            on:close={backToOverview}
+            on:run={runSelected}
+            on:resume={togglePause}
+            on:revision={(e) => resolveRevision(e.detail.mode)}
+            on:rename-begin={beginEditName}
+            on:rename-cancel={cancelEditName}
+            on:rename-save={saveEditName}
+            on:changed={(e) => refreshRow(e.detail.agent)}
+          >
+            <svelte:fragment slot="overview" let:store>
+              <OverviewTab
+                {store}
+                compact
+                loading={loadingDetail}
+                lastRun={selectedAgentRuns[0] ?? null}
+                running={runningAgentIds.has(selectedAgent.id)}
+              >
+                <!-- The one block of the overview this page adds. It calls
+                     back into this scope, so it goes in as a slot rather than
+                     as a prop. -->
+                <svelte:fragment slot="footer">
+                  <div class="ip-extra">
+                    <button class="ag-btn ag-btn-ghost" on:click={openPreview} title="Compare what memory/learnings the executor would inject under lexical vs semantic ranking — without running the LLM.">
+                      🔍 Preview prompt (A/B lexical vs semantic)
+                    </button>
                   </div>
-                </div>
+                </svelte:fragment>
+              </OverviewTab>
+            </svelte:fragment>
 
-                {#if selectedAgent.description}
-                  <div class="detail-section">
-                    <h4 class="detail-heading">Description</h4>
-                    <div class="detail-text">{selectedAgent.description}</div>
-                  </div>
-                {/if}
+            <svelte:fragment slot="skills">
+              <div class="ip-body">
+                <SkillsTab
+                  agent={selectedAgent}
+                  compact
+                  on:change={(e) => refreshRow({ skills_json: JSON.stringify(e.detail.skills) })}
+                />
+              </div>
+            </svelte:fragment>
 
-                {#if selectedAgent.system_prompt}
-                  <div class="detail-section">
-                    <h4 class="detail-heading">System Prompt</h4>
-                    <div class="detail-code">{selectedAgent.system_prompt}</div>
-                  </div>
-                {/if}
-
-                {#if selectedAgent.goal_template}
-                  <div class="detail-section">
-                    <h4 class="detail-heading">Goal Template</h4>
-                    <div class="detail-code">{selectedAgent.goal_template}</div>
-                  </div>
-                {/if}
-
-                <!-- Preview Prompt (A/B lexical vs semantic ranking) -->
-                <div class="detail-section">
-                  <button class="ag-btn ag-btn-ghost" on:click={openPreview} title="Compare what memory/learnings the executor would inject under lexical vs semantic ranking — without running the LLM.">
-                    🔍 Preview prompt (A/B lexical vs semantic)
-                  </button>
-                </div>
-
-                {@const tools = parseTools(selectedAgent.allowed_tools)}
-                {#if tools.length}
-                  <div class="detail-section">
-                    <h4 class="detail-heading">Allowed Tools</h4>
-                    <div class="tool-tags">
-                      {#each tools as t}<span class="tool-tag">{t}</span>{/each}
-                    </div>
-                  </div>
-                {/if}
-
-                <!-- Procedural skills. Shared with the 3D flow drawer so an
-                     agent is configured the same way wherever it is opened. -->
-                <div class="detail-section">
-                  <AgentSkillsPanel agent={selectedAgent} on:change={onSkillsChange} />
-                </div>
-
-                {@const vars = selectedAgent.variables ? (() => { try { return Object.entries(JSON.parse(selectedAgent.variables)); } catch { return []; } })() : []}
-                {#if vars.length}
-                  <div class="detail-section">
-                    <h4 class="detail-heading">Variables</h4>
-                    {#each vars as [k, v]}
-                      <div class="var-item"><strong>{k}:</strong> <code>{v}</code></div>
-                    {/each}
-                  </div>
-                {/if}
-
-                <!-- Agent's Runs -->
+            <svelte:fragment slot="history">
+              <div class="ip-body">
                 {#if selectedAgentRuns.length}
-                  <div class="detail-section">
-                    <h4 class="detail-heading">Runs ({selectedAgentRuns.length})</h4>
-                    {#each selectedAgentRuns as run}
-                      <button class="run-card" on:click={() => selectRun(run)}>
-                        <span class="run-dot" style="background:{statusColor(run.status)}"></span>
-                        <span class="run-card-status" style="color:{statusColor(run.status)}">{run.status}</span>
-                        <span class="run-card-steps mono">{run.steps_count} steps</span>
-                        <span class="run-card-tokens mono">{fmtTokens(run.tokens_used)}</span>
-                        <span class="run-card-time">{timeAgo(run.created_at)}</span>
-                        <span class="run-card-arrow">›</span>
-                      </button>
-                    {/each}
-                  </div>
+                  {#each selectedAgentRuns as run}
+                    <button class="run-card" on:click={() => selectRun(run)}>
+                      <span class="run-dot" style="background:{statusColor(run.status)}"></span>
+                      <span class="run-card-status" style="color:{statusColor(run.status)}">{run.status}</span>
+                      <span class="run-card-steps mono">{run.steps_count} steps</span>
+                      <span class="run-card-tokens mono">{fmtTokens(run.tokens_used)}</span>
+                      <span class="run-card-time">{timeAgo(run.created_at)}</span>
+                      <span class="run-card-arrow">›</span>
+                    </button>
+                  {/each}
+                {:else}
+                  <div class="ag-empty"><div class="ag-empty-sub">{loadingDetail ? 'Loading…' : 'No runs yet'}</div></div>
                 {/if}
-              {/if}
-            </div>
-          </div>
+              </div>
+            </svelte:fragment>
+          </AgentDrawer>
 
         {:else if detailView === 'run' && selectedRun}
           <!-- ═══ Run Detail ═══ -->
@@ -1072,6 +1140,21 @@
     scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent;
   }
 
+  /* ── The shared drawer, embedded ─────────────── */
+  /* `.ip-body` belongs to AgentDrawer, and Svelte scopes CSS per component:
+     the two tab bodies THIS page fills have to carry the rule themselves,
+     exactly as the 3D world's slots do. */
+  .ip-body {
+    flex: 1; overflow-y: auto; overflow-x: hidden;
+    padding: 16px 18px 24px;
+    scrollbar-width: thin; scrollbar-color: rgba(120,130,160,.25) transparent;
+  }
+  .ip-body::-webkit-scrollbar { width: 6px; }
+  .ip-body::-webkit-scrollbar-thumb { background: rgba(120,130,160,.2); border-radius: 3px; }
+  /* The one block this page adds to the overview, spaced like the sections
+     above it rather than butted against the last one. */
+  .ip-extra { margin-top: 14px; }
+
   /* ── Right column ────────────────────────────── */
   .ag-right { display: flex; flex-direction: column; gap: 10px; min-height: 0; }
   .ag-panel-runs { flex: 1; min-height: 0; }
@@ -1216,7 +1299,6 @@
   }
   .detail-label { font-size: 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-3); display: block; }
   .detail-value { font-size: 12px; color: var(--text-1); display: block; margin-top: 1px; }
-  .detail-text { font-size: 11px; color: var(--text-2); line-height: 1.5; }
   .detail-code {
     font-size: 10px; color: var(--text-2); background: var(--surface-2);
     padding: 8px 10px; border-radius: 6px; font-family: var(--font-mono);
@@ -1226,18 +1308,6 @@
   }
   .result-code { border-left: 2px solid var(--green); }
   .error-code { border-left: 2px solid var(--red); color: var(--red); }
-
-  /* ── Tool tags ───────────────────────────────── */
-  .tool-tags { display: flex; flex-wrap: wrap; gap: 4px; }
-  .tool-tag {
-    font-size: 9px; font-family: var(--font-mono); background: var(--surface-2);
-    padding: 2px 6px; border-radius: 4px; color: var(--teal);
-  }
-
-  /* ── Variable items ──────────────────────────── */
-  .var-item { font-size: 11px; color: var(--text-2); margin-bottom: 3px; }
-  .var-item strong { color: var(--text-1); }
-  .var-item code { font-size: 10px; font-family: var(--font-mono); background: var(--surface-2); padding: 1px 4px; border-radius: 3px; }
 
   /* ── Run card (in agent detail) ──────────────── */
   .run-card {

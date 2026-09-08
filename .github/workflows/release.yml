@@ -98,6 +98,27 @@ jobs:
       - name: Build DEB
         run: PLATFORM=linux-x64 packaging/deb/build-deb.sh
 
+      # Portable tarball — what in-app update downloads on Linux.
+      #
+      # .deb and .rpm cannot serve that purpose: their files belong to dpkg or
+      # rpm, and replacing them from inside the app leaves a machine whose next
+      # `apt upgrade` reverts the update. So a package install is told to use
+      # its package manager, and everyone else gets this. Without it the
+      # feature could not work on Linux no matter what the code did — there was
+      # nothing self-contained to download.
+      - name: Build portable tarball
+        id: tarball
+        run: |
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          STAGE=$(mktemp -d)
+          STAGE_DIR="$STAGE" PLATFORM=linux-x64 packaging/stage-payload.sh
+          mkdir -p packaging/out
+          OUT="packaging/out/Kernl-${VERSION}-x64-linux.tar.gz"
+          # One top-level directory inside, which is what the updater expects
+          # to find when it unpacks.
+          tar -czf "$OUT" -C "$STAGE" "kernl-${VERSION}"
+          echo "path=$OUT" >> $GITHUB_OUTPUT
+
       - name: Locate artifacts
         id: locate
         run: |
@@ -112,6 +133,7 @@ jobs:
           path: |
             ${{ steps.locate.outputs.rpm }}
             ${{ steps.locate.outputs.deb }}
+            ${{ steps.tarball.outputs.path }}
 
   # ── macOS: .app → .dmg, both archs (macOS runners) ─────────────
   macos:
@@ -165,6 +187,35 @@ jobs:
       # Without these secrets the .app is unsigned. Users right-click → Open
       # to bypass Gatekeeper. With them, we get a Developer ID-signed and
       # Apple-notarized bundle that opens with a normal double-click.
+      #
+      # Every step below gates on APPLE_CERT_DATA, not on three different
+      # secrets. Separate gates meant a half-filled secret set produced a
+      # signed-but-unnotarized build — which Gatekeeper rejects exactly like an
+      # unsigned one — and the release still went green. The guard turns that
+      # into a failure at the top of the job instead.
+      - name: Check signing secrets are all-or-nothing
+        run: |
+          ALL="APPLE_CERT_DATA APPLE_CERT_PASSWORD APPLE_TEAM_ID
+               APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY"
+          MISSING=""
+          COUNT=0
+          for v in $ALL; do
+            COUNT=$((COUNT + 1))
+            [ -z "${!v:-}" ] && MISSING="$MISSING $v"
+          done
+          SET=$((COUNT - $(echo $MISSING | wc -w)))
+          if [ "$SET" -eq "$COUNT" ]; then
+            echo "signing: all six secrets present — signed + notarized build"
+          elif [ "$SET" -eq 0 ]; then
+            echo "signing: no secrets set — UNSIGNED build (users must right-click → Open)"
+          else
+            echo "::error::Signing secrets are partially set. Missing:$MISSING" >&2
+            echo "Set all six or none: a signed-but-unnotarized app is rejected by" >&2
+            echo "Gatekeeper the same as an unsigned one, and this job would have" >&2
+            echo "shipped it as a successful release." >&2
+            exit 1
+          fi
+
       - name: Import signing certificate
         if: env.APPLE_CERT_DATA != ''
         run: |
@@ -177,13 +228,87 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple: -s -k '' build.keychain
           rm cert.p12
 
+      # Signed inside-out: every nested Mach-O first, the bundle last.
+      #
+      # This used to be one `codesign --deep`, with the identity written as
+      # "Developer ID Application: $APPLE_TEAM_ID". Two bugs in one line.
+      # codesign matches the identity as a substring of the certificate's
+      # common name, and that name is "Developer ID Application: <Your Name>
+      # (TEAMID)" — the team id is in parentheses at the END, so the string
+      # never matched and the step died with "no identity found". And Apple
+      # deprecated --deep for signing years ago: it does not apply entitlements
+      # to nested code, which for a payload that ships its own bun, ffmpeg and
+      # whisper binaries means the JIT entitlements never reach the binary that
+      # needs them. The keychain holds exactly one Developer ID at this point,
+      # so the identity below is unambiguous.
       - name: Sign .app
-        if: env.APPLE_TEAM_ID != ''
+        if: env.APPLE_CERT_DATA != ''
         run: |
-          APP="packaging/out/Kernl-$(node -p "require('./services/kernel/package.json').version")-${{ matrix.arch }}.app"
-          codesign --deep --force --options runtime \
-            --sign "Developer ID Application: $APPLE_TEAM_ID" "$APP"
+          set -euo pipefail
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          APP="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.app"
+          ENT="packaging/macos/entitlements.plist"
+
+          # --timestamp is not optional: notarization rejects a signature with
+          # no secure timestamp, and the failure arrives minutes later from
+          # Apple's service rather than here.
+          sign() {
+            codesign --force --options runtime --timestamp \
+              --entitlements "$ENT" --sign "Developer ID Application" "$1"
+          }
+
+          # Nested code first. `find -perm +111` alone catches shell scripts
+          # too, and codesign on a script is a no-op that still costs a call —
+          # `file` narrows it to actual Mach-O images (binaries, .dylib, .node).
+          find "$APP/Contents" -type f \( -perm +111 -o -name '*.dylib' -o -name '*.node' \) \
+            | sort -u \
+            | while IFS= read -r f; do
+                if file -b "$f" | grep -q '^Mach-O'; then
+                  echo "  sign $f"
+                  sign "$f"
+                fi
+              done
+
+          # The bundle last, so its seal covers the signatures written above.
+          sign "$APP"
+
+          # --deep IS right for verification: here it means "walk everything
+          # and check it", which is exactly the question being asked.
           codesign --verify --deep --strict --verbose=2 "$APP"
+          echo "── entitlements as signed ──"
+          codesign --display --entitlements - "$APP"
+
+      # Notarize the .app itself and staple the ticket INTO the bundle, before
+      # it is ever copied into the .dmg.
+      #
+      # Stapling only the dmg (what this job used to do) leaves the app the
+      # user drags to /Applications with no ticket of its own: Gatekeeper then
+      # has to ask Apple over the network on first launch, so the app fails to
+      # open offline — on a laptop, at a conference, in front of people. The
+      # dmg gets its own ticket further down; both is correct, either alone is
+      # not.
+      - name: Notarize + staple .app
+        if: env.APPLE_CERT_DATA != ''
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          APP="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.app"
+
+          echo "$APPLE_API_KEY" > AuthKey.p8
+          trap 'rm -f AuthKey.p8 notarize-app.zip' EXIT
+
+          # notarytool takes a zip/dmg/pkg, never a bare .app — and it has to
+          # be `ditto -k --keepParent`, the only zip that preserves the bundle's
+          # symlinks and extended attributes. A plain `zip -r` uploads an
+          # archive whose signature no longer verifies.
+          ditto -c -k --keepParent "$APP" notarize-app.zip
+          xcrun notarytool submit notarize-app.zip \
+            --key AuthKey.p8 \
+            --key-id "$APPLE_API_KEY_ID" \
+            --issuer "$APPLE_API_ISSUER" \
+            --wait
+          xcrun stapler staple "$APP"
+          xcrun stapler validate "$APP"
 
       - name: Build .dmg
         run: |
@@ -243,19 +368,69 @@ jobs:
           test -f "$MNT/.DS_Store"     || { echo "FAIL: no .DS_Store — the window will open unstyled" >&2; exit 1; }
           hdiutil detach "$MNT"
 
-      - name: Notarize
-        if: env.APPLE_API_KEY_ID != ''
+      # The disk image gets its own signature and ticket. The app inside it is
+      # already signed and stapled by the steps above; this covers the wrapper
+      # the user actually downloads.
+      - name: Sign + notarize .dmg
+        if: env.APPLE_CERT_DATA != ''
         run: |
+          set -euo pipefail
           VERSION=$(node -p "require('./services/kernel/package.json').version")
           DMG="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.dmg"
+
           echo "$APPLE_API_KEY" > AuthKey.p8
+          trap 'rm -f AuthKey.p8' EXIT
+
+          # dmgbuild writes an unsigned image. Signing it is what lets
+          # Gatekeeper name the developer in the "downloaded from the internet"
+          # dialog instead of shrugging.
+          codesign --force --timestamp --sign "Developer ID Application" "$DMG"
+
           xcrun notarytool submit "$DMG" \
             --key AuthKey.p8 \
             --key-id "$APPLE_API_KEY_ID" \
             --issuer "$APPLE_API_ISSUER" \
             --wait
           xcrun stapler staple "$DMG"
-          rm AuthKey.p8
+          xcrun stapler validate "$DMG"
+
+      # Repack the portable tarball from the SIGNED bundle.
+      #
+      # build-app.sh writes both the .app and the .tar.gz, and it runs before
+      # any of the signing above — so with every secret correctly configured
+      # the dmg shipped signed and notarized while the tarball beside it, same
+      # version, same release page, shipped the unsigned bundle. Whoever chose
+      # "portable" got the worse artifact for no stated reason.
+      #
+      # tar, not ditto, and deliberately: the artifact has to stay a .tar.gz
+      # with the same shape build-app.sh produced, and macOS bsdtar carries the
+      # extended attributes the signature and the stapled ticket live in. That
+      # is an assumption, not a guarantee, which is why the step below unpacks
+      # what it just wrote and verifies both rather than trusting it.
+      - name: Repack portable tarball from the signed app
+        if: env.APPLE_CERT_DATA != ''
+        run: |
+          set -euo pipefail
+          VERSION=$(node -p "require('./services/kernel/package.json').version")
+          APP="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}.app"
+          TARBALL="packaging/out/Kernl-${VERSION}-${{ matrix.arch }}-macos.tar.gz"
+
+          # Same command and same archive shape as build-app.sh line 251 — the
+          # .app sits at the root of the tar, so `tar xzf` still puts a bundle
+          # in the current directory and the README instructions hold. Only the
+          # contents differ: this one is signed.
+          rm -f "$TARBALL"
+          ( cd packaging/out && tar czf "$(basename "$TARBALL")" "$(basename "$APP")" )
+
+          # Prove it: unpack what is about to be uploaded and check both the
+          # signature and the ticket survived the round trip. If tar drops the
+          # extended attributes the ticket lives in, this fails HERE — loudly,
+          # in CI — instead of on a user's laptop with no network.
+          rm -rf packaging/tar-verify && mkdir -p packaging/tar-verify
+          tar xzf "$TARBALL" -C packaging/tar-verify
+          codesign --verify --deep --strict "packaging/tar-verify/$(basename "$APP")"
+          xcrun stapler validate "packaging/tar-verify/$(basename "$APP")"
+          rm -rf packaging/tar-verify
 
       - uses: actions/upload-artifact@v7
         with:
@@ -341,8 +516,11 @@ jobs:
           Start-Process cmd.exe -ArgumentList "/c", "`"`"$dir\start.bat`" > `"$log`" 2>&1`"" `
             -WindowStyle Hidden
 
-          # /api/manifest is the readiness probe start.bat itself waits on, so
-          # it is the product's own definition of "up".
+          # /api/health is the readiness probe start.bat itself waits on, so
+          # it is the product's own definition of "up". Keep the two the same:
+          # this job passed for months against /api/manifest while start.bat
+          # could never get past it, because the workaround below hid the 401
+          # here and there is no equivalent for `curl -sf` over there.
           # 5 minutes. The first boot seeds agents, offices and drivers and
           # loads an ONNX embedding model, none of which is instant on a cold
           # runner — and a timeout that fires early is indistinguishable from
@@ -355,10 +533,10 @@ jobs:
           $ready = $false
           foreach ($i in 1..150) {
             try {
-              $probe = Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/manifest" `
+              $probe = Invoke-WebRequest -Uri "http://127.0.0.1:3086/api/health" `
                          -UseBasicParsing -TimeoutSec 5 -SkipHttpErrorCheck
               if ($probe.StatusCode -gt 0) {
-                Write-Host "kernel answered $($probe.StatusCode) on /api/manifest"
+                Write-Host "kernel answered $($probe.StatusCode) on /api/health"
                 $ready = $true; break
               }
             } catch { Start-Sleep -Seconds 2 }

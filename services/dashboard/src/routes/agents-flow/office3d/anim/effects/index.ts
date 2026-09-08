@@ -8,7 +8,6 @@ export { floatingGlyph, type FloatingGlyphOpts } from './floating-glyph.js';
 export { shake, type ShakeOpts } from './shake.js';
 export { convergingParticles, type ConvergingParticlesOpts } from './converging-particles.js';
 export { fallingGlyph, type FallingGlyphOpts } from './falling-glyph.js';
-export { spinningGear, type SpinningGearOpts } from './spinning-gear.js';
 export { curvedArrow, type CurvedArrowOpts } from './curved-arrow.js';
 export { paperPlane, type PaperPlaneOpts } from './paper-plane.js';
 export { pillarOfLight, type PillarOfLightOpts } from './pillar-of-light.js';

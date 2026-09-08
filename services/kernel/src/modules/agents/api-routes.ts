@@ -4,6 +4,7 @@
  */
 
 import type { ServerResponse } from "node:http";
+import { normalizeModelChainInput, normalizeExecutorType, normalizeSkillsInput } from "./chain-input.js";
 import type { KernelHttpServer } from "../../core/http-server.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
@@ -19,6 +20,7 @@ import type {
   ReflectionOptimizerLike,
   WorkspaceEvolverLike,
 } from "./advanced-types.js";
+import { rankSkillsForAgent, skillRowText, agentRowText } from "./skill-scoring.js";
 
 /**
  * Conservative prompt-injection red-flag patterns scanned in cloned marketplace
@@ -90,6 +92,13 @@ export function registerAgentRoutes(
   workspaceEvolver?: WorkspaceEvolverLike,
   /** Kernel-wide default language for the agent designer + i18n proposals. */
   defaultLanguage?: KernelLanguage,
+  /**
+   * Skill candidates from subscribed catalogue repos, for the per-agent
+   * suggestions route. Injected rather than imported so the agents module
+   * keeps not depending on marketplace: absent → suggestions fall back to
+   * installed skills only, which is a degraded answer, not an error.
+   */
+  catalogSkills?: () => Promise<Array<{ slug: string; name: string; text: string }>>,
 ): void {
   const designerLang: KernelLanguage = defaultLanguage ?? "es";
 
@@ -888,8 +897,22 @@ export function registerAgentRoutes(
         builtin_handler?: string;
         under_revision?: boolean;
         skills?: string[];
+        /** JSON array, or the array itself. See chain-input.ts. */
+        model_chain?: string | Array<{ provider?: string; model?: string }>;
+        executor_type?: string;
       }>(req);
-      const updated = service.updateAgent(id, body);
+      // The chain, the engine and the loose pair are one edit for the person
+      // making it, so they have to be one write here — otherwise `provider`
+      // and the chain head can end up disagreeing between two requests.
+      const updated = service.updateAgent(id, {
+        ...body,
+        model_chain: normalizeModelChainInput(body.model_chain),
+        executor_type: normalizeExecutorType(body.executor_type),
+        // Was reaching the column through the spread, unchecked. The two
+        // writers have to accept the same thing or the fallback path becomes
+        // a way around the validation the primary one does.
+        skills: normalizeSkillsInput(body.skills),
+      });
       if (!updated) { server.json(res, 404, { error: "Agent not found" }); return; }
       server.json(res, 200, { success: true, agent: updated });
     } catch (err) {
@@ -1170,6 +1193,93 @@ export function registerAgentRoutes(
       if (!body.content) { server.json(res, 400, { error: "content required" }); return; }
       service.addMemory(id, (body.role as "user" | "assistant") ?? "user", body.content);
       server.json(res, 200, { ok: true });
+    } catch (err) {
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  // GET /api/agents/:id/skill-suggestions — which skills would suit this
+  // agent, scored live, across installed extensions AND subscribed catalogue
+  // repos. Same maths as the daily suggester cron; this is the path the
+  // drawer's SKILLS tab calls, so the ranking reaches the agent it is about
+  // instead of a note nobody reads. A skill not yet installed is included
+  // flagged `installed: false` — that is what turns a recommendation into an
+  // installer.
+  server.get("/api/agents/:id/skill-suggestions", async (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+
+      const agent = service.getAgent(id);
+      if (!agent) { server.json(res, 404, { error: "agent not found" }); return; }
+
+      const url = new URL(req.url ?? "/", "http://localhost");
+      const minScore = Number(url.searchParams.get("min_score") ?? "1") || 0;
+      // Clamp into [0, 50]; fall back to 8 only when the param is absent or
+      // genuinely not a number. `top_n=0` must return zero results, not the
+      // default — and a negative value must not reach Array.slice(0, -n),
+      // which truncates from the end instead of erroring.
+      const topNRaw = url.searchParams.get("top_n");
+      const topNParsed = topNRaw === null ? NaN : Number(topNRaw);
+      const topN = Number.isFinite(topNParsed) ? Math.min(Math.max(topNParsed, 0), 50) : 8;
+
+      const rows = service.listInstalledSkillRows();
+      const installedSlugs = new Set(rows.map((r) => r.slug));
+
+      const candidates: Array<{ slug: string; name: string; text: string; installed: boolean }> =
+        rows.map((r) => ({
+          slug: r.slug,
+          name: r.name,
+          text: skillRowText(r),
+          installed: true,
+        }));
+
+      // The catalogue can never take down the tab: a dead repo, no network,
+      // or a slow provider degrades to "installed skills only", logged as a
+      // warning — never a 500.
+      if (catalogSkills) {
+        try {
+          for (const c of await catalogSkills()) {
+            if (installedSlugs.has(c.slug)) continue; // the installed row wins
+            candidates.push({ slug: c.slug, name: c.name, text: c.text, installed: false });
+          }
+        } catch (e) {
+          log.warn(`skill-suggestions: catalogue source failed — ${String(e)}`);
+        }
+      }
+
+      if (candidates.length === 0) { server.json(res, 200, { suggestions: [] }); return; }
+
+      let attached: string[] = [];
+      try { attached = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { attached = []; }
+
+      const ranked = rankSkillsForAgent(
+        {
+          text: agentRowText({
+            name: agent.name,
+            description: agent.description ?? "",
+            system_prompt: agent.system_prompt ?? "",
+            flow_name: null,
+          }),
+          attached: new Set(attached.map(String)),
+        },
+        candidates.map((c) => ({ slug: c.slug, text: c.text })),
+        { minScore, topN },
+      );
+
+      const byslug = new Map(candidates.map((c) => [c.slug, c]));
+      server.json(res, 200, {
+        suggestions: ranked.map((m) => {
+          const c = byslug.get(m.slug);
+          return {
+            slug: m.slug,
+            name: c?.name ?? m.slug,
+            score: Number(m.score.toFixed(2)),
+            matches: m.matches,
+            installed: c?.installed ?? false,
+          };
+        }),
+      });
     } catch (err) {
       server.json(res, 500, { error: String(err) });
     }
