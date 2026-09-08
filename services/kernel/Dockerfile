@@ -212,7 +212,19 @@ RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-cer
 # backend SILENTLY, leaving the container on the CPU with nothing in the logs
 # to say why. It is ~150 KB and does nothing when no GPU is passed through, so
 # it ships unconditionally rather than becoming a build flag someone forgets.
-RUN apt-get update && apt-get install -y --no-install-recommends libvulkan1 \
+#
+# libsm6 / libice6 / libegl1 are the same bargain for the Blender bridge: a few
+# megabytes between them, inert without the extension. Blender ITSELF is
+# deliberately not here — a gigabyte unpacked, carried by every install whether
+# or not the operator ever renders. The extension fetches the official portable
+# build into the data volume on demand, which survives a container recreate and,
+# measured on this machine, offers an OptiX backend the distro package does not.
+#
+# libEGL is the one that bites: without it a render dies with "Couldn't open
+# libEGL.so.1" AFTER the job is queued and the scene is built, because EEVEE
+# needs a GPU context even with no window.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      libvulkan1 libsm6 libice6 libegl1 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 COPY --from=whisper /opt/whisper /opt/whisper
 # The env override is the highest-priority branch of mediaToolBin(), which is
