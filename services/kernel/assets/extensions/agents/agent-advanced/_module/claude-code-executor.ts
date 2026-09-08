@@ -32,6 +32,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { log } from "../../../../../src/core/logger.js";
+import { failureNote } from "./failure-note.js";
 import { resolveDefaultSocketPath as resolveKernelMcpSocketPath } from "../../../../../src/core/mcp-unix-socket.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "../../../../../src/core/llm/logger.js";
 import { isoNow } from "../../../../../src/core/helpers.js";
@@ -851,8 +852,19 @@ export class ClaudeCodeExecutor {
         tokens_used: execResult.tokens_used,
       });
 
-      if (run.trigger_type === "manual" && execResult.result) {
-        service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id);
+      if (run.trigger_type === "manual") {
+        if (execResult.result) {
+          service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id);
+        } else if (execResult.status === "failed") {
+          // A failed run used to write NOTHING here, and the chat panel only
+          // falls back to the run row when the thread has no agent message at
+          // all — so the second failure onward vanished completely. The
+          // operator saw their message, no reply, and no error: an agent that
+          // had simply stopped answering. Persisting the failure like the
+          // native executor does puts it in the thread, permanently, for every
+          // client rather than only the tab that happened to be watching.
+          service.addMemory(agent.id, "assistant", failureNote(execResult.error), run.id);
+        }
       }
 
       // Auto-eval — same closed-loop the native executor does, gated on
@@ -933,6 +945,12 @@ export class ClaudeCodeExecutor {
         raw_data: { status: "failed", steps_count: stepNumber, tokens_used: totalTokens, engine: "claude_code" },
         tokens_used: totalTokens,
       });
+
+      // Same reasoning as the non-throwing failure above: without this the
+      // thread stays silent and the operator has no way to learn the run died.
+      if (run.trigger_type === "manual") {
+        service.addMemory(agent.id, "assistant", failureNote(msg), run.id);
+      }
 
       const failedExecResult: ExecutionResult = {
         status: "failed",

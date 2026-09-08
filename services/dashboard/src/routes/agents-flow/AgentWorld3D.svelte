@@ -6777,6 +6777,12 @@ Boss says: "${msg}"`;
         // reported "Timed out waiting for response" and its real answer was
         // never shown.
         const askedAgent = selectedAgent;
+        // How many replies the thread held before this run. The check below
+        // used to ask whether the thread had ANY agent message, which is true
+        // the moment an agent has ever answered — so from the second exchange
+        // onward a failed run fell through it and vanished, leaving the
+        // operator with their own message and silence.
+        const repliesBefore = chatHistory.filter((m) => m.role === 'agent').length;
         const budgetMs = Number(agentDetail?.agent?.timeout_ms ?? selData?.timeout_ms ?? 300000) + 30000;
         const attempts = Math.ceil(budgetMs / 3000);
         let answered = false;
@@ -6804,9 +6810,12 @@ Boss says: "${msg}"`;
               // on the server while the pane showed a spinner.
               chatPending = false;
               await loadChatFromMemory();
-              if (!chatHistory.some((m) => m.role === 'agent')) {
-                // Memory had nothing (an executor that does not persist, or a
-                // failure); fall back to what the run itself reported.
+              const gotReply = chatHistory.filter((m) => m.role === 'agent').length > repliesBefore;
+              if (!gotReply) {
+                // Memory gained nothing for THIS run — an executor that does
+                // not persist, or a failure that wrote no answer. Fall back to
+                // what the run itself reported, so the exchange never ends in
+                // silence.
                 const result = detail.run.result || detail.run.error || detail.run.status;
                 const fullText = typeof result === 'string' ? result : JSON.stringify(result);
                 chatHistory = [...chatHistory, {
