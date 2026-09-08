@@ -279,8 +279,11 @@ rather you read them here than discover them at an awkward moment.
   infrastructure inside, but no per-user data isolation: everyone who has the
   API token sees everything. Give each person their own instance; don't share
   one across a team. ([`docs/MULTI_USER.md`](./docs/MULTI_USER.md))
-- **No auto-update.** Kernl doesn't check for new versions or update itself.
-  Watch releases if you want to know when something ships.
+- **Updates are checked, never automatic.** Settings → About asks GitHub for the
+  newest release (cached six hours) and can install it in place on a macOS .app,
+  a Windows install and a Linux portable build. Nothing happens unattended, and
+  package installs update through their own channel: `dnf`/`apt` for the rpm and
+  deb, `docker compose pull` for the stack, `git pull` from source.
 - **Installers are unsigned.** macOS needs right-click → Open the first time,
   Windows needs "More info → Run anyway". The signing pipeline is wired but the
   certificates aren't bought yet. Docker and source installs are unaffected.
