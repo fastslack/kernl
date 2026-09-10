@@ -22,7 +22,7 @@
   "backend": {
     "entry": "backend/entry.js",
     "packages": {
-      "discord.js": "14.25.1"
+      "discord.js": "14.27.0"
     }
   }
 }

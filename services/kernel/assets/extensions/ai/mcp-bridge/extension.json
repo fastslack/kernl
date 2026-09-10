@@ -24,7 +24,7 @@
   "backend": {
     "entry": "backend/entry.js",
     "packages": {
-      "@modelcontextprotocol/sdk": "1.26.0",
+      "@modelcontextprotocol/sdk": "1.30.0",
       "uuid": "11.1.0",
       "zod": "3.25.76"
     }

@@ -22,7 +22,7 @@
   "backend": {
     "entry": "backend/entry.js",
     "packages": {
-      "grammy": "1.41.1"
+      "grammy": "1.45.1"
     }
   }
 }
