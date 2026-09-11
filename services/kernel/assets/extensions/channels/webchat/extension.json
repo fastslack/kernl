@@ -19,8 +19,8 @@
   "backend": {
     "entry": "backend/entry.js",
     "packages": {
-      "uuid": "11.1.0",
-      "ws": "8.21.0"
+      "uuid": "11.1.1",
+      "ws": "8.21.3"
     }
   }
 }

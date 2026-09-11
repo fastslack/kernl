@@ -22,7 +22,7 @@
   "backend": {
     "entry": "backend/entry.js",
     "packages": {
-      "@slack/bolt": "4.6.0"
+      "@slack/bolt": "4.7.3"
     }
   }
 }

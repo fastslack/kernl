@@ -23,8 +23,8 @@
   "backend": {
     "entry": "backend/entry.js",
     "packages": {
-      "cron-parser": "5.5.0",
-      "uuid": "11.1.0",
+      "cron-parser": "5.8.1",
+      "uuid": "11.1.1",
       "zod": "3.25.76"
     }
   },
