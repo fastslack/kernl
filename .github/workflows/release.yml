@@ -657,7 +657,7 @@ jobs:
         run: |
           sha256sum \
             kernl-*.rpm kernl_*.deb \
-            Kernl-*.dmg Kernl-*-macos.tar.gz \
+            Kernl-*.dmg Kernl-*-macos.tar.gz Kernl-*-linux.tar.gz \
             kernl-*-windows-x64.msi kernl-*-windows-x64.zip \
             > SHA256SUMS
           cat SHA256SUMS
@@ -672,6 +672,7 @@ jobs:
             kernl_*.deb
             Kernl-*.dmg
             Kernl-*-macos.tar.gz
+            Kernl-*-linux.tar.gz
             kernl-*-windows-x64.msi
             kernl-*-windows-x64.zip
             SHA256SUMS
