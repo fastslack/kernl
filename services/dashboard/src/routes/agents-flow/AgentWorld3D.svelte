@@ -44,6 +44,7 @@
   import MeetingHistoryPanel from './MeetingHistoryPanel.svelte';
   import MgmtLogPanel from './MgmtLogPanel.svelte';
   import WorkspaceTab from './WorkspaceTab.svelte';
+  import ChatTab from './ChatTab.svelte';
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
@@ -7448,106 +7449,23 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
       <!-- ──────────────── CHAT TAB ──────────────── -->
       <svelte:fragment slot="chat">
-        <div class="chat-section">
-          {#if !chatCanConverse}
-            <!-- A builtin agent never sees what you type: the executor calls
-                 `handler()` with no arguments and throws the goal away. Rather
-                 than offer a field that quietly does something else, say what
-                 this agent is and point at the controls that do work. -->
-            <div class="chat-noop">
-              <div class="chat-noop-glyph" aria-hidden="true">▣</div>
-              <h4 class="chat-noop-h">{selData.name} doesn't read messages</h4>
-              <p class="chat-noop-p">
-                It's a script agent. Anything sent here would be discarded and the script
-                would run unchanged — the same thing <b>Run now</b> does.
-              </p>
-              <div class="chat-noop-kv">
-                <span class="chat-noop-lbl">runs</span>
-                <code class="ip-code">{selData.builtin_handler}</code>
-              </div>
-              {#if selData.description}
-                <div class="chat-noop-kv">
-                  <span class="chat-noop-lbl">does</span>
-                  <span class="chat-noop-desc">{selData.description}</span>
-                </div>
-              {/if}
-              <div class="chat-noop-actions">
-                <button class="ip-btn ip-btn-primary" on:click={startAgent} disabled={starting}>
-                  <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
-                  <span>{starting ? 'starting…' : 'Run now'}</span>
-                </button>
-                <button class="ip-btn ip-btn-ghost" on:click={() => selectPanelTab('history')}>
-                  <span class="ip-btn-ico">◷</span><span>See what it did</span>
-                </button>
-              </div>
-            </div>
-          {:else}
-            <div class="chat-messages" bind:this={chatScrollEl}>
-              {#if chatHistoryLoading && chatHistory.length === 0}
-                <div class="ip-loading">Loading the conversation…</div>
-              {:else if chatHistory.length === 0}
-                <div class="chat-intro">
-                  <div class="chat-intro-h">Talk to {selData.name}</div>
-                  <p class="chat-intro-p">
-                    {#if selData.description}{selData.description} — a{:else}A{/if}sk a question or hand
-                    over a one-off task. It answers here using its own tools, and the thread is
-                    stored with the agent, so it's still here next time you open this panel.
-                  </p>
-                </div>
-              {:else}
-                {#each chatHistory as msg, i (msg.ts + '-' + msg.role + '-' + i)}
-                  <div class="chat-msg copy-wrap" class:chat-you={msg.role === 'you'} class:chat-agent={msg.role === 'agent'}>
-                    <CopyTextBtn text={msg.text} title="Copy message" />
-                    <div class="chat-meta">
-                      <span class="chat-role">{msg.role === 'you' ? 'You' : selData.name}</span>
-                      <span class="chat-time">{fmtClock(new Date(msg.ts).toISOString())}</span>
-                    </div>
-                    {#if msg.role === 'agent'}
-                      <div class="chat-text ip-out-md" on:click={handleOutputClick} role="presentation">{@html formatRunOutput(msg.text)}</div>
-                      {#if isLlmConfigError(msg.text)}
-                        <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-                      {/if}
-                    {:else}
-                      <span class="chat-text">{msg.text}</span>
-                    {/if}
-                  </div>
-                {/each}
-              {/if}
-
-              {#if chatPending}
-                <!-- Named work, not a bare spinner: these runs take minutes and
-                     an unlabelled dot reads as a hang. -->
-                <div class="chat-msg chat-agent chat-typing" aria-live="polite">
-                  <div class="chat-meta"><span class="chat-role">{selData.name}</span></div>
-                  <div class="chat-typing-row">
-                    <span class="chat-typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-                    <span class="chat-typing-txt">working — running its tools, this can take a few minutes</span>
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            {#if chatError}
-              <div class="chat-err" role="alert">
-                <span class="chat-err-ico" aria-hidden="true">⚠</span>
-                <span>{chatError}</span>
-                {#if isLlmConfigError(chatError)}
-                  <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-                {/if}
-              </div>
-            {/if}
-
-            <ChatComposer
-              bind:value={chatInput}
-              sending={chatSending}
-              placeholder={`Ask ${selData.name} something, or hand over a task…`}
-              hint="Enter sends · Shift+Enter for a new line · the thread is saved with the agent"
-              suggestions={chatSuggestions}
-              sendLabel={`Send to ${selData.name}`}
-              on:send={(e) => talkToAgent(e.detail)}
-            />
-          {/if}
-        </div>
+        <ChatTab
+          agent={selData}
+          canConverse={chatCanConverse}
+          history={chatHistory}
+          historyLoading={chatHistoryLoading}
+          error={chatError}
+          pending={chatPending}
+          bind:input={chatInput}
+          sending={chatSending}
+          suggestions={chatSuggestions}
+          bind:scrollEl={chatScrollEl}
+          {starting}
+          onSend={(text) => talkToAgent(text)}
+          onStart={startAgent}
+          onSeeHistory={() => selectPanelTab('history')}
+          onOutputClick={handleOutputClick}
+        />
       </svelte:fragment>
 
       <!-- ──────────────── WORKSPACE TAB ──────────────── -->
@@ -7988,28 +7906,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-close:hover{background:rgba(239,93,110,.12);border-color:rgba(239,93,110,.3);color:#ef5d6e}
 
-  /* ── Primary actions ─────────── */
-  .ip-btn{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:8px 14px;border-radius:8px;
-    font:600 11px 'Syne',sans-serif;letter-spacing:.4px;
-    cursor:pointer;transition:all .15s;
-    border:1px solid transparent;
-  }
-  .ip-btn-ico{font:500 11px 'JetBrains Mono',monospace}
-  .ip-btn-primary{
-    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
-    box-shadow:0 6px 16px -8px rgba(120,220,140,.5);
-  }
-  .ip-btn-primary:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
-  .ip-btn-primary:disabled{opacity:.5;cursor:wait;background:rgba(120,220,140,.3);border-color:rgba(120,220,140,.2)}
-  .ip-btn-ghost{
-    background:rgba(255,255,255,.03);
-    border-color:rgba(120,130,160,.2);
-    color:#d8dae3;
-  }
-  .ip-btn-ghost:hover{background:rgba(255,255,255,.06);border-color:rgba(120,130,160,.35)}
-
   /* ── Tabs ─────────────────────── */
   .ip-tabs{
     display:flex;gap:2px;
@@ -8079,12 +7975,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   /* Skin picker ─── moved to sections/AppearanceSection.svelte */
 
   /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
-  .ip-code{
-    font:500 11px 'JetBrains Mono',monospace;
-    background:rgba(0,0,0,.3);color:#d8dae3;
-    padding:2px 7px;border-radius:4px;
-    border:1px solid rgba(120,130,160,.12);
-  }
 
   /* ── KV grid (limits etc) ────── */
   .ip-kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
@@ -8340,80 +8230,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-retry:hover{border-color:#aab0c0;color:#fff}
 
-  /* ── Chat with agent ─────────── */
-  /* ═══════════════════════════════════════════════════════════════
-     CHAT — message input + conversation thread
-     ═══════════════════════════════════════════════════════════════ */
-  .chat-section{
-    flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;
-    padding:16px 18px;
-  }
-  .chat-messages{
-    flex:1;overflow-y:auto;margin-bottom:12px;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-    display:flex;flex-direction:column;gap:10px;
-  }
-  .chat-msg{
-    padding:10px 12px;border-radius:10px;
-    font:400 13px/1.5 'Manrope',sans-serif;
-    max-width:90%;
-    word-break:break-word;
-  }
-  .chat-you{
-    align-self:flex-end;
-    background:color-mix(in srgb, var(--flow-color) 14%, transparent);
-    border:1px solid color-mix(in srgb, var(--flow-color) 28%, transparent);
-  }
-  .chat-agent{
-    align-self:flex-start;
-    background:rgba(120,130,160,.06);
-    border:1px solid rgba(120,130,160,.15);
-  }
-  /* Author and clock on one line — a reply that lands minutes after you asked
-     needs a timestamp to be readable as a conversation. */
-  .chat-meta{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
-  .chat-role{
-    font:600 9px 'JetBrains Mono',monospace;
-    text-transform:uppercase;letter-spacing:.5px;
-  }
-  .chat-time{font:400 9px 'JetBrains Mono',monospace;color:#6a6f82;font-variant-numeric:tabular-nums}
-  .chat-you .chat-role{color:var(--flow-color)}
-  .chat-agent .chat-role{color:#a78bfa}
-  .chat-text{color:#e0e2ea}
-  .chat-agent .chat-text{max-height:300px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.2) transparent}
-
-  /* ── Empty thread ──
-     Says who you are about to talk to and what happens to the thread, instead
-     of a one-liner floating over 500px of nothing. */
-  .chat-intro{margin:auto 0;padding:4px 2px;max-width:46ch}
-  .chat-intro-h{font:600 14px 'Syne',sans-serif;color:#e0e2ea;margin-bottom:6px}
-  .chat-intro-p{font:400 12px/1.6 'Manrope',sans-serif;color:#8a8fa8;margin:0}
-
-  /* ── Working ────────────────── */
-  .chat-typing{opacity:.9}
-  .chat-typing-row{display:flex;align-items:center;gap:8px}
-  .chat-typing-txt{font:400 11px 'Manrope',sans-serif;color:#8a8fa8}
-  .chat-typing-dots{display:inline-flex;gap:3px;flex-shrink:0}
-  .chat-typing-dots span{
-    width:5px;height:5px;border-radius:50%;background:#a78bfa;
-    animation:chat-blink 1.2s ease-in-out infinite;
-  }
-  .chat-typing-dots span:nth-child(2){animation-delay:.18s}
-  .chat-typing-dots span:nth-child(3){animation-delay:.36s}
-  @keyframes chat-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
-  @media (prefers-reduced-motion: reduce){
-    .chat-typing-dots span{animation:none;opacity:.7}
-  }
-
-  .chat-err{
-    display:flex;align-items:flex-start;gap:8px;
-    margin-bottom:10px;padding:8px 10px;border-radius:8px;
-    background:rgba(239,93,110,.08);
-    border:1px solid rgba(239,93,110,.25);
-    font:400 11px/1.45 'Manrope',sans-serif;color:#f0a0aa;
-  }
-  .chat-err-ico{flex-shrink:0}
-
   /* ── "Configure LLM" chip ──
      A run that dies with no provider configured is not a report, it is a task.
      The kernel already names the screen in prose ("Settings → AI"); this is
@@ -8430,26 +8246,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .llm-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b}
   /* Under a card rather than beside a message: own line, indented to the card. */
   .llm-fix-row{display:inline-block;align-self:flex-start;margin:6px 0 2px 12px}
-
-  /* ── Script agents ──
-     The tab stays, the input does not. Same call as the office environment:
-     an affordance that cannot work is explained, not silently removed. */
-  .chat-noop{
-    margin:auto 0;padding:18px;border-radius:12px;max-width:52ch;
-    background:rgba(120,130,160,.04);
-    border:1px solid rgba(120,130,160,.14);
-  }
-  .chat-noop-glyph{font:400 20px 'JetBrains Mono',monospace;color:#8a8fa8;margin-bottom:8px}
-  .chat-noop-h{font:600 14px 'Syne',sans-serif;color:#e0e2ea;margin:0 0 6px}
-  .chat-noop-p{font:400 12px/1.6 'Manrope',sans-serif;color:#8a8fa8;margin:0 0 14px}
-  .chat-noop-kv{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
-  .chat-noop-lbl{
-    flex-shrink:0;width:38px;
-    font:600 9px 'JetBrains Mono',monospace;color:#6a6f82;
-    text-transform:uppercase;letter-spacing:.5px;
-  }
-  .chat-noop-desc{font:400 12px/1.5 'Manrope',sans-serif;color:#c0c5d8}
-  .chat-noop-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
 
   /* ── Meeting modal ──────────── */
   .meeting-modal{width:460px}
