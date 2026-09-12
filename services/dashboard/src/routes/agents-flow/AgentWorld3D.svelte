@@ -5,8 +5,7 @@
   import PerfOverlay from './PerfOverlay.svelte';
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall, rpc } from '$lib/ws.js';
-  import { getCommDetail } from '$lib/api.js';
-  import { sanitizeHtml, escapeHtml } from '$lib/sanitize.js';
+  import { escapeHtml } from '$lib/sanitize.js';
   import { highlightCode, detectLang } from '$lib/workspace-highlight.js';
   import { renderMarkdown } from '$lib/workspace-md.js';
   import {
@@ -42,6 +41,7 @@
   import NewOfficeModal from './NewOfficeModal.svelte';
   import RegisterRepoModal from './RegisterRepoModal.svelte';
   import AutoMeetingModal from './AutoMeetingModal.svelte';
+  import EmailModal from './EmailModal.svelte';
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
@@ -5196,30 +5196,11 @@
   let runSteps: Array<{ step_number: number; type: string; content: string; tool_name: string; tool_output?: string; is_event?: boolean }> = [];
 
   // ── Sent-email viewer ──────────────────────────────────────────────
-  // When an activity row is an email-send tool result, show a "Ver email" link
-  // that opens this modal with the real sent message (from / to / subject / body).
-  let emailModalOpen = false;
-  let emailModalLoading = false;
-  let emailModalError: string | null = null;
-  let emailModalData: any = null;
+  // An email-send activity row shows a "Ver email" link; it calls open()
+  // on EmailModal.svelte, which fetches and renders the real sent message.
+  // Only the handle stays here — the link sits next to its own row.
+  let emailModal: EmailModal | null = null;
 
-
-  async function openEmailModal(commId: string): Promise<void> {
-    emailModalOpen = true;
-    emailModalLoading = true;
-    emailModalError = null;
-    emailModalData = null;
-    try {
-      const d: any = await getCommDetail(commId);
-      if (!d || d.error) throw new Error(d?.error || 'No se encontró el email');
-      emailModalData = d;
-    } catch (err: any) {
-      emailModalError = err?.message ? String(err.message) : String(err);
-    } finally {
-      emailModalLoading = false;
-    }
-  }
-  function closeEmailModal(): void { emailModalOpen = false; emailModalData = null; emailModalError = null; }
   // Track loading + error separately from `runSteps`. Without these, an empty
   // result (e.g. a meeting event, or a run that errored before producing any
   // steps) leaves the UI stuck on "Loading steps…" forever because
@@ -7438,7 +7419,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                   {#if etype === 'tool_result'}
                     {@const _cid = emailCommId(e.data.tool_name, String(e.data.content_preview ?? e.data.result ?? ''))}
                     {#if _cid}
-                      <button class="email-view-link" on:click|stopPropagation={() => openEmailModal(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
+                      <button class="email-view-link" on:click|stopPropagation={() => emailModal?.open(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
                     {/if}
                   {/if}
                   {#if dt !== null || stepTok > 0 || cumTok > 0}
@@ -7583,7 +7564,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
                                   <span class="ip-step-type">{step.type.replace(/_/g, ' ')}</span>
                                   {#if step.tool_name}<code class="ip-step-tool">{step.tool_name}</code>{/if}
                                   {#if emailCommId(step.tool_name, step.tool_output ?? step.content)}
-                                    <button class="email-view-link" on:click|stopPropagation={() => { const id = emailCommId(step.tool_name, step.tool_output ?? step.content); if (id) openEmailModal(id); }} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
+                                    <button class="email-view-link" on:click|stopPropagation={() => { const id = emailCommId(step.tool_name, step.tool_output ?? step.content); if (id) emailModal?.open(id); }} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
                                   {/if}
                                   {#if step.content}
                                     <button class="ip-copy-inline" title="copy step content" on:click={() => copy(step.content, 'step-' + run.id + '-' + step.step_number)}>{copiedKey === 'step-' + run.id + '-' + step.step_number ? '✓' : '⧉'}</button>
@@ -7995,42 +7976,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   {/if}
 </div>
 
-<!-- Sent-email viewer modal (opened from email-send activity rows) -->
-{#if emailModalOpen}
-  <div class="email-modal-backdrop" on:click={closeEmailModal} role="presentation">
-    <div class="email-modal" on:click|stopPropagation role="dialog" aria-modal="true">
-      <div class="email-modal-head">
-        <span class="email-modal-title">📧 Email enviado</span>
-        <button class="email-modal-close" on:click={closeEmailModal} title="Close">×</button>
-      </div>
-      {#if emailModalLoading}
-        <div class="email-modal-body email-modal-dim">Loading email…</div>
-      {:else if emailModalError}
-        <div class="email-modal-body email-modal-err">⚠ {emailModalError}</div>
-      {:else if emailModalData?.comm}
-        {@const c = emailModalData.comm}
-        {@const acc = emailModalData.account}
-        {@const fromAddr = c.direction === 'outbound' ? (acc?.email ?? '—') : (acc?.email ?? '—')}
-        <div class="email-modal-meta">
-          <div class="emm-row"><span class="emm-k">De</span><span class="emm-v">{acc?.label ? acc.label + ' · ' : ''}{fromAddr}</span></div>
-          <div class="emm-row"><span class="emm-k">Para</span><span class="emm-v">{c.recipients_to || '—'}</span></div>
-          {#if c.recipients_cc}<div class="emm-row"><span class="emm-k">CC</span><span class="emm-v">{c.recipients_cc}</span></div>{/if}
-          <div class="emm-row"><span class="emm-k">Asunto</span><span class="emm-v emm-subj">{c.subject || '(sin asunto)'}</span></div>
-          {#if c.sent_at}<div class="emm-row"><span class="emm-k">Enviado</span><span class="emm-v">{fmtClock(c.sent_at)} · {c.status}</span></div>{/if}
-        </div>
-        <div class="email-modal-body">
-          {#if c.body_html}
-            <div class="email-modal-html">{@html sanitizeHtml(c.body_html)}</div>
-          {:else}
-            <div class="email-modal-text">{c.body || '(sin cuerpo)'}</div>
-          {/if}
-        </div>
-      {:else}
-        <div class="email-modal-body email-modal-dim">No se encontró el email.</div>
-      {/if}
-    </div>
-  </div>
-{/if}
+<!-- Sent-email viewer modal (opened from email-send activity rows) — the
+     fetch, the state and the styles live in EmailModal.svelte. -->
+<EmailModal bind:this={emailModal} />
 
 <style>
   .world3d-container{position:relative;width:100%;height:100%;overflow:hidden;background:#020206}
@@ -10366,34 +10314,4 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     border-radius:999px; white-space:nowrap;
   }
   .email-view-link:hover{ background:rgba(91,141,239,.28); color:#fff; }
-  .email-modal-backdrop{
-    position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center;
-    background:rgba(2,2,6,.72); backdrop-filter:blur(3px); padding:24px;
-  }
-  .email-modal{
-    width:min(680px,94vw); max-height:86vh; display:flex; flex-direction:column;
-    background:#0d1018; border:1px solid #2a3350; border-radius:12px;
-    box-shadow:0 18px 60px rgba(0,0,0,.6); overflow:hidden;
-  }
-  .email-modal-head{
-    display:flex; align-items:center; justify-content:space-between;
-    padding:12px 16px; border-bottom:1px solid #1e2335; background:#11151f;
-  }
-  .email-modal-title{ font:700 13px 'Manrope',sans-serif; color:#e6ecff; }
-  .email-modal-close{
-    width:26px; height:26px; border-radius:6px; border:1px solid #2a3350; background:transparent;
-    color:#9aa3bd; font-size:18px; line-height:1; cursor:pointer;
-  }
-  .email-modal-close:hover{ background:#1a1f30; color:#fff; }
-  .email-modal-meta{ padding:12px 16px; border-bottom:1px solid #1a1f30; display:flex; flex-direction:column; gap:4px; }
-  .emm-row{ display:grid; grid-template-columns:64px 1fr; gap:8px; font:500 12px 'Manrope',sans-serif; }
-  .emm-k{ color:#6b7390; font-weight:600; text-transform:uppercase; font-size:10px; padding-top:2px; }
-  .emm-v{ color:#cdd5ec; word-break:break-word; }
-  .emm-subj{ color:#fff; font-weight:600; }
-  .email-modal-body{ padding:14px 16px; overflow:auto; }
-  .email-modal-text{ font:400 13px/1.6 'Manrope',sans-serif; color:#cdd5ec; white-space:pre-wrap; }
-  .email-modal-html{ font-size:13px; line-height:1.6; color:#cdd5ec; }
-  .email-modal-html :global(a){ color:#9fd0ff; }
-  .email-modal-dim{ color:#6b7390; }
-  .email-modal-err{ color:#ff8a8a; }
 </style>
