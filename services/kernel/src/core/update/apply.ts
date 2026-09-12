@@ -8,50 +8,74 @@
  * runs without one.
  *
  * ── Why a helper script ────────────────────────────────────────────────────
- * The kernel lives inside the bundle it has to replace. It cannot delete its
- * own .app and survive, so the sequence is:
+ * The kernel lives inside the directory it has to replace. It cannot delete
+ * its own install and survive, so the sequence is:
  *
  *   1. download and verify into a temp dir           (this process)
  *   2. write a helper that waits for our PID to die  (this process)
  *   3. spawn the helper detached, then exit          (this process)
- *   4. swap the bundle, relaunch                     (helper, we are gone)
+ *   4. swap the install, relaunch                    (helper, we are gone)
  *
- * The helper keeps the previous bundle until the new one launches. A failed
+ * The helper keeps the previous copy until the new one is in place. A failed
  * swap that leaves no way back is worse than not updating at all.
  *
- * ── What this does NOT do ──────────────────────────────────────────────────
- * Linux is left to dpkg/rpm. Replacing files under /opt that a package manager
- * believes it owns produces a system where the next `apt upgrade` fights this
- * one. The UI points those users at their package manager instead, which is
- * the same reason install.sh shells out rather than unpacking by hand.
+ * ── The asset name comes from the release, not from here ───────────────────
+ * It used to be built by hand, and the hand-built name drifted from the one
+ * that was actually published: `Kernl-0.3.0-windows-x64.zip` against a
+ * published `kernl-0.3.0-windows-x64.zip`. GitHub's download endpoint resolves
+ * names case-insensitively, so the DOWNLOAD survived — and then the checksum
+ * lookup, an exact string comparison against SHA256SUMS, did not. The update
+ * failed after transferring three hundred megabytes. Asking the release API
+ * which assets exist removes the whole class: the name we verify and the name
+ * we fetch are the ones on the release.
  *
- * ── Untested on the platform it matters most ───────────────────────────────
- * Written on Linux; the macOS path has never run. Gatekeeper is the specific
- * risk: a downloaded bundle carries a com.apple.quarantine xattr, and unless
- * the release is notarized the swap will succeed and the relaunch will be
- * refused — an update that reports success and leaves the user with an app
- * that will not open. The helper strips the xattr, which is necessary and not
- * sufficient: notarization is the real fix and it belongs to the release
- * pipeline, not here.
+ * ── Windows has two answers ────────────────────────────────────────────────
+ * An unzipped directory is swapped. An MSI install is handed back to msiexec,
+ * because the MSI owns its registry entry, its uninstaller and its elevation —
+ * swapping the directory under it leaves Add/Remove Programs advertising a
+ * version that is no longer on disk.
+ *
+ * ── What this does NOT do ──────────────────────────────────────────────────
+ * Packaged Linux is left to dpkg/rpm. Replacing files under /opt that a
+ * package manager believes it owns produces a system where the next
+ * `apt upgrade` fights this one. The UI points those users at their package
+ * manager instead, which is the same reason install.sh shells out rather than
+ * unpacking by hand.
+ *
+ * ── Untested on the platforms it matters most ──────────────────────────────
+ * Written and exercised on Linux. The macOS path is gated on the bundle being
+ * signed, which today's releases are not, so it refuses rather than producing
+ * an app Gatekeeper will not open. The Windows paths are generated as text and
+ * tested as text (see tests/update-helper.test.ts); neither has run on
+ * Windows.
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { chmod, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { Readable } from "node:stream";
-import { pipeline } from "node:stream/promises";
 import { log } from "../logger.js";
 import { checkForUpdate } from "./check.js";
-import { assetFor, installKind, installRootFrom, isSwappable } from "./platform.js";
+import {
+  assetSpecFor,
+  installKind,
+  installRootFrom,
+  isSwappable,
+  relaunchCommandFor,
+  usesInstaller,
+  type AssetSpec,
+  type InstallKind,
+} from "./platform.js";
 import { helperFor, helperFilename } from "./helper.js";
 
 export type ApplyOutcome =
   | { ok: true; restarting: true }
   | { ok: false; reason: string; useInstead?: string };
+
+const REPO = process.env.KERNEL_UPDATE_REPO ?? "fastslack/kernl";
 
 /**
  * Where this .app lives, derived from the running module rather than assumed.
@@ -65,6 +89,19 @@ export function macAppBundlePath(): string | null {
   // Packaged, the bundled server sits directly in Resources/.
   const candidate = resolve(here, "..", "..");
   return candidate.endsWith(".app/Contents") ? dirname(candidate) : null;
+}
+
+/**
+ * Does this directory hold a packaged Kernl?
+ *
+ * The Windows packages are flat — `build-zip.sh` and `build-msi.sh` both copy
+ * `bin/mcp-server.js` to the package root — so there is no `bin/` to recognise
+ * and the path alone cannot tell an install from any other directory. These
+ * two files are what stage-payload.sh puts there and what the MSI's own smoke
+ * test looks for after installing.
+ */
+function looksPackaged(dir: string): boolean {
+  return existsSync(join(dir, "mcp-server.js")) && existsSync(join(dir, "start.bat"));
 }
 
 /**
@@ -84,64 +121,6 @@ async function isSignedBundle(bundle: string): Promise<boolean> {
   });
 }
 
-/** The asset name the release publishes for this machine. */
-function macAssetFor(version: string): string {
-  return process.arch === "arm64"
-    ? `Kernl-${version}-arm64-macos.tar.gz`
-    : `Kernl-${version}-x64-macos.tar.gz`;
-}
-
-const REPO = process.env.KERNEL_UPDATE_REPO ?? "fastslack/kernl";
-
-/**
- * The helper. Deliberately dumb and readable: it is the thing that runs when
- * nothing else is left to supervise it, so it must be inspectable by whoever
- * finds it in a temp directory wondering what replaced their app.
- */
-function helperScript(args: {
-  pid: number;
-  staged: string;
-  bundle: string;
-  backup: string;
-}): string {
-  return `#!/bin/sh
-# Written by Kernl to finish an update. Safe to delete.
-set -eu
-
-# Wait for the kernel to exit — we are about to replace the bundle it is
-# running from. Bounded: if it never dies, do nothing rather than swap a
-# bundle out from under a live process.
-i=0
-while kill -0 ${args.pid} 2>/dev/null; do
-  i=$((i + 1))
-  [ "$i" -gt 60 ] && exit 1
-  sleep 1
-done
-
-# Keep the old bundle until the new one is in place.
-rm -rf "${args.backup}"
-mv "${args.bundle}" "${args.backup}"
-
-if mv "${args.staged}" "${args.bundle}"; then
-  # A downloaded bundle is quarantined; without this Gatekeeper refuses the
-  # relaunch and the user is left with an app that will not open.
-  xattr -dr com.apple.quarantine "${args.bundle}" 2>/dev/null || true
-  rm -rf "${args.backup}"
-else
-  # Put it back. An update that fails is recoverable; one that leaves no app
-  # behind is not.
-  mv "${args.backup}" "${args.bundle}"
-fi
-
-open "${args.bundle}"
-`;
-}
-
-/**
- * Download the newest build, stage it, and hand off to the helper. Returns
- * only if the handoff did NOT happen — on success this process is about to be
- * asked to exit.
- */
 /**
  * Where the current attempt is up to.
  *
@@ -211,13 +190,84 @@ async function stagedFrom(dir: string, macApp: boolean): Promise<string | null> 
 }
 
 /**
+ * The asset this machine needs, as the release actually published it.
+ *
+ * Returns the real name and the real download URL, so the checksum lookup and
+ * the fetch agree with each other and with the release by construction.
+ */
+async function resolveAsset(
+  version: string,
+  spec: AssetSpec,
+): Promise<{ name: string; url: string } | null> {
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${version}`);
+  if (!res.ok) return null;
+  const body = (await res.json()) as {
+    assets?: { name?: string; browser_download_url?: string }[];
+  };
+  for (const a of body.assets ?? []) {
+    if (a.name && a.browser_download_url && spec.pattern.test(a.name)) {
+      return { name: a.name, url: a.browser_download_url };
+    }
+  }
+  return null;
+}
+
+/**
+ * The published checksum for `name`, or null when the release does not list it.
+ *
+ * Compared case-insensitively. The names in SHA256SUMS come from whatever the
+ * packagers produced, and one spelling of "kernl" is not more correct than the
+ * other — refusing an update over a capital letter is not integrity, it is a
+ * bug wearing integrity's clothes. The digest is still compared exactly, which
+ * is the part that is actually load-bearing.
+ */
+async function publishedChecksum(version: string, name: string): Promise<string | null> {
+  const res = await fetch(
+    `https://github.com/${REPO}/releases/download/v${version}/SHA256SUMS`,
+  );
+  if (!res.ok) return null;
+  const wanted = name.toLowerCase();
+  for (const line of (await res.text()).split("\n")) {
+    const [digest, file] = line.trim().split(/\s+/);
+    if (!digest || !file) continue;
+    if (file.replace(/^\*/, "").toLowerCase() === wanted) return digest;
+  }
+  return null;
+}
+
+/** Stream `url` to `dest`, counting bytes so the browser has something to draw. */
+async function download(url: string, dest: string): Promise<string | null> {
+  const res = await fetch(url);
+  if (!res.ok || !res.body) return `HTTP ${res.status}`;
+  phase({ total: Number(res.headers.get("content-length") ?? 0) });
+
+  const out = createWriteStream(dest);
+  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+  let received = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (!value) continue;
+    received += value.byteLength;
+    phase({ received });
+    if (!out.write(Buffer.from(value))) {
+      await new Promise<void>((ok) => out.once("drain", ok));
+    }
+  }
+  await new Promise<void>((ok) => out.end(ok));
+  return null;
+}
+
+/**
  * Download the newest build, stage it, and hand off to the helper. Returns
  * only if the handoff did NOT happen — on success this process is about to be
  * asked to exit.
  */
 export async function applyUpdate(): Promise<ApplyOutcome> {
   const here = dirname(fileURLToPath(import.meta.url));
-  const kind = installKind(here, process.platform);
+  const kind: InstallKind = installKind(here, process.platform, {
+    packaged: looksPackaged(here),
+  });
   phase({ phase: "checking", received: 0, total: 0, reason: undefined });
 
   if (kind === "linux-package") {
@@ -226,7 +276,7 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
       "sudo apt upgrade kernl   (or dnf upgrade kernl)",
     );
   }
-  if (!isSwappable(kind)) {
+  if (!isSwappable(kind) && !usesInstaller(kind)) {
     return refuse("This does not look like an installed copy, so there is nothing to replace.");
   }
 
@@ -255,44 +305,34 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
     return refuse("Already on the newest release.");
   }
 
-  const asset = assetFor(status.latest, process.platform, process.arch);
-  if (!asset) {
+  const spec = assetSpecFor(status.latest, kind, process.arch);
+  if (!spec) {
     return refuse(
       `The release publishes no build for ${process.platform}/${process.arch}.`,
       `https://github.com/${REPO}/releases/latest`,
     );
   }
-  const url = `https://github.com/${REPO}/releases/download/v${status.latest}/${asset}`;
 
-  let staged: string;
+  const asset = await resolveAsset(status.latest, spec);
+  if (!asset) {
+    return refuse(
+      `Release v${status.latest} publishes no ${spec.expected}, so there is ` +
+        `nothing to install on this platform.`,
+      `https://github.com/${REPO}/releases/latest`,
+    );
+  }
+
+  let archive: string;
+  let dir: string;
   try {
-    const dir = await mkdtemp(join(tmpdir(), "kernl-update-"));
-    const archive = join(dir, asset);
+    dir = await mkdtemp(join(tmpdir(), "kernl-update-"));
+    archive = join(dir, asset.name);
 
     phase({ phase: "downloading", version: status.latest, received: 0 });
-    const res = await fetch(url);
-    if (!res.ok || !res.body) {
-      return refuse(`Could not download ${asset} (HTTP ${res.status}).`);
-    }
-    phase({ total: Number(res.headers.get("content-length") ?? 0) });
+    const failed = await download(asset.url, archive);
+    if (failed) return refuse(`Could not download ${asset.name} (${failed}).`);
 
-    // Counted by hand rather than piped, so the browser has something to draw.
-    const out = createWriteStream(archive);
-    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-    let received = 0;
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      if (!value) continue;
-      received += value.byteLength;
-      phase({ received });
-      if (!out.write(Buffer.from(value))) {
-        await new Promise<void>((ok) => out.once("drain", ok));
-      }
-    }
-    await new Promise<void>((ok) => out.end(ok));
-
-    // Verify before unpacking anything.
+    // Verify before unpacking or installing anything.
     //
     // This replaces the running application, so trusting an HTTPS fetch on its
     // own is the wrong shape: the user consented to "update", not to "install
@@ -300,37 +340,38 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
     // object, or an intercepting proxy all look identical to a good download
     // without this.
     phase({ phase: "verifying" });
-    const sums = await fetch(
-      `https://github.com/${REPO}/releases/download/v${status.latest}/SHA256SUMS`,
-    );
-    if (!sums.ok) {
+    const expected = await publishedChecksum(status.latest, asset.name);
+    if (!expected) {
       return refuse(
-        "This release publishes no checksums, so the download cannot be verified.",
+        `This release publishes no checksum for ${asset.name}, so the ` +
+          `download cannot be verified.`,
         `https://github.com/${REPO}/releases/latest`,
       );
     }
-    const expected = (await sums.text())
-      .split("\n")
-      .map((l) => l.trim().split(/\s+/))
-      .find(([, name]) => name?.replace(/^\*/, "") === asset)?.[0];
-    if (!expected) return refuse(`SHA256SUMS does not list ${asset}.`);
-
     const actual = createHash("sha256").update(await readFile(archive)).digest("hex");
     if (actual !== expected) {
       return refuse("The download did not match its published checksum, so it was discarded.");
     }
-
-    phase({ phase: "unpacking" });
-    await extract(archive, dir);
-    const found = await stagedFrom(dir, kind === "macos-app");
-    if (!found) return refuse("The downloaded archive did not contain what was expected.");
-    staged = found;
   } catch (err) {
     return refuse(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
+  // An installer is not unpacked: msiexec takes the .msi as it was published.
+  let staged = archive;
+  if (!usesInstaller(kind)) {
+    try {
+      phase({ phase: "unpacking" });
+      await extract(archive, dir);
+      const found = await stagedFrom(dir, kind === "macos-app");
+      if (!found) return refuse("The downloaded archive did not contain what was expected.");
+      staged = found;
+    } catch (err) {
+      return refuse(`Unpacking failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   phase({ phase: "handoff" });
-  const script = join(dirname(staged), helperFilename(kind));
+  const script = join(dir, helperFilename(kind));
   await writeFile(
     script,
     helperFor(kind, {
@@ -338,14 +379,15 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
       staged,
       target,
       backup: `${target}.previous`,
-      relaunch: target,
+      relaunch: relaunchCommandFor(target, kind) ?? [],
+      ...(usesInstaller(kind) ? { installer: archive } : {}),
     }),
   );
-  if (kind !== "windows-dir") await chmod(script, 0o755);
+  if (kind !== "windows-dir" && kind !== "windows-msi") await chmod(script, 0o755);
 
   // Detached and fully severed: it has to outlive us, and it will be running
   // when this process no longer exists to own its output.
-  const runner = kind === "windows-dir"
+  const runner = kind === "windows-dir" || kind === "windows-msi"
     ? spawn("cmd.exe", ["/c", script], { detached: true, stdio: "ignore", windowsHide: true })
     : spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
   runner.unref();
