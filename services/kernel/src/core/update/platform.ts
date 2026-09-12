@@ -133,7 +133,7 @@ function underProgramFiles(parts: string[]): boolean {
 export function installKind(
   modulePath: string,
   platform: string,
-  opts: { packaged?: boolean } = {},
+  opts: { packaged?: boolean; installerRegistered?: boolean } = {},
 ): InstallKind {
   const parts = segments(modulePath);
   const inBin = parts[parts.length - 1] === "bin";
@@ -145,6 +145,18 @@ export function installKind(
 
   if (platform === "win32") {
     if (!looksPackaged) return "unknown";
+    // The installer's own mark, when we could read it: product.wxs writes
+    // HKCU\Software\Matware\Kernl\installed as the shortcut component's
+    // KeyPath, so its presence means an MSI put this here — wherever "here"
+    // is. That matters because INSTALLDIR is user-overridable (WIXUI_INSTALLDIR),
+    // so an MSI install outside Program Files would otherwise be swapped: the
+    // exact mistake the msi path exists to avoid.
+    if (opts.installerRegistered === true) return "windows-msi";
+    if (opts.installerRegistered === false) return "windows-dir";
+    // Nothing could be read — no `reg`, a locked-down box. Fall back to where
+    // it lives, which is wrong only in the safe direction: msiexec refuses
+    // cleanly when there is no product to upgrade, while a swap under Program
+    // Files fails on permissions after the app has already exited.
     return underProgramFiles(parts) ? "windows-msi" : "windows-dir";
   }
 
@@ -190,6 +202,29 @@ export function installRootFrom(moduleDir: string, kind: InstallKind): string | 
 /** Can `kind` be replaced by swapping a directory? */
 export function isSwappable(kind: InstallKind): boolean {
   return kind === "macos-app" || kind === "windows-dir" || kind === "linux-portable";
+}
+
+/**
+ * Where to stage the download so the swap can actually happen: beside the
+ * thing being replaced.
+ *
+ * `move` on Windows cannot move a DIRECTORY to a different volume, and the
+ * system temp directory is on C: while a portable copy is as likely to live on
+ * D: or a USB stick. Staged there, the helper waits for the kernel to exit and
+ * then fails at the only step that matters — with the app already closed. On
+ * POSIX the same choice turns a cross-device copy of a few hundred megabytes
+ * into a rename.
+ *
+ * Null when there is nothing to swap (an installer hands a file to the OS, so
+ * any readable location will do) — the caller falls back to the temp dir, and
+ * also falls back when this directory cannot be written.
+ */
+export function stagingParentFor(target: string, kind: InstallKind): string | null {
+  if (!isSwappable(kind)) return null;
+  const parts = segments(target);
+  if (parts.length < 2) return null;
+  const parent = parts.slice(0, -1);
+  return /^[a-zA-Z]:$/.test(parent[0] ?? "") ? parent.join("\\") : `/${parent.join("/")}`;
 }
 
 /** Is `kind` upgraded by handing the installer back to the operating system? */

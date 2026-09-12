@@ -9,17 +9,16 @@
  * only go forward. Reinstalling the previous version does not undo migration
  * 017. A desktop app can swap itself while you are not looking; something that
  * owns your data cannot, so the update has to be a moment the user chose.
+ * `apply.ts` is that moment, and it is only ever reached from a button.
  *
- * What this removes is the failure that prompted it: running a build for a
- * week without knowing a newer one exists. The person could not have known —
- * nothing told them, and the artefacts live behind a workflow run rather than
- * a release page.
- *
- * ── Nothing to find, for now ───────────────────────────────────────────────
- * The check reads GitHub's releases. Today the repository has none published
- * (one draft), because builds are dispatched manually and never tagged. Until
- * that changes this reports `unknown` and the UI stays quiet — which is the
- * correct behaviour, not a bug to work around.
+ * ── Failures are not answers ───────────────────────────────────────────────
+ * A successful check is cached for six hours, because the release host has no
+ * business hearing from every dashboard load. A FAILED one is cached for a
+ * minute, and a rate-limited one for five. Caching a failure for six hours —
+ * which is what this did — meant one flaky moment hid a published release for
+ * the rest of the day, and the only way out was the About card's "Check for
+ * updates" button, which passes `fresh` and which nobody clicks when the UI is
+ * quiet because a quiet UI means "nothing to do".
  */
 
 import { readFileSync, existsSync } from "node:fs";
@@ -39,7 +38,7 @@ export interface UpdateStatus {
   /** Epoch ms of the last successful check; null if never. */
   checkedAt: number | null;
   /** Why there is no answer, when there is none. */
-  reason?: "no-releases" | "offline" | "unknown-version";
+  reason?: "no-releases" | "offline" | "rate-limited" | "unknown-version";
 }
 
 // ── Version comparison (pure) ───────────────────────────────────────────────
@@ -132,27 +131,55 @@ export function currentVersion(): string | null {
 // ── The check ───────────────────────────────────────────────────────────────
 
 const REPO = process.env.KERNEL_UPDATE_REPO ?? "fastslack/kernl";
+
+/** A good answer is worth six hours. */
 const TTL_MS = 6 * 60 * 60 * 1000;
+/** A connection that failed is worth a minute: it was not an answer. */
+const FAILURE_TTL_MS = 60 * 1000;
+/** Unauthenticated GitHub resets hourly; five minutes is polite and useful. */
+const RATE_LIMIT_TTL_MS = 5 * 60 * 1000;
 
-let cache: { at: number; status: UpdateStatus } | null = null;
+/**
+ * GitHub asks every client to identify itself, and an unauthenticated caller
+ * gets 60 requests an hour per IP — shared by everyone behind the same NAT.
+ * Saying who we are is what makes a 403 legible as "rate limited" instead of
+ * arriving as an anonymous failure. Same convention as `job-scrapers.ts`.
+ */
+export const UPDATE_USER_AGENT = "Kernl-Updater (+https://github.com/fastslack/kernl)";
 
-export type FetchLike = (url: string) => Promise<{
+/** Headers every call to the release host carries. */
+export function githubHeaders(): Record<string, string> {
+  return {
+    "User-Agent": UPDATE_USER_AGENT,
+    Accept: "application/vnd.github+json",
+  };
+}
+
+/** No request to the release host may hang forever. */
+export const REQUEST_TIMEOUT_MS = 15_000;
+
+let cache: { at: number; ttl: number; status: UpdateStatus } | null = null;
+
+export type FetchLike = (
+  url: string,
+  init?: { headers?: Record<string, string>; signal?: AbortSignal },
+) => Promise<{
   ok: boolean;
   status: number;
   json: () => Promise<unknown>;
 }>;
 
 /**
- * Ask GitHub for the newest release. Cached for six hours and never throws —
- * an update check that breaks the dashboard is worse than one that says
- * nothing. `fetchImpl` is injectable so the comparison logic can be tested
- * without a network.
+ * Ask GitHub for the newest release. Cached — for six hours on success, a
+ * minute on failure — and never throws: an update check that breaks the
+ * dashboard is worse than one that says nothing. `fetchImpl` is injectable so
+ * the comparison and caching logic can be tested without a network.
  */
 export async function checkForUpdate(
   opts: { fresh?: boolean; fetchImpl?: FetchLike } = {},
 ): Promise<UpdateStatus> {
   const now = Date.now();
-  if (!opts.fresh && cache && now - cache.at < TTL_MS) return cache.status;
+  if (!opts.fresh && cache && now - cache.at < cache.ttl) return cache.status;
 
   const current = currentVersion();
   if (!current) {
@@ -174,16 +201,27 @@ export async function checkForUpdate(
     checkedAt: null,
   };
 
-  const doFetch: FetchLike = opts.fetchImpl ?? ((url) => fetch(url) as unknown as ReturnType<FetchLike>);
+  const doFetch: FetchLike =
+    opts.fetchImpl ??
+    ((url, init) => fetch(url, init as RequestInit) as unknown as ReturnType<FetchLike>);
 
   let status: UpdateStatus;
+  let ttl = TTL_MS;
   try {
-    const res = await doFetch(`https://api.github.com/repos/${REPO}/releases/latest`);
+    const res = await doFetch(`https://api.github.com/repos/${REPO}/releases/latest`, {
+      headers: githubHeaders(),
+      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    });
     if (res.status === 404) {
-      // No published release. Expected while every build is a manual dispatch.
+      // No published release. A real answer, so it caches like one.
       status = { ...base, checkedAt: now, reason: "no-releases" };
+    } else if (res.status === 403 || res.status === 429) {
+      // Rate limited rather than broken: worth saying, and worth backing off.
+      status = { ...base, reason: "rate-limited" };
+      ttl = RATE_LIMIT_TTL_MS;
     } else if (!res.ok) {
       status = { ...base, reason: "offline" };
+      ttl = FAILURE_TTL_MS;
     } else {
       const body = (await res.json()) as { tag_name?: string; html_url?: string };
       const latest = (body.tag_name ?? "").replace(/^v/, "");
@@ -198,11 +236,13 @@ export async function checkForUpdate(
         : { ...base, checkedAt: now, reason: "no-releases" };
     }
   } catch {
-    // Offline, DNS down, rate-limited — all the same to the caller.
+    // Offline, DNS down, timed out — all the same to the caller, and none of
+    // them an answer worth keeping for six hours.
     status = { ...base, reason: "offline" };
+    ttl = FAILURE_TTL_MS;
   }
 
-  cache = { at: now, status };
+  cache = { at: now, ttl, status };
   if (status.updateAvailable) {
     log.info(`Update available: ${status.current} → ${status.latest}`);
   }

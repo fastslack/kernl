@@ -21,6 +21,7 @@ import {
   installRootFrom,
   isSwappable,
   relaunchCommandFor,
+  stagingParentFor,
   usesInstaller,
 } from "../src/core/update/platform.js";
 
@@ -136,8 +137,49 @@ describe("installKind", () => {
     expect(installKind("C:\\Program Files\\Kernl", "win32")).toBe("unknown");
   });
 
+  it("believes the installer's own mark over the path it sits in", () => {
+    // INSTALLDIR is user-overridable (WIXUI_INSTALLDIR), so an MSI install can
+    // live anywhere — and an unzipped copy can be dropped into Program Files.
+    // The registry value product.wxs writes settles it either way.
+    expect(installKind("D:\\Apps\\Kernl", "win32", { packaged: true, installerRegistered: true }))
+      .toBe("windows-msi");
+    expect(installKind("C:\\Program Files\\Kernl", "win32", { packaged: true, installerRegistered: false }))
+      .toBe("windows-dir");
+  });
+
+  it("falls back to the path only when the mark could not be read", () => {
+    // `reg` missing or blocked. Wrong in the safe direction: msiexec refuses
+    // cleanly when there is no product, whereas a swap under Program Files
+    // fails on permissions after the app has already exited.
+    expect(installKind("C:\\Program Files\\Kernl", "win32", { packaged: true }))
+      .toBe("windows-msi");
+    expect(installKind("D:\\Apps\\Kernl", "win32", { packaged: true })).toBe("windows-dir");
+  });
+
   it("says unknown for a platform with no story", () => {
     expect(installKind("/somewhere", "freebsd")).toBe("unknown");
+  });
+});
+
+describe("stagingParentFor", () => {
+  it("stages beside the install, so the swap stays on one volume", () => {
+    // `move` cannot move a DIRECTORY across volumes on Windows, and the system
+    // temp dir is on C: while a portable copy is as likely to be on D: or a
+    // USB stick. Staged there, the helper waits for the kernel to exit and
+    // then fails at the only step that matters.
+    expect(stagingParentFor("D:\\PortableApps\\Kernl", "windows-dir")).toBe("D:\\PortableApps");
+    expect(stagingParentFor("/home/me/kernl", "linux-portable")).toBe("/home/me");
+    expect(stagingParentFor("/Applications/Kernl.app", "macos-app")).toBe("/Applications");
+  });
+
+  it("has no opinion when nothing is being swapped", () => {
+    // An installer just reads a file, so any readable location will do.
+    expect(stagingParentFor("C:\\Program Files\\Kernl", "windows-msi")).toBeNull();
+    expect(stagingParentFor("/opt/kernl", "linux-package")).toBeNull();
+  });
+
+  it("refuses a path with no parent to speak of", () => {
+    expect(stagingParentFor("/kernl", "linux-portable")).toBeNull();
   });
 });
 

@@ -11,7 +11,7 @@
  * The kernel lives inside the directory it has to replace. It cannot delete
  * its own install and survive, so the sequence is:
  *
- *   1. download and verify into a temp dir           (this process)
+ *   1. download and verify into a staging dir        (this process)
  *   2. write a helper that waits for our PID to die  (this process)
  *   3. spawn the helper detached, then exit          (this process)
  *   4. swap the install, relaunch                    (helper, we are gone)
@@ -33,7 +33,8 @@
  * An unzipped directory is swapped. An MSI install is handed back to msiexec,
  * because the MSI owns its registry entry, its uninstaller and its elevation —
  * swapping the directory under it leaves Add/Remove Programs advertising a
- * version that is no longer on disk.
+ * version that is no longer on disk. Which one this is comes from the
+ * installer's own registry mark, not from guessing at the path.
  *
  * ── What this does NOT do ──────────────────────────────────────────────────
  * Packaged Linux is left to dpkg/rpm. Replacing files under /opt that a
@@ -51,20 +52,22 @@
  */
 
 import { spawn } from "node:child_process";
-import { createWriteStream, existsSync } from "node:fs";
-import { chmod, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
+import { createReadStream, createWriteStream, existsSync } from "node:fs";
+import { chmod, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { pipeline } from "node:stream/promises";
 import { log } from "../logger.js";
-import { checkForUpdate } from "./check.js";
+import { checkForUpdate, githubHeaders, REQUEST_TIMEOUT_MS } from "./check.js";
 import {
   assetSpecFor,
   installKind,
   installRootFrom,
   isSwappable,
   relaunchCommandFor,
+  stagingParentFor,
   usesInstaller,
   type AssetSpec,
   type InstallKind,
@@ -76,6 +79,16 @@ export type ApplyOutcome =
   | { ok: false; reason: string; useInstead?: string };
 
 const REPO = process.env.KERNEL_UPDATE_REPO ?? "fastslack/kernl";
+
+/**
+ * A download that stops producing bytes for this long is dead.
+ *
+ * Not a total timeout: three hundred megabytes over a slow line is legitimately
+ * slow, and killing that would be the bug. What must not happen is the phase
+ * sitting at "downloading" forever with nothing arriving and no way to cancel,
+ * which is what having no timeout at all produced.
+ */
+const STALL_MS = 60_000;
 
 /**
  * Where this .app lives, derived from the running module rather than assumed.
@@ -102,6 +115,27 @@ export function macAppBundlePath(): string | null {
  */
 function looksPackaged(dir: string): boolean {
   return existsSync(join(dir, "mcp-server.js")) && existsSync(join(dir, "start.bat"));
+}
+
+/**
+ * Did an MSI put this install here?
+ *
+ * `product.wxs` writes HKCU\Software\Matware\Kernl\installed as the shortcut
+ * component's KeyPath, so the value exists for an installed copy and not for
+ * an unzipped one. Undefined when the question could not be asked at all —
+ * `reg` missing, a policy that blocks it — which the caller treats as "fall
+ * back to the path", not as "no".
+ */
+async function msiRegistered(): Promise<boolean | undefined> {
+  if (process.platform !== "win32") return undefined;
+  return new Promise((ok) => {
+    const p = spawn("reg", ["query", "HKCU\\Software\\Matware\\Kernl", "/v", "installed"], {
+      stdio: "ignore",
+      windowsHide: true,
+    });
+    p.on("error", () => ok(undefined));
+    p.on("exit", (code) => ok(code === 0));
+  });
 }
 
 /**
@@ -190,6 +224,23 @@ async function stagedFrom(dir: string, macApp: boolean): Promise<string | null> 
 }
 
 /**
+ * A staging directory on the same volume as the install, falling back to the
+ * system temp dir when that is not writable (Program Files, a read-only
+ * mount). See `stagingParentFor` for why the volume matters.
+ */
+async function makeStagingDir(target: string, kind: InstallKind): Promise<string> {
+  const parent = stagingParentFor(target, kind);
+  if (parent) {
+    try {
+      return await mkdtemp(join(parent, ".kernl-update-"));
+    } catch {
+      /* not writable — the temp dir will do, and the helper will say if not */
+    }
+  }
+  return await mkdtemp(join(tmpdir(), "kernl-update-"));
+}
+
+/**
  * The asset this machine needs, as the release actually published it.
  *
  * Returns the real name and the real download URL, so the checksum lookup and
@@ -199,7 +250,10 @@ async function resolveAsset(
   version: string,
   spec: AssetSpec,
 ): Promise<{ name: string; url: string } | null> {
-  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${version}`);
+  const res = await fetch(`https://api.github.com/repos/${REPO}/releases/tags/v${version}`, {
+    headers: githubHeaders(),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
   if (!res.ok) return null;
   const body = (await res.json()) as {
     assets?: { name?: string; browser_download_url?: string }[];
@@ -224,6 +278,7 @@ async function resolveAsset(
 async function publishedChecksum(version: string, name: string): Promise<string | null> {
   const res = await fetch(
     `https://github.com/${REPO}/releases/download/v${version}/SHA256SUMS`,
+    { headers: githubHeaders(), signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS) },
   );
   if (!res.ok) return null;
   const wanted = name.toLowerCase();
@@ -237,36 +292,90 @@ async function publishedChecksum(version: string, name: string): Promise<string 
 
 /** Stream `url` to `dest`, counting bytes so the browser has something to draw. */
 async function download(url: string, dest: string): Promise<string | null> {
-  const res = await fetch(url);
-  if (!res.ok || !res.body) return `HTTP ${res.status}`;
-  phase({ total: Number(res.headers.get("content-length") ?? 0) });
+  const ac = new AbortController();
+  let stall = setTimeout(() => ac.abort(), STALL_MS);
+  try {
+    const res = await fetch(url, { headers: githubHeaders(), signal: ac.signal });
+    if (!res.ok || !res.body) return `HTTP ${res.status}`;
+    phase({ total: Number(res.headers.get("content-length") ?? 0) });
 
-  const out = createWriteStream(dest);
-  const reader = (res.body as ReadableStream<Uint8Array>).getReader();
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (!value) continue;
-    received += value.byteLength;
-    phase({ received });
-    if (!out.write(Buffer.from(value))) {
-      await new Promise<void>((ok) => out.once("drain", ok));
+    const out = createWriteStream(dest);
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    let received = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      // Bytes arrived, so the clock starts again.
+      clearTimeout(stall);
+      stall = setTimeout(() => ac.abort(), STALL_MS);
+      received += value.byteLength;
+      phase({ received });
+      if (!out.write(Buffer.from(value))) {
+        await new Promise<void>((ok) => out.once("drain", ok));
+      }
     }
+    await new Promise<void>((ok) => out.end(ok));
+    return null;
+  } catch (err) {
+    if (ac.signal.aborted) return `stalled for ${STALL_MS / 1000}s with nothing received`;
+    return err instanceof Error ? err.message : String(err);
+  } finally {
+    clearTimeout(stall);
   }
-  await new Promise<void>((ok) => out.end(ok));
-  return null;
 }
 
 /**
- * Download the newest build, stage it, and hand off to the helper. Returns
- * only if the handoff did NOT happen — on success this process is about to be
- * asked to exit.
+ * The digest of a file, read in chunks.
+ *
+ * `readFile` then hash was a 311 MB spike for the Windows zip — a whole
+ * release archive held in memory for no reason, on top of the copy already on
+ * disk. On a small machine that is the difference between an update and an
+ * OOM.
  */
+async function sha256(file: string): Promise<string> {
+  const hash = createHash("sha256");
+  await pipeline(createReadStream(file), hash);
+  return hash.digest("hex");
+}
+
+/**
+ * True while an attempt is running.
+ *
+ * Two clicks used to mean two downloads, two helpers and two exit timers,
+ * racing to move the same directory — and the second helper would find the
+ * install already gone. The button also stays disabled in the UI, but that is
+ * the browser's opinion; a second tab, a retry after a timeout, or a POST by
+ * hand all reach this the same way.
+ */
+let applying = false;
+
 export async function applyUpdate(): Promise<ApplyOutcome> {
+  if (applying) {
+    return {
+      ok: false,
+      reason: "An update is already in progress — watch the progress below.",
+    };
+  }
+  applying = true;
+  let handedOff = false;
+  try {
+    const outcome = await runApply(() => {
+      handedOff = true;
+    });
+    return outcome;
+  } finally {
+    // Keep the door shut when the helper has taken over: this process is
+    // seconds from exiting and must not start anything else.
+    if (!handedOff) applying = false;
+  }
+}
+
+async function runApply(markHandedOff: () => void): Promise<ApplyOutcome> {
   const here = dirname(fileURLToPath(import.meta.url));
   const kind: InstallKind = installKind(here, process.platform, {
     packaged: looksPackaged(here),
+    installerRegistered: await msiRegistered(),
   });
   phase({ phase: "checking", received: 0, total: 0, reason: undefined });
 
@@ -322,11 +431,15 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
     );
   }
 
-  let archive: string;
-  let dir: string;
+  // From here on there is a directory on disk, and every exit that is not the
+  // handoff has to take it with it: a failed attempt used to leave the whole
+  // archive — up to three hundred megabytes — sitting in the temp dir, once
+  // per click, with nothing that would ever clean it up.
+  let dir: string | null = null;
+  let handedOff = false;
   try {
-    dir = await mkdtemp(join(tmpdir(), "kernl-update-"));
-    archive = join(dir, asset.name);
+    dir = await makeStagingDir(target, kind);
+    const archive = join(dir, asset.name);
 
     phase({ phase: "downloading", version: status.latest, received: 0 });
     const failed = await download(asset.url, archive);
@@ -348,51 +461,57 @@ export async function applyUpdate(): Promise<ApplyOutcome> {
         `https://github.com/${REPO}/releases/latest`,
       );
     }
-    const actual = createHash("sha256").update(await readFile(archive)).digest("hex");
-    if (actual !== expected) {
+    if ((await sha256(archive)) !== expected) {
       return refuse("The download did not match its published checksum, so it was discarded.");
     }
-  } catch (err) {
-    return refuse(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
-  }
 
-  // An installer is not unpacked: msiexec takes the .msi as it was published.
-  let staged = archive;
-  if (!usesInstaller(kind)) {
-    try {
+    // An installer is not unpacked: msiexec takes the .msi as it was published.
+    let staged = archive;
+    if (!usesInstaller(kind)) {
       phase({ phase: "unpacking" });
       await extract(archive, dir);
       const found = await stagedFrom(dir, kind === "macos-app");
       if (!found) return refuse("The downloaded archive did not contain what was expected.");
       staged = found;
-    } catch (err) {
-      return refuse(`Unpacking failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    phase({ phase: "handoff" });
+    const script = join(dir, helperFilename(kind));
+    await writeFile(
+      script,
+      helperFor(kind, {
+        pid: process.pid,
+        staged,
+        target,
+        backup: `${target}.previous`,
+        relaunch: relaunchCommandFor(target, kind) ?? [],
+        ...(usesInstaller(kind) ? { installer: archive } : {}),
+      }),
+    );
+    if (kind !== "windows-dir" && kind !== "windows-msi") await chmod(script, 0o755);
+
+    // Detached and fully severed: it has to outlive us, and it will be running
+    // when this process no longer exists to own its output.
+    const runner = kind === "windows-dir" || kind === "windows-msi"
+      ? spawn("cmd.exe", ["/c", script], { detached: true, stdio: "ignore", windowsHide: true })
+      : spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
+    runner.unref();
+
+    handedOff = true;
+    markHandedOff();
+    phase({ phase: "done" });
+    log.info(`Update to ${status.latest} staged; handing off and exiting.`);
+    return { ok: true, restarting: true };
+  } catch (err) {
+    return refuse(`Update failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    // The handoff owns the directory from the moment the helper is spawned —
+    // the staged tree and the script itself live there. A local flag rather
+    // than a read of the shared phase: the phase is for the browser, and
+    // deciding a recursive delete by it would turn any future `phase()` call
+    // placed after the spawn into a deleted staging directory.
+    if (dir && !handedOff) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
     }
   }
-
-  phase({ phase: "handoff" });
-  const script = join(dir, helperFilename(kind));
-  await writeFile(
-    script,
-    helperFor(kind, {
-      pid: process.pid,
-      staged,
-      target,
-      backup: `${target}.previous`,
-      relaunch: relaunchCommandFor(target, kind) ?? [],
-      ...(usesInstaller(kind) ? { installer: archive } : {}),
-    }),
-  );
-  if (kind !== "windows-dir" && kind !== "windows-msi") await chmod(script, 0o755);
-
-  // Detached and fully severed: it has to outlive us, and it will be running
-  // when this process no longer exists to own its output.
-  const runner = kind === "windows-dir" || kind === "windows-msi"
-    ? spawn("cmd.exe", ["/c", script], { detached: true, stdio: "ignore", windowsHide: true })
-    : spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
-  runner.unref();
-
-  phase({ phase: "done" });
-  log.info(`Update to ${status.latest} staged; handing off and exiting.`);
-  return { ok: true, restarting: true };
 }
