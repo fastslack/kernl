@@ -7,6 +7,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **In-app update could not work on Windows, and said so only after refusing.**
+  An install was recognised by the running code sitting in a `bin/` directory —
+  the shape `stage-payload.sh` produces and the macOS bundle and Linux tarball
+  ship. But `build-zip.sh` and `build-msi.sh` both copy the bundled kernel to
+  the package ROOT, so a Windows install runs from `C:\Program Files\Kernl` and
+  was classified "not an installed copy". The one platform with no package
+  manager behind it was the one that could never update.
+- **An MSI install is upgraded by Windows' installer now, not by moving its
+  directory.** A swap under Program Files needs permission this process does
+  not have, and even where it works it leaves Add/Remove Programs advertising a
+  version that is no longer on disk. The app downloads the new MSI, verifies it,
+  and hands it to `msiexec /i /qb` — one UAC prompt, the installer's own
+  progress, registry and uninstaller kept in step. A portable copy is still
+  swapped, which is right for a directory nobody else owns.
+- **The updater asked for asset names the release does not publish.** It built
+  them by hand — `Kernl-…-windows-x64.zip` against a published
+  `kernl-…-windows-x64.zip`. GitHub resolves asset names case-insensitively so
+  the download survived; the checksum lookup, an exact string comparison
+  against SHA256SUMS, did not, and the update failed after transferring 311 MB.
+  The name now comes from the release API, so what gets verified and what gets
+  fetched are the same string by construction.
+- **The Windows helper could not sleep, so it never swapped anything.** It used
+  `timeout`, which exits immediately with "Input redirection is not supported"
+  when stdin is redirected — and the helper is spawned with its stdio ignored.
+  The wait loop burned its sixty tries in milliseconds and gave up, by which
+  point the kernel had already exited: a closed app, no update, no relaunch.
+- **A failed first move could nest the new install inside the old one.** The
+  move that parks the previous copy was unchecked, and `move` into an existing
+  directory moves *into* it — so a denied move dropped the new tree inside the
+  live install, reported success, and deleted a backup that was never made.
+- **The relaunch pointed at a directory.** Correct for `open` on a macOS
+  bundle; on Windows it ran `start "" "C:\Program Files\Kernl"`, which opens
+  Explorer, and on Linux it tried to execute a folder. Windows relaunches
+  `start.bat`, the documented entry point the Start Menu shortcut already uses,
+  and the Linux portable copy runs its bundled runtime against its bundled
+  kernel.
+- **In-app update on Linux returned 404.** The portable tarball was built and
+  uploaded as a CI artifact, but the release only attached `Kernl-*-macos.tar.gz`,
+  so the file the updater downloads was never published.
+
+### Added
+
+- A test that checks the asset names the updater asks for against the names a
+  real release published. The previous test asserted the hand-built name
+  against itself, which passes however wrong that name is — and is why all of
+  the above shipped.
+
 ## [0.3.0] - 2026-09-08
 
 Everything an agent is — its prompt, its runtime, its tools, its skills, what

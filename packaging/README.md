@@ -219,8 +219,8 @@ signtool verify /pa /v kernl.msi                          # Windows
 |---|---|---|
 | `.rpm` | Fedora Copr (free, public) → `dnf copr enable matware/kernl` | ✓ via Copr |
 | `.deb` | apt-mirror or PackageCloud → `add-apt-repository` | ✓ via repo metadata |
-| `.dmg` | GitHub Releases + Sparkle updater | needs Sparkle integration |
-| `.msi` | GitHub Releases + WiX Bootstrapper | needs Burn integration |
+| `.dmg` | GitHub Releases + Sparkle updater | in-app once signed; Sparkle still nicer |
+| `.msi` | GitHub Releases | ✓ in-app, via `msiexec` |
 | All | GitHub Releases (manual download) | ✗ user re-downloads |
 
 Initial recommendation: **GitHub Releases for all 4 formats** (zero infra,
@@ -236,7 +236,13 @@ discoverable). Add Copr + apt-mirror later if Linux usage grows.
       Developer ID certificate and the App Store Connect API key
 - [ ] Windows code-signing cert (or self-signed for unsigned MVP)
 - [ ] `Sparkle.framework` + appcast.xml for macOS auto-updates
-- [ ] WiX Bootstrapper or Squirrel.Windows for `.msi` auto-updates
+- [x] In-app upgrade for `.msi` installs — done without a bootstrapper or
+      Squirrel: `product.wxs` already carries a MajorUpgrade with a stable
+      UpgradeCode, so the app downloads the new MSI, verifies it against
+      SHA256SUMS and hands it to `msiexec /i /qb`. Windows keeps the registry,
+      the shortcut and the uninstaller in step, which is exactly what a
+      directory swap under Program Files cannot do (and has no permission to
+      attempt). Still unrun on a real Windows box — see the item above.
 - [ ] Welcome / first-run page in the dashboard explaining Tier 1 vs Tier 2
 
 ## Why bun and not Node
