@@ -26,19 +26,12 @@ export { resolveFlowColor, agentType, agentUsesSkills, modelChainFallbacks, CLAU
 export type { AgentData, ChainData, FlowData, StatsData, Vec3, Walker, RoomInfo, CorridorInfo, FloorPlan, SpeechBubble, HumanoidParts, Aabb2D } from './types.js';
 
 // Animation system — pose math, easing, path navigation, effects, registry.
-// See office3d/anim/index.ts for the full surface.
-export {
-  createAnimationRegistry, initAnimEffects,
-  cameraTween, haloPulse, risingParticles, bubbleFade, materialPulse,
-  floatingGlyph, shake, convergingParticles, fallingGlyph,
-  curvedArrow, paperPlane, pillarOfLight,
-  tickerCard, candlestick, coinTrail, priceLine, chyronLabel,
-  createNoteStack,
-  runTradeExecution,
-  computeWalkPose, computeRunPose, computeCarrierPose, computeSittingPose, computeTalkingPose,
-  pathLength, interpolatePath, pathDirection, buildCumDist,
-  easeOutCubic, easeInOutQuad, easeOutQuad, smoothstep, lerp, damp, clamp01,
-  type AnimationRegistry, type Ticker, type TradeExecutionOpts,
-  type WalkPose, type SittingPose, type SittingMode, type TalkingPose,
-  type NoteStack, type NoteStackOpts,
-} from './anim/index.js';
+//
+// Re-exported wholesale rather than re-listed. This block used to name every
+// symbol by hand, which made anim/ the only subsystem where adding or removing
+// one effect meant editing three barrels plus the consumer — and removing the
+// spinning gear proved it, because a name left behind in any of them is a
+// build error at the far end. anim/index.ts already does `export *` over its
+// own parts, so the single enumeration that remains is effects/index.ts, where
+// each file is named exactly once.
+export * from './anim/index.js';

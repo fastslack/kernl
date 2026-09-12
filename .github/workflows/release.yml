@@ -199,11 +199,15 @@ jobs:
                APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY"
           MISSING=""
           COUNT=0
+          SET=0
           for v in $ALL; do
             COUNT=$((COUNT + 1))
-            [ -z "${!v:-}" ] && MISSING="$MISSING $v"
+            if [ -n "${!v:-}" ]; then
+              SET=$((SET + 1))
+            else
+              MISSING="$MISSING $v"
+            fi
           done
-          SET=$((COUNT - $(echo $MISSING | wc -w)))
           if [ "$SET" -eq "$COUNT" ]; then
             echo "signing: all six secrets present — signed + notarized build"
           elif [ "$SET" -eq 0 ]; then
