@@ -10,7 +10,7 @@ import { TaskService } from "./service.js";
 import { taskTools } from "./tools.js";
 import { registerTasksRoutes } from "./api-routes.js";
 import { tasksRpcActions } from "./rpc-actions.js";
-import { tasksDashboardRpcActions } from "./dashboard-rpc-actions.js";
+import { queryTasks } from "./dashboard-queries.js";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import type { EventBus } from "../../../../../src/core/event-bus.js";
 
@@ -55,12 +55,9 @@ export function createTasksModule(): TasksModule {
       return serviceRef ? tasksRpcActions(serviceRef) : [];
     },
 
-    getDashboardRpcActions() {
-      return dbRef ? tasksDashboardRpcActions({ db: dbRef }) : [];
-    },
-
     getDashboardDescriptor(): DashboardDescriptor {
       return {
+        channels: [{ name: "tasks", query: (db) => queryTasks(db) }],
         registerRoutes: (server) => {
           if (dbRef && eventsRef) registerTasksRoutes(server, dbRef, eventsRef);
         },

@@ -4,50 +4,29 @@ import type { SystemRegistry } from "../../core/system-registry.js";
 import { tableExists, safeGet, safeAll, today, daysFromNow } from "./query-helpers.js";
 import { CronExpressionParser } from "cron-parser";
 
-// ── Module queries: re-exported for DASHBOARD-INTERNAL callers ─────
+// ── Extension-owned sections ─────────────────────────
 //
-// Callers INTERNAL to the dashboard module (api-routes.ts, rpc-actions.ts) use
-// these re-exports. NO consumer outside the module uses them — verified with
-// grep: every feature module imports straight from its own `dashboard-queries.ts`.
+// The main view composes four sections that belong to extensions — tasks, crm,
+// reminders, shopping. This module never imports their code: each extension
+// registers a channel through `getDashboardDescriptor().channels`, and callers
+// hand `queryFullDashboard()` a reader backed by `DashboardRegistry`. A section
+// whose extension is not active comes back null.
 //
-// Progression of the dashboard inversion:
-//   ✓ Rutas HTTP duplicadas (`/api/dashboard/<channel>`) removidas de
-//     `api-routes.ts` — ahora las auto-genera `DashboardRegistry.registerAllRoutes()`
-//     for the ~18 modules that declare `getDashboardDescriptor()`.
-//   ⏳ Pending: migrate `rpc-actions.ts` to the same pattern (iterate the registry
-//     de tener casos hardcoded). Requiere inyectar `dashboardRegistry` en
-//     `DashboardRpcDeps` and generate per-channel RpcActions automatically.
-//   ⏳ Pending: once rpc-actions migrates, these re-exports can be deleted.
+// The registry also serves every channel at `/api/dashboard/<channel>`
+// (`registerAllRoutes()`) and as `dashboard.<channel>` (`dashboardRpcActions()`),
+// so no per-extension route or RPC lives in this module.
 //
-// Los 4 "core KPI" (tasks/crm/reminders/shopping) no migran — son agregados en
-// `queryFullDashboard()` for the dashboard's main view.
-
-// Imports of the 4 core KPI queries — used internally by queryFullDashboard
-// composition AND re-exported below for the dashboard's HTTP routes.
-import { queryTasks, type DashboardTasks } from "../../../assets/extensions/productivity/tasks/_module/dashboard-queries.js";
-import { queryCrm, type DashboardCrm } from "../../../assets/extensions/people/crm/_module/dashboard-queries.js";
-import { queryReminders, type DashboardReminders } from "../../../assets/extensions/productivity/reminders/_module/dashboard-queries.js";
-import {
-  queryShopping,
-  type DashboardShoppingItem,
-  type DashboardShoppingList,
-  type DashboardShopping,
-} from "../../../assets/extensions/home/shopping/_module/dashboard-queries.js";
-
-// Re-exports for dashboard-internal callers + tests that consume via this barrel.
-export { queryTasks, type DashboardTasks };
-export { queryCrm, type DashboardCrm };
-export { queryReminders, type DashboardReminders };
-export { queryShopping, type DashboardShoppingItem, type DashboardShoppingList, type DashboardShopping };
-// Agents/chat dashboard queries are owned by their modules; dashboard callers
-// import them directly from the owning module's dashboard-queries.js (one-way
-// aggregation dep) rather than through this barrel.
-// time-tracking + web-intel queries still flow through here because
-// api-routes registers legacy kebab-case URLs (`/api/dashboard/time-tracking`,
-// `/api/dashboard/web-intel`) against them. Every other extension's dashboard
-// query is auto-routed by DashboardRegistry now, so its re-export was deleted.
-export { type DashboardTimeTracking, queryTimeTracking } from "../../../assets/extensions/productivity/time-tracking/_module/dashboard-queries.js";
+// web-intel is dashboard-internal and keeps its legacy kebab-case URL in api-routes.
 export { type DashboardWebIntel, queryWebIntel } from "./web-intel-query.js";
+
+/** Sections of the main view — each is the name of a channel its extension registers. */
+export const CORE_KPI_CHANNELS = ["tasks", "crm", "reminders", "shopping"] as const;
+
+/**
+ * Reads one extension-owned dashboard channel by name. Resolves `undefined`
+ * when no active extension registers it.
+ */
+export type DashboardChannelReader = (name: string) => Promise<unknown>;
 
 // ── Cross-module types ──────────────────────────────
 
@@ -62,13 +41,12 @@ export interface DashboardKpis {
 export interface FullDashboard {
   generatedAt: string;
   kpis: DashboardKpis;
-  // The 4 core KPI types are also re-exported by name above so consumers
-  // can `import { DashboardTasks } from "../dashboard/api.js"` without
-  // reaching back into the extension's source path.
-  tasks: DashboardTasks;
-  crm: DashboardCrm;
-  reminders: DashboardReminders;
-  shopping: DashboardShopping;
+  // Extension-owned sections: typed by their extensions, null when the owning
+  // extension is not active.
+  tasks: unknown;
+  crm: unknown;
+  reminders: unknown;
+  shopping: unknown;
 }
 
 export interface AgendaItem {
@@ -238,14 +216,20 @@ export function queryKpis(db: SqliteDb): DashboardKpis {
   };
 }
 
-export function queryFullDashboard(db: SqliteDb): FullDashboard {
+export async function queryFullDashboard(
+  db: SqliteDb,
+  readChannel: DashboardChannelReader,
+): Promise<FullDashboard> {
+  const [tasks, crm, reminders, shopping] = await Promise.all(
+    CORE_KPI_CHANNELS.map(async (name) => (await readChannel(name)) ?? null),
+  );
   return {
     generatedAt: new Date().toISOString(),
     kpis: queryKpis(db),
-    tasks: queryTasks(db),
-    crm: queryCrm(db),
-    reminders: queryReminders(db),
-    shopping: queryShopping(db),
+    tasks,
+    crm,
+    reminders,
+    shopping,
   };
 }
 

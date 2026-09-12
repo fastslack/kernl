@@ -102,7 +102,7 @@ export async function initMtw(args: {
   // Extension-owned channels arrive via getQueryChannels() — registered
   // BEFORE this map so core entries below win as the final fallback.
   const coreQueryChannels: Record<string, () => Promise<unknown> | unknown> = {
-    dashboard: () => queryFullDashboard(sqlite),
+    dashboard: () => queryFullDashboard(sqlite, (name) => dashboardRegistry.queryChannel(name, sqlite, neo4j)),
     analytics: () => queryAnalytics(sqlite, dbRegistry.getGraph()),
     agenda: () => {
       const d = new Date().toISOString().split("T")[0];

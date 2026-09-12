@@ -162,6 +162,7 @@ export async function initHttpAndMcp(args: {
       registerDashboardRoutes(
         httpServer,
         sqlite,
+        (name) => dashboardRegistry.queryChannel(name, sqlite, neo4j),
         () => dbRegistry.getGraph(),
         lifeService,
         (await import("../system-registry.js")).systemRegistry,

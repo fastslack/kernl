@@ -6,7 +6,7 @@ import { crmTools } from "./tools.js";
 import { registerCrmDashboardRoutes } from "./dashboard-routes.js";
 import { registerContactsRoutes } from "./routes.js";
 import { contactsRpcActions } from "./rpc-actions.js";
-import { crmDashboardRpcActions } from "./dashboard-rpc-actions.js";
+import { queryCrm } from "./dashboard-queries.js";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import type { EventBus } from "../../../../../src/core/event-bus.js";
 
@@ -64,12 +64,9 @@ export function createCrmModule(): CrmModule {
       return dbRef ? contactsRpcActions(dbRef) : [];
     },
 
-    getDashboardRpcActions() {
-      return dbRef ? crmDashboardRpcActions({ db: dbRef }) : [];
-    },
-
     getDashboardDescriptor(): DashboardDescriptor {
       return {
+        channels: [{ name: "crm", query: (db) => queryCrm(db) }],
         registerRoutes: (server) => {
           if (serviceRef) registerCrmDashboardRoutes(server, serviceRef);
           if (dbRef) registerContactsRoutes(server, dbRef, eventsRef ?? undefined);
