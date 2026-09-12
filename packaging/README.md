@@ -76,7 +76,7 @@ PLATFORM=win-x64 packaging/windows/build-zip.sh
 
 # Windows MSI (Windows host with WiX 3.x on PATH)
 PLATFORM=win-x64 packaging/windows/build-msi.sh
-# → ./Kernl-*-windows-x64.msi
+# → packaging/out/kernl-*-windows-x64.msi
 ```
 
 ## Per-user install paths (after install/extract)

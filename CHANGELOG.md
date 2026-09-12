@@ -49,12 +49,60 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   uploaded as a CI artifact, but the release only attached `Kernl-*-macos.tar.gz`,
   so the file the updater downloads was never published.
 
+- **Two clicks started two updates.** Nothing guarded the apply path, so a
+  second click — or a second tab, or a retry after a timeout — began another
+  download, wrote another helper and armed another exit timer, with both
+  helpers racing to move the same directory. The second would find the install
+  already gone.
+- **A portable copy on another drive could never be updated.** The download
+  was staged in the system temp directory, and `move` on Windows cannot move a
+  *directory* across volumes: with the app on D: and TEMP on C:, the helper
+  waited for the kernel to exit and then failed at the one step that matters.
+  Staging now happens beside the install, which on Linux and macOS also turns a
+  cross-device copy of several hundred megabytes into a rename.
+- **An MSI installed outside Program Files was swapped instead of upgraded.**
+  `INSTALLDIR` is user-overridable, so "is this an installer's install?" cannot
+  be answered by the path. It now reads the registry value `product.wxs`
+  already writes, and only falls back to the path when that cannot be read at
+  all.
+- **Every failed attempt left the download behind.** Up to three hundred
+  megabytes per click, in the temp directory, with nothing that would ever
+  clean it up.
+- **Verifying the checksum held the whole archive in memory.** The file was
+  read in one piece to be hashed — a 311 MB spike on top of the copy already on
+  disk. It is hashed in chunks now.
+- **Nothing had a timeout.** A connection that opened and then went quiet left
+  the progress bar on "downloading" forever, with no cancel button anywhere. A
+  download that receives nothing for sixty seconds is now abandoned and says
+  so, and the calls to the release host give up after fifteen.
+- **A moment offline hid a release for six hours.** The check cached failures
+  with the same six-hour lifetime as answers, so one flaky fetch left the UI
+  quiet for the rest of the day — and a quiet UI is exactly when nobody thinks
+  to press "Check for updates". A failure is kept for a minute now, and a
+  GitHub rate limit for five and reported as itself rather than as "offline".
+- The update check identifies itself to GitHub, which asks callers to and
+  allows sixty anonymous requests an hour per IP.
+
 ### Added
 
 - A test that checks the asset names the updater asks for against the names a
   real release published. The previous test asserted the hand-built name
   against itself, which passes however wrong that name is — and is why all of
   the above shipped.
+- Tests for the update check itself, which had none despite taking an
+  injectable fetch for exactly that purpose: version ordering including the
+  prerelease rule, and what a failure is allowed to do to the cache.
+
+### Changed
+
+- **`docs/ARCHITECTURE-MAP.md` is gone.** Its contents now open
+  `docs/ARCHITECTURE.md`, which is where they were always headed: the two files
+  described the same system at two depths and each began by pointing at the
+  other. A link to the old path will no longer resolve.
+- The dashboard and desktop manifests carry the kernel's version instead of
+  sitting at 0.1.0 while the kernel reached 0.3.0, and `scripts/release.sh`
+  bumps them with it, so a checkout no longer reads as three projects at three
+  different ages.
 
 ## [0.3.0] - 2026-09-08
 

@@ -303,7 +303,7 @@ rather you read them here than discover them at an awkward moment.
 ## Documentation
 
 - [`docs/GETTING_STARTED.md`](./docs/GETTING_STARTED.md) — first-run walkthrough
-- [`docs/ARCHITECTURE-MAP.md`](./docs/ARCHITECTURE-MAP.md) — contributor map · [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — full system guide
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — the contributor map and the full system guide, in that order
 - [`docs/API_DOCS.md`](./docs/API_DOCS.md) — HTTP + MCP surface reference
 - [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — production deploys
 - [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) · [`docs/SECURITY.md`](./docs/SECURITY.md) · [`docs/PRIVACY.md`](./docs/PRIVACY.md)
