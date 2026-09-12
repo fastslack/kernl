@@ -2,19 +2,8 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 import type { KernelConfig } from "../../core/config.js";
-import { resolve } from "node:path";
 import { newId, isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
-import { writeAgentEvent } from "../../core/agent-logger.js";
-import { WORKSPACE_ROOT } from "./workspace-constants.js";
-import { OFFICE_HOME_WORKSPACE_NAME } from "./office-home.js";
-import { computeNextCronRun } from "./cron-utils.js";
-import {
-  rankByRelevance,
-  rankByEmbedding,
-  vectorToBlob,
-  blobToVector,
-} from "../../core/ranking/relevance.js";
 import type {
   Agent,
   AgentFlow,
@@ -36,17 +25,19 @@ import type {
   AgentMessageRole,
   AgentDebateCooldown,
 } from "./types.js";
-
-const TOPIC_STOPWORDS = new Set<string>([
-  "the", "and", "for", "are", "but", "not", "you", "with", "this", "that",
-  "from", "have", "has", "was", "were", "been", "being", "will", "shall",
-  "should", "could", "would", "can", "may", "our", "your", "their", "they",
-  "them", "there", "here", "into", "onto", "upon", "than", "then", "these",
-  "those", "some", "any", "all", "who", "what", "when", "where", "why", "how",
-  "para", "por", "con", "sin", "del", "los", "las", "una", "uno", "que", "como",
-  "pero", "este", "esta", "esto", "esos", "esas", "cuando", "donde", "quien",
-  "sobre", "entre", "desde", "hasta", "muy", "más", "menos",
-]);
+import { AgentChainsService } from "./services/chains-service.js";
+import { AgentEventLogService } from "./services/event-log-service.js";
+import { AgentEvolutionService } from "./services/evolution-service.js";
+import { AgentTriggersService } from "./services/triggers-service.js";
+import { AgentSchedulesService } from "./services/schedules-service.js";
+import { AgentPromptVersionsService } from "./services/prompt-versions-service.js";
+import { AgentSubscriptionsService } from "./services/subscriptions-service.js";
+import { AgentConversationsService } from "./services/conversations-service.js";
+import { AgentMemoryService } from "./services/memory-service.js";
+import { AgentFlowsService } from "./services/flows-service.js";
+import { AgentRanksService } from "./services/ranks-service.js";
+import { AgentRunsService } from "./services/runs-service.js";
+import { AgentFeedbackService } from "./services/feedback-service.js";
 
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
 const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
@@ -56,13 +47,23 @@ const AUTO_PAUSE_ALERT_TOPIC = "Agent auto-pause alerts";
 
 export class AgentService {
   /**
-   * Embeddings client — set lazily by bootstrap once createEmbeddingsClient
-   * resolves (the agents module initialises before that happens). Stays
-   * null on hosts where embeddings are disabled or LMStudio + local both
-   * failed; in that case write-time embedding silently no-ops and the
-   * reader degrades to lexical ranking. Best-effort everywhere.
+   * Per-aggregate services this class delegates to. Each owns its own tables;
+   * the delegating methods below keep every existing `agentService.*` call
+   * site working unchanged.
    */
-  private embeddings: EmbeddingsClient | null = null;
+  private readonly chains: AgentChainsService;
+  private readonly eventLog: AgentEventLogService;
+  private readonly evolution: AgentEvolutionService;
+  private readonly triggers: AgentTriggersService;
+  private readonly schedules: AgentSchedulesService;
+  private readonly promptVersions: AgentPromptVersionsService;
+  private readonly subscriptions: AgentSubscriptionsService;
+  private readonly conversations: AgentConversationsService;
+  private readonly memory: AgentMemoryService;
+  private readonly flows: AgentFlowsService;
+  private readonly ranks: AgentRanksService;
+  private readonly runs: AgentRunsService;
+  private readonly feedback: AgentFeedbackService;
 
   constructor(
     private db: SqliteDb,
@@ -75,46 +76,53 @@ export class AgentService {
      * optional so existing call sites (demo scripts, tests) are unaffected.
      */
     private config?: KernelConfig,
-  ) {}
+  ) {
+    this.chains = new AgentChainsService(db, events);
+    this.eventLog = new AgentEventLogService(db);
+    this.evolution = new AgentEvolutionService(db, events);
+    this.triggers = new AgentTriggersService(db, events);
+    this.schedules = new AgentSchedulesService(db, events, config);
+    this.promptVersions = new AgentPromptVersionsService(db, events, (id) => this.getAgent(id));
+    this.subscriptions = new AgentSubscriptionsService(
+      db,
+      (id) => this.getAgent(id),
+      (id) => this.getConversation(id),
+    );
+    this.conversations = new AgentConversationsService(db, events);
+    this.memory = new AgentMemoryService(db);
+    this.flows = new AgentFlowsService(db, events, (id) => this.getAgent(id));
+    this.ranks = new AgentRanksService(
+      db,
+      events,
+      (id) => this.getAgent(id),
+      (filters) => this.listAgents(filters),
+    );
+    this.runs = new AgentRunsService(
+      db,
+      events,
+      (id) => this.getAgent(id),
+      (table, column, modelColumn, rowId, text) =>
+        this.scheduleEmbed(table, column, modelColumn, rowId, text),
+    );
+    this.feedback = new AgentFeedbackService(
+      db,
+      events,
+      (id) => this.getRun(id),
+      (agentId, runCreatedAt, outcome) =>
+        this.reinforceLearningsForRun(agentId, runCreatedAt, outcome),
+    );
+  }
 
   /** Inject the embeddings client. Idempotent — last writer wins. */
   setEmbeddingsClient(client: EmbeddingsClient | null): void {
-    this.embeddings = client;
-    if (client) {
-      log.info(`AgentService: semantic ranking enabled (${client.provider} ${client.model} dim=${client.dim})`);
-    }
+    this.memory.setEmbeddingsClient(client);
   }
 
   getEmbeddingsClient(): EmbeddingsClient | null {
-    return this.embeddings;
+    return this.memory.getEmbeddingsClient();
   }
 
-  /**
-   * Embed a single text — best-effort. Returns null on any failure or when
-   * no client is wired. Callers MUST treat null as "store no embedding,
-   * reader will fall back to lexical for this row".
-   */
-  private async embedOne(text: string): Promise<number[] | null> {
-    if (!this.embeddings || !text || text.length === 0) return null;
-    try {
-      const [vec] = await this.embeddings.embed([text]);
-      return vec ?? null;
-    } catch (err) {
-      log.debug(`AgentService.embedOne failed: ${err instanceof Error ? err.message : String(err)}`);
-      return null;
-    }
-  }
-
-  /**
-   * Fire-and-forget background embed: keeps the public addMemory/addLearning/
-   * createRun signatures sync (existing callers untouched) while still landing
-   * a vector on the row a moment later. Reader degrades to lexical for rows
-   * whose embedding hasn't arrived yet — safe to call even when embeddings
-   * are disabled (no-op on null client).
-   *
-   * `column` and `modelColumn` are interpolated into the SQL but only ever
-   * supplied from this file's three call sites — never from user input.
-   */
+  /** @see AgentMemoryService.scheduleEmbed — `createRun` embeds its goal through here. */
   private scheduleEmbed(
     table: "agent_memory" | "agent_learnings" | "agent_runs",
     column: "embedding" | "goal_embedding",
@@ -122,189 +130,51 @@ export class AgentService {
     rowId: string,
     text: string,
   ): void {
-    if (!this.embeddings || !text || text.length === 0) return;
-    const client = this.embeddings;
-    queueMicrotask(() => {
-      void (async () => {
-        try {
-          const vec = await this.embedOne(text);
-          if (!vec) return;
-          this.db
-            .prepare(`UPDATE ${table} SET ${column} = ?, ${modelColumn} = ? WHERE id = ?`)
-            .run(vectorToBlob(vec), client.model, rowId);
-        } catch (err) {
-          log.debug(`scheduleEmbed(${table}/${rowId}) failed: ${err instanceof Error ? err.message : String(err)}`);
-        }
-      })();
-    });
+    this.memory.scheduleEmbed(table, column, modelColumn, rowId, text);
   }
 
-  // ── Flow CRUD ──────────────────────────────────────
+
+  // ── Flows (offices) → AgentFlowsService ────────────
 
   createFlow(input: { name: string; description?: string; color?: string }): AgentFlow {
-    const now = isoNow();
-    const flow: AgentFlow = {
-      id: newId(),
-      name: input.name,
-      description: input.description ?? "",
-      color: input.color ?? "#6366f1",
-      active: 1,
-      created_at: now,
-      updated_at: now,
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_flows (id, name, description, color, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(flow.id, flow.name, flow.description, flow.color, flow.active, flow.created_at, flow.updated_at);
-    // Every office gets a kernel-workspace home automatically (DB-only — the
-    // on-disk folder convention is seeded lazily by the executor / set_repo so
-    // flow creation stays test-safe). Best-effort: a failure here must not
-    // block office creation.
-    try {
-      this.ensureOfficeHomeWorkspace(flow);
-    } catch (err) {
-      log.warn(`createFlow: could not create office home for "${flow.name}": ${err instanceof Error ? err.message : String(err)}`);
-    }
-    this.events.emit("data.changed", { module: "agents", action: "flow_created" });
-    return flow;
-  }
-
-  // ── Office home (workspace / repo) ─────────────────
-  //
-  // See src/modules/agents/office-home.ts and migration v36. The home is the
-  // directory every agent in the office inherits as cwd (unless it has its own
-  // __cwd_path__ / __workspace__ override). It's a kernel workspace by default;
-  // promoting to a host git repo just fills home_repo_path.
-
-  /**
-   * Make sure `flow` has a backing office-home workspace row and that
-   * `home_workspace_id` points at it. Idempotent + DB-only. Returns the
-   * workspace id. Mutates the passed `flow` object's home_workspace_id.
-   */
-  private ensureOfficeHomeWorkspace(flow: AgentFlow): string {
-    if (flow.home_workspace_id) {
-      const live = this.db
-        .prepare("SELECT 1 FROM workspaces WHERE id = ? AND deleted_at IS NULL")
-        .get(flow.home_workspace_id);
-      if (live) return flow.home_workspace_id;
-    }
-    // Re-link to an existing 'office-home' row if one is already there (e.g.
-    // partial backfill, or the link column was cleared).
-    const existing = this.db
-      .prepare("SELECT id FROM workspaces WHERE owner_flow_id = ? AND name = ? AND deleted_at IS NULL")
-      .get(flow.id, OFFICE_HOME_WORKSPACE_NAME) as { id: string } | undefined;
-    let wsId = existing?.id;
-    if (!wsId) {
-      const now = isoNow();
-      wsId = newId();
-      this.db
-        .prepare(
-          `INSERT INTO workspaces (id, owner_flow_id, name, description, shared, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 1, ?, ?)`,
-        )
-        .run(wsId, flow.id, OFFICE_HOME_WORKSPACE_NAME, `Home of the ${flow.name} office`, now, now);
-    }
-    this.db
-      .prepare("UPDATE agent_flows SET home_workspace_id = ?, updated_at = ? WHERE id = ?")
-      .run(wsId, isoNow(), flow.id);
-    flow.home_workspace_id = wsId;
-    return wsId;
+    return this.flows.createFlow(input);
   }
 
   /** Public entrypoint for the backfill script. Returns the workspace id or null. */
   ensureOfficeHome(flowId: string): string | null {
-    const flow = this.getFlow(flowId);
-    if (!flow) return null;
-    return this.ensureOfficeHomeWorkspace(flow);
+    return this.flows.ensureOfficeHome(flowId);
   }
 
-  /**
-   * Resolve the working directory an agent in `flowId` should inherit.
-   * Self-healing: if the office has no home yet, creates the workspace row.
-   *   - home_repo_path set (absolute) → the host git repo.
-   *   - otherwise → data/workspaces/{home_workspace_id}/.
-   * Returns null if the flow doesn't exist.
-   */
   resolveFlowHome(flowId: string): { path: string; kind: "git" | "workspace"; flow: AgentFlow } | null {
-    if (!flowId) return null;
-    const flow = this.getFlow(flowId);
-    if (!flow) return null;
-    if (flow.home_repo_path && flow.home_repo_path.startsWith("/")) {
-      return { path: flow.home_repo_path, kind: "git", flow };
-    }
-    let wsId = flow.home_workspace_id;
-    if (!wsId) {
-      try {
-        wsId = this.ensureOfficeHomeWorkspace(flow);
-      } catch {
-        return null;
-      }
-    }
-    if (!wsId) return null;
-    return { path: resolve(WORKSPACE_ROOT, wsId), kind: "workspace", flow };
+    return this.flows.resolveFlowHome(flowId);
   }
 
-  /**
-   * Promote (or revert) an office to a host git repo. Empty `repoPath` reverts
-   * the office to its kernel workspace. Disk side (mkdir / git init / seed) is
-   * the caller's job (the set_repo tool) — this only persists the column.
-   */
   setFlowRepo(flowId: string, repoPath: string): AgentFlow | undefined {
-    const flow = this.getFlow(flowId);
-    if (!flow) return undefined;
-    this.db
-      .prepare("UPDATE agent_flows SET home_repo_path = ?, updated_at = ? WHERE id = ?")
-      .run(repoPath, isoNow(), flowId);
-    this.events.emit("data.changed", { module: "agents", action: "flow_repo_set" });
-    return this.getFlow(flowId);
+    return this.flows.setFlowRepo(flowId, repoPath);
   }
 
   listFlows(): AgentFlow[] {
-    return this.db
-      .prepare("SELECT * FROM agent_flows WHERE active = 1 ORDER BY created_at DESC")
-      .all() as AgentFlow[];
+    return this.flows.listFlows();
   }
 
   getFlow(id: string): AgentFlow | undefined {
-    return this.db.prepare("SELECT * FROM agent_flows WHERE id = ?").get(id) as AgentFlow | undefined;
+    return this.flows.getFlow(id);
   }
 
   updateFlow(id: string, updates: Partial<Pick<AgentFlow, "name" | "description" | "color">>): AgentFlow | undefined {
-    const flow = this.getFlow(id);
-    if (!flow) return undefined;
-    const name = updates.name ?? flow.name;
-    const description = updates.description ?? flow.description;
-    const color = updates.color ?? flow.color;
-    const now = isoNow();
-    this.db
-      .prepare("UPDATE agent_flows SET name = ?, description = ?, color = ?, updated_at = ? WHERE id = ?")
-      .run(name, description, color, now, id);
-    this.events.emit("data.changed", { module: "agents", action: "flow_updated" });
-    return this.getFlow(id);
+    return this.flows.updateFlow(id, updates);
   }
 
   deleteFlow(id: string): boolean {
-    const flow = this.getFlow(id);
-    if (!flow) return false;
-    // Unassign agents from this flow
-    this.db.prepare("UPDATE agents SET flow_id = '' WHERE flow_id = ?").run(id);
-    this.db.prepare("UPDATE agent_flows SET active = 0 WHERE id = ?").run(id);
-    this.events.emit("data.changed", { module: "agents", action: "flow_deleted" });
-    return true;
+    return this.flows.deleteFlow(id);
   }
 
   assignAgentToFlow(agentId: string, flowId: string): boolean {
-    const agent = this.getAgent(agentId);
-    if (!agent) return false;
-    if (flowId && !this.getFlow(flowId)) return false;
-    this.db.prepare("UPDATE agents SET flow_id = ?, updated_at = ? WHERE id = ?").run(flowId, isoNow(), agentId);
-    this.events.emit("data.changed", { module: "agents", action: "agent_flow_changed" });
-    return true;
+    return this.flows.assignAgentToFlow(agentId, flowId);
   }
 
-  // ── Rank CRUD ───────────────────────────────────────
+
+  // ── Ranks → AgentRanksService ───────────────────────
 
   createRank(input: {
     name: string;
@@ -313,91 +183,36 @@ export class AgentService {
     color?: string;
     description?: string;
   }): AgentRank {
-    const now = isoNow();
-    const rank: AgentRank = {
-      id: newId(),
-      name: input.name,
-      level: input.level,
-      insignia: input.insignia ?? "",
-      color: input.color ?? "#888888",
-      description: input.description ?? "",
-      active: 1,
-      created_at: now,
-      updated_at: now,
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_ranks (id, name, level, insignia, color, description, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(rank.id, rank.name, rank.level, rank.insignia, rank.color, rank.description, rank.active, rank.created_at, rank.updated_at);
-    this.events.emit("data.changed", { module: "agents", action: "rank_created" });
-    return rank;
+    return this.ranks.createRank(input);
   }
 
   listRanks(): AgentRank[] {
-    return this.db
-      .prepare("SELECT * FROM agent_ranks WHERE active = 1 ORDER BY level ASC")
-      .all() as AgentRank[];
+    return this.ranks.listRanks();
   }
 
   getRank(id: string): AgentRank | undefined {
-    if (!id) return undefined;
-    return this.db.prepare("SELECT * FROM agent_ranks WHERE id = ?").get(id) as AgentRank | undefined;
+    return this.ranks.getRank(id);
   }
 
-  /**
-   * Resolve the top agent (holder of the highest rank): the active
-   * agent holding the highest-level rank. Mirrors the selection logic in
-   * `top-agent-seeder.ts` so callers (e.g. Telegram routing) reach the same
-   * commander the seeder created. Returns undefined if no ranks/agent exist.
-   */
   getTopAgent(): Agent | undefined {
-    const ranks = this.listRanks();
-    if (ranks.length === 0) return undefined;
-    const top = [...ranks].sort((a, b) => b.level - a.level)[0];
-    if (!top) return undefined;
-    return this.listAgents({ active: true }).find((a) => a.rank_id === top.id);
+    return this.ranks.getTopAgent();
   }
 
   updateRank(
     id: string,
     updates: Partial<Pick<AgentRank, "name" | "level" | "insignia" | "color" | "description">>,
   ): AgentRank | undefined {
-    const rank = this.getRank(id);
-    if (!rank) return undefined;
-    const name = updates.name ?? rank.name;
-    const level = updates.level ?? rank.level;
-    const insignia = updates.insignia ?? rank.insignia;
-    const color = updates.color ?? rank.color;
-    const description = updates.description ?? rank.description;
-    const now = isoNow();
-    this.db
-      .prepare(
-        "UPDATE agent_ranks SET name = ?, level = ?, insignia = ?, color = ?, description = ?, updated_at = ? WHERE id = ?",
-      )
-      .run(name, level, insignia, color, description, now, id);
-    this.events.emit("data.changed", { module: "agents", action: "rank_updated" });
-    return this.getRank(id);
+    return this.ranks.updateRank(id, updates);
   }
 
   deleteRank(id: string): boolean {
-    const rank = this.getRank(id);
-    if (!rank) return false;
-    this.db.prepare("UPDATE agents SET rank_id = '' WHERE rank_id = ?").run(id);
-    this.db.prepare("UPDATE agent_ranks SET active = 0 WHERE id = ?").run(id);
-    this.events.emit("data.changed", { module: "agents", action: "rank_deleted" });
-    return true;
+    return this.ranks.deleteRank(id);
   }
 
   assignRankToAgent(agentId: string, rankId: string): boolean {
-    const agent = this.getAgent(agentId);
-    if (!agent) return false;
-    if (rankId && !this.getRank(rankId)) return false;
-    this.db.prepare("UPDATE agents SET rank_id = ?, updated_at = ? WHERE id = ?").run(rankId, isoNow(), agentId);
-    this.events.emit("data.changed", { module: "agents", action: "agent_rank_changed" });
-    return true;
+    return this.ranks.assignRankToAgent(agentId, rankId);
   }
+
 
   // ── Model fallback chain ────────────────────────────
 
@@ -983,132 +798,22 @@ export class AgentService {
     }
   }
 
-  // ── Run management ──────────────────────────────────
+  // ── Runs & steps → AgentRunsService ─────────────────
 
   createRun(input: {
     agent_id: string;
     trigger_type?: "manual" | "event" | "schedule" | "chain";
     trigger_payload?: Record<string, unknown>;
     goal: string;
-    /** Run that spawned this one (chain/invoke). Empty string for top-level. */
     parent_run_id?: string;
-    /** Agent that spawned this one. Empty string for top-level. */
     parent_agent_id?: string;
-    /** 0 for top-level, parent.depth + 1 otherwise. */
     depth?: number;
   }): AgentRun {
-    const now = isoNow();
-
-    // ── Defense-in-depth gates ───────────────────────────
-    // 1. Refuse to create runs for inactive agents. The handler in tools.ts
-    //    already checks `agent.active`, but the agent could be deactivated
-    //    between that check and here, OR another path could call createRun
-    //    directly without the check (e.g. extension-facade, chain-runner).
-    const agentRow = this.db
-      .prepare("SELECT active FROM agents WHERE id = ?")
-      .get(input.agent_id) as { active: number } | undefined;
-    if (!agentRow) {
-      throw new Error(`createRun: agent ${input.agent_id} not found`);
-    }
-    if (agentRow.active === 0) {
-      throw new Error(`createRun: agent ${input.agent_id} is inactive (active=0)`);
-    }
-
-    // 2. Self-invocation guard. If a parent context is supplied and the parent
-    //    agent_id matches the target, refuse — this is the classic runaway-loop
-    //    failure mode: an agent invoking `kernel_agents_run(self)` ad infinitum.
-    //    Top-level runs (no parent) bypass this check.
-    const parentAgentId = (input.parent_agent_id ?? "").trim();
-    const parentRunId = (input.parent_run_id ?? "").trim();
-    if (parentAgentId && parentAgentId === input.agent_id) {
-      throw new Error(
-        `createRun: agent ${input.agent_id} cannot invoke itself (self-recursion). ` +
-        `Parent run was ${parentRunId || "(unknown)"}.`,
-      );
-    }
-
-    // 3. Recursion depth cap. Even without direct self-invocation a chain
-    //    A→B→A→B→... can spiral. Hard ceiling ends the descent.
-    const depth = Math.max(0, Number(input.depth ?? 0));
-    const maxDepth = Math.max(1, Number(process.env.KERNEL_AGENT_MAX_DEPTH ?? 5));
-    if (depth > maxDepth) {
-      throw new Error(
-        `createRun: agent ${input.agent_id} depth=${depth} exceeds KERNEL_AGENT_MAX_DEPTH=${maxDepth}. ` +
-        `Parent chain rooted at run ${parentRunId || "(unknown)"}.`,
-      );
-    }
-
-    // 4. Per-agent runaway guard. Count CONCURRENT in-flight runs, not the
-    //    rolling-60s total — high-frequency legit agents (Email Triage,
-    //    Trading Auto-Execute) can complete dozens of fast runs per minute
-    //    without that being a loop. A loop, by contrast, leaves runs piling
-    //    up in pending/running because the executor can't keep pace.
-    //    Tunable via env so a legit burst can crank it.
-    const maxConcurrent = Math.max(1, Number(process.env.KERNEL_AGENT_MAX_CONCURRENT ?? 25));
-    const concurrent = this.db
-      .prepare(
-        "SELECT COUNT(*) AS c FROM agent_runs WHERE agent_id = ? AND status IN ('pending', 'running')",
-      )
-      .get(input.agent_id) as { c: number };
-    if (concurrent.c >= maxConcurrent) {
-      throw new Error(
-        `createRun: agent ${input.agent_id} runaway guard tripped — ${concurrent.c} concurrent in-flight runs (max ${maxConcurrent}). ` +
-        `Likely a self-invocation loop or a stuck executor. Raise KERNEL_AGENT_MAX_CONCURRENT to lift.`,
-      );
-    }
-
-    // For chain-triggered runs, enrich payload with chain metadata and use
-    // 'event' as the SQL trigger_type (CHECK constraint compatibility).
-    // The TypeScript type preserves 'chain' for application-level logic.
-    const isChain = input.trigger_type === "chain";
-    const sqlTriggerType = isChain ? "event" : (input.trigger_type ?? "manual");
-    const payload = isChain
-      ? { chain: true, ...(input.trigger_payload ?? {}) }
-      : (input.trigger_payload ?? {});
-
-    const run: AgentRun = {
-      id: newId(),
-      agent_id: input.agent_id,
-      trigger_type: input.trigger_type ?? "manual",
-      trigger_payload: JSON.stringify(payload),
-      goal: input.goal,
-      status: "pending",
-      result: "",
-      error: "",
-      steps_count: 0,
-      tokens_used: 0,
-      started_at: null,
-      completed_at: null,
-      created_at: now,
-      parent_run_id: parentRunId,
-      parent_agent_id: parentAgentId,
-      depth,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_runs (id, agent_id, trigger_type, trigger_payload, goal,
-         status, result, error, steps_count, tokens_used, started_at, completed_at, created_at,
-         parent_run_id, parent_agent_id, depth)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        run.id, run.agent_id, sqlTriggerType, run.trigger_payload,
-        run.goal, run.status, run.result, run.error, run.steps_count,
-        run.tokens_used, run.started_at, run.completed_at, run.created_at,
-        run.parent_run_id, run.parent_agent_id, run.depth,
-      );
-
-    if (run.goal && run.goal.length >= 5) {
-      this.scheduleEmbed("agent_runs", "goal_embedding", "goal_embedding_model", run.id, run.goal);
-    }
-    return run;
+    return this.runs.createRun(input);
   }
 
   getRun(id: string): AgentRun | undefined {
-    return this.db
-      .prepare("SELECT * FROM agent_runs WHERE id = ?")
-      .get(id) as AgentRun | undefined;
+    return this.runs.getRun(id);
   }
 
   listRuns(filters?: {
@@ -1116,26 +821,7 @@ export class AgentService {
     status?: string;
     limit?: number;
   }): AgentRun[] {
-    let sql = "SELECT * FROM agent_runs WHERE 1=1";
-    const params: unknown[] = [];
-
-    if (filters?.agent_id) {
-      sql += " AND agent_id = ?";
-      params.push(filters.agent_id);
-    }
-    if (filters?.status) {
-      sql += " AND status = ?";
-      params.push(filters.status);
-    }
-
-    sql += " ORDER BY created_at DESC";
-
-    if (filters?.limit) {
-      sql += " LIMIT ?";
-      params.push(filters.limit);
-    }
-
-    return this.db.prepare(sql).all(...params) as AgentRun[];
+    return this.runs.listRuns(filters);
   }
 
   updateRun(
@@ -1150,70 +836,19 @@ export class AgentService {
       completed_at: string;
     }>,
   ): void {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (updates.status !== undefined) { sets.push("status = ?"); params.push(updates.status); }
-    if (updates.result !== undefined) { sets.push("result = ?"); params.push(updates.result); }
-    if (updates.error !== undefined) { sets.push("error = ?"); params.push(updates.error); }
-    if (updates.steps_count !== undefined) { sets.push("steps_count = ?"); params.push(updates.steps_count); }
-    if (updates.tokens_used !== undefined) { sets.push("tokens_used = ?"); params.push(updates.tokens_used); }
-    if (updates.started_at !== undefined) { sets.push("started_at = ?"); params.push(updates.started_at); }
-    if (updates.completed_at !== undefined) { sets.push("completed_at = ?"); params.push(updates.completed_at); }
-
-    if (sets.length === 0) return;
-    params.push(id);
-
-    this.db.prepare(`UPDATE agent_runs SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+    this.runs.updateRun(id, updates);
   }
 
   cancelRun(id: string): boolean {
-    const run = this.getRun(id);
-    if (!run || run.status === "completed" || run.status === "failed") return false;
-
-    this.updateRun(id, { status: "cancelled", completed_at: isoNow() });
-    this.events.emit("data.changed", { module: "agents", action: "run_cancelled" });
-    return true;
+    return this.runs.cancelRun(id);
   }
 
   /** Mark stale "running"/"pending" runs as failed (e.g. after crash/restart) */
   cleanupStaleRuns(): number {
-    const now = isoNow();
-    const result = this.db
-      .prepare(
-        `UPDATE agent_runs SET status = 'failed', error = 'Stale run cleaned up on startup', completed_at = ?
-         WHERE status IN ('running', 'pending')`,
-      )
-      .run(now);
-    const changes = result?.changes ?? 0;
-    if (changes > 0) {
-      log.info(`AgentService: cleaned up ${changes} stale runs`);
-    }
-    // …and the meetings those runs were driving.
-    //
-    // A meeting or debate only exists inside a live process: MeetingExecutor
-    // loops in memory and closes the conversation when it finishes. Kill the
-    // process mid-meeting — a crash, or an operator redeploying — and the run
-    // was marked failed here while the conversation stayed `open` forever.
-    // Nothing ever closed it, and the dashboard hydrates open meetings on
-    // load, so the 3D office kept showing a phantom meeting in session, halo,
-    // banner, wall display and all, for a discussion that died days ago.
-    // A process that has just started cannot have a meeting in flight, so any
-    // open one is by definition abandoned.
-    const stranded = this.db
-      .prepare(
-        `UPDATE agent_conversations SET status = 'closed', closed_at = ?
-          WHERE status = 'open' AND kind IN ('meeting', 'debate')`,
-      )
-      .run(now);
-    const closed = stranded?.changes ?? 0;
-    if (closed > 0) {
-      log.info(`AgentService: closed ${closed} meeting(s) stranded by the last shutdown`);
-    }
-    return changes;
+    return this.runs.cleanupStaleRuns();
   }
 
-  // ── Steps ───────────────────────────────────────────
+  // ── Steps → AgentRunsService ────────────────────────
 
   addStep(input: {
     run_id: string;
@@ -1225,94 +860,26 @@ export class AgentService {
     tool_output?: string;
     tokens?: number;
   }): AgentStep {
-    const now = isoNow();
-    const step: AgentStep = {
-      id: newId(),
-      run_id: input.run_id,
-      step_number: input.step_number,
-      type: input.type,
-      content: input.content ?? "",
-      tool_name: input.tool_name ?? "",
-      tool_input: JSON.stringify(input.tool_input ?? {}),
-      tool_output: input.tool_output ?? "",
-      tokens: input.tokens ?? 0,
-      created_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_run_steps (id, run_id, step_number, type, content,
-         tool_name, tool_input, tool_output, tokens, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        step.id, step.run_id, step.step_number, step.type,
-        step.content, step.tool_name, step.tool_input, step.tool_output,
-        step.tokens, step.created_at,
-      );
-
-    return step;
+    return this.runs.addStep(input);
   }
 
   getSteps(runId: string): AgentStep[] {
-    return this.db
-      .prepare("SELECT * FROM agent_run_steps WHERE run_id = ? ORDER BY step_number ASC")
-      .all(runId) as AgentStep[];
+    return this.runs.getSteps(runId);
   }
 
   getRunEvents(runId: string): Array<{ id: string; event_type: string; event_subtype: string; detail: string; raw_data: string; tokens_used: number; duration_ms: number; created_at: string }> {
-    return this.db
-      .prepare("SELECT id, event_type, event_subtype, detail, raw_data, tokens_used, duration_ms, created_at FROM agent_event_log WHERE run_id = ? ORDER BY created_at ASC")
-      .all(runId) as Array<{ id: string; event_type: string; event_subtype: string; detail: string; raw_data: string; tokens_used: number; duration_ms: number; created_at: string }>;
+    return this.runs.getRunEvents(runId);
   }
 
   getAdHocConnections(agentId: string): {
     invokedBy: Array<{ agent_id: string; agent_name: string; count: number; last_at: string }>;
     invoked: Array<{ agent_id: string; agent_name: string; count: number; last_at: string }>;
   } {
-    // Who invoked ME (runs where I'm the target and trigger_payload has source_agent_id)
-    const invokedByRows = this.db.prepare(
-      `SELECT json_extract(trigger_payload, '$.source_agent_id') AS src_id,
-              COUNT(*) AS cnt,
-              MAX(created_at) AS last_at
-       FROM agent_runs
-       WHERE agent_id = ? AND trigger_type = 'chain'
-         AND json_extract(trigger_payload, '$.source_agent_id') IS NOT NULL
-         AND json_extract(trigger_payload, '$.source_agent_id') <> ''
-       GROUP BY src_id
-       ORDER BY last_at DESC
-       LIMIT 20`,
-    ).all(agentId) as Array<{ src_id: string; cnt: number; last_at: string }>;
-
-    const invokedBy = invokedByRows.map((r) => {
-      const a = this.getAgent(r.src_id);
-      return { agent_id: r.src_id, agent_name: a?.name ?? "Unknown", count: r.cnt, last_at: r.last_at };
-    });
-
-    // Who did I invoke (tool_call steps with tool_name = kernel_agents_invoke from my runs)
-    const invokedRows = this.db.prepare(
-      `SELECT json_extract(s.tool_input, '$.agent_id') AS tgt_id,
-              COUNT(*) AS cnt,
-              MAX(r.created_at) AS last_at
-       FROM agent_run_steps s
-       JOIN agent_runs r ON r.id = s.run_id
-       WHERE r.agent_id = ? AND s.tool_name = 'kernel_agents_invoke'
-         AND s.type = 'tool_call'
-         AND json_extract(s.tool_input, '$.agent_id') IS NOT NULL
-       GROUP BY tgt_id
-       ORDER BY last_at DESC
-       LIMIT 20`,
-    ).all(agentId) as Array<{ tgt_id: string; cnt: number; last_at: string }>;
-
-    const invoked = invokedRows.map((r) => {
-      const a = this.getAgent(r.tgt_id);
-      return { agent_id: r.tgt_id, agent_name: a?.name ?? "Unknown", count: r.cnt, last_at: r.last_at };
-    });
-
-    return { invokedBy, invoked };
+    return this.runs.getAdHocConnections(agentId);
   }
 
-  // ── Event Triggers ──────────────────────────────────
+
+  // ── Event triggers → AgentTriggersService ───────────
 
   addEventTrigger(input: {
     agent_id: string;
@@ -1320,70 +887,26 @@ export class AgentService {
     filter?: Record<string, unknown>;
     cooldown_ms?: number;
   }): EventTrigger {
-    const now = isoNow();
-    const trigger: EventTrigger = {
-      id: newId(),
-      agent_id: input.agent_id,
-      event_name: input.event_name,
-      filter: JSON.stringify(input.filter ?? {}),
-      cooldown_ms: input.cooldown_ms ?? 60_000,
-      last_fired: null,
-      active: 1,
-      created_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_event_triggers (id, agent_id, event_name, filter,
-         cooldown_ms, last_fired, active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        trigger.id, trigger.agent_id, trigger.event_name, trigger.filter,
-        trigger.cooldown_ms, trigger.last_fired, trigger.active, trigger.created_at,
-      );
-
-    this.events.emit("data.changed", { module: "agents", action: "trigger_added" });
-    return trigger;
+    return this.triggers.addEventTrigger(input);
   }
 
   listEventTriggers(agentId?: string): EventTrigger[] {
-    if (agentId) {
-      return this.db
-        .prepare("SELECT * FROM agent_event_triggers WHERE agent_id = ? ORDER BY created_at DESC")
-        .all(agentId) as EventTrigger[];
-    }
-    return this.db
-      .prepare("SELECT * FROM agent_event_triggers ORDER BY created_at DESC")
-      .all() as EventTrigger[];
+    return this.triggers.listEventTriggers(agentId);
   }
 
   getActiveEventTriggers(): EventTrigger[] {
-    return this.db
-      .prepare(
-        `SELECT t.* FROM agent_event_triggers t
-         JOIN agents a ON t.agent_id = a.id
-         WHERE t.active = 1 AND a.active = 1`,
-      )
-      .all() as EventTrigger[];
+    return this.triggers.getActiveEventTriggers();
   }
 
   removeEventTrigger(id: string): boolean {
-    const result = this.db.prepare("DELETE FROM agent_event_triggers WHERE id = ?").run(id);
-    if (result.changes > 0) {
-      this.events.emit("data.changed", { module: "agents", action: "trigger_removed" });
-      return true;
-    }
-    return false;
+    return this.triggers.removeEventTrigger(id);
   }
 
   updateTriggerLastFired(id: string): void {
-    this.db
-      .prepare("UPDATE agent_event_triggers SET last_fired = ? WHERE id = ?")
-      .run(isoNow(), id);
+    this.triggers.updateTriggerLastFired(id);
   }
 
-  // ── Schedules ───────────────────────────────────────
+  // ── Schedules → AgentSchedulesService ───────────────
 
   addSchedule(input: {
     agent_id: string;
@@ -1391,119 +914,23 @@ export class AgentService {
     cron_expression?: string;
     goal_override?: string;
   }): AgentSchedule {
-    const now = isoNow();
-    const cronExpr = input.cron_expression ?? "";
-    const intervalMs = input.interval_ms ?? 0;
-
-    // Rate-limit floor: a schedule firing more often than every 5 minutes is
-    // almost always a footgun — it's the cheapest exfil channel an attacker
-    // gets if they ever land an agent_create. 5 min is more than enough for
-    // human-perceived "near-real-time" workflows. Operators who really need
-    // sub-5-min cadence can opt in with KERNEL_AGENT_MIN_SCHEDULE_SECONDS.
-    // Prefer live config.agents.minScheduleSeconds (single source of truth,
-    // reflects hot-reloaded settings) — fall back to a direct env read only
-    // when this instance wasn't constructed with a KernelConfig (demo
-    // scripts, older tests).
-    const minSeconds = this.config
-      ? this.config.agents.minScheduleSeconds
-      : Math.max(1, Number(process.env.KERNEL_AGENT_MIN_SCHEDULE_SECONDS ?? 300));
-    if (intervalMs > 0 && intervalMs < minSeconds * 1000) {
-      throw new Error(
-        `agent schedule interval_ms=${intervalMs} is below minimum ${minSeconds * 1000}ms. ` +
-        `Raise KERNEL_AGENT_MIN_SCHEDULE_SECONDS to lower the floor (default 300s).`,
-      );
-    }
-    if (cronExpr) {
-      // Estimate cadence from two consecutive cron fires.
-      try {
-        const first = new Date(computeNextCronRun(cronExpr, "UTC"));
-        const second = new Date(computeNextCronRun(cronExpr, "UTC", first));
-        const deltaMs = second.getTime() - first.getTime();
-        if (deltaMs > 0 && deltaMs < minSeconds * 1000) {
-          throw new Error(
-            `agent schedule cron "${cronExpr}" fires every ${Math.round(deltaMs / 1000)}s, below minimum ${minSeconds}s. ` +
-            `Raise KERNEL_AGENT_MIN_SCHEDULE_SECONDS to lower the floor.`,
-          );
-        }
-      } catch (e) {
-        if (e instanceof Error && e.message.startsWith("agent schedule cron")) throw e;
-        // computeNextCronRun threw because the expression is malformed; let
-        // the original code path reject below.
-      }
-    }
-
-    // Compute initial next_run_at
-    let nextRun: string;
-    if (cronExpr) {
-      nextRun = computeNextCronRun(cronExpr, "UTC");
-    } else {
-      nextRun = new Date(Date.now() + intervalMs).toISOString();
-    }
-
-    const schedule: AgentSchedule = {
-      id: newId(),
-      agent_id: input.agent_id,
-      interval_ms: intervalMs,
-      cron_expression: cronExpr,
-      goal_override: input.goal_override ?? "",
-      next_run_at: nextRun,
-      last_run_at: null,
-      active: 1,
-      created_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_schedules (id, agent_id, interval_ms, cron_expression, goal_override,
-         next_run_at, last_run_at, active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        schedule.id, schedule.agent_id, schedule.interval_ms, schedule.cron_expression,
-        schedule.goal_override, schedule.next_run_at, schedule.last_run_at,
-        schedule.active, schedule.created_at,
-      );
-
-    this.events.emit("data.changed", { module: "agents", action: "schedule_added" });
-    return schedule;
+    return this.schedules.addSchedule(input);
   }
 
   listSchedules(agentId?: string): AgentSchedule[] {
-    if (agentId) {
-      return this.db
-        .prepare("SELECT * FROM agent_schedules WHERE agent_id = ? ORDER BY created_at DESC")
-        .all(agentId) as AgentSchedule[];
-    }
-    return this.db
-      .prepare("SELECT * FROM agent_schedules ORDER BY created_at DESC")
-      .all() as AgentSchedule[];
+    return this.schedules.listSchedules(agentId);
   }
 
   getDueSchedules(): Array<AgentSchedule & { agent_name: string }> {
-    const now = isoNow();
-    return this.db
-      .prepare(
-        `SELECT s.*, a.name as agent_name
-         FROM agent_schedules s
-         JOIN agents a ON s.agent_id = a.id
-         WHERE s.next_run_at <= ? AND s.active = 1 AND a.active = 1`,
-      )
-      .all(now) as Array<AgentSchedule & { agent_name: string }>;
+    return this.schedules.getDueSchedules();
   }
 
   removeSchedule(id: string): boolean {
-    const result = this.db.prepare("DELETE FROM agent_schedules WHERE id = ?").run(id);
-    if (result.changes > 0) {
-      this.events.emit("data.changed", { module: "agents", action: "schedule_removed" });
-      return true;
-    }
-    return false;
+    return this.schedules.removeSchedule(id);
   }
 
   updateScheduleNextRun(id: string, nextRunAt: string, lastRunAt: string): void {
-    this.db
-      .prepare("UPDATE agent_schedules SET next_run_at = ?, last_run_at = ? WHERE id = ?")
-      .run(nextRunAt, lastRunAt, id);
+    this.schedules.updateScheduleNextRun(id, nextRunAt, lastRunAt);
   }
 
   // NOTE: `deactivateSchedule()` lived here for the old in-memory circuit
@@ -1511,7 +938,7 @@ export class AgentService {
   // (`recordRunOutcome`) and deliberately leaves the schedule row alone, so
   // reactivating an agent resumes it without having to repair its cron too.
 
-  // ── Feedback ──────────────────────────────────────
+  // ── Feedback & stats → AgentFeedbackService ───────
 
   addFeedback(input: {
     agent_id: string;
@@ -1520,43 +947,11 @@ export class AgentService {
     outcome?: AgentFeedback["outcome"];
     lesson?: string;
   }): AgentFeedback {
-    const now = isoNow();
-    const feedback: AgentFeedback = {
-      id: newId(),
-      agent_id: input.agent_id,
-      run_id: input.run_id,
-      rating: input.rating,
-      outcome: input.outcome ?? "neutral",
-      lesson: input.lesson ?? "",
-      created_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_feedback (id, agent_id, run_id, rating, outcome, lesson, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        feedback.id, feedback.agent_id, feedback.run_id,
-        feedback.rating, feedback.outcome, feedback.lesson, feedback.created_at,
-      );
-
-    // Reinforce or penalize learnings that were active during the run.
-    // This closes the feedback loop: repeated-success learnings gain confidence,
-    // learnings that guided failures get downweighted and eventually deactivated.
-    const run = this.getRun(input.run_id);
-    if (run) {
-      this.reinforceLearningsForRun(input.agent_id, run.created_at, feedback.outcome);
-    }
-
-    this.events.emit("data.changed", { module: "agents", action: "feedback_added" });
-    return feedback;
+    return this.feedback.addFeedback(input);
   }
 
   getFeedback(agentId: string, limit = 20): AgentFeedback[] {
-    return this.db
-      .prepare("SELECT * FROM agent_feedback WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?")
-      .all(agentId, limit) as AgentFeedback[];
+    return this.feedback.getFeedback(agentId, limit);
   }
 
   getAgentStats(agentId: string): {
@@ -1570,63 +965,11 @@ export class AgentService {
     top_tools: Array<{ tool: string; count: number }>;
     common_errors: string[];
   } {
-    // Aggregate in SQL — loading every run row into memory grew unbounded with
-    // an agent's history (called on every invocation).
-    const agg = this.db
-      .prepare(
-        `SELECT COUNT(*) AS total,
-                SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
-                SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) AS failed,
-                COALESCE(SUM(tokens_used), 0) AS sum_tokens,
-                COALESCE(SUM(steps_count), 0) AS sum_steps
-         FROM agent_runs WHERE agent_id = ?`,
-      )
-      .get(agentId) as { total: number; completed: number; failed: number; sum_tokens: number; sum_steps: number };
-
-    const completed = agg.completed ?? 0;
-    const failed = agg.failed ?? 0;
-    const total = agg.total ?? 0;
-
-    const avgRatingRow = this.db
-      .prepare("SELECT AVG(rating) as avg FROM agent_feedback WHERE agent_id = ?")
-      .get(agentId) as { avg: number | null } | undefined;
-
-    const avgTokens = total > 0 ? agg.sum_tokens / total : 0;
-    const avgSteps = total > 0 ? agg.sum_steps / total : 0;
-
-    // Top tools used across all runs
-    const toolRows = this.db
-      .prepare(
-        `SELECT s.tool_name, COUNT(*) as cnt
-         FROM agent_run_steps s
-         JOIN agent_runs r ON s.run_id = r.id
-         WHERE r.agent_id = ? AND s.type = 'tool_call' AND s.tool_name <> ''
-         GROUP BY s.tool_name ORDER BY cnt DESC LIMIT 10`,
-      )
-      .all(agentId) as Array<{ tool_name: string; cnt: number }>;
-
-    // Common errors from failed runs
-    const errorRows = this.db
-      .prepare(
-        `SELECT error FROM agent_runs WHERE agent_id = ? AND status = 'failed' AND error <> ''
-         ORDER BY created_at DESC LIMIT 5`,
-      )
-      .all(agentId) as Array<{ error: string }>;
-
-    return {
-      total_runs: total,
-      completed,
-      failed,
-      avg_rating: avgRatingRow?.avg ?? null,
-      avg_tokens: Math.round(avgTokens),
-      avg_steps: Math.round(avgSteps * 10) / 10,
-      success_rate: total > 0 ? Math.round((completed / total) * 100) : 0,
-      top_tools: toolRows.map(r => ({ tool: r.tool_name, count: r.cnt })),
-      common_errors: errorRows.map(r => r.error.slice(0, 200)),
-    };
+    return this.feedback.getAgentStats(agentId);
   }
 
-  // ── Learnings ─────────────────────────────────────
+
+  // ── Learnings → AgentMemoryService ────────────────
 
   addLearning(input: {
     agent_id: string;
@@ -1635,62 +978,27 @@ export class AgentService {
     confidence?: number;
     source_runs?: string[];
   }): AgentLearning {
-    const now = isoNow();
-    const learning: AgentLearning = {
-      id: newId(),
-      agent_id: input.agent_id,
-      type: input.type,
-      content: input.content,
-      confidence: input.confidence ?? 0.5,
-      source_runs: JSON.stringify(input.source_runs ?? []),
-      active: 1,
-      created_at: now,
-      updated_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_learnings (id, agent_id, type, content, confidence, source_runs, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        learning.id, learning.agent_id, learning.type, learning.content,
-        learning.confidence, learning.source_runs, learning.active,
-        learning.created_at, learning.updated_at,
-      );
-
-    this.scheduleEmbed("agent_learnings", "embedding", "embedding_model", learning.id, learning.content);
-    return learning;
+    return this.memory.addLearning(input);
   }
 
   getLearnings(agentId: string): AgentLearning[] {
-    return this.db
-      .prepare("SELECT * FROM agent_learnings WHERE agent_id = ? AND active = 1 ORDER BY confidence DESC")
-      .all(agentId) as AgentLearning[];
+    return this.memory.getLearnings(agentId);
   }
 
-  // ── Conversational Memory ─────────────────────────
+  // ── Conversational memory → AgentMemoryService ────
 
-  /** Save a message to agent's conversational memory */
   addMemory(agentId: string, role: "user" | "assistant", content: string, runId = ""): void {
-    const id = newId();
-    this.db.prepare(
-      "INSERT INTO agent_memory (id, agent_id, role, content, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(id, agentId, role, content, runId, isoNow());
-    this.scheduleEmbed("agent_memory", "embedding", "embedding_model", id, content);
+    this.memory.addMemory(agentId, role, content, runId);
   }
 
-  /** Get recent conversational memory for an agent (last N exchanges) */
   getMemory(agentId: string, limit = 20): Array<{ role: string; content: string; created_at: string }> {
-    return this.db
-      .prepare("SELECT role, content, created_at FROM agent_memory WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?")
-      .all(agentId, limit) as Array<{ role: string; content: string; created_at: string }>;
+    return this.memory.getMemory(agentId, limit);
   }
 
-  /** Clear all memory for an agent */
   clearMemory(agentId: string): void {
-    this.db.prepare("DELETE FROM agent_memory WHERE agent_id = ?").run(agentId);
+    this.memory.clearMemory(agentId);
   }
+
 
   // ── Office inbox (async colleague-to-colleague mail within a flow) ────
 
@@ -1988,27 +1296,17 @@ export class AgentService {
       .get(flowId, name) as Agent | undefined;
   }
 
-  /**
-   * Get memory items ranked by relevance to a goal. When the agent has >limit
-   * items, prefers those with keyword overlap to the current goal; falls back
-   * to recency. Replaces blind last-N slicing with purposeful recall.
-   */
+  // ── Relevance ranking → AgentMemoryService ────────
+
   getRelevantMemory(
     agentId: string,
     goal: string,
     limit = 20,
     pool = 100,
   ): Array<{ role: string; content: string; created_at: string }> {
-    const recent = this.getMemory(agentId, pool);
-    return rankByRelevance(recent, goal, m => m.content, limit);
+    return this.memory.getRelevantMemory(agentId, goal, limit, pool);
   }
 
-  /**
-   * Embedding-aware variant of getRelevantMemory. Reads pre-computed
-   * vectors written by scheduleEmbed(); rows whose embedding hasn't landed
-   * yet (or failed) participate via lexical-only score, so the ranker is
-   * always usable regardless of backfill state.
-   */
   getRelevantMemoryByEmbedding(
     agentId: string,
     goal: string,
@@ -2018,51 +1316,18 @@ export class AgentService {
     cosineWeight?: number,
     minScore?: number,
   ): Array<{ role: string; content: string; created_at: string }> {
-    const rows = this.db
-      .prepare(
-        `SELECT role, content, created_at, embedding
-         FROM agent_memory WHERE agent_id = ?
-         ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(agentId, pool) as Array<{
-        role: string;
-        content: string;
-        created_at: string;
-        embedding: Buffer | Uint8Array | null;
-      }>;
-    const items = rows.map(r => ({
-      role: r.role,
-      content: r.content,
-      created_at: r.created_at,
-      embedding: blobToVector(r.embedding),
-    }));
-    return rankByEmbedding(items, goalVector, goal, m => m.content, limit, cosineWeight, minScore)
-      .map(({ role, content, created_at }) => ({ role, content, created_at }));
+    return this.memory.getRelevantMemoryByEmbedding(agentId, goal, goalVector, limit, pool, cosineWeight, minScore);
   }
 
-  /**
-   * Find past runs of this agent whose goals are similar to the current one.
-   * Used to inject "when you did X you got Y" context into the prompt.
-   */
   findSimilarPastRuns(
     agentId: string,
     goal: string,
     limit = 3,
     pool = 30,
   ): AgentRun[] {
-    const recent = this.db
-      .prepare(
-        `SELECT * FROM agent_runs
-         WHERE agent_id = ? AND status IN ('completed', 'failed')
-         ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(agentId, pool) as AgentRun[];
-    // Match against goal text; skip runs with empty goals.
-    const filtered = recent.filter(r => r.goal && r.goal.length > 0);
-    return rankByRelevance(filtered, goal, r => r.goal, limit, 0.1);
+    return this.memory.findSimilarPastRuns(agentId, goal, limit, pool);
   }
 
-  /** Embedding-aware variant of findSimilarPastRuns. */
   findSimilarPastRunsByEmbedding(
     agentId: string,
     goal: string,
@@ -2072,45 +1337,17 @@ export class AgentService {
     cosineWeight?: number,
     minScore?: number,
   ): AgentRun[] {
-    const rows = this.db
-      .prepare(
-        `SELECT *, goal_embedding FROM agent_runs
-         WHERE agent_id = ? AND status IN ('completed', 'failed')
-         ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(agentId, pool) as Array<AgentRun & { goal_embedding: Buffer | Uint8Array | null }>;
-    const filtered = rows
-      .filter(r => r.goal && r.goal.length > 0)
-      .map(r => ({ ...r, embedding: blobToVector(r.goal_embedding) }));
-    const ranked = rankByEmbedding(filtered, goalVector, goal, r => r.goal, limit, cosineWeight, minScore);
-    // Strip the helper columns we attached for ranking — restore the AgentRun shape.
-    return ranked.map(r => {
-      const { embedding: _e, goal_embedding: _ge, ...rest } = r;
-      return rest as AgentRun;
-    });
+    return this.memory.findSimilarPastRunsByEmbedding(agentId, goal, goalVector, limit, pool, cosineWeight, minScore);
   }
 
-  /**
-   * Get learnings ranked by relevance to the current goal. Within each
-   * relevance tier, prefers higher confidence. Prevents irrelevant learnings
-   * (e.g. "avoid X" when agent isn't doing X) from hogging the prompt.
-   */
   getRelevantLearnings(
     agentId: string,
     goal: string,
     limit = 15,
   ): AgentLearning[] {
-    const all = this.getLearnings(agentId);
-    if (all.length <= limit) return all;
-    // Rank by relevance; ties broken by confidence (already sorted desc by getLearnings)
-    return rankByRelevance(all, goal, l => l.content, limit);
+    return this.memory.getRelevantLearnings(agentId, goal, limit);
   }
 
-  /**
-   * Embedding-aware variant of getRelevantLearnings. minScore defaults are
-   * higher than for memory because learnings are more structured (auto-eval
-   * lessons), so cosine scores cluster higher.
-   */
   getRelevantLearningsByEmbedding(
     agentId: string,
     goal: string,
@@ -2119,119 +1356,39 @@ export class AgentService {
     cosineWeight?: number,
     minScore?: number,
   ): AgentLearning[] {
-    const rows = this.db
-      .prepare(
-        `SELECT *, embedding FROM agent_learnings
-         WHERE agent_id = ? AND active = 1
-         ORDER BY confidence DESC`,
-      )
-      .all(agentId) as Array<AgentLearning & { embedding: Buffer | Uint8Array | null }>;
-    if (rows.length <= limit) return rows.map(({ embedding: _, ...rest }) => rest as AgentLearning);
-    const items = rows.map(r => ({ ...r, embedding: blobToVector(r.embedding) }));
-    return rankByEmbedding(items, goalVector, goal, l => l.content, limit, cosineWeight, minScore ?? 0.45)
-      .map(({ embedding: _, ...rest }) => rest as AgentLearning);
+    return this.memory.getRelevantLearningsByEmbedding(agentId, goal, goalVector, limit, cosineWeight, minScore);
   }
 
   updateLearningConfidence(id: string, delta: number): void {
-    const learning = this.db
-      .prepare("SELECT confidence FROM agent_learnings WHERE id = ?")
-      .get(id) as { confidence: number } | undefined;
-    if (!learning) return;
-
-    const newConf = Math.max(0, Math.min(1, learning.confidence + delta));
-    this.db
-      .prepare("UPDATE agent_learnings SET confidence = ?, updated_at = ? WHERE id = ?")
-      .run(newConf, isoNow(), id);
+    this.memory.updateLearningConfidence(id, delta);
   }
 
   deactivateLearning(id: string): void {
-    this.db
-      .prepare("UPDATE agent_learnings SET active = 0, updated_at = ? WHERE id = ?")
-      .run(isoNow(), id);
+    this.memory.deactivateLearning(id);
   }
 
-  /**
-   * Get learnings that were active (and would have been injected into prompt)
-   * at the time a given run started. Used to attribute run outcomes back to learnings.
-   */
   getLearningsActiveAt(agentId: string, referenceTime: string): AgentLearning[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM agent_learnings
-         WHERE agent_id = ? AND active = 1 AND created_at < ?
-         ORDER BY confidence DESC LIMIT 15`,
-      )
-      .all(agentId, referenceTime) as AgentLearning[];
+    return this.memory.getLearningsActiveAt(agentId, referenceTime);
   }
 
-  /**
-   * Given a run outcome, adjust confidence of learnings that were active during it.
-   * Success boosts confidence, failure penalizes it. Learnings below 0.15 get deactivated.
-   * Returns count of learnings updated / deactivated.
-   */
   reinforceLearningsForRun(
     agentId: string,
     runCreatedAt: string,
     outcome: "success" | "partial" | "failure" | "neutral",
   ): { updated: number; deactivated: number } {
-    const delta =
-      outcome === "success" ? 0.08
-      : outcome === "partial" ? 0.02
-      : outcome === "failure" ? -0.15
-      : 0;
-    if (delta === 0) return { updated: 0, deactivated: 0 };
-
-    const learnings = this.getLearningsActiveAt(agentId, runCreatedAt);
-    let updated = 0;
-    let deactivated = 0;
-    for (const l of learnings) {
-      this.updateLearningConfidence(l.id, delta);
-      updated++;
-      // Re-fetch to check new confidence
-      const fresh = this.db
-        .prepare("SELECT confidence FROM agent_learnings WHERE id = ?")
-        .get(l.id) as { confidence: number } | undefined;
-      if (fresh && fresh.confidence < 0.15) {
-        this.deactivateLearning(l.id);
-        deactivated++;
-      }
-    }
-    return { updated, deactivated };
+    return this.memory.reinforceLearningsForRun(agentId, runCreatedAt, outcome);
   }
 
-  /**
-   * Periodic cleanup: deactivate learnings below minConfidence threshold.
-   * Returns count deactivated.
-   */
   cleanupLowConfidenceLearnings(agentId: string, minConfidence = 0.15): number {
-    const result = this.db
-      .prepare(
-        `UPDATE agent_learnings SET active = 0, updated_at = ?
-         WHERE agent_id = ? AND active = 1 AND confidence < ?`,
-      )
-      .run(isoNow(), agentId, minConfidence);
-    return result.changes as number;
+    return this.memory.cleanupLowConfidenceLearnings(agentId, minConfidence);
   }
 
-  // ── Conversations & messages (generic inter-agent thread) ────────────
 
-  /**
-   * Normalise a free-form topic into a stable hash used to dedup conversations
-   * and lock debate cooldowns. Keep it simple (lowercase + strip punctuation +
-   * collapse whitespace + clip). Good enough until we bolt on embeddings.
-   */
+  // ── Conversations & messages → AgentConversationsService ────────────
+
+  /** @see AgentConversationsService.computeTopicHash */
   static computeTopicHash(topic: string): string {
-    const normalised = (topic || "")
-      .toLowerCase()
-      .normalize("NFKD")
-      .replace(/[\u0300-\u036f]/g, "")
-      .replace(/[^a-z0-9\s]/g, " ")
-      .split(/\s+/)
-      .filter(w => w.length >= 3 && !TOPIC_STOPWORDS.has(w))
-      .slice(0, 16)
-      .sort()
-      .join("-");
-    return normalised.slice(0, 200);
+    return AgentConversationsService.computeTopicHash(topic);
   }
 
   createConversation(input: {
@@ -2242,175 +1399,49 @@ export class AgentService {
     parent_conversation_id?: string;
     meta?: Record<string, unknown>;
   }): AgentConversation {
-    const now = isoNow();
-    const convo: AgentConversation = {
-      id: newId(),
-      kind: input.kind,
-      topic: input.topic.slice(0, 500),
-      topic_hash: AgentService.computeTopicHash(input.topic),
-      participants: JSON.stringify([...new Set(input.participants)]),
-      initiator_agent_id: input.initiator_agent_id,
-      parent_conversation_id: input.parent_conversation_id ?? "",
-      status: "open",
-      meta: JSON.stringify(input.meta ?? {}),
-      created_at: now,
-      updated_at: now,
-      closed_at: null,
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_conversations
-          (id, kind, topic, topic_hash, participants, initiator_agent_id,
-           parent_conversation_id, status, meta, created_at, updated_at, closed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        convo.id, convo.kind, convo.topic, convo.topic_hash, convo.participants,
-        convo.initiator_agent_id, convo.parent_conversation_id, convo.status,
-        convo.meta, convo.created_at, convo.updated_at, convo.closed_at,
-      );
-    this.events.emit("agent:conversation:opened", {
-      conversation_id: convo.id, kind: convo.kind, topic: convo.topic,
-      participants: JSON.parse(convo.participants), initiator: convo.initiator_agent_id,
-    });
-    return convo;
+    return this.conversations.createConversation(input);
   }
 
   getConversation(id: string): AgentConversation | undefined {
-    if (!id) return undefined;
-    return this.db
-      .prepare("SELECT * FROM agent_conversations WHERE id = ?")
-      .get(id) as AgentConversation | undefined;
+    return this.conversations.getConversation(id);
   }
 
-  /**
-   * Find an open chat with the given participant set (order-insensitive) and
-   * matching topic_hash. If none, create one. Used by postToColleague to keep
-   * related back-and-forth mail in a single thread.
-   */
   findOrCreateChatConversation(input: {
     topic: string;
     participants: string[];
     initiator_agent_id: string;
   }): AgentConversation {
-    const hash = AgentService.computeTopicHash(input.topic);
-    const participantsSorted = [...new Set(input.participants)].sort();
-    const rows = this.db
-      .prepare(
-        `SELECT * FROM agent_conversations
-          WHERE kind = 'chat' AND status = 'open' AND topic_hash = ?
-          ORDER BY created_at DESC
-          LIMIT 20`,
-      )
-      .all(hash) as AgentConversation[];
-    for (const row of rows) {
-      const current = this.parseParticipants(row).slice().sort();
-      if (current.length === participantsSorted.length &&
-          current.every((id, i) => id === participantsSorted[i])) {
-        return row;
-      }
-    }
-    return this.createConversation({
-      kind: "chat",
-      topic: input.topic,
-      participants: input.participants,
-      initiator_agent_id: input.initiator_agent_id,
-    });
+    return this.conversations.findOrCreateChatConversation(input);
   }
 
   listConversations(opts?: {
     agent_id?: string;
     kind?: "chat" | "meeting" | "debate";
     status?: "open" | "closed";
-    /** Hide rows whose meta.archived is truthy. Default true so the dashboard
-     *  doesn't keep re-surfacing meetings the user already dismissed. */
     excludeArchived?: boolean;
     limit?: number;
   }): AgentConversation[] {
-    let sql = "SELECT * FROM agent_conversations WHERE 1=1";
-    const params: unknown[] = [];
-    if (opts?.kind) { sql += " AND kind = ?"; params.push(opts.kind); }
-    if (opts?.status) { sql += " AND status = ?"; params.push(opts.status); }
-    if (opts?.agent_id) {
-      // participants is a JSON array of IDs — LIKE match is safe because IDs
-      // are UUIDs and never appear as substrings of one another.
-      sql += " AND participants LIKE ?";
-      params.push(`%"${opts.agent_id}"%`);
-    }
-    // Default to excluding archived. The dashboard can opt back in by
-    // passing excludeArchived=false explicitly.
-    const excludeArchived = opts?.excludeArchived !== false;
-    if (excludeArchived) {
-      // SQLite has no native JSON ops at this version, so a substring filter
-      // on the serialized meta column is good enough for a flag.
-      sql += " AND meta NOT LIKE ?";
-      params.push('%"archived":true%');
-    }
-    sql += " ORDER BY updated_at DESC";
-    sql += ` LIMIT ${Math.max(1, Math.min(opts?.limit ?? 50, 500))}`;
-    return this.db.prepare(sql).all(...params) as AgentConversation[];
+    return this.conversations.listConversations(opts);
   }
 
   closeConversation(id: string): void {
-    const now = isoNow();
-    this.db
-      .prepare("UPDATE agent_conversations SET status = 'closed', closed_at = ?, updated_at = ? WHERE id = ?")
-      .run(now, now, id);
-    this.events.emit("agent:conversation:closed", { conversation_id: id });
+    this.conversations.closeConversation(id);
   }
 
-  /**
-   * Mark a conversation as archived (soft hide). Re-merges into the existing
-   * meta JSON so other meta keys aren't blown away. Idempotent. Returns true
-   * if the row existed and was updated.
-   */
   archiveConversation(id: string): boolean {
-    const convo = this.getConversation(id);
-    if (!convo) return false;
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(convo.meta || "{}"); } catch { meta = {}; }
-    meta.archived = true;
-    meta.archived_at = isoNow();
-    this.db
-      .prepare("UPDATE agent_conversations SET meta = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(meta), isoNow(), id);
-    this.events.emit("agent:conversation:archived", { conversation_id: id });
-    return true;
+    return this.conversations.archiveConversation(id);
   }
 
-  /**
-   * Bulk-archive every closed conversation matching the filters. Used by the
-   * dashboard's "clear all read" button to clean out the meeting history in
-   * one shot.
-   */
   archiveClosedConversations(opts?: { kind?: "chat" | "meeting" | "debate" }): number {
-    let sql = "SELECT id, meta FROM agent_conversations WHERE status = 'closed' AND meta NOT LIKE ?";
-    const params: unknown[] = ['%"archived":true%'];
-    if (opts?.kind) { sql += " AND kind = ?"; params.push(opts.kind); }
-    const rows = this.db.prepare(sql).all(...params) as Array<{ id: string; meta: string }>;
-    let count = 0;
-    for (const r of rows) {
-      if (this.archiveConversation(r.id)) count++;
-    }
-    return count;
+    return this.conversations.archiveClosedConversations(opts);
   }
 
   parseParticipants(convo: AgentConversation): string[] {
-    try {
-      const raw = JSON.parse(convo.participants || "[]");
-      return Array.isArray(raw) ? raw.filter((x: unknown): x is string => typeof x === "string") : [];
-    } catch { return []; }
+    return this.conversations.parseParticipants(convo);
   }
 
   addParticipant(conversationId: string, agentId: string): void {
-    const convo = this.getConversation(conversationId);
-    if (!convo) return;
-    const current = this.parseParticipants(convo);
-    if (current.includes(agentId)) return;
-    current.push(agentId);
-    this.db
-      .prepare("UPDATE agent_conversations SET participants = ?, updated_at = ? WHERE id = ?")
-      .run(JSON.stringify(current), isoNow(), conversationId);
+    this.conversations.addParticipant(conversationId, agentId);
   }
 
   postMessage(input: {
@@ -2424,113 +1455,43 @@ export class AgentService {
     run_id?: string;
     meta?: Record<string, unknown>;
   }): AgentMessage {
-    const msg: AgentMessage = {
-      id: newId(),
-      conversation_id: input.conversation_id,
-      from_agent_id: input.from_agent_id,
-      to_agent_id: input.to_agent_id ?? "",
-      role: input.role ?? "stmt",
-      in_reply_to: input.in_reply_to ?? "",
-      body: input.body,
-      tokens: input.tokens ?? 0,
-      run_id: input.run_id ?? "",
-      meta: JSON.stringify(input.meta ?? {}),
-      created_at: isoNow(),
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_messages
-          (id, conversation_id, from_agent_id, to_agent_id, role, in_reply_to,
-           body, tokens, run_id, meta, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        msg.id, msg.conversation_id, msg.from_agent_id, msg.to_agent_id, msg.role,
-        msg.in_reply_to, msg.body, msg.tokens, msg.run_id, msg.meta, msg.created_at,
-      );
-    this.db
-      .prepare("UPDATE agent_conversations SET updated_at = ? WHERE id = ?")
-      .run(msg.created_at, msg.conversation_id);
-    this.events.emit("agent:conversation:message_posted", {
-      conversation_id: msg.conversation_id,
-      message_id: msg.id,
-      from_agent_id: msg.from_agent_id,
-      to_agent_id: msg.to_agent_id,
-      role: msg.role,
-      in_reply_to: msg.in_reply_to,
-    });
-    return msg;
+    return this.conversations.postMessage(input);
   }
 
   getMessage(id: string): AgentMessage | undefined {
-    if (!id) return undefined;
-    return this.db
-      .prepare("SELECT * FROM agent_messages WHERE id = ?")
-      .get(id) as AgentMessage | undefined;
+    return this.conversations.getMessage(id);
   }
 
   listMessages(conversationId: string, opts?: {
     limit?: number;
     role?: AgentMessageRole;
   }): AgentMessage[] {
-    let sql = "SELECT * FROM agent_messages WHERE conversation_id = ?";
-    const params: unknown[] = [conversationId];
-    if (opts?.role) { sql += " AND role = ?"; params.push(opts.role); }
-    sql += " ORDER BY created_at ASC";
-    sql += ` LIMIT ${Math.max(1, Math.min(opts?.limit ?? 200, 1000))}`;
-    return this.db.prepare(sql).all(...params) as AgentMessage[];
+    return this.conversations.listMessages(conversationId, opts);
   }
 
-  /**
-   * Return {distinctCounterSenders, counterMessages} for a conversation.
-   * Used by the debate orchestrator to decide whether to auto-open a debate.
-   */
   getCounterStats(conversationId: string): {
     distinct_senders: string[];
     counters: AgentMessage[];
   } {
-    const counters = this.db
-      .prepare(
-        `SELECT * FROM agent_messages
-          WHERE conversation_id = ? AND role = 'counter'
-          ORDER BY created_at ASC`,
-      )
-      .all(conversationId) as AgentMessage[];
-    const distinct = Array.from(new Set(counters.map(m => m.from_agent_id)));
-    return { distinct_senders: distinct, counters };
+    return this.conversations.getCounterStats(conversationId);
   }
 
-  // ── Debate cooldown register ─────────────────────────
+  // ── Debate cooldown register → AgentConversationsService ──
 
   getDebateCooldown(topicHash: string): AgentDebateCooldown | undefined {
-    if (!topicHash) return undefined;
-    return this.db
-      .prepare("SELECT * FROM agent_debate_cooldowns WHERE topic_hash = ?")
-      .get(topicHash) as AgentDebateCooldown | undefined;
+    return this.conversations.getDebateCooldown(topicHash);
   }
 
   recordDebateCooldown(topicHash: string, debateConvId: string): void {
-    const now = isoNow();
-    this.db
-      .prepare(
-        `INSERT INTO agent_debate_cooldowns (topic_hash, debate_conv_id, opened_at, closed_at)
-         VALUES (?, ?, ?, NULL)
-         ON CONFLICT(topic_hash) DO UPDATE SET
-           debate_conv_id = excluded.debate_conv_id,
-           opened_at = excluded.opened_at,
-           closed_at = NULL`,
-      )
-      .run(topicHash, debateConvId, now);
+    this.conversations.recordDebateCooldown(topicHash, debateConvId);
   }
 
   countRecentAutoDebates(sinceIsoTimestamp: string): number {
-    const row = this.db
-      .prepare("SELECT COUNT(*) AS c FROM agent_debate_cooldowns WHERE opened_at >= ?")
-      .get(sinceIsoTimestamp) as { c: number } | undefined;
-    return row?.c ?? 0;
+    return this.conversations.countRecentAutoDebates(sinceIsoTimestamp);
   }
 
-  // ── Chains ──────────────────────────────────────
+
+  // ── Chains → AgentChainsService ─────────────────
 
   addChain(input: {
     source_agent_id: string;
@@ -2540,69 +1501,22 @@ export class AgentService {
     pass_result?: boolean;
     delay_ms?: number;
   }): AgentChain {
-    if (input.source_agent_id === input.target_agent_id) {
-      throw new Error("Cannot chain an agent to itself");
-    }
-
-    const now = isoNow();
-    const chain: AgentChain = {
-      id: newId(),
-      source_agent_id: input.source_agent_id,
-      target_agent_id: input.target_agent_id,
-      label: input.label ?? "",
-      condition: JSON.stringify(input.condition ?? {}),
-      pass_result: input.pass_result !== false ? 1 : 0,
-      delay_ms: input.delay_ms ?? 0,
-      active: 1,
-      created_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO agent_chains (id, source_agent_id, target_agent_id, label,
-         condition, pass_result, delay_ms, active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        chain.id, chain.source_agent_id, chain.target_agent_id,
-        chain.label, chain.condition, chain.pass_result,
-        chain.delay_ms, chain.active, chain.created_at,
-      );
-
-    this.events.emit("data.changed", { module: "agents", action: "chain_added" });
-    return chain;
+    return this.chains.addChain(input);
   }
 
   listChains(agentId?: string): AgentChain[] {
-    if (agentId) {
-      return this.db
-        .prepare(
-          `SELECT * FROM agent_chains
-           WHERE (source_agent_id = ? OR target_agent_id = ?) AND active = 1
-           ORDER BY created_at DESC`,
-        )
-        .all(agentId, agentId) as AgentChain[];
-    }
-    return this.db
-      .prepare("SELECT * FROM agent_chains WHERE active = 1 ORDER BY created_at DESC")
-      .all() as AgentChain[];
+    return this.chains.listChains(agentId);
   }
 
   getChainsBySource(sourceId: string): AgentChain[] {
-    return this.db
-      .prepare("SELECT * FROM agent_chains WHERE source_agent_id = ? AND active = 1")
-      .all(sourceId) as AgentChain[];
+    return this.chains.getChainsBySource(sourceId);
   }
 
   removeChain(id: string): boolean {
-    const exists = this.db.prepare("SELECT id FROM agent_chains WHERE id = ?").get(id);
-    if (!exists) return false;
-    this.db.prepare("DELETE FROM agent_chains WHERE id = ?").run(id);
-    this.events.emit("data.changed", { module: "agents", action: "chain_removed" });
-    return true;
+    return this.chains.removeChain(id);
   }
 
-  // ── Event Log ─────────────────────────────────────
+  // ── Event log → AgentEventLogService ──────────────
 
   logEvent(data: {
     run_id?: string;
@@ -2615,29 +1529,7 @@ export class AgentService {
     tokens_used?: number;
     duration_ms?: number;
   }): void {
-    const id = newId();
-    const now = isoNow();
-    this.db
-      .prepare(
-        `INSERT INTO agent_event_log (id, run_id, agent_id, agent_name, event_type, event_subtype, detail, raw_data, tokens_used, duration_ms, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        id,
-        data.run_id ?? "",
-        data.agent_id ?? "",
-        data.agent_name ?? "",
-        data.event_type,
-        data.event_subtype ?? "",
-        data.detail ?? "",
-        JSON.stringify(data.raw_data ?? {}),
-        data.tokens_used ?? 0,
-        data.duration_ms ?? 0,
-        now,
-      );
-
-    // Mirror every structured event to stdout in pretty colored form.
-    writeAgentEvent(data);
+    this.eventLog.logEvent(data);
   }
 
   getEventLog(opts?: {
@@ -2648,22 +1540,7 @@ export class AgentService {
     offset?: number;
     since?: string;
   }): unknown[] {
-    let sql = "SELECT * FROM agent_event_log WHERE 1=1";
-    const params: unknown[] = [];
-
-    if (opts?.run_id) { sql += " AND run_id = ?"; params.push(opts.run_id); }
-    if (opts?.agent_id) { sql += " AND agent_id = ?"; params.push(opts.agent_id); }
-    if (opts?.event_type) { sql += " AND event_type = ?"; params.push(opts.event_type); }
-    if (opts?.since) { sql += " AND created_at >= ?"; params.push(opts.since); }
-
-    sql += " ORDER BY created_at DESC";
-
-    const limit = opts?.limit ?? 200;
-    const offset = opts?.offset ?? 0;
-    sql += " LIMIT ? OFFSET ?";
-    params.push(limit, offset);
-
-    return this.db.prepare(sql).all(...params);
+    return this.eventLog.getEventLog(opts);
   }
 
   getEventLogCount(opts?: {
@@ -2672,27 +1549,11 @@ export class AgentService {
     event_type?: string;
     since?: string;
   }): number {
-    let sql = "SELECT COUNT(*) as cnt FROM agent_event_log WHERE 1=1";
-    const params: unknown[] = [];
-
-    if (opts?.run_id) { sql += " AND run_id = ?"; params.push(opts.run_id); }
-    if (opts?.agent_id) { sql += " AND agent_id = ?"; params.push(opts.agent_id); }
-    if (opts?.event_type) { sql += " AND event_type = ?"; params.push(opts.event_type); }
-    if (opts?.since) { sql += " AND created_at >= ?"; params.push(opts.since); }
-
-    const row = this.db.prepare(sql).get(...params) as { cnt: number };
-    return row.cnt;
+    return this.eventLog.getEventLogCount(opts);
   }
 
   clearEventLog(opts?: { before?: string; agent_id?: string }): number {
-    let sql = "DELETE FROM agent_event_log WHERE 1=1";
-    const params: unknown[] = [];
-
-    if (opts?.before) { sql += " AND created_at < ?"; params.push(opts.before); }
-    if (opts?.agent_id) { sql += " AND agent_id = ?"; params.push(opts.agent_id); }
-
-    const result = this.db.prepare(sql).run(...params);
-    return result.changes;
+    return this.eventLog.clearEventLog(opts);
   }
 
   // ── Dashboard Widgets ────────────────────────────
@@ -2789,46 +1650,11 @@ export class AgentService {
 
   // ── Prompt version lineage (Autogenesis RSPL) ──────────
 
+  /** Agent creation writes the first lineage row directly. */
   private writePromptVersion(v: Omit<AgentPromptVersion, "id"> & { id?: string }): AgentPromptVersion {
-    const row: AgentPromptVersion = {
-      id: v.id ?? newId(),
-      agent_id: v.agent_id,
-      version: v.version,
-      system_prompt: v.system_prompt,
-      goal_template: v.goal_template,
-      parent_version: v.parent_version,
-      source: v.source,
-      note: v.note,
-      active: v.active,
-      created_at: v.created_at,
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_prompt_versions
-          (id, agent_id, version, system_prompt, goal_template, parent_version, source, note, active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id, row.agent_id, row.version, row.system_prompt, row.goal_template,
-        row.parent_version, row.source, row.note, row.active, row.created_at,
-      );
-    return row;
+    return this.promptVersions.writePromptVersion(v);
   }
 
-  /** Next free version number for an agent (always monotonically increasing). */
-  private nextPromptVersion(agentId: string): number {
-    const row = this.db
-      .prepare("SELECT MAX(version) AS v FROM agent_prompt_versions WHERE agent_id = ?")
-      .get(agentId) as { v: number | null } | undefined;
-    return (row?.v ?? 0) + 1;
-  }
-
-  /**
-   * Append a new prompt version. When `activate: true` (default), any prior
-   * version is deactivated and this one becomes the live snapshot. When
-   * `activate: false`, the new row is saved as a candidate — useful for the
-   * reflection optimizer while a candidate is being evaluated.
-   */
   snapshotPrompt(
     agentId: string,
     input: {
@@ -2840,120 +1666,38 @@ export class AgentService {
       activate?: boolean;
     },
   ): AgentPromptVersion | null {
-    const agent = this.getAgent(agentId);
-    if (!agent) return null;
-    const parent = input.parent_version ?? (this.getActivePromptVersion(agentId)?.version ?? 0);
-    const version = this.nextPromptVersion(agentId);
-    const activate = input.activate !== false;
-    if (activate) {
-      this.db.prepare("UPDATE agent_prompt_versions SET active = 0 WHERE agent_id = ?").run(agentId);
-    }
-    return this.writePromptVersion({
-      agent_id: agentId,
-      version,
-      system_prompt: input.system_prompt,
-      goal_template: input.goal_template,
-      parent_version: parent,
-      source: input.source,
-      note: input.note ?? "",
-      active: activate ? 1 : 0,
-      created_at: isoNow(),
-    });
+    return this.promptVersions.snapshotPrompt(agentId, input);
   }
 
-  /**
-   * Flip an existing version (by number) into the active slot without
-   * creating new lineage rows. Used by the reflection optimizer's Commit
-   * step to activate a previously-written candidate.
-   */
   activatePromptVersion(agentId: string, version: number): AgentPromptVersion | null {
-    const target = this.getPromptVersion(agentId, version);
-    if (!target) return null;
-    this.db.prepare("UPDATE agent_prompt_versions SET active = 0 WHERE agent_id = ?").run(agentId);
-    this.db
-      .prepare("UPDATE agent_prompt_versions SET active = 1 WHERE agent_id = ? AND version = ?")
-      .run(agentId, version);
-    this.db
-      .prepare("UPDATE agents SET system_prompt = ?, goal_template = ?, updated_at = ? WHERE id = ?")
-      .run(target.system_prompt, target.goal_template, isoNow(), agentId);
-    this.events.emit("data.changed", { module: "agents", action: "prompt_activated" });
-    return this.getPromptVersion(agentId, version) ?? null;
+    return this.promptVersions.activatePromptVersion(agentId, version);
   }
 
   listPromptVersions(agentId: string, limit = 50): AgentPromptVersion[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM agent_prompt_versions
-         WHERE agent_id = ? ORDER BY version DESC LIMIT ?`,
-      )
-      .all(agentId, limit) as AgentPromptVersion[];
+    return this.promptVersions.listPromptVersions(agentId, limit);
   }
 
   getPromptVersion(agentId: string, version: number): AgentPromptVersion | undefined {
-    return this.db
-      .prepare("SELECT * FROM agent_prompt_versions WHERE agent_id = ? AND version = ?")
-      .get(agentId, version) as AgentPromptVersion | undefined;
+    return this.promptVersions.getPromptVersion(agentId, version);
   }
 
   getActivePromptVersion(agentId: string): AgentPromptVersion | undefined {
-    return this.db
-      .prepare("SELECT * FROM agent_prompt_versions WHERE agent_id = ? AND active = 1")
-      .get(agentId) as AgentPromptVersion | undefined;
+    return this.promptVersions.getActivePromptVersion(agentId);
   }
 
-  /**
-   * Restore a historical version into the live agent row. Creates a new
-   * version entry (source='restore') pointing at the restored one as parent,
-   * so the lineage never loses information.
-   */
   restorePromptVersion(agentId: string, version: number, note = ""): AgentPromptVersion | null {
-    const target = this.getPromptVersion(agentId, version);
-    if (!target) return null;
-    const agent = this.getAgent(agentId);
-    if (!agent) return null;
-    // Apply to live agent, then record as a new version.
-    this.db
-      .prepare("UPDATE agents SET system_prompt = ?, goal_template = ?, updated_at = ? WHERE id = ?")
-      .run(target.system_prompt, target.goal_template, isoNow(), agentId);
-    const snapshot = this.snapshotPrompt(agentId, {
-      system_prompt: target.system_prompt,
-      goal_template: target.goal_template,
-      source: "restore",
-      note: note || `restored from v${version}`,
-      parent_version: version,
-    });
-    this.events.emit("data.changed", { module: "agents", action: "prompt_restored" });
-    return snapshot;
+    return this.promptVersions.restorePromptVersion(agentId, version, note);
   }
 
-  /**
-   * Extremely small line-level diff for UI — not a full LCS, just a marker
-   * of which lines are common/removed/added. Good enough to render a side-by-side.
-   */
   diffPromptVersions(
     agentId: string,
     fromVersion: number,
     toVersion: number,
   ): { from: AgentPromptVersion; to: AgentPromptVersion; lines: Array<{ kind: "same" | "added" | "removed"; text: string }> } | null {
-    const from = this.getPromptVersion(agentId, fromVersion);
-    const to = this.getPromptVersion(agentId, toVersion);
-    if (!from || !to) return null;
-    const a = from.system_prompt.split("\n");
-    const b = to.system_prompt.split("\n");
-    const aSet = new Set(a);
-    const bSet = new Set(b);
-    const lines: Array<{ kind: "same" | "added" | "removed"; text: string }> = [];
-    for (const line of a) {
-      if (bSet.has(line)) lines.push({ kind: "same", text: line });
-      else lines.push({ kind: "removed", text: line });
-    }
-    for (const line of b) {
-      if (!aSet.has(line)) lines.push({ kind: "added", text: line });
-    }
-    return { from, to, lines };
+    return this.promptVersions.diffPromptVersions(agentId, fromVersion, toVersion);
   }
 
-  // ── Evolution runs (Autogenesis SEPL) ───────────────────
+  // ── Evolution runs (Autogenesis SEPL) → AgentEvolutionService ──
 
   createEvolutionRun(input: {
     agent_id: string;
@@ -2965,42 +1709,7 @@ export class AgentService {
     workspace_id?: string;
     artifact_ref?: string;
   }): AgentEvolutionRun {
-    const row: AgentEvolutionRun = {
-      id: newId(),
-      agent_id: input.agent_id,
-      target: input.target ?? "prompt",
-      workspace_id: input.workspace_id ?? "",
-      artifact_ref: input.artifact_ref ?? "",
-      base_version: input.base_version,
-      candidate_version: 0,
-      hypothesis: input.hypothesis,
-      proposal: input.proposal,
-      status: "proposed",
-      baseline_score: 0,
-      candidate_score: 0,
-      trigger_run_ids: JSON.stringify(input.trigger_run_ids ?? []),
-      evaluation: "",
-      error: "",
-      created_at: isoNow(),
-      committed_at: null,
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_evolution_runs
-          (id, agent_id, target, workspace_id, artifact_ref,
-           base_version, candidate_version, hypothesis, proposal, status,
-           baseline_score, candidate_score, trigger_run_ids, evaluation, error,
-           created_at, committed_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        row.id, row.agent_id, row.target, row.workspace_id, row.artifact_ref,
-        row.base_version, row.candidate_version,
-        row.hypothesis, row.proposal, row.status, row.baseline_score, row.candidate_score,
-        row.trigger_run_ids, row.evaluation, row.error, row.created_at, row.committed_at,
-      );
-    this.events.emit("data.changed", { module: "agents", action: "evolution_proposed" });
-    return row;
+    return this.evolution.createEvolutionRun(input);
   }
 
   updateEvolutionRun(
@@ -3008,145 +1717,49 @@ export class AgentService {
     patch: Partial<Pick<AgentEvolutionRun,
       "candidate_version" | "status" | "baseline_score" | "candidate_score" | "evaluation" | "error" | "committed_at" | "artifact_ref">>,
   ): AgentEvolutionRun | undefined {
-    const current = this.db
-      .prepare("SELECT * FROM agent_evolution_runs WHERE id = ?")
-      .get(id) as AgentEvolutionRun | undefined;
-    if (!current) return undefined;
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    for (const [k, v] of Object.entries(patch)) {
-      sets.push(`${k} = ?`);
-      params.push(v as unknown);
-    }
-    if (sets.length === 0) return current;
-    params.push(id);
-    this.db.prepare(`UPDATE agent_evolution_runs SET ${sets.join(", ")} WHERE id = ?`).run(...params);
-    this.events.emit("data.changed", { module: "agents", action: "evolution_updated" });
-    return this.db
-      .prepare("SELECT * FROM agent_evolution_runs WHERE id = ?")
-      .get(id) as AgentEvolutionRun | undefined;
+    return this.evolution.updateEvolutionRun(id, patch);
   }
 
   listEvolutionRuns(agentId: string, limit = 20): AgentEvolutionRun[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM agent_evolution_runs
-         WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(agentId, limit) as AgentEvolutionRun[];
+    return this.evolution.listEvolutionRuns(agentId, limit);
   }
 
   listEvolutionRunsByWorkspace(workspaceId: string, limit = 50): AgentEvolutionRun[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM agent_evolution_runs
-         WHERE workspace_id = ? ORDER BY created_at DESC LIMIT ?`,
-      )
-      .all(workspaceId, limit) as AgentEvolutionRun[];
+    return this.evolution.listEvolutionRunsByWorkspace(workspaceId, limit);
   }
 
   getEvolutionRun(id: string): AgentEvolutionRun | undefined {
-    return this.db
-      .prepare("SELECT * FROM agent_evolution_runs WHERE id = ?")
-      .get(id) as AgentEvolutionRun | undefined;
+    return this.evolution.getEvolutionRun(id);
   }
 
-  // ── Conversation subscriptions ───────────────────────────────────────────
+  // ── Conversation subscriptions → AgentSubscriptionsService ───────────────
 
-  /**
-   * Subscribe an agent to a conversation. Idempotent — re-subscribing
-   * updates mode/filter_role and reactivates if previously cancelled.
-   */
   subscribeAgentToConversation(input: {
     agent_id: string;
     conversation_id: string;
     mode?: "responder" | "observer";
     filter_role?: string;
   }): AgentConversationSubscription | null {
-    const agent = this.getAgent(input.agent_id);
-    if (!agent) return null;
-    const convo = this.getConversation(input.conversation_id);
-    if (!convo) return null;
-
-    const mode = input.mode ?? "responder";
-    const filterRole = input.filter_role ?? "";
-
-    const existing = this.db
-      .prepare(
-        `SELECT * FROM agent_conversation_subscriptions
-         WHERE agent_id = ? AND conversation_id = ?`,
-      )
-      .get(input.agent_id, input.conversation_id) as AgentConversationSubscription | undefined;
-
-    if (existing) {
-      this.db
-        .prepare(
-          `UPDATE agent_conversation_subscriptions
-           SET mode = ?, filter_role = ?, active = 1
-           WHERE id = ?`,
-        )
-        .run(mode, filterRole, existing.id);
-      return this.getSubscription(existing.id) ?? null;
-    }
-
-    const sub: AgentConversationSubscription = {
-      id: newId(),
-      agent_id: input.agent_id,
-      conversation_id: input.conversation_id,
-      mode,
-      filter_role: filterRole,
-      active: 1,
-      last_fired_at: null,
-      created_at: isoNow(),
-    };
-    this.db
-      .prepare(
-        `INSERT INTO agent_conversation_subscriptions
-          (id, agent_id, conversation_id, mode, filter_role, active, last_fired_at, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(sub.id, sub.agent_id, sub.conversation_id, sub.mode, sub.filter_role, sub.active, sub.last_fired_at, sub.created_at);
-    return sub;
+    return this.subscriptions.subscribeAgentToConversation(input);
   }
 
   unsubscribeAgentFromConversation(agentId: string, conversationId: string): boolean {
-    const result = this.db
-      .prepare(
-        `UPDATE agent_conversation_subscriptions SET active = 0
-         WHERE agent_id = ? AND conversation_id = ?`,
-      )
-      .run(agentId, conversationId) as { changes: number };
-    return result.changes > 0;
+    return this.subscriptions.unsubscribeAgentFromConversation(agentId, conversationId);
   }
 
   getSubscription(id: string): AgentConversationSubscription | undefined {
-    return this.db
-      .prepare("SELECT * FROM agent_conversation_subscriptions WHERE id = ?")
-      .get(id) as AgentConversationSubscription | undefined;
+    return this.subscriptions.getSubscription(id);
   }
 
   listSubscriptionsForConversation(conversationId: string): AgentConversationSubscription[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM agent_conversation_subscriptions
-         WHERE conversation_id = ? AND active = 1`,
-      )
-      .all(conversationId) as AgentConversationSubscription[];
+    return this.subscriptions.listSubscriptionsForConversation(conversationId);
   }
 
   listSubscriptionsForAgent(agentId: string): AgentConversationSubscription[] {
-    return this.db
-      .prepare(
-        `SELECT * FROM agent_conversation_subscriptions
-         WHERE agent_id = ? AND active = 1
-         ORDER BY created_at DESC`,
-      )
-      .all(agentId) as AgentConversationSubscription[];
+    return this.subscriptions.listSubscriptionsForAgent(agentId);
   }
 
   markSubscriptionFired(id: string): void {
-    this.db
-      .prepare("UPDATE agent_conversation_subscriptions SET last_fired_at = ? WHERE id = ?")
-      .run(isoNow(), id);
+    this.subscriptions.markSubscriptionFired(id);
   }
 }
