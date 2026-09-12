@@ -2,7 +2,10 @@
   import { onMount, tick, afterUpdate } from 'svelte';
   import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
   import ToolCard from '$lib/components/ToolCard.svelte';
-  import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
+  import {
+    msgAuthError, streamAuthError, parseContentBlocks, parseStoredMessage,
+    imageSrc, providerIcon, providerColor, fmtCtx, isDateBreak, formatDateBreak,
+  } from '$lib/chat-view.js';
   import { modelEntries } from '$lib/llm-models.js';
   import ModelTraitBadges from '$lib/components/ModelTraitBadges.svelte';
   import { buildCatalog, commonModels, rankModels, type ModelEntry, type CatalogRow } from '$lib/model-catalog.js';
@@ -12,22 +15,7 @@
   /** The provider's session lapsed — offer the fix instead of a dead instruction. */
   let ccAuthOpen = false;
 
-  /** The auth failure can arrive as plain content OR inside content_blocks. */
-  function msgAuthError(m: any): boolean {
-    if (isClaudeCodeAuthError(m?.content)) return true;
-    try {
-      const blocks = typeof m?.content_blocks === 'string' ? JSON.parse(m.content_blocks) : m?.content_blocks;
-      if (!Array.isArray(blocks)) return false;
-      return isClaudeCodeAuthError(blocks.map((b: any) => b?.text ?? '').join(' '));
-    } catch {
-      return false;
-    }
-  }
 
-  /** The live bubble is a separate render path and needs the same affordance. */
-  function streamAuthError(blocks: any[]): boolean {
-    return isClaudeCodeAuthError((blocks ?? []).filter((b) => b?.type === 'text').map((b) => b?.text ?? '').join(' '));
-  }
 
   /**
    * A failed turn is reported twice — once by the SSE `error` event and once by
@@ -350,14 +338,6 @@
     }
   }
 
-  /** Render a parsed content_blocks array for a persisted assistant message. */
-  function parseContentBlocks(raw: string | undefined): any[] {
-    if (!raw) return [];
-    try {
-      const arr = JSON.parse(raw);
-      return Array.isArray(arr) ? arr : [];
-    } catch { return []; }
-  }
 
   async function handleFiles(files: FileList | File[]) {
     const list = Array.from(files);
@@ -432,27 +412,7 @@
     }
   }
 
-  /** Parse stored user message that may contain attachment refs. */
-  function parseStoredMessage(raw: string): { text: string; images: string[]; documents: Array<{ filename?: string; path?: string }>; local: boolean } {
-    if (!raw || !raw.startsWith('{')) return { text: raw, images: [], documents: [], local: false };
-    try {
-      const p = JSON.parse(raw);
-      if (typeof p !== 'object' || p === null) return { text: raw, images: [], documents: [], local: false };
-      const images: string[] = Array.isArray(p.images) ? p.images : [];
-      const docs: Array<{ filename?: string; path?: string }> = Array.isArray(p.documents)
-        ? p.documents.map((d: any) => typeof d === 'string' ? { path: d } : { filename: d?.filename, path: d?.path })
-        : [];
-      return { text: typeof p.text === 'string' ? p.text : '', images, documents: docs, local: !!p._local };
-    } catch {
-      return { text: raw, images: [], documents: [], local: false };
-    }
-  }
 
-  function imageSrc(ref: string, local: boolean): string {
-    // Local echoes already hold a data: URL preview. Persisted refs are relative paths served by /api/chat/images.
-    if (local || ref.startsWith('data:') || ref.startsWith('http')) return ref;
-    return '/api/chat/images?path=' + encodeURIComponent(ref);
-  }
 
   function onKeydown(e: KeyboardEvent) {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); doSend(); }
@@ -464,21 +424,7 @@
     ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
   }
 
-  function providerIcon(p: string | undefined): string {
-    if (!p) return 'M';
-    const map: Record<string, string> = { anthropic: 'A', openai: 'O', lmstudio: 'L', ollama: 'O' };
-    return map[p.toLowerCase()] || p[0]?.toUpperCase() || 'M';
-  }
 
-  function providerColor(p: string | undefined): string {
-    if (!p) return 'var(--gold)';
-    const map: Record<string, string> = {
-      anthropic: '#D4A84B', claude: '#D4A84B', 'claude-code': '#D4A84B',
-      openai: '#3DD68C', lmstudio: '#8B7CF6', ollama: '#5B9BF7',
-      grok: '#E0E0E0', nvidia: '#76B900',
-    };
-    return map[p.toLowerCase()] || 'var(--gold)';
-  }
 
   // ── Provider + model picker (custom dropdown with search) ──────────
   type LlmProviderStatus = {
@@ -675,11 +621,6 @@
     }
   }
 
-  function fmtCtx(n?: number): string {
-    if (!n || n <= 0) return '';
-    if (n >= 1000) return `${Math.round(n / 1000)}k ctx`;
-    return `${n} ctx`;
-  }
 
   $: currentProvider = availableProviders.find(p => p.slug === selectedEp?.llm_provider) ?? null;
 
@@ -829,22 +770,7 @@
     : catalogByProvider.reduce((n, c) => n + c.groups.reduce((m, g) => m + g.rows.length, 0), 0);
   $: provTotal = availableProviders.reduce((n, p) => n + p.models.length, 0);
 
-  function isDateBreak(msgs: any[], idx: number): boolean {
-    if (idx === 0) return true;
-    const prev = new Date(msgs[idx - 1].created_at).toDateString();
-    const curr = new Date(msgs[idx].created_at).toDateString();
-    return prev !== curr;
-  }
 
-  function formatDateBreak(iso: string): string {
-    const d = new Date(iso);
-    const today = new Date();
-    const yesterday = new Date(today);
-    yesterday.setDate(yesterday.getDate() - 1);
-    if (d.toDateString() === today.toDateString()) return 'Today';
-    if (d.toDateString() === yesterday.toDateString()) return 'Yesterday';
-    return d.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-  }
 </script>
 
 <div class="cx" class:sidebar-collapsed={sidebarCollapsed}>

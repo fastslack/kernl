@@ -16,7 +16,7 @@ export function clearAuthToken(): void {
 	localStorage.removeItem('kernel_auth_token');
 }
 
-async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
+export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
 	const token = getAuthToken();
 	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
 	if (token) headers['Authorization'] = `Bearer ${token}`;
@@ -50,15 +50,15 @@ async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
 	return r.json();
 }
 
-function post(url: string, body: unknown) {
+export function post(url: string, body: unknown) {
 	return apiFetch(url, { method: 'POST', body: JSON.stringify(body) });
 }
 
-function put(url: string, body: unknown) {
+export function put(url: string, body: unknown) {
 	return apiFetch(url, { method: 'PUT', body: JSON.stringify(body) });
 }
 
-function del(url: string) {
+export function del(url: string) {
 	return apiFetch(url, { method: 'DELETE' });
 }
 

@@ -6,7 +6,7 @@
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall, rpc } from '$lib/ws.js';
   import { getCommDetail, rpcPost } from '$lib/api.js';
-  import { sanitizeHtml } from '$lib/sanitize.js';
+  import { sanitizeHtml, escapeHtml } from '$lib/sanitize.js';
   import { highlightCode, detectLang } from '$lib/workspace-highlight.js';
   import { renderMarkdown } from '$lib/workspace-md.js';
   import {
@@ -53,6 +53,26 @@
   import { goto } from '$app/navigation';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
+  import { fmtRelTime, fmtTokens, fmtClock, triggerColor } from '$lib/display-format.js';
+  import { formatInline, formatRunOutput } from '$lib/run-format.js';
+  import {
+    liveStepIcon, liveStepLabel, liveEventType, liveEventSummary,
+    liveStepSummary, liveStepCategory, liveFmtDelta, liveFmtTokens,
+    liveStepTokens, runElapsedMs, runTokensTotal,
+    liveStepDeltaMs as liveStepDeltaMsOf,
+    liveStepTokensTotal as liveStepTokensTotalOf,
+  } from '$lib/live-steps.js';
+  import { isWorkspacePathHidden, buildWsRows, wsFileIcon, wsFmtSize } from '$lib/workspace-tree.js';
+  import {
+    meetingRoomDoorPoint, getMeetingSeatPositions, pickFreeChair,
+    sameOffice as sameOfficeOf, type SeatedWalker,
+  } from '$lib/office-geometry.js';
+  import {
+    hexToNum, toolGlyph, escapeBannerText, firstUrlIn, urlForOption,
+    buildFixerGoal, mgmtKindIcon, mgmtKindColor, safeParse, emailCommId,
+    resolveAgentWorkspace, dependsOnGoogleAuth, formatAgentRecentRuns,
+    initials, parseMeetingTopics,
+  } from '$lib/agent-helpers.js';
 
   // Tabs contribuidos por extensiones (declarados en su manifest, expuestos por
   // /api/manifest). They are filtered by the selected office/agent and the
@@ -445,11 +465,6 @@
     });
   }
 
-  /** Parse a CSS hex color (`#rrggbb`) to a THREE-friendly numeric hex. */
-  function hexToNum(css: string, fallback = 0xffffff): number {
-    const n = parseInt((css || '').replace('#', ''), 16);
-    return Number.isFinite(n) ? n : fallback;
-  }
 
   /** (#F3) Fly a glowing data packet from desk A to desk B: a curved arrow +
    *  coin stream along the arc, then a converging ripple + monitor pulse at B.
@@ -496,25 +511,6 @@
     });
   }
 
-  /** Map a kernel tool name to a glyph for the floating-tool-icon animation. */
-  function toolGlyph(name: string): string {
-    if (!name) return '🔧';
-    const n = name.toLowerCase();
-    if (n.includes('email') || n.includes('mail')) return '📧';
-    if (n.includes('workspace')) return '💻';
-    if (n.includes('files') || n.includes('fs_')) return '📁';
-    if (n.includes('web')) return '🌐';
-    if (n.includes('calendar') || n.includes('events')) return '📅';
-    if (n.includes('tasks')) return '✅';
-    if (n.includes('chat') || n.includes('comms')) return '💬';
-    if (n.includes('code')) return '⌨️';
-    if (n.includes('trad')) return '📈';
-    if (n.includes('vault')) return '🔐';
-    if (n.includes('graph') || n.includes('memory')) return '🧠';
-    if (n.includes('research') || n.includes('search')) return '🔍';
-    if (n.includes('agent')) return '🤝';
-    return '🔧';
-  }
 
   /** Diff agents' active flag against the cached map; spawn a LEAVE walker
    *  when 1→0 and an ARRIVE walker when 0→1. The first observation just primes
@@ -764,23 +760,6 @@
       pendingQuestions = (data.questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
   }
-  /** Pull the first http(s) URL out of a free-text context. Used as a
-   *  fallback for older questions whose options don't yet carry `url`. */
-  function firstUrlIn(text: string | undefined | null): string | null {
-    if (!text) return null;
-    const m = text.match(/https?:\/\/[^\s)\]>"']+/i);
-    return m ? m[0] : null;
-  }
-  /** Resolve the URL an option should open: explicit `url` wins; otherwise,
-   *  if the option's label hints at opening a link ("open"), fall
-   *  back to the first URL found in the question's context. */
-  function urlForOption(q: PendingQuestion, opt: { label: string; value?: string; url?: string }): string | null {
-    if (opt.url && /^https?:\/\//i.test(opt.url)) return opt.url;
-    const labelMentionsLink = /(open|view|visit|go to)/i.test(opt.label);
-    const valueMentionsLink = opt.value === 'open' || opt.value === 'view' || opt.value === 'visit';
-    if (labelMentionsLink || valueMentionsLink) return firstUrlIn(q.context);
-    return null;
-  }
   async function answerQuestion(q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) {
     if (questionSubmitting[q.id]) return;
     // Open the linked URL FIRST (synchronously, inside the user's click event)
@@ -888,25 +867,6 @@
     return fixerCandidates[0] ?? null;
   })();
 
-  function buildFixerGoal(report: OfficeReport, body: string): string {
-    return [
-      `An agent run reported an issue that needs diagnosis + a fix.`,
-      ``,
-      `Source agent: ${report.agentName} (${report.agentId})`,
-      `Run ID:       ${report.runId ?? '(unknown)'}`,
-      `Status:       ${report.status}`,
-      `When:         ${new Date(report.ts).toISOString()}`,
-      ``,
-      `--- BEGIN REPORT BODY ---`,
-      body,
-      `--- END REPORT BODY ---`,
-      ``,
-      `Please:`,
-      `  1. Diagnose the root cause from the report body above.`,
-      `  2. If it's a code/config/infra issue you can fix, fix it. Otherwise route to the right agent (post_to_colleague) with a clear ask.`,
-      `  3. Reply with: ROOT_CAUSE, ACTION_TAKEN (or DELEGATED_TO + agent), and STATUS (fixed / in_progress / blocked).`,
-    ].join('\n');
-  }
 
   async function sendReportToFixer(): Promise<void> {
     if (!openReport || sendingToFixer) return;
@@ -1051,14 +1011,6 @@
     // we do NOT auto-open the panel, otherwise the user's "off" choice gets
     // overridden whenever a new manager event arrives. The unread count on
     // the View toggle (badge) signals the new activity instead.
-  }
-  function mgmtKindIcon(k: MgmtEntry['kind']): string {
-    return k === 'edit' ? '📝' : k === 'directive' ? '📤' : '📨';
-  }
-  function mgmtKindColor(k: MgmtEntry['kind'], cross?: boolean): string {
-    if (k === 'edit') return '#c67fe8';
-    if (k === 'directive') return '#f0883e';
-    return cross ? '#5b8def' : '#3dd6c8';
   }
 
   let liveMeetings: Record<string, LiveMeeting> = {};
@@ -2144,10 +2096,6 @@
     meetingDecor.delete(meetingId);
   }
 
-  function escapeBannerText(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
 
   // ── HQ menu (hidden dropdown) ───────────────────
   let hqMenuOpen = false;
@@ -5215,11 +5163,6 @@
   let worldRefreshTimer: ReturnType<typeof setTimeout>;
 
   // Parse helpers tolerant of JSON string columns
-  function safeParse(raw: unknown): any {
-    if (raw == null) return null;
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(String(raw)); } catch { return null; }
-  }
 
   // Clipboard — shows a brief "copied" flash on the triggering button
   let copiedKey: string | null = null;
@@ -5231,38 +5174,6 @@
     } catch {
       copiedKey = key + ':err';
       setTimeout(() => { copiedKey = null; }, 1200);
-    }
-  }
-
-  function fmtRelTime(iso?: string): string {
-    if (!iso) return '—';
-    const t = new Date(iso).getTime();
-    if (isNaN(t)) return iso;
-    const d = Date.now() - t;
-    if (d < 0) {
-      const f = -d;
-      if (f < 60_000) return `in ${Math.round(f / 1000)}s`;
-      if (f < 3_600_000) return `in ${Math.round(f / 60_000)}m`;
-      return `in ${Math.round(f / 3_600_000)}h`;
-    }
-    if (d < 60_000) return `${Math.round(d / 1000)}s ago`;
-    if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
-    if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
-    return `${Math.round(d / 86_400_000)}d ago`;
-  }
-
-  function fmtTokens(n?: number): string {
-    if (!n || n < 1000) return String(n ?? 0);
-    return (n / 1000).toFixed(1) + 'k';
-  }
-
-  function triggerColor(t: string): string {
-    switch (t) {
-      case 'manual': return '#a78bfa';
-      case 'chain': return '#3dd6c8';
-      case 'schedule': return '#fbbf24';
-      case 'event': return '#f472b6';
-      default: return '#8a8fa8';
     }
   }
 
@@ -5397,106 +5308,21 @@
   let workspaceLoading = false;
   let workspacePreviewUrl: string | null = null;
 
-  // Filter out lockfiles / bun cache dirs / OS junk from the workspace tree.
-  const WS_HIDDEN_BASENAMES = new Set([
-    'bun.lockb', 'bun.lock',
-    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-    '.DS_Store', 'Thumbs.db',
-  ]);
-  function isWorkspacePathHidden(path: string): boolean {
-    const base = path.split('/').pop() ?? path;
-    if (WS_HIDDEN_BASENAMES.has(base)) return true;
-    if (/\.(bun[a-z0-9-]*|lockb?|tsbuildinfo)$/i.test(base)) return true;
-    if (path.split('/').some(seg => seg === '.bun' || seg.startsWith('.bun-'))) return true;
-    return false;
-  }
   $: visibleWorkspaceFiles = workspaceFiles.filter(f => !isWorkspacePathHidden(f.path));
 
   // ── Workspace tree ─────────────────────────────────────────────────
   // The API returns a flat list (full paths). Build a collapsible tree:
   // dirs derived both from explicit 'dir' entries and from file parents,
   // flattened into rows (depth-aware) so no recursive component is needed.
-  type WsTreeRow = { path: string; name: string; depth: number; isDir: boolean; size: number; fileCount: number };
   let wsCollapsed: Set<string> = new Set();
   function toggleWsDir(path: string): void {
     if (wsCollapsed.has(path)) wsCollapsed.delete(path); else wsCollapsed.add(path);
     wsCollapsed = wsCollapsed;
   }
-  function buildWsRows(files: Array<{ path: string; type: string; size: number }>, collapsed: Set<string>): WsTreeRow[] {
-    const dirs = new Set<string>();
-    const leafFiles: Array<{ path: string; size: number }> = [];
-    for (const f of files) {
-      if (f.type === 'dir') { dirs.add(f.path); continue; }
-      leafFiles.push({ path: f.path, size: f.size });
-      const segs = f.path.split('/');
-      for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'));
-    }
-    const children = new Map<string, { dirs: string[]; files: Array<{ path: string; size: number }> }>();
-    const bucket = (k: string) => {
-      let c = children.get(k);
-      if (!c) { c = { dirs: [], files: [] }; children.set(k, c); }
-      return c;
-    };
-    for (const d of dirs) {
-      const parent = d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '';
-      bucket(parent).dirs.push(d);
-      // also register implied ancestors of explicit dir entries
-      const segs = d.split('/');
-      for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'));
-    }
-    for (const f of leafFiles) {
-      const parent = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
-      bucket(parent).files.push(f);
-    }
-    const countCache = new Map<string, number>();
-    const countFiles = (dir: string): number => {
-      const hit = countCache.get(dir);
-      if (hit !== undefined) return hit;
-      const c = children.get(dir);
-      let n = c ? c.files.length : 0;
-      if (c) for (const d of c.dirs) n += countFiles(d);
-      countCache.set(dir, n);
-      return n;
-    };
-    const rows: WsTreeRow[] = [];
-    const walk = (dir: string, depth: number): void => {
-      const c = children.get(dir);
-      if (!c) return;
-      for (const d of [...new Set(c.dirs)].sort()) {
-        rows.push({ path: d, name: d.split('/').pop() ?? d, depth, isDir: true, size: 0, fileCount: countFiles(d) });
-        if (!collapsed.has(d)) walk(d, depth + 1);
-      }
-      for (const f of [...c.files].sort((a, b) => a.path.localeCompare(b.path))) {
-        rows.push({ path: f.path, name: f.path.split('/').pop() ?? f.path, depth, isDir: false, size: f.size, fileCount: 0 });
-      }
-    };
-    walk('', 0);
-    return rows;
-  }
   $: wsRows = buildWsRows(visibleWorkspaceFiles, wsCollapsed);
   $: wsAllDirs = [...new Set(buildWsRows(visibleWorkspaceFiles, new Set()).filter(r => r.isDir).map(r => r.path))];
   $: wsFileCount = visibleWorkspaceFiles.filter(f => f.type !== 'dir').length;
 
-  const WS_ICONS: Record<string, string> = {
-    ts: '🔷', tsx: '🔷', js: '🟨', jsx: '🟨', mjs: '🟨', cjs: '🟨',
-    json: '📋', css: '🎨', scss: '🎨', svelte: '🧩', vue: '🧩',
-    html: '🌐', md: '📝', txt: '📄', log: '📄', pdf: '📕',
-    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️', ico: '🖼️',
-    sh: '⚙️', bash: '⚙️', zsh: '⚙️', py: '🐍', rs: '🦀', go: '🐹',
-    sql: '🗄️', db: '🗄️', sqlite: '🗄️',
-    yml: '🔧', yaml: '🔧', toml: '🔧', ini: '🔧', conf: '🔧', env: '🔧',
-    zip: '📦', tar: '📦', gz: '📦', lock: '🔒',
-  };
-  function wsFileIcon(name: string): string {
-    if (name.startsWith('.')) return '🔧';
-    const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
-    return WS_ICONS[ext] ?? '📄';
-  }
-  function wsFmtSize(n: number): string {
-    if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
-    if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${n} B`;
-  }
   let runsLoading = false;
   let memoryLoading = false;
   let expandedRunId: string | null = null;
@@ -5505,25 +5331,11 @@
   // ── Sent-email viewer ──────────────────────────────────────────────
   // When an activity row is an email-send tool result, show a "Ver email" link
   // that opens this modal with the real sent message (from / to / subject / body).
-  const EMAIL_TOOLS = new Set(['kernel_email_send', 'kernel_comms_reply', 'kernel_comms_send']);
-  const EMAIL_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
   let emailModalOpen = false;
   let emailModalLoading = false;
   let emailModalError: string | null = null;
   let emailModalData: any = null;
 
-  /** Returns the communication id for an email-send tool row, or null. `raw` is
-   *  the tool output/preview text (live: e.data.content_preview; history: step.tool_output). */
-  function emailCommId(toolName: string | undefined, raw: string | undefined): string | null {
-    if (!toolName || !EMAIL_TOOLS.has(toolName) || !raw) return null;
-    try {
-      const o = JSON.parse(raw);
-      const id = o?.id ?? o?.comm_id ?? o?.thread_id;
-      if (id) return String(id);
-    } catch { /* not JSON — fall through to UUID scan */ }
-    const m = String(raw).match(EMAIL_UUID_RE);
-    return m ? m[0] : null;
-  }
 
   async function openEmailModal(commId: string): Promise<void> {
     emailModalOpen = true;
@@ -5603,41 +5415,6 @@
     if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
   }
 
-  /**
-   * Resolve which workspace to list for an agent. Mirrors the logic in
-   * `claude-code-executor.resolveCwd`:
-   *   1. variables.__workspace__ — workspace registrado bajo data/workspaces/
-   *   2. fallback `agent-<id>` — el cwd default que crea el executor
-   *
-   * `__cwd_path__` (an absolute path outside data/workspaces) cannot be
-   * navigated via the workspaces endpoint; reported as such, with no ws id.
-   */
-  function resolveAgentWorkspace(agent: any): { wsId: string | null; cwdPath: string | null; cwdLabel: string; cwdHint: string } {
-    const vars = safeParse(agent?.variables) || {};
-    if (typeof vars.__cwd_path__ === 'string' && vars.__cwd_path__.startsWith('/')) {
-      return {
-        wsId: null,
-        cwdPath: vars.__cwd_path__,
-        cwdLabel: vars.__cwd_path__,
-        cwdHint: 'external repo (mounted RW) — files listed below',
-      };
-    }
-    if (typeof vars.__workspace__ === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(vars.__workspace__)) {
-      return {
-        wsId: vars.__workspace__,
-        cwdPath: null,
-        cwdLabel: `data/workspaces/${vars.__workspace__}`,
-        cwdHint: 'workspace registrado',
-      };
-    }
-    const fallback = `agent-${agent.id}`;
-    return {
-      wsId: fallback,
-      cwdPath: null,
-      cwdLabel: `data/workspaces/${fallback}`,
-      cwdHint: 'workspace default por agent id',
-    };
-  }
 
   $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData) : null;
 
@@ -5792,10 +5569,6 @@
   // graph-enrich) speak to Google APIs. Surface a permanent inline Re-login
   // button in their description so the user can fix expired auth proactively —
   // without waiting for the next failed run to surface the LAST RESULT button.
-  function dependsOnGoogleAuth(a: any): boolean {
-    const h = a?.builtin_handler;
-    return typeof h === 'string' && h.startsWith('gsync:');
-  }
 
   // ── RunFailureCard wiring (Task 10) ─────────────────────
   // The card only renders and dispatches a `kind`; it does not know how to
@@ -5880,339 +5653,6 @@
   }
   $: if (!liveIsRunning) lastRunningFor = null;
 
-  function liveStepIcon(type: string): string {
-    switch (type) {
-      case 'tool_call': return '🔧';
-      case 'tool_result': return '📥';
-      case 'thought': return '💭';
-      case 'final': return '✨';
-      case 'rate_limit_wait': return '⏳';
-      case 'error': return '⚠️';
-      case 'auto_eval_started': return '📝';
-      case 'auto_eval': return '📝';
-      case 'learning_created': return '💡';
-      case 'learning_deactivated': return '🗑️';
-      case 'chain_triggered': return '🔗';
-      case 'run_started': return '▶';
-      case 'run_completed': return '✅';
-      default: return '•';
-    }
-  }
-  function liveStepLabel(type: string): string {
-    switch (type) {
-      case 'tool_call': return 'calling tool';
-      case 'tool_result': return 'tool result';
-      case 'thought': return 'thinking';
-      case 'final': return 'finalizing';
-      case 'rate_limit_wait': return 'rate limited';
-      case 'error': return 'error';
-      case 'auto_eval_started': return 'self-grading';
-      case 'auto_eval': return 'self-eval';
-      case 'learning_created': return 'lesson learned';
-      case 'learning_deactivated': return 'lesson dropped';
-      case 'chain_triggered': return 'handoff';
-      case 'run_started': return 'run started';
-      case 'run_completed': return 'run completed';
-      default: return type || 'step';
-    }
-  }
-  function liveEventSummary(e: AgentFlowEvent): string {
-    const t = e.event.split(':').pop() ?? '';
-    if (t === 'run_started') {
-      const goalTxt = String(e.data.goal ?? '').trim();
-      const isBuiltin = Boolean(e.data.builtin);
-      if (isBuiltin) {
-        return goalTxt
-          ? `Builtin run — ${goalTxt}`
-          : 'Builtin run (native code, no prompt)';
-      }
-      return goalTxt
-        ? `Started — goal: ${goalTxt}`
-        : 'Started — scheduled run';
-    }
-    if (t === 'run_completed') {
-      const st = String(e.data.status ?? 'completed');
-      return st === 'completed' ? 'Run completed successfully' : `Run ${st}`;
-    }
-    if (t === 'chain_triggered') return `Handoff → ${String(e.data.target_agent_name ?? 'next agent')}`;
-    if (t === 'auto_eval_started') return 'Self-grading…';
-    if (t === 'auto_eval') {
-      const score = Number(e.data.score ?? 0);
-      return `Self-graded ${score}/5 — ${String(e.data.outcome ?? '')}`;
-    }
-    if (t === 'learning_created') return `Lesson learned: ${String(e.data.content ?? '')}`;
-    if (t === 'step') {
-      const st = String(e.data.type ?? '');
-      const preview = String(e.data.content_preview ?? '');
-      // Server already truncates previews (tool_result=2000, tool_call input=800,
-      // thought/final=200). Show the full preview — truncating again here only
-      // hides useful context in the LIVE tab. Full text is in HISTORY.
-      if (st === 'tool_call') {
-        // Preview is a JSON.stringify of the tool input. Server caps it at
-        // 800 chars — for tools with bulky inputs (e.g. Write with the full
-        // markdown body of a lead dossier) the cut lands mid-string and
-        // JSON.parse throws. Same forward-rule as tool_result: ALWAYS wrap
-        // in a json code fence (so markdown can't mangle it), pretty-print
-        // when it parses, mark truncated otherwise.
-        const toolName = String(e.data.tool_name ?? 'tool');
-        let body = preview;
-        let truncated = false;
-        try { body = JSON.stringify(JSON.parse(preview), null, 2); }
-        catch {
-          truncated = true;
-          // Best-effort: at least undo basic JSON escapes so the raw text
-          // has real newlines and quotes instead of literal `\n` / `\"`.
-          body = preview.replace(/\\n/g, '\n').replace(/\\"/g, '"');
-        }
-        const tag = truncated ? '\n... (truncated — full payload in HISTORY tab)' : '';
-        return sanitizePreview('```json\n' + toolName + '(\n' + body + tag + '\n)\n```', preview.length, 800);
-      }
-      if (st === 'tool_result') {
-        // Tool results come in two flavours: JSON/structured payloads and
-        // prose (meeting messages, agent chat, LLM answers).
-        //
-        // Server caps preview at 2000 chars — for big JSON payloads (e.g.
-        // kernel_crm_leads with 5+ leads), the cut lands MID-STRING. The
-        // old heuristic required matching brackets at both ends and fell
-        // through to the prose path on truncation — markdown then chewed
-        // the broken JSON into unreadable garbage with stray asterisks +
-        // backslashes (the bug visible in /tmp/clipboard-1778297598.png).
-        //
-        // New rule: any preview that *starts* with `{` or `[` is JSON.
-        // Wrap in a `json` code fence regardless of truncation so markdown
-        // can't touch it. Pretty-print only when the payload parses cleanly;
-        // otherwise show raw + a truncation marker.
-        const trimmed = preview.trim();
-        const startsWithOpen = trimmed.startsWith('{') || trimmed.startsWith('[');
-        if (startsWithOpen) {
-          const closesCleanly =
-            (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-            (trimmed.startsWith('[') && trimmed.endsWith(']'));
-          let body = preview;
-          let truncated = !closesCleanly;
-          if (closesCleanly) {
-            try { body = JSON.stringify(JSON.parse(trimmed), null, 2); }
-            catch { truncated = true; /* malformed even though brackets match */ }
-          }
-          const tag = truncated ? '\n... (truncated — full payload in HISTORY tab)' : '';
-          return sanitizePreview('```json\n' + body + tag + '\n```', preview.length, 2000);
-        }
-        // Prose — let formatRunOutput render markdown normally.
-        return sanitizePreview(preview, preview.length, 2000);
-      }
-      if (st === 'thought') return sanitizePreview(preview, preview.length, 200);
-      if (st === 'final') return sanitizePreview(preview, preview.length, 200);
-      if (st === 'rate_limit_wait') return String(e.data.content_preview ?? 'waiting…');
-      return preview || st;
-    }
-    return t;
-  }
-  function liveEventType(e: AgentFlowEvent): string {
-    const t = e.event.split(':').pop() ?? '';
-    if (t === 'step') return String(e.data.type ?? 'step');
-    return t;
-  }
-
-  // ── Tool action summarizer ──────────────────────────────────────────
-  // Turns raw tool payloads into one-line, human-friendly summaries so the
-  // LIVE timeline reads like a story instead of a JSON dump. Falls back to
-  // the tool name when the input shape is unfamiliar (extension tools, new
-  // MCP servers, etc.) — better to look generic than to wrap wrong.
-  type ToolCategory =
-    | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
-    | 'error' | 'meta' | 'tool';
-  function toolCategory(toolName: string): ToolCategory {
-    if (!toolName) return 'tool';
-    if (toolName === 'Bash') return 'shell';
-    if (['Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep', 'LS'].includes(toolName)) return 'fs';
-    if (toolName === 'WebFetch' || toolName === 'WebSearch') return 'web';
-    if (toolName.startsWith('kernel_')) return 'kernel';
-    if (toolName.startsWith('mcp__')) return 'mcp';
-    if (toolName === 'Task' || toolName === 'TodoWrite' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') return 'meta';
-    return 'tool';
-  }
-  function ellipsize(s: string, n: number): string {
-    if (!s) return '';
-    const t = s.replace(/\s+/g, ' ').trim();
-    return t.length > n ? t.slice(0, n - 1) + '…' : t;
-  }
-  function tryParseJson(raw: string): unknown {
-    if (!raw) return null;
-    try { return JSON.parse(raw); } catch { /* */ }
-    // Some previews arrive double-escaped (JSON string of JSON). Try one peel.
-    try {
-      const inner = JSON.parse(raw);
-      if (typeof inner === 'string') {
-        try { return JSON.parse(inner); } catch { return inner; }
-      }
-    } catch { /* */ }
-    return null;
-  }
-  function basenameOf(p: string): string {
-    if (!p) return '';
-    const norm = p.replace(/\\/g, '/');
-    const idx = norm.lastIndexOf('/');
-    return idx >= 0 ? norm.slice(idx + 1) : norm;
-  }
-  /**
-   * Summarize a tool_call. Returns the line shown front-and-center in the
-   * timeline ("Listing kernel agent tools", "Reading /src/index.ts:42", …).
-   * Falls back to the raw tool name when the payload shape is unknown so
-   * the user always sees *something* meaningful instead of `{}`.
-   */
-  function summarizeToolCall(toolName: string, inputPreview: string): string {
-    const args = tryParseJson(inputPreview) as Record<string, unknown> | null;
-    if (!toolName) return 'calling tool';
-    if (!args || typeof args !== 'object') return toolName;
-    switch (toolName) {
-      case 'Bash': {
-        const desc = typeof args.description === 'string' ? args.description : '';
-        const cmd = typeof args.command === 'string' ? args.command : '';
-        if (desc) return desc;
-        return cmd ? `$ ${ellipsize(cmd, 96)}` : 'shell command';
-      }
-      case 'Read': {
-        const p = String(args.file_path ?? '');
-        const off = args.offset, lim = args.limit;
-        const range = off != null || lim != null
-          ? ` · L${off ?? 1}${lim != null ? '–' + (Number(off ?? 0) + Number(lim)) : '+'}`
-          : '';
-        return p ? `Read ${basenameOf(p)}${range}` : 'Read file';
-      }
-      case 'Write': {
-        const p = String(args.file_path ?? '');
-        return p ? `Write ${basenameOf(p)}` : 'Write file';
-      }
-      case 'Edit': {
-        const p = String(args.file_path ?? '');
-        const all = args.replace_all ? ' (replace all)' : '';
-        return p ? `Edit ${basenameOf(p)}${all}` : 'Edit file';
-      }
-      case 'NotebookEdit': {
-        const p = String(args.notebook_path ?? '');
-        return p ? `Edit notebook ${basenameOf(p)}` : 'Edit notebook';
-      }
-      case 'Glob': {
-        const pat = String(args.pattern ?? '');
-        const dir = String(args.path ?? '');
-        return pat ? `Find files matching ${ellipsize(pat, 60)}${dir ? ' in ' + basenameOf(dir) : ''}` : 'Glob';
-      }
-      case 'Grep': {
-        const pat = String(args.pattern ?? '');
-        const where = String(args.path ?? '');
-        return pat ? `Search ${ellipsize(pat, 56)}${where ? ' in ' + basenameOf(where) : ''}` : 'Grep';
-      }
-      case 'LS': {
-        const p = String(args.path ?? '');
-        return p ? `List ${basenameOf(p)}` : 'List directory';
-      }
-      case 'WebFetch': {
-        const u = String(args.url ?? '');
-        return u ? `Fetch ${ellipsize(u, 84)}` : 'Fetch URL';
-      }
-      case 'WebSearch': {
-        const q = String(args.query ?? '');
-        return q ? `Search the web for ${ellipsize(q, 70)}` : 'Web search';
-      }
-      case 'Task': {
-        const desc = String(args.description ?? args.subagent_type ?? '');
-        return desc ? `Spawn subagent · ${ellipsize(desc, 60)}` : 'Spawn subagent';
-      }
-      case 'TodoWrite': return `Update task list (${Array.isArray(args.todos) ? (args.todos as unknown[]).length : '?'} items)`;
-      case 'TaskCreate': return `Create task · ${ellipsize(String(args.subject ?? ''), 60)}`;
-      case 'TaskUpdate': return `Update task · ${ellipsize(String(args.taskId ?? ''), 24)} → ${String(args.status ?? '')}`;
-      default: {
-        // Generic kernel_* / mcp__* / unknown tool: pretty-print 1-2 string
-        // args (skip nested objects to keep the line tight).
-        const entries = Object.entries(args).filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean');
-        if (entries.length === 0) return toolName;
-        const head = entries.slice(0, 2)
-          .map(([k, v]) => `${k}=${ellipsize(String(v), 40)}`)
-          .join(' · ');
-        return `${toolName} · ${head}`;
-      }
-    }
-  }
-  /**
-   * Summarize a tool_result. The preview the server sends is whatever the
-   * tool returned (often JSON). We aim for a one-line "N rows" / "M lines"
-   * / "ok" callout so the timeline reads vertically; the full payload is
-   * still available via the expand chevron.
-   */
-  function summarizeToolResult(toolName: string, preview: string): string {
-    if (!preview) return 'no output';
-    const trimmed = preview.trim();
-    // JSON envelope from MCP — `{ content: [{ type:"text", text:"..." }], isError }`
-    const parsed = tryParseJson(trimmed);
-    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).content)) {
-      const arr = ((parsed as Record<string, unknown>).content as unknown[]);
-      const texts: string[] = [];
-      for (const it of arr) {
-        if (it && typeof it === 'object' && (it as Record<string, unknown>).type === 'text') {
-          texts.push(String((it as Record<string, unknown>).text ?? ''));
-        }
-      }
-      const joined = texts.join('\n').trim();
-      if (joined) return summarizeText(toolName, joined);
-    }
-    if (parsed && Array.isArray(parsed)) {
-      return `${(parsed as unknown[]).length} items`;
-    }
-    if (parsed && typeof parsed === 'object') {
-      const obj = parsed as Record<string, unknown>;
-      if (typeof obj.error === 'string') return `error · ${ellipsize(obj.error, 70)}`;
-      const keys = Object.keys(obj);
-      // Single-key wrappers — show the key as a hint.
-      if (keys.length === 1) return `${keys[0]} (object)`;
-      return `${keys.length} fields · ${ellipsize(keys.slice(0, 4).join(', '), 60)}`;
-    }
-    return summarizeText(toolName, trimmed);
-  }
-  function summarizeText(toolName: string, txt: string): string {
-    const lines = txt.split('\n').filter(l => l.length > 0);
-    if (lines.length === 0) return 'empty output';
-    if (lines.length === 1) return ellipsize(lines[0], 100);
-    // Heuristics by tool:
-    //   - Grep: lines like "file:line:text" — count matches
-    //   - LS / Glob: list of paths
-    //   - Bash: line count + first line preview
-    if (toolName === 'Grep' && lines.every(l => /:/.test(l))) {
-      return `${lines.length} matches · ${ellipsize(lines[0], 80)}`;
-    }
-    if ((toolName === 'Glob' || toolName === 'LS') && lines.every(l => !l.includes(' ') || l.startsWith('/'))) {
-      return `${lines.length} paths`;
-    }
-    return `${lines.length} lines · ${ellipsize(lines[0], 80)}`;
-  }
-  /**
-   * Per-step summary for the LIVE timeline. Always returns a non-empty
-   * string — falls back to the existing liveEventSummary() prose when the
-   * step isn't a tool call/result (thoughts, finals, run events, etc.).
-   */
-  function liveStepSummary(e: AgentFlowEvent): string {
-    const etype = liveEventType(e);
-    const preview = String(e.data.content_preview ?? '');
-    const toolName = String(e.data.tool_name ?? '');
-    if (etype === 'tool_call') return summarizeToolCall(toolName, preview);
-    if (etype === 'tool_result') return summarizeToolResult(toolName, preview);
-    if (etype === 'thought') return ellipsize(preview, 140) || 'thinking…';
-    if (etype === 'final') return ellipsize(preview, 140) || 'finalizing…';
-    if (etype === 'rate_limit_wait') return ellipsize(preview, 140) || 'rate-limit cooldown';
-    if (etype === 'error') return ellipsize(preview, 140) || 'error';
-    // Run lifecycle + meta — defer to the existing prose helper.
-    return liveEventSummary(e);
-  }
-  /** Category hint used to color-code the step row. */
-  function liveStepCategory(e: AgentFlowEvent): ToolCategory {
-    const etype = liveEventType(e);
-    if (etype === 'thought') return 'think';
-    if (etype === 'final') return 'final';
-    if (etype === 'error' || etype === 'rate_limit_wait') return 'error';
-    if (etype === 'tool_call' || etype === 'tool_result') {
-      return toolCategory(String(e.data.tool_name ?? ''));
-    }
-    return 'meta';
-  }
   // Set of step keys (`${ts}-${idx}`) that the user has expanded — controls
   // whether the detail panel renders below the summary line. Defaults to
   // collapsed for everything so the timeline stays scannable.
@@ -6224,291 +5664,15 @@
     expandedLiveSteps = new Set(expandedLiveSteps);
   }
 
-  // ── Meta chips: Δt + token usage ────────────────────────────────────
-  /** Compact duration for the LIVE chips. Same shape as the trigger
-   *  cooldowns' formatter (now TriggeringSection's) but returns '' (not '—')
-   *  on zero so we can use `{#if str}` for conditional rendering. */
-  function liveFmtDelta(ms: number): string {
-    if (!Number.isFinite(ms) || ms < 0) return '';
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
-    const s = Math.round(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60), ss = s % 60;
-    return ss === 0 ? `${m}m` : `${m}m${String(ss).padStart(2, '0')}s`;
-  }
-  /** Token formatter for LIVE chips. Empty string on zero (same reason
-   *  as above — the existing fmtTokens returns '0'). Adds M for runs
-   *  that go past a million tokens. */
-  function liveFmtTokens(n: number): string {
-    if (!Number.isFinite(n) || n <= 0) return '';
-    if (n < 1000) return String(Math.round(n));
-    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-    return `${(n / 1_000_000).toFixed(1)}M`;
-  }
-  /** Δt between this event and the previous event in temporal order.
-   *  Returns ms or null when this is the oldest event in the buffer. */
+  // Delta and token chips read the live buffer; the maths lives in $lib/live-steps.
   function liveStepDeltaMs(i: number): number | null {
-    // liveCurrentRunEvents is newest-first → previous event in time = i+1
-    const e = liveCurrentRunEvents[i];
-    const prev = liveCurrentRunEvents[i + 1];
-    if (!e || !prev) return null;
-    const a = Date.parse(e.ts), b = Date.parse(prev.ts);
-    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-    const d = a - b;
-    return d >= 0 ? d : null;
+    return liveStepDeltaMsOf(liveCurrentRunEvents, i);
   }
-  /** Sum of (numeric) tokens reported on this step. Backend emits tokens
-   *  only on thought/final today; tool_call/tool_result carry only the
-   *  cumulative `tokens_total` so the chip can stay visible. */
-  function liveStepTokens(e: AgentFlowEvent): number {
-    const n = Number((e.data as Record<string, unknown>).tokens);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }
-  /** Cumulative tokens up to and including this step, as reported by the
-   *  backend. Falls back to scanning later (older) events for the last
-   *  known total when this event doesn't carry one. */
   function liveStepTokensTotal(i: number): number {
-    for (let j = i; j < liveCurrentRunEvents.length; j++) {
-      const v = Number((liveCurrentRunEvents[j].data as Record<string, unknown>).tokens_total);
-      if (Number.isFinite(v) && v > 0) return v;
-    }
-    return 0;
+    return liveStepTokensTotalOf(liveCurrentRunEvents, i);
   }
-  /** Total wall-clock elapsed for the current run — from the first event
-   *  we've seen up to (and including) the most recent one. */
-  $: liveRunElapsedMs = (() => {
-    if (liveCurrentRunEvents.length < 2) return 0;
-    const newest = Date.parse(liveCurrentRunEvents[0].ts);
-    const oldest = Date.parse(liveCurrentRunEvents[liveCurrentRunEvents.length - 1].ts);
-    if (!Number.isFinite(newest) || !Number.isFinite(oldest)) return 0;
-    const d = newest - oldest;
-    return d > 0 ? d : 0;
-  })();
-  $: liveRunTokensTotal = (() => {
-    for (const e of liveCurrentRunEvents) {
-      const v = Number((e.data as Record<string, unknown>).tokens_total);
-      if (Number.isFinite(v) && v > 0) return v;
-    }
-    return 0;
-  })();
-
-  function fmtClock(ts: string | undefined): string {
-    if (!ts) return '';
-    try {
-      const d = new Date(ts);
-      return d.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch { return ''; }
-  }
-
-  /** Clean up a backend preview that was sliced mid-string. Drops trailing
-   * half-open markdown markers (stray `**`, trailing `#`, open `` ` ``), then
-   * — if the preview actually hit the server cap — appends a sentinel that
-   * formatRunOutput renders as a styled callout (not markdown, because
-   * underscores/asterisks in payload IDs leak as literal chars). */
-  const TRUNC_MARK = '\u0002TRUNCATED_HINT\u0002';
-  // Agent step previews sometimes arrive as JSON-encoded strings (i.e. the
-  // server stored the LLM's reply via JSON.stringify, so newlines are `\n`
-  // and quotes are `\"` when displayed verbatim). Detect that shape and
-  // unwrap it so markdown formatting actually works. Safe no-op on content
-  // that wasn't encoded.
-  function unescapeJsonish(s: string): string {
-    if (!s) return s;
-    const trimmed = s.trim();
-    // Case 1: whole value is a quoted JSON string — unwrap it.
-    if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (typeof parsed === 'string') return parsed;
-      } catch { /* fall through to inline */ }
-    }
-    // Case 2: literal escape sequences embedded in prose.
-    if (/\\n|\\"|\\t|\\\\/.test(s)) {
-      return s
-        .replace(/\\r\\n/g, '\n')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '  ')
-        .replace(/\\"/g, '"')
-        .replace(/\\'/g, "'")
-        .replace(/\\\\/g, '\\');
-    }
-    return s;
-  }
-
-  function sanitizePreview(text: string, rawLen: number, serverCap: number): string {
-    let t = unescapeJsonish(String(text)).replace(/\s+$/, '');
-    // strip trailing lone markdown markers that would render as raw asterisks
-    t = t.replace(/(\*{1,3}|_{1,3})$/g, '');
-    // Strip a stray trailing backtick ONLY if it isn't part of a ``` fence.
-    // tool_call / tool_result previews wrap their payload in ```json … ```;
-    // chopping a backtick off the closing fence breaks the markdown regex in
-    // formatRunOutput and the fence renders as literal text.
-    t = t.replace(/(?<!`)`$/g, '');
-    t = t.replace(/\n\s*-\s*\**$/g, '');
-    t = t.replace(/\n\s*#{1,6}\s*$/g, '');
-    if (rawLen >= serverCap) t += '\n\n' + TRUNC_MARK;
-    return t;
-  }
-
-  // ── Markdown-ish formatter + UUID detection ────
-  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-  function escapeHtml(s: string): string {
-    return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]);
-  }
-  function linkifyUuids(html: string): string {
-    return html.replace(UUID_RE, (m) => `<button type="button" class="ip-uuid-link" data-comm-id="${m}" title="Open ${m}">${m.slice(0, 8)}…</button>`);
-  }
-  /**
-   * Inline markdown for a single-line list item.
-   *
-   * Decisions and action items were printed raw, so the `**bold**` the
-   * moderator writes showed up as literal asterisks in the summary — the one
-   * part of the meeting a reader actually skims. They can't go through
-   * formatRunOutput: that is a block renderer and would nest a <p> (and
-   * possibly a whole <ul>) inside each <li>. This does the inline subset and
-   * nothing else.
-   *
-   * It also drops a leading bullet marker. `extractBullets` strips one only
-   * when the line starts with it, so a NESTED item ("  - **Wren:** …") kept
-   * its dash and rendered as "- **Wren:** …" — visible in the summary as a
-   * stray hyphen before half the action items.
-   */
-  function formatInline(text: string | undefined | null): string {
-    if (!text) return '';
-    let t = String(text).trim().replace(/^[-*•]\s+/, '').trim();
-    t = escapeHtml(t);
-    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
-    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    t = t.replace(/(^|[\s(])_([^_]+)_(?=[\s.,;:)]|$)/g, '$1<em>$2</em>');
-    return t;
-  }
-
-  function formatRunOutput(text: string | undefined | null): string {
-    if (!text) return '';
-
-    // ── JSON envelope unwrapping ───────────────────
-    // The Claude Code SDK and several builtin handlers return a JSON envelope
-    // like { most_recent_output: { content: "...markdown..." } } or
-    // { content: "...", metadata: {...} }. Treating the whole envelope as
-    // markdown destroys it: the `{` and `"key":` lines turn into <p>s, and
-    // the `**bold**` markers inside the content string fight with the JSON
-    // braces. Detect that shape and extract the human-facing payload before
-    // running the regular markdown pass.
-    const trimmed = String(text).trim();
-    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-      try {
-        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        // MCP shape: { content: [{ type: "text", text: "..." }, …], isError?: bool }.
-        // Concatenate every text part and recurse — the agent's prose lives there.
-        if (Array.isArray(parsed.content)) {
-          const parts: string[] = [];
-          for (const item of parsed.content as unknown[]) {
-            if (item && typeof item === "object" && (item as Record<string, unknown>).type === "text") {
-              parts.push(String((item as Record<string, unknown>).text ?? ""));
-            }
-          }
-          if (parts.length > 0) {
-            const flag = parsed.isError ? "⚠ tool error\n\n" : "";
-            return formatRunOutput(flag + parts.join("\n\n"));
-          }
-        }
-        const mro = parsed.most_recent_output as Record<string, unknown> | undefined;
-        const candidate =
-          (typeof mro?.content === "string" && mro.content) ||
-          (typeof parsed.content === "string" && parsed.content as string) ||
-          (typeof parsed.result === "string" && parsed.result as string) ||
-          (typeof parsed.summary === "string" && parsed.summary as string) ||
-          "";
-        if (candidate) {
-          // Recurse — the extracted string IS the markdown the agent wrote.
-          // Append the structured envelope at the bottom inside a collapsed
-          // <details> so power users can still inspect it.
-          const pretty = JSON.stringify(parsed, null, 2);
-          return formatRunOutput(candidate) +
-            '<details class="md-envelope"><summary>raw JSON envelope</summary>' +
-            `<pre class="md-codeblock">${escapeHtml(pretty)}</pre></details>`;
-        }
-        // It's JSON but doesn't have a known content field — render the
-        // pretty-printed JSON as a single code block instead of as markdown.
-        return `<pre class="md-codeblock">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-      } catch {
-        // Not actually valid JSON — fall through to the markdown pass.
-      }
-    }
-
-    // Protect triple-backtick fenced blocks from every markdown rule below.
-    // Without this, JSON content that contains ## / ** / etc. gets mangled
-    // (e.g. `## Context` inside a tool input becomes an <h3>).
-    const fenceStash: string[] = [];
-    const source = String(text).replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_m, body) => {
-      const idx = fenceStash.length;
-      fenceStash.push(escapeHtml(String(body)));
-      return `\u0000CODEBLOCK${idx}\u0000`;
-    });
-    let html = escapeHtml(source);
-    // headers
-    html = html.replace(/^#{4,6}\s+(.+)$/gm, '<h5 class="md-h">$1</h5>');
-    html = html.replace(/^###\s+(.+)$/gm, '<h4 class="md-h">$1</h4>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h3 class="md-h">$1</h3>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h3 class="md-h">$1</h3>');
-    // bold then italic (careful order)
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    // inline code
-    html = html.replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>');
-    // links [text](url) — reject anything that isn't http(s)/mailto, otherwise
-    // an agent that ingested external content could output `[x](javascript:...)`
-    // and pop XSS in this dashboard.
-    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) => {
-      let href: string | null = null;
-      try {
-        const u = new URL(url, window.location.href);
-        if (u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:') {
-          href = u.toString();
-        }
-      } catch { href = null; }
-      if (!href) return escapeHtml(text);
-      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-    });
-    // lists + paragraphs
-    const lines = html.split('\n');
-    const out: string[] = [];
-    let listType: 'ul' | 'ol' | null = null;
-    const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
-    for (const raw of lines) {
-      const ul = /^\s*[-*]\s+(.*)$/.exec(raw);
-      const ol = /^\s*\d+\.\s+(.*)$/.exec(raw);
-      if (ul) {
-        if (listType !== 'ul') { closeList(); out.push('<ul class="md-ul">'); listType = 'ul'; }
-        out.push(`<li>${ul[1]}</li>`);
-      } else if (ol) {
-        if (listType !== 'ol') { closeList(); out.push('<ol class="md-ol">'); listType = 'ol'; }
-        out.push(`<li>${ol[1]}</li>`);
-      } else if (raw.trim() === '') {
-        closeList();
-      } else {
-        closeList();
-        if (/^<h[1-6]/.test(raw.trim())) out.push(raw);
-        else out.push(`<p class="md-p">${raw}</p>`);
-      }
-    }
-    closeList();
-    let joined = linkifyUuids(out.join(''));
-    // Restore the fenced code blocks as <pre>. They were escaped at stash time
-    // so they're safe to drop back in as-is.
-    joined = joined.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_m, idx) => {
-      return `<pre class="md-codeblock">${fenceStash[Number(idx)]}</pre>`;
-    });
-    // Render the truncation sentinel as a visible callout. Both the raw
-    // marker and an escaped variant (in case it went through escapeHtml
-    // before the replace) are matched.
-    const TRUNC_HTML = '<div class="md-trunc-hint">✂ Preview truncated by the server — open the HISTORY tab to see the full content.</div>';
-    joined = joined
-      .replace(/\u0002TRUNCATED_HINT\u0002/g, TRUNC_HTML)
-      .replace(/TRUNCATED_HINT/g, TRUNC_HTML); // defensive fallback
-    return joined;
-  }
+  $: liveRunElapsedMs = runElapsedMs(liveCurrentRunEvents);
+  $: liveRunTokensTotal = runTokensTotal(liveCurrentRunEvents);
 
   // ── Draft (communication) modal ────────────────
   let draftModalOpen = false;
@@ -6589,16 +5753,6 @@
     }
   }
 
-  function formatAgentRecentRuns(runs: any[]): string {
-    return (runs || []).slice(0, 5).map((rr: any) => {
-      const status = rr.status ?? '?';
-      const steps = rr.steps_count ?? 0;
-      const tokens = rr.tokens_used ?? 0;
-      const when = String(rr.created_at ?? '').slice(0, 16).replace('T', ' ');
-      const id = rr.id ? rr.id.slice(0, 8) : '?';
-      return `[${status}] ${steps} steps · ${tokens} tokens · ${when} · ${id}`;
-    }).join('\n');
-  }
 
   function closeDraftModal() {
     draftModalOpen = false;
@@ -6953,12 +6107,6 @@ Boss says: "${msg}"`;
     const r = ranks.find(x => x.id === a.rank_id);
     return r ? { insignia: r.insignia, color: r.color } : null;
   }
-  function initials(name: string): string {
-    const parts = name.trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) return '?';
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-  }
 
   function toggleAutoMeetingAttendee(id: string) {
     if (id === autoMeetingModeratorId) return; // moderator can't attend itself
@@ -7030,12 +6178,6 @@ Boss says: "${msg}"`;
     }
   }
 
-  /** Parse the "temas" textarea — one topic per line, bullets tolerated. */
-  function parseMeetingTopics(raw: string): string[] {
-    return raw.split('\n')
-      .map(t => t.replace(/^[-*•\s]+/, '').trim())
-      .filter(Boolean);
-  }
 
   /** Human-readable brief injected into the chat + every agent's goal. */
   function meetingBrief(): string {
@@ -7119,25 +6261,6 @@ Boss says: "${msg}"`;
   /** Get seat positions around the meeting table */
   // Door midpoint of a meeting room. Mirrors office.ts:buildMeetingRooms door
   // placement: pick the wall whose center is closest to the central hall.
-  function meetingRoomDoorPoint(
-    mr: { cx: number; cz: number; w: number; d: number },
-    hallCenter: { x: number; z: number },
-  ): { x: number; y: number; z: number } {
-    const wallCenters = [
-      { x: mr.cx,             z: mr.cz + mr.d / 2 },
-      { x: mr.cx,             z: mr.cz - mr.d / 2 },
-      { x: mr.cx - mr.w / 2,  z: mr.cz },
-      { x: mr.cx + mr.w / 2,  z: mr.cz },
-    ];
-    let best = wallCenters[1];
-    let minDist = Infinity;
-    for (const wc of wallCenters) {
-      const d2 = (wc.x - hallCenter.x) ** 2 + (wc.z - hallCenter.z) ** 2;
-      if (d2 < minDist) { minDist = d2; best = wc; }
-    }
-    return { x: best.x, y: 0, z: best.z };
-  }
-
   /** Two agents from different offices interact → both walk to a free meeting
    *  room, sit down at facing seats around the conference table, "coordinate"
    *  for a few seconds, then walk back to their desks. This is the visual we
@@ -7223,53 +6346,12 @@ Boss says: "${msg}"`;
   }
 
   function sameOffice(srcId: string, tgtId: string): boolean {
-    const sf = agents.find(a => a.id === srcId)?.flow_id ?? '';
-    const tf = agents.find(a => a.id === tgtId)?.flow_id ?? '';
-    return !!sf && !!tf && sf === tf;
+    return sameOfficeOf(agents, srcId, tgtId);
   }
 
-  function getMeetingSeatPositions(mr: { cx: number; cz: number; w: number; d: number }): Array<{ x: number; y: number; z: number }> {
-    const tableW = Math.min(mr.w * 0.5, 6);
-    const tableD = Math.min(mr.d * 0.3, 3);
-    const seats: Array<{ x: number; y: number; z: number }> = [];
-    const numPerSide = Math.max(2, Math.floor(tableW / 1.5));
-    // HEAD SEATS FIRST. Callers hand out seats in participant order and the
-    // moderator is always participant 0, so whoever chairs the meeting takes
-    // seats[0]. With the head seats appended last, the chair sat in the middle
-    // of a long side like everyone else and the table had nobody at its head —
-    // for the cross-office coordination path, seats[0] and seats[1] are now
-    // the two heads, which face each other across the table exactly as that
-    // code already intended.
-    seats.push({ x: mr.cx - tableW / 2 - 0.6, y: 0, z: mr.cz });
-    seats.push({ x: mr.cx + tableW / 2 + 0.6, y: 0, z: mr.cz });
-    // Then along both long sides.
-    for (let i = 0; i < numPerSide; i++) {
-      const x = mr.cx - tableW / 2 + (tableW / (numPerSide + 1)) * (i + 1);
-      seats.push({ x, y: 0, z: mr.cz - tableD / 2 - 0.6 }); // front side
-      seats.push({ x, y: 0, z: mr.cz + tableD / 2 + 0.6 }); // back side
-    }
-    return seats;
-  }
-
-  /** Pick a free visitor chair in My Office (not currently targeted by another
-   *  walker) so concurrent visitors don't stack on one seat. Falls back to
-   *  round-robin when all four are occupied. */
+  /** Free visitor chair in My Office; seats and walkers live in this component. */
   function pickFreeMyOfficeChair(): { x: number; y: number; z: number } | null {
-    if (myOfficeSeats.length === 0) return null;
-    const taken = new Set<number>();
-    for (const w of walkers) {
-      if (w.targetId !== 'myoffice' && w.targetId !== 'meeting') continue;
-      const curve = (w as any).curve as Array<{ x: number; z: number }> | undefined;
-      const c = curve?.[curve.length - 1];
-      if (!c) continue;
-      myOfficeSeats.forEach((s, idx) => {
-        if (Math.abs(s.x - c.x) < 0.5 && Math.abs(s.z - c.z) < 0.5) taken.add(idx);
-      });
-    }
-    for (let i = 0; i < myOfficeSeats.length; i++) {
-      if (!taken.has(i)) return myOfficeSeats[i];
-    }
-    return myOfficeSeats[taken.size % myOfficeSeats.length];
+    return pickFreeChair(myOfficeSeats, walkers as unknown as SeatedWalker[]);
   }
 
   // Fetch recent completed runs for an agent — used to build meeting/chat context
