@@ -30,6 +30,16 @@ cd "$ROOT"
 
 PKG="services/kernel/package.json"
 LOCK="services/kernel/package-lock.json"
+# Manifests that carry a version but are not the source of truth. They are not
+# published anywhere and nothing reads them at runtime — but they sat at 0.1.0
+# while the kernel reached 0.2.6, which makes a checkout look like three
+# projects at three ages, and sends anyone debugging a version mismatch to the
+# wrong file. Bumped here so "the version" stays one number.
+EXTRA_MANIFESTS=(
+  "services/dashboard/package.json"
+  "services/dashboard/package-lock.json"
+  "apps/desktop/package.json"
+)
 CASK="packaging/homebrew/kernl.rb"
 REPO_SLUG="fastslack/kernl"
 DEV_BRANCH="dev"
@@ -185,6 +195,11 @@ step "Bumping to $VERSION"
 set_json_version "$PKG" "$VERSION"
 [[ -f "$LOCK" ]] && set_json_version "$LOCK" "$VERSION"
 git add "$PKG" ${LOCK:+"$LOCK"}
+for m in "${EXTRA_MANIFESTS[@]}"; do
+  [[ -f "$m" ]] || continue
+  set_json_version "$m" "$VERSION"
+  git add "$m"
+done
 git commit -q -m "Release $VERSION"
 ok "$(git log --oneline -1)"
 

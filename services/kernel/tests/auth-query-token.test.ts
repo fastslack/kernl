@@ -73,6 +73,15 @@ describe("isAuthenticated", () => {
     expect(isAuthenticated(req(`/api/cinema/media/webseed-proxy?url=x&auth=${TOKEN}`), TOKEN)).toBe(true);
   });
 
+  it("accepts ?auth= on a finished conversion the player streams", () => {
+    expect(isAuthenticated(req(`/api/cinema/media/convert/file?key=abc&auth=${TOKEN}`, { accept: "*/*" }), TOKEN)).toBe(true);
+  });
+
+  it("keeps the rest of the convert API off the query-token path", () => {
+    expect(isAuthenticated(req(`/api/cinema/media/convert/start?auth=${TOKEN}`), TOKEN)).toBe(false);
+    expect(isAuthenticated(req(`/api/cinema/media/convert/file/extra?auth=${TOKEN}`), TOKEN)).toBe(false);
+  });
+
   it("still rejects a wrong token on a cinema media route", () => {
     expect(isAuthenticated(req("/api/cinema/media/transcode?url=x&auth=wrong"), TOKEN)).toBe(false);
   });

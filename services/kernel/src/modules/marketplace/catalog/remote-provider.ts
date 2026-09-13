@@ -15,7 +15,7 @@
  */
 
 import { writeFile, mkdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { randomBytes } from "node:crypto";
 import { log } from "../../../core/logger.js";
@@ -134,7 +134,7 @@ export class RemoteProvider implements CatalogProvider {
   /** Best-effort cleanup of the directory holding a downloaded bundle. */
   static async cleanupBundle(bundlePath: string): Promise<void> {
     try {
-      const dir = bundlePath.substring(0, bundlePath.lastIndexOf("/"));
+      const dir = dirname(bundlePath);
       if (dir.startsWith(tmpdir())) {
         await rm(dir, { recursive: true, force: true });
       }

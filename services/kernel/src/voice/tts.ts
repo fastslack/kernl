@@ -228,6 +228,36 @@ export class TtsService {
           audio,
           format: "wav",
         };
+      } else if (platform === "win32") {
+        // Windows: System.Speech through PowerShell, which every supported
+        // Windows ships. Text goes in through stdin so no quoting of user text
+        // into the command line is needed.
+        const wavFile = outputFile.replace(".aiff", ".wav");
+        const script =
+          "Add-Type -AssemblyName System.Speech;" +
+          "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;" +
+          `$s.SetOutputToWaveFile('${wavFile.replace(/'/g, "''")}');` +
+          "$s.Speak([Console]::In.ReadToEnd());" +
+          "$s.Dispose()";
+
+        await new Promise<void>((resolve, reject) => {
+          const proc = spawn("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script]);
+          proc.on("close", (code) => {
+            if (code === 0) resolve();
+            else reject(new Error(`System.Speech exited with code ${code}`));
+          });
+          proc.on("error", reject);
+          proc.stdin?.end(text);
+        });
+
+        const audio = readFileSync(wavFile);
+        unlinkSync(wavFile);
+
+        log.info(`TTS: system synthesis complete - ${audio.length} bytes`);
+        return {
+          audio,
+          format: "wav",
+        };
       } else {
         throw new Error(`System TTS not supported on ${platform}`);
       }

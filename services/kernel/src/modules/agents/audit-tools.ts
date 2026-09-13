@@ -9,11 +9,12 @@
  */
 
 import { z } from "zod";
-import { readFile } from "node:fs/promises";
-import { resolve, relative, normalize } from "node:path";
+import { readFile, readdir, stat } from "node:fs/promises";
+import { resolve, relative, join, sep } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { textResult, errorResult } from "../../core/helpers.js";
+import { isPathInside, toPosixPath } from "../../core/fs-paths.js";
 import type { ToolDefinition } from "../../core/types.js";
 import type { AgentService } from "./service.js";
 import { defineTool } from "../../core/tool-builder.js";
@@ -23,7 +24,12 @@ const execFileAsync = promisify(execFile);
 /** Project root — code access is restricted to src/ under this path. */
 const PROJECT_ROOT = resolve(process.cwd());
 
-/** Paths that are never readable (secrets, binaries, deps). */
+/**
+ * Paths that are never readable (secrets, binaries, deps). Matched against the
+ * project-relative path with forward slashes: on Windows `relative()` returns
+ * backslashes, and `/data\//` then never matched — `data\kernel.db` and the
+ * auth token became readable there while Linux blocked them.
+ */
 const BLOCKED_PATTERNS = [
   /\.env/i,
   /credentials/i,
@@ -36,18 +42,59 @@ const BLOCKED_PATTERNS = [
   /data\//,
 ];
 
-function isPathAllowed(filePath: string): boolean {
-  const abs = resolve(PROJECT_ROOT, filePath);
-  const rel = relative(PROJECT_ROOT, abs);
+export function isPathAllowed(filePath: string, root: string = PROJECT_ROOT): boolean {
+  const abs = resolve(root, filePath);
   // Must stay inside project root
-  if (rel.startsWith("..") || resolve(abs) !== abs && !abs.startsWith(PROJECT_ROOT)) {
-    return false;
-  }
+  if (!isPathInside(root, abs)) return false;
+  // Trailing slash so a bare directory ("data") matches its `data/` pattern too.
+  const rel = toPosixPath(relative(root, abs)) + "/";
   // Must not match any blocked pattern
   for (const p of BLOCKED_PATTERNS) {
     if (p.test(rel)) return false;
   }
   return true;
+}
+
+/**
+ * Plain JS search, for hosts without ripgrep — every native Windows install and
+ * most fresh macOS ones. Same exclusions and per-file cap as the rg call.
+ */
+async function searchWithoutRg(
+  pattern: string,
+  searchDir: string,
+  glob: string | undefined,
+  limit: number,
+): Promise<string[]> {
+  const re = new RegExp(pattern);
+  const globRe = glob
+    ? new RegExp("^" + glob.replace(/[.+^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$")
+    : null;
+  const out: string[] = [];
+  const skip = new Set(["node_modules", ".git", "dist", "data"]);
+  async function walk(dir: string): Promise<void> {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.length >= limit) return;
+      if (skip.has(e.name)) continue;
+      const full = join(dir, e.name);
+      if (e.isDirectory()) { await walk(full); continue; }
+      if (globRe && !globRe.test(e.name)) continue;
+      const s = await stat(full).catch(() => null);
+      if (!s || s.size > 500 * 1024) continue;
+      const text = await readFile(full, "utf-8").catch(() => "");
+      let perFile = 0;
+      const lines = text.split(/\r?\n/);
+      for (let i = 0; i < lines.length && perFile < 5 && out.length < limit; i++) {
+        if (re.test(lines[i])) {
+          out.push(`${full}:${i + 1}:${lines[i]}`);
+          perFile++;
+        }
+      }
+    }
+  }
+  await walk(searchDir);
+  return out;
 }
 
 export function auditTools(service: AgentService): ToolDefinition[] {
@@ -100,6 +147,10 @@ export function auditTools(service: AgentService): ToolDefinition[] {
         const limit = Math.min(max_results ?? 30, 100);
         const searchDir = resolve(PROJECT_ROOT, "src");
 
+        // Paths come back absolute from both searchers; show them project-relative.
+        const toRel = (l: string) =>
+          l.startsWith(PROJECT_ROOT + sep) ? toPosixPath(l.slice(PROJECT_ROOT.length + 1)) : l;
+
         try {
           const rgArgs = [
             "--no-heading", "--line-number", "--color=never",
@@ -115,14 +166,20 @@ export function auditTools(service: AgentService): ToolDefinition[] {
           }
           rgArgs.push(pattern, searchDir);
 
-          const { stdout } = await execFileAsync("rg", rgArgs, {
-            timeout: 10_000,
-            maxBuffer: 1024 * 1024,
-          });
-
-          const lines = stdout.split("\n").filter(Boolean).slice(0, limit);
+          let lines: string[];
+          try {
+            const { stdout } = await execFileAsync("rg", rgArgs, {
+              timeout: 10_000,
+              maxBuffer: 1024 * 1024,
+            });
+            lines = stdout.split(/\r?\n/).filter(Boolean).slice(0, limit);
+          } catch (rgErr: unknown) {
+            if ((rgErr as { code?: unknown }).code !== "ENOENT") throw rgErr;
+            lines = await searchWithoutRg(pattern, searchDir, glob, limit);
+            if (lines.length === 0) return textResult(`No matches found for \`${pattern}\``);
+          }
           // Make paths relative
-          const results = lines.map(l => l.replace(PROJECT_ROOT + "/", ""));
+          const results = lines.map(toRel);
 
           return textResult(
             `## Search: \`${pattern}\`${glob ? ` (${glob})` : ""}\n\nFound ${results.length} matches:\n\`\`\`\n${results.join("\n")}\n\`\`\``,

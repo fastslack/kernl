@@ -46,6 +46,7 @@
 	import RemoteManager from '$lib/components/commander/RemoteManager.svelte';
 	import BookmarksDropdown from '$lib/components/commander/BookmarksDropdown.svelte';
 	import { bookmarkAdd } from '$lib/fs-api.js';
+	import { basenameHostPath, isAbsoluteHostPath, joinHostPath, parentHostPath } from '$lib/host-path.js';
 	import '$lib/components/commander/commander.css';
 
 	// ── Preview / editor / remotes / bookmarks state ────────────────
@@ -176,16 +177,15 @@
 
 	// ── Navigation & refresh ────────────────────────────────────────
 
+	// Separator-aware: the local provider on a Windows kernel speaks C:\…,
+	// remote providers and every other host speak POSIX.
 	function parentOf(p: string): string {
-		if (!p || p === '/') return '/';
-		const trimmed = p.endsWith('/') ? p.slice(0, -1) : p;
-		const parent = trimmed.slice(0, trimmed.lastIndexOf('/')) || '/';
-		return parent;
+		if (!p) return '/';
+		return parentHostPath(p);
 	}
 
 	function joinPath(base: string, name: string): string {
-		if (base.endsWith('/')) return base + name;
-		return base + '/' + name;
+		return joinHostPath(base, name);
 	}
 
 	async function navigate(paneId: PaneId, path: string): Promise<void> {
@@ -202,7 +202,7 @@
 			path,
 			cursor: null,
 			selection: new Set(),
-			title: path.split('/').filter(Boolean).slice(-1)[0] || '/'
+			title: basenameHostPath(path) || '/'
 		}));
 		try {
 			const listing = await listDir(t0.providerId, path);
@@ -420,7 +420,7 @@
 			return;
 		}
 		if (entry.kind === 'symlink') {
-			if (entry.target && entry.target.startsWith('/')) {
+			if (isAbsoluteHostPath(entry.target)) {
 				navigate(activeSide, entry.target);
 			}
 			return;
@@ -516,7 +516,7 @@
 				break;
 			case 'bookmark': {
 				if (!activeT) return;
-				const suggested = activeT.path.split('/').filter(Boolean).slice(-1)[0] || activeT.path;
+				const suggested = basenameHostPath(activeT.path) || activeT.path;
 				modal = {
 					kind: 'mkdir' // reuse the prompt dialog by misnaming; handled below
 				} as typeof modal;
@@ -545,7 +545,7 @@
 		if (!paths.length) return;
 		const items = paths.map((from) => ({
 			from,
-			to: joinPath(passiveT!.path, from.split('/').pop()!)
+			to: joinPath(passiveT!.path, basenameHostPath(from))
 		}));
 		modal =
 			kind === 'copy'
@@ -686,8 +686,16 @@
 		switch (verb) {
 			case 'cd':
 			case 'goto':
-				await navigate(activeSide, arg.startsWith('/') ? arg : joinPath(activeT.path, arg));
+			{
+				// `~` means the provider's home (the command bar advertises
+				// `goto ~/Downloads`); nothing on the kernel side expands it, and on
+				// Windows the home is C:\Users\…, so it is resolved here.
+				const tilde = /^~(?:[\\/]|$)/.test(arg) && homePath
+					? (arg.length > 2 ? joinPath(homePath, arg.slice(2)) : homePath)
+					: null;
+				await navigate(activeSide, tilde ?? (isAbsoluteHostPath(arg) ? arg : joinPath(activeT.path, arg)));
 				break;
+			}
 			case 'mkdir':
 				await doMkdir(arg);
 				break;
@@ -811,7 +819,7 @@
 			...t,
 			providerId: paramProvider,
 			path: leftPath,
-			title: leftTitle ?? leftPath.split('/').filter(Boolean).slice(-1)[0] ?? '/'
+			title: leftTitle ?? (basenameHostPath(leftPath) || '/')
 		}));
 		updateActiveTab(rightPane, (t) => ({ ...t, providerId: 'local', path: home }));
 		homePath = home;

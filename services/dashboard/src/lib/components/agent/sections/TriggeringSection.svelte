@@ -16,6 +16,7 @@
 -->
 <script lang="ts">
   import type { Readable } from 'svelte/store';
+  import { fmtRelTime } from '$lib/display-format.js';
 
   /** The drawer's agent store (`AgentDrawer` publishes it on the overview slot). */
   export let store: Readable<any>;
@@ -54,24 +55,6 @@
   // Same as before the merge: with nothing to show, nothing is shown. An empty
   // heading would be new, and the spec asked for a merge, not for a new line.
   $: hasAny = hasConnections || sch.length > 0 || trg.length > 0;
-
-  /** Copies of the 3D world's own formatters — the parent still uses both. */
-  function fmtRelTime(iso?: string): string {
-    if (!iso) return '—';
-    const t = new Date(iso).getTime();
-    if (isNaN(t)) return iso;
-    const d = Date.now() - t;
-    if (d < 0) {
-      const f = -d;
-      if (f < 60_000) return `in ${Math.round(f / 1000)}s`;
-      if (f < 3_600_000) return `in ${Math.round(f / 60_000)}m`;
-      return `in ${Math.round(f / 3_600_000)}h`;
-    }
-    if (d < 60_000) return `${Math.round(d / 1000)}s ago`;
-    if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
-    if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
-    return `${Math.round(d / 86_400_000)}d ago`;
-  }
 
   function fmtDuration(ms?: number): string {
     if (!ms) return '—';

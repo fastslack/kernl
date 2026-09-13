@@ -1,8 +1,91 @@
 # Architecture Guide
 
-The full system guide. If you just want the quick contributor map (where
-things live, how to add a module), start with the shorter
-[`ARCHITECTURE-MAP.md`](./ARCHITECTURE-MAP.md).
+Read this before your first PR — it is the fastest way to understand a codebase
+with 71 modules and 290 MCP tools without reading all of it. The orientation is
+here at the top; the subsystem internals, data flows and step-by-step module
+recipe follow.
+
+For the migration this repo is in the middle of — "minimal kernel, everything
+else an extension" — see [`architecture/`](./architecture/), which tracks the
+phases, the deprecations audit and the handoff notes. It is a plan, not a
+description of today.
+
+## The 30-second model
+
+Kernl is an **MCP server**. It exposes ~290 tools (`kernel_{module}_{action}`)
+over two transports — stdio and Streamable HTTP — backed by SQLite (primary) and
+an optional Neo4j graph. Everything else is a **module** or an **extension** that
+plugs into that core. You almost never touch the core to add a feature; you add a
+module or an extension.
+
+```
+services/kernel/bin/mcp-server.ts        → entry point, calls bootstrap()
+services/kernel/src/index.ts             → bootstrap(): DB init, module registration, MCP + HTTP servers
+services/kernel/src/server.ts            → MCP server + McpHttpRouter (Streamable HTTP sessions)
+services/kernel/src/core/                → framework: config, logger, DB clients, HTTP server, auth, types
+services/kernel/src/modules/{name}/      → built-in feature modules (self-contained)
+services/kernel/assets/extensions/{cat}/ → marketplace extensions (loaded at runtime from prebuilt bundles)
+services/dashboard/                      → SvelteKit SPA (separate build, served by nginx)
+services/kernel/tests/                   → bun tests (in-memory SQLite, Neo4j unavailable)
+```
+
+## Runtime conventions
+
+- **Bun** (not Node) is the runtime — scripts use `bun`, imports use the `.js`
+  extension (ESM, `moduleResolution Node16`), TypeScript strict.
+- **SQLite** via `bun:sqlite`/better-sqlite3 is the source of truth. Money is
+  always integer cents; booleans are `INTEGER 0/1`; deletes are soft
+  (`deleted_at`). Several columns are `NOT NULL DEFAULT ''` — check presence with
+  `<> ''`, not `IS NOT NULL`.
+- **Neo4j** is optional and degrades gracefully — always guard with
+  `neo4j.available` before graph calls.
+
+## Extensions vs. modules
+
+Built-in modules live in `services/kernel/src/modules/` and compile with the
+kernel. **Extensions** live in
+`services/kernel/assets/extensions/<category>/<slug>/` and are loaded at runtime
+from a prebuilt `backend/entry.js` bundle. After editing extension source you
+must run `bun run build:extensions` or the kernel runs the stale bundle. The core
+never imports extension source directly — it talks to them through structural
+interfaces in `services/kernel/src/core/extension-seams.ts`.
+
+## Security model
+
+Single-user, self-hosted by default. Key invariants (see `SECURITY.md` and the
+`/api` + `/mcp` auth gates in `services/kernel/src/server.ts` /
+`services/kernel/src/core/http-server.ts`):
+
+- The HTTP API and `/mcp` require `Authorization: Bearer $KERNEL_AUTH_TOKEN`.
+  If no token is configured the kernel **generates and persists one** at first
+  boot (mode-600 file next to the DB) rather than running open. Every shipped
+  stack, including the Docker quick start, runs authenticated;
+  `KERNEL_ALLOW_UNAUTH=1` exists only as a deliberate local-development escape
+  hatch. Binding to loopback is **not** a substitute for it — the user's own
+  browser is inside the loopback boundary.
+- CORS is deny-by-default: `Access-Control-Allow-Origin` is sent only for an
+  origin explicitly listed in `CORS_ALLOWED_ORIGINS`.
+- The encryption key (`KERNEL_ENCRYPTION_KEY`) is likewise auto-generated and
+  persisted if unset; at-rest secrets use AES-256-GCM.
+- Untrusted input that reaches `fetch`, the shell, `import()`, or a DB column
+  goes through a guard (`guardedFetch`/url-guard, `execFile` argv form,
+  path-containment checks, column allowlists). When in doubt, fail closed.
+
+## Where to start
+
+- **Add a tool to an existing module** → `services/kernel/src/modules/<name>/tools.ts`
+  + `service.ts`, plus a test in `services/kernel/tests/`. The module pattern is
+  below; the seven-step recipe is under "Adding a New Module".
+- **Add a new module** → copy the smallest existing module, register it in
+  `services/kernel/src/index.ts`.
+- **Add an extension** → see a sibling under
+  `services/kernel/assets/extensions/<category>/` for the `extension.json` +
+  `_module/` + `_wrapper/` shape, then `bun run build:extensions`.
+- **Run the stack** → `docker compose up -d --build`, then open
+  `http://localhost:3086`. Or `bun run dev` for stdio MCP.
+
+See [`CONTRIBUTING.md`](./CONTRIBUTING.md) for workflow and [`FAQ.md`](./FAQ.md)
+for common setup questions.
 
 ## System Overview
 

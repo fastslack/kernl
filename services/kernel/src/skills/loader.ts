@@ -7,6 +7,8 @@ import { readFileSync, existsSync, readdirSync } from "fs";
 import { join, resolve, sep } from "path";
 import { pathToFileURL } from "url";
 import { log } from "../core/logger.js";
+import { assetsRoot } from "../core/assets-root.js";
+import { findOnPath, spawnableCommand } from "../core/fs-paths.js";
 import type {
   SkillManifest,
   Skill,
@@ -184,7 +186,7 @@ async function installFromNpm(
   version: string | undefined,
   targetPath: string
 ): Promise<SkillManifest | null> {
-  const { execSync } = await import("child_process");
+  const { execFileSync } = await import("child_process");
   const { mkdirSync, cpSync, rmSync } = await import("fs");
   const { tmpdir } = await import("os");
   const { randomUUID } = await import("crypto");
@@ -194,9 +196,13 @@ async function installFromNpm(
   try {
     mkdirSync(tempDir, { recursive: true });
 
-    // Install package to temp directory
+    // Install package to temp directory. An argv, not a shell string: the temp
+    // dir contains the username on Windows ("C:\Users\Juan Perez\…"), and the
+    // package name must never reach a shell. npm there is an npm.cmd shim,
+    // which only runs through cmd.exe.
     const spec = version ? `${packageName}@${version}` : packageName;
-    execSync(`npm install --prefix ${tempDir} ${spec}`, {
+    const npm = spawnableCommand(findOnPath("npm") ?? "npm", ["install", "--prefix", tempDir, spec]);
+    execFileSync(npm.file, npm.args, {
       stdio: "pipe",
     });
 
@@ -292,7 +298,9 @@ async function installBundled(
   // (gitignored). The personal path wins so an operator can override a public
   // skill in place without forking the repo.
   const personalPath = pathResolve(process.cwd(), "assets", "personal", "skills", skillId);
-  const bundledPath = pathResolve(process.cwd(), "assets", "skills", skillId);
+  // Bundled skills ship beside the kernel; cwd is the user's data dir in
+  // every native package.
+  const bundledPath = pathResolve(assetsRoot(), "assets", "skills", skillId);
   const sourcePath = existsSync(personalPath) ? personalPath : bundledPath;
 
   // If the skill is already installed at targetPath, just load the manifest

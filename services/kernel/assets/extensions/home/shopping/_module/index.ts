@@ -1,16 +1,16 @@
-import type { KernelModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
+import type { ExtensibleModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
 import { runMigrations } from "../../../../../src/core/db/migrations.js";
 import { shoppingMigrations } from "./migrations/001_shopping.js";
 import { ShoppingService } from "./service.js";
 import { shoppingTools } from "./tools.js";
 import { shoppingRpcActions } from "./rpc-actions.js";
-import { shoppingDashboardRpcActions } from "./dashboard-rpc-actions.js";
+import { queryShopping } from "./dashboard-queries.js";
 import { registerShoppingRoutes } from "./routes.js";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import type { EventBus } from "../../../../../src/core/event-bus.js";
 import type { KernelConfig } from "../../../../../src/core/config.js";
 
-export function createShoppingModule(): KernelModule & { getService(): ShoppingService | null } {
+export function createShoppingModule(): ExtensibleModule & { getService(): ShoppingService | null } {
   let tools: ToolDefinition[] = [];
   let serviceInstance: ShoppingService | null = null;
   let dbRef: SqliteDb | null = null;
@@ -54,12 +54,9 @@ export function createShoppingModule(): KernelModule & { getService(): ShoppingS
       return dbRef ? shoppingRpcActions(dbRef) : [];
     },
 
-    getDashboardRpcActions() {
-      return dbRef ? shoppingDashboardRpcActions({ db: dbRef }) : [];
-    },
-
     getDashboardDescriptor(): DashboardDescriptor {
       return {
+        channels: [{ name: "shopping", query: (db) => queryShopping(db) }],
         registerRoutes: (server) => {
           if (dbRef) {
             registerShoppingRoutes(

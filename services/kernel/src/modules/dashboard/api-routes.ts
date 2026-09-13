@@ -24,25 +24,19 @@ import { getGlobalPiiFilter } from "../../core/pii-filter.js";
 import {
   // Core KPI composers — dashboard página principal
   queryKpis,
-  queryTasks,
-  queryCrm,
-  queryReminders,
-  queryShopping,
   queryFullDashboard,
+  type DashboardChannelReader,
   // Cross-module aggregators — they don't belong to any single module
   queryAgenda,
   queryCrossModuleIntel,
   queryCalendar,
   querySystemTimeline,
-  // Legacy aliases kebab-case mantenidos en api-routes hasta alinear el
-  // the module's `channel.name` with its path. See the comment below where
-  // registran (`/web-intel`, `/time-tracking`).
+  // Dashboard-internal query kept under its legacy kebab-case URL
+  // (`/web-intel`). See the comment below where it is registered.
   queryWebIntel,
-  queryTimeTracking,
-  // The remaining modules (issues, comms, subscriptions, finance, notes,
-  // goals, vehicles, meals, documents, files, health, training, nutrition,
-  // chat, events) se auto-registran via `DashboardRegistry` —
-  // `registerAllRoutes()` genera `/api/dashboard/<channel_name>`.
+  // Every extension-owned section (tasks, crm, reminders, shopping, issues,
+  // comms, finance, notes, events, …) is a channel in `DashboardRegistry` —
+  // `registerAllRoutes()` serves it at `/api/dashboard/<channel_name>`.
 } from "./api.js";
 import type { Notifier } from "../../core/notify/notifier.js";
 import type { EventBus } from "../../core/event-bus.js";
@@ -57,6 +51,8 @@ const startedAt = Date.now();
 export function registerDashboardRoutes(
   server: KernelHttpServer,
   db: SqliteDb,
+  /** Reads extension-owned channels — backed by `DashboardRegistry` at bootstrap. */
+  readChannel: DashboardChannelReader,
   getGraph: () => GraphDriver | null,
   lifeService?: LifeService | null,
   sysRegistry?: SystemRegistry,
@@ -200,12 +196,12 @@ export function registerDashboardRoutes(
   }
 
   // ── Direct query routes (never null) ──
-  directRoute("/api/dashboard", queryFullDashboard);
+  // `/api/dashboard/{tasks,crm,reminders,shopping}` are channels registered by
+  // their extensions; DashboardRegistry.registerAllRoutes() serves them.
+  server.get("/api/dashboard", async (req, res) => {
+    server.json(res, 200, await queryFullDashboard(db, readChannel), req);
+  });
   directRoute("/api/dashboard/kpis", queryKpis);
-  directRoute("/api/dashboard/tasks", queryTasks);
-  directRoute("/api/dashboard/crm", queryCrm);
-  directRoute("/api/dashboard/reminders", queryReminders);
-  directRoute("/api/dashboard/shopping", queryShopping);
 
   // ── Delegated domain routes ──────────────────────
   // Moved to extensions:
@@ -237,7 +233,12 @@ export function registerDashboardRoutes(
   // home: removed — extracted as an extension; its "home"/"house" channels are
   // auto-registra el DashboardRegistry.
   nullableRoute("/api/dashboard/web-intel", queryWebIntel);
-  nullableRoute("/api/dashboard/time-tracking", queryTimeTracking);
+  // time-tracking is an extension: this alias reads its `timeTracking` channel
+  // instead of importing its query, with the same `{ available }` envelope.
+  server.get("/api/dashboard/time-tracking", async (req, res) => {
+    const data = await readChannel("timeTracking");
+    server.json(res, 200, data ? { available: true, ...(data as Record<string, unknown>) } : { available: false }, req);
+  });
 
   // files: migrated to extension. Its /api/files/* routes are registered by
   // the extension itself via DashboardRegistry/self-registering modules.

@@ -10,7 +10,7 @@
 import { EventEmitter } from "node:events";
 import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
-import { basename, join } from "node:path";
+import { basename, join, posix } from "node:path";
 import type { FsProvider } from "./providers/provider.js";
 import { newId, isoNow } from "../../../../../src/core/helpers.js";
 import { log } from "../../../../../src/core/logger.js";
@@ -139,7 +139,7 @@ export class OpEngine {
       }
       const plan: Plan[] = [];
       for (const item of items) {
-        await enumerate(src, item.from, item.to, plan, op.abort.signal);
+        await enumerate(src, dst, item.from, item.to, plan, op.abort.signal);
       }
       op.itemsTotal = plan.length;
       op.totalBytes = plan.reduce((s, p) => s + (p.kind === "file" ? p.size : 0), 0);
@@ -211,6 +211,7 @@ class AbortError extends Error {
 
 async function enumerate(
   src: FsProvider,
+  dst: FsProvider,
   from: string,
   to: string,
   out: Array<{ from: string; to: string; kind: "file" | "dir"; size: number }>,
@@ -226,8 +227,8 @@ async function enumerate(
       // as entries (size 0) so users notice they existed.
       if (child.kind === "symlink") {
         out.push({
-          from: joinSafe(from, child.name),
-          to: joinSafe(to, child.name),
+          from: joinSafe(src, from, child.name),
+          to: joinSafe(dst, to, child.name),
           kind: "file",
           size: 0,
         });
@@ -235,8 +236,9 @@ async function enumerate(
       }
       await enumerate(
         src,
-        joinSafe(from, child.name),
-        joinSafe(to, child.name),
+        dst,
+        joinSafe(src, from, child.name),
+        joinSafe(dst, to, child.name),
         out,
         signal,
       );
@@ -246,11 +248,11 @@ async function enumerate(
   }
 }
 
-function joinSafe(parent: string, name: string): string {
-  // `join` from node:path handles both posix and windows; remote providers
-  // (SFTP, S3, WebDAV) all use POSIX — callers in those providers normalize
-  // separately. For phase 2 we only have local, so join() is correct.
-  return join(parent, name);
+function joinSafe(provider: FsProvider, parent: string, name: string): string {
+  // Local paths follow the host (backslashes on Windows); SFTP, S3, WebDAV and
+  // archive paths are always POSIX. A plain join() on a Windows kernel turned
+  // `/remote/dir` into `\remote\dir`: ENOENT over SFTP, backslash keys on S3.
+  return provider.kind === "local" ? join(parent, name) : posix.join(parent, name);
 }
 
 function toProgress(op: InternalOp): OpProgress {

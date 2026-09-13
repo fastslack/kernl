@@ -18,6 +18,7 @@ import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 
 import { log } from "../logger.js";
+import { renameWithRetry } from "../fs-paths.js";
 import {
   LicenseError,
   type LicenseClaim,
@@ -116,7 +117,7 @@ export function createLicenseService(opts: LicenseServiceOptions = {}): LicenseS
       const tmp = `${path}.tmp`;
       await writeFile(tmp, jwt.trim() + "\n", "utf-8");
       await chmod(tmp, 0o600);
-      await import("node:fs/promises").then((m) => m.rename(tmp, path));
+      await renameWithRetry(tmp, path);
       return result;
     },
 

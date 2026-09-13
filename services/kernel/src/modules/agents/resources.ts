@@ -22,6 +22,7 @@ import { resolve as resolvePath, join } from "node:path";
 import { homedir } from "node:os";
 import type { ResourceContent, ResourceListing, ResourceProvider } from "../../core/types.js";
 import { log } from "../../core/logger.js";
+import { isPathInside } from "../../core/fs-paths.js";
 import { WORKSPACE_ROOT } from "./workspace-constants.js";
 import type { WorkspaceServiceLike } from "./advanced-types.js";
 import { parseSkillMdFrontmatter, readSkillMd } from "../../core/prompt-sanitizer.js";
@@ -42,6 +43,9 @@ function parseUri(uri: string, expectedScheme: string): string[] | null {
 
 /** Cheap inline frontmatter reader — same shape `workspace-tools` already uses. */
 function parseFrontmatter(md: string): { meta: Record<string, string>; body: string } {
+  // Files checked out with Git for Windows' autocrlf carry CRLF, and then
+  // `---\n` never matched and every skill lost its metadata.
+  md = md.replace(/\r\n/g, "\n");
   if (!md.startsWith("---\n")) return { meta: {}, body: md };
   const end = md.indexOf("\n---", 4);
   if (end === -1) return { meta: {}, body: md };
@@ -108,7 +112,7 @@ export function createAnalysisResourceProvider(wsService: WorkspaceServiceLike):
       // Belt and suspenders: ensure the resolved path is still inside the
       // workspace's analyses directory.
       const dir = resolvePath(WORKSPACE_ROOT, ws.id, ANALYSES_SUBDIR);
-      if (!abs.startsWith(`${dir}/`) && abs !== dir) return null;
+      if (!isPathInside(dir, abs)) return null;
       try {
         await stat(abs);
         const text = await readFile(abs, "utf-8");

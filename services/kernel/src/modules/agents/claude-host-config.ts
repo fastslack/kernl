@@ -15,11 +15,15 @@
  * ClaudeCodeExecutor) then `HOME`.
  */
 
-import { readFileSync, writeFileSync, existsSync, mkdirSync, renameSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, dirname } from "node:path";
+import { renameWithRetrySync } from "../../core/fs-paths.js";
 
 export function hostHome(): string {
-  return process.env.HOST_HOME ?? process.env.HOME ?? "";
+  // os.homedir(), not $HOME: Windows has no HOME, and the old "" fallback put
+  // `.claude.json` in the kernel's data dir — read and written silently.
+  return process.env.HOST_HOME ?? homedir();
 }
 
 export function claudeJsonPath(): string {
@@ -87,7 +91,9 @@ function writeJsonAtomic(path: string, data: unknown): void {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   const tmp = `${path}.tmp.${process.pid}.${Date.now()}`;
   writeFileSync(tmp, JSON.stringify(data, null, 2) + "\n", "utf-8");
-  renameSync(tmp, path);
+  // Claude Code itself keeps ~/.claude.json open; on Windows that briefly
+  // turns the rename into EPERM.
+  renameWithRetrySync(tmp, path);
 }
 
 export function writeClaudeJson(data: ClaudeJson): void {

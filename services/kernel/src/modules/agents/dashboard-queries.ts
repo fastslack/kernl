@@ -116,9 +116,10 @@ export function queryAgentsList(db: SqliteDb): { agents: Record<string, unknown>
 
   // Flow metadata for categorization
   const flowMap: Record<string, string> = {};
-  const flowDetailMap: Record<string, { id: string; name: string; color: string; description: string }> = {};
-  const flowRows = safeAll<{ id: string; name: string; color: string; description: string }>(db,
-    "SELECT id, name, color, description FROM agent_flows WHERE active = 1",
+  type FlowRow = { id: string; name: string; color: string; description: string; home_workspace_id: string; home_repo_path: string };
+  const flowDetailMap: Record<string, FlowRow> = {};
+  const flowRows = safeAll<FlowRow>(db,
+    "SELECT id, name, color, description, home_workspace_id, home_repo_path FROM agent_flows WHERE active = 1",
   );
   for (const f of flowRows) {
     flowMap[f.id] = f.name;
@@ -161,6 +162,9 @@ export function queryAgentsList(db: SqliteDb): { agents: Record<string, unknown>
       name: f.name,
       color: f.color,
       description: f.description,
+      // The agent drawer resolves an office agent's cwd from these.
+      home_workspace_id: f.home_workspace_id,
+      home_repo_path: f.home_repo_path,
       agent_count: flowAgentCount[f.id] || 0,
       last_run_at: flowLastRun[f.id] || null,
     })),

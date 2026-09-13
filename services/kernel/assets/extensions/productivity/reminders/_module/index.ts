@@ -11,7 +11,7 @@ import { ReminderScheduler } from "./scheduler.js";
 import { reminderTools } from "./tools.js";
 import { registerRemindersRoutes } from "./api-routes.js";
 import { remindersRpcActions } from "./rpc-actions.js";
-import { remindersDashboardRpcActions } from "./dashboard-rpc-actions.js";
+import { queryReminders } from "./dashboard-queries.js";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import type { EventBus } from "../../../../../src/core/event-bus.js";
 
@@ -73,12 +73,9 @@ export function createRemindersModule(): RemindersModule {
       return serviceRef ? remindersRpcActions(serviceRef) : [];
     },
 
-    getDashboardRpcActions() {
-      return dbRef ? remindersDashboardRpcActions({ db: dbRef }) : [];
-    },
-
     getDashboardDescriptor(): DashboardDescriptor {
       return {
+        channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
         registerRoutes: (server) => {
           if (dbRef && eventsRef) registerRemindersRoutes(server, dbRef, eventsRef);
         },

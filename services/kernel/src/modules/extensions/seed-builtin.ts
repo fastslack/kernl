@@ -77,6 +77,11 @@ export async function seedBuiltinExtensions(
 ): Promise<BuiltinSeedSummary> {
   const summary: BuiltinSeedSummary = { seeded: [], skipped: [], promoted: [], errors: [] };
 
+  // Folders an update or uninstall could not delete last run — Windows keeps a
+  // loaded extension's native addon mapped until the process exits — are free
+  // now, before anything loads.
+  await service.purgeTrash();
+
   const root = builtinDir();
 
   // Returning quietly here is what hid the packaging bug for so long: the

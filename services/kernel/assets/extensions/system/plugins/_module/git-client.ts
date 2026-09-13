@@ -1,8 +1,12 @@
 import { mkdir, rm, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { createWriteStream, existsSync } from "node:fs";
+import { join, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pipeline } from "node:stream/promises";
+import { open as openZip, type ZipFile, type Entry as ZipEntry } from "yauzl";
 import { log } from "../../../../../src/core/logger.js";
+import { isPathInside } from "../../../../../src/core/fs-paths.js";
 import type { PluginManifest } from "./types.js";
 
 const execFileAsync = promisify(execFile);
@@ -196,6 +200,15 @@ export async function clonePlugin(
     });
   } catch (err) {
     await rm(targetDir, { recursive: true, force: true }).catch(() => {});
+    // ENOENT = the git binary itself is missing; git is not part of a stock
+    // Windows install.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        `Failed to clone ${cloneUrl}: git is not installed or not on PATH. ` +
+        "Install Git (on Windows: https://git-scm.com/download/win) and restart Kernl, " +
+        "or install the plugin from a .zip or .tar.gz file instead.",
+      );
+    }
     throw new Error(`Failed to clone ${cloneUrl}: ${err}`);
   }
 
@@ -204,6 +217,60 @@ export async function clonePlugin(
 }
 
 // ── Archive Extraction ─────────────────────────────────────
+
+/**
+ * Windows 10+ ships bsdtar as System32\tar.exe, which reads .tar and .tar.gz.
+ * Call it by path: when Git for Windows' GNU tar comes first on PATH, it reads
+ * `-f C:\...` as a remote host and fails with "Cannot connect to C:".
+ */
+function tarBinary(): string {
+  if (process.platform !== "win32") return "tar";
+  const system = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  return existsSync(system) ? system : "tar";
+}
+
+/**
+ * Extract a zip in-process. `unzip` is not on a stock Windows install (nor on
+ * many minimal Linux images), and yauzl is already a kernel dependency.
+ * Entries that would land outside targetDir are refused.
+ */
+function extractZip(archivePath: string, targetDir: string): Promise<void> {
+  return new Promise((resolveP, reject) => {
+    openZip(archivePath, { lazyEntries: true }, (openErr, zip?: ZipFile) => {
+      if (openErr || !zip) {
+        reject(openErr ?? new Error(`could not open ${archivePath}`));
+        return;
+      }
+      const fail = (err: unknown) => {
+        try { zip.close(); } catch { /* already closed */ }
+        reject(err);
+      };
+      zip.on("error", fail);
+      zip.on("end", () => resolveP());
+      zip.on("entry", (entry: ZipEntry) => {
+        const dest = join(targetDir, entry.fileName);
+        if (!isPathInside(targetDir, dest, { allowRoot: false })) {
+          fail(new Error(`zip entry escapes the target directory: ${entry.fileName}`));
+          return;
+        }
+        if (entry.fileName.endsWith("/")) {
+          mkdir(dest, { recursive: true }).then(() => zip.readEntry(), fail);
+          return;
+        }
+        zip.openReadStream(entry, (streamErr, stream) => {
+          if (streamErr || !stream) {
+            fail(streamErr ?? new Error(`could not read ${entry.fileName}`));
+            return;
+          }
+          mkdir(dirname(dest), { recursive: true })
+            .then(() => pipeline(stream, createWriteStream(dest)))
+            .then(() => zip.readEntry(), fail);
+        });
+      });
+      zip.readEntry();
+    });
+  });
+}
 
 /** Extract a .zip or .tar.gz archive into targetDir */
 export async function extractArchive(
@@ -216,15 +283,13 @@ export async function extractArchive(
 
   try {
     if (lower.endsWith(".zip")) {
-      await execFileAsync("unzip", ["-o", "-q", archivePath, "-d", targetDir], {
-        timeout: 60_000,
-      });
+      await extractZip(archivePath, targetDir);
     } else if (lower.endsWith(".tar.gz") || lower.endsWith(".tgz")) {
-      await execFileAsync("tar", ["-xzf", archivePath, "-C", targetDir, "--strip-components=1"], {
+      await execFileAsync(tarBinary(), ["-xzf", archivePath, "-C", targetDir, "--strip-components=1"], {
         timeout: 60_000,
       });
     } else if (lower.endsWith(".tar")) {
-      await execFileAsync("tar", ["-xf", archivePath, "-C", targetDir, "--strip-components=1"], {
+      await execFileAsync(tarBinary(), ["-xf", archivePath, "-C", targetDir, "--strip-components=1"], {
         timeout: 60_000,
       });
     } else {

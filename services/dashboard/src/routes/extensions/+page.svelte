@@ -4,6 +4,10 @@
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
   import SkillsHub from '$lib/components/SkillsHub.svelte';
   import { SUGGESTED_SKILL_REPOS, isSubscribed, type SuggestedRepo } from '$lib/skill-repos.js';
+  import {
+    isInstalledStatus, categoryLabel, fmtMoney, priceParts, priceBadge,
+    fmtPrice, fmtRelative, actionForCard,
+  } from '$lib/extension-cards.js';
 
   type ExtensionType =
     | 'module' | 'skill' | 'agent-bundle' | 'office' | 'flow'
@@ -559,8 +563,6 @@
     };
   }
 
-  const isInstalledStatus = (s: CardStatus): boolean =>
-    s === 'installed' || s === 'active' || s === 'disabled' || s === 'error';
 
   function matchesPrice(vm: CardVM): boolean {
     if (priceFilter === 'free') return vm.priceCents === 0;
@@ -655,11 +657,6 @@
         ])
       : gridCards.map((vm) => ({ kind: 'card' as const, key: vm.key, vm }));
 
-  /** Human label for a category slug: `compliance-os` → `Compliance os`. */
-  function categoryLabel(c: string): string {
-    const s = (c || 'uncategorised').replace(/[-_]+/g, ' ').trim();
-    return s.charAt(0).toUpperCase() + s.slice(1);
-  }
 
   /**
    * The skills shelf, cut into sections.
@@ -697,12 +694,6 @@
       }));
   })();
 
-  /** Split a formatted price into currency symbol and digits for the big numeral. */
-  function priceParts(cents: number, currency: string): { sym: string; num: string } {
-    const formatted = fmtMoney(cents, currency);
-    const m = /^([^\d]*)(.*)$/.exec(formatted);
-    return { sym: (m?.[1] ?? '').trim(), num: m?.[2] ?? formatted };
-  }
 
   /** Type counts for the type menu — only types that actually have something. */
   $: typeCounts = (() => {
@@ -722,35 +713,15 @@
   /** Counts what Discover actually shows — not the whole catalog. */
   $: discoverCount = catalogItems.filter((e) => !isInstalledStatus(e.status as CardStatus)).length;
 
-  /** What the card's primary button says and does. */
-  function actionFor(vm: CardVM): {
-    label: string;
-    disabled: boolean;
-    kind: 'buy' | 'get' | 'update' | 'manage' | 'pricing';
-  } {
-    const purchase = purchases[vm.slug];
-    if (purchase && (purchase.state === 'pending' || purchase.state === 'paid')) {
-      return {
-        label: purchase.state === 'paid' ? 'Installing…' : 'Waiting for payment…',
-        disabled: true,
-        kind: 'buy',
-      };
-    }
-    if (installing[vm.slug]) return { label: 'Installing…', disabled: true, kind: 'get' };
-    if (vm.updateAvailable) return { label: `Update to v${vm.version}`, disabled: false, kind: 'update' };
-    if (vm.status === 'for_sale') {
-      // No resolvable price — an older store, an unpublished item, or Stripe
-      // being down. Send the user to the pricing page rather than showing a Buy
-      // button that can't charge, or worse, labelling a paid item "Free".
-      if (!vm.priceId || vm.priceCents <= 0) {
-        return { label: 'See pricing', disabled: false, kind: 'pricing' };
-      }
-      return { label: `${fmtMoney(vm.priceCents, vm.currency)} · Buy`, disabled: !storeReachable, kind: 'buy' };
-    }
-    if (vm.status === 'owned') return { label: 'Install', disabled: false, kind: 'get' };
-    if (vm.status === 'available') return { label: 'Install', disabled: false, kind: 'get' };
-    return { label: 'Manage', disabled: false, kind: 'manage' };
+  /** What the card's primary button says and does; the rules live in $lib. */
+  function actionFor(vm: CardVM) {
+    return actionForCard(vm, {
+      purchase: purchases[vm.slug],
+      installing: !!installing[vm.slug],
+      storeReachable,
+    });
   }
+
 
   const PRICING_URL = 'https://lifekernl.com/pricing';
 
@@ -764,28 +735,7 @@
     void acquire(vm);
   }
 
-  /** The price chip on a card. Paid-but-unpriced must never read as "Free". */
-  function priceBadge(vm: CardVM): string {
-    if (vm.status === 'owned') return '✓ Owned';
-    if (vm.priceCents > 0) return fmtMoney(vm.priceCents, vm.currency);
-    return 'PAID';
-  }
 
-  function fmtMoney(cents: number, currency: string): string {
-    if (!cents) return 'Free';
-    const amount = cents / 100;
-    const whole = Number.isInteger(amount);
-    try {
-      return new Intl.NumberFormat(undefined, {
-        style: 'currency',
-        currency: currency || 'USD',
-        minimumFractionDigits: whole ? 0 : 2,
-        maximumFractionDigits: whole ? 0 : 2,
-      }).format(amount);
-    } catch {
-      return `${currency} ${whole ? amount.toFixed(0) : amount.toFixed(2)}`;
-    }
-  }
 
   /** Open a card: installed things get the full drawer, catalog things a preview. */
   let previewed: CardVM | null = null;
@@ -925,14 +875,6 @@
     }
   }
 
-  function fmtRelative(isoTs: string | null): string {
-    if (!isoTs) return 'never';
-    const ms = Date.now() - new Date(isoTs).getTime();
-    if (ms < 60_000) return 'just now';
-    if (ms < 3600_000) return `${Math.floor(ms / 60_000)}m ago`;
-    if (ms < 86400_000) return `${Math.floor(ms / 3600_000)}h ago`;
-    return `${Math.floor(ms / 86400_000)}d ago`;
-  }
 
   async function fetchList(): Promise<void> {
     loading = true;
@@ -1081,12 +1023,6 @@
     uploadFile = inp.files && inp.files.length ? inp.files[0] : null;
   }
 
-  function fmtPrice(m: ExtensionItem['manifest']): string {
-    if (!m?.pricing || m.pricing.model === 'free') return 'FREE';
-    const amount = (m.pricing.amount_cents / 100).toFixed(0);
-    const suffix = m.pricing.model === 'subscription' ? '/mo' : '';
-    return `${m.pricing.currency} ${amount}${suffix}`;
-  }
 
   let debounceHandle: ReturnType<typeof setTimeout> | null = null;
   function onSearchInput(): void {

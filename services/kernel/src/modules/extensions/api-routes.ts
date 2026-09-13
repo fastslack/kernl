@@ -12,6 +12,8 @@ import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
 import type { KernelHttpServer } from "../../core/http-server.js";
+import { assetsDir } from "../../core/assets-root.js";
+import { isPathInside } from "../../core/fs-paths.js";
 import type { ExtensionService } from "./service.js";
 import { BUNDLE_EXT } from "./bundle.js";
 import {
@@ -126,9 +128,11 @@ export function registerExtensionsRoutes(
         server.json(res, 400, { error: "Invalid brand name" });
         return;
       }
-      const brandDir = resolve(process.cwd(), "assets/brand-logos");
+      // assetsDir, not cwd: native packages start in the user's data dir,
+      // which has no brand-logos folder.
+      const brandDir = assetsDir("brand-logos");
       const fullPath = resolve(brandDir, raw);
-      if (!fullPath.startsWith(brandDir + "/")) {
+      if (!isPathInside(brandDir, fullPath, { allowRoot: false })) {
         server.json(res, 403, { error: "Access denied" });
         return;
       }
@@ -176,7 +180,7 @@ export function registerExtensionsRoutes(
       // Block path traversal: logo must stay inside install_path.
       const installDir = resolve(row.install_path);
       const fullPath = resolve(installDir, logo);
-      if (!fullPath.startsWith(installDir + "/") && fullPath !== installDir) {
+      if (!isPathInside(installDir, fullPath)) {
         server.json(res, 403, { error: "Invalid logo path" });
         return;
       }
@@ -251,7 +255,9 @@ export function registerExtensionsRoutes(
       const frontendDir = resolve(row.install_path, "frontend");
       const fullPath = resolve(join(frontendDir, rest));
       // Containment: the resolved path must stay inside frontend/.
-      if (!fullPath.startsWith(frontendDir + "/")) {
+      // isPathInside, not startsWith(dir + "/"): resolve() returns backslashes
+      // on Windows, so the old check 404'd every extension page there.
+      if (!isPathInside(frontendDir, fullPath, { allowRoot: false })) {
         server.json(res, 404, { error: "Not found" });
         return;
       }

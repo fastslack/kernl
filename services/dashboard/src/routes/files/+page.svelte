@@ -272,17 +272,23 @@
 </script>
 
 <script lang="ts" context="module">
+  import { hostPathSep, splitHostPath } from '$lib/host-path.js';
+
+  // Separator-aware: a native Windows kernel indexes C:\Users\… paths, which a
+  // "/" split left as one untouched, very long segment.
   function shortenPath(path: string): string {
     if (!path) return '';
-    const parts = path.split('/');
-    if (parts.length <= 4) return path;
-    return parts.slice(0, 2).join('/') + '/.../' + parts.slice(-2).join('/');
+    const { root, parts } = splitHostPath(path);
+    if (parts.length <= 3) return path;
+    const sep = hostPathSep(path);
+    return root + parts[0] + sep + '...' + sep + parts.slice(-2).join(sep);
   }
   function shortenDir(dir: string): string {
     if (!dir) return '';
-    const parts = dir.split('/');
-    if (parts.length <= 3) return dir;
-    return '.../' + parts.slice(-2).join('/');
+    const { parts } = splitHostPath(dir);
+    if (parts.length <= 2) return dir;
+    const sep = hostPathSep(dir);
+    return '...' + sep + parts.slice(-2).join(sep);
   }
 </script>
 
@@ -302,7 +308,7 @@
       </div>
       <div class="form-field grow">
         <label for="f-path">Directory Path</label>
-        <input id="f-path" type="text" bind:value={formPath} placeholder="/home/user/Documents" />
+        <input id="f-path" type="text" bind:value={formPath} placeholder="/home/user/Documents or C:\Users\you\Documents" />
       </div>
     </div>
     <div class="form-row">

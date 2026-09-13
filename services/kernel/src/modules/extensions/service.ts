@@ -6,14 +6,15 @@
  * directory per extension under config.dataPath/extensions/{slug}/).
  */
 
-import { mkdir, rename, rm, writeFile } from "node:fs/promises";
-import { cpSync } from "node:fs";
-import { join, relative, resolve, sep } from "node:path";
+import { mkdir, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { cpSync, existsSync } from "node:fs";
+import { basename, join, relative, sep } from "node:path";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { Identity } from "../../core/attestation.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { isNewer } from "../../core/semver.js";
 import { log } from "../../core/logger.js";
+import { isPathInside, renameWithRetry } from "../../core/fs-paths.js";
 import type {
   ExtensionSource,
   ExtensionStatus,
@@ -57,6 +58,29 @@ export interface ExtensionServiceOptions {
   /** RS256 bundle-signature verifier. Injected in tests; defaults to the real
    *  check against the embedded LICENSE_PUBLIC_KEY. */
   verifyBundleSig?: (sha256Hex: string, signatureB64: string) => Promise<boolean>;
+  /** Platform whose file-locking rules apply. Injected in tests. */
+  platform?: NodeJS.Platform;
+  /** Directory move used for swaps and trash. Injected in tests to simulate a
+   *  Windows lock; defaults to `renameWithRetry`. */
+  renameDir?: (from: string, to: string) => Promise<void>;
+  /** Recursive delete. Injected in tests; defaults to `rm -rf`. */
+  removeDir?: (dir: string) => Promise<void>;
+}
+
+/** Error codes Windows returns while a file in the folder is open or mapped. */
+const LOCK_CODES = new Set(["EPERM", "EBUSY", "EACCES", "ENOTEMPTY"]);
+
+function isLockError(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return !!code && LOCK_CODES.has(code);
+}
+
+/** Thrown by a second update of the same extension while the first runs. */
+export class ExtensionBusyError extends Error {
+  constructor(slug: string) {
+    super(`An install or update of ${slug} is already running — try again when it finishes.`);
+    this.name = "ExtensionBusyError";
+  }
 }
 
 export class ExtensionService {
@@ -91,6 +115,153 @@ export class ExtensionService {
 
   private verifySignature(sha256Hex: string, signatureB64: string): Promise<boolean> {
     return (this.opts.verifyBundleSig ?? verifyBundleSignature)(sha256Hex, signatureB64);
+  }
+
+  // ── Folder swaps that survive Windows locks ─────────────────────────
+
+  /** Slugs with an install or update in flight — see `withSlugLock`. */
+  private readonly busy = new Set<string>();
+
+  private get platform(): NodeJS.Platform {
+    return this.opts.platform ?? process.platform;
+  }
+
+  private moveDir(from: string, to: string): Promise<void> {
+    return this.opts.renameDir
+      ? this.opts.renameDir(from, to)
+      : renameWithRetry(from, to, { platform: this.platform });
+  }
+
+  private deleteDir(dir: string): Promise<void> {
+    return this.opts.removeDir
+      ? this.opts.removeDir(dir)
+      : rm(dir, { recursive: true, force: true });
+  }
+
+  /**
+   * Run `fn` holding the slug's lock. The store cron, the store's update
+   * button and kernel_extensions_update all end here; two of them swapping the
+   * same folder at once is how a backup gets restored over a finished update.
+   */
+  private async withSlugLock<T>(slug: string, fn: () => Promise<T>): Promise<T> {
+    if (this.busy.has(slug)) throw new ExtensionBusyError(slug);
+    this.busy.add(slug);
+    try {
+      return await fn();
+    } finally {
+      this.busy.delete(slug);
+    }
+  }
+
+  /** `<extensionsDir>/.trash` — folders that could not be deleted in place. */
+  private get trashDir(): string {
+    return join(this.opts.extensionsDir, ".trash");
+  }
+
+  /**
+   * Move `from` to `to`. Windows will not rename a folder while a file in it
+   * is open or mapped, so on a lock the module holding it is shut down and the
+   * move tried once more. Returns false when it still cannot move — win32 only;
+   * POSIX has no such lock, so a failure there is a real error and throws.
+   */
+  private async tryMoveDir(from: string, to: string, slug: string): Promise<boolean> {
+    try {
+      await this.moveDir(from, to);
+      return true;
+    } catch (err) {
+      if (this.platform !== "win32" || !isLockError(err)) throw err;
+    }
+    await this.opts.installerDeps.moduleRegistry?.unregisterModule(`ext:${slug}`).catch(() => false);
+    try {
+      await this.moveDir(from, to);
+      return true;
+    } catch (err) {
+      if (!isLockError(err)) throw err;
+      log.warn(`Extension ${slug}: ${from} is held by a running process — installing beside it`);
+      return false;
+    }
+  }
+
+  /**
+   * A folder for a new copy of `slug` that nothing else uses — for when the
+   * usual `<extensionsDir>/<slug>` is still held by the process.
+   */
+  private sideDir(slug: string, version: string): string {
+    const safeVersion = version.replace(/[^A-Za-z0-9._-]/g, "_");
+    return join(this.opts.extensionsDir, `${slug}@${safeVersion}-${newId().slice(0, 8)}`);
+  }
+
+  /**
+   * Delete a folder the extension no longer uses. When Windows refuses — a
+   * native addon stays mapped until the process exits — move it into the
+   * trash, or failing even that record it, so the next boot's purgeTrash()
+   * finishes the job. Never throws: whatever it follows already succeeded.
+   */
+  private async discardDir(dir: string): Promise<void> {
+    try {
+      await this.deleteDir(dir);
+      if (!existsSync(dir)) return;
+    } catch (err) {
+      log.warn(`Extensions: could not delete ${dir} now — ${err instanceof Error ? err.message : err}`);
+    }
+    try {
+      await mkdir(this.trashDir, { recursive: true });
+      await this.moveDir(dir, join(this.trashDir, `${basename(dir)}-${newId()}`));
+      return;
+    } catch { /* still held — record it below */ }
+    try {
+      const pending = await this.readPending();
+      if (!pending.includes(dir)) pending.push(dir);
+      await this.writePending(pending);
+      log.warn(`Extensions: ${dir} is still in use — it will be removed on the next start`);
+    } catch (err) {
+      log.warn(`Extensions: could not schedule removal of ${dir} — ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  private async readPending(): Promise<string[]> {
+    try {
+      const parsed: unknown = JSON.parse(await readFile(join(this.trashDir, "pending.json"), "utf-8"));
+      return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === "string") : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async writePending(list: string[]): Promise<void> {
+    await mkdir(this.trashDir, { recursive: true });
+    await writeFile(join(this.trashDir, "pending.json"), JSON.stringify(list, null, 2), "utf-8");
+  }
+
+  /**
+   * Delete what discardDir() had to leave behind. Runs at boot, before any
+   * extension loads, so nothing holds those folders any more. Only folders
+   * inside the extensions dir that no installed row points at are touched.
+   */
+  async purgeTrash(): Promise<void> {
+    if (!existsSync(this.trashDir)) return;
+    let entries: string[] = [];
+    try {
+      entries = await readdir(this.trashDir);
+    } catch {
+      return;
+    }
+    for (const name of entries) {
+      if (name === "pending.json") continue;
+      await this.deleteDir(join(this.trashDir, name)).catch(() => {});
+    }
+    const inUse = new Set(this.list().map((r) => r.install_path));
+    const stillPending: string[] = [];
+    for (const dir of await this.readPending()) {
+      if (!isPathInside(this.opts.extensionsDir, dir, { allowRoot: false }) || inUse.has(dir)) continue;
+      try {
+        await this.deleteDir(dir);
+        if (existsSync(dir)) stillPending.push(dir);
+      } catch {
+        stillPending.push(dir);
+      }
+    }
+    await this.writePending(stillPending).catch(() => {});
   }
 
   // ── Reads ───────────────────────────────────────────────────────────
@@ -147,7 +318,15 @@ export class ExtensionService {
     opts?: { remoteWatermark?: RemoteWatermark | null },
   ): Promise<InstalledExtension> {
     const preview = await peekManifest(bundlePath);
+    return this.withSlugLock(preview.slug, () => this.applyInstall(bundlePath, source, preview, opts));
+  }
 
+  private async applyInstall(
+    bundlePath: string,
+    source: ExtensionSource,
+    preview: ExtensionManifest,
+    opts?: { remoteWatermark?: RemoteWatermark | null },
+  ): Promise<InstalledExtension> {
     const existing = this.get(preview.id) ?? this.getBySlug(preview.slug);
     if (existing) {
       throw new Error(
@@ -156,8 +335,22 @@ export class ExtensionService {
       );
     }
 
-    const installPath = join(this.opts.extensionsDir, preview.slug);
+    let installPath = join(this.opts.extensionsDir, preview.slug);
     await mkdir(this.opts.extensionsDir, { recursive: true });
+
+    // A folder with this name and no row is what an uninstall leaves when
+    // Windows would not let go of it. Extracting over it would mix two
+    // versions' files, so it is moved out of the way — or, still held, the
+    // install goes beside it.
+    if (existsSync(installPath)) {
+      const aside = join(this.trashDir, `${preview.slug}-${newId()}`);
+      await mkdir(this.trashDir, { recursive: true });
+      if (await this.tryMoveDir(installPath, aside, preview.slug)) {
+        await this.discardDir(aside);
+      } else {
+        installPath = this.sideDir(preview.slug, preview.version);
+      }
+    }
 
     const unpacked = await unpackBundle(bundlePath, installPath, true);
     const { manifest } = unpacked;
@@ -211,15 +404,25 @@ export class ExtensionService {
   }
 
   /**
-   * Upgrade an already-installed extension in place from a newer .kernl
-   * bundle. Mirrors installFromBundle's peek → auth → apply → receipt flow,
-   * but operates on an EXISTING row/dir instead of creating a new one, and
-   * preserves user state (settings, id, installed_at) across the swap.
+   * Upgrade an already-installed extension from a newer .kernl bundle.
+   * Mirrors installFromBundle's peek → auth → apply → receipt flow, but
+   * operates on an EXISTING row instead of creating a new one, and preserves
+   * user state (settings, id, installed_at) across the swap.
    *
-   * Safety: the current install dir is moved aside to a `.bak-<uuid>` sibling
-   * before anything is touched. If unpack, authenticity, dispatchInstall, or
-   * the receipt step throws, the backup is restored (files + DB row) and the
-   * original error re-thrown — the extension is left exactly as it was.
+   * Where the new copy goes:
+   *   · a copy in the writable extensions dir is swapped in place — moved
+   *     aside to a `.bak-<uuid>` sibling first;
+   *   · a built-in extension still pointing at the shipped bundle (Program
+   *     Files, /opt, inside a signed .app) is never written into: the update
+   *     lands in `<extensionsDir>/<slug>` and the row follows it;
+   *   · on Windows, a folder the running process will not release is left
+   *     alone — the update installs beside it and the old folder is discarded
+   *     (at the next start, at the latest).
+   *
+   * If unpack, authenticity, dispatchInstall or the receipt step throws, the
+   * backup is restored (files + DB row, install_path included) and the error
+   * re-thrown. Only one install/update per slug runs at a time; a second
+   * caller gets ExtensionBusyError instead of racing the first.
    */
   async update(
     bundlePath: string,
@@ -228,6 +431,22 @@ export class ExtensionService {
   ): Promise<{ extension: InstalledExtension; from: string; to: string }> {
     const preview = await peekManifest(bundlePath);
 
+    const found = this.get(preview.id) ?? this.getBySlug(preview.slug);
+    if (!found) {
+      throw new Error(`Extension not installed: ${preview.slug}. Use install instead.`);
+    }
+
+    return this.withSlugLock(found.slug, () => this.applyUpdate(bundlePath, source, preview, opts));
+  }
+
+  private async applyUpdate(
+    bundlePath: string,
+    source: ExtensionSource,
+    preview: ExtensionManifest,
+    opts?: { force?: boolean; remoteWatermark?: RemoteWatermark | null },
+  ): Promise<{ extension: InstalledExtension; from: string; to: string }> {
+    // Re-read under the lock: an update that finished while this one waited
+    // for its bundle has already moved the row on.
     const existing = this.get(preview.id) ?? this.getBySlug(preview.slug);
     if (!existing) {
       throw new Error(`Extension not installed: ${preview.slug}. Use install instead.`);
@@ -248,13 +467,34 @@ export class ExtensionService {
       );
     }
 
-    const backupDir = `${existing.install_path}.bak-${newId()}`;
     const prevRow: InstalledExtension = { ...existing };
+    const slugDir = join(this.opts.extensionsDir, existing.slug);
+    const inDataDir = isPathInside(this.opts.extensionsDir, existing.install_path, { allowRoot: false });
 
-    await rename(existing.install_path, backupDir);
+    // In the data dir the live copy is what gets replaced. A built-in still
+    // pointing at the shipped bundle is never written into — that copy is
+    // read-only and the boot re-seed owns it — so the update goes to the
+    // slug's data-dir folder, where only a stale leftover could be in the way.
+    let targetDir = inDataDir ? existing.install_path : slugDir;
+    await mkdir(this.opts.extensionsDir, { recursive: true });
+
+    let backupDir: string | null = null; // where the previous copy was moved to
+    let restoreTo: string | null = null; // where it goes back on rollback
+    let heldDir: string | null = null; // a folder Windows would not release
+
+    if (existsSync(targetDir)) {
+      const aside = `${targetDir}.bak-${newId()}`;
+      if (await this.tryMoveDir(targetDir, aside, existing.slug)) {
+        backupDir = aside;
+        restoreTo = targetDir;
+      } else {
+        heldDir = targetDir;
+        targetDir = this.sideDir(existing.slug, preview.version);
+      }
+    }
 
     try {
-      const unpacked = await unpackBundle(bundlePath, existing.install_path, true);
+      const unpacked = await unpackBundle(bundlePath, targetDir, true);
       const { manifest } = unpacked;
 
       const auth = await checkBundleAuthenticity(
@@ -266,7 +506,7 @@ export class ExtensionService {
         throw new Error(`Refusing to update ${manifest.slug}: ${auth.reason}`);
       }
 
-      await dispatchInstall(manifest, existing.install_path, this.opts.installerDeps);
+      await dispatchInstall(manifest, targetDir, this.opts.installerDeps);
 
       const now = isoNow();
       const updatedRow: InstalledExtension = {
@@ -275,12 +515,13 @@ export class ExtensionService {
         name: manifest.name,
         manifest_json: JSON.stringify(manifest),
         type: manifest.type,
+        install_path: targetDir,
         updated_at: now,
       };
       this.db
         .prepare(
           `UPDATE installed_extensions
-              SET version = ?, name = ?, manifest_json = ?, type = ?, updated_at = ?
+              SET version = ?, name = ?, manifest_json = ?, type = ?, install_path = ?, updated_at = ?
             WHERE id = ?`,
         )
         .run(
@@ -288,22 +529,33 @@ export class ExtensionService {
           updatedRow.name,
           updatedRow.manifest_json,
           updatedRow.type,
+          updatedRow.install_path,
           updatedRow.updated_at,
           updatedRow.id,
         );
 
       await this.finalizeReceipt(updatedRow, source, opts?.remoteWatermark ?? null);
 
-      await rm(backupDir, { recursive: true, force: true }).catch(() => {});
+      if (backupDir) await this.discardDir(backupDir);
+      if (heldDir) await this.discardDir(heldDir);
 
       return { extension: updatedRow, from: prevRow.version, to: manifest.version };
     } catch (err) {
-      await rm(existing.install_path, { recursive: true, force: true }).catch(() => {});
-      await rename(backupDir, existing.install_path).catch(() => {});
+      await this.deleteDir(targetDir).catch(() => {});
+      if (backupDir && restoreTo) {
+        const from = backupDir;
+        const to = restoreTo;
+        await this.moveDir(from, to).catch((restoreErr) => {
+          log.error(
+            `Extension ${existing.slug}: update failed AND the previous copy could not be restored ` +
+              `from ${from} to ${to} — ${restoreErr instanceof Error ? restoreErr.message : restoreErr}`,
+          );
+        });
+      }
       this.db
         .prepare(
           `UPDATE installed_extensions
-              SET version = ?, name = ?, manifest_json = ?, type = ?, updated_at = ?
+              SET version = ?, name = ?, manifest_json = ?, type = ?, install_path = ?, updated_at = ?
             WHERE id = ?`,
         )
         .run(
@@ -311,6 +563,7 @@ export class ExtensionService {
           prevRow.name,
           prevRow.manifest_json,
           prevRow.type,
+          prevRow.install_path,
           prevRow.updated_at,
           prevRow.id,
         );
@@ -462,12 +715,21 @@ export class ExtensionService {
     const { readManifest } = await import("./bundle.js");
     const manifest = await readManifest(sourceDir);
     const newManifestJson = JSON.stringify(manifest);
+    // isPathInside, not a string prefix: on Windows the two sides can differ
+    // in separator or drive-letter case and still be the same folder.
     const materialized =
       !!row.install_path &&
-      resolve(row.install_path).startsWith(resolve(this.opts.extensionsDir));
+      isPathInside(this.opts.extensionsDir, row.install_path, { allowRoot: false });
     const nextPath = materialized ? row.install_path : sourceDir;
 
-    if (materialized && manifest.version !== row.version) {
+    // A materialized copy NEWER than what the kernel ships is an update applied
+    // from the store. Refreshing it from the bundle would quietly put the old
+    // version back on every boot, so the bundle only wins when it is newer.
+    if (materialized && isNewer(row.version, manifest.version)) {
+      return false;
+    }
+
+    if (materialized && isNewer(manifest.version, row.version)) {
       try {
         cpSync(sourceDir, nextPath, {
           recursive: true,
@@ -651,16 +913,26 @@ export class ExtensionService {
       }
     }
 
-    // Best-effort type-specific teardown, then hard delete of dir + row.
-    try {
-      await dispatchUninstall(manifest, row.install_path, this.opts.installerDeps);
-    } catch (err) {
-      log.warn(`Uninstall hook failed for ${row.slug}: ${err}`);
-    }
+    await this.withSlugLock(row.slug, async () => {
+      // Best-effort type-specific teardown, then delete of dir + row.
+      try {
+        await dispatchUninstall(manifest, row.install_path, this.opts.installerDeps);
+      } catch (err) {
+        log.warn(`Uninstall hook failed for ${row.slug}: ${err}`);
+      }
 
-    await rm(row.install_path, { recursive: true, force: true }).catch(() => {});
-    this.db.prepare("DELETE FROM installed_extensions WHERE id = ?").run(id);
-    log.info(`Extension uninstalled: ${row.slug}`);
+      // Only a copy in the data dir is the extension's own to delete. A
+      // built-in still pointing at the shipped bundle lives in the app's
+      // read-only folder (Program Files, /opt, the .app, /app/assets in
+      // Docker) — deleting that would strip files out of the installation.
+      // What Windows will not release is removed at the next start instead of
+      // being left for a reinstall to extract over.
+      if (row.install_path && isPathInside(this.opts.extensionsDir, row.install_path, { allowRoot: false })) {
+        await this.discardDir(row.install_path);
+      }
+      this.db.prepare("DELETE FROM installed_extensions WHERE id = ?").run(id);
+      log.info(`Extension uninstalled: ${row.slug}`);
+    });
   }
 
   /**

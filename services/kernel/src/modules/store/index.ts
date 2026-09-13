@@ -159,10 +159,10 @@ function buildTools(
                 `(${result.agents.join(", ")}). Open the dashboard to see the team.`,
             );
           }
-          return textResult(
-            `✅ Installed **${result.installed.slug}** from the store. ` +
-              "Reload the kernel to activate it (`kernel_extensions_activate` or a restart).",
-          );
+          const next = result.installed.status === "active"
+            ? "It loads the next time Kernl starts (Settings → About → Restart Kernl)."
+            : "Activate it with `kernel_extensions_activate`; it loads the next time Kernl starts (Settings → About → Restart Kernl).";
+          return textResult(`✅ Installed **${result.installed.slug}** from the store. ${next}`);
         } catch (e) {
           // The store's own messages are precise (401 no/expired license, 403
           // not entitled, 404 unknown/not-published) — surface them verbatim.

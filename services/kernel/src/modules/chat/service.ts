@@ -7,6 +7,7 @@ import type { KernelConfig, KernelLanguage } from "../../core/config.js";
 import type { ToolDefinition, ToolResult } from "../../core/types.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
+import { assetsRoot } from "../../core/assets-root.js";
 import {
   promptChatSoulFallback,
   promptChatIdentity,
@@ -62,7 +63,9 @@ import { formatBudgetWarning } from "../../core/llm/tool-loop.js";
 let _soulCache: string | null = null;
 function loadSoulPrompt(lang: KernelLanguage): string {
   if (_soulCache !== null) return _soulCache;
-  const soulPath = resolvePath(process.cwd(), "assets", "SOUL.md");
+  // assetsRoot, not cwd: native packages start in the user's data dir, where
+  // SOUL.md never is.
+  const soulPath = resolvePath(assetsRoot(), "assets", "SOUL.md");
   if (existsSync(soulPath)) {
     try {
       // SOUL.md is language-agnostic: it already instructs the assistant to

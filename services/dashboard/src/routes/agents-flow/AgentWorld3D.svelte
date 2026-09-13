@@ -5,10 +5,7 @@
   import PerfOverlay from './PerfOverlay.svelte';
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall, rpc } from '$lib/ws.js';
-  import { getCommDetail, rpcPost } from '$lib/api.js';
-  import { sanitizeHtml } from '$lib/sanitize.js';
-  import { highlightCode, detectLang } from '$lib/workspace-highlight.js';
-  import { renderMarkdown } from '$lib/workspace-md.js';
+  import { escapeHtml } from '$lib/sanitize.js';
   import {
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
@@ -40,6 +37,16 @@
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import OfficeCreatorChat from '$lib/components/OfficeCreatorChat.svelte';
   import NewOfficeModal from './NewOfficeModal.svelte';
+  import RegisterRepoModal from './RegisterRepoModal.svelte';
+  import AutoMeetingModal from './AutoMeetingModal.svelte';
+  import EmailModal from './EmailModal.svelte';
+  import DraftModal from './DraftModal.svelte';
+  import MeetingHistoryPanel from './MeetingHistoryPanel.svelte';
+  import MgmtLogPanel from './MgmtLogPanel.svelte';
+  import WorkspaceTab from './WorkspaceTab.svelte';
+  import ChatTab from './ChatTab.svelte';
+  import HistoryTab from './HistoryTab.svelte';
+  import LiveTab from './LiveTab.svelte';
   import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
@@ -53,6 +60,19 @@
   import { goto } from '$app/navigation';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
+  import { fmtRelTime, fmtTokens, triggerColor } from '$lib/display-format.js';
+  import { formatInline, formatRunOutput } from '$lib/run-format.js';
+  import { isWorkspacePathHidden } from '$lib/workspace-tree.js';
+  import {
+    meetingRoomDoorPoint, getMeetingSeatPositions, pickFreeChair,
+    sameOffice as sameOfficeOf, type SeatedWalker,
+  } from '$lib/office-geometry.js';
+  import {
+    hexToNum, toolGlyph, escapeBannerText, firstUrlIn, urlForOption,
+    buildFixerGoal, safeParse,
+    resolveAgentWorkspace, dependsOnGoogleAuth,
+    parseMeetingTopics,
+  } from '$lib/agent-helpers.js';
 
   // Tabs contribuidos por extensiones (declarados en su manifest, expuestos por
   // /api/manifest). They are filtered by the selected office/agent and the
@@ -98,7 +118,7 @@
     id: string; source_agent_id: string; target_agent_id: string;
     label: string; active: number;
   }> = [];
-  export let flows: Array<{ id: string; name: string; color: string; active: number }> = [];
+  export let flows: Array<{ id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string }> = [];
   export let ranks: Array<{
     id: string; name: string; level: number;
     insignia: string; color: string; description: string; active: number;
@@ -445,11 +465,6 @@
     });
   }
 
-  /** Parse a CSS hex color (`#rrggbb`) to a THREE-friendly numeric hex. */
-  function hexToNum(css: string, fallback = 0xffffff): number {
-    const n = parseInt((css || '').replace('#', ''), 16);
-    return Number.isFinite(n) ? n : fallback;
-  }
 
   /** (#F3) Fly a glowing data packet from desk A to desk B: a curved arrow +
    *  coin stream along the arc, then a converging ripple + monitor pulse at B.
@@ -496,25 +511,6 @@
     });
   }
 
-  /** Map a kernel tool name to a glyph for the floating-tool-icon animation. */
-  function toolGlyph(name: string): string {
-    if (!name) return '🔧';
-    const n = name.toLowerCase();
-    if (n.includes('email') || n.includes('mail')) return '📧';
-    if (n.includes('workspace')) return '💻';
-    if (n.includes('files') || n.includes('fs_')) return '📁';
-    if (n.includes('web')) return '🌐';
-    if (n.includes('calendar') || n.includes('events')) return '📅';
-    if (n.includes('tasks')) return '✅';
-    if (n.includes('chat') || n.includes('comms')) return '💬';
-    if (n.includes('code')) return '⌨️';
-    if (n.includes('trad')) return '📈';
-    if (n.includes('vault')) return '🔐';
-    if (n.includes('graph') || n.includes('memory')) return '🧠';
-    if (n.includes('research') || n.includes('search')) return '🔍';
-    if (n.includes('agent')) return '🤝';
-    return '🔧';
-  }
 
   /** Diff agents' active flag against the cached map; spawn a LEAVE walker
    *  when 1→0 and an ARRIVE walker when 0→1. The first observation just primes
@@ -764,23 +760,6 @@
       pendingQuestions = (data.questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
   }
-  /** Pull the first http(s) URL out of a free-text context. Used as a
-   *  fallback for older questions whose options don't yet carry `url`. */
-  function firstUrlIn(text: string | undefined | null): string | null {
-    if (!text) return null;
-    const m = text.match(/https?:\/\/[^\s)\]>"']+/i);
-    return m ? m[0] : null;
-  }
-  /** Resolve the URL an option should open: explicit `url` wins; otherwise,
-   *  if the option's label hints at opening a link ("open"), fall
-   *  back to the first URL found in the question's context. */
-  function urlForOption(q: PendingQuestion, opt: { label: string; value?: string; url?: string }): string | null {
-    if (opt.url && /^https?:\/\//i.test(opt.url)) return opt.url;
-    const labelMentionsLink = /(open|view|visit|go to)/i.test(opt.label);
-    const valueMentionsLink = opt.value === 'open' || opt.value === 'view' || opt.value === 'visit';
-    if (labelMentionsLink || valueMentionsLink) return firstUrlIn(q.context);
-    return null;
-  }
   async function answerQuestion(q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) {
     if (questionSubmitting[q.id]) return;
     // Open the linked URL FIRST (synchronously, inside the user's click event)
@@ -888,25 +867,6 @@
     return fixerCandidates[0] ?? null;
   })();
 
-  function buildFixerGoal(report: OfficeReport, body: string): string {
-    return [
-      `An agent run reported an issue that needs diagnosis + a fix.`,
-      ``,
-      `Source agent: ${report.agentName} (${report.agentId})`,
-      `Run ID:       ${report.runId ?? '(unknown)'}`,
-      `Status:       ${report.status}`,
-      `When:         ${new Date(report.ts).toISOString()}`,
-      ``,
-      `--- BEGIN REPORT BODY ---`,
-      body,
-      `--- END REPORT BODY ---`,
-      ``,
-      `Please:`,
-      `  1. Diagnose the root cause from the report body above.`,
-      `  2. If it's a code/config/infra issue you can fix, fix it. Otherwise route to the right agent (post_to_colleague) with a clear ask.`,
-      `  3. Reply with: ROOT_CAUSE, ACTION_TAKEN (or DELEGATED_TO + agent), and STATUS (fixed / in_progress / blocked).`,
-    ].join('\n');
-  }
 
   async function sendReportToFixer(): Promise<void> {
     if (!openReport || sendingToFixer) return;
@@ -1051,14 +1011,6 @@
     // we do NOT auto-open the panel, otherwise the user's "off" choice gets
     // overridden whenever a new manager event arrives. The unread count on
     // the View toggle (badge) signals the new activity instead.
-  }
-  function mgmtKindIcon(k: MgmtEntry['kind']): string {
-    return k === 'edit' ? '📝' : k === 'directive' ? '📤' : '📨';
-  }
-  function mgmtKindColor(k: MgmtEntry['kind'], cross?: boolean): string {
-    if (k === 'edit') return '#c67fe8';
-    if (k === 'directive') return '#f0883e';
-    return cross ? '#5b8def' : '#3dd6c8';
   }
 
   let liveMeetings: Record<string, LiveMeeting> = {};
@@ -1378,145 +1330,10 @@
   // office — click navigates to the DevOps control panel (/devops).
   let devopsTerminalHitbox: any = null;
 
-  // ── Register-repo modal state ────────────────────────────────
-  // Opened by clicking a FREE rack OR by the floating "+" button in the HQ
-  // overlay. Submits via rpcOrCall('repos.register', …) → backend extension.
-  let showRegisterRepoModal = false;
-  let registerRepoName = '';
-  let registerRepoPath = '';
-  let registerRepoDesc = '';
-  let registerRepoTags = '';
-  let registerRepoBusy = false;
-  let registerRepoError = '';
-  /** Which field the error belongs to, so it can sit under that field. */
-  let registerRepoErrorField: 'name' | 'path' | '' = '';
-  let registerRepoShared = true;
-  let registerRepoAgents: string[] = [];
-  // Checkouts the kernel can actually reach. The path used to be a free-text
-  // box validated inside the container, so a real path on the operator's
-  // machine failed with "does not exist" — true of the container, false of
-  // them. Offering what it can see removes the guess.
-  let repoCandidates: Array<{ path: string; name: string; registered: boolean }> = [];
-  let repoRoots: string[] = [];
-  let repoCandidatesLoading = false;
-  let repoManualPath = false;
-  let registerRepoDialog: HTMLDivElement | null = null;
-  let registerRepoTrigger: HTMLElement | null = null;
-  // Does ANY flow look like a Repos Office? Drives visibility of the floating
-  // button so the entry-point only appears when the office actually exists.
-
-  /** POST to repos.register via the RPC bus (mtw-request) with a REST
-   *  fallback to /api/mtw. On success we refetch repos + force a scene
-   *  rebuild so the new rack lights up immediately. */
-  async function submitRegisterRepo(): Promise<void> {
-    const name = registerRepoName.trim();
-    const path = registerRepoPath.trim();
-    if (!name) { registerRepoError = 'Name is required'; return; }
-    if (!path || !path.startsWith('/')) { registerRepoError = 'Absolute path is required (must start with /)'; return; }
-    registerRepoBusy = true;
-    registerRepoError = '';
-    try {
-      // Auto-registered RpcActions are reachable over the WS bus *and* at
-      // POST /api/rpc/<action>; `rpcPost` takes whichever is up. The comment
-      // that used to sit here claimed no HTTP route existed, which is how this
-      // form ended up unusable whenever the bridge was down.
-      const args: Record<string, unknown> = { name, path, shared: registerRepoShared };
-      const desc = registerRepoDesc.trim(); if (desc) args.description = desc;
-      const tags = registerRepoTags.trim(); if (tags) args.tags = tags;
-      if (!registerRepoShared) args.agents = registerRepoAgents;
-      await rpcPost('repos.register', args);
-      // Success → refresh + rebuild so the rack flips from FREE to OCCUPIED.
-      await fetchReposBookmarks();
-      rebuildScene();
-      closeRegisterRepoModal();
-      registerRepoDone = `Registered ${name}.`;
-      setTimeout(() => (registerRepoDone = ''), 4000);
-    } catch (e: any) {
-      const msg = e?.message ?? String(e);
-      registerRepoError = msg;
-      // Park the message under the field it is about. The server answers with
-      // prose, so match on what it actually says rather than inventing codes.
-      registerRepoErrorField = /name/i.test(msg) && !/path/i.test(msg) ? 'name' : 'path';
-    } finally {
-      registerRepoBusy = false;
-    }
-  }
-
-  /** Success toast for the register flow — the modal used to just vanish. */
-  let registerRepoDone = '';
-
-  async function loadRepoCandidates(): Promise<void> {
-    repoCandidatesLoading = true;
-    try {
-      const res: any = await rpcPost('repos.candidates', {});
-      repoCandidates = res?.candidates ?? [];
-      repoRoots = res?.roots ?? [];
-      // Nothing to offer means the picker would be an empty box pretending to
-      // be a choice; fall back to typing, with the roots named in the hint.
-      if (repoCandidates.filter((c) => !c.registered).length === 0) repoManualPath = true;
-    } catch {
-      repoManualPath = true;
-    } finally {
-      repoCandidatesLoading = false;
-    }
-  }
-
-  function onRepoAgentsInput(e: Event): void {
-    const el = e.currentTarget as HTMLInputElement;
-    registerRepoAgents = el.value.split(',').map((v) => v.trim()).filter(Boolean);
-  }
-
-  function pickCandidate(c: { path: string; name: string }): void {
-    registerRepoPath = c.path;
-    // Only prefill the name while it is untouched or still matches the last
-    // pick — never clobber something the operator typed.
-    if (!registerRepoName.trim() || repoCandidates.some((x) => x.name === registerRepoName)) {
-      registerRepoName = c.name;
-    }
-    registerRepoError = '';
-    registerRepoErrorField = '';
-  }
-
-  function closeRegisterRepoModal(): void {
-    showRegisterRepoModal = false;
-    // Focus goes back where it came from, or it lands on <body> and the next
-    // Tab restarts from the top of the document.
-    registerRepoTrigger?.focus?.();
-    registerRepoTrigger = null;
-  }
-
-  /** Tab must not escape an open dialog. */
-  function trapRepoModalKeys(e: KeyboardEvent): void {
-    if (e.key === 'Escape') { e.stopPropagation(); closeRegisterRepoModal(); return; }
-    if (e.key !== 'Tab' || !registerRepoDialog) return;
-    const focusable = registerRepoDialog.querySelectorAll<HTMLElement>(
-      'button:not([disabled]), input:not([disabled]), select, textarea, [href], [tabindex]:not([tabindex="-1"])',
-    );
-    if (focusable.length === 0) return;
-    const first = focusable[0];
-    const last = focusable[focusable.length - 1];
-    if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
-    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
-  }
-
-  function openRegisterRepoModal(): void {
-    registerRepoTrigger = (typeof document !== 'undefined' ? document.activeElement : null) as HTMLElement | null;
-    registerRepoError = '';
-    registerRepoErrorField = '';
-    registerRepoName = '';
-    registerRepoPath = '';
-    registerRepoDesc = '';
-    registerRepoTags = '';
-    registerRepoShared = true;
-    registerRepoAgents = [];
-    repoManualPath = false;
-    repoCandidates = [];
-    showRegisterRepoModal = true;
-    void loadRepoCandidates();
-    // Focus the dialog so Escape works before the first click. The handler
-    // lives on the dialog, and keydown only reaches it from inside.
-    void tick().then(() => registerRepoDialog?.focus());
-  }
+  // The register-repo modal owns its own state, form, focus trap and
+  // styles. The world keeps only the handle, so a click on a FREE rack
+  // can open it.
+  let registerRepoModal: RegisterRepoModal | null = null;
 
   function buildThemedOffices(target: any) {
     freeRepoRackHitboxes = [];
@@ -2144,10 +1961,6 @@
     meetingDecor.delete(meetingId);
   }
 
-  function escapeBannerText(s: string): string {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
 
   // ── HQ menu (hidden dropdown) ───────────────────
   let hqMenuOpen = false;
@@ -2925,7 +2738,7 @@
         // through the shared opener rather than flipping the flag and clearing
         // fields by hand: doing it by hand skipped loading the checkouts the
         // kernel can see, the focus handoff, and every field added since.
-        openRegisterRepoModal();
+        registerRepoModal?.open();
         return;
       }
       if (hoveredMeetingRoomIdx >= 0) {
@@ -5215,11 +5028,6 @@
   let worldRefreshTimer: ReturnType<typeof setTimeout>;
 
   // Parse helpers tolerant of JSON string columns
-  function safeParse(raw: unknown): any {
-    if (raw == null) return null;
-    if (typeof raw === 'object') return raw;
-    try { return JSON.parse(String(raw)); } catch { return null; }
-  }
 
   // Clipboard — shows a brief "copied" flash on the triggering button
   let copiedKey: string | null = null;
@@ -5231,38 +5039,6 @@
     } catch {
       copiedKey = key + ':err';
       setTimeout(() => { copiedKey = null; }, 1200);
-    }
-  }
-
-  function fmtRelTime(iso?: string): string {
-    if (!iso) return '—';
-    const t = new Date(iso).getTime();
-    if (isNaN(t)) return iso;
-    const d = Date.now() - t;
-    if (d < 0) {
-      const f = -d;
-      if (f < 60_000) return `in ${Math.round(f / 1000)}s`;
-      if (f < 3_600_000) return `in ${Math.round(f / 60_000)}m`;
-      return `in ${Math.round(f / 3_600_000)}h`;
-    }
-    if (d < 60_000) return `${Math.round(d / 1000)}s ago`;
-    if (d < 3_600_000) return `${Math.round(d / 60_000)}m ago`;
-    if (d < 86_400_000) return `${Math.round(d / 3_600_000)}h ago`;
-    return `${Math.round(d / 86_400_000)}d ago`;
-  }
-
-  function fmtTokens(n?: number): string {
-    if (!n || n < 1000) return String(n ?? 0);
-    return (n / 1000).toFixed(1) + 'k';
-  }
-
-  function triggerColor(t: string): string {
-    switch (t) {
-      case 'manual': return '#a78bfa';
-      case 'chain': return '#3dd6c8';
-      case 'schedule': return '#fbbf24';
-      case 'event': return '#f472b6';
-      default: return '#8a8fa8';
     }
   }
 
@@ -5397,150 +5173,24 @@
   let workspaceLoading = false;
   let workspacePreviewUrl: string | null = null;
 
-  // Filter out lockfiles / bun cache dirs / OS junk from the workspace tree.
-  const WS_HIDDEN_BASENAMES = new Set([
-    'bun.lockb', 'bun.lock',
-    'package-lock.json', 'yarn.lock', 'pnpm-lock.yaml',
-    '.DS_Store', 'Thumbs.db',
-  ]);
-  function isWorkspacePathHidden(path: string): boolean {
-    const base = path.split('/').pop() ?? path;
-    if (WS_HIDDEN_BASENAMES.has(base)) return true;
-    if (/\.(bun[a-z0-9-]*|lockb?|tsbuildinfo)$/i.test(base)) return true;
-    if (path.split('/').some(seg => seg === '.bun' || seg.startsWith('.bun-'))) return true;
-    return false;
-  }
   $: visibleWorkspaceFiles = workspaceFiles.filter(f => !isWorkspacePathHidden(f.path));
 
   // ── Workspace tree ─────────────────────────────────────────────────
-  // The API returns a flat list (full paths). Build a collapsible tree:
-  // dirs derived both from explicit 'dir' entries and from file parents,
-  // flattened into rows (depth-aware) so no recursive component is needed.
-  type WsTreeRow = { path: string; name: string; depth: number; isDir: boolean; size: number; fileCount: number };
+  // Row building moved to WorkspaceTab.svelte with the markup. Only the
+  // collapse set stays, because loadWorkspaceFiles() resets it on reload.
   let wsCollapsed: Set<string> = new Set();
-  function toggleWsDir(path: string): void {
-    if (wsCollapsed.has(path)) wsCollapsed.delete(path); else wsCollapsed.add(path);
-    wsCollapsed = wsCollapsed;
-  }
-  function buildWsRows(files: Array<{ path: string; type: string; size: number }>, collapsed: Set<string>): WsTreeRow[] {
-    const dirs = new Set<string>();
-    const leafFiles: Array<{ path: string; size: number }> = [];
-    for (const f of files) {
-      if (f.type === 'dir') { dirs.add(f.path); continue; }
-      leafFiles.push({ path: f.path, size: f.size });
-      const segs = f.path.split('/');
-      for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'));
-    }
-    const children = new Map<string, { dirs: string[]; files: Array<{ path: string; size: number }> }>();
-    const bucket = (k: string) => {
-      let c = children.get(k);
-      if (!c) { c = { dirs: [], files: [] }; children.set(k, c); }
-      return c;
-    };
-    for (const d of dirs) {
-      const parent = d.includes('/') ? d.slice(0, d.lastIndexOf('/')) : '';
-      bucket(parent).dirs.push(d);
-      // also register implied ancestors of explicit dir entries
-      const segs = d.split('/');
-      for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'));
-    }
-    for (const f of leafFiles) {
-      const parent = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/')) : '';
-      bucket(parent).files.push(f);
-    }
-    const countCache = new Map<string, number>();
-    const countFiles = (dir: string): number => {
-      const hit = countCache.get(dir);
-      if (hit !== undefined) return hit;
-      const c = children.get(dir);
-      let n = c ? c.files.length : 0;
-      if (c) for (const d of c.dirs) n += countFiles(d);
-      countCache.set(dir, n);
-      return n;
-    };
-    const rows: WsTreeRow[] = [];
-    const walk = (dir: string, depth: number): void => {
-      const c = children.get(dir);
-      if (!c) return;
-      for (const d of [...new Set(c.dirs)].sort()) {
-        rows.push({ path: d, name: d.split('/').pop() ?? d, depth, isDir: true, size: 0, fileCount: countFiles(d) });
-        if (!collapsed.has(d)) walk(d, depth + 1);
-      }
-      for (const f of [...c.files].sort((a, b) => a.path.localeCompare(b.path))) {
-        rows.push({ path: f.path, name: f.path.split('/').pop() ?? f.path, depth, isDir: false, size: f.size, fileCount: 0 });
-      }
-    };
-    walk('', 0);
-    return rows;
-  }
-  $: wsRows = buildWsRows(visibleWorkspaceFiles, wsCollapsed);
-  $: wsAllDirs = [...new Set(buildWsRows(visibleWorkspaceFiles, new Set()).filter(r => r.isDir).map(r => r.path))];
-  $: wsFileCount = visibleWorkspaceFiles.filter(f => f.type !== 'dir').length;
 
-  const WS_ICONS: Record<string, string> = {
-    ts: '🔷', tsx: '🔷', js: '🟨', jsx: '🟨', mjs: '🟨', cjs: '🟨',
-    json: '📋', css: '🎨', scss: '🎨', svelte: '🧩', vue: '🧩',
-    html: '🌐', md: '📝', txt: '📄', log: '📄', pdf: '📕',
-    png: '🖼️', jpg: '🖼️', jpeg: '🖼️', gif: '🖼️', webp: '🖼️', svg: '🖼️', ico: '🖼️',
-    sh: '⚙️', bash: '⚙️', zsh: '⚙️', py: '🐍', rs: '🦀', go: '🐹',
-    sql: '🗄️', db: '🗄️', sqlite: '🗄️',
-    yml: '🔧', yaml: '🔧', toml: '🔧', ini: '🔧', conf: '🔧', env: '🔧',
-    zip: '📦', tar: '📦', gz: '📦', lock: '🔒',
-  };
-  function wsFileIcon(name: string): string {
-    if (name.startsWith('.')) return '🔧';
-    const ext = name.includes('.') ? (name.split('.').pop() ?? '').toLowerCase() : '';
-    return WS_ICONS[ext] ?? '📄';
-  }
-  function wsFmtSize(n: number): string {
-    if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
-    if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
-    return `${n} B`;
-  }
   let runsLoading = false;
   let memoryLoading = false;
   let expandedRunId: string | null = null;
   let runSteps: Array<{ step_number: number; type: string; content: string; tool_name: string; tool_output?: string; is_event?: boolean }> = [];
 
   // ── Sent-email viewer ──────────────────────────────────────────────
-  // When an activity row is an email-send tool result, show a "Ver email" link
-  // that opens this modal with the real sent message (from / to / subject / body).
-  const EMAIL_TOOLS = new Set(['kernel_email_send', 'kernel_comms_reply', 'kernel_comms_send']);
-  const EMAIL_UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-  let emailModalOpen = false;
-  let emailModalLoading = false;
-  let emailModalError: string | null = null;
-  let emailModalData: any = null;
+  // An email-send activity row shows a "Ver email" link; it calls open()
+  // on EmailModal.svelte, which fetches and renders the real sent message.
+  // Only the handle stays here — the link sits next to its own row.
+  let emailModal: EmailModal | null = null;
 
-  /** Returns the communication id for an email-send tool row, or null. `raw` is
-   *  the tool output/preview text (live: e.data.content_preview; history: step.tool_output). */
-  function emailCommId(toolName: string | undefined, raw: string | undefined): string | null {
-    if (!toolName || !EMAIL_TOOLS.has(toolName) || !raw) return null;
-    try {
-      const o = JSON.parse(raw);
-      const id = o?.id ?? o?.comm_id ?? o?.thread_id;
-      if (id) return String(id);
-    } catch { /* not JSON — fall through to UUID scan */ }
-    const m = String(raw).match(EMAIL_UUID_RE);
-    return m ? m[0] : null;
-  }
-
-  async function openEmailModal(commId: string): Promise<void> {
-    emailModalOpen = true;
-    emailModalLoading = true;
-    emailModalError = null;
-    emailModalData = null;
-    try {
-      const d: any = await getCommDetail(commId);
-      if (!d || d.error) throw new Error(d?.error || 'No se encontró el email');
-      emailModalData = d;
-    } catch (err: any) {
-      emailModalError = err?.message ? String(err.message) : String(err);
-    } finally {
-      emailModalLoading = false;
-    }
-  }
-  function closeEmailModal(): void { emailModalOpen = false; emailModalData = null; emailModalError = null; }
   // Track loading + error separately from `runSteps`. Without these, an empty
   // result (e.g. a meeting event, or a run that errored before producing any
   // steps) leaves the UI stuck on "Loading steps…" forever because
@@ -5603,49 +5253,14 @@
     if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
   }
 
-  /**
-   * Resolve which workspace to list for an agent. Mirrors the logic in
-   * `claude-code-executor.resolveCwd`:
-   *   1. variables.__workspace__ — workspace registrado bajo data/workspaces/
-   *   2. fallback `agent-<id>` — el cwd default que crea el executor
-   *
-   * `__cwd_path__` (an absolute path outside data/workspaces) cannot be
-   * navigated via the workspaces endpoint; reported as such, with no ws id.
-   */
-  function resolveAgentWorkspace(agent: any): { wsId: string | null; cwdPath: string | null; cwdLabel: string; cwdHint: string } {
-    const vars = safeParse(agent?.variables) || {};
-    if (typeof vars.__cwd_path__ === 'string' && vars.__cwd_path__.startsWith('/')) {
-      return {
-        wsId: null,
-        cwdPath: vars.__cwd_path__,
-        cwdLabel: vars.__cwd_path__,
-        cwdHint: 'external repo (mounted RW) — files listed below',
-      };
-    }
-    if (typeof vars.__workspace__ === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(vars.__workspace__)) {
-      return {
-        wsId: vars.__workspace__,
-        cwdPath: null,
-        cwdLabel: `data/workspaces/${vars.__workspace__}`,
-        cwdHint: 'workspace registrado',
-      };
-    }
-    const fallback = `agent-${agent.id}`;
-    return {
-      wsId: fallback,
-      cwdPath: null,
-      cwdLabel: `data/workspaces/${fallback}`,
-      cwdHint: 'workspace default por agent id',
-    };
-  }
 
-  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData) : null;
+  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData, flows) : null;
 
   async function loadWorkspaceFiles() {
     if (!selectedAgent || workspaceLoading) return;
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent);
+    const info = resolveAgentWorkspace(agent, flows);
     workspaceLoading = true;
     workspaceFileContent = null;
     workspacePreviewUrl = null;
@@ -5671,7 +5286,7 @@
   async function loadWorkspaceFile(path: string) {
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent);
+    const info = resolveAgentWorkspace(agent, flows);
     try {
       const url = info.cwdPath
         ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`
@@ -5792,10 +5407,6 @@
   // graph-enrich) speak to Google APIs. Surface a permanent inline Re-login
   // button in their description so the user can fix expired auth proactively —
   // without waiting for the next failed run to surface the LAST RESULT button.
-  function dependsOnGoogleAuth(a: any): boolean {
-    const h = a?.builtin_handler;
-    return typeof h === 'string' && h.startsWith('gsync:');
-  }
 
   // ── RunFailureCard wiring (Task 10) ─────────────────────
   // The card only renders and dispatches a `kind`; it does not know how to
@@ -5870,7 +5481,6 @@
   $: liveCurrentRunEvents = liveRunId
     ? liveEvents.filter(e => e.data.run_id === liveRunId)
     : liveEvents;
-  $: liveHeadEvent = liveCurrentRunEvents[0] ?? null;
 
   // Auto-switch to LIVE tab when an agent starts working (but don't hijack if user navigated)
   let lastRunningFor: string | null = null;
@@ -5880,731 +5490,13 @@
   }
   $: if (!liveIsRunning) lastRunningFor = null;
 
-  function liveStepIcon(type: string): string {
-    switch (type) {
-      case 'tool_call': return '🔧';
-      case 'tool_result': return '📥';
-      case 'thought': return '💭';
-      case 'final': return '✨';
-      case 'rate_limit_wait': return '⏳';
-      case 'error': return '⚠️';
-      case 'auto_eval_started': return '📝';
-      case 'auto_eval': return '📝';
-      case 'learning_created': return '💡';
-      case 'learning_deactivated': return '🗑️';
-      case 'chain_triggered': return '🔗';
-      case 'run_started': return '▶';
-      case 'run_completed': return '✅';
-      default: return '•';
-    }
-  }
-  function liveStepLabel(type: string): string {
-    switch (type) {
-      case 'tool_call': return 'calling tool';
-      case 'tool_result': return 'tool result';
-      case 'thought': return 'thinking';
-      case 'final': return 'finalizing';
-      case 'rate_limit_wait': return 'rate limited';
-      case 'error': return 'error';
-      case 'auto_eval_started': return 'self-grading';
-      case 'auto_eval': return 'self-eval';
-      case 'learning_created': return 'lesson learned';
-      case 'learning_deactivated': return 'lesson dropped';
-      case 'chain_triggered': return 'handoff';
-      case 'run_started': return 'run started';
-      case 'run_completed': return 'run completed';
-      default: return type || 'step';
-    }
-  }
-  function liveEventSummary(e: AgentFlowEvent): string {
-    const t = e.event.split(':').pop() ?? '';
-    if (t === 'run_started') {
-      const goalTxt = String(e.data.goal ?? '').trim();
-      const isBuiltin = Boolean(e.data.builtin);
-      if (isBuiltin) {
-        return goalTxt
-          ? `Builtin run — ${goalTxt}`
-          : 'Builtin run (native code, no prompt)';
-      }
-      return goalTxt
-        ? `Started — goal: ${goalTxt}`
-        : 'Started — scheduled run';
-    }
-    if (t === 'run_completed') {
-      const st = String(e.data.status ?? 'completed');
-      return st === 'completed' ? 'Run completed successfully' : `Run ${st}`;
-    }
-    if (t === 'chain_triggered') return `Handoff → ${String(e.data.target_agent_name ?? 'next agent')}`;
-    if (t === 'auto_eval_started') return 'Self-grading…';
-    if (t === 'auto_eval') {
-      const score = Number(e.data.score ?? 0);
-      return `Self-graded ${score}/5 — ${String(e.data.outcome ?? '')}`;
-    }
-    if (t === 'learning_created') return `Lesson learned: ${String(e.data.content ?? '')}`;
-    if (t === 'step') {
-      const st = String(e.data.type ?? '');
-      const preview = String(e.data.content_preview ?? '');
-      // Server already truncates previews (tool_result=2000, tool_call input=800,
-      // thought/final=200). Show the full preview — truncating again here only
-      // hides useful context in the LIVE tab. Full text is in HISTORY.
-      if (st === 'tool_call') {
-        // Preview is a JSON.stringify of the tool input. Server caps it at
-        // 800 chars — for tools with bulky inputs (e.g. Write with the full
-        // markdown body of a lead dossier) the cut lands mid-string and
-        // JSON.parse throws. Same forward-rule as tool_result: ALWAYS wrap
-        // in a json code fence (so markdown can't mangle it), pretty-print
-        // when it parses, mark truncated otherwise.
-        const toolName = String(e.data.tool_name ?? 'tool');
-        let body = preview;
-        let truncated = false;
-        try { body = JSON.stringify(JSON.parse(preview), null, 2); }
-        catch {
-          truncated = true;
-          // Best-effort: at least undo basic JSON escapes so the raw text
-          // has real newlines and quotes instead of literal `\n` / `\"`.
-          body = preview.replace(/\\n/g, '\n').replace(/\\"/g, '"');
-        }
-        const tag = truncated ? '\n... (truncated — full payload in HISTORY tab)' : '';
-        return sanitizePreview('```json\n' + toolName + '(\n' + body + tag + '\n)\n```', preview.length, 800);
-      }
-      if (st === 'tool_result') {
-        // Tool results come in two flavours: JSON/structured payloads and
-        // prose (meeting messages, agent chat, LLM answers).
-        //
-        // Server caps preview at 2000 chars — for big JSON payloads (e.g.
-        // kernel_crm_leads with 5+ leads), the cut lands MID-STRING. The
-        // old heuristic required matching brackets at both ends and fell
-        // through to the prose path on truncation — markdown then chewed
-        // the broken JSON into unreadable garbage with stray asterisks +
-        // backslashes (the bug visible in /tmp/clipboard-1778297598.png).
-        //
-        // New rule: any preview that *starts* with `{` or `[` is JSON.
-        // Wrap in a `json` code fence regardless of truncation so markdown
-        // can't touch it. Pretty-print only when the payload parses cleanly;
-        // otherwise show raw + a truncation marker.
-        const trimmed = preview.trim();
-        const startsWithOpen = trimmed.startsWith('{') || trimmed.startsWith('[');
-        if (startsWithOpen) {
-          const closesCleanly =
-            (trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-            (trimmed.startsWith('[') && trimmed.endsWith(']'));
-          let body = preview;
-          let truncated = !closesCleanly;
-          if (closesCleanly) {
-            try { body = JSON.stringify(JSON.parse(trimmed), null, 2); }
-            catch { truncated = true; /* malformed even though brackets match */ }
-          }
-          const tag = truncated ? '\n... (truncated — full payload in HISTORY tab)' : '';
-          return sanitizePreview('```json\n' + body + tag + '\n```', preview.length, 2000);
-        }
-        // Prose — let formatRunOutput render markdown normally.
-        return sanitizePreview(preview, preview.length, 2000);
-      }
-      if (st === 'thought') return sanitizePreview(preview, preview.length, 200);
-      if (st === 'final') return sanitizePreview(preview, preview.length, 200);
-      if (st === 'rate_limit_wait') return String(e.data.content_preview ?? 'waiting…');
-      return preview || st;
-    }
-    return t;
-  }
-  function liveEventType(e: AgentFlowEvent): string {
-    const t = e.event.split(':').pop() ?? '';
-    if (t === 'step') return String(e.data.type ?? 'step');
-    return t;
-  }
-
-  // ── Tool action summarizer ──────────────────────────────────────────
-  // Turns raw tool payloads into one-line, human-friendly summaries so the
-  // LIVE timeline reads like a story instead of a JSON dump. Falls back to
-  // the tool name when the input shape is unfamiliar (extension tools, new
-  // MCP servers, etc.) — better to look generic than to wrap wrong.
-  type ToolCategory =
-    | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
-    | 'error' | 'meta' | 'tool';
-  function toolCategory(toolName: string): ToolCategory {
-    if (!toolName) return 'tool';
-    if (toolName === 'Bash') return 'shell';
-    if (['Read', 'Write', 'Edit', 'NotebookEdit', 'Glob', 'Grep', 'LS'].includes(toolName)) return 'fs';
-    if (toolName === 'WebFetch' || toolName === 'WebSearch') return 'web';
-    if (toolName.startsWith('kernel_')) return 'kernel';
-    if (toolName.startsWith('mcp__')) return 'mcp';
-    if (toolName === 'Task' || toolName === 'TodoWrite' || toolName === 'TaskCreate' || toolName === 'TaskUpdate') return 'meta';
-    return 'tool';
-  }
-  function ellipsize(s: string, n: number): string {
-    if (!s) return '';
-    const t = s.replace(/\s+/g, ' ').trim();
-    return t.length > n ? t.slice(0, n - 1) + '…' : t;
-  }
-  function tryParseJson(raw: string): unknown {
-    if (!raw) return null;
-    try { return JSON.parse(raw); } catch { /* */ }
-    // Some previews arrive double-escaped (JSON string of JSON). Try one peel.
-    try {
-      const inner = JSON.parse(raw);
-      if (typeof inner === 'string') {
-        try { return JSON.parse(inner); } catch { return inner; }
-      }
-    } catch { /* */ }
-    return null;
-  }
-  function basenameOf(p: string): string {
-    if (!p) return '';
-    const norm = p.replace(/\\/g, '/');
-    const idx = norm.lastIndexOf('/');
-    return idx >= 0 ? norm.slice(idx + 1) : norm;
-  }
-  /**
-   * Summarize a tool_call. Returns the line shown front-and-center in the
-   * timeline ("Listing kernel agent tools", "Reading /src/index.ts:42", …).
-   * Falls back to the raw tool name when the payload shape is unknown so
-   * the user always sees *something* meaningful instead of `{}`.
-   */
-  function summarizeToolCall(toolName: string, inputPreview: string): string {
-    const args = tryParseJson(inputPreview) as Record<string, unknown> | null;
-    if (!toolName) return 'calling tool';
-    if (!args || typeof args !== 'object') return toolName;
-    switch (toolName) {
-      case 'Bash': {
-        const desc = typeof args.description === 'string' ? args.description : '';
-        const cmd = typeof args.command === 'string' ? args.command : '';
-        if (desc) return desc;
-        return cmd ? `$ ${ellipsize(cmd, 96)}` : 'shell command';
-      }
-      case 'Read': {
-        const p = String(args.file_path ?? '');
-        const off = args.offset, lim = args.limit;
-        const range = off != null || lim != null
-          ? ` · L${off ?? 1}${lim != null ? '–' + (Number(off ?? 0) + Number(lim)) : '+'}`
-          : '';
-        return p ? `Read ${basenameOf(p)}${range}` : 'Read file';
-      }
-      case 'Write': {
-        const p = String(args.file_path ?? '');
-        return p ? `Write ${basenameOf(p)}` : 'Write file';
-      }
-      case 'Edit': {
-        const p = String(args.file_path ?? '');
-        const all = args.replace_all ? ' (replace all)' : '';
-        return p ? `Edit ${basenameOf(p)}${all}` : 'Edit file';
-      }
-      case 'NotebookEdit': {
-        const p = String(args.notebook_path ?? '');
-        return p ? `Edit notebook ${basenameOf(p)}` : 'Edit notebook';
-      }
-      case 'Glob': {
-        const pat = String(args.pattern ?? '');
-        const dir = String(args.path ?? '');
-        return pat ? `Find files matching ${ellipsize(pat, 60)}${dir ? ' in ' + basenameOf(dir) : ''}` : 'Glob';
-      }
-      case 'Grep': {
-        const pat = String(args.pattern ?? '');
-        const where = String(args.path ?? '');
-        return pat ? `Search ${ellipsize(pat, 56)}${where ? ' in ' + basenameOf(where) : ''}` : 'Grep';
-      }
-      case 'LS': {
-        const p = String(args.path ?? '');
-        return p ? `List ${basenameOf(p)}` : 'List directory';
-      }
-      case 'WebFetch': {
-        const u = String(args.url ?? '');
-        return u ? `Fetch ${ellipsize(u, 84)}` : 'Fetch URL';
-      }
-      case 'WebSearch': {
-        const q = String(args.query ?? '');
-        return q ? `Search the web for ${ellipsize(q, 70)}` : 'Web search';
-      }
-      case 'Task': {
-        const desc = String(args.description ?? args.subagent_type ?? '');
-        return desc ? `Spawn subagent · ${ellipsize(desc, 60)}` : 'Spawn subagent';
-      }
-      case 'TodoWrite': return `Update task list (${Array.isArray(args.todos) ? (args.todos as unknown[]).length : '?'} items)`;
-      case 'TaskCreate': return `Create task · ${ellipsize(String(args.subject ?? ''), 60)}`;
-      case 'TaskUpdate': return `Update task · ${ellipsize(String(args.taskId ?? ''), 24)} → ${String(args.status ?? '')}`;
-      default: {
-        // Generic kernel_* / mcp__* / unknown tool: pretty-print 1-2 string
-        // args (skip nested objects to keep the line tight).
-        const entries = Object.entries(args).filter(([, v]) => typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean');
-        if (entries.length === 0) return toolName;
-        const head = entries.slice(0, 2)
-          .map(([k, v]) => `${k}=${ellipsize(String(v), 40)}`)
-          .join(' · ');
-        return `${toolName} · ${head}`;
-      }
-    }
-  }
-  /**
-   * Summarize a tool_result. The preview the server sends is whatever the
-   * tool returned (often JSON). We aim for a one-line "N rows" / "M lines"
-   * / "ok" callout so the timeline reads vertically; the full payload is
-   * still available via the expand chevron.
-   */
-  function summarizeToolResult(toolName: string, preview: string): string {
-    if (!preview) return 'no output';
-    const trimmed = preview.trim();
-    // JSON envelope from MCP — `{ content: [{ type:"text", text:"..." }], isError }`
-    const parsed = tryParseJson(trimmed);
-    if (parsed && typeof parsed === 'object' && Array.isArray((parsed as Record<string, unknown>).content)) {
-      const arr = ((parsed as Record<string, unknown>).content as unknown[]);
-      const texts: string[] = [];
-      for (const it of arr) {
-        if (it && typeof it === 'object' && (it as Record<string, unknown>).type === 'text') {
-          texts.push(String((it as Record<string, unknown>).text ?? ''));
-        }
-      }
-      const joined = texts.join('\n').trim();
-      if (joined) return summarizeText(toolName, joined);
-    }
-    if (parsed && Array.isArray(parsed)) {
-      return `${(parsed as unknown[]).length} items`;
-    }
-    if (parsed && typeof parsed === 'object') {
-      const obj = parsed as Record<string, unknown>;
-      if (typeof obj.error === 'string') return `error · ${ellipsize(obj.error, 70)}`;
-      const keys = Object.keys(obj);
-      // Single-key wrappers — show the key as a hint.
-      if (keys.length === 1) return `${keys[0]} (object)`;
-      return `${keys.length} fields · ${ellipsize(keys.slice(0, 4).join(', '), 60)}`;
-    }
-    return summarizeText(toolName, trimmed);
-  }
-  function summarizeText(toolName: string, txt: string): string {
-    const lines = txt.split('\n').filter(l => l.length > 0);
-    if (lines.length === 0) return 'empty output';
-    if (lines.length === 1) return ellipsize(lines[0], 100);
-    // Heuristics by tool:
-    //   - Grep: lines like "file:line:text" — count matches
-    //   - LS / Glob: list of paths
-    //   - Bash: line count + first line preview
-    if (toolName === 'Grep' && lines.every(l => /:/.test(l))) {
-      return `${lines.length} matches · ${ellipsize(lines[0], 80)}`;
-    }
-    if ((toolName === 'Glob' || toolName === 'LS') && lines.every(l => !l.includes(' ') || l.startsWith('/'))) {
-      return `${lines.length} paths`;
-    }
-    return `${lines.length} lines · ${ellipsize(lines[0], 80)}`;
-  }
-  /**
-   * Per-step summary for the LIVE timeline. Always returns a non-empty
-   * string — falls back to the existing liveEventSummary() prose when the
-   * step isn't a tool call/result (thoughts, finals, run events, etc.).
-   */
-  function liveStepSummary(e: AgentFlowEvent): string {
-    const etype = liveEventType(e);
-    const preview = String(e.data.content_preview ?? '');
-    const toolName = String(e.data.tool_name ?? '');
-    if (etype === 'tool_call') return summarizeToolCall(toolName, preview);
-    if (etype === 'tool_result') return summarizeToolResult(toolName, preview);
-    if (etype === 'thought') return ellipsize(preview, 140) || 'thinking…';
-    if (etype === 'final') return ellipsize(preview, 140) || 'finalizing…';
-    if (etype === 'rate_limit_wait') return ellipsize(preview, 140) || 'rate-limit cooldown';
-    if (etype === 'error') return ellipsize(preview, 140) || 'error';
-    // Run lifecycle + meta — defer to the existing prose helper.
-    return liveEventSummary(e);
-  }
-  /** Category hint used to color-code the step row. */
-  function liveStepCategory(e: AgentFlowEvent): ToolCategory {
-    const etype = liveEventType(e);
-    if (etype === 'thought') return 'think';
-    if (etype === 'final') return 'final';
-    if (etype === 'error' || etype === 'rate_limit_wait') return 'error';
-    if (etype === 'tool_call' || etype === 'tool_result') {
-      return toolCategory(String(e.data.tool_name ?? ''));
-    }
-    return 'meta';
-  }
-  // Set of step keys (`${ts}-${idx}`) that the user has expanded — controls
-  // whether the detail panel renders below the summary line. Defaults to
-  // collapsed for everything so the timeline stays scannable.
-  let expandedLiveSteps = new Set<string>();
-  function toggleLiveStep(key: string): void {
-    if (expandedLiveSteps.has(key)) expandedLiveSteps.delete(key);
-    else expandedLiveSteps.add(key);
-    // Trigger Svelte reactivity (Set mutation isn't tracked otherwise).
-    expandedLiveSteps = new Set(expandedLiveSteps);
-  }
-
-  // ── Meta chips: Δt + token usage ────────────────────────────────────
-  /** Compact duration for the LIVE chips. Same shape as the trigger
-   *  cooldowns' formatter (now TriggeringSection's) but returns '' (not '—')
-   *  on zero so we can use `{#if str}` for conditional rendering. */
-  function liveFmtDelta(ms: number): string {
-    if (!Number.isFinite(ms) || ms < 0) return '';
-    if (ms < 1000) return `${Math.round(ms)}ms`;
-    if (ms < 10_000) return `${(ms / 1000).toFixed(1)}s`;
-    const s = Math.round(ms / 1000);
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60), ss = s % 60;
-    return ss === 0 ? `${m}m` : `${m}m${String(ss).padStart(2, '0')}s`;
-  }
-  /** Token formatter for LIVE chips. Empty string on zero (same reason
-   *  as above — the existing fmtTokens returns '0'). Adds M for runs
-   *  that go past a million tokens. */
-  function liveFmtTokens(n: number): string {
-    if (!Number.isFinite(n) || n <= 0) return '';
-    if (n < 1000) return String(Math.round(n));
-    if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-    return `${(n / 1_000_000).toFixed(1)}M`;
-  }
-  /** Δt between this event and the previous event in temporal order.
-   *  Returns ms or null when this is the oldest event in the buffer. */
-  function liveStepDeltaMs(i: number): number | null {
-    // liveCurrentRunEvents is newest-first → previous event in time = i+1
-    const e = liveCurrentRunEvents[i];
-    const prev = liveCurrentRunEvents[i + 1];
-    if (!e || !prev) return null;
-    const a = Date.parse(e.ts), b = Date.parse(prev.ts);
-    if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
-    const d = a - b;
-    return d >= 0 ? d : null;
-  }
-  /** Sum of (numeric) tokens reported on this step. Backend emits tokens
-   *  only on thought/final today; tool_call/tool_result carry only the
-   *  cumulative `tokens_total` so the chip can stay visible. */
-  function liveStepTokens(e: AgentFlowEvent): number {
-    const n = Number((e.data as Record<string, unknown>).tokens);
-    return Number.isFinite(n) && n > 0 ? n : 0;
-  }
-  /** Cumulative tokens up to and including this step, as reported by the
-   *  backend. Falls back to scanning later (older) events for the last
-   *  known total when this event doesn't carry one. */
-  function liveStepTokensTotal(i: number): number {
-    for (let j = i; j < liveCurrentRunEvents.length; j++) {
-      const v = Number((liveCurrentRunEvents[j].data as Record<string, unknown>).tokens_total);
-      if (Number.isFinite(v) && v > 0) return v;
-    }
-    return 0;
-  }
-  /** Total wall-clock elapsed for the current run — from the first event
-   *  we've seen up to (and including) the most recent one. */
-  $: liveRunElapsedMs = (() => {
-    if (liveCurrentRunEvents.length < 2) return 0;
-    const newest = Date.parse(liveCurrentRunEvents[0].ts);
-    const oldest = Date.parse(liveCurrentRunEvents[liveCurrentRunEvents.length - 1].ts);
-    if (!Number.isFinite(newest) || !Number.isFinite(oldest)) return 0;
-    const d = newest - oldest;
-    return d > 0 ? d : 0;
-  })();
-  $: liveRunTokensTotal = (() => {
-    for (const e of liveCurrentRunEvents) {
-      const v = Number((e.data as Record<string, unknown>).tokens_total);
-      if (Number.isFinite(v) && v > 0) return v;
-    }
-    return 0;
-  })();
-
-  function fmtClock(ts: string | undefined): string {
-    if (!ts) return '';
-    try {
-      const d = new Date(ts);
-      return d.toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
-    } catch { return ''; }
-  }
-
-  /** Clean up a backend preview that was sliced mid-string. Drops trailing
-   * half-open markdown markers (stray `**`, trailing `#`, open `` ` ``), then
-   * — if the preview actually hit the server cap — appends a sentinel that
-   * formatRunOutput renders as a styled callout (not markdown, because
-   * underscores/asterisks in payload IDs leak as literal chars). */
-  const TRUNC_MARK = '\u0002TRUNCATED_HINT\u0002';
-  // Agent step previews sometimes arrive as JSON-encoded strings (i.e. the
-  // server stored the LLM's reply via JSON.stringify, so newlines are `\n`
-  // and quotes are `\"` when displayed verbatim). Detect that shape and
-  // unwrap it so markdown formatting actually works. Safe no-op on content
-  // that wasn't encoded.
-  function unescapeJsonish(s: string): string {
-    if (!s) return s;
-    const trimmed = s.trim();
-    // Case 1: whole value is a quoted JSON string — unwrap it.
-    if (trimmed.length >= 2 && trimmed.startsWith('"') && trimmed.endsWith('"')) {
-      try {
-        const parsed = JSON.parse(trimmed);
-        if (typeof parsed === 'string') return parsed;
-      } catch { /* fall through to inline */ }
-    }
-    // Case 2: literal escape sequences embedded in prose.
-    if (/\\n|\\"|\\t|\\\\/.test(s)) {
-      return s
-        .replace(/\\r\\n/g, '\n')
-        .replace(/\\n/g, '\n')
-        .replace(/\\r/g, '\r')
-        .replace(/\\t/g, '  ')
-        .replace(/\\"/g, '"')
-        .replace(/\\'/g, "'")
-        .replace(/\\\\/g, '\\');
-    }
-    return s;
-  }
-
-  function sanitizePreview(text: string, rawLen: number, serverCap: number): string {
-    let t = unescapeJsonish(String(text)).replace(/\s+$/, '');
-    // strip trailing lone markdown markers that would render as raw asterisks
-    t = t.replace(/(\*{1,3}|_{1,3})$/g, '');
-    // Strip a stray trailing backtick ONLY if it isn't part of a ``` fence.
-    // tool_call / tool_result previews wrap their payload in ```json … ```;
-    // chopping a backtick off the closing fence breaks the markdown regex in
-    // formatRunOutput and the fence renders as literal text.
-    t = t.replace(/(?<!`)`$/g, '');
-    t = t.replace(/\n\s*-\s*\**$/g, '');
-    t = t.replace(/\n\s*#{1,6}\s*$/g, '');
-    if (rawLen >= serverCap) t += '\n\n' + TRUNC_MARK;
-    return t;
-  }
-
-  // ── Markdown-ish formatter + UUID detection ────
-  const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-  function escapeHtml(s: string): string {
-    return s.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' } as Record<string, string>)[c]);
-  }
-  function linkifyUuids(html: string): string {
-    return html.replace(UUID_RE, (m) => `<button type="button" class="ip-uuid-link" data-comm-id="${m}" title="Open ${m}">${m.slice(0, 8)}…</button>`);
-  }
-  /**
-   * Inline markdown for a single-line list item.
-   *
-   * Decisions and action items were printed raw, so the `**bold**` the
-   * moderator writes showed up as literal asterisks in the summary — the one
-   * part of the meeting a reader actually skims. They can't go through
-   * formatRunOutput: that is a block renderer and would nest a <p> (and
-   * possibly a whole <ul>) inside each <li>. This does the inline subset and
-   * nothing else.
-   *
-   * It also drops a leading bullet marker. `extractBullets` strips one only
-   * when the line starts with it, so a NESTED item ("  - **Wren:** …") kept
-   * its dash and rendered as "- **Wren:** …" — visible in the summary as a
-   * stray hyphen before half the action items.
-   */
-  function formatInline(text: string | undefined | null): string {
-    if (!text) return '';
-    let t = String(text).trim().replace(/^[-*•]\s+/, '').trim();
-    t = escapeHtml(t);
-    t = t.replace(/`([^`]+)`/g, '<code>$1</code>');
-    t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-    t = t.replace(/(^|[\s(])_([^_]+)_(?=[\s.,;:)]|$)/g, '$1<em>$2</em>');
-    return t;
-  }
-
-  function formatRunOutput(text: string | undefined | null): string {
-    if (!text) return '';
-
-    // ── JSON envelope unwrapping ───────────────────
-    // The Claude Code SDK and several builtin handlers return a JSON envelope
-    // like { most_recent_output: { content: "...markdown..." } } or
-    // { content: "...", metadata: {...} }. Treating the whole envelope as
-    // markdown destroys it: the `{` and `"key":` lines turn into <p>s, and
-    // the `**bold**` markers inside the content string fight with the JSON
-    // braces. Detect that shape and extract the human-facing payload before
-    // running the regular markdown pass.
-    const trimmed = String(text).trim();
-    if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
-      try {
-        const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        // MCP shape: { content: [{ type: "text", text: "..." }, …], isError?: bool }.
-        // Concatenate every text part and recurse — the agent's prose lives there.
-        if (Array.isArray(parsed.content)) {
-          const parts: string[] = [];
-          for (const item of parsed.content as unknown[]) {
-            if (item && typeof item === "object" && (item as Record<string, unknown>).type === "text") {
-              parts.push(String((item as Record<string, unknown>).text ?? ""));
-            }
-          }
-          if (parts.length > 0) {
-            const flag = parsed.isError ? "⚠ tool error\n\n" : "";
-            return formatRunOutput(flag + parts.join("\n\n"));
-          }
-        }
-        const mro = parsed.most_recent_output as Record<string, unknown> | undefined;
-        const candidate =
-          (typeof mro?.content === "string" && mro.content) ||
-          (typeof parsed.content === "string" && parsed.content as string) ||
-          (typeof parsed.result === "string" && parsed.result as string) ||
-          (typeof parsed.summary === "string" && parsed.summary as string) ||
-          "";
-        if (candidate) {
-          // Recurse — the extracted string IS the markdown the agent wrote.
-          // Append the structured envelope at the bottom inside a collapsed
-          // <details> so power users can still inspect it.
-          const pretty = JSON.stringify(parsed, null, 2);
-          return formatRunOutput(candidate) +
-            '<details class="md-envelope"><summary>raw JSON envelope</summary>' +
-            `<pre class="md-codeblock">${escapeHtml(pretty)}</pre></details>`;
-        }
-        // It's JSON but doesn't have a known content field — render the
-        // pretty-printed JSON as a single code block instead of as markdown.
-        return `<pre class="md-codeblock">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
-      } catch {
-        // Not actually valid JSON — fall through to the markdown pass.
-      }
-    }
-
-    // Protect triple-backtick fenced blocks from every markdown rule below.
-    // Without this, JSON content that contains ## / ** / etc. gets mangled
-    // (e.g. `## Context` inside a tool input becomes an <h3>).
-    const fenceStash: string[] = [];
-    const source = String(text).replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_m, body) => {
-      const idx = fenceStash.length;
-      fenceStash.push(escapeHtml(String(body)));
-      return `\u0000CODEBLOCK${idx}\u0000`;
-    });
-    let html = escapeHtml(source);
-    // headers
-    html = html.replace(/^#{4,6}\s+(.+)$/gm, '<h5 class="md-h">$1</h5>');
-    html = html.replace(/^###\s+(.+)$/gm, '<h4 class="md-h">$1</h4>');
-    html = html.replace(/^##\s+(.+)$/gm, '<h3 class="md-h">$1</h3>');
-    html = html.replace(/^#\s+(.+)$/gm, '<h3 class="md-h">$1</h3>');
-    // bold then italic (careful order)
-    html = html.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-    html = html.replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-    // inline code
-    html = html.replace(/`([^`\n]+)`/g, '<code class="md-code">$1</code>');
-    // links [text](url) — reject anything that isn't http(s)/mailto, otherwise
-    // an agent that ingested external content could output `[x](javascript:...)`
-    // and pop XSS in this dashboard.
-    html = html.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, text: string, url: string) => {
-      let href: string | null = null;
-      try {
-        const u = new URL(url, window.location.href);
-        if (u.protocol === 'http:' || u.protocol === 'https:' || u.protocol === 'mailto:') {
-          href = u.toString();
-        }
-      } catch { href = null; }
-      if (!href) return escapeHtml(text);
-      return `<a href="${escapeHtml(href)}" target="_blank" rel="noopener noreferrer">${text}</a>`;
-    });
-    // lists + paragraphs
-    const lines = html.split('\n');
-    const out: string[] = [];
-    let listType: 'ul' | 'ol' | null = null;
-    const closeList = () => { if (listType) { out.push(`</${listType}>`); listType = null; } };
-    for (const raw of lines) {
-      const ul = /^\s*[-*]\s+(.*)$/.exec(raw);
-      const ol = /^\s*\d+\.\s+(.*)$/.exec(raw);
-      if (ul) {
-        if (listType !== 'ul') { closeList(); out.push('<ul class="md-ul">'); listType = 'ul'; }
-        out.push(`<li>${ul[1]}</li>`);
-      } else if (ol) {
-        if (listType !== 'ol') { closeList(); out.push('<ol class="md-ol">'); listType = 'ol'; }
-        out.push(`<li>${ol[1]}</li>`);
-      } else if (raw.trim() === '') {
-        closeList();
-      } else {
-        closeList();
-        if (/^<h[1-6]/.test(raw.trim())) out.push(raw);
-        else out.push(`<p class="md-p">${raw}</p>`);
-      }
-    }
-    closeList();
-    let joined = linkifyUuids(out.join(''));
-    // Restore the fenced code blocks as <pre>. They were escaped at stash time
-    // so they're safe to drop back in as-is.
-    joined = joined.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_m, idx) => {
-      return `<pre class="md-codeblock">${fenceStash[Number(idx)]}</pre>`;
-    });
-    // Render the truncation sentinel as a visible callout. Both the raw
-    // marker and an escaped variant (in case it went through escapeHtml
-    // before the replace) are matched.
-    const TRUNC_HTML = '<div class="md-trunc-hint">✂ Preview truncated by the server — open the HISTORY tab to see the full content.</div>';
-    joined = joined
-      .replace(/\u0002TRUNCATED_HINT\u0002/g, TRUNC_HTML)
-      .replace(/TRUNCATED_HINT/g, TRUNC_HTML); // defensive fallback
-    return joined;
-  }
-
   // ── Draft (communication) modal ────────────────
-  let draftModalOpen = false;
-  let draftModalLoading = false;
-  let draftModalError = '';
-  let draftModalData: any = null;
+  // The preview behind every UUID chip in a run output. Resolving the id
+  // against seven endpoints, and rendering whichever entity answers, is all
+  // in DraftModal.svelte now. handleOutputClick below stays here — it is
+  // wired to six different output panes.
+  let draftModal: DraftModal | null = null;
 
-  async function openDraftModal(entityId: string) {
-    draftModalOpen = true;
-    draftModalLoading = true;
-    draftModalError = '';
-    draftModalData = null;
-    try {
-      // Try communication first
-      const commRes: any = await fetch('/api/dashboard/comms/detail?id=' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (commRes?.comm) { draftModalData = commRes; draftModalLoading = false; return; }
-
-      // Try note
-      const noteRes: any = await fetch('/api/notes/' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (noteRes?.note || noteRes?.id) {
-        const n = noteRes.note ?? noteRes;
-        draftModalData = { _type: 'note', note: n };
-        draftModalLoading = false;
-        return;
-      }
-
-      // Try prospect
-      const prospRes: any = await fetch('/api/prospecting/' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (prospRes?.prospect || prospRes?.id) {
-        const p = prospRes.prospect ?? prospRes;
-        draftModalData = { _type: 'prospect', prospect: p };
-        draftModalLoading = false;
-        return;
-      }
-
-      // Try agent run
-      const runRes: any = await fetch('/api/agents/runs/' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (runRes?.run) {
-        draftModalData = { _type: 'run', run: runRes.run };
-        draftModalLoading = false;
-        return;
-      }
-
-      // Try agent (the entity that PRODUCES runs)
-      const agentRes: any = await fetch('/api/agents/' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (agentRes?.agent) {
-        draftModalData = {
-          _type: 'agent',
-          agent: agentRes.agent,
-          recentRuns: agentRes.runs ?? [],
-        };
-        draftModalLoading = false;
-        return;
-      }
-
-      // Try CRM contact (used by prospector → copywriter → dispatcher pipelines)
-      const contactRes: any = await fetch('/api/contacts/detail?id=' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (contactRes?.contact) {
-        draftModalData = { _type: 'contact', contact: contactRes.contact };
-        draftModalLoading = false;
-        return;
-      }
-
-      // Try reminder (kernel_reminders_create / kernel_reminders_schedule emit
-      // these IDs in tool results; users clicking the hash should land here).
-      const reminderRes: any = await fetch('/api/reminders/detail?id=' + encodeURIComponent(entityId)).then(r => r.json()).catch(() => null);
-      if (reminderRes?.reminder) {
-        draftModalData = { _type: 'reminder', reminder: reminderRes.reminder };
-        draftModalLoading = false;
-        return;
-      }
-
-      draftModalError = `ID ${entityId.slice(0, 8)}… not found in communications, notes, prospects, runs, agents, contacts, or reminders.`;
-    } catch (e: any) {
-      draftModalError = e?.message || 'Failed to load';
-    } finally {
-      draftModalLoading = false;
-    }
-  }
-
-  function formatAgentRecentRuns(runs: any[]): string {
-    return (runs || []).slice(0, 5).map((rr: any) => {
-      const status = rr.status ?? '?';
-      const steps = rr.steps_count ?? 0;
-      const tokens = rr.tokens_used ?? 0;
-      const when = String(rr.created_at ?? '').slice(0, 16).replace('T', ' ');
-      const id = rr.id ? rr.id.slice(0, 8) : '?';
-      return `[${status}] ${steps} steps · ${tokens} tokens · ${when} · ${id}`;
-    }).join('\n');
-  }
-
-  function closeDraftModal() {
-    draftModalOpen = false;
-    draftModalData = null;
-    draftModalError = '';
-  }
 
   function handleOutputClick(e: MouseEvent) {
     const t = e.target as HTMLElement | null;
@@ -6614,7 +5506,7 @@
       e.preventDefault();
       e.stopPropagation();
       const id = btn.getAttribute('data-comm-id');
-      if (id) openDraftModal(id);
+      if (id) draftModal?.open(id);
     }
   }
 
@@ -6908,134 +5800,10 @@ Boss says: "${msg}"`;
     meetingSelectedIds = new Set(meetingSelectedIds);
   }
 
-  // ── Auto-Meeting (autonomous agent-to-agent via MeetingExecutor) ─────
-  // Distinct from "Call Meeting" above (which makes the user the moderator).
-  // Here we pick a moderator agent + attendees and fire a run on the
-  // moderator with a goal that calls kernel_agents_call_meeting.
-  let showAutoMeetingModal = false;
-  let autoMeetingTopic = '';
-  let autoMeetingContext = '';
-  let autoMeetingTopicsText = '';
-  let autoMeetingModeratorId = '';
-  let autoMeetingAttendeeIds: Set<string> = new Set();
-  let autoMeetingRounds = 2;
-  let autoMeetingUrgency: 'normal' | 'urgent' = 'normal';
-  let autoMeetingFiring = false;
-  let autoMeetingError = '';
-  let autoMeetingSearch = '';
-
-  $: autoMeetingAgentOptions = agents.filter(a => a.active && !a.builtin_handler)
-    .filter(a => !autoMeetingSearch || a.name.toLowerCase().includes(autoMeetingSearch.toLowerCase()));
-
-  // Group the agent options by office (flow) so the picker shows cohesive
-  // sections instead of one big pile of pills. Each section header carries
-  // the flow name + colour stripe; cards inside use the agent's rank insignia
-  // as a mini avatar so the user can identify them at a glance.
-  $: autoMeetingAgentsByFlow = (() => {
-    const byFlow = new Map<string, { flow: { id: string; name: string; color: string }; agents: typeof autoMeetingAgentOptions }>();
-    for (const a of autoMeetingAgentOptions) {
-      const f = flows.find(x => x.id === a.flow_id);
-      const flowKey = f?.id ?? '_none';
-      const flowMeta = f ?? { id: '_none', name: 'No office', color: '#6b7088' };
-      if (!byFlow.has(flowKey)) byFlow.set(flowKey, { flow: flowMeta as any, agents: [] });
-      byFlow.get(flowKey)!.agents.push(a);
-    }
-    // Sort offices alphabetically for stable rendering; agents within a flow
-    // sorted by name.
-    return [...byFlow.values()]
-      .sort((a, b) => a.flow.name.localeCompare(b.flow.name))
-      .map(g => ({ ...g, agents: [...g.agents].sort((x, y) => x.name.localeCompare(y.name)) }));
-  })();
-
-  function rankInfoForAgent(agentId: string): { insignia: string; color: string } | null {
-    const a = agents.find(x => x.id === agentId);
-    if (!a?.rank_id) return null;
-    const r = ranks.find(x => x.id === a.rank_id);
-    return r ? { insignia: r.insignia, color: r.color } : null;
-  }
-  function initials(name: string): string {
-    const parts = name.trim().split(/\s+/).filter(Boolean);
-    if (parts.length === 0) return '?';
-    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
-    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
-  }
-
-  function toggleAutoMeetingAttendee(id: string) {
-    if (id === autoMeetingModeratorId) return; // moderator can't attend itself
-    if (autoMeetingAttendeeIds.has(id)) autoMeetingAttendeeIds.delete(id);
-    else autoMeetingAttendeeIds.add(id);
-    autoMeetingAttendeeIds = new Set(autoMeetingAttendeeIds);
-  }
-
-  function setAutoMeetingModerator(id: string) {
-    autoMeetingModeratorId = id;
-    if (autoMeetingAttendeeIds.has(id)) {
-      autoMeetingAttendeeIds.delete(id);
-      autoMeetingAttendeeIds = new Set(autoMeetingAttendeeIds);
-    }
-  }
-
-  function resetAutoMeetingForm() {
-    autoMeetingTopic = '';
-    autoMeetingContext = '';
-    autoMeetingTopicsText = '';
-    autoMeetingModeratorId = '';
-    autoMeetingAttendeeIds = new Set();
-    autoMeetingRounds = 2;
-    autoMeetingUrgency = 'normal';
-    autoMeetingError = '';
-    autoMeetingSearch = '';
-  }
-
-  async function fireAutoMeeting() {
-    if (!autoMeetingModeratorId || autoMeetingAttendeeIds.size === 0 || !autoMeetingTopic.trim()) return;
-    autoMeetingFiring = true;
-    autoMeetingError = '';
-    try {
-      const attendeeIds = [...autoMeetingAttendeeIds];
-      const attendeeJson = JSON.stringify(attendeeIds);
-      // Fold description + topics into the tool's `context` param — the
-      // MeetingExecutor hands context verbatim to every participant, so the
-      // agents drill into each listed topic during their turns.
-      const autoTopics = parseMeetingTopics(autoMeetingTopicsText);
-      const ctxParts: string[] = [];
-      if (autoMeetingContext.trim()) ctxParts.push(autoMeetingContext.trim());
-      if (autoTopics.length > 0) ctxParts.push(`Topics to dig into (every participant must address them explicitly): ${autoTopics.map(t => `(${t})`).join(' ')}`);
-      const ctxCombined = ctxParts.join(' — ');
-      const ctxLine = ctxCombined
-        ? `Pasale como context: "${ctxCombined.replace(/"/g, '\\"')}".`
-        : '';
-      const goal =
-        `Call a meeting using the kernel_agents_call_meeting tool with ` +
-        `attendee_ids ${attendeeJson}, topic "${autoMeetingTopic.replace(/"/g, '\\"')}", ` +
-        `rounds ${autoMeetingRounds}, urgency "${autoMeetingUrgency}". ${ctxLine} ` +
-        `Return the meeting summary without invoking any other tool.`;
-      const res = await fetch('/api/agents/run', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ agent_id: autoMeetingModeratorId, goal }),
-      });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        autoMeetingError = body?.error || `HTTP ${res.status}`;
-        return;
-      }
-      // Live transcript modal opens itself when meeting_requested arrives.
-      showAutoMeetingModal = false;
-      resetAutoMeetingForm();
-    } catch (e: any) {
-      autoMeetingError = e?.message || 'Failed to start meeting';
-    } finally {
-      autoMeetingFiring = false;
-    }
-  }
-
-  /** Parse the "temas" textarea — one topic per line, bullets tolerated. */
-  function parseMeetingTopics(raw: string): string[] {
-    return raw.split('\n')
-      .map(t => t.replace(/^[-*•\s]+/, '').trim())
-      .filter(Boolean);
-  }
+  // The Auto-Meeting form lives in AutoMeetingModal.svelte. It only fires a
+  // run on the moderator agent, so unlike "Call Meeting" it never touches
+  // the floor — the world keeps just the handle for the HQ dropdown.
+  let autoMeetingModal: AutoMeetingModal | null = null;
 
   /** Human-readable brief injected into the chat + every agent's goal. */
   function meetingBrief(): string {
@@ -7119,25 +5887,6 @@ Boss says: "${msg}"`;
   /** Get seat positions around the meeting table */
   // Door midpoint of a meeting room. Mirrors office.ts:buildMeetingRooms door
   // placement: pick the wall whose center is closest to the central hall.
-  function meetingRoomDoorPoint(
-    mr: { cx: number; cz: number; w: number; d: number },
-    hallCenter: { x: number; z: number },
-  ): { x: number; y: number; z: number } {
-    const wallCenters = [
-      { x: mr.cx,             z: mr.cz + mr.d / 2 },
-      { x: mr.cx,             z: mr.cz - mr.d / 2 },
-      { x: mr.cx - mr.w / 2,  z: mr.cz },
-      { x: mr.cx + mr.w / 2,  z: mr.cz },
-    ];
-    let best = wallCenters[1];
-    let minDist = Infinity;
-    for (const wc of wallCenters) {
-      const d2 = (wc.x - hallCenter.x) ** 2 + (wc.z - hallCenter.z) ** 2;
-      if (d2 < minDist) { minDist = d2; best = wc; }
-    }
-    return { x: best.x, y: 0, z: best.z };
-  }
-
   /** Two agents from different offices interact → both walk to a free meeting
    *  room, sit down at facing seats around the conference table, "coordinate"
    *  for a few seconds, then walk back to their desks. This is the visual we
@@ -7223,53 +5972,12 @@ Boss says: "${msg}"`;
   }
 
   function sameOffice(srcId: string, tgtId: string): boolean {
-    const sf = agents.find(a => a.id === srcId)?.flow_id ?? '';
-    const tf = agents.find(a => a.id === tgtId)?.flow_id ?? '';
-    return !!sf && !!tf && sf === tf;
+    return sameOfficeOf(agents, srcId, tgtId);
   }
 
-  function getMeetingSeatPositions(mr: { cx: number; cz: number; w: number; d: number }): Array<{ x: number; y: number; z: number }> {
-    const tableW = Math.min(mr.w * 0.5, 6);
-    const tableD = Math.min(mr.d * 0.3, 3);
-    const seats: Array<{ x: number; y: number; z: number }> = [];
-    const numPerSide = Math.max(2, Math.floor(tableW / 1.5));
-    // HEAD SEATS FIRST. Callers hand out seats in participant order and the
-    // moderator is always participant 0, so whoever chairs the meeting takes
-    // seats[0]. With the head seats appended last, the chair sat in the middle
-    // of a long side like everyone else and the table had nobody at its head —
-    // for the cross-office coordination path, seats[0] and seats[1] are now
-    // the two heads, which face each other across the table exactly as that
-    // code already intended.
-    seats.push({ x: mr.cx - tableW / 2 - 0.6, y: 0, z: mr.cz });
-    seats.push({ x: mr.cx + tableW / 2 + 0.6, y: 0, z: mr.cz });
-    // Then along both long sides.
-    for (let i = 0; i < numPerSide; i++) {
-      const x = mr.cx - tableW / 2 + (tableW / (numPerSide + 1)) * (i + 1);
-      seats.push({ x, y: 0, z: mr.cz - tableD / 2 - 0.6 }); // front side
-      seats.push({ x, y: 0, z: mr.cz + tableD / 2 + 0.6 }); // back side
-    }
-    return seats;
-  }
-
-  /** Pick a free visitor chair in My Office (not currently targeted by another
-   *  walker) so concurrent visitors don't stack on one seat. Falls back to
-   *  round-robin when all four are occupied. */
+  /** Free visitor chair in My Office; seats and walkers live in this component. */
   function pickFreeMyOfficeChair(): { x: number; y: number; z: number } | null {
-    if (myOfficeSeats.length === 0) return null;
-    const taken = new Set<number>();
-    for (const w of walkers) {
-      if (w.targetId !== 'myoffice' && w.targetId !== 'meeting') continue;
-      const curve = (w as any).curve as Array<{ x: number; z: number }> | undefined;
-      const c = curve?.[curve.length - 1];
-      if (!c) continue;
-      myOfficeSeats.forEach((s, idx) => {
-        if (Math.abs(s.x - c.x) < 0.5 && Math.abs(s.z - c.z) < 0.5) taken.add(idx);
-      });
-    }
-    for (let i = 0; i < myOfficeSeats.length; i++) {
-      if (!taken.has(i)) return myOfficeSeats[i];
-    }
-    return myOfficeSeats[taken.size % myOfficeSeats.length];
+    return pickFreeChair(myOfficeSeats, walkers as unknown as SeatedWalker[]);
   }
 
   // Fetch recent completed runs for an agent — used to build meeting/chat context
@@ -7428,11 +6136,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     labels: deskLabels.size,
   };
 </script>
-
-<!-- Escape and the focus trap live at the window, not on the dialog: the old
-     modal put Escape on the overlay, which never received the event because
-     nothing inside was focused when it opened. -->
-<svelte:window on:keydown={(e) => showRegisterRepoModal && trapRepoModalKeys(e)} />
 
 
 <div class="world3d-container" on:click={() => { if (hqMenuOpen) hqMenuOpen = false; if (pendingMenuOpen) pendingMenuOpen = false; if (searchOpen) closeSearch(); }} role="presentation">
@@ -7602,7 +6305,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
         <button class="hq-action" on:click={() => { showMeetingModal = true; hqMenuOpen = false; }}>
           <span class="hq-action-ico">&#9743;</span> Call Meeting
         </button>
-        <button class="hq-action" on:click={() => { showAutoMeetingModal = true; hqMenuOpen = false; }} title="Trigger an autonomous agent-to-agent meeting (you don't participate)">
+        <button class="hq-action" on:click={() => { autoMeetingModal?.open(); hqMenuOpen = false; }} title="Trigger an autonomous agent-to-agent meeting (you don't participate)">
           <span class="hq-action-ico">&#9881;</span> Auto-Meeting
         </button>
         <!-- Not gated on owning an office named "repos"/"devops" any more: the
@@ -7611,7 +6314,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
              a naming convention. /devops stays — it is the paid DevOps Office
              page, and on an install without it the route renders the extension
              gate on purpose. -->
-        <button class="hq-action" on:click={() => { openRegisterRepoModal(); hqMenuOpen = false; }} title="Track an existing local repository — files stay where they are.">
+        <button class="hq-action" on:click={() => { registerRepoModal?.open(); hqMenuOpen = false; }} title="Track an existing local repository — files stay where they are.">
           <span class="hq-action-ico">&#128193;</span> Register Repo
         </button>
         <a class="hq-action" href="/repos" on:click={() => (hqMenuOpen = false)} style="text-decoration:none" title="All tracked repos — paths, who can use each one, and how to stop tracking.">
@@ -7729,197 +6432,15 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     />
   {/if}
 
-  <!-- Register Repo Modal.
-       The path is picked from what the kernel can actually reach, not typed:
-       validation runs inside the container, so a real path on the operator's
-       machine used to fail with "does not exist" — true of the container and
-       false of them. Manual entry stays available for the case the scan
-       misses. Trigger lives in the HQ dropdown (Create section). -->
-  {#if showRegisterRepoModal}
-    <div class="modal-overlay">
-      <!-- Click-outside-to-close as a real button behind the dialog, rather
-           than a listener on a presentational div. The old markup silenced the
-           warning with role="button" on the overlay, which announces the whole
-           backdrop as a button and wraps the dialog inside it. -->
-      <button
-        type="button"
-        class="modal-backdrop-close"
-        aria-label="Close"
-        tabindex="-1"
-        on:click={closeRegisterRepoModal}
-      ></button>
-      <div
-        class="modal repo-modal"
-        bind:this={registerRepoDialog}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="repo-modal-title"
-        tabindex="-1"
-      >
-        <div class="modal-title" id="repo-modal-title">REGISTER REPO</div>
-        <div class="modal-sub">Track an existing local checkout — files stay where they are.</div>
-
-        <label class="modal-label" for="repo-name">
-          Name <span class="modal-req" aria-hidden="true">*</span>
-        </label>
-        <input
-          id="repo-name"
-          type="text"
-          class="modal-input"
-          class:modal-input-bad={registerRepoErrorField === 'name'}
-          placeholder="kernl"
-          required
-          aria-required="true"
-          aria-invalid={registerRepoErrorField === 'name'}
-          aria-describedby={registerRepoErrorField === 'name' ? 'repo-err' : undefined}
-          bind:value={registerRepoName}
-          disabled={registerRepoBusy}
-        />
-        {#if registerRepoErrorField === 'name'}
-          <div class="modal-error" id="repo-err" role="alert">{registerRepoError}</div>
-        {/if}
-
-        <div class="modal-label" id="repo-path-label">
-          Path <span class="modal-req" aria-hidden="true">*</span>
-          <button
-            type="button"
-            class="repo-path-toggle"
-            on:click={() => { repoManualPath = !repoManualPath; registerRepoError = ''; registerRepoErrorField = ''; }}
-          >{repoManualPath ? 'pick from disk' : 'type it instead'}</button>
-        </div>
-
-        {#if repoManualPath}
-          <input
-            id="repo-path"
-            type="text"
-            class="modal-input"
-            class:modal-input-bad={registerRepoErrorField === 'path'}
-            placeholder={repoRoots.length ? `${repoRoots[0]}/my-repo` : '/absolute/path/to/repo'}
-            required
-            aria-required="true"
-            aria-labelledby="repo-path-label"
-            aria-invalid={registerRepoErrorField === 'path'}
-            bind:value={registerRepoPath}
-            disabled={registerRepoBusy}
-          />
-          <p class="modal-hint modal-hint-block">
-            {#if repoRoots.length}
-              The kernel runs in a container and can only reach
-              {#each repoRoots as r, i}<code>{r}</code>{i < repoRoots.length - 1 ? ', ' : ''}{/each}.
-              A path outside that is invisible to it even though it exists on your machine.
-            {:else}
-              Absolute path, as the kernel sees it.
-            {/if}
-          </p>
-        {:else if repoCandidatesLoading}
-          <p class="modal-hint modal-hint-block">Scanning what the kernel can reach…</p>
-        {:else if repoCandidates.length === 0}
-          <!-- Never an empty box. An `{#each}` over nothing collapses a flex
-               column to zero height, so a failed or empty scan rendered as a
-               void between two labels — no list, no input, no explanation. -->
-          <input
-            id="repo-path"
-            type="text"
-            class="modal-input"
-            placeholder={repoRoots.length ? `${repoRoots[0]}/my-repo` : '/absolute/path/to/repo'}
-            aria-labelledby="repo-path-label"
-            bind:value={registerRepoPath}
-            disabled={registerRepoBusy}
-          />
-          <p class="modal-hint modal-hint-block">
-            No checkouts came back from the scan. Type the path as the kernel sees it{#if repoRoots.length} — it can only reach {#each repoRoots as r, i}<code>{r}</code>{i < repoRoots.length - 1 ? ', ' : ''}{/each}{/if}.
-          </p>
-        {:else}
-          <div class="repo-cand-list" role="radiogroup" aria-labelledby="repo-path-label">
-            {#each repoCandidates as c (c.path)}
-              <button
-                type="button"
-                class="repo-cand"
-                class:repo-cand-on={registerRepoPath === c.path}
-                role="radio"
-                aria-checked={registerRepoPath === c.path}
-                disabled={c.registered || registerRepoBusy}
-                title={c.registered ? 'Already registered' : c.path}
-                on:click={() => pickCandidate(c)}
-              >
-                <span class="repo-cand-name">{c.name}</span>
-                <span class="repo-cand-path">{c.path}</span>
-                {#if c.registered}<span class="repo-cand-tag">registered</span>{/if}
-              </button>
-            {/each}
-          </div>
-        {/if}
-        {#if registerRepoErrorField === 'path'}
-          <div class="modal-error" id="repo-err" role="alert">{registerRepoError}</div>
-        {/if}
-
-        <div class="modal-label" id="repo-scope-label">Who can use it</div>
-        <div class="repo-scope" role="radiogroup" aria-labelledby="repo-scope-label">
-          <button
-            type="button" class="repo-scope-opt" class:repo-scope-on={registerRepoShared}
-            role="radio" aria-checked={registerRepoShared} disabled={registerRepoBusy}
-            on:click={() => (registerRepoShared = true)}
-          >
-            <span class="repo-scope-t">Any agent</span>
-            <span class="repo-scope-s">Every office reaches it through the repo tools.</span>
-          </button>
-          <button
-            type="button" class="repo-scope-opt" class:repo-scope-on={!registerRepoShared}
-            role="radio" aria-checked={!registerRepoShared} disabled={registerRepoBusy}
-            on:click={() => (registerRepoShared = false)}
-          >
-            <span class="repo-scope-t">Only chosen agents</span>
-            <span class="repo-scope-s">Nobody else sees it, not even in a listing.</span>
-          </button>
-        </div>
-
-        {#if !registerRepoShared}
-          <label class="modal-label" for="repo-agents">
-            Agents <span class="modal-hint">(comma-separated ids)</span>
-          </label>
-          <input
-            id="repo-agents"
-            type="text"
-            class="modal-input"
-            placeholder="agent-id-1, agent-id-2"
-            value={registerRepoAgents.join(', ')}
-            on:input={onRepoAgentsInput}
-            disabled={registerRepoBusy}
-          />
-          {#if registerRepoAgents.length === 0}
-            <p class="modal-hint modal-hint-block modal-hint-warn">
-              With nobody named, this repo is reachable by no agent at all.
-            </p>
-          {/if}
-        {/if}
-
-        <label class="modal-label" for="repo-desc">Description <span class="modal-hint">(optional)</span></label>
-        <input id="repo-desc" type="text" class="modal-input" bind:value={registerRepoDesc} disabled={registerRepoBusy} />
-
-        <label class="modal-label" for="repo-tags">Tags <span class="modal-hint">(optional, comma-separated)</span></label>
-        <input id="repo-tags" type="text" class="modal-input" placeholder="ts, monorepo, infra" bind:value={registerRepoTags} disabled={registerRepoBusy} />
-
-        {#if registerRepoError && !registerRepoErrorField}
-          <div class="modal-error" role="alert">{registerRepoError}</div>
-        {/if}
-
-        <div class="modal-actions">
-          <button class="modal-cancel" on:click={closeRegisterRepoModal} disabled={registerRepoBusy}>Cancel</button>
-          <button
-            class="modal-confirm repo-modal-confirm"
-            on:click={submitRegisterRepo}
-            disabled={registerRepoBusy || !registerRepoName.trim() || !registerRepoPath.trim()}
-          >
-            {registerRepoBusy ? 'Registering…' : 'Register'}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  {#if registerRepoDone}
-    <div class="repo-toast" role="status" aria-live="polite">{registerRepoDone}</div>
-  {/if}
+  <!-- Register Repo Modal — the whole form lives in RegisterRepoModal.svelte.
+       Opened from the HQ dropdown and from a click on a FREE rack in the
+       Repos Office. The scene refresh stays here because it is the world's:
+       it is awaited before the modal closes, so the rack flips from FREE to
+       OCCUPIED while the form is still up, exactly as it did inline. -->
+  <RegisterRepoModal
+    bind:this={registerRepoModal}
+    onRegistered={async () => { await fetchReposBookmarks(); rebuildScene(); }}
+  />
 
   <!-- Call Meeting Modal -->
   {#if showMeetingModal}
@@ -7972,128 +6493,11 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     </div>
   {/if}
 
-  <!-- Auto-Meeting Modal (autonomous: pick moderator + attendees, kernel orchestrates) -->
-  {#if showAutoMeetingModal}
-    <div class="modal-overlay" on:click={() => showAutoMeetingModal = false} role="button" tabindex="-1" on:keydown={e => e.key === 'Escape' && (showAutoMeetingModal = false)}>
-      <div class="modal auto-meeting-modal" on:click|stopPropagation role="presentation">
-        <div class="modal-title">Auto-Meeting</div>
-        <div class="modal-sub">The agents talk to each other (you don't take part). You'll see the conversation live as soon as it starts.</div>
-
-        <label class="modal-label">
-          Topic
-          <input type="text" class="modal-input" bind:value={autoMeetingTopic}
-            placeholder="What do they need to discuss?" />
-        </label>
-
-        <label class="modal-label">
-          Description / Context (optional)
-          <textarea class="modal-textarea" bind:value={autoMeetingContext} rows="3"
-            placeholder="Background o documento que el moderador les muestra"></textarea>
-        </label>
-
-        <label class="modal-label">
-          Topics to dig into (one per line, optional)
-          <textarea class="modal-textarea" bind:value={autoMeetingTopicsText} rows="3"
-            placeholder={'e.g.\nStatus of each workstream\nOpen risks\nPending decisions'}></textarea>
-        </label>
-
-        <div class="modal-row">
-          <label class="modal-label modal-half">
-            Rounds
-            <select class="modal-input" bind:value={autoMeetingRounds}>
-              <option value={1}>1</option>
-              <option value={2}>2</option>
-              <option value={3}>3</option>
-              <option value={4}>4</option>
-              <option value={5}>5</option>
-              <option value={10}>10</option>
-              <option value={15}>15</option>
-              <option value={20}>20</option>
-            </select>
-          </label>
-          <label class="modal-label modal-half">
-            Urgencia
-            <select class="modal-input" bind:value={autoMeetingUrgency}>
-              <option value="normal">normal</option>
-              <option value="urgent">urgent (rojo)</option>
-            </select>
-          </label>
-        </div>
-
-        <div class="modal-label">Moderador (1)</div>
-        <div class="am-picker am-picker-mod">
-          {#each autoMeetingAgentsByFlow as group (group.flow.id)}
-            <div class="am-flow-section">
-              <div class="am-flow-head" style="--c:{group.flow.color}">
-                <span class="am-flow-stripe" style="background:{group.flow.color}"></span>
-                <span class="am-flow-name">{group.flow.name}</span>
-                <span class="am-flow-count">{group.agents.length}</span>
-              </div>
-              <div class="am-card-grid">
-                {#each group.agents as a (a.id)}
-                  {@const rank = rankInfoForAgent(a.id)}
-                  <button type="button"
-                    class="am-card am-card-mod {autoMeetingModeratorId === a.id ? 'am-card-mod-on' : ''}"
-                    style="--flow-c:{group.flow.color}"
-                    title={a.name}
-                    on:click={() => setAutoMeetingModerator(a.id)}>
-                    <span class="am-card-av" style="background:{group.flow.color}; color:{rank?.color ?? '#fff'}">
-                      {#if rank}{rank.insignia}{:else}<span class="am-card-init">{initials(a.name)}</span>{/if}
-                    </span>
-                    <span class="am-card-name">{a.name}</span>
-                  </button>
-                {/each}
-              </div>
-            </div>
-          {/each}
-        </div>
-
-        <div class="modal-label">Attendees ({autoMeetingAttendeeIds.size})</div>
-        <input type="text" class="modal-input" bind:value={autoMeetingSearch} placeholder="search agent…" />
-        <div class="am-picker am-picker-att">
-          {#each autoMeetingAgentsByFlow as group (group.flow.id)}
-            {@const attGroupAgents = group.agents.filter(a => a.id !== autoMeetingModeratorId)}
-            {#if attGroupAgents.length > 0}
-              <div class="am-flow-section">
-                <div class="am-flow-head" style="--c:{group.flow.color}">
-                  <span class="am-flow-stripe" style="background:{group.flow.color}"></span>
-                  <span class="am-flow-name">{group.flow.name}</span>
-                  <span class="am-flow-count">{attGroupAgents.length}</span>
-                </div>
-                <div class="am-card-grid">
-                  {#each attGroupAgents as a (a.id)}
-                    {@const rank = rankInfoForAgent(a.id)}
-                    <button type="button"
-                      class="am-card am-card-att {autoMeetingAttendeeIds.has(a.id) ? 'am-card-att-on' : ''}"
-                      style="--flow-c:{group.flow.color}"
-                      title={a.name}
-                      on:click={() => toggleAutoMeetingAttendee(a.id)}>
-                      <span class="am-card-av" style="background:{group.flow.color}; color:{rank?.color ?? '#fff'}">
-                        {#if rank}{rank.insignia}{:else}<span class="am-card-init">{initials(a.name)}</span>{/if}
-                      </span>
-                      <span class="am-card-name">{a.name}</span>
-                    </button>
-                  {/each}
-                </div>
-              </div>
-            {/if}
-          {/each}
-        </div>
-
-        {#if autoMeetingError}
-          <div class="modal-error">{autoMeetingError}</div>
-        {/if}
-
-        <div class="modal-actions">
-          <button class="modal-cancel" on:click={() => { showAutoMeetingModal = false; resetAutoMeetingForm(); }}>Cancel</button>
-          <button class="modal-confirm" on:click={fireAutoMeeting}
-            disabled={autoMeetingFiring || !autoMeetingModeratorId || autoMeetingAttendeeIds.size === 0 || !autoMeetingTopic.trim()}>
-            {autoMeetingFiring ? 'Starting…' : `Start (${autoMeetingAttendeeIds.size + 1} agents)`}
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <!-- Auto-Meeting Modal (autonomous: pick moderator + attendees, kernel
+       orchestrates) — the form lives in AutoMeetingModal.svelte. The live
+       transcript panel below still opens on its own when the
+       meeting_requested event arrives. -->
+  <AutoMeetingModal bind:this={autoMeetingModal} {agents} {flows} {ranks} />
 
   <!-- Live Agent-to-Agent Meeting Transcript — side panel so the 3D stays visible -->
   {#if showLiveMeeting && activeMeetingId && liveMeetings[activeMeetingId]}
@@ -8179,92 +6583,20 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   {/if}
 
   <!-- Meeting history panel — last 10 meetings, click any to re-open the
-       transcript modal. Top-right corner so it doesn't fight the management
-       log. Hidden by default; the badge button toggles it. -->
-  {#if showMeetingHistory && liveMeetingsList.length > 0}
-    {@const closedCount = liveMeetingsList.filter(m => m.status === 'completed' || m.status === 'failed').length}
-    <div class="hist-panel hist-open">
-      <div class="hist-head">
-        <span class="hist-head-badge">{liveMeetingsList.length}</span>
-        <span class="hist-head-label">Meetings</span>
-        {#if closedCount > 0}
-          <button class="hist-clear-all"
-                  title="Archive every completed/failed meeting"
-                  on:click={dismissAllReadMeetings}>
-            Clear {closedCount} read
-          </button>
-        {/if}
-        <button class="hist-head-close"
-                title="Hide this panel (also via the hq-bar View menu)"
-                on:click={() => showMeetingHistory = false}>×</button>
-      </div>
-      <div class="hist-body">
-          {#each liveMeetingsList.slice(0, 10) as m (m.id)}
-            <div class="hist-row hist-row-{m.status}"
-                 role="button"
-                 tabindex="0"
-                 on:click={() => { activeMeetingId = m.id; showLiveMeeting = true; }}
-                 on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { activeMeetingId = m.id; showLiveMeeting = true; } }}>
-              <div class="hist-row-head">
-                {#if m.status === 'started'}<span class="hist-dot hist-dot-live"></span>
-                {:else if m.status === 'completed'}<span class="hist-dot hist-dot-done"></span>
-                {:else if m.status === 'failed'}<span class="hist-dot hist-dot-fail"></span>
-                {:else}<span class="hist-dot hist-dot-pending"></span>{/if}
-                <span class="hist-row-topic">{(m.topic || '(no topic)').slice(0, 60)}</span>
-                {#if m.status === 'completed' || m.status === 'failed'}
-                  <button class="hist-row-x"
-                          title="Dismiss this meeting"
-                          on:click|stopPropagation={() => dismissMeeting(m.id)}>✕</button>
-                {/if}
-              </div>
-              <div class="hist-row-meta">
-                <span>{m.moderatorName}</span>
-                <span>·</span>
-                <span>{m.participants.length} participants</span>
-                <span>·</span>
-                <span>{m.turns.length} turns</span>
-                {#if m.turns.length > 0}
-                  <span>·</span>
-                  <span>{m.turns.reduce((s, t) => s + (t.tokens || 0), 0).toLocaleString()} tk</span>
-                {/if}
-              </div>
-              {#if m.summary}
-                <div class="hist-row-summary">{m.summary.slice(0, 110)}{m.summary.length > 110 ? '…' : ''}</div>
-              {/if}
-            </div>
-          {/each}
-      </div>
-    </div>
-  {/if}
+       transcript modal. Rendering lives in MeetingHistoryPanel.svelte; the
+       store, the modal and the archive calls stay here. -->
+  <MeetingHistoryPanel
+    meetings={liveMeetingsList}
+    bind:show={showMeetingHistory}
+    onOpen={(id) => { activeMeetingId = id; showLiveMeeting = true; }}
+    onDismiss={dismissMeeting}
+    onDismissAllRead={dismissAllReadMeetings}
+  />
 
-  <!-- Management log panel — manager edits + escalations, bottom-left -->
-  {#if showMgmtLog && mgmtLog.length > 0}
-    <div class="mgmt-log mgmt-log-open">
-      <div class="mgmt-log-head">
-        <span class="mgmt-log-badge">{mgmtLog.length}</span>
-        <span class="mgmt-log-label">Management log</span>
-        <button class="mgmt-log-close"
-                title="Hide this panel (also via the hq-bar View menu)"
-                on:click={() => showMgmtLog = false}>×</button>
-      </div>
-      <div class="mgmt-log-body">
-        {#each mgmtLog.slice(0, 10) as entry}
-          <div class="mgmt-entry" style="border-left-color:{mgmtKindColor(entry.kind, entry.crossOffice)}">
-            <div class="mgmt-entry-head">
-              <span class="mgmt-entry-ico">{mgmtKindIcon(entry.kind)}</span>
-              <span class="mgmt-entry-from">{entry.from}</span>
-              <span class="mgmt-entry-arrow">→</span>
-              <span class="mgmt-entry-to">{entry.to}</span>
-              {#if entry.crossOffice}<span class="mgmt-entry-tag">cross-office</span>{/if}
-              {#if entry.role === 'manager'}<span class="mgmt-entry-tag mgmt-entry-tag-mgr">manager</span>{/if}
-            </div>
-            <div class="mgmt-entry-detail">{entry.detail}</div>
-            {#if entry.preview}<div class="mgmt-entry-preview">{entry.preview.slice(0, 140)}{entry.preview.length > 140 ? '…' : ''}</div>{/if}
-          </div>
-        {/each}
-      </div>
-    </div>
-  {/if}
+  <!-- Management log panel — manager edits + escalations, bottom-left.
+       Rendering lives in MgmtLogPanel.svelte; pushMgmtLog stays here
+       because the event loop calls it. -->
+  <MgmtLogPanel entries={mgmtLog} bind:show={showMgmtLog} />
 
   <!-- Floating meeting indicator — hidden by default. Users still reach live
        meetings via the hq-bar menu (📡 Live meeting / 📋 Meetings panel) so
@@ -8822,263 +7154,31 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
       <!-- ──────────────── LIVE TAB ──────────────── -->
       <svelte:fragment slot="live">
-        <div class="ip-body live-body">
-          <div class="live-hero">
-            <div class="live-hero-head">
-              <span class="live-badge"><span class="live-dot-big"></span>LIVE</span>
-              <span class="live-hero-name">{selData.name}</span>
-            </div>
-            {#if liveHeadEvent}
-              {@const hType = liveEventType(liveHeadEvent)}
-              {@const hCat = liveStepCategory(liveHeadEvent)}
-              <div class="live-now live-cat-{hCat}">
-                <div class="live-now-icon-wrap">
-                  <span class="live-now-icon">{liveStepIcon(hType)}</span>
-                  <span class="live-now-halo"></span>
-                </div>
-                <div class="live-now-body copy-wrap">
-                  <CopyTextBtn text={String(liveHeadEvent.data.content_preview ?? '') || liveEventSummary(liveHeadEvent)} title="Copy event content" />
-                  <div class="live-now-lbl">{liveStepLabel(hType)}</div>
-                  {#if hType === 'tool_call' && liveHeadEvent.data.tool_name}
-                    <code class="live-tool">{liveHeadEvent.data.tool_name}</code>
-                  {/if}
-                  <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
-                </div>
-                <div class="live-now-clock">{fmtClock(liveHeadEvent.ts)}</div>
-              </div>
-            {:else}
-              <div class="live-now live-waiting">
-                <div class="live-now-icon-wrap">
-                  <span class="live-now-icon">✨</span>
-                  <span class="live-now-halo"></span>
-                </div>
-                <div class="live-now-body">
-                  <div class="live-now-lbl">warming up</div>
-                  <div class="live-now-txt">Agent just started — waiting for the first step…</div>
-                </div>
-              </div>
-            {/if}
-          </div>
-
-          <div class="live-timeline-head">
-            <span class="live-timeline-h">Activity</span>
-            <span class="ip-sec-c">{liveCurrentRunEvents.length}</span>
-            {#if liveRunElapsedMs > 0 || liveRunTokensTotal > 0}
-              <span class="live-totals">
-                {#if liveRunElapsedMs > 0}<span class="live-totals-chip live-totals-time" title="Wall-clock elapsed since the first event in this run">⏱ {liveFmtDelta(liveRunElapsedMs)}</span>{/if}
-                {#if liveRunTokensTotal > 0}<span class="live-totals-chip live-totals-tok" title="Cumulative tokens reported by the model so far">◉ {liveFmtTokens(liveRunTokensTotal)} tok</span>{/if}
-              </span>
-            {/if}
-          </div>
-
-          {#if liveCurrentRunEvents.length === 0}
-            <div class="ip-empty">No events yet — stay tuned.</div>
-          {:else}
-            <ol class="live-timeline">
-              {#each liveCurrentRunEvents as e, i (e.ts + '-' + i)}
-                {@const etype = liveEventType(e)}
-                {@const ecat = liveStepCategory(e)}
-                {@const stepKey = e.ts + '-' + i}
-                {@const isOpen = expandedLiveSteps.has(stepKey)}
-                {@const hasDetail = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
-                {@const dt = liveStepDeltaMs(i)}
-                {@const stepTok = liveStepTokens(e)}
-                {@const cumTok = liveStepTokensTotal(i)}
-                <li class="live-step live-step-{etype} live-cat-{ecat}" class:live-step-head={i === 0} class:live-step-open={isOpen}>
-                  <span class="live-step-dot"></span>
-                  <button
-                    type="button"
-                    class="live-step-summary"
-                    disabled={!hasDetail}
-                    on:click={() => hasDetail && toggleLiveStep(stepKey)}
-                    title={hasDetail ? (isOpen ? 'Hide details' : 'Show details') : ''}
-                  >
-                    <span class="live-step-icon">{liveStepIcon(etype)}</span>
-                    <span class="live-step-type">{liveStepLabel(etype)}</span>
-                    {#if e.data.tool_name}<code class="live-step-tool">{e.data.tool_name}</code>{/if}
-                    <span class="live-step-text">{liveStepSummary(e)}</span>
-                    <span class="live-step-clock">{fmtClock(e.ts)}</span>
-                    {#if hasDetail}
-                      <span class="live-step-chev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
-                    {/if}
-                  </button>
-                  {#if etype === 'tool_result'}
-                    {@const _cid = emailCommId(e.data.tool_name, String(e.data.content_preview ?? e.data.result ?? ''))}
-                    {#if _cid}
-                      <button class="email-view-link" on:click|stopPropagation={() => openEmailModal(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
-                    {/if}
-                  {/if}
-                  {#if dt !== null || stepTok > 0 || cumTok > 0}
-                    <div class="live-step-meta">
-                      {#if dt !== null && dt > 50}
-                        <span class="live-meta-chip live-meta-time" title="Time since the previous event">+{liveFmtDelta(dt)}</span>
-                      {/if}
-                      {#if stepTok > 0}
-                        <span class="live-meta-chip live-meta-tok" title="Tokens reported by the model for this step">◉ {liveFmtTokens(stepTok)} tok</span>
-                      {/if}
-                      {#if cumTok > 0 && cumTok !== stepTok}
-                        <span class="live-meta-chip live-meta-cum" title="Cumulative tokens for this run up to this step">Σ {liveFmtTokens(cumTok)}</span>
-                      {/if}
-                    </div>
-                  {/if}
-                  {#if hasDetail && isOpen}
-                    <div class="live-step-detail copy-wrap">
-                      <CopyTextBtn text={String(e.data.content_preview ?? '') || liveEventSummary(e)} title="Copy event content" />
-                      <div class="live-step-txt ip-out-md" on:click={handleOutputClick} role="presentation">
-                        {@html formatRunOutput(liveEventSummary(e))}
-                      </div>
-                    </div>
-                  {/if}
-                </li>
-              {/each}
-            </ol>
-          {/if}
-        </div>
+        <LiveTab
+          agentName={selData.name}
+          events={liveCurrentRunEvents}
+          onOutputClick={handleOutputClick}
+          onOpenEmail={(id) => emailModal?.open(id)}
+        />
       </svelte:fragment>
 
       <!-- ──────────────── HISTORY TAB ──────────────── -->
       <svelte:fragment slot="history">
-        <div class="ip-body">
-          <!-- KPIs — moved here from Overview. A count over the agent's whole
-               run history belongs next to the series it summarizes, not
-               leading a panel that otherwise talks about right now. -->
-          {#if selStats}
-            <div class="ip-kpis">
-              <div class="ip-kpi">
-                <div class="ip-kpi-v">{selStats.total_runs}</div>
-                <div class="ip-kpi-l">Total runs</div>
-              </div>
-              <div class="ip-kpi">
-                <div class="ip-kpi-v" style="color:#78dc8c">{selStats.completed}</div>
-                <div class="ip-kpi-l">Completed</div>
-              </div>
-              <div class="ip-kpi">
-                <div class="ip-kpi-v" style="color:#ef5d6e">{selStats.failed}</div>
-                <div class="ip-kpi-l">Failed</div>
-              </div>
-              <div class="ip-kpi">
-                <div class="ip-kpi-v">{Math.round(selStats.success_rate)}<span class="ip-kpi-unit">%</span></div>
-                <div class="ip-kpi-l">Success</div>
-              </div>
-            </div>
-          {/if}
-
-          {#if runsLoading}
-            <div class="ip-loading">Loading runs…</div>
-          {:else if agentRuns.length === 0}
-            <div class="ip-empty">No runs yet. Hit <b>Run now</b> to start one.</div>
-          {:else}
-            <div class="ip-runs">
-              {#each agentRuns as run}
-                <div class="ip-run-card" class:expanded={expandedRunId === run.id} class:run-fail={run.status === 'failed'} class:run-ok={run.status === 'completed'} class:run-live={run.status === 'running'}>
-                  <button class="ip-run-head" on:click={() => loadRunSteps(run.id)}>
-                    <span class="ip-run-status" class:ok={run.status === 'completed'} class:fail={run.status === 'failed'} class:running={run.status === 'running'}>
-                      {run.status === 'completed' ? '✓' : run.status === 'failed' ? '✗' : '●'}
-                    </span>
-                    <span class="ip-run-trigger" style="--c:{triggerColor(run.trigger_type)}">{run.trigger_type}</span>
-                    <span class="ip-run-steps">{run.steps_count} steps</span>
-                    <span class="ip-run-tokens">{fmtTokens(run.tokens_used)} tok</span>
-                    <span class="ip-run-time" title={run.created_at}>{fmtRelTime(run.created_at)}</span>
-                    <span class="ip-run-caret" class:open={expandedRunId === run.id}>▾</span>
-                  </button>
-
-                  {#if run.error && expandedRunId !== run.id}
-                    <div class="ip-run-err-pre">
-                      <span class="ip-run-err-lbl">error</span>
-                      <span class="ip-run-err-txt">{run.error.slice(0, 160)}{run.error.length > 160 ? '…' : ''}</span>
-                    </div>
-                  {/if}
-                  {#if run.result && expandedRunId !== run.id}
-                    <div class="ip-run-prev">{run.result.slice(0, 160)}{run.result.length > 160 ? '…' : ''}</div>
-                  {/if}
-
-                  <!-- handled below in expanded state via formatRunOutput -->
-
-
-                  {#if expandedRunId === run.id}
-                    <div class="ip-run-body">
-                      <div class="ip-run-meta-row">
-                        <span class="ip-run-meta-item">run <code>{run.id.slice(0, 8)}</code>
-                          <button class="ip-copy-inline" title="copy run id" on:click={() => copy(run.id, 'run-' + run.id)}>{copiedKey === 'run-' + run.id ? '✓' : '⧉'}</button>
-                        </span>
-                        <span class="ip-run-meta-item">{new Date(run.created_at).toLocaleString()}</span>
-                      </div>
-
-                      {#if run.error}
-                        <div class="ip-err-box">
-                          <div class="ip-err-head">
-                            <span class="ip-err-lbl">⚠ error</span>
-                            <button class="ip-icon-btn ip-icon-btn-err" title="copy error" on:click={() => copy(run.error ?? '', 'err-' + run.id)}>{copiedKey === 'err-' + run.id ? '✓ copied' : '⧉ copy'}</button>
-                          </div>
-                          <pre class="ip-err-txt">{run.error}</pre>
-                        </div>
-                      {/if}
-
-                      {#if run.result}
-                        <div class="ip-out-box">
-                          <div class="ip-out-head">
-                            <span class="ip-out-lbl">📤 agent output (handoff)</span>
-                            <button class="ip-icon-btn" title="copy output" on:click={() => copy(run.result ?? '', 'out-' + run.id)}>{copiedKey === 'out-' + run.id ? '✓ copied' : '⧉ copy'}</button>
-                          </div>
-                          <div class="ip-out-md" on:click={handleOutputClick} role="presentation">
-                            {@html formatRunOutput(run.result)}
-                          </div>
-                        </div>
-                      {/if}
-
-                      {#if runStepsLoading}
-                        <div class="ip-loading">Loading steps…</div>
-                      {:else if runStepsError}
-                        <div class="ip-loading ip-error">
-                          ⚠ Failed to load steps: {runStepsError}
-                          <button class="ip-retry" on:click={() => { expandedRunId = null; loadRunSteps(run.id); }}>retry</button>
-                        </div>
-                      {:else if runSteps.length > 0}
-                        {@const regularSteps = runSteps.filter(s => !s.is_event)}
-                        {@const eventEntries = runSteps.filter(s => s.is_event)}
-                        <div class="ip-steps-h">Steps <span class="ip-sec-c">{regularSteps.length}</span>{#if eventEntries.length}<span class="ip-sec-c ip-sec-c-ev">+ {eventEntries.length} events</span>{/if}</div>
-                        <ol class="ip-steps">
-                          {#each runSteps as step}
-                            <li class="ip-step step-{step.type}" class:step-event={step.is_event}>
-                              <span class="ip-step-dot"></span>
-                              <div class="ip-step-body">
-                                <div class="ip-step-head">
-                                  <span class="ip-step-num">{step.step_number}</span>
-                                  {#if step.is_event}
-                                    <span class="ip-step-ev-badge">{step.type === 'auto_eval' ? '📝' : step.type === 'learning_created' ? '💡' : step.type === 'learning_deactivated' ? '🗑️' : '📌'}</span>
-                                  {/if}
-                                  <span class="ip-step-type">{step.type.replace(/_/g, ' ')}</span>
-                                  {#if step.tool_name}<code class="ip-step-tool">{step.tool_name}</code>{/if}
-                                  {#if emailCommId(step.tool_name, step.tool_output ?? step.content)}
-                                    <button class="email-view-link" on:click|stopPropagation={() => { const id = emailCommId(step.tool_name, step.tool_output ?? step.content); if (id) openEmailModal(id); }} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
-                                  {/if}
-                                  {#if step.content}
-                                    <button class="ip-copy-inline" title="copy step content" on:click={() => copy(step.content, 'step-' + run.id + '-' + step.step_number)}>{copiedKey === 'step-' + run.id + '-' + step.step_number ? '✓' : '⧉'}</button>
-                                  {/if}
-                                </div>
-                                {#if step.content}
-                                  <div class="ip-step-content ip-out-md" on:click={handleOutputClick} role="presentation">
-                                    {@html formatRunOutput(step.content)}
-                                  </div>
-                                {/if}
-                              </div>
-                            </li>
-                          {/each}
-                        </ol>
-                      {:else}
-                        <div class="ip-loading ip-empty-steps">
-                          No steps recorded for this run.
-                          {#if run.status === 'failed'}<br/><span class="ip-loading-dim">The run errored before producing any steps.</span>{/if}
-                          {#if run.status === 'running'}<br/><span class="ip-loading-dim">Still running — refresh in a moment.</span>{/if}
-                        </div>
-                      {/if}
-                    </div>
-                  {/if}
-                </div>
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <HistoryTab
+          stats={selStats}
+          runs={agentRuns}
+          {runsLoading}
+          {expandedRunId}
+          steps={runSteps}
+          stepsLoading={runStepsLoading}
+          stepsError={runStepsError}
+          {copiedKey}
+          onToggleRun={loadRunSteps}
+          onRetryRun={(id) => { expandedRunId = null; loadRunSteps(id); }}
+          onCopy={copy}
+          onOutputClick={handleOutputClick}
+          onOpenEmail={(id) => emailModal?.open(id)}
+        />
       </svelte:fragment>
 
       <!-- ──────────────── TABS CONTRIBUIDOS POR EXTENSIONES ──────────────── -->
@@ -9090,202 +7190,37 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
       <!-- ──────────────── CHAT TAB ──────────────── -->
       <svelte:fragment slot="chat">
-        <div class="chat-section">
-          {#if !chatCanConverse}
-            <!-- A builtin agent never sees what you type: the executor calls
-                 `handler()` with no arguments and throws the goal away. Rather
-                 than offer a field that quietly does something else, say what
-                 this agent is and point at the controls that do work. -->
-            <div class="chat-noop">
-              <div class="chat-noop-glyph" aria-hidden="true">▣</div>
-              <h4 class="chat-noop-h">{selData.name} doesn't read messages</h4>
-              <p class="chat-noop-p">
-                It's a script agent. Anything sent here would be discarded and the script
-                would run unchanged — the same thing <b>Run now</b> does.
-              </p>
-              <div class="chat-noop-kv">
-                <span class="chat-noop-lbl">runs</span>
-                <code class="ip-code">{selData.builtin_handler}</code>
-              </div>
-              {#if selData.description}
-                <div class="chat-noop-kv">
-                  <span class="chat-noop-lbl">does</span>
-                  <span class="chat-noop-desc">{selData.description}</span>
-                </div>
-              {/if}
-              <div class="chat-noop-actions">
-                <button class="ip-btn ip-btn-primary" on:click={startAgent} disabled={starting}>
-                  <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
-                  <span>{starting ? 'starting…' : 'Run now'}</span>
-                </button>
-                <button class="ip-btn ip-btn-ghost" on:click={() => selectPanelTab('history')}>
-                  <span class="ip-btn-ico">◷</span><span>See what it did</span>
-                </button>
-              </div>
-            </div>
-          {:else}
-            <div class="chat-messages" bind:this={chatScrollEl}>
-              {#if chatHistoryLoading && chatHistory.length === 0}
-                <div class="ip-loading">Loading the conversation…</div>
-              {:else if chatHistory.length === 0}
-                <div class="chat-intro">
-                  <div class="chat-intro-h">Talk to {selData.name}</div>
-                  <p class="chat-intro-p">
-                    {#if selData.description}{selData.description} — a{:else}A{/if}sk a question or hand
-                    over a one-off task. It answers here using its own tools, and the thread is
-                    stored with the agent, so it's still here next time you open this panel.
-                  </p>
-                </div>
-              {:else}
-                {#each chatHistory as msg, i (msg.ts + '-' + msg.role + '-' + i)}
-                  <div class="chat-msg copy-wrap" class:chat-you={msg.role === 'you'} class:chat-agent={msg.role === 'agent'}>
-                    <CopyTextBtn text={msg.text} title="Copy message" />
-                    <div class="chat-meta">
-                      <span class="chat-role">{msg.role === 'you' ? 'You' : selData.name}</span>
-                      <span class="chat-time">{fmtClock(new Date(msg.ts).toISOString())}</span>
-                    </div>
-                    {#if msg.role === 'agent'}
-                      <div class="chat-text ip-out-md" on:click={handleOutputClick} role="presentation">{@html formatRunOutput(msg.text)}</div>
-                      {#if isLlmConfigError(msg.text)}
-                        <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-                      {/if}
-                    {:else}
-                      <span class="chat-text">{msg.text}</span>
-                    {/if}
-                  </div>
-                {/each}
-              {/if}
-
-              {#if chatPending}
-                <!-- Named work, not a bare spinner: these runs take minutes and
-                     an unlabelled dot reads as a hang. -->
-                <div class="chat-msg chat-agent chat-typing" aria-live="polite">
-                  <div class="chat-meta"><span class="chat-role">{selData.name}</span></div>
-                  <div class="chat-typing-row">
-                    <span class="chat-typing-dots" aria-hidden="true"><span></span><span></span><span></span></span>
-                    <span class="chat-typing-txt">working — running its tools, this can take a few minutes</span>
-                  </div>
-                </div>
-              {/if}
-            </div>
-
-            {#if chatError}
-              <div class="chat-err" role="alert">
-                <span class="chat-err-ico" aria-hidden="true">⚠</span>
-                <span>{chatError}</span>
-                {#if isLlmConfigError(chatError)}
-                  <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-                {/if}
-              </div>
-            {/if}
-
-            <ChatComposer
-              bind:value={chatInput}
-              sending={chatSending}
-              placeholder={`Ask ${selData.name} something, or hand over a task…`}
-              hint="Enter sends · Shift+Enter for a new line · the thread is saved with the agent"
-              suggestions={chatSuggestions}
-              sendLabel={`Send to ${selData.name}`}
-              on:send={(e) => talkToAgent(e.detail)}
-            />
-          {/if}
-        </div>
+        <ChatTab
+          agent={selData}
+          canConverse={chatCanConverse}
+          history={chatHistory}
+          historyLoading={chatHistoryLoading}
+          error={chatError}
+          pending={chatPending}
+          bind:input={chatInput}
+          sending={chatSending}
+          suggestions={chatSuggestions}
+          bind:scrollEl={chatScrollEl}
+          {starting}
+          onSend={(text) => talkToAgent(text)}
+          onStart={startAgent}
+          onSeeHistory={() => selectPanelTab('history')}
+          onOutputClick={handleOutputClick}
+        />
       </svelte:fragment>
 
       <!-- ──────────────── WORKSPACE TAB ──────────────── -->
       <svelte:fragment slot="workspace">
-        <div class="ws-panel">
-          {#if selWorkspaceInfo}
-            {@const vars = safeParse(selData?.variables) || {}}
-            {@const extraDirs = Array.isArray(vars.__additional_directories__)
-              ? vars.__additional_directories__
-              : (typeof vars.__additional_directories__ === 'string'
-                  ? (safeParse(vars.__additional_directories__) || [])
-                  : [])}
-            {@const sandboxDriver = vars.__sandbox_driver__ || (vars.__container_sandbox__ ? 'docker' : '')}
-            <div class="ws-cwd-card">
-              <div class="ws-cwd-row">
-                <span class="ws-cwd-lbl">cwd</span>
-                <code class="ws-cwd-path">{selWorkspaceInfo.cwdLabel}</code>
-              </div>
-              <div class="ws-cwd-hint">{selWorkspaceInfo.cwdHint}</div>
-              {#if workspacePreviewUrl}
-                <div class="ws-cwd-row ws-cwd-preview">
-                  <span class="ws-cwd-lbl">preview</span>
-                  <a class="ws-preview-link" style="color:#4ade80;word-break:break-all;text-decoration:none" href={workspacePreviewUrl} target="_blank" rel="noopener noreferrer">🔗 {workspacePreviewUrl}</a>
-                </div>
-              {/if}
-              {#if extraDirs.length}
-                <div class="ws-cwd-row ws-cwd-extra">
-                  <span class="ws-cwd-lbl">+dirs</span>
-                  <div class="ws-cwd-paths">
-                    {#each extraDirs as d}<code class="ws-cwd-path">{d}</code>{/each}
-                  </div>
-                </div>
-              {/if}
-              <div class="ws-cwd-row ws-cwd-guard" class:warn={!sandboxDriver}>
-                <span class="ws-cwd-lbl">guard</span>
-                {#if sandboxDriver}
-                  <span class="ws-guard-ok">📦 sandbox: {sandboxDriver} — Bash confinado al sandbox</span>
-                {:else}
-                  <span class="ws-guard-warn">⚠ no sandbox — Read/Edit/Write/Glob/Grep are scoped to the cwd, but <strong>Bash is unrestricted inside the kernel container</strong></span>
-                {/if}
-              </div>
-            </div>
-          {/if}
-          {#if workspaceLoading}
-            <div class="ws-loading">Loading workspace...</div>
-          {:else if !selWorkspaceInfo?.wsId && !selWorkspaceInfo?.cwdPath}
-            <div class="ws-empty">This agent uses <code>__cwd_path__</code> (an absolute path). To see it, register it as a workspace or browse via the global Workspace tab.</div>
-          {:else if workspaceFileContent}
-            <div class="ws-file-view">
-              <div class="ws-file-header">
-                <button class="ws-back" on:click={() => workspaceFileContent = null}>← Back</button>
-                <span class="ws-file-path">{workspaceFileContent.path}</span>
-                {#if detectLang(workspaceFileContent.path)}
-                  <span class="ws-file-lang">{detectLang(workspaceFileContent.path)}</span>
-                {/if}
-              </div>
-              <div class="copy-wrap">
-                <CopyTextBtn text={workspaceFileContent.content} title="Copy file contents" />
-                {#if workspaceFileContent.path.endsWith('.md')}
-                  <div class="ws-file-md md-body">{@html renderMarkdown(workspaceFileContent.content)}</div>
-                {:else}
-                  <pre class="ws-file-code"><code>{@html highlightCode(workspaceFileContent.content, detectLang(workspaceFileContent.path))}</code></pre>
-                {/if}
-              </div>
-            </div>
-          {:else if visibleWorkspaceFiles.length === 0}
-            <div class="ws-empty">No files yet. This agent hasn't created anything in its workspace.</div>
-          {:else}
-            <div class="ws-toolbar">
-              <span class="ws-count">{wsFileCount} {wsFileCount === 1 ? 'file' : 'files'}</span>
-              <button class="ws-tb-btn" on:click={() => { wsCollapsed = new Set(wsAllDirs); }} disabled={wsCollapsed.size >= wsAllDirs.length}>⊟ Collapse all</button>
-              <button class="ws-tb-btn" on:click={() => { wsCollapsed = new Set(); }} disabled={wsCollapsed.size === 0}>⊞ Expand all</button>
-            </div>
-            <div class="ws-tree">
-              {#each wsRows as r (r.path)}
-                {#if r.isDir}
-                  <button class="ws-row ws-dir" on:click={() => toggleWsDir(r.path)} title={r.path}>
-                    {#each { length: r.depth } as _}<span class="ws-guide"></span>{/each}
-                    <span class="ws-chev" class:open={!wsCollapsed.has(r.path)}>▸</span>
-                    <span class="ws-icon">{wsCollapsed.has(r.path) ? '📁' : '📂'}</span>
-                    <span class="ws-name ws-dirname">{r.name}</span>
-                    <span class="ws-badge">{r.fileCount}</span>
-                  </button>
-                {:else}
-                  <button class="ws-row ws-file" on:click={() => loadWorkspaceFile(r.path)} title={r.path}>
-                    {#each { length: r.depth } as _}<span class="ws-guide"></span>{/each}
-                    <span class="ws-chev-spacer"></span>
-                    <span class="ws-icon">{wsFileIcon(r.name)}</span>
-                    <span class="ws-name">{r.name}</span>
-                    <span class="ws-size">{wsFmtSize(r.size)}</span>
-                  </button>
-                {/if}
-              {/each}
-            </div>
-          {/if}
-        </div>
+        <WorkspaceTab
+          info={selWorkspaceInfo}
+          variables={selData?.variables}
+          previewUrl={workspacePreviewUrl}
+          loading={workspaceLoading}
+          files={visibleWorkspaceFiles}
+          bind:collapsed={wsCollapsed}
+          bind:fileContent={workspaceFileContent}
+          onOpenFile={loadWorkspaceFile}
+        />
       </svelte:fragment>
     </AgentDrawer>
   {/if}
@@ -9300,204 +7235,14 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     </div>
   {/if}
 
-  <!-- Draft preview modal -->
-  {#if draftModalOpen}
-    <div class="modal-overlay" on:click={closeDraftModal} role="button" tabindex="-1" on:keydown={e => e.key === 'Escape' && closeDraftModal()}>
-      <div class="modal draft-modal" on:click|stopPropagation role="presentation">
-        <div class="draft-modal-head">
-          <div>
-            <div class="modal-title">
-              {#if draftModalData?._type === 'note'}Note
-              {:else if draftModalData?._type === 'prospect'}Prospect
-              {:else if draftModalData?._type === 'run'}Agent Run
-              {:else if draftModalData?._type === 'agent'}Agent
-              {:else if draftModalData?._type === 'contact'}Contact
-              {:else if draftModalData?._type === 'reminder'}Reminder
-              {:else}Draft{/if}
-            </div>
-            <div class="modal-sub">
-              {#if draftModalData?.comm}
-                {draftModalData.comm.channel ?? 'email'} · <span class="draft-status">{draftModalData.comm.status}</span>
-                {#if draftModalData.comm.id}· <code>{draftModalData.comm.id.slice(0,8)}</code>{/if}
-              {:else if draftModalData?._type === 'note'}
-                {draftModalData.note.tags || 'note'} · <code>{draftModalData.note.id?.slice(0,8)}</code>
-              {:else if draftModalData?._type === 'prospect'}
-                {draftModalData.prospect.city || ''} · <code>{draftModalData.prospect.id?.slice(0,8)}</code>
-              {:else if draftModalData?._type === 'run'}
-                {draftModalData.run.status} · {draftModalData.run.steps_count ?? 0} steps · <code>{draftModalData.run.id?.slice(0,8)}</code>
-              {:else if draftModalData?._type === 'agent'}
-                {draftModalData.agent.role || 'worker'} · {draftModalData.agent.active ? 'active' : 'inactive'} · <code>{draftModalData.agent.id?.slice(0,8)}</code>
-              {:else if draftModalData?._type === 'contact'}
-                {draftModalData.contact.relationship || 'contact'} · <code>{draftModalData.contact.id?.slice(0,8)}</code>
-              {:else if draftModalData?._type === 'reminder'}
-                {draftModalData.reminder.status} · {draftModalData.reminder.repeat} · <code>{draftModalData.reminder.id?.slice(0,8)}</code>
-              {:else}Loading…{/if}
-            </div>
-          </div>
-          <button class="draft-modal-close" on:click={closeDraftModal} title="Close">×</button>
-        </div>
-
-        {#if draftModalLoading}
-          <div class="ip-loading">Loading…</div>
-        {:else if draftModalError}
-          <div class="modal-error">{draftModalError}</div>
-
-        {:else if draftModalData?.comm}
-          {@const c = draftModalData.comm}
-          <div class="draft-field">
-            <span class="draft-lbl">To</span>
-            <span class="draft-val">{c.recipients_to || '—'}</span>
-          </div>
-          {#if c.recipients_cc}
-            <div class="draft-field"><span class="draft-lbl">Cc</span><span class="draft-val">{c.recipients_cc}</span></div>
-          {/if}
-          {#if c.recipients_bcc}
-            <div class="draft-field"><span class="draft-lbl">Bcc</span><span class="draft-val">{c.recipients_bcc}</span></div>
-          {/if}
-          <div class="draft-field">
-            <span class="draft-lbl">Subject</span>
-            <span class="draft-val draft-subject">{c.subject || '(no subject)'}</span>
-          </div>
-          {#if draftModalData.contact}
-            <div class="draft-field"><span class="draft-lbl">Contact</span><span class="draft-val">{draftModalData.contact.name} &lt;{draftModalData.contact.email}&gt;</span></div>
-          {/if}
-          <div class="draft-body copy-wrap">
-            <CopyTextBtn text={c.body || c.body_html || ''} title="Copy body" />
-            {#if c.body_html}
-              <iframe title="draft-body" class="draft-iframe" srcdoc={c.body_html}></iframe>
-            {:else}
-              <pre class="draft-body-pre">{c.body || '(empty body)'}</pre>
-            {/if}
-          </div>
-          {#if draftModalData.attachments?.length}
-            <div class="draft-field">
-              <span class="draft-lbl">Files</span>
-              <span class="draft-val">{draftModalData.attachments.length} attachment(s)</span>
-            </div>
-          {/if}
-
-        {:else if draftModalData?._type === 'note'}
-          {@const n = draftModalData.note}
-          <div class="draft-field"><span class="draft-lbl">Title</span><span class="draft-val draft-subject">{n.title || '(untitled)'}</span></div>
-          {#if n.tags}<div class="draft-field"><span class="draft-lbl">Tags</span><span class="draft-val">{n.tags}</span></div>{/if}
-          {#if n.created_at}<div class="draft-field"><span class="draft-lbl">Created</span><span class="draft-val">{String(n.created_at).slice(0,16).replace('T',' ')}</span></div>{/if}
-          <div class="draft-body copy-wrap">
-            <CopyTextBtn text={n.body || n.content || ''} title="Copy note" />
-            <div class="draft-body-pre ip-out-md">{@html formatRunOutput(n.body || n.content || '(empty)')}</div>
-          </div>
-
-        {:else if draftModalData?._type === 'prospect'}
-          {@const p = draftModalData.prospect}
-          <div class="draft-field"><span class="draft-lbl">Name</span><span class="draft-val draft-subject">{p.name || p.business_name || '?'}</span></div>
-          {#if p.city}<div class="draft-field"><span class="draft-lbl">City</span><span class="draft-val">{p.city}{p.country ? ', ' + p.country : ''}</span></div>{/if}
-          {#if p.industry}<div class="draft-field"><span class="draft-lbl">Industry</span><span class="draft-val">{p.industry}</span></div>{/if}
-          {#if p.email || p.phone}<div class="draft-field"><span class="draft-lbl">Contact</span><span class="draft-val">{[p.email, p.phone].filter(Boolean).join(' · ')}</span></div>{/if}
-          {#if p.website}<div class="draft-field"><span class="draft-lbl">Website</span><span class="draft-val"><a href={p.website} target="_blank" rel="noopener">{p.website}</a></span></div>{/if}
-          {#if p.score != null}<div class="draft-field"><span class="draft-lbl">Score</span><span class="draft-val">{p.score}/100</span></div>{/if}
-          {#if p.notes}<div class="draft-body copy-wrap"><CopyTextBtn text={p.notes} title="Copy notes" /><pre class="draft-body-pre">{p.notes}</pre></div>{/if}
-
-        {:else if draftModalData?._type === 'run'}
-          {@const r = draftModalData.run}
-          <div class="draft-field"><span class="draft-lbl">Status</span><span class="draft-val">{r.status}</span></div>
-          <div class="draft-field"><span class="draft-lbl">Trigger</span><span class="draft-val">{r.trigger_type}</span></div>
-          <div class="draft-field"><span class="draft-lbl">Steps</span><span class="draft-val">{r.steps_count ?? 0}</span></div>
-          <div class="draft-field"><span class="draft-lbl">Tokens</span><span class="draft-val">{r.tokens_used ?? 0}</span></div>
-          {#if r.created_at}<div class="draft-field"><span class="draft-lbl">Date</span><span class="draft-val">{String(r.created_at).slice(0,16).replace('T',' ')}</span></div>{/if}
-          {#if r.result || r.error}
-            <div class="draft-body copy-wrap">
-              <CopyTextBtn text={r.result || r.error || ''} title="Copy run output" />
-              <div class="draft-body-pre ip-out-md">{@html formatRunOutput(r.result || r.error || '')}</div>
-            </div>
-          {/if}
-
-        {:else if draftModalData?._type === 'agent'}
-          {@const a = draftModalData.agent}
-          <div class="draft-field"><span class="draft-lbl">Name</span><span class="draft-val draft-subject">{a.name}</span></div>
-          {#if a.description}<div class="draft-field"><span class="draft-lbl">Description</span><span class="draft-val">{a.description}</span></div>{/if}
-          <div class="draft-field"><span class="draft-lbl">Role</span><span class="draft-val">{a.role || 'worker'}</span></div>
-          {#if a.provider || a.model}<div class="draft-field"><span class="draft-lbl">Model</span><span class="draft-val">{[a.provider, a.model].filter(Boolean).join(' / ') || '—'}</span></div>{/if}
-          <div class="draft-field"><span class="draft-lbl">Active</span><span class="draft-val">{a.active ? 'yes' : 'no'}</span></div>
-          {#if draftModalData.recentRuns?.length}
-            <div class="draft-field"><span class="draft-lbl">Recent</span><span class="draft-val">{draftModalData.recentRuns.length} run(s)</span></div>
-            <div class="draft-body copy-wrap">
-              <CopyTextBtn text={formatAgentRecentRuns(draftModalData.recentRuns)} title="Copy recent runs" />
-              <pre class="draft-body-pre">{formatAgentRecentRuns(draftModalData.recentRuns)}</pre>
-            </div>
-          {/if}
-
-        {:else if draftModalData?._type === 'contact'}
-          {@const k = draftModalData.contact}
-          <div class="draft-field"><span class="draft-lbl">Name</span><span class="draft-val draft-subject">{k.name || '?'}</span></div>
-          {#if k.company}<div class="draft-field"><span class="draft-lbl">Company</span><span class="draft-val">{k.company}</span></div>{/if}
-          {#if k.relationship}<div class="draft-field"><span class="draft-lbl">Relationship</span><span class="draft-val">{k.relationship}</span></div>{/if}
-          {#if k.email && k.email !== ''}<div class="draft-field"><span class="draft-lbl">Email</span><span class="draft-val">{k.email}</span></div>{/if}
-          {#if k.phone && k.phone !== ''}<div class="draft-field"><span class="draft-lbl">Phone</span><span class="draft-val">{k.phone}</span></div>{/if}
-          {#if k.notes && k.notes !== ''}<div class="draft-body copy-wrap"><CopyTextBtn text={k.notes} title="Copy notes" /><pre class="draft-body-pre">{k.notes}</pre></div>{/if}
-
-        {:else if draftModalData?._type === 'reminder'}
-          {@const rem = draftModalData.reminder}
-          <div class="draft-field"><span class="draft-lbl">Title</span><span class="draft-val draft-subject">{rem.title || '(no title)'}</span></div>
-          {#if rem.trigger_at}<div class="draft-field"><span class="draft-lbl">Trigger</span><span class="draft-val">{String(rem.trigger_at).slice(0,16).replace('T',' ')}</span></div>{/if}
-          <div class="draft-field"><span class="draft-lbl">Status</span><span class="draft-val">{rem.status}</span></div>
-          <div class="draft-field"><span class="draft-lbl">Repeat</span><span class="draft-val">{rem.repeat}</span></div>
-          {#if rem.snoozed_until}<div class="draft-field"><span class="draft-lbl">Snoozed until</span><span class="draft-val">{String(rem.snoozed_until).slice(0,16).replace('T',' ')}</span></div>{/if}
-          {#if rem.last_fired_at}<div class="draft-field"><span class="draft-lbl">Last fired</span><span class="draft-val">{String(rem.last_fired_at).slice(0,16).replace('T',' ')}</span></div>{/if}
-          <div class="draft-field"><span class="draft-lbl">Notify</span><span class="draft-val">{[rem.notify_mattermost ? 'Mattermost' : null, rem.notify_telegram ? 'Telegram' : null].filter(Boolean).join(', ') || '—'}</span></div>
-          {#if rem.body && rem.body !== ''}
-            <div class="draft-body copy-wrap">
-              <CopyTextBtn text={rem.body} title="Copy body" />
-              <pre class="draft-body-pre">{rem.body}</pre>
-            </div>
-          {/if}
-        {/if}
-
-        <div class="modal-actions">
-          {#if draftModalData?.comm?.id}
-            <a class="modal-cancel" href={'/comms/edit/' + draftModalData.comm.id} target="_blank" rel="noopener">Open editor →</a>
-          {/if}
-          <button class="modal-confirm" on:click={closeDraftModal}>Close</button>
-        </div>
-      </div>
-    </div>
-  {/if}
+  <!-- Draft preview modal — see DraftModal.svelte. handleOutputClick opens
+       it when a UUID chip in any run output is clicked. -->
+  <DraftModal bind:this={draftModal} />
 </div>
 
-<!-- Sent-email viewer modal (opened from email-send activity rows) -->
-{#if emailModalOpen}
-  <div class="email-modal-backdrop" on:click={closeEmailModal} role="presentation">
-    <div class="email-modal" on:click|stopPropagation role="dialog" aria-modal="true">
-      <div class="email-modal-head">
-        <span class="email-modal-title">📧 Email enviado</span>
-        <button class="email-modal-close" on:click={closeEmailModal} title="Close">×</button>
-      </div>
-      {#if emailModalLoading}
-        <div class="email-modal-body email-modal-dim">Loading email…</div>
-      {:else if emailModalError}
-        <div class="email-modal-body email-modal-err">⚠ {emailModalError}</div>
-      {:else if emailModalData?.comm}
-        {@const c = emailModalData.comm}
-        {@const acc = emailModalData.account}
-        {@const fromAddr = c.direction === 'outbound' ? (acc?.email ?? '—') : (acc?.email ?? '—')}
-        <div class="email-modal-meta">
-          <div class="emm-row"><span class="emm-k">De</span><span class="emm-v">{acc?.label ? acc.label + ' · ' : ''}{fromAddr}</span></div>
-          <div class="emm-row"><span class="emm-k">Para</span><span class="emm-v">{c.recipients_to || '—'}</span></div>
-          {#if c.recipients_cc}<div class="emm-row"><span class="emm-k">CC</span><span class="emm-v">{c.recipients_cc}</span></div>{/if}
-          <div class="emm-row"><span class="emm-k">Asunto</span><span class="emm-v emm-subj">{c.subject || '(sin asunto)'}</span></div>
-          {#if c.sent_at}<div class="emm-row"><span class="emm-k">Enviado</span><span class="emm-v">{fmtClock(c.sent_at)} · {c.status}</span></div>{/if}
-        </div>
-        <div class="email-modal-body">
-          {#if c.body_html}
-            <div class="email-modal-html">{@html sanitizeHtml(c.body_html)}</div>
-          {:else}
-            <div class="email-modal-text">{c.body || '(sin cuerpo)'}</div>
-          {/if}
-        </div>
-      {:else}
-        <div class="email-modal-body email-modal-dim">No se encontró el email.</div>
-      {/if}
-    </div>
-  </div>
-{/if}
+<!-- Sent-email viewer modal (opened from email-send activity rows) — the
+     fetch, the state and the styles live in EmailModal.svelte. -->
+<EmailModal bind:this={emailModal} />
 
 <style>
   .world3d-container{position:relative;width:100%;height:100%;overflow:hidden;background:#020206}
@@ -9902,28 +7647,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-close:hover{background:rgba(239,93,110,.12);border-color:rgba(239,93,110,.3);color:#ef5d6e}
 
-  /* ── Primary actions ─────────── */
-  .ip-btn{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:8px 14px;border-radius:8px;
-    font:600 11px 'Syne',sans-serif;letter-spacing:.4px;
-    cursor:pointer;transition:all .15s;
-    border:1px solid transparent;
-  }
-  .ip-btn-ico{font:500 11px 'JetBrains Mono',monospace}
-  .ip-btn-primary{
-    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
-    box-shadow:0 6px 16px -8px rgba(120,220,140,.5);
-  }
-  .ip-btn-primary:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
-  .ip-btn-primary:disabled{opacity:.5;cursor:wait;background:rgba(120,220,140,.3);border-color:rgba(120,220,140,.2)}
-  .ip-btn-ghost{
-    background:rgba(255,255,255,.03);
-    border-color:rgba(120,130,160,.2);
-    color:#d8dae3;
-  }
-  .ip-btn-ghost:hover{background:rgba(255,255,255,.06);border-color:rgba(120,130,160,.35)}
-
   /* ── Tabs ─────────────────────── */
   .ip-tabs{
     display:flex;gap:2px;
@@ -9956,88 +7679,14 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
   .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}
 
-  @keyframes led-pulse{50%{opacity:.55}}
 
   /* ── Mandate ─── moved to components/agent/sections/MandateSection.svelte */
 
-  /* ── KPI grid ────────────────── */
-  .ip-kpis{
-    display:grid;grid-template-columns:repeat(4,1fr);gap:1px;
-    background:rgba(120,130,160,.1);border:1px solid rgba(120,130,160,.12);
-    border-radius:10px;overflow:hidden;
-    margin-bottom:18px;
-  }
-  .ip-kpi{
-    padding:12px 8px;background:#0f1219;
-    display:flex;flex-direction:column;align-items:center;gap:4px;
-  }
-  .ip-kpi-v{
-    font:600 22px/1 'Syne',sans-serif;color:#f0f2f7;
-    font-variant-numeric:tabular-nums;
-  }
-  .ip-kpi-unit{font-size:13px;color:#8a8fa8;font-weight:500;margin-left:1px}
-  .ip-kpi-l{
-    font:500 9px 'JetBrains Mono',monospace;
-    color:#6a6f82;text-transform:uppercase;letter-spacing:.5px;
-  }
-
-  /* ── Sections ─── the section frame moved with them, to
-     components/agent/sections/*. The count badge stays: the LIVE and HISTORY
-     tab bodies still print it. */
-  .ip-sec-c{
-    font:600 9px 'JetBrains Mono',monospace;
-    padding:1px 6px;border-radius:4px;
-    background:rgba(120,130,160,.15);color:#a0a5b8;
-    letter-spacing:0;text-transform:none;
-  }
   /* Skin picker ─── moved to sections/AppearanceSection.svelte */
 
   /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
-  .ip-code{
-    font:500 11px 'JetBrains Mono',monospace;
-    background:rgba(0,0,0,.3);color:#d8dae3;
-    padding:2px 7px;border-radius:4px;
-    border:1px solid rgba(120,130,160,.12);
-  }
-
-  /* ── KV grid (limits etc) ────── */
-  .ip-kv-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-  .ip-kv{
-    display:flex;justify-content:space-between;align-items:center;gap:10px;
-    padding:8px 12px;border-radius:6px;
-    background:rgba(120,130,160,.04);
-    border:1px solid rgba(120,130,160,.08);
-  }
-  .ip-kv span{font:500 10px 'Manrope',sans-serif;color:#8a8fa8;flex-shrink:0}
-  /* A model id is long enough to squash the label out of a two-up grid. */
-  .ip-kv code{
-    font:600 11px 'JetBrains Mono',monospace;color:#f0f2f7;
-    min-width:0;text-align:right;overflow-wrap:anywhere;
-  }
 
   /* ── Pre blocks ─── moved to sections/MandateSection + GoalSection */
-
-  /* ── Icon buttons ─────────── */
-  .ip-icon-btn{
-    background:rgba(120,130,160,.08);
-    border:1px solid rgba(120,130,160,.15);
-    color:#a0a5b8;
-    padding:4px 8px;border-radius:5px;
-    font:500 9px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    cursor:pointer;transition:all .12s;
-    display:inline-flex;align-items:center;gap:4px;
-    white-space:nowrap;
-  }
-  .ip-icon-btn:hover{background:rgba(120,130,160,.16);color:#f0f2f7}
-  .ip-icon-btn-err{color:#ef5d6e;background:rgba(239,93,110,.08);border-color:rgba(239,93,110,.2)}
-  .ip-icon-btn-err:hover{background:rgba(239,93,110,.18);color:#ff7280}
-  .ip-copy-inline{
-    background:transparent;border:none;
-    color:#6a6f82;cursor:pointer;
-    font:400 11px monospace;line-height:1;padding:1px 4px;border-radius:3px;
-    transition:color .12s;margin-left:4px;
-  }
-  .ip-copy-inline:hover{color:#d8dae3;background:rgba(120,130,160,.1)}
 
   /* ── Tool chips ─── moved to sections/ToolsSection.svelte */
 
@@ -10051,127 +7700,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .hud-i:hover{color:var(--text-1)}
   .hud-d{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 
-  /* ═══════════════════════════════════════════════════════════════
-     HISTORY TAB — run cards with expandable timeline
-     ═══════════════════════════════════════════════════════════════ */
-  .ip-runs{display:flex;flex-direction:column;gap:8px}
-  .ip-run-card{
-    border-radius:10px;
-    background:linear-gradient(180deg, rgba(255,255,255,.02) 0%, rgba(255,255,255,0) 100%);
-    border:1px solid rgba(120,130,160,.14);
-    overflow:hidden;
-    transition:border-color .15s;
-  }
-  .ip-run-card:hover{border-color:rgba(120,130,160,.25)}
-  .ip-run-card.expanded{border-color:rgba(61,214,200,.35);background:rgba(61,214,200,.02)}
-  .ip-run-card.run-fail{border-left:3px solid #ef5d6e}
-  .ip-run-card.run-ok{border-left:3px solid #78dc8c}
-  .ip-run-card.run-live{border-left:3px solid #6aa0ff}
-
-  .ip-run-head{
-    display:grid;
-    grid-template-columns:18px auto auto auto 1fr auto;
-    align-items:center;gap:10px;
-    padding:10px 12px;
-    background:none;border:none;
-    color:#b0b5c8;
-    cursor:pointer;text-align:left;
-    font-family:inherit;width:100%;
-    transition:background .1s;
-  }
-  .ip-run-head:hover{background:rgba(255,255,255,.02)}
-  .ip-run-status{font:700 12px 'JetBrains Mono',monospace;width:16px;text-align:center}
-  .ip-run-status.ok{color:#78dc8c}
-  .ip-run-status.fail{color:#ef5d6e}
-  .ip-run-status.running{color:#6aa0ff;animation:led-pulse 1s ease-in-out infinite}
-  .ip-run-trigger{
-    font:600 9px 'JetBrains Mono',monospace;
-    color:var(--c,#8a8fa8);
-    background:color-mix(in srgb, var(--c,#8a8fa8) 12%, transparent);
-    border:1px solid color-mix(in srgb, var(--c,#8a8fa8) 25%, transparent);
-    padding:2px 7px;border-radius:4px;text-transform:uppercase;letter-spacing:.5px;
-  }
-  .ip-run-steps{font:500 10px 'JetBrains Mono',monospace;color:#a0a5b8}
-  .ip-run-tokens{font:500 10px 'JetBrains Mono',monospace;color:#8a8fa8}
-  .ip-run-time{
-    font:500 10px 'Manrope',sans-serif;color:#6a6f82;
-    text-align:right;
-  }
-  .ip-run-caret{
-    color:#6a6f82;transition:transform .2s;font-size:11px;
-  }
-  .ip-run-caret.open{transform:rotate(180deg);color:var(--flow-color)}
-
-  .ip-run-err-pre{
-    display:flex;gap:8px;align-items:baseline;
-    padding:0 12px 10px;
-    font:500 11px 'Manrope',sans-serif;
-  }
-  .ip-run-err-lbl{
-    font:600 9px 'JetBrains Mono',monospace;
-    color:#ef5d6e;text-transform:uppercase;letter-spacing:.5px;
-    padding:2px 6px;border-radius:4px;
-    background:rgba(239,93,110,.12);
-  }
-  .ip-run-err-txt{color:#ef8090;word-break:break-word;line-height:1.4;flex:1}
-  .ip-run-prev{
-    padding:0 12px 12px;
-    font:400 12px/1.5 'Manrope',sans-serif;
-    color:#8a8fa8;word-break:break-word;
-  }
-
-  .ip-run-body{
-    padding:12px;
-    border-top:1px solid rgba(120,130,160,.1);
-    background:rgba(0,0,0,.15);
-  }
-  .ip-run-meta-row{
-    display:flex;gap:12px;flex-wrap:wrap;align-items:center;
-    padding-bottom:10px;margin-bottom:12px;
-    border-bottom:1px dashed rgba(120,130,160,.12);
-  }
-  .ip-run-meta-item{
-    font:500 10px 'JetBrains Mono',monospace;color:#8a8fa8;
-    display:inline-flex;align-items:center;gap:4px;
-  }
-  .ip-run-meta-item code{color:#d8dae3;background:rgba(0,0,0,.3);padding:1px 6px;border-radius:3px}
-
-  /* Error + output blocks */
-  .ip-err-box{
-    border:1px solid rgba(239,93,110,.3);
-    background:rgba(239,93,110,.06);
-    border-radius:8px;
-    margin-bottom:12px;
-    overflow:hidden;
-  }
-  .ip-err-head{
-    display:flex;justify-content:space-between;align-items:center;
-    padding:8px 12px;
-    background:rgba(239,93,110,.1);
-    border-bottom:1px solid rgba(239,93,110,.15);
-  }
-  .ip-err-lbl{font:600 10px 'JetBrains Mono',monospace;color:#ef5d6e;text-transform:uppercase;letter-spacing:.5px}
-  .ip-err-txt{
-    margin:0;padding:12px;
-    font:400 11px/1.55 'JetBrains Mono',monospace;
-    color:#ff9ba8;white-space:pre-wrap;word-break:break-word;
-    max-height:240px;overflow-y:auto;
-  }
-
-  .ip-out-box{
-    border:1px solid rgba(61,214,200,.25);
-    background:rgba(61,214,200,.04);
-    border-radius:8px;
-    margin-bottom:12px;
-    overflow:hidden;
-  }
-  .ip-out-head{
-    display:flex;justify-content:space-between;align-items:center;
-    padding:8px 12px;
-    background:rgba(61,214,200,.08);
-    border-bottom:1px solid rgba(61,214,200,.15);
-  }
-  .ip-out-lbl{font:600 10px 'Syne',sans-serif;color:#3dd6c8;text-transform:uppercase;letter-spacing:.8px}
   .ip-out-txt{
     margin:0;padding:12px;
     font:400 11px/1.55 'JetBrains Mono',monospace;
@@ -10179,154 +7707,11 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     max-height:280px;overflow-y:auto;
   }
 
-  /* Steps timeline */
-  .ip-steps-h{
-    font:600 10px 'Syne',sans-serif;color:#8a8fa8;
-    text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;
-    display:inline-flex;align-items:center;gap:6px;
-  }
-  .ip-steps{
-    list-style:none;margin:0;padding:0;
-    display:flex;flex-direction:column;gap:2px;
-    position:relative;padding-left:22px;
-  }
-  .ip-steps::before{
-    content:'';position:absolute;left:7px;top:8px;bottom:8px;width:1px;
-    background:linear-gradient(180deg, rgba(120,130,160,.3) 0%, rgba(120,130,160,.05) 100%);
-  }
-  .ip-step{
-    position:relative;padding:6px 10px;border-radius:6px;
-    transition:background .1s;
-  }
-  .ip-step:hover{background:rgba(255,255,255,.02)}
-  .ip-step-dot{
-    position:absolute;left:-18px;top:11px;
-    width:9px;height:9px;border-radius:50%;
-    background:#3a3f52;border:2px solid #0b0d14;
-  }
-  .step-tool_call .ip-step-dot{background:#fbbf24}
-  .step-tool_result .ip-step-dot{background:#6aa0ff}
-  .step-thought .ip-step-dot{background:#8a8fa8}
-  .step-final .ip-step-dot{background:#78dc8c;box-shadow:0 0 8px rgba(120,220,140,.5)}
-  .step-error .ip-step-dot{background:#ef5d6e}
-  .step-auto_eval .ip-step-dot{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.5)}
-  .step-learning_created .ip-step-dot{background:#d4a84b;box-shadow:0 0 8px rgba(212,168,75,.5)}
-  .step-learning_deactivated .ip-step-dot{background:#8a8fa8}
-  .step-chain_triggered .ip-step-dot{background:#a78bfa}
-
-  .ip-step-head{display:flex;align-items:center;gap:8px;font:500 10px 'JetBrains Mono',monospace;flex-wrap:wrap}
-  .ip-step-num{color:#6a6f82;min-width:18px}
-  .ip-step-ev-badge{font-size:13px;line-height:1}
-  .ip-step-type{
-    color:#a0a5b8;text-transform:uppercase;letter-spacing:.5px;font-size:9px;font-weight:600;
-    padding:1px 6px;border-radius:3px;background:rgba(120,130,160,.1);
-  }
-  .step-tool_call .ip-step-type{color:#fbbf24;background:rgba(251,191,36,.1)}
-  .step-tool_result .ip-step-type{color:#6aa0ff;background:rgba(106,160,255,.1)}
-  .step-final .ip-step-type{color:#78dc8c;background:rgba(120,220,140,.1)}
-  .step-error .ip-step-type{color:#ef5d6e;background:rgba(239,93,110,.1)}
-  .step-auto_eval .ip-step-type{color:#f59e0b;background:rgba(245,158,11,.12)}
-  .step-learning_created .ip-step-type{color:#d4a84b;background:rgba(212,168,75,.12)}
-  .step-learning_deactivated .ip-step-type{color:#8a8fa8;background:rgba(120,130,160,.1)}
-  .step-event{border-left:2px solid rgba(212,168,75,.4);margin-left:-2px}
-  .step-event .ip-step-content{background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.12)}
-  .ip-sec-c-ev{color:#d4a84b;margin-left:6px}
-  .ip-step-tool{color:#d8dae3;font-weight:500;word-break:break-all}
-  .ip-step-content{
-    margin-top:4px;padding:6px 8px;border-radius:4px;
-    background:rgba(0,0,0,.2);
-    font:400 10px/1.5 'JetBrains Mono',monospace;
-    color:#b0b5c8;word-break:break-word;white-space:pre-wrap;
-  }
-
   /* Misc */
-  .ip-loading,.ip-empty{
+  .ip-loading{
     font:500 11px 'Manrope',sans-serif;color:#6a6f82;
     text-align:center;padding:24px 12px;
   }
-  .ip-empty b{color:#d8dae3;font-weight:600}
-  .ip-error{color:#f47070;display:flex;flex-direction:column;gap:8px;align-items:center}
-  .ip-empty-steps{color:#8a8f9e}
-  .ip-loading-dim{color:#5a5f70;font-size:10px}
-  .ip-retry{
-    background:transparent;border:1px solid #5a5f70;color:#aab0c0;
-    font:500 10px 'Manrope',sans-serif;padding:3px 10px;border-radius:3px;cursor:pointer;
-  }
-  .ip-retry:hover{border-color:#aab0c0;color:#fff}
-
-  /* ── Chat with agent ─────────── */
-  /* ═══════════════════════════════════════════════════════════════
-     CHAT — message input + conversation thread
-     ═══════════════════════════════════════════════════════════════ */
-  .chat-section{
-    flex:1;display:flex;flex-direction:column;min-height:0;overflow:hidden;
-    padding:16px 18px;
-  }
-  .chat-messages{
-    flex:1;overflow-y:auto;margin-bottom:12px;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-    display:flex;flex-direction:column;gap:10px;
-  }
-  .chat-msg{
-    padding:10px 12px;border-radius:10px;
-    font:400 13px/1.5 'Manrope',sans-serif;
-    max-width:90%;
-    word-break:break-word;
-  }
-  .chat-you{
-    align-self:flex-end;
-    background:color-mix(in srgb, var(--flow-color) 14%, transparent);
-    border:1px solid color-mix(in srgb, var(--flow-color) 28%, transparent);
-  }
-  .chat-agent{
-    align-self:flex-start;
-    background:rgba(120,130,160,.06);
-    border:1px solid rgba(120,130,160,.15);
-  }
-  /* Author and clock on one line — a reply that lands minutes after you asked
-     needs a timestamp to be readable as a conversation. */
-  .chat-meta{display:flex;align-items:baseline;gap:8px;margin-bottom:4px}
-  .chat-role{
-    font:600 9px 'JetBrains Mono',monospace;
-    text-transform:uppercase;letter-spacing:.5px;
-  }
-  .chat-time{font:400 9px 'JetBrains Mono',monospace;color:#6a6f82;font-variant-numeric:tabular-nums}
-  .chat-you .chat-role{color:var(--flow-color)}
-  .chat-agent .chat-role{color:#a78bfa}
-  .chat-text{color:#e0e2ea}
-  .chat-agent .chat-text{max-height:300px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.2) transparent}
-
-  /* ── Empty thread ──
-     Says who you are about to talk to and what happens to the thread, instead
-     of a one-liner floating over 500px of nothing. */
-  .chat-intro{margin:auto 0;padding:4px 2px;max-width:46ch}
-  .chat-intro-h{font:600 14px 'Syne',sans-serif;color:#e0e2ea;margin-bottom:6px}
-  .chat-intro-p{font:400 12px/1.6 'Manrope',sans-serif;color:#8a8fa8;margin:0}
-
-  /* ── Working ────────────────── */
-  .chat-typing{opacity:.9}
-  .chat-typing-row{display:flex;align-items:center;gap:8px}
-  .chat-typing-txt{font:400 11px 'Manrope',sans-serif;color:#8a8fa8}
-  .chat-typing-dots{display:inline-flex;gap:3px;flex-shrink:0}
-  .chat-typing-dots span{
-    width:5px;height:5px;border-radius:50%;background:#a78bfa;
-    animation:chat-blink 1.2s ease-in-out infinite;
-  }
-  .chat-typing-dots span:nth-child(2){animation-delay:.18s}
-  .chat-typing-dots span:nth-child(3){animation-delay:.36s}
-  @keyframes chat-blink{0%,80%,100%{opacity:.25}40%{opacity:1}}
-  @media (prefers-reduced-motion: reduce){
-    .chat-typing-dots span{animation:none;opacity:.7}
-  }
-
-  .chat-err{
-    display:flex;align-items:flex-start;gap:8px;
-    margin-bottom:10px;padding:8px 10px;border-radius:8px;
-    background:rgba(239,93,110,.08);
-    border:1px solid rgba(239,93,110,.25);
-    font:400 11px/1.45 'Manrope',sans-serif;color:#f0a0aa;
-  }
-  .chat-err-ico{flex-shrink:0}
 
   /* ── "Configure LLM" chip ──
      A run that dies with no provider configured is not a report, it is a task.
@@ -10344,186 +7729,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .llm-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b}
   /* Under a card rather than beside a message: own line, indented to the card. */
   .llm-fix-row{display:inline-block;align-self:flex-start;margin:6px 0 2px 12px}
-
-  /* ── Script agents ──
-     The tab stays, the input does not. Same call as the office environment:
-     an affordance that cannot work is explained, not silently removed. */
-  .chat-noop{
-    margin:auto 0;padding:18px;border-radius:12px;max-width:52ch;
-    background:rgba(120,130,160,.04);
-    border:1px solid rgba(120,130,160,.14);
-  }
-  .chat-noop-glyph{font:400 20px 'JetBrains Mono',monospace;color:#8a8fa8;margin-bottom:8px}
-  .chat-noop-h{font:600 14px 'Syne',sans-serif;color:#e0e2ea;margin:0 0 6px}
-  .chat-noop-p{font:400 12px/1.6 'Manrope',sans-serif;color:#8a8fa8;margin:0 0 14px}
-  .chat-noop-kv{display:flex;align-items:baseline;gap:10px;margin-bottom:8px}
-  .chat-noop-lbl{
-    flex-shrink:0;width:38px;
-    font:600 9px 'JetBrains Mono',monospace;color:#6a6f82;
-    text-transform:uppercase;letter-spacing:.5px;
-  }
-  .chat-noop-desc{font:400 12px/1.5 'Manrope',sans-serif;color:#c0c5d8}
-  .chat-noop-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
-
-  /* ── Workspace panel ──────────── */
-  .ws-panel{padding:8px 0;overflow-y:auto;max-height:calc(100% - 120px);scrollbar-width:thin}
-  .ws-loading,.ws-empty{padding:24px 16px;text-align:center;color:#6a6f82;font:500 12px 'Manrope',sans-serif}
-  .ws-empty code{padding:1px 6px;border-radius:3px;background:rgba(120,130,160,.12);color:#c0c5d8;font:500 10px 'JetBrains Mono',monospace}
-  /* cwd card — header of the workspace tab showing the agent's working
-     directory and the guardrails applied on top of it */
-  .ws-cwd-card{
-    margin:0 8px 10px;padding:10px 12px;border-radius:8px;
-    background:linear-gradient(180deg,rgba(99,102,241,.08),rgba(99,102,241,.03));
-    border:1px solid rgba(99,102,241,.18);
-    display:flex;flex-direction:column;gap:6px;
-  }
-  .ws-cwd-row{display:flex;align-items:flex-start;gap:8px;flex-wrap:wrap}
-  .ws-cwd-lbl{
-    flex-shrink:0;padding:2px 8px;border-radius:3px;
-    background:rgba(99,102,241,.18);color:#a5a8e8;
-    font:600 9px/14px 'JetBrains Mono',monospace;letter-spacing:.5px;text-transform:uppercase;
-  }
-  .ws-cwd-path{
-    flex:1;min-width:0;padding:2px 6px;border-radius:3px;
-    background:rgba(0,0,0,.25);color:#e2e4f0;
-    font:500 11px/16px 'JetBrains Mono',monospace;
-    word-break:break-all;
-  }
-  .ws-cwd-paths{display:flex;flex-direction:column;gap:3px;flex:1;min-width:0}
-  .ws-cwd-hint{font:500 10px 'Manrope',sans-serif;color:#7a7f96;padding-left:2px}
-  .ws-cwd-extra .ws-cwd-lbl{background:rgba(180,140,80,.18);color:#d8b878}
-  .ws-cwd-guard{margin-top:2px;padding-top:6px;border-top:1px dashed rgba(120,130,160,.2)}
-  .ws-cwd-guard .ws-cwd-lbl{background:rgba(80,180,120,.18);color:#7ed8a4}
-  .ws-cwd-guard.warn .ws-cwd-lbl{background:rgba(220,140,60,.20);color:#e8b070}
-  .ws-guard-ok{flex:1;font:500 11px 'Manrope',sans-serif;color:#7ed8a4}
-  .ws-guard-warn{flex:1;font:500 11px 'Manrope',sans-serif;color:#e8b070;line-height:1.45}
-  .ws-guard-warn strong{color:#f0d8a0}
-  /* Workspace file tree — collapsible dirs with indent guides */
-  .ws-toolbar{
-    display:flex;align-items:center;gap:6px;margin:0 8px 6px;padding:0 4px;
-  }
-  .ws-count{
-    flex:1;font:600 10px 'JetBrains Mono',monospace;color:#6a6f82;
-    letter-spacing:.04em;text-transform:uppercase;
-  }
-  .ws-tb-btn{
-    padding:3px 9px;border-radius:5px;border:1px solid rgba(120,130,160,.18);
-    background:rgba(120,130,160,.06);color:#8a8fa8;cursor:pointer;
-    font:500 10px 'Manrope',sans-serif;transition:all .12s;
-  }
-  .ws-tb-btn:hover:not(:disabled){background:rgba(120,130,160,.14);color:#e0e2ea}
-  .ws-tb-btn:disabled{opacity:.35;cursor:default}
-  .ws-tree{
-    display:flex;flex-direction:column;margin:0 8px;padding:4px;
-    border-radius:8px;background:rgba(0,0,0,.18);
-    border:1px solid rgba(120,130,160,.08);
-  }
-  .ws-row{
-    display:flex;align-items:center;gap:6px;width:100%;padding:5px 8px 5px 6px;
-    border:none;border-radius:5px;background:transparent;
-    cursor:pointer;text-align:left;transition:background .1s,color .1s;
-  }
-  .ws-row:hover{background:rgba(120,130,160,.1)}
-  .ws-guide{
-    flex-shrink:0;width:9px;margin:-5px 5px -5px 6px;align-self:stretch;
-    border-left:1px solid rgba(120,130,160,.16);
-  }
-  .ws-chev{
-    flex-shrink:0;width:10px;font-size:9px;color:#6a6f82;
-    display:inline-block;transition:transform .12s ease;line-height:1;
-  }
-  .ws-chev.open{transform:rotate(90deg)}
-  .ws-chev-spacer{flex-shrink:0;width:10px}
-  .ws-icon{font-size:12px;flex-shrink:0;line-height:1}
-  .ws-name{
-    flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
-    font:400 11px 'JetBrains Mono',monospace;color:#b8bdd2;
-  }
-  .ws-row:hover .ws-name{color:#e8ecf5}
-  .ws-dirname{font:600 11px 'Manrope',sans-serif;color:#cdd2e4;letter-spacing:.01em}
-  .ws-badge{
-    flex-shrink:0;min-width:16px;padding:1px 6px;border-radius:8px;text-align:center;
-    background:rgba(120,130,160,.12);color:#7a7f96;
-    font:600 9px/14px 'JetBrains Mono',monospace;
-  }
-  .ws-size{color:#4a4f6a;font:400 10px 'JetBrains Mono',monospace;flex-shrink:0}
-  .ws-file-view{display:flex;flex-direction:column;height:100%}
-  .ws-file-header{
-    display:flex;align-items:center;gap:8px;padding:8px 12px;
-    border-bottom:1px solid rgba(120,130,160,.1);
-  }
-  .ws-back{
-    padding:4px 10px;border-radius:5px;border:1px solid rgba(120,130,160,.2);
-    background:rgba(120,130,160,.06);color:#8a8fa8;cursor:pointer;
-    font:500 10px 'Manrope',sans-serif;transition:all .1s;
-  }
-  .ws-back:hover{background:rgba(120,130,160,.15);color:#fff}
-  .ws-file-path{font:500 11px 'JetBrains Mono',monospace;color:#c0c5d8;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .ws-file-lang{
-    padding:2px 8px;border-radius:4px;flex-shrink:0;
-    background:rgba(99,102,241,.14);border:1px solid rgba(99,102,241,.3);
-    color:#a5a9ff;font:500 9px 'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:.04em;
-  }
-  .ws-file-code{
-    flex:1;overflow:auto;padding:12px 16px;margin:0;
-    font:400 11px/1.5 'JetBrains Mono',monospace;color:#c0c5d8;
-    background:rgba(0,0,0,.2);border-radius:0 0 8px 8px;
-    white-space:pre;tab-size:2;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.2) transparent;
-  }
-  .ws-file-code code{display:block;min-width:max-content}
-  /* Syntax highlighting — neutral dark palette */
-  .ws-file-code :global(.hl-kw) { color:#c586c0; }
-  .ws-file-code :global(.hl-str) { color:#ce9178; }
-  .ws-file-code :global(.hl-num) { color:#b5cea8; }
-  .ws-file-code :global(.hl-com) { color:#6a9955; font-style:italic; }
-  .ws-file-code :global(.hl-fn)  { color:#dcdcaa; }
-  .ws-file-code :global(.hl-typ) { color:#4ec9b0; }
-  .ws-file-code :global(.hl-key) { color:#9cdcfe; }
-  .ws-file-code :global(.hl-pun) { color:#9a9fb2; }
-
-  /* Rendered-markdown view (when the file is .md). Mirrors the styles on
-     the top-level /workspace page so proposals render readable, not raw. */
-  .ws-file-md{
-    flex:1;overflow:auto;padding:14px 18px;
-    font:400 12.5px/1.65 'Manrope','Inter',sans-serif;color:#e8ecf5;
-    background:rgba(0,0,0,.18);border-radius:0 0 8px 8px;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.2) transparent;
-  }
-  .ws-file-md :global(h1),
-  .ws-file-md :global(h2),
-  .ws-file-md :global(h3),
-  .ws-file-md :global(h4),
-  .ws-file-md :global(h5),
-  .ws-file-md :global(h6){ margin:1.2em 0 .4em; line-height:1.3; color:#f0f4ff; }
-  .ws-file-md :global(h1){ font-size:18px; }
-  .ws-file-md :global(h2){ font-size:15px; border-bottom:1px solid rgba(90,110,160,.18); padding-bottom:3px; }
-  .ws-file-md :global(h3){ font-size:13px; color:#bcc7e5; }
-  .ws-file-md :global(p){ margin:8px 0; }
-  .ws-file-md :global(ul), .ws-file-md :global(ol){ padding-left:20px; margin:6px 0; }
-  .ws-file-md :global(li){ margin:2px 0; }
-  .ws-file-md :global(code){ background:rgba(90,110,160,.14); padding:1px 5px; border-radius:3px;
-    font:90% 'JetBrains Mono',monospace; }
-  .ws-file-md :global(pre.md-code){
-    background:rgba(0,0,0,.32); border:1px solid rgba(90,110,160,.2);
-    padding:10px 12px; border-radius:6px; overflow-x:auto; margin:10px 0;
-    font:400 11px/1.5 'JetBrains Mono',monospace;
-  }
-  .ws-file-md :global(pre.md-code code){ background:transparent; padding:0; }
-  .ws-file-md :global(blockquote){
-    border-left:3px solid rgba(99,102,241,.5);
-    margin:10px 0; padding:2px 12px;
-    color:#a8b5d1; background:rgba(99,102,241,.06);
-  }
-  .ws-file-md :global(a){ color:#7c92ff; text-decoration:underline; }
-  .ws-file-md :global(a:hover){ color:#a3b3ff; }
-  .ws-file-md :global(table.md-table){ border-collapse:collapse; margin:10px 0; font-size:11.5px; }
-  .ws-file-md :global(table.md-table th),
-  .ws-file-md :global(table.md-table td){
-    border:1px solid rgba(90,110,160,.2); padding:5px 9px; text-align:left;
-  }
-  .ws-file-md :global(table.md-table th){ background:rgba(90,110,160,.1); font-weight:600; }
-  .ws-file-md :global(hr){ border:none; border-top:1px solid rgba(90,110,160,.2); margin:16px 0; }
 
   /* ── Meeting modal ──────────── */
   .meeting-modal{width:460px}
@@ -10572,54 +7777,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .modal-input:focus{border-color:#6366f1}
   .modal-textarea{display:block;width:100%;margin-top:5px;padding:8px 12px;border-radius:8px;background:#141620;border:1px solid rgba(74,79,106,.3);color:var(--text-1,#e0e2ea);font:400 12px 'Manrope',sans-serif;outline:none;resize:vertical;box-sizing:border-box;line-height:1.5}
   .modal-textarea:focus{border-color:#6366f1}
-  .modal-row{display:flex;gap:10px}
-  .modal-half{flex:1}
-  .modal-error{font:500 11px 'Manrope',sans-serif;color:#ef4444;background:rgba(239,68,68,.1);padding:6px 10px;border-radius:6px;margin-bottom:8px}
   .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
   .modal-cancel{padding:8px 18px;border-radius:8px;font:600 11px 'Manrope',sans-serif;background:#1a1d2a;border:1px solid rgba(74,79,106,.3);color:var(--text-2,#8a8fa8);cursor:pointer;transition:all .15s}
   .modal-cancel:hover{background:#22253a}
   .modal-confirm{padding:8px 18px;border-radius:8px;font:600 11px 'Syne',sans-serif;letter-spacing:.5px;background:#10b981;border:none;color:#fff;cursor:pointer;transition:all .15s}
   .modal-confirm:hover{filter:brightness(1.1)}
   .modal-confirm:disabled{opacity:.4;cursor:not-allowed}
-
-  /* ── Register-Repo modal (data-center amber accent) ── */
-  .repo-modal{border:1px solid #ffb84a40;box-shadow:0 20px 60px rgba(0,0,0,.6),0 0 24px rgba(255,184,74,.08)}
-  .repo-modal .modal-title{color:#ffb84a;letter-spacing:3px;text-shadow:0 0 8px #ffb84a30}
-  /* Backdrop as a real element behind the dialog, not a role on the wrapper. */
-  /* The backdrop is absolutely positioned, and `.modal` is static — so without
-     a stacking context of its own the backdrop paints OVER the dialog and
-     swallows every click inside it. That is not a style nicety: it made the
-     form close on any click at all. */
-  .modal-backdrop-close{position:absolute;inset:0;border:0;background:transparent;cursor:default;padding:0;z-index:0}
-  .repo-modal{position:relative;z-index:1}
-  .modal-req{color:#e8734a;margin-left:2px}
-  .modal-input-bad{border-color:#e8734a !important}
-  .modal-hint-block{display:block;margin:4px 0 0;font:400 11px/1.5 'Manrope',sans-serif;color:#8a8fa8}
-  .modal-hint-block code{font-family:'Geist Mono',monospace;color:#cbd0e8}
-  .modal-hint-warn{color:#e8b04a}
-  .repo-path-toggle{margin-left:8px;border:0;background:transparent;color:#7fb2ff;font:400 11px/1 'Manrope',sans-serif;cursor:pointer;text-decoration:underline}
-  /* The candidate list is the primary control now, so it gets room to be read
-     and a scroll of its own rather than pushing the actions off-screen. */
-  .repo-cand-list{display:flex;flex-direction:column;gap:4px;max-height:180px;overflow-y:auto;margin-top:4px}
-  .repo-cand{display:flex;align-items:baseline;gap:8px;width:100%;text-align:left;padding:7px 9px;border:1px solid rgba(255,255,255,.08);border-radius:6px;background:rgba(255,255,255,.02);cursor:pointer;transition:border-color .12s,background .12s}
-  .repo-cand:hover:not(:disabled){border-color:rgba(127,178,255,.5);background:rgba(127,178,255,.07)}
-  .repo-cand-on{border-color:#7fb2ff;background:rgba(127,178,255,.12)}
-  .repo-cand:disabled{opacity:.45;cursor:not-allowed}
-  .repo-cand-name{font:600 12px/1 'Manrope',sans-serif;color:#e6e9f5;flex-shrink:0}
-  .repo-cand-path{font:400 10px/1.3 'Geist Mono',monospace;color:#8a8fa8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-  .repo-cand-tag{font:600 9px/1 'Manrope',sans-serif;text-transform:uppercase;letter-spacing:.06em;color:#8a8fa8;flex-shrink:0}
-  .repo-scope{display:flex;gap:6px;margin-top:4px}
-  .repo-scope-opt{flex:1;display:flex;flex-direction:column;gap:2px;text-align:left;padding:8px 10px;border:1px solid rgba(255,255,255,.08);border-radius:6px;background:rgba(255,255,255,.02);cursor:pointer;transition:border-color .12s,background .12s}
-  .repo-scope-opt:hover:not(:disabled){border-color:rgba(127,178,255,.5)}
-  .repo-scope-on{border-color:#7fb2ff;background:rgba(127,178,255,.12)}
-  .repo-scope-t{font:600 12px/1.2 'Manrope',sans-serif;color:#e6e9f5}
-  .repo-scope-s{font:400 10px/1.4 'Manrope',sans-serif;color:#8a8fa8}
-  /* Success used to be "the modal disappears", which reads the same as a
-     silent failure. */
-  .repo-toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%);z-index:1400;padding:9px 16px;border-radius:8px;background:rgba(20,24,31,.96);border:1px solid rgba(127,255,178,.3);color:#9ff5c4;font:500 12px/1 'Manrope',sans-serif;box-shadow:0 8px 24px rgba(0,0,0,.45)}
-  .repo-modal-confirm{background:#ffb84a;color:#1a1410}
-  .repo-modal-confirm:hover{filter:brightness(1.08)}
-  .modal-hint{color:#7a7a7a;font-weight:400;text-transform:none;letter-spacing:0}
 
   /* ── Markdown output (run.result / step.content) ── */
   .ip-out-md{
@@ -10785,297 +7948,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .ip-auth-btn:disabled{opacity:.55;cursor:wait}
   .ip-auth-ico{font-size:13px;line-height:1}
-
-  /* ── LIVE tab ── */
-  @keyframes live-pulse{
-    0%,100%{opacity:1;transform:scale(1)}
-    50%{opacity:.45;transform:scale(.82)}
-  }
-
-  .live-body{padding-top:4px}
-  .live-hero{
-    margin:0 0 14px;padding:14px 16px;border-radius:12px;
-    background:
-      radial-gradient(600px 200px at 50% -80%, rgba(239,93,110,.18), transparent 70%),
-      linear-gradient(180deg, #161a28 0%, #0d1020 100%);
-    border:1px solid rgba(239,93,110,.25);
-    box-shadow:0 4px 22px rgba(239,93,110,.12);
-    position:relative;overflow:hidden;
-  }
-  .live-hero::before{
-    content:'';position:absolute;inset:0;pointer-events:none;
-    background:linear-gradient(90deg, transparent 0%, rgba(239,93,110,.08) 50%, transparent 100%);
-    animation:live-sheen 3s ease-in-out infinite;
-  }
-  @keyframes live-sheen{
-    0%{transform:translateX(-100%)}100%{transform:translateX(100%)}
-  }
-  .live-hero-head{
-    display:flex;align-items:center;gap:10px;margin-bottom:12px;position:relative;z-index:1;
-  }
-  .live-badge{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:3px 9px;border-radius:5px;
-    background:rgba(239,93,110,.22);
-    border:1px solid rgba(239,93,110,.5);
-    font:700 9px 'Syne',sans-serif;letter-spacing:2px;color:#ff7a8a;
-  }
-  .live-dot-big{
-    width:8px;height:8px;border-radius:50%;background:#ff3b4f;
-    box-shadow:0 0 10px #ff3b4f, 0 0 18px rgba(255,59,79,.5);
-    animation:live-pulse 1s ease-in-out infinite;
-  }
-  .live-hero-name{font:600 13px 'Manrope',sans-serif;color:#e0e2ea}
-
-  .live-now{
-    display:flex;align-items:flex-start;gap:14px;position:relative;z-index:1;
-    padding:10px 12px;border-radius:10px;
-    background:rgba(255,255,255,.02);border:1px solid rgba(120,130,160,.12);
-  }
-  .live-waiting{opacity:.75}
-  .live-now-icon-wrap{position:relative;width:40px;height:40px;flex-shrink:0}
-  .live-now-icon{
-    position:relative;z-index:2;
-    width:40px;height:40px;display:inline-flex;align-items:center;justify-content:center;
-    background:linear-gradient(135deg, rgba(239,93,110,.25), rgba(239,93,110,.1));
-    border:1px solid rgba(239,93,110,.4);
-    border-radius:50%;font-size:18px;
-  }
-  .live-now-halo{
-    position:absolute;inset:-4px;border-radius:50%;
-    border:2px solid rgba(239,93,110,.45);
-    animation:live-halo 1.6s ease-out infinite;
-  }
-  @keyframes live-halo{
-    0%{transform:scale(.9);opacity:.8}
-    100%{transform:scale(1.7);opacity:0}
-  }
-  .live-now-body{flex:1;min-width:0}
-  .live-now-lbl{
-    font:700 9px 'Syne',sans-serif;letter-spacing:1.2px;text-transform:uppercase;
-    color:#ff7a8a;margin-bottom:3px;
-  }
-  .live-now-txt{
-    font:500 12px/1.5 'Manrope',sans-serif;color:#e5e8f0;
-    word-break:break-word;overflow-wrap:anywhere;white-space:pre-wrap;
-    max-height:480px;overflow-y:auto;padding-right:4px;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
-  .live-tool{
-    font:600 10px 'JetBrains Mono',monospace;
-    background:rgba(251,191,36,.14);color:#fbbf24;
-    padding:1px 6px;border-radius:3px;margin-right:6px;
-  }
-  .live-now-clock{
-    flex-shrink:0;font:500 9px 'JetBrains Mono',monospace;color:#6a6f82;
-  }
-
-  .live-timeline-head{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:0 2px 6px;margin-bottom:4px;
-    border-bottom:1px solid rgba(120,130,160,.12);
-  }
-  .live-timeline-h{
-    font:700 9px 'Syne',sans-serif;letter-spacing:1.2px;
-    text-transform:uppercase;color:#8a8fa8;
-  }
-
-  .live-timeline{
-    list-style:none;margin:0;padding:0 0 0 20px;position:relative;
-    display:flex;flex-direction:column;gap:2px;
-  }
-  .live-timeline::before{
-    content:'';position:absolute;left:7px;top:10px;bottom:10px;width:1px;
-    background:linear-gradient(180deg, rgba(239,93,110,.35) 0%, rgba(120,130,160,.08) 100%);
-  }
-  .live-step{
-    position:relative;padding:4px 0 4px 6px;border-radius:7px;
-    transition:background .12s;
-  }
-  .live-step-dot{
-    position:absolute;left:-18px;top:11px;
-    width:9px;height:9px;border-radius:50%;
-    background:#3a3f52;border:2px solid #0d1020;
-    z-index:1;
-  }
-  /* Category-driven dot color — replaces the old per-event-type overrides
-     so kernel_* tools, MCP tools, web fetches all get their own hue. */
-  .live-cat-shell  .live-step-dot{background:#fbbf24}
-  .live-cat-fs     .live-step-dot{background:#6aa0ff}
-  .live-cat-web    .live-step-dot{background:#4dd6e0}
-  .live-cat-kernel .live-step-dot{background:#5fdba0}
-  .live-cat-mcp    .live-step-dot{background:#c693ff}
-  .live-cat-think  .live-step-dot{background:#a78bfa}
-  .live-cat-final  .live-step-dot{background:#78dc8c;box-shadow:0 0 8px rgba(120,220,140,.55)}
-  .live-cat-error  .live-step-dot{background:#ef5d6e}
-  .live-cat-meta   .live-step-dot{background:#9aa3c0}
-  .live-cat-tool   .live-step-dot{background:#d0b87a}
-  .live-step-run_started .live-step-dot{background:#3dd68c}
-  .live-step-run_completed .live-step-dot{background:#78dc8c}
-  .live-step-head .live-step-dot{
-    box-shadow:0 0 0 4px rgba(239,93,110,.18), 0 0 14px rgba(239,93,110,.55);
-    animation:live-pulse 1.2s ease-in-out infinite;
-  }
-
-  /* ── Summary row — one line of plain-language action description.
-     Whole row is a button: click to expand the JSON payload below. */
-  .live-step-summary{
-    width:100%;display:flex;align-items:center;gap:8px;flex-wrap:nowrap;
-    padding:6px 10px;border-radius:7px;border:1px solid transparent;
-    background:transparent;color:inherit;text-align:left;cursor:pointer;
-    font:500 10.5px 'JetBrains Mono',monospace;
-    transition:background .12s, border-color .12s;
-    min-width:0;
-  }
-  .live-step-summary:disabled{cursor:default}
-  .live-step-summary:hover:not(:disabled){
-    background:rgba(255,255,255,.025);
-    border-color:rgba(120,130,160,.15);
-  }
-  .live-step-open .live-step-summary{
-    background:rgba(255,255,255,.03);
-    border-color:rgba(120,130,160,.18);
-    border-bottom-left-radius:0;border-bottom-right-radius:0;
-  }
-  .live-step-icon{font-size:11px;flex-shrink:0}
-  .live-step-type{
-    text-transform:uppercase;letter-spacing:.6px;font-size:9px;font-weight:700;
-    padding:1px 6px;border-radius:3px;background:rgba(120,130,160,.12);color:#a0a5b8;
-    flex-shrink:0;
-  }
-  .live-cat-shell  .live-step-type{background:rgba(251,191,36,.14);color:#fbbf24}
-  .live-cat-fs     .live-step-type{background:rgba(106,160,255,.14);color:#6aa0ff}
-  .live-cat-web    .live-step-type{background:rgba(77,214,224,.14);color:#4dd6e0}
-  .live-cat-kernel .live-step-type{background:rgba(95,219,160,.14);color:#5fdba0}
-  .live-cat-mcp    .live-step-type{background:rgba(198,147,255,.14);color:#c693ff}
-  .live-cat-think  .live-step-type{background:rgba(167,139,250,.14);color:#a78bfa}
-  .live-cat-final  .live-step-type{background:rgba(120,220,140,.14);color:#78dc8c}
-  .live-cat-error  .live-step-type{background:rgba(239,93,110,.16);color:#ef8090}
-  .live-cat-meta   .live-step-type{background:rgba(154,163,192,.14);color:#9aa3c0}
-  .live-cat-tool   .live-step-type{background:rgba(208,184,122,.14);color:#d0b87a}
-  .live-step-tool{
-    font:600 10px 'JetBrains Mono',monospace;color:#d0b87a;flex-shrink:0;
-    padding:1px 5px;border-radius:3px;background:rgba(208,184,122,.10);
-  }
-  .live-cat-shell  .live-step-tool{color:#fbbf24;background:rgba(251,191,36,.10)}
-  .live-cat-fs     .live-step-tool{color:#6aa0ff;background:rgba(106,160,255,.10)}
-  .live-cat-web    .live-step-tool{color:#4dd6e0;background:rgba(77,214,224,.10)}
-  .live-cat-kernel .live-step-tool{color:#5fdba0;background:rgba(95,219,160,.10)}
-  .live-cat-mcp    .live-step-tool{color:#c693ff;background:rgba(198,147,255,.10)}
-  /* The human-readable summary — takes the rest of the row and truncates
-     gracefully when the description is long. */
-  .live-step-text{
-    flex:1;min-width:0;
-    color:#d6dae8;font:400 11.5px/1.4 'Manrope',sans-serif;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
-  }
-  .live-step-open .live-step-text{white-space:normal}
-  .live-step-clock{color:#4a4f6a;font-size:9px;flex-shrink:0}
-  .live-step-chev{
-    color:#6a6f82;font-size:11px;width:14px;text-align:center;flex-shrink:0;
-    transition:transform .14s;
-  }
-  .live-step-open .live-step-chev{color:#a0a5b8}
-
-  /* Expanded detail panel — the full JSON payload that used to live
-     inline. Renders inside a card connected to the summary row above. */
-  .live-step-detail{
-    position:relative;
-    margin:0 0 4px 0;padding:10px 12px;
-    border:1px solid rgba(120,130,160,.18);border-top:none;
-    border-radius:0 0 7px 7px;
-    background:rgba(8,10,18,.7);
-    animation:live-step-detail-in .14s ease-out;
-  }
-  @keyframes live-step-detail-in{
-    from{opacity:0;transform:translateY(-3px)}
-    to{opacity:1;transform:translateY(0)}
-  }
-  /* Subtle left border colored by category so the expand visually anchors
-     to the same accent as the dot above. */
-  .live-cat-shell  .live-step-detail{border-left-color:rgba(251,191,36,.35)}
-  .live-cat-fs     .live-step-detail{border-left-color:rgba(106,160,255,.35)}
-  .live-cat-web    .live-step-detail{border-left-color:rgba(77,214,224,.35)}
-  .live-cat-kernel .live-step-detail{border-left-color:rgba(95,219,160,.35)}
-  .live-cat-mcp    .live-step-detail{border-left-color:rgba(198,147,255,.35)}
-  .live-cat-think  .live-step-detail{border-left-color:rgba(167,139,250,.35)}
-  .live-cat-error  .live-step-detail{border-left-color:rgba(239,93,110,.45)}
-  .live-step-txt{
-    margin-top:0;padding:5px 8px;border-radius:5px;
-    background:rgba(0,0,0,.25);
-    font:400 10.5px/1.5 'Manrope',sans-serif;color:#c0c5d8;
-    word-break:break-word;overflow-wrap:anywhere;white-space:pre-wrap;
-    max-height:420px;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
-  /* Plain-language summary line under the LIVE hero icon — same idea as
-     .live-step-text but bigger because it's the headline action. */
-  .live-now-summary{
-    margin-top:4px;color:#e0e3ee;
-    font:500 13px/1.45 'Manrope',sans-serif;
-    word-break:break-word;
-  }
-
-  /* ── Per-step meta chips (Δt + tokens). Sit just under the summary row,
-     small enough not to compete with the description but always visible
-     so the user gets a feel for cost without opening the step. */
-  .live-step-meta{
-    display:flex;flex-wrap:wrap;gap:5px;
-    padding:1px 0 3px 30px;
-    font:500 9px 'JetBrains Mono',monospace;
-  }
-  .live-meta-chip{
-    display:inline-flex;align-items:center;gap:3px;
-    padding:1px 5px;border-radius:3px;
-    background:rgba(120,130,160,.08);color:#7a83a0;
-    border:1px solid rgba(120,130,160,.10);
-    letter-spacing:.3px;
-  }
-  .live-meta-time{color:#9ec0ef;background:rgba(106,160,255,.07);border-color:rgba(106,160,255,.15)}
-  .live-meta-tok {color:#c4e8a8;background:rgba(120,220,140,.07);border-color:rgba(120,220,140,.18)}
-  .live-meta-cum {color:#8e8fa8;background:rgba(120,130,160,.05);border-color:rgba(120,130,160,.10)}
-
-  /* ── Totals row inside the timeline header — current run elapsed + tok */
-  .live-totals{display:inline-flex;gap:6px;margin-left:auto}
-  .live-totals-chip{
-    display:inline-flex;align-items:center;gap:3px;
-    padding:2px 7px;border-radius:4px;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.4px;
-    background:rgba(120,130,160,.10);color:#a8b0c8;
-    border:1px solid rgba(120,130,160,.15);
-  }
-  .live-totals-time{color:#9ec0ef;background:rgba(106,160,255,.10);border-color:rgba(106,160,255,.22)}
-  .live-totals-tok {color:#bee2a3;background:rgba(120,220,140,.10);border-color:rgba(120,220,140,.22)}
-
-  /* ── Draft modal ── */
-  .draft-modal{width:620px;max-width:92vw;padding:18px 20px}
-  .draft-modal-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;margin-bottom:12px}
-  .draft-modal-close{
-    background:transparent;border:none;color:#8a8fa8;font:400 22px/1 'Manrope',sans-serif;
-    cursor:pointer;padding:0 4px;transition:color .12s;
-  }
-  .draft-modal-close:hover{color:#fff}
-  .draft-status{text-transform:uppercase;font:700 9px 'JetBrains Mono',monospace;color:#fbbf24;letter-spacing:.5px}
-  .draft-field{
-    display:flex;gap:10px;align-items:baseline;
-    padding:4px 0;border-bottom:1px dashed rgba(120,130,160,.12);
-    font:400 11px 'Manrope',sans-serif;
-  }
-  .draft-field:last-of-type{border-bottom:none}
-  .draft-lbl{
-    flex:0 0 70px;font:600 9px 'JetBrains Mono',monospace;
-    color:#6a6f82;text-transform:uppercase;letter-spacing:.5px;
-  }
-  .draft-val{flex:1;color:#d0d4e0;word-break:break-word}
-  .draft-subject{color:#fff;font-weight:600}
-  .draft-body{margin:12px 0 4px;border:1px solid rgba(74,79,106,.25);border-radius:8px;overflow:hidden;background:#0a0c14}
-  .draft-iframe{width:100%;height:340px;border:none;background:#fff;display:block}
-  .draft-body-pre{
-    margin:0;padding:12px 14px;max-height:340px;overflow-y:auto;
-    font:400 11px/1.55 'JetBrains Mono',monospace;
-    color:#d0d4e0;white-space:pre-wrap;word-break:break-word;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
 
   /* ── My Office reports panel ── */
   .office-reports-panel{
@@ -11709,224 +8581,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   .lm-summary-list li{ margin:2px 0; }
 
-  /* ── Auto-Meeting modal: per-office grouped agent picker ─────────────── */
-  .auto-meeting-modal{ width:min(720px, 94vw); max-height:88vh; overflow-y:auto; }
-  /* Outer picker container — vertical stack of office sections. */
-  .am-picker{
-    display:flex; flex-direction:column; gap:10px;
-    margin:4px 0 12px;
-    max-height:260px; overflow-y:auto;
-    padding:8px; border:1px solid #1f2236; border-radius:8px;
-    background:#0c0d14;
-  }
-  /* One office's group: small flow-coloured header + grid of agent cards. */
-  .am-flow-section{ display:flex; flex-direction:column; gap:6px; }
-  .am-flow-head{
-    display:flex; align-items:center; gap:8px;
-    padding:2px 0 4px;
-    border-bottom:1px dashed rgba(255,255,255,.06);
-  }
-  .am-flow-stripe{
-    width:3px; height:14px; border-radius:2px;
-    box-shadow:0 0 6px var(--c);
-  }
-  .am-flow-name{
-    font:700 11px 'Manrope',sans-serif; letter-spacing:.4px;
-    color:#e0e2ea; text-transform:uppercase;
-  }
-  .am-flow-count{
-    font:600 10px 'JetBrains Mono',monospace;
-    color:#8d92a8; background:rgba(255,255,255,.04);
-    padding:1px 6px; border-radius:8px;
-  }
-  /* Medium square cards laid out in an auto-fill grid — names wrap to 2
-   * lines if needed but the card height stays consistent. */
-  .am-card-grid{
-    display:grid;
-    grid-template-columns:repeat(auto-fill, minmax(130px, 1fr));
-    gap:6px;
-  }
-  .am-card{
-    display:flex; flex-direction:column; align-items:center;
-    gap:6px; padding:8px 6px;
-    min-height:74px;
-    background:#161827; color:#cbd0e8;
-    border:1.5px solid #2a2f4a; border-radius:8px;
-    cursor:pointer; transition:all .12s;
-    text-align:center;
-  }
-  .am-card:hover{ background:#1a1d2c; border-color:var(--flow-c); }
-  .am-card-av{
-    width:28px; height:28px; border-radius:50%;
-    display:inline-flex; align-items:center; justify-content:center;
-    font:900 14px 'Manrope',sans-serif; line-height:1;
-    text-shadow:0 1px 2px rgba(0,0,0,0.85);
-    box-shadow:0 0 0 2px rgba(0,0,0,.35), 0 0 6px var(--flow-c);
-    flex-shrink:0;
-  }
-  .am-card-init{ font:700 10px 'JetBrains Mono',monospace; color:#fff; }
-  .am-card-name{
-    font:600 10.5px/1.3 'Manrope',sans-serif;
-    color:#cbd0e8;
-    display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;
-    overflow:hidden; word-break:break-word;
-  }
-  /* Selected states — gold for moderator, blue for attendee. */
-  .am-card-mod-on{
-    background:rgba(201,168,76,.18); color:#f4e1a3;
-    border-color:#c9a84c; box-shadow:0 0 0 1px #c9a84c44, 0 0 12px rgba(201,168,76,.35);
-  }
-  .am-card-mod-on .am-card-name{ color:#f4e1a3; }
-  .am-card-att-on{
-    background:rgba(91,141,239,.18); color:#cbe0ff;
-    border-color:#5b8def; box-shadow:0 0 0 1px #5b8def44, 0 0 10px rgba(91,141,239,.3);
-  }
-  .am-card-att-on .am-card-name{ color:#cbe0ff; }
-
-  /* ── Management log panel (bottom-left) ─────────────────── */
-  .mgmt-log{
-    position:absolute; bottom:18px; left:18px; z-index:11;
-    width:min(360px, 40vw);
-    background:#0f1018; border:1px solid #2a2f4a; border-radius:8px;
-    box-shadow:0 6px 22px rgba(0,0,0,.35);
-    animation:lm-turn-in .3s ease-out;
-    font:500 11px 'JetBrains Mono',monospace; color:#cbd0e8;
-  }
-  .mgmt-log-head{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 12px; color:#e7e9f4;
-    font:700 11px 'JetBrains Mono',monospace;
-    border-bottom:1px solid #1f2236;
-  }
-  .mgmt-log-badge{
-    background:#c67fe8; color:#0f1018; padding:1px 7px; border-radius:10px;
-    font:700 10px 'JetBrains Mono',monospace;
-  }
-  .mgmt-log-label{ flex:1; text-align:left; }
-  .mgmt-log-close{
-    background:transparent; border:none; color:#6b7090; cursor:pointer;
-    font:700 14px 'JetBrains Mono',monospace; padding:0 4px; line-height:1;
-  }
-  .mgmt-log-close:hover{ color:#fff; }
-  .mgmt-log-body{
-    max-height:360px; overflow-y:auto; padding:4px;
-  }
-  .mgmt-log-body::-webkit-scrollbar{ width:6px; }
-  .mgmt-log-body::-webkit-scrollbar-thumb{ background:#2a2f4a; border-radius:3px; }
-  .mgmt-entry{
-    border-left:3px solid #c67fe8; padding:6px 10px; margin:2px 0;
-    background:#13152080;
-  }
-  .mgmt-entry-head{
-    display:flex; align-items:center; gap:6px; flex-wrap:wrap;
-    font:600 11px 'JetBrains Mono',monospace;
-  }
-  .mgmt-entry-from{ color:#e7e9f4; }
-  .mgmt-entry-arrow{ color:#5a5f7a; }
-  .mgmt-entry-to{ color:#cbe0ff; }
-  .mgmt-entry-tag{
-    font-size:9px; padding:0 5px; border-radius:3px;
-    background:#1a1d2c; color:#8b90af; border:1px solid #2a2f4a;
-  }
-  .mgmt-entry-tag-mgr{ background:#3a2812; color:#f0b874; border-color:#6a4820; }
-  .mgmt-entry-detail{
-    margin-top:3px; color:#cbd0e8; font:500 11px 'Manrope',sans-serif;
-    word-break:break-word;
-  }
-  .mgmt-entry-preview{
-    margin-top:3px; padding:4px 6px; background:#0a0b14; border-radius:3px;
-    color:#8b90af; font:400 10px 'JetBrains Mono',monospace;
-    white-space:pre-wrap; word-break:break-word;
-  }
-
-  /* ── Meeting history panel (top-left, under stats bar) ──────────
-     Positioned on the left so it doesn't fight the live-meeting modal,
-     which now occupies the entire right column. */
-  .hist-panel{
-    position:absolute; top:60px; left:18px; z-index:11;
-    width:min(340px, 38vw);
-    background:#0f1018; border:1px solid #2a2f4a; border-radius:8px;
-    box-shadow:0 6px 22px rgba(0,0,0,.35);
-    animation:lm-turn-in .3s ease-out;
-    font:500 11px 'JetBrains Mono',monospace; color:#cbd0e8;
-  }
-  .hist-head{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 12px; color:#e7e9f4;
-    font:700 11px 'JetBrains Mono',monospace;
-    border-bottom:1px solid #1f2236;
-  }
-  .hist-head-badge{
-    background:#ffd166; color:#0f1018; padding:1px 7px; border-radius:10px;
-    font:700 10px 'JetBrains Mono',monospace;
-  }
-  .hist-head-label{ flex:1; }
-  .hist-head-close{
-    background:transparent; border:none; color:#6b7090; cursor:pointer;
-    font:700 14px 'JetBrains Mono',monospace; padding:0 4px; line-height:1;
-  }
-  .hist-head-close:hover{ color:#fff; }
-  .hist-clear-all{
-    padding:2px 8px; background:#2a1818; color:#ffb4b4;
-    border:1px solid #553030; border-radius:4px;
-    cursor:pointer; font:600 10px 'JetBrains Mono',monospace;
-    transition:background .12s, color .12s;
-  }
-  .hist-clear-all:hover{ background:#3a2020; color:#ff7a7a; }
-  .hist-row-x{
-    margin-left:auto; padding:0 6px; background:transparent;
-    color:#5a5f7a; border:1px solid transparent; border-radius:3px;
-    cursor:pointer; font:700 11px 'JetBrains Mono',monospace;
-    line-height:1.2;
-    transition:color .12s, border-color .12s, background .12s;
-  }
-  .hist-row-x:hover{ color:#ff7a7a; border-color:#553030; background:#2a1818; }
-  .hist-badge{
-    background:#ffd166; color:#0f1018; padding:1px 7px; border-radius:10px;
-    font:700 10px 'JetBrains Mono',monospace;
-  }
-  .hist-label{ flex:1; text-align:left; }
-  .hist-chev{ color:#6b7090; }
-  .hist-body{
-    max-height:50vh; overflow-y:auto; padding:4px;
-  }
-  .hist-body::-webkit-scrollbar{ width:6px; }
-  .hist-body::-webkit-scrollbar-thumb{ background:#2a2f4a; border-radius:3px; }
-  .hist-row{
-    display:block; width:100%; text-align:left;
-    border:none; background:#13152080;
-    border-left:3px solid #5b8def;
-    padding:7px 10px; margin:3px 0;
-    cursor:pointer; color:#cbd0e8;
-    font:500 11px 'JetBrains Mono',monospace;
-    transition:background .12s, transform .12s;
-  }
-  .hist-row:hover{ background:#1a1d2c; transform:translateX(-2px); }
-  .hist-row-started{ border-left-color:#ffd166; }
-  .hist-row-completed{ border-left-color:#78dc8c; }
-  .hist-row-failed{ border-left-color:#ff6b6b; }
-  .hist-row-requested{ border-left-color:#5b8def; }
-  .hist-row-head{
-    display:flex; align-items:center; gap:6px; font:700 11px 'JetBrains Mono',monospace;
-    color:#e7e9f4;
-  }
-  .hist-dot{
-    width:7px; height:7px; border-radius:50%;
-    flex-shrink:0;
-  }
-  .hist-dot-live{ background:#ffd166; animation:hist-pulse 1.4s ease-in-out infinite; }
-  .hist-dot-done{ background:#78dc8c; }
-  .hist-dot-fail{ background:#ff6b6b; }
-  .hist-dot-pending{ background:#5b8def; }
-  @keyframes hist-pulse{ 0%,100%{opacity:1;} 50%{opacity:.4;} }
-  .hist-row-topic{ flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .hist-row-meta{
-    display:flex; gap:5px; flex-wrap:wrap; margin-top:3px;
-    font-size:10px; color:#7e84a3;
-  }
-  .hist-row-summary{
-    margin-top:4px; font-size:10px; color:#9298b8; line-height:1.4;
-  }
 
   .lm-toast{
     position:absolute; bottom:18px; right:18px; z-index:10;
@@ -11940,42 +8594,4 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .lm-toast-done{ border:1.5px solid #78dc8c; box-shadow:0 4px 14px rgba(120,220,140,.25); }
   .lm-toast:hover{ background:#1a1d2c; transform:translateY(-1px); }
 
-  /* ── Sent-email link + modal ── */
-  .email-view-link{
-    display:inline-flex; align-items:center; gap:3px; margin-left:6px;
-    padding:1px 7px; font:600 10px 'Manrope',sans-serif; cursor:pointer;
-    color:#9fd0ff; background:rgba(91,141,239,.12); border:1px solid rgba(91,141,239,.45);
-    border-radius:999px; white-space:nowrap;
-  }
-  .email-view-link:hover{ background:rgba(91,141,239,.28); color:#fff; }
-  .email-modal-backdrop{
-    position:fixed; inset:0; z-index:9999; display:flex; align-items:center; justify-content:center;
-    background:rgba(2,2,6,.72); backdrop-filter:blur(3px); padding:24px;
-  }
-  .email-modal{
-    width:min(680px,94vw); max-height:86vh; display:flex; flex-direction:column;
-    background:#0d1018; border:1px solid #2a3350; border-radius:12px;
-    box-shadow:0 18px 60px rgba(0,0,0,.6); overflow:hidden;
-  }
-  .email-modal-head{
-    display:flex; align-items:center; justify-content:space-between;
-    padding:12px 16px; border-bottom:1px solid #1e2335; background:#11151f;
-  }
-  .email-modal-title{ font:700 13px 'Manrope',sans-serif; color:#e6ecff; }
-  .email-modal-close{
-    width:26px; height:26px; border-radius:6px; border:1px solid #2a3350; background:transparent;
-    color:#9aa3bd; font-size:18px; line-height:1; cursor:pointer;
-  }
-  .email-modal-close:hover{ background:#1a1f30; color:#fff; }
-  .email-modal-meta{ padding:12px 16px; border-bottom:1px solid #1a1f30; display:flex; flex-direction:column; gap:4px; }
-  .emm-row{ display:grid; grid-template-columns:64px 1fr; gap:8px; font:500 12px 'Manrope',sans-serif; }
-  .emm-k{ color:#6b7390; font-weight:600; text-transform:uppercase; font-size:10px; padding-top:2px; }
-  .emm-v{ color:#cdd5ec; word-break:break-word; }
-  .emm-subj{ color:#fff; font-weight:600; }
-  .email-modal-body{ padding:14px 16px; overflow:auto; }
-  .email-modal-text{ font:400 13px/1.6 'Manrope',sans-serif; color:#cdd5ec; white-space:pre-wrap; }
-  .email-modal-html{ font-size:13px; line-height:1.6; color:#cdd5ec; }
-  .email-modal-html :global(a){ color:#9fd0ff; }
-  .email-modal-dim{ color:#6b7390; }
-  .email-modal-err{ color:#ff8a8a; }
 </style>

@@ -112,6 +112,9 @@ jobs:
           VERSION=$(node -p "require('./services/kernel/package.json').version")
           STAGE=$(mktemp -d)
           STAGE_DIR="$STAGE" PLATFORM=linux-x64 packaging/stage-payload.sh
+          # The tarball's own launcher: it keeps data in ~/.local/share/kernl,
+          # outside the folder the in-app update replaces.
+          install -m 0755 packaging/linux/kernl-portable.sh "$STAGE/kernl-${VERSION}/kernl"
           mkdir -p packaging/out
           OUT="packaging/out/Kernl-${VERSION}-x64-linux.tar.gz"
           # One top-level directory inside, which is what the updater expects
@@ -199,11 +202,15 @@ jobs:
                APPLE_API_KEY_ID APPLE_API_ISSUER APPLE_API_KEY"
           MISSING=""
           COUNT=0
+          SET=0
           for v in $ALL; do
             COUNT=$((COUNT + 1))
-            [ -z "${!v:-}" ] && MISSING="$MISSING $v"
+            if [ -n "${!v:-}" ]; then
+              SET=$((SET + 1))
+            else
+              MISSING="$MISSING $v"
+            fi
           done
-          SET=$((COUNT - $(echo $MISSING | wc -w)))
           if [ "$SET" -eq "$COUNT" ]; then
             echo "signing: all six secrets present — signed + notarized build"
           elif [ "$SET" -eq 0 ]; then
@@ -463,6 +470,20 @@ jobs:
       - name: Build kernel
         run: (cd services/kernel && npm run build)
 
+      # whisper and onnxruntime need the VC++ runtime DLLs, which a fresh
+      # Windows does not have and this runner does — so the package carries
+      # them app-local. See section 4b of packaging/stage-payload.sh.
+      - name: Locate the VC++ runtime to bundle
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          $redist = Get-ChildItem "$vs\VC\Redist\MSVC" -Directory |
+            Where-Object { Test-Path (Join-Path $_.FullName "x64\Microsoft.VC143.CRT\vcruntime140.dll") } |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if (-not $redist) { Write-Host "::error::no VC143 CRT redist under $vs\VC\Redist\MSVC"; exit 1 }
+          Write-Host "VC++ runtime from $($redist.FullName)\x64"
+          "VCRUNTIME_DIR=$($redist.FullName)\x64" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
       - name: Build portable zip
         shell: bash
         run: PLATFORM=win-x64 packaging/windows/build-zip.sh
@@ -499,7 +520,12 @@ jobs:
           }
 
           $dir = "C:\Program Files\Kernl"
-          foreach ($f in @("bun.exe","mcp-server.js","start.bat","dashboard\index.html")) {
+          # The VC++ DLLs are checked here rather than by running whisper: this
+          # runner has the redistributable installed, so a whisper run would
+          # pass even from a package that lacks them.
+          foreach ($f in @("bun.exe","mcp-server.js","start.bat","dashboard\index.html",
+                           "whisper\whisper-cli.exe","whisper\vcruntime140.dll","whisper\vcomp140.dll",
+                           "node_modules\onnxruntime-node\bin\napi-v3\win32\x64\msvcp140.dll")) {
             if (-not (Test-Path (Join-Path $dir $f))) {
               Write-Host "::error::missing after install: $f"
               exit 1
@@ -602,6 +628,20 @@ jobs:
           }
           Write-Host "bundled catalog root resolved"
 
+          # An extension page, served. /ext-assets checked containment with
+          # startsWith(dir + "/"), which never matches a backslash path, so on
+          # Windows every extension page was a 404 — blank Cinema, blank
+          # everything — while every check above stayed green.
+          $ext = Invoke-WebRequest -Uri "http://127.0.0.1:3086/ext-assets/cinema/entry.js" `
+                   -UseBasicParsing -TimeoutSec 15 -SkipHttpErrorCheck
+          Write-Host "GET /ext-assets/cinema/entry.js -> $($ext.StatusCode)"
+          if ($ext.StatusCode -ne 200) {
+            Write-Host "::error::extension frontend not served on Windows (expected 200)"
+            if (Test-Path $log) { Write-Host "---- kernel log ----"; Get-Content $log -Tail 40 }
+            exit 1
+          }
+          Write-Host "extension pages are served"
+
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
         if: env.WINDOWS_CERT_DATA != ''
@@ -645,11 +685,12 @@ jobs:
       # Checksums for everything published.
       #
       # The in-app updater downloads a replacement bundle and swaps the running
-      # app for it. Until now it verified nothing — it fetched over HTTPS from
-      # GitHub and trusted whatever came back. That is a worse gap than the
-      # missing code signature: the user already consented once, and a
-      # compromised release or an intercepting proxy would be installed without
-      # a word. install.sh had the same hole.
+      # app for it, and checks the download against this file first. That
+      # catches a corrupted or truncated download, a stale CDN object and a
+      # proxy that rewrote the bytes. It does NOT catch a compromised release:
+      # this file is published by the same release as the artifacts, so
+      # whoever can replace one can replace both. That needs a detached
+      # signature made with a key the release process keeps.
       #
       # Generated here rather than per-platform so one file covers every
       # artifact, and so the sums are computed from exactly what gets attached.
@@ -657,7 +698,7 @@ jobs:
         run: |
           sha256sum \
             kernl-*.rpm kernl_*.deb \
-            Kernl-*.dmg Kernl-*-macos.tar.gz \
+            Kernl-*.dmg Kernl-*-macos.tar.gz Kernl-*-linux.tar.gz \
             kernl-*-windows-x64.msi kernl-*-windows-x64.zip \
             > SHA256SUMS
           cat SHA256SUMS
@@ -672,6 +713,7 @@ jobs:
             kernl_*.deb
             Kernl-*.dmg
             Kernl-*-macos.tar.gz
+            Kernl-*-linux.tar.gz
             kernl-*-windows-x64.msi
             kernl-*-windows-x64.zip
             SHA256SUMS

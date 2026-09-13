@@ -106,7 +106,8 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
     // ── Cross-module aggregators (no extension owns these) ──
     {
       name: "dashboard.full",
-      handler: async () => queryFullDashboard(db),
+      handler: async () =>
+        queryFullDashboard(db, async (name) => dashboardRegistry?.queryChannel(name, db, neo4j)),
     },
     {
       name: "dashboard.kpis",

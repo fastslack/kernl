@@ -197,9 +197,13 @@ export class ConvertJobService {
         status.status = "error";
         status.error = err instanceof Error ? err.message : String(err);
         log.error(`cinema/convert: ${key.slice(0, 8)} failed`, err);
-        await rm(partPath, { force: true }).catch(() => {});
+        // convert() only rejects from ffmpeg's exit handler, so the process is
+        // gone by now — but Windows can still answer EBUSY/EPERM while an
+        // antivirus scans the file it just closed. Retry instead of leaving a
+        // stale .part behind.
+        await rm(partPath, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
       } finally {
-        await rm(srcPath, { force: true }).catch(() => {});
+        await rm(srcPath, { force: true, recursive: true, maxRetries: 5, retryDelay: 100 }).catch(() => {});
         status.updatedAt = isoNow();
         this.writeRow(status);
         this.live.delete(key);

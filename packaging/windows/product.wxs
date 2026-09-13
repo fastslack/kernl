@@ -30,7 +30,12 @@
              Description="Personal life-management MCP server"
              Manufacturer="Matware" />
 
+    <!-- AllowSameVersionUpgrades: build-msi.sh drops a prerelease suffix from
+         ProductVersion, so 0.4.0-rc.1 and 0.4.0 carry the same version. Without
+         this, installing the final build over the rc added a second entry to
+         Add/Remove Programs instead of upgrading. -->
     <MajorUpgrade
+      AllowSameVersionUpgrades="yes"
       DowngradeErrorMessage="A newer version of Kernl is already installed." />
 
     <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
@@ -46,7 +51,23 @@
     <Feature Id="ProductFeature" Title="Kernl" Level="1">
       <ComponentGroupRef Id="ApplicationFiles" />
       <ComponentRef Id="ApplicationShortcut" />
+      <ComponentRef Id="InstallMarker" />
     </Feature>
+
+    <!-- The in-app updater's way of knowing an MSI owns this folder. It used to
+         read only the HKCU value below, which exists for the account that ran
+         the installer and nobody else: every other user on the machine was
+         treated as an unzipped copy and the update tried to move Program Files.
+         HKLM, with the directory, answers for everyone and for a custom
+         INSTALLDIR. -->
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="InstallMarker" Guid="{FDFAFD13-0C0C-4C99-B7D2-7B7A469B6586}" Win64="yes">
+        <RegistryKey Root="HKLM" Key="Software\Matware\Kernl">
+          <RegistryValue Name="installed" Type="integer" Value="1" KeyPath="yes"/>
+          <RegistryValue Name="InstallDir" Type="string" Value="[INSTALLDIR]"/>
+        </RegistryKey>
+      </Component>
+    </DirectoryRef>
 
     <!-- Directory tree the installer materializes. -->
     <Directory Id="TARGETDIR" Name="SourceDir">

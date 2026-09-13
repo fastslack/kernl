@@ -339,9 +339,9 @@ function marketplaceSyncRepos(ctx: BuiltinHandlerContext): BuiltinHandler {
  * already-installed, licensed extensions and applies them in place via
  * `runStoreUpdates` (Task 4 engine). Gated on `config.store.autoUpdate`
  * (default true); free users (no license JWT) are a strict no-op inside
- * `runStoreUpdates` itself — no network chatter. Notifies + reminds to
- * reload the kernel when at least one extension was updated (live
- * module-code reload isn't implemented — see runtime notes).
+ * `runStoreUpdates` itself — no network chatter. Notifies when at least one
+ * extension was updated, and says the new code runs from the next start
+ * (live module-code reload isn't implemented — see runtime notes).
  */
 function storeAutoUpdate(ctx: BuiltinHandlerContext): BuiltinHandler {
   return async () => {
@@ -375,7 +375,7 @@ function storeAutoUpdate(ctx: BuiltinHandlerContext): BuiltinHandler {
       try {
         await ctx.notifier.send({
           title: "Extensions updated",
-          body: `${lines.join("\n")}\nReload the kernel to activate.`,
+          body: `${lines.join("\n")}\nThe new versions run the next time Kernl starts — restart it from Settings → About.`,
         });
       } catch { /* non-fatal */ }
     }

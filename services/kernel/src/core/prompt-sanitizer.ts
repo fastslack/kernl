@@ -318,7 +318,9 @@ export function _resetForTests(): void {
  * skill" so the API surface stays simple.
  */
 export function parseSkillMdFrontmatter(filePath: string): { name?: string; description?: string } | null {
-  const content = readSkillMd(filePath);
+  // CRLF (Git for Windows' autocrlf) left a `\r` on every value and kept
+  // `(.*)$` from matching at all.
+  const content = readSkillMd(filePath)?.replace(/\r\n/g, "\n");
   if (!content) return null;
   if (!content.startsWith("---")) return null;
   const end = content.indexOf("\n---", 4);

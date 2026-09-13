@@ -59,9 +59,13 @@ export function extensionsTools(service: ExtensionService): ToolDefinition[] {
           { type: "local", path: input.bundle_path },
           { force: input.force },
         );
-        return text(
-          `✅ Updated ${r.extension.slug}: ${r.from} → ${r.to}. Reload the kernel to activate.`,
-        );
+        // A module's code is imported once per process — there is no hot
+        // reload — so its new version runs from the next start. Skills, agents
+        // and the other declarative types are applied by the update itself.
+        const when = r.extension.type === "module"
+          ? "The new code runs the next time Kernl starts — restart it now from Settings → About, or POST /api/update/restart."
+          : "Active now.";
+        return text(`✅ Updated ${r.extension.slug}: ${r.from} → ${r.to}. ${when}`);
       },
     }),
     defineTool({

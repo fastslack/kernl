@@ -220,6 +220,8 @@ const es: Record<string, string> = {
   "settings.about.tagline": "Servidor MCP de gestión de vida personal — tareas, CRM, recordatorios, compras, dashboard e inteligencia de grafo.",
   "settings.about.version_unknown": "versión desconocida",
   "settings.about.available": "Kernl {version} está disponible",
+  "settings.about.restart": "Reiniciar Kernl",
+  "settings.about.restarting": "Reiniciando…",
   "settings.about.current": "Estás en la última versión ({version})",
   "settings.about.check_failed": "No se pudo consultar si hay una versión más nueva",
   "settings.about.changelog": "Qué cambió",

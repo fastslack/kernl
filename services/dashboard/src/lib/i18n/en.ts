@@ -220,6 +220,8 @@ const en: Record<string, string> = {
   "settings.about.tagline": "Personal life management MCP server — tasks, CRM, reminders, shopping, dashboard and graph intelligence.",
   "settings.about.version_unknown": "version unknown",
   "settings.about.available": "Kernl {version} is available",
+  "settings.about.restart": "Restart Kernl",
+  "settings.about.restarting": "Restarting…",
   "settings.about.current": "You are on the latest version ({version})",
   "settings.about.check_failed": "Could not check whether a newer version exists",
   "settings.about.changelog": "What changed",

@@ -20,7 +20,7 @@
  */
 
 import { mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, isAbsolute } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
@@ -32,8 +32,13 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 
 import { log } from "../../../../../src/core/logger.js";
+import { findOnPath, toPermissionRulePath } from "../../../../../src/core/fs-paths.js";
 import { failureNote } from "./failure-note.js";
-import { resolveDefaultSocketPath as resolveKernelMcpSocketPath } from "../../../../../src/core/mcp-unix-socket.js";
+import {
+  resolveDefaultSocketPath as resolveKernelMcpSocketPath,
+  resolveMcpBridgePath,
+  chooseKernelMcpTransport,
+} from "../../../../../src/core/mcp-unix-socket.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "../../../../../src/core/llm/logger.js";
 import { isoNow } from "../../../../../src/core/helpers.js";
 import type { KernelConfig } from "../../../../../src/core/config.js";
@@ -190,11 +195,16 @@ function isLocalMcpUrl(raw: string): boolean {
   }
 }
 
-function resolveKernelMcpUrl(): string {
-  const raw = process.env.KERNEL_MCP_URL ?? "http://localhost:3087/mcp";
+function resolveKernelMcpUrl(port?: number): string {
+  // The kernel serves /mcp on its own HTTP port (config.dashboard.port), which
+  // is 3086 in the native packages — the old hard-coded 3087 only matched the
+  // container. 127.0.0.1 rather than localhost: on Windows localhost can
+  // resolve to ::1 first while the kernel listens on IPv4.
+  const fallback = `http://127.0.0.1:${port ?? 3087}/mcp`;
+  const raw = process.env.KERNEL_MCP_URL ?? fallback;
   if (!isLocalMcpUrl(raw)) {
-    log.error(`SECURITY: KERNEL_MCP_URL "${raw}" is not a local kernel endpoint. Falling back to http://localhost:3087/mcp.`);
-    return "http://localhost:3087/mcp";
+    log.error(`SECURITY: KERNEL_MCP_URL "${raw}" is not a local kernel endpoint. Falling back to ${fallback}.`);
+    return fallback;
   }
   return raw;
 }
@@ -218,14 +228,37 @@ function resolveKernelMcpUrl(): string {
  *
  *  Override default via KERNEL_MCP_TRANSPORT={stdio,http}.
  */
+/** The stdio bridge script this install actually has — `bin/mcp-stdio-bridge.ts`
+ *  in a checkout, `mcp-stdio-bridge.js` beside the built entry in the image —
+ *  or "" when it ships none. Same lookup the chat adapter uses. */
+function existingKernelMcpBridgePath(): string {
+  return resolveMcpBridgePath(process.env.KERNEL_MCP_BRIDGE);
+}
+
+/** Bridge path for spawning and for the bwrap bind dirs; falls back to the
+ *  checkout location so those dirs never collapse to "/". */
+function kernelMcpBridgePath(): string {
+  return existingKernelMcpBridgePath() || `${process.cwd()}/bin/mcp-stdio-bridge.ts`;
+}
+
 function resolveKernelMcpServerConfig(caller: {
   agentId: string;
   runId: string;
   depth: number;
   usingDockerSandbox: boolean;
+  /** The kernel's own HTTP port (config.dashboard.port), where /mcp is served. */
+  kernelPort?: number;
 }): McpServerConfig {
   const explicit = process.env.KERNEL_MCP_TRANSPORT?.toLowerCase();
-  const transport = explicit ?? (caller.usingDockerSandbox ? "http" : "stdio");
+  // The stdio bridge needs what the native packages lack: the .ts bridge
+  // script (they ship only the bundled mcp-server.js and run with cwd = the
+  // user's data dir) and, on Windows, a Unix socket under /tmp. Without it
+  // every kernel tool silently vanished from the run and the agent improvised
+  // with its built-ins. Fall back to HTTP whenever stdio cannot work.
+  const transport = explicit
+    ?? (caller.usingDockerSandbox
+      ? "http"
+      : chooseKernelMcpTransport({ bridgePath: existingKernelMcpBridgePath() }));
   if (transport === "http") {
     // Inside the docker sandbox container, `localhost:3087` loops back to
     // the agent container itself. We default to `kernel:3087` (the compose
@@ -259,8 +292,7 @@ function resolveKernelMcpServerConfig(caller: {
   }
   // Bridge script lives next to bin/mcp-server.ts. The kernel module is
   // checked into the repo so cwd-relative path is stable across containers.
-  const bridgePath = process.env.KERNEL_MCP_BRIDGE
-    ?? `${process.cwd()}/bin/mcp-stdio-bridge.ts`;
+  const bridgePath = kernelMcpBridgePath();
   log.info(`claude_code MCP: stdio bridge for agent=${caller.agentId.slice(0,8)} bin=${process.execPath} bridge=${bridgePath} socket=${resolveKernelMcpSocketPath()}`);
   return {
     type: "stdio" as const,
@@ -483,15 +515,17 @@ export class ClaudeCodeExecutor {
       // Permission allow-list pura — con `permissionMode: 'dontAsk'`, cualquier
       // any tool/path not listed here is denied automatically. Read/Edit/Write/
       // Glob/Grep are scoped to the agent's cwd plus any extra declared paths.
-      const cwdGlob = `${cwd.replace(/\/+$/, "")}/**`;
+      // `//abs/path/**` (and `//c/...` on Windows): a rule with a single
+      // leading slash anchors at the settings source, not the filesystem root,
+      // so `Read(/app/data/ws/**)` never matched the agent's own workspace.
+      const cwdGlob = `${toPermissionRulePath(cwd)}/**`;
       // Always include the dirs holding (a) the kernel MCP Unix socket and
       // (b) the stdio bridge script — otherwise the SDK can't spawn the
       // bridge inside its bwrap and the bridge can't see the socket, so
       // every kernel_* tool call fails silently. Cheap, idempotent: the SDK
       // de-dupes additionalDirectories internally.
       const mcpSocketDir = resolveKernelMcpSocketPath().replace(/\/[^/]+$/, "") || "/";
-      const bridgePath = process.env.KERNEL_MCP_BRIDGE
-        ?? `${process.cwd()}/bin/mcp-stdio-bridge.ts`;
+      const bridgePath = kernelMcpBridgePath();
       const bridgeDir = bridgePath.replace(/\/[^/]+$/, "") || "/";
       const extraDirs = [
         mcpSocketDir,
@@ -500,7 +534,7 @@ export class ClaudeCodeExecutor {
       ];
       const extraAllows: string[] = [];
       for (const d of extraDirs) {
-        const g = `${d.replace(/\/+$/, "")}/**`;
+        const g = `${toPermissionRulePath(d)}/**`;
         extraAllows.push(`Read(${g})`, `Edit(${g})`, `Write(${g})`, `Grep(${g})`, `Glob(${g})`);
       }
 
@@ -532,6 +566,20 @@ export class ClaudeCodeExecutor {
       const allowUnsandboxedBash = process.env.KERNEL_ALLOW_UNSANDBOXED_BASH === "1";
       const includeBash = usingSandbox || allowUnsandboxedBash || allowedSet.has("Bash");
       const includeWebFetch = usingSandbox || allowedSet.has("WebFetch");
+      // The SDK's OS sandbox is bubblewrap/Seatbelt, which Windows does not
+      // have; with failIfUnavailable:false the run used to carry on unsandboxed
+      // without a word. It is still allowed (same Bash policy as any run with
+      // no sandbox, above), but the log now says what that means.
+      const osSandboxMissing = !usingSandbox && process.platform === "win32";
+      if (osSandboxMissing) {
+        log.warn(
+          `ClaudeCodeExecutor: agent "${agent.name}" runs with NO sandbox on Windows (no sandbox driver, no OS sandbox). ` +
+          (includeBash
+            ? "Bash is allowed and runs as this Windows user on the host"
+            : "Bash is not allowed (add it to allowed_tools or set KERNEL_ALLOW_UNSANDBOXED_BASH=1 to grant it)") +
+          "; file tools are limited by permission rules only.",
+        );
+      }
       const permissionAllow = [
         `Read(${cwdGlob})`,
         `Edit(${cwdGlob})`,
@@ -688,6 +736,7 @@ export class ClaudeCodeExecutor {
             runId: run.id,
             depth: currentDepth,
             usingDockerSandbox: usingSandbox,
+            kernelPort: this.configRef?.dashboard?.port,
           }),
           ...sanitizeUserMcpServers(vars.__mcp_servers__),
         },
@@ -721,7 +770,7 @@ export class ClaudeCodeExecutor {
           : { permissions: { allow: permissionAllow } },
         // OS-level bwrap sandbox — complements the rules when there is no driver.
         // With an active driver, bwrap is redundant.
-        sandbox: (usingSandbox || vars.__sandbox__ === false) ? undefined : {
+        sandbox: (usingSandbox || vars.__sandbox__ === false || osSandboxMissing) ? undefined : {
           enabled: true,
           failIfUnavailable: false,
           autoAllowBashIfSandboxed: true,
@@ -810,7 +859,7 @@ export class ClaudeCodeExecutor {
           const authHint = useOAuthResolved
             ? "OAuth (Max/Pro sub). If the balance is low the CLI dies silently."
             : "API key. If the key is invalid or the balance is low the CLI dies silently.";
-          probed = `subprocess murió sin output — ${authHint}\nReproducí a mano:\n  cd ${cwdResolved} && ${useOAuthResolved ? "" : "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY "}${claudeBinResolved} -p "ping"`;
+          probed = `subprocess murió sin output — ${authHint}\nReproducí a mano:\n  ${reproduceCommand(cwdResolved, claudeBinResolved, useOAuthResolved)}`;
         }
         if (probed) {
           errorMsg = `${errorMsg}\n${probed}`;
@@ -905,7 +954,7 @@ export class ClaudeCodeExecutor {
         const authHint = useOAuthResolved
           ? "OAuth (Max/Pro sub). If the balance is low the CLI dies silently."
           : "API key. If the key is invalid or the balance is low the CLI dies silently.";
-        extra = `subprocess died with no output — ${authHint}\nReproduce it by hand to see why:\n  cd ${cwdResolved} && ${useOAuthResolved ? "" : "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY "}${claudeBinResolved} -p "ping"`;
+        extra = `subprocess died with no output — ${authHint}\nReproduce it by hand to see why:\n  ${reproduceCommand(cwdResolved, claudeBinResolved, useOAuthResolved)}`;
       }
       const msg = extra ? `${baseMsg}\n${extra}` : baseMsg;
       log.error(`ClaudeCodeExecutor: agent "${agent.name}" failed: ${msg}`);
@@ -1149,14 +1198,16 @@ export class ClaudeCodeExecutor {
       return override;
     }
 
-    try {
-      const which = spawnSync("which", ["claude"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-      const path = (which.stdout ?? "").trim();
-      if (which.status === 0 && path && existsSync(path)) {
-        this.cachedClaudeBin = path;
-        return path;
-      }
-    } catch { /* not on PATH */ }
+    const isWindows = process.platform === "win32";
+    // PATH lookup in-process: `which` is not a Windows command, so spawning it
+    // there always failed and a logged-in CLI was never found. On Windows only
+    // claude.exe qualifies — the SDK spawns the path directly, and an npm
+    // `claude.cmd` shim cannot be spawned without a shell (see candidates).
+    const onPath = findOnPath(isWindows ? "claude.exe" : "claude");
+    if (onPath) {
+      this.cachedClaudeBin = onPath;
+      return onPath;
+    }
 
     // When the kernel runs in a container (docker-compose sets HOST_CLAUDE_CLI),
     // the host CLI is bind-mounted but not on PATH. Preferring it over the
@@ -1168,15 +1219,26 @@ export class ClaudeCodeExecutor {
       return hostCli;
     }
 
-    const candidates = [
-      `${process.env.HOME ?? ""}/.local/bin/claude`,
-      "/usr/local/bin/claude",
-      "/usr/bin/claude",
-      // Fall back to the gnu binary the SDK embeds — useful when Bun runs on
-      // glibc but detects musl and points at the wrong package by default.
-      resolve(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"),
-      "/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
-    ];
+    // homedir(), not $HOME: Windows has no HOME, and "" + "/.local/bin/claude"
+    // pointed at the root of the current drive.
+    const home = homedir();
+    const candidates = isWindows
+      ? [
+          // Where the native Windows installer puts the CLI.
+          resolve(home, ".local", "bin", "claude.exe"),
+          // npm global install. Its claude.cmd shim only wraps this script,
+          // which the SDK can run directly with the kernel's own runtime.
+          resolve(process.env.APPDATA ?? resolve(home, "AppData", "Roaming"), "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js"),
+        ]
+      : [
+          resolve(home, ".local/bin/claude"),
+          "/usr/local/bin/claude",
+          "/usr/bin/claude",
+          // Fall back to the gnu binary the SDK embeds — useful when Bun runs on
+          // glibc but detects musl and points at the wrong package by default.
+          resolve(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"),
+          "/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
+        ];
     for (const c of candidates) {
       if (existsSync(c)) {
         this.cachedClaudeBin = c;
@@ -1202,7 +1264,9 @@ export class ClaudeCodeExecutor {
     const vars = this.parseVariables(agent);
     if (vars.__cwd_path__) {
       const p = vars.__cwd_path__;
-      if (p.startsWith("/") && existsSync(p)) {
+      // isAbsolute, not startsWith("/"): `C:\code\proj` is absolute too, and was
+      // silently swapped for the workspace fallback.
+      if (isAbsolute(p) && existsSync(p)) {
         return { cwd: p, officeHomeFlow: null };
       }
       log.warn(
@@ -1579,12 +1643,32 @@ export class ClaudeCodeExecutor {
  * Translate a path inside the kernel container (e.g. `/app/data/...`) to its
  * equivalent on the Docker host. Needed for Docker-in-Docker bind-mounts and
  * for any driver that ultimately hands paths to the host daemon.
+ *
+ * Returns "" when `HOST_KERNEL_ROOT` is unset. Handing the daemon the raw
+ * `/app/data/...` path is what broke sandboxed runs on a named-volume stack:
+ * the host has no such directory, so the daemon created an empty root-owned
+ * one and mounted it as /workspace — the agent couldn't write its cwd, wrote
+ * to the sandbox's /tmp instead and lost everything when the `--rm` container
+ * exited. Empty lets the driver resolve the kernel path itself.
  */
 function hostPathFromKernel(p: string): string {
   const hostRoot = process.env.HOST_KERNEL_ROOT;
   if (hostRoot && p.startsWith("/app/")) {
     return p.replace(/^\/app/, hostRoot);
   }
-  return p;
+  return "";
+}
+
+/**
+ * The one-line "run it yourself" command shown when the CLI dies without
+ * output. cmd.exe has no `VAR=value cmd` prefix and needs `cd /d` to change
+ * drive, so the POSIX form did nothing useful when pasted on Windows.
+ */
+function reproduceCommand(cwd: string, bin: string, useOAuth: boolean): string {
+  if (process.platform === "win32") {
+    const key = useOAuth ? "" : `set "ANTHROPIC_API_KEY=%ANTHROPIC_API_KEY%" && `;
+    return `cd /d "${cwd}" && ${key}"${bin}" -p "ping"`;
+  }
+  return `cd ${cwd} && ${useOAuth ? "" : "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY "}${bin} -p "ping"`;
 }
 

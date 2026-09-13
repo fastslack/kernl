@@ -1,8 +1,9 @@
 import { existsSync, statSync, readdirSync } from "node:fs";
-import { resolve, sep as pathSep } from "node:path";
+import { resolve, join, basename, isAbsolute, sep as pathSep } from "node:path";
 import { execFileSync } from "node:child_process";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { isPathInside } from "../../../../../src/core/fs-paths.js";
 import type { Repo, CreateRepoInput, UpdateRepoInput } from "./types.js";
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-_]{0,62}$/;
@@ -91,7 +92,9 @@ export class RepoService {
   ): { ok: true; path: string } | { ok: false; error: string } {
     if (!p) return { ok: false, error: "path is required" };
     const abs = resolve(p);
-    if (abs !== p && !p.startsWith("/")) {
+    // isAbsolute, not startsWith("/"): on Windows `C:\code\x` and `C:/code/x`
+    // are absolute too, and the second one resolves to a different string.
+    if (!isAbsolute(p)) {
       // Tool callers should always pass absolute paths; we resolve relative
       // ones against the kernel CWD, which is rarely what they want.
       return { ok: false, error: `path must be absolute (got: ${p})` };
@@ -99,7 +102,7 @@ export class RepoService {
     if (!existsSync(abs)) {
       const roots = visibleRoots.filter(Boolean);
       if (roots.length > 0) {
-        const under = roots.some((r) => abs === r || abs.startsWith(r.replace(/\/+$/, "") + "/"));
+        const under = roots.some((r) => isPathInside(r, abs));
         return {
           ok: false,
           error: under
@@ -258,16 +261,19 @@ export class RepoService {
       let entries;
       try { entries = readdirSync(dir, { withFileTypes: true }); } catch { return; }
       if (entries.some((e) => e.name === ".git")) {
-        const abs = dir.replace(/\/+$/, "");
+        // resolve/basename/join rather than "/" string surgery: on Windows the
+        // old `${dir}/${name}` produced `C:\Users\me/code/x`, which register
+        // then rejected, so every discovered candidate failed.
+        const abs = resolve(dir);
         if (!seen.has(abs)) {
           seen.add(abs);
-          out.push({ path: abs, name: abs.slice(abs.lastIndexOf("/") + 1) });
+          out.push({ path: abs, name: basename(abs) });
         }
         return; // Don't descend into a checkout looking for more checkouts.
       }
       for (const e of entries) {
         if (!e.isDirectory() || e.name.startsWith(".") || e.name === "node_modules") continue;
-        walk(`${dir}/${e.name}`, depth + 1);
+        walk(join(dir, e.name), depth + 1);
       }
     };
     for (const r of roots.filter(Boolean)) walk(resolve(r), 0);

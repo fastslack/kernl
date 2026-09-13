@@ -178,7 +178,8 @@ describe("store:auto-update builtin handler", () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].title).toBe("Extensions updated");
     expect(sent[0].body).toContain("trading: 1.0.0 → 1.1.0");
-    expect(sent[0].body).toContain("Reload the kernel to activate.");
+    expect(sent[0].body).toContain("run the next time Kernl starts");
+    expect(sent[0].body).toContain("Settings → About");
 
     const stored = service.getBySlug("trading")!;
     expect(stored.version).toBe("1.1.0");

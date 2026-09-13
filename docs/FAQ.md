@@ -51,8 +51,8 @@ Extensions run from prebuilt bundles. Run `bun run build:extensions` after editi
 anything under `services/kernel/assets/extensions/*/_module/`.
 
 **Where do I start reading?**
-[`ARCHITECTURE-MAP.md`](./ARCHITECTURE-MAP.md) — the map. Then
-[`docs/CONTRIBUTING.md`](CONTRIBUTING.md).
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) — it opens with the 30-second model and
+where everything lives. Then [`docs/CONTRIBUTING.md`](CONTRIBUTING.md).
 
 ## Project & support
 

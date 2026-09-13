@@ -23,8 +23,8 @@
   import { initLocale, t } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
   import {
-    updateInfo, updating, updateError, updateHint, showUpdateBanner,
-    initUpdateStore, refreshUpdateInfo, applyUpdate, dismissUpdate,
+    updateInfo, updating, updateError, updateHint, updateNotice, showUpdateBanner,
+    canApplyUpdate, initUpdateStore, refreshUpdateInfo, applyUpdate, dismissUpdate,
   } from '$lib/update.js';
 
   // ── State ───────────────────────────────────────────────────────
@@ -408,6 +408,11 @@
 
   // ── Command palette ───────────────────────────────────────────────
   $: CMD_ITEMS = allViews.map(v => ({ label: 'Go to ' + v.label, action: () => navigate(v.id) }));
+
+  // The handler below accepts Ctrl or ⌘; the hint should name the one this
+  // keyboard has — "⌘K" means nothing on Windows or Linux.
+  const cmdShortcut = typeof navigator !== 'undefined'
+    && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent) ? '⌘K' : 'Ctrl+K';
 
   function openCmd() { cmdOpen = true; }
   function closeCmd() { cmdOpen = false; }
@@ -929,9 +934,16 @@
           What changed
         </a>
       {/if}
-      <button class="update-bar-go" disabled={$updating} on:click={applyUpdate}>
-        {$updating ? 'Updating…' : 'Update now'}
-      </button>
+      <!-- No button where the install cannot replace itself (a container, an
+           app running from its disk image): the kernel's instruction instead
+           of a click whose only outcome is a refusal. -->
+      {#if $canApplyUpdate}
+        <button class="update-bar-go" disabled={$updating} on:click={applyUpdate}>
+          {$updating ? 'Updating…' : 'Update now'}
+        </button>
+      {:else if $updateInfo.install?.hint}
+        <code title={$updateInfo.install.reason ?? ''}>{$updateInfo.install.hint}</code>
+      {/if}
       <button class="update-bar-close" title="Dismiss until the next release" on:click={dismissUpdate}>✕</button>
     </div>
   {/if}
@@ -941,6 +953,12 @@
       <span class="update-bar-msg">{$updateError}</span>
       {#if $updateHint}<code>{$updateHint}</code>{/if}
       <button class="update-bar-close" on:click={() => updateError.set('')}>✕</button>
+    </div>
+  {:else if $updateNotice}
+    <div class="update-bar" role="status">
+      <span class="update-bar-dot" aria-hidden="true"></span>
+      <span class="update-bar-msg">{$updateNotice}</span>
+      <button class="update-bar-close" on:click={() => updateNotice.set('')}>✕</button>
     </div>
   {/if}
 
@@ -1022,7 +1040,7 @@
         <button class="search-trigger" on:click={openCmd}>
           <span class="search-icon" aria-hidden="true">⌕</span>
           <span class="search-label">{$t('header.search')}</span>
-          <kbd>⌘K</kbd>
+          <kbd>{cmdShortcut}</kbd>
         </button>
       </div>
 

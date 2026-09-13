@@ -16,6 +16,7 @@ import { WebSocketServer, type WebSocket } from "ws";
 import type { Server as HttpServer } from "node:http";
 import { log } from "../../../../../src/core/logger.js";
 import { newId } from "../../../../../src/core/helpers.js";
+import { findOnPath } from "../../../../../src/core/fs-paths.js";
 import type {
   ChannelTransport,
   ChannelMessageHandler,
@@ -59,6 +60,20 @@ function ensureServerCert(cfg: IrcTransportConfig): { cert: string; key: string 
     const certPath = resolve(cfg.dataDir, "server-cert.pem");
     const keyPath = resolve(cfg.dataDir, "server-key.pem");
     if (!existsSync(certPath) || !existsSync(keyPath)) {
+      // A native Windows install has no openssl on PATH, and the kernel ships
+      // no in-process X.509 generator. Say how to give the listener a cert
+      // instead of logging "spawn openssl ENOENT".
+      if (!findOnPath("openssl")) {
+        log.warn(
+          "IRC: no TLS certificate configured and openssl is not on PATH, so the TLS listener stays off " +
+          "(the /ws/irc WebSocket gateway still works). To enable it, paste a PEM certificate and key into " +
+          `the IRC channel settings (tlsCert / tlsKey), or put server-cert.pem and server-key.pem in ${cfg.dataDir}` +
+          (process.platform === "win32"
+            ? ". Alternatively install OpenSSL for Windows, make sure openssl.exe is on PATH, and restart Kernl to have a self-signed pair generated."
+            : "."),
+        );
+        return null;
+      }
       execFileSync("openssl", [
         "req", "-x509", "-newkey", "rsa:2048", "-nodes",
         "-keyout", keyPath, "-out", certPath,

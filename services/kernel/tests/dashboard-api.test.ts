@@ -23,14 +23,21 @@ import {
 } from "../assets/extensions/home/life/_module/life-service.js";
 import {
   queryKpis,
-  queryTasks,
-  queryCrm,
-  queryReminders,
-  queryShopping,
   queryFullDashboard,
   queryAgenda,
   queryCrossModuleIntel,
+  CORE_KPI_CHANNELS,
 } from "../src/modules/dashboard/api.js";
+import { DashboardRegistry } from "../src/core/dashboard-registry.js";
+import type { Neo4jClient } from "../src/core/db/neo4j.js";
+import { queryTasks, type DashboardTasks } from "../assets/extensions/productivity/tasks/_module/dashboard-queries.js";
+import { queryCrm, type DashboardCrm } from "../assets/extensions/people/crm/_module/dashboard-queries.js";
+import { queryReminders } from "../assets/extensions/productivity/reminders/_module/dashboard-queries.js";
+import { queryShopping } from "../assets/extensions/home/shopping/_module/dashboard-queries.js";
+import { createTasksModule } from "../assets/extensions/productivity/tasks/_module/index.js";
+import { createCrmModule } from "../assets/extensions/people/crm/_module/index.js";
+import { createRemindersModule } from "../assets/extensions/productivity/reminders/_module/index.js";
+import { createShoppingModule } from "../assets/extensions/home/shopping/_module/index.js";
 import { queryIssues, parseScopedLabels } from "../assets/extensions/productivity/issues/_module/dashboard-queries.js";
 import { queryComms } from "../assets/extensions/people/comms/_module/dashboard-queries.js";
 
@@ -281,17 +288,46 @@ describe("Dashboard API queries", () => {
   // ── queryFullDashboard ────────────────────────────────
 
   describe("queryFullDashboard", () => {
-    it("integrates all sections", () => {
-      const dash = queryFullDashboard(db);
-      expect(dash.generatedAt).toBeTruthy();
-      expect(dash.kpis).toBeDefined();
-      expect(dash.tasks).toBeDefined();
-      expect(dash.crm).toBeDefined();
-      expect(dash.reminders).toBeDefined();
-      expect(dash.shopping).toBeDefined();
+    // Wired the way bootstrap wires it: each extension contributes its own
+    // channel, and the dashboard reads the sections through the registry.
+    function coreKpiRegistry(): DashboardRegistry {
+      const registry = new DashboardRegistry();
+      for (const mod of [createTasksModule(), createCrmModule(), createRemindersModule(), createShoppingModule()]) {
+        registry.registerModule(mod);
+      }
+      return registry;
+    }
+
+    function readerFor(registry: DashboardRegistry) {
+      return (name: string) => registry.queryChannel(name, db, {} as Neo4jClient);
+    }
+
+    it("each core KPI section is a channel registered by its owning extension", () => {
+      expect(coreKpiRegistry().getChannelNames().sort()).toEqual([...CORE_KPI_CHANNELS].sort());
     });
 
-    it("reflects inserted data across modules", () => {
+    it("integrates all sections", async () => {
+      const dash = await queryFullDashboard(db, readerFor(coreKpiRegistry()));
+      expect(dash.generatedAt).toBeTruthy();
+      expect(dash.kpis).toBeDefined();
+      expect(dash.tasks).toEqual(queryTasks(db));
+      expect(dash.crm).toEqual(queryCrm(db));
+      expect(dash.reminders).toEqual(queryReminders(db));
+      expect(dash.shopping).toEqual(queryShopping(db));
+    });
+
+    it("leaves a section null when its extension is not active", async () => {
+      const registry = new DashboardRegistry();
+      registry.registerModule(createTasksModule());
+
+      const dash = await queryFullDashboard(db, readerFor(registry));
+      expect(dash.tasks).toEqual(queryTasks(db));
+      expect(dash.crm).toBeNull();
+      expect(dash.reminders).toBeNull();
+      expect(dash.shopping).toBeNull();
+    });
+
+    it("reflects inserted data across modules", async () => {
       db.prepare(
         `INSERT INTO tasks (id, title, status, priority, created_at, updated_at)
          VALUES ('t1','Task','todo','high',?,?)`,
@@ -301,11 +337,11 @@ describe("Dashboard API queries", () => {
          VALUES ('c1','Bob','professional',?,?)`,
       ).run(now, now);
 
-      const dash = queryFullDashboard(db);
+      const dash = await queryFullDashboard(db, readerFor(coreKpiRegistry()));
       expect(dash.kpis.tasks.total).toBe(1);
       expect(dash.kpis.contacts.total).toBe(1);
-      expect(dash.tasks.byPriority.high).toBe(1);
-      expect(dash.crm.total).toBe(1);
+      expect((dash.tasks as DashboardTasks).byPriority.high).toBe(1);
+      expect((dash.crm as DashboardCrm).total).toBe(1);
     });
   });
 });

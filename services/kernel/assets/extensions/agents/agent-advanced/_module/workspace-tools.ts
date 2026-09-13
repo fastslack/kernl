@@ -25,6 +25,7 @@
 import { z } from "zod";
 import { readFile, writeFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
 import { checkProtected, formatViolation } from "../../../../../src/core/protected-files.js";
+import { isPathInside } from "../../../../../src/core/fs-paths.js";
 import { resolve, relative, join, normalize, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -51,7 +52,9 @@ const MAX_SEARCH_FILE_BYTES = 256_000;
 function resolveFilePath(workspaceId: string, filePath: string): string | null {
   const workDir = resolve(WORKSPACE_ROOT, workspaceId);
   const target = resolve(workDir, normalize(filePath));
-  if (!target.startsWith(workDir)) return null;
+  // Containment through relative(): a bare startsWith(workDir) let workspace
+  // `acme` reach its sibling `acme-2` with `../acme-2/x`.
+  if (!isPathInside(workDir, target)) return null;
   return target;
 }
 
@@ -105,7 +108,10 @@ function dateSlug(d: Date = new Date()): string {
   return d.toISOString().slice(0, 10);
 }
 
-function parseFrontmatter(md: string): { meta: Record<string, string>; body: string } {
+function parseFrontmatter(source: string): { meta: Record<string, string>; body: string } {
+  // Files saved on Windows (or checked out with autocrlf) end lines in CRLF;
+  // without this their "---\r\n" header was not recognised at all.
+  const md = source.replace(/\r\n/g, "\n");
   if (!md.startsWith("---\n")) return { meta: {}, body: md };
   const end = md.indexOf("\n---", 4);
   if (end === -1) return { meta: {}, body: md };

@@ -32,7 +32,7 @@
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import {
     updateInfo, checking, updating, updateError, updateHint, updateProgress,
-    refreshUpdateInfo, applyUpdate,
+    canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
   } from '$lib/update.js';
 
   // ── Types ────────────────────────────────────
@@ -1567,9 +1567,16 @@
                       {$t('settings.about.changelog')}
                     </a>
                   {/if}
-                  <button class="btn-sm primary" disabled={$updating} on:click={applyUpdate}>
-                    {$updating ? $t('settings.about.updating') : $t('settings.about.update_now')}
-                  </button>
+                  {#if $canApplyUpdate}
+                    <button class="btn-sm primary" disabled={$updating} on:click={applyUpdate}>
+                      {$updating ? $t('settings.about.updating') : $t('settings.about.update_now')}
+                    </button>
+                  {:else}
+                    <!-- The install cannot replace itself; say why and what to
+                         do instead of offering a button that can only refuse. -->
+                    <span class="about-update-msg about-dim">{$updateInfo.install?.reason ?? ''}</span>
+                    {#if $updateInfo.install?.hint}<code>{$updateInfo.install.hint}</code>{/if}
+                  {/if}
                   {#if $updating && $updateProgress}
                     <!-- Everything slow — the download, the checksum, the
                          unpack — happens before the kernel exits, so this page
@@ -1606,7 +1613,20 @@
                   {$checking ? $t('settings.about.checking') : $t('settings.about.check')}
                 </button>
                 {#if checkedLabel}<span class="about-checked">{checkedLabel}</span>{/if}
+                <!-- An updated extension only runs after a restart. Offered for
+                     every installed copy — the kernel relaunches itself the way
+                     it was started — and hidden for a source checkout, which
+                     has no entry point to relaunch. -->
+                {#if $updateInfo?.install?.kind && $updateInfo.install.kind !== 'unknown'}
+                  <button class="btn-sm" disabled={$updating} on:click={restartKernl}>
+                    {$updating ? $t('settings.about.restarting') : $t('settings.about.restart')}
+                  </button>
+                {/if}
               </div>
+
+              {#if $updateNotice && !$updateError}
+                <p class="about-update-msg">{$updateNotice}</p>
+              {/if}
 
               {#if $updateError}
                 <p class="about-err">

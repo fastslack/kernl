@@ -158,7 +158,7 @@ export class SttService {
       }
 
       await new Promise<void>((resolve, reject) => {
-        const proc = spawn(join(whisperPath, "main"), args);
+        const proc = spawn(join(whisperPath, process.platform === "win32" ? "main.exe" : "main"), args);
         proc.on("close", (code) => {
           if (code === 0) resolve();
           else reject(new Error(`Whisper exited with code ${code}`));

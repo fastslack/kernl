@@ -280,10 +280,15 @@ rather you read them here than discover them at an awkward moment.
   API token sees everything. Give each person their own instance; don't share
   one across a team. ([`docs/MULTI_USER.md`](./docs/MULTI_USER.md))
 - **Updates are checked, never automatic.** Settings → About asks GitHub for the
-  newest release (cached six hours) and can install it in place on a macOS .app,
-  a Windows install and a Linux portable build. Nothing happens unattended, and
-  package installs update through their own channel: `dnf`/`apt` for the rpm and
-  deb, `docker compose pull` for the stack, `git pull` from source.
+  newest release (cached six hours) and can install it for you. Nothing happens
+  unattended, and what "install" means depends on how you installed: an MSI
+  install is upgraded by Windows' own installer (one UAC prompt, the progress
+  bar you expect, Add/Remove Programs kept in step); a portable Windows or Linux
+  copy is swapped in place, keeping the old one until the new one is running;
+  and the rest update through their own channel — `dnf`/`apt` for the rpm and
+  deb, `docker compose pull` for the stack, `git pull` from source. On macOS the
+  button refuses while the build is unsigned, because Gatekeeper would not open
+  the result: until the certificate is bought, that download is a manual one.
 - **Installers are unsigned.** macOS needs right-click → Open the first time,
   Windows needs "More info → Run anyway". The signing pipeline is wired but the
   certificates aren't bought yet. Docker and source installs are unaffected.
@@ -298,7 +303,7 @@ rather you read them here than discover them at an awkward moment.
 ## Documentation
 
 - [`docs/GETTING_STARTED.md`](./docs/GETTING_STARTED.md) — first-run walkthrough
-- [`docs/ARCHITECTURE-MAP.md`](./docs/ARCHITECTURE-MAP.md) — contributor map · [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — full system guide
+- [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) — the contributor map and the full system guide, in that order
 - [`docs/API_DOCS.md`](./docs/API_DOCS.md) — HTTP + MCP surface reference
 - [`docs/DEPLOYMENT.md`](./docs/DEPLOYMENT.md) — production deploys
 - [`docs/CONTRIBUTING.md`](./docs/CONTRIBUTING.md) · [`docs/SECURITY.md`](./docs/SECURITY.md) · [`docs/PRIVACY.md`](./docs/PRIVACY.md)
