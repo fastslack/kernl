@@ -35,7 +35,19 @@ import { delimiter as PATH_DELIM } from "node:path";
 import { spawn } from "node:child_process";
 import { log } from "../../core/logger.js";
 import { assetsRoot } from "../../core/assets-root.js";
+import { isPathInside } from "../../core/fs-paths.js";
 import type { ExtensionManifest } from "./schema.js";
+
+/**
+ * Does an existing link already point at `target`? A Windows junction reads
+ * back with a trailing separator (and sometimes a different drive-letter case),
+ * so a plain `===` there re-created the link on every boot.
+ */
+export function sameLinkTarget(current: string, target: string, win = process.platform === "win32"): boolean {
+  if (!win) return current === target;
+  const norm = (p: string) => resolve(p.replace(/^\\\\\?\\/, "")).replace(/[\\/]+$/, "").toLowerCase();
+  return norm(current) === norm(target);
+}
 
 /**
  * Make the payload's own node_modules reachable from a materialized extension.
@@ -69,20 +81,24 @@ export function linkPayloadModules(extensionsDir: string): void {
   // Docker (/app/data/extensions) and dev (services/kernel/data/extensions)
   // keep the data dir inside the tree that owns node_modules, so the walk
   // already reaches it. Nothing to link, and linking would be self-referential.
-  if (resolve(extensionsDir).startsWith(resolve(root) + sep)) return;
+  if (isPathInside(root, extensionsDir, { allowRoot: false })) return;
 
   const link = join(extensionsDir, "node_modules");
+  const win = process.platform === "win32";
   try {
     mkdirSync(extensionsDir, { recursive: true });
     const current = lstatSync(link, { throwIfNoEntry: false });
     if (current?.isSymbolicLink()) {
-      if (readlinkSync(link) === payload) return; // already correct
+      if (sameLinkTarget(readlinkSync(link), payload, win)) return; // already correct
       rmSync(link, { force: true });
     } else if (current) {
       // A real directory here belongs to someone else — never clobber it.
       return;
     }
-    symlinkSync(payload, link, "dir");
+    // A "dir" symlink on Windows needs admin or Developer Mode and threw EPERM
+    // for every ordinary user, so payload packages never resolved there. A
+    // junction needs no privilege and takes the same absolute target.
+    symlinkSync(payload, link, win ? "junction" : "dir");
     log.info(`Extensions: payload node_modules linked at ${link}`);
   } catch (err) {
     // Not fatal on its own: extensions that declare everything they import
@@ -228,7 +244,7 @@ export async function ensureExtensionPackages(args: {
   // Already-writable extensions (anything installed from the marketplace) stay
   // where they are.
   let target = installPath;
-  const alreadyWritable = resolve(installPath).startsWith(resolve(extensionsDir));
+  const alreadyWritable = isPathInside(extensionsDir, installPath);
   if (!alreadyWritable) {
     target = join(extensionsDir, slug);
     mkdirSync(dirname(target), { recursive: true });

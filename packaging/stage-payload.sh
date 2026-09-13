@@ -440,6 +440,45 @@ if [ -d "$ORT_BIN" ]; then
   fi
 fi
 
+# ── 4b) Visual C++ runtime, app-local, for win-x64 ──────────────────
+# whisper-cli.exe, its ggml DLLs and onnxruntime's binding all import
+# MSVCP140 / VCRUNTIME140(_1) / VCOMP140, and none of those ship with Windows.
+# On a PC without the VC++ 2015-2022 redistributable whisper exits 0xC0000135
+# with an empty stderr and the transformers fallback dies on "module could not
+# be found": no offline subtitles, no translation. CI never saw it because the
+# windows-latest image has the redistributable installed.
+#
+# Microsoft allows these files to be deployed beside the binaries that load
+# them. VCRUNTIME_DIR is the folder holding them — on the Windows runner,
+# Visual Studio's own Redist\MSVC\<ver>\x64 tree (release.yml sets it).
+if [ "$PLATFORM" = "win-x64" ]; then
+  if [ -n "${VCRUNTIME_DIR:-}" ]; then
+    # Git-bash on the runner hands over a C:\ path; find wants /c/.
+    if command -v cygpath >/dev/null 2>&1; then
+      VCRUNTIME_DIR="$(cygpath -u "$VCRUNTIME_DIR")"
+    fi
+    if [ ! -d "$VCRUNTIME_DIR" ]; then
+      echo "ERROR: VCRUNTIME_DIR=$VCRUNTIME_DIR is not a directory" >&2
+      exit 1
+    fi
+    for dll in msvcp140.dll msvcp140_1.dll vcruntime140.dll vcruntime140_1.dll vcomp140.dll; do
+      # maxdepth 2 reaches Microsoft.VC143.CRT / .OpenMP under x64 and stays
+      # out of the spectre and onecore variants beside it.
+      src="$(find "$VCRUNTIME_DIR" -maxdepth 2 -iname "$dll" -print -quit)"
+      if [ -z "$src" ]; then
+        echo "ERROR: $dll not found under VCRUNTIME_DIR=$VCRUNTIME_DIR" >&2
+        exit 1
+      fi
+      if [ -d "$SRC_TREE/bin/whisper" ]; then cp "$src" "$SRC_TREE/bin/whisper/$dll"; fi
+      if [ -d "$ORT_BIN/win32/x64" ]; then cp "$src" "$ORT_BIN/win32/x64/$dll"; fi
+    done
+    echo "  VC++ runtime: bundled from $VCRUNTIME_DIR"
+  else
+    echo "  WARN: VCRUNTIME_DIR not set — subtitles on this package need the"
+    echo "  WARN: VC++ 2015-2022 x64 redistributable installed on the user's PC"
+  fi
+fi
+
 # ── 5) Dashboard SPA + assets + manifest ───────────────────────────
 cp -a services/dashboard/build "$SRC_TREE/dashboard"
 cp -a services/kernel/assets "$SRC_TREE/assets"

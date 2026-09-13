@@ -8,7 +8,7 @@
  */
 
 import { readFile } from "node:fs/promises";
-import { join, relative } from "node:path";
+import { basename, join, relative } from "node:path";
 import type { ExtensionManifest } from "../../extensions/schema.js";
 import type {
   ExtensionPermission,
@@ -350,7 +350,7 @@ export async function readSkillMdAsExtensionManifest(
   }
   const { fm, body } = parsed;
   const inferredName =
-    fm.name && fm.name.length > 0 ? fm.name : skillDir.split("/").pop() ?? "unnamed-skill";
+    fm.name && fm.name.length > 0 ? fm.name : basename(skillDir) || "unnamed-skill";
   // Coerced, not trusted: anything the parser hands back that is not a string
   // must degrade to the placeholder rather than reach the manifest. That is
   // the check whose absence hid the block-scalar bug — `[]` and `"|-"` both

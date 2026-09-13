@@ -12,6 +12,7 @@
 		createTab
 	} from '$lib/commander-stores.js';
 	import { isInScope, isUnder, isWritable, type FsEntry, type FsRoot } from '$lib/fs-api.js';
+	import { basenameHostPath, hostPathCrumbs, parentHostPath } from '$lib/host-path.js';
 
 	export let paneId: PaneId;
 	export let store: Writable<PaneState>;
@@ -147,14 +148,9 @@
 	 * scope", so they render as plain text instead.
 	 */
 	function crumbs(path: string): Array<{ label: string; path: string; reachable: boolean }> {
-		const parts = path.split('/').filter(Boolean);
-		const out = [{ label: '/', path: '/', reachable: isInScope('/', roots) }];
-		let cur = '';
-		for (const p of parts) {
-			cur += '/' + p;
-			out.push({ label: p, path: cur, reachable: isInScope(cur, roots) });
-		}
-		return out;
+		// hostPathCrumbs, not split('/'): a Windows kernel reports C:\Users\…,
+		// which used to render as one crumb whose parent was "/".
+		return hostPathCrumbs(path).map((c) => ({ ...c, reachable: isInScope(c.path, roots) }));
 	}
 
 	// ── Places: the directories this provider actually serves ───────
@@ -205,8 +201,7 @@
 
 	/** Last path segment, or the whole path for a single-segment root. */
 	function rootLabel(r: string): string {
-		const parts = r.split('/').filter(Boolean);
-		return parts.length ? parts[parts.length - 1] : '/';
+		return basenameHostPath(r) || '/';
 	}
 
 
@@ -218,9 +213,8 @@
 	}
 
 	function parentOf(p: string): string {
-		if (!p || p === '/') return '/';
-		const trimmed = p.endsWith('/') ? p.slice(0, -1) : p;
-		return trimmed.slice(0, trimmed.lastIndexOf('/')) || '/';
+		if (!p) return '/';
+		return parentHostPath(p);
 	}
 
 	// ── Interaction ─────────────────────────────────────────────────

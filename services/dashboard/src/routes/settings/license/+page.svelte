@@ -262,8 +262,8 @@
   <div class="card card-info">
     <h2>Alternatives</h2>
     <ul>
-      <li><b>File:</b> save the JWT as <code>~/.config/kernl/license.jwt</code> and restart the kernel.</li>
-      <li><b>Env:</b> set <code>KERNEL_LICENSE_JWT</code> in <code>~/.config/kernl/.env</code>.</li>
+      <li><b>File:</b> save the JWT as <code>~/.config/kernl/license.jwt</code> (Windows: <code>%USERPROFILE%\.config\kernl\license.jwt</code>) and restart the kernel.</li>
+      <li><b>Env:</b> set <code>KERNEL_LICENSE_JWT</code> in <code>~/.config/kernl/.env</code> (Windows: <code>%APPDATA%\Kernl\.env</code>; macOS: <code>~/Library/Application Support/Kernl/config/.env</code>).</li>
       <li><b>CLI (coming soon):</b> <code>kernl license set &lt;jwt&gt;</code>.</li>
     </ul>
   </div>

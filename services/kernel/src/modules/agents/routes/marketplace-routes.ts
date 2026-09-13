@@ -185,7 +185,7 @@ export function registerMarketplaceRoutes(
         return;
       }
 
-      const { existsSync, mkdirSync } = await import("node:fs");
+      const { existsSync, mkdirSync, rmSync } = await import("node:fs");
       const { resolve: resolvePath, basename } = await import("node:path");
       const { execFileSync } = await import("node:child_process");
 
@@ -226,7 +226,7 @@ export function registerMarketplaceRoutes(
       const hasPlugins = existsSync(resolvePath(targetPath, "plugins"));
       const hasManifest = existsSync(resolvePath(targetPath, ".claude-plugin", "marketplace.json"));
       if (!hasPlugins && !hasManifest) {
-        try { execFileSync("rm", ["-rf", targetPath]); } catch { /* ignore */ }
+        try { rmSync(targetPath, { recursive: true, force: true }); } catch { /* ignore */ }
         server.json(res, 400, { error: "The repo doesn't look like a Claude Code marketplace (missing plugins/ or .claude-plugin/marketplace.json)" });
         return;
       }
@@ -319,7 +319,7 @@ export function registerMarketplaceRoutes(
       }
       const { existsSync } = await import("node:fs");
       const { resolve: resolvePath } = await import("node:path");
-      const { execFileSync } = await import("node:child_process");
+      const { rmSync } = await import("node:fs");
       const hostHome = process.env.HOST_HOME ?? homedir();
       const mpPath = resolvePath(hostHome, ".claude/plugins/marketplaces", name);
       if (!existsSync(mpPath)) {
@@ -327,7 +327,8 @@ export function registerMarketplaceRoutes(
         return;
       }
       try {
-        execFileSync("rm", ["-rf", mpPath]);
+        // In-process, not `rm -rf`: there is no rm on Windows.
+        rmSync(mpPath, { recursive: true, force: true });
         server.json(res, 200, { success: true });
       } catch (err) {
         server.json(res, 500, { error: `rm failed: ${String(err)}` });

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
+	import { basenameHostPath } from '$lib/host-path.js';
 
 	export let providerId: string;
 	export let path: string;
@@ -77,7 +78,7 @@
 <div class="pv-overlay" on:click|self={onClose} role="dialog" aria-modal="true">
 	<div class="pv-dialog">
 		<div class="pv-header">
-			<span class="pv-title">{result?.name ?? path.split('/').pop()}</span>
+			<span class="pv-title">{result?.name ?? basenameHostPath(path)}</span>
 			<span class="pv-meta">
 				{#if result}{result.mime} · {fmtBytes(result.size)}{/if}
 			</span>

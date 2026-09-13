@@ -79,8 +79,10 @@ Optional features (graph analytics, ML trading):
     activate "Neo4j" with your Bolt URI + credentials.
 
 Updates:
-  - Replace this folder with the new version. Your data and config
-    stay in %LOCALAPPDATA% / %APPDATA% — they're not touched.
+  - Kernl tells you when a new version is out. Click "Update now": it
+    downloads and verifies the new version, replaces this folder and starts
+    again. If the new version does not start, the previous one is put back.
+    Your data and config stay in %LOCALAPPDATA% / %APPDATA%.
 
 Troubleshooting:
   - "Windows protected your PC" SmartScreen warning:

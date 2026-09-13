@@ -68,6 +68,8 @@ import type { LicenseService } from "../license/index.js";
 import { registerLicenseRoutes } from "../license/routes.js";
 import { checkForUpdate } from "../update/check.js";
 import { applyUpdate, updateProgress } from "../update/apply.js";
+import { exitForUpdate } from "../update/install.js";
+import { restartKernl } from "../update/restart.js";
 
 export interface HttpResult {
   httpServer: KernelHttpServer | null;
@@ -396,7 +398,25 @@ export async function initHttpAndMcp(args: {
         httpServer!.json(res, 202, outcome);
         // Give the response time to reach the browser before the helper's
         // wait-for-exit loop gets what it is waiting for.
-        setTimeout(() => process.exit(0), 750);
+        // exitForUpdate, not process.exit: it stops the kernel's own children
+        // (whisper, ffmpeg, bun workers) that would otherwise keep files in
+        // the install dir open on Windows, then exits through the normal
+        // shutdown — or restarts the systemd unit for an rpm/deb install.
+        setTimeout(() => { void exitForUpdate(); }, 750);
+      });
+
+      // Restart without updating — what an extension update needs for its new
+      // code to run. Relaunches the way this install was started (start.bat,
+      // the .app, systemd, the container's restart policy); a 202 means "about
+      // to exit", exactly like /api/update/apply.
+      httpServer.post("/api/update/restart", async (_req, res) => {
+        const outcome = await restartKernl();
+        if (!outcome.ok) {
+          httpServer!.json(res, 400, outcome);
+          return;
+        }
+        httpServer!.json(res, 202, outcome);
+        setTimeout(() => { void exitForUpdate(); }, 750);
       });
 
       // Polled while the POST above is still in flight. Separate on purpose:
@@ -541,7 +561,10 @@ export async function initHttpAndMcp(args: {
       // (Claude Code SDK + bwrap --unshare-net) can talk to the kernel
       // through a path that survives the sandbox's network isolation.
       // Disabled via KERNEL_MCP_UNIX_SOCKET=0.
-      if (process.env.KERNEL_MCP_UNIX_SOCKET !== "0") {
+      // Never on Windows: there is no bwrap to escape, the bridge is not
+      // shipped, and "/tmp/kernl-mcp.sock" resolves to C:\tmp. Claude Code
+      // reaches the kernel over the HTTP endpoint above instead.
+      if (process.env.KERNEL_MCP_UNIX_SOCKET !== "0" && process.platform !== "win32") {
         try {
           const socketPath = resolveDefaultSocketPath();
           mcpUnixSocket = await startMcpUnixSocketServer(registry, events, mcpOpts, socketPath);

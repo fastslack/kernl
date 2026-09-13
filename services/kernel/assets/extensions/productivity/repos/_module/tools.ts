@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { ToolDefinition } from "../../../../../src/core/types.js";
 import { textResult, errorResult } from "../../../../../src/core/helpers.js";
+import { shellCommand } from "../../../../../src/core/fs-paths.js";
 import { getRequestContext } from "../../../../../src/core/request-context.js";
 import type { RepoService } from "./service.js";
 import { RepoService as RepoServiceClass } from "./service.js";
@@ -103,6 +104,48 @@ function listDir(absRoot: string, relStart: string, depth: number, glob?: RegExp
     }
   }
   return out;
+}
+
+/**
+ * In-process fallback for `kernel_repos_search` when neither rg nor grep is
+ * installed, which is a stock Windows machine. Same skip list as listDir. The
+ * glob is matched against the file name, or against the repo-relative path
+ * when it contains a slash — how rg's --glob and grep's --include read the
+ * common `*.ts` form. Output mirrors rg: `path:line:text`, forward slashes.
+ */
+export function searchInProcess(root: string, pattern: RegExp, glob: string | undefined, cap: number): string[] {
+  const globRe = glob ? globToRegex(glob) : null;
+  const matchPath = glob?.includes("/") ?? false;
+  const hits: string[] = [];
+  const stack: Array<{ abs: string; rel: string }> = [{ abs: root, rel: "" }];
+  while (stack.length && hits.length < cap) {
+    const cur = stack.pop()!;
+    let entries;
+    try { entries = readdirSync(cur.abs, { withFileTypes: true }); } catch { continue; }
+    entries.sort((a, b) => b.name.localeCompare(a.name)); // popped in name order
+    for (const e of entries) {
+      const rel = cur.rel ? `${cur.rel}/${e.name}` : e.name;
+      const abs = join(cur.abs, e.name);
+      if (e.isDirectory()) {
+        if (!SKIP_DIRS.has(e.name)) stack.push({ abs, rel });
+        continue;
+      }
+      if (!e.isFile()) continue;
+      if (globRe && !globRe.test(matchPath ? rel : e.name)) continue;
+      let text: string;
+      try {
+        if (statSync(abs).size > MAX_READ_BYTES * 5) continue;
+        text = readFileSync(abs, "utf8");
+      } catch { continue; }
+      if (text.includes("\u0000")) continue; // binary
+      const lines = text.split(/\r?\n/);
+      for (let i = 0; i < lines.length && hits.length < cap; i++) {
+        if (pattern.test(lines[i])) hits.push(`${rel}:${i + 1}:${lines[i]}`);
+      }
+      if (hits.length >= cap) break;
+    }
+  }
+  return hits;
 }
 
 function globToRegex(glob: string): RegExp {
@@ -396,10 +439,20 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
           if (!out) return textResult(`No matches for \`${a.query}\` in **${r.repo.name}**.`);
           return textResult(`### Matches in ${r.repo.name} (grep)\n\n\`\`\`\n${truncate(out, MAX_OUTPUT_BYTES)}\n\`\`\``);
         } catch (grepErr) {
-          const code = (grepErr as { code?: number }).code;
+          const code = (grepErr as { code?: number | string }).code;
           if (code === 1) return textResult(`No matches for \`${a.query}\` in **${r.repo.name}**.`);
-          return errorResult(`search failed: ${String((grepErr as Error).message ?? grepErr)}`);
+          if (code !== "ENOENT") {
+            return errorResult(`search failed: ${String((grepErr as Error).message ?? grepErr)}`);
+          }
         }
+        // Neither rg nor grep is installed — the normal state of a Windows
+        // machine. Search in-process rather than fail every call.
+        let pattern: RegExp;
+        try { pattern = new RegExp(a.query); } catch { return errorResult(`invalid pattern: ${a.query}`); }
+        const hits = searchInProcess(r.repo.path, pattern, a.glob, cap);
+        service.touch(r.repo.id);
+        if (hits.length === 0) return textResult(`No matches for \`${a.query}\` in **${r.repo.name}**.`);
+        return textResult(`### Matches in ${r.repo.name} (built-in search)\n\n\`\`\`\n${truncate(hits.join("\n"), MAX_OUTPUT_BYTES)}\n\`\`\``);
       },
     },
 
@@ -423,11 +476,14 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         if (!cmd) return errorResult("command required");
         const timeout = Math.min(MAX_EXEC_TIMEOUT, a.timeout_ms ?? 60_000);
         try {
-          const { stdout, stderr } = await execFileAsync("sh", ["-c", cmd], {
+          // sh -c on POSIX, cmd.exe /d /s /c on Windows, where `sh` does not exist.
+          const shell = shellCommand(cmd);
+          const { stdout, stderr } = await execFileAsync(shell.file, shell.args, {
             cwd: r.repo.path,
             timeout,
             maxBuffer: 2 * 1024 * 1024,
             env: { ...process.env },
+            windowsVerbatimArguments: shell.windowsVerbatimArguments,
           });
           service.touch(r.repo.id);
           const combined = (stdout + (stderr ? `\n--- stderr ---\n${stderr}` : "")).trim();

@@ -5,6 +5,9 @@ import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-drive
 import type { KernelConfig } from "../../../../../src/core/config.js";
 import { newId, isoNow } from "../../../../../src/core/helpers.js";
 import { log } from "../../../../../src/core/logger.js";
+// rename() that rides out the transient EPERM/EBUSY Windows raises while an
+// antivirus or the indexer still holds the freshly cloned/extracted files.
+import { renameWithRetry } from "../../../../../src/core/fs-paths.js";
 import type {
   PluginRepo,
   PluginRegistryEntry,
@@ -185,8 +188,7 @@ export class PluginManagerService {
     await mkdir(resolve(PLUGINS_DIR), { recursive: true });
 
     // Rename temp to final
-    const { rename } = await import("node:fs/promises");
-    await rename(tempDir, installDir);
+    await renameWithRetry(tempDir, installDir);
 
     // Save to database
     const now = isoNow();
@@ -271,8 +273,7 @@ export class PluginManagerService {
     await rm(installDir, { recursive: true, force: true });
     await mkdir(resolve(PLUGINS_DIR), { recursive: true });
 
-    const { rename } = await import("node:fs/promises");
-    await rename(tempDir, installDir);
+    await renameWithRetry(tempDir, installDir);
 
     const now = isoNow();
     const plugin: InstalledPlugin = {
@@ -347,8 +348,7 @@ export class PluginManagerService {
 
     // Replace install directory
     await rm(existing.install_path, { recursive: true, force: true });
-    const { rename } = await import("node:fs/promises");
-    await rename(tempDir, existing.install_path);
+    await renameWithRetry(tempDir, existing.install_path);
 
     // Update database
     const now = isoNow();

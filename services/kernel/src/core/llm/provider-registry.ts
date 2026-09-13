@@ -10,6 +10,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { log } from "../logger.js";
+import { assetsRoot } from "../assets-root.js";
 import type { SqliteDb } from "../db/sqlite.js";
 import type {
   LlmProvider,
@@ -128,7 +129,7 @@ export class LlmProviderRegistry {
   private readProviderManifest(slug: string): Record<string, unknown> | null {
     const root = process.env.KERNEL_ASSETS_DIR
       ? resolve(process.env.KERNEL_ASSETS_DIR)
-      : resolve(process.cwd(), "assets");
+      : resolve(assetsRoot(), "assets");
     const path = resolve(root, "extensions/ai/models", slug, "extension.json");
     if (!existsSync(path)) return null;
     try { return JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>; }

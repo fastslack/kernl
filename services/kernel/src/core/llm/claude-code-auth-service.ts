@@ -19,6 +19,7 @@ import {
 import { ClaudeLoginSession, type LoginProcess, type LoginSessionView } from "./claude-code-login.js";
 import { resetClaudeCodeSdkCache } from "./client.js";
 import { log } from "../logger.js";
+import { findOnPath, spawnableCommand } from "../fs-paths.js";
 
 export interface ClaudeAuthReport extends ClaudeAuthStatus {
   /** The CLI was found — without this nothing else is possible. */
@@ -29,13 +30,9 @@ export interface ClaudeAuthReport extends ClaudeAuthStatus {
   configDir: string;
 }
 
+/** PATH lookup in-process: spawning `which` fails outright on Windows. */
 function which(cmd: string): string | null {
-  try {
-    const p = execFileSync("which", [cmd], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    return p || null;
-  } catch {
-    return null;
-  }
+  return findOnPath(cmd);
 }
 
 /** Wrap a spawned child so the session sees only what it needs. */
@@ -74,7 +71,9 @@ export class ClaudeCodeAuthService {
     };
     if (!cli) return base;
     try {
-      const out = execFileSync(cli, ["auth", "status", "--json"], {
+      // npm installs `claude.cmd` on Windows, which cannot be exec'd directly.
+      const run = spawnableCommand(cli, ["auth", "status", "--json"]);
+      const out = execFileSync(run.file, run.args, {
         encoding: "utf-8",
         env: { ...process.env, ...claudeAuthEnv({ oauthToken: this.getToken() }) },
         timeout: 20_000,
@@ -184,7 +183,8 @@ export class ClaudeCodeAuthService {
     const cli = this.findCli();
     if (!cli) return { ok: false, detail: "The Claude Code CLI was not found." };
     try {
-      const out = execFileSync(cli, ["-p", "ok", "--max-turns", "1"], {
+      const run = spawnableCommand(cli, ["-p", "ok", "--max-turns", "1"]);
+      const out = execFileSync(run.file, run.args, {
         encoding: "utf-8",
         env: { ...process.env, ...claudeAuthEnv({ oauthToken: this.getToken() }) },
         timeout: 60_000,

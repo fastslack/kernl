@@ -17,6 +17,7 @@
    */
   import { tick } from 'svelte';
   import { rpcPost } from '$lib/api.js';
+  import { isAbsoluteHostPath, joinHostPath } from '$lib/host-path.js';
 
   /**
    * Run after `repos.register` succeeds and before the modal closes — the
@@ -54,7 +55,7 @@
     const name = registerRepoName.trim();
     const path = registerRepoPath.trim();
     if (!name) { registerRepoError = 'Name is required'; return; }
-    if (!path || !path.startsWith('/')) { registerRepoError = 'Absolute path is required (must start with /)'; return; }
+    if (!isAbsoluteHostPath(path)) { registerRepoError = 'Absolute path is required (e.g. /home/you/repo or C:\\code\\repo)'; return; }
     registerRepoBusy = true;
     registerRepoError = '';
     try {
@@ -225,7 +226,7 @@
           type="text"
           class="modal-input"
           class:modal-input-bad={registerRepoErrorField === 'path'}
-          placeholder={repoRoots.length ? `${repoRoots[0]}/my-repo` : '/absolute/path/to/repo'}
+          placeholder={repoRoots.length ? joinHostPath(repoRoots[0], 'my-repo') : '/absolute/path/to/repo or C:\\code\\repo'}
           required
           aria-required="true"
           aria-labelledby="repo-path-label"
@@ -252,7 +253,7 @@
           id="repo-path"
           type="text"
           class="modal-input"
-          placeholder={repoRoots.length ? `${repoRoots[0]}/my-repo` : '/absolute/path/to/repo'}
+          placeholder={repoRoots.length ? joinHostPath(repoRoots[0], 'my-repo') : '/absolute/path/to/repo or C:\\code\\repo'}
           aria-labelledby="repo-path-label"
           bind:value={registerRepoPath}
           disabled={registerRepoBusy}

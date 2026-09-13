@@ -118,7 +118,7 @@
     id: string; source_agent_id: string; target_agent_id: string;
     label: string; active: number;
   }> = [];
-  export let flows: Array<{ id: string; name: string; color: string; active: number }> = [];
+  export let flows: Array<{ id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string }> = [];
   export let ranks: Array<{
     id: string; name: string; level: number;
     insignia: string; color: string; description: string; active: number;
@@ -5254,13 +5254,13 @@
   }
 
 
-  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData) : null;
+  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData, flows) : null;
 
   async function loadWorkspaceFiles() {
     if (!selectedAgent || workspaceLoading) return;
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent);
+    const info = resolveAgentWorkspace(agent, flows);
     workspaceLoading = true;
     workspaceFileContent = null;
     workspacePreviewUrl = null;
@@ -5286,7 +5286,7 @@
   async function loadWorkspaceFile(path: string) {
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent);
+    const info = resolveAgentWorkspace(agent, flows);
     try {
       const url = info.cwdPath
         ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`

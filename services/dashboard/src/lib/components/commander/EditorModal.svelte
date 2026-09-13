@@ -8,6 +8,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
+	import { basenameHostPath } from '$lib/host-path.js';
 
 	export let providerId: string;
 	export let path: string;
@@ -141,7 +142,7 @@
 <div class="ed-overlay" on:click|self={onClose} role="dialog" aria-modal="true">
 	<div class="ed-dialog">
 		<div class="ed-header">
-			<span class="ed-title">{path.split('/').pop()}</span>
+			<span class="ed-title">{basenameHostPath(path)}</span>
 			<span class="ed-meta">
 				{mime} · {fmtBytes(size)} · {lineCount} lines
 				{#if dirty}<span class="ed-dirty">● unsaved</span>{/if}

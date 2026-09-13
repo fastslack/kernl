@@ -142,8 +142,16 @@ case "$KIND" in
     # Replace rather than merge: leftovers from an older layout inside a
     # bundle are their own class of bug, and the user's data lives in
     # ~/Library/Application Support/Kernl, not in here.
-    $SUDO rm -rf "/Applications/$(basename "$APP")"
-    $SUDO cp -a "$APP" /Applications/ || die "could not copy into /Applications"
+    #
+    # Always as Kernl.app. The tarball names its bundle Kernl-<version>-<arch>.app
+    # while the dmg installs Kernl.app, so copying the name as-is left one more
+    # copy beside the last on every re-run — and the in-app updater replaces
+    # whichever one is running, not the others.
+    $SUDO rm -rf /Applications/Kernl.app
+    for old in /Applications/Kernl-[0-9]*.app; do
+      [ -d "$old" ] && $SUDO rm -rf "$old"
+    done
+    $SUDO cp -a "$APP" /Applications/Kernl.app || die "could not copy into /Applications"
     ;;
 esac
 

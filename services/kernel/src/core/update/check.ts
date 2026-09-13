@@ -16,15 +16,14 @@
  * business hearing from every dashboard load. A FAILED one is cached for a
  * minute, and a rate-limited one for five. Caching a failure for six hours —
  * which is what this did — meant one flaky moment hid a published release for
- * the rest of the day, and the only way out was the About card's "Check for
- * updates" button, which passes `fresh` and which nobody clicks when the UI is
- * quiet because a quiet UI means "nothing to do".
+ * the rest of the day.
  */
 
-import { readFileSync, existsSync } from "node:fs";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
 import { log } from "../logger.js";
+import { detectInstall, finalizeUpdateOnBoot, type LastUpdate } from "./install.js";
+import { currentVersion } from "./version.js";
+
+export { currentVersion } from "./version.js";
 
 export interface UpdateStatus {
   /** Version this process is running. */
@@ -39,6 +38,36 @@ export interface UpdateStatus {
   checkedAt: number | null;
   /** Why there is no answer, when there is none. */
   reason?: "no-releases" | "offline" | "rate-limited" | "unknown-version";
+  /**
+   * How this copy was installed and whether it can update itself. The UI
+   * hides "Update now" when it cannot and shows `hint` instead, rather than
+   * offering a button whose only possible outcome is a refusal.
+   */
+  install?: { kind: string; canApply: boolean; reason?: string; hint?: string };
+  /** How the most recent update went, once it has settled. */
+  lastAttempt?: LastUpdate | null;
+}
+
+/**
+ * The release answer is cached; these two are not. Both are local, cheap, and
+ * change exactly when the user is watching — right after an update.
+ */
+async function withLocalState(status: UpdateStatus): Promise<UpdateStatus> {
+  try {
+    const install = await detectInstall();
+    return {
+      ...status,
+      install: {
+        kind: install.kind,
+        canApply: install.canApply,
+        ...(install.reason ? { reason: install.reason } : {}),
+        ...(install.hint ? { hint: install.hint } : {}),
+      },
+      lastAttempt: finalizeUpdateOnBoot(),
+    };
+  } catch {
+    return status;
+  }
 }
 
 // ── Version comparison (pure) ───────────────────────────────────────────────
@@ -98,36 +127,6 @@ export function compareVersions(a: string, b: string): number {
   return 0;
 }
 
-// ── Current version ─────────────────────────────────────────────────────────
-
-let cachedVersion: string | null = null;
-
-/**
- * The running version, from the same package.json the release workflow's
- * version-check job compares the tag against. Reading anything else would
- * reintroduce the drift that guard exists to catch.
- */
-export function currentVersion(): string | null {
-  if (cachedVersion) return cachedVersion;
-  const here = dirname(fileURLToPath(import.meta.url));
-  // dev: src/core/update → up three. Packaged: the bundle sits beside its
-  // package.json, which stage-payload copies next to mcp-server.js.
-  for (const c of [resolve(here, "../../.."), here, resolve(here, "..")]) {
-    const p = resolve(c, "package.json");
-    if (!existsSync(p)) continue;
-    try {
-      const v = JSON.parse(readFileSync(p, "utf-8")).version;
-      if (typeof v === "string" && v) {
-        cachedVersion = v;
-        return v;
-      }
-    } catch {
-      /* keep looking */
-    }
-  }
-  return null;
-}
-
 // ── The check ───────────────────────────────────────────────────────────────
 
 const REPO = process.env.KERNEL_UPDATE_REPO ?? "fastslack/kernl";
@@ -179,18 +178,18 @@ export async function checkForUpdate(
   opts: { fresh?: boolean; fetchImpl?: FetchLike } = {},
 ): Promise<UpdateStatus> {
   const now = Date.now();
-  if (!opts.fresh && cache && now - cache.at < cache.ttl) return cache.status;
+  if (!opts.fresh && cache && now - cache.at < cache.ttl) return withLocalState(cache.status);
 
   const current = currentVersion();
   if (!current) {
-    return {
+    return withLocalState({
       current: "unknown",
       latest: null,
       updateAvailable: false,
       url: null,
       checkedAt: null,
       reason: "unknown-version",
-    };
+    });
   }
 
   const base: UpdateStatus = {
@@ -246,7 +245,7 @@ export async function checkForUpdate(
   if (status.updateAvailable) {
     log.info(`Update available: ${status.current} → ${status.latest}`);
   }
-  return status;
+  return withLocalState(status);
 }
 
 /** Drop the cache. Tests, and an explicit "check now" from the UI. */

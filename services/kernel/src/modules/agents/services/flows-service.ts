@@ -1,4 +1,4 @@
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { EventBus } from "../../../core/event-bus.js";
 import { newId, isoNow } from "../../../core/helpers.js";
@@ -112,7 +112,7 @@ export class AgentFlowsService {
     if (!flowId) return null;
     const flow = this.getFlow(flowId);
     if (!flow) return null;
-    if (flow.home_repo_path && flow.home_repo_path.startsWith("/")) {
+    if (flow.home_repo_path && isAbsolute(flow.home_repo_path)) {
       return { path: flow.home_repo_path, kind: "git", flow };
     }
     let wsId = flow.home_workspace_id;

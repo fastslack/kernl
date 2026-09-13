@@ -179,6 +179,39 @@ describe("resolveAgentWorkspace", () => {
   it("falls back to the per-agent default", () => {
     expect(resolveAgentWorkspace({ id: "a7" }).wsId).toBe("agent-a7");
   });
+
+  const flows = [
+    { id: "office", home_workspace_id: "4dbe35a9-0b32", home_repo_path: "" },
+    { id: "repo-office", home_workspace_id: "ws_home", home_repo_path: "/srv/office" },
+  ];
+
+  it("uses the office workspace home for an agent without its own workspace", () => {
+    const info = resolveAgentWorkspace({ id: "a", flow_id: "office" }, flows);
+    expect(info).toMatchObject({ wsId: "4dbe35a9-0b32", cwdPath: null, cwdLabel: "data/workspaces/4dbe35a9-0b32" });
+  });
+
+  it("prefers the office git repo over its workspace home", () => {
+    const info = resolveAgentWorkspace({ id: "a", flow_id: "repo-office" }, flows);
+    expect(info).toMatchObject({ wsId: null, cwdPath: "/srv/office" });
+  });
+
+  it("keeps the agent's own workspace over the office home", () => {
+    const info = resolveAgentWorkspace({ id: "a", flow_id: "office", variables: { __workspace__: "ws_1" } }, flows);
+    expect(info.wsId).toBe("ws_1");
+  });
+
+  it("accepts Windows absolute paths for an external repo and an office repo", () => {
+    expect(resolveAgentWorkspace({ id: "a", variables: { __cwd_path__: "C:\\code\\proj" } }))
+      .toMatchObject({ wsId: null, cwdPath: "C:\\code\\proj" });
+    expect(resolveAgentWorkspace({ id: "a", flow_id: "win" }, [{ id: "win", home_repo_path: "D:\\offices\\x" }]))
+      .toMatchObject({ wsId: null, cwdPath: "D:\\offices\\x" });
+    expect(resolveAgentWorkspace({ id: "a", variables: { __cwd_path__: "\\\\nas\\repos\\x" } }).cwdPath)
+      .toBe("\\\\nas\\repos\\x");
+  });
+
+  it("falls back to the per-agent default when the office is unknown", () => {
+    expect(resolveAgentWorkspace({ id: "a7", flow_id: "gone" }, flows).wsId).toBe("agent-a7");
+  });
 });
 
 describe("dependsOnGoogleAuth", () => {

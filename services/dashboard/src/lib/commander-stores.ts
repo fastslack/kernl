@@ -4,6 +4,7 @@
 
 import { writable, derived, type Writable } from 'svelte/store';
 import type { FsEntry, OpProgress, ProviderInfo } from './fs-api.js';
+import { basenameHostPath } from './host-path.js';
 
 export type PaneId = 'left' | 'right';
 
@@ -73,7 +74,7 @@ function newTab(providerId: string, path: string): CommanderTab {
 		sortDir: 'asc',
 		backStack: [],
 		fwdStack: [],
-		title: path.split('/').filter(Boolean).slice(-1)[0] || '/'
+		title: basenameHostPath(path) || '/'
 	};
 }
 

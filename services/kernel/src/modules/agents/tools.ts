@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { mkdirSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { textResult, errorResult, isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
@@ -984,16 +984,21 @@ export function agentsTools(
             (home ? ` (\`${home.path}\`).` : "."),
           );
         }
-        if (!raw.startsWith("/")) return errorResult("path must be absolute (start with /)");
+        if (!isAbsolute(raw)) {
+          return errorResult("path must be absolute (e.g. /home/you/office or C:\\Users\\you\\office)");
+        }
 
         mkdirSync(raw, { recursive: true });
 
         let gitNote = "";
         if (input.git_init !== false && !existsSync(join(raw, ".git"))) {
           const r = spawnSync("git", ["init"], { cwd: raw, encoding: "utf8" });
+          const gitMissing = (r.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
           gitNote = r.status === 0
             ? "\n- `git init` ✓"
-            : `\n- git init skipped (${(r.stderr || r.error?.message || "git unavailable").toString().trim().slice(0, 120)})`;
+            : gitMissing
+              ? "\n- git init skipped (git is not installed — install Git from https://git-scm.com to version this office)"
+              : `\n- git init skipped (${(r.stderr || r.error?.message || "git unavailable").toString().trim().slice(0, 120)})`;
         }
 
         try {

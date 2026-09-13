@@ -5,6 +5,8 @@
  * exists yet on the Rust bridge). Bearer auth from localStorage.
  */
 
+import { isUnderHostPath } from './host-path.js';
+
 export type FsEntryKind = 'file' | 'dir' | 'symlink' | 'special';
 
 export interface FsEntry {
@@ -44,15 +46,13 @@ export interface FsRoot {
 	writable: boolean;
 }
 
-function trimSlash(p: string): string {
-	return p.endsWith('/') && p !== '/' ? p.slice(0, -1) : p;
-}
-
-/** True when `path` sits inside (or is) `root`. */
+/**
+ * True when `path` sits inside (or is) `root`. Separator- and case-aware for
+ * Windows paths: a native Windows kernel reports roots like `C:\Users\me`,
+ * which a "/"-prefix check never matched, so every folder read as out of scope.
+ */
 export function isUnder(path: string, root: string): boolean {
-	const p = trimSlash(path);
-	const r = trimSlash(root);
-	return p === r || p.startsWith(r === '/' ? '/' : r + '/');
+	return isUnderHostPath(path, root);
 }
 
 /** True when `path` sits inside any of `roots`. Empty roots means scope unknown. */

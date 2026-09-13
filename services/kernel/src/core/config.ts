@@ -536,9 +536,11 @@ export function loadConfig(): KernelConfig {
       token: process.env.KERNEL_AUTH_TOKEN ?? "",
     },
     claudeCode: {
-      mcpUrl: process.env.KERNEL_MCP_URL ?? "http://localhost:3087/mcp",
+      // Empty = let the adapter decide: the kernel's own port for the URL, and
+      // stdio only where a bridge script exists (never on Windows).
+      mcpUrl: process.env.KERNEL_MCP_URL ?? "",
       mcpBridgePath: process.env.KERNEL_MCP_BRIDGE ?? "",
-      mcpTransport: (process.env.KERNEL_MCP_TRANSPORT ?? "stdio").toLowerCase(),
+      mcpTransport: (process.env.KERNEL_MCP_TRANSPORT ?? "").toLowerCase(),
       cliPath: process.env.CLAUDE_CODE_PATH ?? "",
       // Mirrored out of the provider registry by syncProvidersToKernelConfig,
       // so the model chosen in Settings is the one the adapter sends.
@@ -552,11 +554,15 @@ export function loadConfig(): KernelConfig {
     },
     bridge: {
       enabled: process.env.BRIDGE_ENABLED === "true",
-      socketPath: process.env.BRIDGE_SOCKET_PATH ?? "/tmp/kernl.sock",
+      // Windows has no /tmp and no unix sockets where these bridges expect
+      // them; named pipes are its equivalent.
+      socketPath: process.env.BRIDGE_SOCKET_PATH
+        ?? (process.platform === "win32" ? "\\\\.\\pipe\\kernl" : "/tmp/kernl.sock"),
     },
     rustBridge: {
       enabled: process.env.RUST_BRIDGE_ENABLED === "true",
-      socketPath: process.env.RUST_BRIDGE_SOCKET ?? "/tmp/mtw-rust.sock",
+      socketPath: process.env.RUST_BRIDGE_SOCKET
+        ?? (process.platform === "win32" ? "\\\\.\\pipe\\mtw-rust" : "/tmp/mtw-rust.sock"),
     },
     embeddings: {
       provider: (() => {

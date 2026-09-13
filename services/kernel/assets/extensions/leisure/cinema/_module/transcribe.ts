@@ -5,11 +5,12 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { existsSync } from "node:fs";
+import { createWriteStream, existsSync } from "node:fs";
 import { log } from "../../../../../src/core/logger.js";
+import { renameWithRetry } from "../../../../../src/core/fs-paths.js";
 import { mediaToolBin, mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
 import { loadTransformers } from "../../../../../src/core/transformers-cache.js";
 import {
@@ -90,14 +91,20 @@ export interface ExtractOpts {
   totalSec?: number;
   /** Per-tick callback fired as ffmpeg processes audio. */
   onProgress?: (p: { processedSec: number; totalSec?: number; frac?: number }) => void;
+  /** Directory the per-run temp dir is created under. Defaults to the
+   *  system temp dir; whisper.cpp passes its models dir (see whisperFileArgs). */
+  tmpRoot?: string;
 }
 
 export async function extractAudioToWav(url: string, opts: ExtractOpts = {}): Promise<string> {
-  const dir = await mkdtemp(path.join(tmpdir(), "mtw-transcribe-"));
+  const dir = await mkdtemp(path.join(opts.tmpRoot ?? tmpdir(), "mtw-transcribe-"));
   const out = path.join(dir, "audio.wav");
   const inputUrl = wrapThroughProxy(url);
   /** Peak level of the SOURCE, before loudnorm touches it. See the check below. */
-  const sourcePeakDb = await new Promise<number | null>((resolve, reject) => {
+  const sourcePeakDb = await new Promise<number | null>((resolve, rejectRaw) => {
+    // Every failure path removes the temp dir first: a failed extract used to
+    // leave its partial WAV behind, and on Windows %TEMP% only ever grew.
+    const reject = (e: Error) => { void rmDirOf(out).finally(() => rejectRaw(e)); };
     const ff = spawn(mediaToolBin("ffmpeg"), [
       // `info` rather than `error` so volumedetect's summary reaches stderr;
       // `-nostats` already keeps the progress spam out.
@@ -291,7 +298,9 @@ export function wrapThroughProxy(url: string): string {
 }
 
 async function rmDirOf(filePath: string): Promise<void> {
-  try { await rm(path.dirname(filePath), { recursive: true, force: true }); }
+  // Retries because Windows answers EBUSY/EPERM for a moment after ffmpeg or
+  // whisper-cli exits, or while an antivirus scan still holds the WAV.
+  try { await rm(path.dirname(filePath), { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }); }
   catch { /* */ }
 }
 
@@ -304,6 +313,106 @@ function ggmlUrl(model: string): string {
   return `https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-${model}.bin`;
 }
 
+/**
+ * The whisper-cli arguments that name files, relative to the `cwd` it is
+ * spawned in.
+ *
+ * On Windows whisper-cli receives argv in the system code page, but
+ * whisper.cpp opens the model path as UTF-8: an absolute path under
+ * C:\Users\José\… aborts with std::range_error, and a character outside the
+ * code page arrives as `?` and the file is not found. Spawned from the models
+ * dir, the paths it parses are `ggml-<model>.bin` and a mkdtemp name — ASCII
+ * we chose ourselves. It changes nothing on Linux or macOS.
+ */
+export function whisperFileArgs(
+  cwd: string,
+  modelPath: string,
+  wavPath: string,
+  p: typeof path.posix = path,
+): string[] {
+  const rel = (f: string) => p.relative(cwd, f) || f;
+  return [
+    "-m", rel(modelPath),
+    "-f", rel(wavPath),
+    "-of", rel(wavPath),               // base output name (no extension)
+  ];
+}
+
+/**
+ * Where whisper's WAV is written: beside the models, so the relative paths
+ * above stay short and ASCII. Falls back to the system temp dir when the
+ * models dir cannot be created.
+ */
+async function whisperTmpRoot(): Promise<string> {
+  const dir = path.join(WHISPERCPP_MODELS_DIR, ".tmp");
+  try {
+    await mkdir(dir, { recursive: true });
+    return dir;
+  } catch {
+    return tmpdir();
+  }
+}
+
+/**
+ * Write a response body to `target` so that `target` only ever exists whole.
+ *
+ * The model download used to buffer the entire file in memory — about 3 GB
+ * for large-v3 — and writeFile it straight onto the final name. An
+ * interrupted write left a truncated ggml-*.bin that the existsSync check in
+ * ensureGgmlModel accepted forever after. Now the bytes stream into
+ * `<target>.part`, a body shorter than the announced length is rejected, and
+ * only a complete file is renamed into place. Returns the bytes written.
+ */
+export async function downloadToFileAtomic(
+  r: Response,
+  target: string,
+  onProgress?: (receivedBytes: number, totalBytes: number) => void,
+): Promise<number> {
+  const part = `${target}.part`;
+  await rm(part, { force: true });
+  const totalBytesRaw = r.headers.get("content-length");
+  const totalBytes = totalBytesRaw ? parseInt(totalBytesRaw, 10) : 0;
+  let received = 0;
+  try {
+    const out = createWriteStream(part);
+    const closed = new Promise<void>((resolve, reject) => {
+      out.on("close", () => resolve());
+      out.on("error", reject);
+    });
+    closed.catch(() => { /* awaited below; this only marks it handled */ });
+    try {
+      if (r.body) {
+        const reader = r.body.getReader();
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          received += value.byteLength;
+          if (!out.write(value)) {
+            await new Promise<void>((resolve) => out.once("drain", () => resolve()));
+          }
+          onProgress?.(received, totalBytes);
+        }
+      } else {
+        const buf = Buffer.from(await r.arrayBuffer());
+        received = buf.length;
+        out.write(buf);
+      }
+    } finally {
+      out.end();
+      await closed;
+    }
+    // `<`, not `!==`: a gzip-encoded body decodes to more than its header says.
+    if (totalBytes > 0 && received < totalBytes) {
+      throw new Error(`download truncated at ${received} of ${totalBytes} bytes`);
+    }
+    await renameWithRetry(part, target);
+    return received;
+  } catch (err) {
+    await rm(part, { force: true }).catch(() => {});
+    throw err;
+  }
+}
+
 async function ensureGgmlModel(
   model: string,
   onProgress?: (p: { downloadedMB: number; totalMB?: number; frac?: number }) => void,
@@ -313,44 +422,22 @@ async function ensureGgmlModel(
   log.info(`Downloading ggml-${model}.bin … (one-time)`);
   const r = await fetch(ggmlUrl(model));
   if (!r.ok) throw new Error(`ggml download ${r.status}`);
-  const { mkdir } = await import("node:fs/promises");
   await mkdir(WHISPERCPP_MODELS_DIR, { recursive: true });
-  // Stream the download so we can emit progress instead of waiting for the
-  // whole file to land. Falls back to arrayBuffer() if the response has no
-  // readable body (shouldn't happen with HF, defensive).
-  const totalBytesRaw = r.headers.get("content-length");
-  const totalBytes = totalBytesRaw ? parseInt(totalBytesRaw, 10) : 0;
-  const totalMB = totalBytes ? totalBytes / (1024 * 1024) : undefined;
-  if (!r.body) {
-    const buf = Buffer.from(await r.arrayBuffer());
-    await writeFile(target, buf);
-    log.info(`ggml-${model}.bin saved (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
-    return target;
-  }
-  const chunks: Uint8Array[] = [];
-  let received = 0;
-  const reader = r.body.getReader();
   // Throttle progress callbacks to ~10 Hz so we don't drown the SSE channel.
   let lastEmit = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    chunks.push(value);
-    received += value.byteLength;
+  const bytes = await downloadToFileAtomic(r, target, (received, totalBytes) => {
     const now = Date.now();
-    if (onProgress && now - lastEmit > 100) {
-      lastEmit = now;
-      const downloadedMB = received / (1024 * 1024);
-      const frac = totalBytes ? Math.min(0.99, received / totalBytes) : undefined;
-      onProgress({ downloadedMB, totalMB, frac });
-    }
-  }
-  const buf = Buffer.concat(chunks);
-  await writeFile(target, buf);
-  if (onProgress) {
-    onProgress({ downloadedMB: buf.length / (1024 * 1024), totalMB, frac: 1 });
-  }
-  log.info(`ggml-${model}.bin saved (${(buf.length / 1024 / 1024).toFixed(1)} MB)`);
+    if (!onProgress || now - lastEmit <= 100) return;
+    lastEmit = now;
+    onProgress({
+      downloadedMB: received / (1024 * 1024),
+      totalMB: totalBytes ? totalBytes / (1024 * 1024) : undefined,
+      frac: totalBytes ? Math.min(0.99, received / totalBytes) : undefined,
+    });
+  });
+  const mb = bytes / (1024 * 1024);
+  onProgress?.({ downloadedMB: mb, totalMB: mb, frac: 1 });
+  log.info(`ggml-${model}.bin saved (${mb.toFixed(1)} MB)`);
   return target;
 }
 
@@ -391,6 +478,7 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
   });
   const wav = await extractAudioToWav(url, {
     totalSec: probedSec ?? undefined,
+    tmpRoot: await whisperTmpRoot(),
     onProgress: (p) => {
       emit?.({
         subPhase: "extract",
@@ -411,10 +499,9 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
 
   try {
     const args = [
-      "-m", modelPath,
-      "-f", wav,
+      // -m, -f and -of, relative to the models dir the process runs in.
+      ...whisperFileArgs(WHISPERCPP_MODELS_DIR, modelPath, wav),
       "-osrt",                          // emit .srt next to the wav
-      "-of", wav,                       // base output name (no extension)
       "-t", "4",                        // threads
       "-pp",                            // print progress (whisper.cpp writes to stderr)
       // ── Anti-hallucination ───────────────────────────────────────────
@@ -435,7 +522,10 @@ async function transcribeWhisperCpp(url: string, opts: TranscribeOpts): Promise<
     // ── Sub-phase 4: whisper.cpp transcribes ───────────────────────────
     emit?.({ subPhase: "transcribe", frac: 0, totalSec: probedSec ?? undefined });
     await new Promise<void>((resolve, reject) => {
-      const proc: ChildProcess = spawn(mediaToolBin("whisper-cli"), args, { stdio: ["ignore", "pipe", "pipe"] });
+      const proc: ChildProcess = spawn(mediaToolBin("whisper-cli"), args, {
+        cwd: WHISPERCPP_MODELS_DIR,
+        stdio: ["ignore", "pipe", "pipe"],
+      });
       let stderr = "";
       // Which backend actually ran, surfaced in the same one-word slot the
       // extract phase uses for "ffmpeg". ggml announces this once at startup,

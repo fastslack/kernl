@@ -15,6 +15,7 @@
 import type { AgentFlowEvent } from './stores.js';
 import { ellipsize } from './display-format.js';
 import { sanitizePreview } from './run-format.js';
+import { isAbsoluteHostPath } from './host-path.js';
 
 export type ToolCategory =
   | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
@@ -309,7 +310,7 @@ export function summarizeText(toolName: string, txt: string): string {
   if (toolName === 'Grep' && lines.every(l => /:/.test(l))) {
     return `${lines.length} matches · ${ellipsize(lines[0], 80)}`;
   }
-  if ((toolName === 'Glob' || toolName === 'LS') && lines.every(l => !l.includes(' ') || l.startsWith('/'))) {
+  if ((toolName === 'Glob' || toolName === 'LS') && lines.every(l => !l.includes(' ') || isAbsoluteHostPath(l))) {
     return `${lines.length} paths`;
   }
   return `${lines.length} lines · ${ellipsize(lines[0], 80)}`;

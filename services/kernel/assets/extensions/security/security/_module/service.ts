@@ -1,7 +1,9 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
+import { homedir } from "node:os";
 import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { isPathInside } from "../../../../../src/core/fs-paths.js";
 import type { SecurityScan, SecurityFinding, ScanKind, ScanRule, Severity } from "./types.js";
 import {
   SECRET_RULES,
@@ -59,10 +61,19 @@ export class SecurityService {
 
     try {
       const root = path.resolve(opts.target_path);
-      // Protect against escaping the kernel's data root via crafted paths.
-      const cwd = path.resolve(process.cwd());
-      if (!root.startsWith(cwd) && !root.startsWith("/app") && !root.startsWith("/home")) {
-        throw new Error(`refuse to scan outside allowed roots (cwd, /app, /home): ${root}`);
+      // Protect against escaping the allowed roots via crafted paths. A native
+      // install runs with cwd = the data dir (%LOCALAPPDATA%\Kernl on Windows),
+      // so the user's home and the filesystem-commander roots count too: the
+      // old startsWith(cwd | /app | /home) refused every real project there.
+      const allowedRoots = [
+        process.cwd(),
+        "/app",
+        "/home",
+        homedir(),
+        ...(process.env.FS_COMMANDER_ALLOWED_ROOTS ?? "").split(",").map((s) => s.trim()),
+      ].filter(Boolean);
+      if (!allowedRoots.some((r) => isPathInside(r, root))) {
+        throw new Error(`refuse to scan outside allowed roots (${allowedRoots.join(", ")}): ${root}`);
       }
 
       const queue: string[] = [root];

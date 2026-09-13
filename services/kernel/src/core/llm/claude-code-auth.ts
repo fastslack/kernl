@@ -215,6 +215,11 @@ export function ptyCommand(
   which: (cmd: string) => string | null,
   platform: string = process.platform,
 ): string[] | null {
+  // Neither `script` nor `socat` lends a Windows console to a child, and a
+  // Git-for-Windows `script` on PATH would take the util-linux branch and
+  // print usage where the link belongs. The dialog falls back to pasting a
+  // token, which needs no terminal.
+  if (platform === "win32") return null;
   const script = which("script");
   if (script) {
     // The caller hands us one shell string, so BSD needs an explicit `sh -c`

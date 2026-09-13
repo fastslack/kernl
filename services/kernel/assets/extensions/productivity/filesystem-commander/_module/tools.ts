@@ -477,7 +477,10 @@ async function walkAndHash(
       continue;
     }
     for (const e of listing.entries) {
-      const full = p.endsWith("/") ? p + e.name : p + "/" + e.name;
+      // The local provider on Windows lists backslash paths; remote providers
+      // always speak "/". Mixing them showed duplicates as C:\dir/file.
+      const sep = provider.kind === "local" && process.platform === "win32" ? "\\" : "/";
+      const full = p.endsWith("/") || p.endsWith(sep) ? p + e.name : p + sep + e.name;
       if (e.kind === "dir") {
         queue.push(full);
       } else if (e.kind === "file") {

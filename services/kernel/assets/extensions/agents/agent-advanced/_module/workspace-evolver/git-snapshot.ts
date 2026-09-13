@@ -24,6 +24,23 @@ const COMMIT_AUTHOR_NAME = "Kernl";
 const COMMIT_AUTHOR_EMAIL = "evolver@kernl.local";
 
 async function git(workspaceDir: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
+  try {
+    return await gitRaw(workspaceDir, args);
+  } catch (err) {
+    // ENOENT = the binary itself is missing (a non-zero exit carries a number).
+    // Git is not part of a stock Windows install, and "spawn git ENOENT" does
+    // not tell anyone what to do about it.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new Error(
+        "git is not installed or not on PATH. Workspace evolution snapshots and reverts every cycle with git — " +
+        "install Git (on Windows: https://git-scm.com/download/win) and restart Kernl.",
+      );
+    }
+    throw err;
+  }
+}
+
+function gitRaw(workspaceDir: string, args: string[]): Promise<{ stdout: string; stderr: string }> {
   return execFileAsync("git", ["-C", workspaceDir, ...args], {
     timeout: GIT_TIMEOUT_MS,
     maxBuffer: 4 * 1024 * 1024,

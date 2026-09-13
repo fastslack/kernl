@@ -139,12 +139,31 @@ describe("installKind", () => {
 
   it("believes the installer's own mark over the path it sits in", () => {
     // INSTALLDIR is user-overridable (WIXUI_INSTALLDIR), so an MSI install can
-    // live anywhere — and an unzipped copy can be dropped into Program Files.
-    // The registry value product.wxs writes settles it either way.
+    // live anywhere.
     expect(installKind("D:\\Apps\\Kernl", "win32", { packaged: true, installerRegistered: true }))
       .toBe("windows-msi");
+    expect(installKind("D:\\Apps\\Kernl", "win32", {
+      packaged: true, installerRegistered: true, msiInstallDir: "D:\\Apps\\Kernl\\",
+    })).toBe("windows-msi");
+  });
+
+  it("never swaps a copy under Program Files, whatever this account's registry says", () => {
+    // The old mark lived under the installing user's HKCU. Every other account
+    // read "no mark", was sent down the swap path, and `move` on Program Files
+    // failed after the kernel had already exited.
     expect(installKind("C:\\Program Files\\Kernl", "win32", { packaged: true, installerRegistered: false }))
-      .toBe("windows-dir");
+      .toBe("windows-msi");
+  });
+
+  it("tells a portable copy from the MSI's folder when the machine-wide mark names it", () => {
+    const msi = { packaged: true, installerRegistered: true, msiInstallDir: "C:\\Program Files\\Kernl\\" };
+    expect(installKind("D:\\Portable\\Kernl", "win32", msi)).toBe("windows-dir");
+    expect(installKind("c:\\program files\\kernl", "win32", msi)).toBe("windows-msi");
+  });
+
+  it("calls a container a container on every platform", () => {
+    expect(installKind("/app/dist", "linux", { container: true })).toBe("docker");
+    expect(installKind("/opt/kernl/bin", "linux", { container: true })).toBe("docker");
   });
 
   it("falls back to the path only when the mark could not be read", () => {

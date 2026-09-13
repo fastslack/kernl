@@ -11,6 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
+import { shellCommand } from "../../../../../../src/core/fs-paths.js";
 import type { WorkspacePolicy, EvaluationResult } from "./types.js";
 
 export async function runEvaluation(
@@ -44,10 +45,15 @@ interface ShellResult {
 
 function runShell(command: string, cwd: string, timeoutMs: number): Promise<ShellResult> {
   return new Promise((resolveP) => {
-    const child = spawn("/bin/sh", ["-c", command], {
+    // `/bin/sh -c` on POSIX, `cmd.exe /d /s /c` on Windows — a hard-coded
+    // /bin/sh failed with ENOENT there, so every cycle was rejected and the
+    // reject path reverted the agent's edits.
+    const shell = shellCommand(command);
+    const child = spawn(shell.file, shell.args, {
       cwd,
       env: process.env,
       stdio: ["ignore", "pipe", "pipe"],
+      windowsVerbatimArguments: shell.windowsVerbatimArguments,
     });
 
     let stdout = "";

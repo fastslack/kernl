@@ -22,8 +22,9 @@
  */
 
 import { existsSync } from "node:fs";
-import { execSync } from "node:child_process";
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
+import { findOnPath } from "../fs-paths.js";
 import {
   query,
   type Options,
@@ -33,7 +34,11 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { log } from "../logger.js";
 import { newId } from "../helpers.js";
-import { resolveDefaultSocketPath as resolveKernelMcpSocketPath } from "../mcp-unix-socket.js";
+import {
+  resolveDefaultSocketPath as resolveKernelMcpSocketPath,
+  resolveMcpBridgePath,
+  chooseKernelMcpTransport,
+} from "../mcp-unix-socket.js";
 import { claudeAuthEnv } from "./claude-code-auth.js";
 import type {
   ChatMessage,
@@ -114,30 +119,49 @@ function isLocalMcpUrl(raw: string): boolean {
 }
 
 function resolveKernelMcpUrl(cfg?: ClaudeCodeProviderOptions): string {
-  const raw = cfg?.mcpUrl ?? process.env.KERNEL_MCP_URL ?? "http://localhost:3087/mcp";
+  // The port the kernel itself serves /mcp on. A fixed 3087 is only Docker's
+  // port; native packages listen on DASHBOARD_PORT (3086 by default).
+  const fallback = `http://127.0.0.1:${process.env.DASHBOARD_PORT || "3086"}/mcp`;
+  const raw = cfg?.mcpUrl || process.env.KERNEL_MCP_URL || fallback;
   if (!isLocalMcpUrl(raw)) {
     log.error(
-      `SECURITY: KERNEL_MCP_URL "${raw}" is not a local kernel endpoint. Falling back to http://localhost:3087/mcp.`,
+      `SECURITY: KERNEL_MCP_URL "${raw}" is not a local kernel endpoint. Falling back to ${fallback}.`,
     );
-    return "http://localhost:3087/mcp";
+    return fallback;
   }
   return raw;
 }
 
-/** Path to the stdio bridge the SDK spawns as the "kernel" MCP server.
- *  `||` (not `??`) so an empty injected/config value derives from cwd. */
+/** Explicit bridge path from config/env, if any. `||` (not `??`) so an empty
+ *  injected/config value means "not set". */
+function explicitKernelMcpBridgePath(cfg?: ClaudeCodeProviderOptions): string | undefined {
+  return cfg?.mcpBridgePath || process.env.KERNEL_MCP_BRIDGE || undefined;
+}
+
+/** Path to the stdio bridge the SDK spawns as the "kernel" MCP server. Falls
+ *  back to the source-tree location so bwrap bind dirs never collapse to "/". */
 function resolveKernelMcpBridgePath(cfg?: ClaudeCodeProviderOptions): string {
-  return cfg?.mcpBridgePath
-    || process.env.KERNEL_MCP_BRIDGE
+  return resolveMcpBridgePath(explicitKernelMcpBridgePath(cfg))
     || `${process.cwd()}/bin/mcp-stdio-bridge.ts`;
 }
 
-/** Same selector as the claude_code agent executor — default to stdio bridge
- *  so chat completions survive the SDK's bwrap --unshare-net sandbox. */
+/** Same selector as the claude_code agent executor: stdio bridge where one
+ *  exists, so chat completions survive the SDK's bwrap --unshare-net sandbox;
+ *  HTTP on Windows and on installs that ship no bridge. */
 function resolveKernelMcpServerConfig(cfg?: ClaudeCodeProviderOptions): import("@anthropic-ai/claude-agent-sdk").McpServerConfig {
-  const transport = (cfg?.mcpTransport ?? process.env.KERNEL_MCP_TRANSPORT ?? "stdio").toLowerCase();
+  const transport = chooseKernelMcpTransport({
+    explicit: cfg?.mcpTransport || process.env.KERNEL_MCP_TRANSPORT,
+    bridgePath: resolveMcpBridgePath(explicitKernelMcpBridgePath(cfg)),
+  });
   if (transport === "http") {
-    return { type: "http" as const, url: resolveKernelMcpUrl(cfg) };
+    // /mcp sits behind the kernel's bearer token; without it every tool call
+    // answered 401. Bootstrap exports the token (generated or configured).
+    const token = process.env.KERNEL_AUTH_TOKEN;
+    return {
+      type: "http" as const,
+      url: resolveKernelMcpUrl(cfg),
+      ...(token ? { headers: { Authorization: `Bearer ${token}` } } : {}),
+    };
   }
   return {
     type: "stdio" as const,
@@ -608,13 +632,13 @@ export class ChatClaudeCodeProvider {
       return override;
     }
 
-    try {
-      const path = execSync("which claude", { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-      if (path && existsSync(path)) {
-        this.cachedBin = path;
-        return path;
-      }
-    } catch { /* not in PATH */ }
+    // In-process PATH scan: `which` does not exist on Windows, and there it
+    // also has to try PATHEXT to find claude.exe or npm's claude.cmd.
+    const onPath = findOnPath("claude");
+    if (onPath) {
+      this.cachedBin = onPath;
+      return onPath;
+    }
 
     const hostCli = process.env.HOST_CLAUDE_CLI;
     if (hostCli && existsSync(hostCli)) {
@@ -622,13 +646,20 @@ export class ChatClaudeCodeProvider {
       return hostCli;
     }
 
-    const candidates = [
-      `${process.env.HOME ?? ""}/.local/bin/claude`,
-      "/usr/local/bin/claude",
-      "/usr/bin/claude",
-      resolve(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"),
-      "/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
-    ];
+    const home = homedir();
+    const candidates = process.platform === "win32"
+      ? [
+          // The native installer's location, then npm's global shim.
+          join(home, ".local", "bin", "claude.exe"),
+          join(process.env.APPDATA || join(home, "AppData", "Roaming"), "npm", "claude.cmd"),
+        ]
+      : [
+          `${home}/.local/bin/claude`,
+          "/usr/local/bin/claude",
+          "/usr/bin/claude",
+          resolve(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"),
+          "/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
+        ];
     for (const c of candidates) {
       if (existsSync(c)) {
         this.cachedBin = c;

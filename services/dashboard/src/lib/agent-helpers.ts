@@ -9,6 +9,7 @@
  */
 
 import { escapeHtml } from './sanitize.js';
+import { isAbsoluteHostPath } from './host-path.js';
 
 /** `#5b8def` → 0x5b8def, for three.js material colours. Falls back on junk. */
 export function hexToNum(css: string, fallback = 0xffffff): number {
@@ -147,14 +148,23 @@ export interface AgentWorkspaceInfo {
   cwdHint: string;
 }
 
+/** The office fields that decide where a flow's agents run. */
+export interface FlowHome {
+  id: string;
+  home_workspace_id?: string | null;
+  home_repo_path?: string | null;
+}
+
 /**
- * Resolve an agent's working directory from its variables: an explicit
- * absolute `__cwd_path__` (an external repo), else a registered
- * `__workspace__`, else the per-agent default.
+ * Resolve an agent's working directory the way the claude-code executor's
+ * `resolveCwd` does: an explicit absolute `__cwd_path__` (an external repo),
+ * else a registered `__workspace__`, else its office's home (the git repo the
+ * office was promoted to, or the office workspace), else the per-agent default.
+ * Without `flows` an office agent would show a directory it never runs in.
  */
-export function resolveAgentWorkspace(agent: any): AgentWorkspaceInfo {
+export function resolveAgentWorkspace(agent: any, flows: FlowHome[] = []): AgentWorkspaceInfo {
   const vars = safeParse(agent?.variables) || {};
-  if (typeof vars.__cwd_path__ === 'string' && vars.__cwd_path__.startsWith('/')) {
+  if (isAbsoluteHostPath(vars.__cwd_path__)) {
     return {
       wsId: null,
       cwdPath: vars.__cwd_path__,
@@ -168,6 +178,23 @@ export function resolveAgentWorkspace(agent: any): AgentWorkspaceInfo {
       cwdPath: null,
       cwdLabel: `data/workspaces/${vars.__workspace__}`,
       cwdHint: 'workspace registrado',
+    };
+  }
+  const flow = agent?.flow_id ? flows.find(f => f.id === agent.flow_id) : undefined;
+  if (isAbsoluteHostPath(flow?.home_repo_path)) {
+    return {
+      wsId: null,
+      cwdPath: flow.home_repo_path,
+      cwdLabel: flow.home_repo_path,
+      cwdHint: 'home del office (repo git) — files listed below',
+    };
+  }
+  if (typeof flow?.home_workspace_id === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(flow.home_workspace_id)) {
+    return {
+      wsId: flow.home_workspace_id,
+      cwdPath: null,
+      cwdLabel: `data/workspaces/${flow.home_workspace_id}`,
+      cwdHint: 'home del office',
     };
   }
   const fallback = `agent-${agent.id}`;

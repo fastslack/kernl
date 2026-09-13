@@ -113,8 +113,21 @@ describe("what differs per platform", () => {
     for (const kind of ["windows-dir", "windows-msi"] as const) {
       const script = helperFor(kind, { ...args, installer: "C:\\tmp\\kernl.msi" });
       expect(script).not.toMatch(/^\s*timeout\b/m);
-      expect(script).toContain("ping -n 2 127.0.0.1");
+      expect(script).toMatch(/ping\.exe" -n 2 127\.0\.0\.1/);
     }
+  });
+
+  it("calls Windows' own find, tasklist and msiexec by full path", () => {
+    // Git for Windows puts GNU find on PATH. It does not filter stdin for a
+    // string, so the wait loop ended at once and the swap ran with the kernel
+    // still alive.
+    for (const kind of ["windows-dir", "windows-msi"] as const) {
+      const script = helperFor(kind, { ...args, installer: "C:\\tmp\\kernl.msi" });
+      expect(script).toContain('"%SYS%\\find.exe"');
+      expect(script).toContain('"%SYS%\\tasklist.exe"');
+      expect(script).not.toMatch(/\| find "/);
+    }
+    expect(helperFor("windows-msi", { ...args, installer: "C:\\x.msi" })).toContain('"%SYS%\\msiexec.exe"');
   });
 
   it("quotes every path, so a space in the install location is not a bug", () => {
@@ -141,7 +154,7 @@ describe("the MSI helper", () => {
     // The MSI owns its registry entry, its uninstaller and its elevation
     // prompt. Swapping the directory underneath it leaves Add/Remove Programs
     // advertising a version that is no longer on disk.
-    expect(script).toContain(`msiexec /i "${msiArgs.installer}"`);
+    expect(script).toContain(`msiexec.exe" /i "${msiArgs.installer}"`);
     expect(script).not.toMatch(/^move /m);
     expect(script).not.toContain(args.backup);
   });
@@ -153,19 +166,70 @@ describe("the MSI helper", () => {
 
   it("waits for the kernel to exit first, because msiexec cannot replace open files", () => {
     const waitIdx = script.indexOf("4242");
-    // The COMMAND, not the word: the comment above the wait loop explains why
-    // it has to wait for msiexec, and matching that would pass for free.
-    const upgradeIdx = script.indexOf("msiexec /i");
+    // The COMMAND, not the word: a comment explaining why it has to wait for
+    // msiexec would pass for free.
+    const upgradeIdx = script.indexOf('msiexec.exe" /i');
     expect(waitIdx).toBeGreaterThanOrEqual(0);
     expect(waitIdx).toBeLessThan(upgradeIdx);
   });
 
-  it("leaves the working install alone when the upgrade fails", () => {
-    const afterMsiexec = script.slice(script.indexOf("msiexec"));
-    expect(afterMsiexec).toMatch(/if errorlevel 1/);
+  it("treats a pending reboot as success and a declined prompt as something to report", () => {
+    // 3010 used to count as failure, and a declined UAC prompt (1602) just
+    // exited — with the kernel already gone.
+    expect(script).toContain('if "%rc%"=="3010" goto installed');
+    expect(script).toContain('if "%rc%"=="1602" goto cancelled');
+    expect(script).toContain("uac-declined");
+  });
+
+  it("starts the previous version again when the installer fails or is declined", () => {
+    for (const marker of ["msiexec-%rc%", ":cancelled"]) {
+      const tail = script.slice(script.indexOf(marker));
+      expect(tail.indexOf("call :relaunch")).toBeGreaterThanOrEqual(0);
+      expect(tail.indexOf("call :relaunch")).toBeLessThan(tail.indexOf("exit /b 1"));
+    }
   });
 
   it("starts Kernl again once the installer is done", () => {
     expect(script).toContain('start "" "C:\\Program Files\\Kernl\\start.bat"');
+  });
+});
+
+describe("every way out of a swap", () => {
+  const withResult = {
+    ...args,
+    resultFile: "/data/update-result.json",
+    version: "0.4.0",
+    healthUrl: "http://127.0.0.1:3086/api/health",
+  };
+
+  for (const kind of SWAP_KINDS) {
+    const script = helperFor(kind, withResult);
+
+    it(`${kind}: starts Kernl again when the old copy cannot be moved aside`, () => {
+      // The kernel has already exited by now. A helper that just stopped here
+      // left the user with no application running.
+      const tail = script.slice(script.indexOf("move-aside"));
+      const relaunch = tail.search(/relaunch/);
+      expect(relaunch).toBeGreaterThanOrEqual(0);
+      expect(relaunch).toBeLessThan(tail.search(/exit (\/b )?1/));
+    });
+
+    it(`${kind}: records what happened for the next boot`, () => {
+      expect(script).toContain("/data/update-result.json");
+      for (const code of ["move-aside", "move-in", "new-version-did-not-start", "rolled-back"]) {
+        expect(script).toContain(code);
+      }
+    });
+
+    it(`${kind}: puts the previous copy back when the new version never answers`, () => {
+      expect(script).toContain(withResult.healthUrl);
+      expect(script).toContain(`${args.target}.failed`);
+    });
+  }
+
+  it("retries a Windows move while a just-closed file is still locked", () => {
+    const script = helperFor("windows-dir", withResult);
+    expect(script).toContain(":park_retry");
+    expect(script).toContain(":movein_retry");
   });
 });

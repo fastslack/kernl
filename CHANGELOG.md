@@ -7,7 +7,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-09-13
+
+### Upgrading from 0.3.0 or earlier
+
+- **Install this release by hand once.** The fixes below are in the updater,
+  and an installed copy updates itself with the updater it already has — the
+  one that cannot. On Windows run the new MSI (or unzip over the portable
+  copy), on macOS open the new dmg, on Linux re-run `install.sh`. Every update
+  after that happens from the "Update now" button.
+
+### Added
+
+- **Restart Kernl from the dashboard** (Settings → About). It relaunches the
+  way the install was started — start.bat, the .app, the systemd unit, the
+  container's restart policy — so an updated extension takes effect without
+  closing a console window or hunting for a shortcut. `POST
+  /api/update/restart` does the same.
+
 ### Fixed
+
+- **Every extension page was blank on Windows.** `/ext-assets` checked
+  containment with `startsWith(dir + "/")`, which never matches a backslash
+  path, so Cinema and every other extension page answered 404. Every path jail
+  in the kernel, the extensions and the dashboard now compares through
+  `relative()`, case-insensitively on Windows, and the Windows release smoke
+  test requests an extension page.
+- **Offline subtitles failed on a PC without the Visual C++ runtime.**
+  whisper-cli and onnxruntime import MSVCP140, VCRUNTIME140 and VCOMP140; the
+  Windows packages carry them beside the binaries, and the release fails when
+  they are missing.
+- **Cinema on Windows:** converted videos played black
+  (`/api/cinema/media/convert/file` answered 401), whisper aborted under a
+  profile name with accents, an interrupted model download left a truncated
+  model that was trusted forever, and a failed extraction left its WAV in the
+  temp folder.
+- **Extension packages did not resolve for ordinary Windows users.** The
+  payload link was a directory symlink, which needs administrator rights; it is
+  a junction now.
+- **Claude Code on Windows.** The CLI is found without `which`; kernel tools
+  reach chat and agents over HTTP with the API token instead of a Unix socket
+  under `/tmp`; agent permission rules use the absolute `//path` form — a single
+  leading slash anchors at the settings source and never matched on any
+  platform — and Docker agents use the stdio bridge that actually ships.
+- **POSIX-only tools and paths on Windows:** repos exec and search, plugin zip
+  installs, the workspace evolver, filesystem-commander remote copies and its
+  refuse-to-delete-a-root guard, security scans outside the data folder, the
+  IRC certificate message, `kernel_code_read`'s `data/` block, `HOME`, CRLF
+  frontmatter, `tar` taken from PATH, and a closed console window skipping the
+  clean shutdown.
+- **The dashboard rejected Windows paths** in Filesystem, Workspace, repo
+  registration, Files and the licence page, and showed ⌘K on keyboards without
+  a ⌘ key.
+- **Extension updates** take a per-extension lock, update built-in extensions
+  into the data folder instead of the install folder, survive a folder Windows
+  keeps locked, and no longer delete the shipped copy on uninstall.
+- **Sandboxed agents on a named-volume stack wrote into an empty `/workspace`**
+  and lost their files with the container. The workspace is mounted from the
+  data volume, and the agent drawer shows the office home an agent actually
+  runs in.
+- **macOS could never update from inside the app.** The bundle was located two
+  folders above `Contents/Resources` and then required to end in
+  `.app/Contents`, which it never does, so every attempt was refused with
+  "could not work out which directory to replace". The check that followed
+  verified the signature of the app already installed rather than the one
+  downloaded, and refused because releases are not signed yet. The downloaded
+  bundle is verified now: a broken signature is refused, an unsigned build is
+  installed with its quarantine attribute removed. An app running translocated
+  from Downloads, from the disk image, or from a folder the account cannot
+  write says so before anything is downloaded.
+- **Package installs update from the app.** The .deb or .rpm is downloaded,
+  verified and installed through the desktop's administrator prompt (pkexec),
+  then Kernl restarts through systemd, or relaunches when it was started by
+  hand. Without pkexec the message is the exact install command for the file
+  already downloaded. It used to suggest `apt upgrade kernl`, which does
+  nothing: no repository publishes Kernl.
+- **A failed update left no Kernl running.** The kernel exits before the helper
+  swaps anything, and every failure in the helper — a folder it could not move,
+  msiexec failing, a declined UAC prompt — just exited. Every way out now
+  starts Kernl again, and records what happened for the next boot.
+- **An update that installed a version that does not start was final.** The
+  helper keeps the previous copy until the new version answers on
+  `/api/health`, and puts it back if it does not within five minutes.
+- **The dashboard never said whether an update worked.** It showed "restarting,
+  this page will reconnect" and stopped listening; losing contact mid-download
+  also read as success. It now waits for Kernl to come back, then says "now on
+  vX", or what went wrong.
+- **Other Windows accounts could not update an MSI install.** The MSI's marker
+  lived under the installing user's HKCU, so any other account saw an unzipped
+  copy and tried to move Program Files. The installer writes an HKLM marker
+  with the install folder, and a copy under Program Files is never swapped.
+- **msiexec's "success, reboot required" (3010) counted as a failure.**
+- **Installing an rc and then its final build gave two Add/Remove Programs
+  entries**, because both carry the same MSI version.
+- **The Windows helper trusted whatever `find` and `tar` came first on PATH.**
+  Git for Windows' GNU find ended the wait loop at once, so the swap ran with
+  the kernel still alive. System tools are called from System32 by full path,
+  and moves are retried while Windows keeps a just-closed file locked.
+- **Exiting for an update skipped the kernel's own shutdown** and left whisper,
+  ffmpeg and other child processes holding files in the install folder. They
+  are stopped first, and the kernel closes through its normal shutdown.
+- **A portable Linux copy could delete its own database on update.** Started
+  from inside the extracted folder, Kernl kept `data/` there, and the update
+  replaces that folder. The tarball ships a `kernl` launcher that keeps data in
+  `~/.local/share/kernl`, and the updater refuses while data is inside the
+  install.
+- **Every successful update left its download behind**, beside the install or
+  in the temp folder. The next boot removes it.
+- **Docker offered an "Update now" button that could only refuse.** It shows
+  the rebuild command instead.
+- **A portable copy could report the version of an unrelated package.json.**
+  The lookup started three folders up, which for a tarball under `~/apps` is
+  the home folder.
+- **install.sh on macOS installed a second, versioned copy on every re-run.**
+  It installs `Kernl.app`, like the dmg.
 
 - **In-app update could not work on Windows, and said so only after refusing.**
   An install was recognised by the running code sitting in a `bin/` directory —

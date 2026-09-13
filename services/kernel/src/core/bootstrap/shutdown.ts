@@ -55,7 +55,12 @@ export function installShutdownHandlers(args: {
     cameraStreamHub, mcpRouter, mcpUnixSocket, httpServer,
   } = args;
 
+  // Idempotent: on Windows closing the console can deliver SIGHUP and
+  // SIGBREAK back to back, and a second pass would close sqlite twice.
+  let shuttingDown = false;
   const shutdown = async (): Promise<void> => {
+    if (shuttingDown) return;
+    shuttingDown = true;
     log.info("Shutting down...");
     mtwPublisher?.shutdown();
     mtwConn?.close().catch(() => {});
@@ -78,6 +83,11 @@ export function installShutdownHandlers(args: {
 
   process.on("SIGINT", shutdown);
   process.on("SIGTERM", shutdown);
+  // Windows never delivers SIGTERM. Closing the start.bat console arrives as
+  // SIGHUP, Ctrl+Break as SIGBREAK; without these the kernel died with sqlite
+  // still open and no module shut down.
+  process.on("SIGHUP", shutdown);
+  if (process.platform === "win32") process.on("SIGBREAK", shutdown);
 
   // Register signal watchers in system registry
   systemRegistry.register({

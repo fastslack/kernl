@@ -33,7 +33,7 @@ import {
   stat,
   chmod,
 } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join, relative, sep, win32 } from "node:path";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -86,12 +86,44 @@ export function bundleFileName(slug: string, version?: string): string {
 // ── tar, portably ─────────────────────────────────────────────────────
 
 /**
+ * The tar to spawn.
+ *
+ * On Windows that is System32's tar.exe by full path, never whichever `tar`
+ * PATH resolves first. System32's is bsdtar (libarchive, Windows 10 1803+) and
+ * reads gzipped tars and zips alike. Git for Windows, MSYS and Cygwin put GNU
+ * tar on PATH instead, and GNU tar reads `-f C:\…` as a remote `host:path` —
+ * "Cannot connect to C: resolve failed" — so an install failed after the
+ * download had already finished.
+ */
+export function tarBinary(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string {
+  if (platform !== "win32") return "tar";
+  const systemRoot = env.SystemRoot ?? env.SYSTEMROOT ?? "C:\\Windows";
+  return win32.join(systemRoot, "System32", "tar.exe");
+}
+
+/**
+ * Whether an archive member could land outside the directory it is extracted
+ * into: absolute in either separator (`/x`, `\x`, `//host/x`), drive-qualified
+ * (`C:x`, `C:\x` — resolved against the drive, not the target), or climbing
+ * out through a `..` segment.
+ */
+export function isUnsafeMember(member: string): boolean {
+  const normalized = member.replace(/\\/g, "/");
+  if (normalized.startsWith("/")) return true;
+  if (/^[a-zA-Z]:/.test(normalized)) return true;
+  return normalized.split("/").some((seg) => seg === "..");
+}
+
+/**
  * Run `tar` with flags every implementation understands.
  *
- * Kernl runs on three different tars and they do NOT agree on options:
+ * Kernl runs on four different tars and they do NOT agree on options:
  *
  *   · GNU tar      — Linux hosts and the Debian-based kernel image
- *   · bsdtar       — /usr/bin/tar on macOS (libarchive)
+ *   · bsdtar       — /usr/bin/tar on macOS, System32\tar.exe on Windows
  *   · busybox tar  — Alpine-based images
  *
  * Only the short POSIX flags (-c -x -t -z -f -C -O) exist in all three, so
@@ -109,7 +141,7 @@ function tarArgs(mode: "c" | "x" | "t", archive: string, rest: string[] = []): s
 
 /** Every member path in an archive, trimmed, in archive order. */
 async function listMembers(archive: string): Promise<string[]> {
-  const { stdout } = await execFileAsync("tar", tarArgs("t", archive), {
+  const { stdout } = await execFileAsync(tarBinary(), tarArgs("t", archive), {
     timeout: 60_000,
     maxBuffer: 16 * 1024 * 1024,
   });
@@ -265,7 +297,7 @@ export async function packBundle(
   // Build the tarball. `-C sourceDir .` packs the directory contents
   // (not the directory itself) — no wrapper folder inside.
   await execFileAsync(
-    "tar",
+    tarBinary(),
     tarArgs("c", outPath, ["-C", sourceDir, "."]),
     { timeout: 60_000 },
   );
@@ -299,14 +331,11 @@ export async function unpackBundle(
 
   try {
     // Zip-slip hardening: list the archive members first and reject any that
-    // are absolute or escape `targetDir` via `..`, BEFORE writing anything.
-    // (Extraction otherwise runs before the integrity check, so a crafted
-    // bundle could drop files outside the install dir.)
+    // are absolute, drive-qualified or escape `targetDir` via `..`, BEFORE
+    // writing anything. (Extraction otherwise runs before the integrity check,
+    // so a crafted bundle could drop files outside the install dir.)
     for (const member of await listMembers(bundlePath)) {
-      const normalized = member.replace(/\\/g, "/");
-      const isAbsolute = normalized.startsWith("/");
-      const escapes = normalized.split("/").some((seg) => seg === "..");
-      if (isAbsolute || escapes) {
+      if (isUnsafeMember(member)) {
         await rm(targetDir, { recursive: true, force: true }).catch(() => {});
         throw new Error(`Unsafe path in bundle ${bundlePath}: ${member}`);
       }
@@ -317,7 +346,7 @@ export async function unpackBundle(
     // `..`-escaping members are already rejected by the listing check above,
     // and GNU tar strips leading "/" by default anyway.
     await execFileAsync(
-      "tar",
+      tarBinary(),
       tarArgs("x", bundlePath, ["-C", targetDir]),
       { timeout: 60_000 },
     );
@@ -374,7 +403,7 @@ export async function peekManifest(bundlePath: string): Promise<ExtensionManifes
     throw new Error(`Bundle ${bundlePath} has no ${MANIFEST_FILE} at its root`);
   }
   const { stdout } = await execFileAsync(
-    "tar",
+    tarBinary(),
     tarArgs("x", bundlePath, ["-O", entry]),
     { timeout: 30_000, maxBuffer: 4 * 1024 * 1024 },
   );

@@ -17,7 +17,11 @@
  * never clobbers operator-added `variables` keys.
  */
 
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 import type { SqliteDb } from "../../core/db/sqlite.js";
+import { assetsDir } from "../../core/assets-root.js";
 import type { AgentService } from "./service.js";
 import type { ModelChainEntry } from "./types.js";
 import { isoNow, slugify } from "../../core/helpers.js";
@@ -161,8 +165,9 @@ export function scheduleFloorMs(minScheduleSeconds?: number): number {
 }
 
 function expandHome(p: string): string {
-  if (p === "~") return process.env.HOME ?? p;
-  if (p.startsWith("~/")) return `${process.env.HOME ?? "~"}${p.slice(1)}`;
+  // os.homedir(): Windows has no HOME, and a literal "~" folder was created.
+  if (p === "~") return homedir();
+  if (p.startsWith("~/") || p.startsWith("~\\")) return join(homedir(), p.slice(2));
   return p;
 }
 
@@ -497,9 +502,11 @@ export function materializeOffice(
  */
 export async function loadRepoServiceBestEffort(db: SqliteDb): Promise<RepoServiceLike | null> {
   try {
-    const modPath = new URL(
-      "../../../assets/extensions/productivity/repos/_module/service.js",
-      import.meta.url,
+    // From the bundled assets tree, not relative to this module: in a built
+    // package this code lives inside mcp-server.js, and "../../../assets"
+    // climbed out of the install directory.
+    const modPath = pathToFileURL(
+      join(assetsDir("extensions"), "productivity", "repos", "_module", "service.js"),
     ).href;
     const mod = (await import(modPath)) as {
       RepoService?: new (db: SqliteDb) => RepoServiceLike;

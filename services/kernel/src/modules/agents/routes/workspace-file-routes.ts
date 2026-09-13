@@ -7,8 +7,10 @@
  * to what the agent record itself can tell us.
  */
 
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
 import type { KernelHttpServer } from "../../../core/http-server.js";
+import { isPathInside } from "../../../core/fs-paths.js";
 import type { AgentService } from "../service.js";
 import type { WorkspaceServiceLike } from "../advanced-types.js";
 
@@ -19,6 +21,21 @@ export function registerWorkspaceFileRoutes(
 ): void {
   // ── Workspace API ─────────────────────────────
   const workspaceRoot = resolve(process.cwd(), "data", "workspaces");
+
+  /**
+   * The absolute directory an agent runs in outside data/workspaces: its own
+   * `__cwd_path__`, else — when it has no `__workspace__` of its own — the git
+   * repo its office was promoted to. Mirrors `resolveCwd()` in the claude-code
+   * executor. An office home that is a kernel workspace is served by
+   * /api/agents/workspace/:wsId instead. "" when neither applies.
+   */
+  function agentCwdRoot(agent: { flow_id?: string }, vars: Record<string, unknown>): string {
+    // isAbsolute, not startsWith("/"): C:\code\proj is absolute too.
+    if (typeof vars.__cwd_path__ === "string" && isAbsolute(vars.__cwd_path__)) return vars.__cwd_path__;
+    if (vars.__workspace__ || !agent.flow_id) return "";
+    const repo = service.getFlow(agent.flow_id)?.home_repo_path ?? "";
+    return repo && isAbsolute(repo) && existsSync(repo) ? repo : "";
+  }
 
   async function computeWsStats(wsId: string): Promise<{ files: number; bytes: number; mtime: number }> {
     const { readdir, stat } = await import("node:fs/promises");
@@ -151,8 +168,8 @@ export function registerWorkspaceFileRoutes(
       if (!agent) { server.json(res, 404, { error: "Agent not found" }); return; }
       let vars: Record<string, unknown> = {};
       try { vars = JSON.parse((agent as { variables?: string }).variables || "{}"); } catch { /* defaults */ }
-      const cwd = typeof vars.__cwd_path__ === "string" ? vars.__cwd_path__ : "";
-      if (!cwd || !cwd.startsWith("/")) { server.json(res, 400, { error: "agent has no absolute __cwd_path__" }); return; }
+      const cwd = agentCwdRoot(agent, vars);
+      if (!cwd) { server.json(res, 400, { error: "agent has no absolute __cwd_path__ or office repo home" }); return; }
       const root = resolve(cwd);
       const { readdir, stat } = await import("node:fs/promises");
       const files: Array<{ path: string; type: string; size: number }> = [];
@@ -191,11 +208,11 @@ export function registerWorkspaceFileRoutes(
       if (!agent) { server.json(res, 404, { error: "Agent not found" }); return; }
       let vars: Record<string, unknown> = {};
       try { vars = JSON.parse((agent as { variables?: string }).variables || "{}"); } catch { /* defaults */ }
-      const cwd = typeof vars.__cwd_path__ === "string" ? vars.__cwd_path__ : "";
-      if (!cwd || !cwd.startsWith("/")) { server.json(res, 400, { error: "agent has no absolute __cwd_path__" }); return; }
+      const cwd = agentCwdRoot(agent, vars);
+      if (!cwd) { server.json(res, 400, { error: "agent has no absolute __cwd_path__ or office repo home" }); return; }
       const root = resolve(cwd);
       const target = resolve(root, filePath);
-      if (target !== root && !target.startsWith(root + "/")) { server.json(res, 403, { error: "forbidden" }); return; }
+      if (!isPathInside(root, target)) { server.json(res, 403, { error: "forbidden" }); return; }
       const { readFile, stat } = await import("node:fs/promises");
       const s = await stat(target).catch(() => null);
       if (!s || !s.isFile()) { server.json(res, 404, { error: "file not found" }); return; }

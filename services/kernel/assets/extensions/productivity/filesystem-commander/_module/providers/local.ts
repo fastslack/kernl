@@ -140,7 +140,11 @@ export class LocalProvider implements FsProvider {
       if (b.kind === "dir" && a.kind !== "dir") return 1;
       return a.name.localeCompare(b.name);
     });
-    const parent = abs === sep || this.roots.includes(abs) ? null : dirname(abs);
+    // No parent above a configured root (compared through relative(), which
+    // is case-insensitive on Windows) or above a filesystem root: dirname("C:\\")
+    // is "C:\\" itself, so "parent" navigation used to loop on the spot.
+    const atRoot = abs === sep || dirname(abs) === abs || this.roots.some((root) => relative(root, abs) === "");
+    const parent = atRoot ? null : dirname(abs);
     return { path: abs, entries, parent };
   }
 
@@ -193,8 +197,10 @@ export class LocalProvider implements FsProvider {
 
   async rm(path: string, opts?: { recursive?: boolean }): Promise<void> {
     const abs = this.guard(path);
-    // Safety belt: refuse to delete a configured root itself.
-    if (this.roots.includes(abs)) {
+    // Safety belt: refuse to delete a configured root itself. Compared through
+    // relative() rather than includes(): Windows paths are case-insensitive, so
+    // `c:\users\me` passes guard() and yet is not `C:\Users\me` to includes().
+    if (this.roots.some((root) => relative(root, abs) === "")) {
       throw new Error(`Refusing to delete root path: ${abs}`);
     }
     await rm(abs, { recursive: opts?.recursive ?? false, force: false });

@@ -53,7 +53,7 @@ export function registerPrivateAssetRoutes(server: KernelHttpServer): void {
         return;
       }
       const [mk, pluginName] = body.source.split("/", 2);
-      const home = process.env.HOST_HOME ?? process.env.HOME ?? "";
+      const home = process.env.HOST_HOME ?? (await import("node:os")).homedir();
       const { cpSync, existsSync, mkdirSync } = await import("node:fs");
       const { resolve } = await import("node:path");
       const srcPath = `${home}/.claude/plugins/marketplaces/${mk}/plugins/${pluginName}`;
@@ -113,7 +113,7 @@ export function registerPrivateAssetRoutes(server: KernelHttpServer): void {
       if (!body.name || !/^[a-z0-9][a-z0-9_-]*$/i.test(body.name)) {
         server.json(res, 400, { error: "name (skill slug) required" }); return;
       }
-      const home = process.env.HOST_HOME ?? process.env.HOME ?? "";
+      const home = process.env.HOST_HOME ?? (await import("node:os")).homedir();
       const { cpSync, existsSync, mkdirSync } = await import("node:fs");
       const { resolve } = await import("node:path");
       const srcPath = `${home}/.claude/skills/${body.name}`;
