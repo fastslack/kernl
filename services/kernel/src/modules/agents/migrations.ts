@@ -689,6 +689,20 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN auto_pause_reason    TEXT    NOT NULL DEFAULT '';
     `,
   },
+  {
+    // The agents dashboard channel is re-queried every 15 seconds, and
+    // agent_runs gains a row per scheduled poll, each with a goal embedding.
+    // Without these, runs-today, recent runs, tokens, runs-by-trigger and
+    // last-run-per-agent each read the whole table: 1.5s per refresh at 106K
+    // rows, blocking every other request for that long.
+    version: 43,
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_created        ON agent_runs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_created  ON agent_runs(agent_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_tokens   ON agent_runs(agent_id, tokens_used);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger        ON agent_runs(trigger_type);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is
