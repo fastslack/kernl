@@ -78,7 +78,7 @@ export interface NavGroup {
  * Everything else — Home, Work, Finance, Wellness, AI, Tools — comes from
  * extensions declaring `frontend.navGroups` + `frontend.navItems` in their
  * manifest. See the concrete stubs under `assets/extensions/SLUG/`
- * (home, news, life, shopping-nav, house, files-indexer,
+ * (home, news, life, shopping-nav, house,
  *  work-suite, people-suite, finance-suite, wellness-suite, ai-suite,
  *  filesystem-commander). Disable any of them from /extensions and their
  * items/groups vanish from the sidebar.
