@@ -201,6 +201,7 @@ export async function ingestPass(
       }
     }
 
+    const sent = cursor;
     const next = resp.cursor ?? "";
     cursor = next;
 
@@ -218,6 +219,19 @@ export async function ingestPass(
     // so the next tick resumes from the persisted cursor instead of
     // permanently labelling it "done" at 4% coverage.
     if (!next) {
+      finished = true;
+      break;
+    }
+
+    // archive.org sometimes answers "the page after X" with the same page and
+    // X again. Following that cursor re-fetches one page forever and no other
+    // collection gets its turn, so close the run; its next refresh starts over.
+    if (next === sent) {
+      log.warn(
+        `cinema ingest: ${run.collection} — archive.org returned the cursor it was sent; ` +
+        `closing the run instead of re-fetching the same page`,
+      );
+      service.updateRun(run.id, { error: `archive.org cursor stopped advancing at ${next}` });
       finished = true;
       break;
     }
