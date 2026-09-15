@@ -64,6 +64,10 @@ services:
       dockerfile: Dockerfile
     container_name: kernl
     restart: unless-stopped
+    # bun runs as PID 1 and never reaps orphaned grandchildren (helpers that
+    # agents and the auth bridge spawn), so they pile up as zombies. Docker's
+    # init reaps them.
+    init: true
     # Bypass Docker's embedded DNS (127.0.0.11) — it can time out on
     # certain Cloudflare-hosted records that resolve to direct IPs.
     # External resolvers handle those in <10ms.

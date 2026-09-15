@@ -68,6 +68,10 @@ services:
     image: localhost/kernl:public
     container_name: kernl-public-kernel
     restart: unless-stopped
+    # bun runs as PID 1 and never reaps orphaned grandchildren (helpers that
+    # agents and the auth bridge spawn), so they pile up as zombies. Docker's
+    # init reaps them.
+    init: true
     environment:
       MCP_TRANSPORT: http
       # This container has no IPv6 default route, but the resolver still returns
