@@ -69,10 +69,34 @@ function highlight(msg: string): string {
   return msg;
 }
 
+/**
+ * JSON.stringify prints an Error as `{}`: its name, message and stack are not
+ * enumerable. Spell them out, keeping own fields such as `code`.
+ */
+function errorsAsObjects(_key: string, value: unknown): unknown {
+  if (!(value instanceof Error)) return value;
+  return {
+    ...value,
+    name: value.name,
+    message: value.message,
+    stack: value.stack,
+    ...(value.cause !== undefined ? { cause: value.cause } : {}),
+  };
+}
+
+function serialize(data: unknown): string {
+  try {
+    return JSON.stringify(data, errorsAsObjects);
+  } catch {
+    // Cyclic structures, BigInt… A logger must never throw into its caller.
+    return String(data);
+  }
+}
+
 function write(level: LogLevel, msg: string, data?: unknown): void {
   if (LEVELS[level] < threshold) return;
   if (isQuieted(level, msg)) return;
-  const payload = data !== undefined ? ` ${JSON.stringify(data)}` : "";
+  const payload = data !== undefined ? ` ${serialize(data)}` : "";
   const coloredMsg = level === "error" ? `${C.error}${msg}${C.reset}` :
                      level === "warn" ? `${C.warn}${msg}${C.reset}` :
                      highlight(msg);
