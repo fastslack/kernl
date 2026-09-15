@@ -89,6 +89,7 @@ export function createMusicModule(): MusicModule {
               derivedIndexIsDue({
                 inserted: insertedSinceRebuild,
                 updated: updatedSinceRebuild,
+                finished: result.finished,
                 builtAt: svc.catalog.tagsBuiltAt(),
               })
             ) {

@@ -348,7 +348,12 @@ export async function ingestNextChunk(
     // Not on every update: a refresh re-reads titles we already have, and
     // rebuilding both tables after each one froze the kernel for seconds
     // every 15 minutes.
-    if (derivedIndexIsDue({ inserted: result.inserted, updated: result.updated, builtAt: service.tagsBuiltAt() })) {
+    if (derivedIndexIsDue({
+      inserted: result.inserted,
+      updated: result.updated,
+      finished: result.finished,
+      builtAt: service.tagsBuiltAt(),
+    })) {
       try {
         const { tags } = service.rebuildTags();
         log.info(`cinema ingest: tag index rebuilt — ${tags} tags`);

@@ -9,7 +9,9 @@ import type { SqliteDb } from "../src/core/db/sqlite.js";
 // A cinema refresh pass re-reads the newest page of a collection and upserts
 // titles it already has. Each of those counted as "updated", and any update
 // triggered a full rebuild of cinema_tags and cinema_works: 5.4 seconds with
-// the kernel frozen, every 15 minutes, on a 245K-title catalogue.
+// the kernel frozen, every 15 minutes, on a 245K-title catalogue. A collection
+// that is still backfilling brings new titles on every pass, so it kept the
+// same freeze going on each one.
 
 const realFetch = globalThis.fetch;
 
@@ -21,10 +23,25 @@ function archiveServing(ids: string[]): typeof fetch {
     })) as unknown as typeof fetch;
 }
 
+/** A collection too big for one pass: every page has new titles and a next cursor. */
+function archiveBackfilling(): typeof fetch {
+  return (async (input: string | URL | Request) => {
+    const url = new URL(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    const page = Number(url.searchParams.get("cursor") || "0");
+    return Response.json({
+      items: [`p${page}a`, `p${page}b`].map((identifier) => ({ identifier, title: identifier, subject: ["Drama"] })),
+      cursor: String(page + 1),
+    });
+  }) as typeof fetch;
+}
+
 describe("cinema ingester rebuilds", () => {
   let db: SqliteDb;
   let svc: CinemaService;
   let rebuilds: { tags: number; works: number };
+
+  const ageIndexes = (ms: number) =>
+    db.prepare("UPDATE cinema_tags SET updated_at = ?").run(new Date(Date.now() - ms).toISOString());
 
   beforeEach(() => {
     db = new Database(":memory:") as unknown as SqliteDb;
@@ -55,10 +72,21 @@ describe("cinema ingester rebuilds", () => {
 
   it("rebuilds on a refresh once the indexes are old enough", async () => {
     await ingestNextChunk(svc, ["feature_films"]);
-    const sevenHoursAgo = new Date(Date.now() - 7 * 3_600_000).toISOString();
-    db.prepare("UPDATE cinema_tags SET updated_at = ?").run(sevenHoursAgo);
+    ageIndexes(7 * 3_600_000);
 
     await ingestNextChunk(svc, ["feature_films"]);
+    expect(rebuilds).toEqual({ tags: 2, works: 2 });
+  });
+
+  it("holds rebuilds while a collection backfills, then catches up after an hour", async () => {
+    globalThis.fetch = archiveBackfilling();
+
+    await ingestNextChunk(svc, ["artsandmusicvideos"]); // first titles ever: build
+    await ingestNextChunk(svc, ["artsandmusicvideos"]); // more new titles, index minutes old: hold
+    expect(rebuilds).toEqual({ tags: 1, works: 1 });
+
+    ageIndexes(2 * 3_600_000);
+    await ingestNextChunk(svc, ["artsandmusicvideos"]);
     expect(rebuilds).toEqual({ tags: 2, works: 2 });
   });
 });
