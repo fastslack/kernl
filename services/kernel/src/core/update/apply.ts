@@ -68,6 +68,7 @@ import {
   linuxPackageFormat,
   recordAttempt,
   setUpdateExitPlan,
+  startDetached,
   system32,
   updateDataDir,
   updateResultFile,
@@ -462,16 +463,13 @@ async function runApply(markHandedOff: () => void): Promise<ApplyOutcome> {
       startedAt: Date.now(),
     });
 
-    // Detached and fully severed: it has to outlive us.
-    const runner = windows
-      ? spawn(process.env.ComSpec ?? system32("cmd.exe"), ["/d", "/c", script], {
-          detached: true,
-          stdio: "ignore",
-          windowsHide: true,
-        })
-      : spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
-    runner.unref();
-    setUpdateExitPlan({ kind: "exit", helperPid: runner.pid });
+    // Detached and fully severed: it has to outlive us. Only a helper that
+    // actually started may be handed off to; if it cannot start, the catch
+    // below refuses and the kernel stays up.
+    const helperPid = windows
+      ? await startDetached(process.env.ComSpec ?? system32("cmd.exe"), ["/d", "/c", script], { windowsHide: true })
+      : await startDetached("/bin/sh", [script]);
+    setUpdateExitPlan({ kind: "exit", helperPid });
 
     handedOff = true;
     markHandedOff();
@@ -600,9 +598,16 @@ async function applyPackage(
       }),
     );
     await chmod(script, 0o755);
-    const runner = spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
-    runner.unref();
-    setUpdateExitPlan({ kind: "exit", helperPid: runner.pid });
+    let helperPid: number;
+    try {
+      helperPid = await startDetached("/bin/sh", [script]);
+    } catch (err) {
+      return refuse(
+        `Kernl ${to} is installed, but the restart helper could not start ` +
+        `(${err instanceof Error ? err.message : String(err)}). Restart Kernl to finish.`,
+      );
+    }
+    setUpdateExitPlan({ kind: "exit", helperPid });
   } else {
     setUpdateExitPlan(method);
   }

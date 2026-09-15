@@ -11,12 +11,11 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import { chmod, mkdir, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { join } from "node:path";
 import { log } from "../logger.js";
 import { relaunchCommandFor, restartMethodFor } from "./platform.js";
 import { restartHelperFor } from "./helper.js";
-import { detectInstall, setUpdateExitPlan, system32, updateDataDir, type InstallInfo } from "./install.js";
+import { detectInstall, setUpdateExitPlan, startDetached, system32, updateDataDir, type InstallInfo } from "./install.js";
 import { healthUrl, updateProgress } from "./apply.js";
 
 export type RestartOutcome =
@@ -119,17 +118,18 @@ export async function restartKernl(): Promise<RestartOutcome> {
         }),
       );
       if (!plan.windows) await chmod(script, 0o755);
-      // Detached and fully severed: it has to outlive us.
-      const runner = plan.windows
-        ? spawn(process.env.ComSpec ?? system32("cmd.exe"), ["/d", "/c", script], {
-            detached: true,
-            stdio: "ignore",
-            windowsHide: true,
-          })
-        : spawn("/bin/sh", [script], { detached: true, stdio: "ignore" });
-      runner.unref();
-      setUpdateExitPlan({ kind: "exit", helperPid: runner.pid });
-      log.info(`restart: helper ${runner.pid} will relaunch ${plan.relaunch.join(" ")}`);
+      // Detached and fully severed: it has to outlive us. Only a helper that
+      // actually started may be handed off to — otherwise stay up and say so.
+      let helperPid: number;
+      try {
+        helperPid = plan.windows
+          ? await startDetached(process.env.ComSpec ?? system32("cmd.exe"), ["/d", "/c", script], { windowsHide: true })
+          : await startDetached("/bin/sh", [script]);
+      } catch (err) {
+        return { ok: false, reason: `Could not start the restart helper (${err instanceof Error ? err.message : String(err)}).` };
+      }
+      setUpdateExitPlan({ kind: "exit", helperPid });
+      log.info(`restart: helper ${helperPid} will relaunch ${plan.relaunch.join(" ")}`);
       return { ok: true, restarting: true };
     }
   }

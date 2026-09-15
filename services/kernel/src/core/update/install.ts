@@ -72,6 +72,27 @@ function readText(path: string): string {
   }
 }
 
+/**
+ * Start a helper that has to outlive this process, and resolve with its pid
+ * once it has actually started. spawn() returns before a missing interpreter
+ * is reported — that arrives later as an 'error' event — so handing off right
+ * after it could exit the kernel with nothing left to relaunch it.
+ */
+export function startDetached(
+  command: string,
+  args: string[],
+  opts: { windowsHide?: boolean } = {},
+): Promise<number> {
+  return new Promise((resolvePid, reject) => {
+    const child = spawn(command, args, { detached: true, stdio: "ignore", windowsHide: opts.windowsHide });
+    child.once("error", reject);
+    child.once("spawn", () => {
+      child.unref();
+      resolvePid(child.pid!);
+    });
+  });
+}
+
 // ── Probes ──────────────────────────────────────────────────────────────────
 
 /**
