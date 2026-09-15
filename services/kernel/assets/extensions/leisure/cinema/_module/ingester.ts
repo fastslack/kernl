@@ -14,6 +14,7 @@
  */
 
 import { log } from "../../../../../src/core/logger.js";
+import { derivedIndexIsDue } from "../../_lib/archive-catalog/rebuild-policy.js";
 import type { CinemaService } from "./service.js";
 import type { ArchiveScrapeRow, IngestRun } from "./types.js";
 
@@ -344,7 +345,10 @@ export async function ingestNextChunk(
     // row the page uses for browsing was simply absent. A full rebuild is a
     // single scan: 72,618 tags in 310ms on this catalogue, which is far cheaper
     // than the network pass that just ran.
-    if (result.inserted + result.updated > 0) {
+    // Not on every update: a refresh re-reads titles we already have, and
+    // rebuilding both tables after each one froze the kernel for seconds
+    // every 15 minutes.
+    if (derivedIndexIsDue({ inserted: result.inserted, updated: result.updated, builtAt: service.tagsBuiltAt() })) {
       try {
         const { tags } = service.rebuildTags();
         log.info(`cinema ingest: tag index rebuilt — ${tags} tags`);

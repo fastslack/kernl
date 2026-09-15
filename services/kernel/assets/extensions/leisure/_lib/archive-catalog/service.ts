@@ -370,6 +370,15 @@ export class ArchiveCatalog {
     return { tags: items.length, titlesScanned, durationMs: Date.now() - t0 };
   }
 
+  /** When the tag index was last built, or null if it never was. A rebuild
+   *  stamps every row with the same time, so any row answers. */
+  tagsBuiltAt(): string | null {
+    const row = this.db
+      .prepare(`SELECT updated_at FROM ${this.T.tags} LIMIT 1`)
+      .get() as { updated_at: string } | undefined;
+    return row?.updated_at || null;
+  }
+
   // ── Internals ─────────────────────────────────────────────────────
 
   private buildWhere(f: CatalogListFilter): { where: string[]; params: unknown[] } {

@@ -8,7 +8,7 @@ import { log } from "../../../../../src/core/logger.js";
 import { musicMigrations } from "./migrations/001_music.js";
 import { MusicService } from "./service.js";
 import { registerMusicRoutes } from "./api-routes.js";
-import { archiveCatalogMigrations, ingestNextChunk } from "../../_lib/archive-catalog/index.js";
+import { archiveCatalogMigrations, derivedIndexIsDue, ingestNextChunk } from "../../_lib/archive-catalog/index.js";
 
 export interface MusicModule extends ExtensibleModule {
   getService(): MusicService;
@@ -49,6 +49,8 @@ export function createMusicModule(): MusicModule {
   let tickHandle: ReturnType<typeof setInterval> | null = null;
   let inFlight = false;
   let passesSinceRebuild = 0;
+  let insertedSinceRebuild = 0;
+  let updatedSinceRebuild = 0;
 
   return {
     name: "music",
@@ -77,8 +79,22 @@ export function createMusicModule(): MusicModule {
               + ` (${result.fetched} fetched in ${result.durationMs}ms${result.finished ? ", finished" : ""})`,
             );
             passesSinceRebuild++;
-            if (passesSinceRebuild >= REBUILD_TAGS_EVERY_N_PASSES) {
+            insertedSinceRebuild += result.inserted;
+            updatedSinceRebuild += result.updated;
+            // Batched every N passes, and only when the index is actually due:
+            // a refresh re-reads known titles, which is no reason to rewrite
+            // every tag and freeze the kernel for a second each time.
+            if (
+              passesSinceRebuild >= REBUILD_TAGS_EVERY_N_PASSES &&
+              derivedIndexIsDue({
+                inserted: insertedSinceRebuild,
+                updated: updatedSinceRebuild,
+                builtAt: svc.catalog.tagsBuiltAt(),
+              })
+            ) {
               passesSinceRebuild = 0;
+              insertedSinceRebuild = 0;
+              updatedSinceRebuild = 0;
               const r = svc.catalog.rebuildTags();
               log.info(`music-ingester: tags rebuilt — ${r.tags} unique from ${r.titlesScanned} titles (${r.durationMs}ms)`);
             }
