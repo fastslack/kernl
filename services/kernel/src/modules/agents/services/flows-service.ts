@@ -5,7 +5,8 @@ import { newId, isoNow } from "../../../core/helpers.js";
 import { log } from "../../../core/logger.js";
 import { WORKSPACE_ROOT } from "../workspace-constants.js";
 import { OFFICE_HOME_WORKSPACE_NAME } from "../office-home.js";
-import type { Agent, AgentFlow } from "../types.js";
+import { FLOW_KINDS, isFlowKind, type Agent, type AgentFlow, type FlowKind, type RepoIsolation } from "../types.js";
+import { applyRepoIsolation } from "../repo-isolation.js";
 
 /**
  * Offices (flows) and the home directory every agent in one inherits.
@@ -22,7 +23,17 @@ export class AgentFlowsService {
     private getAgent: (id: string) => Agent | undefined,
   ) {}
 
-  createFlow(input: { name: string; description?: string; color?: string }): AgentFlow {
+  createFlow(input: {
+    name: string;
+    description?: string;
+    color?: string;
+    kind?: FlowKind;
+    source_extension_id?: string;
+  }): AgentFlow {
+    const kind = input.kind ?? "general";
+    if (!isFlowKind(kind)) {
+      throw new Error(`Invalid office kind "${String(kind)}" — use one of ${FLOW_KINDS.join(", ")}`);
+    }
     const now = isoNow();
     const flow: AgentFlow = {
       id: newId(),
@@ -30,15 +41,18 @@ export class AgentFlowsService {
       description: input.description ?? "",
       color: input.color ?? "#6366f1",
       active: 1,
+      kind,
+      repo_isolation: "",
+      source_extension_id: input.source_extension_id ?? "",
       created_at: now,
       updated_at: now,
     };
     this.db
       .prepare(
-        `INSERT INTO agent_flows (id, name, description, color, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO agent_flows (id, name, description, color, active, kind, source_extension_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(flow.id, flow.name, flow.description, flow.color, flow.active, flow.created_at, flow.updated_at);
+      .run(flow.id, flow.name, flow.description, flow.color, flow.active, flow.kind, flow.source_extension_id, flow.created_at, flow.updated_at);
     // Every office gets a kernel-workspace home automatically (DB-only — the
     // on-disk folder convention is seeded lazily by the executor / set_repo so
     // flow creation stays test-safe). Best-effort: a failure here must not
@@ -152,28 +166,79 @@ export class AgentFlowsService {
     return this.db.prepare("SELECT * FROM agent_flows WHERE id = ?").get(id) as AgentFlow | undefined;
   }
 
-  updateFlow(id: string, updates: Partial<Pick<AgentFlow, "name" | "description" | "color">>): AgentFlow | undefined {
+  updateFlow(
+    id: string,
+    updates: Partial<Pick<AgentFlow, "name" | "description" | "color" | "kind" | "repo_isolation">>,
+  ): AgentFlow | undefined {
     const flow = this.getFlow(id);
     if (!flow) return undefined;
+    if (updates.kind !== undefined && !isFlowKind(updates.kind)) {
+      throw new Error(`Invalid office kind "${String(updates.kind)}" — use one of ${FLOW_KINDS.join(", ")}`);
+    }
+    if (
+      updates.repo_isolation !== undefined &&
+      updates.repo_isolation !== "sandbox" &&
+      updates.repo_isolation !== "host"
+    ) {
+      throw new Error(`Invalid repo_isolation "${String(updates.repo_isolation)}" — use "sandbox" or "host"`);
+    }
     const name = updates.name ?? flow.name;
     const description = updates.description ?? flow.description;
     const color = updates.color ?? flow.color;
+    const kind = updates.kind ?? flow.kind ?? "general";
+    const isolation = updates.repo_isolation ?? flow.repo_isolation ?? "";
     const now = isoNow();
     this.db
-      .prepare("UPDATE agent_flows SET name = ?, description = ?, color = ?, updated_at = ? WHERE id = ?")
-      .run(name, description, color, now, id);
+      .prepare("UPDATE agent_flows SET name = ?, description = ?, color = ?, kind = ?, repo_isolation = ?, updated_at = ? WHERE id = ?")
+      .run(name, description, color, kind, isolation, now, id);
+    if (updates.repo_isolation) this.propagateRepoIsolation(id, updates.repo_isolation);
     this.events.emit("data.changed", { module: "agents", action: "flow_updated" });
     return this.getFlow(id);
   }
 
-  deleteFlow(id: string): boolean {
+  /** Rewrite the sandbox variables of every agent in the office that works on a repo. */
+  private propagateRepoIsolation(flowId: string, isolation: RepoIsolation): void {
+    const rows = this.db
+      .prepare("SELECT id, variables FROM agents WHERE flow_id = ?")
+      .all(flowId) as Array<{ id: string; variables: string }>;
+    const update = this.db.prepare("UPDATE agents SET variables = ?, updated_at = ? WHERE id = ?");
+    for (const row of rows) {
+      let vars: Record<string, unknown>;
+      try {
+        vars = JSON.parse(row.variables || "{}") as Record<string, unknown>;
+      } catch {
+        continue;
+      }
+      if (typeof vars.__cwd_path__ !== "string" || !vars.__cwd_path__) continue;
+      update.run(JSON.stringify(applyRepoIsolation(vars, isolation)), isoNow(), row.id);
+    }
+  }
+
+  deleteFlow(id: string): { unassigned: number } | null {
     const flow = this.getFlow(id);
-    if (!flow) return false;
-    // Unassign agents from this flow
-    this.db.prepare("UPDATE agents SET flow_id = '' WHERE flow_id = ?").run(id);
-    this.db.prepare("UPDATE agent_flows SET active = 0 WHERE id = ?").run(id);
+    if (!flow) return null;
+    const now = isoNow();
+    // Single transaction (spec §2.4): a failure partway through must leave
+    // the agents' flow_id/active untouched rather than half-unassigning them.
+    const trx = this.db.transaction(() => {
+      // Pause everyone in the office except the top-rank agent: removing an
+      // office must never switch off the Chief.
+      this.db
+        .prepare(
+          `UPDATE agents SET active = 0, updated_at = ?
+            WHERE flow_id = ?
+              AND COALESCE(rank_id, '') NOT IN (
+                SELECT id FROM agent_ranks WHERE level = (SELECT MAX(level) FROM agent_ranks)
+              )`,
+        )
+        .run(now, id);
+      const moved = this.db.prepare("UPDATE agents SET flow_id = '', updated_at = ? WHERE flow_id = ?").run(now, id);
+      this.db.prepare("UPDATE agent_flows SET active = 0, updated_at = ? WHERE id = ?").run(now, id);
+      return { unassigned: Number(moved.changes) };
+    });
+    const result = trx();
     this.events.emit("data.changed", { module: "agents", action: "flow_deleted" });
-    return true;
+    return result;
   }
 
   assignAgentToFlow(agentId: string, flowId: string): boolean {

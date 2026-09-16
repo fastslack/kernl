@@ -29,24 +29,6 @@ const CORRIDOR_W = 6;
 const DESK_SPACING = 4.5;
 const ROOM_PAD = 3;
 
-/** Display-name overrides for the 3D office signs. Keys match the exact flow
- *  names stored in the DB; values are the short uppercase label rendered above
- *  the door (≤ 12 chars). Unmapped flow names render with their full original
- *  name, and FIXED_OFFICES / connectivity logic always use the original names.
- *  Operator-specific entries (named projects, client offices) live in this
- *  file's personal override at `assets/personal/dashboard/floor-plan-overrides.ts`
- *  when present — keep this map generic. */
-const FLOW_DISPLAY_NAME: Record<string, string> = {
-  'Market Analysis':   'MARKETING',
-  'Web Scraping':      'SCRAPING',
-  // Placeholder office — rendered without a label on the door until the
-  // user decides what goes here.
-  'New office':        '',
-};
-function displayFlowName(name: string): string {
-  return FLOW_DISPLAY_NAME[name] ?? name;
-}
-
 export function computeFloorPlan(
   agents: AgentData[],
   chains: ChainData[],
@@ -123,8 +105,6 @@ export function computeFloorPlan(
   // Grid-sizing: the grid must hold EVERY room plus the reserved core. The
   // core is bigger than the original "4 special rooms" count — it's:
   //   • 6 special cells (Central Hall, My Office, Meeting A/B/C/D)
-  //   • up to ~5 fixed-office pins (Management, Market Analysis, Web Scraping,
-  //     Automations, Communications)
   //   • ~1 hall-extension column funnelling south toward the entrance
   // Underestimating this forced the dynamic assignment to overflow and every
   // extra room collapsed onto (0,0) — visually two rooms superimposed.
@@ -174,29 +154,10 @@ export function computeFloorPlan(
   }
   const hallExtensionSet = new Set(hallExtensionCells.map(c => `${c.col},${c.row}`));
 
-  // Fixed offices — flows pinned to specific cells (by flow name).
-  //   Communications   → below-right (SE), swapped with My Office
-  //   Management       → west-of-core on the main row (outer W)
-  //   Market Analysis  → east-of-core on the main row (outer E)
-  //   Web Scraping     → NW outer (north of Management) — swapped with Automations
-  //   Automations      → NE outer (north of Market Analysis)
-  // Operator-specific flow pins live in `assets/personal/dashboard/floor-plan-overrides.ts`
-  // when present — keep this map generic.
-  const FIXED_OFFICES: Record<string, { col: number; row: number }> = {
-    'Communications':  { col: centerCol + 1, row: centerRow + 1 },
-    'Management':      { col: centerCol - 2, row: centerRow },
-    'Market Analysis': { col: centerCol + 2, row: centerRow },
-    'Web Scraping':    { col: centerCol - 2, row: centerRow - 1 },
-    'Automations':     { col: centerCol + 2, row: centerRow - 1 },
-  };
-  const fixedOfficeSet = new Set(Object.values(FIXED_OFFICES).map(c => `${c.col},${c.row}`));
-
   // ── Assign offices to cells ──
   const usedCells = new Set<string>();
-  // Reserve special + fixed office cells + hall-extension cells so offices
-  // can never claim the axis that funnels traffic to the entrance.
+  // Reserve special + hall-extension cells so offices can never claim the axis that funnels traffic to the entrance.
   for (const c of SPECIAL_CELLS) usedCells.add(`${c.col},${c.row}`);
-  for (const c of Object.values(FIXED_OFFICES)) usedCells.add(`${c.col},${c.row}`);
   for (const c of hallExtensionCells) usedCells.add(`${c.col},${c.row}`);
 
   // Build list of free cells, sorted by distance to center (closest first)
@@ -211,33 +172,13 @@ export function computeFloorPlan(
   }
   freeCells.sort((a, b) => a.dist - b.dist); // closest to core first
 
-  // Assign each office: fixed offices first, then dynamic by size (biggest → closest to core).
+  // Assign each office by size (biggest → closest to core).
   //
-  // Guards:
-  //  • A flow name can appear more than once in the DB (e.g. two "Web Scraping"
-  //    rows with different colors). Only the FIRST one claims the pin; any
-  //    duplicate falls through to dynamic assignment so they don't overlap.
-  //  • If freeCells runs out, we spill to the next unused (col,row) that still
-  //    fits in the grid — never the (0,0) fallback which already hosts a room.
+  // Guard: If freeCells runs out, we spill to the next unused (col,row) that still
+  // fits in the grid — never the (0,0) fallback which already hosts a room.
   const agentCells: Array<{ col: number; row: number }> = [];
   let freeIdx = 0;
-  const claimedFixed = new Set<string>();
   for (const spec of roomSpecs) {
-    const flowName = flows.find(f => f.id === spec.flowId)?.name || '';
-    const fixed = FIXED_OFFICES[flowName];
-    const pinKey = fixed ? `${fixed.col},${fixed.row}` : '';
-    const pinAvailable =
-      !!fixed &&
-      fixed.col >= 0 && fixed.col < gridCols &&
-      fixed.row >= 0 && fixed.row < gridRows &&
-      !claimedFixed.has(pinKey);
-
-    if (pinAvailable) {
-      agentCells.push(fixed);
-      claimedFixed.add(pinKey);
-      continue;
-    }
-
     // Advance past any freeCells that a previous overflow already consumed.
     while (freeIdx < freeCells.length && usedCells.has(`${freeCells[freeIdx].col},${freeCells[freeIdx].row}`)) {
       freeIdx++;
@@ -335,7 +276,7 @@ export function computeFloorPlan(
     // behind a generic "General".
     const flow = flows.find(f => f.id === spec.flowId);
     const color = flow?.color || '#4a4f6a';
-    const name = displayFlowName(flow?.name || `?[${spec.flowId.slice(0, 6)}]`);
+    const name = flow?.name || `?[${spec.flowId.slice(0, 6)}]`;
 
     // Door faces toward the central hall — pick the wall closest to the hall.
     const walls = [

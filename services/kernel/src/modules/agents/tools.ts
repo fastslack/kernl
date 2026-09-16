@@ -1,10 +1,7 @@
 import { z } from "zod";
-import { mkdirSync, existsSync } from "node:fs";
-import { isAbsolute, join } from "node:path";
-import { spawnSync } from "node:child_process";
 import { textResult, errorResult, isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
-import { seedOfficeHome } from "./office-home.js";
+import { setOfficeRepo, OfficeRepoError, type SetOfficeRepoResult } from "./office-repo.js";
 import type { ToolDefinition } from "../../core/types.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
@@ -970,47 +967,34 @@ export function agentsTools(
         git_init: z.boolean().optional().describe("Run `git init` if the directory is not already a git repo. Default true."),
       }),
       handler: async (input) => {
-        const flowId = input.flow_id?.trim();
-        if (!flowId) return errorResult("flow_id is required");
-        const flow = service.getFlow(flowId);
-        if (!flow) return errorResult(`Flow not found: ${flowId}`);
-
-        const raw = input.path?.trim() ?? "";
-        if (!raw) {
-          service.setFlowRepo(flowId, "");
-          const home = service.resolveFlowHome(flowId);
+        let result: SetOfficeRepoResult;
+        try {
+          result = setOfficeRepo(service, {
+            flow_id: input.flow_id,
+            path: input.path,
+            git_init: input.git_init,
+            retarget_agents: false,
+          });
+        } catch (err) {
+          if (err instanceof OfficeRepoError) return errorResult(err.message);
+          throw err;
+        }
+        if (!result.path) {
           return textResult(
-            `Office **${flow.name}** reverted to its kernel workspace home` +
-            (home ? ` (\`${home.path}\`).` : "."),
+            `Office **${result.flow.name}** reverted to its kernel workspace home` +
+            (result.homePath ? ` (\`${result.homePath}\`).` : "."),
           );
         }
-        if (!isAbsolute(raw)) {
-          return errorResult("path must be absolute (e.g. /home/you/office or C:\\Users\\you\\office)");
-        }
-
-        mkdirSync(raw, { recursive: true });
-
-        let gitNote = "";
-        if (input.git_init !== false && !existsSync(join(raw, ".git"))) {
-          const r = spawnSync("git", ["init"], { cwd: raw, encoding: "utf8" });
-          const gitMissing = (r.error as NodeJS.ErrnoException | undefined)?.code === "ENOENT";
-          gitNote = r.status === 0
-            ? "\n- `git init` ✓"
-            : gitMissing
-              ? "\n- git init skipped (git is not installed — install Git from https://git-scm.com to version this office)"
-              : `\n- git init skipped (${(r.stderr || r.error?.message || "git unavailable").toString().trim().slice(0, 120)})`;
-        }
-
-        try {
-          seedOfficeHome(raw, flow);
-        } catch (err) {
-          log.warn(`set_repo: seedOfficeHome failed for ${raw}: ${err instanceof Error ? err.message : String(err)}`);
-        }
-
-        service.setFlowRepo(flowId, raw);
+        const gitNote = result.git === "done"
+          ? "\n- `git init` ✓"
+          : result.git === "missing"
+            ? "\n- git init skipped (git is not installed — install Git from https://git-scm.com to version this office)"
+            : result.git === "failed"
+              ? `\n- git init skipped (${result.gitDetail})`
+              : "";
         return textResult(
-          `Office **${flow.name}** promoted to git repo:\n` +
-          `- Path: \`${raw}\`${gitNote}\n` +
+          `Office **${result.flow.name}** promoted to git repo:\n` +
+          `- Path: \`${result.path}\`${gitNote}\n` +
           `- Seeded CHARTER.md / MEMORY.md / decisions/ / docs/ (existing files untouched)\n\n` +
           `Agents in this office without a \`__cwd_path__\` override will now work here.`,
         );

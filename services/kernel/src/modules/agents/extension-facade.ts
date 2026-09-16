@@ -31,6 +31,7 @@ import { log } from "../../core/logger.js";
 import type { AgentsFacadeLike } from "../extensions/installer.js";
 import { computeNextCronRun } from "./cron-utils.js";
 import { sanitizeAgentPayload } from "../../core/prompt-sanitizer.js";
+import { isFlowKind } from "./types.js";
 
 interface AgentPayload {
   slug: string;
@@ -78,6 +79,7 @@ interface FlowPayload {
 interface OfficePayload extends FlowPayload {
   /** Auto-debate flag for the office (maps to agent_flows.auto_debate). */
   auto_debate?: boolean;
+  kind?: string;
 }
 
 interface ChainPayload {
@@ -336,26 +338,24 @@ export class AgentsFacade implements AgentsFacadeLike {
     if (!p.name?.trim()) throw new Error(`office ${p.slug}: missing \`name\``);
 
     const now = new Date().toISOString();
-    const existing = this.db
-      .prepare("SELECT id FROM agent_flows WHERE id = ?")
-      .get(p.slug) as { id: string } | undefined;
-
+    const existing = this.db.prepare("SELECT id FROM agent_flows WHERE id = ?").get(p.slug) as { id: string } | undefined;
     const auto_debate = p.auto_debate === false ? 0 : 1;
-
+    const kind = isFlowKind(p.kind) ? p.kind : "general";
+    const sourceExtensionId = p.__extension_id ?? "";
     if (existing) {
       this.db
         .prepare(
-          `UPDATE agent_flows SET name = ?, description = ?, color = ?,
-           auto_debate = ?, active = 1, updated_at = ? WHERE id = ?`,
+          `UPDATE agent_flows SET name = ?, description = ?, color = ?, auto_debate = ?,
+             kind = ?, source_extension_id = ?, active = 1, updated_at = ? WHERE id = ?`,
         )
-        .run(p.name, p.description ?? "", p.color ?? "#6366f1", auto_debate, now, p.slug);
+        .run(p.name, p.description ?? "", p.color ?? "#6366f1", auto_debate, kind, sourceExtensionId, now, p.slug);
     } else {
       this.db
         .prepare(
-          `INSERT INTO agent_flows (id, name, description, color, active, auto_debate, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 1, ?, ?, ?)`,
+          `INSERT INTO agent_flows (id, name, description, color, active, auto_debate, kind, source_extension_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
         )
-        .run(p.slug, p.name, p.description ?? "", p.color ?? "#6366f1", auto_debate, now, now);
+        .run(p.slug, p.name, p.description ?? "", p.color ?? "#6366f1", auto_debate, kind, sourceExtensionId, now, now);
     }
     log.info(`agents: office upserted from bundle → ${p.slug}`);
     return p.slug;
@@ -411,11 +411,21 @@ export class AgentsFacade implements AgentsFacadeLike {
 
   async uninstallBySource(extensionId: string): Promise<void> {
     if (!extensionId) return;
-    const result = this.db
-      .prepare("DELETE FROM agents WHERE source_extension_id = ?")
-      .run(extensionId);
-    log.info(
-      `agents: uninstalled ${result.changes} agent(s) from extension ${extensionId}`,
-    );
+    const trx = this.db.transaction(() => {
+      // Chains of the removed agents go with them (ON DELETE CASCADE).
+      const result = this.db.prepare("DELETE FROM agents WHERE source_extension_id = ?").run(extensionId);
+      const offices = this.db
+        .prepare("SELECT id FROM agent_flows WHERE source_extension_id = ? AND active = 1")
+        .all(extensionId) as Array<{ id: string }>;
+      const now = new Date().toISOString();
+      for (const { id } of offices) {
+        // Whatever the operator put in the office stays, parked in Sin asignar.
+        this.db.prepare("UPDATE agents SET active = 0, flow_id = '', updated_at = ? WHERE flow_id = ?").run(now, id);
+        this.db.prepare("UPDATE agent_flows SET active = 0, updated_at = ? WHERE id = ?").run(now, id);
+      }
+      return { agentCount: result.changes, officeCount: offices.length };
+    });
+    const { agentCount, officeCount } = trx();
+    log.info(`agents: uninstalled ${agentCount} agent(s) and ${officeCount} office(s) from extension ${extensionId}`);
   }
 }

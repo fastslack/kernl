@@ -690,6 +690,34 @@ export const agentsMigrations: Migration[] = [
     `,
   },
   {
+    // Offices get an explicit kind (the room and buttons used to be chosen by
+    // name prefix), the extension that seeded them (so uninstall can clean up),
+    // and the repo isolation their agents run with.
+    version: 42,
+    sql: `
+      ALTER TABLE agent_flows ADD COLUMN kind                TEXT NOT NULL DEFAULT 'general';
+      ALTER TABLE agent_flows ADD COLUMN source_extension_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_flows ADD COLUMN repo_isolation      TEXT NOT NULL DEFAULT '';
+
+      UPDATE agent_flows SET kind = 'devops'
+        WHERE lower(name) LIKE 'devops%' OR lower(name) LIKE 'repos%';
+      UPDATE agent_flows SET kind = 'communications'
+        WHERE lower(name) LIKE 'communication%' OR lower(name) LIKE 'comunicacion%';
+      UPDATE agent_flows SET kind = 'creative'
+        WHERE lower(name) LIKE 'creativos%';
+
+      UPDATE agent_flows SET source_extension_id = COALESCE((
+          SELECT a.source_extension_id FROM agents a
+           WHERE a.flow_id = agent_flows.id AND a.source_extension_id <> '' LIMIT 1), '')
+        WHERE length(id) <> 36;
+
+      UPDATE agent_flows SET repo_isolation = 'host'
+        WHERE EXISTS (
+          SELECT 1 FROM agents a
+           WHERE a.flow_id = agent_flows.id AND a.variables LIKE '%"__sandbox__":false%');
+    `,
+  },
+  {
     // The agents dashboard channel is re-queried every 15 seconds, and
     // agent_runs gains a row per scheduled poll, each with a goal embedding.
     // Without these, runs-today, recent runs, tokens, runs-by-trigger and

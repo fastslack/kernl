@@ -25,6 +25,11 @@ export interface CameraTweenOpts {
   tag?: string;
 }
 
+function prefersReducedMotion(): boolean {
+  if (typeof window === 'undefined') return false;
+  return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
 /**
  * Create a camera-tween ticker.
  *
@@ -37,13 +42,27 @@ export function cameraTween(
   controls: any,
   opts: CameraTweenOpts,
 ): Ticker {
+  const tag = opts.tag ?? 'camera-tween';
+
+  // prefers-reduced-motion: the camera jumps — target and position are set
+  // now, and the ticker finishes on its first frame without easing.
+  if (prefersReducedMotion()) {
+    controls.target.x = opts.target.x;
+    controls.target.y = opts.target.y;
+    controls.target.z = opts.target.z;
+    camera.position.x = opts.position.x;
+    camera.position.y = opts.position.y;
+    camera.position.z = opts.position.z;
+    return { tag, update: () => true };
+  }
+
   const convergeRate = opts.convergeRate ?? 3;
   const targetDamping = opts.targetDamping ?? 0.15;
   const positionDamping = opts.positionDamping ?? 0.10;
   let progress = 0;
 
   return {
-    tag: opts.tag ?? 'camera-tween',
+    tag,
     update(deltaSec: number): boolean {
       progress += deltaSec * convergeRate;
       const t = Math.min(progress, 1);
