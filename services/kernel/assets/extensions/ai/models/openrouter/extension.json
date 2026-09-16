@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.openrouter",
+  "slug": "openrouter",
+  "name": "OpenRouter",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "One key for hundreds of hosted models.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/openrouter.svg",
+  "permissions": ["network"],
+  "built_in": true
+}

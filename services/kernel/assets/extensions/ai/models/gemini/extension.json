@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.gemini",
+  "slug": "gemini",
+  "name": "Google Gemini",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "Google Gemini models through the OpenAI-compatible API.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/google.svg",
+  "permissions": ["network"],
+  "built_in": true
+}
