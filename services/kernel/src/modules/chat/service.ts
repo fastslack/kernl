@@ -17,6 +17,7 @@ import { estimateTokens } from "./memory-decay.js";
 import {
   createChatProviders,
   resolveProvider,
+  resolveProviderFor,
   type ChatLlmProvider,
 } from "../../core/llm/chat-adapters.js";
 import { KnowledgeService } from "./knowledge-service.js";
@@ -679,11 +680,18 @@ export class ChatService {
 
     // 6. Resolve LLM provider — primary + chain
     const providerName = episode.llm_provider || this.defaultProvider;
-    const provider = resolveProvider(this.providers, providerName);
-    if (!provider) {
+    const resolved = resolveProviderFor(this.providers, providerName, episode.llm_model || "");
+    if (!resolved) {
       throw new Error(
         `No available LLM provider (requested: ${providerName})`,
       );
+    }
+    const provider = resolved.provider;
+    // Empty when someone else had to stand in: the substitute answers with its
+    // own default rather than a model name that belongs to another provider.
+    const llmModel = resolved.model;
+    if (resolved.substituted) {
+      log.warn(`Chat: "${providerName}" was unusable — "${provider.name}" answers instead, with its own model.`);
     }
     // Chain set in /models (config.agents.defaultModelChain) is the global
     // fallback ladder. Chat reuses it: if the primary errors, walk through
@@ -734,7 +742,7 @@ export class ChatService {
         : systemText;
 
       const completion = await this._chatCompletionWithChain(
-        { provider, model: episode.llm_model || "" },
+        { provider, model: llmModel },
         fallbackChain,
         llmMessages,
         {
@@ -806,7 +814,7 @@ export class ChatService {
       try {
         const synthesisSystem = `${systemText}\n\n[BUDGET EXHAUSTED] You have used all ${MAX_TOOL_ITERATIONS} tool-use turns. You MUST now write your final answer using only the tool results already in this conversation. Do NOT request more tools — they are disabled. Be direct and concise.`;
         const synthesis = await this._chatCompletionWithChain(
-          { provider, model: episode.llm_model || "" },
+          { provider, model: llmModel },
           fallbackChain,
           llmMessages,
           { system: synthesisSystem, tools: undefined },

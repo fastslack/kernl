@@ -1111,6 +1111,27 @@ export function clearProviderExhausted(providerName?: string): number {
  * LM Studio is intentionally last in FALLBACK_ORDER — it requires the
  * desktop app to be running and reachable from the kernel's namespace.
  */
+/**
+ * Resolve a provider together with the model it is allowed to be asked for.
+ *
+ * A model name belongs to exactly one provider, so it must never travel with a
+ * substitution. It did: with NVIDIA in a backoff window, the chat resolved to
+ * MiniMax and still sent NVIDIA's model, and MiniMax answered "invalid params,
+ * unknown model" — which the UI then showed as NVIDIA's reply. When the
+ * provider that comes back is not the one asked for, the model is dropped and
+ * the substitute answers with its own default.
+ */
+export function resolveProviderFor(
+  providers: Map<string, ChatLlmProvider>,
+  requested: string,
+  model: string,
+): { provider: ChatLlmProvider; model: string; substituted: boolean } | null {
+  const provider = resolveProvider(providers, requested);
+  if (!provider) return null;
+  const substituted = providers.get(requested) !== provider;
+  return { provider, model: substituted ? "" : model, substituted };
+}
+
 export function resolveProvider(
   providers: Map<string, ChatLlmProvider>,
   requested: string,

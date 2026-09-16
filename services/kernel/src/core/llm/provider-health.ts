@@ -69,7 +69,11 @@ const AUTO_UNPIN_THRESHOLD = 3;
 
 // ── Failure kinds ───────────────────────────────────────────────────────
 
-export type FailureKind = "rate-limit" | "exhausted" | "transient" | "auth";
+/**
+ * `model` is the odd one out: it is a fault in the request, not in the
+ * provider, so it is recorded for visibility and never blocks anything.
+ */
+export type FailureKind = "rate-limit" | "exhausted" | "transient" | "auth" | "model";
 
 // ── In-memory state ─────────────────────────────────────────────────────
 
@@ -253,6 +257,13 @@ export function recordFailure(
   retryAfterMs?: number,
 ): void {
   const e = get(slug);
+  // A model this provider does not serve is the caller's mistake. Counting it
+  // as a strike blocked a provider that was answering fine, and the next call
+  // went somewhere the user never chose.
+  if (kind === "model") {
+    e.lastFailureKind = kind;
+    return;
+  }
   e.failures += 1;
   e.lastFailureKind = kind;
 
@@ -462,6 +473,13 @@ export function _resetForTests(): void {
  */
 export function classifyError(err: unknown): FailureKind {
   const msg = err instanceof Error ? err.message : String(err);
+  // A model the provider does not serve says nothing about the provider. Left
+  // as "transient" it counted as a strike: three sends of one stale model name
+  // put a perfectly healthy NVIDIA into a backoff window, and the chat then
+  // answered through whatever provider the fallback found.
+  if (/unknown model|model[_ ]not[_ ]found|no such model|invalid model|does not exist|not a valid model|model .{0,40}(is )?(not found|not available|unavailable|not supported)/i.test(msg)) {
+    return "model";
+  }
   // "exhausted" must be checked BEFORE the auth check below — xAI returns
   // HTTP 403 for both "bad key" and "out of credits" and uses the *body*
   // to disambiguate (e.g. "Your team … has either used all available
