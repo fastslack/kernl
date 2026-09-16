@@ -163,3 +163,15 @@ CORS_ALLOWED_ORIGINS=http://localhost:3086
 - [CONTRIBUTING.md](CONTRIBUTING.md) -- How to contribute
 - [SECURITY.md](SECURITY.md) -- Security measures and vulnerability reporting
 - [PRIVACY.md](PRIVACY.md) -- Data handling and privacy policy
+
+## Connect your AI
+
+Kernl needs one LLM for chat and agents. The first-run wizard asks for it; later it lives in **Settings → AI**.
+
+1. Pick a provider. **NVIDIA** is free and recommended: create an account at build.nvidia.com, click "Get API Key", paste it.
+2. Kernl tests the key with a real tool call before saving anything. If it fails, the message says why and what to do.
+3. Every provider you connect becomes a backup for the previous one. Reorder them from Settings → AI.
+
+Local models: start Ollama or LM Studio on this machine and click **Detect**. In Docker, Kernl reaches them through `host.docker.internal`.
+
+Claude Code (Claude Pro/Max): sign in with the official `claude` CLI using the command Settings → AI shows, then click **Detect**. Kernl never asks for or stores your Claude token.

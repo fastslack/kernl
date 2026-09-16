@@ -4,6 +4,24 @@ import type { IncomingMessage } from "node:http";
 export const AUTH_EXEMPT_PATHS = ["/api/health", "/api/metrics", "/api/auth/verify"];
 
 /**
+ * Prefixes served to anyone, matched on the path.
+ *
+ * Brand logos are bundled SVGs, byte-identical on every install, and the route
+ * that serves them already refuses any name that could escape its directory —
+ * so there is nothing here to protect. They have to be readable without a
+ * token because an `<img src>` cannot send an Authorization header: behind the
+ * gate, every provider logo in the AI screens renders as a broken image and
+ * nothing says why. The `?auth=` fallback below would also work, but it would
+ * put the static token into a dozen image URLs per page, and so into history
+ * and logs, to guard a picture of a logo.
+ */
+export const AUTH_EXEMPT_PREFIXES = ["/api/extensions/brand/"];
+
+export function isAuthExemptPath(pathname: string): boolean {
+  return AUTH_EXEMPT_PATHS.includes(pathname) || AUTH_EXEMPT_PREFIXES.some((p) => pathname.startsWith(p));
+}
+
+/**
  * Paths that carry their own authentication and must bypass the kernel token
  * check — otherwise the credential they *do* present can never be evaluated.
  *

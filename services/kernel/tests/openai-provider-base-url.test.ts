@@ -6,8 +6,7 @@
  * the providers page as a permanently red row.
  */
 import { test, expect, afterEach } from "bun:test";
-import { createOpenAiProvider } from "../src/core/llm/providers/openai-provider.js";
-import { createGrokProvider } from "../src/core/llm/providers/grok-provider.js";
+import { createCatalogProvider } from "../src/core/llm/providers/openai-compatible-provider.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
@@ -29,16 +28,16 @@ async function urlUsedBy(provider: any, config: Record<string, unknown>): Promis
 }
 
 test("openai posts to its default base URL when the form left it empty", async () => {
-  const url = await urlUsedBy(createOpenAiProvider(), { apiKey: "sk-test", baseUrl: "", defaultModel: "" });
+  const url = await urlUsedBy(createCatalogProvider("openai")(), { apiKey: "sk-test", baseUrl: "", defaultModel: "" });
   expect(url).toBe("https://api.openai.com/v1/chat/completions");
 });
 
 test("openai honours a custom base URL", async () => {
-  const url = await urlUsedBy(createOpenAiProvider(), { apiKey: "sk-test", baseUrl: "http://localhost:8080/v1", defaultModel: "gpt-4o-mini" });
+  const url = await urlUsedBy(createCatalogProvider("openai")(), { apiKey: "sk-test", baseUrl: "http://localhost:8080/v1", defaultModel: "gpt-4o-mini" });
   expect(url).toBe("http://localhost:8080/v1/chat/completions");
 });
 
 test("grok posts to the xAI endpoint", async () => {
-  const url = await urlUsedBy(createGrokProvider(), { apiKey: "xai-test", defaultModel: "grok-4-fast-non-reasoning" });
+  const url = await urlUsedBy(createCatalogProvider("grok")(), { apiKey: "xai-test", defaultModel: "grok-4-fast-non-reasoning" });
   expect(url).toBe("https://api.x.ai/v1/chat/completions");
 });

@@ -76,10 +76,10 @@ reads the newest release and picks the build for your machine. On Windows, take 
 → Dashboard at **http://localhost:3086** · MCP endpoint at **http://localhost:3086/mcp**
 
 Nothing to sign up for and no host paths to set. First run walks you through four
-steps, and one of them is picking an LLM — a cloud key, or a local model through LM
-Studio or Ollama if you would rather nothing left the machine at all. The kernel waits
-for that choice before serving the rest of the API, so the dashboard cannot hand you a
-screen whose every button fails.
+steps, and one of them is connecting an AI — NVIDIA is free by default, or pick from
+eleven others, including local models through Ollama or LM Studio if you'd rather
+nothing left the machine at all. Chat and agents stay off until you connect one; the
+rest of the dashboard works either way.
 
 <details>
 <summary><b>Prefer Docker?</b> (adds the bundled Neo4j graph brain)</summary>
@@ -116,7 +116,7 @@ Everything runs on **your machine**. Your data never leaves the box.
 
 <sub>For the depth, once you want a number: **103 tools** live on a fresh install, rising past **290** as you enable more of the **71 bundled modules**.</sub>
 
-<div align="center"><sub><b>WORKS WITH</b></sub><br>Claude · Cursor · OpenAI · Grok · LM Studio · <b>any MCP client</b></div>
+<div align="center"><sub><b>WORKS WITH</b></sub><br>Claude · Cursor · OpenAI · NVIDIA · Gemini · Ollama · <b>any MCP client</b></div>
 
 ## 💬 Talk to your life
 
@@ -139,7 +139,7 @@ Real data. Real actions. On your machine — not in someone else's cloud.
 | 🔒 **Private by default** | Self-hosted. Your tasks, email and finances never touch someone else's cloud. |
 | 🧠 **Real memory** | A graph-backed brain (Neo4j + GDS) links every module, so your AI finally *remembers*. |
 | 🤖 **Agents that act** | Not a chatbot — autonomous *offices* that work in loops and use your tools. |
-| 🔌 **Any LLM, any client** | Claude, OpenAI, Grok, or a local model via LM Studio. Any MCP client connects. |
+| 🔌 **Any LLM, any client** | NVIDIA (free), Gemini, Groq, OpenRouter, Anthropic, OpenAI, DeepSeek, Grok, MiniMax, Claude Code, or a local model via Ollama or LM Studio. Any MCP client connects. |
 | 🧩 **Endlessly extensible** | Everything is a module. Ship your own as a portable `.kernl` package. |
 | 📊 **103 tools installed, 71 modules bundled** | One surface for your whole life — not fifteen disconnected apps. Enable everything and you pass 290 tools. |
 
@@ -160,7 +160,7 @@ Real data. Real actions. On your machine — not in someone else's cloud.
 **A fleet of agents** — cooperating agents with chains, schedules and their own workspaces. Package a whole team as an installable `.kernl` *office*, and watch them work in a live **3D office view**.
 
 **Pluggable everything**
-- **LLM providers** — Claude, OpenAI, Grok, LM Studio (local), and more via extensions.
+- **LLM providers** — 12 built in, connected from Settings → AI; keys stored encrypted.
 - **Sandbox drivers** — run agent code in Docker, CubeSandbox, or your own driver.
 - **Channels** — WhatsApp, Telegram, Slack, email, Mattermost and webchat on one notification bus.
 

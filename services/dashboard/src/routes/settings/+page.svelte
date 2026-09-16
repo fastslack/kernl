@@ -5,12 +5,7 @@
    * Data sources:
    *   GET /api/settings/catalog          → core settings + extension sections (generic renderer)
    *   PUT /api/settings                  → batch save of dirty catalog keys (per card)
-   *   GET /api/config/ai                 → brains defaults + fallback chain
-   *   POST /api/config/ai                → save brains / chain
-   *   GET /api/config/ai/providers       → registry-driven provider rows (schema + masked values)
-   *   GET/PUT /api/llm-providers/:slug/config → per-provider config save (raw merge, hot reload)
-   *   GET /api/config/ai/test            → connectivity probe for provider rows
-   *   GET /api/config/ai/lm-models       → LM Studio model discovery
+   *   /api/llm/catalog (+ connect/test/detect) → Settings → AI (AiConnections)
    *   /api/channels*                     → runtime channels + WhatsApp QR pairing (ported)
    *   /api/registry/apis, /api/registry/rss → integration summaries
    */
@@ -22,14 +17,12 @@
   import Field from '$lib/components/settings/Field.svelte';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import SelectField from '$lib/components/settings/SelectField.svelte';
-  import SearchableSelect from '$lib/components/settings/SearchableSelect.svelte';
-  import { providerTestId } from '$lib/llm-models.js';
-  import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
   import StatusPill from '$lib/components/settings/StatusPill.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
+  import AiConnections from '$lib/components/llm/AiConnections.svelte';
   import {
     updateInfo, checking, updating, updateError, updateHint, updateProgress,
     canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
@@ -57,29 +50,6 @@
     fields: CatalogItem[];
   }
   interface GenericCard { id: string; title: string; desc: string; items: CatalogItem[] }
-  interface ProviderRow {
-    slug: string;
-    name: string;
-    source: string;
-    ready: boolean;
-    error?: string;
-    /** The API has always sent this and the page ignored it, which is how a
-     *  provider that cannot run a single agent displayed a green READY. */
-    capabilities?: { tools?: boolean };
-    schema: Array<{ key: string; label: string; type: string; required?: boolean; placeholder?: string }>;
-    values: Record<string, string>;
-  }
-  interface TestResult {
-    ok: boolean; latencyMs?: number; models?: string[]; error?: string;
-    /** A real completion came back. */
-    answered?: boolean;
-    /** It executed a tool call — the thing an agent actually needs. */
-    toolCall?: boolean;
-    /** Capability tags by model id — vision / reasoning / fast / long context,
-     *  computed by the kernel and, until now, never sent to this page. */
-    traits?: Record<string, Record<string, boolean>>;
-  }
-  interface ChainLink { provider: string; model: string }
 
   // ── Load state ───────────────────────────────
   let loading = true;
@@ -88,8 +58,6 @@
 
   let catalog: CatalogItem[] = [];
   let extSections: ExtSection[] = [];
-  let aiConfig: any = null;
-  let providerRows: ProviderRow[] = [];
   let channels: any[] = [];
   let apiCount: number | null = null;
   let rssCount: number | null = null;
@@ -114,11 +82,6 @@
     return r.json();
   }
   const jsonHeaders = { 'Content-Type': 'application/json' };
-
-  // Claude Code is the one provider whose credential is a login, not a key —
-  // there is no field to type into, so it gets a dialog of its own.
-  let ccAuthOpen = false;
-
 
   // ── Locale helpers ───────────────────────────
   function resolveText(txt: unknown, loc: string): string {
@@ -196,8 +159,6 @@
   async function loadAll() {
     const tasks: Array<[string, Promise<any>]> = [
       ['catalog', jfetch('/api/settings/catalog')],
-      ['ai', rpcOrCall('config.ai.get', {}, () => jfetch('/api/config/ai'))],
-      ['providers', jfetch('/api/config/ai/providers')],
       ['channels', rpcOrCall('channels.list', {}, () => jfetch('/api/channels'))],
       ['apis', jfetch('/api/registry/apis')],
       ['rss', jfetch('/api/registry/rss')],
@@ -215,8 +176,6 @@
       const val = res.value;
       switch (key) {
         case 'catalog': applyCatalog(val); break;
-        case 'ai': aiConfig = val; initBrains(val); break;
-        case 'providers': providerRows = val.providers ?? []; initProvEdits(); break;
         case 'channels': channels = val.channels ?? val ?? []; break;
         case 'apis': apiCount = (val.apis ?? []).length; break;
         case 'rss': rssCount = (val.feeds ?? []).length; break;
@@ -267,14 +226,11 @@
     } else {
       stopWaPolling();
     }
-    if (sec === 'ai') ensureAiExtras();
   }
 
   // ── Category → section mapping ───────────────
-  // Keys owned by the rich AI cards (Brains + Providers) — hidden from the
-  // generic renderer to avoid double editing surfaces.
-  const AI_RICH_KEYS =
-    /^(ANTHROPIC_API_KEY|OPENAI_API_KEY|GROK_API_KEY|NVIDIA_API_KEY|LMSTUDIO_(BASE_URL|API_KEY|MODEL)|OLLAMA_|MINIMAX_|CHAT_DEFAULT_(PROVIDER|MODEL)|AGENTS_DEFAULT_(PROVIDER|MODEL))/;
+  // Keys the AI connections card owns — hidden from the generic renderer.
+  const AI_RICH_KEYS = /^(LMSTUDIO_(BASE_URL|API_KEY)|MINIMAX_)/;
 
   function sectionForItem(it: CatalogItem): string {
     if (it.extension) {
@@ -437,222 +393,9 @@
     });
   }
 
-  // ═══════════════════════════════════════════════
-  // AI — Brains
-  // ═══════════════════════════════════════════════
-  let chatProvider = '';
-  let chatModel = '';
-  let agentsProvider = '';
-  let agentsModel = '';
-  let chainLinks: ChainLink[] = [];
-  let brainsInit = { chatProvider: '', chatModel: '', agentsProvider: '', agentsModel: '', chain: '' };
-  let brainsSaving = false;
-  let brainsMsg = '';
-  let brainsErr = '';
-
-  function initBrains(cfg: any) {
-    const d = cfg?.defaults ?? {};
-    chatProvider = d.chatProvider ?? '';
-    chatModel = d.chatModel ?? '';
-    agentsProvider = d.agentsProvider ?? '';
-    agentsModel = d.agentsModel ?? '';
-    chainLinks = (d.agentsDefaultModelChain ?? []).map((l: any) => ({ provider: l.provider ?? '', model: l.model ?? '' }));
-    brainsInit = {
-      chatProvider, chatModel, agentsProvider, agentsModel,
-      chain: JSON.stringify(chainLinks),
-    };
-  }
-
-  $: brainsDirty =
-    chatProvider !== brainsInit.chatProvider ||
-    chatModel !== brainsInit.chatModel ||
-    agentsProvider !== brainsInit.agentsProvider ||
-    agentsModel !== brainsInit.agentsModel ||
-    JSON.stringify(chainLinks) !== brainsInit.chain;
-
-  async function saveBrains() {
-    brainsSaving = true; brainsErr = ''; brainsMsg = '';
-    try {
-      const body = {
-        chatProvider, chatModel, agentsProvider, agentsModel,
-        agentsDefaultModelChain: chainLinks.filter((l) => l.provider || l.model),
-      };
-      const res = await rpcOrCall('config.ai.save', body, () =>
-        jfetch('/api/config/ai', { method: 'POST', headers: jsonHeaders, body: JSON.stringify(body) }));
-      if ((res as any)?.error) throw new Error((res as any).error);
-      aiConfig = await jfetch('/api/config/ai').catch(() => aiConfig);
-      initBrains(aiConfig);
-      brainsMsg = $t('settings.card.saved');
-      setTimeout(() => (brainsMsg = ''), 2500);
-    } catch (e: any) {
-      brainsErr = e.message;
-    } finally {
-      brainsSaving = false;
-    }
-  }
-
-  function chainAdd() {
-    chainLinks = [...chainLinks, { provider: providerRows[0]?.slug ?? '', model: '' }];
-  }
-  function chainRemove(i: number) {
-    chainLinks = chainLinks.filter((_, idx) => idx !== i);
-  }
-  function chainMove(i: number, dir: -1 | 1) {
-    const j = i + dir;
-    if (j < 0 || j >= chainLinks.length) return;
-    const next = [...chainLinks];
-    [next[i], next[j]] = [next[j], next[i]];
-    chainLinks = next;
-  }
-
-  // ── AI extras: connectivity tests + LM models ─
-  let testResults: Record<string, TestResult> = {};
-  let testing = false;
-  let testsRan = false;
-  let lmModels: string[] = [];
-  let lmLoaded = false;
-
-  async function ensureAiExtras() {
-    if (!testsRan) runProviderTests();
-    if (!lmLoaded) fetchLmModels();
-  }
-  async function runProviderTests() {
-    testing = true; testsRan = true;
-    try {
-      const data = await rpcOrCall('config.ai.test', {}, () => jfetch('/api/config/ai/test'));
-      if (data) testResults = data as Record<string, TestResult>;
-    } catch { /* best effort */ }
-    testing = false;
-  }
-  async function fetchLmModels() {
-    lmLoaded = true;
-    try {
-      const data = await jfetch('/api/config/ai/lm-models');
-      lmModels = (data.models ?? []).filter((m: string) => !m.includes('embed'));
-    } catch { /* best effort */ }
-  }
-
-  function modelOptions(
-    provider: string,
-    tests: Record<string, TestResult>,
-    lm: string[],
-  ): string[] {
-    if (!provider) return [];
-    if (provider === 'lmstudio') {
-      return lm.length ? lm : (tests.lmstudio?.models ?? []);
-    }
-    // providerTestId bridges the naming conventions — aiConfig stores
-    // `claude_code`, the probe files that provider under `claude-code`, and
-    // a miss here silently degrades the dropdown to a free-text box.
-    return tests[providerTestId(provider)]?.models ?? [];
-  }
-
-  /**
-   * The brains card calls this from the markup. It has to be a reactive
-   * *value* rather than a plain function: Svelte only re-runs a template
-   * expression when something the expression itself names changes, and
-   * a bare `modelOptions(chatProvider)` names neither `testResults` nor `lmModels`.
-   * So the card decided "no catalogue → render a text box" on first paint, and
-   * nothing re-rendered it when the probe came back seconds later. Rebinding
-   * the closure here is what re-runs every call site, the ones inside the
-   * fallback-chain `{#each}` included.
-   */
-  $: modelOptsFor = ((tests, lm) => (provider: string) => modelOptions(provider, tests, lm))(
-    testResults,
-    lmModels,
-  );
-  /** Same reactivity trick, for the badges. */
-  $: modelTraitsFor = ((tests) => (provider: string) =>
-    tests[providerTestId(provider)]?.traits ?? {})(testResults);
-  $: providerOptions = providerRows.map((p) => ({ value: p.slug, label: p.name || p.slug }));
-
-  // ═══════════════════════════════════════════════
-  // AI — Provider rows
-  // ═══════════════════════════════════════════════
-  let provEdits: Record<string, Record<string, string>> = {};
-  let provState: Record<string, { saving?: boolean; msg?: string; err?: string }> = {};
-
-  function initProvEdits() {
-    const edits: Record<string, Record<string, string>> = {};
-    for (const row of providerRows) {
-      const e: Record<string, string> = {};
-      for (const f of row.schema ?? []) {
-        e[f.key] = f.type === 'password' ? '' : (row.values?.[f.key] ?? '');
-      }
-      edits[row.slug] = e;
-    }
-    provEdits = edits;
-  }
-
-  function provRowDirty(row: ProviderRow, edits: Record<string, Record<string, string>>): boolean {
-    const e = edits[row.slug];
-    if (!e) return false;
-    return (row.schema ?? []).some((f) =>
-      f.type === 'password' ? (e[f.key] ?? '') !== '' : (e[f.key] ?? '') !== (row.values?.[f.key] ?? ''));
-  }
-
-  function hasKey(row: ProviderRow): boolean {
-    if (row.ready) return true;
-    return (row.schema ?? []).some((f) => f.type === 'password' && (row.values?.[f.key] ?? '') !== '' && row.values[f.key] !== '(not set)');
-  }
-
-  /**
-   * Can this provider run the tool loop a native-executor agent needs?
-   *
-   * A finished test is evidence and wins; the declared capability is only the
-   * prediction to fall back on before anyone pressed Test.
-   */
-  function runsTools(row: ProviderRow, tests: Record<string, TestResult> = testResults): boolean {
-    const tr = tests[providerTestId(row.slug)];
-    if (tr?.ok && tr.toolCall !== undefined) return tr.toolCall;
-    return row.capabilities?.tools !== false;
-  }
-
-  /**
-   * Whether the provider ever claimed to expose tool calling.
-   *
-   * This separates two things the badge used to say with one word. A provider
-   * that declares `tools: false` is never handed a tool by the probe — see
-   * `test-providers.ts`, which asks it a plain question instead and then
-   * writes `toolCall: false` because nothing was tried, not because anything
-   * failed. Claude Code is the case: its SDK runs its own agent loop and does
-   * not surface raw tool calls to `chatCompletion`, so it cannot drive a
-   * native agent while running agents perfectly well through the
-   * `claude_code` executor. Reporting that identically to a provider that
-   * promised tools and then did not produce one reads as a fault, and it sent
-   * someone looking for a break that was not there.
-   */
-  function declaresTools(row: ProviderRow): boolean {
-    return row.capabilities?.tools !== false;
-  }
-
-  // ── Can an agent actually run? ──────────────────────────────
-  // The kernel's own verdict, from a real tool call. Read on load; the button
-  // re-probes on demand because it spends a call.
-  interface Readiness { ok: boolean; reason: string; provider?: string; detail?: string }
-  let readiness: Readiness | null = null;
-  let readinessBusy = false;
-
-  /**
-   * Which provider's form is open.
-   *
-   * Seven providers stacked full-height turned the one screen you go to when
-   * something is broken into a scroll. The tab strip keeps every provider's
-   * status visible at once — that is what you scan for — and only the row you
-   * are actually editing gets expanded.
-   */
-  /**
-   * Card-level tabs, so a section is one screen instead of a scroll.
-   *
-   * The rich cards are hand-written per section, the rest come from the
-   * catalog, so the strip is built from both. Declared here rather than read
-   * off the DOM because the tab has to exist before its card renders — only
-   * one of them is in the tree at a time.
-   */
   $: richCards = {
     ai: [
-      { id: 'brains', title: $t('settings.ai.brains_title') },
-      { id: 'providers', title: $t('settings.ai.providers_title') },
+      { id: 'providers', title: $t('llm.connections') },
     ],
     channels: [
       { id: 'channels-runtime', title: $t('settings.channels.runtime_title') },
@@ -720,136 +463,6 @@
   /** Search jumps to a field; open the card holding it or the jump lands nowhere. */
   function revealCard(id: string): void {
     if (cardTabs.some((t) => t.id === id)) activeCard = id;
-  }
-
-  let provTab = '';
-  $: if (!provTab && providerRows.length) {
-    // Open on something worth looking at: a provider that is live, else the
-    // first one in the list.
-    provTab = (providerRows.find((r) => r.ready) ?? providerRows[0]).slug;
-  }
-
-  async function loadReadiness(): Promise<void> {
-    try {
-      const r = await fetch('/api/llm/readiness');
-      readiness = r.ok ? await r.json() : null;
-    } catch { readiness = null; }
-  }
-
-  async function checkReadiness(): Promise<void> {
-    readinessBusy = true;
-    try {
-      const r = await fetch('/api/llm/readiness/recheck', { method: 'POST' });
-      if (r.ok) readiness = await r.json();
-    } catch { /* leave the previous verdict rather than blank the banner */ }
-    finally { readinessBusy = false; }
-  }
-
-  function rowStatus(row: ProviderRow, tests: Record<string, TestResult>, isTesting: boolean):
-    { status: 'ok' | 'warn' | 'error' | 'neutral'; label: string } {
-    const tr = tests[providerTestId(row.slug)];
-    if (isTesting && !tr) return { status: 'neutral', label: '…' };
-    // Reachable and still unable to drive a native agent — but say WHICH of
-    // the two reasons. By design (Claude Code: its SDK owns the tool loop) is
-    // a shape, not a fault, and it still runs agents under the claude_code
-    // executor. A provider that claimed tools and produced none is the fault.
-    if (tr?.ok && !runsTools(row, tests)) {
-      return declaresTools(row)
-        ? { status: 'warn', label: $t('settings.ai.no_tools') }
-        : { status: 'neutral', label: $t('settings.ai.tools_via_sdk') };
-    }
-    if (tr?.ok) return { status: 'ok', label: $t('settings.ai.ready') };
-    if (tr && !tr.ok && hasKey(row)) return { status: 'error', label: $t('settings.ai.error') };
-    // Never configured is not broken. This branch used to sit below `row.error`,
-    // so every provider you had simply not set up glowed red as a failure.
-    if (!hasKey(row)) return { status: 'neutral', label: $t('settings.ai.no_key') };
-    if (row.error) return { status: 'error', label: $t('settings.ai.error') };
-    if (!runsTools(row, tests)) {
-      return declaresTools(row)
-        ? { status: 'warn', label: $t('settings.ai.no_tools') }
-        : { status: 'neutral', label: $t('settings.ai.tools_via_sdk') };
-    }
-    return { status: 'warn', label: $t('settings.ai.configured') };
-  }
-
-  /**
-   * A schema field is a model picker by naming convention: every provider that
-   * exposes a model choice calls it `defaultModel` (claude, openai, grok,
-   * nvidia, minimax, claude-code). The list is dynamic per key, so it can't
-   * live in the backend ConfigField schema — the UI resolves it at render.
-   */
-  const isModelField = (key: string) => key === 'defaultModel';
-
-  /**
-   * slug → options for that row's model dropdown. Same source the chat/agents/
-   * chain dropdowns use (the probe's `testResults`, already fetched), so no
-   * extra requests and one consistent list across the page.
-   *
-   * Reactive on purpose, and it reads `testResults`/`lmModels` DIRECTLY: a plain
-   * helper called as `f(row.slug)` from the markup would only re-run when
-   * `row.slug` changed, so a probe finishing in the background would never
-   * repaint the dropdown. Touching them here is what registers the dependency.
-   *
-   * The empty option is "auto" — an empty `defaultModel` has always meant "let
-   * the provider use its built-in default", and a strict dropdown without it
-   * would take away the ability to go back.
-   */
-  $: providerModelOpts = Object.fromEntries(
-    providerRows.map((row) => {
-      const f = (row.schema ?? []).find((x) => isModelField(x.key));
-      if (!f) return [row.slug, []];
-      const models = row.slug === 'lmstudio'
-        ? (lmModels.length ? lmModels : (testResults.lmstudio?.models ?? []))
-        : (testResults[providerTestId(row.slug)]?.models ?? []);
-      if (!models.length) return [row.slug, []];
-      const auto = f.placeholder ? `${$t('settings.ai.model_auto')} — ${f.placeholder}` : $t('settings.ai.model_auto');
-      return [row.slug, [{ value: '', label: auto }, ...models.map((m) => ({ value: m, label: m }))]];
-    })
-  ) as Record<string, Array<{ value: string; label: string }>>;
-
-  /**
-   * Per-row "Test". The probe (`/api/config/ai/test`) reads the SAVED registry
-   * config — it never sees what's typed in the form. Testing a freshly pasted
-   * key without persisting it re-reported the old (usually empty) state, so the
-   * pill never moved and the button looked dead. Save first when dirty.
-   */
-  async function testProviderRow(row: ProviderRow) {
-    if (provRowDirty(row, provEdits)) await saveProviderRow(row); // saves, then probes
-    else await runProviderTests();
-  }
-
-  async function saveProviderRow(row: ProviderRow) {
-    const edits = provEdits[row.slug] ?? {};
-    provState = { ...provState, [row.slug]: { saving: true } };
-    try {
-      // PUT replaces settings_json wholesale → merge over the raw config so
-      // untouched secrets survive (never send masked strings back).
-      const cur = await jfetch(`/api/llm-providers/${encodeURIComponent(row.slug)}/config`);
-      const merged: Record<string, unknown> = { ...(cur.config ?? {}) };
-      for (const f of row.schema ?? []) {
-        const v = edits[f.key] ?? '';
-        if (f.type === 'password') {
-          if (v !== '') merged[f.key] = v; // only overwrite freshly-typed secrets
-        } else {
-          merged[f.key] = v;
-        }
-      }
-      const res = await jfetch(`/api/llm-providers/${encodeURIComponent(row.slug)}/config`, {
-        method: 'PUT', headers: jsonHeaders, body: JSON.stringify({ config: merged }),
-      });
-      if (res.error) throw new Error(res.error);
-      // Refresh rows (new masked values) + re-probe connectivity
-      try {
-        const fresh = await jfetch('/api/config/ai/providers');
-        providerRows = fresh.providers ?? providerRows;
-        initProvEdits();
-      } catch { /* keep local state */ }
-      runProviderTests();
-      provState = { ...provState, [row.slug]: { msg: $t('settings.card.saved') } };
-      setTimeout(() => { provState = { ...provState, [row.slug]: {} }; }, 2500);
-    } catch (e: any) {
-      provState = { ...provState, [row.slug]: { err: e.message } };
-    }
   }
 
   // ═══════════════════════════════════════════════
@@ -1014,10 +627,7 @@
     if (loadErrors.page) return loadErrors.page;
     const src: string[] = [];
     if (loadErrors.catalog) src.push('catalog');
-    if (activeSection === 'ai') {
-      if (loadErrors.ai) src.push('ai');
-      if (loadErrors.providers) src.push('providers');
-    } else if (activeSection === 'channels') {
+    if (activeSection === 'channels') {
       if (loadErrors.channels) src.push('channels');
     } else if (activeSection === 'integrations') {
       if (loadErrors.apis) src.push('api registry');
@@ -1041,9 +651,6 @@
     }
     mounted = true;
     sectionFx(activeSection);
-    // Cached verdict — no call is spent unless the kernel already marked it
-    // stale, so opening Settings stays free.
-    void loadReadiness();
   });
 
   onDestroy(() => {
@@ -1139,216 +746,12 @@
           </div>
         {/if}
 
-        <!-- ═══ AI (rich) ═══ -->
-        {#if activeSection === 'ai' && activeCard === 'brains'}
-          <!-- Brains -->
-          <SettingsCard
-            cardId="brains"
-            title={$t('settings.ai.brains_title')}
-            description={$t('settings.ai.brains_desc')}
-            dirty={brainsDirty}
-            saving={brainsSaving}
-            savedMsg={brainsMsg}
-            error={brainsErr}
-            saveLabel={$t('settings.card.save')}
-            savingLabel={$t('settings.card.saving')}
-            on:save={saveBrains}
-          >
-            <div class="brains">
-              <div class="brain-row">
-                <span class="brain-label">{$t('settings.ai.chat_brain')}</span>
-                <div class="brain-ctrls">
-                  <SelectField bind:value={chatProvider} options={providerOptions} />
-                  {#if modelOptsFor(chatProvider).length}
-                    <SearchableSelect bind:value={chatModel} options={modelOptsFor(chatProvider).map((m) => ({ value: m, label: m }))} traits={modelTraitsFor(chatProvider)} placeholder={$t('settings.ai.search_models')} />
-                  {:else}
-                    <input class="brain-in" type="text" bind:value={chatModel} placeholder={$t('settings.ai.model')} spellcheck="false" />
-                  {/if}
-                </div>
-                <span class="brain-cur">{$t('settings.ai.current')}: {aiConfig?.defaults?.chatProvider ?? '?'} / {aiConfig?.defaults?.chatModel ?? '?'}</span>
-              </div>
-
-              <div class="brain-row">
-                <span class="brain-label">{$t('settings.ai.agents_brain')}</span>
-                <div class="brain-ctrls">
-                  <SelectField bind:value={agentsProvider} options={providerOptions} />
-                  {#if modelOptsFor(agentsProvider).length}
-                    <SearchableSelect bind:value={agentsModel} options={modelOptsFor(agentsProvider).map((m) => ({ value: m, label: m }))} traits={modelTraitsFor(agentsProvider)} placeholder={$t('settings.ai.search_models')} />
-                  {:else}
-                    <input class="brain-in" type="text" bind:value={agentsModel} placeholder={$t('settings.ai.model')} spellcheck="false" />
-                  {/if}
-                </div>
-                <span class="brain-cur">{$t('settings.ai.current')}: {aiConfig?.defaults?.agentsProvider ?? '?'} / {aiConfig?.defaults?.agentsModel ?? '?'}</span>
-              </div>
-
-              <div class="chain">
-                <div class="chain-head">
-                  <span class="brain-label">{$t('settings.ai.fallback_chain')}</span>
-                  <span class="chain-hint">{$t('settings.ai.chain_hint')}</span>
-                  <button class="btn-sm" on:click={chainAdd}>+ {$t('settings.ai.add_link')}</button>
-                </div>
-                {#if chainLinks.length === 0}
-                  <div class="chain-empty">{$t('settings.ai.chain_empty')}</div>
-                {:else}
-                  {#each chainLinks as link, i}
-                    <div class="chain-row">
-                      <span class="chain-idx">{i + 1}</span>
-                      <SelectField bind:value={link.provider} options={providerOptions} />
-                      {#if modelOptsFor(link.provider).length}
-                        <SearchableSelect bind:value={link.model} options={modelOptsFor(link.provider).map((m) => ({ value: m, label: m }))} traits={modelTraitsFor(link.provider)} placeholder={$t('settings.ai.search_models')} />
-                      {:else}
-                        <input class="brain-in" type="text" bind:value={link.model} placeholder={$t('settings.ai.model')} spellcheck="false" />
-                      {/if}
-                      <div class="chain-btns">
-                        <button class="btn-sm" disabled={i === 0} on:click={() => chainMove(i, -1)}>↑</button>
-                        <button class="btn-sm" disabled={i === chainLinks.length - 1} on:click={() => chainMove(i, 1)}>↓</button>
-                        <button class="btn-sm del" on:click={() => chainRemove(i)}>×</button>
-                      </div>
-                    </div>
-                  {/each}
-                {/if}
-              </div>
-            </div>
-          </SettingsCard>
-        {/if}
-
+        <!-- ═══ AI ═══ -->
         {#if activeSection === 'ai' && activeCard === 'providers'}
-          <!-- Providers -->
-          <SettingsCard
-            cardId="providers"
-            title={$t('settings.ai.providers_title')}
-            description={$t('settings.ai.providers_desc')}
-            showFooter={false}
-          >
-            <div slot="header">
-              <button class="btn-sm" disabled={readinessBusy} on:click={checkReadiness}>
-                {readinessBusy ? $t('settings.ai.readiness_checking') : $t('settings.ai.readiness_check')}
-              </button>
-              <button class="btn-sm" disabled={testing} on:click={runProviderTests}>
-                {testing ? $t('settings.ai.testing') : $t('settings.ai.test_all')}
-              </button>
-            </div>
-
-            <!-- The one test that answers the question this page exists for.
-                 "Test all" only proves a provider replies; it passed Claude
-                 Code, which cannot execute a tool call, so every agent failed
-                 while this screen showed green. This runs a real tool call. -->
-            {#if readiness}
-              <div class="readiness" class:ok={readiness.ok && readiness.reason === 'ok'}
-                   class:partial={readiness.ok && readiness.reason !== 'ok'}
-                   class:bad={!readiness.ok}>
-                {#if readiness.reason === 'ok'}
-                  {$t('settings.ai.readiness_ok', { provider: readiness.provider ?? '' })}
-                {:else if readiness.ok}
-                  {$t('settings.ai.readiness_sdk')}
-                {:else}
-                  {$t('settings.ai.readiness_bad', { detail: readiness.detail ?? readiness.reason })}
-                {/if}
-              </div>
-            {/if}
-
-            <!-- Every provider's state on one line each, always visible. The
-                 form for one of them below. -->
-            <div class="prov-tabs" role="tablist">
-              {#each providerRows as row (row.slug)}
-                {@const st = rowStatus(row, testResults, testing)}
-                <button
-                  type="button"
-                  role="tab"
-                  class="prov-tab"
-                  class:active={provTab === row.slug}
-                  aria-selected={provTab === row.slug}
-                  on:click={() => (provTab = row.slug)}
-                >
-                  <span class="prov-tab-name">{row.name || row.slug}</span>
-                  <StatusPill status={st.status} label={st.label} />
-                  {#if provRowDirty(row, provEdits)}
-                    <!-- Unsaved edits must be findable from a tab you are not
-                         currently looking at. -->
-                    <span class="prov-tab-dirty" title="Unsaved changes">●</span>
-                  {/if}
-                </button>
-              {/each}
-            </div>
-
-            <div class="prov-table">
-              {#each providerRows.filter((r) => r.slug === provTab) as row (row.slug)}
-                {@const st = rowStatus(row, testResults, testing)}
-                {@const trow = testResults[providerTestId(row.slug)]}
-                <div class="prov-row">
-                  <div class="prov-id">
-                    <span class="prov-name">{row.name || row.slug}</span>
-                    <span class="prov-slug">{row.slug}</span>
-                    <StatusPill status={st.status} label={st.label} />
-                    {#if trow?.ok && trow.latencyMs != null}
-                      <span class="prov-lat">{trow.latencyMs}ms</span>
-                    {/if}
-                    {#if row.slug === 'claude-code'}
-                      <button class="btn-sm" on:click={() => (ccAuthOpen = true)}>Sign in…</button>
-                    {/if}
-                  </div>
-                  {#if !runsTools(row)}
-                    <!-- Says the quiet part where the operator is looking, and
-                         not only in the pill: this provider passes a
-                         connectivity test and still cannot drive a native
-                         agent. Which sentence depends on whether that is a
-                         fault or the provider's design — see `declaresTools`. -->
-                    <p class="prov-note" class:prov-note-info={!declaresTools(row)}>
-                      {declaresTools(row)
-                        ? $t('settings.ai.agents_need_tools')
-                        : $t('settings.ai.tools_in_sdk_note')}
-                    </p>
-                  {/if}
-                  <div class="prov-fields">
-                    {#each (provEdits[row.slug] ? row.schema ?? [] : []) as f (f.key)}
-                      <div class="prov-field">
-                        <span class="prov-flabel">{f.label || f.key}</span>
-                        {#if f.type === 'password'}
-                          <SecretInput
-                            bind:value={provEdits[row.slug][f.key]}
-                            masked={row.values?.[f.key] ?? ''}
-                            configured={(row.values?.[f.key] ?? '') !== ''}
-                            placeholder={f.placeholder ?? ''}
-                          />
-                        {:else if isModelField(f.key)}
-                          {@const opts = providerModelOpts[row.slug] ?? []}
-                          {#if opts.length}
-                            <SearchableSelect bind:value={provEdits[row.slug][f.key]} options={opts} placeholder={$t('settings.ai.search_models')} />
-                          {:else}
-                            <!-- No catalog yet (no key, or the probe hasn't run). Fall back to
-                                 free text so the row stays configurable instead of dead. -->
-                            <input class="prov-in" type="text" bind:value={provEdits[row.slug][f.key]} placeholder={f.placeholder ?? ''} spellcheck="false" />
-                            <span class="prov-fhint">{$t('settings.ai.model_discover')}</span>
-                          {/if}
-                        {:else}
-                          <input class="prov-in" type="text" bind:value={provEdits[row.slug][f.key]} placeholder={f.placeholder ?? ''} spellcheck="false" />
-                        {/if}
-                      </div>
-                    {/each}
-                  </div>
-                  <div class="prov-actions">
-                    {#if provState[row.slug]?.err}
-                      <span class="prov-msg err">{provState[row.slug].err}</span>
-                    {:else if provState[row.slug]?.msg}
-                      <span class="prov-msg ok">{provState[row.slug].msg}</span>
-                    {:else if trow && !trow.ok && trow.error}
-                      <span class="prov-msg err" title={trow.error}>{trow.error.slice(0, 60)}</span>
-                    {/if}
-                    <button
-                      class="btn-sm"
-                      disabled={testing || provState[row.slug]?.saving}
-                      on:click={() => testProviderRow(row)}
-                    >{$t('settings.ai.test')}</button>
-                    <button
-                      class="btn-sm primary"
-                      disabled={!provRowDirty(row, provEdits) || provState[row.slug]?.saving}
-                      on:click={() => saveProviderRow(row)}
-                    >{provState[row.slug]?.saving ? $t('settings.card.saving') : $t('settings.card.save')}</button>
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </SettingsCard>
+          <AiConnections
+            initialConnect={$page.url.searchParams.get('connect') ?? ''}
+            on:advanced={() => revealCard('ai-advanced')}
+          />
         {/if}
 
         <!-- ═══ Channels (rich) ═══ -->
@@ -1708,12 +1111,6 @@
   {/if}
 </div>
 
-<ClaudeCodeAuthModal
-  open={ccAuthOpen}
-  on:close={() => (ccAuthOpen = false)}
-  on:changed={() => { void loadAll(); }}
-/>
-
 <style>
   .st-page { display: flex; flex-direction: column; height: calc(100vh - 56px - 48px); overflow: hidden; }
   .st-header { flex-shrink: 0; padding: 12px 0 8px; display: flex; align-items: baseline; gap: 10px; }
@@ -1777,50 +1174,6 @@
   .btn-sm.del { color: #ef4444; }
   .btn-sm.del:hover:not(:disabled) { border-color: #ef4444; background: rgba(239,68,68,0.06); }
 
-  /* Brains */
-  .brains { display: flex; flex-direction: column; gap: 10px; padding: 6px; }
-  .brain-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  .brain-label { font-size: 11px; font-weight: 700; color: var(--text-1); min-width: 100px; }
-  .brain-ctrls { display: flex; gap: 8px; flex: 1; min-width: 240px; }
-  .brain-ctrls :global(select) { max-width: 160px; }
-  .brain-in {
-    flex: 1; padding: 6px 10px; border-radius: 6px; font-size: 12px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1);
-    font-family: var(--font-mono); outline: none; box-sizing: border-box; min-width: 0;
-  }
-  .brain-in:focus { border-color: var(--teal); }
-  .brain-cur { font: 400 10px var(--font-mono); color: var(--text-3); }
-
-  .chain { border-top: 1px solid var(--border); padding-top: 8px; display: flex; flex-direction: column; gap: 6px; }
-  .chain-head { display: flex; align-items: center; gap: 10px; }
-  .chain-hint { font-size: 10px; color: var(--text-3); flex: 1; }
-  .chain-empty { font-size: 11px; color: var(--text-3); padding: 4px 0; }
-  .chain-row { display: flex; align-items: center; gap: 8px; }
-  .chain-row :global(select) { max-width: 150px; }
-  .chain-idx {
-    font: 700 10px var(--font-mono); color: var(--text-3); width: 16px; text-align: right; flex-shrink: 0;
-  }
-  .chain-btns { display: flex; gap: 3px; flex-shrink: 0; }
-
-  /* Providers table */
-  .prov-table { display: flex; flex-direction: column; }
-  .prov-row {
-    display: grid; grid-template-columns: 190px 1fr auto; gap: 8px 14px; align-items: start;
-    padding: 9px 6px; border-bottom: 1px solid var(--border);
-  }
-  .prov-row:last-child { border-bottom: none; }
-  .prov-id { display: flex; flex-direction: column; gap: 3px; align-items: flex-start; }
-  .prov-name { font-size: 12px; font-weight: 700; color: var(--text-1); }
-  .prov-slug { font: 400 9px var(--font-mono); color: var(--text-3); }
-  .prov-lat { font: 400 9px var(--font-mono); color: #4ade80; }
-  .prov-note {
-    margin: 4px 0 0; max-width: 62ch;
-    font: 400 11px/1.5 var(--font-sans, inherit); color: #e8c070;
-  }
-  /* Amber is for "something is wrong here". A provider whose SDK owns the tool
-     loop is not wrong, so this reads as information rather than a warning. */
-  .prov-note-info { color: var(--text-2); }
-
   /* ── Card tabs ──
      Section-level. Same wrap rule as the provider strip: never scroll
      sideways, because a tab you cannot see is a card you cannot reach. */
@@ -1845,57 +1198,15 @@
   }
   .card-tab:focus-visible { outline: 2px solid #4ade80; outline-offset: 2px; }
 
-  /* ── Provider tabs ──
-     Wraps rather than scrolls sideways: a hidden provider is exactly the
-     failure this replaced. */
-  .prov-tabs {
-    display: flex; flex-wrap: wrap; gap: 6px;
-    margin: 0 0 14px; padding-bottom: 12px;
-    border-bottom: 1px solid rgba(120, 130, 160, .14);
-  }
-  .prov-tab {
-    display: inline-flex; align-items: center; gap: 7px;
-    padding: 6px 11px; border-radius: 8px; cursor: pointer;
-    background: rgba(120, 130, 160, .05);
-    border: 1px solid rgba(120, 130, 160, .16);
-    color: var(--text-2);
-    transition: background .15s, border-color .15s, color .15s;
-  }
-  .prov-tab:hover { background: rgba(120, 130, 160, .12); color: var(--text-1); }
-  .prov-tab.active {
-    background: rgba(120, 130, 160, .16);
-    border-color: rgba(120, 130, 160, .45);
-    color: var(--text-1);
-  }
-  .prov-tab:focus-visible { outline: 2px solid #4ade80; outline-offset: 2px; }
-  .prov-tab-name { font: 600 12px var(--font-sans, inherit); white-space: nowrap; }
-  .prov-tab-dirty { color: #e8c070; font-size: 9px; line-height: 1; }
-  /* The verdict that actually decides whether the product works. Sits above
-     the provider list because no single row can answer it. */
-  .readiness {
-    margin: 0 0 12px; padding: 10px 12px; border-radius: 8px;
-    font: 400 12px/1.5 var(--font-sans, inherit);
-    border: 1px solid rgba(120, 130, 160, .2); background: rgba(120, 130, 160, .06);
-    color: var(--text-2);
-  }
-  .readiness.ok { border-color: rgba(74, 222, 128, .35); background: rgba(74, 222, 128, .08); color: #86efac; }
-  .readiness.partial { border-color: rgba(232, 192, 112, .35); background: rgba(232, 192, 112, .08); color: #e8c070; }
-  .readiness.bad { border-color: rgba(248, 81, 73, .35); background: rgba(248, 81, 73, .08); color: #f8a5a0; }
-  .prov-fields { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
-  .prov-field { display: grid; grid-template-columns: 110px 1fr; gap: 8px; align-items: center; }
-  .prov-flabel { font-size: 10px; color: var(--text-2); }
-  /* Third child of a 2-col grid — pin it under the control, not under the label. */
-  .prov-fhint { grid-column: 2; font-size: 10px; color: var(--text-2); opacity: 0.8; line-height: 1.3; }
+  /* Shared text input style — still used by the Channels/WhatsApp config
+     fields below, so it stays even though the AI provider rows that named it
+     are gone. */
   .prov-in {
     width: 100%; padding: 6px 10px; border-radius: 6px; font-size: 12px;
     border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1);
     font-family: var(--font-body); outline: none; box-sizing: border-box;
   }
   .prov-in:focus { border-color: var(--teal); }
-  .prov-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; flex-wrap: wrap; max-width: 260px; }
-  .prov-msg { font-size: 9px; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .prov-msg.ok { color: #4ade80; }
-  .prov-msg.err { color: #f87171; }
 
   /* Channels */
   .ch-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 8px; padding: 6px; }
@@ -2032,8 +1343,6 @@
   .fld-lang-key { font: 400 9px var(--font-mono); color: var(--text-3); }
 
   @media (max-width: 700px) {
-    .prov-row { grid-template-columns: 1fr; }
-    .prov-actions { justify-content: flex-start; max-width: none; }
     .wa-qr-box { flex-direction: column; align-items: center; }
     .fld-lang { grid-template-columns: 1fr; }
   }

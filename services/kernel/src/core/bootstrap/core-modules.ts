@@ -110,16 +110,7 @@ export async function initCoreModules(args: {
   // Chat providers + default resolution mirror the agents executor
   // (see modules/agents/index.ts). Built here so kernel_research_digest's
   // map-reduce gets a one-shot completer fed by the same default provider.
-  const digestProviders = createChatProviders({
-    anthropicApiKey: ctx.config.webIntel.anthropicApiKey,
-    openaiApiKey: ctx.config.webIntel.openaiApiKey,
-    lmstudioBaseUrl: ctx.config.webIntel.lmstudioBaseUrl,
-    grokApiKey: ctx.config.webIntel.grokApiKey,
-    grokDefaultModel: ctx.config.webIntel.grokDefaultModel,
-    nvidiaApiKey: ctx.config.webIntel.nvidiaApiKey,
-    nvidiaDefaultModel: ctx.config.webIntel.nvidiaDefaultModel,
-    claudeCode: ctx.config.claudeCode,
-  });
+  const digestProviders = createChatProviders({ claudeCode: ctx.config.claudeCode });
   const digestDefaultProvider =
     ctx.config.agents?.defaultProvider || ctx.config.chat.defaultProvider || "claude";
 

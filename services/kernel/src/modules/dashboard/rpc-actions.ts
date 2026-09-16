@@ -31,6 +31,7 @@ import type { ConfigService } from "../config/service.js";
 import { getGlobalPiiFilter } from "../../core/pii-filter.js";
 import { createChatProviders } from "../../core/llm/chat-adapters.js";
 import { writeEnvFile } from "../config/ai-routes.js";
+import { legacyCredentialTarget } from "../../core/llm/credentials-legacy.js";
 import { log } from "../../core/logger.js";
 import {
   queryKpis,
@@ -377,8 +378,8 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
               lmstudio: { configured: aiCfg.webIntel.lmstudioBaseUrl.length > 0, baseUrl: aiCfg.webIntel.lmstudioBaseUrl },
               minimax: (() => {
                 const mm = (llmRegistry?.loadConfig("minimax") ?? {}) as Record<string, unknown>;
-                const key = (typeof mm.apiKey === "string" && mm.apiKey) ? mm.apiKey : (process.env.MINIMAX_API_KEY ?? "");
-                const model = (typeof mm.defaultModel === "string" && mm.defaultModel) ? mm.defaultModel : (process.env.MINIMAX_DEFAULT_MODEL ?? "");
+                const key = typeof mm.apiKey === "string" ? mm.apiKey : "";
+                const model = typeof mm.defaultModel === "string" ? mm.defaultModel : "";
                 return { configured: key.length > 0, keyMasked: maskKey(key), defaultModel: model };
               })(),
               elevenlabs: { configured: elevenLabsKey.length > 0, keyMasked: maskKey(elevenLabsKey) },
@@ -409,6 +410,9 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
           const envUpdates: Record<string, string> = {};
           const persist = (key: string, value: string): void => {
             envUpdates[key] = value;
+            // Credentials are saved by the config assignment that follows each
+            // persist() call (a registry accessor); they never touch env or .env.
+            if (legacyCredentialTarget(key)) return;
             process.env[key] = value; // env mirror — provider re-init reads process.env
             if (configService) {
               try { configService.set(key, value, "user"); } catch { /* keep going; env mirror already applied */ }
@@ -507,15 +511,22 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
               log.info(`AI config updated via RPC: ${Object.keys(envUpdates).join(", ")}`);
             } else {
               // Fallback (ConfigService not wired): legacy batch .env write + emit.
-              try {
-                writeEnvFile(envPath, envUpdates);
-                log.info(`AI config updated via RPC: ${Object.keys(envUpdates).join(", ")}`);
-              } catch (writeErr) {
-                log.warn("Could not write .env file — in-memory only", writeErr);
-              }
-              if (deps.events) {
-                for (const [key, value] of Object.entries(envUpdates)) {
-                  deps.events.emit("config:changed", { key, value, updatedBy: "rpc" });
+              // Credentials never reach .env or a config:changed payload — they were
+              // already saved to the registry by the config assignment above.
+              const persistable = Object.fromEntries(
+                Object.entries(envUpdates).filter(([k]) => !legacyCredentialTarget(k)),
+              );
+              if (Object.keys(persistable).length > 0) {
+                try {
+                  writeEnvFile(envPath, persistable);
+                  log.info(`AI config updated via RPC: ${Object.keys(envUpdates).join(", ")}`);
+                } catch (writeErr) {
+                  log.warn("Could not write .env file — in-memory only", writeErr);
+                }
+                if (deps.events) {
+                  for (const [key, value] of Object.entries(persistable)) {
+                    deps.events.emit("config:changed", { key, value, updatedBy: "rpc" });
+                  }
                 }
               }
             }
@@ -525,19 +536,7 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
             if (providerKeysChanged) {
               if (deps.chatService) deps.chatService.reloadProviders();
               if (deps.agentExecutor) {
-                const newProviders = createChatProviders({
-                  anthropicApiKey: aiCfg.webIntel.anthropicApiKey,
-                  openaiApiKey: aiCfg.webIntel.openaiApiKey,
-                  lmstudioBaseUrl: aiCfg.webIntel.lmstudioBaseUrl,
-                  grokApiKey: aiCfg.webIntel.grokApiKey,
-                  grokDefaultModel: aiCfg.webIntel.grokDefaultModel,
-                  nvidiaApiKey: aiCfg.webIntel.nvidiaApiKey,
-                  nvidiaDefaultModel: aiCfg.webIntel.nvidiaDefaultModel,
-                  minimaxApiKey: process.env.MINIMAX_API_KEY,
-                  minimaxBaseUrl: process.env.MINIMAX_BASE_URL,
-                  minimaxDefaultModel: process.env.MINIMAX_DEFAULT_MODEL,
-                  claudeCode: aiCfg.claudeCode,
-                });
+                const newProviders = createChatProviders({ claudeCode: aiCfg.claudeCode });
                 deps.agentExecutor.setProviders(newProviders, aiCfg.agents.defaultProvider || aiCfg.chat.defaultProvider);
               }
               const { reloadLlmClient } = await import("../../core/llm/client.js");

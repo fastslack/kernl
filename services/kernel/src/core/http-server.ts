@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { log } from "./logger.js";
 import type { KernelConfig } from "./config.js";
 import { resolveSecureBind } from "./config.js";
-import { isAuthenticated, AUTH_EXEMPT_PATHS, isPeerAuthenticatedPath } from "./auth.js";
+import { isAuthenticated, isAuthExemptPath, isPeerAuthenticatedPath } from "./auth.js";
 
 const gzipAsync = promisify(gzip);
 const GZIP_THRESHOLD = 1024; // Only compress responses > 1KB
@@ -376,7 +376,7 @@ export class KernelHttpServer {
     if (
       this.authToken &&
       pathname.startsWith("/api/") &&
-      !AUTH_EXEMPT_PATHS.includes(pathname) &&
+      !isAuthExemptPath(pathname) &&
       // Peering endpoints authenticate the caller by signature instead; the
       // token gate would reject a friend before its credential is ever read.
       !isPeerAuthenticatedPath(pathname)

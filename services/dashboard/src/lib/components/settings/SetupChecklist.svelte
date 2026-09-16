@@ -8,10 +8,10 @@
    *
    * Derivation:
    *   GET /api/settings/catalog       → catalog items (core + extension sections)
-   *   GET /api/config/ai/providers    → registry provider rows
+   *   GET /api/llm/catalog            → provider catalog rows
    *
    * Items:
-   *   LLM provider  → some provider ready / has a key         → ?section=ai
+   *   LLM provider  → some provider connected                 → ?section=ai
    *   Web search    → SEARXNG_* or BRAVE_* key configured     → ?section=ai
    *   Channels      → some `notifications` item configured    → ?section=channels
    *   Google        → some GOOGLE_* key configured            → ?section=integrations
@@ -28,12 +28,6 @@
     configured: boolean;
     extension?: string;
   }
-  interface ProviderRow {
-    slug: string;
-    ready: boolean;
-    schema?: Array<{ key: string; type: string }>;
-    values?: Record<string, string>;
-  }
   interface CheckItem {
     id: string;
     labelKey: string;
@@ -44,16 +38,6 @@
   let loading = true;
   let error = '';
   let items: CheckItem[] = [];
-
-  function providerConfigured(p: ProviderRow): boolean {
-    if (p.ready) return true;
-    return (p.schema ?? []).some(
-      (f) =>
-        f.type === 'password' &&
-        (p.values?.[f.key] ?? '') !== '' &&
-        p.values?.[f.key] !== '(not set)',
-    );
-  }
 
   async function jfetch(url: string): Promise<any> {
     const r = await fetch(url);
@@ -66,7 +50,7 @@
     error = '';
     const [catRes, provRes] = await Promise.allSettled([
       jfetch('/api/settings/catalog'),
-      jfetch('/api/config/ai/providers'),
+      jfetch('/api/llm/catalog'),
     ]);
 
     let all: CatalogItem[] = [];
@@ -81,9 +65,9 @@
       ];
     }
 
-    let providers: ProviderRow[] = [];
+    let providers: Array<{ connected: boolean }> = [];
     if (provRes.status === 'fulfilled') {
-      providers = (provRes.value as { providers?: ProviderRow[] }).providers ?? [];
+      providers = (provRes.value as { providers?: Array<{ connected: boolean }> }).providers ?? [];
     }
 
     if (catRes.status === 'rejected' && provRes.status === 'rejected') {
@@ -98,7 +82,7 @@
       {
         id: 'llm',
         labelKey: 'welcome.setup_llm_title',
-        done: providers.some(providerConfigured),
+        done: providers.some((p) => p.connected),
         section: 'ai',
       },
       {

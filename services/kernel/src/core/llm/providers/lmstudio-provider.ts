@@ -49,15 +49,11 @@ class LmStudioProviderImpl implements LlmProvider {
   configure(config: Record<string, unknown>): void {
     if (typeof config.baseUrl === "string" && config.baseUrl) {
       this.baseUrl = normalizeLmStudioBase(config.baseUrl);
-    } else if (process.env.LMSTUDIO_BASE_URL) {
-      this.baseUrl = normalizeLmStudioBase(process.env.LMSTUDIO_BASE_URL);
     }
   }
 
   async start(): Promise<void> {
-    this.baseUrl = normalizeLmStudioBase(
-      this.baseUrl || process.env.LMSTUDIO_BASE_URL || LMSTUDIO_DEFAULT_BASE,
-    );
+    this.baseUrl = normalizeLmStudioBase(this.baseUrl || LMSTUDIO_DEFAULT_BASE);
     const found = await detectLmStudio(this.baseUrl);
 
     // Nothing at the configured address? Try the default before giving up.

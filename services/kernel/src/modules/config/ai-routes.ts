@@ -16,6 +16,7 @@ import type { AgentExecutor } from "../agents/executor.js";
 import type { ConfigService } from "./service.js";
 import { createChatProviders } from "../../core/llm/chat-adapters.js";
 import { reloadLlmClient } from "../../core/llm/client.js";
+import { legacyCredentialTarget } from "../../core/llm/credentials-legacy.js";
 
 /** Mask a key: show first 8 chars + *** */
 function maskKey(key: string): string {
@@ -120,8 +121,8 @@ export function registerAiConfigRoutes(
           // MiniMax is registry-native (no config.webIntel home). Read its
           // settings_json (falling back to env) for the masked state.
           const mm = (llmRegistry?.loadConfig("minimax") ?? {}) as Record<string, unknown>;
-          const key = (typeof mm.apiKey === "string" && mm.apiKey) ? mm.apiKey : (process.env.MINIMAX_API_KEY ?? "");
-          const model = (typeof mm.defaultModel === "string" && mm.defaultModel) ? mm.defaultModel : (process.env.MINIMAX_DEFAULT_MODEL ?? "");
+          const key = typeof mm.apiKey === "string" ? mm.apiKey : "";
+          const model = typeof mm.defaultModel === "string" ? mm.defaultModel : "";
           return { configured: key.length > 0, keyMasked: maskKey(key), defaultModel: model };
         })(),
         elevenlabs: {
@@ -175,6 +176,9 @@ export function registerAiConfigRoutes(
       const envUpdates: Record<string, string> = {};
       const persist = (key: string, value: string): void => {
         envUpdates[key] = value;
+        // Credentials are saved by the config assignment that follows each
+        // persist() call (a registry accessor); they never touch env or .env.
+        if (legacyCredentialTarget(key)) return;
         process.env[key] = value; // env mirror — provider re-init reads process.env
         if (configService) {
           try { configService.set(key, value, "user"); } catch { /* keep going; env mirror already applied */ }
@@ -186,7 +190,6 @@ export function registerAiConfigRoutes(
       if (body.anthropicApiKey !== undefined && body.anthropicApiKey !== "") {
         persist("ANTHROPIC_API_KEY", body.anthropicApiKey);
         config.webIntel.anthropicApiKey = body.anthropicApiKey;
-        config.voice.openaiApiKey = config.webIntel.openaiApiKey; // keep in sync
       }
       if (body.openaiApiKey !== undefined && body.openaiApiKey !== "") {
         persist("OPENAI_API_KEY", body.openaiApiKey);
@@ -289,16 +292,23 @@ export function registerAiConfigRoutes(
             log.info(`AI config updated: ${Object.keys(envUpdates).join(", ")}`);
           } else {
             // Fallback (ConfigService not wired): legacy batch .env write + emit.
-            try {
-              writeEnvFile(envPath, envUpdates);
-              log.info(`AI config updated: ${Object.keys(envUpdates).join(", ")}`);
-            } catch (writeErr) {
-              // Non-fatal: in-memory update still applied, just can't persist
-              log.warn("Could not write .env file — in-memory only", writeErr);
-            }
-            if (events) {
-              for (const [key, value] of Object.entries(envUpdates)) {
-                events.emit("config:changed", { key, value, updatedBy: "http" });
+            // Credentials never reach .env or a config:changed payload — they were
+            // already saved to the registry by the config assignment above.
+            const persistable = Object.fromEntries(
+              Object.entries(envUpdates).filter(([k]) => !legacyCredentialTarget(k)),
+            );
+            if (Object.keys(persistable).length > 0) {
+              try {
+                writeEnvFile(envPath, persistable);
+                log.info(`AI config updated: ${Object.keys(envUpdates).join(", ")}`);
+              } catch (writeErr) {
+                // Non-fatal: in-memory update still applied, just can't persist
+                log.warn("Could not write .env file — in-memory only", writeErr);
+              }
+              if (events) {
+                for (const [key, value] of Object.entries(persistable)) {
+                  events.emit("config:changed", { key, value, updatedBy: "http" });
+                }
               }
             }
           }
@@ -318,19 +328,7 @@ export function registerAiConfigRoutes(
         if (providerKeysChanged) {
           if (chatService) chatService.reloadProviders();
           if (agentExecutor) {
-            const newProviders = createChatProviders({
-              anthropicApiKey: config.webIntel.anthropicApiKey,
-              openaiApiKey: config.webIntel.openaiApiKey,
-              lmstudioBaseUrl: config.webIntel.lmstudioBaseUrl,
-              grokApiKey: config.webIntel.grokApiKey,
-              grokDefaultModel: config.webIntel.grokDefaultModel,
-              nvidiaApiKey: config.webIntel.nvidiaApiKey,
-              nvidiaDefaultModel: config.webIntel.nvidiaDefaultModel,
-              minimaxApiKey: process.env.MINIMAX_API_KEY,
-              minimaxBaseUrl: process.env.MINIMAX_BASE_URL,
-              minimaxDefaultModel: process.env.MINIMAX_DEFAULT_MODEL,
-              claudeCode: config.claudeCode,
-            });
+            const newProviders = createChatProviders({ claudeCode: config.claudeCode });
             agentExecutor.setProviders(newProviders, config.agents.defaultProvider || config.chat.defaultProvider);
           }
           // Rebuild the standalone llm() singleton's config so EmailTriage,

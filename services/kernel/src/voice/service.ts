@@ -4,6 +4,7 @@
  */
 
 import { log } from "../core/logger.js";
+import { getProviderConfig } from "../core/llm/credentials.js";
 import { SttService } from "./stt.js";
 import { TtsService } from "./tts.js";
 import type {
@@ -168,7 +169,7 @@ export class VoiceService implements IVoiceService {
  * Create a VoiceService from environment variables
  */
 export function createVoiceServiceFromEnv(): VoiceService | null {
-  const openaiKey = process.env.OPENAI_API_KEY;
+  const openaiKey = getProviderConfig("openai").apiKey || undefined;
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
 
   // Determine STT provider

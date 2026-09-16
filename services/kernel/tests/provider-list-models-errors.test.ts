@@ -12,9 +12,7 @@
  */
 
 import { describe, it, expect, afterEach } from "bun:test";
-import { createMinimaxProvider } from "../src/core/llm/providers/minimax-provider.js";
-import { createGrokProvider } from "../src/core/llm/providers/grok-provider.js";
-import { createNvidiaProvider } from "../src/core/llm/providers/nvidia-provider.js";
+import { createCatalogProvider } from "../src/core/llm/providers/openai-compatible-provider.js";
 import { testAllProviders } from "../src/core/llm/test-providers.js";
 
 const realFetch = globalThis.fetch;
@@ -25,13 +23,13 @@ function stubFetch(res: () => Response | Promise<Response>) {
 }
 
 const CASES = [
-  { slug: "minimax", make: createMinimaxProvider, envKey: "MINIMAX_API_KEY" },
-  { slug: "grok", make: createGrokProvider, envKey: "GROK_API_KEY" },
-  { slug: "nvidia", make: createNvidiaProvider, envKey: "NVIDIA_API_KEY" },
+  { slug: "minimax", make: createCatalogProvider("minimax") },
+  { slug: "grok", make: createCatalogProvider("grok") },
+  { slug: "nvidia", make: createCatalogProvider("nvidia") },
 ] as const;
 
 describe("listModels() propagates upstream failures", () => {
-  for (const { slug, make, envKey } of CASES) {
+  for (const { slug, make } of CASES) {
     it(`${slug}: throws with status + detail on a non-ok response`, async () => {
       stubFetch(() => new Response("invalid api key", { status: 401 }));
       const p = make();
@@ -49,16 +47,10 @@ describe("listModels() propagates upstream failures", () => {
     });
 
     it(`${slug}: still returns [] (no throw) when no key is configured`, async () => {
-      const saved = process.env[envKey];
-      delete process.env[envKey];
-      try {
-        const p = make();
-        p.configure({ apiKey: "" });
-        await p.start();
-        expect(await p.listModels!()).toEqual([]);
-      } finally {
-        if (saved !== undefined) process.env[envKey] = saved;
-      }
+      const p = make();
+      p.configure({ apiKey: "" });
+      await p.start();
+      expect(await p.listModels!()).toEqual([]);
     });
   }
 });
@@ -66,7 +58,7 @@ describe("listModels() propagates upstream failures", () => {
 describe("testAllProviders surfaces the failure instead of a green pill", () => {
   it("reports ok:false with the upstream error for a bad minimax key", async () => {
     stubFetch(() => new Response("invalid api key", { status: 401 }));
-    const provider = createMinimaxProvider();
+    const provider = createCatalogProvider("minimax")();
     provider.configure({ apiKey: "bad-key" });
     await provider.start();
 

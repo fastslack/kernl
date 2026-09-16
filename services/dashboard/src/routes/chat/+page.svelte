@@ -1,6 +1,5 @@
 <script lang="ts">
   import { onMount, tick, afterUpdate } from 'svelte';
-  import ClaudeCodeAuthModal from '$lib/components/ClaudeCodeAuthModal.svelte';
   import ToolCard from '$lib/components/ToolCard.svelte';
   import {
     msgAuthError, streamAuthError, parseContentBlocks, parseStoredMessage,
@@ -11,11 +10,6 @@
   import { buildCatalog, commonModels, rankModels, type ModelEntry, type CatalogRow } from '$lib/model-catalog.js';
   import { formatMd } from '$lib/chat-md.js';
   import { formatToolInput } from '$lib/tool-presentation.js';
-
-  /** The provider's session lapsed — offer the fix instead of a dead instruction. */
-  let ccAuthOpen = false;
-
-
 
   /**
    * A failed turn is reported twice — once by the SSE `error` event and once by
@@ -1078,9 +1072,9 @@
                   <div class="cx-msg-content">{@html formatMd(m.content)}</div>
                 {/if}
                 {#if msgAuthError(m)}
-                  <button class="cx-fix-auth" on:click={() => (ccAuthOpen = true)}>
+                  <a class="cx-fix-auth" href="/settings?section=ai&card=providers&connect=claude-code">
                     Sign in to Claude Code
-                  </button>
+                  </a>
                 {/if}
               {/if}
             </div>
@@ -1105,9 +1099,9 @@
                 {/each}
               </div>
               {#if streamAuthError(streamingBlocks)}
-                <button class="cx-fix-auth" on:click={() => (ccAuthOpen = true)}>
+                <a class="cx-fix-auth" href="/settings?section=ai&card=providers&connect=claude-code">
                   Sign in to Claude Code
-                </button>
+                </a>
               {/if}
             </div>
           </div>
@@ -1493,9 +1487,6 @@
     </div>
   </div>
 {/if}
-
-
-<ClaudeCodeAuthModal open={ccAuthOpen} on:close={() => (ccAuthOpen = false)} />
 
 <style>
   /* ── Chat Container ─────────────────────────────────────── */
@@ -2584,8 +2575,9 @@
   }
 
   .cx-fix-auth {
-    margin-top: 8px; background: var(--teal, #2dd4bf); color: #04211d; border: 0;
+    display: inline-block; margin-top: 8px; background: var(--teal, #2dd4bf); color: #04211d; border: 0;
     border-radius: 6px; padding: 6px 12px; font-size: 12.5px; font-weight: 650; cursor: pointer;
+    text-decoration: none;
   }
   .cx-msg-content {
     font-size: 13.5px;

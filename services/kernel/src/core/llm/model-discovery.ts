@@ -252,7 +252,7 @@ export function formatDiscoveryNotification(report: DiscoveryReport): { title: s
       const fix = ref.suggestion ? `→ ${ref.suggestion}` : "(no clear successor — migrate manually)";
       lines.push(`  • ${ref.slug}/${ref.model} [${ref.location}] ${fix}`);
     }
-    lines.push("Apply with kernel_models_apply_migration or from /providers.");
+    lines.push("Apply with kernel_models_apply_migration or from Settings → AI.");
   }
   return { title: "LLM models changed", body: lines.join("\n") };
 }

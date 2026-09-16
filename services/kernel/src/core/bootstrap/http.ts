@@ -53,8 +53,9 @@ import {
 } from "../../modules/dashboard/architecture-routes.js";
 import { registerSkillRoutes } from "../../modules/skills/api-routes.js";
 import { registerAgentRoutes } from "../../modules/agents/api-routes.js";
+import { officeSourcesFrom } from "../../modules/agents/office-templates.js";
 import { registerSandboxDriverRoutes } from "../sandbox/routes.js";
-import { registerLlmProviderRoutes, registerClaudeCodeAuthRoutes } from "../llm/provider-routes.js";
+import { registerLlmProviderRoutes, registerLlmReadinessRoutes } from "../llm/provider-routes.js";
 import { registerDbDriverRoutes } from "../db-drivers/api-routes.js";
 import { registerAiConfigRoutes } from "../../modules/config/ai-routes.js";
 import { registerSettingsRoutes } from "../../modules/config/settings-routes.js";
@@ -188,10 +189,8 @@ export async function initHttpAndMcp(args: {
       // After a provider's settings_json is saved via PUT /api/llm-providers/:slug/config,
       // mirror it into config.webIntel.* + .env and hot-reload the chat adapter /
       // llm() singleton so chat/agents/web-intel pick up the change without a restart.
-      const { syncProvidersToKernelConfig, providerEnvUpdates } = await import("../llm/sync-config.js");
-      const { writeEnvFile } = await import("../../modules/config/ai-routes.js");
       const { reloadLlmClient } = await import("../llm/client.js");
-      const { resolve: resolvePath } = await import("node:path");
+      const { legacyCredentialTarget, mirrorDeferredEnv } = await import("../llm/credentials-legacy.js");
       // ── Rehydrate stored settings into process.env ────────────────
       //
       // ConfigService.set() writes app_settings + process.env + .env, but
@@ -210,6 +209,7 @@ export async function initHttpAndMcp(args: {
           .all() as Array<{ key: string; value: string }>;
         let restored = 0;
         for (const { key, value } of stored) {
+          if (legacyCredentialTarget(key)) continue;
           if (process.env[key] === undefined || process.env[key] === "") {
             process.env[key] = value;
             restored++;
@@ -261,33 +261,64 @@ export async function initHttpAndMcp(args: {
         log.warn("Config: could not restore the LLM chain from settings", err);
       }
 
-      const llmEnvPath = resolvePath(process.cwd(), ".env");
-      registerClaudeCodeAuthRoutes(httpServer, llmRegistry);
-      registerLlmProviderRoutes(httpServer, llmRegistry, modelBlocklist, (slug) => {
-        syncProvidersToKernelConfig(config, llmRegistry);
-        const envUpdates = providerEnvUpdates(slug, llmRegistry.loadConfig(slug));
-        if (Object.keys(envUpdates).length > 0) {
-          try { writeEnvFile(llmEnvPath, envUpdates); } catch (err) { log.warn("env persist failed", err); }
-          if (events) for (const [k, v] of Object.entries(envUpdates)) events.emit("config:changed", { key: k, value: v, updatedBy: "http" });
-        }
-        try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* */ }
+      // Rebuild every consumer of the provider config: the chat service, the
+      // llm() singleton, the agents executor's own provider map (it is set
+      // once at module init and otherwise only rebuilt by the legacy config
+      // routes — without this a provider connected through either path here
+      // reports ready while agent runs keep serving the boot-time map), and
+      // readiness. Shared by the old settings-save callback and the new
+      // connect routes so both behave the same.
+      const refreshLlmConsumers = (why: string): void => {
+        mirrorDeferredEnv();
+        try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* chat may be disabled */ }
+        void import("../llm/chat-adapters.js").then(({ createChatProviders }) => {
+          const executor = (registry.getModule("agents") as { getExecutor?: () => { setProviders(p: ReturnType<typeof createChatProviders>, d: string): void } | null } | undefined)?.getExecutor?.();
+          executor?.setProviders(createChatProviders({ claudeCode: config.claudeCode }), config.agents.defaultProvider || config.chat.defaultProvider);
+        }).catch(() => { /* agents may be disabled */ });
         reloadLlmClient(config);
-        markLlmReadinessStale(`provider "${slug}" was reconfigured`);
+        markLlmReadinessStale(why);
+      };
+
+      registerLlmReadinessRoutes(httpServer);
+      registerLlmProviderRoutes(httpServer, llmRegistry, modelBlocklist, (slug) => {
+        refreshLlmConsumers(`provider "${slug}" was reconfigured`);
       });
 
-      // Mirror the stored provider settings into KernelConfig once at boot.
-      // This only ran from the save callback, so anything living solely in the
-      // registry — the Claude Code token, and the model picked for it — was
-      // absent on every fresh start until someone happened to press Save.
+      // "Connect your AI": test a pasted key without saving, connect in one
+      // step, detect local servers, remove a provider, reorder the chain.
+      const { registerConnectRoutes } = await import("../llm/connect-routes.js");
+      const claudeCodeTransition = await import("../llm/claude-code-transition.js");
+      registerConnectRoutes(httpServer, {
+        registry: llmRegistry,
+        claudeCode: config.claudeCode,
+        getChain: () => config.agents.defaultModelChain ?? [],
+        setChain: (chain) => {
+          config.agents.defaultModelChain = chain;
+          const value = JSON.stringify(chain);
+          process.env.AGENTS_DEFAULT_MODEL_CHAIN = value;
+          const configService = (registry.getModule("config") as { getService?: () => { set(k: string, v: string, by?: "user" | "chat"): unknown } | null } | undefined)?.getService?.();
+          try { configService?.set("AGENTS_DEFAULT_MODEL_CHAIN", value, "user"); } catch { /* the in-memory chain still applies */ }
+        },
+        onChanged: (slug, why) => {
+          refreshLlmConsumers(why);
+          log.info(`LLM providers reloaded: ${slug}`);
+        },
+        detectClaudeSession: () => {
+          const { applyClaudeCodeTransition } = claudeCodeTransition;
+          return applyClaudeCodeTransition() === "cli";
+        },
+        hasClaudeCredential: () => claudeCodeTransition.hasClaudeCodeCredential(),
+        claudeCodeTransition: () => claudeCodeTransition.applyClaudeCodeTransition(),
+        loginCommand: () => claudeCodeTransition.claudeCodeLoginCommand(),
+      });
+
+      // The chat service and llm() were built before credentials were migrated
+      // into the registry (initDrivers), so rebuild them against it once.
       try {
-        syncProvidersToKernelConfig(config, llmRegistry);
-        // The chat service and the llm() singleton read this config in their
-        // constructors, which already ran — so mirroring alone changes nothing
-        // until they are rebuilt. Same two calls the save path makes.
         try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* chat may be disabled */ }
         reloadLlmClient(config);
       } catch (err) {
-        log.warn("Provider settings could not be mirrored into config at boot", err);
+        log.warn("LLM providers could not be rebuilt at boot", err);
       }
 
       // ── Can an agent actually run? ────────────────────────────────
@@ -302,18 +333,7 @@ export async function initHttpAndMcp(args: {
         await import("../llm/readiness.js");
       const { createLlmReadinessGate } = await import("../llm/readiness-gate.js");
       const { createChatProviders } = await import("../llm/chat-adapters.js");
-      initLlmReadiness(() =>
-        createChatProviders({
-          anthropicApiKey: config.webIntel.anthropicApiKey,
-          openaiApiKey: config.webIntel.openaiApiKey,
-          lmstudioBaseUrl: config.webIntel.lmstudioBaseUrl,
-          grokApiKey: config.webIntel.grokApiKey,
-          grokDefaultModel: config.webIntel.grokDefaultModel,
-          nvidiaApiKey: config.webIntel.nvidiaApiKey,
-          nvidiaDefaultModel: config.webIntel.nvidiaDefaultModel,
-          claudeCode: config.claudeCode,
-        }),
-      );
+      initLlmReadiness(() => createChatProviders({ claudeCode: config.claudeCode }));
       httpServer.addPrecondition(createLlmReadinessGate());
       // Fill the cache in the background: boot must not wait on a provider,
       // and the gate refuses by default until the answer arrives.
@@ -491,6 +511,26 @@ export async function initHttpAndMcp(args: {
             name: i.manifest?.name ?? i.slug,
             text: `${i.slug} ${i.manifest?.name ?? ""} ${i.manifest?.description ?? ""} ${i.manifest?.long_description ?? ""}`,
           }));
+        },
+        // Offices that extensions ship — installed ones from the extensions
+        // service, the rest from the catalog — for the wizard gallery.
+        async () => {
+          const ext = registry.getModule("extensions") as {
+            service?: {
+              list(): Array<{ slug: string; name: string; status: string; manifest_json: string }>;
+              hasLicense(feature: string): boolean;
+            };
+          } | null;
+          const mp = registry.getModule("marketplace") as {
+            getService?: () => {
+              browseCatalog(f: { type?: string; limit?: number }): Promise<
+                Array<{ slug: string; feature?: string; manifest?: { name?: string; description?: string; office?: string } }>
+              >;
+            } | null;
+          } | null;
+          const installed = ext?.service?.list() ?? [];
+          const catalog = (await mp?.getService?.()?.browseCatalog({ limit: 500 })) ?? [];
+          return officeSourcesFrom(installed, catalog, (f) => ext?.service?.hasLicense(f) ?? false);
         },
       );
     }

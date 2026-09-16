@@ -13,10 +13,10 @@
  * cares about: does it respond, and can it execute a tool call — which is what
  * an agent needs and what a connectivity check can never establish.
  *
- * The response keys match the dashboard's `AI_PROVIDERS` IDs
- * (`anthropic`, `openai`, `grok`, `nvidia`, `lmstudio`) — note that the
- * registry uses "claude" internally for Anthropic, so we map. This keeps
- * the existing UI working unchanged.
+ * The response keys are catalog slugs (`services/kernel/src/core/llm/
+ * provider-catalog.ts`), except Anthropic, which the dashboard has always
+ * keyed as `anthropic` while the registry stores it under the catalog slug
+ * "claude" — so that one entry maps.
  *
  * Cheap: one HTTP call per provider, all in parallel, 10s timeout each.
  * Always returns 200 with per-provider {ok, latencyMs, error?, models?}.
@@ -24,6 +24,7 @@
 
 import type { LlmProviderRegistry } from "./provider-registry.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
+import { PROVIDER_CATALOG } from "./provider-catalog.js";
 
 export interface ProviderTestResult {
   ok: boolean;
@@ -72,23 +73,22 @@ function probeTimeout(slug: string): number {
   return slug === "claude-code" || slug === "claude_code" ? 45_000 : 20_000;
 }
 
-/** Dashboard-facing ID → registry slug. Add an entry when a new
- *  provider is wired up. Anything not listed here is skipped. */
-const PROVIDER_MAP: Array<{ id: string; slug: string; modelFilter?: (id: string) => boolean }> = [
-  { id: "anthropic",   slug: "claude",      modelFilter: (m) => m.toLowerCase().includes("claude") },
-  // claude-code (Claude Code SDK, host `claude login` OAuth — no API key).
-  // The setup wizard tests it by its own slug; without this entry the probe
-  // returns nothing and the wizard shows "no test result for claude-code".
+/** Per-provider catalogue filters; providers without one return everything. */
+const MODEL_FILTERS: Record<string, (id: string) => boolean> = {
+  claude: (m) => m.toLowerCase().includes("claude"),
   // "opus" / "sonnet" / "haiku" are the CLI's aliases for the newest model of
-  // each family. A plain `includes("claude")` filter drops them, which would
-  // hide the one choice that never goes stale.
-  { id: "claude-code", slug: "claude-code", modelFilter: (m) => /claude|^(opus|sonnet|haiku)$/i.test(m) },
-  { id: "openai",    slug: "openai",   modelFilter: (m) => /^(gpt-|o1-|o3-|chatgpt-)/i.test(m) },
-  { id: "grok",      slug: "grok",     modelFilter: (m) => m.toLowerCase().includes("grok") },
-  { id: "nvidia",    slug: "nvidia"    /* return all NIM models */                              },
-  { id: "lmstudio",  slug: "lmstudio"  /* whatever's loaded                                    */ },
-  { id: "minimax",   slug: "minimax"   /* OpenAI-compatible /v1/models                         */ },
-];
+  // each family; a plain includes("claude") would hide the choice that never goes stale.
+  "claude-code": (m) => /claude|^(opus|sonnet|haiku)$/i.test(m),
+  openai: (m) => /^(gpt-|o1-|o3-|chatgpt-)/i.test(m),
+  grok: (m) => m.toLowerCase().includes("grok"),
+};
+
+/** Every catalog provider. The dashboard historically keyed Anthropic as "anthropic". */
+const PROVIDER_MAP = PROVIDER_CATALOG.map((e) => ({
+  id: e.slug === "claude" ? "anthropic" : e.slug,
+  slug: e.slug,
+  modelFilter: MODEL_FILTERS[e.slug],
+}));
 
 /**
  * Sanity bound on the catalogue each probe carries back, not a display limit.

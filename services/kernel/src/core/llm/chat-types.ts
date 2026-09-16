@@ -70,6 +70,9 @@ export interface ChatCompletionResult {
   content: string;
   model: string;
   tokens_used: number;
+  /** Prompt / completion split, when the provider reports it. */
+  input_tokens?: number;
+  output_tokens?: number;
   tool_calls?: ToolUseBlock[];
   stop_reason?: string;
 }

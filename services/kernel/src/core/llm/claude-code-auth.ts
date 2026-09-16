@@ -67,12 +67,10 @@ export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
  * Like `auth status`, this reports presence and not validity; proving a
  * credential works needs a real call, which is what the readiness probe does.
  */
-export function hasStoredCredential(env: NodeJS.ProcessEnv = process.env): boolean {
-  if ((env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim().length > 0) return true;
-
+/** A session the official CLI created itself — never a token Kernl holds. */
+export function hasCliSession(env: NodeJS.ProcessEnv = process.env): boolean {
   const dir = claudeConfigDir(env);
   if (existsSync(resolve(dir, ".credentials.json"))) return true;
-
   try {
     const raw = readFileSync(resolve(dir, ".claude.json"), "utf-8");
     const parsed = JSON.parse(raw) as Record<string, unknown>;
@@ -81,6 +79,11 @@ export function hasStoredCredential(env: NodeJS.ProcessEnv = process.env): boole
     // Missing, unreadable or malformed all mean the same thing here.
     return false;
   }
+}
+
+export function hasStoredCredential(env: NodeJS.ProcessEnv = process.env): boolean {
+  if ((env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim().length > 0) return true;
+  return hasCliSession(env);
 }
 
 /** Create the directory on first use; the CLI will not create the parent. */

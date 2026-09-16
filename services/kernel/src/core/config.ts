@@ -57,6 +57,7 @@ export interface KernelConfig {
   webIntel: {
     pollIntervalMs: number;
     defaultLlm: string;
+    /** @deprecated read through getProviderConfig(); accessor over the provider registry. */
     anthropicApiKey: string;
     openaiApiKey: string;
     grokApiKey: string;
@@ -393,22 +394,23 @@ export function loadConfig(): KernelConfig {
     webIntel: {
       pollIntervalMs: parseInt(process.env.WEBINTEL_POLL_INTERVAL_MS ?? "60000", 10),
       defaultLlm: process.env.WEBINTEL_DEFAULT_LLM ?? "claude",
-      anthropicApiKey: process.env.ANTHROPIC_API_KEY ?? "",
-      openaiApiKey: process.env.OPENAI_API_KEY ?? "",
-      // xAI Grok uses an OpenAI-compatible endpoint. Accept GROK_API_KEY or XAI_API_KEY (alias).
-      grokApiKey: process.env.GROK_API_KEY ?? process.env.XAI_API_KEY ?? "",
-      grokDefaultModel: process.env.GROK_DEFAULT_MODEL ?? "",
-      // NVIDIA NIM uses an OpenAI-compatible endpoint at integrate.api.nvidia.com.
-      nvidiaApiKey: process.env.NVIDIA_API_KEY ?? "",
-      nvidiaDefaultModel: process.env.NVIDIA_DEFAULT_MODEL ?? "",
-      lmstudioBaseUrl: process.env.LMSTUDIO_BASE_URL ?? "",
+      // Provider credentials live in the encrypted provider registry. These
+      // fields are replaced at boot by read-only accessors over it
+      // (installLegacyCredentialMirror) for code that still reads them.
+      anthropicApiKey: "",
+      openaiApiKey: "",
+      grokApiKey: "",
+      grokDefaultModel: "",
+      nvidiaApiKey: "",
+      nvidiaDefaultModel: "",
+      lmstudioBaseUrl: "",
       braveApiKey: process.env.BRAVE_API_KEY ?? "",
       googleCseKey: process.env.GOOGLE_CSE_KEY ?? "",
       googleCseCx: process.env.GOOGLE_CSE_CX ?? "",
       searxngBaseUrl: process.env.SEARXNG_BASE_URL ?? "",
     },
     chat: {
-      defaultProvider: process.env.CHAT_DEFAULT_PROVIDER ?? "claude_code",
+      defaultProvider: process.env.CHAT_DEFAULT_PROVIDER ?? "",
       defaultModel: process.env.CHAT_DEFAULT_MODEL ?? "",
       extractionModel: process.env.CHAT_EXTRACTION_MODEL ?? "",
       contextBudget: parseInt(process.env.CHAT_CONTEXT_BUDGET ?? "2000", 10),
@@ -500,7 +502,7 @@ export function loadConfig(): KernelConfig {
       enabled: process.env.VOICE_ENABLED === "true",
       sttProvider: (process.env.VOICE_STT_PROVIDER ?? "openai") as "openai" | "local-whisper",
       ttsProvider: (process.env.VOICE_TTS_PROVIDER ?? "system") as "elevenlabs" | "openai" | "system",
-      openaiApiKey: process.env.OPENAI_API_KEY ?? "",
+      openaiApiKey: "",
       elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
       localWhisperPath: process.env.LOCAL_WHISPER_PATH ?? "",
       defaultVoiceId: process.env.VOICE_DEFAULT_ID ?? "alloy",
@@ -542,9 +544,7 @@ export function loadConfig(): KernelConfig {
       mcpBridgePath: process.env.KERNEL_MCP_BRIDGE ?? "",
       mcpTransport: (process.env.KERNEL_MCP_TRANSPORT ?? "").toLowerCase(),
       cliPath: process.env.CLAUDE_CODE_PATH ?? "",
-      // Mirrored out of the provider registry by syncProvidersToKernelConfig,
-      // so the model chosen in Settings is the one the adapter sends.
-      model: process.env.CLAUDE_CODE_DEFAULT_MODEL ?? "",
+      model: "",
     },
     cors: {
       allowedOrigins: (process.env.CORS_ALLOWED_ORIGINS ?? "")
@@ -569,9 +569,7 @@ export function loadConfig(): KernelConfig {
         const v = (process.env.EMBEDDINGS_PROVIDER ?? "auto").toLowerCase();
         return v === "lmstudio" || v === "local" ? v : "auto";
       })(),
-      baseUrl: process.env.EMBEDDINGS_BASE_URL
-        ?? process.env.LMSTUDIO_BASE_URL
-        ?? "http://127.0.0.1:1234/v1",
+      baseUrl: process.env.EMBEDDINGS_BASE_URL ?? "http://127.0.0.1:1234/v1",
       model: process.env.EMBEDDINGS_MODEL ?? "text-embedding-bge-m3",
       dim: parseInt(process.env.EMBEDDINGS_DIM ?? "1024", 10),
     },

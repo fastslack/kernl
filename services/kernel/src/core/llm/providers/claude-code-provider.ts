@@ -16,7 +16,7 @@
  */
 
 import { ChatClaudeCodeProvider } from "../claude-code-adapter.js";
-import { hasStoredCredential } from "../claude-code-auth.js";
+import { hasClaudeCodeCredential } from "../claude-code-transition.js";
 import type {
   LlmProvider,
   LlmProviderCapabilities,
@@ -58,7 +58,7 @@ class ClaudeCodeProviderImpl implements LlmProvider {
   readonly capabilities = CAPS;
 
   private impl: ChatClaudeCodeProvider | null = null;
-  private defaultModel = "claude-sonnet-4-5";
+  private defaultModel = "sonnet";
   private lastError?: string;
   private lastModel?: string;
   private oauthToken = "";
@@ -102,12 +102,12 @@ class ClaudeCodeProviderImpl implements LlmProvider {
    */
   isReady(): boolean {
     if (!this.impl?.available()) return false;
-    return hasStoredCredential();
+    return hasClaudeCodeCredential();
   }
 
   private describeUnreadiness(): string | undefined {
     if (!this.impl?.available()) return "Claude Code CLI not found.";
-    if (!hasStoredCredential()) return "Claude Code is installed but not signed in — run `claude login`.";
+    if (!hasClaudeCodeCredential()) return "Claude Code has no session yet. Settings → AI shows how to sign in.";
     return undefined;
   }
 
@@ -127,7 +127,7 @@ class ClaudeCodeProviderImpl implements LlmProvider {
 
   getConfigSchema(): ConfigField[] {
     return [
-      { key: "defaultModel", label: "Default model", type: "text", required: false, placeholder: "claude-sonnet-4-5" },
+      { key: "defaultModel", label: "Default model", type: "text", required: false, placeholder: "sonnet" },
     ];
   }
 
@@ -155,7 +155,7 @@ class ClaudeCodeProviderImpl implements LlmProvider {
   async listModels(): Promise<string[]> {
     if (this.cachedModels) return this.cachedModels;
 
-    const token = this.oauthToken || process.env.CLAUDE_CODE_OAUTH_TOKEN || "";
+    const token = this.oauthToken;
     if (token) {
       try {
         const res = await fetch("https://api.anthropic.com/v1/models?limit=100", {

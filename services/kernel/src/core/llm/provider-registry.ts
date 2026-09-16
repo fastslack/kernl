@@ -224,8 +224,8 @@ export class LlmProviderRegistry {
     try {
       const provider = reg.factory();
       const cfg = this.loadConfig(slug);
-      // Always call configure (even with an empty cfg) so the provider
-      // pueda caer a defaults de env var. Los drivers deben ser idempotentes.
+      // Always call configure (even with an empty cfg) so the provider falls back
+      // to its catalog defaults. Drivers must be idempotent.
       provider.configure(cfg);
       const hook = this.preStartHooks.get(slug);
       if (hook) hook(provider);

@@ -22,7 +22,7 @@
 
 import type { ChatLlmProvider } from "./chat-adapters.js";
 import type { ChatCompletionResult, ToolDefinitionForLlm } from "./chat-types.js";
-import { hasStoredCredential } from "./claude-code-auth.js";
+import { hasClaudeCodeCredential } from "./claude-code-transition.js";
 import { log } from "../logger.js";
 
 /** Registered under both spellings; the adapter answers to either. */
@@ -144,7 +144,7 @@ export async function probeLlmReadiness(
   }
 
   const sdkFallback = (): LlmReadiness | null => {
-    if (!sdkProvider || !hasStoredCredential()) return null;
+    if (!sdkProvider || !hasClaudeCodeCredential()) return null;
     return {
       ok: true,
       reason: "ok-sdk-only",

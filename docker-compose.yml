@@ -157,11 +157,15 @@ services:
       # (.kernel-encryption-key, mode 600) in the kernel-data volume, reusing it
       # across restarts. Override here only if you want to pin a specific key:
       #   KERNEL_ENCRYPTION_KEY: ${KERNEL_ENCRYPTION_KEY:-}
-      # Optional LLM keys — leave unset and configure later in Settings → AI.
-      # Set any of these in .env next to this file; empty ones are ignored and
-      # the provider simply stays out of the chain. Without at least one, every
-      # LLM-backed feature (subtitle translation, triage, digests, agents)
-      # fails with "no usable output" — the kernel has nothing to call.
+      # LLM providers are connected in Settings → AI and stored encrypted in
+      # the data volume. The keys below are an upgrade lane and nothing else:
+      # on the first boot after updating, whatever your .env still sets is
+      # imported into the registry once and ignored on every boot after that.
+      # They have to be passed for that to happen — the .env next to this file
+      # is not readable from inside the container, so without them an existing
+      # install would come up with Settings → AI empty and no explanation.
+      # A fresh install never needs them. An upgraded one can delete the block
+      # once it has booted through that import at least once.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       MINIMAX_API_KEY: ${MINIMAX_API_KEY:-}
@@ -169,9 +173,9 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       GROK_API_KEY: ${GROK_API_KEY:-}
       NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
-      # Local runtimes (LM Studio / Ollama). Point at the host with
-      # host.docker.internal, e.g. http://host.docker.internal:1234/v1
       LMSTUDIO_BASE_URL: ${LMSTUDIO_BASE_URL:-}
+      # Ollama's address for subtitle translation (chat providers are connected
+      # in Settings → AI). Point at the host with host.docker.internal.
       OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-}
       # A small, cheap model for mechanical subtasks (subtitle translation,
       # extraction). Falls back to the chain default when unset.
@@ -186,6 +190,10 @@ services:
       # container cannot see just moves the failure from "out of scope" to
       # "no such directory".
       FS_COMMANDER_ALLOWED_ROOTS: /home/fastslack/mtwProjects/LABS
+    # Lets Kernl find Ollama or LM Studio running on this machine:
+    # host.docker.internal is not defined on Linux unless mapped here.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - kernel-data:/app/data
       # The Unix socket mtw-request listens on. Harmless when the engine is
