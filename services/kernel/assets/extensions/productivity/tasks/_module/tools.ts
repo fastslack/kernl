@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { TaskService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 function fmtMins(m: number): string {
   if (m <= 0) return "0m";

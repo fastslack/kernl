@@ -19,8 +19,7 @@
  * flows, or missing slugs are logged and the handler returns gracefully.
  */
 
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type EventBus, log } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { Agent } from "../../../../../src/modules/agents/types.js";
 import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-handlers.js";

@@ -20,17 +20,19 @@
  * lazily on each request via getter closures.
  */
 
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
-import { NostrIdentity } from "../../../../../src/core/nostr/nostr-identity.js";
-import type { NostrRelayPool } from "../../../../../src/core/nostr/nostr-relay-pool.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { NostrIdentity, type NostrRelayPool } from "@kernl/extension-sdk/nostr";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type GraphDriver,
+  type EmbeddingsClient,
+  runMigrations,
+  type SqliteDb,
+  type AgentDriver,
+  log,
+} from "@kernl/extension-sdk";
 import { cinemaMigrations } from "./migrations/001_cinema_titles.js";
 import { CinemaService } from "./service.js";
 import { CinemaSubsService } from "./subs-service.js";
@@ -53,11 +55,8 @@ import { CanonicalService } from "./canonical/service.js";
 import { CanonicalRunner } from "./canonical/runner.js";
 import { tmdbFromEnv } from "./canonical/tmdb.js";
 import { MediaProbeRunner } from "./media-runner.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
-import type { AgentDriver } from "../../../../../src/core/types.js";
-import { log } from "../../../../../src/core/logger.js";
 import path from "node:path";
 
 export interface CinemaModule extends ExtensibleModule {

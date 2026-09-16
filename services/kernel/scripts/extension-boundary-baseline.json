@@ -1,0 +1,68 @@
+{
+  "agents/agent-advanced": {
+    "source": [
+      "src/core/i18n/prompts.js",
+      "src/core/llm/provider-health.js",
+      "src/core/mcp-unix-socket.js",
+      "src/modules/agents/agent-name-conventions.js",
+      "src/modules/agents/builtin-handlers.js",
+      "src/modules/agents/executor.js",
+      "src/modules/agents/i18n.js",
+      "src/modules/agents/index.js",
+      "src/modules/agents/office-home.js",
+      "src/modules/agents/service.js",
+      "src/modules/agents/types.js",
+      "src/modules/agents/workspace-constants.js",
+      "src/modules/chat/llm-adapter.js",
+      "src/modules/chat/types.js"
+    ],
+    "bundle": [
+      "src/core/attestation.ts",
+      "src/core/auth.ts",
+      "src/core/canonical-json.ts",
+      "src/core/elicit.ts",
+      "src/core/i18n/prompts.ts",
+      "src/core/llm/chat-adapters.ts",
+      "src/core/llm/claude-code-adapter.ts",
+      "src/core/llm/claude-code-auth.ts",
+      "src/core/llm/credentials.ts",
+      "src/core/llm/lmstudio-detect.ts",
+      "src/core/llm/logger.ts",
+      "src/core/llm/provider-catalog.ts",
+      "src/core/llm/provider-health.ts",
+      "src/core/logger.ts",
+      "src/core/mcp-unix-socket.ts",
+      "src/core/request-context.ts",
+      "src/core/task-registry.ts",
+      "src/core/zod-to-json.ts",
+      "src/modules/agents/i18n.ts",
+      "src/modules/agents/office-home.ts",
+      "src/modules/agents/workspace-constants.ts",
+      "src/server.ts"
+    ]
+  },
+  "home/life": {
+    "source": [
+      "src/modules/dashboard/life-queries.js"
+    ],
+    "bundle": [
+      "src/modules/dashboard/life-queries.ts"
+    ]
+  },
+  "leisure/cinema": {
+    "source": [
+      "src/core/compute-backend.js"
+    ],
+    "bundle": [
+      "src/core/compute-backend.ts"
+    ]
+  },
+  "people/events": {
+    "source": [
+      "src/modules/dashboard/api.js"
+    ],
+    "bundle": [
+      "src/modules/dashboard/api.ts"
+    ]
+  }
+}

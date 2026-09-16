@@ -1,5 +1,11 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists, safeAll, queryWithFallback, toRecord, today } from "../../../../../src/core/db/query-helpers.js";
+import {
+  type SqliteDb,
+  tableExists,
+  safeAll,
+  queryWithFallback,
+  toRecord,
+  today,
+} from "@kernl/extension-sdk";
 
 // ── Communications ───────────────────────────────────
 

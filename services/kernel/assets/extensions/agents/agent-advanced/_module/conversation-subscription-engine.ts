@@ -21,10 +21,7 @@
  * break message posting.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
+import { log, isoNow, type EventBus, type KernelConfig } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../src/modules/agents/executor.js";
 import { resolveAgentLanguage } from "../../../../../src/modules/agents/i18n.js";

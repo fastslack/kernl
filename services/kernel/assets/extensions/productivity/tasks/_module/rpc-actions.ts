@@ -7,7 +7,7 @@
  * soft-delete. (Previously these handlers ran raw SQL and bypassed all of it.)
  */
 
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { RpcAction } from "@kernl/extension-sdk";
 import type { TaskService } from "./service.js";
 import type { Task } from "./types.js";
 

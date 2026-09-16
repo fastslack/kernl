@@ -1,5 +1,10 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { safeAll, toRecord, today, daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import {
+  type SqliteDb,
+  safeAll,
+  toRecord,
+  today,
+  daysFromNow,
+} from "@kernl/extension-sdk";
 
 export interface DashboardTasks {
   kpis: {

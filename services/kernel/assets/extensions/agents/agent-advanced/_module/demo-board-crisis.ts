@@ -37,8 +37,7 @@
  * Nothing here is scheduled. The demo only ever runs when somebody asks for it.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import { log, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { Agent, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-handlers.js";

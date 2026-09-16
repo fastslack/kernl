@@ -1,5 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type KernelModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
 import { giteaChannelMigrations } from "./migrations.js";
 import { GiteaConnectionsService } from "./connections-service.js";
 import { GiteaRepoProvider } from "./provider.js";

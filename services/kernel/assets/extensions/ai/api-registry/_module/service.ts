@@ -1,7 +1,11 @@
 import type { Database } from "bun:sqlite";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { encrypt, decrypt } from "../../../../../src/core/crypto.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  newId,
+  isoNow,
+  encrypt,
+  decrypt,
+  log,
+} from "@kernl/extension-sdk";
 import type {
   ApiCategoryRow,
   ApiRegistryRow,

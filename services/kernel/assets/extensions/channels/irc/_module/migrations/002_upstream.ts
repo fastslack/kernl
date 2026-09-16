@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 
 /**
  * Upstream networks — the bouncer half of the extension. Each row is one

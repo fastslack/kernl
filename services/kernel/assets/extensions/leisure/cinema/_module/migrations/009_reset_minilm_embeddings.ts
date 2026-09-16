@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 
 /**
  * Reset embed bookkeeping for any row that got stamped with the in-process

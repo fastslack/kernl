@@ -3,10 +3,13 @@ import { readFileSync, writeFileSync, readdirSync, statSync, mkdirSync, existsSy
 import { dirname, join, relative } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import { shellCommand } from "../../../../../src/core/fs-paths.js";
-import { getRequestContext } from "../../../../../src/core/request-context.js";
+import {
+  type ToolDefinition,
+  textResult,
+  errorResult,
+  shellCommand,
+  getRequestContext,
+} from "@kernl/extension-sdk";
 import type { RepoService } from "./service.js";
 import { RepoService as RepoServiceClass } from "./service.js";
 import type { Repo } from "./types.js";

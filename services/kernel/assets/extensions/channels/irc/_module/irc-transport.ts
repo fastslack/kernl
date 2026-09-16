@@ -14,15 +14,15 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { Server as HttpServer } from "node:http";
-import { log } from "../../../../../src/core/logger.js";
-import { newId } from "../../../../../src/core/helpers.js";
-import { findOnPath } from "../../../../../src/core/fs-paths.js";
-import type {
-  ChannelTransport,
-  ChannelMessageHandler,
-  ChannelStatus,
-  ChannelResponse,
-} from "../../../../../src/channels/types.js";
+import {
+  log,
+  newId,
+  findOnPath,
+  type ChannelTransport,
+  type ChannelMessageHandler,
+  type ChannelStatus,
+  type ChannelResponse,
+} from "@kernl/extension-sdk";
 import { IrcClient } from "./server/client.js";
 import { IrcServer, type InboundEvent } from "./server/ircd.js";
 

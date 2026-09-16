@@ -1,9 +1,14 @@
 import { readFileSync } from "node:fs";
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import {
+  type SqliteDb,
+  type TakeoutGeoJSON,
+  type TakeoutFeature,
+  type ImportResult,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { ShoppingService } from "../../../../home/shopping/_module/service.js";
-import type { TakeoutGeoJSON, TakeoutFeature, ImportResult } from "../../../../../../src/core/integrations/google-types.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
 
 export function mapTakeoutPlace(feature: TakeoutFeature) {
   const props = feature.properties;

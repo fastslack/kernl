@@ -13,7 +13,7 @@
  * Stage 2) decides scheduling.
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import { derivedIndexIsDue } from "../../_lib/archive-catalog/rebuild-policy.js";
 import type { CinemaService } from "./service.js";
 import type { ArchiveScrapeRow, IngestRun } from "./types.js";

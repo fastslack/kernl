@@ -4,6 +4,7 @@
   "slug": "news",
   "name": "News",
   "version": "1.1.1",
+  "sdk": 1,
   "type": "module",
   "description": "News feed aggregation.",
   "author": "Kernl",

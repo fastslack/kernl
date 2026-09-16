@@ -24,8 +24,12 @@
 - **Soft deletes**: `deleted_at TEXT` nullable — filter with `deleted_at IS NULL`
 - **Booleans**: `INTEGER NOT NULL DEFAULT 0` (0/1)
 - **Bash commands**: NEVER chain commands with `&&`, `||`, or pipes in a single Bash call. Run each as a separate call.
+- **Extensions import the kernel only through `@kernl/extension-sdk`**
+  (`services/kernel/src/sdk/`), never `../../src/...` by path. The build gate
+  (`scripts/check-extension-boundary.ts`) fails otherwise; see ARCHITECTURE.md.
 - **LLM calls — one door only**: every LLM call in the kernel and in every paid
-  extension goes through the driver, `llm()` from `src/core/llm/client.ts`
+  extension goes through the driver, `llm()` from `src/core/llm/client.ts` in
+  the kernel, `llm()` from `@kernl/extension-sdk` in an extension
   (or `createPinnedLlmClient()` when a call must address one specific provider,
   e.g. benchmarking). NEVER instantiate a provider SDK, call a provider REST
   endpoint, or read a provider API key directly from a module or an extension.

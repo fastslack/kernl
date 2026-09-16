@@ -1,8 +1,11 @@
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import {
+  type SqliteDb,
+  type ImportResult,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { GoogleClient } from "../google-client.js";
-import type { ImportResult } from "../../../../../../src/core/integrations/google-types.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
 
 const CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 

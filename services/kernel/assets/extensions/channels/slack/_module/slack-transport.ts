@@ -4,17 +4,17 @@
  */
 
 import { App, LogLevel } from "@slack/bolt";
-import { log } from "../../../../../src/core/logger.js";
-import type {
-  ChannelTransport,
-  ChannelMessageHandler,
-  ChannelCallbackHandler,
-  ChannelMessage,
-  ChannelResponse,
-  ChannelStatus,
-  ChannelConfig,
-  ChannelAttachment,
-} from "../../../../../src/channels/types.js";
+import {
+  log,
+  type ChannelTransport,
+  type ChannelMessageHandler,
+  type ChannelCallbackHandler,
+  type ChannelMessage,
+  type ChannelResponse,
+  type ChannelStatus,
+  type ChannelConfig,
+  type ChannelAttachment,
+} from "@kernl/extension-sdk";
 
 export class SlackTransport implements ChannelTransport {
   readonly platform = "slack" as const;

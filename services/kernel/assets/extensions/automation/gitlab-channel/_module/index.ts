@@ -1,5 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type KernelModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
 import { gitlabChannelMigrations } from "./migrations.js";
 import { GitLabConnectionsService } from "./connections-service.js";
 import { GitLabRepoProvider } from "./provider.js";

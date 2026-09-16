@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, daysFromNow } from "@kernl/extension-sdk";
 
 export interface DashboardShoppingItem {
   id: string;

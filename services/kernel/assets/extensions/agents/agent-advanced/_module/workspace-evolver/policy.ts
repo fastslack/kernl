@@ -7,7 +7,7 @@
 
 import { readFile, writeFile, mkdir, chmod } from "node:fs/promises";
 import { resolve } from "node:path";
-import { checkProtected } from "../../../../../../src/core/protected-files.js";
+import { checkProtected } from "@kernl/extension-sdk";
 import type { WorkspacePolicy } from "./types.js";
 
 export const POLICY_RELPATH = ".evolve/policy.json";

@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists, toRecord } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, tableExists, toRecord } from "@kernl/extension-sdk";
 
 export interface DashboardEventsAttendee {
   id: string;

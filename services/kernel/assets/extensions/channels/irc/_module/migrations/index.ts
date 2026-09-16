@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 import { ircMigrations } from "./001_irc.js";
 import { upstreamMigrations } from "./002_upstream.js";
 

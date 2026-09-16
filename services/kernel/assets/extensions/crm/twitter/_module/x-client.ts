@@ -1,5 +1,5 @@
 import { createHmac, randomBytes } from "node:crypto";
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 
 // ── X API v2 Client (OAuth 1.0a) ─────────────────────────
 // Posts tweets using the X API v2 with user-context OAuth 1.0a authentication.

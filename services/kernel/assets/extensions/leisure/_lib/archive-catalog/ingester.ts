@@ -14,7 +14,7 @@
  * has work left, open or resume its run, walk maxPages pages.
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { ArchiveCatalog } from "./service.js";
 import type {
   ArchiveScrapeRow,

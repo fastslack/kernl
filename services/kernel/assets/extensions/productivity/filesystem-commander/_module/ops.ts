@@ -12,8 +12,7 @@ import { pipeline } from "node:stream/promises";
 import { Transform } from "node:stream";
 import { basename, join, posix } from "node:path";
 import type { FsProvider } from "./providers/provider.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import { newId, isoNow, log } from "@kernl/extension-sdk";
 
 export interface OpItem {
   from: string;

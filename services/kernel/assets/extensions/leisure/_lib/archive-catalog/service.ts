@@ -14,8 +14,7 @@
  *   - light catalog stats (countAll)
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { isoNow, newId } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, isoNow, newId } from "@kernl/extension-sdk";
 import type {
   ArchiveScrapeRow,
   CatalogListFilter,

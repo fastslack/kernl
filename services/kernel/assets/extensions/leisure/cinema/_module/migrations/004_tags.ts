@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 
 /**
  * cinema_tags — normalized tag catalog derived from cinema_titles.subject_json.

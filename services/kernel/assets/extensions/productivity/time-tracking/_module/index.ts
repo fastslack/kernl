@@ -1,11 +1,16 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { timeTrackingMigrations } from "./migrations/001_time_tracking.js";
 import { TimeTrackingService } from "./service.js";
 import { timeTrackingTools } from "./tools.js";
 import { queryTimeTracking } from "./dashboard-queries.js";
 import { timeTrackingRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createTimeTrackingModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];

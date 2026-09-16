@@ -1,8 +1,11 @@
 import { z } from "zod";
-import { defineTool } from "../../../../../src/core/tool-builder.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import { RankingService } from "../../../../../src/core/ranking/service.js";
+import {
+  defineTool,
+  textResult,
+  errorResult,
+  type ToolDefinition,
+  RankingService,
+} from "@kernl/extension-sdk";
 import type { RssRegistryService } from "./service.js";
 import type { RssItemWithFeed } from "./types.js";
 

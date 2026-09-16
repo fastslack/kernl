@@ -11,13 +11,15 @@
  *   - email:urgent       → notify on urgent/critical email triage
  */
 
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
-import type { ReminderServiceLike } from "../../../../../src/core/types/extensions/reminders.js";
-import type { KernelEventsModuleEvents } from "../../../../../src/core/types/extensions/events.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
-import { log } from "../../../../../src/core/logger.js";
-import { formatCents } from "../../../../../src/core/formatting.js";
+import {
+  type EventBus,
+  type Notifier,
+  type ReminderServiceLike,
+  type KernelEventsModuleEvents,
+  type SystemRegistry,
+  log,
+  formatCents,
+} from "@kernl/extension-sdk";
 
 export interface EventListenerDeps {
   events: EventBus;

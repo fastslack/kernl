@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, tableExists } from "@kernl/extension-sdk";
 
 export function queryRepos(db: SqliteDb): unknown {
   if (!tableExists(db, "repos")) return null;

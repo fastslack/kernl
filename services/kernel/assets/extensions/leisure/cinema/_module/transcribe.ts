@@ -9,10 +9,14 @@ import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createWriteStream, existsSync } from "node:fs";
-import { log } from "../../../../../src/core/logger.js";
-import { renameWithRetry } from "../../../../../src/core/fs-paths.js";
-import { mediaToolBin, mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
-import { loadTransformers } from "../../../../../src/core/transformers-cache.js";
+import {
+  log,
+  renameWithRetry,
+  mediaToolBin,
+  mediaToolError,
+  probeMediaTool,
+  loadTransformers,
+} from "@kernl/extension-sdk";
 import {
   parseBackendLog,
   pickBackend,

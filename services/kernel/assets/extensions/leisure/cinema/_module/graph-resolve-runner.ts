@@ -7,9 +7,7 @@
  * is invoked directly rather than looped.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { log, type SqliteDb, type GraphDriver } from "@kernl/extension-sdk";
 import { readCursor, writeCursor } from "./graph-projection.js";
 import { DEFAULT_RESOLVE_BATCH, proposeBatch } from "./graph-resolve.js";
 

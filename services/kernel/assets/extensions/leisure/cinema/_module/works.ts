@@ -27,7 +27,7 @@
  * remakes into a fiction.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import type { SqliteDb } from "@kernl/extension-sdk";
 import { normalizeTitle, extractYear, workKey } from "./title-norm.js";
 
 /** The columns grouping actually reads. */

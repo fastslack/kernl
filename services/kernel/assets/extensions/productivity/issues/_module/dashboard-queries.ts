@@ -1,5 +1,12 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists, safeAll, safeGet, toRecord, today, daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import {
+  type SqliteDb,
+  tableExists,
+  safeAll,
+  safeGet,
+  toRecord,
+  today,
+  daysFromNow,
+} from "@kernl/extension-sdk";
 
 // ── Issues ───────────────────────────────────────────
 

@@ -1,6 +1,6 @@
 import type { BillingCycle } from "./types.js";
 
-import { formatCents } from "../../../../../src/core/formatting.js";
+import { formatCents } from "@kernl/extension-sdk";
 export { formatCents };
 
 /** Advance a date by one billing cycle */

@@ -9,7 +9,7 @@
  * Passwords go in and never come out: responses carry `hasPassword` instead.
  */
 import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../../../../../../src/core/http-server.js";
+import type { KernelHttpServer } from "@kernl/extension-sdk";
 import type { UpstreamManager } from "./manager.js";
 import type { UpstreamStore } from "./store.js";
 import { NETWORK_PRESETS, findPreset } from "./networks.js";

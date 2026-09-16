@@ -1,11 +1,9 @@
-import { log } from "../../../../../src/core/logger.js";
+import { log, textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
 import { z } from "zod";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 import { AgentLoader } from "./loader.js";
 import { AgentSandbox } from "./sandbox.js";
 import { buildPermittedTools } from "./permissions.js";
 import type { AgentDescriptor, SandboxState } from "./types.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
 
 /**
  * SandboxAgentService

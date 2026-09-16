@@ -23,13 +23,13 @@
  * stage can pull from this extension via the registry without the core
  * importing any concrete advanced symbols.
  */
-import type {
-  KernelModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type EventBus,
+  log,
+} from "@kernl/extension-sdk";
 import type { AgentsModule } from "../../../../../src/modules/agents/index.js";
 import { createChatProviders } from "../../../../../src/modules/chat/llm-adapter.js";
 import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-handlers.js";

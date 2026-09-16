@@ -1,7 +1,5 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type SqliteDb, newId, isoNow, log } from "@kernl/extension-sdk";
 import type { IssueClient } from "./client.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
 
 interface GitHubIssue {
   id: number;

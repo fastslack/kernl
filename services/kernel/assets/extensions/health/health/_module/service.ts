@@ -1,7 +1,5 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
 import type { HealthMetric, HealthMedication, HealthAppointment, MetricType, MedicationFrequency, AppointmentStatus } from "./types.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
 const DEFAULT_UNITS: Record<string, string> = {
   weight: "kg", blood_pressure: "mmHg", heart_rate: "bpm",

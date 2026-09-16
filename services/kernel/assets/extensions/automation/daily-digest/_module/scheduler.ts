@@ -2,9 +2,7 @@
  * Scheduling primitives for the daily digest — kept pure so the timezone +
  * fire-once logic is unit-testable without mocking the clock.
  */
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type SqliteDb, type SystemRegistry, log } from "@kernl/extension-sdk";
 
 export type DigestKind = "evening" | "morning";
 

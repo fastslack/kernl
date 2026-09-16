@@ -10,12 +10,7 @@
  * orchestration. Lives as a module so it can be disabled or replaced
  * without touching the kernel core.
  */
-import type {
-  KernelModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import type { ReminderServiceLike } from "../../../../../src/core/types/extensions/reminders.js";
+import type { KernelModule, ModuleContext, ToolDefinition, ReminderServiceLike } from "@kernl/extension-sdk";
 import { setupEventListeners } from "./listeners.js";
 
 export function createEventsRemindersIntegrationModule(): KernelModule {

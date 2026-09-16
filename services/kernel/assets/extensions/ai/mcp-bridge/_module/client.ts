@@ -10,8 +10,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { z } from "zod";
-import { log } from "../../../../../src/core/logger.js";
-import type { ToolDefinition, ToolResult } from "../../../../../src/core/types.js";
+import { log, type ToolDefinition, type ToolResult } from "@kernl/extension-sdk";
 import type { McpServerConfig } from "./types.js";
 import { createClientCredentialsProvider, type TokenProvider } from "./oauth.js";
 

@@ -6,9 +6,14 @@
  */
 
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { textResult, errorResult, newId, isoNow } from "../../../../../src/core/helpers.js";
+import {
+  type ToolDefinition,
+  type SqliteDb,
+  textResult,
+  errorResult,
+  newId,
+  isoNow,
+} from "@kernl/extension-sdk";
 import {
   queryHabits,
   queryWaterIntake,

@@ -13,14 +13,14 @@
  * dependency-free.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type {
-  NotificationProvider,
-  NotificationPayload,
-  ProviderStatus,
-  ProviderCapability,
-  ConfigField,
-} from "../../../../../src/core/notify/provider.js";
+import {
+  log,
+  type NotificationProvider,
+  type NotificationPayload,
+  type ProviderStatus,
+  type ProviderCapability,
+  type ConfigField,
+} from "@kernl/extension-sdk";
 import type {
   MtwConnection,
   MtwMessage,

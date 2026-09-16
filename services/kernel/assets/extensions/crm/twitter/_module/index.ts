@@ -1,5 +1,11 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { twitterMigrations } from "./migrations.js";
 import { TwitterService } from "./service.js";
 import { TwitterPublisher } from "./publisher.js";
@@ -7,7 +13,6 @@ import { twitterTools } from "./tools.js";
 import { queryTwitter } from "./dashboard-query.js";
 import { registerTwitterRoutes } from "./api-routes.js";
 import { twitterDashboardRpcActions } from "./dashboard-rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export interface TwitterModule extends ExtensibleModule {
   getService(): TwitterService | null;

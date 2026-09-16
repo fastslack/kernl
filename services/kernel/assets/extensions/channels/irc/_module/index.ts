@@ -1,12 +1,12 @@
 import { resolve } from "node:path";
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { allIrcMigrations } from "./migrations/index.js";
 import { IrcStore } from "./store.js";
 import { UpstreamStore } from "./upstream/store.js";

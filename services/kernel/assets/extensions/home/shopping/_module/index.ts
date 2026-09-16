@@ -1,14 +1,19 @@
-import type { ExtensibleModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type DashboardDescriptor,
+  runMigrations,
+  type SqliteDb,
+  type EventBus,
+  type KernelConfig,
+} from "@kernl/extension-sdk";
 import { shoppingMigrations } from "./migrations/001_shopping.js";
 import { ShoppingService } from "./service.js";
 import { shoppingTools } from "./tools.js";
 import { shoppingRpcActions } from "./rpc-actions.js";
 import { queryShopping } from "./dashboard-queries.js";
 import { registerShoppingRoutes } from "./routes.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
 
 export function createShoppingModule(): ExtensibleModule & { getService(): ShoppingService | null } {
   let tools: ToolDefinition[] = [];

@@ -1,9 +1,8 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   LearningResource, LearningHighlight, LearningFlashcard,
   LearningReview, LearningGoal, ResourceType, ResourceStatus, HighlightType,
 } from "./types.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
 /** SM-2 spaced repetition algorithm */
 function sm2(card: LearningFlashcard, quality: number): {

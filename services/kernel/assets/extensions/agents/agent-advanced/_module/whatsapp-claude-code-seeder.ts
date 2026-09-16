@@ -9,9 +9,8 @@
  * to `"docker"` (or another registered driver) from the dashboard if you want isolation.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type SqliteDb, log } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
-import { log } from "../../../../../src/core/logger.js";
 import { WHATSAPP_CC_AGENT_NAME } from "../../../../../src/modules/agents/agent-name-conventions.js";
 
 export { WHATSAPP_CC_AGENT_NAME };

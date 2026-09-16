@@ -1,17 +1,17 @@
-import type {
-  ExtensibleModule,
-  DashboardDescriptor,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type EmbeddingsClient,
+} from "@kernl/extension-sdk";
 import { rssRegistryMigrations } from "./migrations.js";
 import { RssRegistryService } from "./service.js";
 import { RssScheduler } from "./scheduler.js";
 import { rssRegistryTools } from "./tools.js";
 import { registerRssRegistryRoutes } from "./api-routes.js";
 import { rssRegistryRpcActions } from "./rpc-actions.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/client.js";
 
 export interface RssRegistryModule extends ExtensibleModule {
   getService(): RssRegistryService | null;

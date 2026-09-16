@@ -11,10 +11,12 @@
  * dependencies; this file needs two and can be read on its own.
  */
 import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import { log } from "../../../../../src/core/logger.js";
-import { PeeringService } from "../../../../../src/core/peering/service.js";
-import { verifyRequest } from "../../../../../src/core/peering/auth.js";
+import {
+  type KernelHttpServer,
+  log,
+  peering as currentPeering,
+  verifyPeerRequest as verifyRequest,
+} from "@kernl/extension-sdk";
 import type { CinemaDirectoriesService as DirectoriesService } from "./directories-service.js";
 import { FriendsDirectorySync, FRIENDS_ENDPOINT } from "./friends-sync.js";
 
@@ -31,7 +33,7 @@ export function registerCinemaFriendsRoutes(
 ): void {
   // ── Called by another kernel ────────────────────────────────
   server.get(FRIENDS_ENDPOINT, async (req, res) => {
-    const peering = PeeringService.current;
+    const peering = currentPeering();
     const dirs = dirsRef();
     if (!peering || !dirs) {
       server.json(res, 503, { error: "not available" });
@@ -59,7 +61,7 @@ export function registerCinemaFriendsRoutes(
 
   // ── Called by the owner ─────────────────────────────────────
   server.post("/api/cinema/directories/sync-friends", async (_req, res) => {
-    const peering = PeeringService.current;
+    const peering = currentPeering();
     const dirs = dirsRef();
     if (!peering || !dirs) {
       server.json(res, 503, { error: "peering not available" });

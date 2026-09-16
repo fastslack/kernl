@@ -12,12 +12,24 @@
  */
 
 import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, cpSync } from "node:fs";
-import { resolve } from "node:path";
+import { delimiter, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { SDK_MAJOR } from "../src/sdk/host.js";
+import { checkExtensionBoundary } from "./check-extension-boundary.js";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const EXT_DIR = resolve(ROOT, "assets/extensions");
+
+/** The `sdk` major an extension's manifest declares, if any. */
+function manifestSdk(extDir: string): number | undefined {
+  try {
+    const m = JSON.parse(readFileSync(resolve(extDir, "extension.json"), "utf-8")) as { sdk?: number };
+    return m.sdk;
+  } catch {
+    return undefined;
+  }
+}
 
 // Dependencies that must not be bundled — they're resolved from the host
 // process' node_modules at runtime.
@@ -363,6 +375,19 @@ function main(): void {
       skipped++;
       continue;
     }
+
+    // The kernel refuses a backend that does not declare the SDK it speaks.
+    // Failing here, before bun runs, beats shipping a bundle that loads as
+    // `error` on every install.
+    const declaredSdk = manifestSdk(extDir);
+    if (declaredSdk !== SDK_MAJOR) {
+      console.error(
+        `[build-extensions] ${slug} FAILED: extension.json declares ${declaredSdk === undefined ? "no" : `"sdk": ${declaredSdk}`} ` +
+          `— backends must declare "sdk": ${SDK_MAJOR}`,
+      );
+      process.exitCode = 1;
+      continue;
+    }
     const outfile = resolve(extDir, "backend/entry.js");
 
     const args = [
@@ -394,6 +419,26 @@ function main(): void {
 
   // Must run after the backends are built: it reads the emitted entry.js.
   recordBackendPackages();
+
+  // Also reads the emitted bundles: any kernel file outside src/sdk/ inlined
+  // into one is a copy of kernel state travelling with that extension.
+  // KERNL_BOUNDARY_BASELINES adds baselines (path-delimited) after the
+  // kernel's own — a repo overlaying its extensions keeps its list there.
+  const extraBaselines = (process.env.KERNL_BOUNDARY_BASELINES ?? "").split(delimiter).filter(Boolean);
+  const boundaryProblems = checkExtensionBoundary({
+    root: EXT_DIR,
+    baselines: [resolve(ROOT, "scripts/extension-boundary-baseline.json"), ...extraBaselines],
+    buildCwd: process.cwd(),
+  });
+  if (boundaryProblems.length > 0) {
+    console.error(
+      `\n[build-extensions] extension ↔ kernel boundary: ${boundaryProblems.length} problem(s)\n  ` +
+        boundaryProblems.join("\n  ") + "\n",
+    );
+    process.exitCode = 1;
+  } else {
+    console.log("[build-extensions] extension ↔ kernel boundary clean");
+  }
 
   // Keep TypeScript happy with a harmless export so `bun run` doesn't treat
   // this as a "no-output" script in certain configurations.

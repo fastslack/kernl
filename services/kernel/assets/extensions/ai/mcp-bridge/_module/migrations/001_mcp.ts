@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 
 /**
  * MCP Bridge tables. All prefixed `mcp_` so they never collide with the

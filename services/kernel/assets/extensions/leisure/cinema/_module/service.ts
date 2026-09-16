@@ -14,8 +14,7 @@
  *     re-ingesting an existing identifier.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
 import type {
   ArchiveScrapeRow,

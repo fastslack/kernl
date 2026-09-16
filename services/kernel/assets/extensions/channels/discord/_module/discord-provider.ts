@@ -1,12 +1,12 @@
-import { log } from "../../../../../src/core/logger.js";
-import type {
-  NotificationProvider,
-  NotificationPayload,
-  ProviderStatus,
-  ProviderCapability,
-  ConfigField,
-} from "../../../../../src/core/notify/provider.js";
-import type { ChannelTransport } from "../../../../../src/channels/types.js";
+import {
+  log,
+  type NotificationProvider,
+  type NotificationPayload,
+  type ProviderStatus,
+  type ProviderCapability,
+  type ConfigField,
+  type ChannelTransport,
+} from "@kernl/extension-sdk";
 
 export class DiscordProvider implements NotificationProvider {
   readonly id = "discord";

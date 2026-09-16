@@ -5,8 +5,17 @@
 
 import { WebSocket, WebSocketServer } from "ws";
 import { timingSafeEqual } from "node:crypto";
-import { log } from "../../../../../src/core/logger.js";
-import { newId } from "../../../../../src/core/helpers.js";
+import {
+  log,
+  newId,
+  type ChannelTransport,
+  type ChannelMessageHandler,
+  type ChannelCallbackHandler,
+  type ChannelMessage,
+  type ChannelResponse,
+  type ChannelStatus,
+  type ChannelConfig,
+} from "@kernl/extension-sdk";
 
 function timingSafeEqualStr(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
@@ -45,15 +54,6 @@ function extractWsToken(url: string, headers: Record<string, string | string[] |
   }
   return null;
 }
-import type {
-  ChannelTransport,
-  ChannelMessageHandler,
-  ChannelCallbackHandler,
-  ChannelMessage,
-  ChannelResponse,
-  ChannelStatus,
-  ChannelConfig,
-} from "../../../../../src/channels/types.js";
 
 interface WebChatClient {
   id: string;

@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { toRecord } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, toRecord } from "@kernl/extension-sdk";
 
 export interface DashboardCrm {
   total: number;

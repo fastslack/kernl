@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists, today, daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, tableExists, today, daysFromNow } from "@kernl/extension-sdk";
 
 export interface DashboardTraining {
   kpis: { totalWorkouts: number; workoutsThisWeek: number; prsAllTime: number; activeProgramName: string | null };

@@ -4,6 +4,7 @@
   "slug": "rss-reader",
   "name": "RSS Reader",
   "version": "1.1.0",
+  "sdk": 1,
   "type": "module",
   "description": "Beautiful three-pane RSS reader. Consumes the rss-registry catalog, tracks read/starred state per item.",
   "long_description": "A modern, dynamic RSS reader UI: categories sidebar, item inbox with live preview, full reader pane with formatted article view. Supports unread tracking, starring, search, filters by feed/category/language, manual + automatic refresh, and live updates when the registry pushes new items.",

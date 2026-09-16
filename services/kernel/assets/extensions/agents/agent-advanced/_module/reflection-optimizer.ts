@@ -14,12 +14,15 @@
  * produced a better result. This is the "shadow evaluation" pragmatic choice.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import { sanitizePromptText } from "../../../../../src/core/prompt-sanitizer.js";
-import { stripReasoning } from "../../../../../src/core/llm/strip-reasoning.js";
+import {
+  log,
+  sanitizePromptText,
+  stripReasoning,
+  type KernelConfig,
+  type KernelLanguage,
+} from "@kernl/extension-sdk";
 import type { ChatLlmProvider } from "../../../../../src/modules/chat/llm-adapter.js";
 import type { ChatMessage } from "../../../../../src/modules/chat/types.js";
-import type { KernelConfig, KernelLanguage } from "../../../../../src/core/config.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { Agent, AgentEvolutionRun, AgentFeedback, AgentRun } from "../../../../../src/modules/agents/types.js";
 import { buildAgentChain, runWithChain, type ChainCandidate } from "./chain-runner.js";

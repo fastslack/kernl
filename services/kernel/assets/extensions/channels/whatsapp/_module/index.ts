@@ -1,4 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
+import type { KernelModule, ModuleContext, ToolDefinition } from "@kernl/extension-sdk";
 import { WhatsAppProvider } from "./whatsapp-provider.js";
 
 /**

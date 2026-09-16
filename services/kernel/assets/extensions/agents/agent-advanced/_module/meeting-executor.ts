@@ -16,10 +16,14 @@
  *   - Events for the 3D office visualization
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import { isoNow, newId } from "../../../../../src/core/helpers.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { KernelConfig, KernelLanguage } from "../../../../../src/core/config.js";
+import {
+  log,
+  isoNow,
+  newId,
+  type EventBus,
+  type KernelConfig,
+  type KernelLanguage,
+} from "@kernl/extension-sdk";
 import type { ChatLlmProvider } from "../../../../../src/modules/chat/llm-adapter.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { Agent } from "../../../../../src/modules/agents/types.js";

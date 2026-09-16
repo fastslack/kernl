@@ -7,8 +7,7 @@
 
 import { createHash } from "node:crypto";
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { FsCommanderService } from "./service.js";
 import type { FsEntry } from "./types.js";
 import type { FsProvider } from "./providers/provider.js";

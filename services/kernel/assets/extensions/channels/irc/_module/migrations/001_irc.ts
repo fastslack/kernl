@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 
 /**
  * IRC server persistence. The kernel is always-on, so these tables also make

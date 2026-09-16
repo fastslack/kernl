@@ -20,8 +20,7 @@
  * distributable extension cannot honour.
  */
 
-import { log } from "../../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import { log, type SqliteDb } from "@kernl/extension-sdk";
 import { normalizeTitle } from "../title-norm.js";
 import { MAX_YEAR_DELTA } from "./matcher.js";
 

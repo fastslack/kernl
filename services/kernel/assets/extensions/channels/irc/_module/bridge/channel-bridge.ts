@@ -11,7 +11,7 @@
  *
  * Mappings live in the kernel config store so they survive restarts.
  */
-import { log } from "../../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { IrcServer } from "../server/ircd.js";
 
 /** Minimal slice of NotificationRegistry the bridge calls. */

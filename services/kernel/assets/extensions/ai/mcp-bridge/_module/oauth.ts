@@ -14,7 +14,7 @@
  * 401 retry uses when a token is revoked before its stated expiry.
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { McpOAuthConfig } from "./types.js";
 
 /** Renew this long before the stated expiry unless the config overrides it. */

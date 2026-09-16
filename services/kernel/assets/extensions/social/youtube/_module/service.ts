@@ -1,7 +1,6 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import type { YouTubeAccountRow, YouTubeVideoRow } from "./types.js";
 
 const GOOGLE_OAUTH_TOKEN = "https://oauth2.googleapis.com/token";

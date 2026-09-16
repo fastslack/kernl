@@ -3,8 +3,7 @@
  */
 
 import crypto from "node:crypto";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
 
 export function financeRpcActions(db: SqliteDb): RpcAction[] {
   return [

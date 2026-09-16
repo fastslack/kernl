@@ -1,11 +1,16 @@
-import type { KernelModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type DashboardDescriptor,
+  runMigrations,
+  log,
+  type EventBus,
+} from "@kernl/extension-sdk";
 import { newsMigrations, seedDefaultFeeds } from "./news-migrations.js";
 import { NewsService } from "./news-service.js";
 import { newsDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { registerNewsRoutes } from "./routes.js";
-import { log } from "../../../../../src/core/logger.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
 
 export { NewsService } from "./news-service.js";
 export { newsMigrations, seedDefaultFeeds } from "./news-migrations.js";

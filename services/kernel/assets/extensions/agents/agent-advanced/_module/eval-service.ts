@@ -1,5 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
+import { log, type KernelConfig, stripReasoning } from "@kernl/extension-sdk";
 import type { ChatLlmProvider } from "../../../../../src/modules/chat/llm-adapter.js";
 import { resolveProvider } from "../../../../../src/modules/chat/llm-adapter.js";
 import type { ChatMessage } from "../../../../../src/modules/chat/types.js";
@@ -8,7 +7,6 @@ import type { AgentService } from "../../../../../src/modules/agents/service.js"
 import { buildAgentChain, runWithChain } from "./chain-runner.js";
 import { resolveAgentLanguage } from "../../../../../src/modules/agents/i18n.js";
 import { promptEvalSystem } from "../../../../../src/core/i18n/prompts.js";
-import { stripReasoning } from "../../../../../src/core/llm/strip-reasoning.js";
 
 export interface EvalResult {
   score: number;        // 1-5

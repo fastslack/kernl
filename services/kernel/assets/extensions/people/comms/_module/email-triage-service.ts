@@ -12,11 +12,14 @@
  *   4. User reviews/approves/edits drafts from /mail dashboard
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
-import { stripReasoning } from "../../../../../src/core/llm/strip-reasoning.js";
+import {
+  type SqliteDb,
+  type KernelConfig,
+  newId,
+  isoNow,
+  log,
+  stripReasoning,
+} from "@kernl/extension-sdk";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -67,7 +70,7 @@ export class EmailTriageService {
 
   /** LLM call via global singleton (routes through mtwRequest) */
   private async llmChat(system: string, user: string): Promise<string> {
-    const { llm } = await import("../../../../../src/core/llm/client.js");
+    const { llm } = await import("@kernl/extension-sdk");
     const result = await llm().chat({ system, user, caller: "email-triage" });
     return result.text;
   }

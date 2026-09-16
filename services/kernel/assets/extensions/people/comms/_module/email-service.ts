@@ -1,10 +1,8 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import { type SqliteDb, type EventBus, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   EmailAction, EmailLabel, EmailListItem, EmailDetail,
   ThreadDetail, EmailCounts, EmailFolder,
 } from "./types.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
 export class EmailService {
   constructor(

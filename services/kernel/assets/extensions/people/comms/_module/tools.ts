@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 const channelEnum = z.enum(["email", "whatsapp", "mattermost", "x", "instagram", "linkedin"]);
 const statusEnum = z.enum(["draft", "ready", "sending", "sent", "failed", "archived"]);
@@ -864,7 +863,7 @@ export function commsTools(service: CommsService): ToolDefinition[] {
   ];
 }
 
-export function commsTriageTools(service: CommsService, db: import("../../../../../src/core/db/sqlite.js").SqliteDb, config: { openaiApiKey: string; anthropicApiKey: string; defaultProvider?: string }): ToolDefinition[] {
+export function commsTriageTools(service: CommsService, db: import("@kernl/extension-sdk").SqliteDb, config: { openaiApiKey: string; anthropicApiKey: string; defaultProvider?: string }): ToolDefinition[] {
   return [
     {
       name: "kernel_comms_enrich_draft",
@@ -917,7 +916,7 @@ ${content}
 ${instruction ? `\nInstruction: ${instruction}` : ""}${originalContext}`;
 
         try {
-          const { llm } = await import("../../../../../src/core/llm/client.js");
+          const { llm } = await import("@kernl/extension-sdk");
           const result = await llm().chat({ system: systemPrompt, user: userMessage, caller: "comms:draft-update" });
           const newBody = result.text;
           if (!newBody) return errorResult("LLM returned empty response");

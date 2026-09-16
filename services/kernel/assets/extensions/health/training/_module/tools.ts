@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { TrainingService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 const CATEGORIES = ["strength", "cardio", "flexibility", "balance", "sport", "custom"] as const;
 const EQUIPMENT = ["none", "barbell", "dumbbell", "kettlebell", "machine", "cable", "bodyweight", "bands", "cardio_machine", "custom"] as const;

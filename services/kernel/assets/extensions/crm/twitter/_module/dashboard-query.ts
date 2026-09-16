@@ -1,4 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import type { SqliteDb } from "@kernl/extension-sdk";
 
 export function queryTwitter(db: SqliteDb): Record<string, unknown> {
   try {

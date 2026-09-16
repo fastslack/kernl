@@ -3,8 +3,7 @@
  * panel data feed.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
 import { queryTwitter } from "./dashboard-query.js";

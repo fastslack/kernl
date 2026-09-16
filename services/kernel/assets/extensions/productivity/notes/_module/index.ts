@@ -1,11 +1,16 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { notesMigrations } from "./migrations/001_notes.js";
 import { NotesService } from "./service.js";
 import { notesTools } from "./tools.js";
 import { queryNotes } from "./dashboard-queries.js";
 import { notesRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createNotesModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];

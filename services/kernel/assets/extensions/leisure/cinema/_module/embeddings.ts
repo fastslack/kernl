@@ -11,10 +11,7 @@
  * background, and never silently mixes incompatible vectors.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
-import { safeIndexSuffix } from "../../../../../src/core/embeddings/index.js";
+import { log, type GraphDriver, type EmbeddingsClient, safeIndexSuffix } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import type { CinemaTitle } from "./types.js";
 

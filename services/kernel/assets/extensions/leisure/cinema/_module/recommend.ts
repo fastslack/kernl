@@ -18,10 +18,7 @@
  * without a graph.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
+import { log, type SqliteDb, type GraphDriver, type EmbeddingsClient } from "@kernl/extension-sdk";
 import { indexNameFor } from "./embeddings.js";
 
 /** Matches the label embeddings.ts writes. */

@@ -15,7 +15,7 @@
  * one from looking "stale".
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import type { ArchiveScrapeRow } from "./types.js";
 import { CINEMA_COLLECTIONS } from "./ingester.js";

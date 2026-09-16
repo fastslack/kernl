@@ -1,5 +1,5 @@
 import type { GoogleClient } from "../../../../integration/google-sync/_module/google-client.js";
-import type { GmailMessageFull, GmailMessageDetail } from "../../../../../../src/core/integrations/google-types.js";
+import type { GmailMessageFull, GmailMessageDetail } from "@kernl/extension-sdk";
 import type { InboxMessage } from "../types.js";
 import type { EmailProvider, ProviderCapabilities, SendEmailOptions, SendResult } from "./types.js";
 import { buildMimeMessage } from "../mime-builder.js";

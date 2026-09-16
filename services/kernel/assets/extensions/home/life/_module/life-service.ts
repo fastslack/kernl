@@ -1,7 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
+import { log, type SqliteDb, type KernelConfig, type SystemRegistry } from "@kernl/extension-sdk";
 import { queryDailySummary, queryHabits, queryWaterIntake, queryMoodLog } from "../../../../../src/modules/dashboard/life-queries.js";
 
 // ── Module-level caches ───────────────────────

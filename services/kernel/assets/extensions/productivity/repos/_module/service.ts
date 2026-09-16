@@ -1,9 +1,7 @@
 import { existsSync, statSync, readdirSync } from "node:fs";
 import { resolve, join, basename, isAbsolute, sep as pathSep } from "node:path";
 import { execFileSync } from "node:child_process";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { isPathInside } from "../../../../../src/core/fs-paths.js";
+import { type SqliteDb, newId, isoNow, isPathInside } from "@kernl/extension-sdk";
 import type { Repo, CreateRepoInput, UpdateRepoInput } from "./types.js";
 
 const SLUG_RE = /^[a-z0-9][a-z0-9-_]{0,62}$/;

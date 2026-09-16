@@ -1,9 +1,4 @@
-import type {
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type ExtensibleModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
 import { youtubeMigrations } from "./migrations/001_youtube.js";
 import { YouTubeService } from "./service.js";
 import { youtubeTools } from "./tools.js";

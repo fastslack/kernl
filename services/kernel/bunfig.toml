@@ -18,6 +18,11 @@ peer = true
 # (`include` is not a bun option; `root` is.)
 root = "tests"
 
+# Install the kernel's extension host before any suite runs, so extension code
+# under test reaches the real logger, LLM driver and request context instead of
+# the SDK's default host (which refuses anything needing a running kernel).
+preload = ["./tests/setup/kernl-host.ts"]
+
 # Globals: describe, it, expect, etc. — compatible with vitest API
 smol = false
 

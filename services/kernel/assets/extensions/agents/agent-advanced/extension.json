@@ -18,6 +18,7 @@
     "evolver"
   ],
   "kernel_min": "0.1.0",
+  "sdk": 1,
   "permissions": [
     "network",
     "filesystem"

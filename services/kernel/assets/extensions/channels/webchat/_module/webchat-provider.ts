@@ -5,8 +5,8 @@ import type {
   ProviderStatus,
   ProviderCapability,
   ConfigField,
-} from "../../../../../src/core/notify/provider.js";
-import type { ChannelTransport } from "../../../../../src/channels/types.js";
+  ChannelTransport,
+} from "@kernl/extension-sdk";
 
 export class WebChatProvider implements NotificationProvider {
   readonly id = "webchat";

@@ -1,0 +1,6 @@
+{
+  "name": "@kernl/extension-sdk",
+  "private": true,
+  "type": "module",
+  "sideEffects": false
+}

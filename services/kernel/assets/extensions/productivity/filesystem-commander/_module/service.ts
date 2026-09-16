@@ -7,10 +7,13 @@
  * This module is framework-agnostic — the HTTP/MCP layers call into it.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type SqliteDb,
+  type KernelConfig,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type {
   Bookmark,
   HistoryRow,

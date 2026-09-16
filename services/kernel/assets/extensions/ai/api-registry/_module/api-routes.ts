@@ -3,7 +3,7 @@
  * configure API keys, and discover external APIs by intent.
  */
 import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import type { KernelHttpServer } from "@kernl/extension-sdk";
 import type { ApiRegistryService } from "./service.js";
 
 export function registerApiRegistryRoutes(

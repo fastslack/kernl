@@ -30,6 +30,7 @@
 
 import { loadConfig } from "../config.js";
 import { setLogLevel, log } from "../logger.js";
+import { installKernlHost } from "../host-runtime.js";
 import { initDatabases } from "./databases.js";
 import { initRegistries } from "./registries.js";
 import { initCoreModules } from "./core-modules.js";
@@ -45,6 +46,12 @@ import { installShutdownHandlers } from "./shutdown.js";
 import type { MeshModule } from "../types/extensions/index.js";
 
 export async function bootstrap(): Promise<void> {
+  // ── Extension host ─────────────────────────────────
+  // Before anything can log through the SDK and before any extension loads:
+  // extensions reach the logger, the LLM driver and the request context
+  // through this one slot.
+  installKernlHost();
+
   // ── Config + log level ─────────────────────────────
   const config = loadConfig();
   setLogLevel(config.logLevel as "debug" | "info" | "warn" | "error");

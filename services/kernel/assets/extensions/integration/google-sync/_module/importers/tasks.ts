@@ -1,9 +1,14 @@
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import {
+  type SqliteDb,
+  type GoogleTask,
+  type GoogleTaskList,
+  type ImportResult,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { TaskService } from "../../../../productivity/tasks/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
-import type { GoogleTask, GoogleTaskList, ImportResult } from "../../../../../../src/core/integrations/google-types.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
 
 const TASK_LISTS_URL = "https://www.googleapis.com/tasks/v1/users/@me/lists";
 

@@ -9,9 +9,7 @@
  * because that whitelist is a `Set.has` with no wildcards.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, type RpcAction, isoNow } from "@kernl/extension-sdk";
 import { discoverHttpServer } from "./discovery.js";
 import { buildAuthorizationUrl } from "./oauth-routes.js";
 import type { McpStore, McpServerRow } from "./store.js";

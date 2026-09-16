@@ -1,8 +1,5 @@
 import { Bot, Context, InputFile, InlineKeyboard, type NextFunction } from "grammy";
-import { log } from "../../../../../src/core/logger.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type { VoiceService } from "../../../../../src/voice/service.js";
-import type { InlineButton } from "../../../../../src/core/extension-seams.js";
+import { log, type KernelConfig, type VoiceService, type InlineButton } from "@kernl/extension-sdk";
 
 export type { InlineButton };
 

@@ -31,18 +31,26 @@ import {
   type SDKMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 
-import { log } from "../../../../../src/core/logger.js";
-import { findOnPath, toPermissionRulePath } from "../../../../../src/core/fs-paths.js";
+import {
+  log,
+  findOnPath,
+  toPermissionRulePath,
+  logLlmStart,
+  logLlmEnd,
+  logLlmFail,
+  isoNow,
+  type KernelConfig,
+  type EventBus,
+  type SandboxDriverRegistry,
+  type SandboxHandle,
+  type SandboxRunOptions,
+} from "@kernl/extension-sdk";
 import { failureNote } from "./failure-note.js";
 import {
   resolveDefaultSocketPath as resolveKernelMcpSocketPath,
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
 } from "../../../../../src/core/mcp-unix-socket.js";
-import { logLlmStart, logLlmEnd, logLlmFail } from "../../../../../src/core/llm/logger.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import { seedOfficeHome, officeHomeGuidance } from "../../../../../src/modules/agents/office-home.js";
@@ -54,8 +62,6 @@ import {
   promptLearningsBlock,
   promptStyleDirective,
 } from "../../../../../src/core/i18n/prompts.js";
-import type { SandboxDriverRegistry } from "../../../../../src/core/sandbox/registry.js";
-import type { SandboxHandle, SandboxRunOptions } from "../../../../../src/core/sandbox/driver.js";
 import type { WorkspaceService } from "./workspace-service.js";
 
 export interface ClaudeCodeExecuteParams {

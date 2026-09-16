@@ -1,10 +1,14 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { learningMigrations } from "./migrations/001_learning.js";
 import { LearningService } from "./service.js";
 import { learningTools } from "./tools.js";
 import { learningRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createLearningModule(): KernelModule {
   let tools: ToolDefinition[] = [];

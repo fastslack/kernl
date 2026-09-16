@@ -1,11 +1,16 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { subscriptionsMigrations } from "./migrations/001_subscriptions.js";
 import { SubscriptionService } from "./service.js";
 import { subscriptionTools } from "./tools.js";
 import { querySubscriptions } from "./dashboard-queries.js";
 import { subscriptionsRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createSubscriptionsModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];

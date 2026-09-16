@@ -1,10 +1,10 @@
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type ModuleContext,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { musicMigrations } from "./migrations/001_music.js";
 import { MusicService } from "./service.js";
 import { registerMusicRoutes } from "./api-routes.js";

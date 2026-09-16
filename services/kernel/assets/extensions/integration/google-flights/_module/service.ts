@@ -9,9 +9,7 @@
  * (`google_flights_searches`) so abuse is observable.
  */
 
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { newId, isoNow, log, type SqliteDb } from "@kernl/extension-sdk";
 import { encodeFilters } from "./encoder.js";
 import { parseSearchResponse } from "./parser.js";
 import {

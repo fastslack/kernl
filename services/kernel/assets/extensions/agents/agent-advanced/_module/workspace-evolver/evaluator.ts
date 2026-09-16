@@ -11,7 +11,7 @@
 
 import { spawn } from "node:child_process";
 import { resolve } from "node:path";
-import { shellCommand } from "../../../../../../src/core/fs-paths.js";
+import { shellCommand } from "@kernl/extension-sdk";
 import type { WorkspacePolicy, EvaluationResult } from "./types.js";
 
 export async function runEvaluation(

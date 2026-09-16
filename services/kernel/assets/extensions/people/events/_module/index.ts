@@ -1,5 +1,13 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+  type SystemRegistry,
+  type EventBus,
+} from "@kernl/extension-sdk";
 import { eventsMigrations } from "./migrations/001_events.js";
 import { EventsService } from "./service.js";
 import { eventsTools } from "./tools.js";
@@ -8,9 +16,6 @@ import { queryEvents } from "./dashboard-queries.js";
 import { eventsRpcActions } from "./rpc-actions.js";
 import { eventsDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { registerEventsRoutes } from "./routes.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
 
 export interface EventsModule extends ExtensibleModule {
   getService(): EventsService | null;

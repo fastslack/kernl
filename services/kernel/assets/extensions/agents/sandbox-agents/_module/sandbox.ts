@@ -1,5 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
+import { log, isoNow, type ToolDefinition } from "@kernl/extension-sdk";
 import type {
   AgentDescriptor,
   AgentManifest,
@@ -10,7 +9,6 @@ import type {
   SandboxState,
   SandboxStatus,
 } from "./types.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
 
 // Bun.spawn with stdio:"pipe" guarantees FileSink for stdin and ReadableStream for stdout/stderr,
 // but bun-types types them as union. Cast helpers below:

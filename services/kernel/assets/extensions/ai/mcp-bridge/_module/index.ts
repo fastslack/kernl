@@ -11,10 +11,15 @@
  * whatever it holds on first boot, so no existing configuration is lost.
  */
 
-import type { KernelModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
-import { log } from "../../../../../src/core/logger.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type DashboardDescriptor,
+  type RpcAction,
+  log,
+  runMigrations,
+} from "@kernl/extension-sdk";
 import { parseMcpBridgeServers } from "./types.js";
 import { mcpMigrations } from "./migrations/001_mcp.js";
 import { McpStore } from "./store.js";

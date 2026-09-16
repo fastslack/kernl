@@ -16,10 +16,9 @@
  * `[legacy]` nudges in their description.
  */
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, errorResult, structuredResult, textResult } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
 import type { EventWithSummary, EventAttendee } from "./types.js";
-import { errorResult, structuredResult, textResult } from "../../../../../src/core/helpers.js";
 
 // ── Shared schemas ────────────────────────────────────────────
 

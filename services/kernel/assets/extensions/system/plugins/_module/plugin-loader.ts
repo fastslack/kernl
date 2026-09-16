@@ -1,9 +1,7 @@
 import { join } from "node:path";
 import { access } from "node:fs/promises";
 import { pathToFileURL } from "node:url";
-import type { ModuleContext, KernelModule } from "../../../../../src/core/types.js";
-import type { ModuleRegistry } from "../../../../../src/core/module-registry.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type ModuleContext, type KernelModule, type ModuleRegistry, log } from "@kernl/extension-sdk";
 import type { InstalledPlugin, PluginManifest, PluginModuleExport } from "./types.js";
 
 /**

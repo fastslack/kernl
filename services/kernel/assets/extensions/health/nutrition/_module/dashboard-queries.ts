@@ -1,5 +1,11 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists, safeAll, safeGet, today, daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import {
+  type SqliteDb,
+  tableExists,
+  safeAll,
+  safeGet,
+  today,
+  daysFromNow,
+} from "@kernl/extension-sdk";
 
 export interface DashboardNutrition {
   kpis: { logsToday: number; caloriestoday: number; proteinToday: number; waterTodayMl: number; waterGoalMl: number; activeFast: boolean };

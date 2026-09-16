@@ -9,7 +9,7 @@
  * issues — not just the agent's own goal execution.
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import {
   type ChatLlmProvider,
 } from "../../../../../src/modules/chat/llm-adapter.js";

@@ -1,10 +1,8 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult, formatCents } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 import type { EventWithSummary, AttendanceSummary } from "./types.js";
 
-import { formatCents } from "../../../../../src/core/formatting.js";
 
 // Helper to format event summary
 function formatEventSummary(e: EventWithSummary): string {

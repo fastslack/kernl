@@ -1,12 +1,14 @@
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  KernelModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type KernelConfig,
+  runMigrations,
+  type AgentDriver,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { googleSyncMigrations } from "./migrations/001_google_sync.js";
 import { fullSyncMigrations } from "./migrations/002_full_sync.js";
 import { emailTriageMigrations } from "./migrations/003_email_triage.js";
@@ -24,8 +26,6 @@ import { GoogleSyncService } from "./sync-service.js";
 import { registerGoogleOAuthRoutes } from "./oauth-routes.js";
 import { googleSyncDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { googleSyncAgentDrivers } from "./agent-drivers.js";
-import type { AgentDriver } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export interface GoogleSyncModule extends ExtensibleModule {
   getService(): GoogleSyncService | null;

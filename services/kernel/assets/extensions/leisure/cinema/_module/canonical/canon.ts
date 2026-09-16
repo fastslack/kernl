@@ -30,8 +30,7 @@
  * immediately, with no second network trip.
  */
 
-import { log } from "../../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import { log, type SqliteDb } from "@kernl/extension-sdk";
 
 const ENDPOINT = "https://query.wikidata.org/sparql";
 const USER_AGENT = "Kernl-cinema/1.0 (https://github.com/kernl; canon-lists)";

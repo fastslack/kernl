@@ -1,9 +1,7 @@
 import { z } from "zod";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { textResult, errorResult, type ToolDefinition, formatCents } from "@kernl/extension-sdk";
 import type { TravelService } from "./service.js";
 
-import { formatCents } from "../../../../../src/core/formatting.js";
 
 export function travelTools(svc: TravelService): ToolDefinition[] {
   return [

@@ -20,8 +20,7 @@
  * orchestrator must not break the caller's message post.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import { log, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { MeetingExecutor } from "./meeting-executor.js";
 import type { AgentConversation, AgentMessage } from "../../../../../src/modules/agents/types.js";

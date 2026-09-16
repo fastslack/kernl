@@ -7,11 +7,8 @@
  * POST /api/google/revoke       — Revoke stored tokens
  */
 
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
 import { GoogleAuth } from "./auth.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export function registerGoogleOAuthRoutes(
   server: KernelHttpServer,

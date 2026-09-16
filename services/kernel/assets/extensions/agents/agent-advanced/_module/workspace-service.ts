@@ -9,9 +9,7 @@
  */
 
 import { readdirSync, existsSync } from "node:fs";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type SqliteDb, newId, isoNow, log } from "@kernl/extension-sdk";
 import { WORKSPACE_ROOT, DEFAULT_WORKSPACE_NAME } from "../../../../../src/modules/agents/workspace-constants.js";
 
 export { WORKSPACE_ROOT, DEFAULT_WORKSPACE_NAME };

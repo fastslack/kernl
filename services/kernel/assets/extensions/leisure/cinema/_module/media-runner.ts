@@ -15,8 +15,7 @@
  * wide would be rude to infrastructure the project depends on.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { log, type SqliteDb } from "@kernl/extension-sdk";
 import {
   probeItem,
   recordFacts,

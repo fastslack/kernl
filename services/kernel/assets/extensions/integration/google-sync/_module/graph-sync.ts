@@ -1,6 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver, GraphResult } from "../../../../../src/core/db-drivers/graph-driver.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type SqliteDb, type GraphDriver, type GraphResult, log } from "@kernl/extension-sdk";
 
 const BATCH_SIZE = 200;
 

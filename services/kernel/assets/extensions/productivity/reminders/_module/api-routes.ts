@@ -2,9 +2,7 @@
  * HTTP routes for reminders. Mirrors the tasks module pattern: simple
  * action endpoints (dismiss, snooze) backed by direct SQL writes.
  */
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import type { KernelHttpServer, SqliteDb, EventBus } from "@kernl/extension-sdk";
 
 export function registerRemindersRoutes(
   server: KernelHttpServer,

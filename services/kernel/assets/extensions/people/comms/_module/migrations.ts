@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 
 /**
  * Consolidated initial schema for the `comms` extension.

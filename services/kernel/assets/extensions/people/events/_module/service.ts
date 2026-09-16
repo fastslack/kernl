@@ -1,6 +1,4 @@
-import type { SqliteDb as Database } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import { type SqliteDb as Database, newId, isoNow, type EventBus } from "@kernl/extension-sdk";
 import type {
   Event,
   EventAttendee,

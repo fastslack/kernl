@@ -1,4 +1,4 @@
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import type { KernelHttpServer } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
 

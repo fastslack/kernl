@@ -45,6 +45,7 @@ function manifestFor(opts: { packages?: boolean; requiresActivation?: boolean })
     license: "MIT",
     category: "utility",
     ...(opts.requiresActivation ? { requires_activation: true } : {}),
+    sdk: 1,
     backend: {
       entry: "backend/entry.js",
       ...(opts.packages ? { packages: { [SDK]: "1.0.0" } } : {}),

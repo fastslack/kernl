@@ -9,11 +9,9 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import { type KernelHttpServer, checkProtected, formatViolation, log } from "@kernl/extension-sdk";
 import type { FsCommanderService } from "./service.js";
 import { buildPreview, guessMime } from "./preview.js";
-import { checkProtected, formatViolation } from "../../../../../src/core/protected-files.js";
-import { log } from "../../../../../src/core/logger.js";
 
 function q(req: IncomingMessage): URLSearchParams {
   return new URL(req.url ?? "/", "http://localhost").searchParams;

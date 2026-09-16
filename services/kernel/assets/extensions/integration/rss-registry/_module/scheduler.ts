@@ -1,4 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { RssRegistryService } from "./service.js";
 
 /**

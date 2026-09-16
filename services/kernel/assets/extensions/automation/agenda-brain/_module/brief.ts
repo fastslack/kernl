@@ -1,4 +1,4 @@
-import { newId, isoNow } from '../../../../../src/core/helpers.js';
+import { newId, isoNow } from "@kernl/extension-sdk";
 import type { TodayPlan } from './types.js';
 
 export function buildBrief(plan: TodayPlan, slot: 'morning' | 'evening'): { title: string; body: string } {

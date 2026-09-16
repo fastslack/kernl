@@ -11,9 +11,7 @@
 
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import { log } from "../../../../../src/core/logger.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type GraphDriver, log, newId, isoNow } from "@kernl/extension-sdk";
 
 // ── Types ──────────────────────────────────────────────
 

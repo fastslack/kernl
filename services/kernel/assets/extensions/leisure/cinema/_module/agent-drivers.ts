@@ -17,10 +17,14 @@ import { existsSync } from "node:fs";
 import { readFile, readdir } from "node:fs/promises";
 import path from "node:path";
 
-import type { AgentDriver, KernelModule, ModuleContext } from "../../../../../src/core/types.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type AgentDriver,
+  type KernelModule,
+  type ModuleContext,
+  type GraphDriver,
+  type EmbeddingsClient,
+  log,
+} from "@kernl/extension-sdk";
 
 import type { CinemaService } from "./service.js";
 import type { CinemaSubsService } from "./subs-service.js";

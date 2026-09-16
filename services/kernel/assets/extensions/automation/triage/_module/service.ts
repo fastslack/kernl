@@ -1,7 +1,10 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { llm } from "../../../../../src/core/llm/client.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type SqliteDb,
+  newId,
+  isoNow,
+  llm,
+  log,
+} from "@kernl/extension-sdk";
 import type {
   RepoProvider,
   RepoProviderRegistry,

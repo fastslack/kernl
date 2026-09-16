@@ -12,10 +12,14 @@
  * so google-sync keeps working when comms isn't installed.
  */
 
-import type { AgentDriver, KernelModule, ModuleContext } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
-import { safeQueryOne } from "../../../../../src/core/db/query-helpers.js";
+import {
+  type AgentDriver,
+  type KernelModule,
+  type ModuleContext,
+  type SqliteDb,
+  type Notifier,
+  safeQueryOne,
+} from "@kernl/extension-sdk";
 import type { GoogleSyncService } from "./sync-service.js";
 
 export interface GoogleSyncDriverDeps {

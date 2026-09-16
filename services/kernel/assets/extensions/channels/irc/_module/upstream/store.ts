@@ -6,10 +6,14 @@
  * so the encryption happens without this module knowing the cipher. Rows are
  * scoped by `account`, which is what keeps one user's networks out of another's.
  */
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { encryptSecrets, decryptSecrets } from "../../../../../../src/core/secrets.js";
-import { log } from "../../../../../../src/core/logger.js";
+import {
+  type SqliteDb,
+  newId,
+  isoNow,
+  encryptSecrets,
+  decryptSecrets,
+  log,
+} from "@kernl/extension-sdk";
 
 export interface UpstreamRow {
   id: string;

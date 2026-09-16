@@ -2,10 +2,7 @@
  * AgendaBrainScheduler — polls every minute and fires morning (08:00) and
  * evening (23:00) briefs in Europe/Amsterdam time, idempotent across restarts.
  */
-import type { SqliteDb } from '../../../../../src/core/db/sqlite.js';
-import type { Notifier } from '../../../../../src/core/notify/notifier.js';
-import type { SystemRegistry } from '../../../../../src/core/system-registry.js';
-import { log } from '../../../../../src/core/logger.js';
+import { type SqliteDb, type Notifier, type SystemRegistry, log } from "@kernl/extension-sdk";
 import { planToday } from './brain-service.js';
 import { buildBrief, alreadySent, recordSent } from './brief.js';
 

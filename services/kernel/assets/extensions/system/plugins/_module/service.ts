@@ -1,13 +1,16 @@
 import { resolve, join } from "node:path";
 import { rm, readFile, access, copyFile, mkdir } from "node:fs/promises";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type SqliteDb,
+  type GraphDriver,
+  type KernelConfig,
+  newId,
+  isoNow,
+  log,
+  renameWithRetry,
+} from "@kernl/extension-sdk";
 // rename() that rides out the transient EPERM/EBUSY Windows raises while an
 // antivirus or the indexer still holds the freshly cloned/extracted files.
-import { renameWithRetry } from "../../../../../src/core/fs-paths.js";
 import type {
   PluginRepo,
   PluginRegistryEntry,

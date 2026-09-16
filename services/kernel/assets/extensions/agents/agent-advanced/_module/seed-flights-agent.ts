@@ -9,10 +9,8 @@
  * operator disabled by hand.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type SqliteDb, isoNow, log } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
 
 const FLOW = {
   name: "Flights",

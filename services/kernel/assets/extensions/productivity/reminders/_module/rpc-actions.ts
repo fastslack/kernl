@@ -5,7 +5,7 @@
  * the same behaviour as the MCP tools (Neo4j mirror, repeat handling, etc.).
  */
 
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { RpcAction } from "@kernl/extension-sdk";
 import type { ReminderService } from "./service.js";
 import type { RepeatInterval } from "./types.js";
 

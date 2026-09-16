@@ -24,7 +24,7 @@
  * fixtures rather than the network.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import type { SqliteDb } from "@kernl/extension-sdk";
 
 const ENDPOINT = "https://archive.org/metadata";
 const TIMEOUT_MS = 20_000;

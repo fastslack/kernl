@@ -11,7 +11,7 @@
  *     skipped silently (read-only providers are normal).
  */
 
-import { log } from "../../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import {
   ProviderNotPublishableError,
   type ProviderId,

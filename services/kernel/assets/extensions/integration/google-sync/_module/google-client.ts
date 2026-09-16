@@ -1,5 +1,5 @@
 import type { GoogleAuth } from "./auth.js";
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;

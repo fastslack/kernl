@@ -30,9 +30,7 @@
  * properties and hides the fact that a row was missing.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { log, type SqliteDb, type GraphDriver } from "@kernl/extension-sdk";
 import { DEDUPE_EXCLUDED_COLLECTIONS } from "./works.js";
 
 /** Rows pulled from SQLite per batch. Sized so one batch is a few MB of

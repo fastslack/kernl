@@ -24,14 +24,18 @@
 
 import { z } from "zod";
 import { readFile, writeFile, mkdir, readdir, stat, unlink } from "node:fs/promises";
-import { checkProtected, formatViolation } from "../../../../../src/core/protected-files.js";
-import { isPathInside } from "../../../../../src/core/fs-paths.js";
+import {
+  checkProtected,
+  formatViolation,
+  isPathInside,
+  textResult,
+  errorResult,
+  log,
+  type ToolDefinition,
+} from "@kernl/extension-sdk";
 import { resolve, relative, join, normalize, dirname } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import { WorkspaceService, WORKSPACE_ROOT, type Workspace } from "./workspace-service.js";
 import { composeUp, composeExec, markExec as composeMarkExec } from "./workspace-compose.js";

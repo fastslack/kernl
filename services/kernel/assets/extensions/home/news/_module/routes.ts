@@ -1,8 +1,6 @@
 import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import { type KernelHttpServer, type EventBus, log } from "@kernl/extension-sdk";
 import type { NewsService } from "./news-service.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export function registerNewsRoutes(
   server: KernelHttpServer,

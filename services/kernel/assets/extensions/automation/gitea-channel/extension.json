@@ -4,6 +4,7 @@
   "slug": "gitea-channel",
   "name": "Gitea Channel Backend",
   "version": "0.1.0",
+  "sdk": 1,
   "type": "module",
   "description": "Backend for the Gitea channel: connection storage (host + PAT) and the RepoProvider implementation consumed by triage and any other module that needs Gitea access.",
   "author": "Kernl",

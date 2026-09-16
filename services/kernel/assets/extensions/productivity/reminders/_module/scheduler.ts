@@ -1,8 +1,5 @@
-import { log } from "../../../../../src/core/logger.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
+import { log, type EventBus, type SystemRegistry, type Notifier } from "@kernl/extension-sdk";
 import type { ReminderService } from "./service.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
 
 export class ReminderScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;

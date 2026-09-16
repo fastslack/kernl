@@ -8,8 +8,7 @@
  * Connections belong to an account, so a client only ever relays through, or
  * even sees, the networks its own account owns.
  */
-import { log } from "../../../../../../src/core/logger.js";
-import { newId } from "../../../../../../src/core/helpers.js";
+import { log, newId } from "@kernl/extension-sdk";
 import type { IrcServer, InboundEvent } from "../server/ircd.js";
 import type { IrcClient } from "../server/client.js";
 import type { IrcStore } from "../store.js";

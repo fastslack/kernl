@@ -9,8 +9,7 @@
  * behind a dead onion, or simply switched off is an ordinary state of the
  * world — it is logged and the sweep moves on to the next one.
  */
-import { log } from "../../../../../src/core/logger.js";
-import type { PeeringService } from "../../../../../src/core/peering/service.js";
+import { log, type PeeringService } from "@kernl/extension-sdk";
 import type { CinemaDirectory, CinemaDirectoriesService as DirectoriesService } from "./directories-service.js";
 
 export const FRIENDS_ENDPOINT = "/api/cinema/directories/friend-view";

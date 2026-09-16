@@ -4,7 +4,7 @@
  * scope to the user's personal items (tasks / events / reminders), exclude
  * soft-deleted tasks, and anchor "today/tomorrow" to Europe/Amsterdam.
  */
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import type { SqliteDb } from "@kernl/extension-sdk";
 import { amsterdamParts } from "./scheduler.js";
 
 export interface DigestContent {

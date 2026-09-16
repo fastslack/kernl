@@ -28,9 +28,7 @@
  *     ffmpeg or whisper.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type SqliteDb, isoNow, log } from "@kernl/extension-sdk";
 
 export type TranscribeJobState = "running" | "ready" | "error" | "interrupted";
 

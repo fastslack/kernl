@@ -1,10 +1,14 @@
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import {
+  type SqliteDb,
+  type GoogleEvent,
+  type ImportResult,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { ReminderService } from "../../../../productivity/reminders/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
-import type { GoogleEvent, ImportResult } from "../../../../../../src/core/integrations/google-types.js";
 import type { RepeatInterval } from "../../../../productivity/reminders/_module/types.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
 
 const CALENDAR_API_URL = "https://www.googleapis.com/calendar/v3/calendars/primary/events";
 

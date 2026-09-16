@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { errorResult, textResult } from "../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { errorResult, textResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { GoogleFlightsService, SimpleSearchInput } from "./service.js";
 import type { FlightLeg, FlightResult } from "./types.js";
 

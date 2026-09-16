@@ -1,6 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { log } from "../../../../../src/core/logger.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, log, newId, isoNow } from "@kernl/extension-sdk";
 
 // ── Seed X/Twitter Agents ─────────────────────────────────
 // Pre-configured agents for automated X content management.

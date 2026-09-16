@@ -20,8 +20,7 @@
  * queries arrive in ES.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import { llm } from "../../../../../src/core/llm/client.js";
+import { log, llm } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import type { CinemaTitle } from "./types.js";
 

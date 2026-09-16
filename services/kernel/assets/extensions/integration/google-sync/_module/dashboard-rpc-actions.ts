@@ -3,9 +3,7 @@
  * Google integrations dashboard panel.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { SqliteDb, KernelConfig, RpcAction } from "@kernl/extension-sdk";
 import { GoogleAuth } from "./auth.js";
 
 export interface GoogleSyncDashboardRpcDeps {

@@ -1,8 +1,5 @@
 import { createServer, type Server } from "node:http";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GoogleTokens } from "../../../../../src/core/integrations/google-types.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type SqliteDb, type GoogleTokens, isoNow, log } from "@kernl/extension-sdk";
 
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
