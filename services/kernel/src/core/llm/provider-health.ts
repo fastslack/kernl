@@ -465,6 +465,33 @@ export function _resetForTests(): void {
   state.clear();
 }
 
+// ── Reporting a fault that belongs to the model, not the provider ───────
+
+/**
+ * Where a model-specific failure goes.
+ *
+ * The blocklist that retires a dead model lives behind a database handle, and
+ * this module is bundled into extensions that have none — importing it here
+ * would also drag a new kernel file into those bundles and trip the extension
+ * boundary gate. So the sink is installed once at boot, and this module only
+ * reports. Until now nothing reported: the blocklist was filled by hand, by
+ * whoever thought to run the chain test.
+ */
+type ModelFaultSink = (slug: string, model: string, kind: FailureKind, message: string) => void;
+
+const FAULT_SINK_KEY = "__kernlModelFaultSink";
+
+export function setModelFaultSink(fn: ModelFaultSink | null): void {
+  (globalThis as Record<string, unknown>)[FAULT_SINK_KEY] = fn ?? undefined;
+}
+
+/** No-op when nothing is installed, which is every test and every CLI tool. */
+export function reportModelFault(slug: string, model: string, kind: FailureKind, message: string): void {
+  if (!slug || !model) return;
+  const sink = (globalThis as Record<string, unknown>)[FAULT_SINK_KEY] as ModelFaultSink | undefined;
+  if (typeof sink === "function") sink(slug, model, kind, message);
+}
+
 // ── Failure-classification helper ───────────────────────────────────────
 
 /**

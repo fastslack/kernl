@@ -26,7 +26,6 @@ import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import { createSkillRegistry } from "../../skills/index.js";
 import { createMarketplaceModule, type MarketplaceModule } from "../../modules/marketplace/index.js";
 import { migrateLlmCredentials } from "../llm/credential-migration.js";
-import { mirrorDeferredEnv } from "../llm/credentials-legacy.js";
 import { hasCliSession } from "../llm/claude-code-auth.js";
 import { applyClaudeCodeTransition } from "../llm/claude-code-transition.js";
 
@@ -96,7 +95,6 @@ export async function initDrivers(args: {
   if (ccState === "legacy-token") {
     log.warn("Claude Code is still using a token stored by an older Kernl. Sign in with the CLI (Settings → AI) to retire it.");
   }
-  mirrorDeferredEnv();
   await llmRegistry.startAll();
 
   // ── DB drivers — seed + start active ────────────────

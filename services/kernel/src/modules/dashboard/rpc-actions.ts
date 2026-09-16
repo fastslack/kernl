@@ -31,7 +31,8 @@ import type { ConfigService } from "../config/service.js";
 import { getGlobalPiiFilter } from "../../core/pii-filter.js";
 import { createChatProviders } from "../../core/llm/chat-adapters.js";
 import { writeEnvFile } from "../config/ai-routes.js";
-import { legacyCredentialTarget } from "../../core/llm/credentials-legacy.js";
+import { legacyCredentialTarget, legacyToStoredPatch } from "../../core/llm/credentials-legacy.js";
+import { getProviderConfig, isConnected, saveProviderConfig } from "../../core/llm/credentials.js";
 import { log } from "../../core/logger.js";
 import {
   queryKpis,
@@ -364,18 +365,19 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
       {
         name: "config.ai.get",
         handler: async () => {
-          const anthropicKey = aiCfg.webIntel.anthropicApiKey;
-          const openaiKey = aiCfg.webIntel.openaiApiKey;
-          const grokKey = aiCfg.webIntel.grokApiKey;
-          const nvidiaKey = aiCfg.webIntel.nvidiaApiKey;
+          const anthropicKey = getProviderConfig("claude").apiKey;
+          const openaiKey = getProviderConfig("openai").apiKey;
+          const grokKey = getProviderConfig("grok").apiKey;
+          const nvidiaKey = getProviderConfig("nvidia").apiKey;
+          const lmstudioBaseUrl = isConnected("lmstudio") ? getProviderConfig("lmstudio").baseUrl : "";
           const elevenLabsKey = aiCfg.voice.elevenLabsApiKey;
           return {
             providers: {
               anthropic: { configured: anthropicKey.length > 0, keyMasked: maskKey(anthropicKey) },
               openai: { configured: openaiKey.length > 0, keyMasked: maskKey(openaiKey) },
-              grok: { configured: grokKey.length > 0, keyMasked: maskKey(grokKey), defaultModel: aiCfg.webIntel.grokDefaultModel },
-              nvidia: { configured: nvidiaKey.length > 0, keyMasked: maskKey(nvidiaKey), defaultModel: aiCfg.webIntel.nvidiaDefaultModel },
-              lmstudio: { configured: aiCfg.webIntel.lmstudioBaseUrl.length > 0, baseUrl: aiCfg.webIntel.lmstudioBaseUrl },
+              grok: { configured: grokKey.length > 0, keyMasked: maskKey(grokKey), defaultModel: getProviderConfig("grok").model },
+              nvidia: { configured: nvidiaKey.length > 0, keyMasked: maskKey(nvidiaKey), defaultModel: getProviderConfig("nvidia").model },
+              lmstudio: { configured: lmstudioBaseUrl.length > 0, baseUrl: lmstudioBaseUrl },
               minimax: (() => {
                 const mm = (llmRegistry?.loadConfig("minimax") ?? {}) as Record<string, unknown>;
                 const key = typeof mm.apiKey === "string" ? mm.apiKey : "";
@@ -418,33 +420,33 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
               try { configService.set(key, value, "user"); } catch { /* keep going; env mirror already applied */ }
             }
           };
+          // Credential keys route through the provider registry instead of
+          // aiCfg.webIntel/aiCfg.voice (those fields no longer exist).
+          const persistCredential = (envKey: string, value: string): void => {
+            persist(envKey, value);
+            const legacy = legacyToStoredPatch(envKey, value);
+            if (legacy) saveProviderConfig(legacy.slug, legacy.patch);
+          };
 
           const body = args as Record<string, string | undefined>;
 
           if (body.anthropicApiKey && body.anthropicApiKey !== "") {
-            persist("ANTHROPIC_API_KEY", body.anthropicApiKey);
-            aiCfg.webIntel.anthropicApiKey = body.anthropicApiKey;
+            persistCredential("ANTHROPIC_API_KEY", body.anthropicApiKey);
           }
           if (body.openaiApiKey && body.openaiApiKey !== "") {
-            persist("OPENAI_API_KEY", body.openaiApiKey);
-            aiCfg.webIntel.openaiApiKey = body.openaiApiKey;
-            aiCfg.voice.openaiApiKey = body.openaiApiKey;
+            persistCredential("OPENAI_API_KEY", body.openaiApiKey);
           }
           if (body.grokApiKey && body.grokApiKey !== "") {
-            persist("GROK_API_KEY", body.grokApiKey);
-            aiCfg.webIntel.grokApiKey = body.grokApiKey;
+            persistCredential("GROK_API_KEY", body.grokApiKey);
           }
           if (body.grokDefaultModel !== undefined) {
-            persist("GROK_DEFAULT_MODEL", body.grokDefaultModel ?? "");
-            aiCfg.webIntel.grokDefaultModel = body.grokDefaultModel ?? "";
+            persistCredential("GROK_DEFAULT_MODEL", body.grokDefaultModel ?? "");
           }
           if (body.nvidiaApiKey && body.nvidiaApiKey !== "") {
-            persist("NVIDIA_API_KEY", body.nvidiaApiKey);
-            aiCfg.webIntel.nvidiaApiKey = body.nvidiaApiKey;
+            persistCredential("NVIDIA_API_KEY", body.nvidiaApiKey);
           }
           if (body.nvidiaDefaultModel !== undefined) {
-            persist("NVIDIA_DEFAULT_MODEL", body.nvidiaDefaultModel ?? "");
-            aiCfg.webIntel.nvidiaDefaultModel = body.nvidiaDefaultModel ?? "";
+            persistCredential("NVIDIA_DEFAULT_MODEL", body.nvidiaDefaultModel ?? "");
           }
           if (body.googleClientId && body.googleClientId !== "") {
             persist("GOOGLE_CLIENT_ID", body.googleClientId);
@@ -455,8 +457,7 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
             aiCfg.google.clientSecret = body.googleClientSecret;
           }
           if (body.lmstudioBaseUrl !== undefined) {
-            persist("LMSTUDIO_BASE_URL", body.lmstudioBaseUrl ?? "");
-            aiCfg.webIntel.lmstudioBaseUrl = body.lmstudioBaseUrl ?? "";
+            persistCredential("LMSTUDIO_BASE_URL", body.lmstudioBaseUrl ?? "");
           }
           // MiniMax — registry-native: persist to settings_json + mirror to env.
           {

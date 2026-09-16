@@ -23,6 +23,7 @@ import type { createRustDelegates } from "../rust/delegates.js";
 import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import { Orchestrator } from "../orchestrator.js";
 import { wireMessageRouting } from "../message-routing.js";
+import { getProviderConfig } from "../llm/credentials.js";
 import { VoiceService } from "../../voice/index.js";
 import { RateLimiter, type PairingManager } from "../../security/index.js";
 
@@ -58,16 +59,17 @@ export async function wireServicesLate(args: {
   let voiceService: VoiceService | null = null;
   if (config.voice.enabled) {
     try {
+      const openaiApiKey = getProviderConfig("openai").apiKey;
       voiceService = new VoiceService({
         stt: {
           provider: config.voice.sttProvider,
-          openaiApiKey: config.voice.openaiApiKey,
+          openaiApiKey,
           localWhisperPath: config.voice.localWhisperPath,
         },
         tts: {
           provider: config.voice.ttsProvider,
           elevenLabsApiKey: config.voice.elevenLabsApiKey,
-          openaiApiKey: config.voice.openaiApiKey,
+          openaiApiKey,
           defaultVoice: {
             voiceId: config.voice.defaultVoiceId,
             name: config.voice.defaultVoiceId,

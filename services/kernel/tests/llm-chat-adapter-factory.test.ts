@@ -91,9 +91,9 @@ describe("createChatProviders", () => {
     expect(ollama.available()).toBe(true);
   });
 
-  it("accepts the legacy key-object call and ignores the keys", () => {
+  it("keys always come from the registry, regardless of other AdapterOptions", () => {
     install({ nvidia: { apiKey: "from-registry" } });
-    const map = createChatProviders({ nvidiaApiKey: "ignored", anthropicApiKey: "ignored" });
+    const map = createChatProviders({ defaultModel: "some-default" });
     expect(map.get("nvidia")!.available()).toBe(true);
     expect(map.get("claude")!.available()).toBe(false);
   });

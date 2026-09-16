@@ -18,6 +18,7 @@
  */
 
 import type { LlmClient } from "../core/llm/client.js";
+import type { ProviderConfig } from "../core/llm/credentials.js";
 import type { KernelConfig } from "../core/config.js";
 import type { LlmStartInfo, LlmEndInfo, LlmFailInfo } from "../core/llm/logger.js";
 import type { MediaTool, MediaToolStatus } from "../core/media-tools.js";
@@ -40,6 +41,18 @@ export interface KernlHost {
   readonly log: Logger;
   llm(): LlmClient;
   createPinnedLlmClient(provider: string, model: string, config: KernelConfig): LlmClient | null;
+  /**
+   * A provider's key, URL and model from the kernel's encrypted provider
+   * registry — for the few extension features that must call a provider API
+   * directly (speech-to-text). Chat goes through `llm()`.
+   */
+  getProviderConfig(slugOrAlias: string): ProviderConfig;
+  /**
+   * Whether the user finished connecting this provider. `getProviderConfig`
+   * alone cannot answer this for a provider like LM Studio, whose `baseUrl`
+   * falls back to a non-empty catalog default even when never connected.
+   */
+  isConnected(slugOrAlias: string): boolean;
   logLlmStart(info: LlmStartInfo): void;
   logLlmEnd(info: LlmEndInfo): void;
   logLlmFail(info: LlmFailInfo): void;
@@ -96,6 +109,8 @@ const defaultHost: KernlHost = Object.freeze({
   }),
   llm: () => notInstalled("llm"),
   createPinnedLlmClient: () => notInstalled("createPinnedLlmClient"),
+  getProviderConfig: () => notInstalled("getProviderConfig"),
+  isConnected: () => notInstalled("isConnected"),
   logLlmStart: () => {},
   logLlmEnd: () => {},
   logLlmFail: () => {},

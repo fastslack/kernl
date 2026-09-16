@@ -113,16 +113,7 @@ export function createAgentsModule(): AgentsModule {
       initProviderStatus(ctx.sqlite);
 
       // Set up LLM providers (reusing chat's provider infrastructure)
-      const providers = createChatProviders({
-        anthropicApiKey: ctx.config.webIntel.anthropicApiKey,
-        openaiApiKey: ctx.config.webIntel.openaiApiKey,
-        lmstudioBaseUrl: ctx.config.webIntel.lmstudioBaseUrl,
-        grokApiKey: ctx.config.webIntel.grokApiKey,
-        grokDefaultModel: ctx.config.webIntel.grokDefaultModel,
-        nvidiaApiKey: ctx.config.webIntel.nvidiaApiKey,
-        nvidiaDefaultModel: ctx.config.webIntel.nvidiaDefaultModel,
-        claudeCode: ctx.config.claudeCode,
-      });
+      const providers = createChatProviders({ claudeCode: ctx.config.claudeCode });
       const defaultProvider = ctx.config.agents?.defaultProvider || ctx.config.chat.defaultProvider || "claude";
       agentExecutor.setProviders(providers, defaultProvider);
 

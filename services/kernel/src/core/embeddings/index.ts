@@ -33,6 +33,7 @@
 
 import { log } from "../logger.js";
 import type { KernelConfig } from "../config.js";
+import { getProviderConfig, isConnected } from "../llm/credentials.js";
 import type { EmbeddingsClient } from "./client.js";
 import { LmStudioEmbeddings } from "./lmstudio.js";
 import { LocalEmbeddings } from "./local.js";
@@ -104,7 +105,7 @@ function resolveLink(
   const slug = kernelProvider.toLowerCase();
   switch (slug) {
     case "openai": {
-      const apiKey = config.webIntel.openaiApiKey;
+      const apiKey = getProviderConfig("openai").apiKey;
       if (!apiKey) return null;
       const d = PROVIDER_DEFAULTS.openai;
       return {
@@ -117,7 +118,7 @@ function resolveLink(
     }
     case "nvidia":
     case "nim": {
-      const apiKey = config.webIntel.nvidiaApiKey;
+      const apiKey = getProviderConfig("nvidia").apiKey;
       if (!apiKey) return null;
       const d = PROVIDER_DEFAULTS.nvidia;
       return {
@@ -147,7 +148,7 @@ function resolveLink(
       // baseUrl from /models). This preserves the current behavior — the
       // legacy EMBEDDINGS_MODEL/DIM still pins the LMStudio link.
       const base = config.embeddings.baseUrl
-        || config.webIntel.lmstudioBaseUrl
+        || (isConnected("lmstudio") ? getProviderConfig("lmstudio").baseUrl : "")
         || "http://127.0.0.1:1234/v1";
       // Normalize /chat/completions tails that may have leaked in from the
       // chat chain config.

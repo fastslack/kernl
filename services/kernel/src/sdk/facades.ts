@@ -7,6 +7,7 @@
 import { getHost, type KernlHost } from "./host.js";
 import type { KernelConfig } from "../core/config.js";
 import type { LlmClient } from "../core/llm/client.js";
+import type { ProviderConfig } from "../core/llm/credentials.js";
 import type { LlmStartInfo, LlmEndInfo, LlmFailInfo } from "../core/llm/logger.js";
 import type { MediaTool, MediaToolStatus } from "../core/media-tools.js";
 import type { KernelRequestContext } from "../core/request-context.js";
@@ -40,6 +41,20 @@ export function logLlmEnd(info: LlmEndInfo): void {
 
 export function logLlmFail(info: LlmFailInfo): void {
   getHost().logLlmFail(info);
+}
+
+/**
+ * A provider's key, URL and model from the kernel's encrypted provider
+ * registry. For the few extension features that must call a provider API that
+ * is not a chat completion (speech-to-text); chat goes through `llm()`.
+ */
+export function getProviderConfig(slugOrAlias: string): ProviderConfig {
+  return getHost().getProviderConfig(slugOrAlias);
+}
+
+/** Whether the user finished connecting this provider. */
+export function isConnected(slugOrAlias: string): boolean {
+  return getHost().isConnected(slugOrAlias);
 }
 
 /** The caller context of the MCP request being served, or an empty default. */

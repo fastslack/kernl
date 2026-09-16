@@ -16,7 +16,8 @@ import type { AgentExecutor } from "../agents/executor.js";
 import type { ConfigService } from "./service.js";
 import { createChatProviders } from "../../core/llm/chat-adapters.js";
 import { reloadLlmClient } from "../../core/llm/client.js";
-import { legacyCredentialTarget } from "../../core/llm/credentials-legacy.js";
+import { legacyCredentialTarget, legacyToStoredPatch } from "../../core/llm/credentials-legacy.js";
+import { getProviderConfig, isConnected, saveProviderConfig } from "../../core/llm/credentials.js";
 
 /** Mask a key: show first 8 chars + *** */
 function maskKey(key: string): string {
@@ -86,10 +87,11 @@ export function registerAiConfigRoutes(
 
   // ── GET /api/config/ai ──────────────────────────────────
   server.get("/api/config/ai", (_req, res) => {
-    const anthropicKey = config.webIntel.anthropicApiKey;
-    const openaiKey = config.webIntel.openaiApiKey;
-    const grokKey = config.webIntel.grokApiKey;
-    const nvidiaKey = config.webIntel.nvidiaApiKey;
+    const anthropicKey = getProviderConfig("claude").apiKey;
+    const openaiKey = getProviderConfig("openai").apiKey;
+    const grokKey = getProviderConfig("grok").apiKey;
+    const nvidiaKey = getProviderConfig("nvidia").apiKey;
+    const lmstudioBaseUrl = isConnected("lmstudio") ? getProviderConfig("lmstudio").baseUrl : "";
     const elevenLabsKey = config.voice.elevenLabsApiKey;
 
     server.json(res, 200, {
@@ -106,16 +108,16 @@ export function registerAiConfigRoutes(
         grok: {
           configured: grokKey.length > 0,
           keyMasked: maskKey(grokKey),
-          defaultModel: config.webIntel.grokDefaultModel,
+          defaultModel: getProviderConfig("grok").model,
         },
         nvidia: {
           configured: nvidiaKey.length > 0,
           keyMasked: maskKey(nvidiaKey),
-          defaultModel: config.webIntel.nvidiaDefaultModel,
+          defaultModel: getProviderConfig("nvidia").model,
         },
         lmstudio: {
-          configured: config.webIntel.lmstudioBaseUrl.length > 0,
-          baseUrl: config.webIntel.lmstudioBaseUrl,
+          configured: lmstudioBaseUrl.length > 0,
+          baseUrl: lmstudioBaseUrl,
         },
         minimax: (() => {
           // MiniMax is registry-native (no config.webIntel home). Read its
@@ -184,33 +186,33 @@ export function registerAiConfigRoutes(
           try { configService.set(key, value, "user"); } catch { /* keep going; env mirror already applied */ }
         }
       };
+      // Credential keys route through the provider registry instead of
+      // config.webIntel/config.voice (those fields no longer exist).
+      const persistCredential = (envKey: string, value: string): void => {
+        persist(envKey, value);
+        const legacy = legacyToStoredPatch(envKey, value);
+        if (legacy) saveProviderConfig(legacy.slug, legacy.patch);
+      };
 
       // API Keys — only update if a non-empty value was provided
       // (empty string means "leave unchanged")
       if (body.anthropicApiKey !== undefined && body.anthropicApiKey !== "") {
-        persist("ANTHROPIC_API_KEY", body.anthropicApiKey);
-        config.webIntel.anthropicApiKey = body.anthropicApiKey;
+        persistCredential("ANTHROPIC_API_KEY", body.anthropicApiKey);
       }
       if (body.openaiApiKey !== undefined && body.openaiApiKey !== "") {
-        persist("OPENAI_API_KEY", body.openaiApiKey);
-        config.webIntel.openaiApiKey = body.openaiApiKey;
-        config.voice.openaiApiKey = body.openaiApiKey;
+        persistCredential("OPENAI_API_KEY", body.openaiApiKey);
       }
       if (body.grokApiKey !== undefined && body.grokApiKey !== "") {
-        persist("GROK_API_KEY", body.grokApiKey);
-        config.webIntel.grokApiKey = body.grokApiKey;
+        persistCredential("GROK_API_KEY", body.grokApiKey);
       }
       if (body.grokDefaultModel !== undefined) {
-        persist("GROK_DEFAULT_MODEL", body.grokDefaultModel);
-        config.webIntel.grokDefaultModel = body.grokDefaultModel;
+        persistCredential("GROK_DEFAULT_MODEL", body.grokDefaultModel);
       }
       if (body.nvidiaApiKey !== undefined && body.nvidiaApiKey !== "") {
-        persist("NVIDIA_API_KEY", body.nvidiaApiKey);
-        config.webIntel.nvidiaApiKey = body.nvidiaApiKey;
+        persistCredential("NVIDIA_API_KEY", body.nvidiaApiKey);
       }
       if (body.nvidiaDefaultModel !== undefined) {
-        persist("NVIDIA_DEFAULT_MODEL", body.nvidiaDefaultModel);
-        config.webIntel.nvidiaDefaultModel = body.nvidiaDefaultModel;
+        persistCredential("NVIDIA_DEFAULT_MODEL", body.nvidiaDefaultModel);
       }
       if (body.googleClientId !== undefined && body.googleClientId !== "") {
         persist("GOOGLE_CLIENT_ID", body.googleClientId);
@@ -221,8 +223,7 @@ export function registerAiConfigRoutes(
         config.google.clientSecret = body.googleClientSecret;
       }
       if (body.lmstudioBaseUrl !== undefined) {
-        persist("LMSTUDIO_BASE_URL", body.lmstudioBaseUrl);
-        config.webIntel.lmstudioBaseUrl = body.lmstudioBaseUrl;
+        persistCredential("LMSTUDIO_BASE_URL", body.lmstudioBaseUrl);
       }
       if (body.elevenLabsApiKey !== undefined && body.elevenLabsApiKey !== "") {
         persist("ELEVENLABS_API_KEY", body.elevenLabsApiKey);
@@ -370,7 +371,7 @@ export function registerAiConfigRoutes(
   // ── GET /api/config/ai/lm-models — Proxy to LMStudio /v1/models (avoids CORS) ──
   server.get("/api/config/ai/lm-models", async (_req, res) => {
     try {
-      const baseUrl = (config.webIntel.lmstudioBaseUrl || "http://localhost:1234/v1").replace(/\/+$/, "");
+      const baseUrl = (getProviderConfig("lmstudio").baseUrl || "http://localhost:1234/v1").replace(/\/+$/, "");
       const r = await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(5_000) });
       const body = await r.json() as any;
       const models = (body.data ?? []).map((m: any) => m.id);

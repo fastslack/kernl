@@ -39,6 +39,7 @@ import {
   logLlmEnd,
   logLlmFail,
   isoNow,
+  getProviderConfig,
   type KernelConfig,
   type EventBus,
   type SandboxDriverRegistry,
@@ -459,7 +460,7 @@ export class ClaudeCodeExecutor {
       //   - the CLI isn't installed / isn't logged in, or
       //   - the agent explicitly asks for `__prefer_api_key__ = true`
       //     (e.g. headless deploys with no CLI session).
-      const apiKey = this.configRef?.webIntel?.anthropicApiKey || process.env.ANTHROPIC_API_KEY || "";
+      const apiKey = getProviderConfig("claude").apiKey;
       apiKeyResolved = apiKey;
       const claudeBin = this.findClaudeCodeBinary();
       claudeBinResolved = claudeBin;

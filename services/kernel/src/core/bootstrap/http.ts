@@ -186,11 +186,22 @@ export async function initHttpAndMcp(args: {
       // (timeout / 404) so the dropdown at /models stops offering it.
       const { ModelBlocklist } = await import("../llm/model-blocklist.js");
       const modelBlocklist = new ModelBlocklist(sqlite);
+      // Every chat and agent call can now retire a model that turns out to be
+      // advertised but not served, instead of waiting for someone to run the
+      // chain test by hand. The classification stays in ModelBlocklist so this
+      // path and the chain test agree on what counts as the model's fault.
+      const { setModelFaultSink } = await import("../llm/provider-health.js");
+      setModelFaultSink((slug, model, kind, message) => {
+        const reason = ModelBlocklist.reasonForFailure(kind, message);
+        if (!reason) return;
+        modelBlocklist.block(slug, model, reason, message);
+        log.warn(`LLM: "${model}" removed from ${slug}'s model list (${reason}).`);
+      });
       // After a provider's settings_json is saved via PUT /api/llm-providers/:slug/config,
       // mirror it into config.webIntel.* + .env and hot-reload the chat adapter /
       // llm() singleton so chat/agents/web-intel pick up the change without a restart.
       const { reloadLlmClient } = await import("../llm/client.js");
-      const { legacyCredentialTarget, mirrorDeferredEnv } = await import("../llm/credentials-legacy.js");
+      const { legacyCredentialTarget } = await import("../llm/credentials-legacy.js");
       // ── Rehydrate stored settings into process.env ────────────────
       //
       // ConfigService.set() writes app_settings + process.env + .env, but
@@ -269,7 +280,6 @@ export async function initHttpAndMcp(args: {
       // readiness. Shared by the old settings-save callback and the new
       // connect routes so both behave the same.
       const refreshLlmConsumers = (why: string): void => {
-        mirrorDeferredEnv();
         try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* chat may be disabled */ }
         void import("../llm/chat-adapters.js").then(({ createChatProviders }) => {
           const executor = (registry.getModule("agents") as { getExecutor?: () => { setProviders(p: ReturnType<typeof createChatProviders>, d: string): void } | null } | undefined)?.getExecutor?.();

@@ -16,6 +16,7 @@ import {
   mediaToolError,
   probeMediaTool,
   loadTransformers,
+  getProviderConfig,
 } from "@kernl/extension-sdk";
 import {
   parseBackendLog,
@@ -706,11 +707,11 @@ const GROQ_ENDPOINT =
 const GROQ_MODEL = process.env.GROQ_WHISPER_MODEL ?? "whisper-large-v3";
 
 export function isGroqAvailable(): boolean {
-  return Boolean(process.env.GROQ_API_KEY);
+  return getProviderConfig("groq").apiKey !== "";
 }
 
 async function transcribeGroq(url: string, opts: TranscribeOpts): Promise<SubCue[]> {
-  if (!isGroqAvailable()) throw new Error("GROQ_API_KEY not set");
+  if (!isGroqAvailable()) throw new Error("Connect Groq in Settings → AI to use cloud transcription");
   const emit = opts.onProgress;
   emit?.({ subPhase: "probe", frac: 0 });
   const probedSec = await resolveExtractDuration(url, opts.durationSec);
@@ -740,7 +741,7 @@ async function transcribeGroq(url: string, opts: TranscribeOpts): Promise<SubCue
 
     const r = await fetch(GROQ_ENDPOINT, {
       method: "POST",
-      headers: { authorization: `Bearer ${process.env.GROQ_API_KEY}` },
+      headers: { authorization: `Bearer ${getProviderConfig("groq").apiKey}` },
       body: fd,
       signal: opts.signal,
     });

@@ -57,14 +57,6 @@ export interface KernelConfig {
   webIntel: {
     pollIntervalMs: number;
     defaultLlm: string;
-    /** @deprecated read through getProviderConfig(); accessor over the provider registry. */
-    anthropicApiKey: string;
-    openaiApiKey: string;
-    grokApiKey: string;
-    grokDefaultModel: string;
-    nvidiaApiKey: string;
-    nvidiaDefaultModel: string;
-    lmstudioBaseUrl: string;
     braveApiKey: string;
     googleCseKey: string;
     googleCseCx: string;
@@ -156,7 +148,6 @@ export interface KernelConfig {
     enabled: boolean;
     sttProvider: "openai" | "local-whisper";
     ttsProvider: "elevenlabs" | "openai" | "system";
-    openaiApiKey: string;
     elevenLabsApiKey: string;
     localWhisperPath: string;
     defaultVoiceId: string;
@@ -394,16 +385,9 @@ export function loadConfig(): KernelConfig {
     webIntel: {
       pollIntervalMs: parseInt(process.env.WEBINTEL_POLL_INTERVAL_MS ?? "60000", 10),
       defaultLlm: process.env.WEBINTEL_DEFAULT_LLM ?? "claude",
-      // Provider credentials live in the encrypted provider registry. These
-      // fields are replaced at boot by read-only accessors over it
-      // (installLegacyCredentialMirror) for code that still reads them.
-      anthropicApiKey: "",
-      openaiApiKey: "",
-      grokApiKey: "",
-      grokDefaultModel: "",
-      nvidiaApiKey: "",
-      nvidiaDefaultModel: "",
-      lmstudioBaseUrl: "",
+      // Provider credentials live in the encrypted provider registry — read
+      // them through getProviderConfig() (core) or the SDK facade of the
+      // same name (extensions), never from this config object.
       braveApiKey: process.env.BRAVE_API_KEY ?? "",
       googleCseKey: process.env.GOOGLE_CSE_KEY ?? "",
       googleCseCx: process.env.GOOGLE_CSE_CX ?? "",
@@ -502,7 +486,6 @@ export function loadConfig(): KernelConfig {
       enabled: process.env.VOICE_ENABLED === "true",
       sttProvider: (process.env.VOICE_STT_PROVIDER ?? "openai") as "openai" | "local-whisper",
       ttsProvider: (process.env.VOICE_TTS_PROVIDER ?? "system") as "elevenlabs" | "openai" | "system",
-      openaiApiKey: "",
       elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
       localWhisperPath: process.env.LOCAL_WHISPER_PATH ?? "",
       defaultVoiceId: process.env.VOICE_DEFAULT_ID ?? "alloy",

@@ -11,6 +11,7 @@ import {
   type AgentDriver,
   log,
   gateToolList,
+  getProviderConfig,
 } from "@kernl/extension-sdk";
 import { commsMigrations } from "./migrations.js";
 import { CommsService } from "./service.js";
@@ -220,8 +221,8 @@ export function createCommsModule(): CommsModule {
     getCommsTriageTools() {
       if (!serviceRef || !dbRef || !configRef) return [];
       return commsTriageTools(serviceRef, dbRef, {
-        openaiApiKey: configRef.webIntel.openaiApiKey || configRef.voice.openaiApiKey || "",
-        anthropicApiKey: configRef.webIntel.anthropicApiKey,
+        openaiApiKey: getProviderConfig("openai").apiKey,
+        anthropicApiKey: getProviderConfig("claude").apiKey,
         defaultProvider: configRef.chat.defaultProvider,
       });
     },

@@ -7,7 +7,7 @@ import { isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
 import type { AppSetting, SettingCategory, SettingDef } from "./types.js";
 import type { LocalizedText } from "../../core/types.js";
-import { legacyCredentialTarget, legacyToStoredPatch, mirrorDeferredEnv } from "../../core/llm/credentials-legacy.js";
+import { legacyCredentialTarget, legacyToStoredPatch } from "../../core/llm/credentials-legacy.js";
 import { saveProviderConfig } from "../../core/llm/credentials.js";
 
 // ── Setting catalog ────────────────────────────────────────────────────────
@@ -541,9 +541,6 @@ export class ConfigService {
     const legacy = legacyToStoredPatch(key, value);
     if (legacy || legacyCredentialTarget(key)) {
       const ok = legacy ? saveProviderConfig(legacy.slug, legacy.patch) : true;
-      // Groq has no registry-backed accessor (the transcribers still read it
-      // from process.env), so refresh that in-memory mirror on every save.
-      if (ok) mirrorDeferredEnv();
       this.events.emit("config:changed", { key, value: "", updatedBy });
       return ok ? { ok: true } : { ok: false, error: "The provider registry is not available yet." };
     }

@@ -902,13 +902,17 @@ function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
     } catch (err) {
       const durationMs = Date.now() - t0;
       const kind = providerHealth.classifyError(err);
+      const message = err instanceof Error ? err.message : String(err);
       providerHealth.recordFailure(p.name, kind);
+      // A model the provider advertises but does not serve retires itself
+      // here, so the picker stops handing it to the next person.
+      providerHealth.reportModelFault(p.name, requestedModel ?? "", kind, message);
       logLlmFail({
         slug: p.name,
         model: requestedModel,
         durationMs,
         kind,
-        message: err instanceof Error ? err.message : String(err),
+        message,
         caller,
       });
       throw err;
@@ -965,21 +969,13 @@ export function buildChatAdapter(
   }
 }
 
-/**
- * The old call shape passed every key by hand. Those fields are accepted and
- * ignored — keys now come from the registry — so extensions that still build
- * their providers the old way keep working until they move to the SDK.
- */
-export type LegacyAdapterOptions = AdapterOptions & { [legacyKeyField: string]: unknown };
-
-export function createChatProviders(options: LegacyAdapterOptions = {}): Map<string, ChatLlmProvider> {
-  const opts: AdapterOptions = { defaultModel: options.defaultModel, claudeCode: options.claudeCode };
+export function createChatProviders(options: AdapterOptions = {}): Map<string, ChatLlmProvider> {
   const providers = new Map<string, ChatLlmProvider>();
   for (const entry of PROVIDER_CATALOG) {
     // A local server needs no key, so an unconnected one would still report
     // available() and get picked as a fallback that can only time out.
     if (entry.group === "local" && !isConnected(entry.slug)) continue;
-    const adapter = buildChatAdapter(entry.slug, {}, opts);
+    const adapter = buildChatAdapter(entry.slug, {}, options);
     if (!adapter) continue;
     // One instance under the slug and every alias: stored agent rows use
     // "claude_code", the registry and dashboard use "claude-code".

@@ -482,7 +482,7 @@ export function parseTranscribeRequest(reqUrl: string):
 
   if (!target) return { ok: false, status: 400, error: "url is required" };
   if (engine === "groq" && !isGroqWhisperAvailable()) {
-    return { ok: false, status: 400, error: "groq engine selected but GROQ_API_KEY is not set" };
+    return { ok: false, status: 400, error: "groq engine selected but Groq is not connected — go to Settings → AI" };
   }
 
   const cacheKey = createHash("sha1")
@@ -1269,7 +1269,7 @@ export function registerCinemaMediaRoutes(
 
       if (!target) return server.json(res, 400, { error: "url is required" });
       if (wEngine === "groq" && !isGroqWhisperAvailable()) {
-        return server.json(res, 400, { error: "groq transcribe engine selected but GROQ_API_KEY is not set" });
+        return server.json(res, 400, { error: "groq transcribe engine selected but Groq is not connected — go to Settings → AI" });
       }
       const willTranslate = tgtLang !== srcLang;
       if (willTranslate && tEngine === "llm" && !isLlmChainAvailable()) {

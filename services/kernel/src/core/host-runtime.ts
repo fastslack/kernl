@@ -11,6 +11,7 @@ import { SDK_MAJOR, installedHost, setHost, type KernlHost } from "../sdk/host.j
 import { log } from "./logger.js";
 import { llm, createPinnedLlmClient } from "./llm/client.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./llm/logger.js";
+import { getProviderConfig, isConnected } from "./llm/credentials.js";
 import { getRequestContext } from "./request-context.js";
 import { loadTransformers } from "./transformers-cache.js";
 import { mediaToolBin, probeMediaTool, mediaToolError } from "./media-tools.js";
@@ -22,6 +23,8 @@ const kernelHost: KernlHost = Object.freeze({
   log,
   llm,
   createPinnedLlmClient,
+  getProviderConfig,
+  isConnected,
   logLlmStart,
   logLlmEnd,
   logLlmFail,

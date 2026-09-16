@@ -22,6 +22,7 @@ import type { ToolMemoryModule } from "../../modules/tool-memory/index.js";
 import type { TorrentsModule, MeshModule } from "../types/extensions/index.js";
 
 import { createLlmClient } from "../llm/client.js";
+import { getProviderConfig, isConnected } from "../llm/credentials.js";
 import { BridgeServer } from "../mtw/bridge-server.js";
 import { RustBridge } from "../rust/bridge.js";
 import { createRustDelegates } from "../rust/delegates.js";
@@ -94,14 +95,17 @@ export async function initBridgesAndStdio(args: {
 
       // Push LLM credentials to Rust so it can call providers without env vars.
       const credProviders: Array<Record<string, string>> = [];
-      if (config.webIntel.anthropicApiKey) {
-        credProviders.push({ name: "anthropic", api_key: config.webIntel.anthropicApiKey });
+      const anthropicApiKey = getProviderConfig("claude").apiKey;
+      if (anthropicApiKey) {
+        credProviders.push({ name: "anthropic", api_key: anthropicApiKey });
       }
-      if (config.webIntel.openaiApiKey) {
-        credProviders.push({ name: "openai", api_key: config.webIntel.openaiApiKey });
+      const openaiApiKey = getProviderConfig("openai").apiKey;
+      if (openaiApiKey) {
+        credProviders.push({ name: "openai", api_key: openaiApiKey });
       }
-      if (config.webIntel.lmstudioBaseUrl) {
-        credProviders.push({ name: "lmstudio", api_key: "local", base_url: config.webIntel.lmstudioBaseUrl });
+      const lmstudioBaseUrl = isConnected("lmstudio") ? getProviderConfig("lmstudio").baseUrl : "";
+      if (lmstudioBaseUrl) {
+        credProviders.push({ name: "lmstudio", api_key: "local", base_url: lmstudioBaseUrl });
       }
       if (credProviders.length > 0) {
         rustBridge.call("credentials.set", { providers: credProviders })

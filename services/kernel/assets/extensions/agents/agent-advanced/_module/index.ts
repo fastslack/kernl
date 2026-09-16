@@ -114,15 +114,7 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
       // Same provider matrix the agents core builds. Stateless adapters, so
       // having a second copy is harmless and keeps cross-module coupling at
       // the config level instead of leaking internal state.
-      const providers = createChatProviders({
-        anthropicApiKey: ctx.config.webIntel.anthropicApiKey,
-        openaiApiKey: ctx.config.webIntel.openaiApiKey,
-        lmstudioBaseUrl: ctx.config.webIntel.lmstudioBaseUrl,
-        grokApiKey: ctx.config.webIntel.grokApiKey,
-        grokDefaultModel: ctx.config.webIntel.grokDefaultModel,
-        nvidiaApiKey: ctx.config.webIntel.nvidiaApiKey,
-        nvidiaDefaultModel: ctx.config.webIntel.nvidiaDefaultModel,
-      });
+      const providers = createChatProviders({ claudeCode: ctx.config.claudeCode });
       const defaultProvider =
         ctx.config.agents?.defaultProvider ||
         ctx.config.chat.defaultProvider ||
