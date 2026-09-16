@@ -228,7 +228,7 @@
           </button>
         </div>
 
-        <div class="nav end">
+        <div class="step-nav end">
           <button class="btn-primary" on:click={next}>{$t('setup.btn_next')}</button>
         </div>
       </section>
@@ -249,7 +249,7 @@
           <!-- Leaving without a provider is a legitimate way to install: the
                gate only covers the routes that call a model, and the dashboard
                banner links back here. -->
-          <div class="nav">
+          <div class="step-nav">
             <button class="btn-ghost" on:click={back}>{$t('setup.btn_back')}</button>
             <button class="btn-ghost" on:click={() => finish('/')} title={$t('setup.llm_later_hint')}>{$t('llm.skip')}</button>
           </div>
@@ -308,7 +308,7 @@
 
         <SetupChecklist />
 
-        <div class="nav center">
+        <div class="step-nav center">
           <button class="btn-primary big" on:click={() => finish('/agents-flow')}>{$t('setup.done_cta_office')}</button>
           <button class="btn-ghost big" on:click={() => finish('/settings?welcome=1')}>{$t('setup.done_cta_settings')}</button>
         </div>
@@ -455,7 +455,7 @@
   /* The connect step has to fit one screen: grid + connect dialog, no scroll. */
   .llm-step { padding-top: 20px; padding-bottom: 20px; }
   .llm-step h2 { margin-bottom: 4px; }
-  .llm-step .step-lede { margin-bottom: 14px; }
+  .llm-step .step-lede { margin-bottom: 10px; }
 
   /* ── Option cards (radio cards) ────────────────────────── */
   .option-grid {
@@ -609,8 +609,14 @@
   /* Sticks to the bottom of the card. The provider step is tall enough that
      Back/Continue fell below the fold on a laptop — the two controls that move
      the wizard forward were the ones you could not see. */
-  .nav {
+  /* Named `step-nav`, not `nav`: app.css styles `.nav` as the sidebar's
+     vertical rail (column, flex: 1, its own scrollbar). This footer never set
+     flex-direction, so the global one won and stacked Back above Skip in a
+     153px-tall block — the single biggest reason the AI step did not fit a
+     720px-tall laptop screen. */
+  .step-nav {
     display: flex;
+    flex-direction: row;
     justify-content: space-between;
     align-items: center;
     gap: 16px;
@@ -623,9 +629,9 @@
     padding-bottom: 4px;
     z-index: 2;
   }
-  .nav > * { flex: none; }
-  .nav.center { justify-content: center; border-top: 0; padding-top: 16px; }
-  .nav.end { justify-content: flex-end; }
+  .step-nav > * { flex: none; }
+  .step-nav.center { justify-content: center; border-top: 0; padding-top: 16px; }
+  .step-nav.end { justify-content: flex-end; }
 
   .btn-primary, .btn-ghost {
     font-family: inherit;

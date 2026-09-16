@@ -40,7 +40,7 @@
 </div>
 
 <style>
-  .pg { display: grid; gap: 12px; }
+  .pg { display: grid; gap: 10px; }
   .pg-title {
     margin: 0 0 6px;
     font-size: 11px;
