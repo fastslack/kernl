@@ -23,7 +23,7 @@
   import { initLocale, t } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
   import {
-    updateInfo, updating, updateError, updateHint, updateNotice, showUpdateBanner,
+    updateInfo, updating, updateError, updateHint, updateNotice, updateProgress, showUpdateBanner,
     canApplyUpdate, initUpdateStore, refreshUpdateInfo, applyUpdate, dismissUpdate,
   } from '$lib/update.js';
 
@@ -938,6 +938,29 @@
            app running from its disk image): the kernel's instruction instead
            of a click whose only outcome is a refusal. -->
       {#if $canApplyUpdate}
+        {#if $updating && $updateProgress}
+          <!-- The download, the checksum and the unpack all finish before the
+               kernel exits, so the bar has something real to show for the part
+               of the wait that is actually long. Same store and same rule as
+               the About card: determinate only when the server sent a
+               content-length, because an invented percentage is worse than an
+               honest spinner. Without this the bar said "Updating…" and
+               nothing else for the whole download. -->
+          {@const p = $updateProgress}
+          {@const pct = p.total > 0 ? Math.round((p.received / p.total) * 100) : null}
+          <div class="update-bar-progress">
+            <div class="update-bar-track" class:indeterminate={pct === null}>
+              <span style={pct === null ? '' : `width:${pct}%`}></span>
+            </div>
+            <span class="update-bar-phase">
+              {p.phase === 'downloading'
+                ? (pct === null
+                    ? `${(p.received / 1048576).toFixed(1)} MB`
+                    : `${pct}% · ${(p.received / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB`)
+                : p.phase}
+            </span>
+          </div>
+        {/if}
         <button class="update-bar-go" disabled={$updating} on:click={applyUpdate}>
           {$updating ? 'Updating…' : 'Update now'}
         </button>
