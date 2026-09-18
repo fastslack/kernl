@@ -52,7 +52,13 @@
    *  Tool names use the `mcp__kernel__` prefix because this chat runs
    *  through the claude_code provider, which exposes kernel tools via
    *  its MCP server. */
-  function defaultInstructions(name: string): string {
+  function defaultInstructions(name: string, provider: string): string {
+    return isClaudeCode(provider) ? claudeCodeInstructions(name) : bridgeInstructions(name);
+  }
+
+  /** Tool policy for the claude_code provider. It reaches the kernel over MCP,
+   *  so it gets the full kernel_agents_* surface — writes included. */
+  function claudeCodeInstructions(name: string): string {
     return `You are ${name} — the top of the Kernl agent organization. You're talking to the human (the user) in a free-form conversation.
 
 CRITICAL TOOL POLICY:
@@ -83,6 +89,33 @@ Destructive op rule: BEFORE deleting, confirm in one short line ("Confirm I shou
 Offices:
 - You do NOT create offices or teams yourself. When the user asks for one, reply with a short description of the team you would build: the office name, 2 to 5 agents with one line each, who leads, and how often the lead should run.
 - Then tell them to open "+ Office" in the command bar, paste that description under "Describe it" and press "Draft with AI"; the wizard shows the team and nothing is created until they confirm.`;
+  }
+
+  /** Tool policy for every other provider. Those run through the chat tool
+   *  bridge (kernel/src/modules/chat/chat-tools.ts), whose whitelist carries
+   *  only the three read-only agent tools — no create, update, delete or run.
+   *  Naming the mcp__kernel__ tools here would just invite calls that cannot
+   *  land, so this version names what actually exists and says plainly what
+   *  the model cannot do, rather than letting it discover that mid-task. */
+  function bridgeInstructions(name: string): string {
+    return `You are ${name} — the top of the Kernl agent organization. You're talking to the human (the user) in a free-form conversation.
+
+CRITICAL TOOL POLICY:
+- For questions about agents, use the kernel tools: kernel_agents_list, kernel_agents_status, kernel_agents_directory. Those are the ONLY source of truth for this system.
+- These are READ-ONLY. On this model you CANNOT create, edit, delete or run agents, and you have no access to flows, run history or fleet stats.
+- If the user asks for any of that, say so in one line and tell them to switch this channel to Claude Code with the model selector in the header. Do NOT improvise, do NOT pretend a change was made, and do NOT invent tool names.
+- If the user is just chatting casually ("hi", "how's it going", "explain X"), answer DIRECTLY in plain text. The tool list above is exhaustive.
+
+Conversation rules:
+- Wait for the user's first message. Do NOT lead with a greeting or assume what they want.
+- Be terse. One paragraph max for plain answers. No filler, no recaps, no "Let me check…" preambles.
+- Match the user's language (Spanish or English).
+- Decisive, professional tone. Respectful peer-to-peer.
+
+Kernel tools you have (use ONE per turn):
+- kernel_agents_list({}) — list agents.
+- kernel_agents_status({ run_id }) — step-by-step log of a specific run.
+- kernel_agents_directory({}) — the agent directory.`;
   }
 
   /** Two-letter initials for the avatar — derives from the top agent's name
@@ -155,6 +188,89 @@ Offices:
 
   let episodeId: string | null = null;
   let messages: DisplayMessage[] = [];
+
+  // ── Model selection ──────────────────────────────────────────────
+  //
+  // The channel used to be pinned to claude_code. It still DEFAULTS there,
+  // because that is the only provider that reaches the kernel over MCP and so
+  // the only one where this agent can actually create and edit the network.
+  // Everything else is offered too, with the reduced tool policy spelled out
+  // in bridgeInstructions() and a badge in the header, so picking one is an
+  // informed trade rather than a silent downgrade.
+  type ProviderRow = {
+    slug: string;
+    name: string;
+    ready: boolean;
+    models: { id: string }[];
+  };
+  const CLAUDE_CODE_SLUG = 'claude_code';
+  /** Per-browser memory of the last pick, so the choice survives reopening. */
+  const PREF_KEY = 'kernl.chief.model';
+  let providers: ProviderRow[] = [];
+  let provider = CLAUDE_CODE_SLUG;
+  let model = '';
+  let modelMenuOpen = false;
+  let switching = false;
+
+  $: isBridged = !isClaudeCode(provider);
+  $: currentProviderName =
+    providers.find((p) => p.slug === provider)?.name ?? providerLabel(provider);
+  $: readyProviders = providers.filter((p) => p.ready);
+
+  /** The kernel spells this provider `claude_code`; the registry and parts of
+   *  the dashboard use `claude-code`. Both mean the same runtime. */
+  function isClaudeCode(slug: string): boolean {
+    return slug === 'claude_code' || slug === 'claude-code';
+  }
+
+  function providerLabel(slug: string): string {
+    return slug === CLAUDE_CODE_SLUG ? 'Claude Code' : slug;
+  }
+
+  /** Reads the saved pick. Returns null when nothing is stored or the stored
+   *  provider is no longer connected — a key that was removed should not
+   *  strand the channel on a provider that cannot answer. */
+  function savedChoice(rows: ProviderRow[]): { provider: string; model: string } | null {
+    let raw: string | null = null;
+    try { raw = localStorage.getItem(PREF_KEY); } catch { return null; }
+    if (!raw) return null;
+    const [slug, ...rest] = raw.split('::');
+    if (!slug) return null;
+    const row = rows.find((p) => p.slug === slug);
+    if (!row?.ready) return null;
+    return { provider: slug, model: rest.join('::') };
+  }
+
+  function rememberChoice(slug: string, id: string) {
+    try { localStorage.setItem(PREF_KEY, `${slug}::${id}`); } catch { /* private mode */ }
+  }
+
+  /** Connected providers and their models. Failure is non-fatal: the selector
+   *  just stays on the default rather than blocking the channel from opening. */
+  async function loadProviders(): Promise<void> {
+    try {
+      const r = await fetch('/api/llm-providers');
+      if (!r.ok) return;
+      const body = await r.json();
+      const list = (body.providers ?? []) as ProviderRow[];
+      providers = await Promise.all(
+        list.map(async (p) => {
+          if (!p.ready) return { ...p, models: [] };
+          try {
+            const mr = await fetch(`/api/llm-providers/${encodeURIComponent(p.slug)}/models`);
+            if (!mr.ok) return { ...p, models: [] };
+            const mb = await mr.json();
+            const models = Array.isArray(mb.models)
+              ? mb.models.map((m: any) => (typeof m === 'string' ? { id: m } : { id: m?.id })).filter((m: any) => m.id)
+              : [];
+            return { ...p, models };
+          } catch {
+            return { ...p, models: [] };
+          }
+        }),
+      );
+    } catch { /* keep silent — selector just won't populate */ }
+  }
   let input = '';
   let inputEl: HTMLTextAreaElement;
   let scrollEl: HTMLDivElement;
@@ -179,16 +295,39 @@ Offices:
   let pendingPermission: PendingPermission | null = null;
 
   onMount(async () => {
+    // Resolve the model BEFORE opening the channel: the system prompt differs
+    // per provider, and instructions are fixed at episode creation.
+    await loadProviders();
+    const saved = savedChoice(providers);
+    if (saved) {
+      provider = saved.provider;
+      model = saved.model;
+    }
+    await openChannel();
+  });
+
+  /**
+   * Create the episode and warm it up. Also the path taken when the user picks
+   * a different model: a switch starts a FRESH episode rather than repointing
+   * the current one, because `instructions` are set at creation and the tool
+   * policy has to change with the provider. Repointing would leave a Claude
+   * Code prompt in front of a model that has none of those tools.
+   */
+  async function openChannel(): Promise<void> {
     const startedAt = performance.now();
+    startError = '';
     phase = 'connecting';
     // 1) Create the chat episode (fast — DB row + handshake).
     try {
       const ep = (await startChatEpisode({
         title: episodeTitle,
-        provider: 'claude_code',
+        provider,
+        ...(model ? { model } : {}),
+        // A user-authored prompt is honoured whatever the provider; only the
+        // generated fallback adapts, since only it names specific tools.
         instructions: (topAgentSystemPrompt && topAgentSystemPrompt.trim().length > 0)
           ? topAgentSystemPrompt
-          : defaultInstructions(topAgentName),
+          : defaultInstructions(topAgentName, provider),
       })) as { id: string };
       episodeId = ep?.id ?? null;
       if (!episodeId) throw new Error('episode id missing in response');
@@ -214,7 +353,29 @@ Offices:
     phase = 'ready';
     await tick();
     inputEl?.focus();
-  });
+  }
+
+  /**
+   * Switch the channel to another model. The transcript goes with the old
+   * episode, so this is destructive to the conversation — the confirm only
+   * appears once there is something to lose.
+   */
+  async function pickModel(slug: string, id: string): Promise<void> {
+    modelMenuOpen = false;
+    if (slug === provider && id === model) return;
+    if (messages.length > 0 && !confirm('Switching model starts a new conversation. Continue?')) return;
+    switching = true;
+    streamAbort?.abort();
+    warmupAbort?.abort();
+    messages = [];
+    streamingBlocks = [];
+    pendingPermission = null;
+    provider = slug;
+    model = id;
+    rememberChoice(slug, id);
+    await openChannel();
+    switching = false;
+  }
 
   /** Send a tiny ping that warms the claude_code subprocess + caches the
    *  system prompt. The response is discarded — no `messages` mutation,
@@ -515,8 +676,63 @@ Offices:
           </div>
         </div>
       </div>
-      <button class="oc-close" on:click={handleClose} title="Close (Esc)">×</button>
+      <div class="oc-head-actions">
+        <div class="oc-model">
+          <button
+            class="oc-model-btn"
+            class:oc-model-bridged={isBridged}
+            on:click={() => (modelMenuOpen = !modelMenuOpen)}
+            disabled={switching}
+            title="Model used by this channel"
+          >
+            <span class="oc-model-name">{model || currentProviderName}</span>
+            {#if isBridged}<span class="oc-model-flag">read-only</span>{/if}
+            <span class="oc-model-caret">▾</span>
+          </button>
+          {#if modelMenuOpen}
+            <!-- svelte-ignore a11y-click-events-have-key-events -->
+            <div class="oc-model-scrim" role="presentation" on:click={() => (modelMenuOpen = false)}></div>
+            <div class="oc-model-menu">
+              {#if readyProviders.length === 0}
+                <div class="oc-model-empty">No connected providers. Add one in AI → Connections.</div>
+              {:else}
+                {#each readyProviders as p (p.slug)}
+                  <div class="oc-model-group">
+                    <div class="oc-model-group-head">
+                      {p.name}
+                      {#if !isClaudeCode(p.slug)}<span class="oc-model-note">no agent edits</span>{/if}
+                    </div>
+                    {#if p.models.length === 0}
+                      <button
+                        class="oc-model-row"
+                        class:oc-model-row-on={p.slug === provider && !model}
+                        on:click={() => pickModel(p.slug, '')}
+                      >default</button>
+                    {:else}
+                      {#each p.models as m (m.id)}
+                        <button
+                          class="oc-model-row"
+                          class:oc-model-row-on={p.slug === provider && m.id === model}
+                          on:click={() => pickModel(p.slug, m.id)}
+                        >{m.id}</button>
+                      {/each}
+                    {/if}
+                  </div>
+                {/each}
+              {/if}
+            </div>
+          {/if}
+        </div>
+        <button class="oc-close" on:click={handleClose} title="Close (Esc)">×</button>
+      </div>
     </header>
+
+    {#if isBridged}
+      <div class="oc-bridged-note">
+        On this model {topAgentName} can read the agent network but not create, edit or run
+        agents — those tools only exist over Claude Code.
+      </div>
+    {/if}
 
     <div class="oc-body" bind:this={scrollEl}>
       {#if startError}
@@ -888,6 +1104,111 @@ Offices:
     border-radius: 6px;
   }
   .oc-close:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-1, #f0f0f0); }
+
+  /* ── Model selector ──────────────────────────────────────────────
+     Sits left of the close button, deliberately quiet: the model matters
+     when you go looking for it, not while you are reading a reply. The
+     bridged state is the exception and gets a warm outline, because a
+     channel that cannot edit the network should say so without being
+     opened. */
+  .oc-head-actions { display: flex; align-items: center; gap: 8px; }
+  .oc-model { position: relative; }
+  .oc-model-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 240px;
+    padding: 5px 9px;
+    border-radius: 7px;
+    border: 1px solid color-mix(in srgb, var(--cmd-color, #c9a84c) 26%, transparent);
+    background: rgba(255, 255, 255, 0.03);
+    color: var(--text-2, #a0a0a0);
+    font-family: inherit;
+    font-size: 11px;
+    letter-spacing: 0.02em;
+    cursor: pointer;
+  }
+  .oc-model-btn:hover:not(:disabled) {
+    background: rgba(255, 255, 255, 0.07);
+    color: var(--text-1, #f0f0f0);
+  }
+  .oc-model-btn:disabled { opacity: 0.5; cursor: progress; }
+  .oc-model-bridged { border-color: rgba(230, 160, 60, 0.5); }
+  .oc-model-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .oc-model-flag {
+    flex-shrink: 0;
+    padding: 1px 5px;
+    border-radius: 999px;
+    background: rgba(230, 160, 60, 0.16);
+    color: #e6a03c;
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .oc-model-caret { flex-shrink: 0; opacity: 0.6; font-size: 9px; }
+
+  /* The scrim closes the menu on any outside click without a global
+     listener that would also fire on the trigger itself. */
+  .oc-model-scrim { position: fixed; inset: 0; z-index: 30; }
+  .oc-model-menu {
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 31;
+    width: 280px;
+    max-height: 320px;
+    overflow-y: auto;
+    padding: 6px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--cmd-color, #c9a84c) 24%, transparent);
+    background: var(--bg-1, #14141a);
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.55);
+  }
+  .oc-model-empty { padding: 10px; color: var(--text-2, #a0a0a0); font-size: 11px; line-height: 1.5; }
+  .oc-model-group + .oc-model-group { margin-top: 6px; }
+  .oc-model-group-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px 4px;
+    color: var(--text-2, #a0a0a0);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .oc-model-note { color: #e6a03c; font-size: 9px; letter-spacing: 0.04em; text-transform: none; }
+  .oc-model-row {
+    display: block;
+    width: 100%;
+    padding: 6px 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-1, #f0f0f0);
+    font-family: inherit;
+    font-size: 12px;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .oc-model-row:hover { background: rgba(255, 255, 255, 0.07); }
+  .oc-model-row-on {
+    background: color-mix(in srgb, var(--cmd-color, #c9a84c) 18%, transparent);
+    color: #fff;
+  }
+
+  .oc-bridged-note {
+    flex-shrink: 0;
+    padding: 8px 16px;
+    background: rgba(230, 160, 60, 0.09);
+    border-bottom: 1px solid rgba(230, 160, 60, 0.22);
+    color: #e6a03c;
+    font-size: 11px;
+    line-height: 1.5;
+  }
 
   .oc-body {
     flex: 1;
