@@ -534,6 +534,8 @@ const es: Record<string, string> = {
   "office.wizard.drafting": "Armando…",
   "office.wizard.draft_note": "La IA propone un borrador. Nada se crea hasta que confirmes en Revisar.",
   "office.wizard.draft_invalid": "No pudimos armar un equipo con eso. Probá describirlo con más detalle, o elegí una plantilla.",
+  "office.wizard.draft_invalid_model": "{model} no devolvió un equipo válido, ni siquiera al reintentar. Probá con otro modelo, describilo con más detalle, o elegí una plantilla.",
+  "office.wizard.draft_detail": "Ver qué rechazó el kernel",
   "office.wizard.name": "Nombre",
   "office.wizard.name_ph": "ej. Code Review",
   "office.wizard.use_repo": "Trabajar sobre un repo",

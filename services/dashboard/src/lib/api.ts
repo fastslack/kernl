@@ -45,7 +45,13 @@ export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unk
 
 	if (!r.ok) {
 		const err = await r.json().catch(() => ({ error: r.statusText })) as { error?: string };
-		throw new Error(err.error || r.statusText);
+		// The message stays exactly what it was; the parsed body rides along so
+		// callers that need more than a code — the reason a draft was rejected,
+		// which model produced it — can read it instead of re-fetching or
+		// guessing. Additive: nothing that only reads `.message` changes.
+		const e = new Error(err.error || r.statusText);
+		(e as Error & { body?: unknown }).body = err;
+		throw e;
 	}
 	return r.json();
 }

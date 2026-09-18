@@ -20,6 +20,7 @@ import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
 import { chatCompletionsUrl, fallbackOrder, getCatalogEntry, quirksFor } from "./provider-catalog.js";
 import { getProviderConfig, isConnected } from "./credentials.js";
 import { stripReasoning } from "./strip-reasoning.js";
+import { parseJsonCompletion } from "./parse-json-completion.js";
 
 /** Hard ceiling for an in-place backoff sleep on a rate-limited LAST link.
  *  We never block longer than this even if the provider's Retry-After is huge —
@@ -475,11 +476,15 @@ export class LlmClient {
     throw new Error(`LLM: ${link.provider} retries exhausted`);
   }
 
-  /** Convenience: chat and parse JSON response */
+  /** Convenience: chat and parse JSON response.
+   *
+   *  Parsing is tolerant of a model that ignored `response_format` and wrapped
+   *  the object in prose — see parse-json-completion.ts. A direct parse is
+   *  still tried first and unchanged, so this only ever recovers replies that
+   *  used to throw. */
   async chatJson<T = unknown>(opts: LlmChatOptions): Promise<T> {
     const result = await this.chat({ ...opts, json: true });
-    const cleaned = result.text.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-    return JSON.parse(cleaned) as T;
+    return parseJsonCompletion<T>(result.text);
   }
 
   private getDefaultModelFor(provider: LlmProvider): string {

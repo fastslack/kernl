@@ -49,9 +49,22 @@ export function registerOfficeRoutes(server: KernelHttpServer, deps: OfficeRoute
       server.json(res, 200, { definition });
     } catch (err) {
       if (err instanceof DraftError) {
+        // Name the model on a draft failure. The operator's next move differs
+        // completely depending on whether their description was thin or the
+        // model cannot hold a schema, and only the server knows which model
+        // actually ran — the chain resolves it, nobody picked it here.
+        let model: string | undefined;
+        if (err.kind === "draft") {
+          try {
+            const { llm } = await import("../../../core/llm/client.js");
+            const { primary } = llm().describeChain();
+            model = [primary.slug, primary.model].filter(Boolean).join("/") || undefined;
+          } catch { /* unresolvable — the message still works without it */ }
+        }
         server.json(res, err.kind === "input" ? 400 : 422, {
           error: err.kind === "input" ? err.message : "invalid_draft",
           detail: err.detail,
+          ...(model ? { model } : {}),
         });
         return;
       }

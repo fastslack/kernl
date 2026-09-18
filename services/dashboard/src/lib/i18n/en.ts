@@ -534,6 +534,8 @@ const en: Record<string, string> = {
   "office.wizard.drafting": "Drafting…",
   "office.wizard.draft_note": "The AI proposes a draft. Nothing is created until you confirm in Review.",
   "office.wizard.draft_invalid": "We could not draft a team from that. Try describing it in more detail, or pick a template.",
+  "office.wizard.draft_invalid_model": "{model} did not return a valid team, even on a retry. Try another model, describe it in more detail, or pick a template.",
+  "office.wizard.draft_detail": "See what the kernel rejected",
   "office.wizard.name": "Name",
   "office.wizard.name_ph": "e.g. Code Review",
   "office.wizard.use_repo": "Work on a repo",
