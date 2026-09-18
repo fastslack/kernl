@@ -125,14 +125,10 @@ export class NostrRelayPool {
           onevent(ev);
         },
         onclose: (reasons) => {
-          // nostr-tools reports one {url, reason} per relay; this pool's own
-          // callers only ever wanted something printable, so flatten it here
-          // and keep the string[] signature they were written against.
-          const messages = reasons.map(({ url, reason }) => `${url}: ${reason}`);
-          for (const message of messages) {
-            log.debug?.(`nostr: relay sub closed — ${message}`);
+          for (const reason of reasons) {
+            log.debug?.(`nostr: relay sub closed — ${reason}`);
           }
-          onclose?.(messages);
+          onclose?.(reasons);
         },
       });
       closers.push(closer);
