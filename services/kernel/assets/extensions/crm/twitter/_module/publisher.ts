@@ -1,6 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
+import { log, type EventBus, type SystemRegistry } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 import { XApiClient } from "./x-client.js";
 

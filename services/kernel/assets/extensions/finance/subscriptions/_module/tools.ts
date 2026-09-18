@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { SubscriptionService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 import { formatCents } from "./helpers.js";
 
 export function subscriptionTools(service: SubscriptionService): ToolDefinition[] {

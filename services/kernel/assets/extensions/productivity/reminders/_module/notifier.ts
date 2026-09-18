@@ -1,5 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
+import { log, type KernelConfig } from "@kernl/extension-sdk";
 import type { Reminder } from "./types.js";
 
 export class MattermostNotifier {

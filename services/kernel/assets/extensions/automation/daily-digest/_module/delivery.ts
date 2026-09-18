@@ -4,7 +4,7 @@
  * Mirrors the Notifier.sendReminder pattern. A provider that isn't active
  * returns false from registry.send — skipped gracefully, never throws.
  */
-import type { NotificationPayload } from "../../../../../src/core/notify/provider.js";
+import type { NotificationPayload } from "@kernl/extension-sdk";
 
 export interface RegistryLike {
   send(providerId: string, payload: NotificationPayload): Promise<boolean>;

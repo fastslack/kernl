@@ -300,6 +300,13 @@ export const extensionManifestSchema = z.object({
   tags: z.array(z.string()).max(32).optional(),
 
   kernel_min: semverSchema.optional(),
+  /**
+   * Major version of `@kernl/extension-sdk` the backend was built against.
+   * Required for anything with a backend, but enforced by `sdk-compat.ts` at
+   * build, install and load — where the refusal can say "rebuild it" — rather
+   * than here, where an old manifest would fail as an opaque parse error.
+   */
+  sdk: z.number().int().positive().optional(),
   dependencies: z.array(reverseDnsIdSchema).optional(),
 
   backend: backendSchema.optional(),

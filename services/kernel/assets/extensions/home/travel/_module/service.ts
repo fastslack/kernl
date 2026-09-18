@@ -1,10 +1,9 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   TravelTrip, TravelFlight, TravelAccommodation, TravelActivity,
   TravelExpense, TravelPackingItem, TravelDocument,
   TripStatus, TripPurpose, FlightStatus, AccomType, ActivityType, ExpenseCategory, DocumentType,
 } from "./types.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
 export class TravelService {
   constructor(private db: SqliteDb) {}

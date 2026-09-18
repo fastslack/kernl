@@ -1,18 +1,18 @@
-import type {
-  ExtensibleModule,
-  DashboardDescriptor,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+  type EventBus,
+} from "@kernl/extension-sdk";
 import { tasksMigrations } from "./migrations/001_tasks.js";
 import { TaskService } from "./service.js";
 import { taskTools } from "./tools.js";
 import { registerTasksRoutes } from "./api-routes.js";
 import { tasksRpcActions } from "./rpc-actions.js";
 import { queryTasks } from "./dashboard-queries.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
 
 export interface TasksModule extends ExtensibleModule {
   getService(): TaskService | null;

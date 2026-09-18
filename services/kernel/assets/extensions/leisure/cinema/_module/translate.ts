@@ -17,9 +17,7 @@
  * even when the user picked "llm" and the chain ended up picking Grok).
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import { llm } from "../../../../../src/core/llm/client.js";
-import { loadTransformers } from "../../../../../src/core/transformers-cache.js";
+import { log, llm, loadTransformers } from "@kernl/extension-sdk";
 import { nllbCode } from "./subtitles.js";
 
 export type TranslateEngine = "nllb" | "llm";

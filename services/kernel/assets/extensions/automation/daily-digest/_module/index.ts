@@ -9,10 +9,14 @@
  * dashboard as a fallback. No LLM — pure SQL summaries of the user's own
  * tasks/events/reminders.
  */
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type SqliteDb,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { dailyDigestMigrations } from "./migrations.js";
 import { DailyDigestScheduler, type DigestKind } from "./scheduler.js";
 import { buildEveningDigest, buildMorningDigest } from "./digest-service.js";

@@ -1,11 +1,13 @@
 import crypto from "node:crypto";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import {
+  type KernelHttpServer,
+  type SqliteDb,
+  type KernelConfig,
+  type EventBus,
+  log,
+  llm,
+} from "@kernl/extension-sdk";
 import type { ShoppingService } from "./service.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import { log } from "../../../../../src/core/logger.js";
-import { llm } from "../../../../../src/core/llm/client.js";
 
 export function registerShoppingRoutes(
   server: KernelHttpServer,

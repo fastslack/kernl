@@ -1,10 +1,10 @@
-import type {
-  ExtensibleModule,
-  DashboardDescriptor,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+} from "@kernl/extension-sdk";
 import { rssReaderMigrations } from "./migrations.js";
 import { RssReaderService } from "./service.js";
 import { registerRssReaderRoutes } from "./api-routes.js";

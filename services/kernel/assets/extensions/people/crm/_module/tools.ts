@@ -1,8 +1,7 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult, structuredResult } from "@kernl/extension-sdk";
 import type { CrmService } from "./service.js";
 import type { LeadStatus } from "./types.js";
-import { textResult, errorResult, structuredResult } from "../../../../../src/core/helpers.js";
 
 const LeadStatusEnum = z.enum(["", "new", "drafted", "contacted", "qualified", "won", "lost"]);
 

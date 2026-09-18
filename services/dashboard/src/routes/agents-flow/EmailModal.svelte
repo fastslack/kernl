@@ -10,6 +10,7 @@
    * moved is everything behind it: the fetch, the four pieces of state, and the
    * modal's styles.
    */
+  import { tick } from 'svelte';
   import { getCommDetail } from '$lib/api.js';
   import { sanitizeHtml } from '$lib/sanitize.js';
   import { fmtClock } from '$lib/display-format.js';
@@ -18,6 +19,7 @@
   let emailModalLoading = false;
   let emailModalError: string | null = null;
   let emailModalData: any = null;
+  let emailDialog: HTMLDivElement | null = null;
 
   /** The only way in — the activity rows pass the communication id. */
   export async function open(commId: string): Promise<void> {
@@ -25,6 +27,8 @@
     emailModalLoading = true;
     emailModalError = null;
     emailModalData = null;
+    // Focus the dialog so keyboard users land inside it.
+    void tick().then(() => emailDialog?.focus());
     try {
       const d: any = await getCommDetail(commId);
       if (!d || d.error) throw new Error(d?.error || 'No se encontró el email');
@@ -37,11 +41,27 @@
   }
 
   function closeEmailModal(): void { emailModalOpen = false; emailModalData = null; emailModalError = null; }
+
+  function closeOnEscape(e: KeyboardEvent): void {
+    if (emailModalOpen && e.key === 'Escape') closeEmailModal();
+  }
 </script>
+
+<!-- Escape lives at the window, as in RegisterRepoModal: a handler on the
+     backdrop only hears keys pressed while something inside it has focus. -->
+<svelte:window on:keydown={closeOnEscape} />
 
 {#if emailModalOpen}
   <div class="email-modal-backdrop" on:click={closeEmailModal} role="presentation">
-    <div class="email-modal" on:click|stopPropagation role="dialog" aria-modal="true">
+    <div
+      class="email-modal"
+      bind:this={emailDialog}
+      on:click|stopPropagation
+      role="dialog"
+      aria-modal="true"
+      aria-label="Email enviado"
+      tabindex="-1"
+    >
       <div class="email-modal-head">
         <span class="email-modal-title">📧 Email enviado</span>
         <button class="email-modal-close" on:click={closeEmailModal} title="Close">×</button>
@@ -88,6 +108,8 @@
     background:#0d1018; border:1px solid #2a3350; border-radius:12px;
     box-shadow:0 18px 60px rgba(0,0,0,.6); overflow:hidden;
   }
+  /* Focused programmatically on open; the frame already marks the dialog. */
+  .email-modal:focus{ outline:none; }
   .email-modal-head{
     display:flex; align-items:center; justify-content:space-between;
     padding:12px 16px; border-bottom:1px solid #1e2335; background:#11151f;

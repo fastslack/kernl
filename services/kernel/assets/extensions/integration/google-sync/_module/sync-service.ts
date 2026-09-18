@@ -1,12 +1,10 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { type SqliteDb, type GraphDriver, type ImportResult, log } from "@kernl/extension-sdk";
 import type { GoogleAuth } from "./auth.js";
 import type { GoogleClient } from "./google-client.js";
 import type { CrmService } from "../../../people/crm/_module/service.js";
 import type { ReminderService } from "../../../productivity/reminders/_module/service.js";
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";
 import type { ShoppingService } from "../../../home/shopping/_module/service.js";
-import type { ImportResult } from "../../../../../src/core/integrations/google-types.js";
 import { importContacts } from "./importers/contacts.js";
 import { importOtherContacts } from "./importers/other-contacts.js";
 import { importCalendar } from "./importers/calendar.js";
@@ -15,7 +13,6 @@ import { importGmail } from "./importers/gmail.js";
 import { importGmailFull } from "./importers/gmail-full.js";
 import { importCalendarFull } from "./importers/calendar-full.js";
 import { GoogleGraphSync, type GraphSyncResult } from "./graph-sync.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export class GoogleSyncService {
   private graphSync: GoogleGraphSync;

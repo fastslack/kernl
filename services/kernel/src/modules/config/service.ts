@@ -7,6 +7,8 @@ import { isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
 import type { AppSetting, SettingCategory, SettingDef } from "./types.js";
 import type { LocalizedText } from "../../core/types.js";
+import { legacyCredentialTarget, legacyToStoredPatch } from "../../core/llm/credentials-legacy.js";
+import { saveProviderConfig } from "../../core/llm/credentials.js";
 
 // ── Setting catalog ────────────────────────────────────────────────────────
 // Each entry describes a known env-var. The `applyToConfig` function mutates
@@ -15,47 +17,12 @@ import type { LocalizedText } from "../../core/types.js";
 const SETTING_CATALOG: SettingDef[] = [
   // ── AI ────────────────────────────────────────────────────────────────────
   {
-    key: "ANTHROPIC_API_KEY",
-    label: { en: "Anthropic API Key", es: "Clave API de Anthropic" },
-    description: { en: "API key for Claude (Anthropic). Required for the 'claude' provider.", es: "Clave API de Claude (Anthropic). Necesaria para el proveedor 'claude'." },
-    category: "ai",
-    type: "secret",
-    sensitive: true,
-    applyToConfig: (v, c) => { c.webIntel.anthropicApiKey = v; },
-  },
-  {
-    key: "OPENAI_API_KEY",
-    label: { en: "OpenAI API Key", es: "Clave API de OpenAI" },
-    description: { en: "API key for OpenAI GPT models.", es: "Clave API para los modelos GPT de OpenAI." },
-    category: "ai",
-    type: "secret",
-    sensitive: true,
-    applyToConfig: (v, c) => { c.webIntel.openaiApiKey = v; c.voice.openaiApiKey = v; },
-  },
-  {
-    key: "LMSTUDIO_BASE_URL",
-    label: { en: "LM Studio Base URL", es: "URL base de LM Studio" },
-    description: { en: "Default points to the docker-compose lmstudio-bridge sidecar (port 1235) which forwards to LM Studio's loopback (127.0.0.1:1234) on the host. Override only if your LM Studio listens on a different port or you want to skip the bridge.", es: "Por defecto apunta al sidecar lmstudio-bridge de docker-compose (puerto 1235), que reenvía al loopback de LM Studio (127.0.0.1:1234) en el host. Cambialo sólo si tu LM Studio escucha en otro puerto o si querés saltear el bridge." },
-    category: "ai",
-    type: "string",
-    applyToConfig: (v, c) => { c.webIntel.lmstudioBaseUrl = v; process.env.LMSTUDIO_BASE_URL = v; process.env.LMSTUDIO_URL = v; },
-  },
-  {
     key: "LMSTUDIO_MODEL",
     label: { en: "LM Studio Model ID", es: "ID de modelo de LM Studio" },
     description: { en: "Model identifier as exposed by LM Studio's local server (e.g. \"qwen3-1.7b\" or \"qwen3.5-9b\"). Required to enable LM Studio as a subtitle translation engine — leave blank to disable.", es: "Identificador del modelo tal como lo expone el servidor local de LM Studio (por ejemplo \"qwen3-1.7b\" o \"qwen3.5-9b\"). Necesario para usar LM Studio como motor de traducción de subtítulos." },
     category: "ai",
     type: "string",
     applyToConfig: (_v, _c) => { process.env.LMSTUDIO_MODEL = _v; },
-  },
-  {
-    key: "LMSTUDIO_API_KEY",
-    label: { en: "LM Studio API Key", es: "Clave API de LM Studio" },
-    description: { en: "Optional bearer token if your LM Studio server requires auth. Leave blank for default LM Studio (no auth).", es: "Token opcional si tu servidor de LM Studio pide autenticación. Dejalo vacío para una instalación estándar (sin auth)." },
-    category: "ai",
-    type: "secret",
-    sensitive: true,
-    applyToConfig: (_v, _c) => { process.env.LMSTUDIO_API_KEY = _v; },
   },
   {
     key: "OLLAMA_BASE_URL",
@@ -81,15 +48,6 @@ const SETTING_CATALOG: SettingDef[] = [
     type: "secret",
     sensitive: true,
     applyToConfig: (_v, _c) => { process.env.OLLAMA_API_KEY = _v; },
-  },
-  {
-    key: "GROK_API_KEY",
-    label: { en: "Grok / xAI API Key", es: "Clave API de Grok / xAI" },
-    description: { en: "API key for xAI's Grok models. Required to use Grok as a subtitle translation engine. Get one at console.x.ai.", es: "Clave API de los modelos Grok de xAI. Necesaria para usar Grok como motor de traducción de subtítulos. Se obtiene en console.x.ai." },
-    category: "ai",
-    type: "secret",
-    sensitive: true,
-    applyToConfig: (_v, _c) => { process.env.GROK_API_KEY = _v; },
   },
   {
     key: "GROK_TRANSLATE_MODEL",
@@ -577,6 +535,16 @@ export class ConfigService {
   set(key: string, value: string, updatedBy: "user" | "chat" = "user"): {
     ok: boolean; error?: string; setting?: AppSetting;
   } {
+    // Provider credentials live only in the encrypted provider registry: no
+    // app_settings row, no .env line, no process.env copy. Kept so
+    // kernel_config_set and older clients still work.
+    const legacy = legacyToStoredPatch(key, value);
+    if (legacy || legacyCredentialTarget(key)) {
+      const ok = legacy ? saveProviderConfig(legacy.slug, legacy.patch) : true;
+      this.events.emit("config:changed", { key, value: "", updatedBy });
+      return ok ? { ok: true } : { ok: false, error: "The provider registry is not available yet." };
+    }
+
     const def = this.resolveDef(key);
     if (!def) {
       // Allow setting unknown keys (advanced / custom env vars)

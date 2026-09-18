@@ -1,5 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type KernelModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
 import { securityMigrations } from "./migrations/001_security.js";
 import { SecurityService } from "./service.js";
 import { securityTools } from "./tools.js";

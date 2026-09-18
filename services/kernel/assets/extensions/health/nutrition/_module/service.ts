@@ -1,10 +1,9 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   NutritionFood, NutritionEntry, NutritionGoal, NutritionFasting,
   NutritionWater, NutritionBodyStats, DailyNutritionSummary,
   MealType, FoodSource, FastingProtocol,
 } from "./types.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
 export class NutritionService {
   constructor(private db: SqliteDb) {}

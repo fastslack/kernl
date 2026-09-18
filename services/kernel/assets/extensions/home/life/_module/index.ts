@@ -1,10 +1,14 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { lifeMigrations } from "./life-migrations.js";
 import { LifeService } from "./life-service.js";
 import { lifeDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { lifeTools } from "./life-tools.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export { LifeService } from "./life-service.js";
 export { lifeMigrations } from "./life-migrations.js";

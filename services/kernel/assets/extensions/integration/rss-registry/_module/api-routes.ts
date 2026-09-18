@@ -4,7 +4,7 @@
  * extension lifecycle — when the module unloads, its routes go with it.
  */
 import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import type { KernelHttpServer } from "@kernl/extension-sdk";
 import type { RssRegistryService } from "./service.js";
 
 export function registerRssRegistryRoutes(

@@ -28,9 +28,7 @@
  * candidates, so the whole contribution can be withdrawn in one statement.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { log, type SqliteDb, type GraphDriver } from "@kernl/extension-sdk";
 import { extractYear, normalizeTitle, titleSimilarity } from "./title-norm.js";
 import { MATCHER_VERSION, REVIEW_FLOOR, yearFactor } from "./canonical/matcher.js";
 import { ALIAS_INDEX } from "./graph-projection.js";

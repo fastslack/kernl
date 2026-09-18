@@ -18,11 +18,9 @@
  */
 
 import { resolve } from "node:path";
-import { log } from "../../../../../../src/core/logger.js";
-import { isoNow } from "../../../../../../src/core/helpers.js";
+import { log, isoNow, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../../src/modules/agents/executor.js";
-import type { EventBus } from "../../../../../../src/core/event-bus.js";
 import type { WorkspaceService } from "../workspace-service.js";
 import { WORKSPACE_ROOT } from "../workspace-service.js";
 import { loadPolicy, initEvolutionFiles, type InitResult } from "./policy.js";

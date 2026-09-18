@@ -1,11 +1,16 @@
-import type { ExtensibleModule, ModuleContext, ToolDefinition, DashboardDescriptor } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type DashboardDescriptor,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { financeMigrations } from "./migrations/001_finance.js";
 import { FinanceService } from "./service.js";
 import { financeTools } from "./tools.js";
 import { queryFinance } from "./dashboard-query.js";
 import { financeRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createFinanceModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];

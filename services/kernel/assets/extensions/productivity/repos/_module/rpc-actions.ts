@@ -3,8 +3,7 @@
  * client) can list/register/unregister repos without going through MCP.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
 import { RepoService } from "./service.js";
 
 export function reposRpcActions(db: SqliteDb, visibleRoots: string[] = []): RpcAction[] {

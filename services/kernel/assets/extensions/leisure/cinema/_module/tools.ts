@@ -8,10 +8,14 @@
  */
 
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import { errorResult, extractErrorMessage, textResult } from "../../../../../src/core/helpers.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
+import {
+  type ToolDefinition,
+  errorResult,
+  extractErrorMessage,
+  textResult,
+  type GraphDriver,
+  type EmbeddingsClient,
+} from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import type { CinemaSubsService } from "./subs-service.js";
 import type { DiscoveryRegistry } from "./discovery/registry.js";

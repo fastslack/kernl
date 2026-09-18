@@ -4,6 +4,7 @@
   "slug": "github-channel",
   "name": "GitHub Channel Backend",
   "version": "0.1.0",
+  "sdk": 1,
   "type": "module",
   "description": "Backend for the GitHub channel: connection storage (App ID + installation + private key) and the RepoProvider implementation consumed by triage and any other module that needs GitHub access.",
   "author": "Kernl",

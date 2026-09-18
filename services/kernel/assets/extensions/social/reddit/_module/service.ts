@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import type { RedditAccountRow, RedditPostRow } from "./types.js";
 
 const REDDIT_OAUTH = "https://www.reddit.com/api/v1/access_token";

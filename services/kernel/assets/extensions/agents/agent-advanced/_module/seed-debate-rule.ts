@@ -18,9 +18,7 @@
  * Idempotent: skips agents already on the current version of the block.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { log } from "../../../../../src/core/logger.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, log, isoNow } from "@kernl/extension-sdk";
 
 export const DEBATE_RULE_START = "<!-- debate-rule:start -->";
 export const DEBATE_RULE_END = "<!-- debate-rule:end -->";

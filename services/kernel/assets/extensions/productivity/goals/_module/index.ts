@@ -1,11 +1,16 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { goalsMigrations } from "./migrations/001_goals.js";
 import { GoalsService } from "./service.js";
 import { goalsTools } from "./tools.js";
 import { queryGoals } from "./dashboard-queries.js";
 import { goalsRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createGoalsModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];

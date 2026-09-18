@@ -81,7 +81,7 @@ function stubConfig(): KernelConfig {
       discord: { enabled: false, botToken: "", allowedUsers: [], allowedGuilds: [], allowedChannels: [] },
       webchat: { enabled: false, requireAuth: false },
     },
-    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, openaiApiKey: "", elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
+    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
     pii: { enabled: false, redactEmails: false, redactPhones: false, redactCreditCards: false, redactIbans: false, redactNames: false, warnOnSend: false, placeholder: "[REDACTED]" },
     ibkr: { gatewayUrl: "https://localhost:5000", accountId: "", enabled: false },
     saxo: { baseUrl: "", appKey: "", appSecret: "", certPath: "", certKeyPath: "", enabled: false },
@@ -92,9 +92,8 @@ function stubConfig(): KernelConfig {
     bridge: { enabled: false, socketPath: "/tmp/kernl.sock" },
     rustBridge: { enabled: false, socketPath: "/tmp/mtw-rust.sock" },
     webIntel: {
-      pollIntervalMs: 60000, defaultLlm: "claude", anthropicApiKey: "", openaiApiKey: "",
-      grokApiKey: "", grokDefaultModel: "", nvidiaApiKey: "", nvidiaDefaultModel: "",
-      lmstudioBaseUrl: "", braveApiKey: "", googleCseKey: "", googleCseCx: "", searxngBaseUrl: "",
+      pollIntervalMs: 60000, defaultLlm: "claude",
+      braveApiKey: "", googleCseKey: "", googleCseCx: "", searxngBaseUrl: "",
     },
     chat: {
       defaultProvider: "stub", defaultModel: "stub-model", extractionModel: "", contextBudget: 2000,

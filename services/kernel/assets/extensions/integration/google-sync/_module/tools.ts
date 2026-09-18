@@ -1,6 +1,12 @@
 import { z } from "zod";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import {
+  type SqliteDb,
+  type ToolDefinition,
+  type ImportResult,
+  type SyncMeta,
+  textResult,
+  errorResult,
+} from "@kernl/extension-sdk";
 import type { GoogleAuth } from "./auth.js";
 import type { GoogleClient } from "./google-client.js";
 import type { CrmService } from "../../../people/crm/_module/service.js";
@@ -8,8 +14,6 @@ import type { ReminderService } from "../../../productivity/reminders/_module/se
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";
 import type { ShoppingService } from "../../../home/shopping/_module/service.js";
 import type { GoogleSyncService } from "./sync-service.js";
-import type { ImportResult, SyncMeta } from "../../../../../src/core/integrations/google-types.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 import { importContacts } from "./importers/contacts.js";
 import { importCalendar } from "./importers/calendar.js";
 import { importTasks } from "./importers/tasks.js";

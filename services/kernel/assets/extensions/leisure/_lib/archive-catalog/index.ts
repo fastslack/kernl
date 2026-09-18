@@ -11,6 +11,7 @@
 export { archiveCatalogMigrations } from "./migrations.js";
 export { ArchiveCatalog } from "./service.js";
 export { ingestPass, ingestNextChunk } from "./ingester.js";
+export { derivedIndexIsDue, DERIVED_INDEX_MAX_AGE_MS } from "./rebuild-policy.js";
 export type {
   CatalogTitle, CatalogTagRow, CatalogListFilter,
   ArchiveScrapeRow, IngestRun, IngestRunUpdate,

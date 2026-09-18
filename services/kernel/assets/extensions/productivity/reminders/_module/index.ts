@@ -1,10 +1,12 @@
-import type {
-  ExtensibleModule,
-  DashboardDescriptor,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+  type EventBus,
+} from "@kernl/extension-sdk";
 import { remindersMigrations } from "./migrations/001_reminders.js";
 import { ReminderService } from "./service.js";
 import { ReminderScheduler } from "./scheduler.js";
@@ -12,8 +14,6 @@ import { reminderTools } from "./tools.js";
 import { registerRemindersRoutes } from "./api-routes.js";
 import { remindersRpcActions } from "./rpc-actions.js";
 import { queryReminders } from "./dashboard-queries.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
 
 export interface RemindersModule extends ExtensibleModule {
   getService(): ReminderService | null;

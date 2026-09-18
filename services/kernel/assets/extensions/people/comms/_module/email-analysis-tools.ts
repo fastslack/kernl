@@ -10,8 +10,7 @@
  */
 
 import { z } from "zod";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { TaskPayload, ReminderPayload, ContactPayload, ShoppingPayload } from "./email-analysis-service.js";
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";

@@ -1,10 +1,14 @@
 import { writable, derived } from "svelte/store";
 import en from "./en.js";
 import es from "./es.js";
+import llmEn from "./llm-connect.en.js";
+import llmEs from "./llm-connect.es.js";
 
 export type Locale = "en" | "es" | "nl" | "de" | "fr" | "pt" | "ja" | "zh";
 
-const translations: Record<string, Record<string, string>> = { en, es };
+// Feature strings live in their own files so parallel work on en.ts/es.ts
+// does not collide; they are merged here once.
+const translations: Record<string, Record<string, string>> = { en: { ...en, ...llmEn }, es: { ...es, ...llmEs } };
 
 /** Active locale. Defaults to "en" — same default as the backend
  *  (KernelConfig.language). */

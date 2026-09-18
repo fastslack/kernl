@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import { textResult } from "../../../../../src/core/helpers.js";
+import { type ToolDefinition, textResult } from "@kernl/extension-sdk";
 import type { SecurityService } from "./service.js";
 import type { ScanKind, Severity } from "./types.js";
 

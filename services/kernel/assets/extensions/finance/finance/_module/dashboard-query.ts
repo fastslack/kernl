@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { today, daysFromNow, toRecord } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, today, daysFromNow, toRecord } from "@kernl/extension-sdk";
 
 // ── Types ────────────────────────────────────────────
 

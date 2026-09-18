@@ -22,7 +22,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile, readFile, access, rm } from "node:fs/promises";
 import { resolve } from "node:path";
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import { WORKSPACE_ROOT } from "./workspace-service.js";
 
 const execFileAsync = promisify(execFile);

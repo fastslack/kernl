@@ -1,6 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { SandboxAgentService } from "./service.js";
 
 export function sandboxAgentTools(service: SandboxAgentService): ToolDefinition[] {

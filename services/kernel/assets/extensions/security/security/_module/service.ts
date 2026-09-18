@@ -1,9 +1,7 @@
 import { readFile, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { homedir } from "node:os";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { isPathInside } from "../../../../../src/core/fs-paths.js";
+import { type SqliteDb, newId, isoNow, isPathInside } from "@kernl/extension-sdk";
 import type { SecurityScan, SecurityFinding, ScanKind, ScanRule, Severity } from "./types.js";
 import {
   SECRET_RULES,

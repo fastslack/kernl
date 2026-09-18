@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { FinanceService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 function fmt(cents: number): string {
   return (cents / 100).toFixed(2);

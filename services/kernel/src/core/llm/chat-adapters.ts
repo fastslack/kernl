@@ -14,6 +14,10 @@ import type {
 } from "./chat-types.js";
 
 import type { ContentBlock } from "./chat-types.js";
+import { PROVIDER_CATALOG, getCatalogEntry, fallbackOrder, quirksFor } from "./provider-catalog.js";
+import { getProviderConfig, isConnected, type ProviderConfig } from "./credentials.js";
+import { stripReasoning } from "./strip-reasoning.js";
+import type { ClaudeCodeProviderOptions } from "./claude-code-adapter.js";
 
 // HTTP timeout for a single LLM API call. 5 min is generous — normal responses
 // complete in <30s even for complex tool-use turns. This gives headroom for
@@ -233,7 +237,7 @@ function logToolTruncationOnce(providerName: string, count: number, cap: number)
 
 /** Truncate to the provider's safe cap, log-once when we have to. */
 export function truncateTools<T>(providerName: string, tools: T[]): T[] {
-  const cap = TOOL_CAPS[providerName] ?? DEFAULT_TOOL_CAP;
+  const cap = getCatalogEntry(providerName)?.toolCap ?? TOOL_CAPS[providerName] ?? DEFAULT_TOOL_CAP;
   if (tools.length <= cap) return tools;
   logToolTruncationOnce(providerName, tools.length, cap);
   return tools.slice(0, cap);
@@ -401,6 +405,14 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
       messages: apiMessages,
     };
     if (opts?.temperature !== undefined) body.temperature = opts.temperature;
+    // Per-model request tweaks the provider documents (sampling, template
+    // flags). The caller's own temperature still wins.
+    const quirks = quirksFor(this.name, model);
+    if (quirks) {
+      if (body.temperature === undefined && quirks.temperature !== undefined) body.temperature = quirks.temperature;
+      if (quirks.topP !== undefined) body.top_p = quirks.topP;
+      if (quirks.extraBody) Object.assign(body, quirks.extraBody);
+    }
     // Pass tools in OpenAI format if provided (sequential tool calls only).
     // truncateTools applies the right cap per slug — openai 128, grok 64,
     // nvidia 64 (Grok/NVIDIA inherit ChatOpenAiProvider but pass their
@@ -444,11 +456,13 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
         };
       }>;
       model?: string;
-      usage?: { total_tokens?: number };
+      usage?: { total_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
     };
 
     const msg = data.choices?.[0]?.message;
-    const content = msg?.content ?? "";
+    // Reasoning models on these endpoints (Nemotron, DeepSeek, Kimi, MiniMax)
+    // can prepend a <think> block; it is scratchpad, never the answer.
+    const content = stripReasoning(msg?.content ?? "");
     const tokens = data.usage?.total_tokens ?? 0;
 
     // Parse OpenAI-format tool_calls
@@ -470,65 +484,10 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
       content,
       model: data.model ?? model,
       tokens_used: tokens,
+      input_tokens: data.usage?.prompt_tokens,
+      output_tokens: data.usage?.completion_tokens,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
-  }
-}
-
-// ── Grok / xAI (OpenAI-compatible) ────────────────────
-// xAI exposes an OpenAI-compatible REST endpoint at api.x.ai/v1, so we
-// reuse ChatOpenAiProvider's request/parse logic and only swap base URL,
-// default model, and the provider name (for exhaustion + fallback routing).
-
-const GROK_DEFAULT_BASE = "https://api.x.ai/v1";
-const GROK_DEFAULT_MODEL = "grok-4-1-fast-non-reasoning";
-
-export class ChatGrokProvider extends ChatOpenAiProvider {
-  constructor(
-    apiKey: string,
-    baseUrl: string = GROK_DEFAULT_BASE,
-    defaultModel: string = GROK_DEFAULT_MODEL,
-  ) {
-    super(apiKey, baseUrl, defaultModel, "grok");
-  }
-}
-
-// ── NVIDIA NIM (OpenAI-compatible) ────────────────────
-// NVIDIA exposes an OpenAI-compatible REST endpoint at integrate.api.nvidia.com/v1,
-// hosting DeepSeek, Llama, Mistral, and other open models via NIM.
-// Same pattern as Grok: reuse ChatOpenAiProvider, swap base URL + default model.
-
-export const NVIDIA_DEFAULT_BASE = "https://integrate.api.nvidia.com/v1";
-// Default — picked because it's currently *actually* serving on NIM.
-// `deepseek-v4-pro`/`v4-flash` are listed in /v1/models but the upstream
-// returns 504 Gateway Timeout when invoked (announced but not warm).
-// User can override via NVIDIA_DEFAULT_MODEL in .env or per-call options.
-export const NVIDIA_DEFAULT_MODEL = "deepseek-ai/deepseek-v3.1-terminus";
-
-export class ChatNvidiaProvider extends ChatOpenAiProvider {
-  constructor(
-    apiKey: string,
-    baseUrl: string = NVIDIA_DEFAULT_BASE,
-    defaultModel: string = NVIDIA_DEFAULT_MODEL,
-  ) {
-    super(apiKey, baseUrl, defaultModel, "nvidia");
-  }
-}
-
-// ── MiniMax (OpenAI-compatible) ───────────────────────
-// MiniMax exposes an OpenAI-compatible REST endpoint at api.minimax.io/v1,
-// hosting the M-series models. Same pattern as Grok/NVIDIA: reuse
-// ChatOpenAiProvider, swap base URL + default model.
-export const MINIMAX_DEFAULT_BASE = "https://api.minimax.io/v1";
-export const MINIMAX_DEFAULT_MODEL = "MiniMax-M2.7";
-
-export class ChatMinimaxProvider extends ChatOpenAiProvider {
-  constructor(
-    apiKey: string,
-    baseUrl: string = MINIMAX_DEFAULT_BASE,
-    defaultModel: string = MINIMAX_DEFAULT_MODEL,
-  ) {
-    super(apiKey, baseUrl, defaultModel, "minimax");
   }
 }
 
@@ -943,13 +902,17 @@ function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
     } catch (err) {
       const durationMs = Date.now() - t0;
       const kind = providerHealth.classifyError(err);
+      const message = err instanceof Error ? err.message : String(err);
       providerHealth.recordFailure(p.name, kind);
+      // A model the provider advertises but does not serve retires itself
+      // here, so the picker stops handing it to the next person.
+      providerHealth.reportModelFault(p.name, requestedModel ?? "", kind, message);
       logLlmFail({
         slug: p.name,
         model: requestedModel,
         durationMs,
         kind,
-        message: err instanceof Error ? err.message : String(err),
+        message,
         caller,
       });
       throw err;
@@ -958,64 +921,68 @@ function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
   return p;
 }
 
-export function createChatProviders(config: {
-  anthropicApiKey: string;
-  openaiApiKey: string;
-  lmstudioBaseUrl: string;
-  grokApiKey?: string;
-  grokDefaultModel?: string;
-  nvidiaApiKey?: string;
-  nvidiaDefaultModel?: string;
-  minimaxApiKey?: string;
-  minimaxBaseUrl?: string;
-  minimaxDefaultModel?: string;
+export interface AdapterOptions {
+  /** Kernel-wide chat default, used where the provider has no model of its own. */
   defaultModel?: string;
-  /** Claude Code provider subprocess/MCP wiring (from `config.claudeCode`).
-   *  Optional — omitted → the provider falls back to its env reads. */
-  claudeCode?: import("./claude-code-adapter.js").ClaudeCodeProviderOptions;
-}): Map<string, ChatLlmProvider> {
+  /** Claude Code subprocess/MCP wiring (from `config.claudeCode`). */
+  claudeCode?: ClaudeCodeProviderOptions;
+}
+
+/**
+ * One chat adapter for one catalog provider, built from its stored config.
+ *
+ * `override` lets the connect dialog test a key the user just pasted without
+ * saving it first: non-empty strings replace the stored values, nothing is
+ * written anywhere.
+ */
+export function buildChatAdapter(
+  slugOrAlias: string,
+  override: Partial<ProviderConfig> = {},
+  opts: AdapterOptions = {},
+): ChatLlmProvider | null {
+  const entry = getCatalogEntry(slugOrAlias);
+  if (!entry) return null;
+  const cfg: ProviderConfig = { ...getProviderConfig(entry.slug) };
+  for (const key of ["apiKey", "baseUrl", "model", "region", "oauthToken"] as const) {
+    const v = override[key];
+    if (typeof v === "string" && v.trim() !== "") cfg[key] = v.trim();
+  }
+  if (override.region && !override.baseUrl) {
+    const regionBase = entry.regions?.find((r) => r.id === override.region)?.baseUrl;
+    if (regionBase) cfg.baseUrl = regionBase;
+  }
+
+  switch (entry.kind) {
+    case "anthropic":
+      return new ChatClaudeProvider(cfg.apiKey, cfg.model || opts.defaultModel || CLAUDE_DEFAULT_MODEL);
+    case "claude-code":
+      return new ChatClaudeCodeProvider(opts.defaultModel, {
+        ...opts.claudeCode,
+        model: cfg.model,
+        ...(cfg.oauthToken ? { oauthToken: cfg.oauthToken } : {}),
+      });
+    case "lmstudio":
+      return new ChatLmStudioProvider(cfg.baseUrl, cfg.model);
+    default:
+      // Local OpenAI-compatible servers ignore auth but the header must not be empty.
+      return new ChatOpenAiProvider(entry.needsKey ? cfg.apiKey : (cfg.apiKey || "local"), cfg.baseUrl, cfg.model, entry.slug);
+  }
+}
+
+export function createChatProviders(options: AdapterOptions = {}): Map<string, ChatLlmProvider> {
   const providers = new Map<string, ChatLlmProvider>();
-
-  providers.set(
-    "claude",
-    instrumentProvider(new ChatClaudeProvider(config.anthropicApiKey, config.defaultModel)),
-  );
-  // Claude via the logged-in CLI (OAuth → Max/Pro subscription). Zero API-key
-  // billing; falls back via resolveProvider when CLI isn't installed.
-  // Registered under both "claude_code" (chat-adapter convention, snake_case,
-  // used by stored agent rows + FALLBACK_ORDER) and "claude-code" (registry
-  // convention, kebab-case, used by /api/llm-providers and the dashboard).
-  // Same instance, two keys → both lookup paths resolve.
-  const claudeCodeProv = instrumentProvider(new ChatClaudeCodeProvider(config.defaultModel, config.claudeCode));
-  providers.set("claude_code", claudeCodeProv);
-  providers.set("claude-code", claudeCodeProv);
-  providers.set(
-    "openai",
-    instrumentProvider(new ChatOpenAiProvider(config.openaiApiKey)),
-  );
-  providers.set(
-    "lmstudio",
-    instrumentProvider(new ChatLmStudioProvider(config.lmstudioBaseUrl)),
-  );
-  providers.set(
-    "grok",
-    instrumentProvider(new ChatGrokProvider(config.grokApiKey ?? "", GROK_DEFAULT_BASE, config.grokDefaultModel || GROK_DEFAULT_MODEL)),
-  );
-  providers.set(
-    "nvidia",
-    instrumentProvider(new ChatNvidiaProvider(config.nvidiaApiKey ?? "", NVIDIA_DEFAULT_BASE, config.nvidiaDefaultModel || NVIDIA_DEFAULT_MODEL)),
-  );
-  // MiniMax key/base/model come from the registry settings_json (mirrored to
-  // process.env by syncProvidersToKernelConfig); fall back to env directly.
-  providers.set(
-    "minimax",
-    instrumentProvider(new ChatMinimaxProvider(
-      config.minimaxApiKey ?? process.env.MINIMAX_API_KEY ?? "",
-      config.minimaxBaseUrl || process.env.MINIMAX_BASE_URL || MINIMAX_DEFAULT_BASE,
-      config.minimaxDefaultModel || process.env.MINIMAX_DEFAULT_MODEL || MINIMAX_DEFAULT_MODEL,
-    )),
-  );
-
+  for (const entry of PROVIDER_CATALOG) {
+    // A local server needs no key, so an unconnected one would still report
+    // available() and get picked as a fallback that can only time out.
+    if (entry.group === "local" && !isConnected(entry.slug)) continue;
+    const adapter = buildChatAdapter(entry.slug, {}, options);
+    if (!adapter) continue;
+    // One instance under the slug and every alias: stored agent rows use
+    // "claude_code", the registry and dashboard use "claude-code".
+    const instance = instrumentProvider(adapter);
+    providers.set(entry.slug, instance);
+    for (const alias of entry.aliases) providers.set(alias, instance);
+  }
   return providers;
 }
 
@@ -1140,21 +1107,35 @@ export function clearProviderExhausted(providerName?: string): number {
  * LM Studio is intentionally last in FALLBACK_ORDER — it requires the
  * desktop app to be running and reachable from the kernel's namespace.
  */
+/**
+ * Resolve a provider together with the model it is allowed to be asked for.
+ *
+ * A model name belongs to exactly one provider, so it must never travel with a
+ * substitution. It did: with NVIDIA in a backoff window, the chat resolved to
+ * MiniMax and still sent NVIDIA's model, and MiniMax answered "invalid params,
+ * unknown model" — which the UI then showed as NVIDIA's reply. When the
+ * provider that comes back is not the one asked for, the model is dropped and
+ * the substitute answers with its own default.
+ */
+export function resolveProviderFor(
+  providers: Map<string, ChatLlmProvider>,
+  requested: string,
+  model: string,
+): { provider: ChatLlmProvider; model: string; substituted: boolean } | null {
+  const provider = resolveProvider(providers, requested);
+  if (!provider) return null;
+  const substituted = providers.get(requested) !== provider;
+  return { provider, model: substituted ? "" : model, substituted };
+}
+
 export function resolveProvider(
   providers: Map<string, ChatLlmProvider>,
   requested: string,
 ): ChatLlmProvider | null {
-  // Order matches AGENTS_DEFAULT_MODEL_CHAIN. openai is OUT (deprecated as
-  // fleet primary — quota-exhausting). claude_code IS in here for chats
-  // that don't need tool loops — it uses the local CLI's OAuth (no per-call
-  // billing), so when paid keys are exhausted it's the safest fallback.
-  // claude_code is a single-turn shim (maxTurns=1) that ignores tools, so a
-  // caller which sends tools must not land here. That is enforced through the
-  // provider's `supportsToolLoop: false` — the agent executor filters on it.
-  // (An earlier comment told callers to pass `disableToolFallbacks`; no such
-  // option ever existed, which is precisely how agent runs kept ending in
-  // "Reached maximum number of turns (1)".)
-  const FALLBACK_ORDER = ["grok", "claude_code", "claude", "nvidia", "lmstudio"];
+  // The catalog's fallback order: recommended, free, paid, local, then the
+  // subscription CLI. claude-code is a single-turn shim that ignores tools; a
+  // caller that sends tools filters it out through `supportsToolLoop: false`.
+  const FALLBACK_ORDER = fallbackOrder();
 
   // 1. Honour the explicit request when it's truly usable
   const requestedProv = providers.get(requested);

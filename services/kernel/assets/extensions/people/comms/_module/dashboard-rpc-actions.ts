@@ -8,7 +8,7 @@
  * structured error from `approveSuggestion()`.
  */
 
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { RpcAction } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";

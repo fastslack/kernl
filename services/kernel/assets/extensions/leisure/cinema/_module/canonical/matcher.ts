@@ -19,7 +19,7 @@
  * of the above costs seconds rather than 74k network calls.
  */
 
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import type { SqliteDb } from "@kernl/extension-sdk";
 import { normalizeTitle, extractYear, trigrams, diceCoefficient } from "../title-norm.js";
 
 /**

@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { NotesService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 /**
  * LLM tool-calls frequently over-escape multi-line strings: instead of sending

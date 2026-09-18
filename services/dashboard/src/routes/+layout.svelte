@@ -1186,13 +1186,9 @@
     {#if llmMissing && !llmBannerDismissed && !isStandalonePage}
       <div class="llm-banner" role="status">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5v.01"/></svg>
-        <span class="llm-banner-text">
-          No LLM can run an agent yet — <strong>chat and agents are off</strong>.
-          Everything else works.
-          {#if llmVerdict?.detail}<span class="llm-banner-detail">{llmVerdict.detail}</span>{/if}
-        </span>
-        <a class="llm-banner-fix" href="/setup?blocked=llm">Configure a provider →</a>
-        <button class="llm-banner-x" title="Dismiss" aria-label="Dismiss" on:click={() => (llmBannerDismissed = true)}>✕</button>
+        <span class="llm-banner-text">{$t('llm.banner')}</span>
+        <a class="llm-banner-fix" href="/settings?section=ai&card=providers">{$t('llm.banner_fix')} →</a>
+        <button class="llm-banner-x" title={$t('llm.banner_dismiss')} aria-label={$t('llm.banner_dismiss')} on:click={() => (llmBannerDismissed = true)}>✕</button>
       </div>
     {/if}
     <div class="content-frame" class:with-rail={railItems.length > 0}>
@@ -1231,4 +1227,16 @@
   transitions. The component handles its own visibility via `displayMode`.
 -->
 <MusicPlayer />
+
+<style>
+  .llm-banner {
+    display: flex; align-items: center; gap: 10px; margin: 0 0 12px; padding: 8px 12px;
+    border: 1px solid color-mix(in srgb, var(--orange) 40%, var(--border)); border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--orange) 8%, var(--surface-1)); color: var(--text-1); font-size: 13px;
+  }
+  .llm-banner svg { color: var(--orange); flex: none; }
+  .llm-banner-text { flex: 1; min-width: 0; }
+  .llm-banner-fix { color: var(--teal); font-weight: 600; text-decoration: none; white-space: nowrap; }
+  .llm-banner-x { border: 0; background: none; color: var(--text-2); cursor: pointer; min-width: 32px; min-height: 32px; }
+</style>
 

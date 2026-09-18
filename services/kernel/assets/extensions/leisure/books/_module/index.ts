@@ -1,9 +1,4 @@
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type DashboardDescriptor, type ExtensibleModule, type ModuleContext, runMigrations } from "@kernl/extension-sdk";
 import { booksMigrations } from "./migrations/001_books.js";
 import { BooksService } from "./service.js";
 import { registerBooksRoutes } from "./api-routes.js";

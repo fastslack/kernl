@@ -19,13 +19,10 @@
  *     manager, cross-office) on every roundup, drawing an orange beam.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import { type SqliteDb, type EventBus, isoNow, log } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../src/modules/agents/executor.js";
 import type { Agent, AgentFlow } from "../../../../../src/modules/agents/types.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
 import { DEMO_SLUGS } from "./demo-handlers.js";
 
 interface FlowSpec {

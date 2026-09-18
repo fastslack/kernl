@@ -161,6 +161,10 @@ export class ModelBlocklist {
     if (errorKind === "exhausted" || errorKind === "auth" || errorKind === "rate-limit") {
       return null;
     }
+    // The health classifier already decided this one is about the model and
+    // not the provider, and it matches more wordings than the patterns below
+    // ("invalid params, unknown model 'x'" matches none of them).
+    if (errorKind === "model") return "not-found";
     // Model-specific: NIM lists it but the inference server hangs.
     if (/\btimeout\b|no response in/i.test(raw)) return "timeout";
     // Model-specific: deprecated / renamed / wrong path.

@@ -3,7 +3,7 @@
  * `dashboard.news` shortcut used by the home page.
  */
 
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { RpcAction } from "@kernl/extension-sdk";
 import type { NewsService } from "./news-service.js";
 
 export interface NewsDashboardRpcDeps {

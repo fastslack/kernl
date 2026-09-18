@@ -12,7 +12,7 @@
  * "work still owed", already understood by anyone reading this module.
  */
 
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import type { SqliteDb } from "@kernl/extension-sdk";
 import { MATCHER_VERSION, type Candidate, type MatchOutcome, type MatchState } from "./matcher.js";
 
 export interface MatchRow {

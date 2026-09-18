@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { TimeTrackingService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 function fmtDuration(minutes: number): string {
   const h = Math.floor(minutes / 60);

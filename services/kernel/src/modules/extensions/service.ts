@@ -24,6 +24,7 @@ import type {
 import type { ExtensionManifest } from "./schema.js";
 import { peekManifest, unpackBundle } from "./bundle.js";
 import { ensureExtensionPackages, needsPackageInstall } from "./ensure-packages.js";
+import { sdkIncompatibility, assertSdkCompatible } from "./sdk-compat.js";
 import { verifyBundleSignature } from "./bundle-signature.js";
 import {
   checkBundleAuthenticity,
@@ -355,6 +356,14 @@ export class ExtensionService {
     const unpacked = await unpackBundle(bundlePath, installPath, true);
     const { manifest } = unpacked;
 
+    // A backend built for another SDK major would load its own copies of
+    // kernel code. Say so now, while the user is looking at the install.
+    const sdkProblem = sdkIncompatibility(manifest);
+    if (sdkProblem) {
+      await rm(installPath, { recursive: true, force: true }).catch(() => {});
+      throw new Error(`Refusing to install ${manifest.slug}: ${sdkProblem}`);
+    }
+
     // Authenticity: a signed bundle must verify against the embedded license
     // public key; a PAID bundle must carry a valid signature. Blocks tampered
     // or forged/pirated paid bundles before they touch the registry.
@@ -465,6 +474,13 @@ export class ExtensionService {
       throw new Error(
         `${existing.slug} update requires an active ${requiredFeature(preview)} license.`,
       );
+    }
+
+    // Checked before the live copy is moved aside, so a refused update leaves
+    // nothing to roll back.
+    const sdkProblem = sdkIncompatibility(preview);
+    if (sdkProblem) {
+      throw new Error(`Refusing to update ${preview.slug}: ${sdkProblem}`);
     }
 
     const prevRow: InstalledExtension = { ...existing };
@@ -584,6 +600,7 @@ export class ExtensionService {
     // type-consistency. The install_path is the source directory itself.
     const { readManifest } = await import("./bundle.js");
     const manifest = await readManifest(sourceDir);
+    assertSdkCompatible(manifest);
 
     const existing = this.get(manifest.id) ?? this.getBySlug(manifest.slug);
     if (existing) throw new Error(`Extension already installed: ${manifest.id}`);
@@ -637,6 +654,7 @@ export class ExtensionService {
     source: ExtensionSource,
     opts?: { remoteWatermark?: RemoteWatermark | null; copyFromDir?: string | null },
   ): Promise<InstalledExtension> {
+    assertSdkCompatible(manifest);
     const existing = this.get(manifest.id) ?? this.getBySlug(manifest.slug);
     if (existing) throw new Error(`Extension already installed: ${manifest.id}`);
 

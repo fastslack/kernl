@@ -19,6 +19,7 @@ import { log } from "../../core/logger.js";
 import type { ExtensionService } from "./service.js";
 import type { InstalledExtension } from "./types.js";
 import type { ExtensionManifest } from "./schema.js";
+import { sdkIncompatibility } from "./sdk-compat.js";
 
 interface LoadResult {
   loaded: string[];
@@ -57,6 +58,16 @@ export async function loadActiveExtensions(
     }
     if (!manifest.backend?.entry) {
       result.skipped.push(row.slug);
+      continue;
+    }
+
+    // A bundle built for another SDK major carries its own copies of kernel
+    // code; importing it would run them. Refuse before the import.
+    const sdkProblem = sdkIncompatibility(manifest);
+    if (sdkProblem) {
+      service.setStatus(row.id, "error", sdkProblem);
+      result.failed.push({ slug: row.slug, error: sdkProblem });
+      log.warn(`Skipping extension ${row.slug}: ${sdkProblem}`);
       continue;
     }
 

@@ -1,7 +1,5 @@
 import { z } from "zod";
-import { defineTool } from "../../../../../src/core/tool-builder.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { defineTool, textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { ApiRegistryService } from "./service.js";
 import type { ApiSeedData } from "./types.js";
 

@@ -8,8 +8,7 @@
  * multi-prefix, CHATHISTORY) and the +E (E2E) channel mode whose payloads the
  * server stores/relays as ciphertext.
  */
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
+import { newId, isoNow, log } from "@kernl/extension-sdk";
 import type { IrcStore } from "../store.js";
 import { SaslAuthenticator, decodePlain } from "../security/sasl.js";
 import { IrcClient } from "./client.js";

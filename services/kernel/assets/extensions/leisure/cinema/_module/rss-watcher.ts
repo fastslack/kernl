@@ -15,7 +15,7 @@
  * one from looking "stale".
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import type { ArchiveScrapeRow } from "./types.js";
 import { CINEMA_COLLECTIONS } from "./ingester.js";
@@ -200,7 +200,9 @@ async function scrapeByIdentifiers(ids: string[]): Promise<ArchiveScrapeRow[]> {
     const orList = slice.map((id) => `identifier:${id}`).join(" OR ");
     const params = new URLSearchParams();
     params.set("q", orList);
-    params.set("count", String(slice.length));
+    // Not slice.length: the scrape API answers 400 to any count below 100,
+    // which refused every batch smaller than a full chunk.
+    params.set("count", String(CHUNK));
     params.set("fields", SCRAPE_FIELDS.join(","));
     const url = `${SCRAPE_URL}?${params.toString()}`;
     const ctrl = new AbortController();

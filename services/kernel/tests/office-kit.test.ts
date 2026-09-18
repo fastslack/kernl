@@ -12,6 +12,7 @@ import {
   parseEvery,
   scheduleFloorMs,
   slugify,
+  OfficeExistsError,
   type OfficeDefinition,
 } from "../src/modules/agents/office-kit.js";
 
@@ -224,5 +225,164 @@ describe("office-kit", () => {
     expect(def.agents[1].slug).toBe("marketing-writer");
     expect(def.agents[0].role).toBe("manager");
     expect(slugify("Análisis de Datos")).toBe("analisis-de-datos");
+  });
+
+  it("mode 'create' refuses a name that already exists, ignoring case", () => {
+    materializeOffice(db, service, { name: "Research", agents: [{ slug: "mc-1", name: "R", prompt: "p" }] });
+    expect(() =>
+      materializeOffice(db, service, { name: "research", agents: [{ slug: "mc-2", name: "R2", prompt: "p" }] }, { mode: "create" }),
+    ).toThrow(OfficeExistsError);
+  });
+
+  it("mode 'create' renames a colliding agent slug instead of taking over the old agent", () => {
+    // Found "Research", then delete it (its agent becomes unassigned + paused
+    // by AgentFlowsService.deleteFlow — simulated directly here).
+    const first = materializeOffice(db, service, {
+      name: "Research",
+      agents: [
+        { slug: "research-curator", name: "Curator", role: "manager", prompt: "p", chainTo: ["research-writer"] },
+        { slug: "research-writer", name: "Writer", prompt: "p2" },
+      ],
+      cron: { agent: "research-curator", every: "45m" },
+    });
+    const oldCuratorId = service.getAgentBySlug("research-curator")!.id;
+    const oldWriterId = service.getAgentBySlug("research-writer")!.id;
+    // Simulate deleting the office: deleteFlow pauses+unassigns the agents
+    // and deactivates the flow (agents.slug stays as-is — slugs are global).
+    db.prepare("UPDATE agents SET active = 0, flow_id = '' WHERE id IN (?, ?)").run(oldCuratorId, oldWriterId);
+    db.prepare("UPDATE agent_flows SET active = 0 WHERE id = ?").run(first.flowId);
+
+    const second = materializeOffice(
+      db,
+      service,
+      {
+        name: "Research",
+        agents: [
+          { slug: "research-curator", name: "Curator", role: "manager", prompt: "p", chainTo: ["research-writer"] },
+          { slug: "research-writer", name: "Writer", prompt: "p2" },
+        ],
+        cron: { agent: "research-curator", every: "45m" },
+      },
+      { mode: "create" },
+    );
+
+    expect(second.flowId).not.toBe(first.flowId);
+    expect(second.created).toEqual(["research-curator-2", "research-writer-2"]);
+    expect(second.updated).toEqual([]);
+    expect(second.warnings).toContain('agent slug "research-curator" already exists — created as "research-curator-2"');
+    expect(second.warnings).toContain('agent slug "research-writer" already exists — created as "research-writer-2"');
+    expect(second.chained).toEqual([["research-curator-2", "research-writer-2"]]);
+    expect(second.scheduled?.agent).toBe("research-curator-2");
+
+    // Old agents are untouched: still the same ids, still unassigned/paused.
+    const oldCurator = service.getAgent(oldCuratorId)!;
+    expect(oldCurator.active).toBe(0);
+    expect(oldCurator.flow_id).toBe("");
+    const oldWriter = service.getAgent(oldWriterId)!;
+    expect(oldWriter.active).toBe(0);
+    expect(oldWriter.flow_id).toBe("");
+
+    // New agents are brand new rows under the new office.
+    const newCurator = service.getAgentBySlug("research-curator-2")!;
+    expect(newCurator.id).not.toBe(oldCuratorId);
+    expect(newCurator.flow_id).toBe(second.flowId);
+    expect(newCurator.active).toBe(1);
+  });
+
+  it("mode 'create' with no colliding slugs behaves normally, no warnings", () => {
+    const r = materializeOffice(
+      db,
+      service,
+      { name: "Fresh Office", agents: [{ slug: "fresh-1", name: "A", prompt: "p" }] },
+      { mode: "create" },
+    );
+    expect(r.created).toEqual(["fresh-1"]);
+    expect(r.warnings).toEqual([]);
+  });
+
+  it("mode defaults to upsert and reuses the office with that name", () => {
+    const a = materializeOffice(db, service, { name: "Same", agents: [{ slug: "up-1", name: "A", prompt: "p" }] });
+    const b = materializeOffice(db, service, { name: "Same", agents: [{ slug: "up-1", name: "A", prompt: "p2" }] });
+    expect(b.flowId).toBe(a.flowId);
+  });
+
+  it("stores kind on a new office and updates it on upsert", () => {
+    const r = materializeOffice(db, service, { name: "Ops", kind: "devops", agents: [{ slug: "k-1", name: "A", prompt: "p" }] });
+    expect(service.getFlow(r.flowId)!.kind).toBe("devops");
+    materializeOffice(db, service, { name: "Ops", kind: "creative", agents: [{ slug: "k-1", name: "A", prompt: "p" }] });
+    expect(service.getFlow(r.flowId)!.kind).toBe("creative");
+  });
+
+  it("officeDefinitionFromJson resolves chainTo and cron.agent NAMEs to slugs", () => {
+    const def = officeDefinitionFromJson({
+      name: "Wizard Team",
+      agents: [
+        { name: "Lead", role: "manager", prompt: "lead prompt", chainTo: ["Writer"] },
+        { name: "Writer", prompt: "writer prompt" },
+      ],
+      cron: { agent: "Lead", every: "45m" },
+    });
+    const lead = def.agents.find((a) => a.name === "Lead")!;
+    const writer = def.agents.find((a) => a.name === "Writer")!;
+    expect(lead.chainTo).toEqual([writer.slug]);
+    expect(def.cron?.agent).toBe(lead.slug);
+  });
+
+  it("officeDefinitionFromJson leaves an already-correct slug in chainTo/cron.agent untouched", () => {
+    const def = officeDefinitionFromJson({
+      name: "Wizard Team 2",
+      agents: [
+        { slug: "custom-lead", name: "Lead", role: "manager", prompt: "p", chainTo: ["custom-writer"] },
+        { slug: "custom-writer", name: "Writer", prompt: "p2" },
+      ],
+      cron: { agent: "custom-lead", every: "45m" },
+    });
+    expect(def.agents[0].chainTo).toEqual(["custom-writer"]);
+    expect(def.cron?.agent).toBe("custom-lead");
+  });
+
+  it("rejects an unknown kind or isolation from JSON", () => {
+    expect(() => officeDefinitionFromJson({ name: "X", kind: "castle", agents: [{ name: "A", prompt: "p" }] })).toThrow(/kind/);
+    expect(() => officeDefinitionFromJson({ name: "X", repoIsolation: "yolo", agents: [{ name: "A", prompt: "p" }] })).toThrow(/repoIsolation/);
+  });
+
+  it("repoIsolation 'sandbox' leaves the executor's safe defaults in place", () => {
+    const r = materializeOffice(db, service, {
+      name: "Sandboxed",
+      repo: "/tmp/office-kit-test-repo",
+      repoIsolation: "sandbox",
+      agents: [{ slug: "sb-1", name: "Builder", prompt: "p" }],
+    });
+    const vars = JSON.parse(service.getAgentBySlug("sb-1")!.variables) as Record<string, unknown>;
+    expect(vars.__cwd_path__).toBe("/tmp/office-kit-test-repo");
+    expect(vars.__sandbox__).toBeUndefined();
+    expect(vars.__permission_mode__).toBeUndefined();
+    expect(service.getFlow(r.flowId)!.repo_isolation).toBe("sandbox");
+  });
+
+  it("an explicit repoIsolation cannot be overridden by an agent's own variables", () => {
+    const r = materializeOffice(db, service, {
+      name: "Locked Sandbox",
+      repo: "/tmp/office-kit-test-repo",
+      repoIsolation: "sandbox",
+      agents: [{ slug: "lk-1", name: "Builder", prompt: "p", variables: { __sandbox__: false } }],
+    });
+    const vars = JSON.parse(service.getAgentBySlug("lk-1")!.variables) as Record<string, unknown>;
+    expect(vars.__sandbox__).toBeUndefined();
+    expect(service.getFlow(r.flowId)!.repo_isolation).toBe("sandbox");
+  });
+
+  it("re-materializing with 'sandbox' removes a previous host posture", () => {
+    const def: OfficeDefinition = {
+      name: "Flip",
+      repo: "/tmp/office-kit-test-repo",
+      agents: [{ slug: "flip-1", name: "B", prompt: "p" }],
+    };
+    const first = materializeOffice(db, service, def);
+    expect(service.getFlow(first.flowId)!.repo_isolation).toBe("host");
+    materializeOffice(db, service, { ...def, repoIsolation: "sandbox" });
+    const vars = JSON.parse(service.getAgentBySlug("flip-1")!.variables) as Record<string, unknown>;
+    expect(vars.__sandbox__).toBeUndefined();
+    expect(vars.__permission_mode__).toBeUndefined();
   });
 });

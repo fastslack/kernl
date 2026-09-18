@@ -1,5 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { toRecord, today, daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import { type SqliteDb, toRecord, today, daysFromNow } from "@kernl/extension-sdk";
 
 export interface DashboardReminders {
   upcoming24h: Array<{ id: string; title: string; trigger_at: string; repeat: string }>;

@@ -1,3 +1,14 @@
+/** What an office is, for the room it gets in 3D and the buttons its agents show. */
+export const FLOW_KINDS = ["general", "devops", "communications", "creative"] as const;
+export type FlowKind = (typeof FLOW_KINDS)[number];
+
+export function isFlowKind(v: unknown): v is FlowKind {
+  return typeof v === "string" && (FLOW_KINDS as readonly string[]).includes(v);
+}
+
+/** How agents of an office that works on a repo are run. */
+export type RepoIsolation = "sandbox" | "host";
+
 /** Named flow — a logical group of agents and chains */
 export interface AgentFlow {
   id: string;
@@ -11,6 +22,10 @@ export interface AgentFlow {
   //   home_repo_path    → absolute host path when promoted to a git repo; '' = use workspace.
   home_workspace_id?: string; // '' = none yet
   home_repo_path?: string;    // '' = use the kernel workspace
+  kind?: FlowKind;                        // 'general' when absent
+  repo_isolation?: RepoIsolation | "";    // '' = the office has no repo
+  source_extension_id?: string;           // '' = created by the operator
+  auto_debate?: number;                   // 0/1
   created_at: string;
   updated_at: string;
 }

@@ -1,9 +1,18 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  type SqliteDb,
+  type EventBus,
+  type Notifier,
+  type KernelConfig,
+  runMigrations,
+  type AgentDriver,
+  log,
+  gateToolList,
+  getProviderConfig,
+} from "@kernl/extension-sdk";
 import { commsMigrations } from "./migrations.js";
 import { CommsService } from "./service.js";
 import { EmailService } from "./email-service.js";
@@ -16,11 +25,8 @@ import { registerEmailRoutes } from "./email-routes.js";
 import { registerEmailSuggestionsRoutes } from "./email-suggestions-routes.js";
 import { commsDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { commsAgentDrivers } from "./agent-drivers.js";
-import type { AgentDriver } from "../../../../../src/core/types.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
-import { log } from "../../../../../src/core/logger.js";
-import { gateToolList } from "../../../../../src/core/license/index.js";
 import { queryComms } from "./dashboard-queries.js";
 import { registerCommsDashboardRoutes } from "./dashboard-routes.js";
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";
@@ -215,8 +221,8 @@ export function createCommsModule(): CommsModule {
     getCommsTriageTools() {
       if (!serviceRef || !dbRef || !configRef) return [];
       return commsTriageTools(serviceRef, dbRef, {
-        openaiApiKey: configRef.webIntel.openaiApiKey || configRef.voice.openaiApiKey || "",
-        anthropicApiKey: configRef.webIntel.anthropicApiKey,
+        openaiApiKey: getProviderConfig("openai").apiKey,
+        anthropicApiKey: getProviderConfig("claude").apiKey,
         defaultProvider: configRef.chat.defaultProvider,
       });
     },

@@ -1,20 +1,20 @@
 import { readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import type {
-  ExtensibleModule,
-  DashboardDescriptor,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { apiRegistryMigrations } from "./migrations/001_api_registry.js";
 import { ApiRegistryService } from "./service.js";
 import { apiRegistryTools } from "./tools.js";
 import { registerApiRegistryRoutes } from "./api-routes.js";
 import { apiRegistryDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import type { ApiSeedData } from "./types.js";
-import { log } from "../../../../../src/core/logger.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

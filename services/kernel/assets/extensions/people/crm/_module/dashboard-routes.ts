@@ -5,7 +5,7 @@
  * channels; this file owns the lead-specific endpoints used by
  * `/crm/leads`.
  */
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import type { KernelHttpServer } from "@kernl/extension-sdk";
 import type { CrmService } from "./service.js";
 import type { LeadStatus } from "./types.js";
 

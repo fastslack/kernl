@@ -597,6 +597,10 @@ export const KERNEL_AGENT_DEFS: Array<{
   // Agent self-evolution (Autogenesis-style reflection loop)
   { handler: "evolution:reflect-all",        name: "Reflection Optimizer",       description: "Scans all active agents, runs a reflection cycle on any with enough recent failures, auto-commits winning candidates",     cron: "0 */6 * * *",  flow: "Automations" },
   { handler: "evolution:reflect-workspaces", name: "Workspace Evolver Monitor",  description: "Scans every workspace with .evolve/policy.json, reports head sha and last evolution outcomes. Read-only — does NOT auto-trigger cycles.", cron: "0 */6 * * *", flow: "Automations" },
+  // Retention. Seeded from here, unlike the other CLI scripts: every
+  // scheduled poll above leaves an agent_runs row, and without this agent
+  // nothing ever prunes them.
+  { handler: "script:cleanup",  name: "Data Cleanup",  description: "Clean stale runs, old logs, dismissed reminders", cron: "0 4 * * 0", flow: "Automations" },
 ];
 
 /** Create the builtin handler map */

@@ -89,6 +89,18 @@ prebuilt `backend/entry.js` bundle. After editing extension source you must run
 imports extension source directly — it talks to them through structural
 interfaces in `services/kernel/src/core/extension-seams.ts`.
 
+The other direction has the same rule. An extension imports the kernel only
+through `@kernl/extension-sdk` (`services/kernel/src/sdk/`): types, pure
+utilities, and host facades (`log`, `llm()`, `getRequestContext()`…) that call
+into the one live kernel instance installed at boot. Importing `src/` by path
+would copy that kernel code — and its state — into the extension's bundle.
+`build:extensions` ends with a gate that fails on any such import or inlined
+file; the few that remain are listed per extension in
+`scripts/extension-boundary-baseline.json`, which may only shrink. Manifests
+with a backend declare `"sdk": 1`, and the kernel refuses to install or load a
+bundle built for another major. Heavy optional pieces live on subpaths:
+`@kernl/extension-sdk/html` and `@kernl/extension-sdk/nostr`.
+
 ## Security model
 
 Single-user, self-hosted by default. Key invariants (see `SECURITY.md` and the

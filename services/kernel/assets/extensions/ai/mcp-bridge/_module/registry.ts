@@ -18,8 +18,7 @@
  * makes a connection usable without restarting the kernel.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { log, type ToolDefinition } from "@kernl/extension-sdk";
 import { connectMcpServer, type McpBridgeConnection } from "./client.js";
 import { createRefreshTokenProvider, ReauthRequiredError } from "./oauth.js";
 import type { McpStore, McpServerRow } from "./store.js";

@@ -1,13 +1,13 @@
-import { log } from "../../../../../src/core/logger.js";
+import {
+  log,
+  type KernelConfig,
+  type NotificationProvider,
+  type NotificationPayload,
+  type ProviderStatus,
+  type ProviderCapability,
+  type ConfigField,
+} from "@kernl/extension-sdk";
 import { TelegramTransport } from "./telegram-transport.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import type {
-  NotificationProvider,
-  NotificationPayload,
-  ProviderStatus,
-  ProviderCapability,
-  ConfigField,
-} from "../../../../../src/core/notify/provider.js";
 
 /**
  * Telegram provider — wraps TelegramTransport.

@@ -18,9 +18,7 @@
  * break the caller's postToColleague.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import { log, isoNow, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../src/modules/agents/executor.js";
 

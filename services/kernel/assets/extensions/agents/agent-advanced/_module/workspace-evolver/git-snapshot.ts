@@ -14,7 +14,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { resolve, join, dirname } from "node:path";
-import { isoNow } from "../../../../../../src/core/helpers.js";
+import { isoNow } from "@kernl/extension-sdk";
 import type { WorkspaceSnapshot } from "./types.js";
 
 const execFileAsync = promisify(execFile);

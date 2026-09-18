@@ -67,7 +67,10 @@ export function queryAgents(db: SqliteDb): DashboardAgents | null {
 
   const topAgents = db
     .prepare(
-      `SELECT a.id, a.name, COUNT(r.id) as run_count, COALESCE(SUM(r.tokens_used), 0) as total_tokens
+      // COUNT(r.agent_id), not COUNT(r.id): same count on this LEFT JOIN, but
+      // it lets SQLite answer from idx_agent_runs_agent_tokens without
+      // reading the (embedding-heavy) rows.
+      `SELECT a.id, a.name, COUNT(r.agent_id) as run_count, COALESCE(SUM(r.tokens_used), 0) as total_tokens
        FROM agents a
        LEFT JOIN agent_runs r ON a.id = r.agent_id
        WHERE a.active = 1

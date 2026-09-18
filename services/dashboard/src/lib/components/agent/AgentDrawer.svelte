@@ -33,6 +33,7 @@
   // Directo a types.js y no a office3d/index.js: el índice arrastra three.js
   // entero, y de acá sólo salen tres helpers puros.
   import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
+  import { traitsOf } from '$lib/office/office-kinds.js';
 
   const dispatch = createEventDispatcher();
 
@@ -40,7 +41,9 @@
   /** Fila que el mundo ya tiene, para pintar sin esperar el fetch. */
   export let listRow: any = null;
   /** Oficina del agente — pinta el acento del panel y el chip del header. */
-  export let flow: { id?: string; name?: string; color?: string } | null = null;
+  export let flow: { id?: string; name?: string; color?: string; kind?: string | null } | null = null;
+  /** Offices the agent can be moved to from the header. */
+  export let offices: Array<{ id: string; name: string; color: string; active?: number }> = [];
   /** Tabs extra que aporta una extensión (panelTabRegistry). */
   export let extraTabs: Array<{ id: string; label: string }> = [];
   /**
@@ -149,14 +152,26 @@
   // distingue eso de una pausa pedida por el operador: la marca sí.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent.auto_paused_at || '');
   $: autoPausedAgo = autoPaused ? sinceLabel(agent?.auto_paused_at ?? '') : '';
-  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps/Repos
-  // office? If so, offer a deep-link to the paid DevOps control panel (/devops).
-  $: devopsOffice = /^(devops|repos)/i.test(flow?.name || '');
+  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
+  // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
+  $: devopsOffice = traitsOf(flow).devopsLink;
   // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
   // office is watching it happen — so the drawer offers the way through. The
   // link carries no piece id on purpose: Scene Studio opens whichever piece is
   // moving, which is the one the operator came to see.
-  $: creativosOffice = /^creativos/i.test(flow?.name || '');
+  $: creativosOffice = traitsOf(flow).liveScene;
+
+  function onOfficeChange(e: Event) {
+    const select = e.currentTarget as HTMLSelectElement;
+    const flowId = select.value;
+    if (flowId && flowId !== flow?.id) {
+      dispatch('move', { flowId });
+      // Show the office the agent is actually in; the refresh after a
+      // successful move brings the new value.
+      select.value = flow?.id ?? '';
+    }
+  }
+  $: movableOffices = offices.filter((o) => o.active !== 0);
 
   // ── Live scene preview ──────────────────────────────────────
   //
@@ -258,7 +273,19 @@
               </div>
             {/if}
             <div class="ip-sub">
-              {#if flow}<span class="ip-flow" style="--f:{flow.color}">{flow.name}</span>{/if}
+              {#if movableOffices.length > 0}
+                <label class="ip-office" style="--f:{flow?.color ?? 'var(--text-3)'}">
+                  <span class="ip-office-dot" aria-hidden="true"></span>
+                  <select class="ip-office-select" aria-label={$t('office.drawer.office')} value={flow?.id ?? ''} on:change={onOfficeChange}>
+                    {#if !flow?.id}<option value="">{$t('office.rail.unassigned')}</option>{/if}
+                    {#each movableOffices as o (o.id)}
+                      <option value={o.id}>{o.name}</option>
+                    {/each}
+                  </select>
+                </label>
+              {:else if flow}
+                <span class="ip-flow" style="--f:{flow.color}">{flow.name}</span>
+              {/if}
               <span class="ip-dot"></span>
               <span class="ip-id" title={$t('agent.drawer.agent_id_title')}>
                 {agent.id.slice(0, 8)}
@@ -583,6 +610,14 @@
     background:color-mix(in srgb, var(--f, var(--flow-color)) 10%, transparent);
     border:1px solid color-mix(in srgb, var(--f, var(--flow-color)) 25%, transparent);
   }
+  .ip-office { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 180px; }
+  .ip-office-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--f); flex: none; }
+  .ip-office-select {
+    appearance: none; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
+    color: var(--text-2); font: inherit; padding: 1px 4px; max-width: 160px; text-overflow: ellipsis; cursor: pointer;
+  }
+  .ip-office-select:hover { border-color: var(--border-h); color: var(--text-1); }
+  .ip-office-select:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
   .ip-dot{width:3px;height:3px;border-radius:50%;background:#4a4f66}
   .ip-tags{
     display:flex;align-items:center;gap:6px;flex-wrap:wrap;

@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import type { InboxMessage } from "../types.js";
 import type { EmailProvider, ProviderCapabilities, SendEmailOptions, SendResult } from "./types.js";
-import { log } from "../../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 
 const RESEND_API_URL = "https://api.resend.com";
 

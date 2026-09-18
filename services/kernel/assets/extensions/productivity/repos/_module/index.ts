@@ -1,6 +1,11 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { reposMigrations } from "./migrations/001_repos.js";
 import { repoAccessMigrations } from "./migrations/002_repo_access.js";
 import { RepoService } from "./service.js";

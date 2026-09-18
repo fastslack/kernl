@@ -19,9 +19,7 @@
  * resume.
  */
 
-import { log } from "../../../../../src/core/logger.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
+import { log, type GraphDriver, type EmbeddingsClient } from "@kernl/extension-sdk";
 import type { CinemaService } from "./service.js";
 import { embedPending } from "./embeddings.js";
 

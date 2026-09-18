@@ -19,10 +19,9 @@
  * remain for back-compat — agents that already reference them keep working.
  */
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, errorResult, structuredResult, textResult } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
 import type { Communication } from "./types.js";
-import { errorResult, structuredResult, textResult } from "../../../../../src/core/helpers.js";
 
 // ── Shared schemas ────────────────────────────────────────────
 

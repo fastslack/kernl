@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { LearningService } from "./service.js";
 
 export function learningTools(svc: LearningService): ToolDefinition[] {

@@ -1,5 +1,10 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+} from "@kernl/extension-sdk";
 import { issuesMigrations } from "./migrations.js";
 import { IssueService } from "./service.js";
 import { issueTools } from "./tools.js";

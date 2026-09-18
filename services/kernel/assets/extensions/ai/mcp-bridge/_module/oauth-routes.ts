@@ -15,8 +15,7 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type KernelHttpServer, log } from "@kernl/extension-sdk";
 import type { McpStore } from "./store.js";
 import type { McpRegistry } from "./registry.js";
 

@@ -1,4 +1,4 @@
-import type { GmailMessagePart } from "../../../../../src/core/integrations/google-types.js";
+import type { GmailMessagePart } from "@kernl/extension-sdk";
 import type { CommMetadata } from "./types.js";
 
 /**

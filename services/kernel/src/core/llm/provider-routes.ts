@@ -22,10 +22,11 @@ import { ModelBlocklist } from "./model-blocklist.js";
 import { recent as recentCalls } from "./call-log.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
 import { getChatProviders } from "./readiness.js";
+import { getCatalogEntry } from "./provider-catalog.js";
 
 /** Enough of the value to recognise it, never enough to use it. */
 const MASK = "***";
-function maskSecret(value: string): string {
+export function maskSecret(value: string): string {
   if (!value) return "";
   if (value.length <= 8) return value.slice(0, 2) + MASK;
   return value.slice(0, 8) + MASK + value.slice(-4);
@@ -35,9 +36,6 @@ function maskSecret(value: string): string {
 function isMasked(value: string): boolean {
   return value.includes(MASK);
 }
-import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
-import { ClaudeCodeAuthService } from "./claude-code-auth-service.js";
-
 function slugOf(req: unknown): string | null {
   const params = (req as { params?: Record<string, string> }).params;
   const slug = params?.slug;
@@ -236,6 +234,18 @@ export function registerLlmProviderRoutes(
       if (keep && typeof stored[key] === "string" && stored[key]) config[key] = stored[key];
     }
 
+    // oauthToken is never client-settable: no UI exposes it, and the merge
+    // above would otherwise accept a raw, unmasked value verbatim — letting
+    // any caller of this route plant a Claude subscription token by hand.
+    // Only `applyClaudeCodeTransition` (claude-code-transition.ts) writes or
+    // clears it; this route just preserves whatever is already stored, legacy
+    // token included, until that transition retires it.
+    if (typeof stored.oauthToken === "string" && stored.oauthToken) {
+      config.oauthToken = stored.oauthToken;
+    } else {
+      delete config.oauthToken;
+    }
+
     const ok = registry.saveConfig(slug, config);
     if (!ok) { server.json(res, 500, { error: "failed to persist config" }); return; }
 
@@ -291,21 +301,13 @@ export function registerLlmProviderRoutes(
   server.post("/api/llm/chain/test", async (req, res) => {
     type Hint = { label: string; action: string; url?: string };
     function buildHint(slug: string, kind?: string, raw?: string): Hint {
-      const billingUrl: Record<string, string> = {
-        grok:    "https://console.x.ai/team",
-        openai:  "https://platform.openai.com/account/billing",
-        claude:  "https://console.anthropic.com/settings/billing",
-        anthropic: "https://console.anthropic.com/settings/billing",
-        nvidia:  "https://build.nvidia.com/",
-      };
-      // NVIDIA NIM publishes models in /v1/models that aren't actually
-      // online on the hosted endpoint — the chat call hangs until the
-      // probe's 15s timeout fires. Surface that specifically so the user
-      // doesn't think their key is bad.
+      const keyPage = getCatalogEntry(slug)?.keyUrl;
+      // A hosted model that is listed but not warm hangs until the probe times
+      // out. Say so, so nobody replaces a key that works.
       if (slug === "nvidia" && raw && /timeout|no response in/i.test(raw)) {
         return {
-          label: "NIM model not available on the hosted endpoint",
-          action: `NVIDIA NIM lists this model in /v1/models but the inference server isn't responding. Change NVIDIA_DEFAULT_MODEL to one that's actually served (meta/llama-3.1-8b-instruct, meta/llama-3.3-70b-instruct, qwen/qwen3-32b).`,
+          label: "This NVIDIA model is listed but not answering",
+          action: "Pick another NVIDIA model in Settings → AI (Edit on the NVIDIA row).",
           url: "https://build.nvidia.com/models",
         };
       }
@@ -313,14 +315,14 @@ export function registerLlmProviderRoutes(
         case "exhausted":
           return {
             label: "Out of credits / billing exhausted",
-            action: `Top up credits or raise the monthly limit for "${slug}".`,
-            url: billingUrl[slug],
+            action: `Top up "${slug}", or connect a backup provider in Settings → AI.`,
+            url: keyPage,
           };
         case "auth":
           return {
             label: "Auth rejected (invalid key or suspended account)",
-            action: `Check "${slug}"'s API key at /api/llm-providers/${slug}/config — it may have been rotated, revoked, or the account suspended.`,
-            url: billingUrl[slug],
+            action: `Replace the key for "${slug}" in Settings → AI — it may have been rotated or revoked.`,
+            url: keyPage,
           };
         case "rate-limit":
           return {
@@ -588,71 +590,10 @@ export function registerLlmProviderRoutes(
 }
 
 /**
- * Claude Code sign-in, driven from the dashboard.
- *
- * This provider runs on the operator's Claude subscription instead of a metered
- * key, which makes it the one provider that works with nothing configured — and
- * the one that silently stops working when its session goes. A container
- * recreate used to be enough to lose it, with no way to sign back in short of
- * an interactive shell inside the container. These four routes are that way in.
+ * Readiness endpoints. Exempt from the gate they feed (see readiness-gate.ts):
+ * a blocked dashboard has to be able to ask why it is blocked.
  */
-export function registerClaudeCodeAuthRoutes(
-  server: KernelHttpServer,
-  registry: LlmProviderRegistry,
-): void {
-  const SLUG = "claude-code";
-  const auth = new ClaudeCodeAuthService(
-    () => new ChatClaudeCodeProvider().binaryPath(),
-    () => {
-      const cfg = registry.loadConfig(SLUG);
-      const t = cfg.oauthToken;
-      return typeof t === "string" && t ? t : undefined;
-    },
-    (token) => {
-      registry.saveConfig(SLUG, { ...registry.loadConfig(SLUG), oauthToken: token });
-      // Mirror into the environment so the adapter picks it up on the very next
-      // call. It is built without config, so the registry alone is invisible.
-      if (token) process.env.CLAUDE_CODE_OAUTH_TOKEN = token;
-      else delete process.env.CLAUDE_CODE_OAUTH_TOKEN;
-    },
-  );
-
-  server.get("/api/llm/claude-code/auth", (_req, res) => {
-    server.json(res, 200, auth.status());
-  });
-
-  server.post("/api/llm/claude-code/auth/login", async (_req, res) => {
-    const r = await auth.startLogin();
-    if ("error" in r) return server.json(res, 400, { error: r.error });
-    server.json(res, 200, r.session);
-  });
-
-  server.post("/api/llm/claude-code/auth/code", async (req, res) => {
-    const body = await server.parseBody<{ session?: string; code?: string }>(req);
-    const r = await auth.submitCode(String(body?.session ?? ""), String(body?.code ?? ""));
-    // A completed sign-in changes the answer to "can an agent run", so the
-    // next check must ask again instead of serving a pre-login verdict.
-    if (r.ok) (await import("./readiness.js")).markLlmReadinessStale("claude-code signed in");
-    server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
-  });
-
-  server.post("/api/llm/claude-code/auth/token", async (req, res) => {
-    const body = await server.parseBody<{ token?: string }>(req);
-    const r = auth.saveToken(String(body?.token ?? ""));
-    if (r.ok) (await import("./readiness.js")).markLlmReadinessStale("claude-code token saved");
-    server.json(res, r.ok ? 200 : 400, r.ok ? { ok: true, status: r.status } : { error: r.error });
-  });
-
-  server.post("/api/llm/claude-code/auth/cancel", async (req, res) => {
-    const body = await server.parseBody<{ session?: string }>(req);
-    auth.cancel(String(body?.session ?? ""));
-    server.json(res, 200, { ok: true });
-  });
-
-  // ── Readiness ────────────────────────────────────────────────────
-  //
-  // Exempt from the gate it feeds (see readiness-gate.ts) — a blocked
-  // dashboard has to be able to ask why it is blocked.
+export function registerLlmReadinessRoutes(server: KernelHttpServer): void {
   server.get("/api/llm/readiness", async (_req, res) => {
     const { ensureLlmReadiness } = await import("./readiness.js");
     server.json(res, 200, await ensureLlmReadiness());

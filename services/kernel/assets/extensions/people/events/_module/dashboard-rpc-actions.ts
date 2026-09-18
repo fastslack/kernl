@@ -6,9 +6,7 @@
  * Once those other queries are extracted we can move the function here.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { SystemRegistry } from "../../../../../src/core/system-registry.js";
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { SqliteDb, SystemRegistry, RpcAction } from "@kernl/extension-sdk";
 import { queryCalendar } from "../../../../../src/modules/dashboard/api.js";
 
 export interface EventsDashboardRpcDeps {

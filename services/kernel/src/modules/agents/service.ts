@@ -7,6 +7,7 @@ import { log } from "../../core/logger.js";
 import type {
   Agent,
   AgentFlow,
+  FlowKind,
   AgentRank,
   AgentRun,
   AgentStep,
@@ -29,7 +30,7 @@ import { AgentChainsService } from "./services/chains-service.js";
 import { AgentEventLogService } from "./services/event-log-service.js";
 import { AgentEvolutionService } from "./services/evolution-service.js";
 import { AgentTriggersService } from "./services/triggers-service.js";
-import { AgentSchedulesService } from "./services/schedules-service.js";
+import { AgentSchedulesService, type SchedulePatch } from "./services/schedules-service.js";
 import { AgentPromptVersionsService } from "./services/prompt-versions-service.js";
 import { AgentSubscriptionsService } from "./services/subscriptions-service.js";
 import { AgentConversationsService } from "./services/conversations-service.js";
@@ -38,6 +39,7 @@ import { AgentFlowsService } from "./services/flows-service.js";
 import { AgentRanksService } from "./services/ranks-service.js";
 import { AgentRunsService } from "./services/runs-service.js";
 import { AgentFeedbackService } from "./services/feedback-service.js";
+import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
 const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
@@ -136,7 +138,7 @@ export class AgentService {
 
   // ── Flows (offices) → AgentFlowsService ────────────
 
-  createFlow(input: { name: string; description?: string; color?: string }): AgentFlow {
+  createFlow(input: { name: string; description?: string; color?: string; kind?: FlowKind; source_extension_id?: string }): AgentFlow {
     return this.flows.createFlow(input);
   }
 
@@ -161,11 +163,14 @@ export class AgentService {
     return this.flows.getFlow(id);
   }
 
-  updateFlow(id: string, updates: Partial<Pick<AgentFlow, "name" | "description" | "color">>): AgentFlow | undefined {
+  updateFlow(
+    id: string,
+    updates: Partial<Pick<AgentFlow, "name" | "description" | "color" | "kind" | "repo_isolation">>,
+  ): AgentFlow | undefined {
     return this.flows.updateFlow(id, updates);
   }
 
-  deleteFlow(id: string): boolean {
+  deleteFlow(id: string): { unassigned: number } | null {
     return this.flows.deleteFlow(id);
   }
 
@@ -173,6 +178,141 @@ export class AgentService {
     return this.flows.assignAgentToFlow(agentId, flowId);
   }
 
+  /**
+   * Make `agentId` the one lead of its office: it becomes `manager` and every
+   * other manager of the office becomes `worker`, in one transaction. Role is
+   * deliberately not editable through `updateAgent`.
+   *
+   * The top-rank agent (the "headquarters" Chief — the agent whose rank has
+   * the highest `agent_ranks.level`) is never part of an office's lead set:
+   * it can't be made a lead, and it is excluded from the demotion sweep so
+   * making someone else the lead never touches its `role`. Same exclusion
+   * clause as `AgentFlowsService.deleteFlow`.
+   */
+  setOfficeLead(flowId: string, agentId: string): { lead_id: string; demoted: string[] } {
+    const flow = this.getFlow(flowId);
+    if (!flow || flow.active !== 1) throw new OfficeTeamError(`Office not found: ${flowId}`, 404);
+    const agent = this.getAgent(agentId);
+    if (!agent || agent.flow_id !== flowId) throw new OfficeTeamError(`Agent ${agentId} is not in this office`, 400);
+    const isTopRank = this.db
+      .prepare(`SELECT 1 FROM agents WHERE id = ? AND COALESCE(rank_id, '') IN (${TOP_RANK_IDS_SQL})`)
+      .get(agentId);
+    if (isTopRank) throw new OfficeTeamError("the headquarters agent cannot lead an office", 400);
+    const now = isoNow();
+    const trx = this.db.transaction(() => {
+      const demoted = (this.db
+        .prepare(
+          `SELECT id FROM agents WHERE flow_id = ? AND role = 'manager' AND id <> ?
+             AND COALESCE(rank_id, '') NOT IN (${TOP_RANK_IDS_SQL})`,
+        )
+        .all(flowId, agentId) as Array<{ id: string }>).map((row) => row.id);
+      this.db
+        .prepare(
+          `UPDATE agents SET role = 'worker', updated_at = ?
+             WHERE flow_id = ? AND role = 'manager' AND id <> ?
+               AND COALESCE(rank_id, '') NOT IN (${TOP_RANK_IDS_SQL})`,
+        )
+        .run(now, flowId, agentId);
+      this.db.prepare("UPDATE agents SET role = 'manager', updated_at = ? WHERE id = ?").run(now, agentId);
+      this.handOverToLead(flowId, agentId, demoted);
+      return demoted;
+    });
+    const demoted = trx();
+    this.events.emit("data.changed", { module: "agents", action: "office_lead_set" });
+    return { lead_id: agentId, demoted };
+  }
+
+  /**
+   * "El jefe reparte al equipo". On: a chain lead → member labelled
+   * office:distribute for every member the lead does not already chain to
+   * (a hand-made chain counts — nobody runs twice). Off: remove the
+   * office:distribute chains to office members; other chains stay.
+   *
+   * Lead and members are the set the rail shows: every agent of the office
+   * whatever its `active` (pausing and deleteAgent both only set active = 0),
+   * minus the top-rank agent, excluded with deleteFlow's rule. Paused members
+   * get their chain too; the executor skips inactive targets until resumed.
+   */
+  setLeadDistributes(flowId: string, enabled: boolean): { lead_id: string; created: number; removed: number } {
+    const flow = this.getFlow(flowId);
+    if (!flow || flow.active !== 1) throw new OfficeTeamError(`Office not found: ${flowId}`, 404);
+    const notTopRank = `COALESCE(rank_id, '') NOT IN (${TOP_RANK_IDS_SQL})`;
+    const leads = this.db
+      .prepare(`SELECT id FROM agents WHERE flow_id = ? AND role = 'manager' AND ${notTopRank}`)
+      .all(flowId) as Array<{ id: string }>;
+    if (leads.length === 0) throw new OfficeTeamError("This office has no lead", 400);
+    if (leads.length > 1) {
+      throw new OfficeTeamError("This office has more than one lead; make one of them the lead first", 409);
+    }
+    const leadId = leads[0].id;
+    let created = 0;
+    let removed = 0;
+    const trx = this.db.transaction(() => {
+      if (enabled) {
+        created = this.chainLeadToMembers(flowId, leadId);
+      } else {
+        const rows = this.db
+          .prepare(
+            `SELECT c.id FROM agent_chains c JOIN agents a ON a.id = c.target_agent_id
+              WHERE c.source_agent_id = ? AND c.label = ? AND a.flow_id = ?`,
+          )
+          .all(leadId, DISTRIBUTE_CHAIN_LABEL, flowId) as Array<{ id: string }>;
+        for (const row of rows) {
+          if (this.removeChain(row.id)) removed++;
+        }
+      }
+    });
+    trx();
+    return { lead_id: leadId, created, removed };
+  }
+
+  /**
+   * Give the new lead what the demoted managers ran as lead, so the office
+   * keeps one lead cadence and one set of office:distribute chains.
+   * Schedules move to the new lead unless it already has an active one (its
+   * cadence wins and the demoted ones are deleted). office:distribute chains
+   * from a demoted manager are deleted and, if there were any, rebuilt from
+   * the new lead as "El jefe reparte" on does. Other chains stay.
+   * Runs inside setOfficeLead's transaction; `demoted` never holds the top-rank agent.
+   */
+  private handOverToLead(flowId: string, leadId: string, demoted: string[]): void {
+    let distributed = false;
+    for (const formerId of demoted) {
+      const leadHasSchedule = this.db
+        .prepare("SELECT 1 FROM agent_schedules WHERE agent_id = ? AND active = 1")
+        .get(leadId);
+      if (leadHasSchedule) {
+        this.db.prepare("DELETE FROM agent_schedules WHERE agent_id = ?").run(formerId);
+      } else {
+        this.db.prepare("UPDATE agent_schedules SET agent_id = ? WHERE agent_id = ?").run(leadId, formerId);
+      }
+      const removed = this.db
+        .prepare("DELETE FROM agent_chains WHERE source_agent_id = ? AND label = ?")
+        .run(formerId, DISTRIBUTE_CHAIN_LABEL);
+      if (removed.changes > 0) distributed = true;
+    }
+    if (distributed) this.chainLeadToMembers(flowId, leadId);
+  }
+
+  /**
+   * Chain the lead to every member of its office it does not already chain
+   * to (a hand-made chain counts), labelled office:distribute. Members are the
+   * office's agents whatever their `active`, minus the lead and the top-rank
+   * agent. Call inside a transaction; returns how many chains were created.
+   */
+  private chainLeadToMembers(flowId: string, leadId: string): number {
+    const members = this.db
+      .prepare(`SELECT id FROM agents WHERE flow_id = ? AND id <> ? AND COALESCE(rank_id, '') NOT IN (${TOP_RANK_IDS_SQL})`)
+      .all(flowId, leadId) as Array<{ id: string }>;
+    const chained = new Set(this.getChainsBySource(leadId).map((c) => c.target_agent_id));
+    let created = 0;
+    for (const member of members) {
+      if (chained.has(member.id)) continue;
+      this.addChain({ source_agent_id: leadId, target_agent_id: member.id, label: DISTRIBUTE_CHAIN_LABEL });
+      created++;
+    }
+    return created;
+  }
 
   // ── Ranks → AgentRanksService ───────────────────────
 
@@ -927,6 +1067,14 @@ export class AgentService {
 
   removeSchedule(id: string): boolean {
     return this.schedules.removeSchedule(id);
+  }
+
+  getSchedule(id: string): AgentSchedule | undefined {
+    return this.schedules.getSchedule(id);
+  }
+
+  updateSchedule(id: string, patch: SchedulePatch): AgentSchedule | undefined {
+    return this.schedules.updateSchedule(id, patch);
   }
 
   updateScheduleNextRun(id: string, nextRunAt: string, lastRunAt: string): void {

@@ -1,5 +1,4 @@
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type KernelHttpServer, log } from "@kernl/extension-sdk";
 import type { BooksService } from "./service.js";
 import type { BookListFilter } from "./types.js";
 

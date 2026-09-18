@@ -14,8 +14,7 @@
  * grep across the two modules.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, isoNow } from "@kernl/extension-sdk";
 import type {
   MusicItem,
   MusicListFilter,

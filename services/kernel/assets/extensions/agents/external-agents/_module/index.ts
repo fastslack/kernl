@@ -1,10 +1,10 @@
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+} from "@kernl/extension-sdk";
 import { externalAgentsMigrations } from "./migrations.js";
 import { ExternalAgentService } from "./service.js";
 import { externalAgentTools } from "./tools.js";

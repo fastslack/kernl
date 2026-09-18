@@ -14,8 +14,7 @@
  *     re-ingesting an existing identifier.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
 import type {
   ArchiveScrapeRow,
@@ -1268,6 +1267,15 @@ export class CinemaService {
 
     void start; // silence unused; keeping the timer here documents intent
     return { tags: items.length, titlesScanned };
+  }
+
+  /** When cinema_tags was last built, or null if it never was. A rebuild
+   *  stamps every row with the same time, so any row answers. */
+  tagsBuiltAt(): string | null {
+    const row = this.db
+      .prepare("SELECT updated_at FROM cinema_tags LIMIT 1")
+      .get() as { updated_at: string } | undefined;
+    return row?.updated_at || null;
   }
 
   /**

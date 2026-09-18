@@ -2,9 +2,8 @@
  * HTTP API routes for lights dashboard
  */
 
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import { type KernelHttpServer, log } from "@kernl/extension-sdk";
 import type { LightsService } from "./service.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export function registerLightsRoutes(
   server: KernelHttpServer,

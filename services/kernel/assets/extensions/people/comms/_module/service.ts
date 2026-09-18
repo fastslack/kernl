@@ -1,7 +1,14 @@
 import { existsSync, mkdirSync, copyFileSync, statSync, unlinkSync, rmSync } from "node:fs";
 import { basename, extname, join } from "node:path";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import {
+  type SqliteDb,
+  type EventBus,
+  newId,
+  isoNow,
+  log,
+  type Notifier,
+} from "@kernl/extension-sdk";
+import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
 import type { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import type {
@@ -13,14 +20,10 @@ import { GmailProvider } from "./providers/gmail-provider.js";
 import { ResendProvider } from "./providers/resend-provider.js";
 import { ImapSmtpProvider, type ImapSmtpConfig } from "./providers/imap-smtp-provider.js";
 import { renderTemplate, detectTemplateVariables } from "./template-engine.js";
-import { sanitizeUserHtml } from "../../../../../src/core/sanitize-html.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 import {
   quoteBody,
   parseMetadata,
 } from "./gmail-helpers.js";
-import { log } from "../../../../../src/core/logger.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
 
 const ATTACHMENTS_DIR = "./data/attachments";
 

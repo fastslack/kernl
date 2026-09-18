@@ -1,13 +1,13 @@
 import { v4 as uuidv4 } from "uuid";
-import { log } from "../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type {
-  NotificationProvider,
-  NotificationPayload,
-  ProviderStatus,
-  ProviderCapability,
-  ConfigField,
-} from "../../../../../src/core/notify/provider.js";
+import {
+  log,
+  type SqliteDb,
+  type NotificationProvider,
+  type NotificationPayload,
+  type ProviderStatus,
+  type ProviderCapability,
+  type ConfigField,
+} from "@kernl/extension-sdk";
 
 export interface StoredNotification {
   id: string;

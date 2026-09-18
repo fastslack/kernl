@@ -17,6 +17,7 @@ import { estimateTokens } from "./memory-decay.js";
 import {
   createChatProviders,
   resolveProvider,
+  resolveProviderFor,
   type ChatLlmProvider,
 } from "../../core/llm/chat-adapters.js";
 import { KnowledgeService } from "./knowledge-service.js";
@@ -44,6 +45,7 @@ import type {
   PermissionRequester,
 } from "./types.js";
 import { ChatClaudeCodeProvider } from "../../core/llm/claude-code-adapter.js";
+import { canonicalSlug } from "../../core/llm/provider-catalog.js";
 // Iteration-budget warning — single canonical copy lives in the core tool-loop
 // (same pattern keeps the conversational chat loop and the autonomous-agent
 // loop on the same rails).
@@ -105,6 +107,24 @@ function countToolUses(blocks: ContentBlock[]): number {
 }
 
 /**
+ * Provider `chatStream` resolves for an episode: the episode's own choice,
+ * then the config default. When neither names one (no CHAT_DEFAULT_PROVIDER
+ * set), fall back to the first link of the agents' model chain — the same
+ * provider an untouched install already runs on — so an empty default
+ * doesn't turn into "chatStream is only supported for claude_code".
+ */
+export function resolveStreamProvider(
+  episodeProvider: string,
+  defaultProvider: string,
+  defaultModelChain: Array<{ provider: string; model: string }> | undefined,
+): string {
+  if (episodeProvider) return episodeProvider;
+  if (defaultProvider) return defaultProvider;
+  const first = defaultModelChain?.[0]?.provider;
+  return first ? canonicalSlug(first) : "";
+}
+
+/**
  * Thrown when something tries to change the model of an episode that already
  * has messages. Its own type so the HTTP layer can answer 409 (a conflict with
  * the episode's state) instead of the blanket 400 every other bad request gets.
@@ -158,17 +178,7 @@ export class ChatService {
     private events: EventBus,
     private config: KernelConfig,
   ) {
-    this.providers = createChatProviders({
-      anthropicApiKey: config.webIntel.anthropicApiKey,
-      openaiApiKey: config.webIntel.openaiApiKey,
-      lmstudioBaseUrl: config.webIntel.lmstudioBaseUrl,
-      grokApiKey: config.webIntel.grokApiKey,
-      grokDefaultModel: config.webIntel.grokDefaultModel,
-      nvidiaApiKey: config.webIntel.nvidiaApiKey,
-      nvidiaDefaultModel: config.webIntel.nvidiaDefaultModel,
-      defaultModel: config.chat.defaultModel || undefined,
-      claudeCode: config.claudeCode,
-    });
+    this.providers = createChatProviders({ defaultModel: config.chat.defaultModel || undefined, claudeCode: config.claudeCode });
     this.defaultProvider = config.chat.defaultProvider;
     // SOUL is always first; user-configurable systemPrompt is appended (never
     // replaces) so identity/voice/security rules can't be silently dropped by
@@ -200,17 +210,7 @@ export class ChatService {
 
   /** Reload LLM providers with updated keys (called after runtime config change) */
   reloadProviders(): void {
-    this.providers = createChatProviders({
-      anthropicApiKey: this.config.webIntel.anthropicApiKey,
-      openaiApiKey: this.config.webIntel.openaiApiKey,
-      lmstudioBaseUrl: this.config.webIntel.lmstudioBaseUrl,
-      grokApiKey: this.config.webIntel.grokApiKey,
-      grokDefaultModel: this.config.webIntel.grokDefaultModel,
-      nvidiaApiKey: this.config.webIntel.nvidiaApiKey,
-      nvidiaDefaultModel: this.config.webIntel.nvidiaDefaultModel,
-      defaultModel: this.config.chat.defaultModel || undefined,
-      claudeCode: this.config.claudeCode,
-    });
+    this.providers = createChatProviders({ defaultModel: this.config.chat.defaultModel || undefined, claudeCode: this.config.claudeCode });
     this.defaultProvider = this.config.chat.defaultProvider;
     log.info("Chat: providers reloaded after config change");
   }
@@ -680,11 +680,18 @@ export class ChatService {
 
     // 6. Resolve LLM provider — primary + chain
     const providerName = episode.llm_provider || this.defaultProvider;
-    const provider = resolveProvider(this.providers, providerName);
-    if (!provider) {
+    const resolved = resolveProviderFor(this.providers, providerName, episode.llm_model || "");
+    if (!resolved) {
       throw new Error(
         `No available LLM provider (requested: ${providerName})`,
       );
+    }
+    const provider = resolved.provider;
+    // Empty when someone else had to stand in: the substitute answers with its
+    // own default rather than a model name that belongs to another provider.
+    const llmModel = resolved.model;
+    if (resolved.substituted) {
+      log.warn(`Chat: "${providerName}" was unusable — "${provider.name}" answers instead, with its own model.`);
     }
     // Chain set in /models (config.agents.defaultModelChain) is the global
     // fallback ladder. Chat reuses it: if the primary errors, walk through
@@ -735,7 +742,7 @@ export class ChatService {
         : systemText;
 
       const completion = await this._chatCompletionWithChain(
-        { provider, model: episode.llm_model || "" },
+        { provider, model: llmModel },
         fallbackChain,
         llmMessages,
         {
@@ -807,7 +814,7 @@ export class ChatService {
       try {
         const synthesisSystem = `${systemText}\n\n[BUDGET EXHAUSTED] You have used all ${MAX_TOOL_ITERATIONS} tool-use turns. You MUST now write your final answer using only the tool results already in this conversation. Do NOT request more tools — they are disabled. Be direct and concise.`;
         const synthesis = await this._chatCompletionWithChain(
-          { provider, model: episode.llm_model || "" },
+          { provider, model: llmModel },
           fallbackChain,
           llmMessages,
           { system: synthesisSystem, tools: undefined },
@@ -933,7 +940,9 @@ export class ChatService {
     if (episode.status === "archived")
       throw new Error("Cannot chat in an archived episode");
 
-    const providerName = episode.llm_provider || this.defaultProvider;
+    const providerName = resolveStreamProvider(
+      episode.llm_provider, this.defaultProvider, this.config.agents.defaultModelChain,
+    );
     if (providerName !== "claude_code" && providerName !== "claude-code") {
       throw new Error(
         `chatStream is only supported for the claude_code provider (episode uses "${providerName}").`,

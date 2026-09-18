@@ -4,13 +4,17 @@
  * factory is also exported here for direct use in tests.
  */
 
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
+import {
+  runMigrations,
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  log,
+} from "@kernl/extension-sdk";
 import { googleFlightsMigrations } from "./migrations.js";
 import { GoogleFlightsService } from "./service.js";
 import { googleFlightsTools } from "./tools.js";
 import { seedFlightsAgent } from "../../../agents/agent-advanced/_module/seed-flights-agent.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export interface GoogleFlightsModule extends KernelModule {
   getService(): GoogleFlightsService;

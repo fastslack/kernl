@@ -12,6 +12,8 @@ import {
   materializeOffice,
   loadRepoServiceBestEffort,
 } from "./office-kit.js";
+import { parseSchedulePatch } from "./services/schedules-service.js";
+import { setOfficeRepo } from "./office-repo.js";
 
 export interface AgentsRpcDeps {
   service: AgentService | null;
@@ -325,7 +327,15 @@ export function agentsRpcActions(deps: AgentsRpcDeps): RpcAction[] {
         const def = officeDefinitionFromJson(args);
         const db = svc.getDb();
         const repoService = def.repo ? await loadRepoServiceBestEffort(db) : null;
-        const report = materializeOffice(db, svc, def, { repoService });
+        let report: ReturnType<typeof materializeOffice>;
+        try {
+          report = materializeOffice(db, svc, def, { repoService, mode: args.mode === "create" ? "create" : "upsert" });
+        } catch (err) {
+          if (err instanceof Error && err.name === "OfficeExistsError") {
+            throw new Error(`office_exists:${(err as unknown as { officeId: string }).officeId}`);
+          }
+          throw err;
+        }
         return { success: true, report };
       },
     },
@@ -335,9 +345,9 @@ export function agentsRpcActions(deps: AgentsRpcDeps): RpcAction[] {
         const svc = requireService();
         const id = typeof args.id === "string" ? args.id : "";
         if (!id) throw new Error("id required");
-        const ok = svc.deleteFlow(id);
-        if (!ok) throw new Error("Flow not found");
-        return { success: true };
+        const result = svc.deleteFlow(id);
+        if (!result) throw new Error("Flow not found");
+        return { success: true, unassigned: result.unassigned };
       },
     },
     {
@@ -352,6 +362,73 @@ export function agentsRpcActions(deps: AgentsRpcDeps): RpcAction[] {
           svc.assignAgentToFlow(aid, flow_id);
         }
         return { success: true, assigned: agent_ids.length };
+      },
+    },
+    {
+      name: "agents.schedule.update",
+      handler: async (args) => {
+        const svc = requireService();
+        const id = typeof args.id === "string" ? args.id : "";
+        if (!id) throw new Error("id required");
+        // Same type checks as PUT /api/agents/schedules/:id: a wrong type is an error, never a silent no-op.
+        const result = parseSchedulePatch(args);
+        if (!result.ok) throw new Error(result.error);
+        const schedule = svc.updateSchedule(id, result.patch);
+        if (!schedule) throw new Error("Schedule not found");
+        return { success: true, schedule };
+      },
+    },
+    {
+      name: "agents.schedule.delete",
+      handler: async (args) => {
+        const svc = requireService();
+        const id = typeof args.id === "string" ? args.id : "";
+        if (!id) throw new Error("id required");
+        const ok = svc.removeSchedule(id);
+        if (!ok) throw new Error("Schedule not found");
+        return { success: true };
+      },
+    },
+    {
+      name: "agents.flows.set_repo",
+      handler: async (args) => {
+        const svc = requireService();
+        // Same contract as PUT /api/agents/flows/:id/repo: only an explicit null removes the repo.
+        if (args.path !== null && typeof args.path !== "string") throw new Error("path must be a string or null");
+        const result = setOfficeRepo(svc, {
+          flow_id: typeof args.flow_id === "string" ? args.flow_id : "",
+          path: args.path as string | null,
+          git_init: typeof args.git_init === "boolean" ? args.git_init : undefined,
+          retarget_agents: true,
+        });
+        return {
+          success: true,
+          flow: result.flow,
+          path: result.path,
+          home_path: result.homePath,
+          git: result.git,
+          git_detail: result.gitDetail,
+          retargeted: result.retargeted,
+        };
+      },
+    },
+    {
+      name: "agents.flows.set_lead",
+      handler: async (args) => {
+        const svc = requireService();
+        const flow_id = typeof args.flow_id === "string" ? args.flow_id : "";
+        const agent_id = typeof args.agent_id === "string" ? args.agent_id : "";
+        if (!flow_id || !agent_id) throw new Error("flow_id and agent_id required");
+        return { success: true, ...svc.setOfficeLead(flow_id, agent_id) };
+      },
+    },
+    {
+      name: "agents.flows.set_distribute",
+      handler: async (args) => {
+        const svc = requireService();
+        const flow_id = typeof args.flow_id === "string" ? args.flow_id : "";
+        if (!flow_id || typeof args.enabled !== "boolean") throw new Error("flow_id and enabled required");
+        return { success: true, ...svc.setLeadDistributes(flow_id, args.enabled) };
       },
     },
     {

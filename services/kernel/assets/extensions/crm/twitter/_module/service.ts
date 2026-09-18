@@ -1,6 +1,4 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, type KernelConfig, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   TwitterAccountRow,
   TwitterPostRow,

@@ -25,10 +25,13 @@ import { spawn } from "node:child_process";
 import { createWriteStream, existsSync, statSync } from "node:fs";
 import { mkdir, rm, rename } from "node:fs/promises";
 import path from "node:path";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
-import { mediaToolBin, mediaToolError } from "../../../../../src/core/media-tools.js";
+import {
+  type SqliteDb,
+  isoNow,
+  log,
+  mediaToolBin,
+  mediaToolError,
+} from "@kernl/extension-sdk";
 
 export type ConvertJobState = "running" | "ready" | "error" | "interrupted";
 

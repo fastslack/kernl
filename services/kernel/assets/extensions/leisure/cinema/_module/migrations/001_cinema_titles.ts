@@ -1,4 +1,4 @@
-import type { Migration } from "../../../../../../src/core/db/migrations.js";
+import type { Migration } from "@kernl/extension-sdk";
 import { cinemaSubsMigration } from "./002_subs.js";
 import { cinemaFtsMigration } from "./003_fts.js";
 import { cinemaTagsMigration } from "./004_tags.js";

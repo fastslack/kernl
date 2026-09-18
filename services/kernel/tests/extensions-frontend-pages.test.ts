@@ -20,6 +20,7 @@ const baseValid = {
   author: "Example",
   license: "MIT",
   category: "leisure",
+  sdk: 1,
   backend: { entry: "backend/entry.js" },
 };
 

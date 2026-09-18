@@ -1,10 +1,15 @@
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import {
+  type SqliteDb,
+  type GmailMessage,
+  type GmailMessageDetail,
+  type ImportResult,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { CrmService } from "../../../../people/crm/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
-import type { GmailMessage, GmailMessageDetail, ImportResult } from "../../../../../../src/core/integrations/google-types.js";
 import type { Contact } from "../../../../people/crm/_module/types.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
 
 const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 

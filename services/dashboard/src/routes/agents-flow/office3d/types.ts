@@ -33,6 +33,13 @@ export interface ChainData {
 
 export interface FlowData {
   id: string; name: string; color: string; active: number;
+  /** 'general' | 'devops' | 'communications' | 'creative'; read through officeKindOf(). */
+  kind?: string | null;
+  description?: string;
+  repo_isolation?: string;
+  home_repo_path?: string;
+  home_workspace_id?: string;
+  source_extension_id?: string;
 }
 
 export interface StatsData {

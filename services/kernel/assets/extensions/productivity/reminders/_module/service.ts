@@ -1,7 +1,5 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
+import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
 import type { Reminder, ReminderStatus, RepeatInterval } from "./types.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
 
 export function computeNextTrigger(current: string, repeat: RepeatInterval): string {
   const d = new Date(current);

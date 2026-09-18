@@ -1,7 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
 import type { GoalsService } from "./service.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 export function goalsTools(service: GoalsService): ToolDefinition[] {
   return [

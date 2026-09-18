@@ -1,10 +1,10 @@
 // Real-case smoke test for the MiniMax provider. Requires MINIMAX_API_KEY.
 // Run: MINIMAX_API_KEY=... bun scripts/demo-minimax.ts
-import { createMinimaxProvider } from "../src/core/llm/providers/minimax-provider.js";
+import { createCatalogProvider } from "../src/core/llm/providers/openai-compatible-provider.js";
 
 async function main() {
-  const p = createMinimaxProvider();
-  p.configure({}); // env fallback (MINIMAX_API_KEY / MINIMAX_BASE_URL / MINIMAX_DEFAULT_MODEL)
+  const p = createCatalogProvider("minimax")();
+  p.configure({ apiKey: process.env.MINIMAX_API_KEY }); // the key comes from the config passed to configure() — no environment fallback
   await p.start();
   if (!p.isReady()) {
     console.error("NOT READY — set MINIMAX_API_KEY");

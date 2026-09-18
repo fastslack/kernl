@@ -18,9 +18,8 @@
  */
 
 import type { Event as NostrEvent } from "nostr-tools/core";
-import { NostrIdentity } from "../../../../../../src/core/nostr/nostr-identity.js";
-import { NostrRelayPool } from "../../../../../../src/core/nostr/nostr-relay-pool.js";
-import { log } from "../../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
+import { NostrIdentity, NostrRelayPool } from "@kernl/extension-sdk/nostr";
 import type {
   CinemaDirectory,
   DirectoryItem,

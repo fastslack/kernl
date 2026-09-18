@@ -12,6 +12,7 @@
  * can see the identity immediately after this stage returns.
  */
 
+import { dirname, resolve } from "node:path";
 import { log } from "../logger.js";
 import type { SqliteDb } from "../db/sqlite.js";
 import type { EventBus } from "../event-bus.js";
@@ -24,6 +25,9 @@ import type { LlmProviderRegistry } from "../llm/provider-registry.js";
 import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import { createSkillRegistry } from "../../skills/index.js";
 import { createMarketplaceModule, type MarketplaceModule } from "../../modules/marketplace/index.js";
+import { migrateLlmCredentials } from "../llm/credential-migration.js";
+import { hasCliSession } from "../llm/claude-code-auth.js";
+import { applyClaudeCodeTransition } from "../llm/claude-code-transition.js";
 
 export interface DriversInitResult {
   attestIdentity: Identity | undefined;
@@ -61,19 +65,37 @@ export async function initDrivers(args: {
   // go to ready=false and the executor throws a clear error at run time).
   await sandboxRegistry.startAll();
 
-  // ── LLM providers — seed + start ────────────────────
+  // ── LLM providers — seed, migrate credentials, start ─
+  // Tables exist from here on (core-modules ran the extensions and config
+  // migrations), so this is the first stage that can write provider rows.
   llmRegistry.seedBuiltinRows();
-  await llmRegistry.startAll();
-  // The registry's per-provider settings_json is the source of truth. Mirror it
-  // into the legacy config.webIntel.* fields the chat adapter / web-intel /
-  // llm() singleton still read, so saved provider config survives restarts even
-  // when it was never written to .env.
   try {
-    const { syncProvidersToKernelConfig } = await import("../llm/sync-config.js");
-    syncProvidersToKernelConfig(ctx.config, llmRegistry);
+    const report = migrateLlmCredentials({
+      db: ctx.sqlite,
+      registry: llmRegistry,
+      env: process.env,
+      envFilePath: resolve(process.cwd(), ".env"),
+      // Never `.env`'s own directory — on the full compose stack that bind
+      // mount can be root-owned while the kernel runs unprivileged. The
+      // sqlite database's directory is always kernel-owned and writable.
+      backupDir: ctx.config.sqlite.path ? dirname(ctx.config.sqlite.path) : resolve(process.cwd(), "data"),
+      hasClaudeSession: () => hasCliSession(),
+    });
+    if (report.frozenChain) ctx.config.agents.defaultModelChain = report.frozenChain;
+    if (report.ignoredEnv.length > 0) {
+      log.warn(
+        `Ignoring provider credentials still set in the environment (${report.ignoredEnv.join(", ")}). ` +
+          "Keys are managed in Settings → AI.",
+      );
+    }
   } catch (err) {
-    log.warn(`syncProvidersToKernelConfig at bootstrap failed: ${String(err)}`);
+    log.warn(`LLM credential migration failed: ${String(err)}`);
   }
+  const ccState = applyClaudeCodeTransition();
+  if (ccState === "legacy-token") {
+    log.warn("Claude Code is still using a token stored by an older Kernl. Sign in with the CLI (Settings → AI) to retire it.");
+  }
+  await llmRegistry.startAll();
 
   // ── DB drivers — seed + start active ────────────────
   // Fresh installs boot with `noop` active so the kernel doesn't try to

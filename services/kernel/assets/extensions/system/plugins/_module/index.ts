@@ -1,9 +1,14 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { pluginsMigrations } from "./migrations/001_plugins.js";
 import { PluginManagerService } from "./service.js";
 import { pluginsTools } from "./tools.js";
-import { log } from "../../../../../src/core/logger.js";
 
 export type PluginsModule = ExtensibleModule & {
   getService(): PluginManagerService;

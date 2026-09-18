@@ -14,10 +14,13 @@
  *   6. On approve: creates task/reminder/contact/shopping item
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type SqliteDb,
+  type KernelConfig,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -89,14 +92,14 @@ export class EmailAnalysisService {
 
   /** LLM call via global singleton */
   private async llmChat(system: string, user: string): Promise<string> {
-    const { llm } = await import("../../../../../src/core/llm/client.js");
+    const { llm } = await import("@kernl/extension-sdk");
     const result = await llm().chat({ system, user, caller: "email-analysis" });
     return result.text;
   }
 
   /** Called by the scheduler — analyzes up to maxEmails unanalyzed inbound emails */
   async analyzeNewEmails(maxEmails = 15): Promise<{ analyzed: number; suggestions: number; errors: number }> {
-    try { const { llm: getLlm } = await import("../../../../../src/core/llm/client.js"); if (!getLlm().hasKey) { log.debug("EmailAnalysis: no LLM API key configured"); return { analyzed: 0, suggestions: 0, errors: 0 }; } } catch { return { analyzed: 0, suggestions: 0, errors: 0 }; }
+    try { const { llm: getLlm } = await import("@kernl/extension-sdk"); if (!getLlm().hasKey) { log.debug("EmailAnalysis: no LLM API key configured"); return { analyzed: 0, suggestions: 0, errors: 0 }; } } catch { return { analyzed: 0, suggestions: 0, errors: 0 }; }
 
     // Get inbound emails not yet analyzed (metadata.email_analyzed != true)
     const rows = this.db.prepare(`

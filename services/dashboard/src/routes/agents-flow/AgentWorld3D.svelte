@@ -6,6 +6,7 @@
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall, rpc } from '$lib/ws.js';
   import { escapeHtml } from '$lib/sanitize.js';
+  import { traitsOf, mailOffice } from '$lib/office/office-kinds.js';
   import {
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
@@ -36,19 +37,17 @@
   import { setTextureAnisotropy } from './office3d/textures.js';
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import OfficeCreatorChat from '$lib/components/OfficeCreatorChat.svelte';
-  import NewOfficeModal from './NewOfficeModal.svelte';
   import RegisterRepoModal from './RegisterRepoModal.svelte';
-  import AutoMeetingModal from './AutoMeetingModal.svelte';
   import EmailModal from './EmailModal.svelte';
   import DraftModal from './DraftModal.svelte';
-  import MeetingHistoryPanel from './MeetingHistoryPanel.svelte';
-  import MgmtLogPanel from './MgmtLogPanel.svelte';
   import WorkspaceTab from './WorkspaceTab.svelte';
   import ChatTab from './ChatTab.svelte';
   import HistoryTab from './HistoryTab.svelte';
   import LiveTab from './LiveTab.svelte';
-  import OfficeInfraPanel from '$lib/components/OfficeInfraPanel.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
+  import Icon from '$lib/components/ui/Icon.svelte';
+  // Aliased: `t` is a local name all over this file, including `{#each … as t}` in markup.
+  import { t as translate } from '$lib/i18n/index.js';
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import OverviewTab from '$lib/components/agent/tabs/OverviewTab.svelte';
@@ -69,7 +68,7 @@
   } from '$lib/office-geometry.js';
   import {
     hexToNum, toolGlyph, escapeBannerText, firstUrlIn, urlForOption,
-    buildFixerGoal, safeParse,
+    buildFixerGoal,
     resolveAgentWorkspace, dependsOnGoogleAuth,
     parseMeetingTopics,
   } from '$lib/agent-helpers.js';
@@ -118,7 +117,7 @@
     id: string; source_agent_id: string; target_agent_id: string;
     label: string; active: number;
   }> = [];
-  export let flows: Array<{ id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string }> = [];
+  export let flows: Array<{ id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string; kind?: string | null }> = [];
   export let ranks: Array<{
     id: string; name: string; level: number;
     insignia: string; color: string; description: string; active: number;
@@ -126,12 +125,11 @@
   export let flowEvents: AgentFlowEvent[] = [];
   export let runningAgentIds: Set<string> = new Set();
   export let stats: Record<string, { total_runs: number; completed: number; failed: number; success_rate: number }> = {};
-  export let triggerCount: number = 0;
-  export let todayRuns: number = 0;
   // Parent's first-fetch lifecycle (graphData). The boot loader stays up until
   // `dataLoaded` is true so the offices are never revealed empty mid-fetch.
   export let dataLoaded: boolean = false;
   export let dataError: boolean = false;
+  /** The /agents-flow shell renders its own rail and command bar. */
 
   let canvasEl: HTMLDivElement;
   let THREE: any, CSS2DObject: any;
@@ -220,6 +218,7 @@
   let deskAabbs = new Map<string, Aabb2D>();
   let hallwayLines: HallwayLine[] = [];
   let roomMap = new Map<string, RoomInfo>();
+  let resizeObserver: ResizeObserver | null = null;
   let corGrid: CorridorGrid = { segments: [], nodes: [], buildingBounds: { minX: -20, maxX: 20, minZ: -20, maxZ: 20 } };
   let meetingRooms: Array<{ cx: number; cz: number; w: number; d: number }> = [];
   let hallExtensions: Array<{ cx: number; cz: number; w: number; d: number }> = [];
@@ -959,19 +958,15 @@
   }
   let mgmtLog: MgmtEntry[] = [];
   // ── Visualization toggles ───────────────────────
-  // All visualization layers are managed from the hq-bar dropdown so the
-  // user has a single, always-visible control surface. Defaults are tuned
-  // so the canvas stays clean on first load — Meetings panel only opens on
-  // demand, modal opens automatically when a real meeting starts.
-  let showMgmtLog = false;
-  let showMeetingHistory = false;
+  // The command bar's View menu drives these through the imperative API;
+  // meeting history and the management log live in the shell's ActivityPanel.
   let showPerfHud = false;
 
   // Dismiss a single meeting from the history panel — archives it on the
   // server (so a refresh doesn't bring it back) and removes it from the
   // local store. Active meetings (requested/started) are kept; only the
   // X button on completed/failed rows triggers this.
-  async function dismissMeeting(meetingId: string): Promise<void> {
+  export async function dismissMeeting(meetingId: string): Promise<void> {
     if (!meetingId) return;
     try {
       await fetch(`/api/agents/conversations/${encodeURIComponent(meetingId)}/archive`, { method: 'POST' });
@@ -986,7 +981,7 @@
   }
 
   // Bulk-dismiss every completed/failed meeting in one shot.
-  async function dismissAllReadMeetings(): Promise<void> {
+  export async function dismissAllReadMeetings(): Promise<void> {
     try {
       await fetch('/api/agents/conversations/archive-all-closed?kind=meeting', { method: 'POST' });
     } catch { /* network error — fall through to local cleanup */ }
@@ -1007,10 +1002,9 @@
   }
   function pushMgmtLog(entry: MgmtEntry): void {
     mgmtLog = [entry, ...mgmtLog].slice(0, 40);
-    // Visibility is controlled exclusively from the hq-bar View menu now —
-    // we do NOT auto-open the panel, otherwise the user's "off" choice gets
-    // overridden whenever a new manager event arrives. The unread count on
-    // the View toggle (badge) signals the new activity instead.
+    // The shell's ActivityPanel renders the log (the `mgmtlog` event) — we
+    // do NOT auto-open anything here, otherwise the user's "off" choice gets
+    // overridden whenever a new manager event arrives.
   }
 
   let liveMeetings: Record<string, LiveMeeting> = {};
@@ -1346,10 +1340,10 @@
       .map(fid => ({ flowId: fid, name: flows.find(f => f.id === fid)?.name || '?', color: flows.find(f => f.id === fid)?.color || '#4a4f6a' }));
     for (const [flowId, room] of roomMap) {
       const flow = flows.find(f => f.id === flowId);
-      const nm = (flow?.name || '').trim().toLowerCase();
-      if (nm.startsWith('comunicacion') || nm.startsWith('communication')) {
+      const theme = traitsOf(flow).theme;
+      if (theme === 'communications') {
         buildCommunicationsOffice(target, room);
-      } else if (nm.startsWith('repos') || nm.startsWith('devops')) {
+      } else if (theme === 'data-center') {
         // Vintage data center theme — server racks, CRT terminals, tape reels,
         // mainframe console + UPS + patch panel + KVM + ops chair + printout
         // stack + DIRECTORY wall panel. Racks light up per registered repo.
@@ -1962,52 +1956,16 @@
   }
 
 
-  // ── HQ menu (hidden dropdown) ───────────────────
-  let hqMenuOpen = false;
-
-  // ── Pending-approval dropdown ────────────────────
-  let pendingMenuOpen = false;
-  let activatingAgentId: string | null = null;
-  $: pendingAgents = agents.filter(a => a.active !== 1);
-
   // O(1) agent lookup for per-frame loops — rebuilt only when the agents
   // array is reassigned (parent polls ~1/min). Avoids agents.find() scans
   // inside the animation loop (230 agents × 230 lookups/frame otherwise).
   let agentById: Map<string, any> = new Map();
   $: agentById = new Map(agents.map(a => [a.id, a]));
 
-  // ── Agent search (HUD lupa) ────────────────────────
-  // Click the magnifier in the HQ stats row → input expands inline.
-  // Type → filtered list of agents drops down (matches name/slug).
-  // Click a row → camera zooms onto the agent's desk + opens its panel.
-  let searchOpen = false;
-  let searchQuery = '';
-  let searchInputEl: HTMLInputElement | null = null;
-  $: searchResults = (() => {
-    const q = searchQuery.trim().toLowerCase();
-    if (!q) return [];
-    return agents
-      .filter(a => {
-        const hay = `${a.name ?? ''} ${a.slug ?? ''}`.toLowerCase();
-        return hay.includes(q);
-      })
-      .slice(0, 12);
-  })();
-  function openSearch() {
-    searchOpen = true;
-    pendingMenuOpen = false;
-    hqMenuOpen = false;
-    // Focus on next tick once the input is mounted.
-    setTimeout(() => { searchInputEl?.focus(); }, 0);
-  }
-  function closeSearch() {
-    searchOpen = false;
-    searchQuery = '';
-  }
-  function focusAgentById(id: string) {
-    if (!camera || !controls) { selectedAgent = id; closeSearch(); return; }
+  export function focusAgentById(id: string) {
+    if (!camera || !controls) { selectedAgent = id; return; }
     const p = deskPos.get(id);
-    if (!p) { selectedAgent = id; closeSearch(); return; }
+    if (!p) { selectedAgent = id; return; }
     selectedAgent = id;
     // Close-up: keep current camera angle, zoom to ~6 units from the desk.
     const desiredDist = 6;
@@ -2020,13 +1978,6 @@
     const camY = Math.max(1.6, p.y + uy * desiredDist + 1.2);
     const camZ = p.z + uz * desiredDist;
     tweenCameraTo(p.x, 1.2, p.z, camX, camY, camZ);
-    closeSearch();
-  }
-  function onSearchKey(ev: KeyboardEvent) {
-    if (ev.key === 'Escape') { closeSearch(); return; }
-    if (ev.key === 'Enter' && searchResults.length > 0) {
-      focusAgentById(searchResults[0].id);
-    }
   }
 
   /** Fly the camera to a world point keeping the current viewing angle, WITHOUT
@@ -2098,28 +2049,6 @@
     } catch { /* audio not available — silent fallback */ }
   }
 
-  async function activateAgent(agentId: string) {
-    if (activatingAgentId) return;
-    activatingAgentId = agentId;
-    try {
-      const r = await fetch(`/api/agents/${agentId}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: true }),
-      });
-      const data = await r.json();
-      if (data?.success) {
-        dispatch('refresh');
-      } else {
-        console.error('activate failed', data?.error);
-      }
-    } catch (e) {
-      console.error('activate network error', e);
-    } finally {
-      activatingAgentId = null;
-    }
-  }
-
   // ── Quick active/inactive toggle straight from the 3D ──────────────
   // Powers the ⏻ chip on each agent nameplate. Generalizes togglePause (which
   // only worked on the selected agent) to ANY agent id. Optimistic local
@@ -2175,17 +2104,6 @@
   // ── Create Office — handled by <OfficeCreatorChat>; only the modal flag
   //    lives here so the HQ menu can toggle it open.
   let showOfficeModal = false;
-  // "New Office" wizard (Office Kit) — the form-based, no-code creator.
-  // The AI-chat creator (OfficeCreatorChat, `showOfficeModal`) stays as the
-  // conversational alternative, reachable from the HQ menu + top-agent click.
-  // Deep-link: /agents-flow?new=office opens the wizard directly (same
-  // pattern as ?chat=chief below).
-  let showNewOfficeWizard = (() => {
-    try {
-      return typeof window !== 'undefined'
-        && new URLSearchParams(window.location.search).get('new') === 'office';
-    } catch { return false; }
-  })();
 
 
   // ── Build Scene ────────────────────────────────
@@ -2195,7 +2113,7 @@
   function markSceneReady(): void {
     if (sceneReady) return;
     if (sceneReadyFallbackTimer) { clearTimeout(sceneReadyFallbackTimer); sceneReadyFallbackTimer = null; }
-    requestAnimationFrame(() => { sceneReady = true; });
+    requestAnimationFrame(() => { sceneReady = true; dispatch('sceneready'); });
   }
 
   // Readiness gate — only reveal the office once EVERYTHING needed is in place:
@@ -2781,7 +2699,7 @@
     sceneReadyFallbackTimer = setTimeout(() => {
       if (!sceneReady) { console.warn('[boot] readiness timed out — revealing anyway'); markSceneReady(); }
     }, 30000);
-    const ro = new ResizeObserver(() => {
+    resizeObserver = new ResizeObserver(() => {
       if (!canvasEl || !renderer) return;
       const w = canvasEl.clientWidth, h = canvasEl.clientHeight;
       renderer.setSize(w, h);
@@ -2790,7 +2708,7 @@
       camera.aspect = w / h;
       camera.updateProjectionMatrix();
     });
-    ro.observe(canvasEl);
+    resizeObserver.observe(canvasEl);
   }
 
   // ── Process live events ────────────────────────
@@ -2828,10 +2746,7 @@
       // cooldown so a burst of real emails reads on screen. The label on the
       // package shows how many emails came in this batch.
       if (e.event === 'comms:mail:received') {
-        const commsFlow = flows.find(f => {
-          const nm = (f.name || '').trim().toLowerCase();
-          return nm.startsWith('comunicacion') || nm.startsWith('communication');
-        });
+        const commsFlow = mailOffice(flows);
         if (commsFlow) {
           const count = Number((e.data as any)?.count ?? 1) || 1;
           enqueueDelivery({
@@ -3204,8 +3119,8 @@
           };
           activeMeetingId = mid;
           // Transcript modal stays HIDDEN by default at meeting_requested.
-          // The user opens it on demand via the hq-bar 📡 toggle, the
-          // meeting-room click, or the Meetings panel.
+          // The user opens it on demand via the meeting-room click or the
+          // shell's ActivityPanel.
           showTranscriptBody = true;
           showMyOfficePanel = false;
           // Drop the gold halo + topic banner above the meeting table so
@@ -3221,8 +3136,8 @@
         if (mid && liveMeetings[mid]) {
           liveMeetings = { ...liveMeetings, [mid]: { ...liveMeetings[mid], status: 'started', participants: mParts, topic: mTopic || liveMeetings[mid].topic } };
           // Pin the active meeting id, but DON'T auto-open the transcript.
-          // User opens via hq-bar 📡 / clicking the meeting room / Meetings
-          // panel — keeps the 3D view clean by default.
+          // User opens via clicking the meeting room / the shell's
+          // ActivityPanel — keeps the 3D view clean by default.
           activeMeetingId = mid;
           showMyOfficePanel = false;
         }
@@ -4015,7 +3930,7 @@
 
       // After hydrating, surface the most recent active meeting in the
       // transcript modal so refreshing the page mid-meeting drops the user
-      // Pick the freshest active meeting (so hq-bar 📡 toggle opens IT)
+      // Pick the freshest active meeting (so opening the transcript shows IT)
       // but do NOT auto-open the transcript modal on page mount.
       const live = Object.values(liveMeetings)
         .filter(m => m.status === 'started' || m.status === 'requested')
@@ -4065,6 +3980,96 @@
     const detail = (ev as CustomEvent).detail as { cx: number; cz: number; w: number; d: number };
     if (!detail) return;
     focusOffice(detail);
+    for (const [flowId, room] of roomMap) {
+      if (room.cx === detail.cx && room.cz === detail.cz) {
+        dispatch('officeclick', { flowId });
+        break;
+      }
+    }
+  }
+
+  // ── Imperative API for the /agents-flow shell (bind:this) ─────────
+  export function focusOfficeById(flowId: string): boolean {
+    const room = roomMap.get(flowId);
+    if (!room) return false;
+    focusOffice(room);
+    return true;
+  }
+
+  /** Frame every room and meeting room. */
+  export function fitAll(): void {
+    if (!camera || !controls || roomMap.size === 0) return;
+    let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
+    const boxes: Array<{ cx: number; cz: number; w: number; d: number }> = [...roomMap.values(), ...meetingRooms];
+    for (const b of boxes) {
+      minX = Math.min(minX, b.cx - b.w / 2);
+      maxX = Math.max(maxX, b.cx + b.w / 2);
+      minZ = Math.min(minZ, b.cz - b.d / 2);
+      maxZ = Math.max(maxZ, b.cz + b.d / 2);
+    }
+    focusOffice({ cx: (minX + maxX) / 2, cz: (minZ + maxZ) / 2, w: maxX - minX, d: maxZ - minZ });
+  }
+
+  export function togglePerfHud(): void { showPerfHud = !showPerfHud; }
+  export function toggleRotationMode(): void { setRotationMode(rotationMode === 'turntable' ? 'recenter' : 'turntable'); }
+  export function openHeadquartersInbox(): void { openTopAgentMessages(); }
+  export function selectAgent(id: string | null): void { selectedAgent = id; }
+  export function openRegisterRepo(): void { registerRepoModal?.open(); }
+  /** Show a meeting's live transcript (from ActivityPanel, or once an agent opens one). The panel renders as soon as the meeting is known. */
+  export function openLiveMeeting(id: string): void {
+    activeMeetingId = id;
+    showLiveMeeting = true;
+    showMyOfficePanel = false;
+    selectedAgent = null;
+  }
+  /** Bring back the minimised chat of the meeting the operator moderates. */
+  export function openHumanMeeting(): void {
+    if (meetingActive) meetingPanelOpen = true;
+  }
+  /** Close the world's right-hand surfaces before a shell drawer opens: the agent drawer, the live transcript, and the operator's meeting chat (minimised; the meeting keeps running). */
+  export function closeRightPanels(): void {
+    selectedAgent = null;
+    showLiveMeeting = false;
+    meetingPanelOpen = false;
+  }
+
+  // Tell the shell whenever the selection changes (desk click, drawer close,
+  // selectAgent) — once per change, so the rail and the office panel follow.
+  let lastDispatchedAgentId: string | null = null;
+  $: if (selectedAgent !== lastDispatchedAgentId) {
+    lastDispatchedAgentId = selectedAgent;
+    dispatch('agentselect', { id: selectedAgent });
+  }
+
+  // The shell's ActivityPanel renders meetings, the management log and the
+  // operator's own meeting; each is sent once per change.
+  let lastMeetingsKey = '';
+  $: {
+    const key = liveMeetingsList.map((m) => `${m.id}:${m.status}:${m.turns.length}:${m.summary ?? ''}`).join('|');
+    if (key !== lastMeetingsKey) {
+      lastMeetingsKey = key;
+      dispatch('meetings', { list: liveMeetingsList });
+    }
+  }
+  let lastMgmtLog: MgmtEntry[] | null = null;
+  $: if (mgmtLog !== lastMgmtLog) {
+    lastMgmtLog = mgmtLog;
+    dispatch('mgmtlog', { entries: mgmtLog });
+  }
+  let lastHumanKey = '';
+  $: {
+    const key = meetingActive ? `on:${meetingTopic}:${meetingSelectedIds.size}` : 'off';
+    if (key !== lastHumanKey) {
+      lastHumanKey = key;
+      dispatch('humanmeeting', { active: meetingActive, topic: meetingTopic, attendees: meetingSelectedIds.size });
+    }
+  }
+  // Once per false→true transition of the transcript panel, whoever opened it
+  // (auto-open, a room sign, openLiveMeeting), so the shell can close its own panels.
+  let lastShowLiveMeeting = false;
+  $: if (showLiveMeeting !== lastShowLiveMeeting) {
+    lastShowLiveMeeting = showLiveMeeting;
+    if (showLiveMeeting) dispatch('liveopen', { id: activeMeetingId });
   }
 
   // Camera tween entry point — runs in the animation registry as a Ticker.
@@ -4652,7 +4657,7 @@
   function sceneFingerprint(): string {
     const a = agents.map(x => `${x.id}:${x.flow_id}:${x.active}:${x.rank_id ?? ''}:${x.skin_id ?? ''}:${x.name}`).sort().join('|');
     const c = chains.map(x => `${x.source_agent_id}>${x.target_agent_id}:${x.active}`).sort().join('|');
-    const f = flows.map(x => `${x.id}:${x.color}:${x.active}`).sort().join('|');
+    const f = flows.map(x => `${x.id}:${x.kind ?? ''}:${x.name}:${x.color}:${x.active}`).sort().join('|');
     const r = ranks.map(x => `${x.id}:${x.color}:${x.insignia}:${x.level}`).sort().join('|');
     return `${a}#${c}#${f}#${r}`;
   }
@@ -4725,8 +4730,10 @@
   function rebuildScene() {
     if (!scene || !THREE) return;
 
-    // Fingerprint: agent IDs + flow assignments + flow count. If unchanged, only desks need refreshing.
-    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}`;
+    // Fingerprint: agent IDs + flow assignments + flow count + each flow's kind/name/color
+    // (kind picks the room theme, name the door sign, color the floor/sign). If unchanged, only desks need refreshing.
+    const flowLayoutKey = flows.map(f => `${f.id}:${f.kind ?? ''}:${f.name}:${f.color}`).sort().join('|');
+    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}`;
     const layoutChanged = layoutKey !== lastLayoutKey;
     lastLayoutKey = layoutKey;
 
@@ -4870,6 +4877,8 @@
     }
   });
   onDestroy(() => {
+    resizeObserver?.disconnect();
+    resizeObserver = null;
     if (animId) cancelAnimationFrame(animId);
     if (reposRefreshTimer) { clearInterval(reposRefreshTimer); reposRefreshTimer = null; }
     if (infraRefreshTimer) { clearInterval(infraRefreshTimer); infraRefreshTimer = null; }
@@ -4916,21 +4925,6 @@
   // The graph payload already carries both, so the block renders with the
   // selection instead of flashing a loading line until the detail fetch lands.
   $: selPrompt = String(agentDetail?.agent?.system_prompt ?? selData?.system_prompt ?? '');
-
-  /** Tools that reach outside the model: a shell, a filesystem, a container. */
-  const ENV_TOOL_RE = /office_exec|workspace|filesystem|shell|bash|terminal|docker/i;
-  $: selAllowedTools = (() => {
-    const parsed = safeParse(agentDetail?.agent?.allowed_tools ?? selData?.allowed_tools);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  })();
-  /** Can this agent actually use the office's shared container?
-   *  A pure LLM agent calls a model and nothing else — a Docker image and a
-   *  Start button mean nothing to it. The environment is still office-scoped
-   *  and this panel is its only entry point, so it is never removed, only
-   *  folded away (see the `startCollapsed` prop on OfficeInfraPanel). */
-  $: canUseOfficeEnv =
-    !!selData &&
-    (agentType(selData) === 'claude_code' || selAllowedTools.some((t) => ENV_TOOL_RE.test(t)));
 
   // Show/hide hallway lines based on selected agent
   $: {
@@ -5048,6 +5042,12 @@
 
   // ── Talk to agent ──────────────────────────────
   const dispatch = createEventDispatcher();
+
+  let lastInboxCount = -1;
+  $: if (pendingQuestions.length !== lastInboxCount) {
+    lastInboxCount = pendingQuestions.length;
+    dispatch('inbox', { count: lastInboxCount });
+  }
 
   let chatInput = '';
   let chatSending = false;
@@ -5771,7 +5771,6 @@ Boss says: "${msg}"`;
   }
 
   // ── Meeting System ─────────────────────────────
-  let showMeetingModal = false;
   let meetingTopic = '';
   let meetingDescription = '';
   // Temas a profundizar — one per line. Injected into every agent's goal so
@@ -5789,39 +5788,38 @@ Boss says: "${msg}"`;
   let meetingChat: Array<{ role: 'you' | string; name: string; text: string; color: string; ts: number }> = [];
   let meetingInput = '';
   let meetingSending = false;
-  let meetingSearch = '';
 
-  $: meetingAgentOptions = agents.filter(a => a.active && !a.builtin_handler)
-    .filter(a => !meetingSearch || a.name.toLowerCase().includes(meetingSearch.toLowerCase()));
-
-  function toggleMeetingAgent(id: string) {
-    if (meetingSelectedIds.has(id)) meetingSelectedIds.delete(id);
-    else meetingSelectedIds.add(id);
-    meetingSelectedIds = new Set(meetingSelectedIds);
-  }
-
-  // The Auto-Meeting form lives in AutoMeetingModal.svelte. It only fires a
-  // run on the moderator agent, so unlike "Call Meeting" it never touches
-  // the floor — the world keeps just the handle for the HQ dropdown.
-  let autoMeetingModal: AutoMeetingModal | null = null;
-
-  /** Human-readable brief injected into the chat + every agent's goal. */
+  /** The brief the operator's chat opens with, in the operator's language. The agents' goal restates the topic in English. */
   function meetingBrief(): string {
-    const lines = [`Motivo: ${meetingTopic.trim()}`];
-    if (meetingDescription.trim()) lines.push(`Description: ${meetingDescription.trim()}`);
+    const lines = [`${$translate('meeting.brief_topic')}: ${meetingTopic.trim()}`];
+    if (meetingDescription.trim()) lines.push(`${$translate('meeting.brief_description')}: ${meetingDescription.trim()}`);
     const topics = parseMeetingTopics(meetingTopicsText);
     if (topics.length > 0) {
-      lines.push('Temas a profundizar:');
+      lines.push(`${$translate('meeting.brief_topics')}:`);
       for (const t of topics) lines.push(`  • ${t}`);
     }
     return lines.join('\n');
   }
 
+  /**
+   * MeetingModal → "Yo". The same client-side mechanism Call Meeting always
+   * had: attendees walk to a room, each message runs every attendee. No
+   * kernel meeting, no history row. Contexto is optional here.
+   */
+  export function startHumanMeeting(input: { topic: string; description: string; topics: string[]; attendeeIds: string[] }): boolean {
+    if (meetingActive) return false;
+    meetingTopic = input.topic;
+    meetingDescription = input.description;
+    meetingTopicsText = input.topics.join('\n');
+    meetingSelectedIds = new Set(input.attendeeIds);
+    void startMeeting();
+    return meetingActive;
+  }
+
   async function startMeeting() {
-    if (meetingSelectedIds.size === 0 || !meetingTopic.trim() || !meetingDescription.trim()) return;
+    if (meetingSelectedIds.size === 0 || !meetingTopic.trim()) return;
     meetingActive = true;
     meetingPanelOpen = true;
-    showMeetingModal = false;
     meetingChat = [];
 
     // Hide seated workers (they're "standing up" to go to the meeting)
@@ -6024,7 +6022,7 @@ Boss says: "${msg}"`;
       const goal = `You are in a group meeting about: "${meetingTopic}". You are ${agent.name}: ${agent.description || 'an agent in this office'}.
 
 ## MEETING BRIEF
-Motivo: ${meetingTopic}
+Topic: ${meetingTopic}
 ${meetingDescription.trim() ? `Description: ${meetingDescription.trim()}` : ''}
 ${meetingTopicsList.length > 0 ? `Topics to dig into (when you answer, go deep specifically on these points):\n${meetingTopicsList.map(t => `- ${t}`).join('\n')}` : ''}
 
@@ -6138,7 +6136,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 </script>
 
 
-<div class="world3d-container" on:click={() => { if (hqMenuOpen) hqMenuOpen = false; if (pendingMenuOpen) pendingMenuOpen = false; if (searchOpen) closeSearch(); }} role="presentation">
+<div class="world3d-container" role="presentation">
   {#if webglError}
     <div class="fb"><span class="fb-icon">&#9888;</span> {webglError}</div>
   {:else}
@@ -6191,212 +6189,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   <PerfOverlay bind:visible={showPerfHud} stats={perfStats} extra={perfExtra} label="baseline" />
 
-  <div class="hq-bar">
-    <div class="hq-stats">
-      <span class="hq-stat"><b>{agents.length}</b> staff</span>
-      <span class="hq-sep"></span>
-      <span class="hq-stat"><b>{runningAgentIds.size}</b> active</span>
-      <span class="hq-sep"></span>
-      <span class="hq-stat"><b>{chains.length}</b> chains</span>
-      <span class="hq-sep"></span>
-      <span class="hq-stat"><b>{triggerCount}</b> triggers</span>
-      <span class="hq-sep"></span>
-      <span class="hq-stat"><b>{todayRuns}</b> today</span>
-      {#if runningAgentIds.size > 0}
-        <span class="hq-sep"></span>
-        <span class="hq-live-dot"></span>
-      {/if}
-      {#if pendingAgents.length > 0}
-        <span class="hq-sep"></span>
-        <button
-          class="hq-pending-pill"
-          on:click|stopPropagation={() => pendingMenuOpen = !pendingMenuOpen}
-          title="Agents waiting for human approval"
-        >
-          <span class="hq-pending-dot"></span>
-          <b>{pendingAgents.length}</b> pending
-        </button>
-      {/if}
-      {#if pendingQuestions.length > 0}
-        <span class="hq-sep"></span>
-        <button
-          class="hq-msg-pill"
-          on:click|stopPropagation={openTopAgentMessages}
-          title="Messages waiting for the top agent — click to open their office and reply"
-        >
-          <span class="hq-msg-dot"></span>
-          <span class="hq-msg-ico">&#128236;</span>
-          <b>{pendingQuestions.length}</b>
-          {pendingQuestions.length === 1 ? 'mensaje' : 'mensajes'}
-        </button>
-      {/if}
-
-      <!-- Agent search (lupa) — collapsed icon by default, expands inline. -->
-      <span class="hq-sep"></span>
-      <div class="hq-search" class:hq-search-open={searchOpen} on:click|stopPropagation role="presentation">
-        {#if !searchOpen}
-          <button
-            class="hq-search-btn"
-            on:click|stopPropagation={openSearch}
-            title="Search an agent (zooms to its desk)"
-            aria-label="Search agent"
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-          </button>
-        {:else}
-          <div class="hq-search-wrap">
-            <svg class="hq-search-glyph" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-              <circle cx="11" cy="11" r="7"/>
-              <line x1="21" y1="21" x2="16.65" y2="16.65"/>
-            </svg>
-            <input
-              bind:this={searchInputEl}
-              bind:value={searchQuery}
-              on:keydown={onSearchKey}
-              type="text"
-              class="hq-search-input"
-              placeholder="agent name…"
-              autocomplete="off"
-              spellcheck="false"
-            />
-            <button
-              class="hq-search-x"
-              on:click|stopPropagation={closeSearch}
-              title="Close (Esc)"
-              aria-label="Close search"
-            >×</button>
-          </div>
-          {#if searchQuery && searchResults.length > 0}
-            <div class="hq-search-results" on:click|stopPropagation role="presentation">
-              {#each searchResults as r (r.id)}
-                {@const flow = flows.find(f => f.id === r.flow_id)}
-                <button
-                  class="hq-search-row"
-                  on:click|stopPropagation={() => focusAgentById(r.id)}
-                  title="Zoom camera to this agent"
-                >
-                  <span class="hq-search-row-dot" style="background:{flow?.color ?? '#888'}"></span>
-                  <span class="hq-search-row-name">{r.name}</span>
-                  <span class="hq-search-row-flow">{flow?.name ?? 'no office'}</span>
-                </button>
-              {/each}
-            </div>
-          {:else if searchQuery && searchResults.length === 0}
-            <div class="hq-search-results hq-search-empty">no matches</div>
-          {/if}
-        {/if}
-      </div>
-    </div>
-    <button class="hq-menu-trigger" on:click|stopPropagation={() => hqMenuOpen = !hqMenuOpen} title="Actions">
-      <span class="hq-dots">&#x22EE;</span>
-    </button>
-    {#if hqMenuOpen}
-      <div class="hq-dropdown">
-        <div class="hq-section">Create</div>
-        <button class="hq-action" on:click={() => { showNewOfficeWizard = true; hqMenuOpen = false; }} title="Found an office with the wizard — 3 steps, no code.">
-          <span class="hq-action-ico">+</span> New Office
-        </button>
-        <button class="hq-action" on:click={() => { showOfficeModal = true; hqMenuOpen = false; }} title="Build the office by chatting with the AI architect.">
-          <span class="hq-action-ico">&#128172;</span> New Office (AI chat)
-        </button>
-        <button class="hq-action" on:click={() => { showMeetingModal = true; hqMenuOpen = false; }}>
-          <span class="hq-action-ico">&#9743;</span> Call Meeting
-        </button>
-        <button class="hq-action" on:click={() => { autoMeetingModal?.open(); hqMenuOpen = false; }} title="Trigger an autonomous agent-to-agent meeting (you don't participate)">
-          <span class="hq-action-ico">&#9881;</span> Auto-Meeting
-        </button>
-        <!-- Not gated on owning an office named "repos"/"devops" any more: the
-             repos extension ships active with its tools live regardless of what
-             the offices are called, so that check hid a working feature behind
-             a naming convention. /devops stays — it is the paid DevOps Office
-             page, and on an install without it the route renders the extension
-             gate on purpose. -->
-        <button class="hq-action" on:click={() => { registerRepoModal?.open(); hqMenuOpen = false; }} title="Track an existing local repository — files stay where they are.">
-          <span class="hq-action-ico">&#128193;</span> Register Repo
-        </button>
-        <a class="hq-action" href="/repos" on:click={() => (hqMenuOpen = false)} style="text-decoration:none" title="All tracked repos — paths, who can use each one, and how to stop tracking.">
-          <span class="hq-action-ico">&#128218;</span> Repos panel
-        </a>
-        <a class="hq-action" href="/devops" on:click={() => (hqMenuOpen = false)} style="text-decoration:none" title="Open the DevOps control panel — repos, backlog, dev stacks, 24/7 autopilot.">
-          <span class="hq-action-ico">&#128736;</span> DevOps panel
-        </a>
-
-        <div class="hq-divider"></div>
-        <div class="hq-section">View</div>
-        <button class="hq-action hq-toggle"
-                class:hq-toggle-on={showLiveMeeting && !!activeMeetingId && !!liveMeetings[activeMeetingId]}
-                class:hq-toggle-disabled={!activeMeetingId || !liveMeetings[activeMeetingId]}
-                on:click={() => { if (activeMeetingId && liveMeetings[activeMeetingId]) showLiveMeeting = !showLiveMeeting; }}
-                title="Show / hide the live meeting transcript modal (auto-opens when a meeting starts)">
-          <span class="hq-action-ico">📡</span>
-          <span class="hq-action-label">Live meeting</span>
-          <span class="hq-toggle-state">{showLiveMeeting && activeMeetingId ? '✓' : ''}</span>
-        </button>
-        <button class="hq-action hq-toggle"
-                class:hq-toggle-on={showMeetingHistory}
-                on:click={() => { showMeetingHistory = !showMeetingHistory; }}
-                title="Show / hide the meetings history panel">
-          <span class="hq-action-ico">📋</span>
-          <span class="hq-action-label">Meetings panel</span>
-          <span class="hq-toggle-count">{liveMeetingsList.length || ''}</span>
-          <span class="hq-toggle-state">{showMeetingHistory ? '✓' : ''}</span>
-        </button>
-        <button class="hq-action hq-toggle"
-                class:hq-toggle-on={showMgmtLog}
-                class:hq-toggle-disabled={mgmtLog.length === 0}
-                on:click={() => { if (mgmtLog.length > 0) showMgmtLog = !showMgmtLog; }}
-                title="Show / hide the management log (manager edits, escalations)">
-          <span class="hq-action-ico">🛠️</span>
-          <span class="hq-action-label">Management log</span>
-          <span class="hq-toggle-count">{mgmtLog.length || ''}</span>
-          <span class="hq-toggle-state">{showMgmtLog ? '✓' : ''}</span>
-        </button>
-        <button class="hq-action hq-toggle"
-                class:hq-toggle-on={showPerfHud}
-                on:click={() => { showPerfHud = !showPerfHud; }}
-                title="Show / hide the performance benchmark HUD (FPS, frame time, draws, triangles). Shift+P also toggles.">
-          <span class="hq-action-ico">⚡</span>
-          <span class="hq-action-label">Performance HUD</span>
-          <span class="hq-toggle-state">{showPerfHud ? '✓' : ''}</span>
-        </button>
-        <button class="hq-action hq-toggle"
-                class:hq-toggle-on={rotationMode === 'turntable'}
-                on:click={() => setRotationMode(rotationMode === 'turntable' ? 'recenter' : 'turntable')}
-                title="Rotation axis (left button). Turntable: rotates smoothly around the reception, preserving your framing. Recenter: rotating snaps the view back to the reception.">
-          <span class="hq-action-ico">🎥</span>
-          <span class="hq-action-label">Giro: {rotationMode === 'turntable' ? 'Turntable' : 'Recentrar'}</span>
-          <span class="hq-toggle-state">{rotationMode === 'turntable' ? '✓' : '↺'}</span>
-        </button>
-      </div>
-    {/if}
-
-    {#if pendingMenuOpen && pendingAgents.length > 0}
-      <div class="hq-pending-dropdown" on:click|stopPropagation role="presentation">
-        <div class="hq-pending-head">Pending approvals ({pendingAgents.length})</div>
-        <div class="hq-pending-body">
-          {#each pendingAgents as a (a.id)}
-            {@const flow = flows.find(f => f.id === a.flow_id)}
-            <div class="hq-pending-row">
-              <div class="hq-pending-info">
-                <span class="hq-pending-name">{a.name}</span>
-                <span class="hq-pending-flow" style="color:{flow?.color ?? '#888'}">{flow?.name ?? 'no office'}</span>
-              </div>
-              <button
-                class="hq-pending-activate"
-                on:click={() => activateAgent(a.id)}
-                disabled={activatingAgentId === a.id}
-              >
-                {activatingAgentId === a.id ? '…' : 'Activate'}
-              </button>
-            </div>
-          {/each}
-        </div>
-      </div>
-    {/if}
-  </div>
 
   <!-- Send-to-fixer toast — page-level so it survives the report modal
        closing on dispatch. Auto-clears via the same setTimeout that owns
@@ -6410,17 +6202,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     </div>
   {/if}
 
-  <!-- New Office chat — replaces the legacy form. Talks directly to Claude
-       Code, which uses the kernel_agents_* tools to spin up the flow + CEO
-       + team based on the conversation. -->
-  <!-- New Office wizard — Office Kit form (3 pasos + blueprint en vivo). -->
-  {#if showNewOfficeWizard}
-    <NewOfficeModal
-      on:close={() => { showNewOfficeWizard = false; }}
-      on:created={() => dispatch('refresh')}
-    />
-  {/if}
-
+  <!-- New Office chat — replaces the legacy form. Talks directly to the AI
+       architect, which uses the kernel_agents_* tools to spin up the flow +
+       CEO + team based on the conversation. -->
   {#if showOfficeModal}
     <OfficeCreatorChat
       topAgentName={topAgent()?.name ?? highestRank()?.name ?? 'Chief'}
@@ -6442,136 +6226,75 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     onRegistered={async () => { await fetchReposBookmarks(); rebuildScene(); }}
   />
 
-  <!-- Call Meeting Modal -->
-  {#if showMeetingModal}
-    <div class="modal-overlay" on:click={() => showMeetingModal = false} role="button" tabindex="-1" on:keydown={e => e.key === 'Escape' && (showMeetingModal = false)}>
-      <div class="modal meeting-modal" on:click|stopPropagation role="presentation">
-        <div class="modal-title">Call Meeting</div>
-        <div class="modal-sub">You moderate: reason, description, and the topics the agents will dig into.</div>
-
-        <label class="modal-label">
-          Motivo
-          <input type="text" class="modal-input" bind:value={meetingTopic} placeholder="ej. Revisión de estrategia Q2" />
-        </label>
-
-        <label class="modal-label">
-          Description
-          <textarea class="modal-textarea" bind:value={meetingDescription} rows="3"
-            placeholder="Context for the meeting: what happened, what needs resolving, what decision has to be made"></textarea>
-        </label>
-
-        <label class="modal-label">
-          Topics to dig into (one per line)
-          <textarea class="modal-textarea" bind:value={meetingTopicsText} rows="3"
-            placeholder={'e.g.\nLast week\u2019s metrics\nTeam blockers\nNext steps'}></textarea>
-        </label>
-
-        <label class="modal-label">
-          Invite ({meetingSelectedIds.size} selected)
-          <input type="text" class="modal-input" bind:value={meetingSearch} placeholder="Search agents..." />
-        </label>
-
-        <div class="meeting-agent-list">
-          {#each meetingAgentOptions as a (a.id)}
-            <button class="meeting-agent-item" class:selected={meetingSelectedIds.has(a.id)}
-              on:click={() => toggleMeetingAgent(a.id)}>
-              <span class="meeting-agent-dot" style="background:{flowColor(a.id)}"></span>
-              <span class="meeting-agent-name">{a.name}</span>
-              {#if meetingSelectedIds.has(a.id)}<span class="meeting-check">&#10003;</span>{/if}
-            </button>
-          {/each}
-        </div>
-
-        <div class="modal-actions">
-          <button class="modal-cancel" on:click={() => showMeetingModal = false}>Cancel</button>
-          <button class="modal-confirm" on:click={startMeeting}
-            disabled={meetingSelectedIds.size === 0 || !meetingTopic.trim() || !meetingDescription.trim()}>
-            Start Meeting ({meetingSelectedIds.size})
-          </button>
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  <!-- Auto-Meeting Modal (autonomous: pick moderator + attendees, kernel
-       orchestrates) — the form lives in AutoMeetingModal.svelte. The live
-       transcript panel below still opens on its own when the
-       meeting_requested event arrives. -->
-  <AutoMeetingModal bind:this={autoMeetingModal} {agents} {flows} {ranks} />
-
   <!-- Live Agent-to-Agent Meeting Transcript — side panel so the 3D stays visible -->
   {#if showLiveMeeting && activeMeetingId && liveMeetings[activeMeetingId]}
     {@const lm = liveMeetings[activeMeetingId]}
-    <div class="lm-side-panel" role="dialog" tabindex="-1">
+    <div class="lm-side-panel" role="dialog" tabindex="-1" aria-label={lm.topic || $translate('meeting.activity.no_topic')}>
       <div class="modal live-meeting-modal" role="presentation">
         <div class="lm-head">
           <div class="lm-titles">
             <div class="lm-title">
-              {#if lm.status === 'requested'}<span class="lm-dot lm-dot-pulse"></span> Walking to meeting room…
-              {:else if lm.status === 'started'}<span class="lm-dot lm-dot-pulse"></span> LIVE
-              {:else if lm.status === 'completed'}<span class="lm-dot lm-dot-done"></span> Completed
-              {:else}<span class="lm-dot lm-dot-fail"></span> Failed{/if}
-              <span class="lm-topic">{lm.topic || '(no topic)'}</span>
+              {#if lm.status === 'requested'}<span class="lm-dot lm-dot-pulse"></span> {$translate('meeting.live.walking')}
+              {:else if lm.status === 'started'}<span class="lm-dot lm-dot-pulse"></span> {$translate('meeting.live.live')}
+              {:else if lm.status === 'completed'}<span class="lm-dot lm-dot-done"></span> {$translate('meeting.live.completed')}
+              {:else}<span class="lm-dot lm-dot-fail"></span> {$translate('meeting.live.failed')}{/if}
+              <span class="lm-topic">{lm.topic || $translate('meeting.activity.no_topic')}</span>
             </div>
             <div class="lm-sub">
-              <span class="lm-mod">🎙️ {lm.moderatorName}</span>
+              <span class="lm-mod">{$translate('meeting.live.moderator', { name: lm.moderatorName })}</span>
               <span class="lm-parts">·</span>
               {#each lm.participants.filter(p => p.id !== lm.moderatorId) as p}
                 <span class="lm-attendee" style="background:{flowColor(p.id)}22;border-color:{flowColor(p.id)}">{p.name}</span>
               {/each}
               <span class="lm-parts">·</span>
-              <span class="lm-stat">{lm.turns.length} turns</span>
+              <span class="lm-stat">{$translate('meeting.live.turns', { n: lm.turns.length })}</span>
               <span class="lm-parts">·</span>
-              <span class="lm-stat">{lm.turns.reduce((s, t) => s + (t.tokens || 0), 0).toLocaleString()} tokens</span>
+              <span class="lm-stat">{$translate('meeting.live.tokens', { n: lm.turns.reduce((s, turn) => s + (turn.tokens || 0), 0).toLocaleString() })}</span>
             </div>
           </div>
           {#if liveMeetingsList.length > 1}
-            <select class="lm-switcher" bind:value={activeMeetingId}>
+            <select class="lm-switcher" bind:value={activeMeetingId} aria-label={$translate('meeting.live.switch')}>
               {#each liveMeetingsList as m}
                 <option value={m.id}>{m.status === 'started' || m.status === 'requested' ? '● ' : '○ '}{(m.topic || m.id).slice(0, 50)}</option>
               {/each}
             </select>
           {/if}
-          <button class="lm-close" on:click={() => { showLiveMeeting = false; showTranscriptBody = false; }} title="Close">✕</button>
+          <button class="lm-close" on:click={() => { showLiveMeeting = false; }} title={$translate('meeting.live.close')} aria-label={$translate('meeting.live.close')}>
+            <Icon name="x" size={14} />
+          </button>
         </div>
 
         <div class="lm-transcript" bind:this={lmTranscriptEl}>
-          {#if !showTranscriptBody}
-            <button class="lm-show-btn" on:click={() => showTranscriptBody = true}>
-              Mostrar {lm.turns.length} turn{lm.turns.length === 1 ? '' : 's'}
-            </button>
-          {:else}
-            {#if lm.turns.length === 0}
-              <div class="lm-empty">
-                {#if lm.status === 'requested'}Waiting for them to reach the meeting room…{:else}Waiting for the first turn…{/if}
-              </div>
-            {/if}
-            {#each lm.turns as t, i (`${t.ts}-${t.agentId}-${t.round}-${i}`)}
-              <div class="lm-turn lm-turn-{t.role}">
-                <div class="lm-turn-head">
-                  <span class="lm-turn-ico">{t.role === 'moderator' ? '🎙️' : '💬'}</span>
-                  <span class="lm-turn-name" style="color:{flowColor(t.agentId)}">{t.agentName}</span>
-                  <span class="lm-turn-meta">round {t.round} · {t.tokens > 0 ? `${t.tokens} tk` : ''}</span>
-                </div>
-                <div class="copy-wrap lm-turn-body-wrap">
-                  <CopyTextBtn text={t.body} title="Copy message" />
-                  <div class="lm-turn-body ip-out-md">{@html formatRunOutput(t.body.length > 6000 ? t.body.slice(0, 6000) + '\n\n…(truncado)' : t.body)}</div>
-                </div>
-              </div>
-            {/each}
+          {#if lm.turns.length === 0}
+            <div class="lm-empty">
+              {#if lm.status === 'requested'}{$translate('meeting.live.waiting_room')}{:else}{$translate('meeting.live.waiting_turn')}{/if}
+            </div>
           {/if}
+          {#each lm.turns as turn, i (`${turn.ts}-${turn.agentId}-${turn.round}-${i}`)}
+            <div class="lm-turn lm-turn-{turn.role}">
+              <div class="lm-turn-head">
+                <span class="lm-turn-ico"><Icon name={turn.role === 'moderator' ? 'users' : 'chev-r'} size={13} /></span>
+                <span class="lm-turn-name" style="color:{flowColor(turn.agentId)}">{turn.agentName}</span>
+                <span class="lm-turn-meta">{turn.role === 'moderator' ? `${$translate('meeting.live.moderator_role')} · ` : ''}{$translate('meeting.live.round', { n: turn.round })}{turn.tokens > 0 ? ` · ${turn.tokens} tk` : ''}</span>
+              </div>
+              <div class="copy-wrap lm-turn-body-wrap">
+                <CopyTextBtn text={turn.body} title={$translate('meeting.live.copy')} />
+                <div class="lm-turn-body ip-out-md">{@html formatRunOutput(turn.body.length > 6000 ? turn.body.slice(0, 6000) + '\n\n…' + $translate('meeting.live.truncated') : turn.body)}</div>
+              </div>
+            </div>
+          {/each}
         </div>
 
         {#if lm.status === 'completed' && (lm.decisions?.length || lm.action_items?.length)}
           <div class="lm-summary">
             {#if lm.decisions && lm.decisions.length > 0}
-              <div class="lm-summary-h">✅ Decisions</div>
+              <div class="lm-summary-h"><Icon name="check" size={13} />{$translate('meeting.live.decisions')}</div>
               <ul class="lm-summary-list">
                 {#each lm.decisions as d}<li>{@html formatInline(d)}</li>{/each}
               </ul>
             {/if}
             {#if lm.action_items && lm.action_items.length > 0}
-              <div class="lm-summary-h">▶ Action items</div>
+              <div class="lm-summary-h"><Icon name="play" size={13} />{$translate('meeting.live.actions')}</div>
               <ul class="lm-summary-list">
                 {#each lm.action_items as a}<li>{@html formatInline(a)}</li>{/each}
               </ul>
@@ -6582,47 +6305,27 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     </div>
   {/if}
 
-  <!-- Meeting history panel — last 10 meetings, click any to re-open the
-       transcript modal. Rendering lives in MeetingHistoryPanel.svelte; the
-       store, the modal and the archive calls stay here. -->
-  <MeetingHistoryPanel
-    meetings={liveMeetingsList}
-    bind:show={showMeetingHistory}
-    onOpen={(id) => { activeMeetingId = id; showLiveMeeting = true; }}
-    onDismiss={dismissMeeting}
-    onDismissAllRead={dismissAllReadMeetings}
-  />
 
-  <!-- Management log panel — manager edits + escalations, bottom-left.
-       Rendering lives in MgmtLogPanel.svelte; pushMgmtLog stays here
-       because the event loop calls it. -->
-  <MgmtLogPanel entries={mgmtLog} bind:show={showMgmtLog} />
-
-  <!-- Floating meeting indicator — hidden by default. Users still reach live
-       meetings via the hq-bar menu (📡 Live meeting / 📋 Meetings panel) so
-       this floating toast was redundant and visually busy. -->
-
-
-  <!-- Active Meeting Panel -->
+  <!-- Active Meeting Panel (the operator moderates) -->
   {#if meetingActive && meetingPanelOpen}
     <div class="meeting-panel">
       <div class="meeting-header">
-        <div class="meeting-title">Meeting: {meetingTopic}</div>
+        <div class="meeting-title">{$translate('meeting.human.title', { topic: meetingTopic })}</div>
         <div class="meeting-attendees">
           {#each [...meetingSelectedIds] as aid}
             {@const a = agents.find(x => x.id === aid)}
             {#if a}<span class="meeting-att-dot" style="background:{flowColor(aid)}" title={a.name}></span>{/if}
           {/each}
-          <span class="meeting-att-count">{meetingSelectedIds.size} attendees</span>
+          <span class="meeting-att-count">{$translate('meeting.human.attendees', { n: meetingSelectedIds.size })}</span>
         </div>
-        <button class="meeting-min" title="Minimise — the meeting continues; the sign above the room reopens it"
-          on:click={() => meetingPanelOpen = false}>&#8211;</button>
-        <button class="meeting-end" on:click={endMeeting}>End Meeting</button>
+        <button class="meeting-min" title={$translate('meeting.human.minimize')} aria-label={$translate('meeting.human.minimize')}
+          on:click={() => meetingPanelOpen = false}><Icon name="minus" size={12} /></button>
+        <button class="meeting-end" on:click={endMeeting}>{$translate('meeting.human.end')}</button>
       </div>
       <div class="meeting-messages">
         {#each meetingChat as msg}
           <div class="meeting-msg copy-wrap">
-            <CopyTextBtn text={msg.text} title="Copy message" />
+            <CopyTextBtn text={msg.text} title={$translate('meeting.live.copy')} />
             <span class="meeting-msg-name" style="color:{msg.color}">{msg.name}</span>
             {#if msg.role !== 'you'}
               <div class="meeting-msg-text ip-out-md">{@html formatRunOutput(msg.text)}</div>
@@ -6633,8 +6336,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
         {/each}
         {#if meetingSending}
           <div class="meeting-msg meeting-typing">
-            <span class="meeting-msg-name" style="color:#8899bb">Agent</span>
-            <span class="meeting-msg-text">typing...</span>
+            <span class="meeting-msg-name" style="color:var(--text-3)">{$translate('meeting.human.agent')}</span>
+            <span class="meeting-msg-text">{$translate('meeting.human.typing')}</span>
           </div>
         {/if}
       </div>
@@ -6642,9 +6345,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
         <ChatComposer
           bind:value={meetingInput}
           sending={meetingSending}
-          placeholder="Say something to the group…"
-          hint="Enter sends · Shift+Enter for a new line · everyone in the room reads this"
-          sendLabel="Send to the room"
+          placeholder={$translate('meeting.human.placeholder')}
+          hint={$translate('meeting.human.hint')}
+          sendLabel={$translate('meeting.human.send')}
           maxRows={4}
           on:send={(e) => sendMeetingMessage(e.detail)}
         />
@@ -6994,6 +6697,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       agentId={selData.id}
       listRow={selRow}
       flow={selFlow ?? null}
+      offices={flows}
+      on:move={(e) => dispatch('moveagent', { agentId: selData.id, flowId: e.detail.flowId })}
       extraTabs={myPanelTabs}
       running={liveIsRunning}
       historyCount={agentRuns.length}
@@ -7115,21 +6820,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
           </svelte:fragment>
 
           <svelte:fragment slot="footer">
-            <!-- ─── Office environment ───
-                 Office-scoped, not agent-scoped, and this panel is its only entry
-                 point in the dashboard — so it is never hidden, only folded. It
-                 opens for agents that can reach a shell or a filesystem, and for
-                 any office whose container is already up; for a pure LLM agent
-                 with a dormant environment it stays one quiet line. -->
-            {#if selData.flow_id}
-              <OfficeInfraPanel
-                flowId={selData.flow_id}
-                officeName={flows.find((f) => f.id === selData.flow_id)?.name ?? ''}
-                color={flowColor(selData.id)}
-                startCollapsed={!canUseOfficeEnv}
-              />
-            {/if}
-
             {#if detailLoading && !agentDetail}
               <div class="ip-loading">Loading full details…</div>
             {/if}
@@ -7254,7 +6944,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .fb-icon{font-size:20px;color:#d4a84b}
 
   /* ── Boot loader — "HQ tactical uplink" radar console ─────────── */
-  .boot{position:absolute;inset:0;z-index:45;display:flex;align-items:center;justify-content:center;
+  .boot{position:absolute;inset:0;z-index:var(--z-hud);display:flex;align-items:center;justify-content:center;
     background:radial-gradient(125% 120% at 50% 38%, #0c1525 0%, #070b16 52%, #04060d 100%);
     overflow:hidden;font-family:'Manrope',-apple-system,sans-serif;will-change:transform,opacity}
   .boot-grid{position:absolute;inset:-2px;opacity:.55;pointer-events:none;
@@ -7332,244 +7022,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   @media (prefers-reduced-motion:reduce){
     .boot-sweep,.boot-blip,.boot-bar span,.boot-grid,.boot-dots::after{animation:none}
     .boot-log li{opacity:1;transform:none;animation:none}
-  }
-
-  .hq-bar{
-    position:absolute;top:12px;left:12px;
-    display:flex;align-items:center;gap:0;
-    background:rgba(14,16,24,.85);backdrop-filter:blur(12px);
-    border:1px solid rgba(74,79,106,.25);border-radius:8px;
-    padding:0;z-index:10;overflow:visible;
-  }
-  .hq-stats{
-    display:flex;align-items:center;gap:0;padding:6px 10px;
-  }
-  .hq-stat{
-    font:500 10px 'Manrope',sans-serif;color:#6a6f82;white-space:nowrap;
-  }
-  .hq-stat b{
-    font:700 11px 'Fira Code',monospace;color:#e0e2ea;margin-right:3px;
-  }
-  .hq-sep{
-    width:1px;height:12px;background:rgba(74,79,106,.3);margin:0 8px;
-  }
-  .hq-menu-trigger{
-    display:flex;align-items:center;justify-content:center;
-    width:28px;height:100%;padding:6px 0;
-    background:transparent;border:none;border-left:1px solid rgba(74,79,106,.2);
-    color:#6a6f82;cursor:pointer;transition:color .12s, background .12s;
-    border-radius:0 7px 7px 0;
-  }
-  .hq-menu-trigger:hover{color:#e0e2ea;background:rgba(255,255,255,.04)}
-  .hq-dots{font-size:14px;line-height:1}
-  .hq-dropdown{
-    position:absolute;top:calc(100% + 4px);right:0;
-    background:rgba(14,16,24,.95);backdrop-filter:blur(16px);
-    border:1px solid rgba(74,79,106,.35);border-radius:8px;
-    padding:4px;min-width:220px;
-    box-shadow:0 8px 24px rgba(0,0,0,.5);
-    animation:hq-drop .12s ease-out;
-  }
-  @keyframes hq-drop{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}
-  .hq-section{
-    padding:6px 10px 3px; font:700 9px 'JetBrains Mono',monospace;
-    color:#5a5f7a; letter-spacing:1.4px; text-transform:uppercase;
-  }
-  .hq-divider{
-    height:1px; background:rgba(74,79,106,.25); margin:4px 6px;
-  }
-  .hq-action{
-    display:flex;align-items:center;gap:8px;width:100%;
-    padding:7px 10px;border:none;border-radius:5px;
-    background:transparent;color:#c0c5d8;
-    font:500 11px 'Manrope',sans-serif;cursor:pointer;
-    transition:background .1s;text-align:left;
-  }
-  .hq-action:hover{background:rgba(255,255,255,.06)}
-  .hq-action-ico{
-    width:18px;text-align:center;font-size:13px;color:#8a8fa8;
-  }
-  .hq-toggle .hq-action-label{ flex:1; }
-  .hq-toggle-on{ background:rgba(255,209,102,.10); color:#fff; }
-  .hq-toggle-on .hq-action-ico{ color:#ffd166; }
-  .hq-toggle-on:hover{ background:rgba(255,209,102,.18); }
-  .hq-toggle-disabled{ opacity:.45; cursor:default; }
-  .hq-toggle-disabled:hover{ background:transparent; }
-  .hq-toggle-state{
-    width:14px; text-align:right; color:#ffd166; font-weight:700;
-  }
-  .hq-toggle-count{
-    font:700 9px 'JetBrains Mono',monospace;
-    background:rgba(91,141,239,.18); color:#9bb6f0;
-    padding:1px 6px; border-radius:8px;
-  }
-  .hq-live-dot{
-    width:7px;height:7px;border-radius:50%;background:#3dd68c;
-    box-shadow:0 0 6px #3dd68c;flex-shrink:0;
-    animation:hq-pulse 1.2s ease-in-out infinite;
-  }
-  @keyframes hq-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.4;transform:scale(.75)}}
-
-  .hq-pending-pill{
-    display:inline-flex; align-items:center; gap:6px;
-    background:rgba(250,204,21,.14); border:1px solid rgba(250,204,21,.4);
-    color:#facc15; padding:2px 9px; border-radius:10px;
-    font:600 11px 'Manrope',sans-serif;
-    cursor:pointer;
-  }
-  .hq-pending-pill:hover{ background:rgba(250,204,21,.22); }
-  .hq-pending-pill b{ color:#facc15; font-weight:700; }
-  .hq-pending-dot{
-    width:6px; height:6px; border-radius:50%; background:#facc15;
-    box-shadow:0 0 6px #facc15;
-    animation:hq-pulse 1.6s ease-in-out infinite;
-  }
-
-  /* Top-agent "new messages" alert pill — red, glowing, fast pulse so
-     it grabs the eye, and one click opens his office Questions tab. */
-  .hq-msg-pill{
-    display:inline-flex; align-items:center; gap:6px;
-    background:rgba(239,93,110,.18); border:1px solid rgba(239,93,110,.55);
-    color:#ff8a98; padding:2px 10px; border-radius:10px;
-    font:700 11px 'Manrope',sans-serif; cursor:pointer;
-    animation:hq-msg-glow 1.4s ease-in-out infinite;
-  }
-  .hq-msg-pill:hover{ background:rgba(239,93,110,.3); border-color:rgba(239,93,110,.85); }
-  .hq-msg-pill b{ color:#ff5d6e; font-weight:800; }
-  .hq-msg-ico{ font-size:12px; line-height:1; }
-  .hq-msg-dot{
-    width:7px; height:7px; border-radius:50%; background:#ff3344;
-    box-shadow:0 0 8px #ff3344;
-    animation:hq-pulse 1s ease-in-out infinite;
-  }
-  @keyframes hq-msg-glow{
-    0%,100%{ box-shadow:0 0 0 0 rgba(239,93,110,0); }
-    50%{ box-shadow:0 0 14px 1px rgba(239,93,110,.5); }
-  }
-
-  .hq-pending-dropdown{
-    position:absolute; top:46px; right:48px; z-index:30;
-    min-width:280px; max-width:380px; max-height:60vh;
-    background:rgba(13,15,24,.97);
-    border:1px solid rgba(250,204,21,.4);
-    border-radius:8px;
-    box-shadow:0 16px 40px rgba(0,0,0,.55);
-    overflow:hidden; display:flex; flex-direction:column;
-  }
-  .hq-pending-head{
-    padding:8px 12px; border-bottom:1px solid rgba(120,130,160,.18);
-    font:700 11px 'Manrope',sans-serif; color:#facc15;
-    letter-spacing:.3px; text-transform:uppercase;
-  }
-  .hq-pending-body{ overflow-y:auto; padding:4px 0; }
-  .hq-pending-row{
-    display:flex; align-items:center; justify-content:space-between;
-    gap:10px; padding:8px 12px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-  }
-  .hq-pending-row:last-child{ border-bottom:none; }
-  .hq-pending-info{ display:flex; flex-direction:column; min-width:0; gap:2px; }
-  .hq-pending-name{
-    font:600 12px 'Manrope',sans-serif; color:#e0e2ea;
-    white-space:nowrap; text-overflow:ellipsis; overflow:hidden; max-width:220px;
-  }
-  .hq-pending-flow{ font:500 10px ui-monospace,monospace; }
-  .hq-pending-activate{
-    background:#facc15; color:#1a1a1a; border:none;
-    padding:4px 12px; border-radius:5px; cursor:pointer;
-    font:700 11px 'Manrope',sans-serif;
-  }
-  .hq-pending-activate:hover:not(:disabled){ filter:brightness(1.08); }
-  .hq-pending-activate:disabled{ opacity:.5; cursor:wait; }
-
-  /* ── Agent search (lupa) ─────────────────────────────────────── */
-  .hq-search { position:relative; display:inline-flex; align-items:center; }
-  .hq-search-btn {
-    display:inline-flex; align-items:center; justify-content:center;
-    width:24px; height:22px; padding:0;
-    background:transparent; border:1px solid transparent;
-    border-radius:6px; color:#8a8fa8; cursor:pointer;
-    transition: color .12s, background .12s, border-color .12s, transform .15s;
-  }
-  .hq-search-btn:hover {
-    color:#3dd6c8;
-    background: rgba(61,214,200,.10);
-    border-color: rgba(61,214,200,.30);
-    transform: scale(1.12);
-  }
-  .hq-search-btn svg { display:block; }
-
-  .hq-search-wrap {
-    display:inline-flex; align-items:center; gap:6px;
-    padding: 2px 4px 2px 8px;
-    height:24px;
-    background: rgba(61,214,200,.06);
-    border: 1px solid rgba(61,214,200,.35);
-    border-radius:6px;
-    animation: hq-search-grow .14s cubic-bezier(.2,.7,.3,1.1);
-    transform-origin: left center;
-  }
-  @keyframes hq-search-grow {
-    from { transform: scaleX(.4); opacity:0; }
-    to   { transform: scaleX(1); opacity:1; }
-  }
-  .hq-search-glyph { color:#3dd6c8; flex:0 0 auto; }
-  .hq-search-input {
-    width: 200px;
-    background: transparent; border:none; outline:none;
-    color:#e0e2ea;
-    font: 500 12px 'Manrope', sans-serif;
-    padding: 0;
-  }
-  .hq-search-input::placeholder { color:#5a5f7a; }
-  .hq-search-x {
-    background: transparent; border:none;
-    color:#5a5f7a; cursor:pointer;
-    width:18px; height:18px;
-    border-radius: 50%;
-    line-height: 1; font-size: 14px;
-    display:inline-flex; align-items:center; justify-content:center;
-  }
-  .hq-search-x:hover { color:#f04770; background: rgba(240,71,112,.18); }
-
-  .hq-search-results {
-    position: absolute;
-    top: calc(100% + 6px); left: 0;
-    min-width: 280px; max-width: 360px;
-    background: rgba(14,16,24,.96); backdrop-filter: blur(16px);
-    border: 1px solid rgba(61,214,200,.35);
-    border-radius: 8px;
-    padding: 4px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.55);
-    z-index: 30;
-    animation: hq-drop .12s ease-out;
-    max-height: 320px; overflow-y: auto;
-  }
-  .hq-search-empty {
-    padding: 10px 12px;
-    font: 500 11px 'JetBrains Mono', monospace;
-    color: #5a5f7a; font-style: italic;
-  }
-  .hq-search-row {
-    width: 100%; text-align: left;
-    background: transparent; border: none;
-    padding: 7px 10px;
-    border-radius: 6px;
-    cursor: pointer;
-    color: #e0e2ea;
-    display: flex; align-items: center; gap: 8px;
-    font: 500 12px 'Manrope', sans-serif;
-  }
-  .hq-search-row:hover { background: rgba(61,214,200,.10); }
-  .hq-search-row-dot {
-    flex: 0 0 auto;
-    width: 8px; height: 8px; border-radius: 50%;
-  }
-  .hq-search-row-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .hq-search-row-flow {
-    flex: 0 0 auto;
-    font: 500 10px 'JetBrains Mono', monospace;
-    color: #6a6f82;
   }
 
   /* ═══════════════════════════════════════════════════════════════
@@ -7730,18 +7182,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   /* Under a card rather than beside a message: own line, indented to the card. */
   .llm-fix-row{display:inline-block;align-self:flex-start;margin:6px 0 2px 12px}
 
-  /* ── Meeting modal ──────────── */
-  .meeting-modal{width:460px}
-  .meeting-agent-list{max-height:200px;overflow-y:auto;display:flex;flex-direction:column;gap:2px;margin-bottom:12px;scrollbar-width:thin}
-  .meeting-agent-item{display:flex;align-items:center;gap:8px;padding:6px 10px;border-radius:6px;
-    background:#141620;border:1px solid rgba(74,79,106,.2);color:var(--text-2);font:500 11px 'Manrope',sans-serif;
-    cursor:pointer;transition:all .12s;text-align:left}
-  .meeting-agent-item:hover{background:#1a1e30;border-color:rgba(74,79,106,.4)}
-  .meeting-agent-item.selected{background:rgba(99,102,241,.1);border-color:rgba(99,102,241,.4);color:var(--text-1)}
-  .meeting-agent-dot{width:8px;height:8px;border-radius:50%;flex-shrink:0}
-  .meeting-agent-name{flex:1}
-  .meeting-check{color:#6366f1;font-size:14px;font-weight:700}
-
   /* ── Active meeting panel ──── */
   .meeting-panel{position:absolute;bottom:12px;right:12px;width:380px;max-height:60vh;
     background:rgba(14,16,24,.95);backdrop-filter:blur(12px);border:1px solid rgba(99,102,241,.3);
@@ -7767,22 +7207,9 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .meeting-composer{padding:0 14px 10px;--flow-color:#8b8cf6}
 
   /* ── Modal ──────────────────── */
-  .modal-overlay{position:fixed;inset:0;z-index:100;background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}
+  .modal-overlay{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}
   .modal{background:#0e1018;border:1px solid rgba(74,79,106,.4);border-radius:16px;padding:24px;width:420px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.6);animation:mslide .2s ease-out}
   @keyframes mslide{from{transform:translateY(12px);opacity:0}}
-  .modal-title{font:700 16px 'Syne',sans-serif;color:var(--text-1,#e0e2ea);margin-bottom:4px}
-  .modal-sub{font:400 11px 'Manrope',sans-serif;color:var(--text-3,#4a4f6a);margin-bottom:16px;line-height:1.4}
-  .modal-label{display:block;font:600 9px 'Manrope',sans-serif;color:var(--text-3,#4a4f6a);text-transform:uppercase;letter-spacing:.5px;margin-bottom:12px}
-  .modal-input{display:block;width:100%;margin-top:5px;padding:8px 12px;border-radius:8px;background:#141620;border:1px solid rgba(74,79,106,.3);color:var(--text-1,#e0e2ea);font:400 13px 'Manrope',sans-serif;outline:none;box-sizing:border-box}
-  .modal-input:focus{border-color:#6366f1}
-  .modal-textarea{display:block;width:100%;margin-top:5px;padding:8px 12px;border-radius:8px;background:#141620;border:1px solid rgba(74,79,106,.3);color:var(--text-1,#e0e2ea);font:400 12px 'Manrope',sans-serif;outline:none;resize:vertical;box-sizing:border-box;line-height:1.5}
-  .modal-textarea:focus{border-color:#6366f1}
-  .modal-actions{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
-  .modal-cancel{padding:8px 18px;border-radius:8px;font:600 11px 'Manrope',sans-serif;background:#1a1d2a;border:1px solid rgba(74,79,106,.3);color:var(--text-2,#8a8fa8);cursor:pointer;transition:all .15s}
-  .modal-cancel:hover{background:#22253a}
-  .modal-confirm{padding:8px 18px;border-radius:8px;font:600 11px 'Syne',sans-serif;letter-spacing:.5px;background:#10b981;border:none;color:#fff;cursor:pointer;transition:all .15s}
-  .modal-confirm:hover{filter:brightness(1.1)}
-  .modal-confirm:disabled{opacity:.4;cursor:not-allowed}
 
   /* ── Markdown output (run.result / step.content) ── */
   .ip-out-md{
@@ -8273,7 +7700,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .rm-fixer-dropdown:hover{background:rgba(255,184,74,.18);color:#ffd28a}
   .rm-fixer-dropdown:disabled{opacity:.5;cursor:not-allowed}
   .rm-fixer-menu{
-    position:absolute;right:0;bottom:calc(100% + 4px);z-index:120;
+    position:absolute;right:0;bottom:calc(100% + 4px);z-index:var(--z-toast);
     min-width:240px;max-width:340px;
     background:rgba(8,6,2,.96);border:1px solid #ffb84a55;border-radius:8px;
     box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 18px rgba(255,184,74,.15);
@@ -8298,7 +7725,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   /* Floating toast that confirms a "send to fixer" dispatch after the
      report modal closes. Anchored top-center to stay clear of the HQ bar. */
   .fixer-toast{
-    position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:150;
+    position:fixed;top:18px;left:50%;transform:translateX(-50%);z-index:var(--z-toast);
     padding:10px 18px;border-radius:999px;
     font:700 11px 'JetBrains Mono',monospace;letter-spacing:.3px;
     background:rgba(8,6,2,.92);backdrop-filter:blur(6px);
@@ -8394,7 +7821,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
        It used to sit at top:64px, which cleared nothing on this side — the
        stats pills and the 2D/3D toggle live at the far LEFT — and just left a
        band of empty floor between the nav and the modal. */
-    position:absolute; top:14px; right:14px; z-index:50;
+    position:absolute; top:14px; right:14px; z-index:var(--z-drawer);
     width:min(640px, 52vw);
     min-width:420px;
     /* Fit the content, don't always span to the bottom of the viewport. The
@@ -8548,15 +7975,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     margin:0; white-space:pre-wrap; word-break:break-word;
     background:transparent; padding:0; max-height:none;
   }
-  .lm-show-btn{
-    margin:auto;
-    padding:10px 18px;
-    background:#1a1d2c; color:#cbd0e8;
-    border:1.5px solid #5b8def; border-radius:6px;
-    font:600 12px 'JetBrains Mono',monospace;
-    cursor:pointer; transition:all .12s;
-  }
-  .lm-show-btn:hover{ background:#252840; transform:translateY(-1px); }
+  /* Icon.svelte renders a block svg: line the icons up with their text. */
+  .lm-close{ display:inline-grid; place-items:center; }
+  .lm-turn-ico{ display:inline-flex; align-items:center; }
+  .lm-summary-h{ display:flex; align-items:center; gap:6px; }
 
   .lm-summary{
     flex-shrink:0;

@@ -3,7 +3,7 @@
  * Read-only listing + dismiss; approval is handled via the MCP tool
  * `kernel_email_approve` to keep all side effects in one path.
  */
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
+import type { KernelHttpServer } from "@kernl/extension-sdk";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 
 export function registerEmailSuggestionsRoutes(

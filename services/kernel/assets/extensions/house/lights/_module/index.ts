@@ -2,13 +2,13 @@
  * Lights module - Control LED devices via WLED, Tasmota, etc.
  */
 
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+} from "@kernl/extension-sdk";
 import { lightsMigrations } from "./migrations/001_lights.js";
 import { LightsService } from "./service.js";
 import { lightsTools } from "./tools.js";

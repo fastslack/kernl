@@ -1,33 +1,22 @@
 import { describe, it, expect, afterEach } from "bun:test";
-import { createMinimaxProvider } from "../src/core/llm/providers/minimax-provider.js";
+import { createCatalogProvider } from "../src/core/llm/providers/openai-compatible-provider.js";
 
 describe("minimax provider", () => {
   const prev = { ...process.env };
   afterEach(() => { process.env = { ...prev }; });
 
-  it("uses explicit config, exposes expected schema, ready with a key", async () => {
-    process.env.MINIMAX_API_KEY = "env-key";
-    process.env.MINIMAX_DEFAULT_MODEL = "MiniMax-Text-01";
-    const p = createMinimaxProvider();
-    p.configure({ apiKey: "explicit-key", defaultModel: "MiniMax-M2" });
+  it("is ready with a configured key and takes its form from the catalog", async () => {
+    const p = createCatalogProvider("minimax")();
+    p.configure({ apiKey: "explicit-key", defaultModel: "MiniMax-M2.7" });
     await p.start();
     expect(p.slug).toBe("minimax");
     expect(p.isReady()).toBe(true);
-    const schema = p.getConfigSchema();
-    expect(schema.map((f) => f.key)).toEqual(["apiKey", "baseUrl", "defaultModel"]);
+    expect(p.getConfigSchema().map((f) => f.key)).toEqual(["apiKey", "defaultModel", "region"]);
   });
 
-  it("falls back to env key when config has none", () => {
+  it("never falls back to the environment", async () => {
     process.env.MINIMAX_API_KEY = "env-key";
-    delete process.env.MINIMAX_DEFAULT_MODEL;
-    const p = createMinimaxProvider();
-    p.configure({});
-    expect(p.getStatus().slug).toBe("minimax");
-  });
-
-  it("not ready without any key", async () => {
-    delete process.env.MINIMAX_API_KEY;
-    const p = createMinimaxProvider();
+    const p = createCatalogProvider("minimax")();
     p.configure({});
     await p.start();
     expect(p.isReady()).toBe(false);

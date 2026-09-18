@@ -1,6 +1,12 @@
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import { log } from "../../../../../src/core/logger.js";
-import { guardOutboundUrl } from "../../../../../src/core/url-guard.js";
+import {
+  type KernelHttpServer,
+  log,
+  guardOutboundUrl,
+  llm,
+  mediaToolBin,
+  mediaToolError,
+  probeMediaTool,
+} from "@kernl/extension-sdk";
 import { parseSubs, encodeVtt, langName } from "./subtitles.js";
 import {
   translateBatch,
@@ -8,14 +14,12 @@ import {
   type TranslateEngine,
   type TranslateProgress,
 } from "./translate.js";
-import { llm } from "../../../../../src/core/llm/client.js";
 import {
   transcribe,
   isGroqAvailable as isGroqWhisperAvailable,
   wrapThroughProxy,
   type TranscribeEngine,
 } from "./transcribe.js";
-import { mediaToolBin, mediaToolError, probeMediaTool } from "../../../../../src/core/media-tools.js";
 import type { TranscribeJobService, TranscribeRunner } from "./transcribe-jobs.js";
 import type { ConvertJobService } from "./convert-jobs.js";
 import { createHash } from "node:crypto";
@@ -478,7 +482,7 @@ export function parseTranscribeRequest(reqUrl: string):
 
   if (!target) return { ok: false, status: 400, error: "url is required" };
   if (engine === "groq" && !isGroqWhisperAvailable()) {
-    return { ok: false, status: 400, error: "groq engine selected but GROQ_API_KEY is not set" };
+    return { ok: false, status: 400, error: "groq engine selected but Groq is not connected — go to Settings → AI" };
   }
 
   const cacheKey = createHash("sha1")
@@ -1265,7 +1269,7 @@ export function registerCinemaMediaRoutes(
 
       if (!target) return server.json(res, 400, { error: "url is required" });
       if (wEngine === "groq" && !isGroqWhisperAvailable()) {
-        return server.json(res, 400, { error: "groq transcribe engine selected but GROQ_API_KEY is not set" });
+        return server.json(res, 400, { error: "groq transcribe engine selected but Groq is not connected — go to Settings → AI" });
       }
       const willTranslate = tgtLang !== srcLang;
       if (willTranslate && tEngine === "llm" && !isLlmChainAvailable()) {

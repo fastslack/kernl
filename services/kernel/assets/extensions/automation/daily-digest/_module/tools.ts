@@ -1,7 +1,5 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { textResult } from "../../../../../src/core/helpers.js";
+import { type ToolDefinition, type SqliteDb, textResult } from "@kernl/extension-sdk";
 import { buildEveningDigest, buildMorningDigest } from "./digest-service.js";
 import type { DigestKind } from "./scheduler.js";
 

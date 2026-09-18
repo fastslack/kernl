@@ -5,15 +5,15 @@
  * (getTransport for message-routing).
  */
 import type { Server as HttpServer } from "node:http";
-import type {
-  NotificationProvider,
-  NotificationPayload,
-  ProviderStatus,
-  ProviderCapability,
-  ConfigField,
-} from "../../../../../src/core/notify/provider.js";
-import type { ChannelTransport } from "../../../../../src/channels/types.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type NotificationProvider,
+  type NotificationPayload,
+  type ProviderStatus,
+  type ProviderCapability,
+  type ConfigField,
+  type ChannelTransport,
+  log,
+} from "@kernl/extension-sdk";
 import { IrcServer } from "./server/ircd.js";
 import { IrcTransport } from "./irc-transport.js";
 import type { OfficeBridge } from "./bridge/office-bridge.js";

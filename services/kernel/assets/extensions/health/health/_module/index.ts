@@ -1,11 +1,16 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
 import { healthMigrations } from "./migrations/001_health.js";
 import { HealthService } from "./service.js";
 import { healthTools } from "./tools.js";
 import { queryHealth } from "./dashboard-queries.js";
 import { healthRpcActions } from "./rpc-actions.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 
 export function createHealthModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];

@@ -8,14 +8,14 @@
  * find it via `import()`.
  */
 
-import type {
-  DashboardDescriptor,
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type DashboardDescriptor,
+  type ExtensibleModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type KernelConfig,
+  runMigrations,
+} from "@kernl/extension-sdk";
 import { fsCommanderMigrations } from "./migrations.js";
 import { FsCommanderService } from "./service.js";
 import { filesystemCommanderTools } from "./tools.js";

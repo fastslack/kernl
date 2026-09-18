@@ -1,7 +1,7 @@
 import { join, resolve } from "node:path";
 import { existsSync } from "node:fs";
 import { readdir } from "node:fs/promises";
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import { AgentManifestSchema } from "./types.js";
 import type { AgentDescriptor } from "./types.js";
 

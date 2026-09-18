@@ -1,6 +1,5 @@
 import { join } from "node:path";
-import type { KernelModule, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { log } from "../../../../../src/core/logger.js";
+import { type KernelModule, type ModuleContext, type ToolDefinition, log } from "@kernl/extension-sdk";
 import { SandboxAgentService } from "./service.js";
 import { sandboxAgentTools } from "./tools.js";
 

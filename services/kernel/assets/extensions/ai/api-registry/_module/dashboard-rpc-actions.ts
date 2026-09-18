@@ -3,7 +3,7 @@
  * dashboard's API explorer page.
  */
 
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { RpcAction } from "@kernl/extension-sdk";
 import type { ApiRegistryService } from "./service.js";
 
 export interface ApiRegistryDashboardRpcDeps {

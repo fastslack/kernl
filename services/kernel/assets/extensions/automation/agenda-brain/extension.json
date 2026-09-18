@@ -17,6 +17,7 @@
     "brief"
   ],
   "kernel_min": "0.1.0",
+  "sdk": 1,
   "dependencies": [
     "com.kernl.tasks"
   ],

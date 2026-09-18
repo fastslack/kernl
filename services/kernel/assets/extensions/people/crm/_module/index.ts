@@ -1,5 +1,12 @@
-import type { ExtensibleModule, DashboardDescriptor, ModuleContext, ToolDefinition } from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import {
+  type ExtensibleModule,
+  type DashboardDescriptor,
+  type ModuleContext,
+  type ToolDefinition,
+  runMigrations,
+  type SqliteDb,
+  type EventBus,
+} from "@kernl/extension-sdk";
 import { crmMigrations } from "./migrations/001_crm.js";
 import { CrmService } from "./service.js";
 import { crmTools } from "./tools.js";
@@ -7,8 +14,6 @@ import { registerCrmDashboardRoutes } from "./dashboard-routes.js";
 import { registerContactsRoutes } from "./routes.js";
 import { contactsRpcActions } from "./rpc-actions.js";
 import { queryCrm } from "./dashboard-queries.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
 
 export interface CrmModule extends ExtensibleModule {
   getService(): CrmService | null;

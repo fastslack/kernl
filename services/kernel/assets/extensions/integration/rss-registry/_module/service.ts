@@ -1,9 +1,12 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/client.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
-import { guardedFetch } from "../../../../../src/core/url-guard.js";
+import {
+  type SqliteDb,
+  type EventBus,
+  type EmbeddingsClient,
+  newId,
+  isoNow,
+  log,
+  guardedFetch,
+} from "@kernl/extension-sdk";
 import { parseFeed, itemHash, type ParsedItem } from "./parser.js";
 import { SEED_CATEGORIES, SEED_FEEDS } from "./seed.js";
 import type {

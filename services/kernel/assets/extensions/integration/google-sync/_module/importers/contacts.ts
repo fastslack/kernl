@@ -1,9 +1,13 @@
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import {
+  type SqliteDb,
+  type GooglePerson,
+  type ImportResult,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { CrmService } from "../../../../people/crm/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
-import type { GooglePerson, ImportResult } from "../../../../../../src/core/integrations/google-types.js";
-import { newId, isoNow } from "../../../../../../src/core/helpers.js";
-import { log } from "../../../../../../src/core/logger.js";
 
 const PEOPLE_API_URL = "https://people.googleapis.com/v1/people/me/connections";
 

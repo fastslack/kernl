@@ -1,11 +1,15 @@
 /**
  * Agenda Brain extension module — schedules morning/evening task briefs.
  */
-import type { KernelModule, ModuleContext, ToolDefinition } from '../../../../../src/core/types.js';
-import type { SqliteDb } from '../../../../../src/core/db/sqlite.js';
-import type { RpcAction } from '../../../../../src/core/mtw/rpc-handler.js';
-import { runMigrations } from '../../../../../src/core/db/migrations.js';
-import { log } from '../../../../../src/core/logger.js';
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type SqliteDb,
+  type RpcAction,
+  runMigrations,
+  log,
+} from "@kernl/extension-sdk";
 import { migrations } from './migrations/001_agenda_brain.js';
 import { planToday } from './brain-service.js';
 import { AgendaBrainScheduler, localDateKey } from './scheduler.js';

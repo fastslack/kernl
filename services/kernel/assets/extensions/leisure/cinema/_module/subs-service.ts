@@ -11,8 +11,7 @@
  * services share the same `sqlite` handle.
  */
 
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 import type { SubAnnouncement } from "./discovery/provider.js";
 
 export interface LocalSub {

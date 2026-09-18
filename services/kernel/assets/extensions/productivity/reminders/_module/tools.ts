@@ -1,8 +1,6 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { type ToolDefinition, type Notifier, textResult, errorResult } from "@kernl/extension-sdk";
 import type { ReminderService } from "./service.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 export function reminderTools(
   service: ReminderService,

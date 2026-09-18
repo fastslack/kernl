@@ -1,5 +1,4 @@
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import type { RpcAction, SqliteDb } from "@kernl/extension-sdk";
 import { SubscriptionService } from "./service.js";
 import { autoCategorize, knownCategories, categoryGroup, CATEGORY_GROUPS } from "./categorize.js";
 

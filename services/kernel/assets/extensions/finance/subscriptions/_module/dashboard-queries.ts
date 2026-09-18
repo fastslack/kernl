@@ -1,5 +1,10 @@
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { tableExists, toRecord, today, daysFromNow } from "../../../../../src/core/db/query-helpers.js";
+import {
+  type SqliteDb,
+  tableExists,
+  toRecord,
+  today,
+  daysFromNow,
+} from "@kernl/extension-sdk";
 
 export interface DashboardSubscriptions {
   kpis: { total: number; active: number; paused: number; monthlyTotalCents: number };

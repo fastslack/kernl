@@ -3,8 +3,7 @@
  * the bouncer (persistent channels/memberships), CHATHISTORY scrollback,
  * CertFP, bans and E2E key distribution.
  */
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
+import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
 
 export interface IrcAccountRow {
   id: string;

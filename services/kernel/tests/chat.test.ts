@@ -16,6 +16,7 @@ import {
   createChatProviders,
   resolveProvider,
 } from "../src/modules/chat/llm-adapter.js";
+import { setCredentialSource } from "../src/core/llm/credentials.js";
 import { ExtractionPipeline } from "../src/modules/chat/extraction.js";
 import { KnowledgeService } from "../src/modules/chat/knowledge-service.js";
 import type { ChatMessage, ChatCompletionOptions, ChatCompletionResult } from "../src/modules/chat/types.js";
@@ -57,7 +58,7 @@ function stubConfig(): KernelConfig {
       discord: { enabled: false, botToken: "", allowedUsers: [], allowedGuilds: [], allowedChannels: [] },
       webchat: { enabled: false, requireAuth: false },
     },
-    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, openaiApiKey: "", elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
+    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
     pii: { enabled: false, redactEmails: false, redactPhones: false, redactCreditCards: false, redactIbans: false, redactNames: false, warnOnSend: false, placeholder: "[REDACTED]" },
     ibkr: { gatewayUrl: "https://localhost:5000", accountId: "", enabled: false },
     saxo: { baseUrl: "", appKey: "", appSecret: "", certPath: "", certKeyPath: "", enabled: false },
@@ -70,13 +71,6 @@ function stubConfig(): KernelConfig {
     webIntel: {
       pollIntervalMs: 60000,
       defaultLlm: "claude",
-      anthropicApiKey: "",
-      openaiApiKey: "",
-      grokApiKey: "",
-      grokDefaultModel: "",
-      nvidiaApiKey: "",
-      nvidiaDefaultModel: "",
-      lmstudioBaseUrl: "",
       braveApiKey: "",
       googleCseKey: "",
       googleCseCx: "",
@@ -166,40 +160,37 @@ describe("memory-decay", () => {
 // ── LLM Adapter ─────────────────────────────────────
 
 describe("llm-adapter", () => {
+  // Keys now come from the registry (Task 3's credential store), not from a
+  // config object passed by hand — install a fake store per test.
+  let credStore: Record<string, Record<string, unknown>> = {};
+  function installCreds(s: Record<string, Record<string, unknown>>) {
+    credStore = s;
+    setCredentialSource({ loadConfig: (x) => ({ ...(credStore[x] ?? {}) }), saveConfig: () => true });
+  }
+  afterEach(() => setCredentialSource(null));
+
   it("creates providers from config", () => {
-    const providers = createChatProviders({
-      anthropicApiKey: "sk-test",
-      openaiApiKey: "sk-openai",
-      lmstudioBaseUrl: "http://localhost:1234/v1",
-    });
-    // claude, claude_code + claude-code alias (same instance), openai,
-    // lmstudio, grok, nvidia, minimax
-    expect(providers.size).toBe(8);
+    installCreds({ claude: { apiKey: "sk-test" }, openai: { apiKey: "sk-openai" } });
+    const providers = createChatProviders();
     expect(providers.get("claude")?.available()).toBe(true);
     expect(providers.get("openai")?.available()).toBe(true);
-    expect(providers.get("lmstudio")?.available()).toBe(true);
     expect(providers.get("claude_code")).toBe(providers.get("claude-code")!);
+    // Local servers (lmstudio, ollama) are left out until connected.
+    expect(providers.has("lmstudio")).toBe(false);
+    expect(providers.has("ollama")).toBe(false);
   });
 
   it("reports unavailable when no key", () => {
-    const providers = createChatProviders({
-      anthropicApiKey: "",
-      openaiApiKey: "",
-      lmstudioBaseUrl: "",
-    });
+    installCreds({});
+    const providers = createChatProviders();
     expect(providers.get("claude")?.available()).toBe(false);
     expect(providers.get("openai")?.available()).toBe(false);
-    expect(providers.get("lmstudio")?.available()).toBe(false);
+    expect(providers.has("lmstudio")).toBe(false);
   });
 
   it("resolveProvider falls back when requested unavailable", () => {
-    const providers = createChatProviders({
-      anthropicApiKey: "",
-      openaiApiKey: "",
-      lmstudioBaseUrl: "",
-      grokApiKey: "xai-test",
-      minimaxApiKey: "",
-    });
+    installCreds({ grok: { apiKey: "xai-test" } });
+    const providers = createChatProviders();
     // claude_code availability depends on the local CLI — force it off so the
     // test behaves the same on dev machines and CI runners.
     (providers.get("claude_code") as { available: () => boolean }).available = () => false;
@@ -208,25 +199,17 @@ describe("llm-adapter", () => {
   });
 
   it("resolveProvider uses non-canonical providers as leftover fallback", () => {
-    // openai is out of FALLBACK_ORDER, but step 3 (leftover scan) still picks
-    // it up when nothing canonical is available.
-    const providers = createChatProviders({
-      anthropicApiKey: "",
-      openaiApiKey: "sk-openai",
-      lmstudioBaseUrl: "",
-      minimaxApiKey: "",
-    });
+    // openai has no key here and no other configured provider outranks it,
+    // so step 3 (leftover scan) is what actually finds it.
+    installCreds({ openai: { apiKey: "sk-openai" } });
+    const providers = createChatProviders();
     (providers.get("claude_code") as { available: () => boolean }).available = () => false;
     expect(resolveProvider(providers, "claude")?.name).toBe("openai");
   });
 
   it("resolveProvider returns null when none available", () => {
-    const providers = createChatProviders({
-      anthropicApiKey: "",
-      openaiApiKey: "",
-      lmstudioBaseUrl: "",
-      minimaxApiKey: "",
-    });
+    installCreds({});
+    const providers = createChatProviders();
     (providers.get("claude_code") as { available: () => boolean }).available = () => false;
     expect(resolveProvider(providers, "claude")).toBeNull();
   });

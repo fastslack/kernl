@@ -1,7 +1,5 @@
 import crypto from "node:crypto";
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
+import type { KernelHttpServer, SqliteDb, EventBus } from "@kernl/extension-sdk";
 
 export function registerContactsRoutes(
   server: KernelHttpServer,

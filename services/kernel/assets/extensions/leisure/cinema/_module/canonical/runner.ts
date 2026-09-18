@@ -22,8 +22,7 @@
  * start/stop/snapshot surface — so the two are read and operated the same way.
  */
 
-import { log } from "../../../../../../src/core/logger.js";
-import type { SqliteDb } from "../../../../../../src/core/db/sqlite.js";
+import { log, type SqliteDb } from "@kernl/extension-sdk";
 import { CandidateIndex, matchTitle } from "./matcher.js";
 import { CanonicalService } from "./service.js";
 import { syncPass, pendingSlices, exhaustedSlices } from "./wikidata.js";

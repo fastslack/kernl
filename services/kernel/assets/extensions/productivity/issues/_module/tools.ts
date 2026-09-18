@@ -1,11 +1,9 @@
 import { z } from "zod";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import { type ToolDefinition, type SqliteDb, textResult, errorResult } from "@kernl/extension-sdk";
 import type { IssueService } from "./service.js";
 import { IssueClient } from "./client.js";
 import { syncGitHubIssues } from "./github-sync.js";
 import { syncGitLabIssues } from "./gitlab-sync.js";
-import { textResult, errorResult } from "../../../../../src/core/helpers.js";
 
 function fmtDuration(secs: number): string {
   if (secs === 0) return "0m";

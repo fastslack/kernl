@@ -24,6 +24,8 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import { assetsDir } from "../../core/assets-root.js";
 import type { AgentService } from "./service.js";
 import type { ModelChainEntry } from "./types.js";
+import { isFlowKind, type FlowKind, type RepoIsolation } from "./types.js";
+import { applyRepoIsolation } from "./repo-isolation.js";
 import { isoNow, slugify } from "../../core/helpers.js";
 
 // Canonical slugify now lives in core/helpers. Re-export it here so existing
@@ -92,6 +94,10 @@ export interface OfficeDefinition {
   defaults?: Partial<Omit<OfficeAgentSpec, "slug" | "name" | "prompt">>;
   agents: OfficeAgentSpec[];
   cron?: OfficeCronSpec;
+  /** Room theme and agent buttons. Default 'general'. */
+  kind?: FlowKind;
+  /** How repo agents run when `repo` is set. Default 'host', the historical posture. */
+  repoIsolation?: RepoIsolation;
 }
 
 export interface MaterializeOpts {
@@ -102,6 +108,8 @@ export interface MaterializeOpts {
   /** Scheduler floor in seconds (from `config.agents.minScheduleSeconds`).
    *  Omitted → env fallback inside `scheduleFloorMs`. */
   minScheduleSeconds?: number;
+  /** 'create' refuses an existing active office with the same name; 'upsert' reuses it. Default 'upsert'. */
+  mode?: "create" | "upsert";
 }
 
 export interface RepoServiceLike {
@@ -119,6 +127,13 @@ export interface OfficeReport {
   scheduled?: { agent: string; intervalMs: number };
   repo?: { registered: boolean; path: string };
   warnings: string[];
+}
+
+export class OfficeExistsError extends Error {
+  constructor(readonly officeId: string, name: string) {
+    super(`An office named "${name}" already exists`);
+    this.name = "OfficeExistsError";
+  }
 }
 
 // ── Helpers ─────────────────────────────────────────────────────
@@ -227,7 +242,33 @@ export function defineOffice(def: OfficeDefinition): OfficeDefinition {
     }
     parseEvery(def.cron.every); // throws on malformed intervals
   }
+  if (def.kind !== undefined && !isFlowKind(def.kind)) {
+    throw new Error(`defineOffice: unknown kind "${String(def.kind)}"`);
+  }
+  if (def.repoIsolation !== undefined && def.repoIsolation !== "sandbox" && def.repoIsolation !== "host") {
+    throw new Error(`defineOffice: unknown repoIsolation "${String(def.repoIsolation)}"`);
+  }
   return def;
+}
+
+/**
+ * `chainTo` entries and `cron.agent` may reference an agent by NAME instead
+ * of slug — the "Armar con IA" draft flow deliberately keeps agent identity
+ * as names until POST time (see office-draft.ts), so a renamed office never
+ * leaves a stale slug baked into the payload. Resolve any such NAME
+ * reference to that agent's derived slug so `defineOffice`'s validation and
+ * the create/upsert engine — which only ever match by slug — see a
+ * consistent shape. A value that already matches a slug is left untouched.
+ * Mutates each spec's `chainTo` in place; returns the resolved cron agent.
+ */
+function resolveNameReferencesToSlugs(agents: OfficeAgentSpec[], cronAgent: string | undefined): string | undefined {
+  const slugs = new Set(agents.map((a) => a.slug));
+  const slugByName = new Map(agents.map((a) => [a.name, a.slug]));
+  for (const a of agents) {
+    a.chainTo = a.chainTo?.map((t) => (slugs.has(t) ? t : slugByName.get(t) ?? t));
+  }
+  if (cronAgent === undefined) return undefined;
+  return slugs.has(cronAgent) ? cronAgent : slugByName.get(cronAgent) ?? cronAgent;
 }
 
 /** JSON-friendly input (RPC / MCP tool / wizard POST) → validated definition.
@@ -259,6 +300,11 @@ export function officeDefinitionFromJson(raw: unknown): OfficeDefinition {
     };
   });
   const cronRaw = o.cron && typeof o.cron === "object" ? (o.cron as Record<string, unknown>) : undefined;
+  const cronAgentRaw = cronRaw ? str(cronRaw.agent) : undefined;
+  const cronValid = Boolean(cronRaw && cronAgentRaw && (typeof cronRaw.every === "string" || typeof cronRaw.every === "number"));
+  // Always resolve chainTo (side effect on `agents`); resolve cron.agent only
+  // when the cron block is otherwise valid.
+  const resolvedCronAgent = resolveNameReferencesToSlugs(agents, cronAgentRaw);
   const def: OfficeDefinition = {
     name: str(o.name) ?? "",
     description: str(o.description),
@@ -267,9 +313,11 @@ export function officeDefinitionFromJson(raw: unknown): OfficeDefinition {
     previewUrl: str(o.previewUrl),
     discipline: o.discipline === false ? false : str(o.discipline),
     modelChain: Array.isArray(o.modelChain) ? (o.modelChain as ModelChainEntry[]) : undefined,
+    kind: typeof o.kind === "string" ? (o.kind as FlowKind) : undefined,
+    repoIsolation: typeof o.repoIsolation === "string" ? (o.repoIsolation as RepoIsolation) : undefined,
     agents,
-    cron: cronRaw && str(cronRaw.agent) && (typeof cronRaw.every === "string" || typeof cronRaw.every === "number")
-      ? { agent: str(cronRaw.agent)!, every: cronRaw.every as string | number, goal: str(cronRaw.goal) }
+    cron: cronValid
+      ? { agent: resolvedCronAgent!, every: cronRaw!.every as string | number, goal: str(cronRaw!.goal) }
       : undefined,
   };
   return defineOffice(def);
@@ -306,17 +354,22 @@ function resolveAgent(def: OfficeDefinition, spec: OfficeAgentSpec, repoPath: st
 
   const executor = merged.executor ?? (repoPath ? "claude_code" : "native");
 
-  const variables: Record<string, unknown> = {};
+  let variables: Record<string, unknown> = {};
   if (repoPath) {
-    // The documented working posture for filesystem-bound claude_code agents
-    // in the containerised kernel: native FS tools jailed to the repo cwd.
     variables.__cwd_path__ = repoPath;
-    variables.__sandbox__ = false;
-    variables.__permission_mode__ = "bypassPermissions";
+    Object.assign(variables, applyRepoIsolation({}, def.repoIsolation ?? "host"));
   }
   if (def.previewUrl) variables.__preview_url__ = def.previewUrl;
   if (merged.plugins?.length) variables.__plugins__ = merged.plugins;
   Object.assign(variables, d.variables ?? {}, spec.variables ?? {}); // author overrides win
+
+  // An explicitly chosen isolation posture is a security decision, not a
+  // default — re-apply it after the author's own `variables` merged above so
+  // a stray `variables.__sandbox__` can't quietly reopen (or close) it. When
+  // repoIsolation is left unset, keep today's precedence: author wins.
+  if (repoPath && def.repoIsolation !== undefined) {
+    variables = applyRepoIsolation(variables, def.repoIsolation);
+  }
 
   const chain = def.modelChain ?? (repoPath ? REPO_MODEL_CHAIN : []);
 
@@ -358,7 +411,48 @@ export function materializeOffice(
     warnings: [],
   };
 
-  // 1) Flow upsert ─────────────────────────────────────────────
+  // 1) Flow ────────────────────────────────────────────────────
+  const mode = opts.mode ?? "upsert";
+
+  // In 'create' mode, agents are ALWAYS brand-new rows — never a silent
+  // takeover of another office's (possibly unassigned/paused) agent that
+  // happens to share a slug. `agents` (working list) and `cronAgent` shadow
+  // `def.agents` / `def.cron.agent` from here on with any renamed slugs
+  // applied; `def` itself is left as validated, for 'upsert' which must
+  // behave exactly as before.
+  let agents = def.agents;
+  let cronAgent = def.cron?.agent;
+
+  if (mode === "create") {
+    const clash = db
+      .prepare("SELECT id FROM agent_flows WHERE lower(name) = lower(?) AND active = 1")
+      .get(def.name) as { id: string } | undefined;
+    if (clash) throw new OfficeExistsError(clash.id, def.name);
+
+    const slugRenames = new Map<string, string>();
+    const taken = new Set(def.agents.map((a) => a.slug));
+    for (const spec of def.agents) {
+      if (!service.getAgentBySlug(spec.slug)) continue;
+      let n = 2;
+      let candidate = `${spec.slug}-${n}`;
+      while (taken.has(candidate) || service.getAgentBySlug(candidate)) {
+        n += 1;
+        candidate = `${spec.slug}-${n}`;
+      }
+      slugRenames.set(spec.slug, candidate);
+      taken.add(candidate);
+      report.warnings.push(`agent slug "${spec.slug}" already exists — created as "${candidate}"`);
+    }
+    if (slugRenames.size) {
+      agents = def.agents.map((a) => ({
+        ...a,
+        slug: slugRenames.get(a.slug) ?? a.slug,
+        chainTo: a.chainTo?.map((t) => slugRenames.get(t) ?? t),
+      }));
+      if (cronAgent && slugRenames.has(cronAgent)) cronAgent = slugRenames.get(cronAgent);
+    }
+  }
+
   let flow = db
     .prepare("SELECT id FROM agent_flows WHERE name = ? AND active = 1")
     .get(def.name) as { id: string } | undefined;
@@ -367,24 +461,33 @@ export function materializeOffice(
       name: def.name,
       description: def.description,
       color: def.color ?? defaultOfficeColor(def.name),
+      kind: def.kind,
     });
     flow = { id: created.id };
-  } else if (def.color || def.description) {
-    db.prepare("UPDATE agent_flows SET description = COALESCE(?, description), color = COALESCE(?, color), updated_at = ? WHERE id = ?")
-      .run(def.description ?? null, def.color ?? null, isoNow(), flow.id);
+  } else if (def.color || def.description || def.kind) {
+    db.prepare(
+      "UPDATE agent_flows SET description = COALESCE(?, description), color = COALESCE(?, color), kind = COALESCE(?, kind), updated_at = ? WHERE id = ?",
+    ).run(def.description ?? null, def.color ?? null, def.kind ?? null, isoNow(), flow.id);
+  }
+  if (repoPath) {
+    db.prepare("UPDATE agent_flows SET repo_isolation = ?, updated_at = ? WHERE id = ?")
+      .run(def.repoIsolation ?? "host", isoNow(), flow.id);
   }
   report.flowId = flow.id;
 
   // 2) Agents upsert ───────────────────────────────────────────
   const idBySlug = new Map<string, string>();
-  for (const spec of def.agents) {
+  for (const spec of agents) {
     const r = resolveAgent(def, spec, repoPath);
     const existing = service.getAgentBySlug(spec.slug);
     if (existing) {
       // Operator-added variables survive; manifest keys win only where set.
       let exVars: Record<string, unknown> = {};
       try { exVars = JSON.parse((existing as unknown as { variables?: string }).variables || "{}"); } catch { /* defaults */ }
-      const mergedVars = { ...exVars, ...r.variables };
+      // Clear the previous posture before the manifest's variables win, so
+      // switching an office to 'sandbox' actually removes __sandbox__: false.
+      const base = repoPath ? applyRepoIsolation(exVars, def.repoIsolation ?? "host") : exVars;
+      const mergedVars = { ...base, ...r.variables };
       db.prepare(
         `UPDATE agents SET
            name = ?, description = ?, system_prompt = ?, goal_template = ?,
@@ -432,7 +535,7 @@ export function materializeOffice(
   const existingChains = new Set(
     service.listChains().map((c) => `${c.source_agent_id}→${c.target_agent_id}`),
   );
-  for (const spec of def.agents) {
+  for (const spec of agents) {
     const sourceId = idBySlug.get(spec.slug)!;
     for (const targetSlug of spec.chainTo ?? []) {
       const targetId = idBySlug.get(targetSlug)!;
@@ -446,12 +549,12 @@ export function materializeOffice(
   // 4) Cron ────────────────────────────────────────────────────
   if (def.cron) {
     const bySlugOrName =
-      idBySlug.get(def.cron.agent) ??
-      idBySlug.get(def.agents.find((a) => a.name === def.cron!.agent)?.slug ?? "");
+      idBySlug.get(cronAgent!) ??
+      idBySlug.get(agents.find((a) => a.name === cronAgent)?.slug ?? "");
     if (bySlugOrName) {
       const hasActive = service.listSchedules(bySlugOrName).some((s) => s.active === 1);
       if (hasActive) {
-        report.warnings.push(`cron: "${def.cron.agent}" already has an active schedule — left as-is`);
+        report.warnings.push(`cron: "${cronAgent}" already has an active schedule — left as-is`);
       } else {
         const intervalMs = Math.max(parseEvery(def.cron.every), scheduleFloorMs(opts.minScheduleSeconds));
         service.addSchedule({
@@ -459,7 +562,7 @@ export function materializeOffice(
           interval_ms: intervalMs,
           goal_override: def.cron.goal ?? "resume",
         });
-        report.scheduled = { agent: def.cron.agent, intervalMs };
+        report.scheduled = { agent: cronAgent!, intervalMs };
       }
     }
   }

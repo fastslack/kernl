@@ -14,8 +14,7 @@
  */
 
 import { z } from "zod";
-import { textResult, errorResult } from "../../../../../../src/core/helpers.js";
-import type { ToolDefinition } from "../../../../../../src/core/types.js";
+import { textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../../src/modules/agents/executor.js";
 import type { WorkspaceEvolverService } from "./service.js";

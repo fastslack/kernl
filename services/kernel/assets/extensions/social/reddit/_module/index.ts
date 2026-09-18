@@ -1,9 +1,4 @@
-import type {
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type ExtensibleModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
 import { redditMigrations } from "./migrations/001_reddit.js";
 import { RedditService } from "./service.js";
 import { redditTools } from "./tools.js";

@@ -7,12 +7,14 @@
  * `agents` rows keep resolving by `builtin_handler`.
  */
 
-import type { AgentDriver } from "../../../../../src/core/types.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
-import { safeQueryOne } from "../../../../../src/core/db/query-helpers.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type AgentDriver,
+  type SqliteDb,
+  type EventBus,
+  type Notifier,
+  safeQueryOne,
+  log,
+} from "@kernl/extension-sdk";
 
 import type { CommsService } from "./service.js";
 import type { EmailTriageService } from "./email-triage-service.js";

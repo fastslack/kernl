@@ -8,6 +8,7 @@
  */
 
 import { ChatClaudeProvider } from "../chat-adapters.js";
+import { getCatalogEntry } from "../provider-catalog.js";
 import type {
   LlmProvider,
   LlmProviderCapabilities,
@@ -34,25 +35,18 @@ class ClaudeProviderImpl implements LlmProvider {
 
   private impl: ChatClaudeProvider | null = null;
   private apiKey = "";
-  private defaultModel = "claude-sonnet-4-20250514";
+  private defaultModel = getCatalogEntry("claude")?.models.recommended ?? "claude-sonnet-5";
   private lastError?: string;
   private lastModel?: string;
 
   configure(config: Record<string, unknown>): void {
-    // Prioridad: config persistida > env var (ANTHROPIC_API_KEY). Permite que
-    // the provider works out of the box with the keys from .env, without
-    // going through the dashboard, while still letting the user override in the UI.
-    this.apiKey = typeof config.apiKey === "string" && config.apiKey
-      ? config.apiKey
-      : (process.env.ANTHROPIC_API_KEY ?? "");
+    this.apiKey = typeof config.apiKey === "string" ? config.apiKey.trim() : "";
     if (typeof config.defaultModel === "string" && config.defaultModel) {
       this.defaultModel = config.defaultModel;
     }
   }
 
   async start(): Promise<void> {
-    // Re-read env in case it changed. `configure()` is usually called with persisted config only.
-    if (!this.apiKey) this.apiKey = process.env.ANTHROPIC_API_KEY ?? "";
     this.impl = new ChatClaudeProvider(this.apiKey, this.defaultModel);
     this.lastError = this.impl.available() ? undefined : "No API key configured";
   }
@@ -80,7 +74,7 @@ class ClaudeProviderImpl implements LlmProvider {
   getConfigSchema(): ConfigField[] {
     return [
       { key: "apiKey", label: "API key", type: "password", required: true, placeholder: "sk-ant-api03-…" },
-      { key: "defaultModel", label: "Default model", type: "text", required: false, placeholder: "claude-sonnet-4-20250514" },
+      { key: "defaultModel", label: "Default model", type: "text", required: false, placeholder: this.defaultModel },
     ];
   }
 

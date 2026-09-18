@@ -7,7 +7,7 @@
  * (`OfficeAgentSource`) so this file never imports the agents module directly —
  * index.ts builds a concrete, duck-typed adapter (graceful if agents absent).
  */
-import { log } from "../../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { IrcServer, InboundEvent } from "../server/ircd.js";
 
 export interface OfficeDescriptor {

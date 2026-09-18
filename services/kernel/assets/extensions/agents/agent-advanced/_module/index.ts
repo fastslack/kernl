@@ -23,13 +23,13 @@
  * stage can pull from this extension via the registry without the core
  * importing any concrete advanced symbols.
  */
-import type {
-  KernelModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import type { EventBus } from "../../../../../src/core/event-bus.js";
-import { log } from "../../../../../src/core/logger.js";
+import {
+  type KernelModule,
+  type ModuleContext,
+  type ToolDefinition,
+  type EventBus,
+  log,
+} from "@kernl/extension-sdk";
 import type { AgentsModule } from "../../../../../src/modules/agents/index.js";
 import { createChatProviders } from "../../../../../src/modules/chat/llm-adapter.js";
 import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-handlers.js";
@@ -114,15 +114,7 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
       // Same provider matrix the agents core builds. Stateless adapters, so
       // having a second copy is harmless and keeps cross-module coupling at
       // the config level instead of leaking internal state.
-      const providers = createChatProviders({
-        anthropicApiKey: ctx.config.webIntel.anthropicApiKey,
-        openaiApiKey: ctx.config.webIntel.openaiApiKey,
-        lmstudioBaseUrl: ctx.config.webIntel.lmstudioBaseUrl,
-        grokApiKey: ctx.config.webIntel.grokApiKey,
-        grokDefaultModel: ctx.config.webIntel.grokDefaultModel,
-        nvidiaApiKey: ctx.config.webIntel.nvidiaApiKey,
-        nvidiaDefaultModel: ctx.config.webIntel.nvidiaDefaultModel,
-      });
+      const providers = createChatProviders({ claudeCode: ctx.config.claudeCode });
       const defaultProvider =
         ctx.config.agents?.defaultProvider ||
         ctx.config.chat.defaultProvider ||

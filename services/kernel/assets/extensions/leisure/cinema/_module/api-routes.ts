@@ -15,11 +15,15 @@
  * the torrents module uses for the rust backend.
  */
 
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import { log } from "../../../../../src/core/logger.js";
-import { guardOutboundUrl } from "../../../../../src/core/url-guard.js";
-import type { GraphDriver } from "../../../../../src/core/db-drivers/graph-driver.js";
-import type { EmbeddingsClient } from "../../../../../src/core/embeddings/index.js";
+import {
+  type KernelHttpServer,
+  log,
+  guardOutboundUrl,
+  type GraphDriver,
+  type EmbeddingsClient,
+  type SqliteDb,
+} from "@kernl/extension-sdk";
+import type { NostrIdentity } from "@kernl/extension-sdk/nostr";
 import type { CinemaService } from "./service.js";
 import type { CinemaSubsService, PublisherTrust } from "./subs-service.js";
 import type { DiscoveryRegistry } from "./discovery/registry.js";
@@ -31,7 +35,6 @@ import type { TranslateRunner } from "./translate-runner.js";
 import type { CanonicalService } from "./canonical/service.js";
 import type { CanonicalRunner, CanonicalPhase } from "./canonical/runner.js";
 import type { MediaProbeRunner } from "./media-runner.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
 import { probeItem, recordFacts } from "./archive-files.js";
 import { canonRails, syncCanonLists, canonListByKey } from "./canonical/canon.js";
 import { similarTo, forYou } from "./recommend.js";
@@ -42,7 +45,6 @@ import type {
   UpdateDirectoryInput,
 } from "./directories-service.js";
 import type { NostrDirectoriesProvider } from "./discovery/nostr-directories-provider.js";
-import type { NostrIdentity } from "../../../../../src/core/nostr/nostr-identity.js";
 import { searchSimilar, hybridSearch } from "./embeddings.js";
 import { ingestNextChunk, CINEMA_COLLECTIONS } from "./ingester.js";
 import { parseSubs, encodeVtt } from "./subtitles.js";

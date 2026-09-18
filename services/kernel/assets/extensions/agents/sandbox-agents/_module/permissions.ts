@@ -1,5 +1,4 @@
-import { log } from "../../../../../src/core/logger.js";
-import type { ToolDefinition } from "../../../../../src/core/types.js";
+import { log, type ToolDefinition } from "@kernl/extension-sdk";
 import type { AgentManifest } from "./types.js";
 
 /**

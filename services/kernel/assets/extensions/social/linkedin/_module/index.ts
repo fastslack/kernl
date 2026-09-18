@@ -1,9 +1,4 @@
-import type {
-  ExtensibleModule,
-  ModuleContext,
-  ToolDefinition,
-} from "../../../../../src/core/types.js";
-import { runMigrations } from "../../../../../src/core/db/migrations.js";
+import { type ExtensibleModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
 import { linkedinMigrations } from "./migrations/001_linkedin.js";
 import { LinkedInService } from "./service.js";
 import { linkedinTools } from "./tools.js";

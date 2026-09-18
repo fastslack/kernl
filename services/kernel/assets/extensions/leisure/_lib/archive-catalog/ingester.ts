@@ -14,7 +14,7 @@
  * has work left, open or resume its run, walk maxPages pages.
  */
 
-import { log } from "../../../../../src/core/logger.js";
+import { log } from "@kernl/extension-sdk";
 import type { ArchiveCatalog } from "./service.js";
 import type {
   ArchiveScrapeRow,
@@ -155,6 +155,7 @@ export async function ingestPass(
       else if (r.updated) updated++;
     }
 
+    const sent = cursor;
     const next = resp.cursor ?? "";
     cursor = next;
 
@@ -165,6 +166,19 @@ export async function ingestPass(
     });
 
     if (!next || items.length === 0) {
+      finished = true;
+      break;
+    }
+
+    // archive.org sometimes answers "the page after X" with the same page and
+    // X again. Following that cursor re-fetches one page forever and no other
+    // collection gets its turn, so close the run; its next refresh starts over.
+    if (next === sent) {
+      log.warn(
+        `archive-ingester[${uaTag}]: ${run.collection} — archive.org returned the cursor it was sent; ` +
+        `closing the run instead of re-fetching the same page`,
+      );
+      catalog.updateRun(run.id, { error: `archive.org cursor stopped advancing at ${next}` });
       finished = true;
       break;
     }

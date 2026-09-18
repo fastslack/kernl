@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy } from 'svelte';
-  import { modelIds } from '$lib/llm-models.js';
+  import { t } from '$lib/i18n/index.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
   import SkillsHub from '$lib/components/SkillsHub.svelte';
   import { SUGGESTED_SKILL_REPOS, isSubscribed, type SuggestedRepo } from '$lib/skill-repos.js';
@@ -1118,7 +1118,6 @@
   let waPending: PendingPair[] = [];
   let waApproved: ApprovedPair[] = [];
 
-  // ── LLM provider config (schema-driven form for type='llm-provider') ──
   interface ConfigField {
     key: string;
     label: string;
@@ -1128,98 +1127,6 @@
     description?: string;
     options?: Array<{ value: string; label: string }>;
     default?: string | number | boolean;
-  }
-  let llmSchema: ConfigField[] = [];
-  let llmConfig: Record<string, unknown> = {};
-  let llmModels: string[] = [];
-  let llmLoadingModels = false;
-  let llmSaving = false;
-  let llmMessage = '';
-  let llmModelMode: 'list' | 'custom' = 'list';
-
-  async function loadLlmProvider(slug: string): Promise<void> {
-    llmSchema = [];
-    llmConfig = {};
-    llmModels = [];
-    llmMessage = '';
-    llmModelMode = 'list';
-    try {
-      const [schemaRes, configRes] = await Promise.all([
-        fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/schema`),
-        fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/config`),
-      ]);
-      if (schemaRes.ok) llmSchema = ((await schemaRes.json()).schema ?? []) as ConfigField[];
-      if (configRes.ok) llmConfig = ((await configRes.json()).config ?? {}) as Record<string, unknown>;
-      // If saved model isn't in the discovered list, surface a custom-text input.
-      llmLoadingModels = true;
-      try {
-        const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/models`);
-        if (r.ok) {
-          const body = await r.json();
-          llmModels = modelIds(body.models);
-        }
-      } catch { /* ignore */ }
-      llmLoadingModels = false;
-      const current = String(llmConfig.defaultModel ?? '');
-      if (current && llmModels.length > 0 && !llmModels.includes(current)) {
-        llmModelMode = 'custom';
-      }
-    } catch (err) {
-      llmMessage = `Load failed: ${(err as Error).message}`;
-    }
-  }
-
-  async function saveLlmProvider(slug: string): Promise<void> {
-    llmSaving = true;
-    llmMessage = '';
-    try {
-      // Strip empty password fields so an unchanged secret isn't blanked out.
-      const payload: Record<string, unknown> = {};
-      for (const field of llmSchema) {
-        const v = llmConfig[field.key];
-        if (field.type === 'password' && (v === '' || v == null)) continue;
-        payload[field.key] = v;
-      }
-      const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/config`, {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ config: payload }),
-      });
-      const body = await r.json();
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
-      llmMessage = body.error ? `Saved (start failed: ${body.error})` : '✓ Saved & reloaded';
-      // Refresh card status (ready flag, lastModel, etc.)
-      await fetchList();
-      if (selected) selected = items.find((i) => i.id === selected!.id) ?? selected;
-    } catch (err) {
-      llmMessage = `Failed: ${(err as Error).message}`;
-    } finally {
-      llmSaving = false;
-      setTimeout(() => (llmMessage = ''), 4000);
-    }
-  }
-
-  function setLlmBool(key: string, ev: Event): void {
-    llmConfig[key] = (ev.currentTarget as HTMLInputElement).checked;
-    llmConfig = llmConfig;
-  }
-
-  async function refreshLlmModels(slug: string): Promise<void> {
-    llmLoadingModels = true;
-    try {
-      const r = await fetch(`${BASE}/api/llm-providers/${encodeURIComponent(slug)}/models`);
-      if (r.ok) llmModels = modelIds((await r.json()).models);
-    } catch { /* ignore */ }
-    llmLoadingModels = false;
-  }
-
-  // Trigger load whenever the user opens an llm-provider drawer (once per slug).
-  let llmLoadedFor = '';
-  $: if (selected && selected.type === 'llm-provider' && llmLoadedFor !== selected.slug) {
-    llmLoadedFor = selected.slug;
-    void loadLlmProvider(selected.slug);
-  } else if (!selected) {
-    llmLoadedFor = '';
   }
 
   // ── db-driver config + activation ────────────────────────────────
@@ -2413,129 +2320,11 @@
     </section>
 
     {#if sel.type === 'llm-provider'}
-      <!-- LLM provider config form, schema-driven via /api/llm-providers/:slug/schema.
-           For the `defaultModel` field we additionally fetch /models so the user
-           can pick from the live catalog instead of typing a model id by hand. -->
+      <!-- Providers are connected in one place: Settings → AI. -->
       <section class="drawer-section llm-panel">
-        <div class="section-title">Configuration</div>
-        {#if llmSchema.length === 0}
-          <div class="llm-hint">Loading…</div>
-        {:else}
-          <div class="llm-form">
-            {#each llmSchema as field (field.key)}
-              <div class="llm-field">
-                <label class="llm-label" for={`llm-f-${field.key}`}>
-                  {field.label}
-                  {#if field.required}<span class="llm-req">*</span>{/if}
-                </label>
-
-                {#if field.key === 'defaultModel' && llmModels.length > 0 && llmModelMode === 'list'}
-                  <div class="llm-row">
-                    <select
-                      class="llm-input"
-                      bind:value={llmConfig[field.key]}
-                    >
-                      <option value="">— use provider default —</option>
-                      {#each llmModels as m (m)}
-                        <option value={m}>{m}</option>
-                      {/each}
-                    </select>
-                    <button
-                      type="button"
-                      class="llm-btn-mini"
-                      title="Refresh model list"
-                      on:click={() => refreshLlmModels(sel.slug)}
-                      disabled={llmLoadingModels}
-                    >↻</button>
-                    <button
-                      type="button"
-                      class="llm-btn-mini"
-                      title="Type a custom model id"
-                      on:click={() => (llmModelMode = 'custom')}
-                    >✎</button>
-                  </div>
-                {:else if field.key === 'defaultModel' && (llmModels.length === 0 || llmModelMode === 'custom')}
-                  <div class="llm-row">
-                    <input
-                      class="llm-input"
-                      type="text"
-                      placeholder={field.placeholder ?? ''}
-                      bind:value={llmConfig[field.key]}
-                    />
-                    {#if llmModels.length > 0}
-                      <button
-                        type="button"
-                        class="llm-btn-mini"
-                        title="Pick from list"
-                        on:click={() => (llmModelMode = 'list')}
-                      >☰</button>
-                    {:else}
-                      <button
-                        type="button"
-                        class="llm-btn-mini"
-                        title="Discover available models"
-                        on:click={() => refreshLlmModels(sel.slug)}
-                        disabled={llmLoadingModels}
-                      >↻</button>
-                    {/if}
-                  </div>
-                {:else if field.type === 'password'}
-                  <input
-                    class="llm-input"
-                    type="password"
-                    placeholder={field.placeholder ?? '(unchanged)'}
-                    bind:value={llmConfig[field.key]}
-                  />
-                {:else if field.type === 'select' && field.options}
-                  <select class="llm-input" bind:value={llmConfig[field.key]}>
-                    {#each field.options as opt (opt.value)}
-                      <option value={opt.value}>{opt.label}</option>
-                    {/each}
-                  </select>
-                {:else if field.type === 'boolean'}
-                  <input
-                    type="checkbox"
-                    checked={Boolean(llmConfig[field.key])}
-                    on:change={(e) => setLlmBool(field.key, e)}
-                  />
-                {:else if field.type === 'number'}
-                  <input
-                    class="llm-input"
-                    type="number"
-                    placeholder={field.placeholder ?? ''}
-                    bind:value={llmConfig[field.key]}
-                  />
-                {:else if field.type === 'textarea'}
-                  <textarea
-                    class="llm-input llm-textarea"
-                    placeholder={field.placeholder ?? ''}
-                    bind:value={llmConfig[field.key]}
-                  ></textarea>
-                {:else}
-                  <input
-                    class="llm-input"
-                    type="text"
-                    placeholder={field.placeholder ?? ''}
-                    bind:value={llmConfig[field.key]}
-                  />
-                {/if}
-
-                {#if field.description}
-                  <div class="llm-help">{field.description}</div>
-                {/if}
-              </div>
-            {/each}
-
-            <div class="llm-actions">
-              <button class="act-btn act-primary" on:click={() => saveLlmProvider(sel.slug)} disabled={llmSaving}>
-                {llmSaving ? 'Saving…' : 'Save & reload'}
-              </button>
-              {#if llmMessage}
-                <span class="llm-msg">{llmMessage}</span>
-              {/if}
-            </div>
-          </div>
-        {/if}
+        <a class="act-btn act-primary" href="/settings?section=ai&card=providers&connect={encodeURIComponent(sel.slug)}">
+          {$t('llm.configure_in_settings')}
+        </a>
       </section>
     {/if}
 
@@ -3789,7 +3578,8 @@
 
   .cc-panel { padding: 0; margin-top: 18px; }
 
-  /* LLM provider config form */
+  /* Schema-driven config form — shared by the db-driver drawer (the
+     llm-provider drawer now just links out to Settings → AI). */
   .llm-panel { margin-top: 14px; }
   .llm-form { display: flex; flex-direction: column; gap: 14px; }
   .llm-field { display: flex; flex-direction: column; gap: 6px; }
@@ -3800,8 +3590,6 @@
     letter-spacing: 0.02em;
   }
   .llm-req { color: var(--red); margin-left: 2px; }
-  .llm-row { display: flex; gap: 6px; align-items: stretch; }
-  .llm-row .llm-input { flex: 1; }
   .llm-input {
     background: var(--bg-2);
     border: 1px solid var(--border-1);
@@ -3815,17 +3603,6 @@
   }
   .llm-input:focus { outline: none; border-color: var(--card-tint); }
   .llm-textarea { min-height: 70px; resize: vertical; font-family: var(--font-mono, monospace); }
-  .llm-btn-mini {
-    background: var(--bg-2);
-    border: 1px solid var(--border-1);
-    border-radius: 6px;
-    color: var(--text-2);
-    padding: 0 10px;
-    font-size: 14px;
-    cursor: pointer;
-  }
-  .llm-btn-mini:hover { color: var(--text-1); border-color: var(--card-tint); }
-  .llm-btn-mini:disabled { opacity: 0.4; cursor: default; }
   .llm-help { font-size: 11px; color: var(--text-3); }
   .llm-hint { font-size: 12px; color: var(--text-3); padding: 8px 0; }
   .llm-actions { display: flex; align-items: center; gap: 12px; margin-top: 4px; }

@@ -17,6 +17,9 @@ import type { FailureKind } from "./provider-health.js";
 import * as callLog from "./call-log.js";
 import * as limiter from "./limiter.js";
 import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
+import { chatCompletionsUrl, fallbackOrder, getCatalogEntry, quirksFor } from "./provider-catalog.js";
+import { getProviderConfig, isConnected } from "./credentials.js";
+import { stripReasoning } from "./strip-reasoning.js";
 
 /** Hard ceiling for an in-place backoff sleep on a rate-limited LAST link.
  *  We never block longer than this even if the provider's Retry-After is huge —
@@ -97,7 +100,8 @@ let _claudeCodeSdk: ChatClaudeCodeProvider | null | undefined = undefined;
 function getClaudeCodeSdk(): ChatClaudeCodeProvider | null {
   if (_claudeCodeSdk === undefined) {
     try {
-      const inst = new ChatClaudeCodeProvider();
+      const legacyToken = getProviderConfig("claude-code").oauthToken;
+      const inst = new ChatClaudeCodeProvider(undefined, legacyToken ? { oauthToken: legacyToken } : {});
       _claudeCodeSdk = inst.available() ? inst : null;
     } catch {
       _claudeCodeSdk = null;
@@ -109,10 +113,13 @@ function getClaudeCodeSdk(): ChatClaudeCodeProvider | null {
 /**
  * Forget the memoised provider so the next call re-probes the CLI.
  *
- * Called after a login completes. Without it the singleton above keeps whatever
- * it decided at boot — which for a logged-out kernel is a provider that
- * materialises as the primary link and fails every request — so a successful
- * login would appear to do nothing until the operator restarted the kernel.
+ * Called whenever the Claude Code credential changes — a CLI session
+ * appearing, or `applyClaudeCodeTransition` deleting a stale legacy token.
+ * Without it the singleton above keeps whatever it decided on first use:
+ * for a logged-out kernel that's a provider that materialises as the primary
+ * link and fails every request, and for a token the transition just deleted
+ * it's a subprocess that keeps receiving credentials which no longer exist.
+ * Either way nothing would recover until the operator restarted the kernel.
  */
 export function resetClaudeCodeSdkCache(): void {
   _claudeCodeSdk = undefined;
@@ -514,6 +521,12 @@ export class LlmClient {
     const body: Record<string, unknown> = { model, messages, max_tokens: maxTokens };
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
     if (opts.json) body.response_format = { type: "json_object" };
+    const quirks = quirksFor(slugOf(link), model);
+    if (quirks) {
+      if (body.temperature === undefined && quirks.temperature !== undefined) body.temperature = quirks.temperature;
+      if (quirks.topP !== undefined) body.top_p = quirks.topP;
+      if (quirks.extraBody) Object.assign(body, quirks.extraBody);
+    }
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), link.timeoutMs ?? 60_000);
@@ -553,7 +566,7 @@ export class LlmClient {
     };
 
     return {
-      text: data.choices?.[0]?.message?.content ?? "",
+      text: stripReasoning(data.choices?.[0]?.message?.content ?? ""),
       model: data.model ?? model,
       provider: link.provider,
       inputTokens: data.usage?.prompt_tokens,
@@ -580,7 +593,7 @@ export class LlmClient {
     // CLI takes down every LLM feature in the kernel.
     const sdk = getClaudeCodeSdk();
     if (sdk) {
-      const sdkModel = /^claude[-_]/i.test(model) ? model : "claude-sonnet-4-5";
+      const sdkModel = /^(claude[-_]|opus$|sonnet$|haiku$)/i.test(model) ? model : "sonnet";
       // The SDK shells out to the CLI; if the CLI is hung (orphan process,
       // bad OAuth refresh, etc.) it would wait forever. Race the call
       // against the same timeout used for direct HTTP so the probe path
@@ -775,160 +788,75 @@ function isChainableError(err: unknown): boolean {
 import type { KernelConfig } from "../config.js";
 
 /**
- * Materialize a single chain entry (kernel provider name + model) into an
- * LlmConfig link. Returns null when the provider has no credentials — the
- * caller filters those out so we never add a dead link to the chain.
+ * Materialize one chain entry (provider slug or alias + model) into a link.
+ * Returns null when the provider cannot be used — no key, or a local server
+ * nobody connected — so a dead link never enters the chain.
  */
-function materializeLink(
-  kernelProvider: string,
-  model: string,
-  config: KernelConfig,
-): LlmConfig | null {
-  const openaiKey = config.webIntel.openaiApiKey || config.voice.openaiApiKey;
-  const anthropicKey = config.webIntel.anthropicApiKey;
-  const grokKey = config.webIntel.grokApiKey;
-  const nvidiaKey = config.webIntel.nvidiaApiKey;
+function materializeLink(kernelProvider: string, model: string): LlmConfig | null {
+  const entry = getCatalogEntry(kernelProvider);
+  if (!entry) return null;
+  const cfg = getProviderConfig(entry.slug);
+  const chosen = model || cfg.model;
 
-  switch (kernelProvider) {
-    case "openai":
-      if (!openaiKey) return null;
-      return {
-        provider: "openai",
-        slug: "openai",
-        apiKey: openaiKey,
-        defaultModel: model || "gpt-4o-mini",
-      };
-    case "anthropic":
-    case "claude": {
-      // SDK (OAuth via the logged-in CLI) is the preferred path — it doesn't
-      // need an API key. The `chat()` filter accepts an empty apiKey when SDK
-      // is available, and `chatAnthropic()` transparently routes the call.
-      // Without this, an SDK-only user (no anthropic key set) would have
-      // every `claude/*` chain entry dropped at materialize time.
-      const sdkReady = !!getClaudeCodeSdk();
-      if (!anthropicKey && !sdkReady) return null;
-      return {
-        provider: "anthropic",
-        slug: "claude",
-        apiKey: anthropicKey,
-        defaultModel: model || "claude-haiku-4-5-20251001",
-      };
-    }
-    case "grok":
-    case "xai":
-      if (!grokKey) return null;
-      // xAI is OpenAI-compatible.
-      return {
-        provider: "custom",
-        slug: "grok",
-        apiKey: grokKey,
-        baseUrl: "https://api.x.ai/v1/chat/completions",
-        defaultModel: model || config.webIntel.grokDefaultModel || "grok-4-fast-reasoning",
-      };
-    case "nvidia":
-    case "nim":
-      if (!nvidiaKey) return null;
-      // NVIDIA NIM is OpenAI-compatible.
-      return {
-        provider: "custom",
-        slug: "nvidia",
-        apiKey: nvidiaKey,
-        baseUrl: "https://integrate.api.nvidia.com/v1/chat/completions",
-        defaultModel: model || config.webIntel.nvidiaDefaultModel || "deepseek-ai/deepseek-v4-pro",
-      };
-    case "minimax": {
-      // MiniMax is registry-native (no config.webIntel home) — read its key
-      // from process.env (mirrored there by syncProvidersToKernelConfig / .env).
-      const minimaxKey = process.env.MINIMAX_API_KEY ?? "";
-      if (!minimaxKey) return null;
-      // OpenAI-compatible endpoint.
-      const base = process.env.MINIMAX_BASE_URL || "https://api.minimax.io/v1";
-      const url = base.endsWith("/chat/completions")
-        ? base
-        : `${base.replace(/\/+$/, "")}/chat/completions`;
-      return {
-        provider: "custom",
-        slug: "minimax",
-        apiKey: minimaxKey,
-        baseUrl: url,
-        defaultModel: model || process.env.MINIMAX_DEFAULT_MODEL || "MiniMax-M2.7",
-      };
+  switch (entry.kind) {
+    case "claude-code":
+      // Not an HTTP endpoint: shaped as `anthropic` so chatOnce enters the
+      // Anthropic branch, where the SDK routing takes over.
+      if (!getClaudeCodeSdk()) return null;
+      return { provider: "anthropic", slug: "claude-code", apiKey: "", defaultModel: chosen || "sonnet" };
+    case "anthropic": {
+      // A logged-in CLI can carry a claude link without an API key.
+      if (!cfg.apiKey && !getClaudeCodeSdk()) return null;
+      return { provider: "anthropic", slug: "claude", apiKey: cfg.apiKey, defaultModel: chosen };
     }
     case "lmstudio":
-    case "ollama": {
-      const base = config.webIntel.lmstudioBaseUrl;
-      if (!base) return null;
-      // LM Studio / Ollama expose OpenAI-compatible /v1/chat/completions.
-      const url = base.endsWith("/chat/completions")
-        ? base
-        : `${base.replace(/\/+$/, "")}/chat/completions`;
+      if (!isConnected(entry.slug) || !cfg.baseUrl) return null;
+      return { provider: "custom", slug: "lmstudio", apiKey: "lm-studio", baseUrl: chatCompletionsUrl(cfg.baseUrl), defaultModel: chosen };
+    default: {
+      if (entry.needsKey ? !cfg.apiKey : !isConnected(entry.slug)) return null;
       return {
-        provider: "custom",
-        slug: kernelProvider === "ollama" ? "ollama" : "lmstudio",
-        apiKey: "lm-studio", // dummy — LM Studio ignores auth
-        baseUrl: url,
-        defaultModel: model || "",
+        provider: entry.slug === "openai" ? "openai" : "custom",
+        slug: entry.slug,
+        apiKey: cfg.apiKey || "local",
+        baseUrl: chatCompletionsUrl(cfg.baseUrl),
+        defaultModel: chosen,
       };
     }
-    case "claude_code":
-    case "claude-code": {
-      // Claude Agent SDK — not a direct HTTP endpoint. The link is shaped as
-      // `anthropic` (so `chatOnce` enters the Anthropic branch) and the SDK
-      // routing in `chatAnthropic` takes over from there. Drops out of the
-      // chain if the CLI isn't installed.
-      if (!getClaudeCodeSdk()) return null;
-      return {
-        provider: "anthropic",
-        slug: "claude-code",
-        apiKey: "",
-        defaultModel: model || "claude-sonnet-4-5",
-      };
-    }
-    default:
-      return null;
   }
 }
 
 /**
- * Build a full LLM config with primary + fallback chain.
- * Priority order:
- *   1. config.agents.defaultModelChain[0]  → primary (if present + has key)
- *   2. config.chat.defaultProvider         → primary (legacy, if chain empty)
- *   3. first available key (openai → anthropic) → primary (last resort)
- *   Then the rest of defaultModelChain becomes the fallback chain.
+ * Primary + fallbacks for the global client.
+ *
+ *   1. `agents.defaultModelChain`, exactly as configured.
+ *   2. If that yields nothing: `chat.defaultProvider` when set, then every
+ *      connected provider in the catalog's fallback order.
+ *   3. Otherwise an empty shell, so boot succeeds and the first call fails
+ *      with a clean "no key" error.
  */
-function buildLlmConfig(config: KernelConfig): LlmConfig {
-  const chain = config.agents?.defaultModelChain ?? [];
+export function buildLlmConfig(config: KernelConfig): LlmConfig {
   const materialized: LlmConfig[] = [];
-  for (const e of chain) {
-    const link = materializeLink(e.provider, e.model, config);
+  for (const e of config.agents?.defaultModelChain ?? []) {
+    const link = materializeLink(e.provider, e.model);
     if (link) materialized.push(link);
   }
 
-  // Legacy fallback: if chain is empty or all dead, try chat.defaultProvider.
   if (materialized.length === 0) {
-    const legacy = materializeLink(
-      config.chat.defaultProvider || "openai",
-      config.chat.defaultModel ?? "",
-      config,
-    );
-    if (legacy) materialized.push(legacy);
-  }
-
-  // Last resort: whatever key exists.
-  if (materialized.length === 0) {
-    for (const provName of ["openai", "anthropic", "grok", "lmstudio"]) {
-      const link = materializeLink(provName, "", config);
-      if (link) { materialized.push(link); break; }
+    const legacy = config.chat?.defaultProvider;
+    if (legacy) {
+      const link = materializeLink(legacy, config.chat.defaultModel ?? "");
+      if (link) materialized.push(link);
+    }
+    for (const slug of fallbackOrder()) {
+      if (!isConnected(slug) || materialized.some((l) => l.slug === slug)) continue;
+      const link = materializeLink(slug, "");
+      if (link) materialized.push(link);
     }
   }
 
   if (materialized.length === 0) {
-    // No providers configured at all — return an empty OpenAI shell so boot
-    // succeeds; the first call will throw a clean "no key" error.
-    return { provider: "openai", apiKey: "", defaultModel: "gpt-4o-mini" };
+    return { provider: "openai", apiKey: "", defaultModel: "" };
   }
-
   const [primary, ...fallbackChain] = materialized;
   return { ...primary, fallbackChain };
 }
@@ -937,19 +865,15 @@ function buildLlmConfig(config: KernelConfig): LlmConfig {
  * A client pinned to ONE provider+model, with no fallback.
  *
  * Needed whenever you must measure or address a specific model rather than
- * "whatever the chain picks". `chat({ model })` alone is not enough: it
- * overrides the model NAME on the current primary, so asking for a Claude
- * model while MiniMax is primary sends a foreign model id to MiniMax, gets a
- * 400, and falls through — which measures the chain, not the model.
- *
- * Returns null when the provider isn't configured (no key, not installed).
+ * "whatever the chain picks". `chat({ model })` alone only renames the model
+ * on the current primary. Returns null when the provider isn't usable.
  */
 export function createPinnedLlmClient(
   provider: string,
   model: string,
-  config: KernelConfig,
+  _config: KernelConfig,
 ): LlmClient | null {
-  const link = materializeLink(provider, model, config);
+  const link = materializeLink(provider, model);
   if (!link) return null;
   return new LlmClient({ ...link, fallbackChain: [], maxRetries: 0 });
 }

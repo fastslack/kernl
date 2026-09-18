@@ -1,15 +1,18 @@
-import type { KernelHttpServer } from "../../../../../src/core/http-server.js";
-import type { SqliteDb } from "../../../../../src/core/db/sqlite.js";
+import {
+  type KernelHttpServer,
+  type SqliteDb,
+  type Notifier,
+  type KernelConfig,
+  newId,
+  isoNow,
+  log,
+} from "@kernl/extension-sdk";
 import type { EmailService } from "./email-service.js";
 import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { EmailTriageService } from "./email-triage-service.js";
-import type { Notifier } from "../../../../../src/core/notify/notifier.js";
-import type { KernelConfig } from "../../../../../src/core/config.js";
 import type { EmailFolder } from "./types.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
-import { newId, isoNow } from "../../../../../src/core/helpers.js";
-import { log } from "../../../../../src/core/logger.js";
 
 const VALID_FOLDERS = new Set<EmailFolder>([
   "inbox", "sent", "starred", "important", "drafts",

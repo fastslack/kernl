@@ -689,6 +689,48 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE agents ADD COLUMN auto_pause_reason    TEXT    NOT NULL DEFAULT '';
     `,
   },
+  {
+    // Offices get an explicit kind (the room and buttons used to be chosen by
+    // name prefix), the extension that seeded them (so uninstall can clean up),
+    // and the repo isolation their agents run with.
+    version: 42,
+    sql: `
+      ALTER TABLE agent_flows ADD COLUMN kind                TEXT NOT NULL DEFAULT 'general';
+      ALTER TABLE agent_flows ADD COLUMN source_extension_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_flows ADD COLUMN repo_isolation      TEXT NOT NULL DEFAULT '';
+
+      UPDATE agent_flows SET kind = 'devops'
+        WHERE lower(name) LIKE 'devops%' OR lower(name) LIKE 'repos%';
+      UPDATE agent_flows SET kind = 'communications'
+        WHERE lower(name) LIKE 'communication%' OR lower(name) LIKE 'comunicacion%';
+      UPDATE agent_flows SET kind = 'creative'
+        WHERE lower(name) LIKE 'creativos%';
+
+      UPDATE agent_flows SET source_extension_id = COALESCE((
+          SELECT a.source_extension_id FROM agents a
+           WHERE a.flow_id = agent_flows.id AND a.source_extension_id <> '' LIMIT 1), '')
+        WHERE length(id) <> 36;
+
+      UPDATE agent_flows SET repo_isolation = 'host'
+        WHERE EXISTS (
+          SELECT 1 FROM agents a
+           WHERE a.flow_id = agent_flows.id AND a.variables LIKE '%"__sandbox__":false%');
+    `,
+  },
+  {
+    // The agents dashboard channel is re-queried every 15 seconds, and
+    // agent_runs gains a row per scheduled poll, each with a goal embedding.
+    // Without these, runs-today, recent runs, tokens, runs-by-trigger and
+    // last-run-per-agent each read the whole table: 1.5s per refresh at 106K
+    // rows, blocking every other request for that long.
+    version: 43,
+    sql: `
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_created        ON agent_runs(created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_created  ON agent_runs(agent_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_agent_tokens   ON agent_runs(agent_id, tokens_used);
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger        ON agent_runs(trigger_type);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

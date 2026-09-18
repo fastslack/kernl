@@ -2,7 +2,7 @@
  * Life dashboard RPC slice — `dashboard.life` panel.
  */
 
-import type { RpcAction } from "../../../../../src/core/mtw/rpc-handler.js";
+import type { RpcAction } from "@kernl/extension-sdk";
 import type { LifeService } from "./life-service.js";
 
 export interface LifeDashboardRpcDeps {

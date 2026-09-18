@@ -26,6 +26,7 @@ const baseManifest = {
   author: "Test Suite",
   license: "MIT",
   category: "utility",
+  sdk: 1,
   backend: { entry: "backend/index.js" },
 };
 

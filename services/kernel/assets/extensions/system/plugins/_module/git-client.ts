@@ -5,8 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { pipeline } from "node:stream/promises";
 import { open as openZip, type ZipFile, type Entry as ZipEntry } from "yauzl";
-import { log } from "../../../../../src/core/logger.js";
-import { isPathInside } from "../../../../../src/core/fs-paths.js";
+import { log, isPathInside } from "@kernl/extension-sdk";
 import type { PluginManifest } from "./types.js";
 
 const execFileAsync = promisify(execFile);

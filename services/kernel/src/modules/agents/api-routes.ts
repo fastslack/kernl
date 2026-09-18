@@ -25,6 +25,11 @@ import { registerWorkspaceFileRoutes } from "./routes/workspace-file-routes.js";
 import { registerPromptVersionRoutes } from "./routes/prompt-version-routes.js";
 import { registerWorkspaceEvolutionRoutes } from "./routes/workspace-evolution-routes.js";
 import { registerMarketplaceRoutes } from "./routes/marketplace-routes.js";
+import { registerOfficeRoutes } from "./routes/office-routes.js";
+import type { ExtensionOfficeSource } from "./office-templates.js";
+import { parseSchedulePatch } from "./services/schedules-service.js";
+import { setOfficeRepo, OfficeRepoError } from "./office-repo.js";
+import { OfficeTeamError } from "./office-team.js";
 
 export function registerAgentRoutes(
   server: KernelHttpServer,
@@ -43,6 +48,8 @@ export function registerAgentRoutes(
    * installed skills only, which is a degraded answer, not an error.
    */
   catalogSkills?: () => Promise<Array<{ slug: string; name: string; text: string }>>,
+  /** Offices shipped by extensions, for the wizard gallery. Absent → built-in templates only. */
+  officeSources?: () => Promise<ExtensionOfficeSource[]>,
 ): void {
   const designerLang: KernelLanguage = defaultLanguage ?? "es";
 
@@ -118,9 +125,18 @@ export function registerAgentRoutes(
       const def = officeDefinitionFromJson(body);
       const db = service.getDb();
       const repoService = def.repo ? await loadRepoServiceBestEffort(db) : null;
-      const report = materializeOffice(db, service, def, { repoService });
+      const mode = body.mode === "create" ? "create" : "upsert";
+      const report = materializeOffice(db, service, def, { repoService, mode });
       server.json(res, 200, { success: true, report });
     } catch (err) {
+      if (err instanceof Error && err.name === "OfficeExistsError") {
+        server.json(res, 409, {
+          error: "office_exists",
+          message: err.message,
+          office_id: (err as unknown as { officeId: string }).officeId,
+        });
+        return;
+      }
       log.error("Failed to create office", err);
       server.json(res, 400, { error: err instanceof Error ? err.message : String(err) });
     }
@@ -520,12 +536,13 @@ export function registerAgentRoutes(
     try {
       const id = (req as unknown as { params: Record<string, string> }).params?.id;
       if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      const body = await server.parseBody<{ name?: string; description?: string; color?: string }>(req);
+      const body = await server.parseBody<Parameters<AgentService["updateFlow"]>[1]>(req);
       const flow = service.updateFlow(id, body);
       if (!flow) { server.json(res, 404, { error: "Flow not found" }); return; }
       server.json(res, 200, { success: true, flow });
     } catch (err) {
-      server.json(res, 500, { error: String(err) });
+      const message = err instanceof Error ? err.message : String(err);
+      server.json(res, message.startsWith("Invalid") ? 400 : 500, { error: message });
     }
   });
 
@@ -534,9 +551,9 @@ export function registerAgentRoutes(
     try {
       const id = (req as unknown as { params: Record<string, string> }).params?.id;
       if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      const ok = service.deleteFlow(id);
-      if (!ok) { server.json(res, 404, { error: "Flow not found" }); return; }
-      server.json(res, 200, { success: true });
+      const result = service.deleteFlow(id);
+      if (!result) { server.json(res, 404, { error: "Flow not found" }); return; }
+      server.json(res, 200, { success: true, unassigned: result.unassigned });
     } catch (err) {
       server.json(res, 500, { error: String(err) });
     }
@@ -554,6 +571,66 @@ export function registerAgentRoutes(
       }
       server.json(res, 200, { success: true, assigned: body.agent_ids.length });
     } catch (err) {
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  // PUT /api/agents/flows/:id/repo — point the office at a host repo, or back to its workspace (path null)
+  server.put("/api/agents/flows/:id/repo", async (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+      const body = await server.parseBody<{ path?: unknown; git_init?: unknown }>(req);
+      let path: string | null;
+      if (body.path === null) path = null;
+      else if (typeof body.path === "string") path = body.path;
+      else { server.json(res, 400, { error: "path must be a string or null" }); return; }
+      let gitInit: boolean | undefined;
+      if (body.git_init === undefined) gitInit = undefined;
+      else if (typeof body.git_init === "boolean") gitInit = body.git_init;
+      else { server.json(res, 400, { error: "git_init must be a boolean" }); return; }
+      const result = setOfficeRepo(service, { flow_id: id, path, git_init: gitInit, retarget_agents: true });
+      server.json(res, 200, {
+        success: true,
+        flow: result.flow,
+        path: result.path,
+        home_path: result.homePath,
+        git: result.git,
+        git_detail: result.gitDetail,
+        retargeted: result.retargeted,
+      });
+    } catch (err) {
+      if (err instanceof OfficeRepoError) { server.json(res, err.status, { error: err.message }); return; }
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  // POST /api/agents/flows/:id/lead — make an agent the office's one lead
+  server.post("/api/agents/flows/:id/lead", async (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+      const body = await server.parseBody<{ agent_id?: unknown }>(req);
+      if (typeof body.agent_id !== "string" || !body.agent_id) { server.json(res, 400, { error: "agent_id required" }); return; }
+      const result = service.setOfficeLead(id, body.agent_id);
+      server.json(res, 200, { success: true, ...result });
+    } catch (err) {
+      if (err instanceof OfficeTeamError) { server.json(res, err.status, { error: err.message }); return; }
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  // PUT /api/agents/flows/:id/distribute — "the lead hands work to the team" on/off
+  server.put("/api/agents/flows/:id/distribute", async (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+      const body = await server.parseBody<{ enabled?: unknown }>(req);
+      if (typeof body.enabled !== "boolean") { server.json(res, 400, { error: "enabled must be a boolean" }); return; }
+      const result = service.setLeadDistributes(id, body.enabled);
+      server.json(res, 200, { success: true, ...result });
+    } catch (err) {
+      if (err instanceof OfficeTeamError) { server.json(res, err.status, { error: err.message }); return; }
       server.json(res, 500, { error: String(err) });
     }
   });
@@ -721,6 +798,37 @@ export function registerAgentRoutes(
       if (!id) { server.json(res, 400, { error: "id required" }); return; }
       const ok = service.removeChain(id);
       if (!ok) { server.json(res, 404, { error: "Chain not found" }); return; }
+      server.json(res, 200, { success: true });
+    } catch (err) {
+      server.json(res, 500, { error: String(err) });
+    }
+  });
+
+  // PUT /api/agents/schedules/:id — change a schedule's cadence or pause it
+  server.put("/api/agents/schedules/:id", async (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+      const body = await server.parseBody<unknown>(req);
+      const result = parseSchedulePatch(body);
+      if (!result.ok) { server.json(res, 400, { error: result.error }); return; }
+      const schedule = service.updateSchedule(id, result.patch);
+      if (!schedule) { server.json(res, 404, { error: "Schedule not found" }); return; }
+      server.json(res, 200, { success: true, schedule });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const status = err instanceof Error && err.name === "ScheduleValidationError" ? 400 : 500;
+      server.json(res, status, { error: message });
+    }
+  });
+
+  // DELETE /api/agents/schedules/:id — remove a schedule
+  server.delete("/api/agents/schedules/:id", (req, res) => {
+    try {
+      const id = (req as unknown as { params: Record<string, string> }).params?.id;
+      if (!id) { server.json(res, 400, { error: "id required" }); return; }
+      const ok = service.removeSchedule(id);
+      if (!ok) { server.json(res, 404, { error: "Schedule not found" }); return; }
       server.json(res, 200, { success: true });
     } catch (err) {
       server.json(res, 500, { error: String(err) });
@@ -1358,6 +1466,8 @@ export function registerAgentRoutes(
 
 
   registerMarketplaceRoutes(server, service, events);
+
+  registerOfficeRoutes(server, { defaultLanguage: designerLang, officeSources });
 
   registerWorkspaceFileRoutes(server, service, wsService);
 

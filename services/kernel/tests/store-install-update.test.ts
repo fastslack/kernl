@@ -33,6 +33,7 @@ const baseManifest = {
   author: "Test Suite",
   license: "Commercial",
   category: "leisure",
+  sdk: 1,
   backend: { entry: "backend/index.js" },
 };
 

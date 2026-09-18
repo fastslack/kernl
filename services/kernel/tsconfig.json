@@ -16,7 +16,12 @@
     "declarationMap": true,
     "sourceMap": true,
     "composite": false,
-    "isolatedModules": true
+    "isolatedModules": true,
+    "paths": {
+      "@kernl/extension-sdk": ["./src/sdk/index.ts"],
+      "@kernl/extension-sdk/html": ["./src/sdk/html.ts"],
+      "@kernl/extension-sdk/nostr": ["./src/sdk/nostr.ts"]
+    }
   },
   "include": ["src/**/*", "bin/**/*", "tests/**/*"],
   "exclude": ["node_modules", "dist"]

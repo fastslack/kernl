@@ -321,12 +321,11 @@ async function checkVoice(): Promise<DiagnosticResult> {
     };
   }
 
-  if (!config.voice.openaiApiKey && config.voice.sttProvider === "openai") {
+  if (config.voice.sttProvider === "openai") {
     return {
       name: "Voice",
-      status: "fail",
-      message: "STT requires OpenAI API key",
-      details: "Set OPENAI_API_KEY for voice transcription",
+      status: "pass",
+      message: `STT: openai (uses the OpenAI key from Settings → AI), TTS: ${config.voice.ttsProvider}`,
     };
   }
 
