@@ -201,6 +201,8 @@ Kernel tools you have (use ONE per turn):
     slug: string;
     name: string;
     ready: boolean;
+    /** Why it is not ready, when the registry says. */
+    error?: string;
     models: { id: string }[];
   };
   const CLAUDE_CODE_SLUG = 'claude_code';
@@ -215,7 +217,13 @@ Kernel tools you have (use ONE per turn):
   $: isBridged = !isClaudeCode(provider);
   $: currentProviderName =
     providers.find((p) => p.slug === provider)?.name ?? providerLabel(provider);
-  $: readyProviders = providers.filter((p) => p.ready);
+  // Every registered provider, not just the reachable ones. `ready` is a probe
+  // — claude_code reports false whenever its CLI is logged out — and filtering
+  // on it made the default provider vanish from its own menu the moment it
+  // needed attention, with no way back to the only runtime that can edit the
+  // network. Offered dimmed instead, with the registry's reason, because
+  // logging the CLI back in is something the user does outside this app.
+  $: menuProviders = providers;
 
   /** The kernel spells this provider `claude_code`; the registry and parts of
    *  the dashboard use `claude-code`. Both mean the same runtime. */
@@ -236,8 +244,10 @@ Kernel tools you have (use ONE per turn):
     if (!raw) return null;
     const [slug, ...rest] = raw.split('::');
     if (!slug) return null;
-    const row = rows.find((p) => p.slug === slug);
-    if (!row?.ready) return null;
+    // Only that the provider still EXISTS — a saved pick should survive the
+    // provider being temporarily unreachable, which is the normal state of a
+    // logged-out CLI between sessions.
+    if (!rows.some((p) => p.slug === slug)) return null;
     return { provider: slug, model: rest.join('::') };
   }
 
@@ -693,14 +703,15 @@ Kernel tools you have (use ONE per turn):
             <!-- svelte-ignore a11y-click-events-have-key-events -->
             <div class="oc-model-scrim" role="presentation" on:click={() => (modelMenuOpen = false)}></div>
             <div class="oc-model-menu">
-              {#if readyProviders.length === 0}
-                <div class="oc-model-empty">No connected providers. Add one in AI → Connections.</div>
+              {#if menuProviders.length === 0}
+                <div class="oc-model-empty">No providers registered. Add one in AI → Connections.</div>
               {:else}
-                {#each readyProviders as p (p.slug)}
-                  <div class="oc-model-group">
-                    <div class="oc-model-group-head">
+                {#each menuProviders as p (p.slug)}
+                  <div class="oc-model-group" class:oc-model-group-off={!p.ready}>
+                    <div class="oc-model-group-head" title={p.ready ? '' : (p.error ?? 'not reachable')}>
                       {p.name}
-                      {#if !isClaudeCode(p.slug)}<span class="oc-model-note">no agent edits</span>{/if}
+                      {#if !p.ready}<span class="oc-model-note">offline</span>
+                      {:else if !isClaudeCode(p.slug)}<span class="oc-model-note">no agent edits</span>{/if}
                     </div>
                     {#if p.models.length === 0}
                       <button
@@ -1178,6 +1189,12 @@ Kernel tools you have (use ONE per turn):
     text-transform: uppercase;
   }
   .oc-model-note { color: #e6a03c; font-size: 9px; letter-spacing: 0.04em; text-transform: none; }
+  /* Unreachable, still offered. Dimmed enough to read as "not right now"
+     rather than "not available", since the fix is usually one CLI login away
+     and the row is the only way back to it. */
+  .oc-model-group-off .oc-model-group-head,
+  .oc-model-group-off .oc-model-row { opacity: 0.55; }
+  .oc-model-group-off .oc-model-row:hover { opacity: 1; }
   .oc-model-row {
     display: block;
     width: 100%;
