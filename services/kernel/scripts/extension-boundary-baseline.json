@@ -17,9 +17,6 @@
       "src/modules/chat/types.js"
     ],
     "bundle": [
-      "src/core/attestation.ts",
-      "src/core/auth.ts",
-      "src/core/canonical-json.ts",
       "src/core/elicit.ts",
       "src/core/i18n/prompts.ts",
       "src/core/llm/chat-adapters.ts",
