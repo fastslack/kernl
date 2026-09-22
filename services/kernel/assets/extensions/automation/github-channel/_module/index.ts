@@ -12,7 +12,7 @@ export function createGitHubChannelModule() {
     migrations: githubChannelMigrations,
     migrationsKey: "ext:github-channel",
     async init(ctx) {
-      const connections = new GitHubConnectionsService(ctx.sqlite);
+      const connections = new GitHubConnectionsService(ctx.sqlite, ctx.config.encryption?.key ?? "");
       const provider = new GitHubRepoProvider(connections);
 
       // Topo sort guarantees triage's listener is in place because we

@@ -12,7 +12,7 @@ export function createGitLabChannelModule() {
     migrations: gitlabChannelMigrations,
     migrationsKey: "ext:gitlab-channel",
     async init(ctx) {
-      const connections = new GitLabConnectionsService(ctx.sqlite);
+      const connections = new GitLabConnectionsService(ctx.sqlite, ctx.config.encryption?.key ?? "");
       const provider = new GitLabRepoProvider(connections);
 
       await ctx.events.emit(TRIAGE_REGISTER_PROVIDER_EVENT, { provider });

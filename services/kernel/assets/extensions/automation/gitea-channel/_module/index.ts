@@ -12,7 +12,7 @@ export function createGiteaChannelModule() {
     migrations: giteaChannelMigrations,
     migrationsKey: "ext:gitea-channel",
     async init(ctx) {
-      const connections = new GiteaConnectionsService(ctx.sqlite);
+      const connections = new GiteaConnectionsService(ctx.sqlite, ctx.config.encryption?.key ?? "");
       const provider = new GiteaRepoProvider(connections);
 
       // Topo sort guarantees triage's listener is in place because we
