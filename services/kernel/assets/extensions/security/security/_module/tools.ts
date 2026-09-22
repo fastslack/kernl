@@ -1,30 +1,25 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult } from "@kernl/extension-sdk";
 import type { SecurityService } from "./service.js";
-import type { ScanKind, Severity } from "./types.js";
+import type { Severity } from "./types.js";
 
 const SEVERITY = z.enum(["critical", "high", "medium", "low"]);
 
 export function securityTools(service: SecurityService): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_security_secret_scan",
       description:
         "Scan a directory tree for hardcoded secrets, API keys, tokens, and private keys. " +
         "Returns severity-ranked findings with file path, line number, and a redacted preview. " +
         "Skips node_modules / .git / build dirs by default. Bounded at 5000 files / 500 findings per run. " +
         "If `path` is omitted, scans the kernel's working directory.",
-      inputSchema: z.object({
+      schema: z.object({
         path: z.string().optional().describe("Absolute or relative directory to scan (e.g. '/app/src' or '.'). Defaults to the kernel's CWD."),
         include_node_modules: z.boolean().optional().describe("Scan node_modules too (default false)"),
         severity_min: SEVERITY.optional().describe("Filter to this severity or higher (default: all)"),
       }),
-      handler: async (args) => {
-        const { path: rawTarget, include_node_modules, severity_min } = args as {
-          path?: string;
-          include_node_modules?: boolean;
-          severity_min?: Severity;
-        };
+      handler: async ({ path: rawTarget, include_node_modules, severity_min }) => {
         const target = rawTarget && rawTarget.trim() !== "" ? rawTarget : ".";
         const { scan, findings, truncated } = await service.runScan({
           kind: "secret_scan",
@@ -34,26 +29,21 @@ export function securityTools(service: SecurityService): ToolDefinition[] {
         });
         return textResult(formatScanResult(scan, findings, truncated));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_security_audit",
       description:
         "Comprehensive security audit. Includes everything kernel_security_secret_scan does PLUS code-smell rules: " +
         "eval(), shell:true, SQL string concat, weak crypto (MD5/SHA1), Math.random in crypto context, " +
         "unsafe child_process invocations, plain-HTTP URLs, security TODOs. " +
         "If `path` is omitted, scans the kernel's working directory.",
-      inputSchema: z.object({
+      schema: z.object({
         path: z.string().optional().describe("Absolute or relative directory to scan. Defaults to the kernel's CWD."),
         include_node_modules: z.boolean().optional().describe("Scan node_modules too (default false)"),
         severity_min: SEVERITY.optional().describe("Filter to this severity or higher (default: all)"),
       }),
-      handler: async (args) => {
-        const { path: rawTarget, include_node_modules, severity_min } = args as {
-          path?: string;
-          include_node_modules?: boolean;
-          severity_min?: Severity;
-        };
+      handler: async ({ path: rawTarget, include_node_modules, severity_min }) => {
         const target = rawTarget && rawTarget.trim() !== "" ? rawTarget : ".";
         const { scan, findings, truncated } = await service.runScan({
           kind: "audit",
@@ -63,18 +53,17 @@ export function securityTools(service: SecurityService): ToolDefinition[] {
         });
         return textResult(formatScanResult(scan, findings, truncated));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_security_scan_history",
       description:
         "List past security scans. Most recent first. Optionally filter by kind.",
-      inputSchema: z.object({
+      schema: z.object({
         limit: z.number().optional().describe("Max scans to return (default 20, max 200)"),
         kind: z.enum(["secret_scan", "audit"]).optional().describe("Filter by scan kind"),
       }),
-      handler: async (args) => {
-        const { limit, kind } = args as { limit?: number; kind?: ScanKind };
+      handler: async ({ limit, kind }) => {
         const scans = service.listScans({ limit, kind });
         if (scans.length === 0) return textResult("No scans on record yet.");
         const lines = scans.map((s) => {
@@ -84,13 +73,12 @@ export function securityTools(service: SecurityService): ToolDefinition[] {
         });
         return textResult(`# Scan history (${scans.length})\n${lines.join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_security_stats",
       description:
         "Aggregate security stats: total scans run, last scan timestamp, open findings broken down by severity, count of resolved findings.",
-      inputSchema: z.object({}),
       handler: async () => {
         const s = service.stats();
         const sev = s.open_findings_by_severity;
@@ -108,7 +96,7 @@ export function securityTools(service: SecurityService): ToolDefinition[] {
           ].join("\n"),
         );
       },
-    },
+    }),
   ];
 }
 

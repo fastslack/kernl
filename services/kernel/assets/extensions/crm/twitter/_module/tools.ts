@@ -1,16 +1,16 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 
 export function twitterTools(service: TwitterService): ToolDefinition[] {
   return [
     // ── Account Management ──────────────────────────
 
-    {
+    defineTool({
       name: "kernel_twitter_add_account",
       description:
         "Add an X/Twitter account. Driver controls how posts are published: 'api' uses official X API (OAuth1) credentials; 'xactions' uses a browser-session cookie (configured later with kernel_twitter_set_cookie).",
-      inputSchema: z.object({
+      schema: z.object({
         handle: z.string().describe("X handle without @ (e.g. 'elonmusk')"),
         display_name: z.string().optional().describe("Display name"),
         driver: z
@@ -36,19 +36,7 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         access_token: z.string().optional().describe("X access token — only for driver=api"),
         access_secret: z.string().optional().describe("X access token secret — only for driver=api"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          handle: string;
-          display_name?: string;
-          driver?: string;
-          role?: string;
-          partner_account_id?: string;
-          voice_persona?: string;
-          api_key?: string;
-          api_secret?: string;
-          access_token?: string;
-          access_secret?: string;
-        };
+      handler: async (input) => {
         const account = service.addAccount(input);
         const driverHint =
           account.driver === "xactions"
@@ -60,12 +48,11 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           `Account added:\n  ID: ${account.id}\n  Handle: @${account.handle}\n  Name: ${account.display_name || account.handle}\n  Driver: ${account.driver}\n  Role: ${account.role}\n  Status: ${account.status}${driverHint}`,
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_twitter_list_accounts",
       description: "List all configured X/Twitter accounts with driver + cookie status.",
-      inputSchema: z.object({}),
       handler: async () => {
         const accounts = service.listAccounts();
         if (accounts.length === 0) return textResult("No X accounts configured.");
@@ -83,20 +70,19 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         });
         return textResult(`${accounts.length} account(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
     // ── Cookie / session management (xactions driver) ──────────
 
-    {
+    defineTool({
       name: "kernel_twitter_set_cookie",
       description:
         "Store the auth_token browser cookie for an account whose driver is 'xactions'. The cookie is what xactions__x_login expects. Cookies expire — re-run this when x_login starts returning unauthenticated.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         cookie: z.string().describe("auth_token cookie value from x.com (the long base64-ish string)"),
       }),
-      handler: async (args) => {
-        const { account_id, cookie } = args as { account_id: string; cookie: string };
+      handler: async ({ account_id, cookie }) => {
         const account = service.getAccount(account_id);
         if (!account) return errorResult(`Account not found: ${account_id}`);
         if (account.driver !== "xactions")
@@ -112,17 +98,16 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           `Cookie stored for @${account.handle}.\n  Next step: run kernel_twitter_get_cookie to retrieve it, then xactions__x_login to activate the session, then xactions__x_get_profile (your handle) to confirm.`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_get_cookie",
       description:
         "Retrieve the stored auth_token cookie for an account. Used by agents to call xactions__x_login(cookie) before doing any xactions__x_* operations on this account's behalf.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
       }),
-      handler: async (args) => {
-        const { account_id } = args as { account_id: string };
+      handler: async ({ account_id }) => {
         const account = service.getAccount(account_id);
         if (!account) return errorResult(`Account not found: ${account_id}`);
         if (account.driver !== "xactions")
@@ -133,90 +118,82 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           );
         return textResult(account.auth_cookie_ref);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_mark_login",
       description:
         "Record that xactions__x_login succeeded for this account (call this AFTER you successfully logged in and verified via x_get_profile). Updates last_login_at.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
       }),
-      handler: async (args) => {
-        const { account_id } = args as { account_id: string };
+      handler: async ({ account_id }) => {
         const account = service.markLoginSuccess(account_id);
         if (!account) return errorResult(`Account not found: ${account_id}`);
         return textResult(`Marked @${account.handle} login OK at ${account.last_login_at}.`);
       },
-    },
+    }),
 
     // ── Account state (campaign phase + crisis tracking) ──────
 
-    {
+    defineTool({
       name: "kernel_twitter_get_state",
       description:
         "Get the current campaign state for an account: phase (seeding/authority/launch/capitalize/sustain/crisis_recovery), rolling 7-day OON %, mute rate, and whether crisis recovery has been triggered.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
       }),
-      handler: async (args) => {
-        const { account_id } = args as { account_id: string };
+      handler: async ({ account_id }) => {
         const state = service.getAccountState(account_id);
         if (!state) return errorResult(`No state for account: ${account_id}`);
         return textResult(
           `Phase: ${state.phase} (since ${state.phase_started_at})\nOON % (7d): ${(state.oon_pct_7d * 100).toFixed(1)}%\nMute rate (7d): ${(state.mute_rate_7d * 100).toFixed(3)}%\nCrisis triggered: ${state.crisis_triggered_at || "never"}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_set_phase",
       description:
         "Set the campaign phase for an account. Valid phases: foundation, seeding, authority, launch, capitalize, sustain, crisis_recovery, idle.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         phase: z
           .enum(["foundation", "seeding", "authority", "launch", "capitalize", "sustain", "crisis_recovery", "idle"])
           .describe("New phase"),
       }),
-      handler: async (args) => {
-        const { account_id, phase } = args as { account_id: string; phase: string };
+      handler: async ({ account_id, phase }) => {
         const state = service.setPhase(account_id, phase);
         if (!state) return errorResult(`Account state not found: ${account_id}`);
         return textResult(`Phase set to '${state.phase}' for account ${account_id}.`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_trigger_crisis_recovery",
       description:
         "Manually trigger crisis recovery for an account (use when OON %_7d <20% or mute rate spikes). Switches phase to 'crisis_recovery'; content-creators STOP original posting for 48h and only do replies.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         oon_pct_7d: z.number().describe("Current rolling 7-day OON %"),
         mute_rate_7d: z.number().describe("Current rolling 7-day mute rate"),
       }),
-      handler: async (args) => {
-        const { account_id, oon_pct_7d, mute_rate_7d } = args as {
-          account_id: string;
-          oon_pct_7d: number;
-          mute_rate_7d: number;
-        };
+      handler: async ({ account_id, oon_pct_7d, mute_rate_7d }) => {
         const state = service.triggerCrisisRecovery(account_id, oon_pct_7d, mute_rate_7d);
         if (!state) return errorResult(`Account state not found: ${account_id}`);
         return textResult(
           `Crisis recovery triggered for account ${account_id}.\n  Phase: ${state.phase}\n  OON % 7d: ${(state.oon_pct_7d * 100).toFixed(1)}%\n  Mute rate 7d: ${(state.mute_rate_7d * 100).toFixed(3)}%`,
         );
       },
-    },
+    }),
 
     // ── Analytics (per-post KPI snapshots) ─────────────────────
 
-    {
+    defineTool({
       name: "kernel_twitter_record_analytics",
       description:
         "Record a snapshot of per-post KPIs (impressions, OON impressions, likes, RTs, replies, quotes, bookmarks, mutes, blocks). Used by the Engagement Tracker after pulling stats from xactions__x_get_post_analytics or the X API.",
-      inputSchema: z.object({
+      schema: z.object({
         post_id: z.string().describe("Internal post ID (twitter_posts.id)"),
         impressions: z.number().optional(),
         oon_impressions: z.number().optional(),
@@ -229,20 +206,7 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         mute_count: z.number().optional(),
         block_count: z.number().optional(),
       }),
-      handler: async (args) => {
-        const input = args as {
-          post_id: string;
-          impressions?: number;
-          oon_impressions?: number;
-          likes?: number;
-          retweets?: number;
-          replies?: number;
-          quotes?: number;
-          bookmarks?: number;
-          profile_clicks?: number;
-          mute_count?: number;
-          block_count?: number;
-        };
+      handler: async (input) => {
         const post = service.getPost(input.post_id);
         if (!post) return errorResult(`Post not found: ${input.post_id}`);
         const snap = service.recordAnalyticsSnapshot(input);
@@ -250,18 +214,17 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           `Analytics snapshot recorded.\n  Impressions: ${snap.impressions}\n  OON %: ${(snap.oon_pct * 100).toFixed(1)}%\n  Engagement rate: ${(snap.engagement_rate * 100).toFixed(2)}%\n  Mute rate: ${(snap.mute_rate * 100).toFixed(3)}%`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_rolling_kpis",
       description:
         "Compute rolling 7-day OON % and mute rate across all posts for an account. Returns the same numbers used to decide crisis_recovery.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         days: z.number().optional().describe("Rolling window in days (default: 7)"),
       }),
-      handler: async (args) => {
-        const { account_id, days } = args as { account_id: string; days?: number };
+      handler: async ({ account_id, days }) => {
         const kpis = service.computeRollingKpis(account_id, days ?? 7);
         const updated = service.updateRollingKpis(account_id, kpis.oon_pct_7d, kpis.mute_rate_7d);
         const phase = updated?.phase ?? "unknown";
@@ -269,32 +232,31 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           `Rolling KPIs (last ${days ?? 7} days):\n  OON %: ${(kpis.oon_pct_7d * 100).toFixed(1)}%\n  Mute rate: ${(kpis.mute_rate_7d * 100).toFixed(3)}%\n  Current phase: ${phase}\n  Crisis threshold: OON % <20% OR mute rate >0.1% triggers crisis_recovery.`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_record_audit",
       description:
         "Record the Algorithm Auditor's score (0-100) and notes for a post. Posts with audit_score <60 should not be approved without manual review.",
-      inputSchema: z.object({
+      schema: z.object({
         post_id: z.string().describe("Post ID"),
         score: z.number().describe("0-100 score from auditor"),
         notes: z.string().describe("Free-text issues raised (one per line)"),
       }),
-      handler: async (args) => {
-        const { post_id, score, notes } = args as { post_id: string; score: number; notes: string };
+      handler: async ({ post_id, score, notes }) => {
         const post = service.recordAudit(post_id, score, notes);
         if (!post) return errorResult(`Post not found: ${post_id}`);
         return textResult(`Audit recorded for post ${post_id}.\n  Score: ${score}/100\n  Notes:\n${notes}`);
       },
-    },
+    }),
 
     // ── Post Management ─────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_twitter_create_post",
       description:
         "Create a draft or queued X/Twitter post. Posts can be tweets, replies, threads, or quotes. Use 'queued' status for posts awaiting approval. Campaign metadata fields (format, signal_target, phase, campaign_anchor) are used by the Algorithm Auditor and Engagement Tracker.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         content: z.string().describe("Post content (max 280 chars for single tweet)"),
         post_type: z
@@ -357,22 +319,7 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
             "Parent post ID (for thread continuations or self-replies). Use the link-in-reply pattern: hero tweet → reply containing the link.",
           ),
       }),
-      handler: async (args) => {
-        const input = args as {
-          account_id: string;
-          content: string;
-          post_type?: string;
-          status?: string;
-          scheduled_at?: string;
-          reply_to_x_id?: string;
-          quote_x_id?: string;
-          format?: string;
-          signal_target?: string;
-          phase?: string;
-          campaign_anchor?: number;
-          parent_post_id?: string;
-        };
-
+      handler: async (input) => {
         const account = service.getAccount(input.account_id);
         if (!account) return errorResult(`Account not found: ${input.account_id}`);
 
@@ -390,16 +337,15 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           `Post created:\n  ID: ${post.id}\n  Type: ${post.post_type}\n  Status: ${post.status}\n  Chars: ${charCount}/280\n  Account: @${account.handle}${post.scheduled_at ? `\n  Scheduled: ${post.scheduled_at}` : ""}${meta ? `\n  ${meta}` : ""}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_get_queue",
       description: "Get posts waiting in the queue (status='queued') for approval.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().optional().describe("Filter by account ID"),
       }),
-      handler: async (args) => {
-        const { account_id } = args as { account_id?: string };
+      handler: async ({ account_id }) => {
         const posts = service.getQueue(account_id);
         if (posts.length === 0) return textResult("Queue is empty.");
 
@@ -409,27 +355,26 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         );
         return textResult(`${posts.length} queued post(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_approve",
       description:
         "Approve a queued or draft post, changing its status to 'approved'. Approved posts are ready for publishing.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Post ID to approve"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const post = service.approvePost(id);
         if (!post) return errorResult(`Post not found or not in draft/queued status: ${id}`);
         return textResult(`Post approved:\n  ID: ${post.id}\n  Content: ${post.content.slice(0, 100)}${post.content.length > 100 ? "..." : ""}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_list_posts",
       description: "List X/Twitter posts with optional filters by status, account, and type.",
-      inputSchema: z.object({
+      schema: z.object({
         status: z
           .enum(["draft", "queued", "approved", "posted", "failed"])
           .optional()
@@ -442,14 +387,7 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         limit: z.number().optional().describe("Max results (default: 50)"),
         offset: z.number().optional().describe("Offset for pagination"),
       }),
-      handler: async (args) => {
-        const opts = args as {
-          status?: string;
-          account_id?: string;
-          post_type?: string;
-          limit?: number;
-          offset?: number;
-        };
+      handler: async (opts) => {
         const posts = service.listPosts(opts);
         if (posts.length === 0) return textResult("No posts found.");
 
@@ -462,16 +400,15 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         });
         return textResult(`${posts.length} post(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_get_post",
       description: "Get a single X/Twitter post by ID with full content and metrics.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Post ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const post = service.getPost(id);
         if (!post) return errorResult(`Post not found: ${id}`);
 
@@ -508,20 +445,19 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
     // ── Mentions ────────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_twitter_list_mentions",
       description: "List mentions for an account. Optionally filter to only unreplied mentions.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().optional().describe("Filter by account ID"),
         unread_only: z.boolean().optional().describe("Only show unreplied mentions (default: false)"),
         limit: z.number().optional().describe("Max results (default: 50)"),
       }),
-      handler: async (args) => {
-        const opts = args as { account_id?: string; unread_only?: boolean; limit?: number };
+      handler: async (opts) => {
         const mentions = service.listMentions(opts);
         if (mentions.length === 0) return textResult("No mentions found.");
 
@@ -531,24 +467,18 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
         });
         return textResult(`${mentions.length} mention(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_reply_mention",
       description:
         "Create a reply post for a mention. Links the reply to the mention and marks the mention as replied.",
-      inputSchema: z.object({
+      schema: z.object({
         mention_id: z.string().describe("Mention ID to reply to"),
         content: z.string().describe("Reply content"),
         account_id: z.string().describe("Account ID to post from"),
       }),
-      handler: async (args) => {
-        const { mention_id, content, account_id } = args as {
-          mention_id: string;
-          content: string;
-          account_id: string;
-        };
-
+      handler: async ({ mention_id, content, account_id }) => {
         const account = service.getAccount(account_id);
         if (!account) return errorResult(`Account not found: ${account_id}`);
 
@@ -573,19 +503,18 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           `Reply draft created:\n  Post ID: ${post.id}\n  Reply to: @${mention.author_handle} (${mention.x_post_id})\n  Content: ${content.slice(0, 100)}${content.length > 100 ? "..." : ""}\n  Status: draft (approve to publish)`,
         );
       },
-    },
+    }),
 
     // ── Metrics & Performance ───────────────────────
 
-    {
+    defineTool({
       name: "kernel_twitter_metrics",
       description: "Get follower/following metrics trend for an account over the last N days.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         days: z.number().optional().describe("Number of days to look back (default: 30)"),
       }),
-      handler: async (args) => {
-        const { account_id, days } = args as { account_id: string; days?: number };
+      handler: async ({ account_id, days }) => {
         const trend = service.getMetricsTrend(account_id, days ?? 30);
         if (trend.length === 0) return textResult("No metrics snapshots found.");
 
@@ -606,19 +535,17 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
         return textResult(`${trend.length} snapshot(s):\n\n${lines.join("\n")}${growth}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_twitter_performance",
       description:
         "Get a performance report for an account: aggregated post metrics, top posts, and breakdown by type/status.",
-      inputSchema: z.object({
+      schema: z.object({
         account_id: z.string().describe("Account ID"),
         days: z.number().optional().describe("Number of days to look back (default: 30)"),
       }),
-      handler: async (args) => {
-        const { account_id, days } = args as { account_id: string; days?: number };
-
+      handler: async ({ account_id, days }) => {
         const account = service.getAccount(account_id);
         if (!account) return errorResult(`Account not found: ${account_id}`);
 
@@ -668,6 +595,6 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
         return textResult(lines.join("\n"));
       },
-    },
+    }),
   ];
 }

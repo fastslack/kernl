@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, type Notifier, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, type Notifier, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { ReminderService } from "./service.js";
 
 export function reminderTools(
@@ -7,11 +7,11 @@ export function reminderTools(
   notifier: Notifier,
 ): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_reminders_create",
       description:
         "Create a reminder with a specific trigger time. Supports repeat (daily/weekly/monthly) and optional task linking.",
-      inputSchema: z.object({
+      schema: z.object({
         title: z.string().describe("Reminder title"),
         body: z.string().optional().describe("Additional details"),
         trigger_at: z
@@ -34,16 +34,7 @@ export function reminderTools(
           .optional()
           .describe("Send Telegram notification (default: true)"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          title: string;
-          body?: string;
-          trigger_at: string;
-          repeat?: "none" | "daily" | "weekly" | "monthly";
-          task_id?: string;
-          notify_mattermost?: boolean;
-          notify_telegram?: boolean;
-        };
+      handler: async (input) => {
         const reminder = service.create(input);
         const notifyChannels: string[] = [];
         if (reminder.notify_mattermost) notifyChannels.push("Mattermost");
@@ -52,13 +43,13 @@ export function reminderTools(
           `Reminder created:\n  ID: ${reminder.id}\n  Title: ${reminder.title}\n  Trigger: ${reminder.trigger_at}\n  Repeat: ${reminder.repeat}\n  Notify: ${notifyChannels.join(", ") || "none"}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_reminders_list",
       description:
         "List reminders with optional filters by status or linked task.",
-      inputSchema: z.object({
+      schema: z.object({
         status: z
           .enum(["active", "snoozed", "fired", "dismissed"])
           .optional()
@@ -68,11 +59,7 @@ export function reminderTools(
           .optional()
           .describe("Filter by linked task ID"),
       }),
-      handler: async (args) => {
-        const filters = args as {
-          status?: "active" | "snoozed" | "fired" | "dismissed";
-          task_id?: string;
-        };
+      handler: async (filters) => {
         const reminders = service.list(filters);
         if (reminders.length === 0) return textResult("No reminders found.");
 
@@ -84,16 +71,15 @@ export function reminderTools(
           `${reminders.length} reminder(s):\n\n${lines.join("\n\n")}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_reminders_get",
       description: "Get detailed info about a reminder by ID.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Reminder ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const r = service.getById(id);
         if (!r) return errorResult(`Reminder not found: ${id}`);
 
@@ -113,13 +99,13 @@ export function reminderTools(
         ];
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_reminders_update",
       description:
         "Update a reminder's title, body, trigger time, repeat interval, or notification preferences.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Reminder ID"),
         title: z.string().optional(),
         body: z.string().optional(),
@@ -129,18 +115,7 @@ export function reminderTools(
         notify_mattermost: z.boolean().optional(),
         notify_telegram: z.boolean().optional(),
       }),
-      handler: async (args) => {
-        const { id, ...changes } = args as {
-          id: string;
-          title?: string;
-          body?: string;
-          trigger_at?: string;
-          repeat?: "none" | "daily" | "weekly" | "monthly";
-          task_id?: string;
-          notify_mattermost?: boolean;
-          notify_telegram?: boolean;
-        };
-
+      handler: async ({ id, ...changes }) => {
         const updatePayload: Record<string, unknown> = { ...changes };
         if (changes.notify_mattermost !== undefined) {
           updatePayload.notify_mattermost = changes.notify_mattermost ? 1 : 0;
@@ -155,54 +130,51 @@ export function reminderTools(
           `Reminder updated:\n  Title: ${reminder.title}\n  Trigger: ${reminder.trigger_at}\n  Repeat: ${reminder.repeat}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_reminders_dismiss",
       description: "Permanently dismiss a reminder (stops it from firing).",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Reminder ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const reminder = service.dismiss(id);
         if (!reminder) return errorResult(`Reminder not found: ${id}`);
         return textResult(`Reminder "${reminder.title}" dismissed.`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_reminders_snooze",
       description:
         "Snooze a reminder until a specific time. It will fire again at the new time.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Reminder ID"),
         until: z
           .string()
           .describe("Snooze until this time (ISO 8601 UTC)"),
       }),
-      handler: async (args) => {
-        const { id, until } = args as { id: string; until: string };
+      handler: async ({ id, until }) => {
         const reminder = service.snooze(id, until);
         if (!reminder) return errorResult(`Reminder not found: ${id}`);
         return textResult(
           `Reminder "${reminder.title}" snoozed until ${until}.`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_reminders_upcoming",
       description:
         "View reminders coming up in the next N hours (default: 24).",
-      inputSchema: z.object({
+      schema: z.object({
         hours: z
           .number()
           .optional()
           .describe("Look-ahead window in hours (default: 24)"),
       }),
-      handler: async (args) => {
-        const { hours } = args as { hours?: number };
+      handler: async ({ hours }) => {
         const reminders = service.upcoming(hours ?? 24);
         if (reminders.length === 0)
           return textResult(`No reminders in the next ${hours ?? 24} hours.`);
@@ -215,13 +187,12 @@ export function reminderTools(
           `${reminders.length} upcoming reminder(s):\n\n${lines.join("\n")}`,
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_reminders_test_notification",
       description:
         "Send a test notification to all configured channels.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!notifier.configured) {
           return errorResult(
@@ -241,6 +212,6 @@ export function reminderTools(
           `All test notifications failed:\n${status.join("\n")}\n\nCheck server logs for details.`,
         );
       },
-    },
+    }),
   ];
 }

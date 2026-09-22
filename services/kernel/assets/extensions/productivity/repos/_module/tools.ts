@@ -5,6 +5,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import {
   type ToolDefinition,
+  defineTool,
   textResult,
   errorResult,
   shellCommand,
@@ -166,21 +167,20 @@ function globToRegex(glob: string): RegExp {
 export function repoTools(service: RepoService, visibleRoots: string[] = []): ToolDefinition[] {
   return [
     // ── kernel_repos_register ─────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_register",
       description:
         "Register an existing local repository (or any project directory) into the kernel registry. " +
         "The repo stays where it is on disk — only its path + metadata are stored. " +
         "On register we probe `.git/` for the remote URL and default branch (best-effort).",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Short slug, lowercase + digits + `-`/`_`. Used as a friendly handle in later calls."),
         path: z.string().describe("ABSOLUTE filesystem path to the repo root."),
         description: z.string().optional(),
         tags: z.string().optional().describe("Comma-separated free-form tags."),
         shared: z.boolean().optional().describe("If false, only the Repos Office sees this repo. Default true."),
       }),
-      handler: async (args) => {
-        const a = args as { name: string; path: string; description?: string; tags?: string; shared?: boolean };
+      handler: async (a) => {
         const res = service.create(a, { visibleRoots });
         if (!res.ok) return errorResult(res.error);
         const r = res.repo;
@@ -195,41 +195,40 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         ].filter(Boolean);
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
     // ── kernel_repos_list ─────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_list",
       description:
         "List registered repos. Filter by tag or substring query (matches name/description/path). " +
         "Returns ID + name + path for each result.",
-      inputSchema: z.object({
+      schema: z.object({
         tag: z.string().optional(),
         query: z.string().optional().describe("Substring match across name, description, path."),
         limit: z.number().optional().describe("Default 50."),
       }),
-      handler: async (args) => {
-        const a = args as { tag?: string; query?: string; limit?: number };
+      handler: async (a) => {
         // Scoped, not filtered after the fact: a repo this agent cannot reach
         // never enters the payload, so its name and path do not leak into a
         // model's context on the way to being dropped.
         const rows = service.listForCaller(
-          callerAgentId(args as Record<string, unknown>),
+          callerAgentId(a),
           { tag: a.tag, query: a.query, limit: a.limit ?? 50 },
         );
         if (rows.length === 0) return textResult("No repos registered. Use `kernel_repos_register` to add one.");
         const lines = rows.map((r) => `- ${formatRepoLine(r)} — id=${r.id}${r.description ? `\n    ${r.description}` : ""}`);
         return textResult(`${rows.length} repo(s):\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── kernel_repos_get ──────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_get",
       description: "Get full details + a freshly probed git status (branch, head sha, dirty flag) for one repo.",
-      inputSchema: z.object({ ...repoSelectorSchema }),
-      handler: async (args) => {
-        const r = resolveRepoOrError(service, args as { id?: string; name?: string }, callerAgentId(args as Record<string, unknown>));
+      schema: z.object({ ...repoSelectorSchema }),
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, a, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const repo = r.repo;
         let branch = "", head = "", dirty: "clean" | "dirty" | "unknown" = "unknown";
@@ -255,68 +254,62 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         ].filter(Boolean);
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
     // ── kernel_repos_update ───────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_update",
       description: "Update editable metadata (name, description, tags, shared flag). Path is immutable — re-register to move.",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         name: z.string().optional(),
         description: z.string().optional(),
         tags: z.string().optional(),
         shared: z.boolean().optional(),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; description?: string; tags?: string; shared?: boolean };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
-        try {
-          const updated = service.update(r.repo.id, {
-            name: a.name,
-            description: a.description,
-            tags: a.tags,
-            shared: a.shared,
-          });
-          if (!updated) return errorResult("Update failed (race condition?)");
-          return textResult(`Repo **${updated.name}** updated.`);
-        } catch (e) {
-          return errorResult(String((e as Error).message ?? e));
-        }
+        const updated = service.update(r.repo.id, {
+          name: a.name,
+          description: a.description,
+          tags: a.tags,
+          shared: a.shared,
+        });
+        if (!updated) return errorResult("Update failed (race condition?)");
+        return textResult(`Repo **${updated.name}** updated.`);
       },
-    },
+    }),
 
     // ── kernel_repos_unregister ───────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_unregister",
       description:
         "Remove a repo from the registry. Files on disk are NEVER touched — this only forgets the pointer. " +
         "Re-register with the same path to bring it back.",
-      inputSchema: z.object({ ...repoSelectorSchema }),
-      handler: async (args) => {
-        const r = resolveRepoOrError(service, args as { id?: string; name?: string }, callerAgentId(args as Record<string, unknown>));
+      schema: z.object({ ...repoSelectorSchema }),
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, a, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         service.unregister(r.repo.id);
         return textResult(`Unregistered repo **${r.repo.name}** (path \`${r.repo.path}\` untouched).`);
       },
-    },
+    }),
 
     // ── kernel_repos_list_files ───────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_list_files",
       description:
         "List files inside a registered repo, relative to its root. Skips `node_modules`, `.git`, `dist`, `build`, virtualenvs etc. " +
         "Use a glob like `src/**/*.ts` to filter.",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         path: z.string().optional().describe("Subdirectory inside the repo. Default: repo root."),
         depth: z.number().optional().describe("Max recursion depth. Default 3, max 8."),
         glob: z.string().optional().describe("Optional glob (`*`, `**`, `?`) matched against the relative path."),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; path?: string; depth?: number; glob?: string };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.path ?? "");
         if (!jailed.ok) return errorResult(jailed.error);
@@ -331,22 +324,21 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         const more = entries.length >= MAX_LIST_ENTRIES ? `\n\n_…stopped at ${MAX_LIST_ENTRIES} entries. Narrow with \`glob\` or \`path\`._` : "";
         return textResult(`### ${r.repo.name}/${relStart || ""}\n\n${lines.join("\n")}${more}`);
       },
-    },
+    }),
 
     // ── kernel_repos_read ─────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_read",
       description:
         "Read a file from a registered repo, relative to its root. " +
         "Large files (>200 KB) are returned in chunks — pass `offset` to page.",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         file: z.string().describe("Repo-relative path, e.g. `src/index.ts`."),
         offset: z.number().optional().describe("Starting byte offset (default 0)."),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; file: string; offset?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.file);
         if (!jailed.ok) return errorResult(jailed.error);
@@ -365,22 +357,21 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         service.touch(r.repo.id);
         return textResult(`### ${r.repo.name}:${a.file}${start > 0 ? ` (chars ${start}–${end} of ${total})` : ""}\n\n\`\`\`\n${chunk}${suffix}\n\`\`\``);
       },
-    },
+    }),
 
     // ── kernel_repos_write ────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_write",
       description:
         "Write (or overwrite) a file in a registered repo. Creates intermediate directories. " +
         "The repo MUST exist; the file path must stay inside the repo root.",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         file: z.string().describe("Repo-relative path."),
         content: z.string().describe("Full file content. Replaces existing content if the file exists."),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; file: string; content: string };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.file);
         if (!jailed.ok) return errorResult(jailed.error);
@@ -393,23 +384,22 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         service.touch(r.repo.id);
         return textResult(`Wrote ${a.content.length} bytes to **${r.repo.name}**:${a.file}.`);
       },
-    },
+    }),
 
     // ── kernel_repos_search ───────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_search",
       description:
         "Search for a string inside a registered repo. Uses `rg` (ripgrep) when available, falls back to `grep -rE`. " +
         "Output is truncated at ~20 KB.",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         query: z.string().describe("Pattern. Treated as a regex by ripgrep/grep."),
         glob: z.string().optional().describe("Restrict to files matching this glob (e.g. `*.ts`)."),
         max_results: z.number().optional().describe("Default 100, max 200."),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; query: string; glob?: string; max_results?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         if (!a.query) return errorResult("query required");
         const cap = Math.min(MAX_SEARCH_RESULTS, Math.max(1, a.max_results ?? 100));
@@ -457,23 +447,22 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         if (hits.length === 0) return textResult(`No matches for \`${a.query}\` in **${r.repo.name}**.`);
         return textResult(`### Matches in ${r.repo.name} (built-in search)\n\n\`\`\`\n${truncate(hits.join("\n"), MAX_OUTPUT_BYTES)}\n\`\`\``);
       },
-    },
+    }),
 
     // ── kernel_repos_exec ─────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_exec",
       description:
         "Run a shell command in a registered repo's working directory (HOST exec, NOT sandboxed). " +
         "Default timeout 60s (max 120s). Output is truncated at ~20 KB. " +
         "Use for builds, tests, linters, git commands. The operator has authorized exec access for any repo in the registry.",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         command: z.string().describe("Full shell command, e.g. `bun install`, `bun test`, `git status`."),
         timeout_ms: z.number().optional().describe("Default 60000, max 120000."),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; command: string; timeout_ms?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const cmd = (a.command ?? "").trim();
         if (!cmd) return errorResult("command required");
@@ -497,24 +486,23 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
           return errorResult(`Command failed (exit ${e.code ?? "?"}):\n${truncate(combined || e.message || String(err), MAX_OUTPUT_BYTES)}`);
         }
       },
-    },
+    }),
 
     // ── kernel_repos_git ──────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_repos_git",
       description:
         "Run a read-only git operation against a registered repo. Supported ops: `status`, `diff`, `log`, `branch`, `show`. " +
         "Use `kernel_repos_exec` with `git ...` for anything that mutates (commit, push, checkout).",
-      inputSchema: z.object({
+      schema: z.object({
         ...repoSelectorSchema,
         op: z.enum(["status", "diff", "log", "branch", "show"]).describe("Which git op to run."),
         ref: z.string().optional().describe("For `diff`/`log`/`show`: the ref/range (default: HEAD)."),
         path: z.string().optional().describe("For `diff`/`log`: restrict to this path."),
         limit: z.number().optional().describe("For `log`: max commits (default 20)."),
       }),
-      handler: async (args) => {
-        const a = args as { id?: string; name?: string; op: string; ref?: string; path?: string; limit?: number };
-        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(args as Record<string, unknown>));
+      handler: async (a) => {
+        const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const cwd = r.repo.path;
         let argv: string[];
@@ -556,6 +544,6 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
           return errorResult(`git ${a.op} failed:\n${truncate(combined || e.message || String(err), MAX_OUTPUT_BYTES)}`);
         }
       },
-    },
+    }),
   ];
 }

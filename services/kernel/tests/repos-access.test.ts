@@ -15,6 +15,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { reposMigrations } from "../assets/extensions/productivity/repos/_module/migrations/001_repos.js";
 import { repoAccessMigrations } from "../assets/extensions/productivity/repos/_module/migrations/002_repo_access.js";
 import { RepoService } from "../assets/extensions/productivity/repos/_module/service.js";
+import { repoTools } from "../assets/extensions/productivity/repos/_module/tools.js";
 
 describe("repo access", () => {
   let db: InstanceType<typeof Database>;
@@ -82,6 +83,44 @@ describe("repo access", () => {
     expect(service.listForCaller("agent-1").map((r) => r.name).sort()).toEqual(["alpha", "beta"]);
     expect(service.listForCaller("agent-2").map((r) => r.name)).toEqual(["alpha"]);
     expect(service.listForCaller("").map((r) => r.name).sort()).toEqual(["alpha", "beta"]);
+  });
+
+  // The agent loop calls a tool's handler directly and injects the caller's id
+  // as `__caller_agent_id`. The schema does not declare it, so the tools only
+  // stay scoped if the parse keeps `__` keys on the input.
+  describe("tools scope by the injected __caller_agent_id", () => {
+    const tool = (name: string) => {
+      const t = repoTools(service).find((x) => x.name === name);
+      if (!t) throw new Error(`missing tool ${name}`);
+      return t;
+    };
+    const text = (r: { content: Array<{ text?: string }> }) => r.content.map((c) => c.text ?? "").join("\n");
+
+    beforeEach(() => {
+      make("alpha", "alpha", true);
+      const priv = make("beta", "nested/beta", false);
+      service.setAccess(priv.id, ["agent-1"]);
+    });
+
+    it("kernel_repos_list hides a private repo from an agent it is not shared with", async () => {
+      const outsider = await tool("kernel_repos_list").handler({ __caller_agent_id: "agent-2" });
+      expect(outsider.isError).toBeFalsy();
+      expect(text(outsider)).toContain("alpha");
+      expect(text(outsider)).not.toContain("beta");
+
+      const member = await tool("kernel_repos_list").handler({ __caller_agent_id: "agent-1", limit: "50" });
+      expect(text(member)).toContain("beta");
+    });
+
+    it("kernel_repos_get refuses a private repo to an agent it is not shared with", async () => {
+      const outsider = await tool("kernel_repos_get").handler({ name: "beta", __caller_agent_id: "agent-2" });
+      expect(outsider.isError).toBe(true);
+      expect(text(outsider)).toContain("not shared with this agent");
+
+      const member = await tool("kernel_repos_get").handler({ name: "beta", __caller_agent_id: "agent-1" });
+      expect(member.isError).toBeFalsy();
+      expect(text(member)).toContain("# beta");
+    });
   });
 });
 

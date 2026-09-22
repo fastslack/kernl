@@ -4,6 +4,8 @@ import {
   type ToolDefinition,
   type ImportResult,
   type SyncMeta,
+  defineTool,
+  defineToolNoInput,
   textResult,
   errorResult,
 } from "@kernl/extension-sdk";
@@ -46,11 +48,10 @@ export function googleSyncTools(
   syncService?: GoogleSyncService,
 ): ToolDefinition[] {
   return [
-    {
+    defineToolNoInput({
       name: "kernel_google_auth",
       description:
         "Initiate Google OAuth2 authentication. Returns a URL to open in your browser. After authorizing, the callback will save tokens automatically.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (auth.isAuthenticated()) {
           return textResult("Already authenticated with Google. Use kernel_google_status to check details.");
@@ -64,13 +65,12 @@ export function googleSyncTools(
           return errorResult(`Auth failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync",
       description:
         "Sync all Google data: contacts → CRM, other contacts → CRM, calendar → reminders, tasks → tasks, Gmail → CRM interactions. Requires prior authentication via kernel_google_auth.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -87,12 +87,11 @@ export function googleSyncTools(
           return errorResult(`Sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_contacts",
       description: "Sync only Google Contacts → CRM contacts.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -104,13 +103,12 @@ export function googleSyncTools(
           return errorResult(`Contacts sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_calendar",
       description:
         "Sync only Google Calendar events (next 30 days) → reminders.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -122,12 +120,11 @@ export function googleSyncTools(
           return errorResult(`Calendar sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_tasks",
       description: "Sync only Google Tasks → tasks.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -139,13 +136,12 @@ export function googleSyncTools(
           return errorResult(`Tasks sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_gmail",
       description:
         "Scan Gmail (last 30 days) and auto-log email interactions with existing CRM contacts. Matches From/To addresses against contact emails.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -157,13 +153,12 @@ export function googleSyncTools(
           return errorResult(`Gmail sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_other_contacts",
       description:
         "Import Google 'Other Contacts' (auto-saved from email interactions) into CRM. Skips duplicates by email.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -175,17 +170,16 @@ export function googleSyncTools(
           return errorResult(`Other contacts sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_google_import_places",
       description:
         "Import saved places from a Google Takeout GeoJSON file into shopping stores. Provide the absolute path to Saved Places.json from Google Takeout.",
-      inputSchema: z.object({
+      schema: z.object({
         file_path: z.string().describe("Absolute path to the Saved Places.json file from Google Takeout"),
       }),
-      handler: async (args) => {
-        const { file_path } = args as { file_path: string };
+      handler: async ({ file_path }) => {
         try {
           const result = importTakeoutPlaces(file_path, db, shoppingService);
           return textResult(formatResult(result));
@@ -193,13 +187,12 @@ export function googleSyncTools(
           return errorResult(`Takeout import failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_status",
       description:
         "Show Google sync status: authentication state, last sync times, and item counts per source.",
-      inputSchema: z.object({}),
       handler: async () => {
         const status = auth.getStatus();
         const metas = db
@@ -244,15 +237,14 @@ export function googleSyncTools(
 
         return textResult(text);
       },
-    },
+    }),
 
     // ── New full sync tools ──────────────────────────
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_full",
       description:
         "Run full sync of all Google data: contacts + full emails (body, headers) + calendar events (with attendees). Stores everything in local SQLite. Also enriches Neo4j graph if available.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!auth.isAuthenticated()) {
           return errorResult("Not authenticated. Run kernel_google_auth first.");
@@ -267,13 +259,12 @@ export function googleSyncTools(
           return errorResult(`Full sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_google_sync_graph",
       description:
         "Build/refresh Neo4j graph from stored Google data. Creates Email, EmailThread, CalendarEvent nodes and SENT, RECEIVED, PART_OF, ATTENDS, ORGANIZED, EMAILED, MET_WITH relationships.",
-      inputSchema: z.object({}),
       handler: async () => {
         if (!syncService) {
           return errorResult("Sync service not initialized.");
@@ -298,26 +289,23 @@ export function googleSyncTools(
           return errorResult(`Graph sync failed: ${String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_google_emails_search",
       description:
         "Search locally stored emails by subject/body text, sender email, and/or date range. Returns matching emails from the google_emails table.",
-      inputSchema: z.object({
+      schema: z.object({
         query: z.string().optional().describe("Text to search in subject, body, or snippet"),
         from: z.string().optional().describe("Sender email address (partial match)"),
         date_from: z.string().optional().describe("Start date (ISO format)"),
         date_to: z.string().optional().describe("End date (ISO format)"),
         limit: z.number().optional().default(20).describe("Max results (default 20)"),
       }),
-      handler: async (args) => {
+      handler: async ({ query, from, date_from, date_to, limit }) => {
         if (!syncService) {
           return errorResult("Sync service not initialized.");
         }
-        const { query, from, date_from, date_to, limit } = args as {
-          query?: string; from?: string; date_from?: string; date_to?: string; limit?: number;
-        };
         try {
           const results = syncService.searchEmails({
             query, from, dateFrom: date_from, dateTo: date_to, limit,
@@ -333,6 +321,6 @@ export function googleSyncTools(
           return errorResult(`Email search failed: ${String(err)}`);
         }
       },
-    },
+    }),
   ];
 }

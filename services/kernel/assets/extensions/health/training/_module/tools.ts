@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult } from "@kernl/extension-sdk";
 import type { TrainingService } from "./service.js";
 
 const CATEGORIES = ["strength", "cardio", "flexibility", "balance", "sport", "custom"] as const;
@@ -10,10 +10,10 @@ const DIFFICULTIES = ["beginner", "intermediate", "advanced", "elite"] as const;
 export function trainingTools(service: TrainingService): ToolDefinition[] {
   return [
     // ── Exercise Library ──────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_training_add_exercise",
       description: "Add a custom exercise to the library. Default exercises (Squat, Bench, Deadlift, etc) are auto-seeded.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Exercise name"),
         category: z.enum(CATEGORIES).optional(),
         muscle_groups: z.array(z.string()).optional().describe("Muscle groups targeted"),
@@ -21,21 +21,20 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         instructions: z.string().optional().describe("How to perform the exercise"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const ex = service.addExercise(args as any);
+      handler: async (input) => {
+        const ex = service.addExercise(input);
         return textResult(`Exercise added: **${ex.name}** (${ex.category}, ${ex.equipment})\n  Muscles: ${JSON.parse(ex.muscle_groups).join(", ") || "n/a"}\n  ID: ${ex.id}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_search_exercises",
       description: "Search the exercise library by name, category, or equipment.",
-      inputSchema: z.object({
+      schema: z.object({
         query: z.string().optional().describe("Search by name"),
         category: z.enum(CATEGORIES).optional(),
         equipment: z.enum(EQUIPMENT).optional(),
       }),
-      handler: async (args) => {
-        const { query, category, equipment } = args as any;
+      handler: async ({ query, category, equipment }) => {
         const exs = service.searchExercises(query, category, equipment);
         if (exs.length === 0) return textResult("No exercises found.");
         const lines = exs.map(e =>
@@ -43,13 +42,13 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         );
         return textResult(`${exs.length} exercise(s):\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Programs ──────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_training_create_program",
       description: "Create a structured training program (e.g. 5x5 Stronglifts, PPL, 16-week marathon plan). Defines the overall goal, duration, and frequency.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Program name (e.g. '5x5 Strength', 'Marathon 16wk', 'PPL Hypertrophy')"),
         description: z.string().optional(),
         goal: z.enum(GOALS).optional().describe("Training goal (default: general)"),
@@ -59,21 +58,20 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         start_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const prog = service.createProgram(args as any);
+      handler: async (input) => {
+        const prog = service.createProgram(input);
         return textResult(
           `Program created: **${prog.name}**\n  Goal: ${prog.goal} | Difficulty: ${prog.difficulty}\n  ${prog.days_per_week} days/week × ${prog.duration_weeks} weeks\n  ID: ${prog.id}`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_list_programs",
       description: "List training programs with their status.",
-      inputSchema: z.object({
+      schema: z.object({
         status: z.enum(["active", "completed", "paused", "archived"]).optional(),
       }),
-      handler: async (args) => {
-        const { status } = args as { status?: string };
+      handler: async ({ status }) => {
         const programs = service.listPrograms(status);
         if (programs.length === 0) return textResult("No programs found. Create one with kernel_training_create_program.");
         const lines = programs.map(p =>
@@ -81,11 +79,11 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         );
         return textResult(`${programs.length} program(s):\n\n${lines.join("\n\n")}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_add_session_template",
       description: "Add a workout session template to a program (e.g. 'Day A - Push', 'Day B - Pull', 'Long Run').",
-      inputSchema: z.object({
+      schema: z.object({
         program_id: z.string().describe("Program ID"),
         name: z.string().describe("Session name (e.g. 'Day A - Push', 'Upper Body')"),
         day_of_week: z.number().optional().describe("Day of week (1=Mon, 7=Sun)"),
@@ -93,15 +91,15 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         order_index: z.number().optional(),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const session = service.addSessionTemplate(args as any);
+      handler: async (input) => {
+        const session = service.addSessionTemplate(input);
         return textResult(`Session template added: **${session.name}** to program\n  ID: ${session.id}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_add_template_exercise",
       description: "Add an exercise to a session template with sets, reps, and weight prescription.",
-      inputSchema: z.object({
+      schema: z.object({
         session_id: z.string().describe("Session template ID"),
         exercise_name: z.string().describe("Exercise name"),
         exercise_id: z.string().optional().describe("Exercise ID from library (optional)"),
@@ -114,17 +112,17 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         order_index: z.number().optional(),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const ex = service.addTemplateExercise(args as any);
+      handler: async (input) => {
+        const ex = service.addTemplateExercise(input);
         return textResult(`Added to session: **${ex.exercise_name}** — ${ex.sets}×${ex.reps}${ex.weight_kg ? ` @${ex.weight_kg}kg` : ""}`);
       },
-    },
+    }),
 
     // ── Workout Logging ───────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_training_start_workout",
       description: "Start a workout session. Returns a workout_id used to log sets.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Workout name (e.g. 'Push Day A', 'Morning Run', 'Leg Day')"),
         sport: z.string().optional().describe("Sport/type (e.g. 'strength', 'running', 'cycling', 'yoga')"),
         program_id: z.string().optional().describe("Link to program"),
@@ -133,17 +131,17 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         fatigue_level: z.number().optional().describe("Fatigue level 1-10"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const w = service.startWorkout(args as any);
+      handler: async (input) => {
+        const w = service.startWorkout(input);
         return textResult(
           `Workout started: **${w.name}**\n  Started: ${w.start_time}\n  ID: ${w.id}\n\nNow use kernel_training_log_set to record each set, and kernel_training_finish_workout when done.`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_log_set",
       description: "Log a set within an active workout. Auto-detects PRs (new volume record).",
-      inputSchema: z.object({
+      schema: z.object({
         workout_id: z.string().describe("Workout ID"),
         exercise_name: z.string().describe("Exercise name"),
         exercise_id: z.string().optional(),
@@ -156,8 +154,8 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         is_warmup: z.boolean().optional().describe("Mark as warmup set (won't count for PRs)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const set = service.logSet(args as any);
+      handler: async (input) => {
+        const set = service.logSet(input);
         let out = `Set ${set.set_number} logged: **${set.exercise_name}**`;
         if (set.reps && set.weight_kg) out += ` — ${set.reps}×${set.weight_kg}kg`;
         else if (set.reps) out += ` — ${set.reps} reps`;
@@ -166,33 +164,31 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         if (set.is_pr) out += " 🏆 **NEW PR!**";
         return textResult(out);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_finish_workout",
       description: "Complete a workout session. Calculates total duration automatically.",
-      inputSchema: z.object({
+      schema: z.object({
         workout_id: z.string(),
         mood_after: z.number().optional().describe("Mood after workout 1-10"),
         calories_burned: z.number().optional(),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const { workout_id, ...input } = args as any;
+      handler: async ({ workout_id, ...input }) => {
         const w = service.finishWorkout(workout_id, input);
         if (!w) return errorResult(`Workout not found: ${workout_id}`);
         return textResult(
           `Workout completed: **${w.name}**\n  Duration: ${w.duration_minutes}min\n  From: ${w.start_time}\n  To: ${w.end_time}`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_get_workout",
       description: "Get full workout details including all sets logged.",
-      inputSchema: z.object({
+      schema: z.object({
         workout_id: z.string(),
       }),
-      handler: async (args) => {
-        const { workout_id } = args as { workout_id: string };
+      handler: async ({ workout_id }) => {
         const w = service.getWorkout(workout_id);
         if (!w) return errorResult(`Workout not found: ${workout_id}`);
 
@@ -215,31 +211,31 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         }
         return textResult(out);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_list_workouts",
       description: "List recent workouts with optional filters.",
-      inputSchema: z.object({
+      schema: z.object({
         from: z.string().optional(),
         to: z.string().optional(),
         sport: z.string().optional(),
         limit: z.number().optional().describe("Max results (default: 20)"),
       }),
-      handler: async (args) => {
-        const workouts = service.listWorkouts({ ...(args as any), limit: (args as any).limit ?? 20 });
+      handler: async (filters) => {
+        const workouts = service.listWorkouts({ ...filters, limit: filters.limit ?? 20 });
         if (workouts.length === 0) return textResult("No workouts found.");
         const lines = workouts.map(w =>
           `${w.date} — **${w.name}** (${w.sport}) ${w.duration_minutes ? `${w.duration_minutes}min` : "in progress"} | ID: ${w.id}`
         );
         return textResult(`${workouts.length} workout(s):\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Cardio ────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_training_log_cardio",
       description: "Log a cardio session (run, cycle, swim, row, etc) with pace, HR, and distance.",
-      inputSchema: z.object({
+      schema: z.object({
         sport: z.string().describe("Sport type (running, cycling, swimming, rowing, hiking, etc)"),
         duration_minutes: z.number().describe("Duration in minutes"),
         distance_m: z.number().optional().describe("Distance in meters (e.g. 5000 for 5km)"),
@@ -252,8 +248,8 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         date: z.string().optional().describe("Date (YYYY-MM-DD, default: today)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const cardio = service.logCardio(args as any);
+      handler: async (input) => {
+        const cardio = service.logCardio(input);
         let out = `Cardio logged: **${cardio.sport}** — ${cardio.duration_minutes}min`;
         if (cardio.distance_m) out += ` | ${(cardio.distance_m / 1000).toFixed(2)}km`;
         if (cardio.avg_pace_min_km) out += ` | ${cardio.avg_pace_min_km.toFixed(2)} min/km`;
@@ -261,32 +257,30 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         if (cardio.calories) out += ` | ${cardio.calories}cal`;
         return textResult(out);
       },
-    },
+    }),
 
     // ── PRs & Progress ────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_training_prs",
       description: "Show personal records. Optionally filter by exercise name.",
-      inputSchema: z.object({
+      schema: z.object({
         exercise: z.string().optional().describe("Filter by exercise name"),
       }),
-      handler: async (args) => {
-        const { exercise } = args as { exercise?: string };
+      handler: async ({ exercise }) => {
         const prs = service.getPrs(exercise);
         if (prs.length === 0) return textResult("No PRs recorded yet. Log workouts to track progress.");
         const lines = prs.map(p => `**${p.exercise_name}** — ${p.pr_type}: ${p.value} ${p.unit} (${p.date})`);
         return textResult(`${prs.length} PR(s):\n\n${lines.join("\n")}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_strength_progress",
       description: "Track strength progress for a specific exercise over recent weeks (max weight, volume, sets per session).",
-      inputSchema: z.object({
+      schema: z.object({
         exercise: z.string().describe("Exercise name to track (e.g. 'Squat', 'Bench Press')"),
         weeks: z.number().optional().describe("Number of weeks to look back (default: 12)"),
       }),
-      handler: async (args) => {
-        const { exercise, weeks } = args as { exercise: string; weeks?: number };
+      handler: async ({ exercise, weeks }) => {
         const { data } = service.getStrengthProgress(exercise, weeks);
         if (data.length === 0) return textResult(`No data found for "${exercise}".`);
         const lines = data.map(d =>
@@ -294,21 +288,20 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         );
         return textResult(`**${exercise} — ${weeks ?? 12}wk Progress:**\n\n${lines.join("\n")}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_training_weekly_summary",
       description: "Training volume and frequency summary by week.",
-      inputSchema: z.object({
+      schema: z.object({
         weeks: z.number().optional().describe("Number of weeks (default: 4)"),
       }),
-      handler: async (args) => {
-        const { weeks } = args as { weeks?: number };
+      handler: async ({ weeks }) => {
         const summary = service.getWeeklySummary(weeks);
         const lines = summary.map(w =>
           `Week of ${w.week}: ${w.workouts} workouts | ${w.total_sets} sets | ${w.total_volume_kg}kg volume | ${w.cardio_minutes}min cardio`
         );
         return textResult(`**Training — ${weeks ?? 4}wk Summary:**\n\n${lines.join("\n")}`);
       },
-    },
+    }),
   ];
 }
