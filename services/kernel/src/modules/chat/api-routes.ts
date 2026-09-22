@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerResponse } from "node:http";
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, isHttpError, type KernelHttpServer } from "../../core/http-server.js";
 import type { ChatService } from "./service.js";
 import { EpisodeLockedError } from "./service.js";
 import type { MemoryDistiller } from "./memory-distiller.js";
@@ -24,14 +24,18 @@ export function registerChatRoutes(
   distiller: MemoryDistiller | null = null,
 ): void {
   const permissionBus = new PermissionBus();
-  server.post("/api/chat/start", async (req, res) => {
+
+  /** These routes answer a failure of the service call with a 400 carrying its message. */
+  const asBadRequest = (err: unknown): HttpError =>
+    isHttpError(err) ? err : new HttpError(400, err instanceof Error ? err.message : "Bad request");
+
+  server.route<{
+    title?: string;
+    provider?: string;
+    model?: string;
+    instructions?: string;
+  }>("POST", "/api/chat/start", ({ body }) => {
     try {
-      const body = await server.parseBody<{
-        title?: string;
-        provider?: string;
-        model?: string;
-        instructions?: string;
-      }>(req);
       const episode = chatService.createEpisode({
         title: body.title,
         provider: body.provider,
@@ -39,33 +43,27 @@ export function registerChatRoutes(
         instructions: body.instructions,
       });
       events.emit("data.changed", { module: "chat", action: "start" });
-      server.json(res, 200, episode);
+      return episode;
     } catch (err) {
-      server.json(res, 400, { error: err instanceof Error ? err.message : "Bad request" });
+      throw asBadRequest(err);
     }
   });
 
-  server.post("/api/chat/message", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        episode_id: string;
-        message: string;
-        images?: Array<{ data: string; media_type: string }>;
-        documents?: Array<{ data: string; media_type: string; filename?: string }>;
-      }>(req);
-      if (!body.episode_id || (!body.message && !body.images?.length && !body.documents?.length)) {
-        server.json(res, 400, { error: "episode_id and message (or attachment) required" });
-        return;
-      }
-      const response = await chatService.chat(body.episode_id, body.message ?? "", {
-        images: body.images,
-        documents: body.documents,
-      });
-      events.emit("data.changed", { module: "chat", action: "message" });
-      server.json(res, 200, response);
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : "Chat error" });
+  server.route<{
+    episode_id: string;
+    message: string;
+    images?: Array<{ data: string; media_type: string }>;
+    documents?: Array<{ data: string; media_type: string; filename?: string }>;
+  }>("POST", "/api/chat/message", async ({ body }) => {
+    if (!body.episode_id || (!body.message && !body.images?.length && !body.documents?.length)) {
+      throw new HttpError(400, "episode_id and message (or attachment) required");
     }
+    const response = await chatService.chat(body.episode_id, body.message ?? "", {
+      images: body.images,
+      documents: body.documents,
+    });
+    events.emit("data.changed", { module: "chat", action: "message" });
+    return response;
   });
 
   // ── Streaming chat via Claude Code SDK ──────────────────
@@ -183,29 +181,25 @@ export function registerChatRoutes(
     }
   });
 
-  server.post("/api/chat/permission/respond", async (req, res) => {
+  server.route<{
+    request_id: string;
+    behavior: "allow" | "deny";
+    reason?: string;
+  }>("POST", "/api/chat/permission/respond", ({ body }) => {
+    if (!body.request_id || (body.behavior !== "allow" && body.behavior !== "deny")) {
+      throw new HttpError(400, "request_id and behavior (allow|deny) required");
+    }
+    let ok: boolean;
     try {
-      const body = await server.parseBody<{
-        request_id: string;
-        behavior: "allow" | "deny";
-        reason?: string;
-      }>(req);
-      if (!body.request_id || (body.behavior !== "allow" && body.behavior !== "deny")) {
-        server.json(res, 400, { error: "request_id and behavior (allow|deny) required" });
-        return;
-      }
-      const ok = permissionBus.respond(body.request_id, {
+      ok = permissionBus.respond(body.request_id, {
         behavior: body.behavior,
         reason: body.reason,
       });
-      if (!ok) {
-        server.json(res, 404, { error: "Unknown or expired request_id" });
-        return;
-      }
-      server.json(res, 200, { ok: true });
     } catch (err) {
-      server.json(res, 400, { error: err instanceof Error ? err.message : "Bad request" });
+      throw asBadRequest(err);
     }
+    if (!ok) throw new HttpError(404, "Unknown or expired request_id");
+    return { ok: true };
   });
 
   // Serve chat attachments — sandboxed under data/chat-images.
@@ -242,55 +236,47 @@ export function registerChatRoutes(
   });
 
   // Hard-delete an episode + its messages (UI sidebar trash button in /chat).
-  server.post("/api/chat/episode/delete", async (req, res) => {
+  server.route<{ episode_id: string }>("POST", "/api/chat/episode/delete", ({ body }) => {
+    if (!body.episode_id) throw new HttpError(400, "episode_id required");
+    let ok: boolean;
     try {
-      const body = await server.parseBody<{ episode_id: string }>(req);
-      if (!body.episode_id) {
-        server.json(res, 400, { error: "episode_id required" });
-        return;
-      }
-      const ok = chatService.deleteEpisode(body.episode_id);
-      if (!ok) { server.json(res, 404, { error: "Episode not found" }); return; }
-      events.emit("data.changed", { module: "chat", action: "episode_deleted" });
-      server.json(res, 200, { success: true, id: body.episode_id });
+      ok = chatService.deleteEpisode(body.episode_id);
     } catch (err) {
-      server.json(res, 400, { error: err instanceof Error ? err.message : "Bad request" });
+      throw asBadRequest(err);
     }
+    if (!ok) throw new HttpError(404, "Episode not found");
+    events.emit("data.changed", { module: "chat", action: "episode_deleted" });
+    return { success: true, id: body.episode_id };
   });
 
-  server.post("/api/chat/episode/provider", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ episode_id: string; provider: string; model?: string }>(req);
+  server.route<{ episode_id: string; provider: string; model?: string }>(
+    "POST", "/api/chat/episode/provider", ({ body }) => {
       if (!body.episode_id || !body.provider) {
-        server.json(res, 400, { error: "episode_id and provider required" });
-        return;
+        throw new HttpError(400, "episode_id and provider required");
       }
-      const updated = chatService.updateEpisodeProvider(body.episode_id, body.provider, body.model);
-      if (!updated) { server.json(res, 404, { error: "Episode not found" }); return; }
+      let updated: ReturnType<ChatService["updateEpisodeProvider"]>;
+      try {
+        updated = chatService.updateEpisodeProvider(body.episode_id, body.provider, body.model);
+      } catch (err) {
+        // A started conversation's model is fixed — that's a conflict with the
+        // episode's state, not a malformed request, so it gets its own status.
+        if (err instanceof EpisodeLockedError) {
+          throw new HttpError(409, err.message, { error: err.message, locked: true, message_count: err.messageCount });
+        }
+        throw asBadRequest(err);
+      }
+      if (!updated) throw new HttpError(404, "Episode not found");
       events.emit("data.changed", { module: "chat", action: "episode_provider" });
-      server.json(res, 200, updated);
-    } catch (err) {
-      // A started conversation's model is fixed — that's a conflict with the
-      // episode's state, not a malformed request, so it gets its own status.
-      if (err instanceof EpisodeLockedError) {
-        server.json(res, 409, { error: err.message, locked: true, message_count: err.messageCount });
-        return;
-      }
-      server.json(res, 400, { error: err instanceof Error ? err.message : "Bad request" });
-    }
-  });
+      return updated;
+    },
+  );
 
-  server.get("/api/chat/episodes", (_req, res) => {
-    const episodes = chatService.listEpisodes({ limit: 50 });
-    server.json(res, 200, episodes);
-  });
+  server.route("GET", "/api/chat/episodes", () => chatService.listEpisodes({ limit: 50 }));
 
-  server.get("/api/chat/messages", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const episodeId = url.searchParams.get("episode_id");
-    if (!episodeId) { server.json(res, 400, { error: "episode_id required" }); return; }
-    const messages = chatService.getMessages(episodeId);
-    server.json(res, 200, messages);
+  server.route("GET", "/api/chat/messages", ({ query }) => {
+    const episodeId = query.get("episode_id");
+    if (!episodeId) throw new HttpError(400, "episode_id required");
+    return chatService.getMessages(episodeId);
   });
 
   // ── Distilled facts ────────────────────────────────────────
@@ -300,30 +286,25 @@ export function registerChatRoutes(
   // All return empty results when the distiller isn't wired (test bootstraps,
   // missing global LLM client) instead of 503-ing — the UI degrades gracefully.
 
-  server.get("/api/chat/distilled-facts", (req, res) => {
-    if (!distiller) { server.json(res, 200, { facts: [] }); return; }
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const category = url.searchParams.get("category");
-    const limitParam = url.searchParams.get("limit");
+  server.route("GET", "/api/chat/distilled-facts", ({ query }) => {
+    if (!distiller) return { facts: [] };
+    const category = query.get("category");
+    const limitParam = query.get("limit");
     let limit = limitParam ? parseInt(limitParam, 10) : 50;
     if (!Number.isFinite(limit) || limit <= 0) limit = 50;
     if (limit > 500) limit = 500;
-    server.json(res, 200, { facts: distiller.search(category, limit) });
+    return { facts: distiller.search(category, limit) };
   });
 
-  server.get("/api/chat/distilled-facts/episode", (req, res) => {
-    if (!distiller) { server.json(res, 200, { facts: [] }); return; }
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const episodeId = url.searchParams.get("episode_id");
-    if (!episodeId) { server.json(res, 400, { error: "episode_id required" }); return; }
-    server.json(res, 200, { facts: distiller.listForEpisode(episodeId) });
+  server.route("GET", "/api/chat/distilled-facts/episode", ({ query }) => {
+    if (!distiller) return { facts: [] };
+    const episodeId = query.get("episode_id");
+    if (!episodeId) throw new HttpError(400, "episode_id required");
+    return { facts: distiller.listForEpisode(episodeId) };
   });
 
-  server.get("/api/chat/distilled-facts/summary", (_req, res) => {
-    if (!distiller) {
-      server.json(res, 200, { categories: [], total: 0 });
-      return;
-    }
+  server.route("GET", "/api/chat/distilled-facts/summary", () => {
+    if (!distiller) return { categories: [], total: 0 };
     // The summary is small and recomputes cheap — no need for a stored view.
     // Walk all facts once, bucket by category.
     const all = distiller.search(null, 500);
@@ -340,6 +321,6 @@ export function registerChatRoutes(
     const categories = [...byCategory.entries()]
       .map(([category, v]) => ({ category, count: v.count, latest: v.latest }))
       .sort((a, b) => b.count - a.count);
-    server.json(res, 200, { categories, total: all.length });
+    return { categories, total: all.length };
   });
 }

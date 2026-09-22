@@ -30,7 +30,7 @@ export function registerArchitectureRoutes(
   const mtw = opts.mtwRequest;
 
   // Architecture 3D map endpoint — full system topology
-  httpServer.get("/api/architecture", (_req, res) => {
+  httpServer.route("GET", "/api/architecture", () => {
     const modules = registry.getInitializedModules();
     const allTools = registry.getAllTools();
     const eventNames = events.eventNames();
@@ -168,7 +168,7 @@ export function registerArchitectureRoutes(
       links.push({ source: "core:eventbus", target: lid, type: "event", label: proc.event ?? "" });
     }
 
-    httpServer.json(res, 200, {
+    return {
       nodes,
       links,
       meta: {
@@ -185,11 +185,11 @@ export function registerArchitectureRoutes(
           rpcModules: mtw.rpcModules.length,
         } : null,
       },
-    });
+    };
   });
 
   // Architecture metrics endpoint — heatmap, health, timeline
-  httpServer.get("/api/architecture/metrics", (_req, res) => {
+  httpServer.route("GET", "/api/architecture/metrics", () => {
     const now = Date.now();
     const oneHourAgo = new Date(now - 3_600_000).toISOString();
     const thirtyMinAgo = new Date(now - 1_800_000).toISOString();
@@ -320,10 +320,10 @@ export function registerArchitectureRoutes(
     // ── Timeline (arch events migrated to mtwRequest) ──
     const timeline: unknown[] = [];
 
-    httpServer.json(res, 200, {
+    return {
       modules: moduleMetrics,
       health,
       timeline,
-    });
+    };
   });
 }

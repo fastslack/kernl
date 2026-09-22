@@ -408,9 +408,7 @@ export async function initHttpAndMcp(args: {
       // Manifest endpoint for frontend dynamic configuration. Passes the
       // extensions service so nav items/groups declared in manifests of
       // active extensions get merged in on every request.
-      httpServer.get("/api/manifest", (_req, res) => {
-        httpServer!.json(res, 200, dashboardRegistry.getManifest(extensionsModule.service));
-      });
+      httpServer.route("GET", "/api/manifest", () => dashboardRegistry.getManifest(extensionsModule.service));
 
       // Is a newer Kernl published? Read-only: it never downloads or applies
       // anything, because migrations run at boot and only go forward, so an
@@ -419,6 +417,7 @@ export async function initHttpAndMcp(args: {
       // The button. Downloads, stages, and hands off to a helper that swaps
       // the bundle once this process is gone — so a 202 here means "we are
       // about to exit", not "done". Only ever reached because someone clicked.
+      // Raw handler (as is /restart below): it answers 202 and then exits.
       httpServer.post("/api/update/apply", async (_req, res) => {
         const outcome = await applyUpdate();
         if (!outcome.ok) {
@@ -453,16 +452,11 @@ export async function initHttpAndMcp(args: {
       // applying ends with this process exiting, so the request that started
       // it cannot also report how it went — and a multi-megabyte download with
       // no progress reads as a hung button.
-      httpServer.get("/api/update/progress", (_req, res) => {
-        httpServer!.json(res, 200, updateProgress());
-      });
+      httpServer.route("GET", "/api/update/progress", () => updateProgress());
 
-      httpServer.get("/api/update/status", async (req, res) => {
-        const url = new URL(req.url ?? "/", "http://localhost");
-        httpServer!.json(res, 200, await checkForUpdate({
-          fresh: url.searchParams.get("fresh") === "1",
-        }));
-      });
+      httpServer.route("GET", "/api/update/status", ({ query }) => checkForUpdate({
+        fresh: query.get("fresh") === "1",
+      }));
 
       // Architecture endpoints (topology + metrics)
       // mtwRequestArch is populated later when the RPC handler initializes.

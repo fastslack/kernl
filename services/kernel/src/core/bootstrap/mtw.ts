@@ -39,7 +39,7 @@ import type { LlmClient } from "../llm/client.js";
 import type { RustBridge } from "../rust/bridge.js";
 import type { createRustDelegates } from "../rust/delegates.js";
 import { MtwPublisher } from "../mtw/publisher.js";
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { MtwRequestArchInfo } from "../../modules/dashboard/architecture-routes.js";
 import type { ExtensionHandles } from "./extensions.js";
 import type { LifeService } from "../types/extensions/index.js";
@@ -142,12 +142,10 @@ export async function initMtw(args: {
   // WS gateway is absent (free stack) or disconnected. Returns the same
   // shape the publisher would broadcast, or 404 for an unknown channel.
   if (httpServer) {
-    httpServer.get("/api/channel/:name", async (req, res) => {
-      const name = (req as unknown as { params?: { name?: string } }).params?.name
-        ?? new URL(req.url ?? "/", "http://localhost").pathname.split("/").pop() ?? "";
+    httpServer.route("GET", "/api/channel/:name", async ({ params: { name } }) => {
       const data = await publisherQueryChannel(name);
-      if (data === undefined) { httpServer.json(res, 404, { error: `unknown channel: ${name}` }); return; }
-      httpServer.json(res, 200, data as Record<string, unknown>);
+      if (data === undefined) throw new HttpError(404, `unknown channel: ${name}`);
+      return data;
     });
   }
 
@@ -248,6 +246,9 @@ export async function initMtw(args: {
   // (and any client) can call them when the Rust bridge / WS transport is off —
   // e.g. the zero-config public stack (BRIDGE_ENABLED=false). Same dispatch as
   // the WS path. POST /api/rpc/<action> with the args as the JSON body.
+  //
+  // Left on the raw handler: an empty body is a 400 here, where the helper
+  // would read it as `{}` and run the action with no args.
   if (httpServer) {
     httpServer.post("/api/rpc/:action", async (req, res) => {
       const action = (req as unknown as { params?: { action?: string } }).params?.action

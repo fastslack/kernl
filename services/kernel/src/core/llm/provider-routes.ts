@@ -11,7 +11,7 @@
  *   POST /api/llm-providers/:slug/stop      → stop the provider
  */
 
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { LlmProviderRegistry } from "./provider-registry.js";
 import type { LlmProviderStatus } from "./provider.js";
 import type { ChatLlmProvider } from "./chat-adapters.js";
@@ -40,6 +40,12 @@ function slugOf(req: unknown): string | null {
   const params = (req as { params?: Record<string, string> }).params;
   const slug = params?.slug;
   if (!slug || !/^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$/.test(slug)) return null;
+  return slug;
+}
+/** The validated `:slug`, or a 400. */
+function requireSlug(params: Record<string, string>): string {
+  const slug = slugOf({ params });
+  if (!slug) throw new HttpError(400, "invalid slug");
   return slug;
 }
 
@@ -74,51 +80,39 @@ export function registerLlmProviderRoutes(
    */
   onConfigSaved?: (slug: string) => void | Promise<void>,
 ): void {
-  server.get("/api/llm-providers", (_req, res) => {
-    server.json(res, 200, {
-      providers: decorateToolLoop(registry.getStatuses(), getChatProviders()),
-    });
-  });
+  server.route("GET", "/api/llm-providers", () => ({
+    providers: decorateToolLoop(registry.getStatuses(), getChatProviders()),
+  }));
 
   // POST /api/llm-providers/clear-exhausted — wipes the per-provider quota
   // exhaustion flag (in-memory + persisted in `provider_status`). Useful when
   // an OOQ flag is stuck from a prior day or a quota was topped up out of
   // band. Body `{slug}` clears one provider; empty body clears all.
-  server.post("/api/llm-providers/clear-exhausted", async (req, res) => {
-    try {
-      const body = (await server.parseBody<{ slug?: string }>(req).catch(() => ({}))) as { slug?: string };
-      const slug = body.slug;
-      const cleared = clearProviderExhausted(slug);
-      server.json(res, 200, { cleared, slug: slug ?? "(all)" });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ slug?: string }>("POST", "/api/llm-providers/clear-exhausted", ({ body }) => {
+    const slug = body.slug;
+    const cleared = clearProviderExhausted(slug);
+    return { cleared, slug: slug ?? "(all)" };
   });
 
-  server.get("/api/llm-providers/:slug", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
+  server.route("GET", "/api/llm-providers/:slug", ({ params }) => {
+    const slug = requireSlug(params);
     const status = registry.getStatuses().find(s => s.slug === slug);
-    if (!status) { server.json(res, 404, { error: "provider not found" }); return; }
-    server.json(res, 200, { status });
+    if (!status) throw new HttpError(404, "provider not found");
+    return { status };
   });
 
-  server.get("/api/llm-providers/:slug/schema", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    const schema = registry.getConfigSchema(slug);
-    if (!schema) { server.json(res, 404, { error: "provider not found" }); return; }
-    server.json(res, 200, { schema });
+  server.route("GET", "/api/llm-providers/:slug/schema", ({ params }) => {
+    const schema = registry.getConfigSchema(requireSlug(params));
+    if (!schema) throw new HttpError(404, "provider not found");
+    return { schema };
   });
 
-  server.get("/api/llm-providers/:slug/models", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
+  server.route("GET", "/api/llm-providers/:slug/models", async ({ params }) => {
+    const slug = requireSlug(params);
     const provider = registry.getProvider(slug);
-    if (!provider) { server.json(res, 404, { error: "provider not running" }); return; }
+    if (!provider) throw new HttpError(404, "provider not running");
     if (typeof provider.listModels !== "function") {
-      server.json(res, 200, { models: [], dynamic: false, blocked: 0 });
-      return;
+      return { models: [], dynamic: false, blocked: 0 };
     }
     try {
       const all = await provider.listModels();
@@ -156,7 +150,7 @@ export function registerLlmProviderRoutes(
             : m.traits.safety ? "safety"
             : "other",
         }));
-      server.json(res, 200, {
+      return {
         models: chat.map((m): { id: string; traits: ModelTraits; loaded?: boolean } =>
           loaded.size > 0 ? { id: m.id, traits: m.traits, loaded: loaded.has(m.id) } : { id: m.id, traits: m.traits },
         ),
@@ -169,9 +163,9 @@ export function registerLlmProviderRoutes(
         ...(loaded.size > 0 || typeof withLoaded.listLoadedModels === "function"
           ? { loadedCount: chat.filter((m) => loaded.has(m.id)).length }
           : {}),
-      });
+      };
     } catch (err) {
-      server.json(res, 200, { models: [], dynamic: true, blocked: 0, nonChatHidden: 0, error: String(err) });
+      return { models: [], dynamic: true, blocked: 0, nonChatHidden: 0, error: String(err) };
     }
   });
 
@@ -184,9 +178,8 @@ export function registerLlmProviderRoutes(
    * the old secret to send back unchanged — so the PUT below now does that
    * merge server-side instead. The secret never has to leave the kernel.
    */
-  server.get("/api/llm-providers/:slug/config", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
+  server.route("GET", "/api/llm-providers/:slug/config", ({ params }) => {
+    const slug = requireSlug(params);
     const raw = registry.loadConfig(slug);
     const schema = registry.getConfigSchema(slug) ?? [];
     const secretKeys = new Set(schema.filter((f) => f.type === "password").map((f) => f.key));
@@ -197,9 +190,12 @@ export function registerLlmProviderRoutes(
     for (const [k, v] of Object.entries(raw)) {
       out[k] = secretKeys.has(k) && typeof v === "string" ? maskSecret(v) : v;
     }
-    server.json(res, 200, { config: out });
+    return { config: out };
   });
 
+  // Left on the raw handler: an empty or malformed body must stay a 400.
+  // The helper reads an empty body as `{}`, which would pass the object
+  // check below and save a config stripped of every non-secret setting.
   server.put("/api/llm-providers/:slug/config", async (req, res) => {
     const slug = slugOf(req);
     if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
@@ -270,22 +266,19 @@ export function registerLlmProviderRoutes(
     server.json(res, 200, { saved: true, running: !!registry.getProvider(slug) });
   });
 
-  server.post("/api/llm-providers/:slug/start", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    const ok = await registry.startProvider(slug);
+  server.route("POST", "/api/llm-providers/:slug/start", async ({ params }) => {
+    const ok = await registry.startProvider(requireSlug(params));
     if (!ok) {
-      server.json(res, 500, { ok: false, error: registry.lastStartError ?? "start failed" });
-      return;
+      const error = registry.lastStartError ?? "start failed";
+      throw new HttpError(500, error, { ok: false, error });
     }
-    server.json(res, 200, { ok: true });
+    return { ok: true };
   });
 
-  server.post("/api/llm-providers/:slug/stop", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    const ok = await registry.stopProvider(slug);
-    server.json(res, ok ? 200 : 404, { ok });
+  server.route("POST", "/api/llm-providers/:slug/stop", async ({ params }) => {
+    const ok = await registry.stopProvider(requireSlug(params));
+    if (!ok) throw new HttpError(404, "provider not running", { ok });
+    return { ok };
   });
 
   // POST /api/llm/chain/test — live audit: pings EVERY link in the chain
@@ -298,6 +291,7 @@ export function registerLlmProviderRoutes(
   //   { event:"done",   winner?:{slug,model,preview}, durationMs }
   // Each event is one line ending in `\n`. Frontend reads via fetch + ReadableStream.
   // Body: { prompt?: string } — optional override (default "ping").
+  // Streams, so it stays on the raw handler.
   server.post("/api/llm/chain/test", async (req, res) => {
     type Hint = { label: string; action: string; url?: string };
     function buildHint(slug: string, kind?: string, raw?: string): Hint {
@@ -431,23 +425,22 @@ export function registerLlmProviderRoutes(
   // (cinema translator, eval scripts) that want the kernel's fallback logic
   // without re-bootstrapping the whole config in a side process.
   // Body: { system?, user, model?, maxTokens?, temperature?, json?, caller? }
-  server.post("/api/llm/chat", async (req, res) => {
+  server.route<{
+    system?: string;
+    user?: string;
+    model?: string;
+    maxTokens?: number;
+    temperature?: number;
+    json?: boolean;
+    caller?: string;
+  }>("POST", "/api/llm/chat", async ({ body }) => {
+    if (!body?.user || typeof body.user !== "string" || !body.user.trim()) {
+      throw new HttpError(400, "`user` is required and must be a non-empty string");
+    }
+    const t0 = Date.now();
+    let result;
     try {
-      const body = await server.parseBody<{
-        system?: string;
-        user?: string;
-        model?: string;
-        maxTokens?: number;
-        temperature?: number;
-        json?: boolean;
-        caller?: string;
-      }>(req);
-      if (!body?.user || typeof body.user !== "string" || !body.user.trim()) {
-        server.json(res, 400, { error: "`user` is required and must be a non-empty string" });
-        return;
-      }
-      const t0 = Date.now();
-      const result = await llm().chat({
+      result = await llm().chat({
         system: body.system,
         user: body.user,
         model: body.model,
@@ -456,18 +449,18 @@ export function registerLlmProviderRoutes(
         json: body.json,
         caller: body.caller ?? "http:/api/llm/chat",
       });
-      server.json(res, 200, {
-        text: result.text,
-        provider: result.provider,
-        model: result.model,
-        latency_ms: Date.now() - t0,
-        input_tokens: result.inputTokens,
-        output_tokens: result.outputTokens,
-      });
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      server.json(res, 502, { error: msg });
+      // The chain failed upstream: a bad gateway, not a kernel fault.
+      throw new HttpError(502, err instanceof Error ? err.message : String(err));
     }
+    return {
+      text: result.text,
+      provider: result.provider,
+      model: result.model,
+      latency_ms: Date.now() - t0,
+      input_tokens: result.inputTokens,
+      output_tokens: result.outputTokens,
+    };
   });
 
   // GET /api/llm/calls — recent audit log of every LLM call. Query params:
@@ -475,30 +468,22 @@ export function registerLlmProviderRoutes(
   //   ?slug=grok    filter to one provider
   //   ?ok=1         only successful
   //   ?fail=1       only failed
-  server.get("/api/llm/calls", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const calls = recentCalls({
-      limit: Number(url.searchParams.get("limit")) || 100,
-      slug: url.searchParams.get("slug") || undefined,
-      okOnly:   url.searchParams.get("ok")   === "1",
-      failOnly: url.searchParams.get("fail") === "1",
-    });
-    server.json(res, 200, { calls });
-  });
+  server.route("GET", "/api/llm/calls", ({ query }) => ({
+    calls: recentCalls({
+      limit: Number(query.get("limit")) || 100,
+      slug: query.get("slug") || undefined,
+      okOnly:   query.get("ok")   === "1",
+      failOnly: query.get("fail") === "1",
+    }),
+  }));
 
   // ── Model blocklist admin ────────────────────────────────────────
   // GET /api/llm/blocklist           → all auto-blocked (slug, model) pairs
   // DELETE /api/llm/blocklist/all    → wipe everything (for "Re-enable all")
   // DELETE /api/llm/blocklist/:slug/:model → unblock a specific entry
-  server.get("/api/llm/blocklist", (_req, res) => {
-    server.json(res, 200, { entries: blocklist.list() });
-  });
-  server.delete("/api/llm/blocklist/all", (_req, res) => {
-    const removed = blocklist.unblockAll();
-    server.json(res, 200, { removed });
-  });
-  server.delete("/api/llm/blocklist/:slug/:model", (req, res) => {
-    const params = (req as { params?: Record<string, string> }).params ?? {};
+  server.route("GET", "/api/llm/blocklist", () => ({ entries: blocklist.list() }));
+  server.route("DELETE", "/api/llm/blocklist/all", () => ({ removed: blocklist.unblockAll() }));
+  server.route("DELETE", "/api/llm/blocklist/:slug/:model", ({ req, params }) => {
     const slug = params.slug;
     // Models often contain slashes (e.g. meta/llama-3.1-8b-instruct) which
     // the param matcher captures as `:model` only up to the first slash.
@@ -508,32 +493,25 @@ export function registerLlmProviderRoutes(
       const m = /^\/api\/llm\/blocklist\/([^/]+)\/(.+?)(?:\?|$)/.exec(req.url);
       if (m && m[1] === slug) model = decodeURIComponent(m[2]);
     }
-    if (!slug || !model) {
-      server.json(res, 400, { error: "slug and model are required" });
-      return;
-    }
+    if (!slug || !model) throw new HttpError(400, "slug and model are required");
     const removed = blocklist.unblock(slug, model);
-    server.json(res, removed ? 200 : 404, { removed });
+    if (!removed) throw new HttpError(404, "not blocked", { removed });
+    return { removed };
   });
 
   // POST /api/llm/blocklist/:slug/:model/permanent — flag a blocked entry
   // as "permanently dismissed". Stays in the blocklist (so the dropdown
   // keeps hiding the model) but disappears from the "Modelos descartados"
   // section. Use when the user has accepted the model is dead for good.
-  server.post("/api/llm/blocklist/:slug/:model/permanent", (req, res) => {
-    const params = (req as { params?: Record<string, string> }).params ?? {};
+  server.route("POST", "/api/llm/blocklist/:slug/:model/permanent", ({ req, params }) => {
     const slug = params.slug;
     let model = params.model ?? "";
     if (req.url) {
       const m = /^\/api\/llm\/blocklist\/([^/]+)\/(.+?)\/permanent(?:\?|$)/.exec(req.url);
       if (m && m[1] === slug) model = decodeURIComponent(m[2]);
     }
-    if (!slug || !model) {
-      server.json(res, 400, { error: "slug and model are required" });
-      return;
-    }
-    const ok = blocklist.markPermanent(slug, model);
-    server.json(res, 200, { ok });
+    if (!slug || !model) throw new HttpError(400, "slug and model are required");
+    return { ok: blocklist.markPermanent(slug, model) };
   });
 
   // GET /api/llm/chain — primary + fallbacks the global LlmClient will use,
@@ -547,7 +525,7 @@ export function registerLlmProviderRoutes(
   //   "rate-limit"→ blocked because of 429 (will recover quickly)
   //   "auth"      → blocked because of 401/403 (bad key / forbidden)
   //   "degraded"  → recent transient failures, still in rotation
-  server.get("/api/llm/chain", (_req, res) => {
+  server.route("GET", "/api/llm/chain", () => {
     const chain = llm().describeChain();
     const health = getAllHealth();
     type LinkStatus = "active" | "standby" | "no-key" | "quota" | "rate-limit" | "auth" | "degraded";
@@ -582,10 +560,10 @@ export function registerLlmProviderRoutes(
         failures: h?.failures ?? 0,
       };
     };
-    server.json(res, 200, {
+    return {
       primary: describe(chain.primary, true),
       fallbacks: chain.fallbacks.map(l => describe(l, false)),
-    });
+    };
   });
 }
 
@@ -594,14 +572,14 @@ export function registerLlmProviderRoutes(
  * a blocked dashboard has to be able to ask why it is blocked.
  */
 export function registerLlmReadinessRoutes(server: KernelHttpServer): void {
-  server.get("/api/llm/readiness", async (_req, res) => {
+  server.route("GET", "/api/llm/readiness", async () => {
     const { ensureLlmReadiness } = await import("./readiness.js");
-    server.json(res, 200, await ensureLlmReadiness());
+    return ensureLlmReadiness();
   });
 
   /** Re-probe on demand. This spends a real call, so it is a POST. */
-  server.post("/api/llm/readiness/recheck", async (_req, res) => {
+  server.route("POST", "/api/llm/readiness/recheck", async () => {
     const { ensureLlmReadiness } = await import("./readiness.js");
-    server.json(res, 200, await ensureLlmReadiness(true));
+    return ensureLlmReadiness(true);
   });
 }

@@ -3,7 +3,7 @@ import { writeFile as fsWriteFile } from "node:fs/promises";
 import { resolve, basename } from "node:path";
 import crypto from "node:crypto";
 import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import { formatUptime } from "./format.js";
@@ -63,20 +63,18 @@ export function registerDashboardRoutes(
   // Email-analysis suggestion routes are now self-registered by the comms
   // extension via its `getDashboardDescriptor().registerRoutes` hook.
 
-  server.get("/api/health", (_req, res) => {
-    server.json(res, 200, {
-      status: "ok",
-      uptimeMs: Date.now() - startedAt,
-      uptimeFormatted: formatUptime(Date.now() - startedAt),
-      timezone: config?.timezone ?? process.env.TIMEZONE ?? "UTC",
-      _debug_tz: { env: process.env.TIMEZONE, configTz: config?.timezone, lifeTz: config?.life?.timezone },
-      services: {
-        sqlite: true,
-        graph: !!getGraph()?.capabilities.cypher,
-        dashboard: true,
-      },
-    });
-  });
+  server.route("GET", "/api/health", () => ({
+    status: "ok",
+    uptimeMs: Date.now() - startedAt,
+    uptimeFormatted: formatUptime(Date.now() - startedAt),
+    timezone: config?.timezone ?? process.env.TIMEZONE ?? "UTC",
+    _debug_tz: { env: process.env.TIMEZONE, configTz: config?.timezone, lifeTz: config?.life?.timezone },
+    services: {
+      sqlite: true,
+      graph: !!getGraph()?.capabilities.cypher,
+      dashboard: true,
+    },
+  }));
 
   // ── Prometheus metrics ───────────────────────────
   server.get("/api/metrics", (_req, res) => {
@@ -136,41 +134,33 @@ export function registerDashboardRoutes(
     return null;
   }
 
-  server.post("/api/upload", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ photo?: string; filename?: string }>(req);
-      if (!body.photo || typeof body.photo !== "string") {
-        server.json(res, 400, { error: "Missing 'photo' (base64 string)" });
-        return;
-      }
-      const buf = Buffer.from(body.photo, "base64");
-
-      // Size check
-      if (buf.length > MAX_UPLOAD_BYTES) {
-        server.json(res, 400, { error: `File too large (${(buf.length / 1024 / 1024).toFixed(1)} MB). Max allowed: 10 MB` });
-        return;
-      }
-
-      // MIME type validation via magic bytes
-      const mime = detectMimeType(buf);
-      if (!mime || !ALLOWED_MIME_TYPES[mime]) {
-        server.json(res, 400, { error: `Unsupported file type. Allowed: ${Object.keys(ALLOWED_MIME_TYPES).join(", ")}` });
-        return;
-      }
-
-      const ext = ALLOWED_MIME_TYPES[mime];
-      const destName = `${crypto.randomUUID()}${ext}`;
-      const uploadsDir = resolve("./data/uploads");
-      mkdirSync(uploadsDir, { recursive: true });
-      const destPath = resolve(uploadsDir, destName);
-      await fsWriteFile(destPath, buf);
-      log.info(`Photo uploaded: ${destPath} (${buf.length} bytes, ${mime})`);
-      server.json(res, 200, { path: destPath, filename: destName, size: buf.length, mimeType: mime });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error("Upload failed", err);
-      server.json(res, 500, { error: msg });
+  // The photo arrives base64-encoded inside a JSON body, so the helper's JSON
+  // parsing (and its 10 MB cap) is exactly what this route did by hand.
+  server.route<{ photo?: string; filename?: string }>("POST", "/api/upload", async ({ body }) => {
+    if (!body.photo || typeof body.photo !== "string") {
+      throw new HttpError(400, "Missing 'photo' (base64 string)");
     }
+    const buf = Buffer.from(body.photo, "base64");
+
+    // Size check
+    if (buf.length > MAX_UPLOAD_BYTES) {
+      throw new HttpError(400, `File too large (${(buf.length / 1024 / 1024).toFixed(1)} MB). Max allowed: 10 MB`);
+    }
+
+    // MIME type validation via magic bytes
+    const mime = detectMimeType(buf);
+    if (!mime || !ALLOWED_MIME_TYPES[mime]) {
+      throw new HttpError(400, `Unsupported file type. Allowed: ${Object.keys(ALLOWED_MIME_TYPES).join(", ")}`);
+    }
+
+    const ext = ALLOWED_MIME_TYPES[mime];
+    const destName = `${crypto.randomUUID()}${ext}`;
+    const uploadsDir = resolve("./data/uploads");
+    mkdirSync(uploadsDir, { recursive: true });
+    const destPath = resolve(uploadsDir, destName);
+    await fsWriteFile(destPath, buf);
+    log.info(`Photo uploaded: ${destPath} (${buf.length} bytes, ${mime})`);
+    return { path: destPath, filename: destName, size: buf.length, mimeType: mime };
   });
 
   // ── Route helpers ─────────────────────────────────
@@ -178,29 +168,22 @@ export function registerDashboardRoutes(
 
   /** Register a GET route that always returns data (query never returns null). */
   function directRoute(path: string, queryFn: (db: SqliteDb) => unknown): void {
-    server.get(path, (req, res) => {
-      server.json(res, 200, queryFn(db), req);
-    });
+    server.route("GET", path, () => queryFn(db));
   }
 
   /** Register a GET route for a nullable query — returns { available: false } when null. */
   function nullableRoute(path: string, queryFn: (db: SqliteDb) => object | null): void {
-    server.get(path, (req, res) => {
+    server.route("GET", path, () => {
       const data = queryFn(db);
-      if (data === null) {
-        server.json(res, 200, { available: false }, req);
-        return;
-      }
-      server.json(res, 200, { available: true, ...(data as Record<string, unknown>) }, req);
+      if (data === null) return { available: false };
+      return { available: true, ...(data as Record<string, unknown>) };
     });
   }
 
   // ── Direct query routes (never null) ──
   // `/api/dashboard/{tasks,crm,reminders,shopping}` are channels registered by
   // their extensions; DashboardRegistry.registerAllRoutes() serves them.
-  server.get("/api/dashboard", async (req, res) => {
-    server.json(res, 200, await queryFullDashboard(db, readChannel), req);
-  });
+  server.route("GET", "/api/dashboard", () => queryFullDashboard(db, readChannel));
   directRoute("/api/dashboard/kpis", queryKpis);
 
   // ── Delegated domain routes ──────────────────────
@@ -235,9 +218,9 @@ export function registerDashboardRoutes(
   nullableRoute("/api/dashboard/web-intel", queryWebIntel);
   // time-tracking is an extension: this alias reads its `timeTracking` channel
   // instead of importing its query, with the same `{ available }` envelope.
-  server.get("/api/dashboard/time-tracking", async (req, res) => {
+  server.route("GET", "/api/dashboard/time-tracking", async () => {
     const data = await readChannel("timeTracking");
-    server.json(res, 200, data ? { available: true, ...(data as Record<string, unknown>) } : { available: false }, req);
+    return data ? { available: true, ...(data as Record<string, unknown>) } : { available: false };
   });
 
   // files: migrated to extension. Its /api/files/* routes are registered by
@@ -249,10 +232,10 @@ export function registerDashboardRoutes(
 
 
   // ── PII filter status ──────────────────────────
-  server.get("/api/pii/status", (_req, res) => {
+  server.route("GET", "/api/pii/status", () => {
     const filter = getGlobalPiiFilter();
     const cfg = filter.getConfig();
-    server.json(res, 200, {
+    return {
       enabled: cfg.enabled,
       redactEmails: cfg.redactEmails,
       redactPhones: cfg.redactPhones,
@@ -261,291 +244,238 @@ export function registerDashboardRoutes(
       redactNames: cfg.redactNames,
       placeholder: cfg.placeholder,
       knownNamesCount: cfg.knownNames.size,
-    });
+    };
   });
 
-  server.post("/api/pii/detect", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ text: string }>(req);
-      if (!body.text) { server.json(res, 400, { error: "text required" }); return; }
-      const filter = getGlobalPiiFilter();
-      const result = filter.detect(body.text);
-      server.json(res, 200, result);
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : "Error" });
-    }
+  server.route<{ text: string }>("POST", "/api/pii/detect", ({ body }) => {
+    if (!body.text) throw new HttpError(400, "text required");
+    const filter = getGlobalPiiFilter();
+    return filter.detect(body.text);
   });
 
 
-  server.get("/api/dashboard/life", async (req, res) => {
+  server.route("GET", "/api/dashboard/life", async () => {
     if (!lifeService) {
-      server.json(res, 200, { generatedAt: new Date().toISOString(), error: "Life service not available" }, req);
-      return;
+      return { generatedAt: new Date().toISOString(), error: "Life service not available" };
     }
     try {
-      const data = await lifeService.getLifeData();
-      server.json(res, 200, data, req);
+      return await lifeService.getLifeData();
     } catch (err) {
       log.error("Life data failed", err);
-      server.json(res, 200, { generatedAt: new Date().toISOString(), error: "Unavailable" }, req);
+      return { generatedAt: new Date().toISOString(), error: "Unavailable" };
     }
   });
 
 
+  /** `?start=` (defaults to today) and `?days=` clamped to 365, 150 when absent or not a number. */
+  const dateRange = (query: URLSearchParams): [string, number] => [
+    query.get("start") ?? new Date().toISOString().split("T")[0],
+    Math.min(parseInt(query.get("days") ?? "150", 10) || 150, 365),
+  ];
+
   // ── Calendar ──────────────────────────────────
-  server.get("/api/dashboard/calendar", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const startParam = url.searchParams.get("start") ?? new Date().toISOString().split("T")[0];
-    const dayCount = Math.min(parseInt(url.searchParams.get("days") ?? "150", 10) || 150, 365);
-    server.json(res, 200, queryCalendar(db, startParam, dayCount, sysRegistry), req);
+  server.route("GET", "/api/dashboard/calendar", ({ query }) => {
+    const [startParam, dayCount] = dateRange(query);
+    return queryCalendar(db, startParam, dayCount, sysRegistry);
   });
 
   // ── System Timeline (Agenda view) ──────────────
-  server.get("/api/dashboard/system-timeline", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const startParam = url.searchParams.get("start") ?? new Date().toISOString().split("T")[0];
-    const dayCount = Math.min(parseInt(url.searchParams.get("days") ?? "150", 10) || 150, 365);
-    server.json(res, 200, querySystemTimeline(db, startParam, dayCount, sysRegistry), req);
+  server.route("GET", "/api/dashboard/system-timeline", ({ query }) => {
+    const [startParam, dayCount] = dateRange(query);
+    return querySystemTimeline(db, startParam, dayCount, sysRegistry);
   });
 
 
   // ── System Agenda ──────────────────────────────
-  server.get("/api/dashboard/system-agenda", (_req, res) => {
-    if (!sysRegistry) {
-      server.json(res, 200, { available: false });
-      return;
-    }
-    server.json(res, 200, {
+  server.route("GET", "/api/dashboard/system-agenda", () => {
+    if (!sysRegistry) return { available: false };
+    return {
       available: true,
       processes: sysRegistry.list(),
       stats: sysRegistry.getStats(),
       uptimeMs: Date.now() - startedAt,
       uptimeFormatted: formatUptime(Date.now() - startedAt),
-    });
+    };
   });
 
 
   // ── Notification API ────────────────────────────────────────────
 
+  const requireNotifier = (): Notifier => {
+    if (!notifier) throw new HttpError(400, "Notifications not configured");
+    return notifier;
+  };
+
   /** GET /api/notifications — list notifications */
-  server.get("/api/notifications", (req, res) => {
-    if (!notifier) {
-      server.json(res, 200, { notifications: [], unread: 0 });
-      return;
-    }
-    try {
-      const url = new URL(req.url ?? "", `http://${req.headers.host}`);
-      const unreadOnly = url.searchParams.get("unread") === "1";
-      const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
-      const notifications = notifier.getNotifications({ unreadOnly, limit });
-      const unread = notifier.getUnreadCount();
-      server.json(res, 200, { notifications, unread });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("GET", "/api/notifications", ({ query }) => {
+    if (!notifier) return { notifications: [], unread: 0 };
+    const unreadOnly = query.get("unread") === "1";
+    const limit = parseInt(query.get("limit") ?? "50", 10);
+    const notifications = notifier.getNotifications({ unreadOnly, limit });
+    const unread = notifier.getUnreadCount();
+    return { notifications, unread };
   });
 
-  /** POST /api/notifications/read — mark one or all as read */
-  server.post("/api/notifications/read", async (req, res) => {
-    if (!notifier) {
-      server.json(res, 400, { error: "Notifications not configured" });
-      return;
+  /**
+   * POST /api/notifications/read — mark one or all as read. Without an id this
+   * marks every notification read, so an empty body must not reach it: only
+   * an explicit `{}` means "all".
+   */
+  server.route<{ id?: string }>("POST", "/api/notifications/read", ({ body }) => {
+    const n = requireNotifier();
+    if (body.id) {
+      n.markRead(body.id);
+    } else {
+      n.markAllRead();
     }
-    try {
-      const body = await server.parseBody<{ id?: string }>(req);
-      if (body.id) {
-        notifier.markRead(body.id);
-      } else {
-        notifier.markAllRead();
-      }
-      events?.emit("data.changed", { module: "notifications", action: "read" });
-      server.json(res, 200, { success: true, unread: notifier.getUnreadCount() });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
+    events?.emit("data.changed", { module: "notifications", action: "read" });
+    return { success: true, unread: n.getUnreadCount() };
+  }, { requireBody: true });
 
-  /** DELETE /api/notifications/:id — delete a notification */
-  server.delete("/api/notifications", async (req, res) => {
-    if (!notifier) {
-      server.json(res, 400, { error: "Notifications not configured" });
-      return;
+  /** DELETE /api/notifications?id= — delete a notification (no id: purge those older than 30 days) */
+  server.route("DELETE", "/api/notifications", ({ query }) => {
+    const n = requireNotifier();
+    const id = query.get("id");
+    if (id) {
+      n.deleteNotification(id);
+    } else {
+      n.purgeOld(30);
     }
-    try {
-      const url = new URL(req.url ?? "", `http://${req.headers.host}`);
-      const id = url.searchParams.get("id");
-      if (id) {
-        notifier.deleteNotification(id);
-      } else {
-        notifier.purgeOld(30);
-      }
-      events?.emit("data.changed", { module: "notifications", action: "delete" });
-      server.json(res, 200, { success: true, unread: notifier.getUnreadCount() });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+    events?.emit("data.changed", { module: "notifications", action: "delete" });
+    return { success: true, unread: n.getUnreadCount() };
   });
 
   // ── Channel Management ──────────────────────────────────
 
   const registry = notifier?.getRegistry();
 
+  const requireRegistry = () => {
+    if (!registry) throw new HttpError(503, "Registry not available");
+    return registry;
+  };
+
   /** GET /api/channels — list all channel providers with status */
-  server.get("/api/channels", (_req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    const statuses = registry.getStatuses();
-    server.json(res, 200, { channels: statuses });
+  server.route("GET", "/api/channels", () => ({ channels: requireRegistry().getStatuses() }));
+
+  /** GET /api/channels/schema?id= — get config form schema for a channel */
+  server.route("GET", "/api/channels/schema", ({ query }) => {
+    const reg = requireRegistry();
+    const id = query.get("id");
+    if (!id) throw new HttpError(400, "Missing ?id= parameter");
+    const schema = reg.getConfigSchema(id);
+    if (!schema) throw new HttpError(404, `No provider "${id}"`);
+    const config2 = reg.loadConfig(id) ?? {};
+    return { id, schema, config: config2 };
   });
 
-  /** GET /api/channels/:id/schema — get config form schema for a channel */
-  server.get("/api/channels/schema", (req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    const url = new URL(req.url ?? "", "http://localhost");
-    const id = url.searchParams.get("id");
-    if (!id) return server.json(res, 400, { error: "Missing ?id= parameter" });
-    const schema = registry.getConfigSchema(id);
-    if (!schema) return server.json(res, 404, { error: `No provider "${id}"` });
-    const config2 = registry.loadConfig(id) ?? {};
-    server.json(res, 200, { id, schema, config: config2 });
-  });
-
-  /** PUT /api/channels/config — save config for a channel */
-  server.post("/api/channels/config", async (req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    try {
-      const body = await server.parseBody<{ id: string; config: Record<string, unknown> }>(req);
-      if (!body.id || !body.config) return server.json(res, 400, { error: "Missing id or config" });
-      const saved = registry.saveConfig(body.id, body.config);
-      if (!saved) return server.json(res, 404, { error: `Channel "${body.id}" not found in marketplace` });
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  /** POST /api/channels/config — save config for a channel */
+  server.route<{ id: string; config: Record<string, unknown> }>("POST", "/api/channels/config", ({ body }) => {
+    const reg = requireRegistry();
+    if (!body.id || !body.config) throw new HttpError(400, "Missing id or config");
+    const saved = reg.saveConfig(body.id, body.config);
+    if (!saved) throw new HttpError(404, `Channel "${body.id}" not found in marketplace`);
+    return { success: true };
   });
 
   /** POST /api/channels/start — start a channel provider */
-  server.post("/api/channels/start", async (req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      if (!body.id) return server.json(res, 400, { error: "Missing id" });
-      // Also update marketplace status to 'active'
-      db.prepare("UPDATE marketplace_items SET status = 'active', updated_at = ? WHERE slug = ? AND type = 'channel'")
-        .run(new Date().toISOString(), body.id);
-      const ok = await registry.startProvider(body.id);
-      if (!ok) {
-        return server.json(res, 400, {
-          error: `Failed to start "${body.id}"`,
-          detail: registry.lastStartError || "Unknown error — check server logs",
-        });
-      }
-      server.json(res, 200, { success: true, status: registry.getProvider(body.id)?.getStatus() });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route<{ id: string }>("POST", "/api/channels/start", async ({ body }) => {
+    const reg = requireRegistry();
+    if (!body.id) throw new HttpError(400, "Missing id");
+    // Also update marketplace status to 'active'
+    db.prepare("UPDATE marketplace_items SET status = 'active', updated_at = ? WHERE slug = ? AND type = 'channel'")
+      .run(new Date().toISOString(), body.id);
+    const ok = await reg.startProvider(body.id);
+    if (!ok) {
+      const error = `Failed to start "${body.id}"`;
+      throw new HttpError(400, error, {
+        error,
+        detail: reg.lastStartError || "Unknown error — check server logs",
+      });
     }
+    return { success: true, status: reg.getProvider(body.id)?.getStatus() };
   });
 
   /** POST /api/channels/stop — stop a channel provider */
-  server.post("/api/channels/stop", async (req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      if (!body.id) return server.json(res, 400, { error: "Missing id" });
-      // Also update marketplace status to 'installed' (not active)
-      db.prepare("UPDATE marketplace_items SET status = 'installed', updated_at = ? WHERE slug = ? AND type = 'channel'")
-        .run(new Date().toISOString(), body.id);
-      const ok = await registry.stopProvider(body.id);
-      server.json(res, 200, { success: true, stopped: ok });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ id: string }>("POST", "/api/channels/stop", async ({ body }) => {
+    const reg = requireRegistry();
+    if (!body.id) throw new HttpError(400, "Missing id");
+    // Also update marketplace status to 'installed' (not active)
+    db.prepare("UPDATE marketplace_items SET status = 'installed', updated_at = ? WHERE slug = ? AND type = 'channel'")
+      .run(new Date().toISOString(), body.id);
+    const ok = await reg.stopProvider(body.id);
+    return { success: true, stopped: ok };
   });
 
   /** POST /api/channels/test — send a test notification through a channel */
-  server.post("/api/channels/test", async (req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      if (!body.id) return server.json(res, 400, { error: "Missing id" });
-      const provider = registry.getProvider(body.id);
-      if (!provider?.isReady()) return server.json(res, 400, { error: `Provider "${body.id}" not running` });
-      let ok: boolean;
-      if (provider.sendTest) {
-        ok = await provider.sendTest();
-      } else {
-        ok = await provider.sendNotification({ title: `Kernl test — ${provider.name}`, body: "Channel working!" });
-      }
-      server.json(res, 200, { success: ok });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route<{ id: string }>("POST", "/api/channels/test", async ({ body }) => {
+    const reg = requireRegistry();
+    if (!body.id) throw new HttpError(400, "Missing id");
+    const provider = reg.getProvider(body.id);
+    if (!provider?.isReady()) throw new HttpError(400, `Provider "${body.id}" not running`);
+    let ok: boolean;
+    if (provider.sendTest) {
+      ok = await provider.sendTest();
+    } else {
+      ok = await provider.sendNotification({ title: `Kernl test — ${provider.name}`, body: "Channel working!" });
     }
+    return { success: ok };
   });
 
   /** GET /api/channels/qr — get QR code for WhatsApp pairing */
-  server.get("/api/channels/qr", (_req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    const provider = registry.getProvider("whatsapp") as any;
-    if (!provider) return server.json(res, 404, { error: "WhatsApp provider not registered" });
+  server.route("GET", "/api/channels/qr", () => {
+    const provider = requireRegistry().getProvider("whatsapp") as any;
+    if (!provider) throw new HttpError(404, "WhatsApp provider not registered");
     const qr = provider.getQr?.() ?? null;
     const status = provider.getStatus?.() ?? {};
-    server.json(res, 200, {
+    return {
       qr,
       connected: status.connected ?? false,
       phoneNumber: status.info?.phoneNumber ?? null,
       error: status.error ?? null,
-    });
+    };
   });
 
   /** POST /api/channels/whatsapp/send — send a WhatsApp message (for testing from dashboard) */
-  server.post("/api/channels/whatsapp/send", async (req, res) => {
-    if (!registry) return server.json(res, 503, { error: "Registry not available" });
-    try {
-      const body = await server.parseBody<{ phone: string; message: string }>(req);
-      if (!body.phone || !body.message) return server.json(res, 400, { error: "Missing phone or message" });
-      const provider = registry.getProvider("whatsapp") as any;
-      if (!provider?.isReady()) return server.json(res, 400, { error: "WhatsApp not connected" });
-      const phone = body.phone.replace(/[\s\-\+\(\)]/g, "");
-      const jid = phone.includes("@") ? phone : `${phone}@s.whatsapp.net`;
-      const ok = await provider.sendTo(jid, { title: "", body: body.message });
-      server.json(res, 200, { success: ok, jid });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ phone: string; message: string }>("POST", "/api/channels/whatsapp/send", async ({ body }) => {
+    const reg = requireRegistry();
+    if (!body.phone || !body.message) throw new HttpError(400, "Missing phone or message");
+    const provider = reg.getProvider("whatsapp") as any;
+    if (!provider?.isReady()) throw new HttpError(400, "WhatsApp not connected");
+    const phone = body.phone.replace(/[\s\-\+\(\)]/g, "");
+    const jid = phone.includes("@") ? phone : `${phone}@s.whatsapp.net`;
+    const ok = await provider.sendTo(jid, { title: "", body: body.message });
+    return { success: ok, jid };
   });
 
+  const userTables = () => db.prepare(
+    "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_migration%'"
+  ).all() as Array<{name: string}>;
+
   // ── GDPR Data Export ──────────────────────────────
-  server.get("/api/data/export", (_req, res) => {
+  server.route("GET", "/api/data/export", () => {
     const data: Record<string, unknown> = {};
 
-    const tables = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_migration%'"
-    ).all() as Array<{name: string}>;
-
-    for (const t of tables) {
+    for (const t of userTables()) {
       try {
         data[t.name] = db.prepare(`SELECT * FROM "${t.name}"`).all();
       } catch { /* skip if error */ }
     }
 
-    server.json(res, 200, {
+    return {
       exported_at: new Date().toISOString(),
       format: "kernl-export-v1",
       tables: Object.keys(data).length,
       data,
-    });
+    };
   });
 
   // ── GDPR Data Purge ───────────────────────────────
-  server.delete("/api/data/purge", async (req, res) => {
-    const body = await server.parseBody<{confirm?: string}>(req);
+  server.route<{confirm?: string}>("DELETE", "/api/data/purge", ({ body }) => {
     if (body.confirm !== "DELETE_ALL_DATA") {
-      server.json(res, 400, { error: 'Send {"confirm":"DELETE_ALL_DATA"} to confirm' }, req);
-      return;
+      throw new HttpError(400, 'Send {"confirm":"DELETE_ALL_DATA"} to confirm');
     }
 
-    const tables = db.prepare(
-      "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_migration%'"
-    ).all() as Array<{name: string}>;
+    const tables = userTables();
 
     let deleted = 0;
     for (const t of tables) {
@@ -555,6 +485,6 @@ export function registerDashboardRoutes(
       } catch { /* skip system tables */ }
     }
 
-    server.json(res, 200, { purged: true, tables: tables.length, rowsDeleted: deleted }, req);
+    return { purged: true, tables: tables.length, rowsDeleted: deleted };
   });
 }

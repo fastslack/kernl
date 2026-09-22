@@ -7,7 +7,7 @@
  * POST /api/google/revoke       — Revoke stored tokens
  */
 
-import { type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
 import { GoogleAuth } from "./auth.js";
 
 export function registerGoogleOAuthRoutes(
@@ -23,7 +23,7 @@ export function registerGoogleOAuthRoutes(
   }
 
   // ── GET /api/google/status ──────────────────────────────
-  server.get("/api/google/status", async (_req, res) => {
+  server.route("GET", "/api/google/status", async () => {
     const credentialsConfigured = !!(clientId && clientSecret);
     const auth = makeAuth();
     // Live health probe — a dead refresh token surfaces as needs_reauth, not a
@@ -46,7 +46,7 @@ export function registerGoogleOAuthRoutes(
       if (row) tokenInfo = { expiresAt: row.expires_at, scopes: row.scopes };
     } catch { /* ignore */ }
 
-    server.json(res, 200, {
+    return {
       credentialsConfigured,
       status,
       authenticated: connected,
@@ -57,7 +57,7 @@ export function registerGoogleOAuthRoutes(
         : null,
       tokenInfo,
       lastSync,
-    });
+    };
   });
 
   // ── POST /api/google/auth/start ─────────────────────────
@@ -66,22 +66,17 @@ export function registerGoogleOAuthRoutes(
   // google_tokens, not whether the refresh_token still works. A revoked or
   // expired refresh_token leaves a stale row in DB, and without `force` the
   // endpoint would short-circuit and the user could never re-auth.
-  server.post("/api/google/auth/start", (req, res) => {
+  server.route("POST", "/api/google/auth/start", ({ query }) => {
     if (!clientId || !clientSecret) {
-      server.json(res, 400, {
-        error: "Google credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env (AI Providers → Google section).",
-      });
-      return;
+      throw new HttpError(
+        400,
+        "Google credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env (AI Providers → Google section).",
+      );
     }
     const auth = makeAuth();
-    const url = new URL(req.url ?? "/", `http://localhost:${dashboardPort}`);
-    const force = url.searchParams.get("force") === "1" || url.searchParams.get("force") === "true";
-    if (!force && auth.isAuthenticated()) {
-      server.json(res, 200, { alreadyAuthenticated: true });
-      return;
-    }
-    const authUrl = auth.getAuthUrlForDashboard(dashboardPort);
-    server.json(res, 200, { authUrl });
+    const force = query.get("force") === "1" || query.get("force") === "true";
+    if (!force && auth.isAuthenticated()) return { alreadyAuthenticated: true };
+    return { authUrl: auth.getAuthUrlForDashboard(dashboardPort) };
   });
 
   // ── GET /auth/google/callback ────────────────────────────
@@ -92,6 +87,7 @@ export function registerGoogleOAuthRoutes(
   const publicBase = (process.env.DASHBOARD_PUBLIC_URL ?? "").replace(/\/$/, "");
   const loc = (path: string) => publicBase ? `${publicBase}${path}` : path;
 
+  // Stays a raw handler: it answers with 302 redirects, not JSON.
   server.get("/auth/google/callback", async (req, res) => {
     const url = new URL(req.url ?? "/", `http://localhost:${dashboardPort}`);
     const code = url.searchParams.get("code");
@@ -124,13 +120,9 @@ export function registerGoogleOAuthRoutes(
   });
 
   // ── POST /api/google/revoke ──────────────────────────────
-  server.post("/api/google/revoke", (_req, res) => {
-    try {
-      makeAuth().revoke();
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("POST", "/api/google/revoke", () => {
+    makeAuth().revoke();
+    return { success: true };
   });
 
   log.info("Google OAuth routes registered (/api/google/*, /auth/google/callback)");

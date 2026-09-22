@@ -2,13 +2,14 @@ import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { EventBus } from "../../../core/event-bus.js";
 import type { KernelConfig } from "../../../core/config.js";
 import { newId, isoNow } from "../../../core/helpers.js";
+import { HttpError } from "../../../sdk/http-error.js";
 import { computeNextCronRun } from "../cron-utils.js";
 import type { AgentSchedule } from "../types.js";
 
 /** A cadence the kernel refuses: below the rate-limit floor, or no cadence at all. */
-export class ScheduleValidationError extends Error {
+export class ScheduleValidationError extends HttpError {
   constructor(message: string) {
-    super(message);
+    super(400, message);
     this.name = "ScheduleValidationError";
   }
 }

@@ -1,4 +1,6 @@
 import {
+  HttpError,
+  isHttpError,
   type KernelHttpServer,
   log,
   guardOutboundUrl,
@@ -609,6 +611,7 @@ export function registerCinemaMediaRoutes(
   /** Same shape, for the download-then-convert fallback. */
   getConvertJobs?: () => ConvertJobService | null,
 ): void {
+  // Stays a raw handler: a Range-forwarding byte stream with passthrough headers.
   server.get("/api/cinema/media/webseed-proxy", async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -748,6 +751,7 @@ export function registerCinemaMediaRoutes(
   //      browser shows a real timeline from frame 1 (the frontend reads
   //      `x-content-duration` and fixes `video.duration` regardless of
   //      what the fMP4 moov reports).
+  // Stays a raw handler: pipes ffmpeg's video/mp4 output with custom headers.
   server.get("/api/cinema/media/transcode", async (req, res) => {
     let ff: import("node:child_process").ChildProcess | null = null;
     const cleanup = () => {
@@ -885,30 +889,25 @@ export function registerCinemaMediaRoutes(
   // the browser would otherwise treat it as a live stream and show only
   // elapsed-time on the scrubber). 5-minute LRU cache keyed by URL — same
   // file rarely changes and ffprobe on a 1.5 GB MPEG can take 10+ seconds.
-  server.get("/api/cinema/media/probe", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const target = url.searchParams.get("url") ?? "";
-      let parsed: URL;
-      try { parsed = new URL(target); }
-      catch { return server.json(res, 400, { error: "invalid url" }); }
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return server.json(res, 400, { error: "only http(s) urls are allowed" });
-      }
-
-      const cached = probeInfoCache.get(target);
-      if (cached && Date.now() - cached.at < 5 * 60_000) {
-        return server.json(res, 200, { ...cached.value, cached: true });
-      }
-
-      const info = await probeMediaInfo(parsed, "torrent-probe");
-
-      probeInfoCache.set(target, { value: info, at: Date.now() });
-      server.json(res, 200, { ...info, cached: false });
-    } catch (err) {
-      server.json(res, 502, { error: extractMessage(err) });
+  server.route("GET", "/api/cinema/media/probe", ({ query }) => or502(null, async () => {
+    const target = query.get("url") ?? "";
+    let parsed: URL;
+    try { parsed = new URL(target); }
+    catch { throw new HttpError(400, "invalid url"); }
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      throw new HttpError(400, "only http(s) urls are allowed");
     }
-  });
+
+    const cached = probeInfoCache.get(target);
+    if (cached && Date.now() - cached.at < 5 * 60_000) {
+      return { ...cached.value, cached: true };
+    }
+
+    const info = await probeMediaInfo(parsed, "torrent-probe");
+
+    probeInfoCache.set(target, { value: info, at: Date.now() });
+    return { ...info, cached: false };
+  }));
 
   // ── POST /api/torrents/import-archive/preview — search archive.org ───
   // Returns search results (without registering anything) so the user can
@@ -919,36 +918,30 @@ export function registerCinemaMediaRoutes(
   // ── GET /api/torrents/import-archive/files?id=… — list files for an item ──
   // Hits archive.org's metadata API server-side (no CORS for browser),
   // returns the file list ready for the frontend to build playable URLs.
-  server.get("/api/cinema/media/import-archive/files", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const id = url.searchParams.get("id") ?? "";
-      if (!id) return server.json(res, 400, { error: "id is required" });
-      const r = await fetch(`https://archive.org/metadata/${encodeURIComponent(id)}`, {
-        headers: { "user-agent": "Kernl/archive-importer" },
-        redirect: "follow",
-      });
-      if (!r.ok) return server.json(res, r.status, { error: `upstream ${r.status}` });
-      const body = (await r.json()) as {
-        metadata?: { title?: string; description?: string };
-        files?: Array<{ name: string; size?: string | number; format?: string; length?: string }>;
-      };
-      const files = (body.files ?? [])
-        .map((f) => ({
-          name: String(f.name ?? ""),
-          size: typeof f.size === "string" ? parseInt(f.size, 10) || 0 : (f.size ?? 0),
-          format: f.format ?? "",
-          length: f.length ?? "",
-        }))
-        .filter((f) => f.name && !f.name.startsWith("__ia_") && !/\.(torrent|sqlite|db|epub|pdf|jpg)$/i.test(f.name) || /\.(jpg|png|webp|jpeg|gif)$/i.test(f.name));
-      const title = body.metadata?.title ?? id;
-      const description = body.metadata?.description ?? "";
-      server.json(res, 200, { id, title, description, files });
-    } catch (err) {
-      log.error("torrents: archive files failed", err);
-      server.json(res, 502, { error: extractMessage(err) });
-    }
-  });
+  server.route("GET", "/api/cinema/media/import-archive/files", ({ query }) => or502("torrents: archive files", async () => {
+    const id = query.get("id") ?? "";
+    if (!id) throw new HttpError(400, "id is required");
+    const r = await fetch(`https://archive.org/metadata/${encodeURIComponent(id)}`, {
+      headers: { "user-agent": "Kernl/archive-importer" },
+      redirect: "follow",
+    });
+    if (!r.ok) throw new HttpError(r.status, `upstream ${r.status}`);
+    const body = (await r.json()) as {
+      metadata?: { title?: string; description?: string };
+      files?: Array<{ name: string; size?: string | number; format?: string; length?: string }>;
+    };
+    const files = (body.files ?? [])
+      .map((f) => ({
+        name: String(f.name ?? ""),
+        size: typeof f.size === "string" ? parseInt(f.size, 10) || 0 : (f.size ?? 0),
+        format: f.format ?? "",
+        length: f.length ?? "",
+      }))
+      .filter((f) => f.name && !f.name.startsWith("__ia_") && !/\.(torrent|sqlite|db|epub|pdf|jpg)$/i.test(f.name) || /\.(jpg|png|webp|jpeg|gif)$/i.test(f.name));
+    const title = body.metadata?.title ?? id;
+    const description = body.metadata?.description ?? "";
+    return { id, title, description, files };
+  }));
 
   // ── POST /api/torrents/import-archive/run — register selected items ──
 
@@ -959,6 +952,7 @@ export function registerCinemaMediaRoutes(
   // bar from real data instead of a wall-clock guess.
   // `/translate-srt/progress` is kept as an alias for back-compat with
   // anything that already wired against the original name.
+  // Stays a raw handler: Server-Sent Events.
   const subsProgressHandler = (req: import("node:http").IncomingMessage, res: import("node:http").ServerResponse) => {
     const url = new URL(req.url ?? "/", "http://localhost");
     const jobId = url.searchParams.get("jobId") ?? "";
@@ -1015,6 +1009,7 @@ export function registerCinemaMediaRoutes(
   //   passthrough=1                      skip translation, just convert SRT→VTT
   // Caches translated VTT under data/subtitles/<sha>.vtt to avoid re-running
   // the model on the same file.
+  // Stays a raw handler: answers text/vtt with x-translate-* headers.
   server.get("/api/cinema/media/translate-srt", async (req, res) => {
     const jobId = new URL(req.url ?? "/", "http://localhost").searchParams.get("jobId") ?? "";
     try {
@@ -1244,6 +1239,7 @@ export function registerCinemaMediaRoutes(
   //
   // Two cache layers means a re-run with a different translate engine reuses
   // the existing whisper transcript without re-running whisper.
+  // Stays a raw handler: answers text/vtt with x-subs-* headers.
   server.get("/api/cinema/media/subs", async (req, res) => {
     const jobId = new URL(req.url ?? "/", "http://localhost").searchParams.get("jobId") ?? "";
     try {
@@ -1496,67 +1492,41 @@ export function registerCinemaMediaRoutes(
   // The fallback for sources no browser decodes. Answers immediately; the
   // download-then-convert runs server-side and the result is a cached, and
   // crucially SEEKABLE, mp4 served by /convert/file.
-  server.get("/api/cinema/media/convert/start", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const target = url.searchParams.get("url") ?? "";
-      if (!target) return server.json(res, 400, { error: "url is required" });
-      const guard = await guardOutboundUrl(target);
-      if (!guard.ok) return server.json(res, 400, { error: guard.reason });
+  server.route("GET", "/api/cinema/media/convert/start", async ({ query }) => {
+    const target = query.get("url") ?? "";
+    if (!target) throw new HttpError(400, "url is required");
+    const guard = await guardOutboundUrl(target);
+    if (!guard.ok) throw new HttpError(400, guard.reason);
 
-      const jobs = getConvertJobs?.() ?? null;
-      if (!jobs) {
-        return server.json(res, 503, {
-          error: "conversion is not available yet — the cinema module is still starting",
-        });
-      }
-      const key = createHash("sha1").update(`convert|${target}`).digest("hex");
-      // Fetch through our own proxy for the same reason the transcribe path
-      // does: ffmpeg and fetch both trip on archive.org's redirect chain, and
-      // the proxy already gets the UA, the redirects and Range right.
-      const status = jobs.start(key, target, wrapThroughProxy(guard.parsed.toString()));
-      server.json(res, 200, status);
-    } catch (err) {
-      log.error("cinema: convert start failed", err);
-      server.json(res, 500, { error: extractMessage(err) });
+    const jobs = getConvertJobs?.() ?? null;
+    if (!jobs) {
+      throw new HttpError(503, "conversion is not available yet — the cinema module is still starting");
     }
+    const key = createHash("sha1").update(`convert|${target}`).digest("hex");
+    // Fetch through our own proxy for the same reason the transcribe path
+    // does: ffmpeg and fetch both trip on archive.org's redirect chain, and
+    // the proxy already gets the UA, the redirects and Range right.
+    return jobs.start(key, target, wrapThroughProxy(guard.parsed.toString()));
   });
 
   // ── GET /api/cinema/media/convert/status?key=… ───────────────────────
-  server.get("/api/cinema/media/convert/status", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
-      if (!key || key.length !== 40) {
-        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
-      }
-      const jobs = getConvertJobs?.() ?? null;
-      const status = jobs?.status(key) ?? null;
-      if (!status) return server.json(res, 404, { error: "no such conversion" });
-      server.json(res, 200, status);
-    } catch (err) {
-      server.json(res, 500, { error: extractMessage(err) });
-    }
+  server.route("GET", "/api/cinema/media/convert/status", ({ query }) => {
+    const key = cacheKeyParam(query);
+    const status = getConvertJobs?.()?.status(key) ?? null;
+    if (!status) throw new HttpError(404, "no such conversion");
+    return status;
   });
 
   // ── DELETE /api/cinema/media/convert?key=… — stop one ────────────────
-  server.delete("/api/cinema/media/convert", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
-      if (!key || key.length !== 40) {
-        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
-      }
-      const jobs = getConvertJobs?.() ?? null;
-      server.json(res, 200, { cancelled: jobs?.cancel(key) ?? false });
-    } catch (err) {
-      server.json(res, 500, { error: extractMessage(err) });
-    }
+  server.route("DELETE", "/api/cinema/media/convert", ({ query }) => {
+    const key = cacheKeyParam(query);
+    return { cancelled: getConvertJobs?.()?.cancel(key) ?? false };
   });
 
   // ── GET /api/cinema/media/convert/file?key=… — serve the result ──────
   // Range-aware on purpose. The whole point of converting to a file instead
   // of streaming one is that the viewer can scrub, which needs 206s.
+  // Stays a raw handler: Range requests and a streamed video/mp4 body.
   server.get("/api/cinema/media/convert/file", async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -1611,68 +1581,52 @@ export function registerCinemaMediaRoutes(
   // and its progress lands in cinema_transcribe_jobs, so losing this
   // response — reload, navigation, flaky wifi — costs nothing: poll
   // /transcribe/status with the returned key and pick the run back up.
-  server.get("/api/cinema/media/transcribe/start", async (req, res) => {
-    try {
-      const p = parseTranscribeRequest(req.url ?? "/");
-      if (!p.ok) return server.json(res, p.status, { error: p.error });
+  server.route("GET", "/api/cinema/media/transcribe/start", async ({ req }) => {
+    const p = parseTranscribeRequest(req.url ?? "/");
+    if (!p.ok) throw new HttpError(p.status, p.error);
 
-      // A finished run is already durable on disk; report it ready rather
-      // than transcribing a film we have captions for.
-      let cached: { cueCount: number } | null = null;
-      if (existsSync(p.cachePath)) {
-        cached = { cueCount: parseSubs(await readFile(p.cachePath, "utf8")).length };
-      }
-
-      const jobs = getTranscribeJobs?.() ?? null;
-      if (!jobs) {
-        return server.json(res, 503, {
-          error: "transcribe jobs are not available yet — the cinema module is still starting",
-        });
-      }
-
-      const status = jobs.start(
-        {
-          key: p.cacheKey,
-          url: p.target,
-          engine: p.engine,
-          model: p.model,
-          lang: p.language ?? "",
-          jobId: p.jobId,
-        },
-        cached,
-      );
-      server.json(res, 200, { ...status, cached: Boolean(cached) });
-    } catch (err) {
-      log.error("cinema: transcribe start failed", err);
-      server.json(res, 500, { error: extractMessage(err) });
+    // A finished run is already durable on disk; report it ready rather
+    // than transcribing a film we have captions for.
+    let cached: { cueCount: number } | null = null;
+    if (existsSync(p.cachePath)) {
+      cached = { cueCount: parseSubs(await readFile(p.cachePath, "utf8")).length };
     }
+
+    const jobs = getTranscribeJobs?.() ?? null;
+    if (!jobs) {
+      throw new HttpError(503, "transcribe jobs are not available yet — the cinema module is still starting");
+    }
+
+    const status = jobs.start(
+      {
+        key: p.cacheKey,
+        url: p.target,
+        engine: p.engine,
+        model: p.model,
+        lang: p.language ?? "",
+        jobId: p.jobId,
+      },
+      cached,
+    );
+    return { ...status, cached: Boolean(cached) };
   });
 
   // ── GET /api/cinema/media/transcribe/status?key=… — poll a run ───────
   // Cheap and safe to call from any tab at any time. Falls back to the disk
   // cache so a run finished by a previous process still reads as ready.
-  server.get("/api/cinema/media/transcribe/status", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
-      if (!key || key.length !== 40) {
-        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
-      }
-      const jobs = getTranscribeJobs?.() ?? null;
-      const status = jobs?.status(key) ?? null;
-      if (status) return server.json(res, 200, status);
+  server.route("GET", "/api/cinema/media/transcribe/status", async ({ query }) => {
+    const key = cacheKeyParam(query);
+    const status = getTranscribeJobs?.()?.status(key) ?? null;
+    if (status) return status;
 
-      // No row: either it was never started here, or it finished long ago and
-      // the row was pruned. The cache file is the older, stronger evidence.
-      const cachePath = path.join(process.cwd(), "data", "subtitles", `${key}.vtt`);
-      if (existsSync(cachePath)) {
-        const cueCount = parseSubs(await readFile(cachePath, "utf8")).length;
-        return server.json(res, 200, { key, status: "ready", frac: 1, cueCount, error: "" });
-      }
-      server.json(res, 404, { error: "no such job" });
-    } catch (err) {
-      server.json(res, 500, { error: extractMessage(err) });
+    // No row: either it was never started here, or it finished long ago and
+    // the row was pruned. The cache file is the older, stronger evidence.
+    const cachePath = path.join(process.cwd(), "data", "subtitles", `${key}.vtt`);
+    if (existsSync(cachePath)) {
+      const cueCount = parseSubs(await readFile(cachePath, "utf8")).length;
+      return { key, status: "ready", frac: 1, cueCount, error: "" };
     }
+    throw new HttpError(404, "no such job");
   });
 
   // ── GET /api/torrents/transcribe — generate SRT from a video URL ────
@@ -1684,6 +1638,7 @@ export function registerCinemaMediaRoutes(
   // the run, so a proxy read timeout or a restart still loses THIS response.
   // What it no longer loses is the work: the run is a job like any other, so
   // the caller can reconnect with /transcribe/status and collect the result.
+  // Stays a raw handler: answers text/vtt with x-transcribe-* headers.
   server.get("/api/cinema/media/transcribe", async (req, res) => {
     const jobId = new URL(req.url ?? "/", "http://localhost").searchParams.get("jobId") ?? "";
     try {
@@ -1773,71 +1728,66 @@ export function registerCinemaMediaRoutes(
   // Drives the "USE EXISTING" pill row in the cinema settings popover,
   // so the user can re-pick a previously-generated transcribe / translation
   // without rerunning the pipeline.
-  server.get("/api/cinema/media/subs/list", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const target = url.searchParams.get("url") ?? "";
-      if (!target) return server.json(res, 400, { error: "url is required" });
+  server.route("GET", "/api/cinema/media/subs/list", async ({ query }) => {
+    const target = query.get("url") ?? "";
+    if (!target) throw new HttpError(400, "url is required");
 
-      const cacheDir = path.join(process.cwd(), "data", "subtitles");
-      if (!existsSync(cacheDir)) return server.json(res, 200, { subs: [] });
-      const { readdir } = await import("node:fs/promises");
-      const entries = await readdir(cacheDir);
-      // Restrict listing to <sha1>.json filenames so that an attacker who
-      // can drop a symlink in the cache dir can't pivot to ../../etc/passwd
-      // via the readFile below. Plain hex 40-char keys are the only legit
-      // sidecar shape we ever write.
-      const sidecarFiles = entries.filter((f) => /^[a-f0-9]{40}\.json$/i.test(f));
-      const subs: SubsSidecar[] = [];
-      for (const fname of sidecarFiles) {
-        try {
-          const raw = await readFile(path.join(cacheDir, fname), "utf8");
-          const meta = JSON.parse(raw) as SubsSidecar;
-          if (meta?.url !== target) continue;
-          // Make sure the .vtt is still on disk (sidecar might out-live it).
-          if (!existsSync(path.join(cacheDir, `${meta.key}.vtt`))) continue;
-          subs.push(meta);
-        } catch { /* skip malformed sidecar */ }
-      }
-      // Fallback: legacy cache files predating the sidecar feature have
-      // no .json companion. Probe known hash combinations for this URL
-      // and add any whose .vtt exists. Cheap (5-30 sha1s) and surfaces
-      // pre-rebuild generations so users don't have to regenerate.
-      const knownKeys = new Set(subs.map((s) => s.key));
-      const candidates = enumerateLegacyKeyCandidates(target);
-      for (const cand of candidates) {
-        if (knownKeys.has(cand.key)) continue;
-        if (!existsSync(path.join(cacheDir, `${cand.key}.vtt`))) continue;
-        subs.push({
-          key: cand.key,
-          kind: cand.kind,
-          url: target,
-          src_lang: cand.src_lang,
-          tgt_lang: cand.tgt_lang,
-          engine: cand.engine,
-          model: cand.model,
-          created_at: 0,             // unknown; sort to end
-        });
-        knownKeys.add(cand.key);
-      }
-
-      // Sort: transcribe first (the source), then translations by
-      // creation time (newest first; legacy entries with created_at=0
-      // sink to the bottom of their group).
-      subs.sort((a, b) => {
-        if (a.kind !== b.kind) return a.kind === "transcribe" ? -1 : 1;
-        return (b.created_at ?? 0) - (a.created_at ?? 0);
-      });
-      server.json(res, 200, { subs });
-    } catch (err) {
-      log.error("torrents: subs list failed", err);
-      server.json(res, 500, { error: extractMessage(err) });
+    const cacheDir = path.join(process.cwd(), "data", "subtitles");
+    if (!existsSync(cacheDir)) return { subs: [] };
+    const { readdir } = await import("node:fs/promises");
+    const entries = await readdir(cacheDir);
+    // Restrict listing to <sha1>.json filenames so that an attacker who
+    // can drop a symlink in the cache dir can't pivot to ../../etc/passwd
+    // via the readFile below. Plain hex 40-char keys are the only legit
+    // sidecar shape we ever write.
+    const sidecarFiles = entries.filter((f) => /^[a-f0-9]{40}\.json$/i.test(f));
+    const subs: SubsSidecar[] = [];
+    for (const fname of sidecarFiles) {
+      try {
+        const raw = await readFile(path.join(cacheDir, fname), "utf8");
+        const meta = JSON.parse(raw) as SubsSidecar;
+        if (meta?.url !== target) continue;
+        // Make sure the .vtt is still on disk (sidecar might out-live it).
+        if (!existsSync(path.join(cacheDir, `${meta.key}.vtt`))) continue;
+        subs.push(meta);
+      } catch { /* skip malformed sidecar */ }
     }
+    // Fallback: legacy cache files predating the sidecar feature have
+    // no .json companion. Probe known hash combinations for this URL
+    // and add any whose .vtt exists. Cheap (5-30 sha1s) and surfaces
+    // pre-rebuild generations so users don't have to regenerate.
+    const knownKeys = new Set(subs.map((s) => s.key));
+    const candidates = enumerateLegacyKeyCandidates(target);
+    for (const cand of candidates) {
+      if (knownKeys.has(cand.key)) continue;
+      if (!existsSync(path.join(cacheDir, `${cand.key}.vtt`))) continue;
+      subs.push({
+        key: cand.key,
+        kind: cand.kind,
+        url: target,
+        src_lang: cand.src_lang,
+        tgt_lang: cand.tgt_lang,
+        engine: cand.engine,
+        model: cand.model,
+        created_at: 0,             // unknown; sort to end
+      });
+      knownKeys.add(cand.key);
+    }
+
+    // Sort: transcribe first (the source), then translations by
+    // creation time (newest first; legacy entries with created_at=0
+    // sink to the bottom of their group).
+    subs.sort((a, b) => {
+      if (a.kind !== b.kind) return a.kind === "transcribe" ? -1 : 1;
+      return (b.created_at ?? 0) - (a.created_at ?? 0);
+    });
+    return { subs };
   });
 
   // ── GET /api/torrents/subs/file/:key.vtt — serve cached sub by key ───
   // Used by the SELECT row to load a cached sub directly without
   // recomputing the parameters. Key is the sha1 returned in the list.
+  // Stays a raw handler: answers text/vtt with its own cache/CORS headers.
   server.get("/api/cinema/media/subs/file", async (req, res) => {
     try {
       const url = new URL(req.url ?? "/", "http://localhost");
@@ -1863,19 +1813,11 @@ export function registerCinemaMediaRoutes(
   // Removes the <key>.vtt + <key>.json sidecar. Drives the per-sub 🗑 button
   // so the user can delete a mis-transcribed / mis-translated track without
   // touching the rest of the cache. Idempotent: deleting a missing key is ok.
-  server.delete("/api/cinema/media/subs/file", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const key = (url.searchParams.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
-      if (!key || key.length !== 40) {
-        return server.json(res, 400, { error: "invalid key (sha1 hex required)" });
-      }
-      const cacheDir = path.join(process.cwd(), "data", "subtitles");
-      await rmCacheKey(cacheDir, key);
-      server.json(res, 200, { ok: true, key });
-    } catch (err) {
-      server.json(res, 500, { error: extractMessage(err) });
-    }
+  server.route("DELETE", "/api/cinema/media/subs/file", async ({ query }) => {
+    const key = cacheKeyParam(query);
+    const cacheDir = path.join(process.cwd(), "data", "subtitles");
+    await rmCacheKey(cacheDir, key);
+    return { ok: true, key };
   });
 
   // ── GET /api/torrents/transcribe/cached ─────────────────────────────
@@ -1888,61 +1830,56 @@ export function registerCinemaMediaRoutes(
   // ALSO returns `any: true` if ANY engine/model combo for this URL is
   // cached — lets the UI suggest using the existing one instead of
   // re-running with the current dropdown selection.
-  server.get("/api/cinema/media/transcribe/cached", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const target = url.searchParams.get("url") ?? "";
-      const engine = (url.searchParams.get("engine") ?? "transformers").toLowerCase();
-      const model = url.searchParams.get("model") ?? "base";
-      const language = url.searchParams.get("lang") || undefined;
-      if (!target) return server.json(res, 400, { error: "url is required" });
+  server.route("GET", "/api/cinema/media/transcribe/cached", async ({ query }) => {
+    const target = query.get("url") ?? "";
+    const engine = (query.get("engine") ?? "transformers").toLowerCase();
+    const model = query.get("model") ?? "base";
+    const language = query.get("lang") || undefined;
+    if (!target) throw new HttpError(400, "url is required");
 
-      const cacheDir = path.join(process.cwd(), "data", "subtitles");
-      const cacheKey = createHash("sha1")
-        .update(`transcribe|${target}|${engine}|${model}|${language ?? "auto"}`)
-        .digest("hex");
-      const cachePath = path.join(cacheDir, `${cacheKey}.vtt`);
-      const exact = existsSync(cachePath);
+    const cacheDir = path.join(process.cwd(), "data", "subtitles");
+    const cacheKey = createHash("sha1")
+      .update(`transcribe|${target}|${engine}|${model}|${language ?? "auto"}`)
+      .digest("hex");
+    const cachePath = path.join(cacheDir, `${cacheKey}.vtt`);
+    const exact = existsSync(cachePath);
 
-      // Sniff for ANY transcript of this URL across engines/models so the UI
-      // can offer "we already have this one" UX. We hash the URL fragment and
-      // walk the cache dir matching the prefix component.
-      let any = exact;
-      let anyKey = exact ? cacheKey : "";
-      if (!exact) {
-        try {
-          const { readdir, stat: statFs } = await import("node:fs/promises");
-          const entries = await readdir(cacheDir).catch(() => [] as string[]);
-          // We can't reverse the sha1, so the practical fast check is to
-          // try the few common engine/model combos.
-          const probeCombos: Array<[string, string]> = [
-            ["whispercpp", "base"], ["whispercpp", "tiny"], ["whispercpp", "small"],
-            ["transformers", "base"], ["transformers", "tiny"],
-            ["groq", "base"],
-          ];
+    // Sniff for ANY transcript of this URL across engines/models so the UI
+    // can offer "we already have this one" UX. We hash the URL fragment and
+    // walk the cache dir matching the prefix component.
+    let any = exact;
+    let anyKey = exact ? cacheKey : "";
+    if (!exact) {
+      try {
+        const { readdir, stat: statFs } = await import("node:fs/promises");
+        const entries = await readdir(cacheDir).catch(() => [] as string[]);
+        // We can't reverse the sha1, so the practical fast check is to
+        // try the few common engine/model combos.
+        const probeCombos: Array<[string, string]> = [
+          ["whispercpp", "base"], ["whispercpp", "tiny"], ["whispercpp", "small"],
+          ["transformers", "base"], ["transformers", "tiny"],
+          ["groq", "base"],
+        ];
+        for (const [e, m] of probeCombos) {
+          const k = createHash("sha1")
+            .update(`transcribe|${target}|${e}|${m}|${language ?? "auto"}`)
+            .digest("hex");
+          if (entries.includes(`${k}.vtt`)) { any = true; anyKey = k; break; }
+        }
+        // Also try without explicit language ("auto")
+        if (!any) {
           for (const [e, m] of probeCombos) {
             const k = createHash("sha1")
-              .update(`transcribe|${target}|${e}|${m}|${language ?? "auto"}`)
+              .update(`transcribe|${target}|${e}|${m}|auto`)
               .digest("hex");
             if (entries.includes(`${k}.vtt`)) { any = true; anyKey = k; break; }
           }
-          // Also try without explicit language ("auto")
-          if (!any) {
-            for (const [e, m] of probeCombos) {
-              const k = createHash("sha1")
-                .update(`transcribe|${target}|${e}|${m}|auto`)
-                .digest("hex");
-              if (entries.includes(`${k}.vtt`)) { any = true; anyKey = k; break; }
-            }
-          }
-          void statFs; // imported in case future caller wants mtime
-        } catch { /* ignore — degrade to exact-only signal */ }
-      }
-
-      server.json(res, 200, { exact, any, key: anyKey });
-    } catch (err) {
-      server.json(res, 500, { error: extractMessage(err) });
+        }
+        void statFs; // imported in case future caller wants mtime
+      } catch { /* ignore — degrade to exact-only signal */ }
     }
+
+    return { exact, any, key: anyKey };
   });
 
   // ── GET /api/torrents/transcribe/info — engine availability ─────────
@@ -1950,10 +1887,10 @@ export function registerCinemaMediaRoutes(
   // an engine that could not run and the user found out only when the job
   // failed. It is now probed (cached 60s in media-tools), and reports the
   // install command for the host when it is missing.
-  server.get("/api/cinema/media/transcribe/info", async (_req, res) => {
+  server.route("GET", "/api/cinema/media/transcribe/info", async () => {
     const whisper = await probeMediaTool("whisper-cli");
     const ffmpeg = await probeMediaTool("ffmpeg");
-    server.json(res, 200, {
+    return {
       engines: {
         // Runs in-process via @huggingface/transformers — no external binary,
         // which is why this one is genuinely always available.
@@ -1975,7 +1912,7 @@ export function registerCinemaMediaRoutes(
         hint: ffmpeg.available ? undefined : `${ffmpeg.reason}. ${ffmpeg.hint}`,
       },
       models: ["tiny", "base", "small", "medium", "large-v3", "large-v3-turbo"],
-    });
+    };
   });
 
   // ── GET /api/torrents/translate-srt/info — engine availability ──────
@@ -1986,9 +1923,9 @@ export function registerCinemaMediaRoutes(
   //           ordered chain (primary + fallbacks) and which links have
   //           credentials. The cinema/MediaPlayer pickers use this to
   //           render the engine tile + a chain summary.
-  server.get("/api/cinema/media/translate-srt/info", async (_req, res) => {
+  server.route("GET", "/api/cinema/media/translate-srt/info", () => {
     const chain = llm().describeChain();
-    server.json(res, 200, {
+    return {
       engines: {
         nllb: { available: true, model: "Xenova/nllb-200-distilled-600M", offline: true },
         llm: {
@@ -1999,7 +1936,7 @@ export function registerCinemaMediaRoutes(
       },
       languages: ["en", "es", "pt", "fr", "de", "it", "ja", "zh", "ru", "ko", "ar"]
         .map(iso => ({ iso, name: langName(iso) })),
-    });
+    };
   });
 
   // ── GET /api/torrents/inbox?target= — drain pending notifications ─
@@ -2106,4 +2043,26 @@ export async function searchArchive(q: ImportArchiveQuery): Promise<ArchiveSearc
 function extractMessage(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+/** `?key=` as a cache key: sha1 hex only, which also rules out path traversal. */
+function cacheKeyParam(query: URLSearchParams): string {
+  const key = (query.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
+  if (!key || key.length !== 40) throw new HttpError(400, "invalid key (sha1 hex required)");
+  return key;
+}
+
+/**
+ * Routes that front archive.org answer an upstream failure as 502 with the
+ * bare message rather than the default 500. An HttpError the handler threw
+ * on purpose passes through untouched.
+ */
+async function or502<T>(what: string | null, fn: () => Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isHttpError(err)) throw err;
+    if (what) log.error(`${what} failed`, err);
+    throw new HttpError(502, extractMessage(err));
+  }
 }

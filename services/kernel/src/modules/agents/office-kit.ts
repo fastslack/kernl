@@ -27,6 +27,7 @@ import type { ModelChainEntry } from "./types.js";
 import { isFlowKind, type FlowKind, type RepoIsolation } from "./types.js";
 import { applyRepoIsolation } from "./repo-isolation.js";
 import { isoNow, slugify } from "../../core/helpers.js";
+import { HttpError } from "../../sdk/http-error.js";
 
 // Canonical slugify now lives in core/helpers. Re-export it here so existing
 // importers of `office-kit`'s slugify (tests, agents tools/rpc/store) keep
@@ -129,9 +130,10 @@ export interface OfficeReport {
   warnings: string[];
 }
 
-export class OfficeExistsError extends Error {
+export class OfficeExistsError extends HttpError {
   constructor(readonly officeId: string, name: string) {
-    super(`An office named "${name}" already exists`);
+    const message = `An office named "${name}" already exists`;
+    super(409, message, { error: "office_exists", message, office_id: officeId });
     this.name = "OfficeExistsError";
   }
 }

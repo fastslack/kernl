@@ -197,19 +197,19 @@ export class DashboardRegistry {
     // Auto-register channel endpoints
     for (const [name, ch] of this.channels) {
       const path = `/api/dashboard/${name}`;
-      server.get(path, async (_req: IncomingMessage, res: ServerResponse) => {
+      server.route("GET", path, async () => {
         try {
           const data = await ch.query(db, neo4j);
-          server.json(res, 200, data ? { available: true, ...(data as Record<string, unknown>) } : { available: false });
+          return data ? { available: true, ...(data as Record<string, unknown>) } : { available: false };
         } catch (err) {
           log.error(`Dashboard channel "${name}" query failed`, err);
-          server.json(res, 200, { available: false });
+          return { available: false };
         }
       });
       log.debug(`DashboardRegistry: auto-registered route ${path}`);
     }
 
-    // Serve module-declared static HTML pages
+    // Serve module-declared static HTML pages (HTML, so not server.route)
     for (const page of this.pages) {
       server.get(page.path, (_req: IncomingMessage, res: ServerResponse) => {
         try {

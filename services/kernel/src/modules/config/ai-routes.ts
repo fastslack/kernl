@@ -7,7 +7,7 @@
 
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
 import type { KernelConfig } from "../../core/config.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { log } from "../../core/logger.js";
@@ -86,7 +86,7 @@ export function registerAiConfigRoutes(
   const envPath = resolve(process.cwd(), ".env");
 
   // ── GET /api/config/ai ──────────────────────────────────
-  server.get("/api/config/ai", (_req, res) => {
+  server.route("GET", "/api/config/ai", () => {
     const anthropicKey = getProviderConfig("claude").apiKey;
     const openaiKey = getProviderConfig("openai").apiKey;
     const grokKey = getProviderConfig("grok").apiKey;
@@ -94,7 +94,7 @@ export function registerAiConfigRoutes(
     const lmstudioBaseUrl = isConnected("lmstudio") ? getProviderConfig("lmstudio").baseUrl : "";
     const elevenLabsKey = config.voice.elevenLabsApiKey;
 
-    server.json(res, 200, {
+    return {
       providers: {
         anthropic: {
           configured: anthropicKey.length > 0,
@@ -141,243 +141,233 @@ export function registerAiConfigRoutes(
         webIntelLlm: config.webIntel.defaultLlm,
       },
       envFileExists: existsSync(envPath),
-    });
+    };
   });
 
   // ── POST /api/config/ai ─────────────────────────────────
-  server.post("/api/config/ai", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        anthropicApiKey?: string;
-        openaiApiKey?: string;
-        grokApiKey?: string;
-        grokDefaultModel?: string;
-        nvidiaApiKey?: string;
-        nvidiaDefaultModel?: string;
-        minimaxApiKey?: string;
-        minimaxBaseUrl?: string;
-        minimaxDefaultModel?: string;
-        lmstudioBaseUrl?: string;
-        elevenLabsApiKey?: string;
-        googleClientId?: string;
-        googleClientSecret?: string;
-        chatProvider?: string;
-        chatModel?: string;
-        agentsProvider?: string;
-        agentsModel?: string;
-        agentsDefaultModelChain?: Array<{ provider: string; model: string }>;
-        webIntelLlm?: string;
-      }>(req);
+  server.route<{
+    anthropicApiKey?: string;
+    openaiApiKey?: string;
+    grokApiKey?: string;
+    grokDefaultModel?: string;
+    nvidiaApiKey?: string;
+    nvidiaDefaultModel?: string;
+    minimaxApiKey?: string;
+    minimaxBaseUrl?: string;
+    minimaxDefaultModel?: string;
+    lmstudioBaseUrl?: string;
+    elevenLabsApiKey?: string;
+    googleClientId?: string;
+    googleClientSecret?: string;
+    chatProvider?: string;
+    chatModel?: string;
+    agentsProvider?: string;
+    agentsModel?: string;
+    agentsDefaultModelChain?: Array<{ provider: string; model: string }>;
+    webIntelLlm?: string;
+  }>("POST", "/api/config/ai", async ({ body }) => {
+    // Per-request tracking of persisted keys. `persist()` routes through
+    // ConfigService (settings store: app_settings + .env + process.env mirror
+    // + config:changed) when available, and ALWAYS mirrors process.env so the
+    // in-process provider re-init below sees the new value regardless. When
+    // ConfigService isn't wired (defensive), the fallback block at the bottom
+    // does the legacy batch .env write + manual event emit.
+    const envUpdates: Record<string, string> = {};
+    const persist = (key: string, value: string): void => {
+      envUpdates[key] = value;
+      // Credentials are saved by the config assignment that follows each
+      // persist() call (a registry accessor); they never touch env or .env.
+      if (legacyCredentialTarget(key)) return;
+      process.env[key] = value; // env mirror — provider re-init reads process.env
+      if (configService) {
+        try { configService.set(key, value, "user"); } catch { /* keep going; env mirror already applied */ }
+      }
+    };
+    // Credential keys route through the provider registry instead of
+    // config.webIntel/config.voice (those fields no longer exist).
+    const persistCredential = (envKey: string, value: string): void => {
+      persist(envKey, value);
+      const legacy = legacyToStoredPatch(envKey, value);
+      if (legacy) saveProviderConfig(legacy.slug, legacy.patch);
+    };
 
-      // Per-request tracking of persisted keys. `persist()` routes through
-      // ConfigService (settings store: app_settings + .env + process.env mirror
-      // + config:changed) when available, and ALWAYS mirrors process.env so the
-      // in-process provider re-init below sees the new value regardless. When
-      // ConfigService isn't wired (defensive), the fallback block at the bottom
-      // does the legacy batch .env write + manual event emit.
-      const envUpdates: Record<string, string> = {};
-      const persist = (key: string, value: string): void => {
-        envUpdates[key] = value;
-        // Credentials are saved by the config assignment that follows each
-        // persist() call (a registry accessor); they never touch env or .env.
-        if (legacyCredentialTarget(key)) return;
-        process.env[key] = value; // env mirror — provider re-init reads process.env
-        if (configService) {
-          try { configService.set(key, value, "user"); } catch { /* keep going; env mirror already applied */ }
-        }
-      };
-      // Credential keys route through the provider registry instead of
-      // config.webIntel/config.voice (those fields no longer exist).
-      const persistCredential = (envKey: string, value: string): void => {
-        persist(envKey, value);
-        const legacy = legacyToStoredPatch(envKey, value);
-        if (legacy) saveProviderConfig(legacy.slug, legacy.patch);
-      };
+    // API Keys — only update if a non-empty value was provided
+    // (empty string means "leave unchanged")
+    if (body.anthropicApiKey !== undefined && body.anthropicApiKey !== "") {
+      persistCredential("ANTHROPIC_API_KEY", body.anthropicApiKey);
+    }
+    if (body.openaiApiKey !== undefined && body.openaiApiKey !== "") {
+      persistCredential("OPENAI_API_KEY", body.openaiApiKey);
+    }
+    if (body.grokApiKey !== undefined && body.grokApiKey !== "") {
+      persistCredential("GROK_API_KEY", body.grokApiKey);
+    }
+    if (body.grokDefaultModel !== undefined) {
+      persistCredential("GROK_DEFAULT_MODEL", body.grokDefaultModel);
+    }
+    if (body.nvidiaApiKey !== undefined && body.nvidiaApiKey !== "") {
+      persistCredential("NVIDIA_API_KEY", body.nvidiaApiKey);
+    }
+    if (body.nvidiaDefaultModel !== undefined) {
+      persistCredential("NVIDIA_DEFAULT_MODEL", body.nvidiaDefaultModel);
+    }
+    if (body.googleClientId !== undefined && body.googleClientId !== "") {
+      persist("GOOGLE_CLIENT_ID", body.googleClientId);
+      config.google.clientId = body.googleClientId;
+    }
+    if (body.googleClientSecret !== undefined && body.googleClientSecret !== "") {
+      persist("GOOGLE_CLIENT_SECRET", body.googleClientSecret);
+      config.google.clientSecret = body.googleClientSecret;
+    }
+    if (body.lmstudioBaseUrl !== undefined) {
+      persistCredential("LMSTUDIO_BASE_URL", body.lmstudioBaseUrl);
+    }
+    if (body.elevenLabsApiKey !== undefined && body.elevenLabsApiKey !== "") {
+      persist("ELEVENLABS_API_KEY", body.elevenLabsApiKey);
+      config.voice.elevenLabsApiKey = body.elevenLabsApiKey;
+    }
 
-      // API Keys — only update if a non-empty value was provided
-      // (empty string means "leave unchanged")
-      if (body.anthropicApiKey !== undefined && body.anthropicApiKey !== "") {
-        persistCredential("ANTHROPIC_API_KEY", body.anthropicApiKey);
+    // MiniMax — registry-native provider: the registry settings_json is the
+    // source of truth. Persist there + mirror to the settings store/env.
+    {
+      const mm = (llmRegistry?.loadConfig("minimax") ?? {}) as Record<string, unknown>;
+      let mmChanged = false;
+      if (body.minimaxApiKey !== undefined && body.minimaxApiKey !== "") {
+        mm.apiKey = body.minimaxApiKey; mmChanged = true;
+        persist("MINIMAX_API_KEY", body.minimaxApiKey);
       }
-      if (body.openaiApiKey !== undefined && body.openaiApiKey !== "") {
-        persistCredential("OPENAI_API_KEY", body.openaiApiKey);
+      if (body.minimaxBaseUrl !== undefined) {
+        mm.baseUrl = body.minimaxBaseUrl; mmChanged = true;
+        persist("MINIMAX_BASE_URL", body.minimaxBaseUrl);
       }
-      if (body.grokApiKey !== undefined && body.grokApiKey !== "") {
-        persistCredential("GROK_API_KEY", body.grokApiKey);
+      if (body.minimaxDefaultModel !== undefined) {
+        mm.defaultModel = body.minimaxDefaultModel; mmChanged = true;
+        persist("MINIMAX_DEFAULT_MODEL", body.minimaxDefaultModel);
       }
-      if (body.grokDefaultModel !== undefined) {
-        persistCredential("GROK_DEFAULT_MODEL", body.grokDefaultModel);
+      if (mmChanged && llmRegistry) {
+        llmRegistry.saveConfig("minimax", mm);
+        await llmRegistry.startProvider("minimax").catch(() => {});
       }
-      if (body.nvidiaApiKey !== undefined && body.nvidiaApiKey !== "") {
-        persistCredential("NVIDIA_API_KEY", body.nvidiaApiKey);
-      }
-      if (body.nvidiaDefaultModel !== undefined) {
-        persistCredential("NVIDIA_DEFAULT_MODEL", body.nvidiaDefaultModel);
-      }
-      if (body.googleClientId !== undefined && body.googleClientId !== "") {
-        persist("GOOGLE_CLIENT_ID", body.googleClientId);
-        config.google.clientId = body.googleClientId;
-      }
-      if (body.googleClientSecret !== undefined && body.googleClientSecret !== "") {
-        persist("GOOGLE_CLIENT_SECRET", body.googleClientSecret);
-        config.google.clientSecret = body.googleClientSecret;
-      }
-      if (body.lmstudioBaseUrl !== undefined) {
-        persistCredential("LMSTUDIO_BASE_URL", body.lmstudioBaseUrl);
-      }
-      if (body.elevenLabsApiKey !== undefined && body.elevenLabsApiKey !== "") {
-        persist("ELEVENLABS_API_KEY", body.elevenLabsApiKey);
-        config.voice.elevenLabsApiKey = body.elevenLabsApiKey;
-      }
+    }
 
-      // MiniMax — registry-native provider: the registry settings_json is the
-      // source of truth. Persist there + mirror to the settings store/env.
-      {
-        const mm = (llmRegistry?.loadConfig("minimax") ?? {}) as Record<string, unknown>;
-        let mmChanged = false;
-        if (body.minimaxApiKey !== undefined && body.minimaxApiKey !== "") {
-          mm.apiKey = body.minimaxApiKey; mmChanged = true;
-          persist("MINIMAX_API_KEY", body.minimaxApiKey);
-        }
-        if (body.minimaxBaseUrl !== undefined) {
-          mm.baseUrl = body.minimaxBaseUrl; mmChanged = true;
-          persist("MINIMAX_BASE_URL", body.minimaxBaseUrl);
-        }
-        if (body.minimaxDefaultModel !== undefined) {
-          mm.defaultModel = body.minimaxDefaultModel; mmChanged = true;
-          persist("MINIMAX_DEFAULT_MODEL", body.minimaxDefaultModel);
-        }
-        if (mmChanged && llmRegistry) {
-          llmRegistry.saveConfig("minimax", mm);
-          await llmRegistry.startProvider("minimax").catch(() => {});
-        }
-      }
+    // Defaults
+    if (body.chatProvider !== undefined) {
+      persist("CHAT_DEFAULT_PROVIDER", body.chatProvider);
+      config.chat.defaultProvider = body.chatProvider;
+    }
+    if (body.chatModel !== undefined) {
+      persist("CHAT_DEFAULT_MODEL", body.chatModel);
+      config.chat.defaultModel = body.chatModel;
+    }
+    if (body.agentsProvider !== undefined) {
+      persist("AGENTS_DEFAULT_PROVIDER", body.agentsProvider);
+      config.agents.defaultProvider = body.agentsProvider;
+    }
+    if (body.agentsModel !== undefined) {
+      persist("AGENTS_DEFAULT_MODEL", body.agentsModel);
+      config.agents.defaultModel = body.agentsModel;
+    }
+    if (body.agentsDefaultModelChain !== undefined) {
+      const cleaned = Array.isArray(body.agentsDefaultModelChain)
+        ? body.agentsDefaultModelChain
+            .filter((e) => e && typeof e === "object")
+            .map((e) => ({ provider: String(e.provider ?? ""), model: String(e.model ?? "") }))
+            .filter((e) => e.provider || e.model)
+        : [];
+      const serialized = JSON.stringify(cleaned);
+      persist("AGENTS_DEFAULT_MODEL_CHAIN", serialized);
+      config.agents.defaultModelChain = cleaned;
+    }
+    if (body.webIntelLlm !== undefined) {
+      persist("WEBINTEL_DEFAULT_LLM", body.webIntelLlm);
+      config.webIntel.defaultLlm = body.webIntelLlm;
+    }
 
-      // Defaults
-      if (body.chatProvider !== undefined) {
-        persist("CHAT_DEFAULT_PROVIDER", body.chatProvider);
-        config.chat.defaultProvider = body.chatProvider;
-      }
-      if (body.chatModel !== undefined) {
-        persist("CHAT_DEFAULT_MODEL", body.chatModel);
-        config.chat.defaultModel = body.chatModel;
-      }
-      if (body.agentsProvider !== undefined) {
-        persist("AGENTS_DEFAULT_PROVIDER", body.agentsProvider);
-        config.agents.defaultProvider = body.agentsProvider;
-      }
-      if (body.agentsModel !== undefined) {
-        persist("AGENTS_DEFAULT_MODEL", body.agentsModel);
-        config.agents.defaultModel = body.agentsModel;
-      }
-      if (body.agentsDefaultModelChain !== undefined) {
-        const cleaned = Array.isArray(body.agentsDefaultModelChain)
-          ? body.agentsDefaultModelChain
-              .filter((e) => e && typeof e === "object")
-              .map((e) => ({ provider: String(e.provider ?? ""), model: String(e.model ?? "") }))
-              .filter((e) => e.provider || e.model)
-          : [];
-        const serialized = JSON.stringify(cleaned);
-        persist("AGENTS_DEFAULT_MODEL_CHAIN", serialized);
-        config.agents.defaultModelChain = cleaned;
-      }
-      if (body.webIntelLlm !== undefined) {
-        persist("WEBINTEL_DEFAULT_LLM", body.webIntelLlm);
-        config.webIntel.defaultLlm = body.webIntelLlm;
-      }
-
-        if (Object.keys(envUpdates).length > 0) {
-          if (configService) {
-            // ConfigService already persisted each key (app_settings + .env +
-            // process.env) and emitted config:changed. Nothing more to write.
+    if (Object.keys(envUpdates).length > 0) {
+      if (configService) {
+        // ConfigService already persisted each key (app_settings + .env +
+        // process.env) and emitted config:changed. Nothing more to write.
+        log.info(`AI config updated: ${Object.keys(envUpdates).join(", ")}`);
+      } else {
+        // Fallback (ConfigService not wired): legacy batch .env write + emit.
+        // Credentials never reach .env or a config:changed payload — they were
+        // already saved to the registry by the config assignment above.
+        const persistable = Object.fromEntries(
+          Object.entries(envUpdates).filter(([k]) => !legacyCredentialTarget(k)),
+        );
+        if (Object.keys(persistable).length > 0) {
+          try {
+            writeEnvFile(envPath, persistable);
             log.info(`AI config updated: ${Object.keys(envUpdates).join(", ")}`);
-          } else {
-            // Fallback (ConfigService not wired): legacy batch .env write + emit.
-            // Credentials never reach .env or a config:changed payload — they were
-            // already saved to the registry by the config assignment above.
-            const persistable = Object.fromEntries(
-              Object.entries(envUpdates).filter(([k]) => !legacyCredentialTarget(k)),
-            );
-            if (Object.keys(persistable).length > 0) {
-              try {
-                writeEnvFile(envPath, persistable);
-                log.info(`AI config updated: ${Object.keys(envUpdates).join(", ")}`);
-              } catch (writeErr) {
-                // Non-fatal: in-memory update still applied, just can't persist
-                log.warn("Could not write .env file — in-memory only", writeErr);
-              }
-              if (events) {
-                for (const [key, value] of Object.entries(persistable)) {
-                  events.emit("config:changed", { key, value, updatedBy: "http" });
-                }
-              }
+          } catch (writeErr) {
+            // Non-fatal: in-memory update still applied, just can't persist
+            log.warn("Could not write .env file — in-memory only", writeErr);
+          }
+          if (events) {
+            for (const [key, value] of Object.entries(persistable)) {
+              events.emit("config:changed", { key, value, updatedBy: "http" });
             }
           }
-
-        // Hot-reload LLM providers so Chat, Agents AND the llm() singleton
-        // (EmailTriage, comms, analysis — anything using the standalone client)
-        // pick up key changes + chain changes without a restart.
-        const providerKeysChanged = [
-          "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "LMSTUDIO_BASE_URL",
-          "GROK_API_KEY", "XAI_API_KEY", "GROK_DEFAULT_MODEL",
-          "NVIDIA_API_KEY", "NVIDIA_DEFAULT_MODEL",
-          "MINIMAX_API_KEY", "MINIMAX_BASE_URL", "MINIMAX_DEFAULT_MODEL",
-          "CHAT_DEFAULT_PROVIDER", "CHAT_DEFAULT_MODEL",
-          "AGENTS_DEFAULT_PROVIDER", "AGENTS_DEFAULT_MODEL",
-          "AGENTS_DEFAULT_MODEL_CHAIN",
-        ].some((k) => k in envUpdates);
-        if (providerKeysChanged) {
-          if (chatService) chatService.reloadProviders();
-          if (agentExecutor) {
-            const newProviders = createChatProviders({ claudeCode: config.claudeCode });
-            agentExecutor.setProviders(newProviders, config.agents.defaultProvider || config.chat.defaultProvider);
-          }
-          // Rebuild the standalone llm() singleton's config so EmailTriage,
-          // email-analysis, and any other code path using `llm()` picks up
-          // the new chain immediately.
-          reloadLlmClient(config);
-          log.info("LLM providers hot-reloaded (including llm() singleton)");
         }
       }
 
-      server.json(res, 200, {
-        success: true,
-        updated: Object.keys(envUpdates),
-        envPersisted: existsSync(envPath),
-        note: Object.keys(envUpdates).length === 0
-          ? "No changes detected"
-          : "Providers reloaded — no restart needed.",
-      });
-    } catch (err) {
-      log.error("Failed to update AI config", err);
-      server.json(res, 500, { error: String(err) });
+      // Hot-reload LLM providers so Chat, Agents AND the llm() singleton
+      // (EmailTriage, comms, analysis — anything using the standalone client)
+      // pick up key changes + chain changes without a restart.
+      const providerKeysChanged = [
+        "ANTHROPIC_API_KEY", "OPENAI_API_KEY", "LMSTUDIO_BASE_URL",
+        "GROK_API_KEY", "XAI_API_KEY", "GROK_DEFAULT_MODEL",
+        "NVIDIA_API_KEY", "NVIDIA_DEFAULT_MODEL",
+        "MINIMAX_API_KEY", "MINIMAX_BASE_URL", "MINIMAX_DEFAULT_MODEL",
+        "CHAT_DEFAULT_PROVIDER", "CHAT_DEFAULT_MODEL",
+        "AGENTS_DEFAULT_PROVIDER", "AGENTS_DEFAULT_MODEL",
+        "AGENTS_DEFAULT_MODEL_CHAIN",
+      ].some((k) => k in envUpdates);
+      if (providerKeysChanged) {
+        if (chatService) chatService.reloadProviders();
+        if (agentExecutor) {
+          const newProviders = createChatProviders({ claudeCode: config.claudeCode });
+          agentExecutor.setProviders(newProviders, config.agents.defaultProvider || config.chat.defaultProvider);
+        }
+        // Rebuild the standalone llm() singleton's config so EmailTriage,
+        // email-analysis, and any other code path using `llm()` picks up
+        // the new chain immediately.
+        reloadLlmClient(config);
+        log.info("LLM providers hot-reloaded (including llm() singleton)");
+      }
     }
+
+    return {
+      success: true,
+      updated: Object.keys(envUpdates),
+      envPersisted: existsSync(envPath),
+      note: Object.keys(envUpdates).length === 0
+        ? "No changes detected"
+        : "Providers reloaded — no restart needed.",
+    };
   });
 
   // ── GET /api/config/ai/test/:provider — Test provider connectivity ──
-  server.get("/api/config/ai/test", async (_req, res) => {
+  server.route("GET", "/api/config/ai/test", async () => {
     // Delegate to the central helper that probes each provider via the
     // registry's `listModels()` — same logic for both this HTTP endpoint
     // and the `config.ai.test` RPC, no more 100-line duplicated fetch blocks.
-    if (!llmRegistry) {
-      server.json(res, 503, { error: "llmRegistry not wired into ai-routes" });
-      return;
-    }
+    if (!llmRegistry) throw new HttpError(503, "llmRegistry not wired into ai-routes");
     const { testAllProviders } = await import("../../core/llm/test-providers.js");
-    const results = await testAllProviders(llmRegistry);
-    server.json(res, 200, results);
+    return testAllProviders(llmRegistry);
   });
 
   // ── GET /api/config/ai/lm-models — Proxy to LMStudio /v1/models (avoids CORS) ──
-  server.get("/api/config/ai/lm-models", async (_req, res) => {
+  server.route("GET", "/api/config/ai/lm-models", async () => {
     try {
       const baseUrl = (getProviderConfig("lmstudio").baseUrl || "http://localhost:1234/v1").replace(/\/+$/, "");
       const r = await fetch(`${baseUrl}/models`, { signal: AbortSignal.timeout(5_000) });
       const body = await r.json() as any;
       const models = (body.data ?? []).map((m: any) => m.id);
-      server.json(res, 200, { models });
+      return { models };
     } catch (err) {
-      server.json(res, 200, { models: [], error: String(err) });
+      // LMStudio being down is an answer, not a failure: empty list + why.
+      return { models: [], error: String(err) };
     }
   });
 
@@ -386,8 +376,8 @@ export function registerAiConfigRoutes(
   // every provider with its config schema + MASKED current values (raw secrets
   // never leave the server). The page renders forms dynamically from this, so
   // new providers (e.g. minimax) appear with zero frontend hardcoding.
-  server.get("/api/config/ai/providers", (_req, res) => {
-    if (!llmRegistry) { server.json(res, 503, { error: "llmRegistry unavailable" }); return; }
+  server.route("GET", "/api/config/ai/providers", () => {
+    if (!llmRegistry) throw new HttpError(503, "llmRegistry unavailable");
     const out = llmRegistry.getStatuses().map((st) => {
       const cfg = llmRegistry.loadConfig(st.slug) as Record<string, unknown>;
       const schema = llmRegistry.getConfigSchema(st.slug) ?? [];
@@ -406,78 +396,67 @@ export function registerAiConfigRoutes(
         values,
       };
     });
-    server.json(res, 200, { providers: out });
+    return { providers: out };
   });
 
   // ── GET /api/config/ai/agents — List agents with their LLM assignments ──
-  server.get("/api/config/ai/agents", (_req, res) => {
+  server.route("GET", "/api/config/ai/agents", () => {
     try {
-      if (!db) { server.json(res, 200, { agents: [] }); return; }
+      if (!db) return { agents: [] };
       const agents = db.prepare(
         "SELECT id, name, description, provider, model, active, builtin_handler FROM agents WHERE active = 1 ORDER BY name"
       ).all();
-      server.json(res, 200, { agents });
+      return { agents };
     } catch {
-      server.json(res, 200, { agents: [] });
+      return { agents: [] };
     }
   });
 
   // ── POST /api/config/ai/agents/update — Update agent's LLM provider/model ──
-  server.post("/api/config/ai/agents/update", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ agent_id: string; provider: string; model: string }>(req);
-      if (!db) { server.json(res, 500, { error: "DB not available" }); return; }
+  server.route<{ agent_id: string; provider: string; model: string }>(
+    "POST", "/api/config/ai/agents/update", ({ body }) => {
+      if (!db) throw new HttpError(500, "DB not available");
       db.prepare("UPDATE agents SET provider = ?, model = ?, updated_at = datetime('now') WHERE id = ?")
         .run(body.provider, body.model, body.agent_id);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
+      return { success: true };
+    },
+  );
 
   // ── GET /api/config/public — unauthenticated config (language, etc.) ──────
-  server.get("/api/config/public", (_req, res) => {
-    server.json(res, 200, {
-      language: config.language,
-    });
-  });
+  server.route("GET", "/api/config/public", () => ({
+    language: config.language,
+  }));
 
   // ── POST /api/config/language — change the system language ────────────────
-  server.post("/api/config/language", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ language?: string }>(req);
-      const raw = (body.language ?? "").trim();
-      if (raw !== "es" && raw !== "en") {
-        server.json(res, 400, { error: "language must be 'es' or 'en'" });
-        return;
-      }
-      process.env["KERNEL_DEFAULT_LANGUAGE"] = raw; // env mirror
-      config.language = raw;
-
-      if (configService) {
-        // Settings store: persists app_settings + .env + emits config:changed.
-        try { configService.set("KERNEL_DEFAULT_LANGUAGE", raw, "user"); } catch { /* env mirror already applied */ }
-      } else {
-        // Fallback: persist to .env so it survives restarts.
-        try {
-          writeEnvFile(envPath, { KERNEL_DEFAULT_LANGUAGE: raw });
-        } catch (err) {
-          log.warn("Could not write .env for KERNEL_DEFAULT_LANGUAGE", err);
-        }
-        // Notify ConfigService so it syncs app_settings.
-        if (events) {
-          events.emit("config:changed", {
-            key: "KERNEL_DEFAULT_LANGUAGE",
-            value: raw,
-            updatedBy: "http",
-          });
-        }
-      }
-
-      server.json(res, 200, { success: true, language: raw });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route<{ language?: string }>("POST", "/api/config/language", ({ body }) => {
+    const raw = (body.language ?? "").trim();
+    if (raw !== "es" && raw !== "en") {
+      throw new HttpError(400, "language must be 'es' or 'en'");
     }
+    process.env["KERNEL_DEFAULT_LANGUAGE"] = raw; // env mirror
+    config.language = raw;
+
+    if (configService) {
+      // Settings store: persists app_settings + .env + emits config:changed.
+      try { configService.set("KERNEL_DEFAULT_LANGUAGE", raw, "user"); } catch { /* env mirror already applied */ }
+    } else {
+      // Fallback: persist to .env so it survives restarts.
+      try {
+        writeEnvFile(envPath, { KERNEL_DEFAULT_LANGUAGE: raw });
+      } catch (err) {
+        log.warn("Could not write .env for KERNEL_DEFAULT_LANGUAGE", err);
+      }
+      // Notify ConfigService so it syncs app_settings.
+      if (events) {
+        events.emit("config:changed", {
+          key: "KERNEL_DEFAULT_LANGUAGE",
+          value: raw,
+          updatedBy: "http",
+        });
+      }
+    }
+
+    return { success: true, language: raw };
   });
 
   log.info("AI config routes registered (/api/config/ai)");

@@ -8,6 +8,9 @@ import { log } from "./logger.js";
 import type { KernelConfig } from "./config.js";
 import { resolveSecureBind } from "./config.js";
 import { isAuthenticated, isAuthExemptPath, isPeerAuthenticatedPath } from "./auth.js";
+import { HttpError, isHttpError } from "../sdk/http-error.js";
+
+export { HttpError, isHttpError };
 
 const gzipAsync = promisify(gzip);
 const GZIP_THRESHOLD = 1024; // Only compress responses > 1KB
@@ -38,6 +41,35 @@ const MIME: Record<string, string> = {
 type RouteHandler = (req: IncomingMessage, res: ServerResponse) => Promise<void> | void;
 
 type ParamRouteEntry = { pattern: RegExp; keys: string[]; handler: RouteHandler };
+
+export type RouteMethod = "GET" | "POST" | "PUT" | "DELETE";
+
+/** What a `server.route()` handler receives. */
+export interface RouteContext<B = any> {
+  req: IncomingMessage;
+  res: ServerResponse;
+  /** `:name` segments of the path (and `rest` for a trailing `/*`). */
+  params: Record<string, string>;
+  query: URLSearchParams;
+  /** Parsed JSON body; `{}` for GET and for an empty body. */
+  body: B;
+}
+
+/**
+ * Returns the JSON body of a 200. A handler that wrote the response itself
+ * (a stream, a file, a non-200 success) returns nothing. Throw `HttpError`
+ * for a 4xx; anything else thrown is a 500 carrying `String(err)`.
+ */
+export type RouteFn<B = any> = (ctx: RouteContext<B>) => unknown | Promise<unknown>;
+
+export interface RouteOptions {
+  /**
+   * Answer an empty body with 400 instead of handing the handler `{}`. For a
+   * route where `{}` means "act on everything" (mark all read, clear a field):
+   * an empty request must not reach it by accident.
+   */
+  requireBody?: boolean;
+}
 
 /**
  * A server-wide condition an `/api/` request must satisfy before it reaches a
@@ -70,6 +102,12 @@ export class KernelHttpServer {
   private authToken: string;
   private corsOrigins: string[];
   private preconditions: Precondition[] = [];
+  /**
+   * Responses `json()` has claimed. A gzipped body is written from a callback,
+   * so `headersSent` stays false for a while after the call returns — without
+   * this, a caller checking it would answer the same request twice.
+   */
+  private answered = new WeakSet<ServerResponse>();
 
   // Simple IP rate limiter for HTTP API (separate from messaging rate limiter)
   private apiRateLimits = new Map<string, { count: number; resetAt: number }>();
@@ -187,6 +225,39 @@ export class KernelHttpServer {
   }
 
   /**
+   * Register a JSON route without the per-handler scaffolding: the body is
+   * parsed, params and query are handed over typed, the return value is the
+   * 200 body, and errors map to a status. See `RouteFn`.
+   */
+  route<B = any>(method: RouteMethod, path: string, fn: RouteFn<B>, opts: RouteOptions = {}): void {
+    const register = { GET: this.get, POST: this.post, PUT: this.put, DELETE: this.delete }[method];
+    register.call(this, path, async (req, res) => {
+      try {
+        const body = method === "GET"
+          ? ({} as B)
+          : await this.parseBody<B>(req, undefined, opts.requireBody ? undefined : ({} as B)).catch((err: Error) => {
+              throw new HttpError(err.message.startsWith("Request body exceeds") ? 413 : 400, err.message);
+            });
+        const result = await fn({
+          req,
+          res,
+          params: (req as unknown as { params?: Record<string, string> }).params ?? {},
+          query: new URL(req.url ?? "/", "http://localhost").searchParams,
+          body,
+        });
+        if (this.responded(res)) return;
+        if (result === undefined) { res.writeHead(204, SECURITY_HEADERS); res.end(); return; }
+        this.json(res, 200, result, req);
+      } catch (err) {
+        if (this.responded(res)) { log.error(`HTTP route error after response started: ${method} ${path}`, err); return; }
+        if (isHttpError(err)) { this.json(res, err.status, err.body ?? { error: err.message }, req); return; }
+        log.error(`HTTP route error: ${method} ${path}`, err);
+        this.json(res, 500, { error: String(err) }, req);
+      }
+    });
+  }
+
+  /**
    * CORS headers for a request — `{}` unless the caller's Origin was
    * explicitly allow-listed via CORS_ALLOWED_ORIGINS.
    *
@@ -205,7 +276,8 @@ export class KernelHttpServer {
     return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
   }
 
-  parseBody<T = unknown>(req: IncomingMessage, maxBytes = 10 * 1024 * 1024): Promise<T> {
+  /** `emptyAs`: resolve to this instead of rejecting when the body is empty. */
+  parseBody<T = unknown>(req: IncomingMessage, maxBytes = 10 * 1024 * 1024, emptyAs?: T): Promise<T> {
     return new Promise((resolve, reject) => {
       const chunks: Buffer[] = [];
       let totalSize = 0;
@@ -219,6 +291,7 @@ export class KernelHttpServer {
         chunks.push(chunk);
       });
       req.on("end", () => {
+        if (totalSize === 0 && emptyAs !== undefined) { resolve(emptyAs); return; }
         try {
           resolve(JSON.parse(Buffer.concat(chunks).toString("utf-8")) as T);
         } catch {
@@ -229,7 +302,12 @@ export class KernelHttpServer {
     });
   }
 
+  private responded(res: ServerResponse): boolean {
+    return res.headersSent || res.writableEnded || this.answered.has(res);
+  }
+
   json(res: ServerResponse, status: number, data: unknown, req?: IncomingMessage): void {
+    this.answered.add(res);
     const body = JSON.stringify(data);
     const cors = this.corsHeaders(req);
     // Gzip if client accepts it and response is large enough
@@ -404,16 +482,18 @@ export class KernelHttpServer {
 
     const key = `${req.method}:${pathname}`;
 
-    let handler = this.routes.get(key);
-    if (handler) {
+    const run = async (handler: RouteHandler) => {
       try {
         await handler(req, res);
       } catch (err) {
+        if (isHttpError(err) && !this.responded(res)) { this.json(res, err.status, err.body ?? { error: err.message }, req); return; }
         log.error(`HTTP handler error: ${key}`, err);
-        this.json(res, 500, { error: "Internal server error" }, req);
+        if (!this.responded(res)) this.json(res, 500, { error: "Internal server error" }, req);
       }
-      return;
-    }
+    };
+
+    const handler = this.routes.get(key);
+    if (handler) { await run(handler); return; }
 
     // Try parameterized routes
     for (const entry of this.paramRoutes) {
@@ -422,12 +502,7 @@ export class KernelHttpServer {
         const params: Record<string, string> = {};
         entry.keys.forEach((k, i) => { params[k] = m[i + 1]; });
         (req as unknown as { params: Record<string, string> }).params = params;
-        try {
-          await entry.handler(req, res);
-        } catch (err) {
-          log.error(`HTTP handler error: ${key}`, err);
-          this.json(res, 500, { error: "Internal server error" }, req);
-        }
+        await run(entry.handler);
         return;
       }
     }

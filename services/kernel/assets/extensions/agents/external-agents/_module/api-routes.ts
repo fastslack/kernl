@@ -1,4 +1,4 @@
-import { type KernelHttpServer, log } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer, log } from "@kernl/extension-sdk";
 import type { ExternalAgentService } from "./service.js";
 import type { AgentReport } from "./types.js";
 
@@ -24,6 +24,10 @@ export function registerExternalAgentRoutes(
     }
     return service.getAgentByApiKey(apiKey);
   };
+
+  // The POST routes stay raw handlers: they authenticate before reading the
+  // body and answer a bad body with their own 400 message, where route() would
+  // parse (and reject) the body first, ahead of the X-Agent-Key check.
 
   // ── POST /api/agents/report ───────────────────────────
   server.post("/api/agents/report", async (req, res) => {
@@ -76,23 +80,18 @@ export function registerExternalAgentRoutes(
   });
 
   // ── GET /api/agents/config ────────────────────────────
-  server.get("/api/agents/config", (req, res) => {
+  server.route("GET", "/api/agents/config", ({ req }) => {
     const agent = authenticate(req.headers);
-    if (!agent) {
-      res.writeHead(401, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ error: "Invalid or missing X-Agent-Key" }));
-      return;
-    }
+    if (!agent) throw new HttpError(401, "Invalid or missing X-Agent-Key");
 
     let config: Record<string, unknown> = {};
     try { config = JSON.parse(agent.config) as Record<string, unknown>; } catch { /* corrupted JSON, use empty */ }
 
-    res.writeHead(200, { "Content-Type": "application/json" });
-    res.end(JSON.stringify({
+    return {
       agent_id: agent.id,
       name: agent.name,
       config,
-    }));
+    };
   });
 
   // ── POST /api/agents/metrics ──────────────────────────

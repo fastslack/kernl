@@ -3,6 +3,8 @@ import {
   type SqliteDb,
   type Notifier,
   type KernelConfig,
+  HttpError,
+  isHttpError,
   newId,
   isoNow,
   log,
@@ -19,6 +21,8 @@ const VALID_FOLDERS = new Set<EmailFolder>([
   "trash", "archived", "snoozed", "all",
 ]);
 
+const errorMessage = (err: unknown) => err instanceof Error ? err.message : String(err);
+
 export function registerEmailRoutes(
   server: KernelHttpServer,
   emailService: EmailService,
@@ -28,279 +32,175 @@ export function registerEmailRoutes(
   config?: KernelConfig,
   triageService?: EmailTriageService | null,
 ): void {
+  /**
+   * `server.route` with this file's failure contract: anything thrown but a
+   * deliberate HttpError is logged as "<METHOD> <path> failed" and answered
+   * 500 with `failure` — a fixed message, or a body built from the error —
+   * instead of the raw error.
+   */
+  const route = <B = Record<string, never>>(
+    method: "GET" | "POST" | "DELETE",
+    path: string,
+    failure: string | ((err: unknown) => { error: string } & Record<string, unknown>),
+    fn: (ctx: { query: URLSearchParams; body: B }) => unknown,
+  ) =>
+    server.route<B>(method, path, async (ctx) => {
+      try {
+        return await fn(ctx);
+      } catch (err) {
+        if (isHttpError(err)) throw err;
+        log.error(`${method} ${path} failed`, err);
+        const body = typeof failure === "string" ? { error: failure } : failure(err);
+        throw new HttpError(500, body.error, body);
+      }
+    });
+
+  /** The request's `gmail_id`, 400 when missing. */
+  const requireGmailId = (body: { gmail_id?: string }): string => {
+    if (!body.gmail_id) throw new HttpError(400, "Missing gmail_id");
+    return body.gmail_id;
+  };
 
   // ── List emails ────────────────────────────────
-  server.get("/api/emails", (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const folder = (url.searchParams.get("folder") ?? "inbox") as EmailFolder;
-      if (!VALID_FOLDERS.has(folder)) {
-        server.json(res, 400, { error: "Invalid folder" });
-        return;
-      }
-      const result = emailService.listEmails({
-        folder,
-        query: url.searchParams.get("q") ?? undefined,
-        label: url.searchParams.get("label") ?? undefined,
-        from: url.searchParams.get("from") ?? undefined,
-        dateFrom: url.searchParams.get("dateFrom") ?? undefined,
-        dateTo: url.searchParams.get("dateTo") ?? undefined,
-        page: Number(url.searchParams.get("page") ?? 1),
-        pageSize: Number(url.searchParams.get("pageSize") ?? 50),
-        accountId: url.searchParams.get("account_id") ?? undefined,
-      });
-      server.json(res, 200, result);
-    } catch (err) {
-      log.error("GET /api/emails failed", err);
-      server.json(res, 500, { error: "Failed to list emails" });
-    }
+  route("GET", "/api/emails", "Failed to list emails", ({ query }) => {
+    const folder = (query.get("folder") ?? "inbox") as EmailFolder;
+    if (!VALID_FOLDERS.has(folder)) throw new HttpError(400, "Invalid folder");
+    return emailService.listEmails({
+      folder,
+      query: query.get("q") ?? undefined,
+      label: query.get("label") ?? undefined,
+      from: query.get("from") ?? undefined,
+      dateFrom: query.get("dateFrom") ?? undefined,
+      dateTo: query.get("dateTo") ?? undefined,
+      page: Number(query.get("page") ?? 1),
+      pageSize: Number(query.get("pageSize") ?? 50),
+      accountId: query.get("account_id") ?? undefined,
+    });
   });
 
   // ── Email detail ───────────────────────────────
-  server.get("/api/emails/detail", (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const gmailId = url.searchParams.get("gmail_id");
-      if (!gmailId) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      const email = emailService.getEmail(gmailId);
-      if (!email) { server.json(res, 404, { error: "Email not found" }); return; }
-      // Auto mark as read
-      emailService.markRead(gmailId);
-      server.json(res, 200, email);
-    } catch (err) {
-      log.error("GET /api/emails/detail failed", err);
-      server.json(res, 500, { error: "Failed to get email" });
-    }
+  route("GET", "/api/emails/detail", "Failed to get email", ({ query }) => {
+    const gmailId = query.get("gmail_id");
+    if (!gmailId) throw new HttpError(400, "Missing gmail_id");
+    const email = emailService.getEmail(gmailId);
+    if (!email) throw new HttpError(404, "Email not found");
+    // Auto mark as read
+    emailService.markRead(gmailId);
+    return email;
   });
 
   // ── Thread ─────────────────────────────────────
-  server.get("/api/emails/thread", (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const threadId = url.searchParams.get("thread_id");
-      if (!threadId) { server.json(res, 400, { error: "Missing thread_id" }); return; }
-      const thread = emailService.getThread(threadId);
-      if (!thread) { server.json(res, 404, { error: "Thread not found" }); return; }
-      server.json(res, 200, thread);
-    } catch (err) {
-      log.error("GET /api/emails/thread failed", err);
-      server.json(res, 500, { error: "Failed to get thread" });
-    }
+  route("GET", "/api/emails/thread", "Failed to get thread", ({ query }) => {
+    const threadId = query.get("thread_id");
+    if (!threadId) throw new HttpError(400, "Missing thread_id");
+    const thread = emailService.getThread(threadId);
+    if (!thread) throw new HttpError(404, "Thread not found");
+    return thread;
   });
 
   // ── Counts (sidebar badges) ────────────────────
-  server.get("/api/emails/counts", (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const accountId = url.searchParams.get("account_id") ?? undefined;
-      server.json(res, 200, emailService.getCounts(accountId));
-    } catch (err) {
-      log.error("GET /api/emails/counts failed", err);
-      server.json(res, 500, { error: "Failed to get counts" });
-    }
-  });
+  route("GET", "/api/emails/counts", "Failed to get counts", ({ query }) =>
+    emailService.getCounts(query.get("account_id") ?? undefined));
 
   // ── Toggle star ────────────────────────────────
-  server.post("/api/emails/star", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string }>(req);
-      if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      const starred = emailService.toggleStar(body.gmail_id);
-      server.json(res, 200, { starred });
-    } catch (err) {
-      log.error("POST /api/emails/star failed", err);
-      server.json(res, 500, { error: "Failed to toggle star" });
-    }
-  });
+  route<{ gmail_id: string }>("POST", "/api/emails/star", "Failed to toggle star", ({ body }) =>
+    ({ starred: emailService.toggleStar(requireGmailId(body)) }));
 
   // ── Toggle read ────────────────────────────────
-  server.post("/api/emails/read", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string }>(req);
-      if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      const isRead = emailService.toggleRead(body.gmail_id);
-      server.json(res, 200, { is_read: isRead });
-    } catch (err) {
-      log.error("POST /api/emails/read failed", err);
-      server.json(res, 500, { error: "Failed to toggle read" });
-    }
-  });
+  route<{ gmail_id: string }>("POST", "/api/emails/read", "Failed to toggle read", ({ body }) =>
+    ({ is_read: emailService.toggleRead(requireGmailId(body)) }));
 
   // ── Archive ────────────────────────────────────
-  server.post("/api/emails/archive", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string }>(req);
-      if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      emailService.archive(body.gmail_id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/archive failed", err);
-      server.json(res, 500, { error: "Failed to archive" });
-    }
+  route<{ gmail_id: string }>("POST", "/api/emails/archive", "Failed to archive", ({ body }) => {
+    emailService.archive(requireGmailId(body));
+    return { ok: true };
   });
 
   // ── Trash ──────────────────────────────────────
-  server.post("/api/emails/trash", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string }>(req);
-      if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      emailService.trash(body.gmail_id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/trash failed", err);
-      server.json(res, 500, { error: "Failed to trash" });
-    }
+  route<{ gmail_id: string }>("POST", "/api/emails/trash", "Failed to trash", ({ body }) => {
+    emailService.trash(requireGmailId(body));
+    return { ok: true };
   });
 
   // ── Restore ────────────────────────────────────
-  server.post("/api/emails/restore", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string }>(req);
-      if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      emailService.restore(body.gmail_id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/restore failed", err);
-      server.json(res, 500, { error: "Failed to restore" });
-    }
+  route<{ gmail_id: string }>("POST", "/api/emails/restore", "Failed to restore", ({ body }) => {
+    emailService.restore(requireGmailId(body));
+    return { ok: true };
   });
 
   // ── Important ──────────────────────────────────
-  server.post("/api/emails/important", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string }>(req);
-      if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
-      emailService.markImportant(body.gmail_id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/important failed", err);
-      server.json(res, 500, { error: "Failed to toggle important" });
-    }
+  route<{ gmail_id: string }>("POST", "/api/emails/important", "Failed to toggle important", ({ body }) => {
+    emailService.markImportant(requireGmailId(body));
+    return { ok: true };
   });
 
   // ── Snooze ─────────────────────────────────────
-  server.post("/api/emails/snooze", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string; until: string }>(req);
-      if (!body.gmail_id || !body.until) { server.json(res, 400, { error: "Missing gmail_id or until" }); return; }
-      emailService.snooze(body.gmail_id, body.until);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/snooze failed", err);
-      server.json(res, 500, { error: "Failed to snooze" });
-    }
+  route<{ gmail_id: string; until: string }>("POST", "/api/emails/snooze", "Failed to snooze", ({ body }) => {
+    if (!body.gmail_id || !body.until) throw new HttpError(400, "Missing gmail_id or until");
+    emailService.snooze(body.gmail_id, body.until);
+    return { ok: true };
   });
 
   // ── Add note ───────────────────────────────────
-  server.post("/api/emails/note", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string; note: string }>(req);
-      if (!body.gmail_id || !body.note) { server.json(res, 400, { error: "Missing gmail_id or note" }); return; }
-      const action = emailService.addNote(body.gmail_id, body.note);
-      server.json(res, 200, action);
-    } catch (err) {
-      log.error("POST /api/emails/note failed", err);
-      server.json(res, 500, { error: "Failed to add note" });
-    }
+  route<{ gmail_id: string; note: string }>("POST", "/api/emails/note", "Failed to add note", ({ body }) => {
+    if (!body.gmail_id || !body.note) throw new HttpError(400, "Missing gmail_id or note");
+    return emailService.addNote(body.gmail_id, body.note);
   });
 
   // ── Block sender ───────────────────────────────
-  server.post("/api/emails/block", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ email: string }>(req);
-      if (!body.email) { server.json(res, 400, { error: "Missing email" }); return; }
-      emailService.blockSender(body.email);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/block failed", err);
-      server.json(res, 500, { error: "Failed to block sender" });
-    }
+  route<{ email: string }>("POST", "/api/emails/block", "Failed to block sender", ({ body }) => {
+    if (!body.email) throw new HttpError(400, "Missing email");
+    emailService.blockSender(body.email);
+    return { ok: true };
   });
 
   // ── Link to task ───────────────────────────────
-  server.post("/api/emails/link-task", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string; task_id: string }>(req);
-      if (!body.gmail_id || !body.task_id) { server.json(res, 400, { error: "Missing gmail_id or task_id" }); return; }
-      emailService.linkToTask(body.gmail_id, body.task_id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/link-task failed", err);
-      server.json(res, 500, { error: "Failed to link task" });
-    }
+  route<{ gmail_id: string; task_id: string }>("POST", "/api/emails/link-task", "Failed to link task", ({ body }) => {
+    if (!body.gmail_id || !body.task_id) throw new HttpError(400, "Missing gmail_id or task_id");
+    emailService.linkToTask(body.gmail_id, body.task_id);
+    return { ok: true };
   });
 
   // ── Link to contact ────────────────────────────
-  server.post("/api/emails/link-contact", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string; contact_id: string }>(req);
-      if (!body.gmail_id || !body.contact_id) { server.json(res, 400, { error: "Missing gmail_id or contact_id" }); return; }
-      emailService.linkToContact(body.gmail_id, body.contact_id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/link-contact failed", err);
-      server.json(res, 500, { error: "Failed to link contact" });
-    }
+  route<{ gmail_id: string; contact_id: string }>("POST", "/api/emails/link-contact", "Failed to link contact", ({ body }) => {
+    if (!body.gmail_id || !body.contact_id) throw new HttpError(400, "Missing gmail_id or contact_id");
+    emailService.linkToContact(body.gmail_id, body.contact_id);
+    return { ok: true };
   });
 
   // ── Label management ───────────────────────────
-  server.post("/api/emails/label", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string; label_id: string; action: "add" | "remove" }>(req);
-      if (!body.gmail_id || !body.label_id) { server.json(res, 400, { error: "Missing gmail_id or label_id" }); return; }
+  route<{ gmail_id: string; label_id: string; action: "add" | "remove" }>(
+    "POST", "/api/emails/label", "Failed to manage label", ({ body }) => {
+      if (!body.gmail_id || !body.label_id) throw new HttpError(400, "Missing gmail_id or label_id");
       if (body.action === "remove") {
         emailService.removeLabelFromEmail(body.gmail_id, body.label_id);
       } else {
         emailService.addLabelToEmail(body.gmail_id, body.label_id);
       }
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("POST /api/emails/label failed", err);
-      server.json(res, 500, { error: "Failed to manage label" });
-    }
+      return { ok: true };
+    },
+  );
+
+  route("GET", "/api/emails/labels", "Failed to list labels", () => emailService.listLabels());
+
+  route<{ name: string; color?: string }>("POST", "/api/emails/labels", "Failed to create label", ({ body }) => {
+    if (!body.name) throw new HttpError(400, "Missing name");
+    return emailService.createLabel(body.name, body.color);
   });
 
-  server.get("/api/emails/labels", (_req, res) => {
-    try {
-      server.json(res, 200, emailService.listLabels());
-    } catch (err) {
-      log.error("GET /api/emails/labels failed", err);
-      server.json(res, 500, { error: "Failed to list labels" });
-    }
-  });
-
-  server.post("/api/emails/labels", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ name: string; color?: string }>(req);
-      if (!body.name) { server.json(res, 400, { error: "Missing name" }); return; }
-      const label = emailService.createLabel(body.name, body.color);
-      server.json(res, 200, label);
-    } catch (err) {
-      log.error("POST /api/emails/labels failed", err);
-      server.json(res, 500, { error: "Failed to create label" });
-    }
-  });
-
-  server.delete("/api/emails/labels", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      if (!body.id) { server.json(res, 400, { error: "Missing id" }); return; }
-      emailService.deleteLabel(body.id);
-      server.json(res, 200, { ok: true });
-    } catch (err) {
-      log.error("DELETE /api/emails/labels failed", err);
-      server.json(res, 500, { error: "Failed to delete label" });
-    }
+  route<{ id: string }>("DELETE", "/api/emails/labels", "Failed to delete label", ({ body }) => {
+    if (!body.id) throw new HttpError(400, "Missing id");
+    emailService.deleteLabel(body.id);
+    return { ok: true };
   });
 
   // ── AI Actions dispatcher ──────────────────────
-  server.post("/api/emails/action", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ gmail_id: string; action: string; params?: Record<string, unknown> }>(req);
-      if (!body.gmail_id || !body.action) { server.json(res, 400, { error: "Missing gmail_id or action" }); return; }
+  route<{ gmail_id: string; action: string; params?: Record<string, unknown> }>(
+    "POST", "/api/emails/action", "Action failed", async ({ body }) => {
+      if (!body.gmail_id || !body.action) throw new HttpError(400, "Missing gmail_id or action");
 
       const email = emailService.getEmail(body.gmail_id);
-      if (!email) { server.json(res, 404, { error: "Email not found" }); return; }
+      if (!email) throw new HttpError(404, "Email not found");
 
       switch (body.action) {
         case "create_task": {
@@ -313,8 +213,7 @@ export function registerEmailRoutes(
             `INSERT INTO tasks (id, title, description, status, priority, context, created_at, updated_at) VALUES (?, ?, ?, 'todo', 'medium', '', ?, ?)`
           ).run(taskId, taskTitle, taskDesc, now, now);
           emailService.linkToTask(body.gmail_id, taskId);
-          server.json(res, 200, { ok: true, task_id: taskId, title: taskTitle });
-          break;
+          return { ok: true, task_id: taskId, title: taskTitle };
         }
         case "create_reminder": {
           const reminderTitle = `Follow up: ${email.subject}`;
@@ -325,8 +224,7 @@ export function registerEmailRoutes(
           db2.prepare(
             `INSERT INTO reminders (id, title, body, trigger_at, status, repeat, notify_mattermost, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', 'none', 1, ?, ?)`
           ).run(remId, reminderTitle, `Email from ${email.from_name || email.from_email}`, triggerAt, now2, now2);
-          server.json(res, 200, { ok: true, reminder_id: remId, title: reminderTitle });
-          break;
+          return { ok: true, reminder_id: remId, title: reminderTitle };
         }
         case "forward_channel": {
           if (notifier) {
@@ -334,236 +232,172 @@ export function registerEmailRoutes(
             const text = `**${email.subject}**\nFrom: ${email.from_name || email.from_email}\n\n${email.snippet}`;
             await notifier.send({ title: email.subject, body: text, channel, priority: "normal" });
           }
-          server.json(res, 200, { ok: true });
-          break;
+          return { ok: true };
         }
         default:
-          server.json(res, 400, { error: `Unknown action: ${body.action}` });
+          throw new HttpError(400, `Unknown action: ${body.action}`);
       }
-    } catch (err) {
-      log.error("POST /api/emails/action failed", err);
-      server.json(res, 500, { error: "Action failed" });
-    }
-  });
+    },
+  );
 
   // ── Email Triage ─────────────────────────────────
 
   if (triageService) {
     // Attention queue — emails needing response with AI drafts
-    server.get("/api/emails/attention", (_req, res) => {
-      try {
-        const url = new URL((_req as any).url ?? "/", "http://localhost");
-        const limit = Number(url.searchParams.get("limit") ?? 50);
-        const items = triageService.getAttentionQueue(limit);
-        const stats = triageService.getTriageStats();
-        server.json(res, 200, { items, stats });
-      } catch (err) {
-        log.error("GET /api/emails/attention failed", err);
-        server.json(res, 500, { error: "Failed to get attention queue" });
-      }
+    route("GET", "/api/emails/attention", "Failed to get attention queue", ({ query }) => {
+      const limit = Number(query.get("limit") ?? 50);
+      const items = triageService.getAttentionQueue(limit);
+      const stats = triageService.getTriageStats();
+      return { items, stats };
     });
 
     // Triage stats
-    server.get("/api/emails/triage-stats", (_req, res) => {
-      try {
-        server.json(res, 200, triageService.getTriageStats());
-      } catch (err) {
-        log.error("GET /api/emails/triage-stats failed", err);
-        server.json(res, 500, { error: "Failed to get triage stats" });
-      }
-    });
+    route("GET", "/api/emails/triage-stats", "Failed to get triage stats", () => triageService.getTriageStats());
 
     // Approve a draft — send it
-    server.post("/api/emails/approve-draft", async (req, res) => {
-      try {
-        const body = await server.parseBody<{ comm_id: string }>(req);
-        if (!body.comm_id) { server.json(res, 400, { error: "Missing comm_id" }); return; }
+    route<{ comm_id: string }>(
+      "POST", "/api/emails/approve-draft", (err) => ({ error: `Send failed: ${errorMessage(err)}` }), async ({ body }) => {
+        if (!body.comm_id) throw new HttpError(400, "Missing comm_id");
 
-        if (!commsService) { server.json(res, 500, { error: "Comms service not available" }); return; }
+        if (!commsService) throw new HttpError(500, "Comms service not available");
 
         // Send the draft
         const comm = await commsService.sendEmail(body.comm_id);
-        server.json(res, 200, {
+        return {
           ok: true,
           gmail_message_id: comm.gmail_message_id,
           sent_at: comm.sent_at,
-        });
-      } catch (err) {
-        log.error("POST /api/emails/approve-draft failed", err);
-        server.json(res, 500, { error: `Send failed: ${err instanceof Error ? err.message : String(err)}` });
-      }
-    });
+        };
+      },
+    );
 
     // Dismiss a draft
-    server.post("/api/emails/dismiss-draft", async (req, res) => {
-      try {
-        const body = await server.parseBody<{ gmail_id: string }>(req);
-        if (!body.gmail_id) { server.json(res, 400, { error: "Missing gmail_id" }); return; }
+    route<{ gmail_id: string }>("POST", "/api/emails/dismiss-draft", "Failed to dismiss", ({ body }) => {
+      const gmailId = requireGmailId(body);
 
-        const db = (emailService as unknown as { db: SqliteDb }).db;
+      const db = (emailService as unknown as { db: SqliteDb }).db;
 
-        // Get draft comm_id from google_emails
-        const row = db.prepare(
-          "SELECT draft_comm_id FROM google_emails WHERE gmail_id = ?"
-        ).get(body.gmail_id) as { draft_comm_id: string } | undefined;
+      // Get draft comm_id from google_emails
+      const row = db.prepare(
+        "SELECT draft_comm_id FROM google_emails WHERE gmail_id = ?"
+      ).get(gmailId) as { draft_comm_id: string } | undefined;
 
-        if (row?.draft_comm_id) {
-          // Delete the draft communication
-          db.prepare("DELETE FROM communications WHERE id = ? AND status = 'draft'").run(row.draft_comm_id);
-          // Clear the link
-          db.prepare("UPDATE google_emails SET draft_comm_id = '', attention_needed = 0 WHERE gmail_id = ?").run(body.gmail_id);
-        } else {
-          // Just mark as not needing attention
-          db.prepare("UPDATE google_emails SET attention_needed = 0 WHERE gmail_id = ?").run(body.gmail_id);
-        }
-
-        server.json(res, 200, { ok: true });
-      } catch (err) {
-        log.error("POST /api/emails/dismiss-draft failed", err);
-        server.json(res, 500, { error: "Failed to dismiss" });
+      if (row?.draft_comm_id) {
+        // Delete the draft communication
+        db.prepare("DELETE FROM communications WHERE id = ? AND status = 'draft'").run(row.draft_comm_id);
+        // Clear the link
+        db.prepare("UPDATE google_emails SET draft_comm_id = '', attention_needed = 0 WHERE gmail_id = ?").run(gmailId);
+      } else {
+        // Just mark as not needing attention
+        db.prepare("UPDATE google_emails SET attention_needed = 0 WHERE gmail_id = ?").run(gmailId);
       }
+
+      return { ok: true };
     });
 
     // Edit draft body before sending
-    server.post("/api/emails/edit-draft", async (req, res) => {
-      try {
-        const body = await server.parseBody<{ comm_id: string; body: string; body_html?: string }>(req);
-        if (!body.comm_id || body.body === undefined) { server.json(res, 400, { error: "Missing comm_id or body" }); return; }
+    route<{ comm_id: string; body: string; body_html?: string }>(
+      "POST", "/api/emails/edit-draft", "Failed to edit draft", ({ body }) => {
+        if (!body.comm_id || body.body === undefined) throw new HttpError(400, "Missing comm_id or body");
 
-        if (!commsService) { server.json(res, 500, { error: "Comms service not available" }); return; }
+        if (!commsService) throw new HttpError(500, "Comms service not available");
 
         const comm = commsService.update(body.comm_id, {
           body: body.body,
           body_html: body.body_html,
         });
-        if (!comm) { server.json(res, 404, { error: "Draft not found or not editable" }); return; }
+        if (!comm) throw new HttpError(404, "Draft not found or not editable");
 
-        server.json(res, 200, { ok: true, body: comm.body });
-      } catch (err) {
-        log.error("POST /api/emails/edit-draft failed", err);
-        server.json(res, 500, { error: "Failed to edit draft" });
-      }
-    });
+        return { ok: true, body: comm.body };
+      },
+    );
   }
 
   // ── Email Accounts CRUD ─────────────────────────
 
   if (commsService) {
     const svc = commsService;
+    const withMessage = (err: unknown) => ({ error: errorMessage(err) });
 
-    server.get("/api/email-accounts", (_req, res) => {
-      try {
-        server.json(res, 200, svc.listAccounts());
-      } catch (err) {
-        log.error("GET /api/email-accounts failed", err);
-        server.json(res, 500, { error: "Failed to list accounts" });
-      }
+    route("GET", "/api/email-accounts", "Failed to list accounts", () => svc.listAccounts());
+
+    route<{
+      label: string; email: string;
+      type?: "personal" | "work" | "transactional" | "marketing";
+      provider?: "gmail" | "resend" | "imap_smtp";
+      company?: string; signature?: string;
+      provider_config?: Record<string, unknown>;
+      is_default?: boolean;
+    }>("POST", "/api/email-accounts", withMessage, ({ body }) => {
+      if (!body.label || !body.email) throw new HttpError(400, "Missing label or email");
+      return svc.addAccount(body);
     });
 
-    server.post("/api/email-accounts", async (req, res) => {
-      try {
-        const body = await server.parseBody<{
-          label: string; email: string;
-          type?: "personal" | "work" | "transactional" | "marketing";
-          provider?: "gmail" | "resend" | "imap_smtp";
-          company?: string; signature?: string;
-          provider_config?: Record<string, unknown>;
-          is_default?: boolean;
-        }>(req);
-        if (!body.label || !body.email) { server.json(res, 400, { error: "Missing label or email" }); return; }
-        const account = svc.addAccount(body);
-        server.json(res, 200, account);
-      } catch (err) {
-        log.error("POST /api/email-accounts failed", err);
-        server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    route<{
+      id: string;
+      label?: string; email?: string;
+      type?: "personal" | "work" | "transactional" | "marketing";
+      company?: string; signature?: string;
+      provider_config?: Record<string, unknown> | string;
+      is_default?: boolean;
+    }>("POST", "/api/email-accounts/update", withMessage, ({ body }) => {
+      if (!body.id) throw new HttpError(400, "Missing id");
+      const changes: Record<string, unknown> = {};
+      if (body.label !== undefined) changes.label = body.label;
+      if (body.email !== undefined) changes.email = body.email;
+      if (body.type !== undefined) changes.type = body.type;
+      if (body.company !== undefined) changes.company = body.company;
+      if (body.signature !== undefined) changes.signature = body.signature;
+      if (body.provider_config !== undefined) {
+        changes.provider_config = typeof body.provider_config === "string"
+          ? body.provider_config
+          : JSON.stringify(body.provider_config);
       }
+      if (body.is_default !== undefined) changes.is_default = body.is_default ? 1 : 0;
+
+      const account = svc.updateAccount(body.id, changes as Parameters<typeof svc.updateAccount>[1]);
+      if (!account) throw new HttpError(404, "Account not found");
+      return account;
     });
 
-    server.post("/api/email-accounts/update", async (req, res) => {
-      try {
-        const body = await server.parseBody<{
-          id: string;
-          label?: string; email?: string;
-          type?: "personal" | "work" | "transactional" | "marketing";
-          company?: string; signature?: string;
-          provider_config?: Record<string, unknown> | string;
-          is_default?: boolean;
-        }>(req);
-        if (!body.id) { server.json(res, 400, { error: "Missing id" }); return; }
-        const changes: Record<string, unknown> = {};
-        if (body.label !== undefined) changes.label = body.label;
-        if (body.email !== undefined) changes.email = body.email;
-        if (body.type !== undefined) changes.type = body.type;
-        if (body.company !== undefined) changes.company = body.company;
-        if (body.signature !== undefined) changes.signature = body.signature;
-        if (body.provider_config !== undefined) {
-          changes.provider_config = typeof body.provider_config === "string"
-            ? body.provider_config
-            : JSON.stringify(body.provider_config);
-        }
-        if (body.is_default !== undefined) changes.is_default = body.is_default ? 1 : 0;
-
-        const account = svc.updateAccount(body.id, changes as Parameters<typeof svc.updateAccount>[1]);
-        if (!account) { server.json(res, 404, { error: "Account not found" }); return; }
-        server.json(res, 200, account);
-      } catch (err) {
-        log.error("POST /api/email-accounts/update failed", err);
-        server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
-      }
+    route<{ id: string }>("POST", "/api/email-accounts/delete", "Failed to delete account", ({ body }) => {
+      if (!body.id) throw new HttpError(400, "Missing id");
+      if (!svc.deleteAccount(body.id)) throw new HttpError(404, "Account not found");
+      return { ok: true };
     });
 
-    server.post("/api/email-accounts/delete", async (req, res) => {
-      try {
-        const body = await server.parseBody<{ id: string }>(req);
-        if (!body.id) { server.json(res, 400, { error: "Missing id" }); return; }
-        const ok = svc.deleteAccount(body.id);
-        if (!ok) { server.json(res, 404, { error: "Account not found" }); return; }
-        server.json(res, 200, { ok: true });
-      } catch (err) {
-        log.error("POST /api/email-accounts/delete failed", err);
-        server.json(res, 500, { error: "Failed to delete account" });
-      }
-    });
-
-    server.post("/api/email-accounts/test", async (req, res) => {
-      try {
-        const body = await server.parseBody<{ id: string }>(req);
-        if (!body.id) { server.json(res, 400, { error: "Missing id" }); return; }
-        const result = await svc.testAccount(body.id);
-        server.json(res, 200, result);
-      } catch (err) {
-        log.error("POST /api/email-accounts/test failed", err);
-        server.json(res, 500, { error: err instanceof Error ? err.message : String(err), ok: false });
-      }
-    });
+    route<{ id: string }>(
+      "POST", "/api/email-accounts/test", (err) => ({ error: errorMessage(err), ok: false }), ({ body }) => {
+        if (!body.id) throw new HttpError(400, "Missing id");
+        return svc.testAccount(body.id);
+      },
+    );
 
     // Google profile lookup — for the "Add Gmail account" flow in the dashboard.
     // Returns auth state + the logged-in user's email/name so the form can
     // autofill, or an auth URL if OAuth hasn't been completed yet.
-    server.get("/api/email-accounts/google-profile", async (_req, res) => {
-      if (!config) { server.json(res, 200, { authenticated: false, configured: false }); return; }
+    server.route("GET", "/api/email-accounts/google-profile", async () => {
+      if (!config) return { authenticated: false, configured: false };
       const { clientId, clientSecret, callbackPort } = config.google;
       const configured = !!(clientId && clientSecret);
       if (!configured) {
-        server.json(res, 200, {
+        return {
           authenticated: false,
           configured: false,
           message: "Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env",
-        });
-        return;
+        };
       }
 
       const db = (emailService as unknown as { db: SqliteDb }).db;
       const auth = new GoogleAuth(db, clientId, clientSecret, callbackPort);
       if (!auth.isAuthenticated()) {
-        server.json(res, 200, {
+        return {
           authenticated: false,
           configured: true,
           status: "disconnected",
           needsReauth: false,
           authUrl: auth.getAuthUrlForDashboard(config.dashboard.port),
-        });
-        return;
+        };
       }
 
       try {
@@ -575,7 +409,7 @@ export function registerEmailRoutes(
         });
         if (!profileRes.ok) throw new Error(`Gmail profile ${profileRes.status}`);
         const profile = await profileRes.json() as { emailAddress?: string };
-        server.json(res, 200, {
+        return {
           authenticated: true,
           configured: true,
           status: "connected",
@@ -583,18 +417,18 @@ export function registerEmailRoutes(
           email: profile.emailAddress ?? "",
           name: "",
           picture: "",
-        });
+        };
       } catch (err) {
         // getAccessToken() marks needs_reauth on a dead refresh token.
         const status = auth.getStatus();
-        server.json(res, 200, {
+        return {
           authenticated: false,
           configured: true,
           status,
           needsReauth: status === "needs_reauth",
-          error: err instanceof Error ? err.message : String(err),
+          error: errorMessage(err),
           authUrl: auth.getAuthUrlForDashboard(config.dashboard.port),
-        });
+        };
       }
     });
   }
@@ -625,6 +459,9 @@ export function registerEmailRoutes(
   // When the env var is set, the request must carry the same value in
   // `X-Inbound-Token` (or a `?token=` query). When it's unset the endpoint is
   // open — fine for local dev, not for internet-exposed deployments.
+  //
+  // Stays a raw handler: it checks the token before reading the body, so an
+  // unauthenticated caller gets 401 without the server parsing its payload.
   if (commsService) {
     const svc = commsService;
     server.post("/api/comms/inbound", async (req, res) => {
