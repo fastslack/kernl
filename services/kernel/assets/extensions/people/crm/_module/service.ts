@@ -1,5 +1,22 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, type PatchColumn, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
 import type { Contact, Interaction, LeadStatus } from "./types.js";
+
+/** The contacts columns updateContact may write; anything else in the patch is ignored. */
+const CONTACT_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  email: "text",
+  phone: "text",
+  company: "text",
+  relationship: "text",
+  notes: "text",
+  last_interaction: "text",
+  lead_status: "text",
+  lead_source: "text",
+  instagram_handle: "text",
+  linkedin_url: "text",
+  x_handle: "text",
+  website: "text",
+};
 
 const LEAD_STATUSES: ReadonlyArray<LeadStatus> = ["", "new", "drafted", "contacted", "qualified", "won", "lost"];
 
@@ -222,18 +239,7 @@ export class CrmService {
 
   /** Patch a contact in place. Only writes the fields actually supplied. */
   updateContact(id: string, patch: Partial<Omit<Contact, "id" | "created_at">>): boolean {
-    const allowed: Array<keyof typeof patch> = [
-      "name", "email", "phone", "company", "relationship", "notes",
-      "last_interaction", "lead_status", "lead_source",
-      "instagram_handle", "linkedin_url", "x_handle", "website",
-    ];
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    for (const k of allowed) {
-      if (patch[k] === undefined) continue;
-      sets.push(`${k} = ?`);
-      params.push(patch[k]);
-    }
+    const { sets, params } = buildPatch(patch, CONTACT_PATCH);
     if (sets.length === 0) return false;
     sets.push("updated_at = ?");
     params.push(isoNow());

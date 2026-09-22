@@ -6,7 +6,8 @@
  * `/api/email-suggestions/*` route are the same request by two roads. They
  * were written twice and had drifted far apart:
  *   - `comms.update` over RPC handed every key of the request to the
- *     service, which writes `${key} = ?` — any column, any name, into SQL.
+ *     service, which wrote `${key} = ?` — any column, any name, into SQL.
+ *     (The service now enforces its own column allow-list too.)
  *   - `comms.search` over RPC searched the Gmail mailbox and answered
  *     `{ results }`; the page renders the stored-communications array the
  *     route returns.

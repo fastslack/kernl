@@ -4,6 +4,7 @@ import {
   isoNow,
   llm,
   log,
+  jsonArray,
 } from "@kernl/extension-sdk";
 import type {
   RepoProvider,
@@ -413,7 +414,7 @@ export class TriageService {
     const target = this.getTarget(item.target_id);
     if (!target) throw new Error(`Target gone for item ${itemId}`);
 
-    const labels = safeParseJsonArray(item.labels_json);
+    const labels = jsonArray(item.labels_json).filter((x): x is string => typeof x === "string");
     const protectedLabel = labels.find((l) => PROTECTED_LABELS.has(l));
     if (protectedLabel) {
       return this.persistGuard(item, target, "protected_label", {
@@ -871,15 +872,6 @@ export class TriageService {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function safeParseJsonArray(text: string): string[] {
-  try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? parsed.filter((x): x is string => typeof x === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
 function applyHardRules(decision: Decision, item: RepoItem): Decision {
   if (decision.decision !== "close") return decision;
   if (item.kind === "pull_request" && decision.closeReason === "stale_insufficient_info") {
@@ -918,7 +910,7 @@ function renderCloseComment(review: TriageReview): string {
     parts.push(review.summary || "Closing this item based on automated triage review.");
   }
   parts.push("");
-  const evidence = safeParseEvidence(review.evidence_json);
+  const evidence = jsonArray<Evidence>(review.evidence_json);
   if (evidence.length > 0) {
     parts.push("**Evidence**");
     for (const e of evidence) {
@@ -936,13 +928,4 @@ function renderCloseComment(review: TriageReview): string {
     `_Closed by mtw-triage (model=${review.model || "default"}, reason=${review.close_reason}, confidence=${review.confidence})._`,
   );
   return parts.join("\n");
-}
-
-function safeParseEvidence(text: string): Evidence[] {
-  try {
-    const parsed = JSON.parse(text);
-    return Array.isArray(parsed) ? (parsed as Evidence[]) : [];
-  } catch {
-    return [];
-  }
 }

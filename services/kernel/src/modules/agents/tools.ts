@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { textResult, errorResult, isoNow } from "../../core/helpers.js";
+import { textResult, errorResult, isoNow, safeJson } from "../../core/helpers.js";
+import { agentAllowedTools, agentSkills } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import { setOfficeRepo, OfficeRepoError, type SetOfficeRepoResult } from "./office-repo.js";
 import type { ToolDefinition } from "../../core/types.js";
@@ -53,15 +54,10 @@ function resolveCaller(
 }
 
 function parseAllowedTools(raw: string | undefined): string[] | null {
-  // Returns null to mean "all tools" (empty JSON array or blank).
-  if (!raw) return null;
-  try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    return arr.filter((t): t is string => typeof t === "string");
-  } catch {
-    return null;
-  }
+  // Returns null to mean "all tools" (empty JSON array, blank or unreadable).
+  const arr = agentAllowedTools({ allowed_tools: raw });
+  if (arr.length === 0) return null;
+  return arr.filter((t): t is string => typeof t === "string");
 }
 
 function enforceAgentMgmtPolicy(
@@ -396,10 +392,7 @@ export function agentsTools(
         }
 
         // Resolve goal
-        let vars: Record<string, unknown> = {};
-        if (input.variables) {
-          try { vars = JSON.parse(input.variables); } catch { /* ignore */ }
-        }
+        const vars = safeJson<Record<string, unknown>>(input.variables, {});
         const goal = input.goal || resolveGoal(agent.goal_template, vars) || `Execute agent "${agent.name}"`;
 
         // Create run — propagate lineage so depth caps and self-recursion
@@ -1582,8 +1575,7 @@ export function agentsTools(
         const { agent_id } = input;
         const agent = service.getAgent(agent_id);
         if (!agent) return errorResult(`Agent not found: ${agent_id}`);
-        let slugs: string[] = [];
-        try { slugs = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { /* ignore */ }
+        const slugs = agentSkills(agent);
         if (slugs.length === 0) return textResult(`Agent ${agent.name} has no skills attached.`);
         const resolver = executor.getSkillResolver();
         if (!resolver) return textResult(`Slugs (resolver offline): ${slugs.join(", ")}`);

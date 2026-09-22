@@ -110,3 +110,46 @@ export function countRows(db: SqliteDb, table: string, where?: string, params: u
   const sql = where ? `SELECT COUNT(*) as c FROM ${table} WHERE ${where}` : `SELECT COUNT(*) as c FROM ${table}`;
   return (db.prepare(sql).get(...params) as { c: number }).c;
 }
+
+// ── Partial updates ──────────────────────────────────────────
+
+/**
+ * How a patch field reaches its column: stored as is, JSON-encoded, as 0/1,
+ * or with its own column name and/or conversion.
+ */
+export type PatchColumn =
+  | "text"
+  | "json"
+  | "bool"
+  | { column?: string; to?: (value: never) => unknown };
+
+/**
+ * The SET clause of a partial UPDATE: one `col = ?` per field of `patch`
+ * that `spec` lists and that is not undefined, in `spec` order.
+ *
+ * Replaces the `if (input.x !== undefined) { sets.push("x = ?"); params.push(…) }`
+ * ladder every service wrote by hand. `spec` is also the allow-list: a key
+ * it does not name never reaches the SQL, so the column names can't come
+ * from the caller. The caller adds its own extras (updated_at, side columns)
+ * to the returned arrays before running the UPDATE.
+ */
+export function buildPatch(
+  patch: object,
+  spec: Record<string, PatchColumn>,
+): { sets: string[]; params: unknown[] } {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const values = patch as Record<string, unknown>;
+  for (const [field, kind] of Object.entries(spec)) {
+    const value = values[field];
+    if (value === undefined) continue;
+    if (kind === "text") { sets.push(`${field} = ?`); params.push(value); }
+    else if (kind === "json") { sets.push(`${field} = ?`); params.push(JSON.stringify(value)); }
+    else if (kind === "bool") { sets.push(`${field} = ?`); params.push(value ? 1 : 0); }
+    else {
+      sets.push(`${kind.column ?? field} = ?`);
+      params.push(kind.to ? kind.to(value as never) : value);
+    }
+  }
+  return { sets, params };
+}

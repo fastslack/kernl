@@ -13,6 +13,7 @@ import { HttpError, isHttpError, type KernelHttpServer } from "../../../core/htt
 import { isPathInside } from "../../../core/fs-paths.js";
 import type { AgentService } from "../service.js";
 import type { WorkspaceServiceLike } from "../advanced-types.js";
+import { agentVariables } from "../agent-fields.js";
 
 export function registerWorkspaceFileRoutes(
   server: KernelHttpServer,
@@ -69,8 +70,7 @@ export function registerWorkspaceFileRoutes(
   function requireAgentCwd(id: string): { root: string; vars: Record<string, unknown> } {
     const agent = service.getAgent(id);
     if (!agent) throw new HttpError(404, "Agent not found");
-    let vars: Record<string, unknown> = {};
-    try { vars = JSON.parse((agent as { variables?: string }).variables || "{}"); } catch { /* defaults */ }
+    const vars = agentVariables(agent);
     const cwd = agentCwdRoot(agent, vars);
     if (!cwd) throw new HttpError(400, "agent has no absolute __cwd_path__ or office repo home");
     return { root: resolve(cwd), vars };

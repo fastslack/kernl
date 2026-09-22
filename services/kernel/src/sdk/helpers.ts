@@ -223,3 +223,32 @@ export function stripInternalArgs(args: unknown): unknown {
   }
   return out;
 }
+
+// ── JSON columns ────────────────────────────────────────────────
+
+/**
+ * Parse stored JSON, or return `fallback` when it is empty, malformed or —
+ * given an `is` guard — not the expected shape. For TEXT columns holding
+ * JSON (tool lists, variables, chains): a bad row must degrade to the
+ * default, not throw out of whatever was reading it.
+ */
+export function safeJson<T>(raw: string | null | undefined, fallback: T, is?: (v: unknown) => v is T): T {
+  if (!raw) return fallback;
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (is && !is(value)) return fallback;
+    return value as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/** A stored JSON array, `[]` for anything else. */
+export function jsonArray<T = unknown>(raw: string | null | undefined): T[] {
+  return safeJson<T[]>(raw, [], Array.isArray as (v: unknown) => v is T[]);
+}
+
+/** A stored JSON object, `{}` for anything else (arrays and null included). */
+export function jsonObject<T extends Record<string, unknown> = Record<string, unknown>>(raw: string | null | undefined): T {
+  return safeJson<T>(raw, {} as T, (v): v is T => typeof v === "object" && v !== null && !Array.isArray(v));
+}

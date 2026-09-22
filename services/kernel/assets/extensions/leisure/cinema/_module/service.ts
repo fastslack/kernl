@@ -14,7 +14,7 @@
  *     re-ingesting an existing identifier.
  */
 
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, jsonArray } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
 import type {
   ArchiveScrapeRow,
@@ -395,14 +395,14 @@ interface RunRow {
   finished_at: string | null;
 }
 
-const PARSE_JSON_ARRAY = (raw: string): string[] => {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return [];
-  }
+const PARSE_JSON_ARRAY = (raw: string): string[] => jsonArray(raw).map(String);
+
+/** The plain cinema_ingest_runs columns updateRun overwrites (counters are added separately). */
+const RUN_PATCH: Record<string, PatchColumn> = {
+  cursor: "text",
+  status: "text",
+  error: "text",
+  finished_at: "text",
 };
 
 /** Coerce a Solr/scrape multi-valued field that may arrive as `T | T[] | undefined`. */
@@ -1110,15 +1110,11 @@ export class CinemaService {
   }
 
   updateRun(id: string, patch: IngestRunUpdate): void {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    if (patch.cursor !== undefined) { sets.push("cursor = ?"); params.push(patch.cursor); }
+    const { sets, params } = buildPatch(patch, RUN_PATCH);
+    // Counters are deltas: they add to the stored value instead of replacing it.
     if (patch.fetched !== undefined) { sets.push("fetched = fetched + ?"); params.push(patch.fetched); }
     if (patch.upserted !== undefined) { sets.push("upserted = upserted + ?"); params.push(patch.upserted); }
     if (patch.embedded !== undefined) { sets.push("embedded = embedded + ?"); params.push(patch.embedded); }
-    if (patch.status !== undefined) { sets.push("status = ?"); params.push(patch.status); }
-    if (patch.error !== undefined) { sets.push("error = ?"); params.push(patch.error); }
-    if (patch.finished_at !== undefined) { sets.push("finished_at = ?"); params.push(patch.finished_at); }
     if (sets.length === 0) return;
     params.push(id);
     this.db.prepare(`UPDATE cinema_ingest_runs SET ${sets.join(", ")} WHERE id = ?`).run(...params);
@@ -1221,10 +1217,8 @@ export class CinemaService {
 
     for (const r of rows) {
       titlesScanned++;
-      let parsed: unknown;
-      try { parsed = JSON.parse(r.subject_json); } catch { continue; }
-      if (!Array.isArray(parsed)) continue;
-      for (const raw of parsed) {
+      // Malformed or non-array subjects contribute nothing.
+      for (const raw of jsonArray(r.subject_json)) {
         if (typeof raw !== "string") continue;
         const trimmed = raw.trim();
         if (trimmed.length < 2) continue;

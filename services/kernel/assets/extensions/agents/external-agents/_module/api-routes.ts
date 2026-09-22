@@ -1,4 +1,4 @@
-import { HttpError, type KernelHttpServer, log } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer, log, safeJson } from "@kernl/extension-sdk";
 import type { ExternalAgentService } from "./service.js";
 import type { AgentReport } from "./types.js";
 
@@ -84,8 +84,8 @@ export function registerExternalAgentRoutes(
     const agent = authenticate(req.headers);
     if (!agent) throw new HttpError(401, "Invalid or missing X-Agent-Key");
 
-    let config: Record<string, unknown> = {};
-    try { config = JSON.parse(agent.config) as Record<string, unknown>; } catch { /* corrupted JSON, use empty */ }
+    // Corrupted JSON reads as an empty config.
+    const config = safeJson<Record<string, unknown>>(agent.config, {});
 
     return {
       agent_id: agent.id,

@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
 import { assetsDir } from "../../core/assets-root.js";
 import { isPathInside } from "../../core/fs-paths.js";
+import { safeJson } from "../../core/helpers.js";
 import type { ExtensionService } from "./service.js";
 import { BUNDLE_EXT } from "./bundle.js";
 import {
@@ -61,16 +62,16 @@ export function registerExtensionsRoutes(
     // Nothing named the missing feature, and nothing pointed at
     // /settings/license, which is the page that fixes it.
     const items = rows.map((r) => {
-      const manifest = safeParse(r.manifest_json);
+      const manifest = safeJson<unknown>(r.manifest_json, null);
       const paid = manifest ? isPaidExtension(manifest as EntitlementManifest) : false;
       const feature = paid ? requiredFeature(manifest as EntitlementManifest) : null;
       return {
         ...r,
         manifest,
-        source: safeParse(r.source_json),
-        granted_permissions: safeParse(r.granted_permissions_json),
-        settings: safeParse(r.settings_json),
-        install_receipt: safeParse(r.install_receipt_json),
+        source: safeJson<unknown>(r.source_json, null),
+        granted_permissions: safeJson<unknown>(r.granted_permissions_json, null),
+        settings: safeJson<unknown>(r.settings_json, null),
+        install_receipt: safeJson<unknown>(r.install_receipt_json, null),
         entitlement: feature
           ? { required_feature: feature, licensed: service.hasLicense(feature) }
           : null,
@@ -98,11 +99,11 @@ export function registerExtensionsRoutes(
     return {
       item: {
         ...row,
-        manifest: safeParse(row.manifest_json),
-        source: safeParse(row.source_json),
-        granted_permissions: safeParse(row.granted_permissions_json),
-        settings: safeParse(row.settings_json),
-        install_receipt: safeParse(row.install_receipt_json),
+        manifest: safeJson<unknown>(row.manifest_json, null),
+        source: safeJson<unknown>(row.source_json, null),
+        granted_permissions: safeJson<unknown>(row.granted_permissions_json, null),
+        settings: safeJson<unknown>(row.settings_json, null),
+        install_receipt: safeJson<unknown>(row.install_receipt_json, null),
       },
     };
   });
@@ -160,7 +161,7 @@ export function registerExtensionsRoutes(
       const row = service.get(id) ?? service.getBySlug(id);
       if (!row) { server.json(res, 404, { error: "Extension not found" }); return; }
 
-      const manifest = safeParse(row.manifest_json) as { logo?: string } | null;
+      const manifest = safeJson<unknown>(row.manifest_json, null) as { logo?: string } | null;
       const logo = manifest?.logo;
       if (!logo || !row.install_path) {
         server.json(res, 404, { error: "No logo" });
@@ -407,11 +408,6 @@ export function registerExtensionsRoutes(
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
-
-function safeParse(raw: string): unknown {
-  try { return JSON.parse(raw); }
-  catch { return null; }
-}
 
 interface StatsBlock {
   total: number;

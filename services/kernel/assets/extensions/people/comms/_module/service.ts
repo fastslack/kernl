@@ -6,7 +6,10 @@ import {
   newId,
   isoNow,
   log,
+  buildPatch,
+  safeJson,
   type Notifier,
+  type PatchColumn,
 } from "@kernl/extension-sdk";
 import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
@@ -47,6 +50,50 @@ function guessMime(filename: string): string {
   const ext = extname(filename).toLowerCase();
   return MIME_MAP[ext] ?? "application/octet-stream";
 }
+
+// ── Partial-update allow-lists ─────────────────────────
+// Each is the full set of columns its update method may write. The column
+// names used to come straight from the caller's keys (`${key} = ?`); now a
+// key these maps don't name is dropped before it reaches the SQL. They match
+// what the tools, routes and dashboard operations already send.
+
+/** The communications columns update() may write. */
+const COMM_PATCH: Record<string, PatchColumn> = {
+  subject: "text",
+  body: "text",
+  // Sanitize HTML at the only edit gate so we can't store raw scripts.
+  // body is plain text; only body_html goes through the sanitizer.
+  body_html: { to: (html: unknown) => sanitizeUserHtml(String(html)) },
+  status: "text",
+  recipients_to: "text",
+  recipients_cc: "text",
+  recipients_bcc: "text",
+  scheduled_at: "text",
+  contact_id: "text",
+  task_id: "text",
+  account_id: "text",
+};
+
+/** The email_accounts columns updateAccount() may write (callers pass is_default as 0/1, provider_config as a string). */
+const ACCOUNT_PATCH: Record<string, PatchColumn> = {
+  label: "text",
+  email: "text",
+  type: "text",
+  company: "text",
+  signature: "text",
+  provider_config: "text",
+  is_default: "text",
+};
+
+/** The email_templates columns updateTemplate() may write (variables is re-derived, never taken from the caller). */
+const TEMPLATE_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  subject: "text",
+  body: "text",
+  body_html: "text",
+  category: "text",
+  account_id: "text",
+};
 
 export class CommsService {
   private providers = new Map<string, EmailProvider>();
@@ -100,10 +147,7 @@ export class CommsService {
     const account = this.getAccount(accountId);
     if (!account) return { ok: false, reason: "Account not found" };
 
-    const rawConfig = (() => {
-      try { return JSON.parse(account.provider_config || "{}") as Record<string, unknown>; }
-      catch { return {}; }
-    })();
+    const rawConfig = safeJson<Record<string, unknown>>(account.provider_config, {});
 
     if (account.provider === "gmail") {
       if (!this.googleAuth) return { ok: false, reason: "Google OAuth not configured (set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET)" };
@@ -304,18 +348,8 @@ export class CommsService {
       return null;
     }
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    for (const [key, value] of Object.entries(changes)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        // Sanitize HTML at the only edit gate so we can't store raw scripts.
-        // body is plain text; only body_html goes through the sanitizer.
-        params.push(key === "body_html" ? sanitizeUserHtml(String(value)) : value);
-      }
-    }
-
+    // COMM_PATCH is the allow-list: a key outside it never reaches the SQL.
+    const { sets, params } = buildPatch(changes, COMM_PATCH);
     if (sets.length === 0) return existing;
 
     const now = isoNow();
@@ -1141,16 +1175,8 @@ export class CommsService {
       this.db.prepare("UPDATE email_accounts SET is_default = 0").run();
     }
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    for (const [key, value] of Object.entries(changes)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        params.push(value);
-      }
-    }
-
+    // ACCOUNT_PATCH is the allow-list: a key outside it never reaches the SQL.
+    const { sets, params } = buildPatch(changes, ACCOUNT_PATCH);
     if (sets.length === 0) return existing;
 
     sets.push("updated_at = ?");
@@ -1346,16 +1372,8 @@ export class CommsService {
     const existing = this.getTemplate(id);
     if (!existing) return null;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    for (const [key, value] of Object.entries(changes)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        params.push(value);
-      }
-    }
-
+    // TEMPLATE_PATCH is the allow-list: a key outside it never reaches the SQL.
+    const { sets, params } = buildPatch(changes, TEMPLATE_PATCH);
     if (sets.length === 0) return existing;
 
     // Re-detect variables if subject/body changed

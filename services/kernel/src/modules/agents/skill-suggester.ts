@@ -29,6 +29,8 @@
 import type { BuiltinHandler, BuiltinHandlerContext } from "./builtin-handlers.js";
 import { log } from "../../core/logger.js";
 import { safeQuery, safeQueryOne } from "../../core/db/query-helpers.js";
+import { agentSkills, agentVariables, readHandlerVars } from "./agent-fields.js";
+import { csvList } from "../../sdk/channels.js";
 import {
   tokenize,
   rankSkillsForAgent,
@@ -47,40 +49,21 @@ interface SuggesterVars {
   excludeHandlerPrefixes: string[];
 }
 
-function parseCsv(v: unknown): string[] {
-  if (typeof v !== "string") return [];
-  return v.split(",").map((s) => s.trim()).filter(Boolean);
-}
-
 function readVars(ctx: BuiltinHandlerContext): SuggesterVars {
-  const row = safeQueryOne<{ variables: string }>(
-    ctx.db,
-    "SELECT variables FROM agents WHERE builtin_handler = ? LIMIT 1",
-    HANDLER_KEY,
-  );
-  let raw: Record<string, unknown> = {};
-  try { raw = row ? JSON.parse(row.variables || "{}") : {}; } catch { /* defaults */ }
+  const raw = readHandlerVars(ctx.db, HANDLER_KEY);
   return {
     topNPerAgent: typeof raw.top_n_per_agent === "number" ? raw.top_n_per_agent : 3,
     agentsPerRun: typeof raw.agents_per_run === "number" ? raw.agents_per_run : 20,
     minScore: typeof raw.min_score === "number" ? raw.min_score : 1,
-    excludeHandlerPrefixes: parseCsv(raw.exclude_handlers),
+    excludeHandlerPrefixes: csvList(raw.exclude_handlers),
   };
 }
 
 // ── Cursor (per-run rotation pointer) ─────────────────────────
 
 function readCursor(ctx: BuiltinHandlerContext): number {
-  const row = safeQueryOne<{ variables: string }>(
-    ctx.db,
-    "SELECT variables FROM agents WHERE builtin_handler = ? LIMIT 1",
-    HANDLER_KEY,
-  );
-  if (!row) return 0;
-  try {
-    const v = JSON.parse(row.variables || "{}");
-    return typeof v.__cursor === "number" ? v.__cursor : 0;
-  } catch { return 0; }
+  const v = readHandlerVars(ctx.db, HANDLER_KEY);
+  return typeof v.__cursor === "number" ? v.__cursor : 0;
 }
 
 function saveCursor(ctx: BuiltinHandlerContext, cursor: number): void {
@@ -90,8 +73,7 @@ function saveCursor(ctx: BuiltinHandlerContext, cursor: number): void {
     HANDLER_KEY,
   );
   if (!row) return;
-  let v: Record<string, unknown> = {};
-  try { v = JSON.parse(row.variables || "{}"); } catch { /* ignore */ }
+  const v = agentVariables(row);
   v.__cursor = cursor;
   ctx.db.prepare("UPDATE agents SET variables = ? WHERE id = ?")
     .run(JSON.stringify(v), row.id);
@@ -159,11 +141,7 @@ function loadSkills(ctx: BuiltinHandlerContext): SkillRow[] {
 }
 
 function getAttachedSlugs(agent: AgentRow): Set<string> {
-  if (!agent.skills_json) return new Set();
-  try {
-    const parsed = JSON.parse(agent.skills_json);
-    return Array.isArray(parsed) ? new Set(parsed.map(String)) : new Set();
-  } catch { return new Set(); }
+  return new Set(agentSkills(agent).map(String));
 }
 
 interface Suggestion { slug: string; score: number; matches: string[] }

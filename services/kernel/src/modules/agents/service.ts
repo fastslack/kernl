@@ -2,6 +2,8 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelConfig } from "../../core/config.js";
 import { newId, isoNow } from "../../core/helpers.js";
+import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
+import { agentModelChain } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import type {
   Agent,
@@ -38,6 +40,35 @@ const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
 
 /** Stable topic so every auto-pause alert for the same pair lands in one thread. */
 const AUTO_PAUSE_ALERT_TOPIC = "Agent auto-pause alerts";
+
+/** The agent columns updateAgent may write, and how each field is stored. */
+const AGENT_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  system_prompt: "text",
+  goal_template: "text",
+  allowed_tools: "json",
+  denied_tools: "json",
+  provider: "text",
+  model: "text",
+  max_iterations: "text",
+  timeout_ms: "text",
+  active: "bool",
+  max_tokens: "text",
+  max_errors: "text",
+  variables: "json",
+  show_on_dashboard: "bool",
+  builtin_handler: "text",
+  rank_id: "text",
+  // An empty chain is stored as "" (not "[]"): "no chain, use the defaults".
+  model_chain: { to: (chain: ModelChainEntry[]) => (chain.length > 0 ? JSON.stringify(chain) : "") },
+  wake_on_inbox: "bool",
+  progressive_discovery: "bool",
+  skin_id: "text",
+  under_revision: "bool",
+  executor_type: "text",
+  skills: { column: "skills_json", to: (slugs: string[]) => JSON.stringify(slugs) },
+};
 
 /**
  * Methods AgentService serves straight from one of its sub-services: same
@@ -317,22 +348,9 @@ export class AgentService {
    * Entries with blank provider AND blank model are filtered out.
    */
   resolveModelChain(agent: Agent): ModelChainEntry[] {
-    if (agent.model_chain) {
-      try {
-        const parsed = JSON.parse(agent.model_chain) as unknown;
-        if (Array.isArray(parsed)) {
-          const chain: ModelChainEntry[] = [];
-          for (const raw of parsed) {
-            if (!raw || typeof raw !== "object") continue;
-            const p = String((raw as Record<string, unknown>).provider ?? "");
-            const m = String((raw as Record<string, unknown>).model ?? "");
-            if (p || m) chain.push({ provider: p, model: m });
-          }
-          if (chain.length > 0) return chain;
-        }
-      } catch { /* fall through to single */ }
-    }
-    return [{ provider: agent.provider, model: agent.model }];
+    const chain = agentModelChain(agent);
+    // No usable chain (empty, malformed, or every entry blank) → the single pair.
+    return chain.length > 0 ? chain : [{ provider: agent.provider, model: agent.model }];
   }
 
   setModelChain(agentId: string, chain: ModelChainEntry[]): boolean {
@@ -656,48 +674,17 @@ export class AgentService {
     const agent = this.getAgent(id);
     if (!agent) return undefined;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (input.name !== undefined) { sets.push("name = ?"); params.push(input.name); }
-    if (input.description !== undefined) { sets.push("description = ?"); params.push(input.description); }
-    if (input.system_prompt !== undefined) { sets.push("system_prompt = ?"); params.push(input.system_prompt); }
-    if (input.goal_template !== undefined) { sets.push("goal_template = ?"); params.push(input.goal_template); }
-    if (input.allowed_tools !== undefined) { sets.push("allowed_tools = ?"); params.push(JSON.stringify(input.allowed_tools)); }
-    if (input.denied_tools !== undefined) { sets.push("denied_tools = ?"); params.push(JSON.stringify(input.denied_tools)); }
-    if (input.provider !== undefined) { sets.push("provider = ?"); params.push(input.provider); }
-    if (input.model !== undefined) { sets.push("model = ?"); params.push(input.model); }
-    if (input.max_iterations !== undefined) { sets.push("max_iterations = ?"); params.push(input.max_iterations); }
-    if (input.timeout_ms !== undefined) { sets.push("timeout_ms = ?"); params.push(input.timeout_ms); }
-    if (input.active !== undefined) {
-      sets.push("active = ?");
-      params.push(input.active ? 1 : 0);
-      // Reactivating clears the breaker: the user un-pausing an agent is
-      // telling us the underlying problem is handled, so it gets the full
-      // failure budget again instead of tripping on its next stumble.
-      if (input.active) {
-        sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
-      }
+    const { sets, params } = buildPatch(
+      // Only a known engine is written; anything else leaves the column alone.
+      { ...input, executor_type: input.executor_type === "native" || input.executor_type === "claude_code" ? input.executor_type : undefined },
+      AGENT_PATCH,
+    );
+    // Reactivating clears the breaker: the user un-pausing an agent is
+    // telling us the underlying problem is handled, so it gets the full
+    // failure budget again instead of tripping on its next stumble.
+    if (input.active) {
+      sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
     }
-    if (input.max_tokens !== undefined) { sets.push("max_tokens = ?"); params.push(input.max_tokens); }
-    if (input.max_errors !== undefined) { sets.push("max_errors = ?"); params.push(input.max_errors); }
-    if (input.variables !== undefined) { sets.push("variables = ?"); params.push(JSON.stringify(input.variables)); }
-    if (input.show_on_dashboard !== undefined) { sets.push("show_on_dashboard = ?"); params.push(input.show_on_dashboard ? 1 : 0); }
-    if (input.builtin_handler !== undefined) { sets.push("builtin_handler = ?"); params.push(input.builtin_handler); }
-    if (input.rank_id !== undefined) { sets.push("rank_id = ?"); params.push(input.rank_id); }
-    if (input.model_chain !== undefined) {
-      sets.push("model_chain = ?");
-      params.push(input.model_chain.length > 0 ? JSON.stringify(input.model_chain) : "");
-    }
-    if (input.wake_on_inbox !== undefined) { sets.push("wake_on_inbox = ?"); params.push(input.wake_on_inbox ? 1 : 0); }
-    if (input.progressive_discovery !== undefined) { sets.push("progressive_discovery = ?"); params.push(input.progressive_discovery ? 1 : 0); }
-    if (input.skin_id !== undefined) { sets.push("skin_id = ?"); params.push(input.skin_id); }
-    if (input.under_revision !== undefined) { sets.push("under_revision = ?"); params.push(input.under_revision ? 1 : 0); }
-    if (input.executor_type === "native" || input.executor_type === "claude_code") {
-      sets.push("executor_type = ?");
-      params.push(input.executor_type);
-    }
-    if (input.skills !== undefined) { sets.push("skills_json = ?"); params.push(JSON.stringify(input.skills)); }
 
     if (sets.length === 0) return agent;
 

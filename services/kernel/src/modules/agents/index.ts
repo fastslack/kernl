@@ -8,6 +8,7 @@ import type {
 import { runMigrations } from "../../core/db/migrations.js";
 import { agentsMigrations } from "./migrations.js";
 import { AgentService } from "./service.js";
+import { agentAllowedTools } from "./agent-fields.js";
 import { AgentExecutor } from "./executor.js";
 import type { SandboxDriverRegistry } from "../../core/sandbox/registry.js";
 import { ReactiveEngine } from "./reactive-engine.js";
@@ -353,10 +354,9 @@ function upgradeWorkspaceAccess(db: { prepare: (sql: string) => { all: () => unk
     const rows = db.prepare("SELECT id, name, allowed_tools FROM agents").all() as Array<{ id: string; name: string; allowed_tools: string }>;
     let patched = 0;
     for (const r of rows) {
-      let current: unknown;
-      try { current = JSON.parse(r.allowed_tools || "[]"); } catch { continue; }
-      if (!Array.isArray(current)) continue;
-      if (current.length === 0) continue; // empty = all tools allowed, nothing to patch
+      const current: unknown[] = agentAllowedTools(r);
+      // Empty (or unreadable) = all tools allowed, nothing to patch.
+      if (current.length === 0) continue;
       const strs = current.filter((t): t is string => typeof t === "string");
       const qualifies =
         strs.some(t => t.startsWith("kernel_workspace_")) ||

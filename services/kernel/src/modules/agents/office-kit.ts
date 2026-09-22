@@ -26,6 +26,7 @@ import type { AgentService } from "./service.js";
 import type { ModelChainEntry } from "./types.js";
 import { isFlowKind, type FlowKind, type RepoIsolation } from "./types.js";
 import { applyRepoIsolation } from "./repo-isolation.js";
+import { agentVariables } from "./agent-fields.js";
 import { isoNow, slugify } from "../../core/helpers.js";
 import { HttpError } from "../../sdk/http-error.js";
 
@@ -484,8 +485,7 @@ export function materializeOffice(
     const existing = service.getAgentBySlug(spec.slug);
     if (existing) {
       // Operator-added variables survive; manifest keys win only where set.
-      let exVars: Record<string, unknown> = {};
-      try { exVars = JSON.parse((existing as unknown as { variables?: string }).variables || "{}"); } catch { /* defaults */ }
+      const exVars = agentVariables(existing);
       // Clear the previous posture before the manifest's variables win, so
       // switching an office to 'sandbox' actually removes __sandbox__: false.
       const base = repoPath ? applyRepoIsolation(exVars, def.repoIsolation ?? "host") : exVars;

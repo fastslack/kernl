@@ -19,6 +19,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { log } from "../../core/logger.js";
+import { jsonObject } from "../../core/helpers.js";
 
 export interface ResolvedSkill {
   /** Slug as stored in the agent's skills_json. */
@@ -70,8 +71,9 @@ export class SkillBodyResolver {
       return null;
     }
 
-    const manifest = safeJson(row.manifest_json);
-    const version = String(manifest?.version ?? "");
+    // A missing or malformed manifest reads as {}: version and description become "".
+    const manifest = jsonObject(row.manifest_json);
+    const version = String(manifest.version ?? "");
 
     const cached = this.cache.get(slug);
     if (cached && cached.install_path === row.install_path && cached.version === version) {
@@ -83,7 +85,7 @@ export class SkillBodyResolver {
       log.warn(`SkillBodyResolver: body not found for ${slug} at ${row.install_path}`);
       return null;
     }
-    const description = String(manifest?.description ?? "");
+    const description = String(manifest.description ?? "");
     const resolved: ResolvedSkill = {
       slug,
       description,
@@ -139,18 +141,6 @@ export class SkillBodyResolver {
         return null;
       }
     }
-    return null;
-  }
-}
-
-// ── Helpers ────────────────────────────────────────────────────────────
-
-function safeJson(raw: string | null | undefined): Record<string, unknown> | null {
-  if (!raw) return null;
-  try {
-    const v = JSON.parse(raw);
-    return typeof v === "object" && v !== null ? (v as Record<string, unknown>) : null;
-  } catch {
     return null;
   }
 }

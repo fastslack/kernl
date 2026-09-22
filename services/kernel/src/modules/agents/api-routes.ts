@@ -18,6 +18,7 @@ import type {
   WorkspaceEvolverLike,
 } from "./advanced-types.js";
 import { rankSkillsForAgent, skillRowText, agentRowText } from "./skill-scoring.js";
+import { agentAllowedTools, agentDeniedTools, agentSkills, agentVariables } from "./agent-fields.js";
 import { registerClaudeConfigRoutes } from "./routes/claude-config-routes.js";
 import { registerPrivateAssetRoutes } from "./routes/private-assets-routes.js";
 import { registerWorkspaceFileRoutes } from "./routes/workspace-file-routes.js";
@@ -616,8 +617,7 @@ export function registerAgentRoutes(
 
     if (candidates.length === 0) return { suggestions: [] };
 
-    let attached: string[] = [];
-    try { attached = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { attached = []; }
+    const attached = agentSkills(agent);
 
     const ranked = rankSkillsForAgent(
       {
@@ -654,13 +654,13 @@ export function registerAgentRoutes(
   const exportAgentDef = (agent: ReturnType<typeof requireAgent>) => ({
     system_prompt: agent.system_prompt,
     goal_template: agent.goal_template,
-    allowed_tools: JSON.parse(agent.allowed_tools),
-    denied_tools: JSON.parse(agent.denied_tools),
+    allowed_tools: agentAllowedTools(agent),
+    denied_tools: agentDeniedTools(agent),
     provider: agent.provider,
     model: agent.model,
     max_iterations: agent.max_iterations,
     timeout_ms: agent.timeout_ms,
-    variables: JSON.parse(agent.variables),
+    variables: agentVariables(agent),
   });
 
   // GET /api/agents/:id/export — export agent as marketplace package JSON

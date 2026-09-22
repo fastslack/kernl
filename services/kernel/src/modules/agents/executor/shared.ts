@@ -24,17 +24,3 @@ export function failedBeforeStart(error: string): ExecutionResult {
     tokens_used: 0,
   };
 }
-
-/** Parse a JSON array that may be double-encoded (string of a string). */
-export function parseJsonArray(raw: string): string[] {
-  try {
-    let parsed = JSON.parse(raw);
-    // Handle double-encoded JSON: '""[...]""' → parse again
-    if (typeof parsed === "string") {
-      parsed = JSON.parse(parsed);
-    }
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}

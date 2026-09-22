@@ -19,7 +19,7 @@ import type { KernelConfig, KernelLanguage } from "../../../core/config.js";
 import type { Agent } from "../types.js";
 import type { AgentService } from "../service.js";
 import type { SkillBodyResolver } from "../skill-resolver.js";
-import { parseJsonArray } from "./shared.js";
+import { agentAllowedTools, agentSkills } from "../agent-fields.js";
 import type { RunRecorder } from "./run-recorder.js";
 import {
   promptTodayDate,
@@ -79,9 +79,8 @@ const todayDate: SystemPromptStep = (ctx) => promptTodayDate(ctx.lang, ctx.today
 // `kernel_skill_load`. Cheap on tokens — typically <50 tok per skill.
 const skillsIndex: SystemPromptStep = (ctx) => {
   if (!ctx.skillResolver || !ctx.agent.skills_json) return null;
-  let attached: string[] = [];
-  try { attached = JSON.parse(ctx.agent.skills_json) as string[]; } catch { attached = []; }
-  if (!Array.isArray(attached) || attached.length === 0) return null;
+  const attached = agentSkills(ctx.agent);
+  if (attached.length === 0) return null;
   return ctx.skillResolver.buildPromptIndex(attached) || null;
 };
 
@@ -217,7 +216,7 @@ const conversationalMemory: SystemPromptStep = (ctx) => {
 // allow_list → whenever any kernel_workspace_* tool is granted (the
 // upgrade pass in agents/index.ts ensures analysis tools are present too).
 const workspaceMandate: SystemPromptStep = (ctx) => {
-  const allowedForHint: string[] = parseJsonArray(ctx.agent.allowed_tools);
+  const allowedForHint = agentAllowedTools(ctx.agent);
   const hasWorkspaceAccess =
     allowedForHint.length === 0 ||
     allowedForHint.some(t => t.startsWith("kernel_workspace_"));

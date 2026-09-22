@@ -28,6 +28,8 @@ import type { BuiltinHandler, BuiltinHandlerContext } from "./builtin-handlers.j
 import { log } from "../../core/logger.js";
 import { safeQuery, safeQueryOne } from "../../core/db/query-helpers.js";
 import { WORKSPACE_ROOT } from "./workspace-constants.js";
+import { readHandlerVars } from "./agent-fields.js";
+import { csvList } from "../../sdk/channels.js";
 import { resolve as resolvePath } from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -82,19 +84,13 @@ interface ScraperVars {
 
 // ── Vars helper ───────────────────────────────────────────────
 
+/** A comma-separated variable as a lowercased keyword list ([] when not a string). */
 function parseCsv(v: unknown): string[] {
-  if (typeof v !== "string") return [];
-  return v.split(",").map((s) => s.trim().toLowerCase()).filter(Boolean);
+  return csvList(v).map((s) => s.toLowerCase());
 }
 
 function readVars(ctx: BuiltinHandlerContext, handler: string, track: JobTrack): ScraperVars {
-  const row = safeQueryOne<{ variables: string }>(
-    ctx.db,
-    "SELECT variables FROM agents WHERE builtin_handler = ? LIMIT 1",
-    handler,
-  );
-  let raw: Record<string, unknown> = {};
-  try { raw = row ? JSON.parse(row.variables || "{}") : {}; } catch { /* defaults */ }
+  const raw = readHandlerVars(ctx.db, handler);
   return {
     track,
     skillKeywords: parseCsv(raw.skill_keywords),
@@ -823,13 +819,7 @@ interface CuratorVars {
 }
 
 function readCuratorVars(ctx: BuiltinHandlerContext): CuratorVars {
-  const row = safeQueryOne<{ variables: string }>(
-    ctx.db,
-    "SELECT variables FROM agents WHERE builtin_handler = ? LIMIT 1",
-    "scraper:jobs:curate",
-  );
-  let raw: Record<string, unknown> = {};
-  try { raw = row ? JSON.parse(row.variables || "{}") : {}; } catch { /* defaults */ }
+  const raw = readHandlerVars(ctx.db, "scraper:jobs:curate");
   return {
     topN: typeof raw.top_n === "number" ? raw.top_n : 5,
     redFlags: parseCsv(raw.red_flags),
@@ -903,13 +893,7 @@ interface DispatchVars {
 }
 
 function readDispatchVars(ctx: BuiltinHandlerContext): DispatchVars {
-  const row = safeQueryOne<{ variables: string }>(
-    ctx.db,
-    "SELECT variables FROM agents WHERE builtin_handler = ? LIMIT 1",
-    "scraper:jobs:dispatch",
-  );
-  let raw: Record<string, unknown> = {};
-  try { raw = row ? JSON.parse(row.variables || "{}") : {}; } catch { /* defaults */ }
+  const raw = readHandlerVars(ctx.db, "scraper:jobs:dispatch");
   return {
     maxPerRun: typeof raw.max_per_run === "number" ? raw.max_per_run : 3,
     requireTags: parseCsv(raw.require_tags),

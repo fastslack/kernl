@@ -12,6 +12,7 @@
  */
 
 import type { SqliteDb } from "../db/sqlite.js";
+import { jsonArray } from "../helpers.js";
 import type { KernelConfig } from "../config.js";
 import { classifyModel } from "./model-traits.js";
 import type { ModelCatalog } from "./model-catalog.js";
@@ -171,14 +172,8 @@ export function findBrokenRefs(deps: {
     rows = [];
   }
   for (const r of rows) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(r.model_chain);
-    } catch {
-      continue;
-    }
-    if (!Array.isArray(parsed)) continue;
-    for (const entry of parsed as Array<{ provider?: string; model?: string }>) {
+    // Unreadable or non-array chains contribute nothing.
+    for (const entry of jsonArray<{ provider?: string; model?: string }>(r.model_chain)) {
       if (!entry?.model) continue;
       consider({
         location: `agent: ${r.name}`,

@@ -40,6 +40,7 @@ import {
   logLlmFail,
   isoNow,
   getProviderConfig,
+  safeJson,
   type KernelConfig,
   type EventBus,
   type SandboxDriverRegistry,
@@ -1429,9 +1430,8 @@ export class ClaudeCodeExecutor {
     const unpack = <T>(key: string): T | undefined => {
       const v = raw[key];
       if (v == null) return undefined;
-      if (typeof v === "string") {
-        try { return JSON.parse(v) as T; } catch { return undefined; }
-      }
+      // Malformed JSON reads as "not set".
+      if (typeof v === "string") return safeJson<T | undefined>(v, undefined);
       return v as T;
     };
     const boolVar = (key: string, defaultVal: boolean): boolean => {

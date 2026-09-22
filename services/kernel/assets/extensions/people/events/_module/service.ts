@@ -1,4 +1,4 @@
-import { type SqliteDb as Database, newId, isoNow, type EventBus } from "@kernl/extension-sdk";
+import { type SqliteDb as Database, type PatchColumn, newId, isoNow, buildPatch, safeJson, type EventBus } from "@kernl/extension-sdk";
 import type {
   Event,
   EventAttendee,
@@ -16,6 +16,24 @@ import type {
   ContactEventHistory,
   EventReminderData,
 } from "./types.js";
+
+/** The events columns update() may write; anything else in the input is ignored. */
+const EVENT_PATCH: Record<string, PatchColumn> = {
+  title: "text",
+  description: "text",
+  type: "text",
+  status: "text",
+  start_at: "text",
+  end_at: "text",
+  duration_minutes: "text",
+  location: "text",
+  location_url: "text",
+  min_attendees: "text",
+  max_attendees: "text",
+  cost_per_person_cents: "text",
+  cost_currency: "text",
+  notes: "text",
+};
 
 // Event bus event types for external listeners
 export interface EventsModuleEvents {
@@ -145,32 +163,7 @@ export class EventsService {
 
     if (!existing) return null;
 
-    const sets: string[] = [];
-    const values: unknown[] = [];
-
-    const fields: (keyof UpdateEventInput)[] = [
-      "title",
-      "description",
-      "type",
-      "status",
-      "start_at",
-      "end_at",
-      "duration_minutes",
-      "location",
-      "location_url",
-      "min_attendees",
-      "max_attendees",
-      "cost_per_person_cents",
-      "cost_currency",
-      "notes",
-    ];
-
-    for (const field of fields) {
-      if (input[field] !== undefined) {
-        sets.push(`${field} = ?`);
-        values.push(input[field]);
-      }
-    }
+    const { sets, params: values } = buildPatch(input, EVENT_PATCH);
 
     if (sets.length === 0) {
       return this.get(id);
@@ -1057,7 +1050,7 @@ export class EventsService {
       cost_per_person_cents: row.cost_per_person_cents,
       cost_currency: row.cost_currency,
       organizer_contact_id: row.organizer_contact_id,
-      recurrence: row.recurrence ? (() => { try { return JSON.parse(row.recurrence); } catch { return null; } })() : null,
+      recurrence: safeJson<RecurrenceRule | null>(row.recurrence, null),
       parent_event_id: row.parent_event_id,
       notes: row.notes,
       created_at: row.created_at,

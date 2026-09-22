@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, type GraphResult, log } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, type GraphResult, log, safeJson } from "@kernl/extension-sdk";
 
 const BATCH_SIZE = 200;
 
@@ -218,8 +218,8 @@ export class GoogleGraphSync {
     for (let i = 0; i < emails.length; i += BATCH_SIZE) {
       const batch = emails.slice(i, i + BATCH_SIZE);
       const rows = batch.map((e) => {
-        const toList: Array<{ email: string }> = tryParseJson(e.to_emails, []);
-        const ccList: Array<{ email: string }> = tryParseJson(e.cc_emails, []);
+        const toList: Array<{ email: string }> = safeJson(e.to_emails, []);
+        const ccList: Array<{ email: string }> = safeJson(e.cc_emails, []);
         const allRecipients = [...toList, ...ccList]
           .map((r) => r.email?.toLowerCase())
           .filter(Boolean);
@@ -276,7 +276,7 @@ export class GoogleGraphSync {
     for (let i = 0; i < events.length; i += BATCH_SIZE) {
       const batch = events.slice(i, i + BATCH_SIZE);
       const rows = batch.map((e) => {
-        const attendees: Array<{ email: string; responseStatus: string }> = tryParseJson(e.attendees, []);
+        const attendees: Array<{ email: string; responseStatus: string }> = safeJson(e.attendees, []);
         return {
           google_event_id: e.google_event_id,
           attendees: attendees
@@ -332,13 +332,5 @@ export class GoogleGraphSync {
        RETURN count(r) AS total`,
     );
     return getCount(res, "total");
-  }
-}
-
-function tryParseJson<T>(json: string, fallback: T): T {
-  try {
-    return JSON.parse(json) as T;
-  } catch {
-    return fallback;
   }
 }

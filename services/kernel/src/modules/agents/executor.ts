@@ -22,9 +22,9 @@ import { resolveAgentSystemPrompt, resolveAgentGoalTemplate, resolveAgentLanguag
 import {
   DEFAULT_MAX_CHAIN_DEPTH,
   failedBeforeStart,
-  parseJsonArray,
   type ExecutionResult,
 } from "./executor/shared.js";
+import { agentAllowedTools, agentDeniedTools, agentVariables } from "./agent-fields.js";
 import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from "./executor/model-chain.js";
 import { assembleSystemPrompt } from "./executor/system-prompt.js";
 import { RunRecorder } from "./executor/run-recorder.js";
@@ -389,7 +389,7 @@ export class AgentExecutor {
   ): { llmTools: LlmToolDef[]; toolExecutor: ToolExecutorMap } {
     const { llmTools, toolExecutor } = this.resolveTools(agent, service.getEmbeddingsClient());
 
-    const deniedSet = new Set(parseJsonArray(agent.denied_tools));
+    const deniedSet = new Set(agentDeniedTools(agent));
     const invokeAllowed = !deniedSet.has("kernel_agents_invoke");
     if (invokeAllowed && !llmTools.some(t => t.name === "kernel_agents_invoke")) {
       llmTools.push(invokeToolDef());
@@ -406,7 +406,7 @@ export class AgentExecutor {
   }
 
   private noToolsResolved(agent: Agent): ExecutionResult {
-    const allowedParsed: string[] = parseJsonArray(agent.allowed_tools);
+    const allowedParsed = agentAllowedTools(agent);
     log.error(
       `Agent "${agent.name}": no tools resolved. ` +
       `allowed_tools=${JSON.stringify(allowedParsed)}, ` +
@@ -450,8 +450,8 @@ export class AgentExecutor {
     effectiveGoal: string;
     effectiveSystemPrompt: string;
   } {
-    let vars: Record<string, string> = {};
-    try { vars = JSON.parse(agent.variables || "{}"); } catch { /* ignore */ }
+    // Values are interpolated as stored (a non-string is stringified by replace).
+    const vars = agentVariables(agent) as Record<string, string>;
     const interpolate = (text: string): string =>
       text.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`);
 
@@ -1059,8 +1059,8 @@ export class AgentExecutor {
     llmTools: LlmToolDef[];
     toolExecutor: Map<string, (args: unknown) => Promise<ToolResult>>;
   } {
-    const allowed: string[] = parseJsonArray(agent.allowed_tools);
-    const denied: string[] = parseJsonArray(agent.denied_tools);
+    const allowed = agentAllowedTools(agent);
+    const denied = agentDeniedTools(agent);
     const deniedSet = new Set(denied);
 
     let filtered = this.allTools;
