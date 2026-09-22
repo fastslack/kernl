@@ -1,11 +1,4 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type EventBus,
-} from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { remindersMigrations } from "./migrations/001_reminders.js";
 import { ReminderService } from "./service.js";
 import { ReminderScheduler } from "./scheduler.js";
@@ -19,17 +12,13 @@ export interface RemindersModule extends ExtensibleModule {
 }
 
 export function createRemindersModule(): RemindersModule {
-  let tools: ToolDefinition[] = [];
-  let scheduler: ReminderScheduler | null = null;
   let serviceRef: ReminderService | null = null;
-  let eventsRef: EventBus | null = null;
 
-  return {
+  const mod = defineModule({
     name: "reminders",
+    migrations: remindersMigrations,
 
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "reminders", remindersMigrations);
-
+    async init(ctx) {
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
           "CREATE CONSTRAINT reminder_id IF NOT EXISTS FOR (r:Reminder) REQUIRE r.id IS UNIQUE",
@@ -38,11 +27,8 @@ export function createRemindersModule(): RemindersModule {
 
       const service = new ReminderService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;
-      eventsRef = ctx.events;
 
-      tools = reminderTools(service, ctx.notifier);
-
-      scheduler = new ReminderScheduler(
+      const scheduler = new ReminderScheduler(
         service,
         ctx.notifier,
         ctx.events,
@@ -61,26 +47,26 @@ export function createRemindersModule(): RemindersModule {
           label: "reminder fired",
         }).catch(() => {});
       });
+
+      return { service, events: ctx.events, scheduler };
     },
 
-    getTools() { return tools; },
-    getService() { return serviceRef; },
+    tools: (s, ctx) => reminderTools(s.service, ctx.notifier),
+    rpc: (s) => remindersRpcActions(s.service, s.events),
 
-    getRpcActions() {
-      return serviceRef ? remindersRpcActions(serviceRef, eventsRef) : [];
-    },
+    dashboard: (s) => ({
+      channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
+      registerRoutes: (server) => {
+        if (s && s.events) registerRemindersRoutes(server, s.service, s.events);
+      },
+    }),
 
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
-        registerRoutes: (server) => {
-          if (serviceRef && eventsRef) registerRemindersRoutes(server, serviceRef, eventsRef);
-        },
-      };
-    },
+    shutdown: (s) => s.scheduler.stop(),
+  });
 
-    async shutdown() {
-      scheduler?.stop();
+  return Object.assign(mod, {
+    getService() {
+      return serviceRef;
     },
-  };
+  });
 }

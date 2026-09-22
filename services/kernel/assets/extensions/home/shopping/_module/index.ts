@@ -1,11 +1,4 @@
-import {
-  type ExtensibleModule,
-  type ModuleContext,
-  type ToolDefinition,
-  type DashboardDescriptor,
-  runMigrations,
-  type EventBus,
-} from "@kernl/extension-sdk";
+import { defineModule, type EventBus } from "@kernl/extension-sdk";
 import { shoppingMigrations } from "./migrations/001_shopping.js";
 import { ShoppingService } from "./service.js";
 import { shoppingTools } from "./tools.js";
@@ -13,17 +6,15 @@ import { shoppingRpcActions } from "./rpc-actions.js";
 import { queryShopping } from "./dashboard-queries.js";
 import { registerShoppingRoutes } from "./routes.js";
 
-export function createShoppingModule(): ExtensibleModule & { getService(): ShoppingService | null } {
-  let tools: ToolDefinition[] = [];
-  let serviceInstance: ShoppingService | null = null;
-  let eventsRef: EventBus | null = null;
+export function createShoppingModule() {
+  let service: ShoppingService | null = null;
+  let events: EventBus | null = null;
 
-  return {
+  const mod = defineModule({
     name: "shopping",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "shopping", shoppingMigrations);
-      eventsRef = ctx.events;
+    migrations: shoppingMigrations,
+    async init(ctx) {
+      events = ctx.events;
 
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
@@ -37,33 +28,19 @@ export function createShoppingModule(): ExtensibleModule & { getService(): Shopp
         );
       }
 
-      serviceInstance = new ShoppingService(ctx.sqlite, () => ctx.graph);
-      tools = shoppingTools(serviceInstance);
+      service = new ShoppingService(ctx.sqlite, () => ctx.graph);
+      return service;
     },
-
-    getTools() {
-      return tools;
+    tools: shoppingTools,
+    rpc: (s) => shoppingRpcActions({ service: s, events }),
+    dashboard: {
+      channels: [{ name: "shopping", query: (db) => queryShopping(db) }],
+      registerRoutes: (server) => {
+        if (service) {
+          registerShoppingRoutes(server, service, events ?? undefined);
+        }
+      },
     },
-
-    getService() {
-      return serviceInstance;
-    },
-
-    getRpcActions() {
-      return serviceInstance ? shoppingRpcActions({ service: serviceInstance, events: eventsRef }) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [{ name: "shopping", query: (db) => queryShopping(db) }],
-        registerRoutes: (server) => {
-          if (serviceInstance) {
-            registerShoppingRoutes(server, serviceInstance, eventsRef ?? undefined);
-          }
-        },
-      };
-    },
-
-    async shutdown() {},
-  };
+  });
+  return Object.assign(mod, { getService: () => service });
 }

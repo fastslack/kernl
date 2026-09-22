@@ -1,4 +1,4 @@
-import { type ExtensibleModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { youtubeMigrations } from "./migrations/001_youtube.js";
 import { YouTubeService } from "./service.js";
 import { youtubeTools } from "./tools.js";
@@ -8,29 +8,18 @@ export interface YouTubeModule extends ExtensibleModule {
 }
 
 export function createYouTubeModule(): YouTubeModule {
-  let tools: ToolDefinition[] = [];
   let serviceRef: YouTubeService | null = null;
 
-  return {
+  const mod = defineModule({
     name: "youtube",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "youtube", youtubeMigrations);
-      const service = new YouTubeService(ctx.sqlite);
-      serviceRef = service;
-      tools = youtubeTools(service);
-    },
-
-    getTools() {
-      return tools;
-    },
-
-    getService() {
+    migrations: youtubeMigrations,
+    init(ctx) {
+      serviceRef = new YouTubeService(ctx.sqlite);
       return serviceRef;
     },
-
-    async shutdown() {},
-  };
+    tools: youtubeTools,
+  });
+  return Object.assign(mod, { getService: () => serviceRef });
 }
 
 export default createYouTubeModule;

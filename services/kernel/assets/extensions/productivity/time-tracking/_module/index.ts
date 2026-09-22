@@ -1,54 +1,29 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-} from "@kernl/extension-sdk";
+import { defineModule } from "@kernl/extension-sdk";
 import { timeTrackingMigrations } from "./migrations/001_time_tracking.js";
 import { TimeTrackingService } from "./service.js";
 import { timeTrackingTools } from "./tools.js";
 import { queryTimeTracking } from "./dashboard-queries.js";
 import { timeTrackingRpcActions } from "./rpc-actions.js";
 
-export function createTimeTrackingModule(): ExtensibleModule {
-  let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
-
-  return {
+export function createTimeTrackingModule() {
+  return defineModule({
     name: "time-tracking",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "time-tracking", timeTrackingMigrations);
-      dbRef = ctx.sqlite;
-      const service = new TimeTrackingService(ctx.sqlite, () => ctx.graph);
-      tools = timeTrackingTools(service);
+    migrations: timeTrackingMigrations,
+    init: (ctx) => ({ db: ctx.sqlite, service: new TimeTrackingService(ctx.sqlite, () => ctx.graph) }),
+    tools: (s) => timeTrackingTools(s.service),
+    rpc: (s) => timeTrackingRpcActions(s.db),
+    // Not dashboardChannel: the channel is "timeTracking" but the tool prefix is "time".
+    dashboard: {
+      channels: [
+        { name: "timeTracking", query: (db) => queryTimeTracking(db) },
+      ],
+      channelMappings: [
+        { moduleKey: "time", channels: ["timeTracking"] },
+      ],
+      stores: ["timeTracking"],
+      fetchEndpoints: [
+        { url: "/api/dashboard/timeTracking", store: "timeTracking" },
+      ],
     },
-
-    getTools() {
-      return tools;
-    },
-
-    getRpcActions() {
-      return dbRef ? timeTrackingRpcActions(dbRef) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [
-          { name: "timeTracking", query: (db) => queryTimeTracking(db) },
-        ],
-        channelMappings: [
-          { moduleKey: "time", channels: ["timeTracking"] },
-        ],
-        stores: ["timeTracking"],
-        fetchEndpoints: [
-          { url: "/api/dashboard/timeTracking", store: "timeTracking" },
-        ],
-      };
-    },
-
-    async shutdown() {},
-  };
+  });
 }

@@ -1,4 +1,4 @@
-import { type KernelModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
+import { defineModule } from "@kernl/extension-sdk";
 import { gitlabChannelMigrations } from "./migrations.js";
 import { GitLabConnectionsService } from "./connections-service.js";
 import { GitLabRepoProvider } from "./provider.js";
@@ -6,28 +6,20 @@ import { gitlabChannelTools } from "./tools.js";
 
 const TRIAGE_REGISTER_PROVIDER_EVENT = "triage:register-provider";
 
-export function createGitLabChannelModule(): KernelModule {
-  let tools: ToolDefinition[] = [];
-  let provider: GitLabRepoProvider | null = null;
-
-  return {
+export function createGitLabChannelModule() {
+  return defineModule({
     name: "gitlab-channel",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "ext:gitlab-channel", gitlabChannelMigrations);
+    migrations: gitlabChannelMigrations,
+    migrationsKey: "ext:gitlab-channel",
+    async init(ctx) {
       const connections = new GitLabConnectionsService(ctx.sqlite);
-      provider = new GitLabRepoProvider(connections);
-      tools = gitlabChannelTools(connections, provider);
+      const provider = new GitLabRepoProvider(connections);
 
       await ctx.events.emit(TRIAGE_REGISTER_PROVIDER_EVENT, { provider });
+      return { connections, provider };
     },
-
-    getTools(): ToolDefinition[] {
-      return tools;
-    },
-
-    async shutdown() {},
-  };
+    tools: ({ connections, provider }) => gitlabChannelTools(connections, provider),
+  });
 }
 
 export default createGitLabChannelModule;

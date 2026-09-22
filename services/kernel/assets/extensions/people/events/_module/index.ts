@@ -1,13 +1,4 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-  type SystemRegistry,
-  type EventBus,
-} from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { eventsMigrations } from "./migrations/001_events.js";
 import { EventsService } from "./service.js";
 import { eventsTools } from "./tools.js";
@@ -22,72 +13,51 @@ export interface EventsModule extends ExtensibleModule {
 }
 
 export function createEventsModule(): EventsModule {
-  let tools: ToolDefinition[] = [];
   let serviceRef: EventsService | null = null;
-  let dbRef: SqliteDb | null = null;
-  let systemRegistryRef: SystemRegistry | null = null;
-  let eventsRef: EventBus | null = null;
 
-  return {
+  const mod = defineModule({
     name: "events",
+    migrations: eventsMigrations,
 
-    async initialize(ctx: ModuleContext) {
-      // Run SQLite migrations
-      runMigrations(ctx.sqlite, "events", eventsMigrations);
-      dbRef = ctx.sqlite;
-      systemRegistryRef = ctx.systemRegistry;
-      eventsRef = ctx.events;
-
+    init(ctx) {
       // Create service with EventBus for notifications
       const service = new EventsService(ctx.sqlite, ctx.events);
       serviceRef = service;
-
-      // Build tools — legacy CRUD + agent-shaped intent verbs.
-      tools = [...eventsTools(service), ...agentEventsTools(service)];
+      return { service, db: ctx.sqlite, systemRegistry: ctx.systemRegistry, events: ctx.events };
     },
 
-    getTools() {
-      return tools;
-    },
+    // Legacy CRUD + agent-shaped intent verbs.
+    tools: (s) => [...eventsTools(s.service), ...agentEventsTools(s.service)],
+    rpc: (s) => eventsRpcActions(s.service),
+    dashboardRpc: (s) =>
+      s.systemRegistry
+        ? eventsDashboardRpcActions({ db: s.db, systemRegistry: s.systemRegistry })
+        : [],
 
+    dashboard: (s) => ({
+      channels: [
+        { name: "events", query: (db) => queryEvents(db) },
+      ],
+      channelMappings: [
+        { moduleKey: "events", channels: ["events", "dashboard", "calendar"] },
+      ],
+      stores: ["events"],
+      fetchEndpoints: [
+        { url: "/api/dashboard/events", store: "events" },
+      ],
+      registerRoutes: (server) => {
+        if (s) {
+          registerEventsRoutes(server, s.db, s.events ?? undefined);
+        }
+      },
+    }),
+  });
+
+  return Object.assign(mod, {
     getService() {
       return serviceRef;
     },
-
-    getRpcActions() {
-      return serviceRef ? eventsRpcActions(serviceRef) : [];
-    },
-
-    getDashboardRpcActions() {
-      return dbRef && systemRegistryRef
-        ? eventsDashboardRpcActions({ db: dbRef, systemRegistry: systemRegistryRef })
-        : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [
-          { name: "events", query: (db) => queryEvents(db) },
-        ],
-        channelMappings: [
-          { moduleKey: "events", channels: ["events", "dashboard", "calendar"] },
-        ],
-        stores: ["events"],
-        fetchEndpoints: [
-          { url: "/api/dashboard/events", store: "events" },
-        ],
-        registerRoutes: (server) => {
-          if (dbRef) {
-            registerEventsRoutes(server, dbRef, eventsRef ?? undefined);
-          }
-        },
-      };
-    },
-
-    async shutdown() {
-      // No cleanup needed
-    },
-  };
+  });
 }
 
 // Re-export types for external use

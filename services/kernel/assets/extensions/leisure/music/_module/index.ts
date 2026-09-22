@@ -1,7 +1,6 @@
 import {
-  type DashboardDescriptor,
   type ExtensibleModule,
-  type ModuleContext,
+  defineModule,
   runMigrations,
   log,
 } from "@kernl/extension-sdk";
@@ -52,22 +51,22 @@ export function createMusicModule(): MusicModule {
   let insertedSinceRebuild = 0;
   let updatedSinceRebuild = 0;
 
-  return {
+  const mod = defineModule({
     name: "music",
+    migrations: musicMigrations,
 
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "music", musicMigrations);
+    init(ctx) {
       // Catalog tables (music_titles, music_titles_fts, music_tags,
       // music_ingest_runs) — same schema cinema uses, parameterized by
       // prefix. Idempotent migrations, safe to re-run.
       runMigrations(ctx.sqlite, "music_catalog", archiveCatalogMigrations("music"));
-      service = new MusicService(ctx.sqlite);
+      const svc = new MusicService(ctx.sqlite);
+      service = svc;
 
       // Kick off the background ingester. The very first tick fires
       // ~60s after boot — long enough that we don't fight kernel boot
       // for CPU/network, short enough that fresh installs see tags
       // populate within the first minute the page is open.
-      const svc = service;
       tickHandle = setInterval(() => {
         if (inFlight) return;
         inFlight = true;
@@ -103,26 +102,21 @@ export function createMusicModule(): MusicModule {
           .catch((e) => log.warn(`music-ingester: pass failed — ${e instanceof Error ? e.message : e}`))
           .finally(() => { inFlight = false; });
       }, INGEST_TICK_MS);
+      return svc;
     },
 
-    getTools() { return []; },
+    dashboard: (svc) => (svc ? { registerRoutes: (server) => registerMusicRoutes(server, svc) } : null),
 
-    async shutdown() {
+    shutdown() {
       if (tickHandle) clearInterval(tickHandle);
       tickHandle = null;
     },
+  });
 
+  return Object.assign(mod, {
     getService() {
       if (!service) throw new Error("MusicService not initialized");
       return service;
     },
-
-    getDashboardDescriptor(): DashboardDescriptor | null {
-      if (!service) return null;
-      const svc = service;
-      return {
-        registerRoutes: (server) => registerMusicRoutes(server, svc),
-      };
-    },
-  };
+  });
 }

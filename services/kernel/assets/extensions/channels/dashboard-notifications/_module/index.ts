@@ -1,4 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "@kernl/extension-sdk";
+import { notificationChannelModule } from "@kernl/extension-sdk";
 import { DashboardProvider } from "./dashboard-provider.js";
 
 /**
@@ -7,19 +7,8 @@ import { DashboardProvider } from "./dashboard-provider.js";
  * The dashboard DB + broadcast function are injected via a pre-start
  * hook from `bootstrap/http.ts`.
  */
-export function createDashboardNotificationsModule(): KernelModule {
-  return {
-    name: "ext:dashboard-notifications",
-    async initialize(ctx: ModuleContext) {
-      ctx.notifier
-        .getRegistry()
-        .registerFactory("dashboard-notifications", () => new DashboardProvider());
-    },
-    getTools(): ToolDefinition[] {
-      return [];
-    },
-    async shutdown() {},
-  };
+export function createDashboardNotificationsModule() {
+  return notificationChannelModule("ext:dashboard-notifications", "dashboard-notifications", () => new DashboardProvider());
 }
 
 export { DashboardProvider } from "./dashboard-provider.js";

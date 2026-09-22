@@ -1,4 +1,4 @@
-import { type KernelModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
+import { defineModule } from "@kernl/extension-sdk";
 import { githubChannelMigrations } from "./migrations.js";
 import { GitHubConnectionsService } from "./connections-service.js";
 import { GitHubRepoProvider } from "./provider.js";
@@ -6,29 +6,22 @@ import { githubChannelTools } from "./tools.js";
 
 const TRIAGE_REGISTER_PROVIDER_EVENT = "triage:register-provider";
 
-export function createGitHubChannelModule(): KernelModule {
-  let tools: ToolDefinition[] = [];
-
-  return {
+export function createGitHubChannelModule() {
+  return defineModule({
     name: "github-channel",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "ext:github-channel", githubChannelMigrations);
+    migrations: githubChannelMigrations,
+    migrationsKey: "ext:github-channel",
+    async init(ctx) {
       const connections = new GitHubConnectionsService(ctx.sqlite);
       const provider = new GitHubRepoProvider(connections);
-      tools = githubChannelTools(connections, provider);
 
       // Topo sort guarantees triage's listener is in place because we
       // declared dependencies=[triage].
       await ctx.events.emit(TRIAGE_REGISTER_PROVIDER_EVENT, { provider });
+      return { connections, provider };
     },
-
-    getTools(): ToolDefinition[] {
-      return tools;
-    },
-
-    async shutdown() {},
-  };
+    tools: ({ connections, provider }) => githubChannelTools(connections, provider),
+  });
 }
 
 export default createGitHubChannelModule;

@@ -1,15 +1,7 @@
 /**
  * Agenda Brain extension module — schedules morning/evening task briefs.
  */
-import {
-  type KernelModule,
-  type ModuleContext,
-  type ToolDefinition,
-  type SqliteDb,
-  type RpcAction,
-  runMigrations,
-  log,
-} from "@kernl/extension-sdk";
+import { type SqliteDb, defineModule, log } from "@kernl/extension-sdk";
 import { migrations } from './migrations/001_agenda_brain.js';
 import { planToday } from './brain-service.js';
 import { AgendaBrainScheduler, localDateKey } from './scheduler.js';
@@ -33,20 +25,14 @@ function readChannel(db: SqliteDb): string {
   }
 }
 
-export function createAgendaBrainModule(): KernelModule {
-  let scheduler: AgendaBrainScheduler | null = null;
-  let dbRef: SqliteDb | null = null;
-  const tools: ToolDefinition[] = [];
-
-  return {
+export function createAgendaBrainModule() {
+  return defineModule({
     name: 'agenda-brain',
-
-    async initialize(ctx: ModuleContext): Promise<void> {
-      runMigrations(ctx.sqlite, 'agenda_brain', migrations);
-      dbRef = ctx.sqlite;
-
+    migrations,
+    migrationsKey: 'agenda_brain',
+    init(ctx) {
       const channel = readChannel(ctx.sqlite);
-      scheduler = new AgendaBrainScheduler(
+      const scheduler = new AgendaBrainScheduler(
         ctx.sqlite,
         ctx.notifier,
         channel,
@@ -54,29 +40,18 @@ export function createAgendaBrainModule(): KernelModule {
       );
       scheduler.start();
       log.info(`Agenda Brain initialized — channel="${channel}"`);
+      return { db: ctx.sqlite, scheduler };
     },
-
-    getTools(): ToolDefinition[] {
-      return tools;
+    dashboardRpc: ({ db }) => [
+      {
+        name: 'agendaBrain.today',
+        handler: async (_args: Record<string, unknown>) => planToday(db, localDateKey()),
+      },
+    ],
+    shutdown({ scheduler }) {
+      scheduler.stop();
     },
-
-    getDashboardRpcActions(): RpcAction[] {
-      return [
-        {
-          name: 'agendaBrain.today',
-          handler: async (_args: Record<string, unknown>) => {
-            if (!dbRef) return null;
-            const dateKey = localDateKey();
-            return planToday(dbRef, dateKey);
-          },
-        },
-      ];
-    },
-
-    async shutdown(): Promise<void> {
-      scheduler?.stop();
-    },
-  };
+  });
 }
 
 export default createAgendaBrainModule;

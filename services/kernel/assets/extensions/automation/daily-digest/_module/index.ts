@@ -9,14 +9,7 @@
  * dashboard as a fallback. No LLM — pure SQL summaries of the user's own
  * tasks/events/reminders.
  */
-import {
-  type KernelModule,
-  type ModuleContext,
-  type ToolDefinition,
-  type SqliteDb,
-  runMigrations,
-  log,
-} from "@kernl/extension-sdk";
+import { type SqliteDb, defineModule, log } from "@kernl/extension-sdk";
 import { dailyDigestMigrations } from "./migrations.js";
 import { DailyDigestScheduler, type DigestKind } from "./scheduler.js";
 import { buildEveningDigest, buildMorningDigest } from "./digest-service.js";
@@ -59,16 +52,11 @@ function readSettings(db: SqliteDb): DigestSettings {
   };
 }
 
-export function createDailyDigestModule(): KernelModule {
-  let scheduler: DailyDigestScheduler | null = null;
-  let tools: ToolDefinition[] = [];
-
-  return {
+export function createDailyDigestModule() {
+  return defineModule({
     name: "daily-digest",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "daily-digest", dailyDigestMigrations);
-
+    migrations: dailyDigestMigrations,
+    init(ctx) {
       const cfg = readSettings(ctx.sqlite);
       const registry = ctx.notifier.getRegistry();
 
@@ -84,7 +72,7 @@ export function createDailyDigestModule(): KernelModule {
         });
       };
 
-      scheduler = new DailyDigestScheduler(
+      const scheduler = new DailyDigestScheduler(
         ctx.sqlite,
         { eveningHour: cfg.eveningHour, morningHour: cfg.morningHour },
         async (kind) => {
@@ -96,17 +84,13 @@ export function createDailyDigestModule(): KernelModule {
       if (cfg.enabled) scheduler.start();
       else log.info("Daily digest disabled (digest.enabled=false)");
 
-      tools = digestTools({ db: ctx.sqlite, sendNow: dispatch });
+      return { scheduler, dispatch };
     },
-
-    getTools(): ToolDefinition[] {
-      return tools;
+    tools: ({ dispatch }, ctx) => digestTools({ db: ctx.sqlite, sendNow: dispatch }),
+    shutdown({ scheduler }) {
+      scheduler.stop();
     },
-
-    async shutdown() {
-      scheduler?.stop();
-    },
-  };
+  });
 }
 
 export default createDailyDigestModule;

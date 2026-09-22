@@ -1,4 +1,4 @@
-import { type ExtensibleModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { redditMigrations } from "./migrations/001_reddit.js";
 import { RedditService } from "./service.js";
 import { redditTools } from "./tools.js";
@@ -8,29 +8,18 @@ export interface RedditModule extends ExtensibleModule {
 }
 
 export function createRedditModule(): RedditModule {
-  let tools: ToolDefinition[] = [];
   let serviceRef: RedditService | null = null;
 
-  return {
+  const mod = defineModule({
     name: "reddit",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "reddit", redditMigrations);
-      const service = new RedditService(ctx.sqlite);
-      serviceRef = service;
-      tools = redditTools(service);
-    },
-
-    getTools() {
-      return tools;
-    },
-
-    getService() {
+    migrations: redditMigrations,
+    init(ctx) {
+      serviceRef = new RedditService(ctx.sqlite);
       return serviceRef;
     },
-
-    async shutdown() {},
-  };
+    tools: redditTools,
+  });
+  return Object.assign(mod, { getService: () => serviceRef });
 }
 
 export default createRedditModule;

@@ -10,14 +10,13 @@
  * orchestration. Lives as a module so it can be disabled or replaced
  * without touching the kernel core.
  */
-import type { KernelModule, ModuleContext, ToolDefinition, ReminderServiceLike } from "@kernl/extension-sdk";
+import { type ReminderServiceLike, defineModule } from "@kernl/extension-sdk";
 import { setupEventListeners } from "./listeners.js";
 
-export function createEventsRemindersIntegrationModule(): KernelModule {
-  return {
+export function createEventsRemindersIntegrationModule() {
+  return defineModule({
     name: "events-reminders-integration",
-
-    async initialize(ctx: ModuleContext) {
+    init(ctx) {
       // Resolve the reminders extension lazily — it may or may not be
       // installed. If absent, only the notification listeners run (the
       // events:opened handler that creates reminders is skipped inside
@@ -34,13 +33,7 @@ export function createEventsRemindersIntegrationModule(): KernelModule {
         systemRegistry: ctx.systemRegistry,
       });
     },
-
-    getTools(): ToolDefinition[] {
-      return [];
-    },
-
-    async shutdown() {},
-  };
+  });
 }
 
 export default createEventsRemindersIntegrationModule;
