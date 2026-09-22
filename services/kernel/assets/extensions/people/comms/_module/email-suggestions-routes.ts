@@ -1,24 +1,20 @@
 /**
  * HTTP routes for email-analysis suggestions surfaced on the dashboard.
- * Read-only listing + dismiss; approval is handled via the MCP tool
- * `kernel_email_approve` to keep all side effects in one path.
+ * Listing + dismiss are the fallback of the `emailSuggestions.*` RPC actions
+ * (same function on both roads; see dashboard-operations.ts). Approval stays
+ * out of HTTP: it needs the WS path with the sibling services wired in, or
+ * the MCP tool `kernel_email_approve`.
  */
 import { HttpError, type KernelHttpServer } from "@kernl/extension-sdk";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
+import { emailSuggestionOperations } from "./dashboard-operations.js";
 
 export function registerEmailSuggestionsRoutes(
   server: KernelHttpServer,
   emailAnalysisService: EmailAnalysisService | null,
 ): void {
-  server.route("GET", "/api/email-suggestions", () => {
-    if (!emailAnalysisService) return { available: false, suggestions: [] };
-    const suggestions = emailAnalysisService.getPendingSuggestions(50);
-    return {
-      available: true,
-      suggestions,
-      count: suggestions.length,
-    };
-  });
+  const op = emailSuggestionOperations(emailAnalysisService);
+  server.operation("GET", "/api/email-suggestions", op["emailSuggestions.list"]);
 
   server.route("POST", "/api/email-suggestions/approve", () => {
     throw new HttpError(
@@ -28,9 +24,5 @@ export function registerEmailSuggestionsRoutes(
     );
   });
 
-  server.route<{ suggestion_id: string }>("POST", "/api/email-suggestions/dismiss", ({ body }) => {
-    if (!emailAnalysisService) throw new HttpError(404, "Email analysis not available");
-    emailAnalysisService.dismissSuggestion(body.suggestion_id);
-    return { success: true };
-  });
+  server.operation("POST", "/api/email-suggestions/dismiss", op["emailSuggestions.dismiss"]);
 }

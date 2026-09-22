@@ -1,103 +1,40 @@
-import crypto from "node:crypto";
 import {
   HttpError,
   isHttpError,
   type KernelHttpServer,
-  type SqliteDb,
-  type KernelConfig,
   type EventBus,
   log,
   llm,
 } from "@kernl/extension-sdk";
 import type { ShoppingService } from "./service.js";
+import { shoppingOperations } from "./operations.js";
+
+type RouteMethod = Parameters<KernelHttpServer["operation"]>[0];
 
 export function registerShoppingRoutes(
   server: KernelHttpServer,
-  db: SqliteDb,
   shoppingService?: ShoppingService | null,
-  config?: KernelConfig,
   events?: EventBus,
 ): void {
-  // The list mutations below answer any failure (a missing field that trips a
-  // NOT NULL column, a SQLite error) with the same 400 they always have.
-  const invalidRequest = <T>(fn: () => T): T => {
-    try { return fn(); } catch { throw new HttpError(400, "Invalid request"); }
-  };
   const requireShopping = (): ShoppingService => {
     if (!shoppingService) throw new HttpError(503, "Shopping service not available");
     return shoppingService;
   };
 
-  server.route<{ id: string; checked: boolean }>("POST", "/api/shopping/check-item", ({ body }) => invalidRequest(() => {
-    const checkedVal = body.checked ? 1 : 0;
-    const now = new Date().toISOString();
-    db.prepare("UPDATE shopping_list_items SET checked = ?, updated_at = ? WHERE id = ?")
-      .run(checkedVal, now, body.id);
-
-    // Auto-complete: if all items in the list are now checked, complete the list
-    if (body.checked) {
-      const row = db.prepare(
-        "SELECT list_id FROM shopping_list_items WHERE id = ?"
-      ).get(body.id) as { list_id: string } | undefined;
-      if (row) {
-        const counts = db.prepare(
-          "SELECT COUNT(*) as total, SUM(CASE WHEN checked = 1 THEN 1 ELSE 0 END) as done FROM shopping_list_items WHERE list_id = ?"
-        ).get(row.list_id) as { total: number; done: number };
-        if (counts.total > 0 && counts.total === counts.done) {
-          db.prepare("UPDATE shopping_lists SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active'")
-            .run(now, row.list_id);
-        }
-      }
-    }
-
-    events?.emit("data.changed", { module: "shopping", action: "check_item" });
-    return { ok: true };
-  }));
-
-  server.route<{ list_id: string; name: string; quantity?: number; unit?: string }>(
-    "POST", "/api/shopping/add-item", ({ body }) => invalidRequest(() => {
-      const now = new Date().toISOString();
-      const id = crypto.randomUUID();
-      db.prepare(
-        `INSERT INTO shopping_list_items (id, list_id, product_id, name, quantity, unit, checked, notes, created_at, updated_at)
-         VALUES (?, ?, NULL, ?, ?, ?, 0, '', ?, ?)`,
-      ).run(id, body.list_id, body.name, body.quantity ?? 1, body.unit ?? "pcs", now, now);
-      events?.emit("data.changed", { module: "shopping", action: "add_item" });
-      return { ok: true, id };
-    }),
-  );
-
-  server.route<{ id: string }>("POST", "/api/shopping/remove-item", ({ body }) => invalidRequest(() => {
-    db.prepare("DELETE FROM shopping_list_items WHERE id = ?").run(body.id);
-    events?.emit("data.changed", { module: "shopping", action: "remove_item" });
-    return { ok: true };
-  }));
-
-  server.route<{ name: string; notes?: string }>("POST", "/api/shopping/create-list", ({ body }) => invalidRequest(() => {
-    const now = new Date().toISOString();
-    const id = crypto.randomUUID();
-    db.prepare(
-      "INSERT INTO shopping_lists (id, name, status, notes, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?)",
-    ).run(id, body.name, body.notes ?? "", now, now);
-    events?.emit("data.changed", { module: "shopping", action: "create_list" });
-    return { ok: true, id };
-  }));
-
-  server.route<{ id: string }>("POST", "/api/shopping/complete-list", ({ body }) => invalidRequest(() => {
-    const now = new Date().toISOString();
-    db.prepare("UPDATE shopping_lists SET status = 'completed', updated_at = ? WHERE id = ?")
-      .run(now, body.id);
-    events?.emit("data.changed", { module: "shopping", action: "complete_list" });
-    return { ok: true };
-  }));
-
-  server.route<{ id: string }>("POST", "/api/shopping/reopen-list", ({ body }) => invalidRequest(() => {
-    const now = new Date().toISOString();
-    db.prepare("UPDATE shopping_lists SET status = 'active', updated_at = ? WHERE id = ?")
-      .run(now, body.id);
-    events?.emit("data.changed", { module: "shopping", action: "reopen_list" });
-    return { ok: true };
-  }));
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The dashboard reaches these through rpcOrCall, WS first and HTTP when the
+  // bridge is down. removeShoppingItem's fallback sends DELETE ?id=, which had
+  // no route, so remove-item answers both methods.
+  const op = shoppingOperations({ service: shoppingService ?? null, events });
+  ([
+    ["POST", "/api/shopping/check-item", "shopping.items.check"],
+    ["POST", "/api/shopping/add-item", "shopping.items.add"],
+    ["POST", "/api/shopping/remove-item", "shopping.items.remove"],
+    ["DELETE", "/api/shopping/remove-item", "shopping.items.remove"],
+    ["POST", "/api/shopping/create-list", "shopping.lists.create"],
+    ["POST", "/api/shopping/complete-list", "shopping.lists.complete"],
+    ["POST", "/api/shopping/reopen-list", "shopping.lists.reopen"],
+  ] as Array<[RouteMethod, string, string]>).forEach(([method, path, name]) => server.operation(method, path, op[name]));
 
   // ── Purchase History ───────────────────────────────
   server.route("GET", "/api/shopping/purchases", ({ query }) => {

@@ -3,8 +3,8 @@
  * REST endpoints for the Agent Composer (dashboard)
  */
 
-import { normalizeModelChainInput, normalizeExecutorType, normalizeSkillsInput } from "./chain-input.js";
-import { HttpError, isHttpError, type KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
+import { agentOperations } from "./operations.js";
 import type { AgentService } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
@@ -26,8 +26,6 @@ import { registerWorkspaceEvolutionRoutes } from "./routes/workspace-evolution-r
 import { registerMarketplaceRoutes } from "./routes/marketplace-routes.js";
 import { registerOfficeRoutes } from "./routes/office-routes.js";
 import type { ExtensionOfficeSource } from "./office-templates.js";
-import { parseSchedulePatch } from "./services/schedules-service.js";
-import { setOfficeRepo } from "./office-repo.js";
 
 type ConversationKind = "chat" | "meeting" | "debate";
 type ConversationStatus = "open" | "closed";
@@ -65,78 +63,37 @@ export function registerAgentRoutes(
     return agent;
   };
 
-  // POST /api/agents — create a new agent
-  server.route<{
-    name: string;
-    description?: string;
-    system_prompt?: string;
-    goal_template?: string;
-    allowed_tools?: string[];
-    denied_tools?: string[];
-    provider?: string;
-    model?: string;
-    max_iterations?: number;
-    timeout_ms?: number;
-    show_on_dashboard?: boolean;
-    flow_id?: string;
-    variables?: Record<string, string>;
-    schedule?: { cron_expression: string; goal_override?: string };
-  }>("POST", "/api/agents", ({ body }) => {
-    if (!body.name?.trim()) throw new HttpError(400, "name is required");
-
-    const agent = service.createAgent({
-      name: body.name.trim(),
-      description: body.description,
-      system_prompt: body.system_prompt,
-      goal_template: body.goal_template,
-      allowed_tools: body.allowed_tools,
-      denied_tools: body.denied_tools,
-      provider: body.provider,
-      model: body.model,
-      max_iterations: body.max_iterations,
-      timeout_ms: body.timeout_ms,
-      show_on_dashboard: body.show_on_dashboard,
-      flow_id: body.flow_id,
-      variables: body.variables,
-    });
-
-    // Optional inline schedule (agent-create with cron). Non-fatal on error.
-    if (body.schedule?.cron_expression) {
-      try {
-        service.addSchedule({
-          agent_id: agent.id,
-          cron_expression: body.schedule.cron_expression,
-          goal_override: body.schedule.goal_override,
-        });
-      } catch (schedErr) {
-        log.warn(`Could not add schedule for ${agent.id}: ${String(schedErr)}`);
-      }
-    }
-
-    return { success: true, agent_id: agent.id, agent };
-  });
-
-  // POST /api/offices/create — Office Kit HTTP fallback of the `offices.create`
-  // WS RPC. One call creates/refreshes a whole office (flow + agents + chains
-  // + cron + repo) via the shared materializeOffice engine. Idempotent.
-  // An existing office is a 409 (OfficeExistsError); any other failure is the
-  // manifest's fault, so a 400.
-  server.route<Record<string, unknown>>("POST", "/api/offices/create", async ({ body }) => {
-    try {
-      const { officeDefinitionFromJson, materializeOffice, loadRepoServiceBestEffort } =
-        await import("./office-kit.js");
-      const def = officeDefinitionFromJson(body);
-      const db = service.getDb();
-      const repoService = def.repo ? await loadRepoServiceBestEffort(db) : null;
-      const mode = body.mode === "create" ? "create" : "upsert";
-      const report = materializeOffice(db, service, def, { repoService, mode });
-      return { success: true, report };
-    } catch (err) {
-      if (isHttpError(err)) throw err;
-      log.error("Failed to create office", err);
-      throw new HttpError(400, err instanceof Error ? err.message : String(err));
-    }
-  });
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The dashboard reaches these through rpcOrCall, WS first and HTTP when
+  // the bridge is down, so both roads run the same function. A path param
+  // is named after the input key the operation reads.
+  const op = agentOperations({ service, executor, events });
+  const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
+  ([
+    ["POST", "/api/agents", "agents.create"],
+    ["POST", "/api/offices/create", "offices.create"],
+    ["GET", "/api/agents/event-log", "agents.eventLog.list"],
+    ["DELETE", "/api/agents/event-log", "agents.eventLog.clear"],
+    ["GET", "/api/agents/graph", "agents.graph"],
+    ["GET", "/api/agents/flows", "agents.flows.list"],
+    ["POST", "/api/agents/flows", "agents.flows.create"],
+    ["DELETE", "/api/agents/flows/:id", "agents.flows.delete"],
+    ["POST", "/api/agents/flows/:flow_id/assign", "agents.flows.assign"],
+    ["PUT", "/api/agents/flows/:flow_id/repo", "agents.flows.set_repo"],
+    ["POST", "/api/agents/flows/:flow_id/lead", "agents.flows.set_lead"],
+    ["PUT", "/api/agents/flows/:flow_id/distribute", "agents.flows.set_distribute"],
+    ["POST", "/api/agents/chain", "agents.chain.create"],
+    ["DELETE", "/api/agents/chain/:id", "agents.chain.delete"],
+    ["PUT", "/api/agents/schedules/:id", "agents.schedule.update"],
+    ["DELETE", "/api/agents/schedules/:id", "agents.schedule.delete"],
+    ["POST", "/api/agents/trigger", "agents.trigger"],
+    ["POST", "/api/agents/stop", "agents.stop"],
+    ["POST", "/api/agents/run", "agents.run"],
+    ["GET", "/api/agents/runs/:id", "agents.runs.detail"],
+    ["GET", "/api/agents/:id", "agents.detail"],
+    ["PUT", "/api/agents/:id", "agents.update"],
+    ["DELETE", "/api/agents/:id", "agents.delete"],
+  ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
   // POST /api/agents/generate-from-prompt — draft an agent from a natural-language
   // description using the global LLM singleton. Does NOT create the agent;
@@ -232,31 +189,6 @@ export function registerAgentRoutes(
 
   // ── Event Log endpoints ────────────────────────────
 
-  // GET /api/agents/event-log — query persistent event log
-  server.route("GET", "/api/agents/event-log", ({ query }) => {
-    const filter = {
-      run_id: query.get("run_id") || undefined,
-      agent_id: query.get("agent_id") || undefined,
-      event_type: query.get("event_type") || undefined,
-      since: query.get("since") || undefined,
-    };
-    const limit = parseInt(query.get("limit") ?? "200", 10);
-    const offset = parseInt(query.get("offset") ?? "0", 10);
-    return {
-      events: service.getEventLog({ ...filter, limit, offset }),
-      total: service.getEventLogCount(filter),
-    };
-  });
-
-  // DELETE /api/agents/event-log — cleanup old event log entries
-  server.route("DELETE", "/api/agents/event-log", ({ query }) => {
-    const deleted = service.clearEventLog({
-      before: query.get("before") || undefined,
-      agent_id: query.get("agent_id") || undefined,
-    });
-    return { success: true, deleted };
-  });
-
   // ── Escalated questions (human-in-the-loop) ─────────────
   server.route("GET", "/api/agents/questions", ({ query }) => {
     const status = (query.get("status") as "pending" | "answered" | "dismissed" | null) ?? "pending";
@@ -349,10 +281,6 @@ export function registerAgentRoutes(
     return { success: true };
   });
 
-  // GET /api/agents/graph — full graph data for visualization
-  server.route("GET", "/api/agents/graph", ({ query }) =>
-    service.getAgentGraph(query.get("flow_id") || undefined));
-
   // ── Conversations (chats, meetings, debates) ─────────────────
 
   // GET /api/agents/conversations — list recent conversations
@@ -408,20 +336,6 @@ export function registerAgentRoutes(
 
   // ── Flow endpoints ──────────────────────────────
 
-  // GET /api/agents/flows — list all flows
-  server.route("GET", "/api/agents/flows", () => ({ flows: service.listFlows() }));
-
-  // POST /api/agents/flows — create a flow
-  server.route<{ name: string; description?: string; color?: string; agent_ids?: string[] }>(
-    "POST", "/api/agents/flows", ({ body }) => {
-      if (!body.name?.trim()) throw new HttpError(400, "name is required");
-      const flow = service.createFlow({ name: body.name.trim(), description: body.description, color: body.color });
-      // Optionally assign agents
-      for (const aid of body.agent_ids ?? []) service.assignAgentToFlow(aid, flow.id);
-      return { success: true, flow };
-    },
-  );
-
   // PUT /api/agents/flows/:id — update a flow. The service rejects bad input
   // with an "Invalid …" error, which is the caller's fault, so a 400.
   server.route<Parameters<AgentService["updateFlow"]>[1]>(
@@ -437,53 +351,6 @@ export function registerAgentRoutes(
       return { success: true, flow };
     },
   );
-
-  // DELETE /api/agents/flows/:id — delete a flow
-  server.route("DELETE", "/api/agents/flows/:id", ({ params: { id } }) => {
-    const result = service.deleteFlow(id);
-    if (!result) throw new HttpError(404, "Flow not found");
-    return { success: true, unassigned: result.unassigned };
-  });
-
-  // POST /api/agents/flows/:id/assign — assign agents to a flow
-  server.route<{ agent_ids: string[] }>("POST", "/api/agents/flows/:id/assign", ({ params: { id }, body }) => {
-    if (!body.agent_ids?.length) throw new HttpError(400, "agent_ids required");
-    for (const aid of body.agent_ids) service.assignAgentToFlow(aid, id);
-    return { success: true, assigned: body.agent_ids.length };
-  });
-
-  // PUT /api/agents/flows/:id/repo — point the office at a host repo, or back to its workspace (path null)
-  server.route<{ path?: unknown; git_init?: unknown }>("PUT", "/api/agents/flows/:id/repo", ({ params: { id }, body }) => {
-    if (body.path !== null && typeof body.path !== "string") throw new HttpError(400, "path must be a string or null");
-    if (body.git_init !== undefined && typeof body.git_init !== "boolean") throw new HttpError(400, "git_init must be a boolean");
-    const result = setOfficeRepo(service, {
-      flow_id: id,
-      path: body.path as string | null,
-      git_init: body.git_init as boolean | undefined,
-      retarget_agents: true,
-    });
-    return {
-      success: true,
-      flow: result.flow,
-      path: result.path,
-      home_path: result.homePath,
-      git: result.git,
-      git_detail: result.gitDetail,
-      retargeted: result.retargeted,
-    };
-  });
-
-  // POST /api/agents/flows/:id/lead — make an agent the office's one lead
-  server.route<{ agent_id?: unknown }>("POST", "/api/agents/flows/:id/lead", ({ params: { id }, body }) => {
-    if (typeof body.agent_id !== "string" || !body.agent_id) throw new HttpError(400, "agent_id required");
-    return { success: true, ...service.setOfficeLead(id, body.agent_id) };
-  });
-
-  // PUT /api/agents/flows/:id/distribute — "the lead hands work to the team" on/off
-  server.route<{ enabled?: unknown }>("PUT", "/api/agents/flows/:id/distribute", ({ params: { id }, body }) => {
-    if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
-    return { success: true, ...service.setLeadDistributes(id, body.enabled) };
-  });
 
   // ── Rank endpoints ──────────────────────────────
 
@@ -569,208 +436,6 @@ export function registerAgentRoutes(
     if (!service.assignRankToAgent(id, body.rank_id ?? "")) throw new HttpError(404, "Agent not found or rank_id invalid");
     return { success: true };
   }, { requireBody: true });
-
-  // POST /api/agents/chain — create a chain between agents
-  server.route<{
-    source_agent_id: string;
-    target_agent_id: string;
-    label?: string;
-    condition?: Record<string, unknown>;
-    pass_result?: boolean;
-    delay_ms?: number;
-  }>("POST", "/api/agents/chain", ({ body }) => {
-    if (!body.source_agent_id || !body.target_agent_id) {
-      throw new HttpError(400, "source_agent_id and target_agent_id required");
-    }
-    const chain = service.addChain(body);
-    return { success: true, chain_id: chain.id, chain };
-  });
-
-  // DELETE /api/agents/chain/:id — remove a chain
-  server.route("DELETE", "/api/agents/chain/:id", ({ params: { id } }) => {
-    if (!service.removeChain(id)) throw new HttpError(404, "Chain not found");
-    return { success: true };
-  });
-
-  // PUT /api/agents/schedules/:id — change a schedule's cadence or pause it.
-  // A cadence under the floor throws ScheduleValidationError, a 400.
-  server.route<unknown>("PUT", "/api/agents/schedules/:id", ({ params: { id }, body }) => {
-    const result = parseSchedulePatch(body);
-    if (!result.ok) throw new HttpError(400, result.error);
-    const schedule = service.updateSchedule(id, result.patch);
-    if (!schedule) throw new HttpError(404, "Schedule not found");
-    return { success: true, schedule };
-  });
-
-  // DELETE /api/agents/schedules/:id — remove a schedule
-  server.route("DELETE", "/api/agents/schedules/:id", ({ params: { id } }) => {
-    if (!service.removeSchedule(id)) throw new HttpError(404, "Schedule not found");
-    return { success: true };
-  });
-
-  // POST /api/agents/trigger — add a trigger or schedule to an agent
-  server.route<{
-    agent_id: string;
-    type: "event" | "schedule";
-    event_name?: string;
-    filter?: Record<string, unknown>;
-    cooldown_ms?: number;
-    interval_ms?: number;
-    cron?: string;
-    goal_override?: string;
-  }>("POST", "/api/agents/trigger", ({ body }) => {
-    if (!body.agent_id) throw new HttpError(400, "agent_id required");
-    if (!body.type) throw new HttpError(400, "type required (event|schedule)");
-
-    if (body.type === "event") {
-      if (!body.event_name) throw new HttpError(400, "event_name required for event trigger");
-      const trigger = service.addEventTrigger({
-        agent_id: body.agent_id,
-        event_name: body.event_name,
-        filter: body.filter,
-        cooldown_ms: body.cooldown_ms,
-      });
-      return { success: true, trigger_id: trigger.id };
-    }
-    if (body.type === "schedule") {
-      if (!body.cron && (!body.interval_ms || body.interval_ms < 60000)) {
-        throw new HttpError(400, "cron expression or interval_ms (>= 60000) required");
-      }
-      const schedule = service.addSchedule({
-        agent_id: body.agent_id,
-        interval_ms: body.interval_ms,
-        cron_expression: body.cron,
-        goal_override: body.goal_override,
-      });
-      return { success: true, schedule_id: schedule.id, schedule };
-    }
-    throw new HttpError(400, "type must be event or schedule");
-  });
-
-  // POST /api/agents/stop — cancel a running agent (by agent_id or run_id)
-  server.route<{ agent_id?: string; run_id?: string }>("POST", "/api/agents/stop", ({ body }) => {
-    const cancel = (runId: string) => {
-      if (!executor.cancelRun(runId)) return false;
-      service.updateRun(runId, { status: "cancelled", completed_at: new Date().toISOString() });
-      return true;
-    };
-
-    // Cancel a specific run
-    if (body.run_id) return { success: true, cancelled: cancel(body.run_id) ? 1 : 0 };
-
-    // Cancel all running runs for this agent
-    if (body.agent_id) {
-      const runs = service.listRuns({ agent_id: body.agent_id, status: "running" });
-      return { success: true, cancelled: runs.filter(run => cancel(run.id)).length };
-    }
-
-    throw new HttpError(400, "agent_id or run_id required");
-  });
-
-  // GET /api/agents/:id — get a single agent
-  server.route("GET", "/api/agents/:id", ({ params: { id } }) => ({
-    agent: requireAgent(id),
-    runs: service.listRuns({ agent_id: id, limit: 5 }),
-    triggers: service.listEventTriggers(id),
-    schedules: service.listSchedules(id),
-    adhocConnections: service.getAdHocConnections(id),
-  }));
-
-  // PUT /api/agents/:id — update an agent
-  server.route<{
-    name?: string; description?: string; system_prompt?: string;
-    goal_template?: string; provider?: string; model?: string;
-    max_iterations?: number; timeout_ms?: number; active?: boolean;
-    max_tokens?: number; max_errors?: number;
-    allowed_tools?: string[]; denied_tools?: string[];
-    variables?: Record<string, string>;
-    builtin_handler?: string;
-    under_revision?: boolean;
-    skills?: string[];
-    /** JSON array, or the array itself. See chain-input.ts. */
-    model_chain?: string | Array<{ provider?: string; model?: string }>;
-    executor_type?: string;
-  }>("PUT", "/api/agents/:id", ({ params: { id }, body }) => {
-    // The chain, the engine and the loose pair are one edit for the person
-    // making it, so they have to be one write here — otherwise `provider`
-    // and the chain head can end up disagreeing between two requests.
-    const updated = service.updateAgent(id, {
-      ...body,
-      model_chain: normalizeModelChainInput(body.model_chain),
-      executor_type: normalizeExecutorType(body.executor_type),
-      // Was reaching the column through the spread, unchecked. The two
-      // writers have to accept the same thing or the fallback path becomes
-      // a way around the validation the primary one does.
-      skills: normalizeSkillsInput(body.skills),
-    });
-    if (!updated) throw new HttpError(404, "Agent not found");
-    return { success: true, agent: updated };
-  });
-
-  // DELETE /api/agents/:id — delete (deactivate) an agent
-  server.route("DELETE", "/api/agents/:id", ({ params: { id } }) => {
-    if (!service.deleteAgent(id)) throw new HttpError(404, "Agent not found");
-    return { success: true };
-  });
-
-  // POST /api/agents/run — manually run an agent
-  server.route<{ agent_id: string; goal?: string; workspace?: string }>("POST", "/api/agents/run", ({ body }) => {
-    if (!body.agent_id) throw new HttpError(400, "agent_id required");
-    const agent = requireAgent(body.agent_id);
-
-    // Workspace override — lets each run use its own isolated cwd (handy
-    // for agents that test several OSS projects in parallel).
-    // We sanitise the name to prevent path traversal.
-    let workspaceOverride: string | undefined;
-    if (typeof body.workspace === "string" && body.workspace.length > 0) {
-      if (!/^[A-Za-z0-9_-]{1,64}$/.test(body.workspace)) {
-        throw new HttpError(400, "workspace must be alphanumeric/-/_ (max 64 chars)");
-      }
-      workspaceOverride = body.workspace;
-    }
-
-    // Manual runs have no event payload, so any {{event.*}} placeholders in
-    // the goal_template resolve to empty strings (not left as literals).
-    const resolvedTemplate = agent.goal_template
-      ? resolveGoal(agent.goal_template, {}).trim()
-      : "";
-    const goal = body.goal || resolvedTemplate || `Execute the agent: ${agent.name}`;
-    const run = service.createRun({
-      agent_id: agent.id,
-      trigger_type: "manual",
-      goal,
-      trigger_payload: workspaceOverride ? { workspace: workspaceOverride } : undefined,
-    });
-    service.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
-
-    // Run async — don't await.
-    //
-    // Both branches feed the circuit breaker. A manual run counts exactly
-    // like a scheduled one: recordRunOutcome() is the single entry point by
-    // design, and the LLM path here was the one place that skipped it, so a
-    // "Run now" that kept failing never advanced the counter — and a "Run
-    // now" that finally worked never cleared it either.
-    executor.execute({ agent, goal, run, service, events }).then(result => {
-      service.updateRun(run.id, {
-        status: result.status,
-        result: result.result,
-        error: result.error,
-        steps_count: result.steps_count,
-        tokens_used: result.tokens_used,
-        completed_at: new Date().toISOString(),
-      });
-      service.recordRunOutcome(agent.id, {
-        ok: result.status === "completed",
-        error: result.error,
-        run_id: run.id,
-      });
-    }).catch(err => {
-      service.updateRun(run.id, { status: "failed", error: String(err), completed_at: new Date().toISOString() });
-      service.recordRunOutcome(agent.id, { ok: false, error: String(err), run_id: run.id });
-    });
-
-    return { success: true, run_id: run.id, status: "running" };
-  });
 
   // POST /api/agents/:id/preview-prompt — dry-run of the prompt build. Assembles
   // the blocks the executor would inject for a hypothetical goal (directory,
@@ -887,21 +552,6 @@ export function registerAgentRoutes(
       trigger_type: r.trigger_type,
     })),
   }));
-
-  // GET /api/agents/runs/:id — get a run with its steps
-  server.route("GET", "/api/agents/runs/:id", ({ params: { id } }) => {
-    // Direct PK lookup. The previous listRuns({limit:500}).find() approach
-    // returned 404 for any run older than the 500 most recent system-wide,
-    // which silently broke the HISTORY tab on agents with long histories.
-    const run = service.getRun(id);
-    if (!run) throw new HttpError(404, "Run not found");
-    return {
-      run,
-      steps: service.getSteps(id),
-      events: service.getRunEvents(id),
-      agent_name: service.getAgent(run.agent_id)?.name ?? "Unknown",
-    };
-  });
 
   // GET /api/agents/:id/runs — list runs for an agent with steps
   server.route("GET", "/api/agents/:id/runs", ({ params: { id } }) => ({

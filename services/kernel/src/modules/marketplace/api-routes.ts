@@ -10,14 +10,13 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import type { MarketplaceService } from "./service.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { log } from "../../core/logger.js";
-import type { ItemType, ItemStatus } from "./types.js";
 import type { CatalogFilter } from "./catalog/types.js";
 import type { ExtensionType } from "../extensions/types.js";
-import { queryMarketplace } from "./dashboard-query.js";
+import { marketplaceOperations } from "./operations.js";
 import { buildDownloadWatermark } from "../extensions/receipt.js";
 import { packBundle, bundleFileName } from "../extensions/bundle.js";
 
@@ -258,46 +257,25 @@ export function registerMarketplaceRoutes(
     return { success: true };
   });
 
-  // ── Browse / Search ──────────────────────────────────
-
-  // GET /api/marketplace — full payload (items + stats + themes + activeTheme).
-  // Mirrors the WebSocket dashboard channel so the page renders the same shape
-  // whether bootstrap data arrives via HTTP first or WS first.
-  // Filters (type/category/status/query/sort) still apply to the items array;
-  // stats reflect the unfiltered totals (intentional: stats are global).
-  server.route("GET", "/api/marketplace", ({ query }) => {
-    const type = query.get("type") as ItemType | null;
-    const category = query.get("category") ?? undefined;
-    const status = query.get("status") as ItemStatus | null;
-    const q = query.get("q") ?? undefined;
-    const sort = query.get("sort") as "popular" | "rating" | "newest" | "name" | null;
-
-    const hasFilter = type || category || status || q || sort;
-    const payload = queryMarketplace(db);
-
-    if (!payload) {
-      return { items: [], total: 0, stats: { total: 0, installed: 0, active: 0, byType: {} }, themes: [], activeTheme: null };
-    }
-
-    // When the caller passes filters, override the items array with the
-    // filtered list — but keep stats/themes/activeTheme unfiltered so the
-    // header counters stay accurate.
-    const items = hasFilter
-      ? service.listItems({
-          type: type ?? undefined,
-          category,
-          status: status ?? undefined,
-          query: q,
-          sort: sort ?? undefined,
-        })
-      : payload.items;
-
-    return {
-      ...payload,
-      items,
-      total: items.length,
-    };
-  });
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The dashboard reaches these through rpcOrCall, WS first and HTTP when
+  // the bridge is down, so both roads run the same function. A path param
+  // is named after the input key the operation reads.
+  const op = marketplaceOperations(service, db);
+  const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
+  ([
+    ["GET", "/api/marketplace", "marketplace.list"],
+    ["POST", "/api/marketplace/install", "marketplace.install"],
+    ["POST", "/api/marketplace/uninstall", "marketplace.uninstall"],
+    ["POST", "/api/marketplace/enable", "marketplace.enable"],
+    ["POST", "/api/marketplace/disable", "marketplace.disable"],
+    ["POST", "/api/marketplace/review", "marketplace.review"],
+    ["POST", "/api/marketplace/theme/activate", "marketplace.theme.activate"],
+    ["POST", "/api/marketplace/theme/deactivate", "marketplace.theme.deactivate"],
+    ["GET", "/api/marketplace/theme/active", "marketplace.theme.active"],
+    ["POST", "/api/marketplace/import", "marketplace.import"],
+    ["GET", "/api/marketplace/export/:id", "marketplace.export"],
+  ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
   // GET /api/marketplace/featured
   server.route("GET", "/api/marketplace/featured", () => ({ items: service.getFeatured() }));
@@ -339,30 +317,7 @@ export function registerMarketplaceRoutes(
     return { success: true };
   });
 
-  // ── Install / Uninstall / Enable / Disable ──────────
-
-  const itemAction = (path: string, act: (id: string) => unknown) => {
-    server.route<{ id?: string }>("POST", path, ({ body: { id } }) => {
-      if (!id) throw new HttpError(400, "id required");
-      const item = act(id);
-      if (!item) throw new HttpError(404, "Item not found");
-      return { success: true, item };
-    });
-  };
-  itemAction("/api/marketplace/install", (id) => service.installItem(id));
-  itemAction("/api/marketplace/uninstall", (id) => service.uninstallItem(id));
-  itemAction("/api/marketplace/enable", (id) => service.enableItem(id));
-  itemAction("/api/marketplace/disable", (id) => service.disableItem(id));
-
   // ── Reviews ──────────────────────────────────────
-
-  server.route<{ item_id: string; rating: number; title?: string; body?: string }>(
-    "POST", "/api/marketplace/review", ({ body }) => {
-      if (!body.item_id || !body.rating) throw new HttpError(400, "item_id and rating required");
-      const review = service.addReview(body);
-      return { success: true, review };
-    },
-  );
 
   server.route("GET", "/api/marketplace/reviews/:item_id", ({ params: { item_id } }) => ({
     reviews: service.getReviews(item_id),
@@ -385,38 +340,10 @@ export function registerMarketplaceRoutes(
 
   // ── Themes ──────────────────────────────────────
 
-  server.route<{ item_id?: string }>("POST", "/api/marketplace/theme/activate", ({ body: { item_id } }) => {
-    if (!item_id) throw new HttpError(400, "item_id required");
-    const theme = service.activateTheme(item_id);
-    if (!theme) throw new HttpError(404, "Theme not found");
-    return { success: true, theme };
-  });
-
-  server.route("POST", "/api/marketplace/theme/deactivate", () => {
-    service.deactivateTheme();
-    return { success: true };
-  });
-
   // ── GET /api/marketplace/theme/list — themes joined with item metadata
   // Returns one row per installed theme with item name/icon/slug + the
   // preview_colors JSON string. Used by the global theme switcher UI.
   server.route("GET", "/api/marketplace/theme/list", () => ({ themes: service.listThemes() }));
-
-  server.route("GET", "/api/marketplace/theme/active", () => {
-    const theme = service.getActiveTheme();
-    if (!theme) return { theme: null };
-    return {
-      theme: {
-        name: theme.name,
-        slug: theme.slug,
-        icon: theme.icon,
-        variables: JSON.parse(theme.variables),
-        fonts: JSON.parse(theme.fonts),
-        customCss: theme.custom_css,
-        previewColors: JSON.parse(theme.preview_colors),
-      },
-    };
-  });
 
   server.route("GET", "/api/marketplace/theme/preview/:id", ({ params: { id } }) => {
     const theme = service.getThemeData(id);
@@ -426,20 +353,6 @@ export function registerMarketplaceRoutes(
       fonts: JSON.parse(theme.fonts),
       customCss: theme.custom_css,
     };
-  });
-
-  // ── Import / Export ──────────────────────────────────
-
-  server.route<Record<string, unknown>>("POST", "/api/marketplace/import", ({ body: pkg }) => {
-    if (!pkg.$schema || !pkg.slug) throw new HttpError(400, "$schema and slug required");
-    const item = service.importItem(pkg);
-    return { success: true, item };
-  });
-
-  server.route("GET", "/api/marketplace/export/:id", ({ params: { id } }) => {
-    const pkg = service.exportItem(id);
-    if (!pkg) throw new HttpError(404, "Item not found");
-    return pkg;
   });
 
   log.info("Marketplace routes registered (/api/marketplace/*)");

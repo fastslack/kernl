@@ -7,8 +7,9 @@
  * POST /api/google/revoke       — Revoke stored tokens
  */
 
-import { HttpError, type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
+import { type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
 import { GoogleAuth } from "./auth.js";
+import { googleSyncOperations } from "./dashboard-rpc-actions.js";
 
 export function registerGoogleOAuthRoutes(
   server: KernelHttpServer,
@@ -22,62 +23,14 @@ export function registerGoogleOAuthRoutes(
     return new GoogleAuth(db, clientId, clientSecret, callbackPort);
   }
 
-  // ── GET /api/google/status ──────────────────────────────
-  server.route("GET", "/api/google/status", async () => {
-    const credentialsConfigured = !!(clientId && clientSecret);
-    const auth = makeAuth();
-    // Live health probe — a dead refresh token surfaces as needs_reauth, not a
-    // false "connected" (matches the google.status RPC).
-    const status = credentialsConfigured ? await auth.checkHealth() : "disconnected";
-    const connected = status === "connected";
-    const needsReauth = status === "needs_reauth";
-
-    // Read last sync timestamps
-    let lastSync: Record<string, string | null> = {};
-    try {
-      const rows = db.prepare("SELECT source, last_sync_at FROM google_sync_meta").all() as Array<{ source: string; last_sync_at: string }>;
-      for (const row of rows) lastSync[row.source] = row.last_sync_at;
-    } catch { /* table may not exist yet */ }
-
-    // Read token info (without exposing raw tokens)
-    let tokenInfo: { expiresAt: string | null; scopes: string | null } = { expiresAt: null, scopes: null };
-    try {
-      const row = db.prepare("SELECT expires_at, scopes FROM google_tokens WHERE id = 1").get() as { expires_at: string; scopes: string } | undefined;
-      if (row) tokenInfo = { expiresAt: row.expires_at, scopes: row.scopes };
-    } catch { /* ignore */ }
-
-    return {
-      credentialsConfigured,
-      status,
-      authenticated: connected,
-      needsReauth,
-      lastAuthError: needsReauth ? auth.lastAuthError() : null,
-      authUrl: credentialsConfigured && !connected
-        ? auth.getAuthUrlForDashboard(dashboardPort)
-        : null,
-      tokenInfo,
-      lastSync,
-    };
-  });
-
-  // ── POST /api/google/auth/start ─────────────────────────
-  // `?force=1` skips the "already authenticated" shortcut — required for the
-  // re-login flow because `isAuthenticated()` only checks if a row exists in
-  // google_tokens, not whether the refresh_token still works. A revoked or
-  // expired refresh_token leaves a stale row in DB, and without `force` the
-  // endpoint would short-circuit and the user could never re-auth.
-  server.route("POST", "/api/google/auth/start", ({ query }) => {
-    if (!clientId || !clientSecret) {
-      throw new HttpError(
-        400,
-        "Google credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env (AI Providers → Google section).",
-      );
-    }
-    const auth = makeAuth();
-    const force = query.get("force") === "1" || query.get("force") === "true";
-    if (!force && auth.isAuthenticated()) return { alreadyAuthenticated: true };
-    return { authUrl: auth.getAuthUrlForDashboard(dashboardPort) };
-  });
+  // ── Operations shared with the WS RPC (dashboard-rpc-actions.ts) ──
+  // GET /api/google/status, POST /api/google/auth/start (`?force=1`),
+  // POST /api/google/revoke: the dashboard reaches them through rpcOrCall,
+  // WS first and HTTP when the bridge is down, so both roads run one function.
+  const op = googleSyncOperations({ db, config });
+  server.operation("GET", "/api/google/status", op["google.status"]);
+  server.operation("POST", "/api/google/auth/start", op["google.auth.start"]);
+  server.operation("POST", "/api/google/revoke", op["google.auth.revoke"]);
 
   // ── GET /auth/google/callback ────────────────────────────
   // Google redirects here after user grants permissions.
@@ -117,12 +70,6 @@ export function registerGoogleOAuthRoutes(
       res.writeHead(302, { Location: loc(`/?google_auth=error&error=${encodeURIComponent(String(err))}`) });
       res.end();
     }
-  });
-
-  // ── POST /api/google/revoke ──────────────────────────────
-  server.route("POST", "/api/google/revoke", () => {
-    makeAuth().revoke();
-    return { success: true };
   });
 
   log.info("Google OAuth routes registered (/api/google/*, /auth/google/callback)");

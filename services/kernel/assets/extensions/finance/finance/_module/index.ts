@@ -4,7 +4,6 @@ import {
   type ToolDefinition,
   type DashboardDescriptor,
   runMigrations,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { financeMigrations } from "./migrations/001_finance.js";
 import { FinanceService } from "./service.js";
@@ -14,15 +13,14 @@ import { financeRpcActions } from "./rpc-actions.js";
 
 export function createFinanceModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let service: FinanceService | null = null;
 
   return {
     name: "finance",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "finance", financeMigrations);
-      dbRef = ctx.sqlite;
-      const service = new FinanceService(ctx.sqlite, () => ctx.graph);
+      service = new FinanceService(ctx.sqlite, () => ctx.graph);
       tools = financeTools(service);
     },
 
@@ -31,7 +29,7 @@ export function createFinanceModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? financeRpcActions(dbRef) : [];
+      return service ? financeRpcActions(service) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {

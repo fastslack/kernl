@@ -267,6 +267,7 @@ export function createCommsModule(): CommsModule {
         reminderService: deps?.reminderService ?? null,
         crmService: deps?.crmService ?? null,
         shoppingService: deps?.shoppingService ?? null,
+        events: eventsRef,
       });
     },
 

@@ -5,26 +5,21 @@
  */
 import { HttpError, type KernelHttpServer } from "@kernl/extension-sdk";
 import type { RssRegistryService } from "./service.js";
+import { rssRegistryOperations } from "./operations.js";
+
+type RouteMethod = Parameters<KernelHttpServer["operation"]>[0];
 
 export function registerRssRegistryRoutes(
   server: KernelHttpServer,
   service: RssRegistryService,
 ): void {
-  // ── Bootstrap data for the dashboard registry view ──
-  server.route("GET", "/api/registry/rss", () => ({
-    categories: service.listCategories(),
-    feeds: service.listFeeds(),
-    stats: service.getStats(),
-  }));
+  // Routes whose RPC twin is the same operation (operations.ts). A path
+  // param is named after the input key the operation reads.
+  const op = rssRegistryOperations(service);
+  const bind = (method: RouteMethod, path: string, name: string) => server.operation(method, path, op[name]);
 
-  // ── Search ──
-  server.route("GET", "/api/registry/rss/search", ({ query }) => ({
-    results: service.searchFeeds({
-      query:       query.get("q") ?? "",
-      category_id: query.get("category") ?? undefined,
-      language:    query.get("language") ?? undefined,
-    }),
-  }));
+  bind("GET", "/api/registry/rss", "registry.rss.list");
+  bind("GET", "/api/registry/rss/search", "registry.rss.search");
 
   // ── Discover by topic (used by Universal Research Engine) ──
   server.route("GET", "/api/registry/rss/discover", ({ query }) => {
@@ -33,56 +28,14 @@ export function registerRssRegistryRoutes(
     return { results: service.discoverFeeds(topic, tags) };
   });
 
-  // ── Items ──
-  server.route("GET", "/api/registry/rss/items", ({ query }) => ({
-    items: service.listItems({
-      feed_id:     query.get("feed_id")     ?? undefined,
-      category_id: query.get("category_id") ?? undefined,
-      language:    query.get("language")    ?? undefined,
-      since:       query.get("since")       ?? undefined,
-      search:      query.get("q")           ?? undefined,
-      limit:       Number(query.get("limit")  ?? "100"),
-      offset:      Number(query.get("offset") ?? "0"),
-    }),
-  }));
-
-  server.route("GET", "/api/registry/rss/items/:id", ({ params: { id } }) => {
-    const item = service.getItem(id);
-    if (!item) throw new HttpError(404, "Item not found");
-    return { item };
-  });
-
-  // ── Live preview (no persistence) — for "add feed" UX ──
-  server.route("GET", "/api/registry/rss/preview", async ({ query }) => {
-    const feedUrl = query.get("url");
-    if (!feedUrl) throw new HttpError(400, "Missing url");
-    return service.previewFeed(feedUrl);
-  });
-
-  // ── Refresh (fetch new items) ──
-  server.route("POST", "/api/registry/rss/refresh", async () => ({
-    results: await service.fetchAllActive(),
-  }));
-
-  server.route("POST", "/api/registry/rss/:id/refresh", ({ params: { id } }) => service.fetchFeed(id));
-
-  // ── Test (validate URL) ──
-  server.route("POST", "/api/registry/rss/:id/test", ({ params: { id } }) => service.testFeed(id));
-
-  // ── Toggle active/disabled ──
-  server.route("POST", "/api/registry/rss/:id/toggle", ({ params: { id } }) => {
-    const feed = service.getFeed(id);
-    if (!feed) throw new HttpError(404, "Feed not found");
-    const newStatus = feed.status === "active" ? "disabled" : "active";
-    const updated = service.updateFeed(id, { status: newStatus });
-    return { success: true, feed: updated };
-  });
-
-  // ── Feed CRUD ──
-  server.route<Record<string, unknown>>("POST", "/api/registry/rss", ({ body }) => {
-    if (!body.feed_url || !body.name) throw new HttpError(400, "name and feed_url are required");
-    return { feed: service.addFeed(body as never) };
-  });
+  bind("GET", "/api/registry/rss/items", "registry.rss.items");
+  bind("GET", "/api/registry/rss/items/:id", "registry.rss.itemGet");
+  bind("GET", "/api/registry/rss/preview", "registry.rss.preview");
+  bind("POST", "/api/registry/rss/refresh", "registry.rss.refresh");
+  bind("POST", "/api/registry/rss/:id/refresh", "registry.rss.refresh");
+  bind("POST", "/api/registry/rss/:id/test", "registry.rss.test");
+  bind("POST", "/api/registry/rss/:id/toggle", "registry.rss.toggle");
+  bind("POST", "/api/registry/rss", "registry.rss.add");
 
   /**
    * Generic feed update — used by drag-drop in the reader sidebar to change
@@ -95,10 +48,7 @@ export function registerRssRegistryRoutes(
     return { feed };
   });
 
-  server.route("DELETE", "/api/registry/rss/:id", ({ params: { id } }) => {
-    if (!service.deleteFeed(id)) throw new HttpError(404, "Feed not found", { ok: false });
-    return { ok: true };
-  });
+  bind("DELETE", "/api/registry/rss/:id", "registry.rss.delete");
 
   /**
    * Persist a new feed ordering for one category. Body shape:
@@ -129,19 +79,7 @@ export function registerRssRegistryRoutes(
     return { ok: true };
   });
 
-  server.route<Record<string, unknown>>("POST", "/api/registry/rss/categories", ({ body }) => {
-    if (!body.name || typeof body.name !== "string") throw new HttpError(400, "name is required");
-    return { category: service.addCategory(body as never) };
-  });
-
-  server.route<Record<string, unknown>>("PUT", "/api/registry/rss/categories/:id", ({ params: { id }, body }) => {
-    const category = service.updateCategory(id, body);
-    if (!category) throw new HttpError(404, "Category not found");
-    return { category };
-  });
-
-  server.route("DELETE", "/api/registry/rss/categories/:id", ({ params: { id } }) => {
-    if (!service.deleteCategory(id)) throw new HttpError(404, "Category not found", { ok: false });
-    return { ok: true };
-  });
+  bind("POST", "/api/registry/rss/categories", "registry.rss.categoryAdd");
+  bind("PUT", "/api/registry/rss/categories/:id", "registry.rss.categoryUpdate");
+  bind("DELETE", "/api/registry/rss/categories/:id", "registry.rss.categoryDelete");
 }

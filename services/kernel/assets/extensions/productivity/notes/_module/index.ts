@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { notesMigrations } from "./migrations/001_notes.js";
 import { NotesService } from "./service.js";
@@ -14,14 +13,13 @@ import { notesRpcActions } from "./rpc-actions.js";
 
 export function createNotesModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let serviceRef: NotesService | null = null;
 
   return {
     name: "notes",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "notes", notesMigrations);
-      dbRef = ctx.sqlite;
 
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
@@ -30,6 +28,7 @@ export function createNotesModule(): ExtensibleModule {
       }
 
       const service = new NotesService(ctx.sqlite, () => ctx.graph);
+      serviceRef = service;
       tools = notesTools(service);
     },
 
@@ -38,7 +37,7 @@ export function createNotesModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? notesRpcActions(dbRef) : [];
+      return serviceRef ? notesRpcActions(serviceRef) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {

@@ -4,33 +4,22 @@
  */
 import { HttpError, type KernelHttpServer } from "@kernl/extension-sdk";
 import type { ApiRegistryService } from "./service.js";
+import { apiRegistryOperations } from "./dashboard-rpc-actions.js";
+
+type Method = Parameters<KernelHttpServer["operation"]>[0];
 
 export function registerApiRegistryRoutes(
   server: KernelHttpServer,
   service: ApiRegistryService,
 ): void {
-  // Bootstrap: catalog + stats + per-API hasKey flag
-  server.route("GET", "/api/registry/apis", () => {
-    const categories = service.listCategories();
-    const apis = service.listApis();
-    const stats = service.getStats();
-    const apisWithKeyInfo = apis.map((api) => ({
-      ...api,
-      hasKey: service.hasApiKey(api.id),
-    }));
-    return { categories, apis: apisWithKeyInfo, stats };
-  });
-
-  server.route("GET", "/api/registry/apis/search", ({ query }) => {
-    const results = service.searchApis({
-      query:       query.get("q") ?? "",
-      category_id: query.get("category") ?? undefined,
-      is_free:     query.get("freeOnly") === "true" ? true : undefined,
-    });
-    return { results };
-  });
-
-  server.route("POST", "/api/registry/apis/:id/test", ({ params: { id } }) => service.testApi(id));
+  // Operations shared with the WS RPC (dashboard-rpc-actions.ts). A path
+  // param is named after the input key the operation reads.
+  const op = apiRegistryOperations(service);
+  ([
+    ["GET", "/api/registry/apis", "registry.apis.list"],
+    ["GET", "/api/registry/apis/search", "registry.apis.search"],
+    ["POST", "/api/registry/apis/:id/test", "registry.apis.test"],
+  ] as Array<[Method, string, string]>).forEach(([method, path, name]) => server.operation(method, path, op[name]));
 
   server.route<{ apiKey: string; apiSecret?: string }>(
     "POST", "/api/registry/apis/:id/key", ({ params: { id }, body }) => {

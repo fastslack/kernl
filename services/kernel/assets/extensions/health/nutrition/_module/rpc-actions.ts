@@ -1,192 +1,110 @@
 /**
  * Nutrition RPC Actions — meal logging, macros, water, fasting, body stats via mtwRequest.
+ *
+ * RPC-only (the wellness page falls back to POST /api/rpc/<action>, the same
+ * handlers). Each one goes through NutritionService, so the RPC log gets what
+ * the MCP tools get: macros scaled from a linked food, a new fast closing the
+ * one still open, a BMI worked out from the weight.
  */
 
-import crypto from "node:crypto";
-import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import type { NutritionService } from "./service.js";
+import type { FastingProtocol, MealType } from "./types.js";
 
-export function nutritionRpcActions(db: SqliteDb): RpcAction[] {
-  return [
-    {
-      name: "nutrition.entries.list",
-      handler: async (args) => {
-        const date = typeof args.date === "string" ? args.date : new Date().toISOString().split("T")[0];
-        const mealType = typeof args.meal_type === "string" ? args.meal_type : "";
-        let where = "date = ?";
-        const params: unknown[] = [date];
-        if (mealType) { where += " AND meal_type = ?"; params.push(mealType); }
+const ENTRY_NUMBERS = {
+  quantity_g: "number", calories: "number", protein_g: "number", carbs_g: "number",
+  fat_g: "number", fiber_g: "number", sugar_g: "number", sodium_mg: "number",
+} as const;
 
-        const rows = db.prepare(
-          `SELECT id, food_id, food_name, meal_type, quantity_g, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, date, notes, created_at
-           FROM nutrition_entries WHERE ${where} ORDER BY created_at`,
-        ).all(...params);
-        return { entries: rows };
-      },
-    },
-    {
-      name: "nutrition.entries.log",
-      handler: async (args) => {
-        const foodName = typeof args.food_name === "string" ? args.food_name.trim() : "";
-        if (!foodName) throw new Error("food_name required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO nutrition_entries (id, food_id, food_name, meal_type, quantity_g, calories, protein_g, carbs_g, fat_g, fiber_g, sugar_g, sodium_mg, date, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id, args.food_id ?? null, foodName, args.meal_type ?? "other",
-          args.quantity_g ?? 0, args.calories ?? 0, args.protein_g ?? 0,
-          args.carbs_g ?? 0, args.fat_g ?? 0, args.fiber_g ?? 0,
-          args.sugar_g ?? 0, args.sodium_mg ?? 0,
-          typeof args.date === "string" ? args.date : now.split("T")[0],
-          args.notes ?? "", now,
-        );
-        return { ok: true, id };
-      },
-    },
-    {
-      name: "nutrition.entries.delete",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        db.prepare("DELETE FROM nutrition_entries WHERE id = ?").run(id);
-        return { ok: true };
-      },
-    },
-    {
-      name: "nutrition.dailySummary",
-      handler: async (args) => {
-        const date = typeof args.date === "string" ? args.date : new Date().toISOString().split("T")[0];
-        const totals = db.prepare(
-          `SELECT COUNT(*) as entries,
-                  COALESCE(SUM(calories), 0) as calories,
-                  COALESCE(SUM(protein_g), 0) as protein_g,
-                  COALESCE(SUM(carbs_g), 0) as carbs_g,
-                  COALESCE(SUM(fat_g), 0) as fat_g,
-                  COALESCE(SUM(fiber_g), 0) as fiber_g
-           FROM nutrition_entries WHERE date = ?`,
-        ).get(date);
-        const goal = db.prepare("SELECT * FROM nutrition_goals WHERE active = 1 LIMIT 1").get();
-        const water = db.prepare(
-          "SELECT COALESCE(SUM(amount_ml), 0) as total_ml FROM nutrition_water WHERE date = ?",
-        ).get(date);
-        return { date, totals, goal: goal ?? null, water };
-      },
-    },
-    {
-      name: "nutrition.water.log",
-      handler: async (args) => {
-        const amountMl = typeof args.amount_ml === "number" ? args.amount_ml : 0;
-        if (!amountMl) throw new Error("amount_ml required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        const date = typeof args.date === "string" ? args.date : now.split("T")[0];
-        db.prepare(
-          "INSERT INTO nutrition_water (id, amount_ml, date, time, notes, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        ).run(id, amountMl, date, now.split("T")[1]?.slice(0, 5) ?? "", args.notes ?? "", now);
-        return { ok: true, id };
-      },
-    },
-    {
-      name: "nutrition.water.today",
-      handler: async (args) => {
-        const date = typeof args.date === "string" ? args.date : new Date().toISOString().split("T")[0];
-        const total = db.prepare(
-          "SELECT COALESCE(SUM(amount_ml), 0) as total_ml FROM nutrition_water WHERE date = ?",
-        ).get(date);
-        const entries = db.prepare(
-          "SELECT id, amount_ml, time, notes FROM nutrition_water WHERE date = ? ORDER BY created_at",
-        ).all(date);
-        return { ...(total as Record<string, unknown>), entries };
-      },
-    },
-    {
-      name: "nutrition.fasting.start",
-      handler: async (args) => {
-        const protocol = typeof args.protocol === "string" ? args.protocol : "16:8";
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        const targetHours = typeof args.target_hours === "number" ? args.target_hours : parseInt(protocol) || 16;
-        db.prepare(
-          `INSERT INTO nutrition_fasting (id, protocol, start_time, target_hours, status, notes, created_at)
-           VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-        ).run(id, protocol, now, targetHours, args.notes ?? "", now);
-        return { ok: true, id };
-      },
-    },
-    {
-      name: "nutrition.fasting.stop",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        const status = typeof args.status === "string" && ["completed", "broken"].includes(args.status) ? args.status : "completed";
-        const now = new Date().toISOString();
+const BODY_STATS = {
+  weight_kg: "number", body_fat_pct: "number", muscle_mass_kg: "number", water_pct: "number",
+  bmi: "number", waist_cm: "number", hip_cm: "number", chest_cm: "number",
+  date: "string", notes: "string",
+} as const;
 
-        // Find active fast if no id
-        let fastId = id;
-        if (!fastId) {
-          const active = db.prepare("SELECT id FROM nutrition_fasting WHERE status = 'active' ORDER BY created_at DESC LIMIT 1").get() as { id: string } | undefined;
-          if (!active) throw new Error("No active fast");
-          fastId = active.id;
-        }
+export function nutritionRpcActions(service: NutritionService): RpcAction[] {
+  const today = () => new Date().toISOString().split("T")[0];
+  const dateArg = (input: Record<string, unknown>) => pickArgs(input, { date: "string" }).date ?? today();
 
-        const fast = db.prepare("SELECT start_time FROM nutrition_fasting WHERE id = ?").get(fastId) as { start_time: string } | undefined;
-        if (!fast) throw new Error("Fast not found");
-        const actualHours = Math.round((Date.now() - new Date(fast.start_time).getTime()) / 3600000 * 10) / 10;
+  return rpcActionsFrom({
+    "nutrition.entries.list": (input) => {
+      const mealType = pickArgs(input, { meal_type: "string" }).meal_type;
+      return { entries: service.listEntries(dateArg(input), (mealType || undefined) as MealType | undefined) };
+    },
 
-        db.prepare("UPDATE nutrition_fasting SET end_time = ?, actual_hours = ?, status = ? WHERE id = ?")
-          .run(now, actualHours, status, fastId);
-        return { ok: true, actualHours };
-      },
+    "nutrition.entries.log": (input) => {
+      const args = pickArgs(input, { ...ENTRY_NUMBERS, food_id: "string", food_name: "string", meal_type: "string", date: "string", notes: "string" });
+      const foodName = args.food_name?.trim() ?? "";
+      // A linked food names the entry itself (and scales its macros).
+      if (!foodName && !args.food_id) throw new HttpError(400, "food_name required");
+      const entry = service.logEntry({
+        ...args,
+        food_name: foodName || undefined,
+        meal_type: args.meal_type as MealType | undefined,
+      });
+      return { ok: true, id: entry.id };
     },
-    {
-      name: "nutrition.fasting.active",
-      handler: async () => {
-        const fast = db.prepare(
-          "SELECT id, protocol, start_time, target_hours, notes, created_at FROM nutrition_fasting WHERE status = 'active' ORDER BY created_at DESC LIMIT 1",
-        ).get();
-        return { fast: fast ?? null };
-      },
+
+    "nutrition.entries.delete": (input) => {
+      const id = pickArgs(input, { id: "string" }).id ?? "";
+      if (!id) throw new HttpError(400, "Missing id");
+      service.deleteEntry(id);
+      return { ok: true };
     },
-    {
-      name: "nutrition.bodyStats.log",
-      handler: async (args) => {
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO nutrition_body_stats (id, weight_kg, body_fat_pct, muscle_mass_kg, water_pct, bmi, waist_cm, hip_cm, chest_cm, date, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id, args.weight_kg ?? null, args.body_fat_pct ?? null, args.muscle_mass_kg ?? null,
-          args.water_pct ?? null, args.bmi ?? null, args.waist_cm ?? null,
-          args.hip_cm ?? null, args.chest_cm ?? null,
-          typeof args.date === "string" ? args.date : now.split("T")[0],
-          args.notes ?? "", now,
-        );
-        return { ok: true, id };
-      },
+
+    "nutrition.dailySummary": (input) => {
+      const summary = service.getDailySummary(dateArg(input));
+      const { water_ml, ...totals } = summary.totals;
+      return {
+        date: summary.date,
+        totals: { entries: summary.entries.length, ...totals },
+        goal: summary.goal ?? null,
+        water: { total_ml: water_ml },
+      };
     },
-    {
-      name: "nutrition.bodyStats.list",
-      handler: async (args) => {
-        const limit = Math.min(100, typeof args.limit === "number" ? args.limit : 30);
-        const rows = db.prepare(
-          "SELECT * FROM nutrition_body_stats ORDER BY date DESC LIMIT ?",
-        ).all(limit);
-        return { stats: rows };
-      },
+
+    "nutrition.water.log": (input) => {
+      const args = pickArgs(input, { amount_ml: "number", date: "string", notes: "string" });
+      if (!args.amount_ml || args.amount_ml <= 0) throw new HttpError(400, "amount_ml required");
+      const entry = service.logWater(args.amount_ml, args.notes, args.date);
+      return { ok: true, id: entry.id };
     },
-    {
-      name: "nutrition.foods.search",
-      handler: async (args) => {
-        const q = typeof args.q === "string" ? args.q.trim() : "";
-        if (!q) throw new Error("Query required");
-        const limit = Math.min(50, typeof args.limit === "number" ? args.limit : 20);
-        const rows = db.prepare(
-          `SELECT f.* FROM nutrition_foods_fts fts JOIN nutrition_foods f ON fts.rowid = f.rowid
-           WHERE nutrition_foods_fts MATCH ? LIMIT ?`,
-        ).all(q, limit);
-        return { foods: rows };
-      },
+
+    "nutrition.water.today": (input) => service.getWaterToday(dateArg(input)),
+
+    "nutrition.fasting.start": (input) => {
+      const args = pickArgs(input, { protocol: "string", target_hours: "number", notes: "string" });
+      const fast = service.startFast({ ...args, protocol: args.protocol as FastingProtocol | undefined });
+      return { ok: true, id: fast.id };
     },
-  ];
+
+    "nutrition.fasting.stop": (input) => {
+      const args = pickArgs(input, { id: "string", status: "string" });
+      const status = args.status === "broken" ? "broken" : "completed";
+      // Find active fast if no id
+      const fastId = args.id || service.getActiveFast()?.id;
+      if (!fastId) throw new HttpError(404, "No active fast");
+      const fast = service.breakFast(fastId, status);
+      if (!fast) throw new HttpError(404, "Fast not found");
+      return { ok: true, actualHours: fast.actual_hours };
+    },
+
+    "nutrition.fasting.active": () => ({ fast: service.getActiveFast() ?? null }),
+
+    "nutrition.bodyStats.log": (input) => {
+      const stats = service.logBodyStats(pickArgs(input, BODY_STATS));
+      return { ok: true, id: stats.id };
+    },
+
+    "nutrition.bodyStats.list": (input) => ({
+      stats: service.listBodyStats(Math.min(100, pickArgs(input, { limit: "number" }).limit ?? 30)),
+    }),
+
+    "nutrition.foods.search": (input) => {
+      const args = pickArgs(input, { q: "string", limit: "number" });
+      const q = args.q?.trim() ?? "";
+      if (!q) throw new HttpError(400, "Query required");
+      return { foods: service.searchFoods(q, Math.min(50, args.limit ?? 20)) };
+    },
+  });
 }

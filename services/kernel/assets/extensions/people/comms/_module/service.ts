@@ -524,6 +524,53 @@ export class CommsService {
       .all(threadId) as Communication[];
   }
 
+  /** A thread with each message's contact name (empty when unknown), for the
+   *  dashboard's thread view. */
+  getThreadWithContactNames(threadId: string): Array<Communication & { contact_name: string }> {
+    const messages = this.getThread(threadId);
+    const contactIds = [...new Set(messages.map((m) => m.contact_id).filter((id): id is string => !!id))];
+    const names = new Map<string, string>();
+    if (contactIds.length > 0) {
+      try {
+        const rows = this.db
+          .prepare(`SELECT id, name FROM contacts WHERE id IN (${contactIds.map(() => "?").join(",")})`)
+          .all(...contactIds) as { id: string; name: string }[];
+        for (const row of rows) names.set(row.id, row.name);
+      } catch { /* contacts table may not exist */ }
+    }
+    return messages.map((m) => ({ ...m, contact_name: (m.contact_id && names.get(m.contact_id)) || "" }));
+  }
+
+  /** The dashboard's search over stored communications (not the mailbox —
+   *  that is searchInbox): subject/body/recipients text, plus exact filters. */
+  searchStored(filters: { q?: string; channel?: string; status?: string; direction?: string; limit?: number }): Array<{
+    id: string; channel: string; subject: string; direction: string; status: string;
+    recipients_to: string; contact_name: string; updated_at: string;
+  }> {
+    const conditions: string[] = [];
+    const params: string[] = [];
+    const q = filters.q?.trim() ?? "";
+    if (q) {
+      const like = `%${q}%`;
+      conditions.push("(c.subject LIKE ? OR c.body LIKE ? OR c.recipients_to LIKE ?)");
+      params.push(like, like, like);
+    }
+    if (filters.channel)   { conditions.push("c.channel = ?");   params.push(filters.channel); }
+    if (filters.status)    { conditions.push("c.status = ?");    params.push(filters.status); }
+    if (filters.direction) { conditions.push("c.direction = ?"); params.push(filters.direction); }
+
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    return this.db.prepare(
+      `SELECT c.id, c.channel, c.subject, c.direction, c.status, c.recipients_to,
+              COALESCE(ct.name, '') as contact_name,
+              COALESCE(c.sent_at, c.updated_at) as updated_at
+       FROM communications c
+       LEFT JOIN contacts ct ON ct.id = c.contact_id
+       ${where}
+       ORDER BY c.updated_at DESC LIMIT ?`,
+    ).all(...params, Math.min(filters.limit || 20, 50)) as ReturnType<CommsService["searchStored"]>;
+  }
+
   // ── Send Email ──────────────────────────────────────
 
   async sendEmail(id: string): Promise<Communication> {

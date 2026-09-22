@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { goalsMigrations } from "./migrations/001_goals.js";
 import { GoalsService } from "./service.js";
@@ -14,14 +13,13 @@ import { goalsRpcActions } from "./rpc-actions.js";
 
 export function createGoalsModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let serviceRef: GoalsService | null = null;
 
   return {
     name: "goals",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "goals", goalsMigrations);
-      dbRef = ctx.sqlite;
 
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
@@ -30,6 +28,7 @@ export function createGoalsModule(): ExtensibleModule {
       }
 
       const service = new GoalsService(ctx.sqlite, () => ctx.graph);
+      serviceRef = service;
       tools = goalsTools(service);
     },
 
@@ -38,7 +37,7 @@ export function createGoalsModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? goalsRpcActions(dbRef) : [];
+      return serviceRef ? goalsRpcActions(serviceRef) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {

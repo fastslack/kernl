@@ -4,9 +4,7 @@ import {
   type ToolDefinition,
   type DashboardDescriptor,
   runMigrations,
-  type SqliteDb,
   type EventBus,
-  type KernelConfig,
 } from "@kernl/extension-sdk";
 import { shoppingMigrations } from "./migrations/001_shopping.js";
 import { ShoppingService } from "./service.js";
@@ -18,18 +16,14 @@ import { registerShoppingRoutes } from "./routes.js";
 export function createShoppingModule(): ExtensibleModule & { getService(): ShoppingService | null } {
   let tools: ToolDefinition[] = [];
   let serviceInstance: ShoppingService | null = null;
-  let dbRef: SqliteDb | null = null;
   let eventsRef: EventBus | null = null;
-  let configRef: KernelConfig | null = null;
 
   return {
     name: "shopping",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "shopping", shoppingMigrations);
-      dbRef = ctx.sqlite;
       eventsRef = ctx.events;
-      configRef = ctx.config;
 
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
@@ -56,21 +50,15 @@ export function createShoppingModule(): ExtensibleModule & { getService(): Shopp
     },
 
     getRpcActions() {
-      return dbRef ? shoppingRpcActions(dbRef) : [];
+      return serviceInstance ? shoppingRpcActions({ service: serviceInstance, events: eventsRef }) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
         channels: [{ name: "shopping", query: (db) => queryShopping(db) }],
         registerRoutes: (server) => {
-          if (dbRef) {
-            registerShoppingRoutes(
-              server,
-              dbRef,
-              serviceInstance ?? undefined,
-              configRef ?? undefined,
-              eventsRef ?? undefined,
-            );
+          if (serviceInstance) {
+            registerShoppingRoutes(server, serviceInstance, eventsRef ?? undefined);
           }
         },
       };

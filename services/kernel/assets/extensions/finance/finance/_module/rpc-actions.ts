@@ -1,98 +1,70 @@
 /**
  * Finance RPC Actions — accounts, transactions, budgets via mtwRequest.
+ *
+ * RPC-only (no HTTP twin); each one reads its args with pickArgs and goes
+ * through FinanceService, so the writes get the service's checks: a
+ * transaction lands with its balance update in one SQLite transaction and
+ * only against an account that exists.
  */
 
-import crypto from "node:crypto";
-import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import type { FinanceService } from "./service.js";
+import type { AccountType, TransactionType } from "./types.js";
 
-export function financeRpcActions(db: SqliteDb): RpcAction[] {
-  return [
-    {
-      name: "finance.accounts.list",
-      handler: async () => {
-        const rows = db.prepare(
-          "SELECT id, name, type, currency, balance_cents, notes, created_at, updated_at FROM finance_accounts ORDER BY name COLLATE NOCASE",
-        ).all();
-        return { accounts: rows };
-      },
-    },
-    {
-      name: "finance.accounts.create",
-      handler: async (args) => {
-        const name = typeof args.name === "string" ? args.name.trim() : "";
-        if (!name) throw new Error("Name required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO finance_accounts (id, name, type, currency, balance_cents, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, name, args.type ?? "checking", args.currency ?? "EUR", args.balance_cents ?? 0, args.notes ?? "", now, now);
-        return { ok: true, id };
-      },
-    },
-    {
-      name: "finance.transactions.list",
-      handler: async (args) => {
-        const accountId = typeof args.account_id === "string" ? args.account_id : "";
-        const category = typeof args.category === "string" ? args.category : "";
-        const limit = Math.min(200, Math.max(10, typeof args.limit === "number" ? args.limit : 50));
-        const offset = typeof args.offset === "number" ? args.offset : 0;
+export function financeRpcActions(service: FinanceService): RpcAction[] {
+  return rpcActionsFrom({
+    "finance.accounts.list": () => ({ accounts: service.listAccounts() }),
 
-        let where = "1=1";
-        const params: unknown[] = [];
-        if (accountId) { where += " AND account_id = ?"; params.push(accountId); }
-        if (category) { where += " AND category = ?"; params.push(category); }
-
-        const total = (db.prepare(`SELECT COUNT(*) as c FROM finance_transactions WHERE ${where}`).get(...params) as { c: number }).c;
-        const rows = db.prepare(
-          `SELECT id, account_id, type, amount_cents, category, description, counterparty, date, notes, created_at
-           FROM finance_transactions WHERE ${where} ORDER BY date DESC, created_at DESC LIMIT ? OFFSET ?`,
-        ).all(...params, limit, offset);
-        return { transactions: rows, total };
-      },
+    "finance.accounts.create": (input) => {
+      const args = pickArgs(input, { name: "string", type: "string", currency: "string", balance_cents: "number", notes: "string" });
+      const name = args.name?.trim() ?? "";
+      if (!name) throw new HttpError(400, "Name required");
+      if (args.balance_cents !== undefined && !Number.isInteger(args.balance_cents)) {
+        throw new HttpError(400, "balance_cents must be an integer");
+      }
+      const account = service.createAccount({ ...args, name, type: args.type as AccountType | undefined });
+      return { ok: true, id: account.id };
     },
-    {
-      name: "finance.transactions.create",
-      handler: async (args) => {
-        const accountId = typeof args.account_id === "string" ? args.account_id : "";
-        const amountCents = typeof args.amount_cents === "number" ? args.amount_cents : 0;
-        if (!accountId || !amountCents) throw new Error("account_id and amount_cents required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        const date = typeof args.date === "string" ? args.date : now.split("T")[0];
 
-        db.prepare(
-          `INSERT INTO finance_transactions (id, account_id, type, amount_cents, category, description, counterparty, date, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, accountId, args.type ?? "expense", amountCents, args.category ?? "", args.description ?? "", args.counterparty ?? "", date, args.notes ?? "", now);
+    "finance.transactions.list": (input) => {
+      const args = pickArgs(input, { account_id: "string", category: "string", limit: "number", offset: "number" });
+      const filters = { account_id: args.account_id || undefined, category: args.category || undefined };
+      const limit = Math.min(200, Math.max(10, args.limit ?? 50));
+      return {
+        transactions: service.listTransactions({ ...filters, limit, offset: args.offset ?? 0 }),
+        total: service.countTransactions(filters),
+      };
+    },
 
-        // Update account balance
-        const sign = args.type === "income" ? 1 : -1;
-        db.prepare("UPDATE finance_accounts SET balance_cents = balance_cents + ?, updated_at = ? WHERE id = ?")
-          .run(sign * Math.abs(amountCents), now, accountId);
+    "finance.transactions.create": (input) => {
+      const args = pickArgs(input, {
+        account_id: "string", type: "string", amount_cents: "number", category: "string",
+        description: "string", counterparty: "string", date: "string", notes: "string",
+      });
+      if (!args.account_id || !args.amount_cents) throw new HttpError(400, "account_id and amount_cents required");
+      if (!Number.isInteger(args.amount_cents)) throw new HttpError(400, "amount_cents must be an integer");
+      // The type carries the direction: the amount is stored as a magnitude, as
+      // the balance update always treated it.
+      const tx = service.addTransaction({
+        ...args,
+        account_id: args.account_id,
+        type: args.type as TransactionType | undefined,
+        amount_cents: Math.abs(args.amount_cents),
+        date: args.date ?? new Date().toISOString().split("T")[0],
+      });
+      return { ok: true, id: tx.id };
+    },
 
-        return { ok: true, id };
-      },
+    "finance.budgets.list": () => ({ budgets: service.listBudgets() }),
+
+    "finance.summary": () => {
+      const today = new Date().toISOString().split("T")[0];
+      const monthStart = today.slice(0, 7) + "-01";
+      return {
+        accounts: service.listAccounts(),
+        monthTotals: service.totalsByTypeSince(monthStart),
+        period: { from: monthStart, to: today },
+      };
     },
-    {
-      name: "finance.budgets.list",
-      handler: async () => {
-        const rows = db.prepare("SELECT id, name, category, amount_cents, period, created_at, updated_at FROM finance_budgets ORDER BY name").all();
-        return { budgets: rows };
-      },
-    },
-    {
-      name: "finance.summary",
-      handler: async () => {
-        const accounts = db.prepare("SELECT id, name, type, currency, balance_cents FROM finance_accounts ORDER BY name").all();
-        const today = new Date().toISOString().split("T")[0];
-        const monthStart = today.slice(0, 7) + "-01";
-        const monthTotals = db.prepare(
-          `SELECT type, SUM(amount_cents) as total FROM finance_transactions
-           WHERE date >= ? GROUP BY type`,
-        ).all(monthStart) as { type: string; total: number }[];
-        return { accounts, monthTotals, period: { from: monthStart, to: today } };
-      },
-    },
-  ];
+  });
 }

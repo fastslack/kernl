@@ -5,8 +5,9 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import type { ServerResponse } from "node:http";
-import { HttpError, isHttpError, type KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, isHttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import type { ChatService } from "./service.js";
+import { chatOperations } from "./operations.js";
 import { EpisodeLockedError } from "./service.js";
 import type { MemoryDistiller } from "./memory-distiller.js";
 import type { EventBus } from "../../core/event-bus.js";
@@ -29,42 +30,17 @@ export function registerChatRoutes(
   const asBadRequest = (err: unknown): HttpError =>
     isHttpError(err) ? err : new HttpError(400, err instanceof Error ? err.message : "Bad request");
 
-  server.route<{
-    title?: string;
-    provider?: string;
-    model?: string;
-    instructions?: string;
-  }>("POST", "/api/chat/start", ({ body }) => {
-    try {
-      const episode = chatService.createEpisode({
-        title: body.title,
-        provider: body.provider,
-        model: body.model,
-        instructions: body.instructions,
-      });
-      events.emit("data.changed", { module: "chat", action: "start" });
-      return episode;
-    } catch (err) {
-      throw asBadRequest(err);
-    }
-  });
-
-  server.route<{
-    episode_id: string;
-    message: string;
-    images?: Array<{ data: string; media_type: string }>;
-    documents?: Array<{ data: string; media_type: string; filename?: string }>;
-  }>("POST", "/api/chat/message", async ({ body }) => {
-    if (!body.episode_id || (!body.message && !body.images?.length && !body.documents?.length)) {
-      throw new HttpError(400, "episode_id and message (or attachment) required");
-    }
-    const response = await chatService.chat(body.episode_id, body.message ?? "", {
-      images: body.images,
-      documents: body.documents,
-    });
-    events.emit("data.changed", { module: "chat", action: "message" });
-    return response;
-  });
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The dashboard reaches these through rpcOrCall, WS first and HTTP when
+  // the bridge is down, so both roads run the same function.
+  const op = chatOperations({ chatService, events });
+  const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
+  ([
+    ["POST", "/api/chat/start", "chat.episode.start"],
+    ["POST", "/api/chat/message", "chat.message.send"],
+    ["GET", "/api/chat/episodes", "chat.episodes.list"],
+    ["GET", "/api/chat/messages", "chat.messages.list"],
+  ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
   // ── Streaming chat via Claude Code SDK ──────────────────
   // POST a message; the server keeps the response open and streams SSE
@@ -270,14 +246,6 @@ export function registerChatRoutes(
       return updated;
     },
   );
-
-  server.route("GET", "/api/chat/episodes", () => chatService.listEpisodes({ limit: 50 }));
-
-  server.route("GET", "/api/chat/messages", ({ query }) => {
-    const episodeId = query.get("episode_id");
-    if (!episodeId) throw new HttpError(400, "episode_id required");
-    return chatService.getMessages(episodeId);
-  });
 
   // ── Distilled facts ────────────────────────────────────────
   // Surface the durable facts the memory-distiller writes on session_stop.

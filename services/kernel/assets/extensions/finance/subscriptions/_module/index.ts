@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { subscriptionsMigrations } from "./migrations/001_subscriptions.js";
 import { SubscriptionService } from "./service.js";
@@ -14,15 +13,14 @@ import { subscriptionsRpcActions } from "./rpc-actions.js";
 
 export function createSubscriptionsModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let service: SubscriptionService | null = null;
 
   return {
     name: "subscriptions",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "subscriptions", subscriptionsMigrations);
-      dbRef = ctx.sqlite;
-      const service = new SubscriptionService(ctx.sqlite, () => ctx.graph);
+      service = new SubscriptionService(ctx.sqlite, () => ctx.graph);
       tools = subscriptionTools(service);
     },
 
@@ -31,7 +29,7 @@ export function createSubscriptionsModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? subscriptionsRpcActions(dbRef) : [];
+      return service ? subscriptionsRpcActions(service) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {

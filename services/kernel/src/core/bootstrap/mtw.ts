@@ -181,6 +181,7 @@ export async function initMtw(args: {
     agentExecutor: agentsModule.getExecutor() as Parameters<typeof dashboardRpcActions>[0]["agentExecutor"],
     llmRegistry,
     configService,
+    mtwRequestArch,
   }));
 
   // Each extension's slice of dashboard RPC actions.

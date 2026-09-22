@@ -55,7 +55,7 @@ export function createEventsModule(): EventsModule {
     },
 
     getRpcActions() {
-      return dbRef ? eventsRpcActions(dbRef) : [];
+      return serviceRef ? eventsRpcActions(serviceRef) : [];
     },
 
     getDashboardRpcActions() {

@@ -71,15 +71,15 @@ export class HealthService {
     return med;
   }
 
-  updateMedication(id: string, changes: Partial<Pick<HealthMedication, "name" | "dosage" | "frequency" | "end_date" | "active" | "notes">>): HealthMedication | undefined {
+  updateMedication(id: string, changes: Partial<Pick<HealthMedication, "name" | "dosage" | "frequency" | "start_date" | "end_date" | "active" | "notes">>): HealthMedication | undefined {
     const existing = this.db.prepare("SELECT * FROM health_medications WHERE id = ?").get(id) as HealthMedication | undefined;
     if (!existing) return undefined;
 
     const updated = { ...existing, ...changes, updated_at: isoNow() };
     this.db.prepare(
-      `UPDATE health_medications SET name=?, dosage=?, frequency=?, end_date=?, active=?, notes=?, updated_at=?
+      `UPDATE health_medications SET name=?, dosage=?, frequency=?, start_date=?, end_date=?, active=?, notes=?, updated_at=?
        WHERE id=?`,
-    ).run(updated.name, updated.dosage, updated.frequency, updated.end_date, updated.active, updated.notes, updated.updated_at, id);
+    ).run(updated.name, updated.dosage, updated.frequency, updated.start_date, updated.end_date, updated.active, updated.notes, updated.updated_at, id);
 
     return updated;
   }
@@ -165,5 +165,31 @@ export class HealthService {
       recent_metrics: recentMetrics,
       latest_weight: latestWeight ?? null,
     };
+  }
+
+  /**
+   * The dashboard's health card: the latest reading per metric type, how many
+   * medications are active, the next five scheduled appointments and how many
+   * readings were logged in the last seven days.
+   */
+  overview(): {
+    latestMetrics: { type: string; value: string; unit: string; date: string }[];
+    activeMeds: number;
+    upcomingAppts: { id: string; title: string; date: string; provider: string }[];
+    weekMetrics: number;
+  } {
+    const today = isoNow().split("T")[0];
+    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
+    const latestMetrics = this.db.prepare(
+      `SELECT type, value, unit, date FROM health_metrics
+       WHERE id IN (SELECT id FROM health_metrics h2 WHERE h2.type = health_metrics.type ORDER BY date DESC LIMIT 1)
+       GROUP BY type`,
+    ).all() as { type: string; value: string; unit: string; date: string }[];
+    const activeMeds = (this.db.prepare("SELECT COUNT(*) as c FROM health_medications WHERE active = 1").get() as { c: number }).c;
+    const upcomingAppts = this.db.prepare(
+      "SELECT id, title, date, provider FROM health_appointments WHERE date >= ? AND status = 'scheduled' ORDER BY date ASC LIMIT 5",
+    ).all(today) as { id: string; title: string; date: string; provider: string }[];
+    const weekMetrics = (this.db.prepare("SELECT COUNT(*) as c FROM health_metrics WHERE date >= ?").get(weekAgo) as { c: number }).c;
+    return { latestMetrics, activeMeds, upcomingAppts, weekMetrics };
   }
 }

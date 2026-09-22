@@ -1,6 +1,9 @@
-import { HttpError, isHttpError, type KernelHttpServer } from "@kernl/extension-sdk";
+import { HttpError, isHttpError, type KernelHttpServer, type Operation } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
+import { twitterOperations } from "./operations.js";
+
+type Method = Parameters<KernelHttpServer["operation"]>[0];
 
 export function registerTwitterRoutes(
   server: KernelHttpServer,
@@ -9,50 +12,39 @@ export function registerTwitterRoutes(
 ): void {
   /**
    * A POST route whose failures — anything but a deliberate HttpError — all
-   * answer 400 "Invalid request", as these routes always have.
+   * answer 400 "Invalid request", as these routes always have. The RPC side
+   * of the same operation keeps the underlying message.
    */
-  const post = <B>(path: string, fn: (body: B) => unknown) =>
-    server.route<B>("POST", path, async ({ body }) => {
-      try {
-        return await fn(body);
-      } catch (err) {
-        if (isHttpError(err)) throw err;
-        throw new HttpError(400, "Invalid request");
-      }
-    });
+  const invalidAs400 = (op: Operation): Operation => async (input) => {
+    try {
+      return await op(input);
+    } catch (err) {
+      if (isHttpError(err)) throw err;
+      throw new HttpError(400, "Invalid request");
+    }
+  };
+
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The page reaches these through rpcOrCall, WS first and HTTP when the
+  // bridge is down, so both roads run the same function.
+  const op = twitterOperations(service, publisher);
+  ([
+    ["POST", "/api/twitter/accounts", "twitter.accounts.create"],
+    ["POST", "/api/twitter/accounts/update", "twitter.accounts.update"],
+    ["POST", "/api/twitter/posts", "twitter.posts.create"],
+    ["POST", "/api/twitter/posts/update", "twitter.posts.update"],
+    ["POST", "/api/twitter/posts/approve", "twitter.posts.approve"],
+    ["POST", "/api/twitter/posts/publish", "twitter.posts.publish"],
+    ["POST", "/api/twitter/posts/delete", "twitter.posts.delete"],
+    ["POST", "/api/twitter/sync-metrics", "twitter.syncMetrics"],
+    ["POST", "/api/twitter/check-mentions", "twitter.checkMentions"],
+    ["GET", "/api/twitter/performance", "twitter.performance"],
+  ] as Array<[Method, string, string]>).forEach(([method, path, name]) =>
+    server.operation(method, path, method === "POST" ? invalidAs400(op[name]) : op[name]));
 
   // ── Accounts ───────────────────────────────────────
 
   server.route("GET", "/api/twitter/accounts", () => service.listAccounts());
-
-  post<{
-    handle: string;
-    display_name?: string;
-    api_key?: string;
-    api_secret?: string;
-    access_token?: string;
-    access_secret?: string;
-  }>("/api/twitter/accounts", (body) => {
-    if (!body.handle) throw new HttpError(400, "handle is required");
-    return service.addAccount(body);
-  });
-
-  post<{
-    id: string;
-    handle?: string;
-    display_name?: string;
-    api_key?: string;
-    api_secret?: string;
-    access_token?: string;
-    access_secret?: string;
-    status?: string;
-  }>("/api/twitter/accounts/update", (body) => {
-    if (!body.id) throw new HttpError(400, "id is required");
-    const { id, ...changes } = body;
-    const account = service.updateAccount(id, changes);
-    if (!account) throw new HttpError(404, "Account not found");
-    return account;
-  });
 
   // ── Posts ──────────────────────────────────────────
 
@@ -64,56 +56,6 @@ export function registerTwitterRoutes(
     const offset = parseInt(query.get("offset") ?? "0", 10);
 
     return service.listPosts({ status, account_id, post_type, limit, offset });
-  });
-
-  post<{
-    account_id: string;
-    content: string;
-    post_type?: string;
-    status?: string;
-    scheduled_at?: string;
-    reply_to_x_id?: string;
-    quote_x_id?: string;
-  }>("/api/twitter/posts", (body) => {
-    if (!body.account_id || !body.content) {
-      throw new HttpError(400, "account_id and content are required");
-    }
-    return service.createPost(body);
-  });
-
-  post<{
-    id: string;
-    content?: string;
-    post_type?: string;
-    status?: string;
-    scheduled_at?: string | null;
-  }>("/api/twitter/posts/update", (body) => {
-    if (!body.id) throw new HttpError(400, "id is required");
-    const { id, ...changes } = body;
-    const post = service.updatePost(id, changes);
-    if (!post) throw new HttpError(404, "Post not found");
-    return post;
-  });
-
-  post<{ id: string }>("/api/twitter/posts/approve", (body) => {
-    const post = service.approvePost(body.id);
-    if (!post) throw new HttpError(400, "Post not found or not in draft/queued status");
-    return post;
-  });
-
-  post<{ id: string }>("/api/twitter/posts/publish", async (body) => {
-    const result = await publisher.publishNow(body.id);
-    if (!result.ok) throw new HttpError(400, result.error ?? "", { error: result.error });
-    return { ok: true, x_post_id: result.x_post_id };
-  });
-
-  post<{ id: string }>("/api/twitter/posts/delete", (body) => {
-    const post = service.getPost(body.id);
-    if (!post) throw new HttpError(404, "Post not found");
-    // Only allow deleting drafts/queued/failed
-    if (post.status === "posted") throw new HttpError(400, "Cannot delete a posted tweet from here");
-    service.deletePost(body.id);
-    return { ok: true };
   });
 
   // ── Queue ─────────────────────────────────────────
@@ -129,27 +71,11 @@ export function registerTwitterRoutes(
     return service.listMentions({ account_id, unread_only });
   });
 
-  // ── Metrics & Sync ────────────────────────────────
-
-  post<{ account_id: string }>("/api/twitter/sync-metrics", async (body) => {
-    const synced = await publisher.syncMetrics(body.account_id);
-    return { ok: true, synced };
-  });
-
-  post<{ account_id: string }>("/api/twitter/check-mentions", async (body) => {
-    const added = await publisher.checkMentions(body.account_id);
-    return { ok: true, new_mentions: added };
-  });
+  // ── Metrics ───────────────────────────────────────
 
   server.route("GET", "/api/twitter/metrics", ({ query }) => {
     const account_id = query.get("account_id") ?? "";
     const days = parseInt(query.get("days") ?? "30", 10);
     return service.getMetricsTrend(account_id, days);
-  });
-
-  server.route("GET", "/api/twitter/performance", ({ query }) => {
-    const account_id = query.get("account_id") ?? "";
-    const days = parseInt(query.get("days") ?? "30", 10);
-    return service.getPerformanceReport(account_id, days);
   });
 }

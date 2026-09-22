@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
   type EventBus,
 } from "@kernl/extension-sdk";
 import { trainingMigrations } from "./migrations/001_training.js";
@@ -16,7 +15,7 @@ import { registerTrainingRoutes } from "./routes.js";
 
 export function createTrainingModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let service: TrainingService | null = null;
   let eventsRef: EventBus | null = null;
 
   return {
@@ -24,9 +23,8 @@ export function createTrainingModule(): ExtensibleModule {
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "training", trainingMigrations);
-      dbRef = ctx.sqlite;
       eventsRef = ctx.events;
-      const service = new TrainingService(ctx.sqlite);
+      service = new TrainingService(ctx.sqlite);
       tools = trainingTools(service);
     },
 
@@ -35,7 +33,7 @@ export function createTrainingModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? trainingRpcActions(dbRef) : [];
+      return service ? trainingRpcActions({ service, events: eventsRef }) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {
@@ -54,8 +52,8 @@ export function createTrainingModule(): ExtensibleModule {
           { url: "/api/dashboard/training", store: "training" },
         ],
         registerRoutes: (server) => {
-          if (dbRef) {
-            registerTrainingRoutes(server, dbRef, eventsRef ?? undefined);
+          if (service) {
+            registerTrainingRoutes(server, service, eventsRef ?? undefined);
           }
         },
       };

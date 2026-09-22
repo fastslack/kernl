@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { nutritionMigrations } from "./migrations/001_nutrition.js";
 import { NutritionService } from "./service.js";
@@ -14,15 +13,14 @@ import { nutritionRpcActions } from "./rpc-actions.js";
 
 export function createNutritionModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let service: NutritionService | null = null;
 
   return {
     name: "nutrition",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "nutrition", nutritionMigrations);
-      dbRef = ctx.sqlite;
-      const service = new NutritionService(ctx.sqlite);
+      service = new NutritionService(ctx.sqlite);
       tools = nutritionTools(service);
     },
 
@@ -31,7 +29,7 @@ export function createNutritionModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? nutritionRpcActions(dbRef) : [];
+      return service ? nutritionRpcActions(service) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {

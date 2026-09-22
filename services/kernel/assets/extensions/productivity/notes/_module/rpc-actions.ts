@@ -1,98 +1,80 @@
 /**
  * Notes RPC Actions — CRUD + search via mtwRequest.
+ *
+ * These have no HTTP twin. They used to be raw SQL: `notes.search` handed
+ * the user's text straight to FTS5 MATCH (a `#tag` or `web-office` was a
+ * syntax error), the tag filter was a substring LIKE, and the Neo4j mirror
+ * was skipped. Now each one calls NotesService, which sanitises the query
+ * and keeps the FTS index and the graph in step.
  */
 
-import crypto from "node:crypto";
-import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import type { NotesService } from "./service.js";
+import type { Note } from "./types.js";
 
-export function notesRpcActions(db: SqliteDb): RpcAction[] {
-  return [
-    {
-      name: "notes.list",
-      handler: async (args) => {
-        const tag = typeof args.tag === "string" ? args.tag : "";
-        const pinned = args.pinned === true ? 1 : undefined;
-        const limit = Math.min(200, Math.max(10, typeof args.limit === "number" ? args.limit : 50));
-        const offset = typeof args.offset === "number" ? args.offset : 0;
+/** A nullable reference: a string sets it, an explicit null clears it. */
+const nullable = (input: Record<string, unknown>, key: string): string | null | undefined =>
+  input[key] === null ? null : typeof input[key] === "string" ? input[key] as string : undefined;
 
-        let where = "1=1";
-        const params: unknown[] = [];
-        if (tag) { where += " AND tags LIKE ?"; params.push(`%${tag}%`); }
-        if (pinned !== undefined) { where += " AND pinned = ?"; params.push(pinned); }
+export function notesRpcActions(service: NotesService): RpcAction[] {
+  const requireId = (input: Record<string, unknown>): string => {
+    const { id } = pickArgs(input, { id: "string" });
+    if (!id) throw new HttpError(400, "Missing id");
+    return id;
+  };
 
-        const rows = db.prepare(
-          `SELECT id, title, body, tags, pinned, contact_id, task_id, created_at, updated_at
-           FROM notes WHERE ${where} ORDER BY pinned DESC, updated_at DESC LIMIT ? OFFSET ?`,
-        ).all(...params, limit, offset);
-        return { notes: rows };
-      },
+  return rpcActionsFrom({
+    "notes.list": (input) => {
+      const args = pickArgs(input, { tag: "string", pinned: "boolean", limit: "number", offset: "number" });
+      return {
+        notes: service.list({
+          tag: args.tag || undefined,
+          // Only `pinned: true` filters; anything else lists everything.
+          pinned: args.pinned === true ? true : undefined,
+          limit: Math.min(200, Math.max(10, args.limit ?? 50)),
+          offset: args.offset ?? 0,
+        }),
+      };
     },
-    {
-      name: "notes.create",
-      handler: async (args) => {
-        const title = typeof args.title === "string" ? args.title.trim() : "";
-        if (!title) throw new Error("Title required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO notes (id, title, body, tags, pinned, contact_id, task_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, title, args.body ?? "", args.tags ?? "", args.pinned ? 1 : 0, args.contact_id ?? null, args.task_id ?? null, now, now);
-        // Update FTS
-        try { db.prepare("INSERT INTO notes_fts (note_id, title, body, tags) VALUES (?, ?, ?, ?)").run(id, title, args.body ?? "", args.tags ?? ""); } catch {}
-        return { ok: true, id };
-      },
+
+    "notes.create": (input) => {
+      const args = pickArgs(input, { title: "string", body: "string", tags: "string", contact_id: "string", task_id: "string" });
+      const title = args.title?.trim() ?? "";
+      if (!title) throw new HttpError(400, "Title required");
+      const note = service.create({
+        ...args,
+        title,
+        pinned: !!input.pinned,
+        contact_id: args.contact_id || undefined,
+        task_id: args.task_id || undefined,
+      });
+      return { ok: true, id: note.id };
     },
-    {
-      name: "notes.update",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const fields: string[] = [];
-        const vals: unknown[] = [];
-        for (const f of ["title", "body", "tags", "contact_id", "task_id"]) {
-          if (args[f] !== undefined) { fields.push(`${f} = ?`); vals.push(args[f]); }
-        }
-        if (args.pinned !== undefined) { fields.push("pinned = ?"); vals.push(args.pinned ? 1 : 0); }
-        if (!fields.length) throw new Error("No fields");
-        const now = new Date().toISOString();
-        fields.push("updated_at = ?"); vals.push(now);
-        vals.push(id);
-        db.prepare(`UPDATE notes SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
-        // Update FTS
-        try {
-          const note = db.prepare("SELECT title, body, tags FROM notes WHERE id = ?").get(id) as { title: string; body: string; tags: string } | undefined;
-          if (note) {
-            db.prepare("DELETE FROM notes_fts WHERE note_id = ?").run(id);
-            db.prepare("INSERT INTO notes_fts (note_id, title, body, tags) VALUES (?, ?, ?, ?)").run(id, note.title, note.body, note.tags);
-          }
-        } catch {}
-        return { ok: true };
-      },
+
+    "notes.update": (input) => {
+      const id = requireId(input);
+      const changes: Partial<Pick<Note, "title" | "body" | "tags" | "pinned" | "contact_id" | "task_id">> =
+        pickArgs(input, { title: "string", body: "string", tags: "string" });
+      for (const key of ["contact_id", "task_id"] as const) {
+        const value = nullable(input, key);
+        if (value !== undefined) changes[key] = value;
+      }
+      if (input.pinned !== undefined) changes.pinned = input.pinned ? 1 : 0;
+      if (Object.keys(changes).length === 0) throw new HttpError(400, "No fields");
+      if (!service.update(id, changes)) throw new HttpError(404, "Note not found");
+      return { ok: true };
     },
-    {
-      name: "notes.delete",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        db.prepare("DELETE FROM notes WHERE id = ?").run(id);
-        try { db.prepare("DELETE FROM notes_fts WHERE note_id = ?").run(id); } catch {}
-        return { ok: true };
-      },
+
+    "notes.delete": (input) => {
+      if (!service.delete(requireId(input))) throw new HttpError(404, "Note not found");
+      return { ok: true };
     },
-    {
-      name: "notes.search",
-      handler: async (args) => {
-        const q = typeof args.q === "string" ? args.q.trim() : "";
-        if (!q) throw new Error("Query required");
-        const limit = Math.min(50, typeof args.limit === "number" ? args.limit : 20);
-        const rows = db.prepare(
-          `SELECT n.id, n.title, n.body, n.tags, n.pinned, n.created_at, n.updated_at
-           FROM notes_fts f JOIN notes n ON f.note_id = n.id
-           WHERE notes_fts MATCH ? ORDER BY rank LIMIT ?`,
-        ).all(q, limit);
-        return { notes: rows };
-      },
+
+    "notes.search": (input) => {
+      const args = pickArgs(input, { q: "string", limit: "number" });
+      const q = args.q?.trim() ?? "";
+      if (!q) throw new HttpError(400, "Query required");
+      return { notes: service.search(q, Math.min(50, args.limit ?? 20)) };
     },
-  ];
+  });
 }

@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
   type EventBus,
 } from "@kernl/extension-sdk";
 import { crmMigrations } from "./migrations/001_crm.js";
@@ -22,7 +21,6 @@ export interface CrmModule extends ExtensibleModule {
 export function createCrmModule(): CrmModule {
   let tools: ToolDefinition[] = [];
   let serviceRef: CrmService | null = null;
-  let dbRef: SqliteDb | null = null;
   let eventsRef: EventBus | null = null;
 
   return {
@@ -30,7 +28,6 @@ export function createCrmModule(): CrmModule {
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "crm", crmMigrations);
-      dbRef = ctx.sqlite;
       eventsRef = ctx.events;
 
       // Constraint creation runs against whatever graph driver is active at
@@ -66,15 +63,17 @@ export function createCrmModule(): CrmModule {
     },
 
     getRpcActions() {
-      return dbRef ? contactsRpcActions(dbRef) : [];
+      return serviceRef ? contactsRpcActions(serviceRef, eventsRef) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
         channels: [{ name: "crm", query: (db) => queryCrm(db) }],
         registerRoutes: (server) => {
-          if (serviceRef) registerCrmDashboardRoutes(server, serviceRef);
-          if (dbRef) registerContactsRoutes(server, dbRef, eventsRef ?? undefined);
+          if (serviceRef) {
+            registerCrmDashboardRoutes(server, serviceRef);
+            registerContactsRoutes(server, serviceRef, eventsRef ?? undefined);
+          }
         },
       };
     },

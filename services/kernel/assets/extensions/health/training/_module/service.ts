@@ -205,6 +205,15 @@ export class TrainingService {
     return set;
   }
 
+  /** Delete a workout and its sets. False when there was no such workout. */
+  deleteWorkout(id: string): boolean {
+    const run = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM training_sets WHERE workout_id = ?").run(id);
+      return this.db.prepare("DELETE FROM training_workouts WHERE id = ?").run(id).changes > 0;
+    });
+    return run();
+  }
+
   getWorkout(id: string): (TrainingWorkout & { sets: TrainingSet[] }) | undefined {
     const workout = this.db.prepare("SELECT * FROM training_workouts WHERE id = ?").get(id) as TrainingWorkout | undefined;
     if (!workout) return undefined;
@@ -345,6 +354,24 @@ export class TrainingService {
       });
     }
     return results;
+  }
+
+  /** Totals over the last `weeks` weeks as one period (getWeeklySummary splits them by week). */
+  getPeriodTotals(weeks = 4): {
+    period: { from: string; weeks: number };
+    workouts: { count: number; total_minutes: number | null; total_calories: number | null };
+    cardio: { count: number; total_minutes: number | null; total_distance: number | null };
+    prs: { count: number };
+  } {
+    const since = new Date(Date.now() - weeks * 7 * 86400000).toISOString().split("T")[0];
+    const workouts = this.db.prepare(
+      "SELECT COUNT(*) as count, SUM(duration_minutes) as total_minutes, SUM(calories_burned) as total_calories FROM training_workouts WHERE date >= ?",
+    ).get(since) as { count: number; total_minutes: number | null; total_calories: number | null };
+    const cardio = this.db.prepare(
+      "SELECT COUNT(*) as count, SUM(duration_minutes) as total_minutes, SUM(distance_m) as total_distance FROM training_cardio WHERE date >= ?",
+    ).get(since) as { count: number; total_minutes: number | null; total_distance: number | null };
+    const prs = this.db.prepare("SELECT COUNT(*) as count FROM training_prs WHERE date >= ?").get(since) as { count: number };
+    return { period: { from: since, weeks }, workouts, cardio, prs };
   }
 
   private seedDefaultExercises(): void {

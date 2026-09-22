@@ -48,29 +48,35 @@ export class NutritionService {
            food.serving_size_g,food.serving_unit,food.source,food.notes,
            food.created_at,food.updated_at);
 
+    // The index is external-content (content='nutrition_foods'), so its rowid
+    // has to be the food row's: that is how a match finds its way back.
     this.db.prepare(`
-      INSERT INTO nutrition_foods_fts(food_id, name, brand)
-      VALUES (?, ?, ?)
-    `).run(food.id, food.name, food.brand);
+      INSERT INTO nutrition_foods_fts(rowid, food_id, name, brand)
+      VALUES ((SELECT rowid FROM nutrition_foods WHERE id = ?), ?, ?, ?)
+    `).run(food.id, food.id, food.name, food.brand);
 
     return food;
   }
 
   searchFoods(query: string, limit = 20): NutritionFood[] {
-    const ids = this.db.prepare(`
-      SELECT food_id FROM nutrition_foods_fts WHERE nutrition_foods_fts MATCH ? LIMIT ?
-    `).all(query + "*", limit) as { food_id: string }[];
-
-    if (ids.length === 0) {
-      return this.db.prepare(
-        `SELECT * FROM nutrition_foods WHERE name LIKE ? OR brand LIKE ? ORDER BY name LIMIT ?`
-      ).all(`%${query}%`, `%${query}%`, limit) as NutritionFood[];
+    // Joined back on rowid: reading `food_id` out of an external-content index
+    // reads nutrition_foods.food_id, which does not exist, so the old
+    // `SELECT food_id FROM nutrition_foods_fts` threw on every search. A query
+    // FTS cannot parse (quotes, a bare "-") falls through to the LIKE search.
+    let foods: NutritionFood[] = [];
+    try {
+      foods = this.db.prepare(`
+        SELECT f.* FROM nutrition_foods_fts fts JOIN nutrition_foods f ON f.rowid = fts.rowid
+        WHERE nutrition_foods_fts MATCH ? LIMIT ?
+      `).all(query + "*", limit) as NutritionFood[];
+    } catch {
+      foods = [];
     }
+    if (foods.length > 0) return foods;
 
-    const placeholders = ids.map(() => "?").join(",");
     return this.db.prepare(
-      `SELECT * FROM nutrition_foods WHERE id IN (${placeholders})`
-    ).all(...ids.map(r => r.food_id)) as NutritionFood[];
+      `SELECT * FROM nutrition_foods WHERE name LIKE ? OR brand LIKE ? ORDER BY name LIMIT ?`
+    ).all(`%${query}%`, `%${query}%`, limit) as NutritionFood[];
   }
 
   getFoodByBarcode(barcode: string): NutritionFood | undefined {
@@ -244,11 +250,11 @@ export class NutritionService {
 
   // ── Water ─────────────────────────────────────────────────────────────────
 
-  logWater(amount_ml: number, notes?: string): NutritionWater {
+  logWater(amount_ml: number, notes?: string, date?: string): NutritionWater {
     const now = isoNow();
     const entry: NutritionWater = {
       id: newId(), amount_ml,
-      date: now.split("T")[0], time: now,
+      date: date ?? now.split("T")[0], time: now,
       notes: notes ?? "", created_at: now,
     };
     this.db.prepare(`
@@ -275,9 +281,11 @@ export class NutritionService {
     weight_kg?: number; body_fat_pct?: number; muscle_mass_kg?: number;
     water_pct?: number; waist_cm?: number; hip_cm?: number; chest_cm?: number;
     date?: string; notes?: string;
+    /** A measured BMI (a scale that reports it) wins over the estimate. */
+    bmi?: number;
   }): NutritionBodyStats {
     const now = isoNow();
-    const bmi = input.weight_kg ? Math.round((input.weight_kg / Math.pow(1.75, 2)) * 10) / 10 : null;
+    const bmi = input.bmi ?? (input.weight_kg ? Math.round((input.weight_kg / Math.pow(1.75, 2)) * 10) / 10 : null);
     const stats: NutritionBodyStats = {
       id: newId(), ...input,
       bmi,

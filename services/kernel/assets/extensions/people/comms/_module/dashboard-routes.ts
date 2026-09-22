@@ -8,8 +8,9 @@
  */
 import { existsSync, readFileSync } from "node:fs";
 import { basename } from "node:path";
-import { HttpError, isHttpError, type KernelHttpServer, type SqliteDb, type EventBus } from "@kernl/extension-sdk";
+import type { KernelHttpServer, SqliteDb, EventBus } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
+import { commsOperations } from "./dashboard-operations.js";
 
 /** Attachment types safe to render from the kernel's origin: none can run script. */
 const INLINE_ATTACHMENT_TYPES = new Set([
@@ -23,59 +24,17 @@ export function registerCommsDashboardRoutes(
   commsService: CommsService,
   events: EventBus,
 ): void {
-  /** A required, trimmed query parameter — 400 when missing or blank. */
-  const requireQuery = (query: URLSearchParams, name: string): string => {
-    const value = (query.get(name) ?? "").trim();
-    if (!value) throw new HttpError(400, `Missing query parameter '${name}'`);
-    return value;
-  };
-
-  /**
-   * Runs `fn`, answering any failure but a deliberate HttpError 400 with the
-   * error's message (`fallback` when what was thrown isn't an Error).
-   */
-  const asBadRequest = async <T>(fallback: (err: unknown) => string, fn: () => T | Promise<T>): Promise<T> => {
-    try {
-      return await fn();
-    } catch (err) {
-      if (isHttpError(err)) throw err;
-      throw new HttpError(400, err instanceof Error ? err.message : fallback(err));
-    }
-  };
-
-  // ── Comms detail ────────────────────────────────────────────
-  server.route("GET", "/api/dashboard/comms/detail", ({ query }) => {
-    const detail = commsService.getWithDetails(requireQuery(query, "id"));
-    if (!detail) throw new HttpError(404, "Communication not found");
-    return detail;
-  });
-
-  // ── Update ───────────────────────────────────────────────────
-  server.route<Record<string, unknown>>("PUT", "/api/dashboard/comms/update", ({ body }) => asBadRequest(String, () => {
-    const id = typeof body.id === "string" ? body.id : "";
-    if (!id) throw new HttpError(400, "Missing 'id' in body");
-    const changes: Record<string, unknown> = {};
-    for (const key of [
-      "subject", "body", "body_html", "status",
-      "recipients_to", "recipients_cc", "recipients_bcc",
-      "contact_id", "task_id",
-    ]) {
-      if (key in body && body[key] !== undefined) changes[key] = body[key];
-    }
-    const updated = commsService.update(id, changes);
-    if (!updated) throw new HttpError(400, "Cannot update (not found or not editable)");
-    events.emit("data.changed", { module: "comms", action: "update" });
-    return updated;
-  }));
-
-  // ── Campaign detail ─────────────────────────────────────────
-  server.route("GET", "/api/dashboard/comms/campaign", ({ query }) => {
-    const id = requireQuery(query, "id");
-    const campaign = commsService.getCampaign(id);
-    if (!campaign) throw new HttpError(404, "Campaign not found");
-    const recipients = commsService.getCampaignRecipients(id);
-    return { ...campaign, recipients };
-  });
+  // ── Operations shared with the WS RPC (dashboard-operations.ts) ──
+  // The dashboard reaches these through rpcOrCall, WS first and HTTP when
+  // the bridge is down, so both roads run the same function.
+  const op = commsOperations(commsService, events);
+  server.operation("GET", "/api/dashboard/comms/detail", op["comms.detail"]);
+  server.operation("PUT", "/api/dashboard/comms/update", op["comms.update"]);
+  server.operation("GET", "/api/dashboard/comms/campaign", op["comms.campaign"]);
+  server.operation("POST", "/api/dashboard/comms/create", op["comms.create"]);
+  server.operation("POST", "/api/dashboard/comms/send", op["comms.send"]);
+  server.operation("GET", "/api/dashboard/comms/thread", op["comms.thread"]);
+  server.operation("GET", "/api/dashboard/comms/search", op["comms.search"]);
 
   // ── Accounts ────────────────────────────────────────────────
   server.route("GET", "/api/dashboard/comms/accounts", () => commsService.listAccounts());
@@ -83,79 +42,6 @@ export function registerCommsDashboardRoutes(
   // ── Templates ───────────────────────────────────────────────
   server.route("GET", "/api/dashboard/comms/templates", ({ query }) =>
     commsService.listTemplates(query.get("category") ?? undefined));
-
-  // ── Create ──────────────────────────────────────────────────
-  server.route<Record<string, unknown>>("POST", "/api/dashboard/comms/create", ({ body }) => asBadRequest(() => "Bad request", () => {
-    const input: Record<string, unknown> = {};
-    for (const key of [
-      "channel", "subject", "body", "body_html",
-      "recipients_to", "recipients_cc", "recipients_bcc",
-      "contact_id", "account_id",
-    ]) {
-      if (key in body && typeof body[key] === "string") input[key] = body[key];
-    }
-    const comm = commsService.create(input as Parameters<typeof commsService.create>[0]);
-    events.emit("data.changed", { module: "comms", action: "create" });
-    return comm;
-  }));
-
-  // ── Send ────────────────────────────────────────────────────
-  server.route<{ id?: string }>("POST", "/api/dashboard/comms/send", ({ body }) => asBadRequest(() => "Send failed", () => {
-    const id = typeof body.id === "string" ? body.id.trim() : "";
-    if (!id) throw new HttpError(400, "Missing 'id' in body");
-    return commsService.sendEmail(id);
-  }));
-
-  // ── Thread (with contact-name enrichment in a single JOIN) ──
-  server.route("GET", "/api/dashboard/comms/thread", ({ query }) => {
-    const messages = commsService.getThread(requireQuery(query, "thread_id"));
-    const contactIds = [...new Set(messages.map((m) => m.contact_id).filter(Boolean))];
-    const contactNameMap = new Map<string, string>();
-    if (contactIds.length > 0) {
-      try {
-        const placeholders = contactIds.map(() => "?").join(",");
-        const rows = db.prepare(
-          `SELECT id, name FROM contacts WHERE id IN (${placeholders})`,
-        ).all(...contactIds) as { id: string; name: string }[];
-        for (const row of rows) contactNameMap.set(row.id, row.name);
-      } catch { /* contacts table may not exist */ }
-    }
-    return messages.map((m) => ({
-      ...m,
-      contact_name: (m.contact_id && contactNameMap.get(m.contact_id)) || "",
-    }));
-  });
-
-  // ── Search ──────────────────────────────────────────────────
-  server.route("GET", "/api/dashboard/comms/search", ({ query }) => {
-    const q = query.get("q") ?? "";
-    const channel = query.get("channel") ?? "";
-    const status = query.get("status") ?? "";
-    const direction = query.get("direction") ?? "";
-    const limit = Math.min(parseInt(query.get("limit") ?? "20", 10) || 20, 50);
-
-    const conditions: string[] = [];
-    const params: string[] = [];
-    if (q.trim()) {
-      const like = `%${q.trim()}%`;
-      conditions.push("(c.subject LIKE ? OR c.body LIKE ? OR c.recipients_to LIKE ?)");
-      params.push(like, like, like);
-    }
-    if (channel)   { conditions.push("c.channel = ?");   params.push(channel); }
-    if (status)    { conditions.push("c.status = ?");    params.push(status); }
-    if (direction) { conditions.push("c.direction = ?"); params.push(direction); }
-
-    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
-    return db.prepare(
-      `SELECT c.id, c.channel, c.subject, c.direction, c.status, c.recipients_to,
-              COALESCE(ct.name, '') as contact_name,
-              COALESCE(c.sent_at, c.updated_at) as updated_at
-       FROM communications c
-       LEFT JOIN contacts ct ON ct.id = c.contact_id
-       ${where}
-       ORDER BY c.updated_at DESC LIMIT ?`,
-    ).all(...params, limit);
-  });
 
   // ── Contact autocomplete (compose UI) ───────────────────────
   server.route("GET", "/api/dashboard/comms/contacts", ({ query }) => {

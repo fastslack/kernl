@@ -178,6 +178,48 @@ export class CrmService {
     return this.db.prepare(sql).all(...params) as Contact[];
   }
 
+  /** One page of the dashboard's contact list: a name/email/company search,
+   *  an optional relationship filter, most recently touched first. */
+  searchContacts(filters: { q?: string; relationship?: string; page?: number; limit?: number }): {
+    contacts: Contact[]; total: number; page: number; limit: number;
+  } {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(10, filters.limit ?? 50));
+    let where = "1=1";
+    const params: unknown[] = [];
+    if (filters.q) {
+      where += " AND (name LIKE ? OR email LIKE ? OR company LIKE ?)";
+      const p = `%${filters.q}%`;
+      params.push(p, p, p);
+    }
+    if (filters.relationship) { where += " AND relationship = ?"; params.push(filters.relationship); }
+
+    const total = (this.db.prepare(`SELECT COUNT(*) as c FROM contacts WHERE ${where}`).get(...params) as { c: number }).c;
+    const contacts = this.db.prepare(
+      `SELECT id, name, email, phone, company, relationship, notes, last_interaction, created_at, updated_at
+       FROM contacts WHERE ${where}
+       ORDER BY last_interaction DESC NULLS LAST, name COLLATE NOCASE
+       LIMIT ? OFFSET ?`,
+    ).all(...params, limit, (page - 1) * limit) as Contact[];
+    return { contacts, total, page, limit };
+  }
+
+  /** Delete a contact and its interaction log (interactions reference the
+   *  contact without ON DELETE CASCADE, so they go first). */
+  deleteContact(id: string): boolean {
+    if (!this.getById(id)) return false;
+    this.db.transaction(() => {
+      this.db.prepare("DELETE FROM interactions WHERE contact_id = ?").run(id);
+      this.db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
+    })();
+
+    const graph = this.getGraph();
+    if (graph?.capabilities.cypher) {
+      graph.run("MATCH (p:Person {id: $id}) DETACH DELETE p", { id }).catch(() => {});
+    }
+    return true;
+  }
+
   /** Patch a contact in place. Only writes the fields actually supplied. */
   updateContact(id: string, patch: Partial<Omit<Contact, "id" | "created_at">>): boolean {
     const allowed: Array<keyof typeof patch> = [

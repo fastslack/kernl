@@ -1,12 +1,10 @@
-import { mkdirSync, readFileSync, existsSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { writeFile as fsWriteFile } from "node:fs/promises";
-import { resolve, basename } from "node:path";
+import { resolve } from "node:path";
 import crypto from "node:crypto";
-import type { IncomingMessage } from "node:http";
-import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
-import { formatUptime } from "./format.js";
 import type { SystemRegistry } from "../../core/system-registry.js";
 import type { LifeService } from "../../core/types/extensions/index.js";
 import type { KernelConfig } from "../../core/config.js";
@@ -22,15 +20,10 @@ import type { KernelConfig } from "../../core/config.js";
 import { log } from "../../core/logger.js";
 import { getGlobalPiiFilter } from "../../core/pii-filter.js";
 import {
-  // Core KPI composers — dashboard página principal
-  queryKpis,
-  queryFullDashboard,
   type DashboardChannelReader,
-  // Cross-module aggregators — they don't belong to any single module
-  queryAgenda,
-  queryCrossModuleIntel,
+  // Cross-module aggregators (KPIs, agenda, cross-intel, timeline) are
+  // operations shared with the WS RPC: see operations.ts.
   queryCalendar,
-  querySystemTimeline,
   // Dashboard-internal query kept under its legacy kebab-case URL
   // (`/web-intel`). See the comment below where it is registered.
   queryWebIntel,
@@ -40,13 +33,12 @@ import {
 } from "./api.js";
 import type { Notifier } from "../../core/notify/notifier.js";
 import type { EventBus } from "../../core/event-bus.js";
+import { dashboardOperations, dateRange, startedAt } from "./operations.js";
 
 // ── Domain route modules ──────────────────────────
 // (All domain routes are now self-registered via their extension's
 //  getDashboardDescriptor().registerRoutes. This dashboard module only
 //  serves cross-cutting routes like /api/dashboard/agenda and life/notifs.)
-
-const startedAt = Date.now();
 
 export function registerDashboardRoutes(
   server: KernelHttpServer,
@@ -62,19 +54,6 @@ export function registerDashboardRoutes(
 ): void {
   // Email-analysis suggestion routes are now self-registered by the comms
   // extension via its `getDashboardDescriptor().registerRoutes` hook.
-
-  server.route("GET", "/api/health", () => ({
-    status: "ok",
-    uptimeMs: Date.now() - startedAt,
-    uptimeFormatted: formatUptime(Date.now() - startedAt),
-    timezone: config?.timezone ?? process.env.TIMEZONE ?? "UTC",
-    _debug_tz: { env: process.env.TIMEZONE, configTz: config?.timezone, lifeTz: config?.life?.timezone },
-    services: {
-      sqlite: true,
-      graph: !!getGraph()?.capabilities.cypher,
-      dashboard: true,
-    },
-  }));
 
   // ── Prometheus metrics ───────────────────────────
   server.get("/api/metrics", (_req, res) => {
@@ -163,28 +142,9 @@ export function registerDashboardRoutes(
     return { path: destPath, filename: destName, size: buf.length, mimeType: mime };
   });
 
-  // ── Route helpers ─────────────────────────────────
-  // Eliminates repeated 7-line route handlers for dashboard query endpoints.
-
-  /** Register a GET route that always returns data (query never returns null). */
-  function directRoute(path: string, queryFn: (db: SqliteDb) => unknown): void {
-    server.route("GET", path, () => queryFn(db));
-  }
-
-  /** Register a GET route for a nullable query — returns { available: false } when null. */
-  function nullableRoute(path: string, queryFn: (db: SqliteDb) => object | null): void {
-    server.route("GET", path, () => {
-      const data = queryFn(db);
-      if (data === null) return { available: false };
-      return { available: true, ...(data as Record<string, unknown>) };
-    });
-  }
-
   // ── Direct query routes (never null) ──
   // `/api/dashboard/{tasks,crm,reminders,shopping}` are channels registered by
   // their extensions; DashboardRegistry.registerAllRoutes() serves them.
-  server.route("GET", "/api/dashboard", () => queryFullDashboard(db, readChannel));
-  directRoute("/api/dashboard/kpis", queryKpis);
 
   // ── Delegated domain routes ──────────────────────
   // Moved to extensions:
@@ -197,9 +157,8 @@ export function registerDashboardRoutes(
 
 
 
-  // Cross-module aggregators — se quedan centralizados en dashboard
-  directRoute("/api/dashboard/agenda", queryAgenda);
-  nullableRoute("/api/dashboard/cross-intel", queryCrossModuleIntel);
+  // Cross-module aggregators (/api/dashboard, kpis, agenda, cross-intel) are
+  // operations shared with the WS RPC — bound at the end of this function.
 
   // Migrados a self-registering modules (DashboardRegistry auto-genera
   // /api/dashboard/<channel_name>). Reads the module's `channels[]` to
@@ -215,7 +174,10 @@ export function registerDashboardRoutes(
   // remover estos aliases.
   // home: removed — extracted as an extension; its "home"/"house" channels are
   // auto-registra el DashboardRegistry.
-  nullableRoute("/api/dashboard/web-intel", queryWebIntel);
+  server.route("GET", "/api/dashboard/web-intel", () => {
+    const data = queryWebIntel(db);
+    return data ? { available: true, ...data } : { available: false };
+  });
   // time-tracking is an extension: this alias reads its `timeTracking` channel
   // instead of importing its query, with the same `{ available }` envelope.
   server.route("GET", "/api/dashboard/time-tracking", async () => {
@@ -230,22 +192,6 @@ export function registerDashboardRoutes(
   // self-registering modules (DashboardRegistry).
 
 
-
-  // ── PII filter status ──────────────────────────
-  server.route("GET", "/api/pii/status", () => {
-    const filter = getGlobalPiiFilter();
-    const cfg = filter.getConfig();
-    return {
-      enabled: cfg.enabled,
-      redactEmails: cfg.redactEmails,
-      redactPhones: cfg.redactPhones,
-      redactCreditCards: cfg.redactCreditCards,
-      redactIbans: cfg.redactIbans,
-      redactNames: cfg.redactNames,
-      placeholder: cfg.placeholder,
-      knownNamesCount: cfg.knownNames.size,
-    };
-  });
 
   server.route<{ text: string }>("POST", "/api/pii/detect", ({ body }) => {
     if (!body.text) throw new HttpError(400, "text required");
@@ -267,185 +213,52 @@ export function registerDashboardRoutes(
   });
 
 
-  /** `?start=` (defaults to today) and `?days=` clamped to 365, 150 when absent or not a number. */
-  const dateRange = (query: URLSearchParams): [string, number] => [
-    query.get("start") ?? new Date().toISOString().split("T")[0],
-    Math.min(parseInt(query.get("days") ?? "150", 10) || 150, 365),
-  ];
-
   // ── Calendar ──────────────────────────────────
+  // `?start=` (defaults to today) and `?days=` clamped to 365, 150 when absent.
+  // The `dashboard.calendar` RPC belongs to the events extension.
   server.route("GET", "/api/dashboard/calendar", ({ query }) => {
-    const [startParam, dayCount] = dateRange(query);
+    const [startParam, dayCount] = dateRange(Object.fromEntries(query));
     return queryCalendar(db, startParam, dayCount, sysRegistry);
   });
 
-  // ── System Timeline (Agenda view) ──────────────
-  server.route("GET", "/api/dashboard/system-timeline", ({ query }) => {
-    const [startParam, dayCount] = dateRange(query);
-    return querySystemTimeline(db, startParam, dayCount, sysRegistry);
-  });
-
-
-  // ── System Agenda ──────────────────────────────
-  server.route("GET", "/api/dashboard/system-agenda", () => {
-    if (!sysRegistry) return { available: false };
-    return {
-      available: true,
-      processes: sysRegistry.list(),
-      stats: sysRegistry.getStats(),
-      uptimeMs: Date.now() - startedAt,
-      uptimeFormatted: formatUptime(Date.now() - startedAt),
-    };
-  });
-
-
-  // ── Notification API ────────────────────────────────────────────
-
-  const requireNotifier = (): Notifier => {
-    if (!notifier) throw new HttpError(400, "Notifications not configured");
-    return notifier;
-  };
-
-  /** GET /api/notifications — list notifications */
-  server.route("GET", "/api/notifications", ({ query }) => {
-    if (!notifier) return { notifications: [], unread: 0 };
-    const unreadOnly = query.get("unread") === "1";
-    const limit = parseInt(query.get("limit") ?? "50", 10);
-    const notifications = notifier.getNotifications({ unreadOnly, limit });
-    const unread = notifier.getUnreadCount();
-    return { notifications, unread };
-  });
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The dashboard reaches these through rpcOrCall, WS first and HTTP when
+  // the bridge is down, so both roads run the same function.
+  const op = dashboardOperations({ db, readChannel, getGraph, systemRegistry: sysRegistry, config, notifier, events });
+  const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
+  ([
+    ["GET", "/api/health", "server.health"],
+    ["GET", "/api/dashboard", "dashboard.full"],
+    ["GET", "/api/dashboard/kpis", "dashboard.kpis"],
+    ["GET", "/api/dashboard/agenda", "dashboard.agenda"],
+    ["GET", "/api/dashboard/cross-intel", "dashboard.crossIntel"],
+    ["GET", "/api/dashboard/system-timeline", "dashboard.systemTimeline"],
+    ["GET", "/api/dashboard/system-agenda", "dashboard.systemAgenda"],
+    ["GET", "/api/pii/status", "pii.status"],
+    ["GET", "/api/notifications", "notifications.list"],
+    ["GET", "/api/channels", "channels.list"],
+    ["GET", "/api/channels/schema", "channels.schema"],
+    ["POST", "/api/channels/config", "channels.config.save"],
+    ["POST", "/api/channels/start", "channels.start"],
+    ["POST", "/api/channels/stop", "channels.stop"],
+    ["POST", "/api/channels/test", "channels.test"],
+    ["GET", "/api/channels/qr", "channels.qr"],
+    ["POST", "/api/channels/whatsapp/send", "channels.whatsapp.send"],
+  ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
   /**
-   * POST /api/notifications/read — mark one or all as read. Without an id this
-   * marks every notification read, so an empty body must not reach it: only
-   * an explicit `{}` means "all".
+   * POST /api/notifications/read — mark one (`{ id }`) or all (`{}`) as read.
+   * Without an id this marks every notification read, so an empty body must
+   * not reach it: only an explicit `{}` means "all". An id that is there but
+   * not a usable string is a 400, never "all".
    */
-  server.route<{ id?: string }>("POST", "/api/notifications/read", ({ body }) => {
-    const n = requireNotifier();
-    if (body.id) {
-      n.markRead(body.id);
-    } else {
-      n.markAllRead();
-    }
-    events?.emit("data.changed", { module: "notifications", action: "read" });
-    return { success: true, unread: n.getUnreadCount() };
-  }, { requireBody: true });
+  server.operation("POST", "/api/notifications/read", (input) =>
+    input.id === undefined ? op["notifications.markAllRead"](input) : op["notifications.markRead"](input),
+    { requireBody: true });
 
-  /** DELETE /api/notifications?id= — delete a notification (no id: purge those older than 30 days) */
-  server.route("DELETE", "/api/notifications", ({ query }) => {
-    const n = requireNotifier();
-    const id = query.get("id");
-    if (id) {
-      n.deleteNotification(id);
-    } else {
-      n.purgeOld(30);
-    }
-    events?.emit("data.changed", { module: "notifications", action: "delete" });
-    return { success: true, unread: n.getUnreadCount() };
-  });
-
-  // ── Channel Management ──────────────────────────────────
-
-  const registry = notifier?.getRegistry();
-
-  const requireRegistry = () => {
-    if (!registry) throw new HttpError(503, "Registry not available");
-    return registry;
-  };
-
-  /** GET /api/channels — list all channel providers with status */
-  server.route("GET", "/api/channels", () => ({ channels: requireRegistry().getStatuses() }));
-
-  /** GET /api/channels/schema?id= — get config form schema for a channel */
-  server.route("GET", "/api/channels/schema", ({ query }) => {
-    const reg = requireRegistry();
-    const id = query.get("id");
-    if (!id) throw new HttpError(400, "Missing ?id= parameter");
-    const schema = reg.getConfigSchema(id);
-    if (!schema) throw new HttpError(404, `No provider "${id}"`);
-    const config2 = reg.loadConfig(id) ?? {};
-    return { id, schema, config: config2 };
-  });
-
-  /** POST /api/channels/config — save config for a channel */
-  server.route<{ id: string; config: Record<string, unknown> }>("POST", "/api/channels/config", ({ body }) => {
-    const reg = requireRegistry();
-    if (!body.id || !body.config) throw new HttpError(400, "Missing id or config");
-    const saved = reg.saveConfig(body.id, body.config);
-    if (!saved) throw new HttpError(404, `Channel "${body.id}" not found in marketplace`);
-    return { success: true };
-  });
-
-  /** POST /api/channels/start — start a channel provider */
-  server.route<{ id: string }>("POST", "/api/channels/start", async ({ body }) => {
-    const reg = requireRegistry();
-    if (!body.id) throw new HttpError(400, "Missing id");
-    // Also update marketplace status to 'active'
-    db.prepare("UPDATE marketplace_items SET status = 'active', updated_at = ? WHERE slug = ? AND type = 'channel'")
-      .run(new Date().toISOString(), body.id);
-    const ok = await reg.startProvider(body.id);
-    if (!ok) {
-      const error = `Failed to start "${body.id}"`;
-      throw new HttpError(400, error, {
-        error,
-        detail: reg.lastStartError || "Unknown error — check server logs",
-      });
-    }
-    return { success: true, status: reg.getProvider(body.id)?.getStatus() };
-  });
-
-  /** POST /api/channels/stop — stop a channel provider */
-  server.route<{ id: string }>("POST", "/api/channels/stop", async ({ body }) => {
-    const reg = requireRegistry();
-    if (!body.id) throw new HttpError(400, "Missing id");
-    // Also update marketplace status to 'installed' (not active)
-    db.prepare("UPDATE marketplace_items SET status = 'installed', updated_at = ? WHERE slug = ? AND type = 'channel'")
-      .run(new Date().toISOString(), body.id);
-    const ok = await reg.stopProvider(body.id);
-    return { success: true, stopped: ok };
-  });
-
-  /** POST /api/channels/test — send a test notification through a channel */
-  server.route<{ id: string }>("POST", "/api/channels/test", async ({ body }) => {
-    const reg = requireRegistry();
-    if (!body.id) throw new HttpError(400, "Missing id");
-    const provider = reg.getProvider(body.id);
-    if (!provider?.isReady()) throw new HttpError(400, `Provider "${body.id}" not running`);
-    let ok: boolean;
-    if (provider.sendTest) {
-      ok = await provider.sendTest();
-    } else {
-      ok = await provider.sendNotification({ title: `Kernl test — ${provider.name}`, body: "Channel working!" });
-    }
-    return { success: ok };
-  });
-
-  /** GET /api/channels/qr — get QR code for WhatsApp pairing */
-  server.route("GET", "/api/channels/qr", () => {
-    const provider = requireRegistry().getProvider("whatsapp") as any;
-    if (!provider) throw new HttpError(404, "WhatsApp provider not registered");
-    const qr = provider.getQr?.() ?? null;
-    const status = provider.getStatus?.() ?? {};
-    return {
-      qr,
-      connected: status.connected ?? false,
-      phoneNumber: status.info?.phoneNumber ?? null,
-      error: status.error ?? null,
-    };
-  });
-
-  /** POST /api/channels/whatsapp/send — send a WhatsApp message (for testing from dashboard) */
-  server.route<{ phone: string; message: string }>("POST", "/api/channels/whatsapp/send", async ({ body }) => {
-    const reg = requireRegistry();
-    if (!body.phone || !body.message) throw new HttpError(400, "Missing phone or message");
-    const provider = reg.getProvider("whatsapp") as any;
-    if (!provider?.isReady()) throw new HttpError(400, "WhatsApp not connected");
-    const phone = body.phone.replace(/[\s\-\+\(\)]/g, "");
-    const jid = phone.includes("@") ? phone : `${phone}@s.whatsapp.net`;
-    const ok = await provider.sendTo(jid, { title: "", body: body.message });
-    return { success: ok, jid };
-  });
+  /** DELETE /api/notifications?id= — delete one; no id: purge those older than `?daysOld=` (30). */
+  server.operation("DELETE", "/api/notifications", (input) =>
+    input.id === undefined ? op["notifications.deleteOld"](input) : op["notifications.delete"](input));
 
   const userTables = () => db.prepare(
     "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND name NOT LIKE '_migration%'"

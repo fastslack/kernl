@@ -192,6 +192,20 @@ export class EventsService {
     return this.get(id);
   }
 
+  /**
+   * Move an event to a new start, keeping its duration: end_at shifts by the
+   * same delta. An event without an end keeps none.
+   */
+  reschedule(id: string, startAt: string): EventWithSummary | null {
+    const row = this.sqlite
+      .prepare("SELECT start_at, end_at FROM events WHERE id = ?")
+      .get(id) as { start_at: string | null; end_at: string | null } | undefined;
+    if (!row) return null;
+    const changes: UpdateEventInput = { start_at: startAt };
+    if (row.start_at && row.end_at) changes.end_at = this.shiftDateTime(row.start_at, row.end_at, startAt);
+    return this.update(id, changes);
+  }
+
   list(filter: ListEventsFilter = {}): EventWithSummary[] {
     const conditions: string[] = [];
     const values: unknown[] = [];

@@ -3,38 +3,27 @@
  * REST endpoints for managing the skill registry
  */
 
-import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import type { SkillRegistry } from "../../skills/registry.js";
-import type { SkillPermission } from "../../skills/types.js";
 import { log } from "../../core/logger.js";
+import { skillOperations } from "./operations.js";
 
 export function registerSkillRoutes(
   server: KernelHttpServer,
   skillRegistry: SkillRegistry,
 ): void {
 
-  // GET /api/skills — list all installed skills
-  server.route("GET", "/api/skills", () => {
-    const skills = skillRegistry.getAllSkills();
-    const result = Array.from(skills.entries()).map(([id, state]) => ({
-      id,
-      name: state.manifest.name,
-      description: state.manifest.description,
-      version: state.manifest.version,
-      author: state.manifest.author,
-      homepage: state.manifest.homepage ?? null,
-      icon: state.manifest.icon ?? null,
-      category: state.manifest.category ?? "custom",
-      status: state.status,
-      permissions: state.manifest.permissions,
-      grantedPermissions: state.config.grantedPermissions,
-      tags: state.manifest.tags ?? [],
-      toolCount: state.skill ? state.skill.tools.length : 0,
-      loadedAt: state.loadedAt ?? null,
-      error: state.error ?? null,
-    }));
-    return { skills: result, total: result.length };
-  });
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The RPC action and the route are one function, so both roads answer alike.
+  const op = skillOperations(skillRegistry);
+  const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
+  ([
+    ["GET", "/api/skills", "skills.list"],
+    ["POST", "/api/skills/install", "skills.install"],
+    ["POST", "/api/skills/enable", "skills.enable"],
+    ["POST", "/api/skills/disable", "skills.disable"],
+    ["DELETE", "/api/skills/uninstall", "skills.uninstall"],
+  ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
   // GET /api/skills/detail?id= — get single skill
   server.route("GET", "/api/skills/detail", ({ query }) => {
@@ -64,111 +53,6 @@ export function registerSkillRoutes(
       loadedAt: state.loadedAt ?? null,
       error: state.error ?? null,
     };
-  });
-
-  // POST /api/skills/install — install from local, npm, git, or bundled
-  server.route<{
-    type: string;
-    path?: string;
-    package?: string;
-    version?: string;
-    url?: string;
-    ref?: string;
-    id?: string;
-    autoEnable?: boolean;
-  }>("POST", "/api/skills/install", async ({ body }) => {
-    if (!body.type) throw new HttpError(400, "type required (local|npm|git|bundled)");
-
-    // For bundled skills already registered in the registry, just enable them
-    if (body.type === "bundled" && body.id) {
-      const existing = skillRegistry.getSkill(body.id);
-      if (existing) {
-        if (body.autoEnable !== false && existing.status !== "enabled") {
-          // Auto-grant all required permissions so enable succeeds
-          const needed = existing.manifest.permissions as SkillPermission[];
-          if (needed.length > 0) skillRegistry.grantPermissions(body.id, needed);
-          await skillRegistry.enableSkill(body.id);
-        }
-        const state = skillRegistry.getSkill(body.id);
-        return { success: true, skillId: body.id, status: state?.status ?? "installed" };
-      }
-    }
-
-    let source: Parameters<typeof skillRegistry.install>[0];
-    switch (body.type) {
-      case "local":
-        if (!body.path) throw new HttpError(400, "path required for local install");
-        source = { type: "local", path: body.path };
-        break;
-      case "npm":
-        if (!body.package) throw new HttpError(400, "package required for npm install");
-        source = { type: "npm", package: body.package, version: body.version };
-        break;
-      case "git":
-        if (!body.url) throw new HttpError(400, "url required for git install");
-        source = { type: "git", url: body.url, ref: body.ref };
-        break;
-      case "bundled":
-        if (!body.id) throw new HttpError(400, "id required for bundled install");
-        source = { type: "bundled", id: body.id };
-        break;
-      default:
-        throw new HttpError(400, `Unknown install type: ${body.type}`);
-    }
-
-    const skillId = await skillRegistry.install(source);
-    if (!skillId) throw new HttpError(500, "Installation failed — check server logs");
-
-    // Auto-enable if requested: first grant all required permissions
-    if (body.autoEnable !== false) {
-      const freshState = skillRegistry.getSkill(skillId);
-      if (freshState) {
-        const needed = freshState.manifest.permissions as SkillPermission[];
-        if (needed.length > 0) skillRegistry.grantPermissions(skillId, needed);
-      }
-      await skillRegistry.enableSkill(skillId);
-    }
-
-    const state = skillRegistry.getSkill(skillId);
-    return {
-      success: true,
-      skillId,
-      status: state?.status ?? "installed",
-    };
-  });
-
-  // POST /api/skills/enable — enable a skill
-  server.route<{ id: string; grantPermissions?: boolean }>("POST", "/api/skills/enable", async ({ body }) => {
-    if (!body.id) throw new HttpError(400, "id required");
-
-    // Auto-grant all required permissions if requested (default: true for convenience)
-    const autoGrant = body.grantPermissions !== false;
-    if (autoGrant) {
-      const state = skillRegistry.getSkill(body.id);
-      if (state?.manifest.permissions) {
-        skillRegistry.grantPermissions(body.id, state.manifest.permissions);
-      }
-    }
-
-    if (!(await skillRegistry.enableSkill(body.id))) {
-      throw new HttpError(400, skillRegistry.getSkill(body.id)?.error ?? "Failed to enable skill");
-    }
-    return { success: true };
-  });
-
-  // POST /api/skills/disable — disable a skill
-  server.route<{ id: string }>("POST", "/api/skills/disable", async ({ body }) => {
-    if (!body.id) throw new HttpError(400, "id required");
-    await skillRegistry.disableSkill(body.id);
-    return { success: true };
-  });
-
-  // DELETE /api/skills/uninstall?id= — uninstall a skill
-  server.route("DELETE", "/api/skills/uninstall", async ({ query }) => {
-    const id = query.get("id");
-    if (!id) throw new HttpError(400, "id required");
-    if (!(await skillRegistry.uninstall(id))) throw new HttpError(404, "Skill not found or failed to remove");
-    return { success: true };
   });
 
   // POST /api/skills/permissions — grant/revoke permissions

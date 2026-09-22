@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
   type EventBus,
 } from "@kernl/extension-sdk";
 import { tasksMigrations } from "./migrations/001_tasks.js";
@@ -21,7 +20,6 @@ export interface TasksModule extends ExtensibleModule {
 export function createTasksModule(): TasksModule {
   let tools: ToolDefinition[] = [];
   let serviceRef: TaskService | null = null;
-  let dbRef: SqliteDb | null = null;
   let eventsRef: EventBus | null = null;
 
   return {
@@ -38,7 +36,6 @@ export function createTasksModule(): TasksModule {
 
       const service = new TaskService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;
-      dbRef = ctx.sqlite;
       eventsRef = ctx.events;
       tools = taskTools(service);
 
@@ -52,14 +49,14 @@ export function createTasksModule(): TasksModule {
     getService() { return serviceRef; },
 
     getRpcActions() {
-      return serviceRef ? tasksRpcActions(serviceRef) : [];
+      return serviceRef ? tasksRpcActions(serviceRef, eventsRef) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
         channels: [{ name: "tasks", query: (db) => queryTasks(db) }],
         registerRoutes: (server) => {
-          if (dbRef && eventsRef) registerTasksRoutes(server, dbRef, eventsRef);
+          if (serviceRef && eventsRef) registerTasksRoutes(server, serviceRef, eventsRef);
         },
       };
     },

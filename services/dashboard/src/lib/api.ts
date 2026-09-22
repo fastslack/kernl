@@ -595,7 +595,7 @@ export function startGoogleAuth() {
 // Live Google/Gmail connection health: { status, needsReauth, authUrl, ... }.
 // Surfaces a dead refresh token (needs_reauth) so the UI can prompt a reconnect.
 export function fetchGoogleSyncStatus() {
-	return rpcOrCall('google.status', {}, () => apiFetch('/api/email-accounts/google-profile'));
+	return rpcOrCall('google.status', {}, () => apiFetch('/api/google/status'));
 }
 
 export function revokeGoogleAuth() {

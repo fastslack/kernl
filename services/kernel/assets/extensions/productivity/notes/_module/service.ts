@@ -181,6 +181,7 @@ export class NotesService {
     task_id?: string;
     pinned?: boolean;
     limit?: number;
+    offset?: number;
   }): Note[] {
     let sql = "SELECT * FROM notes WHERE 1=1";
     const params: unknown[] = [];
@@ -201,6 +202,7 @@ export class NotesService {
 
     sql += " ORDER BY pinned DESC, updated_at DESC";
     if (filters?.limit) { sql += " LIMIT ?"; params.push(filters.limit); }
+    if (filters?.limit && filters.offset) { sql += " OFFSET ?"; params.push(filters.offset); }
 
     return this.db.prepare(sql).all(...params) as Note[];
   }

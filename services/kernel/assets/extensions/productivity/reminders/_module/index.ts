@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
   type EventBus,
 } from "@kernl/extension-sdk";
 import { remindersMigrations } from "./migrations/001_reminders.js";
@@ -23,7 +22,6 @@ export function createRemindersModule(): RemindersModule {
   let tools: ToolDefinition[] = [];
   let scheduler: ReminderScheduler | null = null;
   let serviceRef: ReminderService | null = null;
-  let dbRef: SqliteDb | null = null;
   let eventsRef: EventBus | null = null;
 
   return {
@@ -40,7 +38,6 @@ export function createRemindersModule(): RemindersModule {
 
       const service = new ReminderService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;
-      dbRef = ctx.sqlite;
       eventsRef = ctx.events;
 
       tools = reminderTools(service, ctx.notifier);
@@ -70,14 +67,14 @@ export function createRemindersModule(): RemindersModule {
     getService() { return serviceRef; },
 
     getRpcActions() {
-      return serviceRef ? remindersRpcActions(serviceRef) : [];
+      return serviceRef ? remindersRpcActions(serviceRef, eventsRef) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
         channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
         registerRoutes: (server) => {
-          if (dbRef && eventsRef) registerRemindersRoutes(server, dbRef, eventsRef);
+          if (serviceRef && eventsRef) registerRemindersRoutes(server, serviceRef, eventsRef);
         },
       };
     },

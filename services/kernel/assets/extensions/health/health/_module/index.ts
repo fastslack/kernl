@@ -4,7 +4,6 @@ import {
   type ModuleContext,
   type ToolDefinition,
   runMigrations,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { healthMigrations } from "./migrations/001_health.js";
 import { HealthService } from "./service.js";
@@ -14,15 +13,14 @@ import { healthRpcActions } from "./rpc-actions.js";
 
 export function createHealthModule(): ExtensibleModule {
   let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
+  let service: HealthService | null = null;
 
   return {
     name: "health",
 
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "health", healthMigrations);
-      dbRef = ctx.sqlite;
-      const service = new HealthService(ctx.sqlite, () => ctx.graph);
+      service = new HealthService(ctx.sqlite, () => ctx.graph);
       tools = healthTools(service);
     },
 
@@ -31,7 +29,7 @@ export function createHealthModule(): ExtensibleModule {
     },
 
     getRpcActions() {
-      return dbRef ? healthRpcActions(dbRef) : [];
+      return service ? healthRpcActions(service) : [];
     },
 
     getDashboardDescriptor(): DashboardDescriptor {

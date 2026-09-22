@@ -9,6 +9,7 @@ import type { KernelConfig } from "./config.js";
 import { resolveSecureBind } from "./config.js";
 import { isAuthenticated, isAuthExemptPath, isPeerAuthenticatedPath } from "./auth.js";
 import { HttpError, isHttpError } from "../sdk/http-error.js";
+import type { Operation } from "../sdk/args.js";
 
 export { HttpError, isHttpError };
 
@@ -277,6 +278,20 @@ export class KernelHttpServer {
     // Vary: the same URL answers differently per Origin — caches must not
     // hand one origin's allowance to another.
     return { "Access-Control-Allow-Origin": origin, Vary: "Origin" };
+  }
+
+  /**
+   * A route for an operation shared with an RPC action (see `Operation`). Its
+   * input is the query, the JSON body and the path params in one object,
+   * later ones winning, so `PUT /x/:id` and the RPC's `{ id, ... }` arrive
+   * the same.
+   */
+  operation(method: RouteMethod, path: string, op: Operation, opts?: RouteOptions): void {
+    this.route<unknown>(method, path, ({ query, body, params }) => op({
+      ...Object.fromEntries(query),
+      ...(typeof body === "object" && body !== null && !Array.isArray(body) ? body as Record<string, unknown> : {}),
+      ...params,
+    }), opts);
   }
 
   /** `emptyAs`: resolve to this instead of rejecting when the body is empty. */
