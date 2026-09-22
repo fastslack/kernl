@@ -20,6 +20,7 @@ import {
   resolveProviderFor,
   type ChatLlmProvider,
 } from "../../core/llm/chat-adapters.js";
+import { runWithFallbackChain } from "../../core/llm/fallback-chain.js";
 import { KnowledgeService } from "./knowledge-service.js";
 import { ContextEngine, type RetrievedContext } from "./context-engine.js";
 import { LocalEmbeddings } from "../../core/embeddings/local.js";
@@ -597,47 +598,18 @@ export class ChatService {
         ? recentMessages.slice(-historyLimit)
         : recentMessages;
 
-    // 4. Build dynamic system prompt with today's date
-    const lang = this.config.language;
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const todayLine = promptTodayDate(lang, todayStr);
-    // Already-stamped check covers both ES/EN flavors so flipping the kernel
-    // language mid-process doesn't double-stamp.
-    const alreadyStamped = this.systemPrompt.includes("Today's date") ||
-      this.systemPrompt.includes("Fecha de hoy");
-    const dynamicSystemPrompt = alreadyStamped
-      ? this.systemPrompt
-      : `${this.systemPrompt}\n${todayLine}`;
+    // 4. Build the system prompt (SOUL + date stamp + retrieved context +
+    //    recall + identity guard). System messages go via the system param
+    //    (not in messages array for Claude).
+    const activeProvider = episode.llm_provider || this.defaultProvider;
+    const systemText = this.buildSystemPrompt({
+      contextText: context?.contextText,
+      identityProvider: activeProvider,
+      modelHint: episode.llm_model ? ` (${episode.llm_model})` : "",
+    });
 
     // 5. Assemble LLM messages
     const llmMessages: ChatMessage[] = [];
-
-    // System messages go via the system param (not in messages array for Claude)
-    const systemParts: string[] = [dynamicSystemPrompt];
-    if (context?.contextText) {
-      systemParts.push(context.contextText);
-    }
-    // Inject distilled durable facts (session_stop output). This is what
-    // makes the memory layer actually useful at runtime — without it
-    // chat_distilled_facts is just a diary the dashboard reads. Best-effort:
-    // any failure leaves the prompt unchanged rather than blocking the chat.
-    if (this.distiller) {
-      try {
-        const recall = this.distiller.formatForPrompt(this.memoryRecallLimit);
-        if (recall) systemParts.push(recall);
-      } catch (err) {
-        log.warn(`Memory recall injection failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    // Identity guard: the chat episode keeps history across provider switches,
-    // so when the user asks "which model are you?" the new provider may parrot
-    // a previous response from a different model (e.g. Grok claiming to be
-    // Claude because Claude said so earlier in the same chat). Tell each model
-    // who it actually is at call time so it answers truthfully.
-    const activeProvider = episode.llm_provider || this.defaultProvider;
-    const activeModelHint = episode.llm_model ? ` (${episode.llm_model})` : "";
-    systemParts.push(promptChatIdentity(lang, activeProvider, activeModelHint));
-    const systemText = systemParts.join("\n\n");
 
     for (const m of trimmedHistory) {
       // Check if message content is a JSON with attachments (stored format)
@@ -965,29 +937,12 @@ export class ChatService {
 
     // 2. Build the system prompt — same SOUL + identity guard + recall stack
     // the synchronous path uses, so the SDK loop carries the kernel persona.
-    const lang = this.config.language;
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const todayLine = promptTodayDate(lang, todayStr);
-    const alreadyStamped = this.systemPrompt.includes("Today's date") ||
-      this.systemPrompt.includes("Fecha de hoy");
-    const dynamicSystemPrompt = alreadyStamped
-      ? this.systemPrompt
-      : `${this.systemPrompt}\n${todayLine}`;
-    const systemParts: string[] = [dynamicSystemPrompt];
-    if (this.distiller) {
-      try {
-        const recall = this.distiller.formatForPrompt(this.memoryRecallLimit);
-        if (recall) systemParts.push(recall);
-      } catch (err) {
-        log.warn(`Memory recall injection failed: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    const modelHint = episode.llm_model ? ` (${episode.llm_model})` : "";
-    systemParts.push(promptChatIdentity(lang, providerName, modelHint));
-    if (episode.instructions && episode.instructions.trim()) {
-      const header = lang === "es" ? "## Instrucciones del episodio" : "## Episode instructions";
-      systemParts.push(`${header}\n${episode.instructions.trim()}`);
-    }
+    // No retrieved-context block here; the episode's own instructions are.
+    const systemText = this.buildSystemPrompt({
+      identityProvider: providerName,
+      modelHint: episode.llm_model ? ` (${episode.llm_model})` : "",
+      episodeInstructions: episode.instructions,
+    });
 
     // 3. Drive the SDK loop, accumulating structured blocks for persistence.
     const collectedBlocks: ContentBlock[] = [];
@@ -1024,7 +979,7 @@ export class ChatService {
     try {
       runResult = await provider.chatCompletionStream(userMessage, wrappedSink, {
         model: episode.llm_model || undefined,
-        system: systemParts.join("\n\n"),
+        system: systemText,
         sessionId: episode.sdk_session_id || undefined,
         permission: options.permission,
         cwd: process.env.CHAT_CLAUDE_CWD || process.cwd(),
@@ -1210,39 +1165,89 @@ export class ChatService {
       links.push({ provider: p, model: f.model || "", label: p.name });
     }
 
-    const errors: Array<{ label: string; msg: string }> = [];
-    for (let i = 0; i < links.length; i++) {
-      const l = links[i];
-      try {
-        const r = await l.provider.chatCompletion(messages, {
-          model: l.model || undefined,
-          system: opts.system,
-          tools: opts.tools,
-        });
-        if (i > 0) log.info(`Chat: recovered via fallback link "${l.label}"`);
-        return r;
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        errors.push({ label: l.label, msg: msg.slice(0, 300) });
-
+    const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
+    return runWithFallbackChain(
+      links,
+      (l) => l.provider.chatCompletion(messages, {
+        model: l.model || undefined,
+        system: opts.system,
+        tools: opts.tools,
+      }),
+      {
         // Caller-side schema/tool errors fail identically on every provider —
         // bail immediately so the user sees the real cause, not the last
         // link's echo of the same error.
-        const isSchemaErr =
-          /\b400\b/.test(msg) &&
-          /(invalid|validation|malformed|unrecognized|duplicate function|tool.*schema|parameter)/i.test(msg);
-        if (isSchemaErr) {
-          throw err;
-        }
-        log.warn(`Chat: link "${l.label}" failed (${msg.slice(0, 200)}), trying next`);
+        isFatal: (err) => {
+          const msg = errMsg(err);
+          return /\b400\b/.test(msg) &&
+            /(invalid|validation|malformed|unrecognized|duplicate function|tool.*schema|parameter)/i.test(msg);
+        },
+        onLinkFailed: ({ link, error }, { fatal }) => {
+          if (!fatal) log.warn(`Chat: link "${link.label}" failed (${errMsg(error).slice(0, 200)}), trying next`);
+        },
+        onRecovered: (l) => log.info(`Chat: recovered via fallback link "${l.label}"`),
+        // All links exhausted — surface a combined diagnostic so the user can see
+        // what each provider in the chain rejected and why.
+        exhausted: (failures) => {
+          const summary = failures
+            .map((f, i) => `  [${i + 1}] ${f.link.label}: ${errMsg(f.error).slice(0, 300)}`)
+            .join("\n");
+          return new Error(`All chat providers failed:\n${summary}`);
+        },
+      },
+    );
+  }
+
+  /**
+   * The system prompt both chat paths send: SOUL (+ user systemPrompt) with
+   * today's date, then the retrieved-context block (sync path only), distilled
+   * recall, the identity guard and — when given — the episode's instructions,
+   * joined by blank lines.
+   */
+  private buildSystemPrompt(opts: {
+    contextText?: string;
+    identityProvider: string;
+    modelHint: string;
+    episodeInstructions?: string;
+  }): string {
+    const lang = this.config.language;
+    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayLine = promptTodayDate(lang, todayStr);
+    // Already-stamped check covers both ES/EN flavors so flipping the kernel
+    // language mid-process doesn't double-stamp.
+    const alreadyStamped = this.systemPrompt.includes("Today's date") ||
+      this.systemPrompt.includes("Fecha de hoy");
+    const dynamicSystemPrompt = alreadyStamped
+      ? this.systemPrompt
+      : `${this.systemPrompt}\n${todayLine}`;
+
+    const systemParts: string[] = [dynamicSystemPrompt];
+    if (opts.contextText) {
+      systemParts.push(opts.contextText);
+    }
+    // Inject distilled durable facts (session_stop output). This is what
+    // makes the memory layer actually useful at runtime — without it
+    // chat_distilled_facts is just a diary the dashboard reads. Best-effort:
+    // any failure leaves the prompt unchanged rather than blocking the chat.
+    if (this.distiller) {
+      try {
+        const recall = this.distiller.formatForPrompt(this.memoryRecallLimit);
+        if (recall) systemParts.push(recall);
+      } catch (err) {
+        log.warn(`Memory recall injection failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    // All links exhausted — surface a combined diagnostic so the user can see
-    // what each provider in the chain rejected and why.
-    const summary = errors
-      .map((e, i) => `  [${i + 1}] ${e.label}: ${e.msg}`)
-      .join("\n");
-    throw new Error(`All chat providers failed:\n${summary}`);
+    // Identity guard: the chat episode keeps history across provider switches,
+    // so when the user asks "which model are you?" the new provider may parrot
+    // a previous response from a different model (e.g. Grok claiming to be
+    // Claude because Claude said so earlier in the same chat). Tell each model
+    // who it actually is at call time so it answers truthfully.
+    systemParts.push(promptChatIdentity(lang, opts.identityProvider, opts.modelHint));
+    if (opts.episodeInstructions && opts.episodeInstructions.trim()) {
+      const header = lang === "es" ? "## Instrucciones del episodio" : "## Episode instructions";
+      systemParts.push(`${header}\n${opts.episodeInstructions.trim()}`);
+    }
+    return systemParts.join("\n\n");
   }
 
   private getExtractionProvider(fallbackName: string): ChatLlmProvider | null {
