@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **ECC as a default skill source.** The marketplace catalog now subscribes to
+  [affaan-m/ECC](https://github.com/affaan-m/ECC) (MIT, ~290 skills), pinned to
+  `v2.2.1`. Only the subscription is added — no skill is installed. It lands
+  once per database, so unsubscribing sticks. The catalog fills on the next
+  repo sync (every 6 hours, or "Sync" in the marketplace).
+
 ## [0.3.1] - 2026-09-13
 
 ### Upgrading from 0.3.0 or earlier
