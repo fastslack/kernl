@@ -1,23 +1,18 @@
 import {
-  log,
-  type NotificationProvider,
-  type NotificationPayload,
-  type ProviderStatus,
+  TransportNotificationProvider,
+  csvList,
   type ProviderCapability,
   type ConfigField,
   type ChannelTransport,
 } from "@kernl/extension-sdk";
 
-export class DiscordProvider implements NotificationProvider {
+export class DiscordProvider extends TransportNotificationProvider {
   readonly id = "discord";
   readonly name = "Discord";
   readonly icon = "🎮";
   readonly capabilities: ProviderCapability[] = ["notify", "receive", "buttons", "reactions"];
-
-  private transport: ChannelTransport | null = null;
-  private config: Record<string, unknown> = {};
-  private ready = false;
-  private error: string | undefined;
+  protected readonly style = { bold: "**", alert: "🚨 " };
+  protected readonly requiredKeys = ["botToken"];
 
   getConfigSchema(): ConfigField[] {
     return [
@@ -29,100 +24,15 @@ export class DiscordProvider implements NotificationProvider {
     ];
   }
 
-  validateConfig(config: Record<string, unknown>): { valid: boolean; errors?: string[] } {
-    const errors: string[] = [];
-    if (!config.botToken || typeof config.botToken !== "string") errors.push("botToken is required");
-    return errors.length ? { valid: false, errors } : { valid: true };
-  }
-
-  configure(config: Record<string, unknown>): void {
-    this.config = config;
-  }
-
-  async start(): Promise<void> {
-    try {
-      const { DiscordTransport } = await import("./discord-transport.js");
-      const split = (s: unknown) => typeof s === "string" ? s.split(",").map((v) => v.trim()).filter(Boolean) : [];
-      this.transport = new DiscordTransport({
-        enabled: true,
-        botToken: this.config.botToken as string,
-        allowedUsers: split(this.config.allowedUsers),
-        allowedGuilds: split(this.config.allowedGuilds),
-        allowedChannels: split(this.config.allowedChannels),
-        defaultChannel: (this.config.defaultChannel as string) || undefined,
-      });
-      await this.transport.start();
-      this.ready = this.transport.isReady();
-      this.error = undefined;
-    } catch (err) {
-      this.error = String(err);
-      this.ready = false;
-      throw err;
-    }
-  }
-
-  async stop(): Promise<void> {
-    if (this.transport) {
-      await this.transport.stop();
-      this.transport = null;
-    }
-    this.ready = false;
-  }
-
-  isReady(): boolean {
-    return this.ready && this.transport !== null && this.transport.isReady();
-  }
-
-  getStatus(): ProviderStatus {
-    return {
-      id: this.id,
-      name: this.name,
-      icon: this.icon,
-      connected: this.isReady(),
-      enabled: !!this.config.botToken,
-      error: this.error,
-      capabilities: this.capabilities,
-    };
-  }
-
-  async sendNotification(payload: NotificationPayload): Promise<boolean> {
-    if (!this.isReady() || !this.transport?.sendToDefault) return false;
-    const text = this.formatPayload(payload);
-    try {
-      await this.transport.sendToDefault({ text });
-      return true;
-    } catch (err) {
-      log.error("Discord notification failed", err);
-      return false;
-    }
-  }
-
-  async sendTo(target: string, payload: NotificationPayload): Promise<boolean> {
-    if (!this.isReady() || !this.transport) return false;
-    try {
-      await this.transport.send(target, { text: this.formatPayload(payload) });
-      return true;
-    } catch (err) {
-      log.error(`Discord send to ${target} failed`, err);
-      return false;
-    }
-  }
-
-  async sendTest(): Promise<boolean> {
-    return this.sendNotification({
-      title: "Kernl — Discord test",
-      body: "Discord notification channel working!",
+  protected async createTransport(config: Record<string, unknown>): Promise<ChannelTransport> {
+    const { DiscordTransport } = await import("./discord-transport.js");
+    return new DiscordTransport({
+      enabled: true,
+      botToken: config.botToken as string,
+      allowedUsers: csvList(config.allowedUsers),
+      allowedGuilds: csvList(config.allowedGuilds),
+      allowedChannels: csvList(config.allowedChannels),
+      defaultChannel: (config.defaultChannel as string) || undefined,
     });
-  }
-
-  getTransport(): ChannelTransport | null {
-    return this.transport;
-  }
-
-  private formatPayload(payload: NotificationPayload): string {
-    const prefix = payload.priority === "high" ? "🚨 " : "";
-    const lines = [`${prefix}**${payload.title}**`];
-    if (payload.body) lines.push(payload.body);
-    return lines.join("\n");
   }
 }

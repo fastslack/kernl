@@ -6,6 +6,7 @@
 import { App, LogLevel } from "@slack/bolt";
 import {
   log,
+  mimeToAttachmentType,
   type ChannelTransport,
   type ChannelMessageHandler,
   type ChannelCallbackHandler,
@@ -13,7 +14,6 @@ import {
   type ChannelResponse,
   type ChannelStatus,
   type ChannelConfig,
-  type ChannelAttachment,
 } from "@kernl/extension-sdk";
 
 export class SlackTransport implements ChannelTransport {
@@ -199,7 +199,7 @@ export class SlackTransport implements ChannelTransport {
     // Handle file attachments
     if (msg.files?.length) {
       for (const file of msg.files) {
-        const type = this.getAttachmentType(file.mimetype);
+        const type = mimeToAttachmentType(file.mimetype);
         channelMessage.attachments!.push({
           type,
           url: file.url_private,
@@ -278,13 +278,6 @@ export class SlackTransport implements ChannelTransport {
     } catch (err) {
       log.error("Slack: action handler error", err);
     }
-  }
-
-  private getAttachmentType(mimeType: string): ChannelAttachment["type"] {
-    if (mimeType.startsWith("image/")) return "image";
-    if (mimeType.startsWith("audio/")) return "audio";
-    if (mimeType.startsWith("video/")) return "video";
-    return "document";
   }
 
   async send(chatId: string, response: ChannelResponse): Promise<string> {
