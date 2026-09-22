@@ -101,7 +101,7 @@ export function registerChatRoutes(
         "Cache-Control": "no-cache, no-transform",
         Connection: "keep-alive",
         "X-Accel-Buffering": "no",
-        "Access-Control-Allow-Origin": "*",
+        ...server.corsHeaders(req),
       });
 
       let closed = false;
@@ -227,7 +227,7 @@ export function registerChatRoutes(
         "Content-Type": mimeMap[ext] ?? "application/octet-stream",
         "Content-Length": buf.length,
         "Cache-Control": "private, max-age=86400",
-        "Access-Control-Allow-Origin": "*",
+        ...server.corsHeaders(req),
       });
       res.end(buf);
     } catch {

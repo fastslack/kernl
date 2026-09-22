@@ -11,6 +11,12 @@ import { basename } from "node:path";
 import { HttpError, isHttpError, type KernelHttpServer, type SqliteDb, type EventBus } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
 
+/** Attachment types safe to render from the kernel's origin: none can run script. */
+const INLINE_ATTACHMENT_TYPES = new Set([
+  "image/png", "image/jpeg", "image/gif", "image/webp", "image/avif",
+  "application/pdf", "text/plain",
+]);
+
 export function registerCommsDashboardRoutes(
   server: KernelHttpServer,
   db: SqliteDb,
@@ -180,12 +186,21 @@ export function registerCommsDashboardRoutes(
     }
     try {
       const buf = readFileSync(att.stored_path);
+      // The MIME type and the name come from the email, i.e. from whoever sent
+      // it. Served inline from the kernel's origin, an HTML or SVG attachment
+      // would run its scripts as the dashboard. Only types that cannot carry
+      // script preview inline; everything else is a download. (A sandbox CSP
+      // would do it too, but Chrome then refuses to render PDFs.) The name is
+      // quoted, so a `"` or a line break in it would break the header.
+      const inline = INLINE_ATTACHMENT_TYPES.has(att.mime_type.toLowerCase());
+      const filename = basename(att.filename).replace(/["\\\r\n]/g, "_");
       res.writeHead(200, {
-        "Content-Type": att.mime_type,
+        "Content-Type": inline ? att.mime_type : "application/octet-stream",
         "Content-Length": buf.length,
-        "Content-Disposition": `inline; filename="${basename(att.filename)}"`,
-        "Access-Control-Allow-Origin": "*",
+        "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${filename}"`,
+        "X-Content-Type-Options": "nosniff",
         "Cache-Control": "private, max-age=3600",
+        ...server.corsHeaders(req),
       });
       res.end(buf);
     } catch {

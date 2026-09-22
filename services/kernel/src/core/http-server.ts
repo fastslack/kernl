@@ -267,8 +267,11 @@ export class KernelHttpServer {
    * the user has open read every API response cross-origin — a drive-by read
    * of the whole kernel, and a write too on an unauthenticated deployment.
    * Cross-origin callers (a dashboard dev server on another port) are opt-in.
+   *
+   * Public so a raw handler that writes its own headers (a stream, a file)
+   * applies the same rule instead of reaching for `*`.
    */
-  private corsHeaders(req?: IncomingMessage): Record<string, string> {
+  corsHeaders(req?: IncomingMessage): Record<string, string> {
     const origin = req?.headers.origin ?? "";
     if (!origin || !this.corsOrigins.includes(origin)) return {};
     // Vary: the same URL answers differently per Origin — caches must not
