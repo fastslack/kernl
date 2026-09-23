@@ -1,4 +1,4 @@
-import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule, normalizeInstants } from "@kernl/extension-sdk";
 import { eventsMigrations } from "./migrations/001_events.js";
 import { EventsService } from "./service.js";
 import { eventsTools } from "./tools.js";
@@ -20,6 +20,10 @@ export function createEventsModule(): EventsModule {
     migrations: eventsMigrations,
 
     init(ctx) {
+      // Starts stored without a zone predate the "UTC instant" rule; every
+      // day window and the calendar compare them as instants.
+      normalizeInstants(ctx.sqlite, "events", ["start_at", "end_at"]);
+
       // Create service with EventBus for notifications
       const service = new EventsService(ctx.sqlite, ctx.events);
       serviceRef = service;

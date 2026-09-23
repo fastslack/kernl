@@ -5,12 +5,11 @@
  * handlers), each one through HealthService.
  */
 
-import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction, today } from "@kernl/extension-sdk";
 import type { HealthService } from "./service.js";
 import type { AppointmentStatus, MedicationFrequency, MetricType } from "./types.js";
 
 export function healthRpcActions(service: HealthService): RpcAction[] {
-  const today = () => new Date().toISOString().split("T")[0];
 
   return rpcActionsFrom({
     "health.metrics.list": (input) => {

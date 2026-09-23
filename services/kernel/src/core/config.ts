@@ -321,6 +321,14 @@ export function resolveSecureBind(
   return configuredBind;
 }
 
+/**
+ * TIMEZONE when set, else the host's zone: on a Mac that is the user's own,
+ * in a container it is UTC. It used to be UTC whenever TIMEZONE was unset.
+ */
+export function defaultTimezone(): string {
+  return process.env.TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
 export function loadConfig(): KernelConfig {
   dotenv.config();
 
@@ -334,7 +342,7 @@ export function loadConfig(): KernelConfig {
       password: process.env.NEO4J_PASSWORD ?? "",
     },
     logLevel: process.env.LOG_LEVEL ?? "info",
-    timezone: process.env.TIMEZONE ?? "UTC",
+    timezone: defaultTimezone(),
     browserlessUrl: process.env.BROWSERLESS_URL ?? "http://host.docker.internal:3333",
     language: parseLanguage(process.env.KERNEL_DEFAULT_LANGUAGE),
     mattermost: {
@@ -371,7 +379,7 @@ export function loadConfig(): KernelConfig {
       lat: parseFloat(process.env.LIFE_LAT ?? "51.4769"),
       lon: parseFloat(process.env.LIFE_LON ?? "0.0005"),
       city: process.env.LIFE_CITY ?? "Greenwich",
-      timezone: process.env.TIMEZONE ?? "UTC",
+      timezone: defaultTimezone(),
       currencies: process.env.LIFE_CURRENCIES ?? "USD,EUR",
       clocks: (process.env.LIFE_CLOCKS ?? "America/New_York,Europe/London,Asia/Tokyo").split(","),
       waterGoal: parseInt(process.env.LIFE_WATER_GOAL ?? "8", 10),

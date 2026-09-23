@@ -46,6 +46,7 @@ import {
   type SandboxDriverRegistry,
   type SandboxHandle,
   type SandboxRunOptions,
+  localDate,
 } from "@kernl/extension-sdk";
 import { failureNote } from "./failure-note.js";
 import {
@@ -1395,7 +1396,7 @@ export class ClaudeCodeExecutor {
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
     if (base) parts.push(base);
-    parts.push(promptTodayDate(lang, new Date().toISOString().slice(0, 10)));
+    parts.push(promptTodayDate(lang, localDate()));
     parts.push(promptClaudeCodeWorkInstructions(lang));
 
     // Inject learnings ranked by relevance to current goal — same closed-loop

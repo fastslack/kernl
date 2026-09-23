@@ -5,6 +5,7 @@ import type { CalendarEvent, CalendarSource } from "../../core/types.js";
 import { log } from "../../core/logger.js";
 import { tableExists, safeGet, safeAll, today, daysFromNow } from "./query-helpers.js";
 import { CORE_CALENDAR_SOURCES } from "./calendar-sources.js";
+import { dayStart, localParts, localDateOf } from "../../sdk/clock.js";
 
 // ── Extension-owned sections ─────────────────────────
 //
@@ -261,8 +262,7 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     )
     .all(now) as Array<{ id: string; title: string; trigger_at: string }>;
   for (const r of overdueReminders) {
-    const d = r.trigger_at.split("T")[0];
-    const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(r.trigger_at);
     overdue.push({ type: "reminder", id: r.id, title: r.title, date: d, time: t, priority: null, meta: null });
   }
 
@@ -292,10 +292,9 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
        WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?
        ORDER BY trigger_at`,
     )
-    .all(`${todayStr}T00:00:00`, `${rangeEnd}T00:00:00`) as Array<{ id: string; title: string; trigger_at: string; repeat: string }>;
+    .all(dayStart(todayStr), dayStart(rangeEnd)) as Array<{ id: string; title: string; trigger_at: string; repeat: string }>;
   for (const r of rangeReminders) {
-    const d = r.trigger_at.split("T")[0];
-    const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(r.trigger_at);
     const items = dayMap.get(d);
     if (items) items.push({ type: "reminder", id: r.id, title: r.title, date: d, time: t, priority: null, meta: r.repeat !== "none" ? r.repeat : null });
   }
@@ -305,11 +304,10 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     `SELECT id, title, start_at, type, status FROM events
      WHERE status NOT IN ('cancelled','completed') AND start_at >= ? AND start_at < ?
      ORDER BY start_at`,
-    [`${todayStr}T00:00:00`, `${rangeEnd}T00:00:00`],
+    [dayStart(todayStr), dayStart(rangeEnd)],
   );
   for (const ev of rangeEvents) {
-    const d = ev.start_at.split("T")[0];
-    const t = ev.start_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(ev.start_at);
     const items = dayMap.get(d);
     if (items) items.push({ type: "event", id: ev.id, title: ev.title, date: d, time: t, priority: null, meta: ev.status === "draft" ? `${ev.type} · draft` : ev.type });
   }
@@ -319,11 +317,10 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     `SELECT id, title, start_at, type FROM events
      WHERE status NOT IN ('cancelled','completed') AND start_at < ?
      ORDER BY start_at DESC LIMIT 10`,
-    [`${todayStr}T00:00:00`],
+    [dayStart(todayStr)],
   );
   for (const ev of overdueEvents) {
-    const d = ev.start_at.split("T")[0];
-    const t = ev.start_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(ev.start_at);
     overdue.push({ type: "event", id: ev.id, title: ev.title, date: d, time: t, priority: null, meta: ev.type });
   }
 
@@ -361,14 +358,14 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     `SELECT id, title, repo, created_at, closed_at, state FROM issues
      WHERE (created_at >= ? OR (closed_at IS NOT NULL AND closed_at >= ?))
      ORDER BY created_at DESC LIMIT 30`,
-    [threeDaysAgo, threeDaysAgo],
+    [dayStart(threeDaysAgo), dayStart(threeDaysAgo)],
   );
   for (const iss of issueEvents) {
-    const createdDate = iss.created_at.split("T")[0];
+    const createdDate = localDateOf(iss.created_at);
     const items = dayMap.get(createdDate);
     if (items) items.push({ type: "issue", id: iss.id, title: iss.title, date: createdDate, time: null, priority: null, meta: `opened · ${iss.repo.split("/").pop()}` });
     if (iss.closed_at) {
-      const closedDate = iss.closed_at.split("T")[0];
+      const closedDate = localDateOf(iss.closed_at);
       const closedItems = dayMap.get(closedDate);
       if (closedItems) closedItems.push({ type: "issue", id: iss.id + "-closed", title: iss.title, date: closedDate, time: null, priority: null, meta: `closed · ${iss.repo.split("/").pop()}` });
     }
@@ -392,8 +389,8 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
   for (let i = 0; i < 14; i++) {
     const d = daysFromNow(i);
     const taskCount = (db.prepare(`SELECT COUNT(*) AS c FROM tasks WHERE status NOT IN ('done') AND due_date = ? AND deleted_at IS NULL`).get(d) as { c: number }).c;
-    const reminderCount = (db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?`).get(`${d}T00:00:00`, `${daysFromNow(i + 1)}T00:00:00`) as { c: number }).c;
-    const issueCount = safeGet(db, `SELECT COUNT(*) AS c FROM issues WHERE state = 'open' AND created_at <= ? AND (closed_at IS NULL OR closed_at > ?)`, [`${d}T23:59:59`, `${d}T00:00:00`], { c: 0 }).c;
+    const reminderCount = (db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?`).get(dayStart(d), dayStart(daysFromNow(i + 1))) as { c: number }).c;
+    const issueCount = safeGet(db, `SELECT COUNT(*) AS c FROM issues WHERE state = 'open' AND created_at < ? AND (closed_at IS NULL OR closed_at > ?)`, [dayStart(daysFromNow(i + 1)), dayStart(d)], { c: 0 }).c;
     workloadForecast.push({ date: d, taskCount, issueCount, reminderCount, total: taskCount + issueCount + reminderCount });
   }
 
@@ -420,7 +417,7 @@ export function queryCrossModuleIntel(db: SqliteDb): CrossModuleIntel | null {
   const tasksCompleted = (
     db.prepare(
       `SELECT COUNT(*) AS c FROM tasks WHERE status = 'done' AND updated_at >= ? AND deleted_at IS NULL`,
-    ).get(`${weekAgo}T00:00:00`) as { c: number }
+    ).get(dayStart(weekAgo)) as { c: number }
   ).c;
 
   const issuesClosed = (
@@ -829,9 +826,9 @@ export function querySystemTimeline(
     );
 
     for (const r of rows) {
-      const ds = r.next_run_at.split("T")[0];
+      const ds = localDateOf(r.next_run_at);
       if (ds >= start && ds < end) {
-        const t = r.next_run_at.split("T")[1]?.slice(0, 5) ?? null;
+        const t = localParts(r.next_run_at).time;
         pushEvent(days, ds, {
           id: r.id, type: "research", title: r.name,
           time: t, color: SYS_COLORS.research,
@@ -843,7 +840,7 @@ export function querySystemTimeline(
       if (r.next_run_at < new Date().toISOString() && r.last_run_at) {
         overdue.push({
           id: r.id, type: "research", title: r.name,
-          time: r.next_run_at.split("T")[1]?.slice(0, 5) ?? null,
+          time: localParts(r.next_run_at).time,
           color: SYS_COLORS.research, extra: "overdue",
         });
       }

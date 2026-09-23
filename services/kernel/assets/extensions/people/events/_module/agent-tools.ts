@@ -16,7 +16,7 @@
  * `[legacy]` nudges in their description.
  */
 import { z } from "zod";
-import { type ToolDefinition, defineTool, errorResult, structuredResult, textResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, errorResult, structuredResult, textResult, localDate, localParts } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
 import type { EventWithSummary, EventAttendee } from "./types.js";
 
@@ -117,7 +117,7 @@ export function agentEventsTools(service: EventsService): ToolDefinition[] {
 
 const EventScheduleInput = z.object({
   title: z.string(),
-  start_at: z.string().describe("ISO datetime."),
+  start_at: z.string().describe("ISO datetime. Without Z or an offset it is local time (the kernel's TIMEZONE)."),
   end_at: z.string().optional(),
   duration_minutes: z.number().int().positive().optional(),
   type: z.string().optional(),
@@ -200,17 +200,17 @@ function buildEventToday(service: EventsService): ToolDefinition {
   return defineTool({
     name: "kernel_event_today",
     description:
-      "Return every event that starts today (local UTC date). Skips cancelled events by default. " +
+      "Return every event that starts today (the kernel's local date). Skips cancelled events by default. " +
       "Use this for the 'what's on my calendar today' question — pair with `kernel_event_upcoming` " +
       "for a longer horizon.",
     schema: EventTodayInput,
     outputSchema: EventListOutput,
     tags: ["events", "today", "list", "agenda", "calendar"],
     async handler({ include_cancelled }) {
-      const today = new Date().toISOString().slice(0, 10);
+      const today = localDate();
       const events = service.list({
-        from_date: `${today}T00:00:00Z`,
-        to_date: `${today}T23:59:59Z`,
+        from_date: today,
+        to_date: today,
         limit: 100,
       });
       const filtered = include_cancelled ? events : events.filter((e) => e.status !== "cancelled");
@@ -221,7 +221,7 @@ function buildEventToday(service: EventsService): ToolDefinition {
       const lines = [
         `**${filtered.length} event(s) today** (${today}):`,
         ...filtered.map((e) => {
-          const t = e.start_at.slice(11, 16);
+          const t = localParts(e.start_at).time ?? "";
           return `- ${t} · ${e.title}${e.location ? ` _(${e.location})_` : ""} · ${e.summary.yes}/${e.min_attendees} confirmed`;
         }),
       ];

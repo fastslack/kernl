@@ -6,6 +6,7 @@ import {
   newId,
   isoNow,
   log,
+  localDate,
 } from "@kernl/extension-sdk";
 import type { CrmService } from "../../../../people/crm/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
@@ -85,7 +86,7 @@ export async function importGmail(
       const to = parseEmailAddress(extractHeader(detail, "To"));
       const subject = extractHeader(detail, "Subject") || "(no subject)";
       const dateStr = extractHeader(detail, "Date");
-      const date = dateStr ? new Date(dateStr).toISOString().split("T")[0] : isoNow().split("T")[0];
+      const date = dateStr ? localDate(new Date(dateStr)) : localDate();
 
       // Match against CRM contacts
       const matchedContact = emailIndex.get(from) ?? emailIndex.get(to);

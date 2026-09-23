@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, newId, isoNow, daysFromNow, localDate } from "@kernl/extension-sdk";
 import type { HealthMetric, HealthMedication, HealthAppointment, MetricType, MedicationFrequency, AppointmentStatus } from "./types.js";
 
 const DEFAULT_UNITS: Record<string, string> = {
@@ -145,7 +145,7 @@ export class HealthService {
     latest_weight: HealthMetric | null;
   } {
     const activeMeds = this.listMedications(true);
-    const today = isoNow().split("T")[0];
+    const today = localDate();
     const upcoming = this.db.prepare(
       "SELECT COUNT(*) as c FROM health_appointments WHERE status = 'scheduled' AND date >= ?",
     ).get(today) as { c: number };
@@ -178,8 +178,8 @@ export class HealthService {
     upcomingAppts: { id: string; title: string; date: string; provider: string }[];
     weekMetrics: number;
   } {
-    const today = isoNow().split("T")[0];
-    const weekAgo = new Date(Date.now() - 7 * 86400000).toISOString().split("T")[0];
+    const today = localDate();
+    const weekAgo = daysFromNow(-7);
     const latestMetrics = this.db.prepare(
       `SELECT type, value, unit, date FROM health_metrics
        WHERE id IN (SELECT id FROM health_metrics h2 WHERE h2.type = health_metrics.type ORDER BY date DESC LIMIT 1)

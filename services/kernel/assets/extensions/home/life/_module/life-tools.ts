@@ -15,6 +15,8 @@ import {
   errorResult,
   newId,
   isoNow,
+  localDate,
+  kernelTimezone,
 } from "@kernl/extension-sdk";
 import {
   queryHabits,
@@ -47,7 +49,7 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
         date: z.string().optional().describe("Date (YYYY-MM-DD). Defaults to today."),
       }),
       handler: async (input) => {
-        const date = input.date ?? new Date().toISOString().split("T")[0]!;
+        const date = input.date ?? localDate();
         try {
           db.prepare(
             `INSERT INTO life_log (id, type, value, date, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -63,7 +65,7 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
       description:
         "Get today's life tracking status: habits with streaks, water intake, mood, and daily summary.",
       handler: async () => {
-        const today = new Date().toISOString().split("T")[0]!;
+        const today = localDate();
         const sections: string[] = ["# Life Status", `Date: ${today}`, ""];
 
         const summary = queryDailySummary(db);
@@ -126,7 +128,7 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
             if (t < now || t - now > 24 * 3600_000) continue;
             const prob = h.precipitationProbability ?? 0;
             if (prob > maxRain) maxRain = prob;
-            const hh = new Date(h.time).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: process.env.TIMEZONE ?? "UTC" });
+            const hh = new Date(h.time).toLocaleTimeString("en", { timeZone: kernelTimezone(), hour: "2-digit", minute: "2-digit", hour12: false });
             const filled = Math.round(prob / 10);
             const bar = "█".repeat(filled) + "░".repeat(10 - filled);
             lines.push(`${hh}  ${bar} ${prob}%  ${WEATHER_CODES[h.weatherCode] ?? ""}`);

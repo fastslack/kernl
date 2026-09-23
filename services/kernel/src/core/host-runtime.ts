@@ -18,6 +18,14 @@ import { mediaToolBin, probeMediaTool, mediaToolError } from "./media-tools.js";
 import { PeeringService } from "./peering/service.js";
 import { verifyRequest } from "./peering/auth.js";
 
+// Bootstrap points this at the live config (useTimezone); until then, UTC.
+let timezoneSource: () => string = () => "UTC";
+
+/** Let every copy of the SDK read the kernel's TIMEZONE setting, live. */
+export function useTimezone(get: () => string): void {
+  timezoneSource = get;
+}
+
 const kernelHost: KernlHost = Object.freeze({
   sdk: SDK_MAJOR,
   log,
@@ -35,6 +43,7 @@ const kernelHost: KernlHost = Object.freeze({
   mediaToolError,
   peering: () => PeeringService.current,
   verifyPeerRequest: verifyRequest,
+  timezone: () => timezoneSource(),
 });
 
 /** Install the kernel host. Idempotent; warns if it displaces another host. */

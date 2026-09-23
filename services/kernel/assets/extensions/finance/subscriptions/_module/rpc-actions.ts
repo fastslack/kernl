@@ -1,4 +1,4 @@
-import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction, localDate } from "@kernl/extension-sdk";
 import type { SubscriptionService } from "./service.js";
 import type { BillingCycle, SubscriptionStatus } from "./types.js";
 import { autoCategorize, knownCategories, categoryGroup, CATEGORY_GROUPS } from "./categorize.js";
@@ -51,7 +51,7 @@ export function subscriptionsRpcActions(service: SubscriptionService): RpcAction
         billing_cycle: args.billing_cycle as BillingCycle | undefined,
         // Auto-categorize if no category provided
         category: args.category || autoCategorize(name, provider),
-        start_date: args.start_date ?? new Date().toISOString().slice(0, 10),
+        start_date: args.start_date ?? localDate(),
       });
       return { success: true, subscription: withGroup(sub) };
     },

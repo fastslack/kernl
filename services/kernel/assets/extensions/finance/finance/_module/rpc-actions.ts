@@ -7,7 +7,7 @@
  * only against an account that exists.
  */
 
-import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction, localDate } from "@kernl/extension-sdk";
 import type { FinanceService } from "./service.js";
 import type { AccountType, TransactionType } from "./types.js";
 
@@ -50,7 +50,7 @@ export function financeRpcActions(service: FinanceService): RpcAction[] {
         account_id: args.account_id,
         type: args.type as TransactionType | undefined,
         amount_cents: Math.abs(args.amount_cents),
-        date: args.date ?? new Date().toISOString().split("T")[0],
+        date: args.date ?? localDate(),
       });
       return { ok: true, id: tx.id };
     },
@@ -58,7 +58,7 @@ export function financeRpcActions(service: FinanceService): RpcAction[] {
     "finance.budgets.list": () => ({ budgets: service.listBudgets() }),
 
     "finance.summary": () => {
-      const today = new Date().toISOString().split("T")[0];
+      const today = localDate();
       const monthStart = today.slice(0, 7) + "-01";
       return {
         accounts: service.listAccounts(),

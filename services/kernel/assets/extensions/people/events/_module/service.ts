@@ -1,4 +1,7 @@
-import { type SqliteDb as Database, type PatchColumn, newId, isoNow, buildPatch, safeJson, type EventBus } from "@kernl/extension-sdk";
+import {
+  type SqliteDb as Database, type PatchColumn, type EventBus,
+  newId, isoNow, buildPatch, safeJson, toInstant, dayStart, addDays, localParts,
+} from "@kernl/extension-sdk";
 import type {
   Event,
   EventAttendee,
@@ -23,8 +26,8 @@ const EVENT_PATCH: Record<string, PatchColumn> = {
   description: "text",
   type: "text",
   status: "text",
-  start_at: "text",
-  end_at: "text",
+  start_at: { to: (v: unknown) => toInstant(String(v)) ?? String(v) },
+  end_at: { to: (v: unknown) => (v ? toInstant(String(v)) ?? String(v) : v) },
   duration_minutes: "text",
   location: "text",
   location_url: "text",
@@ -78,8 +81,9 @@ export class EventsService {
       description: input.description ?? "",
       type: input.type ?? "social",
       status: "draft",
-      start_at: input.start_at,
-      end_at: input.end_at ?? null,
+      // Stored as UTC instants, whatever form they came in (see toInstant).
+      start_at: toInstant(input.start_at) ?? input.start_at,
+      end_at: input.end_at ? (toInstant(input.end_at) ?? input.end_at) : null,
       duration_minutes: input.duration_minutes ?? 90,
       location: input.location ?? "",
       location_url: input.location_url ?? "",
@@ -220,14 +224,22 @@ export class EventsService {
       values.push(filter.type);
     }
 
+    // start_at is a UTC instant; the bounds are read the same way (toInstant).
     if (filter.from_date) {
       conditions.push("start_at >= ?");
-      values.push(filter.from_date);
+      values.push(toInstant(filter.from_date) ?? filter.from_date);
     }
 
     if (filter.to_date) {
-      conditions.push("start_at <= ?");
-      values.push(filter.to_date);
+      // A bare date means through the end of that local day; compared as a
+      // string it used to leave that day's events out.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(filter.to_date)) {
+        conditions.push("start_at < ?");
+        values.push(dayStart(addDays(filter.to_date, 1)));
+      } else {
+        conditions.push("start_at <= ?");
+        values.push(toInstant(filter.to_date) ?? filter.to_date);
+      }
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -1027,10 +1039,12 @@ export class EventsService {
   }
 
   private formatDateTime(isoString: string): string {
-    const date = new Date(isoString);
+    // In the kernel's timezone, not the process's (a container runs in UTC).
+    const { date, time } = localParts(isoString);
+    const day = new Date(`${date}T00:00:00Z`);
     const days = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
     const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-    return `${days[date.getDay()]} ${date.getDate()} ${months[date.getMonth()]} ${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+    return `${days[day.getUTCDay()]} ${day.getUTCDate()} ${months[day.getUTCMonth()]} ${time ?? "00:00"}`;
   }
 
   private rowToEvent(row: EventRow): Event {

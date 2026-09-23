@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, kernelTimezone, limitArg } from "@kernl/extension-sdk";
 import type { ExternalAgentService } from "./service.js";
 
 export function externalAgentTools(service: ExternalAgentService): ToolDefinition[] {
@@ -44,7 +44,7 @@ export function externalAgentTools(service: ExternalAgentService): ToolDefinitio
 
         const lines = agents.map((a) => {
           const statusIcon = a.status === "online" ? "🟢" : a.status === "offline" ? "🔴" : a.status === "error" ? "⚠️" : "⚪";
-          const lastSeen = a.last_seen_at ? new Date(a.last_seen_at).toLocaleString() : "never";
+          const lastSeen = a.last_seen_at ? new Date(a.last_seen_at).toLocaleString(undefined, { timeZone: kernelTimezone() }) : "never";
           return `${statusIcon} *${a.name}*\n  Platform: ${a.platform} | Last seen: ${lastSeen}\n  ID: \`${a.id}\``;
         });
 
@@ -198,7 +198,7 @@ export function externalAgentTools(service: ExternalAgentService): ToolDefinitio
         const lines = alerts.map((a) => {
           const icon = a.severity === "critical" ? "🚨" : a.severity === "warning" ? "⚠️" : "ℹ️";
           const ack = a.acknowledged ? " (ack)" : "";
-          const time = new Date(a.created_at).toLocaleString();
+          const time = new Date(a.created_at).toLocaleString(undefined, { timeZone: kernelTimezone() });
           return `${icon} *${a.title}*${ack}\n  ${a.message || "(no message)"}\n  ${time}`;
         });
 

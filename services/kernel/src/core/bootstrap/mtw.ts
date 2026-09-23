@@ -43,6 +43,7 @@ import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { MtwRequestArchInfo } from "../../modules/dashboard/architecture-routes.js";
 import type { ExtensionHandles } from "./extensions.js";
 import type { LifeService } from "../types/extensions/index.js";
+import { localDate } from "../../sdk/clock.js";
 
 export interface MtwResult {
   mtwPublisher: MtwPublisher | null;
@@ -105,7 +106,7 @@ export async function initMtw(args: {
     dashboard: () => queryFullDashboard(sqlite, (name) => dashboardRegistry.queryChannel(name, sqlite, neo4j)),
     analytics: () => queryAnalytics(sqlite, dbRegistry.getGraph()),
     agenda: () => {
-      const d = new Date().toISOString().split("T")[0];
+      const d = localDate();
       return querySystemTimeline(sqlite, d, 150, systemRegistry);
     },
     crossIntel: () => {
@@ -114,7 +115,7 @@ export async function initMtw(args: {
     },
     life: () => (lifeService ? lifeService.getLifeData() : { available: false }),
     calendar: () => {
-      const d = new Date().toISOString().split("T")[0];
+      const d = localDate();
       return queryCalendar(sqlite, d, 150, systemRegistry, dashboardRegistry.getCalendarSources());
     },
     // Same shape as the dashboard.systemAgenda operation: /system shows nothing

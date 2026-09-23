@@ -1,4 +1,4 @@
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type {
   LearningResource, LearningHighlight, LearningFlashcard,
   LearningReview, LearningGoal, ResourceType, ResourceStatus, HighlightType,
@@ -164,7 +164,7 @@ export class LearningService {
     front: string; back: string; deck?: string;
     resource_id?: string; tags?: string[];
   }): LearningFlashcard {
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
     const now = isoNow();
     const card: LearningFlashcard = {
       id: newId(), resource_id: input.resource_id ?? null,
@@ -220,7 +220,7 @@ export class LearningService {
   }
 
   listDecks(): Array<{ deck: string; total: number; due: number }> {
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
     return this.db.prepare(`
       SELECT deck, COUNT(*) as total,
              SUM(CASE WHEN next_review <= ? THEN 1 ELSE 0 END) as due
@@ -267,7 +267,7 @@ export class LearningService {
       by_status[r.status] = (by_status[r.status] ?? 0) + 1;
       by_type[r.type] = (by_type[r.type] ?? 0) + 1;
     }
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
     const due_cards = (this.db.prepare("SELECT COUNT(*) as c FROM learning_flashcards WHERE next_review <= ?").get(today) as { c: number }).c;
     const decks = (this.db.prepare("SELECT COUNT(DISTINCT deck) as c FROM learning_flashcards").get() as { c: number }).c;
     const highlights = (this.db.prepare("SELECT COUNT(*) as c FROM learning_highlights").get() as { c: number }).c;

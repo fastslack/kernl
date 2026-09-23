@@ -1,4 +1,4 @@
-import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule, normalizeInstants } from "@kernl/extension-sdk";
 import { remindersMigrations } from "./migrations/001_reminders.js";
 import { ReminderService } from "./service.js";
 import { ReminderScheduler } from "./scheduler.js";
@@ -25,6 +25,10 @@ export function createRemindersModule(): RemindersModule {
           "CREATE CONSTRAINT reminder_id IF NOT EXISTS FOR (r:Reminder) REQUIRE r.id IS UNIQUE",
         );
       }
+
+      // Triggers stored without a zone predate the "UTC instant" rule; the
+      // scheduler compares them as instants, so rewrite them first.
+      normalizeInstants(ctx.sqlite, "reminders", ["trigger_at", "snoozed_until"]);
 
       const service = new ReminderService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;

@@ -16,7 +16,7 @@ export function reminderTools(
         body: z.string().optional().describe("Additional details"),
         trigger_at: z
           .string()
-          .describe("When to fire, ISO 8601 UTC (e.g. 2025-03-01T09:00:00Z)"),
+          .describe("When to fire, ISO 8601. With Z or an offset it is that instant (2025-03-01T09:00:00Z); without one it is local time in the kernel's TIMEZONE (2025-03-01T09:00)."),
         repeat: z
           .enum(["none", "daily", "weekly", "monthly"])
           .optional()
@@ -109,7 +109,7 @@ export function reminderTools(
         id: z.string().describe("Reminder ID"),
         title: z.string().optional(),
         body: z.string().optional(),
-        trigger_at: z.string().optional().describe("New trigger time (ISO 8601 UTC)"),
+        trigger_at: z.string().optional().describe("New trigger time, ISO 8601; without Z or an offset it is local time (the kernel's TIMEZONE)."),
         repeat: z.enum(["none", "daily", "weekly", "monthly"]).optional(),
         task_id: z.string().optional().describe("Link to a different task"),
         notify_mattermost: z.boolean().optional(),

@@ -1,4 +1,4 @@
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type {
   TrainingExercise, TrainingProgram, TrainingSessionTemplate,
   TrainingTemplateExercise, TrainingWorkout, TrainingSet,
@@ -191,7 +191,7 @@ export class TrainingService {
       `).get(input.exercise_name, input.workout_id) as { best: number | null };
       if (!prevBest.best || volume > prevBest.best) {
         set.is_pr = 1;
-        this.recordPr({ exercise_name: input.exercise_name, pr_type: "volume", value: volume, unit: "kg*reps", workout_id: input.workout_id, date: new Date().toISOString().split("T")[0] });
+        this.recordPr({ exercise_name: input.exercise_name, pr_type: "volume", value: volume, unit: "kg*reps", workout_id: input.workout_id, date: localDate() });
       }
     }
 
@@ -241,7 +241,7 @@ export class TrainingService {
       pr_type: input.pr_type, value: input.value,
       unit: input.unit ?? "kg",
       workout_id: input.workout_id ?? null,
-      date: input.date ?? isoNow().split("T")[0],
+      date: input.date ?? localDate(),
       notes: input.notes ?? "", created_at: isoNow(),
     };
     this.db.prepare(`
@@ -279,7 +279,7 @@ export class TrainingService {
     const cardio: TrainingCardio = {
       id: newId(), workout_id: input.workout_id ?? null,
       sport: input.sport,
-      date: input.date ?? isoNow().split("T")[0],
+      date: input.date ?? localDate(),
       duration_minutes: input.duration_minutes,
       distance_m: input.distance_m ?? null,
       avg_pace_min_km: input.avg_pace_min_km ?? (input.distance_m

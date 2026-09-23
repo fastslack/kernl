@@ -2,6 +2,7 @@ import type { ToolDefinition } from "../../core/types.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { textResult } from "../../core/helpers.js";
 import { defineToolNoInput } from "../../core/tool-builder.js";
+import { localDate, daysFromNow, dayStart } from "../../sdk/clock.js";
 
 // Minimal row shapes for the entity tables this module queries directly via
 // SQL. The full domain types live in the owning extensions (tasks / crm /
@@ -41,7 +42,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
       description:
         "Morning briefing: today's tasks, overdue items, upcoming deadlines, contacts needing follow-up. Your daily overview.",
       handler: async () => {
-        const today = new Date().toISOString().split("T")[0];
+        const today = localDate();
         const sections: string[] = ["# Morning Briefing", `Date: ${today}`, ""];
 
         // Urgent & high-priority tasks
@@ -158,13 +159,13 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
         sections.push("");
 
         // Completed yesterday
-        const yesterday = new Date(Date.now() - 86400000).toISOString().split("T")[0];
+        const yesterday = daysFromNow(-1);
         const completedYesterday = db
           .prepare(
             `SELECT * FROM tasks WHERE status = 'done'
              AND updated_at >= ? AND updated_at < ?`,
           )
-          .all(`${yesterday}T00:00:00`, `${today}T00:00:00`) as TaskRow[];
+          .all(dayStart(yesterday), dayStart(today)) as TaskRow[];
 
         sections.push(`## Completed Yesterday (${completedYesterday.length})`);
         if (completedYesterday.length > 0) {
@@ -288,10 +289,8 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
       description:
         "Evening review: what was completed today, what's pending, and tasks for tomorrow.",
       handler: async () => {
-        const today = new Date().toISOString().split("T")[0];
-        const tomorrow = new Date(Date.now() + 86400000)
-          .toISOString()
-          .split("T")[0];
+        const today = localDate();
+        const tomorrow = daysFromNow(1);
         const sections: string[] = ["# Evening Review", `Date: ${today}`, ""];
 
         // Completed today
@@ -300,7 +299,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
             `SELECT * FROM tasks WHERE status = 'done'
              AND updated_at >= ? AND updated_at < ?`,
           )
-          .all(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as TaskRow[];
+          .all(dayStart(today), dayStart(tomorrow)) as TaskRow[];
 
         sections.push(`## Completed Today (${completed.length})`);
         if (completed.length > 0) {
@@ -319,7 +318,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
               `SELECT COUNT(*) as count FROM tasks
                WHERE created_at >= ? AND created_at < ?`,
             )
-            .get(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as { count: number }
+            .get(dayStart(today), dayStart(tomorrow)) as { count: number }
         ).count;
 
         const balance = completed.length - createdToday;
@@ -360,7 +359,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
              WHERE last_fired_at >= ? AND last_fired_at < ?
              ORDER BY last_fired_at ASC`,
           )
-          .all(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as ReminderRow[];
+          .all(dayStart(today), dayStart(tomorrow)) as ReminderRow[];
 
         sections.push("");
         sections.push(`## Reminders Fired Today (${firedToday.length})`);
@@ -373,7 +372,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
         }
 
         // Tomorrow's reminders
-        const tomorrowEnd = new Date(Date.now() + 2 * 86400000).toISOString().split("T")[0];
+        const tomorrowEnd = daysFromNow(2);
         const tomorrowReminders = db
           .prepare(
             `SELECT * FROM reminders
@@ -381,7 +380,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
              AND trigger_at >= ? AND trigger_at < ?
              ORDER BY trigger_at ASC`,
           )
-          .all(`${tomorrow}T00:00:00`, `${tomorrowEnd}T00:00:00`) as ReminderRow[];
+          .all(dayStart(tomorrow), dayStart(tomorrowEnd)) as ReminderRow[];
 
         sections.push("");
         sections.push(`## Tomorrow's Reminders (${tomorrowReminders.length})`);
@@ -449,14 +448,14 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
                WHERE state IN ('closed','merged') AND closed_at >= ? AND closed_at < ?
                ORDER BY closed_at DESC LIMIT 10`,
             )
-            .all(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as Array<{ title: string; repo: string }>;
+            .all(dayStart(today), dayStart(tomorrow)) as Array<{ title: string; repo: string }>;
           const openedToday = (
             db
               .prepare(
                 `SELECT COUNT(*) AS c FROM issues
                  WHERE created_at >= ? AND created_at < ?`,
               )
-              .get(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as { c: number }
+              .get(dayStart(today), dayStart(tomorrow)) as { c: number }
           ).c;
           const netBalance = closedToday.length - openedToday;
           const sym = netBalance > 0 ? "+" : "";
@@ -506,7 +505,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
               `SELECT COUNT(*) as count FROM tasks
                WHERE status = 'done' AND updated_at >= ?`,
             )
-            .get(`${weekAgo}T00:00:00`) as { count: number }
+            .get(dayStart(weekAgo)) as { count: number }
         ).count;
 
         // Open tasks
@@ -533,7 +532,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
             .prepare(
               `SELECT COUNT(*) as count FROM tasks WHERE created_at >= ?`,
             )
-            .get(`${weekAgo}T00:00:00`) as { count: number }
+            .get(dayStart(weekAgo)) as { count: number }
         ).count;
 
         const velocity = (completedCount / 7).toFixed(1);
@@ -616,7 +615,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
               `SELECT COUNT(*) as count FROM reminders
                WHERE last_fired_at >= ?`,
             )
-            .get(`${weekAgo}T00:00:00`) as { count: number }
+            .get(dayStart(weekAgo)) as { count: number }
         ).count;
 
         sections.push("## Reminders");
@@ -661,7 +660,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
         // Issues weekly summary
         try {
           const openedThisWeek = (
-            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE created_at >= ?`).get(`${weekAgo}T00:00:00`) as { c: number }
+            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE created_at >= ?`).get(dayStart(weekAgo)) as { c: number }
           ).c;
           const closedThisWeek = (
             db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state IN ('closed','merged') AND closed_at >= ?`).get(weekAgo) as { c: number }
@@ -676,7 +675,7 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
             db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state = 'merged' AND closed_at >= ?`).get(weekAgo) as { c: number }
           ).c;
           const timeLogged = (
-            db.prepare(`SELECT COALESCE(SUM(time_spent), 0) AS spt FROM issues WHERE updated_at >= ?`).get(`${weekAgo}T00:00:00`) as { spt: number }
+            db.prepare(`SELECT COALESCE(SUM(time_spent), 0) AS spt FROM issues WHERE updated_at >= ?`).get(dayStart(weekAgo)) as { spt: number }
           ).spt;
           const netBalance = closedThisWeek - openedThisWeek;
           const sym = netBalance > 0 ? "+" : "";

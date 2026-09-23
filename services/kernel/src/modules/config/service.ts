@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SqliteDb } from "../../core/db/sqlite.js";
-import type { KernelConfig } from "../../core/config.js";
+import { defaultTimezone, type KernelConfig } from "../../core/config.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
@@ -293,10 +293,13 @@ const SETTING_CATALOG: SettingDef[] = [
   {
     key: "TIMEZONE",
     label: { en: "Timezone", es: "Zona horaria" },
-    description: { en: "IANA timezone, e.g. UTC, Europe/London, America/New_York.", es: "Zona horaria IANA, por ejemplo UTC, Europe/London, America/New_York." },
+    description: {
+      en: "IANA timezone, e.g. UTC, Europe/London, America/New_York. Empty: this machine's zone. Sets what \"today\" means and when agent schedules run.",
+      es: "Zona horaria IANA, por ejemplo UTC, Europe/London, America/New_York. Vacío: la zona de esta máquina. Define qué es \"hoy\" y a qué hora corren los agentes programados.",
+    },
     category: "general",
     type: "string",
-    applyToConfig: (v, c) => { c.timezone = v; c.life.timezone = v; },
+    applyToConfig: (v, c) => { c.timezone = c.life.timezone = v || defaultTimezone(); },
   },
   {
     key: "KERNEL_DEFAULT_LANGUAGE",

@@ -1,22 +1,34 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, newId, isoNow, addDays, localDateTime, toInstant } from "@kernl/extension-sdk";
 import type { Reminder, ReminderStatus, RepeatInterval } from "./types.js";
 
+/**
+ * The next occurrence at the same local wall-clock time, a local calendar day
+ * (week, month) later. It used to add 24 UTC hours, which moved a daily 09:00
+ * reminder to 08:00 or 10:00 across a DST change.
+ */
 export function computeNextTrigger(current: string, repeat: RepeatInterval): string {
-  const d = new Date(current);
+  const local = localDateTime(new Date(toInstant(current) ?? current));
+  const date = local.slice(0, 10);
+  const wall = local.slice(11, 19);
+  let next: string;
   switch (repeat) {
     case "daily":
-      d.setUTCDate(d.getUTCDate() + 1);
+      next = addDays(date, 1);
       break;
     case "weekly":
-      d.setUTCDate(d.getUTCDate() + 7);
+      next = addDays(date, 7);
       break;
-    case "monthly":
+    case "monthly": {
+      // Same overflow as before: Jan 31 + 1 month is Mar 3 (or 2).
+      const d = new Date(`${date}T00:00:00Z`);
       d.setUTCMonth(d.getUTCMonth() + 1);
+      next = d.toISOString().slice(0, 10);
       break;
+    }
     default:
       return current;
   }
-  return d.toISOString();
+  return toInstant(`${next}T${wall}`)!;
 }
 
 export class ReminderService {
@@ -39,7 +51,8 @@ export class ReminderService {
       id: newId(),
       title: input.title,
       body: input.body ?? "",
-      trigger_at: input.trigger_at,
+      // Stored as a UTC instant, whatever form it came in (see toInstant).
+      trigger_at: toInstant(input.trigger_at) ?? input.trigger_at,
       status: "active",
       repeat: input.repeat ?? "none",
       task_id: input.task_id ?? null,
@@ -111,6 +124,7 @@ export class ReminderService {
     if (!existing) return undefined;
 
     const updated = { ...existing, ...changes, updated_at: isoNow() };
+    if (changes.trigger_at) updated.trigger_at = toInstant(changes.trigger_at) ?? changes.trigger_at;
 
     this.db
       .prepare(
@@ -169,7 +183,7 @@ export class ReminderService {
     const now = isoNow();
     this.db
       .prepare(`UPDATE reminders SET status='snoozed', snoozed_until=?, updated_at=? WHERE id=?`)
-      .run(until, now, id);
+      .run(toInstant(until) ?? until, now, id);
 
     const graph = this.getGraph();
     if (graph?.capabilities.cypher) {

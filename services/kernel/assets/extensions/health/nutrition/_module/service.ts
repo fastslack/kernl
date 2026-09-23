@@ -1,4 +1,4 @@
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type {
   NutritionFood, NutritionEntry, NutritionGoal, NutritionFasting,
   NutritionWater, NutritionBodyStats, DailyNutritionSummary,
@@ -265,7 +265,7 @@ export class NutritionService {
   }
 
   getWaterToday(date?: string): { total_ml: number; goal_ml: number; pct: number; entries: NutritionWater[] } {
-    const today = date ?? isoNow().split("T")[0];
+    const today = date ?? localDate();
     const entries = this.db.prepare(
       "SELECT * FROM nutrition_water WHERE date = ? ORDER BY time ASC"
     ).all(today) as NutritionWater[];
@@ -321,7 +321,7 @@ export class NutritionService {
   // ── Daily Summary ─────────────────────────────────────────────────────────
 
   getDailySummary(date?: string): DailyNutritionSummary {
-    const today = date ?? isoNow().split("T")[0];
+    const today = date ?? localDate();
     const entries = this.listEntries(today);
     const totals = {
       calories: 0, protein_g: 0, carbs_g: 0,

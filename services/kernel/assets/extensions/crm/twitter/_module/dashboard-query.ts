@@ -1,4 +1,4 @@
-import type { SqliteDb } from "@kernl/extension-sdk";
+import { type SqliteDb, localDate, dayStart } from "@kernl/extension-sdk";
 import { publicAccount } from "./service.js";
 import type { TwitterAccountRow } from "./types.js";
 
@@ -81,12 +81,12 @@ export function queryTwitter(db: SqliteDb): Record<string, unknown> {
       .all() as Array<Record<string, unknown>>;
 
     // Posts today
-    const today = new Date().toISOString().slice(0, 10);
+    const todayStart = dayStart(localDate());
     const postedToday = db
       .prepare(
         `SELECT COUNT(*) as count FROM twitter_posts WHERE status = 'posted' AND posted_at >= ?`,
       )
-      .get(today) as { count: number };
+      .get(todayStart) as { count: number };
 
     // Scheduled posts (future)
     const scheduledPosts = db

@@ -51,6 +51,7 @@ import { canonicalSlug } from "../../core/llm/provider-catalog.js";
 // (same pattern keeps the conversational chat loop and the autonomous-agent
 // loop on the same rails).
 import { formatBudgetWarning } from "../../core/llm/tool-loop.js";
+import { localDate } from "../../sdk/clock.js";
 
 /**
  * Load the SOUL prompt from `assets/SOUL.md`. Cached after the first read —
@@ -1211,7 +1212,7 @@ export class ChatService {
     episodeInstructions?: string;
   }): string {
     const lang = this.config.language;
-    const todayStr = new Date().toISOString().slice(0, 10);
+    const todayStr = localDate();
     const todayLine = promptTodayDate(lang, todayStr);
     // Already-stamped check covers both ES/EN flavors so flipping the kernel
     // language mid-process doesn't double-stamp.

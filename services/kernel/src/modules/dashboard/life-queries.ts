@@ -1,4 +1,5 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
+import { localDate, daysFromNow, dayStart } from "../../sdk/clock.js";
 
 export interface DailySummary {
   tasksDone: number;
@@ -26,21 +27,21 @@ export interface MoodEntry {
 }
 
 export function queryDailySummary(db: SqliteDb): DailySummary {
-  const today = new Date().toISOString().split("T")[0]!;
-  const tomorrow = new Date(Date.now() + 86_400_000).toISOString().split("T")[0]!;
+  const today = localDate();
+  const tomorrow = daysFromNow(1);
 
   const tasksDone = (
     db.prepare(
       `SELECT COUNT(*) AS c FROM tasks WHERE status = 'done'
        AND updated_at >= ? AND updated_at < ?`,
-    ).get(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as { c: number }
+    ).get(dayStart(today), dayStart(tomorrow)) as { c: number }
   ).c;
 
   const tasksCreated = (
     db.prepare(
       `SELECT COUNT(*) AS c FROM tasks
        WHERE created_at >= ? AND created_at < ?`,
-    ).get(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as { c: number }
+    ).get(dayStart(today), dayStart(tomorrow)) as { c: number }
   ).c;
 
   const interactions = (
@@ -53,7 +54,7 @@ export function queryDailySummary(db: SqliteDb): DailySummary {
     db.prepare(
       `SELECT COUNT(*) AS c FROM reminders
        WHERE last_fired_at >= ? AND last_fired_at < ?`,
-    ).get(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as { c: number }
+    ).get(dayStart(today), dayStart(tomorrow)) as { c: number }
   ).c;
 
   const purchases = (
@@ -68,7 +69,7 @@ export function queryDailySummary(db: SqliteDb): DailySummary {
       db.prepare(
         `SELECT COUNT(*) AS c FROM issues
          WHERE state IN ('closed','merged') AND closed_at >= ? AND closed_at < ?`,
-      ).get(`${today}T00:00:00`, `${tomorrow}T00:00:00`) as { c: number }
+      ).get(dayStart(today), dayStart(tomorrow)) as { c: number }
     ).c;
   } catch {
     // issues table may not exist

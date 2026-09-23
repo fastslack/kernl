@@ -10,6 +10,7 @@ import {
   safeJson,
   type Notifier,
   type PatchColumn,
+  localDateOf,
 } from "@kernl/extension-sdk";
 import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
@@ -1014,7 +1015,7 @@ export class CommsService {
     let body = options?.body ?? "";
     if (includeQuote && parent.body) {
       const senderName = parentMeta.from_name || parentMeta.from || "sender";
-      const dateStr = parent.sent_at?.split("T")[0] ?? parent.created_at.split("T")[0];
+      const dateStr = (parent.sent_at ? localDateOf(parent.sent_at) : undefined) ?? localDateOf(parent.created_at);
       const quoted = quoteBody(parent.body, senderName, dateStr);
       body = body ? `${body}\n\n${quoted}` : quoted;
     }

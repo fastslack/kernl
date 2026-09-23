@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, formatCents, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, formatCents, localDateOf, limitArg } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
 import type { EventWithSummary, AttendanceSummary } from "./types.js";
 
@@ -596,7 +596,7 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           `**Recent Events:**`,
           ...history.events.slice(0, 10).map((e) => {
             const emoji = { yes: "✅", no: "❌", maybe: "❓", pending: "⏳", waitlist: "📋" }[e.rsvp_status] ?? "•";
-            return `  ${emoji} ${e.title} (${e.start_at.split("T")[0]})`;
+            return `  ${emoji} ${e.title} (${localDateOf(e.start_at)})`;
           }),
         ];
 
@@ -619,7 +619,7 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         const lines = series.map((e) => {
           const statusIcon = { draft: "📝", open: "📢", confirmed: "✅", cancelled: "❌", completed: "🏁" }[e.status];
-          return `${statusIcon} ${e.start_at.split("T")[0]} - ${e.summary.yes}/${e.max_attendees ?? "∞"} confirmed`;
+          return `${statusIcon} ${localDateOf(e.start_at)} - ${e.summary.yes}/${e.max_attendees ?? "∞"} confirmed`;
         });
 
         return textResult(`**Recurring Series: ${series[0].title}**\n\n${lines.join("\n")}`);

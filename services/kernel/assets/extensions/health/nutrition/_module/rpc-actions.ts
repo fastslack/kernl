@@ -7,7 +7,7 @@
  * one still open, a BMI worked out from the weight.
  */
 
-import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction, today } from "@kernl/extension-sdk";
 import type { NutritionService } from "./service.js";
 import type { FastingProtocol, MealType } from "./types.js";
 
@@ -23,7 +23,6 @@ const BODY_STATS = {
 } as const;
 
 export function nutritionRpcActions(service: NutritionService): RpcAction[] {
-  const today = () => new Date().toISOString().split("T")[0];
   const dateArg = (input: Record<string, unknown>) => pickArgs(input, { date: "string" }).date ?? today();
 
   return rpcActionsFrom({

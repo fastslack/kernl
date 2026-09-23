@@ -29,6 +29,7 @@ import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from
 import { assembleSystemPrompt } from "./executor/system-prompt.js";
 import { RunRecorder } from "./executor/run-recorder.js";
 import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
+import { localDate } from "../../sdk/clock.js";
 
 // Public surface kept on this module — callers import these from executor.js.
 export type { ExecutionResult } from "./executor/shared.js";
@@ -265,7 +266,7 @@ export class AgentExecutor {
         lang, depth, maxChainDepth,
         effectiveSystemPrompt,
         effectiveGoal,
-        todayStr: new Date().toISOString().slice(0, 10),
+        todayStr: localDate(),
         goalVector: null,
         memoryGoalSuffix: "",
       });

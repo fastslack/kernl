@@ -18,6 +18,7 @@
 import { CronExpressionParser } from "cron-parser";
 import type { CalendarSource, CalendarSourceEvent } from "../../core/types.js";
 import { tableExists, safeGet, safeAll } from "./query-helpers.js";
+import { dayStart, localParts, localDateOf } from "../../sdk/clock.js";
 
 // 5. Home maintenance (next_due)
 const homeMaintenance: CalendarSource = {
@@ -140,12 +141,12 @@ const researchTasks: CalendarSource = {
        WHERE status = 'active' AND next_run_at IS NOT NULL
          AND next_run_at >= ? AND next_run_at < ?
        ORDER BY next_run_at`,
-      [`${start}T00:00:00`, `${end}T00:00:00`],
+      [dayStart(start), dayStart(end)],
     );
     return {
       events: rows.map((r) => ({
-        date: r.next_run_at.split("T")[0],
-        id: r.id, type: "research", title: r.name, time: r.next_run_at.split("T")[1]?.slice(0, 5) ?? null,
+        date: localDateOf(r.next_run_at),
+        id: r.id, type: "research", title: r.name, time: localParts(r.next_run_at).time,
         color: "#8B7CF6", extra: null,
       })),
     };

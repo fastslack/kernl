@@ -1,4 +1,4 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type { Task, Tag, TaskProject } from "./types.js";
 
 export class TaskService {
@@ -547,7 +547,7 @@ export class TaskService {
   /** Spawn the next instance of a recurring task. Returns the new task or null. */
   private generateNextInstance(completed: Task): Task | null {
     if (!completed.recurrence) return null;
-    const from = completed.due_date ?? isoNow().slice(0, 10);
+    const from = completed.due_date ?? localDate();
     const nextDue = this.previewNextDue(from, completed.recurrence);
     if (!nextDue) return null;
 

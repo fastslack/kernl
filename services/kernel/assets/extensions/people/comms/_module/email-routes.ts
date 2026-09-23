@@ -8,6 +8,7 @@ import {
   newId,
   isoNow,
   log,
+  toInstant,
 } from "@kernl/extension-sdk";
 import { timingSafeEqual } from "node:crypto";
 import type { EmailService } from "./email-service.js";
@@ -218,7 +219,9 @@ export function registerEmailRoutes(
         }
         case "create_reminder": {
           const reminderTitle = `Follow up: ${email.subject}`;
-          const triggerAt = body.params?.trigger_at as string ?? new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+          const given = body.params?.trigger_at as string | undefined;
+          // Reminders store a UTC instant; a time without a zone is local.
+          const triggerAt = (given && toInstant(given)) || new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
           const remId = newId();
           const now2 = isoNow();
           const db2 = (emailService as unknown as { db: SqliteDb }).db;

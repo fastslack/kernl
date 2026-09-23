@@ -19,6 +19,7 @@ import {
   type SystemRegistry,
   log,
   formatCents,
+  kernelTimezone,
 } from "@kernl/extension-sdk";
 
 export interface EventListenerDeps {
@@ -45,6 +46,7 @@ export function setupEventListeners(deps: EventListenerDeps): void {
       const yes = event.summary.yes;
       const min = event.min_attendees;
       const startDate = new Date(event.start_at).toLocaleString("en-GB", {
+        timeZone: kernelTimezone(),
         weekday: "short",
         day: "numeric",
         month: "short",
@@ -129,6 +131,7 @@ export function setupEventListeners(deps: EventListenerDeps): void {
       log.info(`Event cancelled: "${event.title}" (id=${event.id})`);
 
       const startDate = new Date(event.start_at).toLocaleString("en-GB", {
+        timeZone: kernelTimezone(),
         weekday: "short",
         day: "numeric",
         month: "short",
@@ -214,6 +217,7 @@ export function setupEventListeners(deps: EventListenerDeps): void {
 
 function formatReminderBody(event: KernelEventsModuleEvents["events:opened"]["event"]): string {
   const startDate = new Date(event.start_at).toLocaleString("en-GB", {
+    timeZone: kernelTimezone(),
     weekday: "long",
     day: "numeric",
     month: "short",

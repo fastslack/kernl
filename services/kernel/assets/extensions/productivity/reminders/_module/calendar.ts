@@ -5,9 +5,9 @@
  * always shown reminders in (see `queryCalendar`).
  */
 
-import { type CalendarSource, type CalendarSourceEvent, safeAll } from "@kernl/extension-sdk";
+import { type CalendarSource, type CalendarSourceEvent, safeAll, dayStart, localParts, localDateOf, addDays } from "@kernl/extension-sdk";
 
-/** Days (`YYYY-MM-DD`) a recurring reminder fires on within [start, end). */
+/** Days (`YYYY-MM-DD`) a recurring reminder fires on within [start, end), counted in local calendar days. */
 function expandRecurring(
   triggeredAt: string,
   repeat: string,
@@ -15,19 +15,17 @@ function expandRecurring(
   end: string,
 ): string[] {
   const dates: string[] = [];
-  const base = new Date(triggeredAt);
-  const endD = new Date(end + "T00:00:00Z");
-  let cur = new Date(base);
-
-  for (let i = 0; i < 200; i++) {
-    const ds = cur.toISOString().split("T")[0];
-    if (ds >= end) break;
-    if (ds >= start) dates.push(ds);
-    if (repeat === "daily") cur.setUTCDate(cur.getUTCDate() + 1);
-    else if (repeat === "weekly") cur.setUTCDate(cur.getUTCDate() + 7);
-    else if (repeat === "monthly") cur.setUTCMonth(cur.getUTCMonth() + 1);
-    else break;
-    if (cur > endD) break;
+  let day = localDateOf(triggeredAt);
+  for (let i = 0; i < 200 && day < end; i++) {
+    if (day >= start) dates.push(day);
+    if (repeat === "daily") day = addDays(day, 1);
+    else if (repeat === "weekly") day = addDays(day, 7);
+    else if (repeat === "monthly") {
+      // Same overflow as before: Jan 31 + 1 month is Mar 3 (or 2).
+      const d = new Date(`${day}T00:00:00Z`);
+      d.setUTCMonth(d.getUTCMonth() + 1);
+      day = d.toISOString().slice(0, 10);
+    } else break;
   }
   return dates;
 }
@@ -44,11 +42,10 @@ export const remindersCalendarSource: CalendarSource = {
        WHERE status IN ('active','snoozed') AND repeat = 'none'
          AND trigger_at >= ? AND trigger_at < ?
        ORDER BY trigger_at`,
-      [`${start}T00:00:00`, `${end}T00:00:00`],
+      [dayStart(start), dayStart(end)],
     );
     for (const r of oneShot) {
-      const d = r.trigger_at.split("T")[0];
-      const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+      const { date: d, time: t } = localParts(r.trigger_at);
       events.push({
         date: d,
         id: r.id, type: "reminder", title: r.title, time: t,
@@ -62,7 +59,7 @@ export const remindersCalendarSource: CalendarSource = {
        WHERE status IN ('active','snoozed') AND repeat != 'none'`,
     );
     for (const r of recurring) {
-      const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+      const t = localParts(r.trigger_at).time;
       const expanded = expandRecurring(r.trigger_at, r.repeat, start, end);
       for (const d of expanded) {
         events.push({
@@ -81,7 +78,7 @@ export const remindersCalendarSource: CalendarSource = {
       [new Date().toISOString()],
     );
     const overdue = odRem.map((r) => {
-      const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+      const t = localParts(r.trigger_at).time;
       return { id: r.id, type: "reminder", title: r.title, time: t, color: "#F0883E", extra: null };
     });
 

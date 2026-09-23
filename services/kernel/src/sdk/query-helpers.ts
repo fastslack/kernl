@@ -1,4 +1,5 @@
 import type { SqliteDb } from "../core/db/sqlite.js";
+import { toInstant } from "./clock.js";
 
 /**
  * Check if a table exists in the database.
@@ -64,18 +65,37 @@ export function toRecord(rows: Array<{ key: string; count: number }>): Record<st
   return rec;
 }
 
-/**
- * Today's date as ISO string (YYYY-MM-DD).
- */
-export function today(): string {
-  return new Date().toISOString().split("T")[0];
-}
+// Dates live in clock.ts (kernel timezone); re-exported for existing imports.
+export { today, daysFromNow } from "./clock.js";
 
 /**
- * Date N days from now as ISO string (YYYY-MM-DD).
+ * Rewrite the timestamps in `columns` that are not UTC instants yet (no
+ * trailing Z) as instants, read by `toInstant`: a value without a zone is
+ * the kernel's local time. Idempotent, so a module can run it at every boot;
+ * a missing table or column is skipped. Returns how many values changed.
  */
-export function daysFromNow(n: number): string {
-  return new Date(Date.now() + n * 86_400_000).toISOString().split("T")[0];
+export function normalizeInstants(db: SqliteDb, table: string, columns: readonly string[]): number {
+  let changed = 0;
+  for (const column of columns) {
+    let rows: Array<{ rid: number; v: string }>;
+    try {
+      rows = db.prepare(
+        `SELECT rowid AS rid, ${column} AS v FROM ${table}
+          WHERE ${column} IS NOT NULL AND ${column} <> '' AND ${column} NOT LIKE '%Z'`,
+      ).all() as Array<{ rid: number; v: string }>;
+    } catch {
+      continue;
+    }
+    const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
+    for (const r of rows) {
+      const next = toInstant(r.v);
+      if (next && next !== r.v) {
+        update.run(next, r.rid);
+        changed++;
+      }
+    }
+  }
+  return changed;
 }
 
 /**

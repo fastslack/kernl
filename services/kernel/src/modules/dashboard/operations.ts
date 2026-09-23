@@ -20,7 +20,7 @@ import { HttpError } from "../../sdk/http-error.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import type { SystemRegistry } from "../../core/system-registry.js";
-import type { KernelConfig } from "../../core/config.js";
+import { defaultTimezone, type KernelConfig } from "../../core/config.js";
 import type { Notifier } from "../../core/notify/notifier.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { getGlobalPiiFilter } from "../../core/pii-filter.js";
@@ -35,6 +35,7 @@ import {
   type DashboardChannelReader,
 } from "./api.js";
 import type { CalendarSource } from "../../core/types.js";
+import { today } from "../../sdk/clock.js";
 
 export interface DashboardOperationDeps {
   db: SqliteDb;
@@ -54,8 +55,6 @@ export interface DashboardOperationDeps {
 
 /** Process start as the dashboard reports it (health, system agenda, metrics). */
 export const startedAt = Date.now();
-
-const today = () => new Date().toISOString().split("T")[0];
 
 /**
  * What the settings page sees in place of a stored channel secret (any schema
@@ -132,7 +131,7 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
       status: "ok",
       uptimeMs: Date.now() - startedAt,
       uptimeFormatted: formatUptime(Date.now() - startedAt),
-      timezone: config?.timezone ?? process.env.TIMEZONE ?? "UTC",
+      timezone: config?.timezone ?? defaultTimezone(),
       _debug_tz: { env: process.env.TIMEZONE, configTz: config?.timezone, lifeTz: config?.life?.timezone },
       services: {
         sqlite: true,

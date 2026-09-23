@@ -19,6 +19,7 @@ import {
   isoNow,
   log,
   stripReasoning,
+  localDate,
 } from "@kernl/extension-sdk";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -110,7 +111,7 @@ export class EmailTriageService {
       date: e.date,
     }));
 
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDate();
 
     const systemPrompt = `You are an email triage assistant. Classify each email by urgency and whether it needs the user's attention/response.
 Today is ${today}.
