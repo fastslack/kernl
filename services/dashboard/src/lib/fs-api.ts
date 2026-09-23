@@ -202,11 +202,6 @@ export async function listDir(provider: string, path: string): Promise<FsListing
 	return jsonGet<FsListing>(u);
 }
 
-export async function statEntry(provider: string, path: string): Promise<FsStat> {
-	const u = `/api/fs/stat?provider=${encodeURIComponent(provider)}&path=${encodeURIComponent(path)}`;
-	return jsonGet<FsStat>(u);
-}
-
 // ── Mutations ───────────────────────────────────────────────────────
 
 export async function mkdir(provider: string, path: string, recursive = false): Promise<void> {

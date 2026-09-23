@@ -299,17 +299,6 @@
     const next = cur.includes(ref) ? cur.filter(p => p !== ref) : [...cur, ref];
     scheduleSave({ plugins: next });
   }
-  function toggleMcp(name: string, cfg: Mcp) {
-    const cur = agentVars.mcpServers;
-    const next = { ...cur };
-    if (next[name]) { delete next[name]; }
-    else {
-      if (name === 'kernl') next[name] = { type: 'http', url: 'http://host.docker.internal:3086/mcp' };
-      else if (cfg.type === 'http') next[name] = { type: 'http', url: '' };
-      else next[name] = { type: 'stdio', command: '', args: [] };
-    }
-    scheduleSave({ mcpServers: next });
-  }
 
   $: claudeCodeAgents = agents.length;
 
@@ -1316,16 +1305,6 @@
     margin-bottom: 14px;
     font-size: 13px;
   }
-  .agent-picker label { color: var(--muted, #8fa0c3); font-weight: 600; }
-  .agent-picker select {
-    background: var(--panel-bg, rgba(18,22,38,0.8));
-    border: 1px solid var(--panel-border, rgba(90,110,160,0.3));
-    color: inherit;
-    padding: 5px 10px; border-radius: 4px;
-    font-size: 13px;
-    min-width: 260px;
-    font-family: 'Fira Code', monospace;
-  }
 
   .spinner {
     width: 12px; height: 12px;
@@ -1799,7 +1778,6 @@
   .mcp-scope-sub {
     display: block; font-size: 11px; color: var(--muted, #8fa0c3); margin-top: 2px; line-height: 1.5;
   }
-  .mcp-scope-sub code { background: rgba(90,110,160,0.14); padding: 1px 5px; border-radius: 3px; font-family: 'Fira Code', monospace; font-size: 95%; }
   .mcp-scope-n {
     font-family: 'Fira Code', monospace;
     font-size: 13px; font-weight: 700;
@@ -1808,7 +1786,6 @@
     padding: 3px 10px; border-radius: 10px;
     flex-shrink: 0;
   }
-  .mcp-scope-user .mcp-scope-n { background: rgba(16,185,129,0.14); color: #10b981; }
   .mcp-scope-list { display: flex; flex-direction: column; gap: 6px; }
   .mcp-row {
     display: grid; grid-template-columns: 1fr auto 28px;
@@ -1822,7 +1799,6 @@
   .mcp-row-dot {
     width: 6px; height: 6px; border-radius: 50%; background: #10b981; flex-shrink: 0;
   }
-  .mcp-scope-agent .mcp-row-dot { background: #6366f1; }
   .mono { font-family: 'Fira Code', monospace; font-size: 12px; color: var(--fg, #e8ecf5); font-weight: 600; }
   .mcp-row-type {
     font-size: 9px; padding: 2px 6px; border-radius: 8px;
@@ -2225,11 +2201,8 @@
   }
   .card:hover { border-color: rgba(99,102,241,0.4); }
   .card.active { border-color: rgba(99,102,241,0.8); background: rgba(99,102,241,0.08); }
-
-  .card input[type=checkbox] { margin-top: 3px; cursor: pointer; flex-shrink: 0; }
   .card-body { flex: 1; min-width: 0; }
   .card-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; flex-wrap: wrap; }
-  .card-head .name { font-weight: 700; font-size: 13px; color: var(--fg, #e8ecf5); }
   .tag {
     font-size: 9px;
     background: rgba(90,110,160,0.15);

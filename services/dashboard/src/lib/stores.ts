@@ -114,11 +114,3 @@ export function ensureStore(name: string): ReturnType<typeof writable> {
 	return storeMap[name];
 }
 
-// Bulk update all stores from a full fetch
-export function setAllStores(d: Record<string, unknown>) {
-	for (const [key, val] of Object.entries(d)) {
-		if (key in storeMap) {
-			storeMap[key].set(val as Record<string, unknown>);
-		}
-	}
-}

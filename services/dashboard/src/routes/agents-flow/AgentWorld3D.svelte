@@ -464,7 +464,6 @@
     });
   }
 
-
   /** (#F3) Fly a glowing data packet from desk A to desk B: a curved arrow +
    *  coin stream along the arc, then a converging ripple + monitor pulse at B.
    *  Self-contained ephemeral effects (curvedArrow/coinTrail/convergingParticles
@@ -509,7 +508,6 @@
       }, 900);
     });
   }
-
 
   /** Diff agents' active flag against the cached map; spawn a LEAVE walker
    *  when 1→0 and an ARRIVE walker when 0→1. The first observation just primes
@@ -866,7 +864,6 @@
     return fixerCandidates[0] ?? null;
   })();
 
-
   async function sendReportToFixer(): Promise<void> {
     if (!openReport || sendingToFixer) return;
     const fixer = activeFixer;
@@ -906,18 +903,6 @@
       sendingToFixer = false;
       setTimeout(() => { fixerStatus = ''; }, 6000);
     }
-  }
-
-  // Fire-and-forget POST to /api/agents/flow-diag so diagnostic context from
-  // the 3D view lands in the kernel log (keeps browser console clean).
-  function reportWalkerDiag(payload: Record<string, unknown>): void {
-    try {
-      fetch('/api/agents/flow-diag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).catch(() => { /* best effort */ });
-    } catch { /* best effort */ }
   }
 
   // ── Live meeting transcripts ──────────────────
@@ -1955,7 +1940,6 @@
     meetingDecor.delete(meetingId);
   }
 
-
   // O(1) agent lookup for per-frame loops — rebuilt only when the agents
   // array is reassigned (parent polls ~1/min). Avoids agents.find() scans
   // inside the animation loop (230 agents × 230 lookups/frame otherwise).
@@ -2104,7 +2088,6 @@
   // ── Create Office — handled by <OfficeCreatorChat>; only the modal flag
   //    lives here so the HQ menu can toggle it open.
   let showOfficeModal = false;
-
 
   // ── Build Scene ────────────────────────────────
   // Idempotent: dissolve the boot loader exactly once, after the next painted
@@ -3078,7 +3061,6 @@
         if (seats.length > 0 && scene) {
           const allParticipants = [modId, ...attIds].filter(Boolean);
           allParticipants.forEach((pid, i) => {
-            const pName = agents.find(a => a.id === pid)?.name ?? 'Agent';
             const meetingUrgent = e.data.urgency === 'urgent';
             const seat = seats[i % seats.length];
             // If an old walker is blocking, drop it so the meeting takes
@@ -3175,8 +3157,6 @@
         const round = Number(e.data.round ?? 0);
         const body = String(e.data.body ?? e.data.content_preview ?? '');
         const tokens = Number(e.data.tokens ?? 0);
-        const mIco = role === 'moderator' ? '🎙️' : '💬';
-        const mPrev = String(e.data.content_preview ?? '').slice(0, 60);
         if (mid && liveMeetings[mid]) {
           const turn: LiveTurn = { agentId: spkId, agentName: spkName, role, round, body, ts: Date.now(), tokens };
           // Promote the speaker so the floor pose + spotlight code below
@@ -5167,7 +5147,6 @@
   // Core ids are literals; extension-contributed tabs use dynamic ids.
   let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
   let agentRuns: Array<{ id: string; status: string; steps_count: number; tokens_used: number; trigger_type: string; created_at: string; result?: string; error?: string }> = [];
-  let agentMemory: Array<{ role: string; content: string; created_at: string }> = [];
   let workspaceFiles: Array<{ path: string; type: string; size: number }> = [];
   let workspaceFileContent: { path: string; content: string } | null = null;
   let workspaceLoading = false;
@@ -5181,7 +5160,6 @@
   let wsCollapsed: Set<string> = new Set();
 
   let runsLoading = false;
-  let memoryLoading = false;
   let expandedRunId: string | null = null;
   let runSteps: Array<{ step_number: number; type: string; content: string; tool_name: string; tool_output?: string; is_event?: boolean }> = [];
 
@@ -5209,17 +5187,6 @@
       agentRuns = data?.runs ?? [];
     } catch { agentRuns = []; }
     runsLoading = false;
-  }
-
-  async function loadAgentMemory() {
-    if (!selectedAgent || memoryLoading) return;
-    memoryLoading = true;
-    try {
-      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=50`);
-      const data: any = await res.json();
-      agentMemory = (data?.memory ?? []) as Array<{ role: string; content: string; created_at: string }>;
-    } catch { agentMemory = []; }
-    memoryLoading = false;
   }
 
   async function loadChatFromMemory() {
@@ -5252,7 +5219,6 @@
     await tick();
     if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
   }
-
 
   $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData, flows) : null;
 
@@ -5494,7 +5460,6 @@
   // wired to six different output panes.
   let draftModal: DraftModal | null = null;
 
-
   function handleOutputClick(e: MouseEvent) {
     const t = e.target as HTMLElement | null;
     if (!t) return;
@@ -5527,7 +5492,7 @@
     } else {
       panelTab = runningAgentIds.has(selectedAgent) ? 'live' : 'info';
     }
-    agentRuns = []; agentMemory = []; expandedRunId = null; chatHistory = []; latestRun = null;
+    agentRuns = []; expandedRunId = null; chatHistory = []; latestRun = null;
     loadLatestRun(); loadChatFromMemory();
   }
   $: if (!selectedAgent) lastSelectedAgent = null;

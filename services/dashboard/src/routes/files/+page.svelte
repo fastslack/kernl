@@ -933,5 +933,4 @@
   }
   .form-field input[type="text"]:focus { border-color: var(--blue); }
   .form-field input[type="checkbox"] { accent-color: var(--blue); }
-  .config-hint { font-size: 12px; color: var(--gold); margin: 0 0 10px; }
 </style>

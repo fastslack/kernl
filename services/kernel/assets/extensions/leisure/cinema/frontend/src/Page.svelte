@@ -334,7 +334,6 @@
   // membership; here it is just the question people actually ask.
   let kindFilter: '' | 'film' | 'series' = '';
 
-
   // ── Top-tag chip row ─────────────────────────────────────────
   // Populated from /api/cinema/tags. Cached at module scope so reloading
   // /cinema doesn't re-fetch the same data, but refresh on demand after
@@ -867,13 +866,6 @@
   }
   let subInfo: SubEngineInfo | null = null;
 
-  // Helper: short label for the engine picker (e.g. "Qwen 2.5 7B" → keeps
-  // it compact in the button). Strips org prefix and trailing -gguf.
-  function shortModel(model?: string): string {
-    if (!model) return '';
-    const stripped = model.replace(/^[^/]+\//, '').replace(/\.gguf$/i, '');
-    return stripped.length > 18 ? stripped.slice(0, 17) + '…' : stripped;
-  }
   // ── Subtitle UI state ──────────────────────────────────────────────
   // We keep two intent vars (`subSource`, `translateActive`) and derive
   // the internal `subTrack` value from them. That way the settings UI is
@@ -1036,20 +1028,6 @@
       next.delete(row.rowId);
       downloadingRowIds = next;
     }
-  }
-
-  async function setPublisherTrust(pubkey: string, trust: 'mine' | 'trusted' | 'blocked' | 'unknown'): Promise<void> {
-    try {
-      const r = await apiFetch('/api/cinema/subs/trust', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ pubkey, trust }),
-      });
-      if (!r.ok) return;
-      const body = await r.json().catch(() => ({} as any));
-      // Patch the local map so the UI reflects the change without re-fetching.
-      publishersMap = { ...publishersMap, [pubkey]: { trust: body?.publisher?.trust ?? trust, alias: body?.publisher?.alias ?? '' } };
-    } catch { /* non-fatal */ }
   }
 
   function shortPubkey(pk: string): string {
@@ -1631,30 +1609,6 @@
     resumePlaybackIfArmed();
   }
 
-  // ── SELECT row handlers ───────────────────────────────────────────
-  // These let the user instantly switch to any sub already in the cache,
-  // bypassing the GENERATE flow entirely. They're only available when
-  // the corresponding subtitle data exists.
-  function selectOff(): void {
-    activeSubKey = 'off';
-    subSource = 'off';
-    subsApplied = false;
-    if (manualTrack) {
-      while (manualTrack.cues && manualTrack.cues.length > 0) {
-        manualTrack.removeCue(manualTrack.cues[0]);
-      }
-      manualTrack.mode = 'disabled';
-    }
-    activeCueText = '';
-    lastLoadedTrackUrl = '';
-  }
-  function selectShipped(): void {
-    activeSubKey = 'shipped';
-    subSource = 'orig';
-    translateActive = false;
-    subsApplied = true;
-    // The reactive will pick up subSource change and load via trackSrc.
-  }
   /**
    * Put a cached sub on screen. The three-way URL resolution lives in the
    * adapter now; this only guards the auto-open case.
@@ -1943,50 +1897,10 @@
     }
   }
 
-  // Per-engine throughput estimates (audio-seconds processed per wall-second).
-  // Calibrated from the local box: whisper.cpp `base` does ~30x realtime,
-  // `transformers` ~5x, groq cloud ~180x. Tweak if you upgrade hardware.
-  function estimateEtaMs(): number | null {
-    const dur = videoEl?.duration;
-    if (!dur || !Number.isFinite(dur)) return null;
-    const xRealtime: Record<string, Record<string, number>> = {
-      whispercpp:   { tiny: 60, base: 30, small: 15, medium: 6,  'large-v3': 3 },
-      transformers: { tiny: 12, base: 5,  small: 2.5, medium: 1.2, 'large-v3': 0.6 },
-      groq:         { tiny: 180, base: 180, small: 180, medium: 180, 'large-v3': 180 },
-    };
-    const factor = xRealtime[transcribeEngine]?.[transcribeModel] ?? 5;
-    return (dur / factor) * 1000;
-  }
-
   function fmtElapsed(ms: number): string {
     const s = Math.max(0, Math.floor(ms / 1000));
     const m = Math.floor(s / 60), ss = s % 60;
     return m > 0 ? `${m}:${String(ss).padStart(2, '0')}` : `${ss}s`;
-  }
-  /** Format audio seconds as "5m24s" / "12s" / "1h03m". Smaller than
-   *  fmtElapsed because it can hit movie-length values. */
-  function fmtAudio(sec: number): string {
-    const s = Math.max(0, Math.round(sec));
-    if (s < 60) return `${s}s`;
-    const m = Math.floor(s / 60), ss = s % 60;
-    if (m < 60) return ss === 0 ? `${m}m` : `${m}m${String(ss).padStart(2, '0')}s`;
-    const h = Math.floor(m / 60), mm = m % 60;
-    return `${h}h${String(mm).padStart(2, '0')}m`;
-  }
-  /** Per-phase title shown in the transcribe modal. The default ("Preparing
-   *  transcription…") is reserved for the brief startup window before any
-   *  SSE event has arrived. If we already have audio data flowing but the
-   *  subPhase event hasn't landed yet, infer from `transcribeFrac` /
-   *  `transcribeProcessedSec` so the title doesn't lie. */
-  function transcribePhaseTitle(): string {
-    switch (transcribeSubPhase) {
-      case 'probe':       return 'Probing audio…';
-      case 'load-model':  return 'Downloading whisper model…';
-      case 'extract':     return 'Downloading & decoding audio…';
-      case 'transcribe':  return 'Transcribing audio…';
-    }
-    if (transcribeFrac > 0 || transcribeProcessedSec > 0) return 'Transcribing audio…';
-    return 'Preparing transcription…';
   }
 
   // Probe the kernel for a cached VTT for the (url, engine, model, lang)
@@ -2338,17 +2252,6 @@
       try { fn(terminal); } catch { /* a listener must not break teardown */ }
     }
   }
-  // Rough ETA: nllb is ~0.3-0.4s/cue on CPU, grok is ~0.05s/cue (one batch).
-  // We don't know cue count up front, so we estimate from video duration:
-  // assume ~10 cues/min of audio for a typical talking video.
-  function estimateTranslateMs(): number | null {
-    const dur = videoEl?.duration;
-    if (!dur || !Number.isFinite(dur)) return null;
-    const estCues = Math.max(50, dur / 6);     // ~10 cues per minute
-    // LLM chain (cloud or local GPU): ~50ms per cue. NLLB (offline CPU): ~400ms.
-    const perCue = subEngine === 'llm' ? 0.05 : 0.4;
-    return estCues * perCue * 1000;
-  }
 
   function parseVttTimestamp(ts: string): number {
     const parts = ts.split(':');
@@ -2562,25 +2465,6 @@
     if (!v || !Number.isFinite(t)) return;
     v.currentTime = Math.max(0, Math.min(t, v.duration || 0));
   }
-  function onVolumeInput(e: Event): void {
-    const input = e.currentTarget as HTMLInputElement;
-    if (!videoEl) return;
-    videoEl.volume = parseFloat(input.value);
-    videoEl.muted = videoEl.volume === 0;
-  }
-  function toggleFullscreen(): void {
-    // The fullscreen target is the .video-stack so the captions overlay
-    // and custom controls go fullscreen WITH the video. If we requested
-    // it on the bare <video>, the browser's UA stylesheet would replace
-    // our chrome with the native one.
-    const target = videoEl?.parentElement;
-    if (!target) return;
-    if (document.fullscreenElement) {
-      void document.exitFullscreen();
-    } else {
-      void target.requestFullscreen?.();
-    }
-  }
 
   // ── Video element event handlers ────────────────────────────────────
   function onTimeUpdate(): void {
@@ -2683,13 +2567,6 @@
   function onFullscreenChange(): void {
     isFullscreen = !!document.fullscreenElement;
   }
-  function onLoadedMeta(): void {
-    onDurationChange();
-    enableAllTextTracks();
-    // Last-resort trigger: if the reactive `$: maybeLoadTranscript()`
-    // missed the videoEl-becomes-available moment, this catches it.
-    maybeLoadTranscript();
-  }
 
   // Auto-hide controls after 2.5s of no mouse activity during playback.
   // Always visible while paused, while settings open, or on hover.
@@ -2699,16 +2576,6 @@
     controlsHideTimer = setTimeout(() => {
       if (playerIsPlaying) controlsVisible = false;
     }, 2500);
-  }
-
-  function fmtTime(s: number): string {
-    if (!Number.isFinite(s) || s < 0) return '0:00';
-    const t = Math.floor(s);
-    const h = Math.floor(t / 3600);
-    const m = Math.floor((t % 3600) / 60);
-    const sec = t % 60;
-    if (h > 0) return `${h}:${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`;
-    return `${m}:${String(sec).padStart(2, '0')}`;
   }
 
   // Computed CSS for the caption overlay — derived from the user's style
@@ -3135,20 +3002,6 @@
   let codecFallbackHint = '';            // banner message
   let codecFallbackExpected = false;     // probe knew up front → informational, not an error
   let videoLoadWatchdog: ReturnType<typeof setTimeout> | null = null;
-
-  // Manual toggle handler — extracted from the template because inline
-  // `as HTMLInputElement` casts inside Svelte attribute expressions
-  // trip the parser (TS-in-template restriction).
-  function onForceTranscodeToggle(e: Event): void {
-    const input = e.currentTarget as HTMLInputElement;
-    const force = input.checked;
-    if (!playItem || !playFiles[playActiveIdx]) return;
-    codecFallbackUsed = force;       // prevent re-fallback loop
-    codecFallbackHint = '';
-    const built = buildPlayUrl(playItem, playFiles[playActiveIdx], force);
-    playSrc = built.src;
-    playNeedsTranscode = built.needsTranscode;
-  }
 
   /**
    * Move playback onto the transcoder.
@@ -3706,20 +3559,6 @@
     return body.items ?? [];
   }
 
-  // One-shot semantic search — returns items ranked by cosine similarity
-  // to the query embedding. Caller handles state transitions; this is
-  // pure fetch-and-throw.
-  async function fetchSemantic(q: string, limit: number): Promise<ArchiveItem[]> {
-    const params = new URLSearchParams({ q, limit: String(limit) });
-    const r = await apiFetch(`/api/cinema/search?${params.toString()}`);
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({} as any));
-      throw new Error(e.error ?? `http ${r.status}`);
-    }
-    const body = await r.json();
-    return body.items ?? [];
-  }
-
   // Reset + fetch first page. Single path now — the /titles endpoint
   // runs hybrid (FTS5+semantic+RRF) when there's a query, classic
   // listing when there isn't. Filters always layer on top.
@@ -3790,11 +3629,6 @@
     }
   }
 
-  function pickCollection(slug: string) {
-    collection = slug;
-    viewWatchlist = false;
-    runSearch();
-  }
   function clearAllFilters() {
     collection = '';
     activeTags = [];
@@ -6051,16 +5885,6 @@
       inset 0 1px 0 rgba(255, 255, 255, 0.25),
       0 2px 10px color-mix(in srgb, var(--green) 35%, transparent);
   }
-  button.primary.go {
-    background: rgba(255, 176, 0, 0.08);
-    border-color: var(--amber, #ffb000);
-    color: var(--amber, #ffb000);
-  }
-  button.primary.go:hover:not(:disabled) {
-    background: var(--amber, #ffb000);
-    color: #050807;
-    box-shadow: 0 0 16px rgba(255, 176, 0, 0.5);
-  }
   button.primary:disabled { opacity: 0.3; cursor: not-allowed; }
   button.ghost {
     background: transparent;
@@ -6166,11 +5990,6 @@
     flex-wrap: wrap;
     font-size: 12.5px;
   }
-  .result .ok { color: var(--amber, #ffb000); font-weight: 600; }
-  .result .warn { color: var(--yellow, #d4a017); cursor: pointer; }
-  .result a { color: var(--cyan, #4dd0e1); text-decoration: none; }
-  .result a:hover { text-decoration: underline; }
-  .result ul { margin: 6px 0 0 14px; font-size: 11px; }
 
   /* ─── POSTER GRID ────────────────────────────────────────── */
   .grid {
@@ -6342,7 +6161,6 @@
     background: rgba(158, 26, 26, 0.92);
     font-weight: 700;
   }
-  .ovl-meta .dim { color: #b0c8b8; }
 
   /* ── Community subtitles, inside the player's caption menu ────────
      Styled to belong to that menu rather than to this page: the menu sits
@@ -7303,7 +7121,7 @@
     position: relative;
     overflow: hidden;
   }
-  .player video, .player audio, .player img {
+  .player audio, .player img {
     width: 100%;
     /* Bound to the player's height (NOT viewport). Was 80vh which
        overflowed the modal when the player got small — pushing the
@@ -7385,7 +7203,6 @@
   }
   .video-stack.fullscreen { width: 100vw; height: 100vh; }
   .video-stack.controls-hidden { cursor: none; }
-  .video-stack.fullscreen video { max-height: 100vh; }
 
   /* ── Codec-fallback banner: SYSTEM message bar ─────────────
      Looks like a kernel notice — amber-on-black with a `> SYS:`
@@ -7674,24 +7491,6 @@
     color: var(--text-1, #e5e5e5);
     line-height: 1;
   }
-  .ctrl-row .spacer { flex: 1; }
-  .ctrl-row .time {
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 11px;
-    color: var(--green, #33ff77);
-    text-shadow: 0 0 4px rgba(51, 255, 119, 0.55);
-    margin: 0 8px 0 4px;
-    letter-spacing: 0.06em;
-    font-variant-numeric: tabular-nums;
-    padding: 3px 8px;
-    border: 1px solid rgba(51, 255, 119, 0.18);
-    background: rgba(0, 0, 0, 0.45);
-  }
-  .ctrl-row .time .dim {
-    color: rgba(51, 255, 119, 0.4);
-    margin: 0 4px;
-    text-shadow: none;
-  }
   /* Generic player button — sharp corners, uppercase mono captions for
      text variants, phosphor border-glow on hover, amber active state.   */
   .pc-btn {
@@ -7936,10 +7735,6 @@
   }
   /* Compact pills used in horizontal rows (target language) — keep them
      inline-sized, not full-width. */
-  .cfg-row.target-row .src-pill {
-    width: auto;
-    padding: 9px 14px;
-  }
 
   /* Generic config select inside a cfg-row */
   .cfg-select {
@@ -8103,18 +7898,6 @@
     color: #fff;
     box-shadow: inset 5px 0 0 var(--amber, #ffb000), 0 0 14px rgba(255, 176, 0, 0.3);
   }
-  .engine-tile.on .et-name {
-    color: var(--amber, #ffb000);
-    text-shadow: 0 0 6px rgba(255, 176, 0, 0.5);
-  }
-  .engine-tile.on .et-meta {
-    color: #fff;
-    opacity: 1;
-  }
-  .engine-tile.on .et-time {
-    color: var(--amber, #ffb000);
-    opacity: 0.85;
-  }
   .engine-tile.on::after {
     content: "●";
     position: absolute;
@@ -8184,7 +7967,6 @@
     letter-spacing: 0.02em;
     word-break: break-word;
   }
-  .pp-line strong { color: var(--amber, #ffb000); font-weight: 700; }
   .pp-step::before { content: "$ "; opacity: 0.5; }
   .pp-arrow {
     color: var(--cyan, #4dd0e1);
@@ -8297,7 +8079,6 @@
     padding-bottom: 12px;
     border-bottom: 1px dashed rgba(77, 138, 90, 0.22);
   }
-  .step.done .step-head { border-bottom-color: rgba(255, 176, 0, 0.22); }
 
   /* Step number — bigger boxed cell that sits visually on top of the
      panel. Uppercase mono numeral with a phosphor glow when active.   */
@@ -8352,7 +8133,6 @@
     letter-spacing: 0.1em;
     line-height: 1.2;
   }
-  .step.done .step-title { color: var(--amber, #ffb000); text-shadow: 0 0 5px rgba(255, 176, 0, 0.4); }
   .step-tag {
     display: inline-block;
     margin-left: 10px;
@@ -8484,10 +8264,6 @@
     filter: drop-shadow(0 0 3px rgba(255, 176, 0, 0.15));
     transition: filter 180ms, transform 180ms;
   }
-  .choice.on .choice-icon {
-    filter: drop-shadow(0 0 8px rgba(255, 176, 0, 0.7));
-    transform: scale(1.05);
-  }
   .choice-text { flex: 1; min-width: 0; }
   .choice-title {
     font-size: 12px;
@@ -8501,10 +8277,6 @@
     letter-spacing: 0.04em;
     text-transform: uppercase;
   }
-  .choice-title .hilite {
-    color: var(--cyan, #4dd0e1);
-    text-shadow: 0 0 5px rgba(77, 208, 225, 0.45);
-  }
   .choice-sub {
     font-size: 10.5px;
     line-height: 1.5;
@@ -8514,19 +8286,6 @@
   }
   /* Badges (READY, AUTO, .srt language label) — uniform mono pills
      that align to the title baseline.                              */
-  .choice .badge {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 7px;
-    border-radius: 0;
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 9px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.14em;
-    border: 1px solid;
-    line-height: 1.2;
-  }
   .badge.ready {
     background: rgba(51, 255, 119, 0.12);
     color: var(--green, #33ff77);
@@ -8569,22 +8328,6 @@
     flex-wrap: wrap;
   }
   .ctl-lbl::before { content: "├ "; opacity: 0.55; }
-  .ctl select {
-    background: rgba(0, 0, 0, 0.65);
-    border: 1px solid var(--line, #1d3a26);
-    color: var(--text-1, #e5e5e5);
-    padding: 6px 9px;
-    font: inherit;
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 11px;
-    border-radius: 0;
-    outline: none;
-    cursor: pointer;
-    transition: border-color 120ms, box-shadow 120ms;
-  }
-  .ctl select:hover { border-color: var(--green-dim, #4d8a5a); }
-  .ctl select:focus { border-color: var(--amber, #ffb000); box-shadow: 0 0 6px rgba(255, 176, 0, 0.3); }
-  .ctl select:disabled { opacity: 0.5; cursor: not-allowed; }
 
   /* ── ENGINE PICK — the dramatic moment ─────────────────────
      When `.engine-pending` is present (engineConfirmed=false), the
@@ -8609,31 +8352,7 @@
 
   /* Pending-state label transforms into a banner: full-width, sweep
      animation, attention-grabbing.                                  */
-  .ctl.engine-row:has(.engine-pending) > .ctl-lbl {
-    display: block;
-    width: 100%;
-    padding: 8px 10px;
-    margin-bottom: 12px;
-    background: rgba(77, 208, 225, 0.12);
-    border: 1px solid var(--cyan, #4dd0e1);
-    color: var(--cyan, #4dd0e1);
-    font-size: 10px;
-    text-align: center;
-    text-shadow: 0 0 6px rgba(77, 208, 225, 0.6);
-    position: relative;
-    overflow: hidden;
-  }
-  .ctl.engine-row:has(.engine-pending) > .ctl-lbl::before { content: "▸ "; }
   /* Sweep light across the banner */
-  .ctl.engine-row:has(.engine-pending) > .ctl-lbl::after {
-    content: "";
-    position: absolute;
-    top: 0; bottom: 0;
-    left: -30%;
-    width: 30%;
-    background: linear-gradient(90deg, transparent, rgba(77, 208, 225, 0.35), transparent);
-    animation: engine-sweep 2.4s linear infinite;
-  }
   @keyframes engine-sweep {
     from { left: -30%; }
     to   { left: 100%; }
@@ -8679,10 +8398,6 @@
   }
   /* When in pending mode, every engine card pulses subtly so the user
      knows interaction is required HERE.                              */
-  .ctl.engine-row:has(.engine-pending) .engine-btn {
-    border-color: rgba(77, 208, 225, 0.35);
-    animation: engine-pulse 2.8s ease-in-out infinite;
-  }
   @keyframes engine-pulse {
     0%, 100% { box-shadow: 0 0 0 rgba(77, 208, 225, 0); }
     50%      { box-shadow: 0 0 14px rgba(77, 208, 225, 0.18); }
@@ -8744,7 +8459,6 @@
     line-height: 1.45;
     text-transform: none;
   }
-  .engine-btn.on .eng-meta { color: var(--amber, #ffb000); opacity: 0.78; }
 
   /* CTA button — primary action ("▶ Start Whisper"). Mono uppercase
      with ASCII brackets via ::before/::after. Cyan command palette. */
@@ -8820,11 +8534,6 @@
     cursor: pointer;
     user-select: none;
   }
-  .force-transcode-toggle input[type="checkbox"] {
-    position: absolute;
-    opacity: 0;
-    pointer-events: none;
-  }
   /* The knob track: `[OFF | ON]` slot with a single phosphor bar that
      slides between the two slots. No round shapes — this is a console. */
   .ftt-knob {
@@ -8862,34 +8571,11 @@
     z-index: 1;
     transition: color 120ms;
   }
-  /* The travelling phosphor bar — separate element via the input wrapper */
-  .ftt-knob > .ftt-bar { display: none; }       /* in case anyone added one */
-  .force-transcode-toggle input + .ftt-knob {
-    box-shadow: inset 0 0 8px rgba(0, 0, 0, 0.5);
-  }
+  /* The travelling phosphor bar — separate element via the input wrapper */       /* in case anyone added one */
   /* OFF state highlight */
-  .force-transcode-toggle input:not(:checked) + .ftt-knob {
-    background:
-      linear-gradient(to right, rgba(255, 80, 80, 0.18) 0, rgba(255, 80, 80, 0.18) 28px, rgba(0, 0, 0, 0.7) 28px);
-    border-color: rgba(255, 80, 80, 0.5);
-  }
-  .force-transcode-toggle input:not(:checked) + .ftt-knob::before {
-    color: var(--red, #f55);
-    text-shadow: 0 0 4px rgba(255, 80, 80, 0.6);
-  }
   /* ON state — cyan to harmonize with the utility-strip family.
      Override is always opt-in, so ON should feel "I picked this on
      purpose" not "system-recommended" (that's the amber treatment).  */
-  .force-transcode-toggle input:checked + .ftt-knob {
-    background:
-      linear-gradient(to right, rgba(0, 0, 0, 0.7) 0, rgba(0, 0, 0, 0.7) 28px, rgba(77, 208, 225, 0.25) 28px);
-    border-color: var(--cyan, #4dd0e1);
-    box-shadow: inset 0 0 8px rgba(77, 208, 225, 0.2), 0 0 8px rgba(77, 208, 225, 0.35);
-  }
-  .force-transcode-toggle input:checked + .ftt-knob::after {
-    color: var(--cyan, #4dd0e1);
-    text-shadow: 0 0 5px rgba(77, 208, 225, 0.7);
-  }
 
   .ftt-text { flex: 1; min-width: 0; line-height: 1.45; }
   .ftt-title {
@@ -8948,9 +8634,7 @@
   }
   .dismiss-mini:hover { color: var(--red, #f55); }
   .section-head:first-child { margin-top: 0; }
-  .section-head .dim { color: var(--green-dim, #4d8a5a); font-weight: 400; text-transform: none; letter-spacing: 0; }
   .row.indent { margin-left: 16px; padding-left: 8px; border-left: 1px solid rgba(77, 138, 90, 0.18); }
-  .opt .dim { color: rgba(255, 255, 255, 0.4); margin-left: 4px; font-size: 10px; }
   .lbl {
     flex: 0 0 110px;
     font-size: 11px;
@@ -9129,23 +8813,6 @@
     gap: 5px;
     letter-spacing: 0.04em;
   }
-  .translate-meta .kbd {
-    padding: 1px 6px;
-    border: 1px solid rgba(77, 208, 225, 0.4);
-    border-radius: 0;
-    background: rgba(77, 208, 225, 0.08);
-    color: var(--cyan, #4dd0e1);
-    font-family: var(--font-mono, ui-monospace), monospace;
-    font-size: 9px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-  .translate-meta strong {
-    color: var(--text-1, #e5e5e5);
-    font-weight: 700;
-    font-variant-numeric: tabular-nums;
-  }
   .translate-bar {
     position: relative;
     height: 5px;
@@ -9291,13 +8958,6 @@
       0 0 1px rgba(77, 208, 225, 0.5),
       inset 0 0 60px rgba(0, 0, 0, 0.4);
   }
-  .transcribe-card.translating .transcribe-title {
-    color: var(--cyan, #4dd0e1);
-    text-shadow: 0 0 8px rgba(77, 208, 225, 0.5);
-  }
-  .transcribe-card.translating .transcribe-bar-fill {
-    background: linear-gradient(90deg, var(--cyan, #4dd0e1), #88e8f5);
-  }
   /* Same corner-bracket pattern as other framed instruments */
   .transcribe-card::before {
     content: "";
@@ -9325,18 +8985,6 @@
     align-items: flex-end;
     height: 22px;
   }
-  .transcribe-spinner span {
-    display: block;
-    width: 5px;
-    height: 22px;
-    background: var(--amber, #ffb000);
-    border-radius: 0;
-    box-shadow: 0 0 6px rgba(255, 176, 0, 0.7);
-    animation: spinner-bar 0.9s ease-in-out infinite;
-  }
-  .transcribe-spinner span:nth-child(2) { animation-delay: 0.12s; }
-  .transcribe-spinner span:nth-child(3) { animation-delay: 0.24s; }
-  .transcribe-spinner span:nth-child(4) { animation-delay: 0.36s; }
   @keyframes spinner-bar {
     0%, 100% { transform: scaleY(0.3); opacity: 0.55; }
     50%      { transform: scaleY(1.0); opacity: 1; }
@@ -9357,19 +9005,6 @@
     margin-bottom: 16px;
     color: var(--green-dim, #4d8a5a);
     letter-spacing: 0.04em;
-  }
-  .transcribe-meta .kbd {
-    display: inline-block;
-    padding: 2px 7px;
-    border: 1px solid rgba(255, 176, 0, 0.4);
-    border-radius: 0;
-    background: rgba(255, 176, 0, 0.08);
-    color: var(--amber, #ffb000);
-    font-family: var(--font-mono, ui-monospace, monospace);
-    font-size: 10px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
   }
 
   .transcribe-bar {
@@ -9434,11 +9069,6 @@
     letter-spacing: 0.04em;
     font-variant-numeric: tabular-nums;
   }
-  .transcribe-time strong {
-    color: var(--green, #33ff77);
-    font-weight: 700;
-    text-shadow: 0 0 4px rgba(51, 255, 119, 0.5);
-  }
   /* Percent badge inside .transcribe-meta — sits next to engine/model so
      the user gets a top-of-bar progress reading without scanning down. */
   .meta-pct {
@@ -9476,44 +9106,26 @@
     color: var(--green-dim, #4d8a5a);
     font-weight: 600;
   }
-  .ts-chip strong { color: var(--green, #33ff77); font-weight: 700; }
-  .ts-chip .ts-rate,
-  .ts-chip .ts-eta {
-    color: #b0c8b8;
-    font-weight: 500;
-    font-size: 10px;
-    padding-left: 4px;
-    border-left: 1px dashed rgba(176, 200, 184, 0.25);
-    margin-left: 2px;
-  }
   /* AUDIO chip — green family (what whisper sees) */
   .ts-audio {
     border-color: rgba(95, 219, 160, 0.30);
     background: rgba(95, 219, 160, 0.06);
   }
-  .ts-audio .ts-lbl { color: #5fdba0; }
-  .ts-audio strong  { color: #5fdba0; text-shadow: 0 0 4px rgba(95, 219, 160, 0.45); }
   /* CLOCK chip — amber family (what the user waits) */
   .ts-clock {
     border-color: rgba(255, 176, 0, 0.30);
     background: rgba(255, 176, 0, 0.06);
   }
-  .ts-clock .ts-lbl { color: var(--amber, #ffb000); }
-  .ts-clock strong  { color: var(--amber, #ffb000); text-shadow: 0 0 4px rgba(255, 176, 0, 0.45); }
   /* CUES chip (translate phase) */
   .ts-cues {
     border-color: rgba(106, 160, 255, 0.30);
     background: rgba(106, 160, 255, 0.06);
   }
-  .ts-cues .ts-lbl { color: #6aa0ff; }
-  .ts-cues strong  { color: #6aa0ff; text-shadow: 0 0 4px rgba(106, 160, 255, 0.45); }
   /* DOWNLOAD chip (model-fetch phase) */
   .ts-download {
     border-color: rgba(167, 139, 250, 0.30);
     background: rgba(167, 139, 250, 0.06);
   }
-  .ts-download .ts-lbl { color: #a78bfa; }
-  .ts-download strong  { color: #a78bfa; text-shadow: 0 0 4px rgba(167, 139, 250, 0.45); }
   .transcribe-hint {
     margin-top: 6px;
     margin-bottom: 14px;

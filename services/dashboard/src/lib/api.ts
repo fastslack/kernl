@@ -6,11 +6,6 @@ export function getAuthToken(): string | null {
 	return localStorage.getItem('kernel_auth_token');
 }
 
-/** Store auth token in localStorage */
-export function setAuthToken(token: string): void {
-	localStorage.setItem('kernel_auth_token', token);
-}
-
 /** Clear auth token */
 export function clearAuthToken(): void {
 	localStorage.removeItem('kernel_auth_token');
@@ -86,15 +81,6 @@ export function put(url: string, body: unknown) {
 
 export function del(url: string) {
 	return apiFetch(url, { method: 'DELETE' });
-}
-
-// ── Dashboard data ─────────────────────────────────────────────────
-export async function fetchDashboard() {
-	return rpcOrCall('dashboard.full', {}, () => apiFetch('/api/dashboard'));
-}
-
-export async function fetchDashboardSection(section: string) {
-	return rpcOrCall('dashboard.' + section, {}, () => apiFetch('/api/dashboard/' + section));
 }
 
 export async function fetchAgendaToday() {
@@ -253,17 +239,6 @@ export function completeShoppingList(id: string) {
 	return rpcOrCall('shopping.lists.complete', { id }, () => post('/api/shopping/complete-list', { id }));
 }
 
-export function reopenShoppingList(id: string) {
-	return rpcOrCall('shopping.lists.reopen', { id }, () => post('/api/shopping/reopen-list', { id }));
-}
-
-// ── Office Kit ─────────────────────────────────────────────────────
-/** Create/refresh a whole office (flow + agents + chains + cron + repo) in
- *  one call — consumed by the "New Office" wizard on /agents-flow. */
-export function createOffice(def: Record<string, unknown>) {
-	return rpcOrCall('offices.create', def, () => post('/api/offices/create', def));
-}
-
 // ── Comms ──────────────────────────────────────────────────────────
 export function createComm(body: Record<string, unknown>) {
 	return rpcOrCall('comms.create', body, () => post('/api/dashboard/comms/create', body));
@@ -310,11 +285,6 @@ export function approveEmailSuggestion(id: string, overrides: Record<string, unk
 	});
 }
 
-// ── Feeds / News ───────────────────────────────────────────────────
-export function refreshFeeds() {
-	return rpcOrCall('feeds.refresh', {}, () => post('/api/feeds/refresh', {}));
-}
-
 export function addFeed(url: string, name: string) {
 	return rpcOrCall('feeds.add', { url, name }, () => post('/api/feeds', { url, name }));
 }
@@ -348,17 +318,9 @@ export function createAgent(body: Record<string, unknown>) {
 	return rpcOrCall('agents.create', body, () => post('/api/agents', body));
 }
 
-export function triggerAgent(body: Record<string, unknown>) {
-	return rpcOrCall('agents.trigger', body, () => post('/api/agents/trigger', body));
-}
-
 // ── Prompt versions (Autogenesis RSPL) ─────────────────────────────
 export function listPromptVersions(agentId: string) {
 	return apiFetch('/api/agents/' + agentId + '/prompt-versions');
-}
-
-export function getPromptVersion(agentId: string, version: number) {
-	return apiFetch('/api/agents/' + agentId + '/prompt-versions/' + version);
 }
 
 export function diffPromptVersions(agentId: string, from: number, to: number) {
@@ -423,10 +385,6 @@ export function marketplaceActivateTheme(item_id: string) {
 
 export function marketplaceDeactivateTheme() {
 	return rpcOrCall('marketplace.theme.deactivate', {}, () => post('/api/marketplace/theme/deactivate', {}));
-}
-
-export function marketplaceImport(pkg: Record<string, unknown>) {
-	return rpcOrCall('marketplace.import', pkg, () => post('/api/marketplace/import', pkg));
 }
 
 export async function marketplaceExport(id: string) {
@@ -583,36 +541,15 @@ export async function getDistilledFacts(opts: { category?: string; limit?: numbe
 	return res?.facts ?? [];
 }
 
-export async function getDistilledFactsForEpisode(episodeId: string): Promise<DistilledFact[]> {
-	const res = (await apiFetch(
-		'/api/chat/distilled-facts/episode?episode_id=' + encodeURIComponent(episodeId),
-	)) as { facts?: DistilledFact[] };
-	return res?.facts ?? [];
-}
-
 export async function getDistilledSummary(): Promise<DistilledSummary> {
 	const res = (await apiFetch('/api/chat/distilled-facts/summary')) as DistilledSummary;
 	return { categories: res?.categories ?? [], total: res?.total ?? 0 };
-}
-
-// ── AI Config ──────────────────────────────────────────────────────
-export function saveAiConfig(body: Record<string, unknown>) {
-	return rpcOrCall('config.ai.save', body, () => post('/api/config/ai', body));
-}
-
-// ── Google ─────────────────────────────────────────────────────────
-export function startGoogleAuth() {
-	return rpcOrCall('google.auth.start', {}, () => post('/api/google/auth/start', {}));
 }
 
 // Live Google/Gmail connection health: { status, needsReauth, authUrl, ... }.
 // Surfaces a dead refresh token (needs_reauth) so the UI can prompt a reconnect.
 export function fetchGoogleSyncStatus() {
 	return rpcOrCall('google.status', {}, () => apiFetch('/api/google/status'));
-}
-
-export function revokeGoogleAuth() {
-	return rpcOrCall('google.auth.revoke', {}, () => post('/api/google/revoke', {}));
 }
 
 // ── PII status ─────────────────────────────────────────────────────

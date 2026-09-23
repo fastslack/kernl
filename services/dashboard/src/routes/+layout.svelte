@@ -1,6 +1,5 @@
 <script lang="ts">
   import '../app.css';
-  import '$lib/styles/crt.css';
   import { onMount, onDestroy, tick } from 'svelte';
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
@@ -105,7 +104,6 @@
   let navGroups: NavGroup[] = NAV_GROUPS;
   let allViews: NavView[] = VIEWS;
   let viewToGroup: Record<string, string> = VIEW_TO_GROUP;
-  let manifestEndpoints: Array<{ url: string; store: string }> = [];
 
   // ── Clock ────────────────────────────────────────────────────────
   // The rail clock is split into its own parts rather than reusing the
@@ -149,7 +147,7 @@
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
-  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'crt-demo', 'cinema', 'books', 'music', 'commander'];
+  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander'];
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
@@ -448,7 +446,7 @@
       case 'ArrowRight':
         if (e.shiftKey) {
           musicSeek(get(musicTime) + 10);
-        } else if ((e as any).rawShift !== true) {
+        } else {
           // Plain → next track. Shift → seek +10s.
           musicNext();
         }
@@ -499,7 +497,7 @@
 
   // ── Header badges from store ───────────────────────────────────────
   $: taskOverdue = ($data as any)?.tasks?.overdue?.length ?? 0;
-  $: commDrafts = ($data as any)?.comms?.kpis?.drafts ?? (storeMap['comms'] as any)?._value?.kpis?.drafts ?? 0;
+  $: commDrafts = ($data as any)?.comms?.kpis?.drafts ?? 0;
 
   // ── Auth bypass for /login ─────────────────────────────────────
   // The login page must render in a clean shell (no nav, no WS, no
@@ -791,18 +789,13 @@
       mergeChannelMap(m.wsChannelMap);
     }
 
-    // 3. Save manifest fetch endpoints for use in fetchAll
-    if (m.fetchEndpoints) {
-      manifestEndpoints = m.fetchEndpoints;
-    }
-
     // Installed/active modules — used to hide nav items whose backing
     // feature isn't present (suite stubs declare nav for paid or
     // not-yet-installed features via `requires`). Safe-by-default: an item
     // shows unless it explicitly declares a `requires` module that's absent.
     const installedModules = new Set<string>(Array.isArray(m.modules) ? m.modules : []);
 
-    // 4. Rebuild nav groups + items from scratch (hardcoded base + manifest)
+    // 3. Rebuild nav groups + items from scratch (hardcoded base + manifest)
     let nextGroups: NavGroup[] = NAV_GROUPS.map(g => ({
       ...g,
       views: [...g.views],
@@ -878,7 +871,7 @@
     // Extensions, Marketplace) needed to install more, and never empties.
     nextGroups = nextGroups.filter(g => g.id === 'system' || g.views.length > 0);
 
-    // 5. Publish extension page bundles for the [...ext] host route.
+    // 4. Publish extension page bundles for the [...ext] host route.
     extPagesStore.set(Array.isArray(m.extPages) ? m.extPages : []);
     extPagesReady.set(true);
 

@@ -274,14 +274,6 @@ export function registerAgentRoutes(
     return { success: true };
   });
 
-  // POST /api/agents/flow-diag — receive diagnostic breadcrumbs from the 3D
-  // dashboard so walker/meeting events are traceable in kernel logs without
-  // asking the user to read browser devtools.
-  server.route("POST", "/api/agents/flow-diag", ({ body }) => {
-    log.info(`[flow-diag] ${JSON.stringify(body)}`);
-    return { success: true };
-  });
-
   // ── Conversations (chats, meetings, debates) ─────────────────
 
   // GET /api/agents/conversations — list recent conversations

@@ -58,7 +58,6 @@
   // All categories start collapsed — we usually have many. Keep an
   // "expanded" set instead, which defaults empty (= everything collapsed).
   let expandedCats = new Set<string>();
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
 
   // ── Folder editing state ──
   // Inline rename: editingCatId holds the id of the row currently in edit mode.
@@ -382,10 +381,6 @@
     activeFilter = f;
     selectedItem = null;
     loadItems();
-  }
-  function onSearchInput() {
-    if (searchTimer) clearTimeout(searchTimer);
-    searchTimer = setTimeout(() => loadItems(), 300);
   }
 
   // ── Inline folder editing ──
@@ -726,7 +721,6 @@
       window.removeEventListener('mousedown', closeMoveMenuOnDocClick);
     }
     if (pollTimer) clearInterval(pollTimer);
-    if (searchTimer) clearTimeout(searchTimer);
   });
 </script>
 

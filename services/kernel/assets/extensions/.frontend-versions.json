@@ -36,8 +36,8 @@
     "sha256": "24097a535d659fce"
   },
   "home/rss-reader": {
-    "version": "1.1.1",
-    "sha256": "20d552b5a89c887e"
+    "version": "1.1.2",
+    "sha256": "fa40c95ee6d5b53f"
   },
   "home/shopping": {
     "version": "1.1.2",
@@ -76,8 +76,8 @@
     "sha256": "40aa6a03fd3d7560"
   },
   "leisure/cinema": {
-    "version": "1.37.7",
-    "sha256": "b93a7e73adbaf09c"
+    "version": "1.37.8",
+    "sha256": "5fb71a2e3e656548"
   },
   "ai/mcp-bridge": {
     "version": "2.0.1",

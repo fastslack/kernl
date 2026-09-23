@@ -1228,7 +1228,6 @@
   .hood-badge b { color: #8b7cf6; }
   .hud-btn { padding: 4px 12px; border-radius: 4px; border: 1px solid rgba(61,214,200,0.2); background: rgba(20,20,30,0.9); color: #8a8ea2; font: 9px 'JetBrains Mono', monospace; cursor: pointer; }
   .hud-btn:hover { border-color: #3dd6c8; color: #3dd6c8; }
-  .active-btn { border-color: #3dd68c; color: #3dd68c; }
   .verbosity-btn { min-width: 90px; text-align: center; letter-spacing: 0.5px; font-weight: 600; }
   .v-debug { border-color: #ef4444; color: #ef4444; }
   .v-debug:hover { border-color: #ef4444; color: #ef4444; }
