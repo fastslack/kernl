@@ -377,6 +377,9 @@ describe("AgentExecutor.execute — characterization", () => {
     ex.setProviders(new Map([["cc", h.provider("cc", [() => final("x")], { supportsToolLoop: false })]]), "cc");
     captureLogs(h.trace);
     const result = await ex.execute({ agent: makeAgent(), goal: "go", run: makeRun(), service: h.service, events: h.events });
+    // Failed before the loop started, and still unregistered (it used to
+    // stay in the active-runs registry forever).
+    expect(ex.getActiveRunIds()).toEqual([]);
     expect(result).toMatchSnapshot("result");
     expect(h.trace).toMatchSnapshot("trace");
   });
@@ -387,6 +390,9 @@ describe("AgentExecutor.execute — characterization", () => {
     ex.setProviders(new Map([["off", h.provider("off", [() => final("x")], { available: false })]]), "off");
     captureLogs(h.trace);
     const result = await ex.execute({ agent: makeAgent(), goal: "go", run: makeRun(), service: h.service, events: h.events });
+    // Failed before the loop started, and still unregistered (it used to
+    // stay in the active-runs registry forever).
+    expect(ex.getActiveRunIds()).toEqual([]);
     expect(result).toMatchSnapshot("result");
     expect(h.trace).toMatchSnapshot("trace");
   });
@@ -468,6 +474,9 @@ describe("AgentExecutor.execute — characterization", () => {
       agent: makeAgent({ allowed_tools: JSON.stringify(["nope"]), denied_tools: JSON.stringify(["kernel_agents_invoke"]) }),
       goal: "go", run: makeRun(), service: h.service, events: h.events,
     });
+    // Failed before the loop started, and still unregistered (it used to
+    // stay in the active-runs registry forever).
+    expect(ex.getActiveRunIds()).toEqual([]);
     expect(result).toMatchSnapshot("result");
     expect(h.trace).toMatchSnapshot("trace");
   });

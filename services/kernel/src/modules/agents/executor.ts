@@ -220,70 +220,80 @@ export class AgentExecutor {
     const runState = { cancelled: false };
     this.activeRuns.set(run.id, runState);
 
-    const shortCircuit = this.tryShortCircuit(params, depth);
-    if (shortCircuit) return await shortCircuit;
+    // Every way out of the run unregisters it — including the early failures
+    // (no tools, no usable provider) and any early return added later. The
+    // phases below still unregister on their own paths; deleting twice is a
+    // no-op.
+    try {
+      const shortCircuit = this.tryShortCircuit(params, depth);
+      if (shortCircuit) return await shortCircuit;
 
-    const recorder = new RunRecorder(agent, run, service, events);
+      const recorder = new RunRecorder(agent, run, service, events);
 
-    // Emit flow event: run started
-    recorder.emit("agent:flow:run_started", {
-      goal: goal.slice(0, 300),
-      trigger_type: run.trigger_type,
-    });
-    recorder.logEvent({
-      event_type: "run",
-      event_subtype: "started",
-      detail: `Goal: ${goal.slice(0, 200)}`,
-      raw_data: { goal: goal.slice(0, 300), trigger_type: run.trigger_type },
-    });
+      // Emit flow event: run started
+      recorder.emit("agent:flow:run_started", {
+        goal: goal.slice(0, 300),
+        trigger_type: run.trigger_type,
+      });
+      recorder.logEvent({
+        event_type: "run",
+        event_subtype: "started",
+        detail: `Goal: ${goal.slice(0, 200)}`,
+        raw_data: { goal: goal.slice(0, 300), trigger_type: run.trigger_type },
+      });
 
-    // 1-2. Tools, with the per-run kernel_agents_invoke handler.
-    const { llmTools, toolExecutor } = this.resolveRunTools(agent, run, service, events, depth);
-    if (llmTools.length === 0) {
-      return this.noToolsResolved(agent);
+      // 1-2. Tools, with the per-run kernel_agents_invoke handler.
+      const { llmTools, toolExecutor } = this.resolveRunTools(agent, run, service, events, depth);
+      if (llmTools.length === 0) {
+        return this.noToolsResolved(agent);
+      }
+
+      // 3. Model fallback chain.
+      const chainResolution = this.resolveModelChain(agent, service, llmTools.length);
+      if (!chainResolution.ok) {
+        return failedBeforeStart(chainResolution.error);
+      }
+
+      // 4. Interpolate variables in prompts
+      const { lang, effectiveGoal, effectiveSystemPrompt } = this.interpolatePrompts(agent, goal);
+
+      // 5. Build system prompt (enriched with learnings)
+      const assembling = assembleSystemPrompt({
+        agent, service, recorder,
+        config: this.configRef,
+        skillResolver: this.skillResolver,
+        lang, depth, maxChainDepth,
+        effectiveSystemPrompt,
+        effectiveGoal,
+        todayStr: new Date().toISOString().slice(0, 10),
+        goalVector: null,
+        memoryGoalSuffix: "",
+      });
+      const { systemText, memoryGoalSuffix } =
+        assembling instanceof Promise ? await assembling : assembling;
+
+      // Save user message to memory
+      // Don't save goal to memory here — the dashboard chat handler already
+      // persists the user's actual message via POST /api/agents/:id/memory.
+      // Saving the full conversationalGoal (with RULES, RECENT WORK, etc.)
+      // would pollute the chat history with system scaffolding.
+
+      // 5. Build initial messages — inject memory at the END of the goal (recency bias)
+      const goalWithMemory = memoryGoalSuffix
+        ? effectiveGoal + memoryGoalSuffix
+        : effectiveGoal;
+
+      // 6. LLM tool-use loop with safety controls. Awaited so the finally
+      // below runs after the loop, not as soon as its promise is returned —
+      // the run must stay cancellable while it loops.
+      return await this.runNativeLoop({
+        agent, run, service, events, depth, runState, recorder,
+        chain: chainResolution.chain,
+        llmTools, toolExecutor, systemText, effectiveGoal, goalWithMemory,
+      });
+    } finally {
+      this.activeRuns.delete(run.id);
     }
-
-    // 3. Model fallback chain.
-    const chainResolution = this.resolveModelChain(agent, service, llmTools.length);
-    if (!chainResolution.ok) {
-      return failedBeforeStart(chainResolution.error);
-    }
-
-    // 4. Interpolate variables in prompts
-    const { lang, effectiveGoal, effectiveSystemPrompt } = this.interpolatePrompts(agent, goal);
-
-    // 5. Build system prompt (enriched with learnings)
-    const assembling = assembleSystemPrompt({
-      agent, service, recorder,
-      config: this.configRef,
-      skillResolver: this.skillResolver,
-      lang, depth, maxChainDepth,
-      effectiveSystemPrompt,
-      effectiveGoal,
-      todayStr: new Date().toISOString().slice(0, 10),
-      goalVector: null,
-      memoryGoalSuffix: "",
-    });
-    const { systemText, memoryGoalSuffix } =
-      assembling instanceof Promise ? await assembling : assembling;
-
-    // Save user message to memory
-    // Don't save goal to memory here — the dashboard chat handler already
-    // persists the user's actual message via POST /api/agents/:id/memory.
-    // Saving the full conversationalGoal (with RULES, RECENT WORK, etc.)
-    // would pollute the chat history with system scaffolding.
-
-    // 5. Build initial messages — inject memory at the END of the goal (recency bias)
-    const goalWithMemory = memoryGoalSuffix
-      ? effectiveGoal + memoryGoalSuffix
-      : effectiveGoal;
-
-    // 6. LLM tool-use loop with safety controls.
-    return this.runNativeLoop({
-      agent, run, service, events, depth, runState, recorder,
-      chain: chainResolution.chain,
-      llmTools, toolExecutor, systemText, effectiveGoal, goalWithMemory,
-    });
   }
 
   // ── execute() phases ────────────────────────────────
