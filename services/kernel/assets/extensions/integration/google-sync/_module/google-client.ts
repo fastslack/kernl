@@ -1,5 +1,5 @@
 import type { GoogleAuth } from "./auth.js";
-import { log } from "@kernl/extension-sdk";
+import { log, sleep } from "@kernl/extension-sdk";
 
 const MAX_RETRIES = 3;
 const BASE_DELAY_MS = 1000;
@@ -104,8 +104,4 @@ export class GoogleClient {
 
     return allItems;
   }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
 }

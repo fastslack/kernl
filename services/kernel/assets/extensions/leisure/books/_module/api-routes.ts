@@ -1,4 +1,4 @@
-import { HttpError, type KernelHttpServer, log } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer, log, extractErrorMessage } from "@kernl/extension-sdk";
 import type { BooksService } from "./service.js";
 import type { BookListFilter } from "./types.js";
 
@@ -61,7 +61,7 @@ async function upstream<T>(what: string, fn: () => T | Promise<T>): Promise<T> {
     return await fn();
   } catch (err) {
     log.error(`books: ${what} failed`, err);
-    throw new HttpError(502, extractMessage(err));
+    throw new HttpError(502, extractErrorMessage(err));
   }
 }
 
@@ -71,7 +71,3 @@ function numParam(s: string | null): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
-function extractMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}

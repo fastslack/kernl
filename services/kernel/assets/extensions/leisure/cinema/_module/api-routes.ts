@@ -24,6 +24,8 @@ import {
   type GraphDriver,
   type EmbeddingsClient,
   type SqliteDb,
+  clampInt,
+  extractErrorMessage,
 } from "@kernl/extension-sdk";
 import type { NostrIdentity } from "@kernl/extension-sdk/nostr";
 import type { CinemaService } from "./service.js";
@@ -55,20 +57,10 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-function clampInt(raw: string | null, fallback: number, min: number, max: number): number {
-  const n = parseInt(raw ?? "", 10);
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(n, max));
-}
-
 function asBool(raw: unknown): boolean {
   if (typeof raw === "boolean") return raw;
   if (raw === 1 || raw === "1" || raw === "true") return true;
   return false;
-}
-
-function extractMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
 }
 
 /** A dependency wired in after route registration; 503 until it is. */
@@ -88,7 +80,7 @@ async function or502<T>(what: string, fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     if (isHttpError(err)) throw err;
     log.error(`cinema: ${what} failed`, err);
-    throw new HttpError(502, extractMessage(err));
+    throw new HttpError(502, extractErrorMessage(err));
   }
 }
 

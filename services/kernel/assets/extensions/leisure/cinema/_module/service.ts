@@ -226,6 +226,62 @@ function canonExistsSql(list?: string): string {
 }
 
 /**
+ * Append the base catalogue conditions every read path shares: visibility,
+ * torrent availability, watchlist, collection, film/series kind, year range,
+ * language and tags. Like the canon and media clauses below, these live in
+ * one place so `list`, `countAll` and `filterByIds` can never disagree about
+ * which titles a filter selects.
+ */
+function pushBaseClauses(
+  filter: CinemaListFilter,
+  where: string[],
+  params: unknown[],
+): void {
+  if (filter.hidden !== true) where.push("t.hidden = 0");
+  if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
+  if (filter.watchlist === true) where.push("t.watchlist = 1");
+
+  if (filter.collection) {
+    // collection_json is a JSON array string; LIKE is good enough until FTS.
+    where.push("t.collection_json LIKE ?");
+    params.push(`%"${filter.collection}"%`);
+  }
+  // Films vs series. The archive files serials under the television
+  // collections, so membership is the only thing that distinguishes them.
+  if (filter.kind === "series") {
+    where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
+  } else if (filter.kind === "film") {
+    where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
+  }
+  if (filter.yearMin) {
+    where.push("t.year >= ?");
+    params.push(filter.yearMin);
+  }
+  if (filter.yearMax) {
+    where.push("t.year <= ?");
+    params.push(filter.yearMax);
+  }
+  if (filter.language) {
+    // upstream language is sometimes a 2-letter code, sometimes "English",
+    // sometimes empty. case-insensitive prefix match catches both.
+    where.push("LOWER(t.language) LIKE ?");
+    params.push(`${filter.language.toLowerCase()}%`);
+  }
+  // Tag filtering uses LIKE over the JSON array. Cheaper than json_each
+  // for single-tag lookups and avoids the JOIN overhead. Multi-tag with
+  // match='all' AND-chains; match='any' OR-chains.
+  const tagList: string[] = [];
+  if (filter.tag) tagList.push(filter.tag);
+  if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
+  if (tagList.length > 0) {
+    const matchAll = (filter.tagsMatch ?? "all") === "all";
+    const clauses = tagList.map(() => "t.subject_json LIKE ?");
+    where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
+    for (const tag of tagList) params.push(`%"${tag}"%`);
+  }
+}
+
+/**
  * Append whatever media conditions the filter asks for, and say whether the
  * media table needs joining at all.
  *
@@ -524,42 +580,7 @@ export class CinemaService {
     if (ids.length === 0) return [];
     const where: string[] = ["t.deleted_at IS NULL", `t.identifier IN (${ids.map(() => "?").join(",")})`];
     const params: unknown[] = [...ids];
-
-    if (filter.hidden !== true) where.push("t.hidden = 0");
-    if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
-    if (filter.watchlist === true) where.push("t.watchlist = 1");
-    if (filter.collection) {
-      where.push("t.collection_json LIKE ?");
-      params.push(`%"${filter.collection}"%`);
-    }
-    // Films vs series. The archive files serials under the television
-    // collections, so membership is the only thing that distinguishes them.
-    if (filter.kind === "series") {
-      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
-    } else if (filter.kind === "film") {
-      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
-    }
-    if (filter.yearMin) {
-      where.push("t.year >= ?");
-      params.push(filter.yearMin);
-    }
-    if (filter.yearMax) {
-      where.push("t.year <= ?");
-      params.push(filter.yearMax);
-    }
-    if (filter.language) {
-      where.push("LOWER(t.language) LIKE ?");
-      params.push(`${filter.language.toLowerCase()}%`);
-    }
-    const tagList: string[] = [];
-    if (filter.tag) tagList.push(filter.tag);
-    if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
-    if (tagList.length > 0) {
-      const matchAll = (filter.tagsMatch ?? "all") === "all";
-      const clauses = tagList.map(() => "t.subject_json LIKE ?");
-      where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
-      for (const tag of tagList) params.push(`%"${tag}"%`);
-    }
+    pushBaseClauses(filter, where, params);
 
     if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
     pushCanonClauses(filter, where, params);
@@ -643,49 +664,7 @@ export class CinemaService {
   list(filter: CinemaListFilter = {}): CinemaTitle[] {
     const where: string[] = ["t.deleted_at IS NULL"];
     const params: unknown[] = [];
-
-    if (filter.hidden !== true) where.push("t.hidden = 0");
-    if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
-    if (filter.watchlist === true) where.push("t.watchlist = 1");
-
-    if (filter.collection) {
-      // collection_json is a JSON array string; LIKE is good enough until FTS.
-      where.push("t.collection_json LIKE ?");
-      params.push(`%"${filter.collection}"%`);
-    }
-    // Films vs series. The archive files serials under the television
-    // collections, so membership is the only thing that distinguishes them.
-    if (filter.kind === "series") {
-      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
-    } else if (filter.kind === "film") {
-      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
-    }
-    if (filter.yearMin) {
-      where.push("t.year >= ?");
-      params.push(filter.yearMin);
-    }
-    if (filter.yearMax) {
-      where.push("t.year <= ?");
-      params.push(filter.yearMax);
-    }
-    if (filter.language) {
-      // upstream language is sometimes a 2-letter code, sometimes "English",
-      // sometimes empty. case-insensitive prefix match catches both.
-      where.push("LOWER(t.language) LIKE ?");
-      params.push(`${filter.language.toLowerCase()}%`);
-    }
-    // Tag filtering uses LIKE over the JSON array. Cheaper than json_each
-    // for single-tag lookups and avoids the JOIN overhead. Multi-tag with
-    // match='all' AND-chains; match='any' OR-chains.
-    const tagList: string[] = [];
-    if (filter.tag) tagList.push(filter.tag);
-    if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
-    if (tagList.length > 0) {
-      const matchAll = (filter.tagsMatch ?? "all") === "all";
-      const clauses = tagList.map(() => "t.subject_json LIKE ?");
-      where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
-      for (const tag of tagList) params.push(`%"${tag}"%`);
-    }
+    pushBaseClauses(filter, where, params);
 
     if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
     pushCanonClauses(filter, where, params);
@@ -771,41 +750,7 @@ export class CinemaService {
   countAll(filter: CinemaListFilter = {}): number {
     const where: string[] = ["t.deleted_at IS NULL"];
     const params: unknown[] = [];
-    if (filter.hidden !== true) where.push("t.hidden = 0");
-    if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
-    if (filter.watchlist === true) where.push("t.watchlist = 1");
-    if (filter.collection) {
-      where.push("t.collection_json LIKE ?");
-      params.push(`%"${filter.collection}"%`);
-    }
-    // Films vs series. The archive files serials under the television
-    // collections, so membership is the only thing that distinguishes them.
-    if (filter.kind === "series") {
-      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
-    } else if (filter.kind === "film") {
-      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
-    }
-    if (filter.yearMin) {
-      where.push("t.year >= ?");
-      params.push(filter.yearMin);
-    }
-    if (filter.yearMax) {
-      where.push("t.year <= ?");
-      params.push(filter.yearMax);
-    }
-    if (filter.language) {
-      where.push("LOWER(t.language) LIKE ?");
-      params.push(`${filter.language.toLowerCase()}%`);
-    }
-    const tagList: string[] = [];
-    if (filter.tag) tagList.push(filter.tag);
-    if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
-    if (tagList.length > 0) {
-      const matchAll = (filter.tagsMatch ?? "all") === "all";
-      const clauses = tagList.map(() => "t.subject_json LIKE ?");
-      where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
-      for (const tag of tagList) params.push(`%"${tag}"%`);
-    }
+    pushBaseClauses(filter, where, params);
     // The canonical join is only paid for when the filter actually asks about
     // identity — a count is otherwise a pure scan over cinema_titles and there
     // is no reason to make it join two more tables.

@@ -17,8 +17,9 @@
  */
 
 import { log } from "../logger.js";
+import { sleep } from "../../sdk/helpers.js";
 
-export const sleep = (ms: number): Promise<void> => new Promise<void>((r) => setTimeout(r, ms));
+export { sleep };
 
 /** ±15% jitter so retries from concurrent callers don't re-converge into a
  *  fresh thundering herd against the same provider. */

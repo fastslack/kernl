@@ -1,6 +1,7 @@
 import {
   type SqliteDb as Database, type PatchColumn, type EventBus,
   newId, isoNow, buildPatch, safeJson, toInstant, dayStart, addDays, localParts,
+  formatCents,
 } from "@kernl/extension-sdk";
 import type {
   Event,
@@ -888,7 +889,7 @@ export class EventsService {
     }
 
     if (event.cost_per_person_cents > 0) {
-      fullText += `\n\n💰 Cost: ${(event.cost_per_person_cents / 100).toFixed(2)} ${event.cost_currency} per person`;
+      fullText += `\n\n💰 Cost: ${formatCents(event.cost_per_person_cents)} ${event.cost_currency} per person`;
     }
 
     // Attendee list for WhatsApp/Telegram

@@ -28,7 +28,7 @@
 
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EmbeddingsClient } from "../../core/embeddings/index.js";
-import { newId, isoNow } from "../../core/helpers.js";
+import { newId, isoNow, clamp } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
 import { cosine } from "../../core/ranking/cosine.js";
 import { extractKeywords, scoreRelevance } from "../../core/ranking/relevance.js";
@@ -293,10 +293,6 @@ export class BrainService {
 
 interface RawItemRow extends BrainItem {
   embedding: Buffer | Uint8Array;
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
 }
 
 // ── Vector helpers (little-endian Float32, same as tool_memory) ──────

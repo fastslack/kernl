@@ -1,10 +1,6 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, limitArg, formatCents } from "@kernl/extension-sdk";
 import type { FinanceService } from "./service.js";
-
-function fmt(cents: number): string {
-  return (cents / 100).toFixed(2);
-}
 
 export function financeTools(service: FinanceService): ToolDefinition[] {
   return [
@@ -22,7 +18,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
       handler: async (input) => {
         const account = service.createAccount(input);
         return textResult(
-          `Account created:\n  ID: ${account.id}\n  Name: ${account.name}\n  Type: ${account.type}\n  Balance: ${fmt(account.balance_cents)} ${account.currency}`,
+          `Account created:\n  ID: ${account.id}\n  Name: ${account.name}\n  Type: ${account.type}\n  Balance: ${formatCents(account.balance_cents)} ${account.currency}`,
         );
       },
     }),
@@ -34,7 +30,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
         const accounts = service.listAccounts();
         if (accounts.length === 0) return textResult("No accounts found.");
         const lines = accounts.map(
-          (a) => `[${a.type.toUpperCase()}] ${a.name} — ${fmt(a.balance_cents)} ${a.currency}\n  ID: ${a.id}`,
+          (a) => `[${a.type.toUpperCase()}] ${a.name} — ${formatCents(a.balance_cents)} ${a.currency}\n  ID: ${a.id}`,
         );
         return textResult(`${accounts.length} account(s):\n\n${lines.join("\n\n")}`);
       },
@@ -56,7 +52,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
       handler: async (input) => {
         const tx = service.addTransaction(input);
         return textResult(
-          `Transaction recorded:\n  ID: ${tx.id}\n  Type: ${tx.type}\n  Amount: ${fmt(tx.amount_cents)}\n  Category: ${tx.category || "none"}\n  Date: ${tx.date}`,
+          `Transaction recorded:\n  ID: ${tx.id}\n  Type: ${tx.type}\n  Amount: ${formatCents(tx.amount_cents)}\n  Category: ${tx.category || "none"}\n  Date: ${tx.date}`,
         );
       },
     }),
@@ -77,7 +73,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
         if (txs.length === 0) return textResult("No transactions found.");
 
         const lines = txs.map(
-          (t) => `${t.date} [${t.type.toUpperCase()}] ${fmt(t.amount_cents)} — ${t.description || t.category || "no description"}${t.counterparty ? ` (${t.counterparty})` : ""}\n  ID: ${t.id}`,
+          (t) => `${t.date} [${t.type.toUpperCase()}] ${formatCents(t.amount_cents)} — ${t.description || t.category || "no description"}${t.counterparty ? ` (${t.counterparty})` : ""}\n  ID: ${t.id}`,
         );
         return textResult(`${txs.length} transaction(s):\n\n${lines.join("\n\n")}`);
       },
@@ -97,7 +93,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
       handler: async (input) => {
         const { from_tx, to_tx } = service.transfer(input);
         return textResult(
-          `Transfer completed:\n  Amount: ${fmt(input.amount_cents)}\n  From TX: ${from_tx.id}\n  To TX: ${to_tx.id}`,
+          `Transfer completed:\n  Amount: ${formatCents(input.amount_cents)}\n  From TX: ${from_tx.id}\n  To TX: ${to_tx.id}`,
         );
       },
     }),
@@ -115,7 +111,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
       handler: async (input) => {
         const budget = service.addBudget(input);
         return textResult(
-          `Budget created:\n  ID: ${budget.id}\n  Name: ${budget.name}\n  Limit: ${fmt(budget.amount_cents)}/${budget.period}\n  Category: ${budget.category || "all"}`,
+          `Budget created:\n  ID: ${budget.id}\n  Name: ${budget.name}\n  Limit: ${formatCents(budget.amount_cents)}/${budget.period}\n  Category: ${budget.category || "all"}`,
         );
       },
     }),
@@ -132,7 +128,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
 
         const lines = statuses.map((s) => {
           const bar = s.percentage >= 100 ? "OVER" : `${s.percentage}%`;
-          return `${s.budget.name} (${s.budget.category || "all"}):\n  ${fmt(s.spent_cents)} / ${fmt(s.budget.amount_cents)} [${bar}]\n  Remaining: ${fmt(s.remaining_cents)}`;
+          return `${s.budget.name} (${s.budget.category || "all"}):\n  ${formatCents(s.spent_cents)} / ${formatCents(s.budget.amount_cents)} [${bar}]\n  Remaining: ${formatCents(s.remaining_cents)}`;
         });
         return textResult(`Budget status:\n\n${lines.join("\n\n")}`);
       },
@@ -147,7 +143,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
 
         const accountLines = s.accounts.map((a) => `  ${a.name} (${a.type}): ${a.balance} ${s.currency}`);
         return textResult(
-          `Total balance: ${fmt(s.total_balance_cents)} ${s.currency}\n\nAccounts:\n${accountLines.join("\n")}\n\nThis month:\n  Income:   ${fmt(s.this_month_income)} ${s.currency}\n  Expenses: ${fmt(s.this_month_expenses)} ${s.currency}\n  Net:      ${fmt(s.this_month_income - s.this_month_expenses)} ${s.currency}`,
+          `Total balance: ${formatCents(s.total_balance_cents)} ${s.currency}\n\nAccounts:\n${accountLines.join("\n")}\n\nThis month:\n  Income:   ${formatCents(s.this_month_income)} ${s.currency}\n  Expenses: ${formatCents(s.this_month_expenses)} ${s.currency}\n  Net:      ${formatCents(s.this_month_income - s.this_month_expenses)} ${s.currency}`,
         );
       },
     }),

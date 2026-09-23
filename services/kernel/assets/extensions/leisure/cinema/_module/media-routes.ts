@@ -8,6 +8,8 @@ import {
   mediaToolBin,
   mediaToolError,
   probeMediaTool,
+  extractErrorMessage,
+  sleep,
 } from "@kernl/extension-sdk";
 import { parseSubs, encodeVtt, langName } from "./subtitles.js";
 import {
@@ -227,7 +229,7 @@ async function probeDurationWithRetry(
       });
     });
     if (result === "retry") {
-      await new Promise((r) => setTimeout(r, [500, 1500, 4000][attempt - 1] ?? 4000));
+      await sleep([500, 1500, 4000][attempt - 1] ?? 4000);
       continue;
     }
     return result;
@@ -649,7 +651,7 @@ export function registerCinemaMediaRoutes(
       for (let attempt = 1; attempt <= 2 && upstream.status >= 500 && !abort.signal.aborted; attempt++) {
         log.warn(`webseed-proxy: upstream ${upstream.status} for ${parsed.host}${parsed.pathname} — retry ${attempt}/2`);
         try { await upstream.body?.cancel(); } catch { /* nothing buffered yet */ }
-        await new Promise((r) => setTimeout(r, attempt * 400));
+        await sleep(attempt * 400);
         if (abort.signal.aborted) break;
         upstream = await fetch(parsed.toString(), {
           method: "GET",
@@ -737,7 +739,7 @@ export function registerCinemaMediaRoutes(
         return;
       }
       log.error("torrents: webseed-proxy failed", err);
-      try { server.json(res, 502, { error: extractMessage(err) }); } catch { /* */ }
+      try { server.json(res, 502, { error: extractErrorMessage(err) }); } catch { /* */ }
     }
   });
 
@@ -878,7 +880,7 @@ export function registerCinemaMediaRoutes(
     } catch (err) {
       log.error("torrents: transcode failed", err);
       cleanup();
-      try { server.json(res, 502, { error: extractMessage(err) }); }
+      try { server.json(res, 502, { error: extractErrorMessage(err) }); }
       catch { /* */ }
     }
   });
@@ -1217,8 +1219,8 @@ export function registerCinemaMediaRoutes(
       if (!passthrough) publishSubsProgress(jobId, { phase: "done" });
     } catch (err) {
       log.error("torrents: translate-srt failed", err);
-      publishSubsProgress(jobId, { phase: "error", error: extractMessage(err) });
-      server.json(res, 500, { error: extractMessage(err) });
+      publishSubsProgress(jobId, { phase: "error", error: extractErrorMessage(err) });
+      server.json(res, 500, { error: extractErrorMessage(err) });
     }
   });
 
@@ -1447,11 +1449,11 @@ export function registerCinemaMediaRoutes(
       res.end(finalVtt);
       publishSubsProgress(jobId, { phase: "done" });
     } catch (err) {
-      // Use extractMessage + raw error properties so the log line is
+      // Use extractErrorMessage + raw error properties so the log line is
       // useful — `JSON.stringify(err)` on an Error yields `{}` because
       // Error fields aren't enumerable. Knowing the actual cause turns
       // "subs failed {}" into something diagnosable.
-      const msg = extractMessage(err);
+      const msg = extractErrorMessage(err);
       const stack = err instanceof Error ? err.stack?.split("\n").slice(0, 4).join(" | ") : "";
       log.error(`torrents: subs failed: ${msg}`, { stack });
       publishSubsProgress(jobId, { phase: "error", error: msg });
@@ -1572,7 +1574,7 @@ export function registerCinemaMediaRoutes(
       createReadStream(file).pipe(res);
     } catch (err) {
       log.error("cinema: convert file failed", err);
-      try { server.json(res, 500, { error: extractMessage(err) }); } catch { /* */ }
+      try { server.json(res, 500, { error: extractErrorMessage(err) }); } catch { /* */ }
     }
   });
 
@@ -1718,8 +1720,8 @@ export function registerCinemaMediaRoutes(
       res.end(vtt);
     } catch (err) {
       log.error("torrents: transcribe failed", err);
-      publishSubsProgress(jobId, { phase: "transcribe-error", error: extractMessage(err) });
-      server.json(res, 500, { error: extractMessage(err) });
+      publishSubsProgress(jobId, { phase: "transcribe-error", error: extractErrorMessage(err) });
+      server.json(res, 500, { error: extractErrorMessage(err) });
     }
   });
 
@@ -1805,7 +1807,7 @@ export function registerCinemaMediaRoutes(
       });
       res.end(body);
     } catch (err) {
-      server.json(res, 500, { error: extractMessage(err) });
+      server.json(res, 500, { error: extractErrorMessage(err) });
     }
   });
 
@@ -1942,13 +1944,6 @@ export function registerCinemaMediaRoutes(
   // ── GET /api/torrents/inbox?target= — drain pending notifications ─
 }
 
-function clampInt(raw: string | null, fallback: number, min: number, max: number): number {
-  const n = raw ? parseInt(raw, 10) : NaN;
-  if (!Number.isFinite(n)) return fallback;
-  return Math.max(min, Math.min(max, n));
-}
-
-
 // ── archive.org search ──────────────────────────────────────────────────
 export interface ImportArchiveQuery {
   collection?: string;       // e.g. "feature_films", "silent_films"
@@ -2040,11 +2035,6 @@ export async function searchArchive(q: ImportArchiveQuery): Promise<ArchiveSearc
   })).filter(x => x.identifier);
 }
 
-function extractMessage(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
-}
-
 /** `?key=` as a cache key: sha1 hex only, which also rules out path traversal. */
 function cacheKeyParam(query: URLSearchParams): string {
   const key = (query.get("key") ?? "").replace(/[^a-f0-9]/gi, "");
@@ -2063,6 +2053,6 @@ async function or502<T>(what: string | null, fn: () => Promise<T>): Promise<T> {
   } catch (err) {
     if (isHttpError(err)) throw err;
     if (what) log.error(`${what} failed`, err);
-    throw new HttpError(502, extractMessage(err));
+    throw new HttpError(502, extractErrorMessage(err));
   }
 }

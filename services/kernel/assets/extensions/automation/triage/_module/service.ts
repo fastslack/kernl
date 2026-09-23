@@ -5,6 +5,7 @@ import {
   llm,
   log,
   jsonArray,
+  sleep,
 } from "@kernl/extension-sdk";
 import type {
   RepoProvider,
@@ -896,10 +897,6 @@ function downgrade(decision: Decision, reason: string): Decision {
     closeReason: "none",
     risks: [...decision.risks, `[hard-rule] ${reason}`],
   };
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }
 
 function renderCloseComment(review: TriageReview): string {

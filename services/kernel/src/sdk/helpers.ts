@@ -73,7 +73,37 @@ export function slugify(text: string): string {
     .slice(0, 48);
 }
 
+// ── Number Helpers ────────────────────────────────────────────
+
+/**
+ * Bound `n` to `[min, max]`. No rounding, and NaN passes through as NaN —
+ * callers that need an integer or a NaN fallback do that before calling.
+ */
+export function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Parse a query-string integer and bound it to `[min, max]`. A missing,
+ * empty or non-numeric value yields `fallback` (returned as-is, unclamped).
+ *
+ * @example
+ * ```typescript
+ * const limit = clampInt(query.get("limit"), 50, 1, 500);
+ * ```
+ */
+export function clampInt(raw: string | null | undefined, fallback: number, min: number, max: number): number {
+  const n = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return clamp(n, min, max);
+}
+
 // ── Async Helpers ─────────────────────────────────────────────
+
+/** Resolve after `ms` milliseconds. */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Execute a promise without awaiting, logging errors at debug level.
