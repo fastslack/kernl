@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, limitArg } from "@kernl/extension-sdk";
 import type { FinanceService } from "./service.js";
 
 function fmt(cents: number): string {
@@ -70,7 +70,7 @@ export function financeTools(service: FinanceService): ToolDefinition[] {
         category: z.string().optional(),
         from_date: z.string().optional().describe("Start date (YYYY-MM-DD)"),
         to_date: z.string().optional().describe("End date (YYYY-MM-DD)"),
-        limit: z.number().optional().describe("Max results (default: all)"),
+        limit: limitArg(1000, "Max results (default: all)"),
       }),
       handler: async (filters) => {
         const txs = service.listTransactions(filters);

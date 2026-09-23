@@ -202,3 +202,16 @@ export function defineToolNoInput(config: ToolMeta & {
 }): ToolDefinition {
   return defineTool({ ...config, schema: z.object({}), handler: async () => config.handler() });
 }
+
+/**
+ * An optional result-count argument capped at `max`. A larger (or < 1, or
+ * fractional) value is clamped rather than rejected, so an agent asking for
+ * 10 000 rows gets `max` instead of an error; absent stays absent and the
+ * handler applies its own default. Tools listed `limit: z.number()` with no
+ * bound, and every one passed it straight to SQL.
+ */
+export function limitArg(max: number, description?: string) {
+  const clamped = z.number().transform((n) => Math.min(Math.max(1, Math.floor(n)), max));
+  const text = description ? `${description} (max ${max})` : `Max results (max ${max})`;
+  return clamped.describe(text).optional();
+}

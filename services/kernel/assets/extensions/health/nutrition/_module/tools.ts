@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { NutritionService } from "./service.js";
 
 export function nutritionTools(service: NutritionService): ToolDefinition[] {
@@ -39,7 +39,7 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
       description: "Search the food database by name or brand for logging meals.",
       schema: z.object({
         query: z.string().describe("Search term (food name or brand)"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
       }),
       handler: async ({ query, limit }) => {
         const foods = service.searchFoods(query, limit);
@@ -266,7 +266,7 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
       name: "kernel_nutrition_body_trend",
       description: "Get body composition trend (weight, body fat) over recent weeks.",
       schema: z.object({
-        limit: z.number().optional().describe("Number of entries (default: 30)"),
+        limit: limitArg(200, "Number of entries (default: 30)"),
       }),
       handler: async ({ limit }) => {
         const stats = service.listBodyStats(limit);

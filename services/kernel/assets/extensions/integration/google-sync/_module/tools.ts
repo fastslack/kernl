@@ -8,6 +8,7 @@ import {
   defineToolNoInput,
   textResult,
   errorResult,
+  limitArg,
 } from "@kernl/extension-sdk";
 import type { GoogleAuth } from "./auth.js";
 import type { GoogleClient } from "./google-client.js";
@@ -300,7 +301,7 @@ export function googleSyncTools(
         from: z.string().optional().describe("Sender email address (partial match)"),
         date_from: z.string().optional().describe("Start date (ISO format)"),
         date_to: z.string().optional().describe("End date (ISO format)"),
-        limit: z.number().optional().default(20).describe("Max results (default 20)"),
+        limit: limitArg(200, "Max results (default 20)").default(20),
       }),
       handler: async ({ query, from, date_from, date_to, limit }) => {
         if (!syncService) {

@@ -10,7 +10,7 @@ import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
-import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
+import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -517,7 +517,7 @@ export function agentsTools(
       description: "List past runs for an agent",
       schema: z.object({
         agent_id: z.string().describe("Agent ID"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
         status: z.string().optional().describe("Filter by status: pending, running, completed, failed, cancelled"),
       }),
       handler: async (input) => {
@@ -1106,7 +1106,7 @@ export function agentsTools(
       description: "Read an agent's conversational memory — recent interactions with humans and other agents. Use this to check what another agent has been working on or said recently.",
       schema: z.object({
         agent_id: z.string().describe("Agent ID to read memory from"),
-        limit: z.number().optional().describe("Max messages to return (default: 10)"),
+        limit: limitArg(100, "Max messages to return (default: 10)"),
       }),
       handler: async (input) => {
         const memory = service.getMemory(input.agent_id, input.limit ?? 10);
@@ -1323,7 +1323,7 @@ export function agentsTools(
       schema: z.object({
         agent_id: z.string().optional().describe("Agent whose inbox to read. Defaults to the caller."),
         status: z.enum(["unread", "read", "archived"]).optional().describe("Filter by status (default: unread)"),
-        limit: z.number().optional().describe("Max messages (default: 20)"),
+        limit: limitArg(200, "Max messages (default: 20)"),
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {

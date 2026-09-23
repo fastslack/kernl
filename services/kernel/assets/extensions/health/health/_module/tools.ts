@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { HealthService } from "./service.js";
 
 export function healthTools(service: HealthService): ToolDefinition[] {
@@ -27,7 +27,7 @@ export function healthTools(service: HealthService): ToolDefinition[] {
       schema: z.object({
         type: z.enum(["weight", "blood_pressure", "heart_rate", "temperature", "blood_sugar", "sleep_hours", "steps", "oxygen", "custom"]).optional(),
         from_date: z.string().optional(), to_date: z.string().optional(),
-        limit: z.number().optional(),
+        limit: limitArg(200),
       }),
       handler: async (input) => {
         const metrics = service.listMetrics(input);

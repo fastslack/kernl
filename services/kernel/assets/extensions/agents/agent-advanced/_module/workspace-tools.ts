@@ -37,6 +37,7 @@ import {
   defineTool,
   getRequestContext,
   type ToolDefinition,
+  limitArg,
 } from "@kernl/extension-sdk";
 import { resolve, relative, join, normalize, dirname } from "node:path";
 import { execFile } from "node:child_process";
@@ -594,7 +595,7 @@ export function workspaceTools(
         scope: z.enum(["mine", "shared", "all"]).optional().describe("Default 'all'"),
         workspace_id: z.string().optional().describe("Restrict to one workspace"),
         tag_filter: z.string().optional().describe("Only analyses whose tags include this string"),
-        limit: z.number().optional().describe("Max results (default 30)"),
+        limit: limitArg(200, "Max results (default 30)"),
       }),
       outputSchema: z.object({
         scope: z.string(),

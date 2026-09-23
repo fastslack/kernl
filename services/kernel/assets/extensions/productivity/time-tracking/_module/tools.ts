@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { TimeTrackingService } from "./service.js";
 
 function fmtDuration(minutes: number): string {
@@ -69,7 +69,7 @@ export function timeTrackingTools(service: TimeTrackingService): ToolDefinition[
         from_date: z.string().optional().describe("Start date (ISO 8601)"),
         to_date: z.string().optional().describe("End date (ISO 8601)"),
         tag: z.string().optional().describe("Filter by tag"),
-        limit: z.number().optional().describe("Max results (default: all)"),
+        limit: limitArg(1000, "Max results (default: all)"),
       }),
       handler: async (filters) => {
         const entries = service.list(filters);

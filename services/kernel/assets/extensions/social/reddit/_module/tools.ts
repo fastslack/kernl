@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { RedditService } from "./service.js";
 
 export function redditTools(service: RedditService): ToolDefinition[] {
@@ -100,7 +100,7 @@ export function redditTools(service: RedditService): ToolDefinition[] {
         account_id: z.string().optional(),
         status: z.enum(["draft", "scheduled", "published", "failed", "removed"]).optional(),
         subreddit: z.string().optional(),
-        limit: z.number().optional(),
+        limit: limitArg(100),
       }),
       handler: async (input) => {
         const posts = service.listPosts(input);
@@ -134,7 +134,7 @@ export function redditTools(service: RedditService): ToolDefinition[] {
         account_id: z.string(),
         subreddit: z.string().describe("Subreddit name without 'r/'"),
         sort: z.enum(["new", "hot", "top", "rising"]).optional().describe("Default: new"),
-        limit: z.number().optional().describe("Max 100, default 25"),
+        limit: limitArg(100, "Max 100, default 25"),
       }),
       handler: async (input) => {
         const items = await service.fetchSubreddit(

@@ -10,6 +10,7 @@ import {
   errorResult,
   shellCommand,
   getRequestContext,
+  limitArg,
 } from "@kernl/extension-sdk";
 import type { RepoService } from "./service.js";
 import { RepoService as RepoServiceClass } from "./service.js";
@@ -206,7 +207,7 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
       schema: z.object({
         tag: z.string().optional(),
         query: z.string().optional().describe("Substring match across name, description, path."),
-        limit: z.number().optional().describe("Default 50."),
+        limit: limitArg(200, "Default 50."),
       }),
       handler: async (a) => {
         // Scoped, not filtered after the fact: a repo this agent cannot reach
@@ -499,7 +500,7 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         op: z.enum(["status", "diff", "log", "branch", "show"]).describe("Which git op to run."),
         ref: z.string().optional().describe("For `diff`/`log`/`show`: the ref/range (default: HEAD)."),
         path: z.string().optional().describe("For `diff`/`log`: restrict to this path."),
-        limit: z.number().optional().describe("For `log`: max commits (default 20)."),
+        limit: limitArg(200, "For `log`: max commits (default 20)."),
       }),
       handler: async (a) => {
         const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));

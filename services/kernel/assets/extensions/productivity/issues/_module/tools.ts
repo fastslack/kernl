@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, type SqliteDb, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, type SqliteDb, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { IssueService } from "./service.js";
 import { IssueClient } from "./client.js";
 import { syncGitHubIssues } from "./github-sync.js";
@@ -107,7 +107,7 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
         label: z.string().optional().describe("Filter by label name"),
         assignee: z.string().optional().describe("Filter by assignee username"),
         is_pr: z.boolean().optional().describe("Filter PRs/MRs only (true) or issues only (false)"),
-        limit: z.number().optional().describe("Max results (default 50)"),
+        limit: limitArg(200, "Max results (default 50)"),
       }),
       handler: async (filters) => {
         const issues = service.listIssues(filters);

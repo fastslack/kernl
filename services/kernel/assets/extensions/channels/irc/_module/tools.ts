@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { IrcServer } from "./server/ircd.js";
 import type { IrcStore } from "./store.js";
 import type { ChannelBridge } from "./bridge/channel-bridge.js";
@@ -41,7 +41,7 @@ export function ircTools(deps: {
       description: "Read recent scrollback for an IRC channel or nick (bouncer/CHATHISTORY).",
       schema: z.object({
         target: z.string().describe("Channel (#name) or nick"),
-        limit: z.number().optional().describe("Max messages (default 50)"),
+        limit: limitArg(200, "Max messages (default 50)"),
       }),
       handler: async ({ target, limit }) => {
         const rows = store.history(target, Math.min(limit ?? 50, 500));

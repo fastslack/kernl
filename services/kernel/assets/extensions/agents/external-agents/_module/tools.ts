@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { ExternalAgentService } from "./service.js";
 
 export function externalAgentTools(service: ExternalAgentService): ToolDefinition[] {
@@ -146,7 +146,7 @@ export function externalAgentTools(service: ExternalAgentService): ToolDefinitio
         agent_id: z.string().describe("Agent ID"),
         metric_name: z.string().optional().describe("Filter by metric name"),
         since: z.string().optional().describe("Filter by time (ISO 8601)"),
-        limit: z.number().optional().describe("Max results (default: 100)"),
+        limit: limitArg(500, "Max results (default: 100)"),
       }),
       handler: async (input) => {
         const metrics = service.getMetrics(
@@ -186,7 +186,7 @@ export function externalAgentTools(service: ExternalAgentService): ToolDefinitio
         agent_id: z.string().optional().describe("Filter by agent ID"),
         severity: z.enum(["info", "warning", "critical"]).optional(),
         acknowledged: z.boolean().optional().describe("Filter by acknowledgment status"),
-        limit: z.number().optional(),
+        limit: limitArg(200),
       }),
       handler: async (filters) => {
         const alerts = service.getAlerts(filters);

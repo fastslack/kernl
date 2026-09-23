@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, limitArg } from "@kernl/extension-sdk";
 import type { SecurityService } from "./service.js";
 import type { Severity } from "./types.js";
 
@@ -60,7 +60,7 @@ export function securityTools(service: SecurityService): ToolDefinition[] {
       description:
         "List past security scans. Most recent first. Optionally filter by kind.",
       schema: z.object({
-        limit: z.number().optional().describe("Max scans to return (default 20, max 200)"),
+        limit: limitArg(200, "Max scans to return (default 20, max 200)"),
         kind: z.enum(["secret_scan", "audit"]).optional().describe("Filter by scan kind"),
       }),
       handler: async ({ limit, kind }) => {

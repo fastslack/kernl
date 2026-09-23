@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { YouTubeService } from "./service.js";
 
 export function youtubeTools(service: YouTubeService): ToolDefinition[] {
@@ -111,7 +111,7 @@ export function youtubeTools(service: YouTubeService): ToolDefinition[] {
       schema: z.object({
         account_id: z.string().optional(),
         status: z.enum(["draft", "uploading", "uploaded", "failed"]).optional(),
-        limit: z.number().optional(),
+        limit: limitArg(100),
       }),
       handler: async (input) => {
         const videos = service.listVideos(input);

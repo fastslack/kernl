@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 
 export function twitterTools(service: TwitterService): ToolDefinition[] {
@@ -384,7 +384,7 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
           .enum(["tweet", "reply", "thread", "quote"])
           .optional()
           .describe("Filter by post type"),
-        limit: z.number().optional().describe("Max results (default: 50)"),
+        limit: limitArg(200, "Max results (default: 50)"),
         offset: z.number().optional().describe("Offset for pagination"),
       }),
       handler: async (opts) => {
@@ -455,7 +455,7 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
       schema: z.object({
         account_id: z.string().optional().describe("Filter by account ID"),
         unread_only: z.boolean().optional().describe("Only show unreplied mentions (default: false)"),
-        limit: z.number().optional().describe("Max results (default: 50)"),
+        limit: limitArg(200, "Max results (default: 50)"),
       }),
       handler: async (opts) => {
         const mentions = service.listMentions(opts);

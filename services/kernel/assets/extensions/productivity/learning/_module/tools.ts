@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool, defineToolNoInput, textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
+import { defineTool, defineToolNoInput, textResult, errorResult, type ToolDefinition, limitArg } from "@kernl/extension-sdk";
 import type { LearningService } from "./service.js";
 
 export function learningTools(svc: LearningService): ToolDefinition[] {
@@ -55,7 +55,7 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         type: z.enum(["book", "article", "course", "paper", "podcast", "video", "other"]).optional(),
         status: z.enum(["wishlist", "in_progress", "completed", "abandoned", "paused"]).optional(),
         search: z.string().optional(),
-        limit: z.number().optional().default(50),
+        limit: limitArg(200).default(50),
       }),
       handler: async (input) => {
         const resources = svc.listResources(input);
@@ -152,7 +152,7 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
       description: "Get flashcards due for review today",
       schema: z.object({
         deck: z.string().optional(),
-        limit: z.number().optional().default(20),
+        limit: limitArg(200).default(20),
       }),
       handler: async ({ deck, limit }) => {
         const cards = svc.getDueCards(deck, limit ?? 20);

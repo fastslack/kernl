@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { TrainingService } from "./service.js";
 
 const CATEGORIES = ["strength", "cardio", "flexibility", "balance", "sport", "custom"] as const;
@@ -219,7 +219,7 @@ export function trainingTools(service: TrainingService): ToolDefinition[] {
         from: z.string().optional(),
         to: z.string().optional(),
         sport: z.string().optional(),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
       }),
       handler: async (filters) => {
         const workouts = service.listWorkouts({ ...filters, limit: filters.limit ?? 20 });

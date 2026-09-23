@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
 
 const channelEnum = z.enum(["email", "whatsapp", "mattermost", "x", "instagram", "linkedin"]);
@@ -138,7 +138,7 @@ export function commsTools(service: CommsService): ToolDefinition[] {
         status: statusEnum.optional().describe("Filter by status"),
         contact_id: z.string().optional().describe("Filter by contact"),
         task_id: z.string().optional().describe("Filter by task"),
-        limit: z.number().optional().describe("Max results (default 50)"),
+        limit: limitArg(200, "Max results (default 50)"),
       }),
       handler: async (filters) => {
         const comms = service.list(filters);

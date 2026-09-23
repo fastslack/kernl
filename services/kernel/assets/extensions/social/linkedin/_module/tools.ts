@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { LinkedInService } from "./service.js";
 
 export function linkedinTools(service: LinkedInService): ToolDefinition[] {
@@ -125,7 +125,7 @@ export function linkedinTools(service: LinkedInService): ToolDefinition[] {
       schema: z.object({
         account_id: z.string().optional(),
         status: z.enum(["draft", "scheduled", "published", "failed"]).optional(),
-        limit: z.number().optional(),
+        limit: limitArg(100),
       }),
       handler: async (input) => {
         const posts = service.listPosts(input);

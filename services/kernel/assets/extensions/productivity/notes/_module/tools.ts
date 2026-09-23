@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { NotesService } from "./service.js";
 
 /**
@@ -131,7 +131,7 @@ export function notesTools(service: NotesService): ToolDefinition[] {
       description: "Full-text search across all notes (titles, body, tags). Uses SQLite FTS5 for fast results.",
       inputSchema: z.object({
         query: z.string().describe("Search query (supports FTS5 syntax: AND, OR, NOT, quotes for phrases)"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
       }),
       handler: async (args) => {
         const a = args as Record<string, unknown>;
@@ -157,7 +157,7 @@ export function notesTools(service: NotesService): ToolDefinition[] {
         contact_id: z.string().optional().describe("Filter by linked contact"),
         task_id: z.string().optional().describe("Filter by linked task"),
         pinned: z.boolean().optional().describe("Filter pinned notes only"),
-        limit: z.number().optional().describe("Max results"),
+        limit: limitArg(200, "Max results"),
       }),
       handler: async (filters) => {
         const notes = service.list(filters);

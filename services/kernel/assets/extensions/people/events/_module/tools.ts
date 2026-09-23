@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, formatCents } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, formatCents, limitArg } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
 import type { EventWithSummary, AttendanceSummary } from "./types.js";
 
@@ -169,7 +169,7 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           .describe("Filter by type"),
         from_date: z.string().optional().describe("From date (ISO)"),
         to_date: z.string().optional().describe("To date (ISO)"),
-        limit: z.number().optional().describe("Max results (default: 50)"),
+        limit: limitArg(200, "Max results (default: 50)"),
       }),
       handler: async (filters) => {
         const events = service.list(filters);
