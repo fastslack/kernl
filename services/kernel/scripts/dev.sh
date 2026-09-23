@@ -103,7 +103,7 @@ build_dashboard() {
 }
 
 build_extensions() {
-  step "Building extensions (_wrapper/entry.ts → backend/entry.js)"
+  step "Building extensions (_module/index.ts → backend/entry.js)"
   ensure_volume_ownership "kernl_extensions-build-node-modules"
   if ! docker compose run --rm extensions-build; then
     # Common failure: the named node_modules volume is root-owned from

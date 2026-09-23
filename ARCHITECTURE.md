@@ -130,7 +130,7 @@ Single-user, self-hosted by default. Key invariants (see `SECURITY.md` and the
 - **Add a new module** → copy the smallest existing module, register it in
   `services/kernel/src/index.ts`.
 - **Add an extension** → `services/kernel/assets/extensions/<category>/<slug>/`; see a sibling
-  for the `extension.json` + `_module/` + `_wrapper/` shape; `bun run
+  for the `extension.json` + `_module/` shape; `bun run
   build:extensions`.
 - **Run the stack** → `docker compose -f docker-compose.public.yml up -d --build`
   then open `http://localhost:3086`. Or `bun run dev` for stdio MCP.
