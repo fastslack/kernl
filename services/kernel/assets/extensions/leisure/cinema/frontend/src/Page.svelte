@@ -38,6 +38,7 @@
   // a "dim" chip still had a full-saturation 📁 sitting in it.
   import Icon from '$shared/components/Icon.svelte';
   import { createI18n } from '$shared/i18n';
+  import { jsonApi } from '$shared/api';
   import { dicts, CONTENT_LANGUAGES, languageName } from './i18n/index.js';
 
   /** Host-provided context — auth token, locale, navigation. */
@@ -68,6 +69,8 @@
     }
     return fetch(input, { ...init, headers });
   }
+  /** JSON calls over apiFetch; errors read `{ error }`, else `http <status>`. */
+  const api = jsonApi(apiFetch, { statusMessage: (s) => `http ${s}` });
 
   interface ArchiveItem {
     identifier: string;
@@ -292,9 +295,7 @@
     if (!forYouMode) { forYouReason = ''; runSearch(); return; }
     busy = true;
     try {
-      const r = await apiFetch('/api/cinema/for-you?limit=48');
-      const body = await r.json();
-      if (!r.ok) throw new Error(body.error ?? `http ${r.status}`);
+      const body = await api.getJson('/api/cinema/for-you?limit=48');
       items = body.items ?? [];
       forYouReason = body.reason ?? '';
       forYouProfileSize = body.profile_size ?? 0;
@@ -344,11 +345,8 @@
   async function loadTopTags(): Promise<void> {
     tagsLoading = true;
     try {
-      const r = await apiFetch('/api/cinema/tags?limit=30');
-      if (r.ok) {
-        const body = await r.json();
-        topTags = (body.tags ?? []) as CinemaTag[];
-      }
+      const body = await api.getJson('/api/cinema/tags?limit=30');
+      topTags = (body.tags ?? []) as CinemaTag[];
     } catch { /* non-fatal — chip row stays empty */ }
     finally { tagsLoading = false; }
   }
@@ -395,11 +393,8 @@
     tagSearchTimer = setTimeout(async () => {
       tagSearchBusy = true;
       try {
-        const r = await apiFetch(`/api/cinema/tags?q=${encodeURIComponent(q)}&limit=20`);
-        if (r.ok) {
-          const body = await r.json();
-          tagSearchHits = (body.tags ?? []) as CinemaTag[];
-        }
+        const body = await api.getJson(`/api/cinema/tags?q=${encodeURIComponent(q)}&limit=20`);
+        tagSearchHits = (body.tags ?? []) as CinemaTag[];
       } catch { /* */ }
       finally { tagSearchBusy = false; }
     }, 200);
@@ -495,25 +490,16 @@
     descErr = '';
     try {
       const target = DESC_LANGS.find((l) => l.code === descTarget)?.label ?? descTarget;
-      const r = await apiFetch('/api/llm/chat', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          system:
-            'You translate film synopses. Return ONLY the translated text: no preamble, ' +
-            'no notes, no quotes around it, and no explanation of what you did. Preserve ' +
-            'proper nouns, film titles and character names. Keep the paragraph structure.',
-          user: `Translate this film synopsis into ${target}:\n\n${item.description}`,
-          temperature: 0.2,
-          maxTokens: Math.max(400, Math.round(item.description.length / 2)),
-          caller: 'cinema:describe-translate',
-        }),
+      const j = await api.postJson('/api/llm/chat', {
+        system:
+          'You translate film synopses. Return ONLY the translated text: no preamble, ' +
+          'no notes, no quotes around it, and no explanation of what you did. Preserve ' +
+          'proper nouns, film titles and character names. Keep the paragraph structure.',
+        user: `Translate this film synopsis into ${target}:\n\n${item.description}`,
+        temperature: 0.2,
+        maxTokens: Math.max(400, Math.round(item.description.length / 2)),
+        caller: 'cinema:describe-translate',
       });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({} as any));
-        throw new Error(e?.error ?? `http ${r.status}`);
-      }
-      const j = await r.json();
       const text = String(j?.text ?? '').trim();
       if (!text) throw new Error('el modelo devolvió una respuesta vacía');
       descCache.set(key, text);
@@ -529,13 +515,10 @@
   async function ensureMyDirsLoaded() {
     if (myDirs.length > 0) return;
     try {
-      const r = await apiFetch('/api/cinema/directories?origin=local&limit=200');
-      if (r.ok) {
-        const body = await r.json();
-        myDirs = (body.directories ?? []).map((d: any) => ({
-          id: d.id, title: d.title, item_count: d.item_count ?? d.items?.length ?? 0,
-        }));
-      }
+      const body = await api.getJson('/api/cinema/directories?origin=local&limit=200');
+      myDirs = (body.directories ?? []).map((d: any) => ({
+        id: d.id, title: d.title, item_count: d.item_count ?? d.items?.length ?? 0,
+      }));
     } catch { /* */ }
   }
   async function openDirPicker(item: ArchiveItem, ev: Event) {
@@ -649,8 +632,7 @@
   let embedPollTimer: ReturnType<typeof setInterval> | null = null;
   async function refreshEmbedStatus(): Promise<void> {
     try {
-      const r = await apiFetch('/api/cinema/embed/status');
-      if (r.ok) embedSnap = await r.json();
+      embedSnap = await api.getJson('/api/cinema/embed/status');
     } catch { /* silent */ }
   }
   async function startEmbed(): Promise<void> {
@@ -667,8 +649,7 @@
   }
   async function stopEmbed(): Promise<void> {
     try {
-      const r = await apiFetch('/api/cinema/embed/stop', { method: 'POST' });
-      if (r.ok) embedSnap = await r.json();
+      embedSnap = await api.postJson('/api/cinema/embed/stop');
     } catch { /* */ }
   }
   function fmtEta(sec: number | null): string {
@@ -740,19 +721,16 @@
   async function syncWatchlistFromServer(): Promise<void> {
     let serverItems: WatchItem[] = [];
     try {
-      const r = await apiFetch('/api/cinema/titles?watchlist=1&limit=200');
-      if (r.ok) {
-        const body = await r.json();
-        serverItems = (body.items ?? []).map((t: any) => ({
-          identifier: t.identifier,
-          title: t.title,
-          date: t.date,
-          creator: t.creator,
-          description: t.description,
-          subject: t.subject,
-          addedAt: t.last_seen_at ? new Date(t.last_seen_at).getTime() : Date.now(),
-        }));
-      }
+      const body = await api.getJson('/api/cinema/titles?watchlist=1&limit=200');
+      serverItems = (body.items ?? []).map((t: any) => ({
+        identifier: t.identifier,
+        title: t.title,
+        date: t.date,
+        creator: t.creator,
+        description: t.description,
+        subject: t.subject,
+        addedAt: t.last_seen_at ? new Date(t.last_seen_at).getTime() : Date.now(),
+      }));
     } catch { /* offline — use local cache */ }
 
     const local = loadLocalWatchlist();
@@ -982,13 +960,7 @@
     if (refresh) federatedRefreshing = true;
     try {
       const url = `/api/cinema/subs/by-video/${encodeURIComponent(playItem.identifier)}${refresh ? '?refresh=1' : ''}`;
-      const r = await apiFetch(url);
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({} as any));
-        federatedError = e.error ?? `http ${r.status}`;
-        return;
-      }
-      const body = await r.json();
+      const body = await api.getJson(url);
       federatedSubs = Array.isArray(body?.federated) ? body.federated : [];
       publishersMap = body?.publishers ?? {};
       dbg('[cinema] loadFederatedSubs:', federatedSubs.length, 'rows', refresh ? '(refreshed)' : '(cached)');
@@ -1003,21 +975,12 @@
     if (downloadingRowIds.has(row.rowId)) return;
     downloadingRowIds = new Set(downloadingRowIds).add(row.rowId);
     try {
-      const r = await apiFetch('/api/cinema/subs/download', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ rowId: row.rowId }),
-      });
-      const body = await r.json().catch(() => ({} as any));
-      if (!r.ok) {
-        federatedError = body.error ?? `http ${r.status}`;
-        return;
-      }
+      const body = await api.postJson('/api/cinema/subs/download', { rowId: row.rowId });
       // Refresh both views so the new sub shows up in the regular cached
       // list AND the index marks the federated row as downloaded.
       await Promise.all([refreshCachedSubs(), loadFederatedSubs(false)]);
       // Auto-activate the freshly-downloaded sub via the existing path.
-      if (body.cache_key) {
+      if (body?.cache_key) {
         const cs = cachedSubs.find(c => c.key === body.cache_key);
         if (cs) selectCachedSub(cs);
       }
@@ -1059,11 +1022,8 @@
         const upstream = archiveDownloadUrl(playItem.identifier, playFiles[playActiveIdx].name);
         let fromBackend: CachedSub[] = [];
         try {
-          const r = await apiFetch(`/api/cinema/media/subs/list?url=${encodeURIComponent(upstream)}`);
-          if (r.ok) {
-            const j = await r.json();
-            fromBackend = (Array.isArray(j?.subs) ? j.subs : []) as CachedSub[];
-          }
+          const j = await api.getJson(`/api/cinema/media/subs/list?url=${encodeURIComponent(upstream)}`);
+          fromBackend = (Array.isArray(j?.subs) ? j.subs : []) as CachedSub[];
         } catch { /* non-fatal */ }
 
         // Subtitle files shipped inside the archive item itself need no
@@ -1705,16 +1665,13 @@
   async function loadSubInfo() {
     if (subInfo) return;
     try {
-      const r = await apiFetch('/api/cinema/media/translate-srt/info');
-      if (r.ok) {
-        subInfo = await r.json();
-        // Pick a sane default engine based on what's actually available.
-        // Order: lmstudio > ollama > grok > nllb. If user later opens
-        // Advanced and picks a different one, that takes precedence.
-        subEngine = subInfo?.engines.llm.available ? 'llm' : 'nllb';
-        dbg('[cinema] loadSubInfo: default engine →', subEngine,
-          subInfo?.engines.llm.available ? `(primary=${subInfo.engines.llm.primary.slug})` : '');
-      }
+      subInfo = await api.getJson('/api/cinema/media/translate-srt/info');
+      // Pick a sane default engine based on what's actually available.
+      // Order: lmstudio > ollama > grok > nllb. If user later opens
+      // Advanced and picks a different one, that takes precedence.
+      subEngine = subInfo?.engines.llm.available ? 'llm' : 'nllb';
+      dbg('[cinema] loadSubInfo: default engine →', subEngine,
+        subInfo?.engines.llm.available ? `(primary=${subInfo.engines.llm.primary.slug})` : '');
     } catch { /* keep null */ }
   }
 
@@ -1751,13 +1708,10 @@
   async function loadTranscribeInfo() {
     if (transcribeInfo) return;
     try {
-      const r = await apiFetch('/api/cinema/media/transcribe/info');
-      if (r.ok) {
-        transcribeInfo = await r.json();
-        if (transcribeInfo?.engines.groq.available) transcribeEngine = 'groq';
-        else if (transcribeInfo?.engines.whispercpp.available) transcribeEngine = 'whispercpp';
-        else transcribeEngine = 'transformers';
-      }
+      transcribeInfo = await api.getJson('/api/cinema/media/transcribe/info');
+      if (transcribeInfo?.engines.groq.available) transcribeEngine = 'groq';
+      else if (transcribeInfo?.engines.whispercpp.available) transcribeEngine = 'whispercpp';
+      else transcribeEngine = 'transformers';
     } catch { /* */ }
   }
 
@@ -1920,9 +1874,8 @@
     const params = new URLSearchParams({ url: upstream, engine: transcribeEngine, model: transcribeModel });
     if (subSourceLang) params.set('lang', subSourceLang);
     try {
-      const r = await apiFetch(`/api/cinema/media/transcribe/cached?${params.toString()}`);
-      if (!r.ok) return;
-      const data = await r.json() as { exact: boolean; any: boolean; key: string };
+      const data = await api.getJson<{ exact: boolean; any: boolean; key: string }>(
+        `/api/cinema/media/transcribe/cached?${params.toString()}`);
       transcribeAvailable = data.exact;
       transcribeCacheAny = data.any;
     } catch { /* ignore — keep the generate button visible */ }
@@ -2497,9 +2450,7 @@
       const u = new URL(src, window.location.origin);
       const upstream = u.searchParams.get('url');
       if (!upstream) return;
-      const r = await apiFetch(`/api/cinema/media/probe?url=${encodeURIComponent(upstream)}`);
-      if (!r.ok || myToken !== probedDurationToken) return;
-      const j = await r.json();
+      const j = await api.getJson(`/api/cinema/media/probe?url=${encodeURIComponent(upstream)}`);
       if (myToken !== probedDurationToken) return;
 
       // The same probe now reports the codecs, so an unplayable file is known
@@ -3059,9 +3010,8 @@
 
       convertPoll = setInterval(async () => {
         try {
-          const s = await apiFetch(`/api/cinema/media/convert/status?key=${encodeURIComponent(convertKey)}`);
-          if (!s.ok) return;                      // transient: a restart answers 5xx briefly
-          const j = await s.json();
+          // A non-2xx throws into the catch below: a restart answers 5xx briefly.
+          const j = await api.getJson(`/api/cinema/media/convert/status?key=${encodeURIComponent(convertKey)}`);
           convertPhase = j?.phase ?? convertPhase;
           convertFrac = typeof j?.frac === 'number' ? j.frac : convertFrac;
           if (j?.status === 'ready') { adoptConverted(); }
@@ -3207,13 +3157,7 @@
     startupStop();
     resetSubsPipeline();              // a run from the previous video must not leak into this one
     try {
-      const r = await apiFetch(`/api/cinema/media/import-archive/files?id=${encodeURIComponent(item.identifier)}`);
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({} as any));
-        playError = e.error ?? `http ${r.status}`;
-        return;
-      }
-      const body = await r.json();
+      const body = await api.getJson(`/api/cinema/media/import-archive/files?id=${encodeURIComponent(item.identifier)}`);
       const all = (body.files ?? []) as Omit<PlayFile, 'kind'>[];
       // Show videos / audio / images / text in the modal — skip raw archive
       // metadata blobs (xml manifests etc are noisy, but keep .srt/.vtt).
@@ -3550,12 +3494,7 @@
     params.set('limit', String(rows));
     params.set('offset', String((targetPage - 1) * rows));
     params.set('sort', sortMode);
-    const r = await apiFetch(`/api/cinema/titles?${params.toString()}`);
-    if (!r.ok) {
-      const e = await r.json().catch(() => ({} as any));
-      throw new Error(e.error ?? `http ${r.status}`);
-    }
-    const body = await r.json();
+    const body = await api.getJson(`/api/cinema/titles?${params.toString()}`);
     return body.items ?? [];
   }
 

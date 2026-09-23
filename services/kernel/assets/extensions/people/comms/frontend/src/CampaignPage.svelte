@@ -8,11 +8,13 @@
   import Empty from '$shared/components/Empty.svelte';
   import { fmtTime } from '$shared/utils';
   import type { ExtPageContext } from '$shared/types';
+  import { jsonApi } from '$shared/api';
 
   export let ctx: ExtPageContext;
   export let id: string;
 
   const goto = (path: string) => ctx.navigate(path);
+  const api = jsonApi((p, i) => ctx.fetchRaw(p, i), { statusMessage: () => 'Not found', bodyError: false });
 
   $: campaignId = id;
 
@@ -26,11 +28,8 @@
   async function loadCampaign() {
     loading = true; error = '';
     try {
-      const data = await ctx.rpc('comms.campaign', { id: campaignId }, async () => {
-        const r = await ctx.fetchRaw('/api/dashboard/comms/campaign?id=' + encodeURIComponent(campaignId));
-        if (!r.ok) throw new Error('Not found');
-        return r.json();
-      }) as any;
+      const data = await ctx.rpc('comms.campaign', { id: campaignId }, () =>
+        api.getJson('/api/dashboard/comms/campaign?id=' + encodeURIComponent(campaignId))) as any;
       // The operation answers { ...campaign, campaign, recipients } — one row
       // per campaign_recipients entry, each linked to the message it produced
       // (comm_id) once sent.

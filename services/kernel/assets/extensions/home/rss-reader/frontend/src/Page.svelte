@@ -5,8 +5,12 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { sanitizeHtml } from '$shared/sanitize';
   import type { ExtPageContext } from '$shared/types';
+  import { jsonApi } from '$shared/api';
 
   export let ctx: ExtPageContext;
+
+  /** Category edits report only the status (`HTTP <n>`) in their alerts. */
+  const categoryApi = jsonApi((p, i) => ctx.fetchRaw(p, i), { bodyError: false });
 
   const rssReader = ctx.getStore('rssReader') as any;
   const rssRegistry = ctx.getStore('rssRegistry') as any;
@@ -404,12 +408,7 @@
     const name = editingCatName.trim();
     if (!id || !name) { cancelEditCat(); return; }
     try {
-      const r = await ctx.fetchRaw(`/api/registry/rss/categories/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await categoryApi.sendJson('PUT', `/api/registry/rss/categories/${id}`, { name });
       // Mirror change locally so the UI updates immediately, no full refetch.
       categories = categories.map(c => c.id === id ? { ...c, name } : c);
     } catch (err) {
@@ -427,14 +426,8 @@
     const name = newCatName.trim();
     if (!name) { creatingCat = false; newCatName = ''; return; }
     try {
-      const r = await ctx.fetchRaw('/api/registry/rss/categories', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      if (data.category) {
+      const data = await categoryApi.postJson('/api/registry/rss/categories', { name });
+      if (data?.category) {
         categories = [...categories, data.category];
       }
     } catch (err) {
@@ -456,8 +449,7 @@
       : `Delete empty folder "${cat.name}"?`;
     if (!confirm(msg)) return;
     try {
-      const r = await ctx.fetchRaw(`/api/registry/rss/categories/${cat.id}`, { method: 'DELETE' });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await categoryApi.sendJson('DELETE', `/api/registry/rss/categories/${cat.id}`);
       // Local mirror: drop the category, orphan its feeds.
       categories = categories.filter(c => c.id !== cat.id);
       feeds = feeds.map(f => f.category_id === cat.id ? { ...f, category_id: null } : f);
