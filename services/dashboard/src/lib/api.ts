@@ -16,12 +16,32 @@ export function clearAuthToken(): void {
 	localStorage.removeItem('kernel_auth_token');
 }
 
-export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
-	const token = getAuthToken();
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-	if (token) headers['Authorization'] = `Bearer ${token}`;
+/**
+ * `fetch` for a kernel `/api/` route, returning the raw Response — no status
+ * handling, no JSON parsing. Sends a JSON content type unless `opts.headers`
+ * is given (which replaces it, as in `apiFetch`).
+ *
+ * No Authorization header here: the root layout patches window.fetch to add
+ * the bearer token to every same-origin `/api/` request (and to bounce a 401
+ * to /login). That interceptor only sees `fetch` — an EventSource, WebSocket
+ * or `<img src>` still has to carry the token some other way.
+ */
+export function apiFetchRaw(url: string, opts: RequestInit = {}): Promise<Response> {
+	return fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+}
 
-	const r = await fetch(url, { headers, ...opts });
+/**
+ * The `error` string a failed kernel response carries in its JSON body, or
+ * `undefined` when the body is not JSON or has none. Callers pick their own
+ * fallback (`?? \`HTTP ${r.status}\``, `|| r.statusText`, …). Consumes the body.
+ */
+export async function readApiError(r: Response): Promise<string | undefined> {
+	const body = (await r.json().catch(() => ({}))) as { error?: string } | null;
+	return body?.error;
+}
+
+export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
+	const r = await apiFetchRaw(url, opts);
 
 	if (r.status === 401) {
 		// Send the user to /login rather than opening a native prompt().
@@ -486,25 +506,18 @@ export async function* sendChatMessageStream(
 	},
 	signal?: AbortSignal,
 ): AsyncGenerator<ChatStreamEvent, void, unknown> {
-	const token = getAuthToken();
-	const headers: Record<string, string> = {
-		'Content-Type': 'application/json',
-		Accept: 'text/event-stream',
-	};
-	if (token) headers.Authorization = `Bearer ${token}`;
-
+	// Bearer token: added by the layout's window.fetch interceptor (/api/ URL).
 	const r = await fetch('/api/chat/message/stream', {
 		method: 'POST',
-		headers,
+		headers: {
+			'Content-Type': 'application/json',
+			Accept: 'text/event-stream',
+		},
 		body: JSON.stringify(body),
 		signal,
 	});
 	if (!r.ok || !r.body) {
-		const err = await r
-			.json()
-			.catch(() => ({ error: r.statusText }))
-			.then((j: { error?: string }) => j.error || r.statusText);
-		throw new Error(err);
+		throw new Error((await readApiError(r)) || r.statusText);
 	}
 
 	const reader = r.body.getReader();

@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { rpcOrCall } from '$lib/ws.js';
-  import { listEmailSuggestions, fetchGoogleSyncStatus } from '$lib/api';
+  import { listEmailSuggestions, fetchGoogleSyncStatus, apiFetchRaw } from '$lib/api';
   import AccountSwitcher from '$lib/components/AccountSwitcher.svelte';
 
   // ── Types ────────────────────────────────────────
@@ -106,11 +106,11 @@
     const args = urlArgs(url, opts);
     if (action) {
       return rpcOrCall(action, args, async () => {
-        const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+        const r = await apiFetchRaw(url, opts);
         return r.ok ? r.json() : null;
       });
     }
-    const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    const r = await apiFetchRaw(url, opts);
     return r.ok ? r.json() : null;
   }
   function post(url: string, body: unknown) { return api(url, { method: 'POST', body: JSON.stringify(body) }); }

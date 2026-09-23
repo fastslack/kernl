@@ -1,13 +1,14 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { data, issues, planner } from '$lib/stores.js';
-  import KpiCard from '$lib/components/KpiCard.svelte';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import QuickAction from '$lib/components/QuickAction.svelte';
-  import OverviewCard from '$lib/components/OverviewCard.svelte';
-  import BarChart from '$lib/components/BarChart.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Empty from '$lib/components/Empty.svelte';
-  import { fmtTime } from '$lib/utils.js';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import QuickAction from '$shared/components/QuickAction.svelte';
+  import OverviewCard from '$shared/components/OverviewCard.svelte';
+  import BarChart from '$shared/components/BarChart.svelte';
+  import Badge from '$shared/components/Badge.svelte';
+  import Empty from '$shared/components/Empty.svelte';
+  import { fmtTime } from '$shared/utils';
 
   // Data from stores
   $: d = ($data as any);
@@ -83,10 +84,10 @@
 
   <!-- Quick Actions -->
   <div class="quick-actions">
-    <QuickAction label="New Task" icon={ICONS.newTask} variant="primary" href="/tasks" />
-    <QuickAction label="Add Reminder" icon={ICONS.reminder} variant="purple" href="/reminders" />
-    <QuickAction label="View Planner" icon={ICONS.planner} variant="blue" href="/planner" />
-    <QuickAction label="Open Issues" icon={ICONS.issues} variant="orange" href="/issues" />
+    <QuickAction label="New Task" icon={ICONS.newTask} variant="primary" navigate={goto} href="/tasks" />
+    <QuickAction label="Add Reminder" icon={ICONS.reminder} variant="purple" navigate={goto} href="/reminders" />
+    <QuickAction label="View Planner" icon={ICONS.planner} variant="blue" navigate={goto} href="/planner" />
+    <QuickAction label="Open Issues" icon={ICONS.issues} variant="orange" navigate={goto} href="/issues" />
   </div>
 
   <!-- KPI Row -->
@@ -103,7 +104,7 @@
   <!-- Overview Grid -->
   <div class="overview-grid">
     <!-- Urgent Tasks -->
-    <OverviewCard title="Urgent Tasks" icon={ICONS.urgent} iconColor="var(--red)" actions={[{ label: 'View All Tasks', href: '/tasks' }]}>
+    <OverviewCard title="Urgent Tasks" icon={ICONS.urgent} iconColor="var(--red)" navigate={goto} actions={[{ label: 'View All Tasks', href: '/tasks' }]}>
       {#if urgentTasks.length > 0}
         <ul class="card-list">
           {#each urgentTasks as t}
@@ -119,7 +120,7 @@
     </OverviewCard>
 
     <!-- Upcoming Reminders -->
-    <OverviewCard title="Upcoming Reminders" icon={ICONS.reminder} iconColor="var(--purple)" actions={[{ label: 'View Alerts', href: '/reminders' }]}>
+    <OverviewCard title="Upcoming Reminders" icon={ICONS.reminder} iconColor="var(--purple)" navigate={goto} actions={[{ label: 'View Alerts', href: '/reminders' }]}>
       {#if remUpcoming.length > 0}
         <ul class="card-list">
           {#each remUpcoming.slice(0, 5) as r}

@@ -1,4 +1,4 @@
-const en: Record<string, string> = {
+const en = {
   "header.search": "Search",
   "nav.views": "Views",
   "nav.groupViews": "{group} views",
@@ -941,6 +941,13 @@ const en: Record<string, string> = {
   "office.repo.register": "Register",
   "office.repo.registering": "Registering…",
   "office.repo.registered_toast": "Registered {name}.",
-};
+} satisfies Record<string, string>;
+
+/**
+ * Every key the dashboard dictionary defines. `es.ts` is typed against it
+ * (`Record<I18nKey, string>`), so a key added to one file and not the other
+ * fails to compile instead of silently falling back to English.
+ */
+export type I18nKey = keyof typeof en;
 
 export default en;

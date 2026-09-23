@@ -1,13 +1,13 @@
 <script lang="ts">
   import { agents } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
-  import Badge from '$lib/components/Badge.svelte';
+  import Badge from '$shared/components/Badge.svelte';
   // El mismo drawer que monta /agents-flow. Esta página tenía el suyo: una
   // grilla de solo lectura, sin skills, sin triggers y sin nada editable.
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import OverviewTab from '$lib/components/agent/tabs/OverviewTab.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
-  import { fmtTime, timeAgo } from '$lib/utils.js';
+  import { fmtTime, timeAgo } from '$shared/utils';
   import { runAgent, stopAgent, deleteAgent, createAgent, updateAgent } from '$lib/api.js';
   import { agentFromResponse } from '$lib/stores/agent-detail.js';
 

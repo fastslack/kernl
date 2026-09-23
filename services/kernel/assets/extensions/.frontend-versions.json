@@ -1,86 +1,86 @@
 {
   "channels/irc": {
-    "version": "1.3.0",
-    "sha256": "ab72feba72374247"
+    "version": "1.3.1",
+    "sha256": "da0904ead6f539a4"
   },
   "crm/twitter": {
-    "version": "1.1.1",
-    "sha256": "d4e3b34752fbca16"
+    "version": "1.1.2",
+    "sha256": "5272c41023d4f7ad"
   },
   "finance/finance": {
-    "version": "1.1.1",
-    "sha256": "7214182a42264334"
+    "version": "1.1.2",
+    "sha256": "0f353d01dcbb16c0"
   },
   "finance/subscriptions": {
-    "version": "1.1.1",
-    "sha256": "98b727a201876a56"
+    "version": "1.1.2",
+    "sha256": "0b187a6b06248e34"
   },
   "health/health": {
-    "version": "1.1.1",
-    "sha256": "5cfb35945c290e86"
+    "version": "1.1.2",
+    "sha256": "ff99dd461f1d979a"
   },
   "health/nutrition": {
-    "version": "1.1.1",
-    "sha256": "025551f575db2853"
+    "version": "1.1.2",
+    "sha256": "e850f216ed15e40b"
   },
   "health/training": {
-    "version": "1.1.0",
-    "sha256": "afe5b4b337598b67"
+    "version": "1.1.1",
+    "sha256": "a7f1572f62fc5350"
   },
   "home/life": {
-    "version": "1.1.0",
-    "sha256": "72127dcae00e95d0"
+    "version": "1.1.1",
+    "sha256": "7bf0033456c0d12a"
   },
   "home/news": {
-    "version": "1.1.1",
-    "sha256": "2f760497c2bc9bc4"
+    "version": "1.1.2",
+    "sha256": "24097a535d659fce"
   },
   "home/rss-reader": {
-    "version": "1.1.0",
-    "sha256": "799d5f3c10327720"
+    "version": "1.1.1",
+    "sha256": "20d552b5a89c887e"
   },
   "home/shopping": {
-    "version": "1.1.1",
-    "sha256": "14f3b8b79d145f17"
+    "version": "1.1.2",
+    "sha256": "e67436698d5b17e3"
   },
   "leisure/books": {
-    "version": "1.0.0",
-    "sha256": "98d0f0cb9d1ff029"
+    "version": "1.0.1",
+    "sha256": "e0a506efea3d9f67"
   },
   "leisure/music": {
-    "version": "1.1.0",
-    "sha256": "4dc2b143f5bbdcc9"
+    "version": "1.1.1",
+    "sha256": "2018b9afb97695f3"
   },
   "people/comms": {
-    "version": "1.1.1",
-    "sha256": "286476dc004b91df"
+    "version": "1.1.2",
+    "sha256": "c4166d6c8beeac92"
   },
   "people/crm": {
-    "version": "1.1.1",
-    "sha256": "123e3aca659cfa78"
+    "version": "1.1.2",
+    "sha256": "affbc7038d259c07"
   },
   "people/events": {
-    "version": "1.1.1",
-    "sha256": "77c7cd1eb0f1c74a"
+    "version": "1.1.2",
+    "sha256": "c29c534e747b626b"
   },
   "productivity/issues": {
-    "version": "1.1.0",
-    "sha256": "86b00cee603265e8"
+    "version": "1.1.1",
+    "sha256": "a3484e9526bbd5d9"
   },
   "productivity/reminders": {
-    "version": "1.1.1",
-    "sha256": "c94a2971abd6bfef"
+    "version": "1.1.2",
+    "sha256": "af9a62d2a141ee8c"
   },
   "productivity/tasks": {
-    "version": "1.1.0",
-    "sha256": "f21c67cf1a80da80"
+    "version": "1.1.1",
+    "sha256": "40aa6a03fd3d7560"
   },
   "leisure/cinema": {
-    "version": "1.37.6",
-    "sha256": "bf08fb288bdbc057"
+    "version": "1.37.7",
+    "sha256": "b93a7e73adbaf09c"
   },
   "ai/mcp-bridge": {
-    "version": "2.0.0",
-    "sha256": "0bfc21e7bea851d3"
+    "version": "2.0.1",
+    "sha256": "c87da8606c755e9a"
   }
 }

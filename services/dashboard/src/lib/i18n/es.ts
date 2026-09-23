@@ -1,4 +1,7 @@
-const es: Record<string, string> = {
+import type { I18nKey } from "./en.js";
+
+// Exactly the keys of en.ts: a missing or extra key is a compile error.
+const es: Record<I18nKey, string> = {
   "header.search": "Buscar",
   "nav.views": "Vistas",
   "nav.groupViews": "Vistas de {group}",

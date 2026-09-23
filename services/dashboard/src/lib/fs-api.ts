@@ -2,7 +2,9 @@
  * Filesystem Commander — HTTP client.
  *
  * Wraps all `/api/fs/*` endpoints. Uses plain fetch (no RPC equivalent
- * exists yet on the Rust bridge). Bearer auth from localStorage.
+ * exists yet on the Rust bridge). The bearer token is added by the layout's
+ * window.fetch interceptor, which covers every /api/ URL called here. The op
+ * progress EventSource is not a fetch, so the interceptor does not see it.
  */
 
 import { isUnderHostPath } from './host-path.js';
@@ -158,19 +160,10 @@ export class FsApiError extends Error {
 	}
 }
 
-function authHeaders(): Record<string, string> {
-	const headers: Record<string, string> = {};
-	if (typeof localStorage !== 'undefined') {
-		const token = localStorage.getItem('kernel_auth_token');
-		if (token) headers['Authorization'] = `Bearer ${token}`;
-	}
-	return headers;
-}
-
 async function jsonGet<T>(url: string): Promise<T> {
 	let r: Response;
 	try {
-		r = await fetch(url, { headers: authHeaders() });
+		r = await fetch(url);
 	} catch (err) {
 		throw new FsApiError('GET', url, 0, err instanceof Error ? err.message : String(err));
 	}
@@ -183,7 +176,7 @@ async function jsonSend<T>(url: string, method: string, body?: unknown): Promise
 	try {
 		r = await fetch(url, {
 			method,
-			headers: { 'Content-Type': 'application/json', ...authHeaders() },
+			headers: { 'Content-Type': 'application/json' },
 			body: body === undefined ? undefined : JSON.stringify(body)
 		});
 	} catch (err) {

@@ -3,7 +3,7 @@
   import { notifications, unreadCount } from '$lib/stores.js';
   import type { DashboardNotification } from '$lib/stores.js';
   import { miniMd } from '$lib/mini-md.js';
-  import { timeAgo } from '$lib/utils.js';
+  import { timeAgo } from '$shared/utils';
   import { rpcOrCall } from '$lib/ws.js';
 
   // Emoji shortcodes + markdown rendering

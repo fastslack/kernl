@@ -11,6 +11,10 @@ WORKDIR /src
 COPY package.json bun.lock* ./
 RUN bun install --frozen-lockfile || bun install
 COPY . .
+# The dashboard imports its shared widgets from the extensions' frontend
+# library ($shared → ../kernel/assets/extensions/_shared). It lives outside
+# this build context, so compose passes it as the `shared` context.
+COPY --from=shared . /kernel/assets/extensions/_shared
 RUN bun run build
 
 FROM nginx:alpine

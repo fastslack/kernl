@@ -5,6 +5,7 @@
   extension-related lives in one place.
 -->
 <script lang="ts">
+  import { readApiError } from '$lib/api.js';
   import { onMount } from 'svelte';
 
   type Skill = { name: string; source: 'user' | 'plugin'; plugin?: string; marketplace?: string; description: string; path: string };
@@ -94,8 +95,7 @@
     if (!confirm(`Remove "${name}" from user scope? This affects EVERY claude_code agent on the host.`)) return;
     try {
       const res = await fetch(`/api/claude-config/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
       pushToast('ok', 'MCP removido (user scope)', name);
       const ccRes = await fetch('/api/claude-config').then(r => r.ok ? r.json() : null);
       claudeConfig = ccRes;
@@ -110,8 +110,7 @@
     try {
       const path = enabled ? 'enable' : 'disable';
       const res = await fetch(`/api/claude-config/plugin/${encodeURIComponent(ref)}/${path}`, { method: 'POST' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
       pushToast('ok', `Plugin ${enabled ? 'enabled' : 'disabled'}`, ref);
       const ccRes = await fetch('/api/claude-config').then(r => r.ok ? r.json() : null);
       claudeConfig = ccRes;
@@ -160,8 +159,7 @@
     mpBusy = { ...mpBusy, [name]: true };
     try {
       const res = await fetch(`/api/agents/marketplaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
       pushToast('ok', 'Marketplace removido', name);
       await load();
     } catch (e) {
@@ -229,8 +227,7 @@
         body: JSON.stringify({ variables: next }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? res.statusText);
+        throw new Error((await readApiError(res)) ?? res.statusText);
       }
       const updated = await res.json();
       agents = agents.map(a => a.id === selectedAgent!.id ? { ...a, variables: updated.agent?.variables ?? a.variables } : a);
@@ -632,8 +629,7 @@
     if (!confirm(`Delete the private copy of "${name}" for ${selectedAgent.name}?\nFiles are removed from data/agents/…/plugins/${name}/. The user-scope plugin is left intact.`)) return;
     try {
       const res = await fetch(`/api/agents/${selectedAgent.id}/private-plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
       pushToast('ok', 'Copia privada borrada', name);
       await loadPrivateWorkspace();
     } catch (e) {
@@ -662,8 +658,7 @@
     if (!confirm(`Delete the private copy of skill "${name}" for ${selectedAgent.name}?`)) return;
     try {
       const res = await fetch(`/api/agents/${selectedAgent.id}/private-skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
-      const body = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(body.error ?? res.statusText);
+      if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
       pushToast('ok', 'Copia privada borrada', name);
       await loadPrivateWorkspace();
     } catch (e) {

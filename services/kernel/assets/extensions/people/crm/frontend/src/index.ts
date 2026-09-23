@@ -11,16 +11,6 @@
  */
 import Root from "./Root.svelte";
 import PeoplePage from "./PeoplePage.svelte";
-import type { ExtPageContext } from "$shared/types";
+import { createMount } from "$shared/mount";
 
-export type { ExtPageContext };
-
-export function mount(target: HTMLElement, ctx: ExtPageContext): { destroy(): void } {
-  const Component = ctx.view === "people" ? PeoplePage : Root;
-  const page = new Component({ target, props: { ctx } });
-  return {
-    destroy() {
-      page.$destroy();
-    },
-  };
-}
+export const mount = createMount(Root, { people: PeoplePage });

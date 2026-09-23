@@ -13,6 +13,7 @@
    */
   import { createEventDispatcher } from 'svelte';
   import { t } from '$lib/i18n/index.js';
+  import { apiFetchRaw, readApiError } from '$lib/api.js';
 
   const dispatch = createEventDispatcher<{ done: void }>();
 
@@ -78,13 +79,10 @@
   let firstAnswer = '';
   let error = '';
 
-  const H = { 'Content-Type': 'application/json' };
-
   async function call(url: string, body?: unknown): Promise<any> {
-    const r = await fetch(url, body === undefined ? {} : { method: 'POST', headers: H, body: JSON.stringify(body) });
-    const data = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(data?.error || `HTTP ${r.status}`);
-    return data;
+    const r = await apiFetchRaw(url, body === undefined ? {} : { method: 'POST', body: JSON.stringify(body) });
+    if (!r.ok) throw new Error((await readApiError(r)) || `HTTP ${r.status}`);
+    return r.json().catch(() => ({}));
   }
 
   const pause = (ms: number) => new Promise((r) => setTimeout(r, ms));

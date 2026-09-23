@@ -1,8 +1,9 @@
 <script lang="ts">
-  // Local copy of services/dashboard/src/lib/components/DayModal.svelte
-  // (Fase 2b) — the dashboard keeps its own for the /automations shell page.
-  import { TL_COLORS } from './constants';
-  import Empty from '$shared/components/Empty.svelte';
+  // Day detail modal shared by the events planner page and the dashboard's
+  // System → Automations panel. Relative imports only, so it resolves the same
+  // under the extension builder and the dashboard's $shared alias.
+  import { TL_COLORS } from '../timeline';
+  import Empty from './Empty.svelte';
 
   export let open = false;
   export let date = '';

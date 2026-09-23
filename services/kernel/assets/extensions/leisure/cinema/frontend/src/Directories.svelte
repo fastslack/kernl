@@ -16,7 +16,7 @@
     Root.svelte switches to this component based on the pathname.
   */
   import { onMount } from 'svelte';
-  import type { ExtPageContext } from './types.js';
+  import type { ExtPageContext } from '$shared/types';
 
   export let ctx: ExtPageContext;
 

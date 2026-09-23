@@ -252,6 +252,9 @@ services:
     working_dir: /src
     volumes:
       - ./services/dashboard:/src
+      # $shared (../kernel/assets/extensions/_shared from /src): the frontend
+      # library the dashboard shares with extension pages.
+      - ./services/kernel/assets/extensions/_shared:/kernel/assets/extensions/_shared:ro
     command: sh -c "bun install --frozen-lockfile 2>/dev/null || bun install && bun run build"
     profiles: ["build"]
 
@@ -306,6 +309,7 @@ services:
       VITE_PROXY_MTW: ws://mtw-request:7741
     volumes:
       - ./services/dashboard:/src
+      - ./services/kernel/assets/extensions/_shared:/kernel/assets/extensions/_shared:ro
       - dashboard-dev-node-modules:/src/node_modules
     command: sh -c "bun install && bun run dev --host 0.0.0.0 --port 5173"
     depends_on:

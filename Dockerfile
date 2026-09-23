@@ -6,6 +6,9 @@ COPY services/dashboard/package.json services/dashboard/package-lock.json* ./
 RUN bun install
 
 COPY services/dashboard/ ./
+# $shared → ../kernel/assets/extensions/_shared: the frontend library the
+# dashboard shares with extension pages. Needed before the SPA build.
+COPY services/kernel/assets/extensions/_shared/ /build/kernel/assets/extensions/_shared/
 RUN bun run build
 
 # Extension page bundles.

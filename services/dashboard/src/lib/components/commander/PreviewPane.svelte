@@ -21,22 +21,12 @@
 	let error: string | null = null;
 	let result: PreviewResult | null = null;
 
-	function authHeaders(): Record<string, string> {
-		const h: Record<string, string> = {};
-		if (typeof localStorage !== 'undefined') {
-			const token = localStorage.getItem('kernel_auth_token');
-			if (token) h['Authorization'] = `Bearer ${token}`;
-		}
-		return h;
-	}
-
 	async function load(): Promise<void> {
 		loading = true;
 		error = null;
 		try {
 			const r = await fetch(
-				`/api/fs/preview?provider=${encodeURIComponent(providerId)}&path=${encodeURIComponent(path)}`,
-				{ headers: authHeaders() }
+				`/api/fs/preview?provider=${encodeURIComponent(providerId)}&path=${encodeURIComponent(path)}`
 			);
 			if (!r.ok) throw new Error(await r.text());
 			result = (await r.json()) as PreviewResult;

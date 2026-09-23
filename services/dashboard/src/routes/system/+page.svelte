@@ -8,14 +8,14 @@
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { systemAgenda, aiConfig } from '$lib/stores.js';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import Panel from '$lib/components/Panel.svelte';
-  import KpiCard from '$lib/components/KpiCard.svelte';
-  import OverviewCard from '$lib/components/OverviewCard.svelte';
-  import BarChart from '$lib/components/BarChart.svelte';
-  import Empty from '$lib/components/Empty.svelte';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import OverviewCard from '$shared/components/OverviewCard.svelte';
+  import BarChart from '$shared/components/BarChart.svelte';
+  import Empty from '$shared/components/Empty.svelte';
   import AutomationsPanel from '$lib/components/system/AutomationsPanel.svelte';
-  import { fmtMs, fmtTimeShort } from '$lib/utils.js';
+  import { fmtMs, fmtTimeShort } from '$shared/utils';
 
   $: sd = ($systemAgenda as any);
   $: ai = ($aiConfig as any);
@@ -115,7 +115,7 @@
       {/if}
     </OverviewCard>
 
-    <OverviewCard title="AI Providers" icon={ICONS.providers} iconColor="var(--purple)" actions={[{ label: 'Configure', href: '/settings?section=ai' }]}>
+    <OverviewCard title="AI Providers" icon={ICONS.providers} iconColor="var(--purple)" navigate={goto} actions={[{ label: 'Configure', href: '/settings?section=ai' }]}>
       {#if ai?.providers}
         <ul class="card-list">
           {#each Object.entries(providers) as [name, prov]}

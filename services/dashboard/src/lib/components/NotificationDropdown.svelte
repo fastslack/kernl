@@ -2,7 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { miniMd } from '$lib/mini-md.js';
   import type { DashboardNotification } from '$lib/stores.js';
-  import { timeAgo } from '$lib/utils.js';
+  import { timeAgo } from '$shared/utils';
 
   export let open = false;
   export let notifications: DashboardNotification[] = [];

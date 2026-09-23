@@ -22,7 +22,7 @@
     messages = [...messages, { role: 'assistant', content: text, created_at: new Date().toISOString() }];
   }
 
-  import { fmtTime, timeAgo } from '$lib/utils.js';
+  import { fmtTime, timeAgo } from '$shared/utils';
   import {
     getChatEpisodes,
     getChatMessages,
@@ -31,6 +31,7 @@
     sendChatMessageStream,
     respondChatPermission,
     getPiiStatus,
+    readApiError,
     type ChatStreamEvent,
   } from '$lib/api.js';
 
@@ -147,8 +148,7 @@
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ episode_id: id }),
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       // Drop from local list
       episodes = episodes.filter(e => e.id !== id);
       // If the deleted one was active, pick the next one or clear

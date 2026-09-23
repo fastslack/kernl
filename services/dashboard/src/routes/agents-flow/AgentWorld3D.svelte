@@ -5,7 +5,7 @@
   import PerfOverlay from './PerfOverlay.svelte';
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall, rpc } from '$lib/ws.js';
-  import { escapeHtml } from '$lib/sanitize.js';
+  import { escapeHtml } from '$shared/sanitize';
   import { traitsOf, mailOffice } from '$lib/office/office-kinds.js';
   import {
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
@@ -5451,12 +5451,9 @@
         // Direct authenticated HTTP — skip the WS race. Re-login is a one-shot
         // user action; predictability beats latency. `?force=1` bypasses the
         // backend's "already authenticated" shortcut, which would otherwise
-        // trip on a stale-but-revoked token row in google_tokens.
-        const token = localStorage.getItem('kernel_auth_token') ?? '';
-        const r = await fetch('/api/google/auth/start?force=1', {
-          method: 'POST',
-          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-        });
+        // trip on a stale-but-revoked token row in google_tokens. The bearer
+        // token comes from the layout's window.fetch interceptor.
+        const r = await fetch('/api/google/auth/start?force=1', { method: 'POST' });
         const d: any = await r.json().catch(() => ({ error: `HTTP ${r.status} ${r.statusText}` }));
         if (!r.ok) { alert(d?.error ?? `HTTP ${r.status}`); return; }
         if (d?.error) { alert(d.error); return; }

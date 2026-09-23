@@ -1,11 +1,11 @@
 <script lang="ts">
   import { files } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import Panel from '$lib/components/Panel.svelte';
-  import KpiCard from '$lib/components/KpiCard.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import { fmtTime } from '$lib/utils.js';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import Badge from '$shared/components/Badge.svelte';
+  import { fmtTime } from '$shared/utils';
 
   function fmtBytes(bytes: number): string {
     if (!bytes || bytes === 0) return '0 B';

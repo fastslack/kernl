@@ -20,7 +20,7 @@
   // prerequisite that makes it possible.
   import { flip } from 'svelte/animate';
   import { cubicOut } from 'svelte/easing';
-  import type { ExtPageContext } from './types.js';
+  import type { ExtPageContext } from '$shared/types';
   // Cue parsing, cue installation and caption styling are shared with /tv and
   // /torrents — this page used to carry its own copies of all three.
   import {

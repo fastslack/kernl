@@ -184,7 +184,8 @@
 
   // RSS content comes from arbitrary remote feeds — must be DOMPurify-grade.
   // (Old regex blacklist was bypassable with `<svg onload=...>`, encoded URIs,
-  // and anything not literally listed. Now delegates to $lib/sanitize.)
+  // and anything not literally listed. Now delegates to $shared/sanitize,
+  // the one DOMPurify config the dashboard and every extension page share.)
   const safeHtml = sanitizeHtml;
 
   function categoryColorFor(name: string): string {
