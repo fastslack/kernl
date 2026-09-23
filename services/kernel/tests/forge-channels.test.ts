@@ -68,6 +68,55 @@ describe("forge connection store", () => {
   });
 });
 
+describe("forge credentials under a changed or missing key", () => {
+  const unreadable =
+    "Gitea connection cb: stored credentials can't be decrypted with the current KERNEL_ENCRYPTION_KEY — re-add the connection";
+
+  it("a rotated key flags the connection instead of sending the ciphertext", async () => {
+    const c = new GiteaConnectionsService(db, key).add({ name: "cb", host: "https://x", token: "secret-token" });
+    const sealed = rawToken(c.id);
+    const store = new GiteaConnectionsService(db, generateKey());
+    // Startup does not wrap the old ciphertext in a second layer.
+    expect(rawToken(c.id)).toBe(sealed);
+    const conn = store.get(c.id)!;
+    expect(conn.credentials_unreadable).toBe(true);
+    expect(conn.token).toBe("");
+
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return Response.json({}); }) as unknown as typeof fetch;
+    const provider = new GiteaRepoProvider(store);
+    expect(await provider.testConnection(c.id)).toEqual({ ok: false, detail: unreadable });
+    await expect(provider.fetchItem("o/r", 1, c.id)).rejects.toThrow(unreadable);
+    expect(() => provider.assertConnection(c.id)).toThrow(unreadable);
+    expect(calls).toBe(0);
+
+    const tools = giteaChannelTools(store, provider);
+    const list = (await tools.find((t) => t.name === "kernel_gitea_connections_list")!.handler({})).content[0].text;
+    expect(list).toContain("credentials=unreadable");
+    expect(list).not.toContain(sealed);
+  });
+
+  it("a missing key flags sealed credentials too", () => {
+    const c = new GiteaConnectionsService(db, key).add({ name: "cb", host: "https://x", token: "secret-token" });
+    const conn = new GiteaConnectionsService(db, "").get(c.id)!;
+    expect(conn.credentials_unreadable).toBe(true);
+    expect(conn.token).toBe("");
+  });
+
+  it("legacy plaintext keeps working: as given without a key, sealed on boot with one", () => {
+    const hex = "0123456789abcdef0123456789abcdef01234567"; // a Gitea-style token
+    const plain = new GiteaConnectionsService(db, "");
+    const c = plain.add({ name: "cb", host: "https://x", token: hex });
+    expect(rawToken(c.id)).toBe(hex);
+    expect(plain.get(c.id)).toMatchObject({ token: hex });
+    expect(plain.get(c.id)?.credentials_unreadable).toBeUndefined();
+    const store = new GiteaConnectionsService(db, key);
+    expect(rawToken(c.id)).not.toBe(hex);
+    expect(store.get(c.id)?.token).toBe(hex);
+    expect(store.get(c.id)?.credentials_unreadable).toBeUndefined();
+  });
+});
+
 describe("forge tools", () => {
   it("answer with the same text as before", async () => {
     const store = new GiteaConnectionsService(db, key);

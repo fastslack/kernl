@@ -58,7 +58,9 @@ export function forgeConnectionTools<C extends ForgeConnectionRow, S extends z.Z
           const test = c.last_test_at
             ? `last_test=${c.last_test_at} ok=${c.last_test_ok === 1}`
             : "untested";
-          return `- **${c.name}** (id ${c.id}) — ${spec.listDetails(c)}, ${test}`;
+          // Only the fact is shown — never the stored value.
+          const creds = c.credentials_unreadable ? ", credentials=unreadable (re-add the connection)" : "";
+          return `- **${c.name}** (id ${c.id}) — ${spec.listDetails(c)}${creds}, ${test}`;
         });
         return textResult(`${label} connections (${rows.length}):\n${lines.join("\n")}`);
       },

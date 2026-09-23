@@ -7,7 +7,7 @@
  * here they are sealed at rest with the kernel's encryption key.
  */
 
-import { type SqliteDb, newId, isoNow, decrypt, encryptIfNeeded, log } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, decrypt, encryptIfNeeded, isEncrypted, log } from "@kernl/extension-sdk";
 
 export interface ForgeConnectionRow {
   id: string;
@@ -17,6 +17,34 @@ export interface ForgeConnectionRow {
   last_test_error: string;
   created_at: string;
   updated_at: string;
+  /**
+   * Set when a stored credential is ciphertext the current key can't open
+   * (KERNEL_ENCRYPTION_KEY rotated, lost or unset since it was sealed). The
+   * credential column then reads as "" — never the ciphertext — and the
+   * provider refuses to use the connection.
+   */
+  credentials_unreadable?: boolean;
+}
+
+/** The message a connection with unreadable credentials fails with. */
+export function unreadableCredentialsMessage(label: string, name: string): string {
+  return `${label} connection ${name}: stored credentials can't be decrypted with the current KERNEL_ENCRYPTION_KEY — re-add the connection`;
+}
+
+/**
+ * Whether a stored value is a sealed credential rather than a plaintext one.
+ * `isEncrypted()` alone only checks the decoded length, which a 40-char hex
+ * token (Gitea) also passes; so also require strict base64 (what `encrypt()`
+ * emits) and rule out pure hex. Plaintext forge credentials — `ghp_…`,
+ * `glpat-…`, hex tokens, PEM keys — fail one of these.
+ */
+export function looksSealed(value: string): boolean {
+  return (
+    isEncrypted(value) &&
+    value.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value) &&
+    !/^[0-9a-fA-F]+$/.test(value)
+  );
 }
 
 export interface ForgeStoreSpec {
@@ -115,16 +143,30 @@ export class ForgeConnectionStore<C extends ForgeConnectionRow> {
   private open(row: unknown): C | null {
     if (!row) return null;
     const out = { ...(row as Record<string, unknown>) };
-    if (this.spec.encryptionKey) {
-      for (const c of this.spec.secretColumns) {
-        const v = out[c];
-        // A value written before sealing existed does not decrypt: it is the plaintext.
-        if (typeof v === "string" && v) {
-          try { out[c] = decrypt(v, this.spec.encryptionKey); } catch { /* legacy plaintext */ }
-        }
+    for (const c of this.spec.secretColumns) {
+      const v = out[c];
+      if (typeof v !== "string" || !v) continue;
+      if (this.spec.encryptionKey) {
+        try {
+          out[c] = decrypt(v, this.spec.encryptionKey);
+          continue;
+        } catch { /* not sealed with this key — see below */ }
+      }
+      // It does not open with the current key (or there is none). Ciphertext
+      // here means the key changed or went missing since it was sealed: flag
+      // the connection instead of handing the ciphertext to the forge as a
+      // token. Anything else is a legacy plaintext value, used as stored
+      // (with a key configured, startup has already sealed those).
+      if (looksSealed(v)) {
+        out[c] = "";
+        out.credentials_unreadable = true;
       }
     }
     return out as unknown as C;
+  }
+
+  private opens(value: string): boolean {
+    try { decrypt(value, this.spec.encryptionKey); return true; } catch { return false; }
   }
 
   /** Rows saved before credentials were sealed get sealed now, once. */
@@ -135,7 +177,13 @@ export class ForgeConnectionStore<C extends ForgeConnectionRow> {
       .all() as Array<Record<string, string>>;
     let sealed = 0;
     for (const row of rows) {
-      const next = this.spec.secretColumns.map((c) => this.seal(c, row[c] ?? ""));
+      // Ciphertext sealed under another key is left alone: re-sealing it would
+      // wrap it again and it would later "decrypt" to the old ciphertext.
+      // open() reports it as unreadable instead.
+      const next = this.spec.secretColumns.map((c) => {
+        const v = row[c] ?? "";
+        return looksSealed(v) && !this.opens(v) ? v : this.seal(c, v);
+      });
       if (next.every((v, i) => v === row[this.spec.secretColumns[i]])) continue;
       this.db
         .prepare(`UPDATE ${this.spec.table} SET ${this.spec.secretColumns.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`)

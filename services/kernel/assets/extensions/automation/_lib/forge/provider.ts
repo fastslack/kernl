@@ -10,7 +10,7 @@ import type {
   RepoItem,
   RepoProvider,
 } from "../../triage/_module/repo-provider.js";
-import type { ForgeConnectionRow, ForgeConnectionStore } from "./connections.js";
+import { unreadableCredentialsMessage, type ForgeConnectionRow, type ForgeConnectionStore } from "./connections.js";
 
 export type { CommentRef, ConnectionSummary, RepoItem, RepoProvider };
 
@@ -49,6 +49,7 @@ export abstract class ForgeRepoProvider<C extends ForgeConnectionRow> implements
     const conn = this.connections.get(connectionId);
     if (!conn) return { ok: false, detail: "connection not found" };
     try {
+      this.assertReadable(conn);
       const detail = await this.whoami(conn);
       this.connections.recordTest(connectionId, true, "");
       return { ok: true, detail };
@@ -62,6 +63,12 @@ export abstract class ForgeRepoProvider<C extends ForgeConnectionRow> implements
   protected requireConnection(id: string): C {
     const conn = this.connections.get(id);
     if (!conn) throw new Error(`${this.label} connection not found: ${id}`);
+    this.assertReadable(conn);
     return conn;
+  }
+
+  /** A connection whose credentials the current key can't open is never sent to the forge. */
+  private assertReadable(conn: C): void {
+    if (conn.credentials_unreadable) throw new Error(unreadableCredentialsMessage(this.label, conn.name));
   }
 }
