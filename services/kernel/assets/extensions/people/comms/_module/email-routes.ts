@@ -9,6 +9,7 @@ import {
   isoNow,
   log,
 } from "@kernl/extension-sdk";
+import { timingSafeEqual } from "node:crypto";
 import type { EmailService } from "./email-service.js";
 import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
@@ -455,10 +456,10 @@ export function registerEmailRoutes(
   //     raw_headers?:      { ... }
   //   }
   //
-  // Authentication: a shared secret can be required via COMMS_INBOUND_TOKEN.
-  // When the env var is set, the request must carry the same value in
-  // `X-Inbound-Token` (or a `?token=` query). When it's unset the endpoint is
-  // open — fine for local dev, not for internet-exposed deployments.
+  // Authentication: fails closed. The endpoint answers 503 until
+  // COMMS_INBOUND_TOKEN is set, and then every request must carry the same
+  // value in the `X-Inbound-Token` header (compared in constant time). The
+  // token is not accepted as a `?token=` query: URLs end up in access logs.
   //
   // Stays a raw handler: it checks the token before reading the body, so an
   // unauthenticated caller gets 401 without the server parsing its payload.
@@ -467,16 +468,17 @@ export function registerEmailRoutes(
     server.post("/api/comms/inbound", async (req, res) => {
       try {
         const expectedToken = process.env.COMMS_INBOUND_TOKEN ?? "";
-        if (expectedToken) {
-          const headerToken = String(
-            (req.headers?.["x-inbound-token"] ?? req.headers?.["X-Inbound-Token"] ?? "") as string,
-          );
-          const url = new URL(req.url ?? "/", "http://localhost");
-          const queryToken = url.searchParams.get("token") ?? "";
-          if (headerToken !== expectedToken && queryToken !== expectedToken) {
-            server.json(res, 401, { error: "Unauthorized" });
-            return;
-          }
+        if (!expectedToken) {
+          server.json(res, 503, {
+            error: "Inbound email is disabled until COMMS_INBOUND_TOKEN is set",
+          });
+          return;
+        }
+        const header = req.headers?.["x-inbound-token"];
+        const headerToken = String((Array.isArray(header) ? header[0] : header) ?? "");
+        if (!inboundTokenMatches(headerToken, expectedToken)) {
+          server.json(res, 401, { error: "Unauthorized" });
+          return;
         }
 
         const body = await server.parseBody<{
@@ -525,4 +527,12 @@ export function registerEmailRoutes(
       }
     });
   }
+}
+
+/** Constant-time comparison of the inbound token (timingSafeEqual needs equal lengths). */
+export function inboundTokenMatches(given: string, expected: string): boolean {
+  const a = Buffer.from(given, "utf8");
+  const b = Buffer.from(expected, "utf8");
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
 }
