@@ -9,8 +9,6 @@
  * as a full Agent.
  */
 
-import type { SqliteDb } from "../../core/db/sqlite.js";
-import { safeQueryOne } from "../../core/db/query-helpers.js";
 import { jsonArray, jsonObject, safeJson } from "../../core/helpers.js";
 import type { ModelChainEntry } from "./types.js";
 
@@ -62,15 +60,8 @@ export function agentSkills(a: { skills_json?: string | null }): string[] {
 }
 
 /**
- * The variables of the agent running built-in handler `handler` (the first
- * one, if several carry it), {} when there is no such agent or its
- * variables are unreadable. Built-in handlers read their tunables this way.
+ * The variables of the agent running built-in handler `handler`. Defined in
+ * the SDK (same `jsonObject` read as `agentVariables` above) so extension
+ * drivers read their tunables exactly the way kernel handlers do.
  */
-export function readHandlerVars(db: SqliteDb, handler: string): Record<string, unknown> {
-  const row = safeQueryOne<{ variables: string }>(
-    db,
-    "SELECT variables FROM agents WHERE builtin_handler = ? LIMIT 1",
-    handler,
-  );
-  return row ? agentVariables(row) : {};
-}
+export { readHandlerVars } from "../../sdk/agent-vars.js";

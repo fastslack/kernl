@@ -30,6 +30,7 @@ export * from "./args.js";
 export * from "./module.js";
 export * from "./channels.js";
 export * from "./query-helpers.js";
+export * from "./agent-vars.js";
 export * from "./migrations.js";
 export * from "./tool-builder.js";
 export * from "./formatting.js";

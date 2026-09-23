@@ -8,7 +8,8 @@
  * ── Coupling shape with extensions ─────────────────────────────────────
  * This file only contains KERNEL-GENERIC handlers (checks, proactive
  * briefings, marketplace/model-discovery, reflection, plus the sub-registries
- * for scripts / job scrapers / skill suggester / personal scrapers).
+ * for scripts / skill suggester / personal scrapers). The job-board scrapers
+ * (`scraper:jobs:*`) are drivers of the job-hunter extension.
  *
  * Extension-owned handlers do NOT live here anymore. Each extension ships its
  * own `AgentDriver[]` via `KernelModule.getAgentDrivers()` (see
@@ -553,7 +554,6 @@ try {
 // ── Registry ───────────────────────────────────
 
 import { createScriptHandlers } from "./script-handlers.js";
-import { registerJobScrapers } from "./job-scrapers.js";
 import { registerSkillSuggester } from "./skill-suggester.js";
 
 /**
@@ -565,13 +565,15 @@ import { registerSkillSuggester } from "./skill-suggester.js";
  * `ModuleRegistry.collectAgentDrivers()`.
  *
  * Deliberately NOT included here (each has its own registration path):
- *   - extension handlers (cinema/comms/social/gsync/trading/torrents…) —
- *     they ship as AgentDrivers inside their own extensions now;
+ *   - extension handlers (cinema/comms/social/gsync/trading/torrents/
+ *     job-hunter…) — they ship as AgentDrivers inside their own extensions
+ *     now (job-hunter's drivers carry no cron: its agent rows are seeded
+ *     manually by scripts/seeds/jobs-office.ts);
  *   - `llm:model-discovery` (seed-model-discovery-agent.ts, env-gated);
  *   - the skill suggester (seed-skill-suggester.ts — commander flow);
- *   - job scrapers / CLI scripts / personal scrapers — their handlers are
- *     registered below but agent rows are seeded manually (scripts/seeds/*)
- *     or per-instance, exactly as before.
+ *   - CLI scripts / personal scrapers — their handlers are registered below
+ *     but agent rows are seeded manually (scripts/seeds/*) or per-instance,
+ *     exactly as before.
  */
 export const KERNEL_AGENT_DEFS: Array<{
   handler: string;
@@ -635,9 +637,6 @@ export function createBuiltinHandlers(ctx: BuiltinHandlerContext): Map<string, B
 
   // Scrapers — delegated to personal-scrapers.ts when present (gitignored).
   registerPersonalScrapers?.(map, ctx);
-
-  // Job-board scrapers (generic, always available).
-  registerJobScrapers(map, ctx);
 
   // Skill Suggester — deterministic scanner that proposes installed skills
   // to attach to each agent. Lives in the commander's flow; runs daily.
