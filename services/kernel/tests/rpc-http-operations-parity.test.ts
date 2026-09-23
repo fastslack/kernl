@@ -209,6 +209,50 @@ describe("twitter operations answer alike over RPC and HTTP", () => {
     expect(service.getAccount(acc.id)?.handle).toBe("a");
     expect(service.getAccount(acc.id)?.display_name).toBe("D");
   });
+
+  const SECRETS = {
+    api_key: "key-SECRET-1", api_secret: "sec-SECRET-2",
+    access_token: "tok-SECRET-3", access_secret: "acs-SECRET-4",
+  };
+
+  it("no response that reaches the dashboard carries a credential", async () => {
+    const created = await rpc("twitter.accounts.create", { handle: "s", ...SECRETS }) as { id: string };
+    service.updateAccount(created.id, { auth_cookie_ref: "cookie-SECRET-5" });
+    const viaHttp = await (await http("POST", "/api/twitter/accounts", { handle: "t", ...SECRETS })).text();
+    const responses = [
+      JSON.stringify(created),
+      viaHttp,
+      JSON.stringify(await rpc("twitter.accounts.update", { id: created.id, display_name: "S" })),
+      await (await http("POST", "/api/twitter/accounts/update", { id: created.id, role: "founder" })).text(),
+      await (await http("GET", "/api/twitter/accounts")).text(),
+      JSON.stringify(await rpc("dashboard.twitter")),
+    ];
+    for (const body of responses) expect(body).not.toContain("SECRET");
+    const listed = await (await http("GET", "/api/twitter/accounts")).json() as Array<Record<string, unknown>>;
+    const acc = listed.find((a) => a.id === created.id)!;
+    expect(acc.api_secret).toBe("••••");
+    expect(acc.has_api_secret).toBe(true);
+    expect(acc.has_auth_cookie_ref).toBe(true);
+  });
+
+  it("an update with the mask or a blank keeps the stored secret", async () => {
+    const acc = service.addAccount({ handle: "k", ...SECRETS });
+    await rpc("twitter.accounts.update", { id: acc.id, display_name: "K", api_key: "••••", api_secret: "" });
+    await http("POST", "/api/twitter/accounts/update", { id: acc.id, access_token: "••••", access_secret: "" });
+    const stored = service.getAccount(acc.id)!;
+    expect(stored.display_name).toBe("K");
+    expect({ api_key: stored.api_key, api_secret: stored.api_secret, access_token: stored.access_token, access_secret: stored.access_secret })
+      .toEqual(SECRETS);
+  });
+
+  it("an update with a new value replaces the stored secret", async () => {
+    const acc = service.addAccount({ handle: "n", ...SECRETS });
+    await rpc("twitter.accounts.update", { id: acc.id, api_secret: "new-secret" });
+    await http("POST", "/api/twitter/accounts/update", { id: acc.id, access_token: "new-token" });
+    expect(service.getAccount(acc.id)?.api_secret).toBe("new-secret");
+    expect(service.getAccount(acc.id)?.access_token).toBe("new-token");
+    expect(service.getAccount(acc.id)?.api_key).toBe(SECRETS.api_key);
+  });
 });
 
 describe("api-registry and google operations answer alike over RPC and HTTP", () => {

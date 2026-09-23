@@ -33,6 +33,7 @@ describe("dashboard operations answer alike over RPC and HTTP", () => {
   let rpc: (name: string, args?: Record<string, unknown>) => Promise<unknown>;
   let purged: number[];
   let markedAll: number;
+  let channelStore: Record<string, Record<string, unknown>>;
   let config: KernelConfig;
   const savedChainEnv = process.env.AGENTS_DEFAULT_MODEL_CHAIN;
 
@@ -45,11 +46,19 @@ describe("dashboard operations answer alike over RPC and HTTP", () => {
     purged = [];
     markedAll = 0;
 
+    // "tg" is the one configured channel: a secret botToken and a plain chatId.
+    channelStore = { tg: { botToken: "123:SECRET-TOKEN", chatId: "42" } };
     const channelRegistry = {
       getStatuses: () => [],
-      getConfigSchema: () => null,
-      loadConfig: () => ({}),
-      saveConfig: () => false,
+      getConfigSchema: (id: string) => id === "tg"
+        ? [{ key: "botToken", type: "password" }, { key: "chatId", type: "text" }]
+        : null,
+      loadConfig: (id: string) => channelStore[id] ?? {},
+      saveConfig: (id: string, cfg: Record<string, unknown>) => {
+        if (id !== "tg") return false;
+        channelStore[id] = cfg;
+        return true;
+      },
       getProvider: () => undefined,
       startProvider: async () => false,
       stopProvider: async () => true,
@@ -188,6 +197,24 @@ describe("dashboard operations answer alike over RPC and HTTP", () => {
     expect((await http("POST", "/api/notifications/read")).status).toBe(400);
     expect((await http("POST", "/api/notifications/read", {})).status).toBe(200);
     expect(markedAll).toBe(1);
+  });
+
+  it("channels.schema answers `config` with secrets masked on both roads", async () => {
+    const viaRpc = await rpc("channels.schema", { id: "tg" }) as { config: Record<string, unknown> };
+    const viaHttp = await (await http("GET", "/api/channels/schema?id=tg")).json() as typeof viaRpc;
+    for (const out of [viaRpc, viaHttp]) {
+      expect(out.config).toEqual({ botToken: "••••••••", chatId: "42" });
+      expect(JSON.stringify(out)).not.toContain("SECRET");
+    }
+  });
+
+  it("channels.config.save keeps a secret sent blank or masked and replaces it when a new one is typed", async () => {
+    await rpc("channels.config.save", { id: "tg", config: { botToken: "", chatId: "7" } });
+    expect(channelStore.tg).toEqual({ botToken: "123:SECRET-TOKEN", chatId: "7" });
+    await http("POST", "/api/channels/config", { id: "tg", config: { botToken: "••••••••", chatId: "8" } });
+    expect(channelStore.tg).toEqual({ botToken: "123:SECRET-TOKEN", chatId: "8" });
+    await rpc("channels.config.save", { id: "tg", config: { botToken: "456:NEW", chatId: "8" } });
+    expect(channelStore.tg.botToken).toBe("456:NEW");
   });
 
   it("failures reject over RPC (they used to resolve as { error }) and keep the HTTP status and body", async () => {

@@ -14,6 +14,38 @@ function vaultKeyFor(handle: string): string {
   return `x-cookie/${handle.replace(/^@/, "")}`;
 }
 
+/**
+ * Account columns that hold credentials. auth_cookie_ref carries the
+ * auth_token cookie itself (kernel_twitter_set_cookie stores it inline), so it
+ * is as secret as the API keys.
+ */
+export const ACCOUNT_SECRET_FIELDS = ["api_key", "api_secret", "access_token", "access_secret", "auth_cookie_ref"] as const;
+export type AccountSecretField = (typeof ACCOUNT_SECRET_FIELDS)[number];
+
+/**
+ * What a client sees in place of a stored secret. Sending it back on an update
+ * (as the edit form does for untouched fields) keeps the stored value.
+ */
+export const SECRET_MASK = "••••";
+
+/** An account row as it may leave the kernel for a client. */
+export type PublicTwitterAccount = TwitterAccountRow & { [K in AccountSecretField as `has_${K}`]: boolean };
+
+/**
+ * The account with every credential replaced by SECRET_MASK (or "" when
+ * unset) plus a `has_<field>` flag. Every response that reaches the dashboard
+ * goes through this; the publisher and the MCP tools read the raw row.
+ */
+export function publicAccount(row: TwitterAccountRow): PublicTwitterAccount {
+  const out: Record<string, unknown> = { ...row };
+  for (const field of ACCOUNT_SECRET_FIELDS) {
+    const set = typeof row[field] === "string" && row[field] !== "";
+    out[field] = set ? SECRET_MASK : "";
+    out[`has_${field}`] = set;
+  }
+  return out as unknown as PublicTwitterAccount;
+}
+
 /** The twitter_accounts columns updateAccount may write. */
 const ACCOUNT_PATCH: Record<string, PatchColumn> = {
   handle: "text",

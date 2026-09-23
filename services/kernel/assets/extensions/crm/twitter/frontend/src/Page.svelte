@@ -42,6 +42,9 @@
   let accAccessToken = '';
   let accAccessSecret = '';
 
+  const secretPlaceholder = (has: boolean | undefined) =>
+    editingAccount && has ? 'set — leave blank to keep' : 'xxxxxx';
+
   // Detail panel
   let selectedPost: any = null;
 
@@ -192,10 +195,12 @@
       editingAccount = acc;
       accHandle = acc.handle;
       accDisplayName = acc.display_name;
-      accApiKey = acc.api_key;
-      accApiSecret = acc.api_secret;
-      accAccessToken = acc.access_token;
-      accAccessSecret = acc.access_secret;
+      // Credentials come back masked and are never pre-filled: a blank field
+      // on update keeps the stored value, a typed one replaces it.
+      accApiKey = '';
+      accApiSecret = '';
+      accAccessToken = '';
+      accAccessSecret = '';
     } else {
       editingAccount = null;
       accHandle = '';
@@ -702,22 +707,22 @@
       <div class="field-row">
         <div class="field">
           <label>API Key (Consumer Key)</label>
-          <input type="password" bind:value={accApiKey} placeholder="xxxxxx" />
+          <input type="password" bind:value={accApiKey} placeholder={secretPlaceholder(editingAccount?.has_api_key)} />
         </div>
         <div class="field">
           <label>API Secret (Consumer Secret)</label>
-          <input type="password" bind:value={accApiSecret} placeholder="xxxxxx" />
+          <input type="password" bind:value={accApiSecret} placeholder={secretPlaceholder(editingAccount?.has_api_secret)} />
         </div>
       </div>
 
       <div class="field-row">
         <div class="field">
           <label>Access Token</label>
-          <input type="password" bind:value={accAccessToken} placeholder="xxxxxx" />
+          <input type="password" bind:value={accAccessToken} placeholder={secretPlaceholder(editingAccount?.has_access_token)} />
         </div>
         <div class="field">
           <label>Access Token Secret</label>
-          <input type="password" bind:value={accAccessSecret} placeholder="xxxxxx" />
+          <input type="password" bind:value={accAccessSecret} placeholder={secretPlaceholder(editingAccount?.has_access_secret)} />
         </div>
       </div>
 

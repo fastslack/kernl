@@ -58,6 +58,17 @@ export const startedAt = Date.now();
 const today = () => new Date().toISOString().split("T")[0];
 
 /**
+ * What the settings page sees in place of a stored channel secret (any schema
+ * field of type "password"). It shows it as the placeholder and sends back only
+ * what the user typed, so an empty value, or this mask echoed back, on save
+ * means "keep the stored secret".
+ */
+export const CHANNEL_SECRET_MASK = "••••••••";
+
+const secretKeysOf = (schema: ReadonlyArray<{ key: string; type: string }>): string[] =>
+  schema.filter((f) => f.type === "password").map((f) => f.key);
+
+/**
  * `start` (defaults to today) and `days` clamped to 365, 150 when absent.
  * `date`/`limit` are the names the RPC used to read, still taken.
  */
@@ -192,13 +203,28 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
       const id = required(input, "id", "Missing id parameter");
       const schema = reg.getConfigSchema(id);
       if (!schema) throw new HttpError(404, `No provider "${id}"`);
-      return { id, schema, config: reg.loadConfig(id) ?? {} };
+      // Secrets leave masked; channels.config.save merges them back.
+      const config: Record<string, unknown> = { ...(reg.loadConfig(id) ?? {}) };
+      for (const key of secretKeysOf(schema)) {
+        if (typeof config[key] === "string" && config[key]) config[key] = CHANNEL_SECRET_MASK;
+      }
+      return { id, schema, config };
     },
     "channels.config.save": (input) => {
       const reg = requireRegistry();
       const { id, config: cfg } = pickArgs(input, { id: "string", config: "object" });
       if (!id || !cfg) throw new HttpError(400, "Missing id or config");
-      if (!reg.saveConfig(id, cfg)) throw new HttpError(404, `Channel "${id}" not found in marketplace`);
+      // saveConfig replaces wholesale, so a secret left blank or still masked
+      // takes the stored value instead of wiping it (or storing the mask).
+      const stored = reg.loadConfig(id) ?? {};
+      const next: Record<string, unknown> = { ...cfg };
+      for (const key of secretKeysOf(reg.getConfigSchema(id) ?? [])) {
+        const incoming = next[key];
+        const keep = typeof incoming !== "string" || incoming === "" || incoming === CHANNEL_SECRET_MASK;
+        if (keep && typeof stored[key] === "string" && stored[key]) next[key] = stored[key];
+        else if (incoming === CHANNEL_SECRET_MASK) delete next[key];
+      }
+      if (!reg.saveConfig(id, next)) throw new HttpError(404, `Channel "${id}" not found in marketplace`);
       return { success: true };
     },
     "channels.test": async (input) => {

@@ -14,7 +14,7 @@
  */
 
 import { HttpError, pickArgs, type Operation } from "@kernl/extension-sdk";
-import type { TwitterService } from "./service.js";
+import { publicAccount, SECRET_MASK, type TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
 
 /** What the dashboard may set on an account, create and update alike. */
@@ -31,6 +31,20 @@ const ACCOUNT_FIELDS = {
   partner_account_id: "string",
 } as const;
 
+/**
+ * Accounts go back to the page masked (see publicAccount), so the edit form
+ * holds the mask, or a blank, for every credential the user left alone. Either
+ * means "keep what is stored": drop it so the update never overwrites the
+ * secret with the placeholder or wipes it.
+ */
+function withoutUntouchedSecrets<T extends Record<string, unknown>>(fields: T): T {
+  const out = { ...fields };
+  for (const key of ["api_key", "api_secret", "access_token", "access_secret"] as const) {
+    if (out[key] === "" || out[key] === SECRET_MASK) delete out[key];
+  }
+  return out;
+}
+
 export function twitterOperations(tw: TwitterService, pub: TwitterPublisher | null): Record<string, Operation> {
   const required = (input: Record<string, unknown>, key: string): string => {
     const value = typeof input[key] === "string" ? (input[key] as string) : "";
@@ -44,16 +58,16 @@ export function twitterOperations(tw: TwitterService, pub: TwitterPublisher | nu
 
   return {
     "twitter.accounts.create": (input) => {
-      const fields = pickArgs(input, ACCOUNT_FIELDS);
+      const fields = withoutUntouchedSecrets(pickArgs(input, ACCOUNT_FIELDS));
       if (!fields.handle) throw new HttpError(400, "handle is required");
-      return tw.addAccount({ ...fields, handle: fields.handle });
+      return publicAccount(tw.addAccount({ ...fields, handle: fields.handle }));
     },
 
     "twitter.accounts.update": (input) => {
       const id = required(input, "id");
-      const account = tw.updateAccount(id, pickArgs(input, { ...ACCOUNT_FIELDS, status: "string" }));
+      const account = tw.updateAccount(id, withoutUntouchedSecrets(pickArgs(input, { ...ACCOUNT_FIELDS, status: "string" })));
       if (!account) throw new HttpError(404, "Account not found");
-      return account;
+      return publicAccount(account);
     },
 
     "twitter.posts.create": (input) => {

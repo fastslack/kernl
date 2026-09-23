@@ -1,5 +1,5 @@
 import { HttpError, isHttpError, type KernelHttpServer, type Operation } from "@kernl/extension-sdk";
-import type { TwitterService } from "./service.js";
+import { publicAccount, type TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
 import { twitterOperations } from "./operations.js";
 
@@ -44,7 +44,8 @@ export function registerTwitterRoutes(
 
   // ── Accounts ───────────────────────────────────────
 
-  server.route("GET", "/api/twitter/accounts", () => service.listAccounts());
+  // Credentials leave masked; see publicAccount.
+  server.route("GET", "/api/twitter/accounts", () => service.listAccounts().map(publicAccount));
 
   // ── Posts ──────────────────────────────────────────
 

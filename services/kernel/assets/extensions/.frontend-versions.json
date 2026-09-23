@@ -4,16 +4,16 @@
     "sha256": "da0904ead6f539a4"
   },
   "crm/twitter": {
-    "version": "1.1.2",
-    "sha256": "5272c41023d4f7ad"
+    "version": "1.1.3",
+    "sha256": "438a78cb9f2c9407"
   },
   "finance/finance": {
     "version": "1.1.2",
     "sha256": "0f353d01dcbb16c0"
   },
   "finance/subscriptions": {
-    "version": "1.1.2",
-    "sha256": "0b187a6b06248e34"
+    "version": "1.1.3",
+    "sha256": "add43106258c70cc"
   },
   "health/health": {
     "version": "1.1.2",
@@ -52,8 +52,8 @@
     "sha256": "2018b9afb97695f3"
   },
   "people/comms": {
-    "version": "1.1.2",
-    "sha256": "c4166d6c8beeac92"
+    "version": "1.1.3",
+    "sha256": "488c91a0e0e2a6a1"
   },
   "people/crm": {
     "version": "1.1.2",

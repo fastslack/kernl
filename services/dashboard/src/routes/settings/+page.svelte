@@ -470,6 +470,8 @@
   // ═══════════════════════════════════════════════
   let channelSchema: any = null;
   let channelConfig: Record<string, any> = {};
+  // Masked stored value per secret field — the SecretInput placeholder.
+  let channelMasked: Record<string, string> = {};
   let channelId = '';
   let channelSaving = false;
 
@@ -486,8 +488,18 @@
       const data = await rpcOrCall('channels.schema', { id }, () => jfetch(`/api/channels/schema?id=${id}`)) as any;
       channelSchema = data;
       channelConfig = {};
+      channelMasked = {};
+      // channels.schema answers `config`, with every password field masked.
+      // A secret field holds only what the user types (blank keeps the stored
+      // value on save); the mask is shown as its placeholder.
       for (const field of data.schema ?? []) {
-        channelConfig[field.key] = data.currentConfig?.[field.key] ?? '';
+        const current = data.config?.[field.key] ?? '';
+        if (field.type === 'password' || field.secret) {
+          channelConfig[field.key] = '';
+          channelMasked[field.key] = current;
+        } else {
+          channelConfig[field.key] = current;
+        }
       }
     } catch {
       channelSchema = null;
@@ -539,7 +551,7 @@
       const data = await rpcOrCall('channels.schema', { id: 'whatsapp' }, () => jfetch('/api/channels/schema?id=whatsapp')) as any;
       waConfig = {};
       for (const field of data.schema ?? []) {
-        waConfig[field.key] = data.currentConfig?.[field.key] ?? '';
+        waConfig[field.key] = data.config?.[field.key] ?? '';
       }
     } catch { /* fields stay editable, empty */ }
   }
@@ -799,8 +811,8 @@
                     <span class="ch-flabel">{field.label || field.key}{field.required ? ' *' : ''}</span>
                     {#if field.type === 'boolean'}
                       <label class="ch-toggle"><input type="checkbox" bind:checked={channelConfig[field.key]} /> {field.label || field.key}</label>
-                    {:else if field.secret}
-                      <SecretInput bind:value={channelConfig[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
+                    {:else if field.type === 'password' || field.secret}
+                      <SecretInput bind:value={channelConfig[field.key]} masked={channelMasked[field.key] ?? ''} configured={!!channelMasked[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
                     {:else}
                       <input class="prov-in" type="text" bind:value={channelConfig[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
                     {/if}
