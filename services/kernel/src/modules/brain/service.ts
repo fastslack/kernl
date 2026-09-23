@@ -17,8 +17,8 @@
  *
  * Embeddings are raw little-endian Float32 BLOBs (same convention as
  * `tool_memory`). Recall is in-memory cosine over the candidate set —
- * fine at the current scale; the Neo4j vector index / `vector-driver`
- * seam is the documented next step when row counts grow.
+ * fine at the current scale; a Neo4j vector index behind a vector db-driver
+ * is the next step when row counts grow.
  *
  * Autoaprendizaje: `reinforce()` nudges an item's `weight` from usage
  * signals (opened +, ignored −, corrected +), mirroring the confidence

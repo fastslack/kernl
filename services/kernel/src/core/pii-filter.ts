@@ -275,7 +275,3 @@ export function getGlobalPiiFilter(): PiiFilter {
   return globalFilter;
 }
 
-export function initGlobalPiiFilter(config: Partial<PiiFilterConfig>): PiiFilter {
-  globalFilter = new PiiFilter(config);
-  return globalFilter;
-}

@@ -834,16 +834,3 @@ export function llm(): LlmClient {
   return client;
 }
 
-/** Create a lightweight LLM client for a specific purpose (triage, analysis, etc.) */
-export function createLlmClientFromKeys(
-  openaiKey: string,
-  anthropicKey: string,
-  preferredProvider?: string,
-): LlmClient {
-  const provider = (preferredProvider === "anthropic" && anthropicKey) ? "anthropic" : "openai";
-  return new LlmClient({
-    provider: provider as LlmProvider,
-    apiKey: provider === "anthropic" ? anthropicKey : openaiKey,
-    defaultModel: provider === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini",
-  });
-}

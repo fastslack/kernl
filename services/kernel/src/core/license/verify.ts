@@ -127,20 +127,6 @@ export async function verifyLicenseJwt(jwt: string): Promise<LicenseClaim> {
   return claim as LicenseClaim;
 }
 
-/**
- * Optional second-line check: refuse to accept a JWT bound to a different
- * machine. The caller passes in the local fingerprint; if the claim has a
- * machine_id, they must match.
- */
-export function checkMachineBinding(claim: LicenseClaim, localMachineId: string): void {
-  if (claim.machine_id != null && claim.machine_id !== localMachineId) {
-    throw new LicenseError(
-      "machine_mismatch",
-      `License is bound to a different machine (${claim.machine_id})`,
-    );
-  }
-}
-
 // ─── Helpers ─────────────────────────────────────────────────
 
 async function importPublicKey(pem: string): Promise<CryptoKey> {

@@ -95,9 +95,6 @@ export function isNoiseCollection(collections: string[]): boolean {
   return false;
 }
 
-/** Public access for SQL builders that need the same list. */
-export const NOISE_COLLECTION_SLUGS = Array.from(NOISE_COLLECTION_BLOCKLIST);
-
 interface TitleRow {
   identifier: string;
   title: string;
@@ -1342,16 +1339,6 @@ export class CinemaService {
       this.globalMean = row?.m ?? 3.5;
     }
     return this.globalMean;
-  }
-  private bayesianScore(minVotes = 5): string {
-    if (this.globalMean === null) {
-      const row = this.db
-        .prepare("SELECT AVG(avg_rating) AS m FROM cinema_titles WHERE num_reviews > 0")
-        .get() as { m: number | null } | undefined;
-      this.globalMean = row?.m ?? 3.5;
-    }
-    const C = this.globalMean;
-    return `(((t.num_reviews * t.avg_rating) + (${minVotes} * ${C})) / (t.num_reviews + ${minVotes}))`;
   }
 
   /**
