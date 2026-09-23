@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Upgrading from 0.3.2
 
+- **Without `TIMEZONE`, the kernel now uses this machine's timezone**, not
+  UTC. On a Mac that is your own zone; in a container it is still UTC. It
+  moves more than "today": **scheduled agents run at that local time** (an
+  agent set for `0 8 * * *` ran at 08:00 UTC and now runs at 08:00 yours).
+  Set `TIMEZONE=UTC` to keep the old behaviour.
+- **Reminder and event times given without a zone are local time.**
+  `2026-03-01T09:00` meant nothing definite before (reminders compared it as
+  if it were UTC); it is now 09:00 in `TIMEZONE`. Existing reminders and
+  events stored that way are rewritten as UTC instants on the first boot,
+  read the same way. Times with `Z` or an offset are unchanged.
 - **Set `KERNEL_ENCRYPTION_KEY` before upgrading if you use GitHub, GitLab or
   Gitea connections, and keep it.** Their tokens and GitHub App private keys
   were stored in plaintext; with a key configured they are encrypted on the
@@ -71,6 +81,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   wrong endpoint.
 - **An office draft that fails validation gets one repair attempt**, and the
   error names the model that failed.
+- **"Today" was the UTC day.** In UTC-3 it became tomorrow at 21:00: the
+  morning briefing, due-today and overdue tasks, the calendar, the agenda,
+  "completed today" counts and the date agents are told all switched early,
+  and an evening event or reminder showed up under the next day. Every day
+  boundary now follows `TIMEZONE`, and times in briefings and notifications
+  are shown in it.
+- **A daily or weekly reminder drifted an hour at each DST change**; it keeps
+  its local time now. `/remind … at 9am` meant 09:00 in the server's zone
+  (UTC in a container); it means yours.
+- **A reminder due earlier today did not count as overdue** in `/status` and
+  the briefings until the next day (its time was compared as text against a
+  differently formatted "now").
+- **Listing events up to a date left out that day's events.**
+- **A migration that failed halfway stayed half-applied**, unrecorded, and ran
+  again on the next boot over the partial schema. Each migration now applies
+  whole or not at all.
+- **Tools took any `limit`.** 37 tools passed an unbounded `limit` straight
+  to SQL; it is now capped per tool (a larger value is clamped, not refused).
+  Tool arguments with a default are no longer listed as required, and
+  `.optional().default()` arguments are published with their real type.
 - **System → Processes always said "System registry not available".** The
   page never subscribed to the channel it reads, and the channel left out
   the `available` flag the page waits for.
