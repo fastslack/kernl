@@ -62,13 +62,5 @@
     "bundle": [
       "src/core/compute-backend.ts"
     ]
-  },
-  "people/events": {
-    "source": [
-      "src/modules/dashboard/api.js"
-    ],
-    "bundle": [
-      "src/modules/dashboard/api.ts"
-    ]
   }
 }

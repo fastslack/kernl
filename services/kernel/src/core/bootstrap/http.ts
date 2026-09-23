@@ -172,6 +172,7 @@ export async function initHttpAndMcp(args: {
         config,
         notifier,
         events,
+        () => dashboardRegistry.getCalendarSources(),
       );
 
       // Provider-specific admin endpoints (QR pairing, logout, status).

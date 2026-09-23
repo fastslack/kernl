@@ -42,7 +42,9 @@ import { registerEmailSuggestionsRoutes } from "../assets/extensions/people/comm
 import { eventsMigrations } from "../assets/extensions/people/events/_module/migrations/001_events.js";
 import { EventsService } from "../assets/extensions/people/events/_module/service.js";
 import { eventsRpcActions } from "../assets/extensions/people/events/_module/rpc-actions.js";
-import { eventsDashboardRpcActions } from "../assets/extensions/people/events/_module/dashboard-rpc-actions.js";
+import { rpcActionsFrom } from "../src/sdk/args.js";
+import { dashboardOperations } from "../src/modules/dashboard/operations.js";
+import { tasksCalendarSource } from "../assets/extensions/productivity/tasks/_module/calendar.js";
 
 import { notesMigrations } from "../assets/extensions/productivity/notes/_module/migrations/001_notes.js";
 import { NotesService } from "../assets/extensions/productivity/notes/_module/service.js";
@@ -93,7 +95,13 @@ describe("people + productivity operations", () => {
       ...remindersRpcActions(reminders, bus),
       ...commsDashboardRpcActions({ commsService: comms, emailAnalysisService: emailAnalysis, events: bus }),
       ...eventsRpcActions(events),
-      ...eventsDashboardRpcActions({ db, systemRegistry: undefined as never }),
+      // `dashboard.calendar` is the dashboard's operation, fed the modules' calendar sources.
+      ...rpcActionsFrom({
+        "dashboard.calendar": dashboardOperations({
+          db, readChannel: async () => undefined, getGraph: () => null,
+          calendarSources: () => [tasksCalendarSource],
+        })["dashboard.calendar"],
+      }),
       ...notesRpcActions(new NotesService(db, () => null)),
       ...learningRpcActions(new LearningService(db)),
       ...goalsRpcActions(new GoalsService(db, () => null)),

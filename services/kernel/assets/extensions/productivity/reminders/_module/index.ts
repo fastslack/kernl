@@ -6,6 +6,7 @@ import { reminderTools } from "./tools.js";
 import { registerRemindersRoutes } from "./api-routes.js";
 import { remindersRpcActions } from "./rpc-actions.js";
 import { queryReminders } from "./dashboard-queries.js";
+import { remindersCalendarSource } from "./calendar.js";
 
 export interface RemindersModule extends ExtensibleModule {
   getService(): ReminderService | null;
@@ -56,6 +57,7 @@ export function createRemindersModule(): RemindersModule {
 
     dashboard: (s) => ({
       channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
+      calendarSources: [remindersCalendarSource],
       registerRoutes: (server) => {
         if (s && s.events) registerRemindersRoutes(server, s.service, s.events);
       },

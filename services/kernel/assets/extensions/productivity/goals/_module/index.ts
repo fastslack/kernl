@@ -3,6 +3,7 @@ import { goalsMigrations } from "./migrations/001_goals.js";
 import { GoalsService } from "./service.js";
 import { goalsTools } from "./tools.js";
 import { queryGoals } from "./dashboard-queries.js";
+import { goalsCalendarSource } from "./calendar.js";
 import { goalsRpcActions } from "./rpc-actions.js";
 
 export function createGoalsModule() {
@@ -27,6 +28,7 @@ export function createGoalsModule() {
       channelMappings: [
         { moduleKey: "goals", channels: ["goals", "calendar"] },
       ],
+      calendarSources: [goalsCalendarSource],
       stores: ["goals"],
       fetchEndpoints: [
         { url: "/api/dashboard/goals", store: "goals" },

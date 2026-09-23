@@ -5,6 +5,7 @@ import { taskTools } from "./tools.js";
 import { registerTasksRoutes } from "./api-routes.js";
 import { tasksRpcActions } from "./rpc-actions.js";
 import { queryTasks } from "./dashboard-queries.js";
+import { tasksCalendarSource } from "./calendar.js";
 
 export interface TasksModule extends ExtensibleModule {
   getService(): TaskService | null;
@@ -40,6 +41,7 @@ export function createTasksModule(): TasksModule {
 
     dashboard: (s) => ({
       channels: [{ name: "tasks", query: (db) => queryTasks(db) }],
+      calendarSources: [tasksCalendarSource],
       registerRoutes: (server) => {
         if (s && s.events) registerTasksRoutes(server, s.service, s.events);
       },

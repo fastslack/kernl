@@ -115,7 +115,7 @@ export async function initMtw(args: {
     life: () => (lifeService ? lifeService.getLifeData() : { available: false }),
     calendar: () => {
       const d = new Date().toISOString().split("T")[0];
-      return queryCalendar(sqlite, d, 150, systemRegistry);
+      return queryCalendar(sqlite, d, 150, systemRegistry, dashboardRegistry.getCalendarSources());
     },
     systemAgenda: () => ({ processes: systemRegistry.list(), stats: systemRegistry.getStats() }),
   };

@@ -3,6 +3,7 @@ import { subscriptionsMigrations } from "./migrations/001_subscriptions.js";
 import { SubscriptionService } from "./service.js";
 import { subscriptionTools } from "./tools.js";
 import { querySubscriptions } from "./dashboard-queries.js";
+import { subscriptionsCalendarSource } from "./calendar.js";
 import { subscriptionsRpcActions } from "./rpc-actions.js";
 
 export function createSubscriptionsModule() {
@@ -23,6 +24,7 @@ export function createSubscriptionsModule() {
       channelMappings: [
         { moduleKey: "subscriptions", channels: ["subscriptions", "calendar"] },
       ],
+      calendarSources: [subscriptionsCalendarSource],
       stores: ["subscriptions"],
       fetchEndpoints: [
         { url: "/api/dashboard/subscriptions", store: "subscriptions" },

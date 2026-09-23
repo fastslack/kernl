@@ -31,8 +31,10 @@ import {
   queryAgenda,
   queryCrossModuleIntel,
   querySystemTimeline,
+  queryCalendar,
   type DashboardChannelReader,
 } from "./api.js";
+import type { CalendarSource } from "../../core/types.js";
 
 export interface DashboardOperationDeps {
   db: SqliteDb;
@@ -40,6 +42,11 @@ export interface DashboardOperationDeps {
   readChannel: DashboardChannelReader;
   getGraph: () => GraphDriver | null;
   systemRegistry?: SystemRegistry | null;
+  /**
+   * Calendar sources the modules register (`DashboardRegistry.getCalendarSources()`),
+   * read per call so a module registered later still shows up.
+   */
+  calendarSources?: () => readonly CalendarSource[];
   config?: KernelConfig | null;
   notifier?: Notifier | null;
   events?: EventBus | null;
@@ -61,7 +68,7 @@ export function dateRange(input: Record<string, unknown>): [string, number] {
 }
 
 export function dashboardOperations(deps: DashboardOperationDeps): Record<string, Operation> {
-  const { db, readChannel, getGraph, systemRegistry, config, notifier, events } = deps;
+  const { db, readChannel, getGraph, systemRegistry, calendarSources, config, notifier, events } = deps;
 
   const required = (input: Record<string, unknown>, key: string, message = `${key} required`): string => {
     const value = typeof input[key] === "string" ? (input[key] as string) : "";
@@ -87,6 +94,12 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
     "dashboard.crossIntel": () => {
       const data = queryCrossModuleIntel(db);
       return data ? { available: true, ...data } : { available: false };
+    },
+    // Every module's calendar entries (its `calendarSources`) plus the core's.
+    // It used to be the events extension's RPC, calling into this module.
+    "dashboard.calendar": (input) => {
+      const [start, days] = dateRange(input);
+      return queryCalendar(db, start, days, systemRegistry ?? undefined, calendarSources?.() ?? []);
     },
     "dashboard.systemTimeline": (input) => {
       const [start, days] = dateRange(input);

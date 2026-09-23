@@ -5,7 +5,7 @@ import { eventsTools } from "./tools.js";
 import { agentEventsTools } from "./agent-tools.js";
 import { queryEvents } from "./dashboard-queries.js";
 import { eventsRpcActions } from "./rpc-actions.js";
-import { eventsDashboardRpcActions } from "./dashboard-rpc-actions.js";
+import { eventsCalendarSource } from "./calendar.js";
 import { registerEventsRoutes } from "./routes.js";
 
 export interface EventsModule extends ExtensibleModule {
@@ -23,17 +23,15 @@ export function createEventsModule(): EventsModule {
       // Create service with EventBus for notifications
       const service = new EventsService(ctx.sqlite, ctx.events);
       serviceRef = service;
-      return { service, db: ctx.sqlite, systemRegistry: ctx.systemRegistry, events: ctx.events };
+      return { service, db: ctx.sqlite, events: ctx.events };
     },
 
     // Legacy CRUD + agent-shaped intent verbs.
     tools: (s) => [...eventsTools(s.service), ...agentEventsTools(s.service)],
     rpc: (s) => eventsRpcActions(s.service),
-    dashboardRpc: (s) =>
-      s.systemRegistry
-        ? eventsDashboardRpcActions({ db: s.db, systemRegistry: s.systemRegistry })
-        : [],
-
+    // The `dashboard.calendar` RPC is the dashboard's own operation now (it
+    // composes every module's calendar source); events contributes its
+    // entries through `calendarSources` below.
     dashboard: (s) => ({
       channels: [
         { name: "events", query: (db) => queryEvents(db) },
@@ -41,6 +39,7 @@ export function createEventsModule(): EventsModule {
       channelMappings: [
         { moduleKey: "events", channels: ["events", "dashboard", "calendar"] },
       ],
+      calendarSources: [eventsCalendarSource],
       stores: ["events"],
       fetchEndpoints: [
         { url: "/api/dashboard/events", store: "events" },

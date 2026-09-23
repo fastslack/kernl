@@ -5,7 +5,7 @@
  * files and are collected by `ModuleRegistry.getAllDashboardRpcActions()`.
  *
  * What stays here:
- *   - Cross-module aggregators (agenda, crossIntel, systemTimeline, full).
+ *   - Cross-module aggregators (agenda, crossIntel, calendar, systemTimeline, full).
  *   - Core panels that don't have a module: agents/agentsList.
  *   - Infrastructure RPCs: PII filter, architecture, notifications, channels,
  *     AI config, server health/manifest, skills.
@@ -98,6 +98,7 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
     readChannel: async (name) => dashboardRegistry?.queryChannel(name, db, neo4j),
     getGraph: () => deps.getGraph?.() ?? null,
     systemRegistry,
+    calendarSources: () => dashboardRegistry?.getCalendarSources() ?? [],
     config: deps.config,
     notifier: deps.notifier,
     events: deps.events,
@@ -111,6 +112,7 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
       "dashboard.kpis",
       "dashboard.agenda",
       "dashboard.crossIntel",
+      "dashboard.calendar",
       "dashboard.systemTimeline",
       "dashboard.systemAgenda",
     ])),

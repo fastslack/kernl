@@ -13,6 +13,7 @@ import type {
   KernelModule,
   ExtensibleModule,
   AgentPanelTab,
+  CalendarSource,
 } from "./types.js";
 import { log } from "./logger.js";
 
@@ -74,6 +75,7 @@ export class DashboardRegistry {
   private registeredModules: string[] = [];
   private pages: DashboardPage[] = [];
   private agentPanelTabs: AgentPanelTab[] = [];
+  private calendarSources = new Map<string, CalendarSource>();
 
   /**
    * Collect dashboard descriptor from a module.
@@ -161,6 +163,15 @@ export class DashboardRegistry {
       }
     }
 
+    if (desc.calendarSources) {
+      for (const src of desc.calendarSources) {
+        if (this.calendarSources.has(src.id)) {
+          log.warn(`DashboardRegistry: duplicate calendar source "${src.id}" from module "${mod.name}", overwriting`);
+        }
+        this.calendarSources.set(src.id, src);
+      }
+    }
+
     log.debug(
       `DashboardRegistry: registered module "${mod.name}" ` +
       `(${desc.channels?.length ?? 0} ch, ${desc.nav?.length ?? 0} nav, ${desc.pages?.length ?? 0} pages)`,
@@ -182,6 +193,14 @@ export class DashboardRegistry {
   /** All registered channel names */
   getChannelNames(): string[] {
     return [...this.channels.keys()];
+  }
+
+  /**
+   * Calendar sources contributed by registered modules, for `queryCalendar()`.
+   * Unordered: the calendar sorts all sources by `order`.
+   */
+  getCalendarSources(): CalendarSource[] {
+    return [...this.calendarSources.values()];
   }
 
   /** Merged channel mappings from all modules (tool-prefix → channels) */

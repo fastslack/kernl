@@ -3,6 +3,7 @@ import { healthMigrations } from "./migrations/001_health.js";
 import { HealthService } from "./service.js";
 import { healthTools } from "./tools.js";
 import { queryHealth } from "./dashboard-queries.js";
+import { healthCalendarSource } from "./calendar.js";
 import { healthRpcActions } from "./rpc-actions.js";
 
 export function createHealthModule() {
@@ -24,6 +25,7 @@ export function createHealthModule() {
       channelMappings: [
         { moduleKey: "health", channels: ["health", "calendar"] },
       ],
+      calendarSources: [healthCalendarSource],
       stores: ["healthData"],
       fetchEndpoints: [
         { url: "/api/dashboard/health", store: "healthData" },

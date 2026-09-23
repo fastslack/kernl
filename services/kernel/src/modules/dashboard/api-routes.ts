@@ -8,6 +8,7 @@ import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import type { SystemRegistry } from "../../core/system-registry.js";
 import type { LifeService } from "../../core/types/extensions/index.js";
 import type { KernelConfig } from "../../core/config.js";
+import type { CalendarSource } from "../../core/types.js";
 // Per-module routes were moved into their respective modules:
 //   tasks, reminders, chat       → modules/<name>/api-routes.ts (built-in)
 //   comms (compose, threads)     → modules/comms/dashboard-routes.ts
@@ -21,9 +22,8 @@ import { log } from "../../core/logger.js";
 import { getGlobalPiiFilter } from "../../core/pii-filter.js";
 import {
   type DashboardChannelReader,
-  // Cross-module aggregators (KPIs, agenda, cross-intel, timeline) are
-  // operations shared with the WS RPC: see operations.ts.
-  queryCalendar,
+  // Cross-module aggregators (KPIs, agenda, cross-intel, calendar, timeline)
+  // are operations shared with the WS RPC: see operations.ts.
   // Dashboard-internal query kept under its legacy kebab-case URL
   // (`/web-intel`). See the comment below where it is registered.
   queryWebIntel,
@@ -33,7 +33,7 @@ import {
 } from "./api.js";
 import type { Notifier } from "../../core/notify/notifier.js";
 import type { EventBus } from "../../core/event-bus.js";
-import { dashboardOperations, dateRange, startedAt } from "./operations.js";
+import { dashboardOperations, startedAt } from "./operations.js";
 
 // ── Domain route modules ──────────────────────────
 // (All domain routes are now self-registered via their extension's
@@ -51,6 +51,8 @@ export function registerDashboardRoutes(
   config?: KernelConfig,
   notifier?: Notifier | null,
   events?: EventBus,
+  /** Modules' calendar sources — `DashboardRegistry.getCalendarSources()` at bootstrap. */
+  calendarSources?: () => readonly CalendarSource[],
 ): void {
   // Email-analysis suggestion routes are now self-registered by the comms
   // extension via its `getDashboardDescriptor().registerRoutes` hook.
@@ -213,18 +215,10 @@ export function registerDashboardRoutes(
   });
 
 
-  // ── Calendar ──────────────────────────────────
-  // `?start=` (defaults to today) and `?days=` clamped to 365, 150 when absent.
-  // The `dashboard.calendar` RPC belongs to the events extension.
-  server.route("GET", "/api/dashboard/calendar", ({ query }) => {
-    const [startParam, dayCount] = dateRange(Object.fromEntries(query));
-    return queryCalendar(db, startParam, dayCount, sysRegistry);
-  });
-
   // ── Operations shared with the WS RPC (operations.ts) ─────────
   // The dashboard reaches these through rpcOrCall, WS first and HTTP when
   // the bridge is down, so both roads run the same function.
-  const op = dashboardOperations({ db, readChannel, getGraph, systemRegistry: sysRegistry, config, notifier, events });
+  const op = dashboardOperations({ db, readChannel, getGraph, systemRegistry: sysRegistry, calendarSources, config, notifier, events });
   const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
   ([
     ["GET", "/api/health", "server.health"],
@@ -232,6 +226,8 @@ export function registerDashboardRoutes(
     ["GET", "/api/dashboard/kpis", "dashboard.kpis"],
     ["GET", "/api/dashboard/agenda", "dashboard.agenda"],
     ["GET", "/api/dashboard/cross-intel", "dashboard.crossIntel"],
+    // `?start=` (defaults to today) and `?days=` clamped to 365, 150 when absent.
+    ["GET", "/api/dashboard/calendar", "dashboard.calendar"],
     ["GET", "/api/dashboard/system-timeline", "dashboard.systemTimeline"],
     ["GET", "/api/dashboard/system-agenda", "dashboard.systemAgenda"],
     ["GET", "/api/pii/status", "pii.status"],
