@@ -117,7 +117,9 @@ export async function initMtw(args: {
       const d = new Date().toISOString().split("T")[0];
       return queryCalendar(sqlite, d, 150, systemRegistry, dashboardRegistry.getCalendarSources());
     },
-    systemAgenda: () => ({ processes: systemRegistry.list(), stats: systemRegistry.getStats() }),
+    // Same shape as the dashboard.systemAgenda operation: /system shows nothing
+    // until it sees `available`.
+    systemAgenda: () => ({ available: true, processes: systemRegistry.list(), stats: systemRegistry.getStats() }),
   };
   // Pick up extension-contributed channels at boot time. Modules opt in
   // by implementing `getQueryChannels()` — see KernelModule type.
