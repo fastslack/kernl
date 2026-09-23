@@ -76,6 +76,33 @@ function isLockError(err: unknown): boolean {
   return !!code && LOCK_CODES.has(code);
 }
 
+/** The row a fresh install persists before dispatch settles its status. */
+function newInstallRow(
+  manifest: ExtensionManifest,
+  source: ExtensionSource,
+  installPath: string,
+): InstalledExtension {
+  const now = isoNow();
+  return {
+    id: manifest.id,
+    slug: manifest.slug,
+    name: manifest.name,
+    version: manifest.version,
+    type: manifest.type,
+    status: "installed",
+    manifest_json: JSON.stringify(manifest),
+    source_json: JSON.stringify(source),
+    install_path: installPath,
+    granted_permissions_json: JSON.stringify(manifest.permissions ?? []),
+    settings_json: "{}",
+    error: "",
+    installed_at: now,
+    updated_at: now,
+    last_loaded_at: null,
+    install_receipt_json: "{}",
+  };
+}
+
 /** Thrown by a second update of the same extension while the first runs. */
 export class ExtensionBusyError extends Error {
   constructor(slug: string) {
@@ -377,39 +404,15 @@ export class ExtensionService {
       throw new Error(`Refusing to install ${manifest.slug}: ${auth.reason}`);
     }
 
-    const now = isoNow();
-    const row: InstalledExtension = {
-      id: manifest.id,
-      slug: manifest.slug,
-      name: manifest.name,
-      version: manifest.version,
-      type: manifest.type,
-      status: "installed",
-      manifest_json: JSON.stringify(manifest),
-      source_json: JSON.stringify(source),
-      install_path: installPath,
-      granted_permissions_json: JSON.stringify(manifest.permissions ?? []),
-      settings_json: "{}",
-      error: "",
-      installed_at: now,
-      updated_at: now,
-      last_loaded_at: null,
-      install_receipt_json: "{}",
-    };
-
-    try {
-      this.insertRow(row);
-      await dispatchInstall(manifest, installPath, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest, installPath);
-      this.setStatus(row.id, finalStatus);
-      row.status = finalStatus;
-      await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
-      return row;
-    } catch (err) {
-      await rm(installPath, { recursive: true, force: true }).catch(() => {});
-      this.db.prepare("DELETE FROM installed_extensions WHERE id = ?").run(row.id);
-      throw err;
-    }
+    return this.commitInstall(
+      newInstallRow(manifest, source, installPath),
+      manifest,
+      source,
+      opts?.remoteWatermark ?? null,
+      async () => {
+        await rm(installPath, { recursive: true, force: true }).catch(() => {});
+      },
+    );
   }
 
   /**
@@ -605,38 +608,12 @@ export class ExtensionService {
     const existing = this.get(manifest.id) ?? this.getBySlug(manifest.slug);
     if (existing) throw new Error(`Extension already installed: ${manifest.id}`);
 
-    const now = isoNow();
-    const row: InstalledExtension = {
-      id: manifest.id,
-      slug: manifest.slug,
-      name: manifest.name,
-      version: manifest.version,
-      type: manifest.type,
-      status: "installed",
-      manifest_json: JSON.stringify(manifest),
-      source_json: JSON.stringify(source),
-      install_path: sourceDir,
-      granted_permissions_json: JSON.stringify(manifest.permissions ?? []),
-      settings_json: "{}",
-      error: "",
-      installed_at: now,
-      updated_at: now,
-      last_loaded_at: null,
-      install_receipt_json: "{}",
-    };
-
-    this.insertRow(row);
-    try {
-      await dispatchInstall(manifest, sourceDir, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest, sourceDir);
-      this.setStatus(row.id, finalStatus);
-      row.status = finalStatus;
-      await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
-      return row;
-    } catch (err) {
-      this.db.prepare("DELETE FROM installed_extensions WHERE id = ?").run(row.id);
-      throw err;
-    }
+    return this.commitInstall(
+      newInstallRow(manifest, source, sourceDir),
+      manifest,
+      source,
+      opts?.remoteWatermark ?? null,
+    );
   }
 
   /**
@@ -674,35 +651,42 @@ export class ExtensionService {
       "utf-8",
     );
 
-    const now = isoNow();
-    const row: InstalledExtension = {
-      id: manifest.id,
-      slug: manifest.slug,
-      name: manifest.name,
-      version: manifest.version,
-      type: manifest.type,
-      status: "installed",
-      manifest_json: JSON.stringify(manifest),
-      source_json: JSON.stringify(source),
-      install_path: installPath,
-      granted_permissions_json: JSON.stringify(manifest.permissions ?? []),
-      settings_json: "{}",
-      error: "",
-      installed_at: now,
-      updated_at: now,
-      last_loaded_at: null,
-      install_receipt_json: "{}",
-    };
+    return this.commitInstall(
+      newInstallRow(manifest, source, installPath),
+      manifest,
+      source,
+      opts?.remoteWatermark ?? null,
+    );
+  }
 
-    this.insertRow(row);
+  /**
+   * The tail every fresh install shares: persist the row, dispatch the
+   * type-specific installer, settle the post-install status and write the
+   * receipt. On failure the row is deleted and the error re-thrown; `onFail`
+   * runs first so a caller that put files on disk can remove them.
+   *
+   * Without `onFail` a failing INSERT simply propagates — nothing was written.
+   * With it, the INSERT sits inside the rollback like everything else, so the
+   * caller's files are cleaned up for that failure too.
+   */
+  private async commitInstall(
+    row: InstalledExtension,
+    manifest: ExtensionManifest,
+    source: ExtensionSource,
+    remoteWatermark: RemoteWatermark | null,
+    onFail?: () => Promise<void>,
+  ): Promise<InstalledExtension> {
+    if (!onFail) this.insertRow(row);
     try {
-      await dispatchInstall(manifest, installPath, this.opts.installerDeps);
-      const finalStatus = this.postInstallStatus(manifest, installPath);
+      if (onFail) this.insertRow(row);
+      await dispatchInstall(manifest, row.install_path, this.opts.installerDeps);
+      const finalStatus = this.postInstallStatus(manifest, row.install_path);
       this.setStatus(row.id, finalStatus);
       row.status = finalStatus;
-      await this.finalizeReceipt(row, source, opts?.remoteWatermark ?? null);
+      await this.finalizeReceipt(row, source, remoteWatermark);
       return row;
     } catch (err) {
+      if (onFail) await onFail();
       this.db.prepare("DELETE FROM installed_extensions WHERE id = ?").run(row.id);
       throw err;
     }

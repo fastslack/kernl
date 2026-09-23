@@ -31,6 +31,21 @@ import {
 
 const ATTACHMENTS_DIR = "./data/attachments";
 
+const NO_EMAIL_PROVIDER = "No email provider configured. Add an email account or authenticate with Google first.";
+
+/** The communications columns, in INSERT order. */
+const COMM_COLUMNS = [
+  "id", "channel", "direction", "status", "subject", "body", "body_html",
+  "contact_id", "task_id", "account_id", "thread_id", "in_reply_to",
+  "recipients_to", "recipients_cc", "recipients_bcc",
+  "gmail_message_id", "gmail_thread_id",
+  "scheduled_at", "sent_at", "error_message", "metadata",
+  "created_at", "updated_at",
+] as const satisfies ReadonlyArray<keyof Communication>;
+
+const INSERT_COMM_SQL =
+  `INSERT INTO communications (${COMM_COLUMNS.join(", ")}) VALUES (${COMM_COLUMNS.map(() => "?").join(", ")})`;
+
 const MIME_MAP: Record<string, string> = {
   ".pdf": "application/pdf",
   ".doc": "application/msword",
@@ -237,11 +252,10 @@ export class CommsService {
     // (agents pass "" for "none"; ?? wouldn't catch it → invalid FK value).
     const accountId = (input.account_id || this.getDefaultAccountId()) || null;
 
-    const comm: Communication = {
+    return this.insertComm({
       id,
       channel: input.channel ?? "email",
       direction: input.direction ?? "outbound",
-      status: "draft",
       subject: input.subject ?? "",
       body: input.body ?? "",
       body_html: sanitizeUserHtml(input.body_html ?? ""),
@@ -253,6 +267,35 @@ export class CommsService {
       recipients_to: recipientsTo,
       recipients_cc: input.recipients_cc ?? "",
       recipients_bcc: input.recipients_bcc ?? "",
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  /**
+   * Insert one communications row. Every column not given takes the default a
+   * fresh outbound email draft has (thread_id defaults to the row's own id,
+   * timestamps to now). Returns the row as stored, keys in column order.
+   */
+  private insertComm(fields: Partial<Communication>): Communication {
+    const now = isoNow();
+    const id = fields.id ?? newId();
+    const comm: Communication = {
+      id,
+      channel: "email",
+      direction: "outbound",
+      status: "draft",
+      subject: "",
+      body: "",
+      body_html: "",
+      contact_id: null,
+      task_id: null,
+      account_id: null,
+      thread_id: id,
+      in_reply_to: "",
+      recipients_to: "",
+      recipients_cc: "",
+      recipients_bcc: "",
       gmail_message_id: "",
       gmail_thread_id: "",
       scheduled_at: null,
@@ -261,30 +304,83 @@ export class CommsService {
       metadata: "{}",
       created_at: now,
       updated_at: now,
+      ...fields,
     };
 
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
-
+    this.db.prepare(INSERT_COMM_SQL).run(...COMM_COLUMNS.map((c) => comm[c]));
     return comm;
+  }
+
+  /**
+   * The send lifecycle shared by every channel: mark the row 'sending', run the
+   * provider call, then either mark it 'sent' (recording the provider's
+   * message/thread ids when it returns them), emit contact.interaction and
+   * return the fresh row — or mark it 'failed' with the error message, log and
+   * rethrow.
+   */
+  private async withSendLifecycle(
+    comm: Communication,
+    label: string,
+    send: () => Promise<{
+      providerIds?: { messageId: string; threadId: string };
+      interaction: { type: string; summary: string };
+      logMessage: string;
+    }>,
+  ): Promise<Communication> {
+    const id = comm.id;
+    this.db
+      .prepare("UPDATE communications SET status = 'sending', updated_at = ? WHERE id = ?")
+      .run(isoNow(), id);
+
+    try {
+      const { providerIds, interaction, logMessage } = await send();
+
+      const now = isoNow();
+      if (providerIds) {
+        this.db
+          .prepare(
+            `UPDATE communications
+             SET status = 'sent', sent_at = ?, gmail_message_id = ?, gmail_thread_id = ?, error_message = '', updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(now, providerIds.messageId, providerIds.threadId, now, id);
+      } else {
+        this.db
+          .prepare(
+            `UPDATE communications
+             SET status = 'sent', sent_at = ?, error_message = '', updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(now, now, id);
+      }
+
+      if (comm.contact_id) {
+        await this.events.emit("contact.interaction", {
+          contactId: comm.contact_id,
+          ...interaction,
+        });
+      }
+
+      log.info(logMessage);
+      return this.getById(id)!;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.db
+        .prepare(
+          "UPDATE communications SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(errorMsg, isoNow(), id);
+
+      log.error(`${label} send failed: ${id}`, err);
+      throw err;
+    }
+  }
+
+  /** The provider for an account, or the standard "none configured" error. */
+  private requireProvider(accountId?: string | null): EmailProvider {
+    const provider = this.getProvider(accountId);
+    if (!provider) throw new Error(NO_EMAIL_PROVIDER);
+    return provider;
   }
 
   // ── Update ──────────────────────────────────────────
@@ -617,16 +713,10 @@ export class CommsService {
     }
     if (!comm.recipients_to) throw new Error("No recipients specified");
 
-    const provider = this.getProvider(comm.account_id);
-    if (!provider) throw new Error("No email provider configured. Add an email account or authenticate with Google first.");
+    const provider = this.requireProvider(comm.account_id);
     if (!provider.capabilities.send) throw new Error(`Provider ${provider.name} does not support sending`);
 
-    // Mark as sending
-    this.db
-      .prepare("UPDATE communications SET status = 'sending', updated_at = ? WHERE id = ?")
-      .run(isoNow(), id);
-
-    try {
+    return this.withSendLifecycle(comm, "Email", async () => {
       const meta = parseMetadata(comm.metadata);
       const mimeReplyTo = meta.reply_to_message_id || undefined;
       const attachments = this.getAttachments(id);
@@ -647,36 +737,12 @@ export class CommsService {
         })),
       });
 
-      const now = isoNow();
-      this.db
-        .prepare(
-          `UPDATE communications
-           SET status = 'sent', sent_at = ?, gmail_message_id = ?, gmail_thread_id = ?, error_message = '', updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(now, result.messageId, result.threadId, now, id);
-
-      if (comm.contact_id) {
-        await this.events.emit("contact.interaction", {
-          contactId: comm.contact_id,
-          type: "email",
-          summary: `Sent: ${comm.subject}`,
-        });
-      }
-
-      log.info(`Email sent via ${provider.name}: ${id}`);
-      return this.getById(id)!;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.db
-        .prepare(
-          "UPDATE communications SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
-        )
-        .run(errorMsg, isoNow(), id);
-
-      log.error(`Email send failed: ${id}`, err);
-      throw err;
-    }
+      return {
+        providerIds: { messageId: result.messageId, threadId: result.threadId },
+        interaction: { type: "email", summary: `Sent: ${comm.subject}` },
+        logMessage: `Email sent via ${provider.name}: ${id}`,
+      };
+    });
   }
 
   // ── Send WhatsApp ──────────────────────────────────
@@ -696,60 +762,30 @@ export class CommsService {
     if (!waProvider?.isReady()) throw new Error("WhatsApp provider not connected. Check WHATSAPP_ENABLED and QR pairing.");
     if (!waProvider.sendTo) throw new Error("WhatsApp provider does not support sendTo");
 
-    // Mark as sending
-    this.db
-      .prepare("UPDATE communications SET status = 'sending', updated_at = ? WHERE id = ?")
-      .run(isoNow(), id);
-
-    try {
+    return this.withSendLifecycle(comm, "WhatsApp", async () => {
       // Build JID from phone number (strip spaces/dashes, ensure @s.whatsapp.net)
       const phone = comm.recipients_to.replace(/[\s\-\+\(\)]/g, "");
       const jid = phone.includes("@") ? phone : `${phone}@s.whatsapp.net`;
 
-      const success = await waProvider.sendTo(jid, {
+      // sendTo was checked above; the narrowing does not reach into this closure.
+      const success = await waProvider.sendTo!(jid, {
         title: comm.subject || "",
         body: comm.body || "",
       });
 
       if (!success) throw new Error("WhatsApp provider returned false — message not delivered");
 
-      const now = isoNow();
-      this.db
-        .prepare(
-          `UPDATE communications
-           SET status = 'sent', sent_at = ?, error_message = '', updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(now, now, id);
-
-      if (comm.contact_id) {
-        await this.events.emit("contact.interaction", {
-          contactId: comm.contact_id,
-          type: "whatsapp",
-          summary: `WhatsApp: ${(comm.body || "").slice(0, 80)}`,
-        });
-      }
-
-      log.info(`WhatsApp sent: ${id} → ${jid}`);
-      return this.getById(id)!;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.db
-        .prepare(
-          "UPDATE communications SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
-        )
-        .run(errorMsg, isoNow(), id);
-
-      log.error(`WhatsApp send failed: ${id}`, err);
-      throw err;
-    }
+      return {
+        interaction: { type: "whatsapp", summary: `WhatsApp: ${(comm.body || "").slice(0, 80)}` },
+        logMessage: `WhatsApp sent: ${id} → ${jid}`,
+      };
+    });
   }
 
   // ── Search Inbox ──────────────────────────────────
 
   async searchInbox(query: string, maxResults = 10, accountId?: string): Promise<InboxMessage[]> {
-    const provider = this.getProvider(accountId);
-    if (!provider) throw new Error("No email provider configured. Add an email account or authenticate with Google first.");
+    const provider = this.requireProvider(accountId);
     if (!provider.capabilities.searchInbox) throw new Error(`Provider ${provider.name} does not support inbox search`);
 
     return provider.searchInbox(query, maxResults);
@@ -758,8 +794,7 @@ export class CommsService {
   // ── Fetch Email ───────────────────────────────────
 
   async fetchEmail(gmailMessageId: string, accountId?: string): Promise<Communication> {
-    const provider = this.getProvider(accountId);
-    if (!provider) throw new Error("No email provider configured. Add an email account or authenticate with Google first.");
+    const provider = this.requireProvider(accountId);
     if (!provider.capabilities.fetchEmail) throw new Error(`Provider ${provider.name} does not support fetching emails`);
 
     // Dedup PER ACCOUNT: the same Message-ID legitimately exists once per
@@ -783,62 +818,29 @@ export class CommsService {
       if (contact) contactId = contact.id;
     }
 
-    const now = isoNow();
-    const id = newId();
     const meta = JSON.stringify({
       from: fetched.from,
       from_name: fetched.fromName,
       message_id_header: fetched.messageIdHeader,
     });
 
-    const comm: Communication = {
-      id,
-      channel: "email",
+    const comm = this.insertComm({
       direction: "inbound",
       status: "archived",
       subject: fetched.subject,
       body: fetched.body,
       body_html: sanitizeUserHtml(fetched.bodyHtml),
       contact_id: contactId,
-      task_id: null,
       account_id: accountId ?? this.getDefaultAccountId(),
-      thread_id: id,
-      in_reply_to: "",
       recipients_to: fetched.to,
       recipients_cc: fetched.cc,
-      recipients_bcc: "",
       gmail_message_id: gmailMessageId,
       gmail_thread_id: fetched.threadId,
-      scheduled_at: null,
       sent_at: fetched.date,
-      error_message: "",
       metadata: meta,
-      created_at: now,
-      updated_at: now,
-    };
+    });
 
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
-
-    log.info(`Fetched email: ${gmailMessageId} → ${id} (from: ${fetched.from})`);
+    log.info(`Fetched email: ${gmailMessageId} → ${comm.id} (from: ${fetched.from})`);
     return comm;
   }
 
@@ -891,7 +893,6 @@ export class CommsService {
     }
 
     const now = isoNow();
-    const id = newId();
     const accountId = input.account_id ?? this.getDefaultAccountId() ?? null;
     const meta = JSON.stringify({
       from: input.from,
@@ -901,52 +902,23 @@ export class CommsService {
       raw_headers: input.raw_headers ?? {},
     });
 
-    const comm: Communication = {
-      id,
-      channel: "email",
+    const comm = this.insertComm({
       direction: "inbound",
       status: "archived",
       subject: input.subject ?? "(no subject)",
       body: input.body ?? "",
       body_html: sanitizeUserHtml(input.body_html ?? ""),
       contact_id: contactId,
-      task_id: null,
       account_id: accountId,
-      thread_id: id,
-      in_reply_to: "",
       recipients_to: input.to ?? "",
       recipients_cc: input.cc ?? "",
-      recipients_bcc: "",
       gmail_message_id: dedupKey,
-      gmail_thread_id: "",
-      scheduled_at: null,
       sent_at: input.received_at ?? now,
-      error_message: "",
       metadata: meta,
       created_at: now,
       updated_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
+    });
+    const id = comm.id;
 
     log.info(`Comms: ingested inbound ${sourceTag} email from ${input.from} → ${id}`);
 
@@ -1026,60 +998,20 @@ export class CommsService {
       quoted_text: parent.body?.slice(0, 2000) || "",
     });
 
-    const now = isoNow();
-    const id = newId();
-
     // Inherit thread and gmail threading
-    const threadId = parent.thread_id || parent.id;
-
-    const comm: Communication = {
-      id,
-      channel: "email",
-      direction: "outbound",
-      status: "draft",
+    return this.insertComm({
       subject,
       body,
-      body_html: "",
       contact_id: parent.contact_id,
       task_id: parent.task_id,
       account_id: parent.account_id,
-      thread_id: threadId,
+      thread_id: parent.thread_id || parent.id,
       in_reply_to: parent.id,
       recipients_to: recipientsTo,
       recipients_cc: recipientsCc,
-      recipients_bcc: "",
-      gmail_message_id: "",
       gmail_thread_id: parent.gmail_thread_id,
-      scheduled_at: null,
-      sent_at: null,
-      error_message: "",
       metadata: meta,
-      created_at: now,
-      updated_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
-
-    return comm;
+    });
   }
 
   // ── Email Accounts ─────────────────────────────────
