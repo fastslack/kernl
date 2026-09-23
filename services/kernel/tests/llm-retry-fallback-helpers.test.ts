@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { parseRetryAfterMs, retryWithBackoff } from "../src/core/llm/retry.js";
+import { parseDurationish, parseRetryAfterMs, retryWithBackoff } from "../src/core/llm/retry.js";
 import { orderLinksByHealth, runWithFallbackChain } from "../src/core/llm/fallback-chain.js";
 import * as providerHealth from "../src/core/llm/provider-health.js";
 
@@ -22,6 +22,30 @@ afterEach(() => {
 });
 
 const h = (o: Record<string, string>) => new Headers(o);
+
+describe("parseDurationish (x-ratelimit-reset-* values)", () => {
+  it("reads each unit — ms is milliseconds, not minutes", () => {
+    expect(parseDurationish("750ms")).toBe(750);
+    expect(parseDurationish("1s")).toBe(1000);
+    expect(parseDurationish("12.5s")).toBe(12_500);
+    expect(parseDurationish("6m0s")).toBe(360_000);
+    expect(parseDurationish("1m30s")).toBe(90_000);
+    expect(parseDurationish("1h2m")).toBe(3_720_000);
+    expect(parseDurationish("2m500ms")).toBe(120_500);
+  });
+
+  it("reads a bare number as seconds", () => {
+    expect(parseDurationish("2.5")).toBe(2500);
+    expect(parseDurationish("0")).toBe(0);
+  });
+
+  it("returns undefined for anything that is not a duration", () => {
+    expect(parseDurationish("")).toBeUndefined();
+    expect(parseDurationish("soon")).toBeUndefined();
+    expect(parseDurationish("5x")).toBeUndefined();
+    expect(parseDurationish("0s")).toBeUndefined();
+  });
+});
 
 describe("parseRetryAfterMs", () => {
   it("reads Retry-After seconds and dates, then the provider reset headers", () => {

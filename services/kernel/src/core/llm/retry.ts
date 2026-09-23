@@ -65,17 +65,21 @@ export function parseRetryAfterMs(headers: Headers): number | undefined {
   return undefined;
 }
 
-/** Parse OpenAI-style reset values: a bare number of seconds, or compound
- *  durations like "1m30s" / "6m0s" / "750ms". Returns ms or undefined. */
-function parseDurationish(v: string): number | undefined {
+/** Parse OpenAI-style reset values: a bare number of seconds, or Go-style
+ *  durations like "1s" / "12.5s" / "1m30s" / "6m0s" / "750ms" / "1h2m".
+ *  Each part is a number followed by its unit (h, m, s, ms); `ms` is matched
+ *  before `m`, so "750ms" is 750 milliseconds, not 750 minutes. The whole
+ *  value must parse — anything else is not a hint. Returns ms or undefined. */
+export function parseDurationish(v: string): number | undefined {
   const n = Number(v);
-  if (Number.isFinite(n)) return Math.max(0, n * 1000);
-  const m = v.match(/(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+)ms)?/);
-  if (!m) return undefined;
-  const mins = Number(m[1] ?? 0);
-  const secs = Number(m[2] ?? 0);
-  const ms = Number(m[3] ?? 0);
-  const total = mins * 60_000 + secs * 1000 + ms;
+  if (v.trim() !== "" && Number.isFinite(n)) return Math.max(0, n * 1000);
+  const text = v.trim();
+  if (!/^(?:\d+(?:\.\d+)?(?:ms|h|m|s))+$/.test(text)) return undefined;
+  const unitMs: Record<string, number> = { h: 3_600_000, m: 60_000, s: 1000, ms: 1 };
+  let total = 0;
+  for (const [, num, unit] of text.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    total += Number(num) * unitMs[unit];
+  }
   return total > 0 ? total : undefined;
 }
 

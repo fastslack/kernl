@@ -295,9 +295,10 @@ describe("LlmClient retry within a link", () => {
       [{ "retry-after": new Date(now + 5000).toUTCString() }, (d) => d > 3000 && d <= 5000],
       [{ "anthropic-ratelimit-requests-reset": new Date(now + 4000).toISOString() }, (d) => d > 2500 && d <= 4000],
       [{ "x-ratelimit-reset-requests": "6s" }, (d) => d === 6000],
-      // Known quirk, pinned as-is: the duration regex reads "750ms" as
-      // 750 *minutes* ("750m" + stray "s"), so it lands on the cap.
-      [{ "x-ratelimit-reset-requests": "750ms" }, (d) => d === 15_000],
+      // "750ms" is 750 milliseconds (it used to be read as 750 minutes and
+      // land on the cap).
+      [{ "x-ratelimit-reset-requests": "750ms" }, (d) => d === 750],
+      [{ "x-ratelimit-reset-requests": "12.5s" }, (d) => d === 12_500],
       [{ "x-ratelimit-reset-tokens": "1m30s" }, (d) => d === 15_000], // capped at RATE_LIMIT_MAX_WAIT_MS
     ];
     for (const [headers, check] of cases) {
