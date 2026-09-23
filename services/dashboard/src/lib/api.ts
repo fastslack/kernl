@@ -12,11 +12,23 @@ export function clearAuthToken(): void {
 }
 
 /**
+ * Send the browser to /login carrying `?next=` so the user comes back to
+ * `next` afterwards. Does nothing on /login itself — a 401 there would
+ * otherwise loop. Returns whether it redirected.
+ */
+export function redirectToLogin(next: string): boolean {
+	if (window.location.pathname.startsWith('/login')) return false;
+	window.location.href = '/login?next=' + encodeURIComponent(next);
+	return true;
+}
+
+/**
  * `fetch` for a kernel `/api/` route, returning the raw Response — no status
  * handling, no JSON parsing. Sends a JSON content type unless `opts.headers`
  * is given (which replaces it, as in `apiFetch`).
  *
- * No Authorization header here: the root layout patches window.fetch to add
+ * No Authorization header here: the root layout patches window.fetch
+ * ($lib/auth-fetch) to add
  * the bearer token to every same-origin `/api/` request (and to bounce a 401
  * to /login). That interceptor only sees `fetch` — an EventSource, WebSocket
  * or `<img src>` still has to carry the token some other way.
@@ -49,11 +61,8 @@ export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unk
 		// poor way to ask for a 64-character token when there is a login screen
 		// built for exactly this.
 		clearAuthToken();
-		if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-			const next = encodeURIComponent(
-				window.location.pathname + window.location.search + window.location.hash,
-			);
-			window.location.href = `/login?next=${next}`;
+		if (typeof window !== 'undefined') {
+			redirectToLogin(window.location.pathname + window.location.search + window.location.hash);
 		}
 		throw new Error('Authentication required');
 	}

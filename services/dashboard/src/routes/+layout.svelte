@@ -3,12 +3,12 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
-  import { data, wsConnected, storeMap, lastRefresh, ensureStore, activeTheme, type ActiveTheme, notifications, unreadCount, serverTz } from '$lib/stores.js';
+  import { data, lastRefresh, ensureStore, activeTheme, notifications, unreadCount, serverTz } from '$lib/stores.js';
   import { wsConnect, wsDisconnect, mergeChannelMap, rpcOrCall, onWsConnected, wsSubscribeChannels, wsUnsubscribeChannels } from '$lib/ws.js';
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
-  import { railViewsFor } from '$lib/nav.js';
+  import { railViewsFor, buildNav } from '$lib/nav.js';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
@@ -17,14 +17,21 @@
   import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
   import MusicPlayer from '$lib/components/MusicPlayer.svelte';
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
-  import { displayMode as musicDisplayMode, toggle as musicToggle, next as musicNext, prev as musicPrev, toggleMute as musicToggleMute, setVolume as musicSetVolume, volume as musicVolume, seek as musicSeek, currentTime as musicTime, duration as musicDuration, album as musicAlbum, setDisplayMode as musicSetMode } from '$lib/music-player.js';
+  import LlmChainPill from '$lib/components/LlmChainPill.svelte';
+  import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import { initMusicBridge } from '$lib/music-bridge.js';
   import { initLocale, t } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
   import {
-    updateInfo, updating, updateError, updateHint, updateNotice, updateProgress, showUpdateBanner,
+    updateInfo, updating, updateError, updateHint, updateNotice, showUpdateBanner,
     canApplyUpdate, initUpdateStore, refreshUpdateInfo, applyUpdate, dismissUpdate,
   } from '$lib/update.js';
+  import { installAuthFetch } from '$lib/auth-fetch.js';
+  import { safeFetch, fetchInitialData } from '$lib/bootstrap-data.js';
+  import { fetchNotifications, markNotifRead, markAllNotifsRead } from '$lib/notifications.js';
+  import { handleShellKeydown } from '$lib/hotkeys.js';
+  import { applyTheme } from '$lib/theme.js';
+  import { redirectFirstRun, showGoogleAuthBanner, evictServiceWorkers } from '$lib/shell-init.js';
 
   // ── State ───────────────────────────────────────────────────────
   let serverTimezone = 'UTC'; // default, overridden by /api/health
@@ -32,73 +39,6 @@
   let clockInterval: ReturnType<typeof setInterval>;
   let cmdOpen = false;
   let notifOpen = false;
-  let liveOpen = false;
-
-  // ── LIVE pill popover: the configured LLM chain, with status ─────
-  // Hits /api/llm/chain on open. Re-fetches on every open so the user
-  // sees the current health (a 403 on Grok between yesterday and now
-  // would otherwise be invisible until they opened Settings → AI).
-  interface ChainLink {
-    slug: string; provider: string; model: string;
-    status: 'active' | 'standby' | 'no-key' | 'quota' | 'rate-limit' | 'auth' | 'degraded';
-    reason?: string;
-    latencyMs?: number;
-    blockedForMs?: number;
-    lastSuccessAt?: number;
-    failures: number;
-  }
-  let chainData: { primary: ChainLink; fallbacks: ChainLink[] } | null = null;
-  let chainErr = '';
-  let chainLoading = false;
-  async function loadChain() {
-    chainLoading = true; chainErr = '';
-    try {
-      const r = await fetch('/api/llm/chain');
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      chainData = await r.json();
-    } catch (err) {
-      chainErr = err instanceof Error ? err.message : String(err);
-      chainData = null;
-    } finally { chainLoading = false; }
-  }
-  function toggleLive() {
-    liveOpen = !liveOpen;
-    if (liveOpen) loadChain();
-  }
-  function statusLabel(s: ChainLink['status']): string {
-    switch (s) {
-      case 'active':     return 'ACTIVE';
-      case 'standby':    return 'STANDBY';
-      case 'no-key':     return 'NO KEY';
-      case 'quota':      return 'NO CREDIT';
-      case 'rate-limit': return 'RATE LIMITED';
-      case 'auth':       return 'AUTH FAILED';
-      case 'degraded':   return 'DEGRADED';
-    }
-  }
-  function fmtSince(epoch?: number): string {
-    if (!epoch) return '—';
-    const s = Math.round((Date.now() - epoch) / 1000);
-    if (s < 60)   return `${s}s ago`;
-    if (s < 3600) return `${Math.round(s / 60)}m ago`;
-    return `${Math.round(s / 3600)}h ago`;
-  }
-  function fmtCountdown(ms?: number): string {
-    if (!ms || ms <= 0) return '';
-    const s = Math.round(ms / 1000);
-    if (s < 60)   return `${s}s`;
-    if (s < 3600) return `${Math.round(s / 60)}m`;
-    return `${Math.round(s / 3600)}h`;
-  }
-  // Svelte action — closes the popover when the user clicks anywhere
-  // outside its wrapper. Inlined here because it's the only consumer.
-  function clickOutside(node: HTMLElement, onOutside: () => void) {
-    function handle(ev: MouseEvent) {
-      if (node && !node.contains(ev.target as Node)) onOutside();
-    }
-    document.addEventListener('mousedown', handle, true);
-    return { destroy() { document.removeEventListener('mousedown', handle, true); } };
-  }
 
   // Manifest-driven navigation — starts with hardcoded defaults, extended by manifest
   let navGroups: NavGroup[] = NAV_GROUPS;
@@ -270,94 +210,9 @@
   afterNavigate(() => { navigating = false; });
 
   // ── Global fetch interceptor for kernel auth ──────────────────────
-  // Most pages call `fetch('/api/...')` directly instead of going through
-  // `lib/api.ts`. Patching window.fetch once here injects the bearer token
-  // for every same-origin /api/* request without touching 180+ call sites.
-  // On 401 we redirect to /login (visible form, sturdier than prompt()).
-  if (typeof window !== 'undefined' && !(window as any).__kernelAuthPatched) {
-    (window as any).__kernelAuthPatched = true;
-    const TOKEN_KEY = 'kernel_auth_token';
-    const origFetch = window.fetch.bind(window);
-    let redirecting = false; // prevent N parallel 401s from racing N redirects
-    window.fetch = async (input: RequestInfo | URL, init: RequestInit = {}) => {
-      // Resolve URL string (Request | URL | string).
-      const urlStr = typeof input === 'string' ? input
-                   : input instanceof URL    ? input.href
-                   : (input as Request).url;
-      const isApi = urlStr.startsWith('/api/') || urlStr.includes('://' + location.host + '/api/');
-      if (!isApi) return origFetch(input as any, init);
-
-      const token = localStorage.getItem(TOKEN_KEY);
-      const headers = new Headers(init.headers ?? (input instanceof Request ? input.headers : undefined));
-      if (token && !headers.has('Authorization')) headers.set('Authorization', 'Bearer ' + token);
-      const res = await origFetch(input as any, { ...init, headers });
-
-      // 428 → this particular request needed a model and there isn't one.
-      // It used to bounce the whole app to /setup; the kernel now refuses only
-      // the routes that actually call a model, so a 428 is news about one
-      // action, not about the install. Record it — the banner explains it and
-      // links to the fix — and hand the response back to the caller.
-      if (res.status === 428) {
-        void refreshLlmReadiness();
-        return res;
-      }
-
-      if (res.status !== 401) return res;
-      // 401 → bounce to /login (carrying ?next= so we come back here).
-      // Skip if we're already on /login itself (avoid redirect loops).
-      if (!redirecting && !location.pathname.startsWith('/login')) {
-        redirecting = true;
-        const next = encodeURIComponent(location.pathname + location.search);
-        location.href = '/login?next=' + next;
-      }
-      return res;
-    };
-  }
-
-  // ── Data fetching ─────────────────────────────────────────────────
-  async function safeFetch(url: string) {
-    try {
-      const r = await fetch(url);
-      if (!r.ok) return null;
-      return await r.json();
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * All dashboard data now arrives via WebSocket channels (mtwRequest publisher).
-   * No HTTP polling needed — stores are filled by ws.ts handleMtwMessage().
-   * Only fetch data that has no WebSocket channel equivalent.
-   */
-  async function fetchInitialData() {
-    // Fetch init data — uses RPC when WS is connected, falls back to HTTP
-    const [skills, marketplace, aiConfig, google, apiReg, rssReg, themeData] = await Promise.allSettled([
-      // Skills come from the extension registry, not the retired /api/skills
-      // one — that endpoint only ever saw the legacy JS-plugin flavour, so the
-      // AI overview counted 5 skills while the agents used a different set.
-      safeFetch('/api/extensions?type=skill&status=active'),
-      rpcOrCall('marketplace.list', {}, () => safeFetch('/api/marketplace')),
-      rpcOrCall('config.ai.get', {}, () => safeFetch('/api/config/ai')),
-      rpcOrCall('google.status', {}, () => safeFetch('/api/google/status')),
-      rpcOrCall('registry.apis.list', {}, () => safeFetch('/api/registry/apis')),
-      rpcOrCall('registry.rss.list', {}, () => safeFetch('/api/registry/rss')),
-      rpcOrCall('marketplace.theme.active', {}, () => safeFetch('/api/marketplace/theme/active')),
-    ]);
-
-    // `items` from /api/extensions → `skills` so consumers keep their shape.
-    if (skills.status === 'fulfilled' && skills.value) {
-      storeMap['skills'].set({ skills: (skills.value as { items?: unknown[] }).items ?? [] });
-    }
-    if (marketplace.status === 'fulfilled' && marketplace.value) storeMap['marketplace'].set(marketplace.value);
-    if (aiConfig.status === 'fulfilled' && aiConfig.value) storeMap['aiConfig'].set(aiConfig.value);
-    if (google.status === 'fulfilled' && google.value) storeMap['google'].set(google.value);
-    if (apiReg.status === 'fulfilled' && apiReg.value) storeMap['apiRegistry'].set(apiReg.value);
-    if (rssReg.status === 'fulfilled' && rssReg.value) storeMap['rssRegistry'].set(rssReg.value);
-    if (themeData.status === 'fulfilled' && themeData.value?.theme) activeTheme.set(themeData.value.theme as ActiveTheme);
-
-    lastRefresh.set(new Date());
-  }
+  // Installed while this script initializes, not in onMount: children mount
+  // (and fetch) before the layout's onMount runs. See $lib/auth-fetch.
+  installAuthFetch(() => void refreshLlmReadiness());
 
   // Refresh on WS (re)connect — used internally by wsConnect().
   // No UI button: stores are push-driven, a manual refresh is dead UX.
@@ -366,39 +221,6 @@
   }
 
   // ── Notifications ───────────────────────────────────────────────────
-  async function fetchNotifications() {
-    const r = await rpcOrCall('notifications.list', {}, () => safeFetch('/api/notifications'));
-    if (r) {
-      const d = r as any;
-      notifications.set(d.notifications ?? []);
-      unreadCount.set(d.unread ?? 0);
-    }
-  }
-
-  async function markNotifRead(id: string) {
-    await rpcOrCall('notifications.markRead', { id }, () =>
-      fetch('/api/notifications/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id }),
-      }).then(r => r.json())
-    );
-    notifications.update(list => list.map(n => n.id === id ? { ...n, read: 1 } : n));
-    unreadCount.update(c => Math.max(0, c - 1));
-  }
-
-  async function markAllRead() {
-    await rpcOrCall('notifications.markAllRead', {}, () =>
-      fetch('/api/notifications/read', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      }).then(r => r.json())
-    );
-    notifications.update(list => list.map(n => ({ ...n, read: 1 })));
-    unreadCount.set(0);
-  }
-
   function toggleNotif() {
     notifOpen = !notifOpen;
     if (notifOpen) fetchNotifications();
@@ -416,84 +238,22 @@
   function closeCmd() { cmdOpen = false; }
 
   // ── Key bindings ──────────────────────────────────────────────────
+  // The mapping lives in $lib/hotkeys; the palette and dropdown state stay
+  // here, so the context reads and writes them through closures.
+  const keyCtx = {
+    cmdOpen: () => cmdOpen,
+    openCmd,
+    closeOverlays: () => { closeCmd(); notifOpen = false; },
+    views: () => allViews,
+    navigate,
+  };
   function handleKeydown(e: KeyboardEvent) {
-    if ((e.ctrlKey || e.metaKey) && e.key === 'k') { e.preventDefault(); openCmd(); return; }
-    if (e.key === 'Escape') {
-      closeCmd();
-      notifOpen = false;
-      // Esc inside fullscreen player → drop to drawer (don't kill playback).
-      if (get(musicDisplayMode) === 'fullscreen') musicSetMode('drawer');
-      return;
-    }
-    if (cmdOpen) return;
-    if (e.key >= '1' && e.key <= '9' && e.altKey && !e.ctrlKey && !e.metaKey) {
-      e.preventDefault();
-      const idx = parseInt(e.key) - 1;
-      if (allViews[idx]) navigate(allViews[idx].id);
-      return;
-    }
-
-    // ── Player hotkeys ─────────────────────────────────────────────
-    // Only fire when the user isn't typing into an input/textarea/contenteditable
-    // and an album is loaded. Modifiers other than Shift are ignored — anything
-    // with Ctrl/Cmd/Alt is reserved for other features.
-    const tgt = e.target as HTMLElement | null;
-    if (tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
-    if (e.ctrlKey || e.metaKey || e.altKey) return;
-    if (!get(musicAlbum)) return;
-    switch (e.key) {
-      case ' ':         e.preventDefault(); musicToggle(); break;
-      case 'ArrowRight':
-        if (e.shiftKey) {
-          musicSeek(get(musicTime) + 10);
-        } else {
-          // Plain → next track. Shift → seek +10s.
-          musicNext();
-        }
-        break;
-      case 'ArrowLeft':
-        if (e.shiftKey) musicSeek(Math.max(0, get(musicTime) - 10));
-        else musicPrev();
-        break;
-      case 'ArrowUp':   e.preventDefault(); musicSetVolume(Math.min(1, get(musicVolume) + 0.05)); break;
-      case 'ArrowDown': e.preventDefault(); musicSetVolume(Math.max(0, get(musicVolume) - 0.05)); break;
-      case 'm': case 'M': musicToggleMute(); break;
-      case 'n': case 'N': musicNext(); break;
-      case 'p': case 'P': musicPrev(); break;
-      case 'f': case 'F':
-        musicSetMode(get(musicDisplayMode) === 'fullscreen' ? 'drawer' : 'fullscreen');
-        break;
-    }
+    handleShellKeydown(e, keyCtx);
   }
 
   // ── Theme injection ───────────────────────────────────────────────────
-  // CSS variables are pushed to `:root` so every element (including portalled
-  // modals/tooltips outside `.app-shell`) inherits them. `customCss` lets a
-  // theme ship arbitrary selectors — scanlines, glows, keyframes — that
-  // can't be expressed via variables alone. Both go into <style> tags
-  // injected directly into <head> so we sidestep Svelte's CSS preprocessor.
-  function ensureStyleEl(id: string): HTMLStyleElement {
-    let el = document.getElementById(id) as HTMLStyleElement | null;
-    if (!el) {
-      el = document.createElement('style');
-      el.id = id;
-      document.head.appendChild(el);
-    }
-    return el;
-  }
-  $: if (typeof document !== 'undefined') {
-    const t = $activeTheme;
-    const varsCss = t?.variables
-      ? `:root{${Object.entries(t.variables).map(([k, v]) => `${k}:${v}`).join(';')}}`
-      : '';
-    ensureStyleEl('theme-vars').textContent = varsCss;
-    ensureStyleEl('theme-custom').textContent = t?.customCss ?? '';
-    // Reflect the active theme as a body class so non-CSS-var rules can
-    // target it (e.g. `body.theme-crt-terminal .foo { ... }`).
-    const slugClass = t?.slug ? `theme-${t.slug}` : '';
-    document.body.className = document.body.className
-      .split(' ').filter((c) => !c.startsWith('theme-')).concat(slugClass ? [slugClass] : []).join(' ').trim();
-  }
+  // See $lib/theme. Re-runs whenever the active theme store changes.
+  $: if (typeof document !== 'undefined') applyTheme($activeTheme);
 
   // ── Header badges from store ───────────────────────────────────────
   $: taskOverdue = ($data as any)?.tasks?.overdue?.length ?? 0;
@@ -640,27 +400,8 @@
     if (shellInitialized) return;
     shellInitialized = true;
     // First-run redirect to the setup wizard — fire-and-forget, do NOT
-    // early-return. The layout still needs to fetch the manifest, set
-    // up the clock, and open the WebSocket so when the user dismisses
-    // the wizard (or lands on it directly) the rest of the dashboard
-    // is fully initialized.
-    //
-    // We respect either flag:
-    //   kernl.setupComplete — new wizard at /setup
-    //   kernl.welcomeSeen   — legacy welcome flag (kept for users
-    //                             who already dismissed the old welcome)
-    try {
-      const setupDone   = localStorage.getItem('kernl.setupComplete');
-      const welcomeSeen = localStorage.getItem('kernl.welcomeSeen');
-      const path        = window.location.pathname;
-      const onSetupFlow = path === '/setup' || path === '/welcome';
-      if (!setupDone && !welcomeSeen && !onSetupFlow) {
-        goto('/setup', { replaceState: true });
-      }
-    } catch {
-      /* localStorage disabled (privacy mode, sandboxed iframe) — skip the
-         redirect rather than block the dashboard. */
-    }
+    // early-return (see $lib/shell-init).
+    redirectFirstRun(goto);
 
     // ── Is there an LLM that can run an agent? ──────────────────────
     //
@@ -683,31 +424,10 @@
     clockInterval = setInterval(updateClock, 1000);
 
     // Google OAuth redirect handling
-    const qs = new URLSearchParams(window.location.search);
-    const googleAuth = qs.get('google_auth');
-    if (googleAuth) {
-      window.history.replaceState({}, '', window.location.pathname + window.location.hash);
-      const msg = googleAuth === 'success'
-        ? { text: '✓ Google connected successfully', bg: 'var(--green)', col: 'var(--bg)' }
-        : { text: '⚠ Google auth failed: ' + (qs.get('error') || 'Unknown error'), bg: 'var(--red)', col: '#fff' };
-      setTimeout(() => {
-        const banner = document.createElement('div');
-        banner.style.cssText = `position:fixed;top:16px;left:50%;transform:translateX(-50%);background:${msg.bg};color:${msg.col};padding:10px 24px;border-radius:8px;font-weight:600;font-size:14px;z-index:9999;box-shadow:0 4px 16px rgba(0,0,0,.3)`;
-        banner.textContent = msg.text;
-        document.body.appendChild(banner);
-        setTimeout(() => banner.remove(), 4000);
-      }, 500);
-    }
+    showGoogleAuthBanner();
 
-    // Evict any residual service worker left behind from a previous PWA
-    // build of this dashboard. Those SWs keep serving stale chunks and
-    // trigger "new version available" banners on every navigation because
-    // their cached /_app/version.json drifts away from what the server sends.
-    if ('serviceWorker' in navigator) {
-      navigator.serviceWorker.getRegistrations()
-        .then((regs) => Promise.all(regs.map((r) => r.unregister())))
-        .catch(() => {});
-    }
+    // Drop service workers left over from an old PWA build of the dashboard.
+    evictServiceWorkers();
 
     refreshManifest();
     // Re-apply the manifest whenever an extension is enabled/disabled/uninstalled.
@@ -789,100 +509,19 @@
       mergeChannelMap(m.wsChannelMap);
     }
 
-    // Installed/active modules — used to hide nav items whose backing
-    // feature isn't present (suite stubs declare nav for paid or
-    // not-yet-installed features via `requires`). Safe-by-default: an item
-    // shows unless it explicitly declares a `requires` module that's absent.
-    const installedModules = new Set<string>(Array.isArray(m.modules) ? m.modules : []);
-
     // 3. Rebuild nav groups + items from scratch (hardcoded base + manifest)
-    let nextGroups: NavGroup[] = NAV_GROUPS.map(g => ({
-      ...g,
-      views: [...g.views],
-    }));
-    const viewPaths: Record<string, string> = {};
-
-    if (m.navGroups?.length) {
-      const existingIds = new Set(nextGroups.map(g => g.id));
-      const added: NavGroup[] = [];
-      for (const g of m.navGroups) {
-        if (existingIds.has(g.id)) continue;
-        added.push({
-          id: g.id,
-          label: g.label,
-          icon: g.icon,
-          views: [],
-          defaultView: g.defaultView,
-          order: (g as any).order,
-        } as NavGroup);
-      }
-      if (added.length > 0) {
-        const withOrder = nextGroups.map(g => ({
-          ...g,
-          order:
-            (g as any).order ??
-            (g.id === 'system' ? 9999 : g.id === 'people' ? 250 : 500),
-        }));
-        nextGroups = [...withOrder, ...added].sort(
-          (a, b) => (((a as any).order ?? 500) - ((b as any).order ?? 500))
-        );
-      }
-    }
-
-    if (m.navItems?.length) {
-      for (const item of m.navItems) {
-        // Only show items whose backing module is installed. Items without a
-        // `requires` always show (never hides a legit feature); items that
-        // name an absent module (paid extras, unbuilt stubs) are dropped.
-        if (item.requires && !installedModules.has(item.requires)) continue;
-        // Fail open, like the manifest gate above. Dropping an item because its
-        // group has not been merged yet hides real features with no trace: the
-        // nav silently collapsed to the three hardcoded base groups and 39 of
-        // 42 items vanished. An item that names an unknown group now creates
-        // it rather than disappearing.
-        let group = nextGroups.find(g => g.id === item.group);
-        if (!group) {
-          // Needs an icon and a readable label: without them the sidebar
-          // rendered the literal text "undefined" above the group.
-          group = {
-            id: item.group,
-            label: item.group.charAt(0).toUpperCase() + item.group.slice(1),
-            icon: '⚙️',
-            views: [],
-            order: 500,
-          } as any;
-          nextGroups.push(group);
-        }
-        if (group.views.find(v => v.id === item.id)) continue;
-        const view: any = { id: item.id, label: item.label, icon: item.icon };
-        if (item.parent) view.parent = item.parent;
-        if (item.order !== undefined) view.order = item.order;
-        group.views.push(view);
-        if (item.path) viewPaths[item.id] = item.path;
-      }
-      for (const g of nextGroups) {
-        g.views.sort((a, b) => ((a as any).order ?? 999) - ((b as any).order ?? 999));
-      }
-    }
-
-    // Drop groups left empty after filtering (all their items required an
-    // absent module) so no dead group icon lingers in the sidebar. The
-    // `system` group is always kept — it's the admin surface (Settings,
-    // Extensions, Marketplace) needed to install more, and never empties.
-    nextGroups = nextGroups.filter(g => g.id === 'system' || g.views.length > 0);
+    const nav = buildNav(m);
 
     // 4. Publish extension page bundles for the [...ext] host route.
     extPagesStore.set(Array.isArray(m.extPages) ? m.extPages : []);
     extPagesReady.set(true);
 
-    navGroups = nextGroups;
-    allViews = nextGroups.flatMap(g => g.views);
-    const v2g: Record<string, string> = {};
-    for (const g of nextGroups) for (const v of g.views) v2g[v.id] = g.id;
-    viewToGroup = v2g;
+    navGroups = nav.navGroups;
+    allViews = nav.allViews;
+    viewToGroup = nav.viewToGroup;
     // Rewrite path overrides: start fresh so removed items don't linger.
     for (const k of Object.keys(viewPathOverrides)) delete viewPathOverrides[k];
-    for (const k of Object.keys(viewPaths)) viewPathOverrides[k] = viewPaths[k];
+    for (const k of Object.keys(nav.viewPaths)) viewPathOverrides[k] = nav.viewPaths[k];
     // First successful manifest load → the route guard may now engage.
     // (Set last: `allViews` above already reflects the granted views, so
     // the guard never evaluates against a stale nav state.)
@@ -931,29 +570,12 @@
            app running from its disk image): the kernel's instruction instead
            of a click whose only outcome is a refusal. -->
       {#if $canApplyUpdate}
-        {#if $updating && $updateProgress}
-          <!-- The download, the checksum and the unpack all finish before the
-               kernel exits, so the bar has something real to show for the part
-               of the wait that is actually long. Same store and same rule as
-               the About card: determinate only when the server sent a
-               content-length, because an invented percentage is worse than an
-               honest spinner. Without this the bar said "Updating…" and
-               nothing else for the whole download. -->
-          {@const p = $updateProgress}
-          {@const pct = p.total > 0 ? Math.round((p.received / p.total) * 100) : null}
-          <div class="update-bar-progress">
-            <div class="update-bar-track" class:indeterminate={pct === null}>
-              <span style={pct === null ? '' : `width:${pct}%`}></span>
-            </div>
-            <span class="update-bar-phase">
-              {p.phase === 'downloading'
-                ? (pct === null
-                    ? `${(p.received / 1048576).toFixed(1)} MB`
-                    : `${pct}% · ${(p.received / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB`)
-                : p.phase}
-            </span>
-          </div>
-        {/if}
+        <!-- The download, the checksum and the unpack all finish before the
+             kernel exits, so the bar has something real to show for the part
+             of the wait that is actually long. Same store and same rule as
+             the About card. Without this the bar said "Updating…" and
+             nothing else for the whole download. -->
+        <UpdateProgress variant="bar" />
         <button class="update-bar-go" disabled={$updating} on:click={applyUpdate}>
           {$updating ? 'Updating…' : 'Update now'}
         </button>
@@ -1043,7 +665,7 @@
           unreadCount={$unreadCount}
           on:toggle={toggleNotif}
           on:markRead={(e) => markNotifRead(e.detail.id)}
-          on:markAllRead={markAllRead}
+          on:markAllRead={markAllNotifsRead}
           on:viewAll={() => { notifOpen = false; navigate('notifications'); }}
         />
       </div>
@@ -1062,66 +684,7 @@
 
       <!-- Meta cluster: connection + theme. Compact, low-attention. -->
       <div class="hdr-cluster hdr-meta">
-        <div class="live-pill-wrap" use:clickOutside={() => { liveOpen = false; }}>
-          <button
-            type="button"
-            class="ws-pill ws-pill-btn"
-            class:connected={$wsConnected}
-            class:open={liveOpen}
-            on:click={toggleLive}
-            title="Realtime stream + LLM chain status — click to inspect"
-          >
-            <span class="ws-dot"></span>
-            <span class="ws-label">{$wsConnected ? 'LIVE' : 'POLL'}</span>
-          </button>
-          {#if liveOpen}
-            <div class="live-popover" role="dialog" aria-label="LLM chain status">
-              <header class="lp-head">
-                <span class="lp-title">LLM chain · Settings → AI</span>
-                <button type="button" class="lp-refresh" on:click={loadChain} title="Re-check provider health" disabled={chainLoading}>
-                  ↻
-                </button>
-              </header>
-              {#if chainLoading && !chainData}
-                <div class="lp-empty">loading…</div>
-              {:else if chainErr}
-                <div class="lp-empty lp-err">error: {chainErr}</div>
-              {:else if !chainData}
-                <div class="lp-empty">no chain configured</div>
-              {:else}
-                <ul class="lp-list">
-                  {#each [chainData.primary, ...chainData.fallbacks] as link, i (link.slug + ':' + i)}
-                    <li class="lp-row" data-status={link.status}>
-                      <span class="lp-rank">{i === 0 ? 'P' : i}</span>
-                      <span class="lp-slug">{link.slug}</span>
-                      <span class="lp-model" title={link.model}>{link.model || '—'}</span>
-                      <span class="lp-status" data-status={link.status}>{statusLabel(link.status)}</span>
-                      <span class="lp-meta">
-                        {#if link.latencyMs !== undefined}
-                          <span class="lp-meta-item">{Math.round(link.latencyMs)}ms</span>
-                        {/if}
-                        {#if link.lastSuccessAt}
-                          <span class="lp-meta-item" title="Last successful call">✓ {fmtSince(link.lastSuccessAt)}</span>
-                        {/if}
-                        {#if link.blockedForMs && link.blockedForMs > 0}
-                          <span class="lp-meta-item lp-meta-warn" title="Blocked — backoff window">retry in {fmtCountdown(link.blockedForMs)}</span>
-                        {/if}
-                      </span>
-                      {#if link.reason}
-                        <span class="lp-reason">{link.reason}</span>
-                      {/if}
-                    </li>
-                  {/each}
-                </ul>
-                <footer class="lp-foot">
-                  <!-- /models is a redirect stub onto the AI section of
-                       Settings; link the real destination. -->
-                  <a href="/settings?section=ai" on:click={() => liveOpen = false}>configure in Settings →</a>
-                </footer>
-              {/if}
-            </div>
-          {/if}
-        </div>
+        <LlmChainPill />
         <ThemeSwitcher />
       </div>
     </div>
