@@ -15,6 +15,8 @@
 
 import {
   log,
+  formatNotification,
+  csvList,
   type NotificationProvider,
   type NotificationPayload,
   type ProviderStatus,
@@ -353,8 +355,7 @@ export class WhatsAppProvider implements NotificationProvider {
   }
 
   private isAllowed(sender: string): boolean {
-    const raw = (this.config.allowedNumbers as string | undefined) ?? "";
-    const list = raw.split(",").map((s) => s.trim()).filter(Boolean);
+    const list = csvList(this.config.allowedNumbers);
     if (list.length === 0) return false;
     if (list.includes("*")) return true;
     // Exact digit-match only. The previous bidirectional `includes` let any
@@ -366,9 +367,6 @@ export class WhatsAppProvider implements NotificationProvider {
   }
 
   private formatPayload(payload: NotificationPayload): string {
-    const prefix = payload.priority === "high" ? "🚨 " : "";
-    const lines = [`${prefix}*${payload.title}*`];
-    if (payload.body) lines.push(payload.body);
-    return lines.join("\n");
+    return formatNotification(payload, { bold: "*", alert: "🚨 " });
   }
 }

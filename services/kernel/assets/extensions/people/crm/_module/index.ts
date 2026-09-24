@@ -1,12 +1,4 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-  type EventBus,
-} from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { crmMigrations } from "./migrations/001_crm.js";
 import { CrmService } from "./service.js";
 import { crmTools } from "./tools.js";
@@ -20,19 +12,13 @@ export interface CrmModule extends ExtensibleModule {
 }
 
 export function createCrmModule(): CrmModule {
-  let tools: ToolDefinition[] = [];
   let serviceRef: CrmService | null = null;
-  let dbRef: SqliteDb | null = null;
-  let eventsRef: EventBus | null = null;
 
-  return {
+  const mod = defineModule({
     name: "crm",
+    migrations: crmMigrations,
 
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "crm", crmMigrations);
-      dbRef = ctx.sqlite;
-      eventsRef = ctx.events;
-
+    async init(ctx) {
       // Constraint creation runs against whatever graph driver is active at
       // boot. Idempotent (`IF NOT EXISTS`) — safe to retry on restart after
       // toggling backends in /extensions.
@@ -44,7 +30,6 @@ export function createCrmModule(): CrmModule {
 
       const service = new CrmService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;
-      tools = crmTools(service);
 
       // Listen for cross-module events
       ctx.events.on("contact.interaction", async (payload) => {
@@ -55,30 +40,27 @@ export function createCrmModule(): CrmModule {
         };
         service.logInteraction({ contact_id: contactId, type, summary });
       });
+
+      return { service, events: ctx.events };
     },
 
-    getTools() {
-      return tools;
-    },
+    tools: (s) => crmTools(s.service),
+    rpc: (s) => contactsRpcActions(s.service, s.events),
 
+    dashboard: (s) => ({
+      channels: [{ name: "crm", query: (db) => queryCrm(db) }],
+      registerRoutes: (server) => {
+        if (s) {
+          registerCrmDashboardRoutes(server, s.service);
+          registerContactsRoutes(server, s.service, s.events ?? undefined);
+        }
+      },
+    }),
+  });
+
+  return Object.assign(mod, {
     getService() {
       return serviceRef;
     },
-
-    getRpcActions() {
-      return dbRef ? contactsRpcActions(dbRef) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [{ name: "crm", query: (db) => queryCrm(db) }],
-        registerRoutes: (server) => {
-          if (serviceRef) registerCrmDashboardRoutes(server, serviceRef);
-          if (dbRef) registerContactsRoutes(server, dbRef, eventsRef ?? undefined);
-        },
-      };
-    },
-
-    async shutdown() {},
-  };
+  });
 }

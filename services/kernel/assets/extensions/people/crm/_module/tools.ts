@@ -1,17 +1,16 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult, structuredResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, structuredResult } from "@kernl/extension-sdk";
 import type { CrmService } from "./service.js";
-import type { LeadStatus } from "./types.js";
 
 const LeadStatusEnum = z.enum(["", "new", "drafted", "contacted", "qualified", "won", "lost"]);
 
 export function crmTools(service: CrmService): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_crm_add_contact",
       description:
         "Add (or merge) a contact in the Personal CRM. Idempotent by normalized phone + email — calling twice for the same person enriches the existing row instead of duplicating. Optional `lead_*` and social fields turn the contact into a lead the `/crm/leads` view picks up.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Full name"),
         email: z.string().optional().describe("Email address"),
         phone: z.string().optional().describe("Phone number — any format; dedup normalizes it."),
@@ -48,8 +47,7 @@ export function crmTools(service: CrmService): ToolDefinition[] {
         merged: z.boolean().describe("true when an existing row was enriched instead of creating a new one"),
       }),
       tags: ["crm", "contact", "add", "lead", "prospect"],
-      handler: async (args) => {
-        const input = args as Parameters<CrmService["addContact"]>[0];
+      handler: async (input) => {
         // Detect merge by checking if a row with this phone/email already exists.
         const existed = service.findExisting(input.phone, input.email);
         const contact = service.addContact(input);
@@ -75,17 +73,16 @@ export function crmTools(service: CrmService): ToolDefinition[] {
               (contact.lead_status ? ` · lead=${contact.lead_status}` : ""),
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_crm_find",
       description:
         "Search contacts by name, email, company, or notes. Fuzzy matching.",
-      inputSchema: z.object({
+      schema: z.object({
         query: z.string().describe("Search query"),
       }),
-      handler: async (args) => {
-        const { query } = args as { query: string };
+      handler: async ({ query }) => {
         const contacts = service.find(query);
         if (contacts.length === 0)
           return textResult(`No contacts matching "${query}".`);
@@ -98,13 +95,13 @@ export function crmTools(service: CrmService): ToolDefinition[] {
           `${contacts.length} contact(s) found:\n\n${lines.join("\n\n")}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_crm_log_interaction",
       description:
         "Log an interaction with a contact (email, call, meeting, message, social). Updates last_interaction and Neo4j graph.",
-      inputSchema: z.object({
+      schema: z.object({
         contact_id: z.string().describe("Contact ID"),
         type: z
           .enum(["email", "call", "meeting", "message", "social", "other"])
@@ -112,13 +109,7 @@ export function crmTools(service: CrmService): ToolDefinition[] {
         summary: z.string().describe("Brief summary of the interaction"),
         date: z.string().optional().describe("Date (YYYY-MM-DD), defaults to today"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          contact_id: string;
-          type: "email" | "call" | "meeting" | "message" | "social" | "other";
-          summary: string;
-          date?: string;
-        };
+      handler: async (input) => {
         const interaction = service.logInteraction(input);
         if (!interaction)
           return errorResult(`Contact not found: ${input.contact_id}`);
@@ -126,17 +117,16 @@ export function crmTools(service: CrmService): ToolDefinition[] {
           `Interaction logged:\n  Type: ${interaction.type}\n  Date: ${interaction.date}\n  Summary: ${interaction.summary}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_crm_get_contact",
       description:
         "Get detailed info about a contact including recent interactions.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Contact ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const contact = service.getById(id);
         if (!contact) return errorResult(`Contact not found: ${id}`);
 
@@ -151,21 +141,18 @@ export function crmTools(service: CrmService): ToolDefinition[] {
           `${contact.name}\n  Email: ${contact.email || "—"}\n  Phone: ${contact.phone || "—"}\n  Company: ${contact.company || "—"}\n  Relationship: ${contact.relationship}\n  Notes: ${contact.notes || "—"}\n  Last interaction: ${contact.last_interaction || "never"}\n\nRecent interactions:\n${interLines}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_crm_list_contacts",
       description: "List all contacts, optionally filtered by relationship type.",
-      inputSchema: z.object({
+      schema: z.object({
         relationship: z
           .enum(["personal", "professional", "family", "acquaintance"])
           .optional()
           .describe("Filter by relationship type"),
       }),
-      handler: async (args) => {
-        const filters = args as {
-          relationship?: "personal" | "professional" | "family" | "acquaintance";
-        };
+      handler: async (filters) => {
         const contacts = service.listContacts(filters);
         if (contacts.length === 0) return textResult("No contacts found.");
 
@@ -175,16 +162,16 @@ export function crmTools(service: CrmService): ToolDefinition[] {
         );
         return textResult(`${contacts.length} contact(s):\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── kernel_crm_leads ─────────────────────────────
-    {
+    defineTool({
       name: "kernel_crm_leads",
       description:
         "Query the CRM lead pipeline — contacts whose `lead_status` is non-empty. " +
         "Filter by status ('new'|'contacted'|'qualified'|'won'|'lost') and/or source ('web-prospector', etc.). " +
         "Returns typed leads with their phone / email / Instagram / LinkedIn / X handles + counts per stage.",
-      inputSchema: z.object({
+      schema: z.object({
         status: z.enum(["any", "new", "drafted", "contacted", "qualified", "won", "lost"]).default("any"),
         source: z.string().optional().describe("Lead origin tag — e.g. 'web-prospector'."),
         limit: z.number().int().min(1).max(500).default(100),
@@ -209,12 +196,7 @@ export function crmTools(service: CrmService): ToolDefinition[] {
         })),
       }),
       tags: ["crm", "leads", "pipeline", "prospect", "list"],
-      handler: async (args) => {
-        const { status, source, limit } = args as {
-          status: "any" | "new" | "drafted" | "contacted" | "qualified" | "won" | "lost";
-          source?: string;
-          limit: number;
-        };
+      handler: async ({ status, source, limit }) => {
         const leads = service.listLeads({ status, source, limit });
         const counts = service.leadCounts(source);
         const out = {
@@ -254,15 +236,15 @@ export function crmTools(service: CrmService): ToolDefinition[] {
         ];
         return { ...textResult(lines.join("\n")), structuredContent: out };
       },
-    },
+    }),
 
     // ── kernel_crm_set_lead_status ───────────────────
-    {
+    defineTool({
       name: "kernel_crm_set_lead_status",
       description:
         "Move a lead through the pipeline: '' (ordinary contact), 'new', 'contacted', 'qualified', 'won', 'lost'. " +
         "Use right after `kernel_email_send` reaches a prospect → status='contacted'.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Contact id."),
         status: LeadStatusEnum,
       }),
@@ -272,8 +254,7 @@ export function crmTools(service: CrmService): ToolDefinition[] {
         lead_status: z.string(),
       }),
       tags: ["crm", "leads", "pipeline", "lifecycle"],
-      handler: async (args) => {
-        const { id, status } = args as { id: string; status: LeadStatus };
+      handler: async ({ id, status }) => {
         const c = service.setLeadStatus(id, status);
         if (!c) return errorResult(`Contact not found: ${id}`);
         return structuredResult(
@@ -281,6 +262,6 @@ export function crmTools(service: CrmService): ToolDefinition[] {
           `**${c.name}** → lead_status=${c.lead_status}`,
         );
       },
-    },
+    }),
   ];
 }

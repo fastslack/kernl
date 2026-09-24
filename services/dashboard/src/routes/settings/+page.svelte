@@ -23,8 +23,9 @@
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
+  import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import {
-    updateInfo, checking, updating, updateError, updateHint, updateProgress,
+    updateInfo, checking, updating, updateError, updateHint,
     canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
   } from '$lib/update.js';
 
@@ -470,6 +471,8 @@
   // ═══════════════════════════════════════════════
   let channelSchema: any = null;
   let channelConfig: Record<string, any> = {};
+  // Masked stored value per secret field — the SecretInput placeholder.
+  let channelMasked: Record<string, string> = {};
   let channelId = '';
   let channelSaving = false;
 
@@ -486,8 +489,18 @@
       const data = await rpcOrCall('channels.schema', { id }, () => jfetch(`/api/channels/schema?id=${id}`)) as any;
       channelSchema = data;
       channelConfig = {};
+      channelMasked = {};
+      // channels.schema answers `config`, with every password field masked.
+      // A secret field holds only what the user types (blank keeps the stored
+      // value on save); the mask is shown as its placeholder.
       for (const field of data.schema ?? []) {
-        channelConfig[field.key] = data.currentConfig?.[field.key] ?? '';
+        const current = data.config?.[field.key] ?? '';
+        if (field.type === 'password' || field.secret) {
+          channelConfig[field.key] = '';
+          channelMasked[field.key] = current;
+        } else {
+          channelConfig[field.key] = current;
+        }
       }
     } catch {
       channelSchema = null;
@@ -539,7 +552,7 @@
       const data = await rpcOrCall('channels.schema', { id: 'whatsapp' }, () => jfetch('/api/channels/schema?id=whatsapp')) as any;
       waConfig = {};
       for (const field of data.schema ?? []) {
-        waConfig[field.key] = data.currentConfig?.[field.key] ?? '';
+        waConfig[field.key] = data.config?.[field.key] ?? '';
       }
     } catch { /* fields stay editable, empty */ }
   }
@@ -799,8 +812,8 @@
                     <span class="ch-flabel">{field.label || field.key}{field.required ? ' *' : ''}</span>
                     {#if field.type === 'boolean'}
                       <label class="ch-toggle"><input type="checkbox" bind:checked={channelConfig[field.key]} /> {field.label || field.key}</label>
-                    {:else if field.secret}
-                      <SecretInput bind:value={channelConfig[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
+                    {:else if field.type === 'password' || field.secret}
+                      <SecretInput bind:value={channelConfig[field.key]} masked={channelMasked[field.key] ?? ''} configured={!!channelMasked[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
                     {:else}
                       <input class="prov-in" type="text" bind:value={channelConfig[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
                     {/if}
@@ -980,27 +993,10 @@
                     <span class="about-update-msg about-dim">{$updateInfo.install?.reason ?? ''}</span>
                     {#if $updateInfo.install?.hint}<code>{$updateInfo.install.hint}</code>{/if}
                   {/if}
-                  {#if $updating && $updateProgress}
-                    <!-- Everything slow — the download, the checksum, the
-                         unpack — happens before the kernel exits, so this page
-                         is around to show it. Determinate when the server sent
-                         a content-length, indeterminate when it did not: a
-                         made-up percentage is worse than an honest spinner. -->
-                    {@const p = $updateProgress}
-                    {@const pct = p.total > 0 ? Math.round((p.received / p.total) * 100) : null}
-                    <div class="upd-progress">
-                      <div class="upd-bar" class:indeterminate={pct === null}>
-                        <span style={pct === null ? '' : `width:${pct}%`}></span>
-                      </div>
-                      <span class="upd-phase">
-                        {p.phase === 'downloading'
-                          ? (pct === null
-                              ? `${(p.received / 1048576).toFixed(1)} MB`
-                              : `${pct}% · ${(p.received / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB`)
-                          : p.phase}
-                      </span>
-                    </div>
-                  {/if}
+                  <!-- Everything slow — the download, the checksum, the
+                       unpack — happens before the kernel exits, so this page
+                       is around to show it. -->
+                  <UpdateProgress variant="card" />
                 {:else if $updateInfo?.latest}
                   <span class="about-update-msg">
                     {$t('settings.about.current', { version: $updateInfo.current })}
@@ -1345,23 +1341,5 @@
   @media (max-width: 700px) {
     .wa-qr-box { flex-direction: column; align-items: center; }
     .fld-lang { grid-template-columns: 1fr; }
-  }
-
-  /* Update progress. Indeterminate when the server sends no content-length —
-     a sliding band rather than a percentage nobody can stand behind. */
-  .upd-progress { display: flex; align-items: center; gap: .5rem; width: 100%; margin-top: .5rem; }
-  .upd-bar { position: relative; flex: 1; height: 6px; border-radius: 999px;
-             background: rgba(255, 255, 255, .12); overflow: hidden; }
-  .upd-bar > span { display: block; height: 100%; border-radius: 999px;
-                    background: #6366f1; transition: width 200ms ease; }
-  .upd-bar.indeterminate > span { width: 35%; animation: upd-slide 1.1s ease-in-out infinite; }
-  @keyframes upd-slide {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(300%); }
-  }
-  .upd-phase { font-size: .75rem; opacity: .75; white-space: nowrap;
-               font-variant-numeric: tabular-nums; }
-  @media (prefers-reduced-motion: reduce) {
-    .upd-bar.indeterminate > span { animation: none; width: 100%; opacity: .5; }
   }
 </style>

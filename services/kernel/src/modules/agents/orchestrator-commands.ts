@@ -7,6 +7,7 @@ import type { ChatService } from "../chat/service.js";
 import type { InlineButton } from "../../core/extension-seams.js";
 import type { KernelLanguage } from "../../core/config.js";
 import { newId, isoNow } from "../../core/helpers.js";
+import { today, daysFromNow, localDayRange, toInstant, kernelTimezone } from "../../sdk/clock.js";
 import { formatDateForLang } from "../../core/i18n/prompts.js";
 
 export interface OrchestratorResponse {
@@ -45,12 +46,12 @@ export async function getStatus(deps: CommandDeps): Promise<OrchestratorResponse
   ).get() as { c: number }).c;
 
   const overdueReminders = (deps.db.prepare(
-    "SELECT COUNT(*) as c FROM reminders WHERE status = 'active' AND trigger_at < datetime('now')"
+    "SELECT COUNT(*) as c FROM reminders WHERE status = 'active' AND datetime(trigger_at) < datetime('now')"
   ).get() as { c: number }).c;
 
   const dueTodayTasks = (deps.db.prepare(
-    "SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = date('now')"
-  ).get() as { c: number }).c;
+    "SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = ?"
+  ).get(today()) as { c: number }).c;
 
   return {
     text: `📊 *Kernl Status*\n\n` +
@@ -75,9 +76,11 @@ export async function listTasks(deps: CommandDeps, filter?: string): Promise<Orc
       sql = "SELECT * FROM tasks WHERE status = ?";
       params.push(f);
     } else if (f === "overdue") {
-      sql = "SELECT * FROM tasks WHERE status NOT IN ('done', 'cancelled') AND due_date < date('now')";
+      sql = "SELECT * FROM tasks WHERE status NOT IN ('done', 'cancelled') AND due_date < ?";
+      params.push(today());
     } else if (f === "today") {
-      sql = "SELECT * FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = date('now')";
+      sql = "SELECT * FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = ?";
+      params.push(today());
     }
   }
 
@@ -183,40 +186,31 @@ export function parseReminderText(text: string): { title: string; triggerAt: str
     title = text.replace(inMatch[0], "").trim();
   }
 
+  // A clock time the user typed is their wall-clock time (the kernel's
+  // TIMEZONE), not the process's: in a container that is UTC.
+  const clockTime = (m: RegExpMatchArray): string => {
+    let hour = parseInt(m[1], 10);
+    const minute = m[2] ? parseInt(m[2], 10) : 0;
+    const ampm = m[3]?.toLowerCase();
+    if (ampm === "pm" && hour < 12) hour += 12;
+    if (ampm === "am" && hour === 12) hour = 0;
+    return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+  };
+  const wallAt = (date: string, time: string) => new Date(toInstant(`${date}T${time}`)!);
+
   // "tomorrow at Xam/pm"
   const tomorrowMatch = text.match(/\s+tomorrow\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i);
   if (tomorrowMatch) {
-    triggerAt = new Date(now);
-    triggerAt.setDate(triggerAt.getDate() + 1);
-    let hour = parseInt(tomorrowMatch[1], 10);
-    const minute = tomorrowMatch[2] ? parseInt(tomorrowMatch[2], 10) : 0;
-    const ampm = tomorrowMatch[3]?.toLowerCase();
-
-    if (ampm === "pm" && hour < 12) hour += 12;
-    if (ampm === "am" && hour === 12) hour = 0;
-
-    triggerAt.setHours(hour, minute, 0, 0);
+    triggerAt = wallAt(daysFromNow(1, now), clockTime(tomorrowMatch));
     title = text.replace(tomorrowMatch[0], "").trim();
   }
 
   // "at Xam/pm" (today or tomorrow if past)
   const atMatch = text.match(/\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\s*$/i);
   if (atMatch && !triggerAt) {
-    triggerAt = new Date(now);
-    let hour = parseInt(atMatch[1], 10);
-    const minute = atMatch[2] ? parseInt(atMatch[2], 10) : 0;
-    const ampm = atMatch[3]?.toLowerCase();
-
-    if (ampm === "pm" && hour < 12) hour += 12;
-    if (ampm === "am" && hour === 12) hour = 0;
-
-    triggerAt.setHours(hour, minute, 0, 0);
-
-    // If time is in the past, set for tomorrow
-    if (triggerAt <= now) {
-      triggerAt.setDate(triggerAt.getDate() + 1);
-    }
-
+    const time = clockTime(atMatch);
+    triggerAt = wallAt(today(now), time);
+    if (triggerAt <= now) triggerAt = wallAt(daysFromNow(1, now), time);
     title = text.replace(atMatch[0], "").trim();
   }
 
@@ -297,8 +291,8 @@ export async function getHomeStatus(deps: CommandDeps): Promise<OrchestratorResp
   // Overdue maintenance
   const overdueMaintenance = deps.db.prepare(
     `SELECT COUNT(*) as c FROM home_maintenance_items
-     WHERE next_due IS NOT NULL AND next_due < date('now')`
-  ).get() as { c: number };
+     WHERE next_due IS NOT NULL AND next_due < ?`
+  ).get(today()) as { c: number };
 
   // Open incidents
   const openIncidents = deps.db.prepare(
@@ -323,19 +317,19 @@ export async function getHomeStatus(deps: CommandDeps): Promise<OrchestratorResp
 export async function getMorningBriefing(deps: CommandDeps): Promise<OrchestratorResponse> {
   const todayTasks = deps.db.prepare(
     `SELECT COUNT(*) as c FROM tasks
-     WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = date('now')`
-  ).get() as { c: number };
+     WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = ?`
+  ).get(today()) as { c: number };
 
   const upcomingReminders = deps.db.prepare(
     `SELECT title, trigger_at FROM reminders
-     WHERE status = 'active' AND trigger_at > datetime('now') AND trigger_at < datetime('now', '+24 hours')
+     WHERE status = 'active' AND datetime(trigger_at) > datetime('now') AND datetime(trigger_at) < datetime('now', '+24 hours')
      ORDER BY trigger_at LIMIT 5`
   ).all() as Array<{ title: string; trigger_at: string }>;
 
   const overdueCount = deps.db.prepare(
     `SELECT COUNT(*) as c FROM tasks
-     WHERE status NOT IN ('done', 'cancelled') AND due_date < date('now')`
-  ).get() as { c: number };
+     WHERE status NOT IN ('done', 'cancelled') AND due_date < ?`
+  ).get(today()) as { c: number };
 
   const lines = ["☀️ *Good Morning!*\n"];
 
@@ -351,6 +345,7 @@ export async function getMorningBriefing(deps: CommandDeps): Promise<Orchestrato
     lines.push("\n🔔 *Upcoming Reminders:*");
     for (const r of upcomingReminders) {
       const time = new Date(r.trigger_at).toLocaleTimeString("en-US", {
+        timeZone: kernelTimezone(),
         hour: "2-digit",
         minute: "2-digit",
       });
@@ -366,10 +361,11 @@ export async function getMorningBriefing(deps: CommandDeps): Promise<Orchestrato
 }
 
 export async function getEveningSummary(deps: CommandDeps): Promise<OrchestratorResponse> {
+  const [dayStart, dayEnd] = localDayRange();
   const completedToday = deps.db.prepare(
     `SELECT COUNT(*) as c FROM tasks
-     WHERE status = 'done' AND date(updated_at) = date('now')`
-  ).get() as { c: number };
+     WHERE status = 'done' AND datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)`
+  ).get(dayStart, dayEnd) as { c: number };
 
   const remainingTasks = deps.db.prepare(
     `SELECT COUNT(*) as c FROM tasks
@@ -378,13 +374,13 @@ export async function getEveningSummary(deps: CommandDeps): Promise<Orchestrator
 
   const tomorrowTasks = deps.db.prepare(
     `SELECT COUNT(*) as c FROM tasks
-     WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = date('now', '+1 day')`
-  ).get() as { c: number };
+     WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = ?`
+  ).get(daysFromNow(1)) as { c: number };
 
   const firedReminders = deps.db.prepare(
     `SELECT COUNT(*) as c FROM reminders
-     WHERE status = 'fired' AND date(last_fired_at) = date('now')`
-  ).get() as { c: number };
+     WHERE status = 'fired' AND datetime(last_fired_at) >= datetime(?) AND datetime(last_fired_at) < datetime(?)`
+  ).get(dayStart, dayEnd) as { c: number };
 
   return {
     text: `🌙 *Evening Summary*\n\n` +

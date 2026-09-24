@@ -424,7 +424,7 @@
     font-size: 12px;
     margin: 0 0 8px;
   }
-  .muted code, .card-info code {
+  .card-info code {
     background: rgba(0,0,0,0.4);
     padding: 1px 6px;
     border-radius: 3px;

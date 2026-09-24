@@ -8,15 +8,6 @@
  * ../entry.js (self-contained ES module, Svelte runtime included).
  */
 import Page from "./Page.svelte";
-import type { ExtPageContext } from "$shared/types";
+import { createMount } from "$shared/mount";
 
-export type { ExtPageContext };
-
-export function mount(target: HTMLElement, ctx: ExtPageContext): { destroy(): void } {
-  const page = new Page({ target, props: { ctx } });
-  return {
-    destroy() {
-      page.$destroy();
-    },
-  };
-}
+export const mount = createMount(Page);

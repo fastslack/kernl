@@ -1,39 +1,18 @@
-import { createSign, createHash } from "node:crypto";
+import { createSign } from "node:crypto";
+import {
+  ForgeRepoProvider,
+  FORGE_USER_AGENT,
+  forgeRequest,
+  snapshotHash,
+  upsertMarked,
+  type CommentRef,
+  type RepoItem,
+} from "../../_lib/forge/index.js";
 import type { GitHubConnectionsService, GitHubConnection } from "./connections-service.js";
 
 const GITHUB_API = "https://api.github.com";
-const USER_AGENT = "Kernl-triage/0.1";
 const API_VERSION = "2022-11-28";
 const TOKEN_REFRESH_MS = 50 * 60 * 1000;
-
-interface RepoItem {
-  number: number;
-  kind: "issue" | "pull_request";
-  title: string;
-  body: string;
-  state: "open" | "closed";
-  author: string;
-  authorAssociation: string;
-  labels: string[];
-  createdAt: string;
-  updatedAt: string;
-  commentCount: number;
-  snapshotHash: string;
-  url: string;
-}
-
-interface CommentRef {
-  id: string;
-  url: string;
-}
-
-interface ConnectionSummary {
-  id: string;
-  name: string;
-  details: Record<string, string>;
-  lastTestAt: string | null;
-  lastTestOk: boolean | null;
-}
 
 interface GitHubIssueRaw {
   number: number;
@@ -56,29 +35,23 @@ interface CommentRaw {
   html_url: string;
 }
 
-export class GitHubRepoProvider {
+export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> {
   readonly name = "github";
+  protected readonly label = "GitHub";
 
   private tokenCache = new Map<string, { token: string; expiresAt: number }>();
 
-  constructor(private connections: GitHubConnectionsService) {}
-
-  // ── RepoProvider surface ────────────────────────────────────────────
-
-  listConnections(): ConnectionSummary[] {
-    return this.connections.list().map((c) => ({
-      id: c.id,
-      name: c.name,
-      details: { app_id: c.app_id, installation_id: c.installation_id },
-      lastTestAt: c.last_test_at,
-      lastTestOk: c.last_test_ok == null ? null : c.last_test_ok === 1,
-    }));
+  constructor(connections: GitHubConnectionsService) {
+    super(connections);
   }
 
-  assertConnection(connectionId: string): void {
-    if (!this.connections.get(connectionId)) {
-      throw new Error(`GitHub connection not found: ${connectionId}`);
-    }
+  protected details(c: GitHubConnection): Record<string, string> {
+    return { app_id: c.app_id, installation_id: c.installation_id };
+  }
+
+  protected async whoami(conn: GitHubConnection): Promise<string> {
+    const data = await this.get<{ slug?: string; name?: string; id?: number }>(conn, `/app`);
+    return `OK — app id=${data.id ?? "?"} (${data.slug ?? data.name ?? "unnamed"})`;
   }
 
   async fetchOpenItems(repo: string, connectionId: string, maxPages = 50): Promise<RepoItem[]> {
@@ -98,8 +71,7 @@ export class GitHubRepoProvider {
 
   async fetchItem(repo: string, number: number, connectionId: string): Promise<RepoItem> {
     const conn = this.requireConnection(connectionId);
-    const it = await this.get<GitHubIssueRaw>(conn, `/repos/${repo}/issues/${number}`);
-    return toRepoItem(it);
+    return toRepoItem(await this.get<GitHubIssueRaw>(conn, `/repos/${repo}/issues/${number}`));
   }
 
   async upsertMarkedComment(
@@ -111,105 +83,47 @@ export class GitHubRepoProvider {
   ): Promise<CommentRef> {
     const conn = this.requireConnection(connectionId);
     const fullBody = body.includes(marker) ? body : `${marker}\n${body}`;
-    for (let page = 1; page <= 20; page++) {
-      const comments = await this.get<CommentRaw[]>(
-        conn,
-        `/repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`,
-      );
-      if (comments.length === 0) break;
-      const existing = comments.find((c) => c.body.includes(marker));
-      if (existing) {
-        const updated = await this.patch<CommentRaw>(
-          conn,
-          `/repos/${repo}/issues/comments/${existing.id}`,
-          { body: fullBody },
-        );
-        return { id: String(updated.id), url: updated.html_url };
-      }
-      if (comments.length < 100) break;
-    }
-    const created = await this.post<CommentRaw>(
-      conn,
-      `/repos/${repo}/issues/${number}/comments`,
-      { body: fullBody },
-    );
-    return { id: String(created.id), url: created.html_url };
+    const ref = (c: CommentRaw): CommentRef => ({ id: String(c.id), url: c.html_url });
+    return upsertMarked({
+      marker,
+      pageSize: 100,
+      listPage: (page) => this.get<CommentRaw[]>(conn, `/repos/${repo}/issues/${number}/comments?per_page=100&page=${page}`),
+      update: async (existing) =>
+        ref(await this.request<CommentRaw>(conn, "PATCH", `/repos/${repo}/issues/comments/${existing.id}`, { body: fullBody })),
+      create: async () =>
+        ref(await this.request<CommentRaw>(conn, "POST", `/repos/${repo}/issues/${number}/comments`, { body: fullBody })),
+    });
   }
 
   async closeItem(repo: string, number: number, connectionId: string): Promise<void> {
     const conn = this.requireConnection(connectionId);
-    await this.patch<unknown>(conn, `/repos/${repo}/issues/${number}`, { state: "closed" });
+    await this.request<unknown>(conn, "PATCH", `/repos/${repo}/issues/${number}`, { state: "closed" });
   }
 
-  async testConnection(connectionId: string): Promise<{ ok: boolean; detail: string }> {
-    const conn = this.connections.get(connectionId);
-    if (!conn) return { ok: false, detail: "connection not found" };
-    try {
-      const data = await this.get<{ slug?: string; name?: string; id?: number }>(conn, `/app`);
-      const detail = `OK — app id=${data.id ?? "?"} (${data.slug ?? data.name ?? "unnamed"})`;
-      this.connections.recordTest(connectionId, true, "");
-      return { ok: true, detail };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.connections.recordTest(connectionId, false, msg);
-      return { ok: false, detail: msg };
-    }
-  }
-
-  // ── HTTP layer ──────────────────────────────────────────────────────
-
-  private requireConnection(id: string): GitHubConnection {
-    const conn = this.connections.get(id);
-    if (!conn) throw new Error(`GitHub connection not found: ${id}`);
-    return conn;
-  }
-
-  private async request<T>(
-    conn: GitHubConnection,
-    method: "GET" | "POST" | "PATCH",
-    path: string,
-    body?: unknown,
-    attempt = 1,
-  ): Promise<T> {
-    const token = await this.installationToken(conn);
-    const res = await fetch(`${GITHUB_API}${path}`, {
+  private request<T>(conn: GitHubConnection, method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
+    return forgeRequest<T>({
+      label: "GitHub",
       method,
-      headers: {
-        Authorization: `Bearer ${token}`,
+      path,
+      url: `${GITHUB_API}${path}`,
+      headers: async () => ({
+        Authorization: `Bearer ${await this.installationToken(conn)}`,
         Accept: "application/vnd.github+json",
         "X-GitHub-Api-Version": API_VERSION,
-        "User-Agent": USER_AGENT,
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
+      }),
+      body,
+      retryOn: [403, 429],
+      resetHeader: "x-ratelimit-reset",
+      // An expired installation token: drop it, and the one retry mints a new one.
+      onUnauthorized: () => {
+        this.tokenCache.delete(cacheKey(conn));
+        return true;
       },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
     });
-    if (res.ok) {
-      if (res.status === 204) return undefined as T;
-      return (await res.json()) as T;
-    }
-    if (res.status === 401 && attempt === 1) {
-      this.tokenCache.delete(cacheKey(conn));
-      return this.request<T>(conn, method, path, body, attempt + 1);
-    }
-    if ((res.status === 403 || res.status === 429) && attempt <= 3) {
-      const waitMs = retryAfterMs(res);
-      if (waitMs > 0 && waitMs <= 60_000) {
-        await sleep(waitMs);
-        return this.request<T>(conn, method, path, body, attempt + 1);
-      }
-    }
-    const text = await res.text().catch(() => "");
-    throw new Error(`GitHub ${method} ${path} ${res.status}: ${text.slice(0, 300)}`);
   }
 
   private get<T>(conn: GitHubConnection, path: string): Promise<T> {
     return this.request<T>(conn, "GET", path);
-  }
-  private post<T>(conn: GitHubConnection, path: string, body: unknown): Promise<T> {
-    return this.request<T>(conn, "POST", path, body);
-  }
-  private patch<T>(conn: GitHubConnection, path: string, body: unknown): Promise<T> {
-    return this.request<T>(conn, "PATCH", path, body);
   }
 
   // ── Auth ────────────────────────────────────────────────────────────
@@ -229,13 +143,13 @@ export class GitHubRepoProvider {
           Authorization: `Bearer ${jwt}`,
           Accept: "application/vnd.github+json",
           "X-GitHub-Api-Version": API_VERSION,
-          "User-Agent": USER_AGENT,
+          "User-Agent": FORGE_USER_AGENT,
         },
       },
     );
     if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new Error(`GitHub installation token ${res.status}: ${body.slice(0, 300)}`);
+      const text = await res.text().catch(() => "");
+      throw new Error(`GitHub installation token ${res.status}: ${text.slice(0, 300)}`);
     }
     const data = (await res.json()) as { token: string; expires_at: string };
     this.tokenCache.set(key, {
@@ -245,8 +159,6 @@ export class GitHubRepoProvider {
     return data.token;
   }
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────
 
 function cacheKey(conn: GitHubConnection): string {
   return `${conn.id}:${conn.app_id}:${conn.installation_id}`;
@@ -266,20 +178,15 @@ function toRepoItem(raw: GitHubIssueRaw): RepoItem {
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
     commentCount: raw.comments,
-    snapshotHash: snapshotHash(raw, labels),
+    snapshotHash: snapshotHash({
+      title: raw.title,
+      state: raw.state,
+      labels: [...labels].sort().join(","),
+      comments: raw.comments,
+      updated_at: raw.updated_at,
+    }),
     url: raw.html_url,
   };
-}
-
-function snapshotHash(raw: GitHubIssueRaw, labels: string[]): string {
-  const payload = JSON.stringify({
-    title: raw.title,
-    state: raw.state,
-    labels: [...labels].sort().join(","),
-    comments: raw.comments,
-    updated_at: raw.updated_at,
-  });
-  return createHash("sha256").update(payload).digest("hex");
 }
 
 function signAppJwt(appId: string, privateKeyPem: string): string {
@@ -300,22 +207,4 @@ function base64url(text: string): string {
 
 function base64urlBuffer(buf: Buffer): string {
   return buf.toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-
-function retryAfterMs(res: Response): number {
-  const retryAfter = res.headers.get("retry-after");
-  if (retryAfter) {
-    const n = Number(retryAfter);
-    if (Number.isFinite(n)) return n * 1000;
-  }
-  const reset = res.headers.get("x-ratelimit-reset");
-  if (reset) {
-    const ms = Number(reset) * 1000 - Date.now();
-    return Math.max(0, ms);
-  }
-  return 0;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }

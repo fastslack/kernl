@@ -12,7 +12,7 @@
    */
   import { tick } from 'svelte';
   import { getCommDetail } from '$lib/api.js';
-  import { sanitizeHtml } from '$lib/sanitize.js';
+  import { sanitizeHtml } from '$shared/sanitize';
   import { fmtClock } from '$lib/display-format.js';
 
   let emailModalOpen = false;

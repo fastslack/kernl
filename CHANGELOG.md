@@ -7,6 +7,171 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Upgrading from 0.3.2
+
+- **Without `TIMEZONE`, the kernel now uses this machine's timezone**, not
+  UTC. On a Mac that is your own zone; in a container it is still UTC. It
+  moves more than "today": **scheduled agents run at that local time** (an
+  agent set for `0 8 * * *` ran at 08:00 UTC and now runs at 08:00 yours).
+  Set `TIMEZONE=UTC` to keep the old behaviour.
+- **Reminder and event times given without a zone are local time.**
+  `2026-03-01T09:00` meant nothing definite before (reminders compared it as
+  if it were UTC); it is now 09:00 in `TIMEZONE`. Existing reminders and
+  events stored that way are rewritten as UTC instants on the first boot,
+  read the same way. Times with `Z` or an offset are unchanged.
+- **Set `KERNEL_ENCRYPTION_KEY` before upgrading if you use GitHub, GitLab or
+  Gitea connections, and keep it.** Their tokens and GitHub App private keys
+  were stored in plaintext; with a key configured they are encrypted on the
+  first boot. Changing or losing the key afterwards makes them unreadable:
+  re-add the connection. Without a key they stay as they were.
+- **Creating a contact with a phone or email that already exists merges into
+  that contact** instead of adding a duplicate, on every road (tool, RPC,
+  HTTP) — it now goes through the same service as the MCP tool.
+- **Deleting a task over HTTP is a soft delete** now, like everywhere else;
+  a deleted task no longer appears in the dashboard list.
+- **Inbound email (`POST /api/comms/inbound`) needs `COMMS_INBOUND_TOKEN`**,
+  sent in the `X-Inbound-Token` header. A relay that sent `?token=` or relied
+  on the token being unset stops delivering until it is updated.
+- **An empty or malformed request body is a 400** (413 when over 10 MB) on
+  the HTTP API, where most routes used to answer 500. Some 500 messages now
+  read `Error: …`.
+
+### Added
+
+- **ECC as a default skill source.** The marketplace catalog now subscribes to
+  [affaan-m/ECC](https://github.com/affaan-m/ECC) (MIT, ~290 skills), pinned to
+  `v2.2.1`. Only the subscription is added — no skill is installed. It lands
+  once per database, so unsubscribing sticks. The catalog fills on the next
+  repo sync (every 6 hours, or "Sync" in the marketplace).
+- **The top agent's channel runs on any connected model**, with a model
+  picker in its header; providers that are logged out stay in the menu,
+  dimmed, with the reason.
+- **Update progress shows in the banner**, not only in Settings → About.
+- **Job hunting is an extension** (`automation/job-hunter`), installed and
+  active by default; its handlers keep their names, so existing agents keep
+  working.
+
+### Fixed
+
+- **Long replies on Discord and Telegram were lost.** The platforms reject a
+  message over 2000 / 4096 characters and nothing split it; replies are now
+  split at paragraph, line or word boundaries, keeping code blocks intact.
+- **Extension pages dropped the text of sanitised content** (RSS items, news,
+  email bodies and threads): the shared sanitiser stripped text nodes.
+- **A slow dashboard write could run twice.** When the WebSocket was slow the
+  dashboard also sent the request over HTTP, so a slow "Run", "Create" or
+  "Publish" could execute twice. Writes now go by one road only, and an error
+  the kernel answered is not retried.
+- **The dashboard's two roads answered differently.** Every action reachable
+  by WebSocket RPC and HTTP now runs one function. Among what that fixed:
+  "Run now" over WebSocket left `{{event.*}}` in the goal and skipped the
+  circuit breaker; agent updates over WebSocket dropped fields such as
+  wake-on-inbox; chat over WebSocket lost attachments; news column feeds and
+  the architecture map never worked over WebSocket; failures were shown as
+  success.
+- **Food search always failed** (nutrition, including the MCP tool).
+- **Other fixes found while unifying:** an RSS feed could not be disabled
+  over WebSocket; the training page's actions never reached the kernel over
+  WebSocket; removing a shopping item over HTTP answered 404; deleting a
+  contact with interactions failed; creating a learning resource without every
+  field failed; a `#tag` in notes search was a syntax error; a finance
+  transaction stored a signed amount but moved the balance by its absolute
+  value; `GET /api/agents/:id/memory` ignored `?limit=`; revoking an MCP
+  server's sign-in never did anything; the Google status fallback asked the
+  wrong endpoint.
+- **An office draft that fails validation gets one repair attempt**, and the
+  error names the model that failed.
+- **"Today" was the UTC day.** In UTC-3 it became tomorrow at 21:00: the
+  morning briefing, due-today and overdue tasks, the calendar, the agenda,
+  "completed today" counts and the date agents are told all switched early,
+  and an evening event or reminder showed up under the next day. Every day
+  boundary now follows `TIMEZONE`, and times in briefings and notifications
+  are shown in it.
+- **A daily or weekly reminder drifted an hour at each DST change**; it keeps
+  its local time now. `/remind … at 9am` meant 09:00 in the server's zone
+  (UTC in a container); it means yours.
+- **A reminder due earlier today did not count as overdue** in `/status` and
+  the briefings until the next day (its time was compared as text against a
+  differently formatted "now").
+- **Listing events up to a date left out that day's events.**
+- **A migration that failed halfway stayed half-applied**, unrecorded, and ran
+  again on the next boot over the partial schema. Each migration now applies
+  whole or not at all.
+- **Tools took any `limit`.** 37 tools passed an unbounded `limit` straight
+  to SQL; it is now capped per tool (a larger value is clamped, not refused).
+  Tool arguments with a default are no longer listed as required, and
+  `.optional().default()` arguments are published with their real type.
+- **System → Processes always said "System registry not available".** The
+  page never subscribed to the channel it reads, and the channel left out
+  the `available` flag the page waits for.
+- **A campaign's page showed no recipients**; it now lists each one with its
+  status and error, and counts sent, failed and pending.
+- **Channel settings opened empty.** The WhatsApp and generic channel forms
+  read a field nothing sent; they now show the saved configuration, with
+  password fields masked.
+- **Creating, pausing or cancelling a subscription could silently do nothing**
+  when the live connection was down; it now falls back to HTTP.
+- **A run that failed before starting stayed "active" forever** (no tools, no
+  usable provider): it is now always removed from the active runs.
+- **A provider's rate-limit reset of `750ms` was read as 750 minutes**, and
+  so waited the 15-second cap. Milliseconds and hours are now understood.
+
+### Security
+
+- **A workspace tool no longer takes the caller's office from an argument.**
+  An explicit `flow_id` used to override the caller's identity, so any agent
+  could reach another office's private workspaces. CLI agents, whose identity
+  arrives with the request, also get their own office now.
+- **Attachments and chat streams answered `Access-Control-Allow-Origin: *`.**
+  They follow the server's opt-in CORS allow-list now. HTML and SVG
+  attachments download instead of rendering inline from the kernel's origin.
+- **Forge credentials are encrypted at rest** (see Upgrading). A connection
+  whose credentials the current key can't open is flagged as unreadable, says
+  so in its test and list, and is never sent to the forge.
+- **`POST /api/comms/inbound` failed open.** Without `COMMS_INBOUND_TOKEN` it
+  accepted any email; it now answers 503 until the token is set, accepts it
+  only in the `X-Inbound-Token` header (no longer `?token=`), and compares it
+  in constant time.
+- **Twitter/X API keys, tokens and cookies were sent to the dashboard** in
+  every account listing. They are masked now; leaving a credential blank when
+  editing keeps the stored one. Channel settings mask their secrets the same
+  way.
+- **comms updates wrote any column a caller named.** The service now enforces
+  its own column allow-list.
+
+### Changed
+
+- Large internal restructuring with no intended change in behaviour beyond
+  the above: one HTTP route helper, one operation per dashboard action, typed
+  tools and module factories in the extension SDK, shared channel and forge
+  plumbing, the agent executor split into phases, one retry and fallback loop
+  in the LLM layer, one frontend library shared by the dashboard and extension
+  pages, calendar sources contributed by the modules that own them, and
+  generated extension entry points.
+
+## [0.3.2] - 2026-09-18
+
+### Added
+
+- **Connect any LLM provider from one screen.**
+- **Extensions import the kernel from a versioned SDK**, and read credentials
+  through it.
+
+### Fixed
+
+- A bad model name no longer takes a whole provider down.
+- The provider catalog's assets ship with the install.
+- The setup wizard's footer no longer stacks under the sidebar's styles.
+- An update is handed off only to a helper that actually started.
+- Orphaned processes in the kernel container are reaped.
+- Old agent runs are pruned again (the Data Cleanup agent is seeded), and the
+  agents dashboard stops scanning `agent_runs`.
+- archive.org: ingest runs close when their cursor stops advancing, the
+  scrape API is asked for at least 100 rows, and catalog indexes rebuild only
+  when new titles arrive, at most hourly during a backfill.
+- The sent-email viewer closes with Escape.
+- Errors are logged with their message and stack instead of `{}`.
+
 ## [0.3.1] - 2026-09-13
 
 ### Upgrading from 0.3.0 or earlier

@@ -10,7 +10,7 @@ export type { Neo4jClient } from "../core/db/neo4j.js";
 export type { GraphDriver, GraphResult } from "../core/db-drivers/graph-driver.js";
 export type { EventBus } from "../core/event-bus.js";
 export type { KernelConfig, KernelLanguage } from "../core/config.js";
-export type { KernelHttpServer } from "../core/http-server.js";
+export type { KernelHttpServer, RouteMethod, RouteContext, RouteOptions } from "../core/http-server.js";
 export type { RpcAction } from "../core/mtw/rpc-handler.js";
 export type { SystemRegistry } from "../core/system-registry.js";
 export type { ModuleRegistry } from "../core/module-registry.js";

@@ -1,4 +1,4 @@
-const en: Record<string, string> = {
+const en = {
   "llm.title": "Connect your AI",
   "llm.lede": "Which AI should Kernl think with?",
   "llm.group.free": "Free",
@@ -83,5 +83,9 @@ const en: Record<string, string> = {
   "llm.banner_fix": "Set up AI",
   "llm.banner_dismiss": "Dismiss",
   "llm.configure_in_settings": "Configure in Settings → AI",
-};
+} satisfies Record<string, string>;
+
+/** Every key of the LLM-connect strings. `llm-connect.es.ts` is typed against it. */
+export type LlmConnectKey = keyof typeof en;
+
 export default en;

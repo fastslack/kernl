@@ -37,7 +37,7 @@
  * Nothing here is scheduled. The demo only ever runs when somebody asks for it.
  */
 
-import { log, type EventBus } from "@kernl/extension-sdk";
+import { log, sleep, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { Agent, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-handlers.js";
@@ -174,10 +174,6 @@ const SCRIPT: Record<Lang, {
  * `engineeringStandupBusy` in demo-handlers.ts.
  */
 let boardCrisisBusy = false;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 /** Rank level, or -1 for an agent with no rank assigned. */
 function levelOf(service: AgentService, a: Agent): number {

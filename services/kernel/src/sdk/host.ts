@@ -63,6 +63,12 @@ export interface KernlHost {
   mediaToolError(tool: MediaTool, cause?: unknown): Error;
   peering(): PeeringService | null;
   verifyPeerRequest: typeof verifyRequest;
+  /**
+   * The kernel's TIMEZONE setting (IANA name), read live. Optional so a
+   * bundle built now still runs on a kernel whose host predates it; the
+   * SDK's clock then answers in UTC, as it always did.
+   */
+  timezone?(): string;
 }
 
 const HOST_KEY = Symbol.for("kernl.host");
@@ -121,6 +127,7 @@ const defaultHost: KernlHost = Object.freeze({
   mediaToolError: () => notInstalled("mediaToolError"),
   peering: () => null,
   verifyPeerRequest: () => notInstalled("verifyPeerRequest"),
+  timezone: () => "UTC",
 });
 
 /** The installed host, or the default one when no kernel is running. */

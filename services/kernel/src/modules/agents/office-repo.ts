@@ -9,13 +9,14 @@ import { isAbsolute, join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
+import { HttpError } from "../../sdk/http-error.js";
 import { seedOfficeHome } from "./office-home.js";
 import type { AgentService } from "./service.js";
 import type { AgentFlow } from "./types.js";
 
-export class OfficeRepoError extends Error {
-  constructor(message: string, readonly status: 400 | 404) {
-    super(message);
+export class OfficeRepoError extends HttpError {
+  constructor(message: string, status: 400 | 404) {
+    super(status, message);
     this.name = "OfficeRepoError";
   }
 }

@@ -2,13 +2,7 @@
  * Lights module - Control LED devices via WLED, Tasmota, etc.
  */
 
-import {
-  type DashboardDescriptor,
-  type ExtensibleModule,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-} from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { lightsMigrations } from "./migrations/001_lights.js";
 import { LightsService } from "./service.js";
 import { lightsTools } from "./tools.js";
@@ -19,44 +13,21 @@ export interface LightsModule extends ExtensibleModule {
 }
 
 export function createLightsModule(): LightsModule {
-  let tools: ToolDefinition[] = [];
   let serviceRef: LightsService | null = null;
 
-  return {
+  const mod = defineModule({
     name: "lights",
-
-    async initialize(ctx: ModuleContext) {
-      // Run SQLite migrations
-      runMigrations(ctx.sqlite, "lights", lightsMigrations);
-
-      // Create service
-      const service = new LightsService(ctx.sqlite);
-      serviceRef = service;
-
-      // Register tools
-      tools = lightsTools(service);
-    },
-
-    getTools() {
-      return tools;
-    },
-
-    getService() {
+    migrations: lightsMigrations,
+    init(ctx) {
+      serviceRef = new LightsService(ctx.sqlite);
       return serviceRef;
     },
-
-    getDashboardDescriptor(): DashboardDescriptor | null {
-      if (!serviceRef) return null;
-      const service = serviceRef;
-      return {
-        registerRoutes: (server) => registerLightsRoutes(server, service),
-      };
-    },
-
-    async shutdown() {
-      // No cleanup needed
-    },
-  };
+    tools: lightsTools,
+    // No descriptor until the service exists.
+    dashboard: (service) =>
+      service ? { registerRoutes: (server) => registerLightsRoutes(server, service) } : null,
+  });
+  return Object.assign(mod, { getService: () => serviceRef });
 }
 
 // Re-export types for external use

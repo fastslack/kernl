@@ -40,14 +40,19 @@ export function runMigrations(
 
   const sorted = [...migrations].sort((a, b) => a.version - b.version);
 
+  // One transaction per migration, bookkeeping included: a multi-statement
+  // migration that fails partway used to leave its first statements applied
+  // and unrecorded, so the next boot re-ran it against a half-migrated schema.
+  // (A PRAGMA that must run outside a transaction, like foreign_keys, does
+  // not belong in a migration; see comms' ensureEmailAccountsSchema.)
+  const apply = db.transaction((m: Migration) => {
+    db.exec(m.sql);
+    db.prepare("INSERT INTO _migrations (module, version) VALUES (?, ?)").run(moduleName, m.version);
+  });
+
   for (const m of sorted) {
     if (applied.has(m.version)) continue;
-
     log.info(`Migration ${moduleName}@${m.version}`);
-    db.exec(m.sql);
-    db.prepare("INSERT INTO _migrations (module, version) VALUES (?, ?)").run(
-      moduleName,
-      m.version,
-    );
+    apply(m);
   }
 }

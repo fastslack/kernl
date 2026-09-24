@@ -1,4 +1,4 @@
-import { type ExtensibleModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { linkedinMigrations } from "./migrations/001_linkedin.js";
 import { LinkedInService } from "./service.js";
 import { linkedinTools } from "./tools.js";
@@ -8,29 +8,18 @@ export interface LinkedInModule extends ExtensibleModule {
 }
 
 export function createLinkedInModule(): LinkedInModule {
-  let tools: ToolDefinition[] = [];
   let serviceRef: LinkedInService | null = null;
 
-  return {
+  const mod = defineModule({
     name: "linkedin",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "linkedin", linkedinMigrations);
-      const service = new LinkedInService(ctx.sqlite);
-      serviceRef = service;
-      tools = linkedinTools(service);
-    },
-
-    getTools() {
-      return tools;
-    },
-
-    getService() {
+    migrations: linkedinMigrations,
+    init(ctx) {
+      serviceRef = new LinkedInService(ctx.sqlite);
       return serviceRef;
     },
-
-    async shutdown() {},
-  };
+    tools: linkedinTools,
+  });
+  return Object.assign(mod, { getService: () => serviceRef });
 }
 
 export default createLinkedInModule;

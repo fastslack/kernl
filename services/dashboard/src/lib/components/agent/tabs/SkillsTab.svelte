@@ -53,6 +53,7 @@
                mounted the drawer can patch its own copy without a refetch
 -->
 <script lang="ts">
+  import { readApiError } from '$lib/api.js';
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onDestroy } from 'svelte';
   import {
@@ -376,8 +377,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: idOrSlug })
       });
-      const body = (await r.json().catch(() => ({}))) as { error?: string };
-      if (!r.ok) throw new Error(String(body.error ?? `HTTP ${r.status}`));
+      if (!r.ok) throw new Error(String((await readApiError(r)) ?? `HTTP ${r.status}`));
 
       // The shared cache is now stale for every surface, not only this one.
       invalidateSkillsCache();

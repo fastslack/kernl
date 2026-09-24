@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
+import { defineTool, defineToolNoInput, textResult, errorResult, type ToolDefinition, limitArg } from "@kernl/extension-sdk";
 import type { LearningService } from "./service.js";
 
 export function learningTools(svc: LearningService): ToolDefinition[] {
   return [
     // ── Resources ─────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_learning_add",
       description: "Add a book, article, course, paper, podcast or video to track",
-      inputSchema: z.object({
+      schema: z.object({
         title: z.string(),
         type: z.enum(["book", "article", "course", "paper", "podcast", "video", "other"]).optional().default("book"),
         author: z.string().optional(),
@@ -22,19 +22,15 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         tags: z.array(z.string()).optional(),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        try {
-          const r = svc.addResource(args as any);
-          return textResult(`Added to learning list: **${r.title}** (${r.type}) — status: ${r.status}`);
-        } catch (e) {
-          return errorResult(String(e));
-        }
+      handler: async (input) => {
+        const r = svc.addResource(input);
+        return textResult(`Added to learning list: **${r.title}** (${r.type}) — status: ${r.status}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_learning_update",
       description: "Update progress or status of a learning resource",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string(),
         status: z.enum(["wishlist", "in_progress", "completed", "abandoned", "paused"]).optional(),
         current_page: z.number().optional(),
@@ -46,24 +42,23 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         started_at: z.string().optional(),
         completed_at: z.string().optional(),
       }),
-      handler: async (args) => {
-        const { id, ...changes } = args as { id: string; [key: string]: unknown };
-        const r = svc.updateResource(id, changes as any);
+      handler: async ({ id, ...changes }) => {
+        const r = svc.updateResource(id, changes);
         if (!r) return errorResult("Resource not found");
         return textResult(`Updated: **${r.title}** — status: ${r.status}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_learning_list",
       description: "List learning resources with optional filters",
-      inputSchema: z.object({
+      schema: z.object({
         type: z.enum(["book", "article", "course", "paper", "podcast", "video", "other"]).optional(),
         status: z.enum(["wishlist", "in_progress", "completed", "abandoned", "paused"]).optional(),
         search: z.string().optional(),
-        limit: z.number().optional().default(50),
+        limit: limitArg(200).default(50),
       }),
-      handler: async (args) => {
-        const resources = svc.listResources(args as any);
+      handler: async (input) => {
+        const resources = svc.listResources(input);
         if (!resources.length) return textResult("No learning resources found.");
         const lines = resources.map(r => {
           const progress = r.total_pages > 0
@@ -73,11 +68,10 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         });
         return textResult(`## Learning Resources (${resources.length})\n${lines.join("\n")}`);
       },
-    },
-    {
+    }),
+    defineToolNoInput({
       name: "kernel_learning_current",
       description: "Get currently in-progress learning resources",
-      inputSchema: z.object({}),
       handler: async () => {
         const resources = svc.getCurrentlyReading();
         if (!resources.length) return textResult("Nothing currently in progress.");
@@ -89,11 +83,10 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         });
         return textResult(`## Currently Learning\n${lines.join("\n")}`);
       },
-    },
-    {
+    }),
+    defineToolNoInput({
       name: "kernel_learning_stats",
       description: "Get learning statistics (totals, due flashcards, highlights)",
-      inputSchema: z.object({}),
       handler: async () => {
         const stats = svc.getStats();
         const statusLines = Object.entries(stats.by_status).map(([k, v]) => `  - ${k}: ${v}`);
@@ -107,33 +100,28 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
           `\n**By Type:**\n${typeLines.join("\n")}`,
         ].join("\n"));
       },
-    },
+    }),
 
     // ── Highlights ─────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_learning_add_highlight",
       description: "Save a highlight, note, or quote from a resource",
-      inputSchema: z.object({
+      schema: z.object({
         resource_id: z.string(),
         content: z.string(),
         location: z.string().optional().describe("Page number, chapter, or timestamp"),
         type: z.enum(["highlight", "note", "quote", "action_item", "question"]).optional().default("highlight"),
       }),
-      handler: async (args) => {
-        try {
-          const h = svc.addHighlight(args as any);
-          return textResult(`Highlight saved (${h.type})${h.location ? ` at ${h.location}` : ""}`);
-        } catch (e) {
-          return errorResult(String(e));
-        }
+      handler: async (input) => {
+        const h = svc.addHighlight(input);
+        return textResult(`Highlight saved (${h.type})${h.location ? ` at ${h.location}` : ""}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_learning_highlights",
       description: "List all highlights/notes for a resource",
-      inputSchema: z.object({ resource_id: z.string() }),
-      handler: async (args) => {
-        const { resource_id } = args as { resource_id: string };
+      schema: z.object({ resource_id: z.string() }),
+      handler: async ({ resource_id }) => {
         const highlights = svc.listHighlights(resource_id);
         if (!highlights.length) return textResult("No highlights yet.");
         const lines = highlights.map(h =>
@@ -141,37 +129,32 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         );
         return textResult(`## Highlights (${highlights.length})\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
     // ── Flashcards ─────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_learning_add_card",
       description: "Add a flashcard for spaced repetition review",
-      inputSchema: z.object({
+      schema: z.object({
         front: z.string().describe("Question or front of card"),
         back: z.string().describe("Answer or back of card"),
         deck: z.string().optional().default("general"),
         resource_id: z.string().optional(),
         tags: z.array(z.string()).optional(),
       }),
-      handler: async (args) => {
-        try {
-          const card = svc.addFlashcard(args as any);
-          return textResult(`Flashcard added to deck **${card.deck}** — due: ${card.next_review}`);
-        } catch (e) {
-          return errorResult(String(e));
-        }
+      handler: async (input) => {
+        const card = svc.addFlashcard(input);
+        return textResult(`Flashcard added to deck **${card.deck}** — due: ${card.next_review}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_learning_due_cards",
       description: "Get flashcards due for review today",
-      inputSchema: z.object({
+      schema: z.object({
         deck: z.string().optional(),
-        limit: z.number().optional().default(20),
+        limit: limitArg(200).default(20),
       }),
-      handler: async (args) => {
-        const { deck, limit } = args as { deck?: string; limit?: number };
+      handler: async ({ deck, limit }) => {
         const cards = svc.getDueCards(deck, limit ?? 20);
         if (!cards.length) return textResult("No cards due for review!");
         const lines = cards.map(c =>
@@ -179,57 +162,50 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         );
         return textResult(`## Due Cards (${cards.length})\n${lines.join("\n\n")}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_learning_review_card",
       description: "Review a flashcard with a quality score (SM-2 spaced repetition)",
-      inputSchema: z.object({
+      schema: z.object({
         card_id: z.string(),
         quality: z.number().min(0).max(5).describe("0=blackout, 1=wrong, 2=wrong but familiar, 3=correct with effort, 4=correct, 5=perfect"),
       }),
-      handler: async (args) => {
-        const { card_id, quality } = args as { card_id: string; quality: number };
+      handler: async ({ card_id, quality }) => {
         const card = svc.reviewCard(card_id, quality);
         if (!card) return errorResult("Card not found");
         return textResult(
           `Card reviewed (quality: ${quality}/5)\n- Next review: **${card.next_review}** (in ${card.interval_days} days)\n- Ease factor: ${card.ease_factor.toFixed(2)}`
         );
       },
-    },
-    {
+    }),
+    defineToolNoInput({
       name: "kernel_learning_decks",
       description: "List flashcard decks with due card counts",
-      inputSchema: z.object({}),
       handler: async () => {
         const decks = svc.listDecks();
         if (!decks.length) return textResult("No flashcard decks yet.");
         const lines = decks.map(d => `- **${d.deck}**: ${d.total} cards, ${d.due} due`);
         return textResult(`## Flashcard Decks\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Goals ─────────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_learning_add_goal",
       description: "Add a learning goal or curriculum",
-      inputSchema: z.object({
+      schema: z.object({
         title: z.string(),
         description: z.string().optional(),
         target_date: z.string().optional(),
       }),
-      handler: async (args) => {
-        try {
-          const goal = svc.addGoal(args as any);
-          return textResult(`Learning goal added: **${goal.title}** (\`${goal.id}\`)`);
-        } catch (e) {
-          return errorResult(String(e));
-        }
+      handler: async (input) => {
+        const goal = svc.addGoal(input);
+        return textResult(`Learning goal added: **${goal.title}** (\`${goal.id}\`)`);
       },
-    },
-    {
+    }),
+    defineToolNoInput({
       name: "kernel_learning_goals",
       description: "List all learning goals",
-      inputSchema: z.object({}),
       handler: async () => {
         const goals = svc.listGoals();
         if (!goals.length) return textResult("No learning goals set.");
@@ -238,24 +214,19 @@ export function learningTools(svc: LearningService): ToolDefinition[] {
         );
         return textResult(`## Learning Goals\n${lines.join("\n")}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_learning_add_to_goal",
       description: "Add a resource to a learning goal",
-      inputSchema: z.object({
+      schema: z.object({
         goal_id: z.string(),
         resource_id: z.string(),
         order: z.number().optional().default(0),
       }),
-      handler: async (args) => {
-        const { goal_id, resource_id, order } = args as { goal_id: string; resource_id: string; order?: number };
-        try {
-          svc.addResourceToGoal(goal_id, resource_id, order);
-          return textResult(`Resource added to goal.`);
-        } catch (e) {
-          return errorResult(String(e));
-        }
+      handler: async ({ goal_id, resource_id, order }) => {
+        svc.addResourceToGoal(goal_id, resource_id, order);
+        return textResult(`Resource added to goal.`);
       },
-    },
+    }),
   ];
 }

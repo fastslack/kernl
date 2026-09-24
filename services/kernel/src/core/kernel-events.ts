@@ -341,7 +341,3 @@ export interface KernelEvents {
  */
 export type KernelEventName = keyof KernelEvents;
 
-/**
- * Helper type to get payload type for a specific event
- */
-export type KernelEventPayload<K extends KernelEventName> = KernelEvents[K];

@@ -1,10 +1,4 @@
-import {
-  type KernelModule,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  log,
-} from "@kernl/extension-sdk";
+import { type KernelModule, defineModule, log } from "@kernl/extension-sdk";
 import { lifeMigrations } from "./life-migrations.js";
 import { LifeService } from "./life-service.js";
 import { lifeDashboardRpcActions } from "./dashboard-rpc-actions.js";
@@ -18,35 +12,25 @@ export interface LifeModule extends KernelModule {
 }
 
 export function createLifeModule(): LifeModule {
+  // Kept outside the module state: shutdown() drops it, and both
+  // getService() and the dashboard RPC actions go empty afterwards.
   let service: LifeService | null = null;
-  let tools: ToolDefinition[] = [];
 
-  return {
+  const mod = defineModule({
     name: "life",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "life", lifeMigrations);
+    migrations: lifeMigrations,
+    init(ctx) {
       service = new LifeService(ctx.sqlite, ctx.config.life, ctx.systemRegistry);
-      tools = lifeTools(service, ctx.sqlite);
       log.info("life module initialized");
-    },
-
-    getTools(): ToolDefinition[] {
-      return tools;
-    },
-
-    getService() {
       return service;
     },
-
-    getDashboardRpcActions() {
-      return service ? lifeDashboardRpcActions({ lifeService: service }) : [];
-    },
-
-    async shutdown() {
+    tools: (s, ctx) => lifeTools(s, ctx.sqlite),
+    dashboardRpc: () => (service ? lifeDashboardRpcActions({ lifeService: service }) : []),
+    shutdown() {
       service = null;
     },
-  };
+  });
+  return Object.assign(mod, { getService: () => service });
 }
 
 export default createLifeModule;

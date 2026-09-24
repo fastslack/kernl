@@ -8,7 +8,8 @@
  * ── Coupling shape with extensions ─────────────────────────────────────
  * This file only contains KERNEL-GENERIC handlers (checks, proactive
  * briefings, marketplace/model-discovery, reflection, plus the sub-registries
- * for scripts / job scrapers / skill suggester / personal scrapers).
+ * for scripts / skill suggester / personal scrapers). The job-board scrapers
+ * (`scraper:jobs:*`) are drivers of the job-hunter extension.
  *
  * Extension-owned handlers do NOT live here anymore. Each extension ships its
  * own `AgentDriver[]` via `KernelModule.getAgentDrivers()` (see
@@ -27,7 +28,8 @@ import type { Notifier } from "../../core/notify/notifier.js";
 import type { KernelConfig } from "../../core/config.js";
 import type { AgentDriverResult } from "../../core/types.js";
 import { log } from "../../core/logger.js";
-import { safeQuery, safeQueryOne } from "../../core/db/query-helpers.js";
+import { safeQuery, safeQueryOne, today, daysFromNow } from "../../core/db/query-helpers.js";
+import { localDayRange, localDateOf, kernelTimezone } from "../../sdk/clock.js";
 import { messagesFor, localeFor } from "./builtin-messages.js";
 import {
   CHECK_PROBES,
@@ -129,17 +131,18 @@ function digestHandler(ctx: BuiltinHandlerContext, def: CheckDigestDef): Builtin
 
 function morningBriefing(ctx: BuiltinHandlerContext): BuiltinHandler {
   return async () => {
+    const day = today();
     const todayTasks = safeQueryOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = date('now')`,
+      `SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = ?`, day,
     )?.c ?? 0;
 
     const overdueTasks = safeQueryOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND due_date < date('now')`,
+      `SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND due_date < ?`, day,
     )?.c ?? 0;
 
     const upcomingReminders = safeQuery<{ title: string; trigger_at: string }>(ctx.db,
       `SELECT title, trigger_at FROM reminders
-       WHERE status = 'active' AND trigger_at > datetime('now') AND trigger_at < datetime('now', '+12 hours')
+       WHERE status = 'active' AND datetime(trigger_at) > datetime('now') AND datetime(trigger_at) < datetime('now', '+12 hours')
        ORDER BY trigger_at LIMIT 5`,
     );
 
@@ -153,7 +156,7 @@ function morningBriefing(ctx: BuiltinHandlerContext): BuiltinHandler {
     if (upcomingReminders.length > 0) {
       lines.push(t.upcomingReminders);
       for (const r of upcomingReminders) {
-        const time = new Date(r.trigger_at).toLocaleTimeString(locale, { hour: "2-digit", minute: "2-digit" });
+        const time = new Date(r.trigger_at).toLocaleTimeString(locale, { timeZone: kernelTimezone(), hour: "2-digit", minute: "2-digit" });
         lines.push(`• ${time} — ${r.title}`);
       }
     }
@@ -173,8 +176,10 @@ function morningBriefing(ctx: BuiltinHandlerContext): BuiltinHandler {
 
 function eveningSummary(ctx: BuiltinHandlerContext): BuiltinHandler {
   return async () => {
+    const [dayStart, dayEnd] = localDayRange();
     const completedToday = safeQueryOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM tasks WHERE status = 'done' AND date(updated_at) = date('now')`,
+      `SELECT COUNT(*) as c FROM tasks WHERE status = 'done'
+         AND datetime(updated_at) >= datetime(?) AND datetime(updated_at) < datetime(?)`, dayStart, dayEnd,
     )?.c ?? 0;
 
     const remainingTasks = safeQueryOne<{ c: number }>(ctx.db,
@@ -182,11 +187,12 @@ function eveningSummary(ctx: BuiltinHandlerContext): BuiltinHandler {
     )?.c ?? 0;
 
     const tomorrowTasks = safeQueryOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = date('now', '+1 day')`,
+      `SELECT COUNT(*) as c FROM tasks WHERE status NOT IN ('done', 'cancelled') AND date(due_date) = ?`, daysFromNow(1),
     )?.c ?? 0;
 
     const firedReminders = safeQueryOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM reminders WHERE date(last_fired_at) = date('now')`,
+      `SELECT COUNT(*) as c FROM reminders
+        WHERE datetime(last_fired_at) >= datetime(?) AND datetime(last_fired_at) < datetime(?)`, dayStart, dayEnd,
     )?.c ?? 0;
 
     const t = messagesFor(ctx.config?.language).evening;
@@ -498,7 +504,7 @@ function reflectWorkspaces(ctx: BuiltinHandlerContext): BuiltinHandler {
         const accepted = history.filter((h) => h.status === "accepted").length;
         const rejected = history.filter((h) => h.status === "rejected").length;
         const last = history[0];
-        const lastSlug = last ? `${last.status}@${last.created_at.slice(0, 10)}` : "no runs";
+        const lastSlug = last ? `${last.status}@${localDateOf(last.created_at)}` : "no runs";
         lines.push(
           `• ${ws.name} (${ws.id.slice(0, 8)}) — head ${state.head_ref?.slice(0, 8) ?? "?"} — ${accepted}✓/${rejected}✗ — last ${lastSlug}`,
         );
@@ -553,7 +559,6 @@ try {
 // ── Registry ───────────────────────────────────
 
 import { createScriptHandlers } from "./script-handlers.js";
-import { registerJobScrapers } from "./job-scrapers.js";
 import { registerSkillSuggester } from "./skill-suggester.js";
 
 /**
@@ -565,13 +570,15 @@ import { registerSkillSuggester } from "./skill-suggester.js";
  * `ModuleRegistry.collectAgentDrivers()`.
  *
  * Deliberately NOT included here (each has its own registration path):
- *   - extension handlers (cinema/comms/social/gsync/trading/torrents…) —
- *     they ship as AgentDrivers inside their own extensions now;
+ *   - extension handlers (cinema/comms/social/gsync/trading/torrents/
+ *     job-hunter…) — they ship as AgentDrivers inside their own extensions
+ *     now (job-hunter's drivers carry no cron: its agent rows are seeded
+ *     manually by scripts/seeds/jobs-office.ts);
  *   - `llm:model-discovery` (seed-model-discovery-agent.ts, env-gated);
  *   - the skill suggester (seed-skill-suggester.ts — commander flow);
- *   - job scrapers / CLI scripts / personal scrapers — their handlers are
- *     registered below but agent rows are seeded manually (scripts/seeds/*)
- *     or per-instance, exactly as before.
+ *   - CLI scripts / personal scrapers — their handlers are registered below
+ *     but agent rows are seeded manually (scripts/seeds/*) or per-instance,
+ *     exactly as before.
  */
 export const KERNEL_AGENT_DEFS: Array<{
   handler: string;
@@ -635,9 +642,6 @@ export function createBuiltinHandlers(ctx: BuiltinHandlerContext): Map<string, B
 
   // Scrapers — delegated to personal-scrapers.ts when present (gitignored).
   registerPersonalScrapers?.(map, ctx);
-
-  // Job-board scrapers (generic, always available).
-  registerJobScrapers(map, ctx);
 
   // Skill Suggester — deterministic scanner that proposes installed skills
   // to attach to each agent. Lives in the commander's flow; runs daily.

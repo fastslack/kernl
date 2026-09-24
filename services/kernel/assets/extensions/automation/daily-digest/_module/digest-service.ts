@@ -4,7 +4,7 @@
  * scope to the user's personal items (tasks / events / reminders), exclude
  * soft-deleted tasks, and anchor "today/tomorrow" to Europe/Amsterdam.
  */
-import type { SqliteDb } from "@kernl/extension-sdk";
+import { type SqliteDb, dayStart } from "@kernl/extension-sdk";
 import { amsterdamParts } from "./scheduler.js";
 
 export interface DigestContent {
@@ -39,7 +39,7 @@ function eventsOn(db: SqliteDb, dateKey: string): Array<{ title: string; start_a
        WHERE status NOT IN ('cancelled','completed') AND start_at >= ? AND start_at < ?
        ORDER BY start_at`,
     )
-    .all(`${dateKey}T00:00:00`, `${addDays(dateKey, 1)}T00:00:00`) as Array<{ title: string; start_at: string }>;
+    .all(dayStart(dateKey), dayStart(addDays(dateKey, 1))) as Array<{ title: string; start_at: string }>;
 }
 
 function remindersOn(db: SqliteDb, dateKey: string): Array<{ title: string; trigger_at: string }> {
@@ -49,7 +49,7 @@ function remindersOn(db: SqliteDb, dateKey: string): Array<{ title: string; trig
        WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?
        ORDER BY trigger_at`,
     )
-    .all(`${dateKey}T00:00:00`, `${addDays(dateKey, 1)}T00:00:00`) as Array<{ title: string; trigger_at: string }>;
+    .all(dayStart(dateKey), dayStart(addDays(dateKey, 1))) as Array<{ title: string; trigger_at: string }>;
 }
 
 /** Evening digest: a preview of tomorrow + what is still in progress. */

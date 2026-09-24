@@ -1,4 +1,4 @@
-import { type SqliteDb, type KernelConfig, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type KernelConfig, type PatchColumn, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
 import type {
   TwitterAccountRow,
   TwitterPostRow,
@@ -13,6 +13,66 @@ import type {
 function vaultKeyFor(handle: string): string {
   return `x-cookie/${handle.replace(/^@/, "")}`;
 }
+
+/**
+ * Account columns that hold credentials. auth_cookie_ref carries the
+ * auth_token cookie itself (kernel_twitter_set_cookie stores it inline), so it
+ * is as secret as the API keys.
+ */
+export const ACCOUNT_SECRET_FIELDS = ["api_key", "api_secret", "access_token", "access_secret", "auth_cookie_ref"] as const;
+export type AccountSecretField = (typeof ACCOUNT_SECRET_FIELDS)[number];
+
+/**
+ * What a client sees in place of a stored secret. Sending it back on an update
+ * (as the edit form does for untouched fields) keeps the stored value.
+ */
+export const SECRET_MASK = "••••";
+
+/** An account row as it may leave the kernel for a client. */
+export type PublicTwitterAccount = TwitterAccountRow & { [K in AccountSecretField as `has_${K}`]: boolean };
+
+/**
+ * The account with every credential replaced by SECRET_MASK (or "" when
+ * unset) plus a `has_<field>` flag. Every response that reaches the dashboard
+ * goes through this; the publisher and the MCP tools read the raw row.
+ */
+export function publicAccount(row: TwitterAccountRow): PublicTwitterAccount {
+  const out: Record<string, unknown> = { ...row };
+  for (const field of ACCOUNT_SECRET_FIELDS) {
+    const set = typeof row[field] === "string" && row[field] !== "";
+    out[field] = set ? SECRET_MASK : "";
+    out[`has_${field}`] = set;
+  }
+  return out as unknown as PublicTwitterAccount;
+}
+
+/** The twitter_accounts columns updateAccount may write. */
+const ACCOUNT_PATCH: Record<string, PatchColumn> = {
+  handle: "text",
+  display_name: "text",
+  api_key: "text",
+  api_secret: "text",
+  access_token: "text",
+  access_secret: "text",
+  status: "text",
+  driver: "text",
+  auth_cookie_ref: "text",
+  last_login_at: "text",
+  voice_persona: "text",
+  role: "text",
+  partner_account_id: "text",
+};
+
+/** The twitter_posts columns updatePost may write. */
+const POST_PATCH: Record<string, PatchColumn> = {
+  content: "text",
+  post_type: "text",
+  status: "text",
+  scheduled_at: "text",
+  reply_to_x_id: "text",
+  quote_x_id: "text",
+  error_message: "text",
+};
 
 export class TwitterService {
   constructor(
@@ -101,23 +161,7 @@ export class TwitterService {
     const account = this.getAccount(id);
     if (!account) return undefined;
 
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-
-    if (changes.handle !== undefined) { sets.push("handle = ?"); vals.push(changes.handle); }
-    if (changes.display_name !== undefined) { sets.push("display_name = ?"); vals.push(changes.display_name); }
-    if (changes.api_key !== undefined) { sets.push("api_key = ?"); vals.push(changes.api_key); }
-    if (changes.api_secret !== undefined) { sets.push("api_secret = ?"); vals.push(changes.api_secret); }
-    if (changes.access_token !== undefined) { sets.push("access_token = ?"); vals.push(changes.access_token); }
-    if (changes.access_secret !== undefined) { sets.push("access_secret = ?"); vals.push(changes.access_secret); }
-    if (changes.status !== undefined) { sets.push("status = ?"); vals.push(changes.status); }
-    if (changes.driver !== undefined) { sets.push("driver = ?"); vals.push(changes.driver); }
-    if (changes.auth_cookie_ref !== undefined) { sets.push("auth_cookie_ref = ?"); vals.push(changes.auth_cookie_ref); }
-    if (changes.last_login_at !== undefined) { sets.push("last_login_at = ?"); vals.push(changes.last_login_at); }
-    if (changes.voice_persona !== undefined) { sets.push("voice_persona = ?"); vals.push(changes.voice_persona); }
-    if (changes.role !== undefined) { sets.push("role = ?"); vals.push(changes.role); }
-    if (changes.partner_account_id !== undefined) { sets.push("partner_account_id = ?"); vals.push(changes.partner_account_id); }
-
+    const { sets, params: vals } = buildPatch(changes, ACCOUNT_PATCH);
     if (sets.length === 0) return account;
 
     sets.push("updated_at = ?");
@@ -384,17 +428,7 @@ export class TwitterService {
     const post = this.getPost(id);
     if (!post) return undefined;
 
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-
-    if (changes.content !== undefined) { sets.push("content = ?"); vals.push(changes.content); }
-    if (changes.post_type !== undefined) { sets.push("post_type = ?"); vals.push(changes.post_type); }
-    if (changes.status !== undefined) { sets.push("status = ?"); vals.push(changes.status); }
-    if (changes.scheduled_at !== undefined) { sets.push("scheduled_at = ?"); vals.push(changes.scheduled_at); }
-    if (changes.reply_to_x_id !== undefined) { sets.push("reply_to_x_id = ?"); vals.push(changes.reply_to_x_id); }
-    if (changes.quote_x_id !== undefined) { sets.push("quote_x_id = ?"); vals.push(changes.quote_x_id); }
-    if (changes.error_message !== undefined) { sets.push("error_message = ?"); vals.push(changes.error_message); }
-
+    const { sets, params: vals } = buildPatch(changes, POST_PATCH);
     if (sets.length === 0) return post;
 
     sets.push("updated_at = ?");

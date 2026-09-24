@@ -71,7 +71,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version: latest }
+        with: { bun-version: 1.4.2 }
       - uses: actions/setup-node@v5
         with: { node-version: "${{ env.NODE_VERSION }}" }
 
@@ -171,7 +171,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version: latest }
+        with: { bun-version: 1.4.2 }
       - uses: actions/setup-node@v5
         with: { node-version: "${{ env.NODE_VERSION }}" }
 
@@ -457,7 +457,7 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: oven-sh/setup-bun@v2
-        with: { bun-version: latest }
+        with: { bun-version: 1.4.2 }
       - uses: actions/setup-node@v5
         with: { node-version: "${{ env.NODE_VERSION }}" }
 

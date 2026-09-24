@@ -4,7 +4,7 @@
  *
  * Extracted verbatim from AgentWorld3D.svelte. Two things changed, both to
  * remove duplication rather than behaviour:
- *   - `escapeHtml` and the link-protocol check now come from `sanitize.ts`,
+ *   - `escapeHtml` and the link-protocol check now come from `$shared/escape`,
  *     which already exported identical logic.
  *   - `formatRunOutput` takes an optional `baseUrl` so relative links resolve
  *     without a live `window` — that is what makes it testable at all.
@@ -14,7 +14,7 @@
  * would change what each of their call sites renders.
  */
 
-import { escapeHtml } from './sanitize.js';
+import { escapeHtml } from '$shared/escape.js';
 
 /** Sentinel `sanitizePreview` plants and `formatRunOutput` renders as a callout. */
 export const TRUNC_MARK = '\u0002TRUNCATED_HINT\u0002';

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readApiError } from '$lib/api.js';
   import { onMount, onDestroy } from 'svelte';
   import { t } from '$lib/i18n/index.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
@@ -454,8 +455,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug }),
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       await Promise.all([fetchList(), fetchCatalog()]);
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
@@ -476,8 +476,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: entry.id }),
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       await Promise.all([fetchList(), fetchCatalog()]);
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
@@ -951,8 +950,7 @@
     try {
       const r = await fetch(`${BASE}${url}`, { method: 'POST' });
       if (!r.ok) {
-        const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-        throw new Error(body.error ?? `HTTP ${r.status}`);
+        throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       }
       await fetchList();
       if (selected?.id === id) selected = items.find((i) => i.id === id) ?? null;
@@ -981,8 +979,7 @@
           body: JSON.stringify({ filename: uploadFile.name, base64 }),
         });
         if (!r.ok) {
-          const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-          throw new Error(body.error ?? `HTTP ${r.status}`);
+          throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
         }
       } else {
         const r = await fetch(`${BASE}/api/extensions/install`, {
@@ -991,8 +988,7 @@
           body: JSON.stringify({ bundle_path: uploadPath }),
         });
         if (!r.ok) {
-          const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-          throw new Error(body.error ?? `HTTP ${r.status}`);
+          throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
         }
       }
       showUpload = false;

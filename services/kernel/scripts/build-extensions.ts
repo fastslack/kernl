@@ -1,11 +1,14 @@
 /**
- * Build every in-tree extension that has a `_wrapper/entry.ts` into its
- * matching `backend/entry.js`.
+ * Build every in-tree extension with a backend into its `backend/entry.js`.
  *
- * Convention: an extension lives at `assets/extensions/<slug>/` and, when it
- * needs a compiled backend, provides a wrapper at `_wrapper/entry.ts` that
- * re-exports `createModule`. The wrapper is what bun builds; the resulting
- * bundle is what the extension loader imports at runtime.
+ * Convention: an extension lives at `assets/extensions/<slug>/`, and its
+ * backend is `_module/index.ts`, exporting a `create<Name>Module()` factory
+ * (or a default one). The loader wants `createModule` or a default export,
+ * so the build bundles a two-line entry that re-exports the factory under
+ * that name. Every in-tree extension used to carry that entry by hand as
+ * `_wrapper/entry.ts`, 55 copies of the same seven lines; it is generated
+ * now. An extension that needs a different entry can still ship its own
+ * `_wrapper/entry.ts`, and it wins.
  *
  * Idempotent + incremental-ish: always rebuilds, no dependency tracking.
  * Cheap (<1s per extension) so don't over-engineer.
@@ -13,6 +16,7 @@
 
 import { readdirSync, existsSync, statSync, readFileSync, writeFileSync, cpSync } from "node:fs";
 import { delimiter, resolve } from "node:path";
+import { mkdirSync, rmSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { SDK_MAJOR } from "../src/sdk/host.js";
@@ -46,8 +50,8 @@ const EXTERNALS = [
 ];
 
 /**
- * Walk EXT_DIR collecting every directory that holds a `_wrapper/entry.ts`
- * (i.e. an extension that needs a backend bundle). Layout convention is
+ * Walk EXT_DIR collecting every extension with a backend: a `_module/index.ts`
+ * or its own `_wrapper/entry.ts`. Layout convention is
  * `<type>/[<category>/]<slug>/`, so wrappers can live at depth 1-3.
  *
  * Stop descending the moment we see an `extension.json` — that's a bare
@@ -66,7 +70,8 @@ function collectExtensionDirs(root: string, depthRemaining = 3): string[] {
   }
   for (const name of entries) {
     const dir = resolve(root, name);
-    if (existsSync(resolve(dir, "_wrapper/entry.ts"))) {
+    if (name.startsWith("_")) continue; // _shared, _lib, _types: libraries, not extensions
+    if (existsSync(resolve(dir, "_wrapper/entry.ts")) || existsSync(resolve(dir, "_module/index.ts"))) {
       out.push(dir);
       continue;
     }
@@ -358,6 +363,45 @@ function recordBackendPackages(): void {
   console.log(`[build-extensions] manifests updated with backend.packages: ${written}`);
 }
 
+/**
+ * The file bun bundles for an extension's backend: its own
+ * `_wrapper/entry.ts` when it has one, else a generated entry that
+ * re-exports the factory of `_module/index.ts` as `createModule` + default.
+ * The generated file is written to the extension's (gitignored) backend/
+ * with a relative import, so the bundle only ever names paths inside the
+ * extension, and removed once the bundle is built.
+ */
+const GENERATED_ENTRY = ".entry.generated.ts";
+
+function backendEntry(extDir: string, slug: string): string | null {
+  const own = resolve(extDir, "_wrapper/entry.ts");
+  if (existsSync(own)) return own;
+  const index = resolve(extDir, "_module/index.ts");
+  if (!existsSync(index)) return null;
+
+  const src = readFileSync(index, "utf-8");
+  const factories = [...src.matchAll(/export (?:async )?function (create\w*Module)\s*\(/g)].map((m) => m[1]);
+  const hasDefault = /export default\b/.test(src);
+  let body: string;
+  if (factories.length === 1) {
+    body = `import { ${factories[0]} as factory } from "../_module/index.js";\n`;
+  } else if (hasDefault) {
+    body = `import factory from "../_module/index.js";\n`;
+  } else {
+    console.error(
+      `[build-extensions] ${slug} FAILED: _module/index.ts must export one create<Name>Module() ` +
+        `factory or a default one (found ${factories.length ? factories.join(", ") : "none"})`,
+    );
+    process.exitCode = 1;
+    return null;
+  }
+  const dir = resolve(extDir, "backend");
+  mkdirSync(dir, { recursive: true });
+  const entry = resolve(dir, GENERATED_ENTRY);
+  writeFileSync(entry, `${body}export function createModule() { return factory(); }\nexport default createModule;\n`);
+  return entry;
+}
+
 function main(): void {
   if (!existsSync(EXT_DIR)) {
     console.log("[build-extensions] No assets/extensions/ dir — skipping");
@@ -370,8 +414,8 @@ function main(): void {
   let skipped = 0;
   for (const extDir of extensionDirs) {
     const slug = extDir.slice(EXT_DIR.length + 1); // may be "<cat>/<name>" or "<name>"
-    const wrapper = resolve(extDir, "_wrapper/entry.ts");
-    if (!existsSync(wrapper)) {
+    const wrapper = backendEntry(extDir, slug);
+    if (!wrapper) {
       skipped++;
       continue;
     }
@@ -410,6 +454,8 @@ function main(): void {
     } catch (err) {
       console.error(`[build-extensions] ${slug} FAILED:`, err instanceof Error ? err.message : err);
       process.exitCode = 1;
+    } finally {
+      if (wrapper.endsWith(GENERATED_ENTRY)) rmSync(wrapper, { force: true });
     }
   }
   console.log(`[build-extensions] built=${built} skipped=${skipped}`);

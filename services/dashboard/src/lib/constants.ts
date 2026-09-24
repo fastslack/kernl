@@ -1,17 +1,5 @@
 // Colors and constants from app.html
 
-export const COL: Record<string, string> = {
-	KNOWS: 'var(--teal)',
-	SAME_DOMAIN: 'var(--blue)',
-	SAME_COMPANY: 'var(--purple)',
-	DEPENDS_ON: 'var(--gold)'
-};
-
-export const CC: string[] = [
-	'var(--teal)', 'var(--blue)', 'var(--purple)', 'var(--gold)',
-	'var(--green)', 'var(--orange)', 'var(--red)'
-];
-
 export const COMM_STATUS_COL: Record<string, string> = {
 	draft: 'var(--gold)',
 	ready: 'var(--green)',
@@ -47,7 +35,6 @@ export const FREQ_COLORS: Record<string, string> = {
 export const FREQ_ORDER = ['real-time', 'hourly', '6h', '12h', 'daily', 'weekly'];
 
 export const TL_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-export const TL_DOWS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 export interface NavView {
 	id: string;

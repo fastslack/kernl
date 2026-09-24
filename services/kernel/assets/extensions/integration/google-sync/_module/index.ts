@@ -1,13 +1,7 @@
 import {
-  type DashboardDescriptor,
   type ExtensibleModule,
-  type KernelModule,
-  type ModuleContext,
-  type ToolDefinition,
-  type KernelConfig,
+  defineModule,
   runMigrations,
-  type AgentDriver,
-  type SqliteDb,
 } from "@kernl/extension-sdk";
 import { googleSyncMigrations } from "./migrations/001_google_sync.js";
 import { fullSyncMigrations } from "./migrations/002_full_sync.js";
@@ -32,18 +26,13 @@ export interface GoogleSyncModule extends ExtensibleModule {
 }
 
 export function createGoogleSyncModule(): GoogleSyncModule {
-  let tools: ToolDefinition[] = [];
   let syncService: GoogleSyncService | null = null;
-  let capturedConfig: KernelConfig | null = null;
-  let dbRef: SqliteDb | null = null;
-  /** Captured at initialize() — agent drivers need notifier + getModule. */
-  let ctxRef: ModuleContext | null = null;
 
-  return {
+  const mod = defineModule({
     name: "google-sync",
 
-    async initialize(ctx: ModuleContext) {
-      ctxRef = ctx;
+    async init(ctx) {
+      // Five migration sets, each under its own key.
       runMigrations(ctx.sqlite, "google-sync", googleSyncMigrations);
       runMigrations(ctx.sqlite, "google-sync-full", fullSyncMigrations);
       runMigrations(ctx.sqlite, "google-sync-triage", emailTriageMigrations);
@@ -51,8 +40,6 @@ export function createGoogleSyncModule(): GoogleSyncModule {
       runMigrations(ctx.sqlite, "google-sync-auth-health", authHealthMigrations);
 
       const { clientId, clientSecret, callbackPort } = ctx.config.google;
-      capturedConfig = ctx.config;
-      dbRef = ctx.sqlite;
 
       const auth = new GoogleAuth(ctx.sqlite, clientId, clientSecret, callbackPort);
       const client = new GoogleClient(auth);
@@ -66,32 +53,28 @@ export function createGoogleSyncModule(): GoogleSyncModule {
       const taskService = new TaskService(ctx.sqlite, getGraph);
       const shoppingService = new ShoppingService(ctx.sqlite, getGraph);
 
-      syncService = new GoogleSyncService(
+      const service = new GoogleSyncService(
         auth, client, ctx.sqlite,
         getGraph,
         crmService, reminderService, taskService, shoppingService,
       );
+      syncService = service;
 
       // Create Neo4j constraints for full sync nodes
-      await syncService.createConstraints();
+      await service.createConstraints();
 
-      tools = [
-        ...googleSyncTools(auth, client, ctx.sqlite, crmService, reminderService, taskService, shoppingService, syncService),
-        ...agentGoogleSyncTools({
-          auth, client, db: ctx.sqlite,
-          crmService, reminderService, taskService,
-          syncService,
-        }),
-      ];
+      // The agent drivers need notifier + getModule, hence the whole ctx.
+      return { ctx, auth, client, crmService, reminderService, taskService, shoppingService, syncService: service };
     },
 
-    getTools() {
-      return tools;
-    },
-
-    getService() {
-      return syncService;
-    },
+    tools: (s) => [
+      ...googleSyncTools(s.auth, s.client, s.ctx.sqlite, s.crmService, s.reminderService, s.taskService, s.shoppingService, s.syncService),
+      ...agentGoogleSyncTools({
+        auth: s.auth, client: s.client, db: s.ctx.sqlite,
+        crmService: s.crmService, reminderService: s.reminderService, taskService: s.taskService,
+        syncService: s.syncService,
+      }),
+    ],
 
     /**
      * Scheduled agent drivers owned by this extension (gsync:contacts /
@@ -99,31 +82,29 @@ export function createGoogleSyncModule(): GoogleSyncModule {
      * ModuleRegistry.collectAgentDrivers() — the kernel never names
      * google-sync.
      */
-    getAgentDrivers(): AgentDriver[] {
-      return googleSyncAgentDrivers({
-        service: () => syncService,
-        db: () => dbRef,
-        notifier: () => ctxRef?.notifier ?? null,
-        ctx: () => ctxRef,
-      });
-    },
+    agentDrivers: (s) =>
+      googleSyncAgentDrivers({
+        service: () => s.syncService,
+        db: () => s.ctx.sqlite,
+        notifier: () => s.ctx.notifier ?? null,
+        ctx: () => s.ctx,
+      }),
 
-    getDashboardRpcActions() {
-      return dbRef && capturedConfig
-        ? googleSyncDashboardRpcActions({ db: dbRef, config: capturedConfig })
-        : [];
-    },
+    dashboardRpc: (s) => googleSyncDashboardRpcActions({ db: s.ctx.sqlite, config: s.ctx.config }),
 
-    getDashboardDescriptor(): DashboardDescriptor | null {
-      if (!capturedConfig) return null;
-      const config = capturedConfig;
-      return {
-        registerRoutes: (server, db) => {
-          registerGoogleOAuthRoutes(server, db, config);
-        },
-      };
-    },
+    dashboard: (s) =>
+      s
+        ? {
+            registerRoutes: (server, db) => {
+              registerGoogleOAuthRoutes(server, db, s.ctx.config);
+            },
+          }
+        : null,
+  });
 
-    async shutdown() {},
-  };
+  return Object.assign(mod, {
+    getService() {
+      return syncService;
+    },
+  });
 }

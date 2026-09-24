@@ -11,7 +11,10 @@
 
   export let ctx: ExtPageContext;
 
-  const rpcOrCall = (action: string, params: Record<string, unknown>, fallback: () => Promise<any>) =>
+  // Without a fallback, ctx.rpc falls back to POST /api/rpc/<action> when the
+  // WS bridge is down. The writes rely on it: a no-op fallback there used to
+  // report success without saving anything.
+  const rpcOrCall = (action: string, params: Record<string, unknown>, fallback?: () => Promise<any>) =>
     ctx.rpc(action, params, fallback);
 
   interface Sub {
@@ -101,9 +104,9 @@
         notes: form.notes.trim(),
       };
       if (editingId) {
-        await rpcOrCall('subscriptions.update', { id: editingId, ...payload }, async () => ({}));
+        await rpcOrCall('subscriptions.update', { id: editingId, ...payload });
       } else {
-        await rpcOrCall('subscriptions.create', payload, async () => ({}));
+        await rpcOrCall('subscriptions.create', payload);
       }
       await loadAll();
       closeModal();
@@ -116,21 +119,21 @@
   async function cancelSub(id: string) {
     if (!confirm('Cancel this subscription?')) return;
     try {
-      await rpcOrCall('subscriptions.cancel', { id }, async () => ({}));
+      await rpcOrCall('subscriptions.cancel', { id });
       await loadAll();
     } catch { /* ignore */ }
   }
 
   async function pauseSub(id: string) {
     try {
-      await rpcOrCall('subscriptions.pause', { id }, async () => ({}));
+      await rpcOrCall('subscriptions.pause', { id });
       await loadAll();
     } catch { /* ignore */ }
   }
 
   async function resumeSub(id: string) {
     try {
-      await rpcOrCall('subscriptions.resume', { id }, async () => ({}));
+      await rpcOrCall('subscriptions.resume', { id });
       await loadAll();
     } catch { /* ignore */ }
   }

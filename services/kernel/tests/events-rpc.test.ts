@@ -3,6 +3,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { eventsMigrations } from "../assets/extensions/people/events/_module/migrations/001_events.js";
 import { eventsRpcActions } from "../assets/extensions/people/events/_module/rpc-actions.js";
+import { EventsService } from "../assets/extensions/people/events/_module/service.js";
 import type { RpcAction } from "../src/core/mtw/rpc-handler.js";
 
 function setup() {
@@ -11,14 +12,13 @@ function setup() {
   // test DB); reschedule logic under test doesn't depend on FK enforcement.
   db.run("PRAGMA foreign_keys = OFF");
   runMigrations(db, "events", eventsMigrations);
-  const actions = eventsRpcActions(db);
+  const actions = eventsRpcActions(new EventsService(db));
   const call = (name: string, args: Record<string, unknown> = {}) => {
     const a = actions.find((x: RpcAction) => x.name === name);
     if (!a) throw new Error(`no action ${name}`);
     return Promise.resolve(a.handler(args));
   };
-  // Insert directly (the events.create handler passes nulls for NOT NULL
-  // columns — unrelated pre-existing issue; not under test here).
+  // Insert directly, with only the columns the reschedule logic reads.
   let n = 0;
   const insert = (start_at: string, end_at: string | null): string => {
     const id = `ev-${++n}`;

@@ -360,3 +360,23 @@ describe("Marketplace Dashboard Query", () => {
     expect(result!.themes.length).toBe(6);
   });
 });
+
+describe("Default catalog repos", () => {
+  it("subscribes to the ECC skill library, pinned to a release tag", () => {
+    const db = createDb();
+    const rows = db.prepare("SELECT url, ref, items_found, last_synced_at FROM catalog_repos").all() as Array<{
+      url: string; ref: string; items_found: number; last_synced_at: string | null;
+    }>;
+    expect(rows).toEqual([
+      { url: "https://github.com/affaan-m/ECC", ref: "v2.2.1", items_found: 0, last_synced_at: null },
+    ]);
+  });
+
+  it("does not re-add the subscription after the user removes it", () => {
+    const db = createDb();
+    db.prepare("DELETE FROM catalog_repos WHERE url = ?").run("https://github.com/affaan-m/ECC");
+    runMigrations(db, "marketplace", marketplaceMigrations);
+    const count = db.prepare("SELECT COUNT(*) AS n FROM catalog_repos").get() as { n: number };
+    expect(count.n).toBe(0);
+  });
+});

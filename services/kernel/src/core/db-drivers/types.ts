@@ -62,7 +62,7 @@ export interface BaseDbDriverStatus {
 /**
  * Every db-driver implementation includes this lifecycle surface. The
  * kind-specific operation methods (`run`, `upsert`, `get`, …) live on the
- * sub-interface that extends this — see graph-driver.ts, vector-driver.ts.
+ * sub-interface that extends this — see graph-driver.ts.
  */
 export interface BaseDbDriver {
   readonly slug: string;

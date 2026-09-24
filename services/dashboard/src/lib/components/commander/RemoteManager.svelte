@@ -44,19 +44,10 @@
 	};
 	let webdav = { baseUrl: '', username: '', password: '', token: '' };
 
-	function authHeaders(): Record<string, string> {
-		const h: Record<string, string> = {};
-		if (typeof localStorage !== 'undefined') {
-			const t = localStorage.getItem('kernel_auth_token');
-			if (t) h['Authorization'] = `Bearer ${t}`;
-		}
-		return h;
-	}
-
 	async function loadRemotes(): Promise<void> {
 		loading = true;
 		try {
-			const r = await fetch('/api/fs/remotes', { headers: authHeaders() });
+			const r = await fetch('/api/fs/remotes');
 			const data = (await r.json()) as { items: RemoteRow[] };
 			remotes = data.items ?? [];
 		} catch (e) {
@@ -103,7 +94,7 @@
 		try {
 			const r = await fetch('/api/fs/remotes', {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json', ...authHeaders() },
+				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ kind, label: label.trim(), config: buildConfig() })
 			});
 			const data = (await r.json()) as { item?: { provider_id: string }; error?: string };
@@ -121,8 +112,7 @@
 
 	async function testRemote(id: string): Promise<void> {
 		const r = await fetch(`/api/fs/remotes/${encodeURIComponent(id)}/test`, {
-			method: 'POST',
-			headers: authHeaders()
+			method: 'POST'
 		});
 		const data = (await r.json()) as { ok: boolean; error?: string };
 		alert(data.ok ? '✓ Connected' : `✗ ${data.error ?? 'Failed'}`);
@@ -131,8 +121,7 @@
 	async function removeRemote(id: string): Promise<void> {
 		if (!confirm('Remove this remote?')) return;
 		await fetch(`/api/fs/remotes/${encodeURIComponent(id)}`, {
-			method: 'DELETE',
-			headers: authHeaders()
+			method: 'DELETE'
 		});
 		dispatch('removed', { id });
 		await loadRemotes();

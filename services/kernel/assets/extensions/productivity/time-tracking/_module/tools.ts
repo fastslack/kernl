@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { TimeTrackingService } from "./service.js";
 
 function fmtDuration(minutes: number): string {
@@ -10,31 +10,29 @@ function fmtDuration(minutes: number): string {
 
 export function timeTrackingTools(service: TimeTrackingService): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_time_start",
       description: "Start a time tracking timer. Automatically stops any running timer. Optionally link to a task.",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().optional().describe("Link to a task ID"),
         description: z.string().optional().describe("What are you working on"),
         tags: z.string().optional().describe("Comma-separated tags"),
       }),
-      handler: async (args) => {
-        const input = args as { task_id?: string; description?: string; tags?: string };
+      handler: async (input) => {
         const entry = service.start(input);
         return textResult(
           `Timer started:\n  ID: ${entry.id}\n  Description: ${entry.description || "(none)"}\n  Started: ${entry.start_time}${entry.task_id ? `\n  Task: ${entry.task_id}` : ""}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_time_stop",
       description: "Stop the running timer (or a specific timer by ID). Calculates duration automatically.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().optional().describe("Timer ID (omit to stop the currently running timer)"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id?: string };
+      handler: async ({ id }) => {
         const entry = service.stop(id);
         if (!entry) return errorResult("No running timer found.");
         if (!entry.end_time) return textResult("Timer was already stopped.");
@@ -43,39 +41,37 @@ export function timeTrackingTools(service: TimeTrackingService): ToolDefinition[
           `Timer stopped:\n  Description: ${entry.description || "(none)"}\n  Duration: ${fmtDuration(entry.duration_minutes ?? 0)}\n  ${entry.start_time} → ${entry.end_time}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_time_log",
       description: "Manually log a time entry with start and end times (for past work).",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().optional().describe("Link to a task ID"),
         description: z.string().optional().describe("What was done"),
         start_time: z.string().describe("Start time (ISO 8601)"),
         end_time: z.string().describe("End time (ISO 8601)"),
         tags: z.string().optional().describe("Comma-separated tags"),
       }),
-      handler: async (args) => {
-        const input = args as { task_id?: string; description?: string; start_time: string; end_time: string; tags?: string };
+      handler: async (input) => {
         const entry = service.log(input);
         return textResult(
           `Time logged:\n  ID: ${entry.id}\n  Duration: ${fmtDuration(entry.duration_minutes ?? 0)}\n  Description: ${entry.description || "(none)"}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_time_list",
       description: "List time entries with optional filters by task, date range, or tag.",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().optional().describe("Filter by task"),
         from_date: z.string().optional().describe("Start date (ISO 8601)"),
         to_date: z.string().optional().describe("End date (ISO 8601)"),
         tag: z.string().optional().describe("Filter by tag"),
-        limit: z.number().optional().describe("Max results (default: all)"),
+        limit: limitArg(1000, "Max results (default: all)"),
       }),
-      handler: async (args) => {
-        const filters = args as { task_id?: string; from_date?: string; to_date?: string; tag?: string; limit?: number };
+      handler: async (filters) => {
         const entries = service.list(filters);
         if (entries.length === 0) return textResult("No time entries found.");
 
@@ -85,18 +81,17 @@ export function timeTrackingTools(service: TimeTrackingService): ToolDefinition[
         });
         return textResult(`${entries.length} entry(ies):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_time_report",
       description: "Time tracking report: total hours, breakdown by task, tag, and day.",
-      inputSchema: z.object({
+      schema: z.object({
         from_date: z.string().optional().describe("Start date"),
         to_date: z.string().optional().describe("End date"),
         task_id: z.string().optional().describe("Filter by task"),
       }),
-      handler: async (args) => {
-        const filters = args as { from_date?: string; to_date?: string; task_id?: string };
+      handler: async (filters) => {
         const r = service.report(filters);
         if (r.entries_count === 0) return textResult("No time entries in this period.");
 
@@ -117,6 +112,6 @@ export function timeTrackingTools(service: TimeTrackingService): ToolDefinition[
 
         return textResult(output);
       },
-    },
+    }),
   ];
 }

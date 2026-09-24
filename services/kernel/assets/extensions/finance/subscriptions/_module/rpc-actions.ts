@@ -1,146 +1,116 @@
-import type { RpcAction, SqliteDb } from "@kernl/extension-sdk";
-import { SubscriptionService } from "./service.js";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction, localDate } from "@kernl/extension-sdk";
+import type { SubscriptionService } from "./service.js";
+import type { BillingCycle, SubscriptionStatus } from "./types.js";
 import { autoCategorize, knownCategories, categoryGroup, CATEGORY_GROUPS } from "./categorize.js";
 
-export function subscriptionsRpcActions(db: SqliteDb): RpcAction[] {
-  const service = new SubscriptionService(db, null as any);
-  function require(): SubscriptionService {
-    return service;
-  }
+/** What the dashboard may set on a subscription, create and update alike. */
+const SUBSCRIPTION_FIELDS = {
+  name: "string",
+  provider: "string",
+  amount_cents: "number",
+  currency: "string",
+  billing_cycle: "string",
+  category: "string",
+  next_billing: "string",
+  url: "string",
+  notes: "string",
+} as const;
 
-  return [
-    {
-      name: "subscriptions.list",
-      handler: async (args) => {
-        const svc = require();
-        const status = typeof args.status === "string" ? (args.status as any) : undefined;
-        const category = typeof args.category === "string" ? args.category : undefined;
-        const subs = svc.list({ status, category });
-        // Enrich with group info
-        const enriched = subs.map(s => ({ ...s, group: categoryGroup(s.category || "other") }));
-        return { subscriptions: enriched };
-      },
+/**
+ * RPC-only (the page's HTTP fallbacks are placeholders, not routes), all of
+ * it through the module's SubscriptionService.
+ */
+export function subscriptionsRpcActions(service: SubscriptionService): RpcAction[] {
+  const withGroup = <T extends { category: string }>(sub: T) => ({ ...sub, group: categoryGroup(sub.category || "other") });
+  const requireAmount = (amount: number | undefined): void => {
+    if (amount !== undefined && !Number.isInteger(amount)) throw new HttpError(400, "amount_cents must be an integer");
+  };
+  const byId = (input: Record<string, unknown>) => pickArgs(input, { id: "string" }).id ?? "";
+
+  return rpcActionsFrom({
+    "subscriptions.list": (input) => {
+      const args = pickArgs(input, { status: "string", category: "string" });
+      const subs = service.list({ status: args.status as SubscriptionStatus | undefined, category: args.category });
+      // Enrich with group info
+      return { subscriptions: subs.map(withGroup) };
     },
-    {
-      name: "subscriptions.create",
-      handler: async (args) => {
-        const svc = require();
-        const name = typeof args.name === "string" ? args.name : "";
-        if (!name.trim()) throw new Error("name is required");
-        const amount = typeof args.amount_cents === "number" ? args.amount_cents : 0;
-        if (amount <= 0) throw new Error("amount_cents must be > 0");
-        const provider = typeof args.provider === "string" ? args.provider : "";
+
+    "subscriptions.create": (input) => {
+      const args = pickArgs(input, { ...SUBSCRIPTION_FIELDS, start_date: "string" });
+      const name = args.name ?? "";
+      if (!name.trim()) throw new HttpError(400, "name is required");
+      const amount = args.amount_cents ?? 0;
+      if (amount <= 0) throw new HttpError(400, "amount_cents must be > 0");
+      requireAmount(amount);
+      const provider = args.provider ?? "";
+      const sub = service.create({
+        ...args,
+        name,
+        provider,
+        amount_cents: amount,
+        billing_cycle: args.billing_cycle as BillingCycle | undefined,
         // Auto-categorize if no category provided
-        const category = (typeof args.category === "string" && args.category)
-          ? args.category
-          : autoCategorize(name, provider);
-        const sub = svc.create({
-          name,
-          provider,
-          amount_cents: amount,
-          currency: typeof args.currency === "string" ? args.currency : undefined,
-          billing_cycle: typeof args.billing_cycle === "string" ? args.billing_cycle as any : undefined,
-          category,
-          start_date: typeof args.start_date === "string" ? args.start_date : new Date().toISOString().slice(0, 10),
-          next_billing: typeof args.next_billing === "string" ? args.next_billing : undefined,
-          url: typeof args.url === "string" ? args.url : undefined,
-          notes: typeof args.notes === "string" ? args.notes : undefined,
-        });
-        return { success: true, subscription: { ...sub, group: categoryGroup(sub.category || "other") } };
-      },
+        category: args.category || autoCategorize(name, provider),
+        start_date: args.start_date ?? localDate(),
+      });
+      return { success: true, subscription: withGroup(sub) };
     },
-    {
-      name: "subscriptions.update",
-      handler: async (args) => {
-        const svc = require();
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("id required");
-        const changes: any = {};
-        if (typeof args.name === "string") changes.name = args.name;
-        if (typeof args.provider === "string") changes.provider = args.provider;
-        if (typeof args.amount_cents === "number") changes.amount_cents = args.amount_cents;
-        if (typeof args.currency === "string") changes.currency = args.currency;
-        if (typeof args.billing_cycle === "string") changes.billing_cycle = args.billing_cycle;
-        if (typeof args.category === "string") changes.category = args.category;
-        if (typeof args.next_billing === "string") changes.next_billing = args.next_billing;
-        if (typeof args.url === "string") changes.url = args.url;
-        if (typeof args.notes === "string") changes.notes = args.notes;
-        const sub = svc.update(id, changes);
-        if (!sub) throw new Error("Subscription not found");
-        return { success: true, subscription: { ...sub, group: categoryGroup(sub.category || "other") } };
-      },
+
+    "subscriptions.update": (input) => {
+      const id = byId(input);
+      if (!id) throw new HttpError(400, "id required");
+      // Only the keys that were sent: the service spreads these over the row,
+      // so an `undefined` would blank a column.
+      const changes = pickArgs(input, SUBSCRIPTION_FIELDS) as Parameters<SubscriptionService["update"]>[1];
+      requireAmount(changes.amount_cents);
+      const sub = service.update(id, changes);
+      if (!sub) throw new HttpError(404, "Subscription not found");
+      return { success: true, subscription: withGroup(sub) };
     },
-    {
-      name: "subscriptions.cancel",
-      handler: async (args) => {
-        const svc = require();
-        const id = typeof args.id === "string" ? args.id : "";
-        const sub = svc.cancel(id);
-        if (!sub) throw new Error("Subscription not found");
-        return { success: true, subscription: sub };
-      },
+
+    "subscriptions.cancel": (input) => {
+      const sub = service.cancel(byId(input));
+      if (!sub) throw new HttpError(404, "Subscription not found");
+      return { success: true, subscription: sub };
     },
-    {
-      name: "subscriptions.pause",
-      handler: async (args) => {
-        const svc = require();
-        const id = typeof args.id === "string" ? args.id : "";
-        const sub = svc.pause(id);
-        if (!sub) throw new Error("Subscription not found");
-        return { success: true, subscription: sub };
-      },
+
+    "subscriptions.pause": (input) => {
+      const sub = service.pause(byId(input));
+      if (!sub) throw new HttpError(404, "Subscription not found");
+      return { success: true, subscription: sub };
     },
-    {
-      name: "subscriptions.resume",
-      handler: async (args) => {
-        const svc = require();
-        const id = typeof args.id === "string" ? args.id : "";
-        const sub = svc.resume(id);
-        if (!sub) throw new Error("Subscription not paused or not found");
-        return { success: true, subscription: sub };
-      },
+
+    "subscriptions.resume": (input) => {
+      const sub = service.resume(byId(input));
+      if (!sub) throw new HttpError(404, "Subscription not paused or not found");
+      return { success: true, subscription: sub };
     },
-    {
-      name: "subscriptions.summary",
-      handler: async () => {
-        const svc = require();
-        const summary = svc.summary();
-        // Add group breakdown
-        const groupMap = new Map<string, { count: number; monthly_cents: number }>();
-        for (const cat of summary.by_category) {
-          const g = categoryGroup(cat.category);
-          const existing = groupMap.get(g) ?? { count: 0, monthly_cents: 0 };
-          existing.count += cat.count;
-          existing.monthly_cents += cat.monthly_cents;
-          groupMap.set(g, existing);
-        }
-        const by_group = [...groupMap.entries()]
-          .map(([group, data]) => ({ group, ...data }))
-          .sort((a, b) => b.monthly_cents - a.monthly_cents);
-        return { ...summary, by_group };
-      },
+
+    "subscriptions.summary": () => {
+      const summary = service.summary();
+      // Add group breakdown
+      const groupMap = new Map<string, { count: number; monthly_cents: number }>();
+      for (const cat of summary.by_category) {
+        const g = categoryGroup(cat.category);
+        const existing = groupMap.get(g) ?? { count: 0, monthly_cents: 0 };
+        existing.count += cat.count;
+        existing.monthly_cents += cat.monthly_cents;
+        groupMap.set(g, existing);
+      }
+      const by_group = [...groupMap.entries()]
+        .map(([group, data]) => ({ group, ...data }))
+        .sort((a, b) => b.monthly_cents - a.monthly_cents);
+      return { ...summary, by_group };
     },
-    {
-      name: "subscriptions.upcoming",
-      handler: async (args) => {
-        const svc = require();
-        const days = typeof args.days === "number" ? args.days : 30;
-        return { upcoming: svc.upcoming(days) };
-      },
+
+    "subscriptions.upcoming": (input) => ({ upcoming: service.upcoming(pickArgs(input, { days: "number" }).days ?? 30) }),
+
+    "subscriptions.categories": () => ({ categories: knownCategories(), groups: CATEGORY_GROUPS }),
+
+    "subscriptions.suggest_category": (input) => {
+      const args = pickArgs(input, { name: "string", provider: "string" });
+      const category = autoCategorize(args.name ?? "", args.provider ?? "");
+      return { category, group: categoryGroup(category) };
     },
-    {
-      name: "subscriptions.categories",
-      handler: async () => {
-        return { categories: knownCategories(), groups: CATEGORY_GROUPS };
-      },
-    },
-    {
-      name: "subscriptions.suggest_category",
-      handler: async (args) => {
-        const name = typeof args.name === "string" ? args.name : "";
-        const provider = typeof args.provider === "string" ? args.provider : "";
-        return { category: autoCategorize(name, provider), group: categoryGroup(autoCategorize(name, provider)) };
-      },
-    },
-  ];
+  });
 }

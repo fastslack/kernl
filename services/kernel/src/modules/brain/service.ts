@@ -17,8 +17,8 @@
  *
  * Embeddings are raw little-endian Float32 BLOBs (same convention as
  * `tool_memory`). Recall is in-memory cosine over the candidate set —
- * fine at the current scale; the Neo4j vector index / `vector-driver`
- * seam is the documented next step when row counts grow.
+ * fine at the current scale; a Neo4j vector index behind a vector db-driver
+ * is the next step when row counts grow.
  *
  * Autoaprendizaje: `reinforce()` nudges an item's `weight` from usage
  * signals (opened +, ignored −, corrected +), mirroring the confidence
@@ -28,7 +28,7 @@
 
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EmbeddingsClient } from "../../core/embeddings/index.js";
-import { newId, isoNow } from "../../core/helpers.js";
+import { newId, isoNow, clamp } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
 import { cosine } from "../../core/ranking/cosine.js";
 import { extractKeywords, scoreRelevance } from "../../core/ranking/relevance.js";
@@ -293,10 +293,6 @@ export class BrainService {
 
 interface RawItemRow extends BrainItem {
   embedding: Buffer | Uint8Array;
-}
-
-function clamp(v: number, lo: number, hi: number): number {
-  return Math.max(lo, Math.min(hi, v));
 }
 
 // ── Vector helpers (little-endian Float32, same as tool_memory) ──────

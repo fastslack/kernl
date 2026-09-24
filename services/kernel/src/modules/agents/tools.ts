@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { textResult, errorResult, isoNow } from "../../core/helpers.js";
+import { textResult, errorResult, isoNow, safeJson } from "../../core/helpers.js";
+import { agentAllowedTools, agentSkills } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import { setOfficeRepo, OfficeRepoError, type SetOfficeRepoResult } from "./office-repo.js";
 import type { ToolDefinition } from "../../core/types.js";
@@ -9,7 +10,7 @@ import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
-import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
+import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -53,15 +54,10 @@ function resolveCaller(
 }
 
 function parseAllowedTools(raw: string | undefined): string[] | null {
-  // Returns null to mean "all tools" (empty JSON array or blank).
-  if (!raw) return null;
-  try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    return arr.filter((t): t is string => typeof t === "string");
-  } catch {
-    return null;
-  }
+  // Returns null to mean "all tools" (empty JSON array, blank or unreadable).
+  const arr = agentAllowedTools({ allowed_tools: raw });
+  if (arr.length === 0) return null;
+  return arr.filter((t): t is string => typeof t === "string");
 }
 
 function enforceAgentMgmtPolicy(
@@ -396,10 +392,7 @@ export function agentsTools(
         }
 
         // Resolve goal
-        let vars: Record<string, unknown> = {};
-        if (input.variables) {
-          try { vars = JSON.parse(input.variables); } catch { /* ignore */ }
-        }
+        const vars = safeJson<Record<string, unknown>>(input.variables, {});
         const goal = input.goal || resolveGoal(agent.goal_template, vars) || `Execute agent "${agent.name}"`;
 
         // Create run — propagate lineage so depth caps and self-recursion
@@ -524,7 +517,7 @@ export function agentsTools(
       description: "List past runs for an agent",
       schema: z.object({
         agent_id: z.string().describe("Agent ID"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
         status: z.string().optional().describe("Filter by status: pending, running, completed, failed, cancelled"),
       }),
       handler: async (input) => {
@@ -1113,7 +1106,7 @@ export function agentsTools(
       description: "Read an agent's conversational memory — recent interactions with humans and other agents. Use this to check what another agent has been working on or said recently.",
       schema: z.object({
         agent_id: z.string().describe("Agent ID to read memory from"),
-        limit: z.number().optional().describe("Max messages to return (default: 10)"),
+        limit: limitArg(100, "Max messages to return (default: 10)"),
       }),
       handler: async (input) => {
         const memory = service.getMemory(input.agent_id, input.limit ?? 10);
@@ -1330,7 +1323,7 @@ export function agentsTools(
       schema: z.object({
         agent_id: z.string().optional().describe("Agent whose inbox to read. Defaults to the caller."),
         status: z.enum(["unread", "read", "archived"]).optional().describe("Filter by status (default: unread)"),
-        limit: z.number().optional().describe("Max messages (default: 20)"),
+        limit: limitArg(200, "Max messages (default: 20)"),
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
@@ -1582,8 +1575,7 @@ export function agentsTools(
         const { agent_id } = input;
         const agent = service.getAgent(agent_id);
         if (!agent) return errorResult(`Agent not found: ${agent_id}`);
-        let slugs: string[] = [];
-        try { slugs = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { /* ignore */ }
+        const slugs = agentSkills(agent);
         if (slugs.length === 0) return textResult(`Agent ${agent.name} has no skills attached.`);
         const resolver = executor.getSkillResolver();
         if (!resolver) return textResult(`Slugs (resolver offline): ${slugs.join(", ")}`);

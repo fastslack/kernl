@@ -24,7 +24,7 @@
  *     without a restart.
  */
 
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
@@ -79,18 +79,6 @@ export function hasCliSession(env: NodeJS.ProcessEnv = process.env): boolean {
     // Missing, unreadable or malformed all mean the same thing here.
     return false;
   }
-}
-
-export function hasStoredCredential(env: NodeJS.ProcessEnv = process.env): boolean {
-  if ((env.CLAUDE_CODE_OAUTH_TOKEN ?? "").trim().length > 0) return true;
-  return hasCliSession(env);
-}
-
-/** Create the directory on first use; the CLI will not create the parent. */
-export function ensureClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
-  const dir = claudeConfigDir(env);
-  if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
-  return dir;
 }
 
 /**

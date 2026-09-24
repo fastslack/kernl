@@ -226,6 +226,9 @@ services:
     build:
       context: ./services/dashboard
       dockerfile: Dockerfile.public
+      # $shared: the frontend library the dashboard shares with extension pages.
+      additional_contexts:
+        shared: ./services/kernel/assets/extensions/_shared
     image: localhost/mtw-dashboard:public
     container_name: kernl-public-dashboard
     restart: unless-stopped

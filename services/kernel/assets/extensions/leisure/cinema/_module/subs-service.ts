@@ -11,7 +11,7 @@
  * services share the same `sqlite` handle.
  */
 
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, safeJson } from "@kernl/extension-sdk";
 import type { SubAnnouncement } from "./discovery/provider.js";
 
 export interface LocalSub {
@@ -97,15 +97,6 @@ interface PublisherRow {
   trust: PublisherTrust;
   added_at: string;
   notes: string;
-}
-
-function parseJson<T>(raw: string, fallback: T): T {
-  try {
-    const v = JSON.parse(raw);
-    return v as T;
-  } catch {
-    return fallback;
-  }
 }
 
 export class CinemaSubsService {
@@ -342,7 +333,7 @@ export class CinemaSubsService {
       engine_version: row.engine_version,
       origin: row.origin,
       signer_pubkey: row.signer_pubkey,
-      manifest: parseJson<Record<string, unknown>>(row.manifest_json, {}),
+      manifest: safeJson<Record<string, unknown>>(row.manifest_json, {}),
       vtt_path: row.vtt_path,
       srt_path: row.srt_path,
       sha256: row.sha256,

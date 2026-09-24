@@ -1,5 +1,6 @@
 import {
   log,
+  formatNotification,
   type NotificationProvider,
   type NotificationPayload,
   type ProviderStatus,
@@ -87,10 +88,7 @@ export class MattermostProvider implements NotificationProvider {
   }
 
   private formatPayload(payload: NotificationPayload): string {
-    const prefix = payload.priority === "high" ? ":rotating_light: " : "";
-    const lines = [`${prefix}**${payload.title}**`];
-    if (payload.body) lines.push(payload.body);
-    return lines.join("\n");
+    return formatNotification(payload, { bold: "**", alert: ":rotating_light: " });
   }
 
   private async postWebhook(text: string): Promise<void> {

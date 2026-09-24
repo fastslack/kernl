@@ -4,9 +4,10 @@
   The ranking, grouping and matching are not reimplemented here: they live in
   `$lib/model-catalog.js` and `$lib/model-filter.js`, already proven against a
   67-model OpenAI account, and the chat's own picker consumes exactly the same
-  three functions (routes/chat/+page.svelte:8). What is different here is the
-  shape, not the logic — over there the menu is inline in a 12k-line page, here
-  it is a component the runtime panel mounts once per chain row.
+  three functions (routes/chat/ChatModelPicker.svelte). What is different here is the
+  shape, not the logic — over there it is the chat's one header menu (with the
+  episode lock and quota status), here it is a component the runtime panel
+  mounts once per chain row.
 
   A provider that cannot run a tool loop is rendered DISABLED WITH ITS REASON
   rather than filtered out. Hiding it would hide the exact provider named in

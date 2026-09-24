@@ -10,7 +10,7 @@
   import { onDestroy } from 'svelte';
   import Page from './Page.svelte';
   import Directories from './Directories.svelte';
-  import type { ExtPageContext } from './types.js';
+  import type { ExtPageContext } from '$shared/types';
 
   export let ctx: ExtPageContext;
 

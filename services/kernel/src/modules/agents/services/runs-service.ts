@@ -2,6 +2,7 @@ import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { EventBus } from "../../../core/event-bus.js";
 import { newId, isoNow } from "../../../core/helpers.js";
 import { log } from "../../../core/logger.js";
+import { buildPatch, type PatchColumn } from "../../../sdk/query-helpers.js";
 import type { Agent, AgentRun, AgentStep } from "../types.js";
 
 /** Schedules the background embed of a row's text. Supplied by AgentMemoryService. */
@@ -12,6 +13,17 @@ type ScheduleEmbed = (
   rowId: string,
   text: string,
 ) => void;
+
+/** The agent_runs columns updateRun may write (all stored as given). */
+const RUN_PATCH: Record<string, PatchColumn> = {
+  status: "text",
+  result: "text",
+  error: "text",
+  steps_count: "text",
+  tokens_used: "text",
+  started_at: "text",
+  completed_at: "text",
+};
 
 /**
  * Agent runs and the steps inside them, including the guards that stop a
@@ -197,16 +209,7 @@ export class AgentRunsService {
       completed_at: string;
     }>,
   ): void {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (updates.status !== undefined) { sets.push("status = ?"); params.push(updates.status); }
-    if (updates.result !== undefined) { sets.push("result = ?"); params.push(updates.result); }
-    if (updates.error !== undefined) { sets.push("error = ?"); params.push(updates.error); }
-    if (updates.steps_count !== undefined) { sets.push("steps_count = ?"); params.push(updates.steps_count); }
-    if (updates.tokens_used !== undefined) { sets.push("tokens_used = ?"); params.push(updates.tokens_used); }
-    if (updates.started_at !== undefined) { sets.push("started_at = ?"); params.push(updates.started_at); }
-    if (updates.completed_at !== undefined) { sets.push("completed_at = ?"); params.push(updates.completed_at); }
+    const { sets, params } = buildPatch(updates, RUN_PATCH);
 
     if (sets.length === 0) return;
     params.push(id);

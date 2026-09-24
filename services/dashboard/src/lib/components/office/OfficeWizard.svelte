@@ -37,6 +37,10 @@
 	let description = '';
 	let drafting = false;
 	let draftMessage = '';
+	/** The kernel's own reason, shown under the message. Folded away because it
+	 *  is schema talk ("agents[0].prompt is required") — useful to whoever is
+	 *  debugging the model, noise to everyone else. */
+	let draftDetail = '';
 	let creating = false;
 	let createMessage = '';
 	let showErrors = false;
@@ -94,6 +98,7 @@
 	async function draft() {
 		drafting = true;
 		draftMessage = '';
+		draftDetail = '';
 		const result = await draftOffice(description, language);
 		drafting = false;
 		if (result.ok) {
@@ -101,7 +106,15 @@
 			step = 2;
 			showErrors = false;
 		} else if (result.reason === 'invalid') {
-			draftMessage = $t('office.wizard.draft_invalid');
+			// The kernel retries once with the validation error fed back, so
+			// reaching here means the model missed the schema twice. Saying
+			// "describe it better" would blame the operator for that, and they
+			// would rewrite a description that was never the problem — so name
+			// the model when the kernel reports one.
+			draftMessage = result.model
+				? $t('office.wizard.draft_invalid_model', { model: result.model })
+				: $t('office.wizard.draft_invalid');
+			draftDetail = result.detail ?? '';
 		} else {
 			draftMessage = result.message;
 		}
@@ -229,7 +242,12 @@
 				<Icon name="spark" />{drafting ? $t('office.wizard.drafting') : $t('office.wizard.draft')}
 			</button>
 		</div>
-		{#if draftMessage}<p class="k-error" role="alert">{draftMessage}</p>{/if}
+		{#if draftMessage}
+			<p class="k-error" role="alert">{draftMessage}</p>
+			{#if draftDetail}
+				<details class="wz-draft-detail"><summary>{$t('office.wizard.draft_detail')}</summary><code>{draftDetail}</code></details>
+			{/if}
+		{/if}
 		<p class="k-help">{$t('office.wizard.draft_note')}</p>
 	{:else}
 		<div class="wz-grid">
@@ -380,6 +398,10 @@
 </Modal>
 
 <style>
+	.wz-draft-detail { margin: .25rem 0 0; font-size: .75rem; opacity: .8; }
+	.wz-draft-detail summary { cursor: pointer; }
+	.wz-draft-detail code { display: block; margin-top: .25rem; word-break: break-word; }
+
 	.wz-steps { list-style: none; margin: 0; padding: 0; display: flex; gap: 4px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
 	.wz-step { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: 999px; font-size: 12.5px; color: var(--text-3); }
 	.wz-step-n { width: 18px; height: 18px; border-radius: 50%; display: grid; place-items: center; font: 400 10.5px/1 var(--font-mono); border: 1px solid var(--border-h); }

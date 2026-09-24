@@ -1,0 +1,33 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.job-hunter",
+  "slug": "job-hunter",
+  "name": "Job Hunter",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Job-board scrapers (Freelancer, Workana, Arc.dev, Gun.io, RemoteOK, Greenhouse, Lever, Ashby), a deterministic curator and a dispatcher that hands the best hits to an LLM drafter.",
+  "long_description": "Agent handlers for the \"Jobs Hunter\" office: one scraper per board stores keyword-matched ads as #job notes, the curator scores and promotes the best, and the dispatcher asks the jobs-drafter agent for a proposal per curated note. Each handler reads its tunables from its agent's variables. The office itself is created by scripts/seeds/jobs-office.ts; nothing is scheduled until then.",
+  "author": "Kernl",
+  "license": "Apache-2.0",
+  "category": "automation",
+  "tags": [
+    "jobs",
+    "scraper",
+    "freelance",
+    "agents"
+  ],
+  "kernel_min": "0.1.0",
+  "sdk": 1,
+  "permissions": [
+    "network",
+    "filesystem",
+    "notifications",
+    "module:job-hunter"
+  ],
+  "backend": {
+    "entry": "backend/entry.js",
+    "packages": {
+      "uuid": "11.1.1"
+    }
+  }
+}

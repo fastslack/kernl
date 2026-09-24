@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { readApiError } from '$lib/api.js';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
 
@@ -199,8 +200,7 @@
           }),
         });
         if (!r.ok) {
-          const data = await r.json().catch(() => ({}));
-          throw new Error(data.error || `HTTP ${r.status}`);
+          throw new Error((await readApiError(r)) || `HTTP ${r.status}`);
         }
       } else {
         const r = await fetch('/api/email-accounts/update', {
@@ -218,8 +218,7 @@
           }),
         });
         if (!r.ok) {
-          const data = await r.json().catch(() => ({}));
-          throw new Error(data.error || `HTTP ${r.status}`);
+          throw new Error((await readApiError(r)) || `HTTP ${r.status}`);
         }
       }
       cancelEdit();

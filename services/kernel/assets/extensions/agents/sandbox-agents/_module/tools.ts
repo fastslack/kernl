@@ -1,13 +1,12 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { SandboxAgentService } from "./service.js";
 
 export function sandboxAgentTools(service: SandboxAgentService): ToolDefinition[] {
   return [
-    {
+    defineToolNoInput({
       name: "kernel_sandbox_agents_list",
       description: "List all discovered sandbox agents and their current status.",
-      inputSchema: z.object({}),
       handler: async () => {
         const states = service.listStates();
 
@@ -31,44 +30,41 @@ export function sandboxAgentTools(service: SandboxAgentService): ToolDefinition[
 
         return textResult(`Sandbox Agents (${states.length}):\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_sandbox_agents_start",
       description: "Start a sandbox agent subprocess.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Agent name (as declared in manifest.json)"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         const ok = await service.startAgent(name);
         if (!ok) return errorResult(`Agent not found: ${name}`);
         return textResult(`Agent "${name}" started.`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_sandbox_agents_stop",
       description: "Stop a running sandbox agent subprocess.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Agent name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         const ok = await service.stopAgent(name);
         if (!ok) return errorResult(`Agent not found: ${name}`);
         return textResult(`Agent "${name}" stopped.`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_sandbox_agents_status",
       description: "Get the detailed status of a specific sandbox agent.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Agent name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         const state = service.getState(name);
 
         if (!state) return errorResult(`Agent not found: ${name}`);
@@ -84,6 +80,6 @@ export function sandboxAgentTools(service: SandboxAgentService): ToolDefinition[
 
         return textResult(lines.join("\n"));
       },
-    },
+    }),
   ];
 }

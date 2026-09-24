@@ -1,5 +1,6 @@
 import { wsConnected, storeMap, data, ensureStore, agentFlowEvents, archEvents, notifications, unreadCount, type DashboardNotification } from './stores.js';
 import { WS_CHANNEL_MAP } from './constants.js';
+import { callWithFallback, RpcAnsweredError, RpcNotSentError } from './rpc-call.js';
 
 let ws: WebSocket | null = null;
 let retryDelay = 1000;
@@ -130,7 +131,7 @@ const pendingRpc = new Map<string, { resolve: (data: unknown) => void; reject: (
 export function rpc(action: string, args: Record<string, unknown> = {}, timeoutMs = 5000): Promise<unknown> {
 	return new Promise((resolve, reject) => {
 		if (!mtwWs || mtwWs.readyState !== WebSocket.OPEN) {
-			reject(new Error('WebSocket not connected'));
+			reject(new RpcNotSentError(action));
 			return;
 		}
 		const id = crypto.randomUUID();
@@ -170,43 +171,15 @@ export async function rpcOrFetch(action: string, args: Record<string, unknown>, 
 	return res.json();
 }
 
-/** RPC with generic HTTP fallback — races the WS path against HTTP so a flaky
- *  bridge never blocks the UI. WS usually responds in <100ms; if it hasn't
- *  responded in 800ms, HTTP fires in parallel and whichever returns first wins. */
-export async function rpcOrCall<T = unknown>(action: string, args: Record<string, unknown>, httpFallback: () => Promise<T>): Promise<T> {
-	if (!wsIsConnected()) {
-		console.debug(`[HTTP] ${action} (WS disconnected)`);
-		return httpFallback();
-	}
-
-	let settled = false;
-	const wsPromise: Promise<T> = rpc(action, args, 3000)
-		.then((r) => {
-			if (!settled) { settled = true; console.debug(`[WS] ${action}`); }
-			return r as T;
-		})
-		.catch((e) => {
-			console.debug(`[WS] ${action} failed`, e);
-			throw e;
-		});
-
-	const httpPromise: Promise<T> = new Promise<T>((resolve, reject) => {
-		setTimeout(() => {
-			if (settled) return;
-			console.debug(`[HTTP] ${action} (WS slow, racing fallback)`);
-			httpFallback().then((v) => {
-				if (!settled) settled = true;
-				resolve(v);
-			}, reject);
-		}, 800);
+/** RPC with an HTTP fallback. Reads race the two roads; writes never run
+ *  twice. See rpc-call.ts for the rules. */
+export function rpcOrCall<T = unknown>(action: string, args: Record<string, unknown>, httpFallback: () => Promise<T>): Promise<T> {
+	return callWithFallback<T>({
+		action,
+		connected: wsIsConnected(),
+		ws: (timeoutMs) => rpc(action, args, timeoutMs) as Promise<T>,
+		http: httpFallback,
 	});
-
-	try {
-		return await Promise.race([wsPromise, httpPromise]);
-	} catch {
-		// Both racers failed — last resort: one more HTTP attempt.
-		return httpFallback();
-	}
 }
 
 /** Handle a message from mtwRequest (MtwMessage format) */
@@ -224,7 +197,7 @@ function handleMtwMessage(msg: any, onMessage?: () => void) {
 			clearTimeout(pending.timer);
 			pendingRpc.delete(refId);
 			if (msg.type === 'error' || payload?.ok === false) {
-				pending.reject(new Error(payload?.error ?? 'RPC error'));
+				pending.reject(new RpcAnsweredError(payload?.error ?? 'RPC error'));
 			} else {
 				pending.resolve(payload?.data ?? payload);
 			}

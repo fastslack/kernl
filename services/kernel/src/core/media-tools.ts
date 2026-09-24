@@ -337,8 +337,3 @@ export function mediaToolError(tool: MediaTool, cause?: unknown): Error {
   );
 }
 
-/** Clear the probe cache. Tests, and the doctor's --fresh path. */
-export function resetMediaToolCache(): void {
-  cache.clear();
-  bundledCache.clear();
-}

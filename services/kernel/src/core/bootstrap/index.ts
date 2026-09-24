@@ -30,7 +30,7 @@
 
 import { loadConfig } from "../config.js";
 import { setLogLevel, log } from "../logger.js";
-import { installKernlHost } from "../host-runtime.js";
+import { installKernlHost, useTimezone } from "../host-runtime.js";
 import { initDatabases } from "./databases.js";
 import { initRegistries } from "./registries.js";
 import { initCoreModules } from "./core-modules.js";
@@ -55,6 +55,8 @@ export async function bootstrap(): Promise<void> {
   // ── Config + log level ─────────────────────────────
   const config = loadConfig();
   setLogLevel(config.logLevel as "debug" | "info" | "warn" | "error");
+  // A getter, not the value: the TIMEZONE setting mutates config at runtime.
+  useTimezone(() => config.timezone);
 
   const transport = config.mcp.transport;
   const useStdio = transport === "stdio" || transport === "both";

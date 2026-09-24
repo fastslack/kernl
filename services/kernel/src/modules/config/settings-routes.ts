@@ -13,7 +13,7 @@
  * restarts or event plumbing.
  */
 
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
 import type { KernelConfig } from "../../core/config.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
@@ -84,7 +84,7 @@ export function registerSettingsRoutes(
   };
 
   // ── GET /api/settings/catalog ─────────────────────────────
-  server.get("/api/settings/catalog", (_req, res) => {
+  server.route("GET", "/api/settings/catalog", () => {
     syncExtensions();
     const rows = new Map(svc.list().map((r) => [r.key, r]));
 
@@ -103,20 +103,15 @@ export function registerSettingsRoutes(
       ),
     }));
 
-    server.json(res, 200, { settings: core, extensionSections });
+    return { settings: core, extensionSections };
   });
 
   // ── PUT /api/settings ─────────────────────────────────────
-  server.put("/api/settings", async (req, res) => {
-    let body: { entries?: Record<string, unknown> };
-    try {
-      body = await server.parseBody<{ entries?: Record<string, unknown> }>(req);
-    } catch {
-      return server.json(res, 400, { error: "Invalid JSON body" });
-    }
+  // Malformed JSON is the helper's 400 "Invalid JSON body".
+  server.route<{ entries?: Record<string, unknown> }>("PUT", "/api/settings", ({ body }) => {
     const entries = body?.entries;
     if (!entries || typeof entries !== "object" || Array.isArray(entries)) {
-      return server.json(res, 400, { error: "Body must be { entries: { KEY: value } }" });
+      throw new HttpError(400, "Body must be { entries: { KEY: value } }");
     }
 
     syncExtensions();
@@ -137,6 +132,6 @@ export function registerSettingsRoutes(
     }
 
     const { updated, errors } = svc.setMany(list, "user");
-    server.json(res, 200, { updated, errors: [...rejected, ...errors] });
+    return { updated, errors: [...rejected, ...errors] };
   });
 }

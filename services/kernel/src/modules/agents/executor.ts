@@ -2,17 +2,17 @@ import { log } from "../../core/logger.js";
 import { isoNow } from "../../core/helpers.js";
 import { zodToJsonSchema } from "../../core/zod-to-json.js";
 import type { ToolDefinition, ToolResult } from "../../core/types.js";
-import type { KernelConfig } from "../../core/config.js";
+import type { KernelConfig, KernelLanguage } from "../../core/config.js";
 import { isProviderExhausted, markProviderExhausted } from "../../core/llm/chat-adapters.js";
 import * as providerHealth from "../../core/llm/provider-health.js";
 import type { ChatLlmProvider } from "../../core/llm/chat-adapters.js";
 import type { ChatMessage } from "../chat/types.js";
 import { runToolLoop } from "../../core/llm/tool-loop.js";
-import type { LlmLoopTool, LlmLoopResult } from "../../core/llm/tool-loop.js";
+import type { LlmLoopTool, LlmLoopResult, LlmLoopBudgets } from "../../core/llm/tool-loop.js";
 import { buildToolSearch, buildToolDescribe, buildCodeRun } from "../meta/index.js";
 import { RankingService } from "../../core/ranking/service.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
-import type { Agent, AgentRun, AgentStep } from "./types.js";
+import type { Agent, AgentRun } from "./types.js";
 import type { AgentService } from "./service.js";
 import { normalizeDriverResult, driverThrewOutcome } from "./driver-result.js";
 import type { BuiltinHandler } from "./builtin-handlers.js";
@@ -20,61 +20,50 @@ import type { AltExecutorLike, EvalServiceLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveAgentSystemPrompt, resolveAgentGoalTemplate, resolveAgentLanguage } from "./i18n.js";
 import {
-  promptTodayDate,
-  promptInvokedBy,
-  promptDefaultAgent,
-  promptInboxBlock,
-  promptLearningsBlock,
-  promptPerformanceBlock,
-  promptSimilarRunsBlock,
-  promptMemorySummaryBlock,
-  promptMemoryGoalSuffix,
-  promptWorkspaceMandate,
-  promptProgressiveDiscovery,
-  promptStyleDirective,
-} from "../../core/i18n/prompts.js";
+  DEFAULT_MAX_CHAIN_DEPTH,
+  failedBeforeStart,
+  type ExecutionResult,
+} from "./executor/shared.js";
+import { agentAllowedTools, agentDeniedTools, agentVariables } from "./agent-fields.js";
+import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from "./executor/model-chain.js";
+import { assembleSystemPrompt } from "./executor/system-prompt.js";
+import { RunRecorder } from "./executor/run-recorder.js";
+import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
+import { localDate } from "../../sdk/clock.js";
+
+// Public surface kept on this module — callers import these from executor.js.
+export type { ExecutionResult } from "./executor/shared.js";
+export { selectToolCapable } from "./executor/model-chain.js";
+export { extractRoleFromReply, stripRoleWrapper } from "./executor/role-wrapper.js";
 
 type LlmToolDef = LlmLoopTool;
+type ToolExecutorMap = Map<string, (args: unknown) => Promise<ToolResult>>;
 
-/**
- * Keep only the chain entries whose provider can actually run a tool loop.
- *
- * An agent run hands its whole tool catalogue to the provider. A provider that
- * declares `supportsToolLoop: false` — today only the claude_code CLI shim,
- * which runs a single turn with no tools — will not execute a single one of
- * them; it fails with a turn-limit error that names neither tools nor the
- * provider's limitation. Dropping it here turns a confusing runtime failure
- * into a chain that either works or reports precisely why it cannot.
- *
- * With no tools in play the provider is perfectly good, so the filter only
- * applies when the run is actually sending some.
- */
-export function selectToolCapable<T extends { provider: ChatLlmProvider; configProvider: string }>(
-  chain: T[],
-  toolCount: number,
-): { chain: T[]; dropped: string[] } {
-  if (toolCount <= 0) return { chain, dropped: [] };
-  const dropped: string[] = [];
-  const kept = chain.filter((entry) => {
-    if (entry.provider.supportsToolLoop === false) {
-      dropped.push(entry.provider.name);
-      return false;
-    }
-    return true;
-  });
-  return { chain: kept, dropped };
+interface ExecuteParams {
+  agent: Agent;
+  goal: string;
+  run: AgentRun;
+  service: AgentService;
+  events?: EventBus;
+  depth?: number;
 }
 
-export interface ExecutionResult {
-  status: "completed" | "failed";
-  result: string;
-  error: string;
-  steps_count: number;
-  tokens_used: number;
+/** Everything the tool-loop phase of a native run needs. */
+interface NativeLoopRun {
+  agent: Agent;
+  run: AgentRun;
+  service: AgentService;
+  events?: EventBus;
+  depth: number;
+  runState: { cancelled: boolean };
+  recorder: RunRecorder;
+  chain: ModelChainEntry[];
+  llmTools: LlmToolDef[];
+  toolExecutor: ToolExecutorMap;
+  systemText: string;
+  effectiveGoal: string;
+  goalWithMemory: string;
 }
-
-const DEFAULT_MAX_CHAIN_DEPTH = 5;
-const DEFAULT_INVOKE_TIMEOUT_MS = 300_000;
 
 /**
  * Tools every agent gets by default so every agent in the fleet knows about
@@ -118,6 +107,11 @@ function isRetryableChainError(err: unknown): boolean {
 /** Subset of retryable errors that should also mark the provider as globally exhausted. */
 function isProviderQuotaError(msg: string): boolean {
   return /insufficient_quota|exceeded your current quota|credit balance|API error 429|API error 402/i.test(msg);
+}
+
+/** Run-level quota check that triggers the cycle-through-all-providers retry. */
+function isQuotaErrorMessage(errorMsg: string): boolean {
+  return errorMsg.includes("insufficient_quota") || errorMsg.includes("exceeded your current quota") || errorMsg.includes("credit balance") || errorMsg.includes("API error 429") || errorMsg.includes("API error 402");
 }
 
 export class AgentExecutor {
@@ -203,446 +197,272 @@ export class AgentExecutor {
     log.info(`AgentExecutor: ${handlers.size} builtin handlers registered`);
   }
 
-  async execute(params: {
-    agent: Agent;
-    goal: string;
-    run: AgentRun;
-    service: AgentService;
-    events?: EventBus;
-    depth?: number;
-  }): Promise<ExecutionResult> {
+  /**
+   * Run an agent to completion.
+   *
+   * Phases: depth guard → cancellation registration → short-circuits
+   * (builtin handler, claude_code) → tools → model chain → prompt → tool loop.
+   * Everything up to the tool loop runs synchronously (unless semantic
+   * ranking has to embed the goal), exactly as it always has: callers that
+   * don't await still observe run_started, the inbox being marked read, etc.
+   * before execute() returns its promise.
+   */
+  async execute(params: ExecuteParams): Promise<ExecutionResult> {
     const { agent, goal, run, service, events } = params;
     const depth = params.depth ?? 0;
-    let stepNumber = 0;
-    let totalTokens = 0;
 
     // Chain depth guard
-    const maxChainDepth = this.configRef?.agents?.maxInvokeDepth ?? DEFAULT_MAX_CHAIN_DEPTH;
+    const maxChainDepth = this.maxChainDepth();
     if (depth > maxChainDepth) {
-      return {
-        status: "failed",
-        result: "",
-        error: `Max chain depth exceeded (limit: ${maxChainDepth})`,
-        steps_count: 0,
-        tokens_used: 0,
-      };
+      return failedBeforeStart(`Max chain depth exceeded (limit: ${maxChainDepth})`);
     }
 
     // Register active run for cancellation support
     const runState = { cancelled: false };
     this.activeRuns.set(run.id, runState);
 
+    // Every way out of the run unregisters it — including the early failures
+    // (no tools, no usable provider) and any early return added later. The
+    // phases below still unregister on their own paths; deleting twice is a
+    // no-op.
+    try {
+      const shortCircuit = this.tryShortCircuit(params, depth);
+      if (shortCircuit) return await shortCircuit;
+
+      const recorder = new RunRecorder(agent, run, service, events);
+
+      // Emit flow event: run started
+      recorder.emit("agent:flow:run_started", {
+        goal: goal.slice(0, 300),
+        trigger_type: run.trigger_type,
+      });
+      recorder.logEvent({
+        event_type: "run",
+        event_subtype: "started",
+        detail: `Goal: ${goal.slice(0, 200)}`,
+        raw_data: { goal: goal.slice(0, 300), trigger_type: run.trigger_type },
+      });
+
+      // 1-2. Tools, with the per-run kernel_agents_invoke handler.
+      const { llmTools, toolExecutor } = this.resolveRunTools(agent, run, service, events, depth);
+      if (llmTools.length === 0) {
+        return this.noToolsResolved(agent);
+      }
+
+      // 3. Model fallback chain.
+      const chainResolution = this.resolveModelChain(agent, service, llmTools.length);
+      if (!chainResolution.ok) {
+        return failedBeforeStart(chainResolution.error);
+      }
+
+      // 4. Interpolate variables in prompts
+      const { lang, effectiveGoal, effectiveSystemPrompt } = this.interpolatePrompts(agent, goal);
+
+      // 5. Build system prompt (enriched with learnings)
+      const assembling = assembleSystemPrompt({
+        agent, service, recorder,
+        config: this.configRef,
+        skillResolver: this.skillResolver,
+        lang, depth, maxChainDepth,
+        effectiveSystemPrompt,
+        effectiveGoal,
+        todayStr: localDate(),
+        goalVector: null,
+        memoryGoalSuffix: "",
+      });
+      const { systemText, memoryGoalSuffix } =
+        assembling instanceof Promise ? await assembling : assembling;
+
+      // Save user message to memory
+      // Don't save goal to memory here — the dashboard chat handler already
+      // persists the user's actual message via POST /api/agents/:id/memory.
+      // Saving the full conversationalGoal (with RULES, RECENT WORK, etc.)
+      // would pollute the chat history with system scaffolding.
+
+      // 5. Build initial messages — inject memory at the END of the goal (recency bias)
+      const goalWithMemory = memoryGoalSuffix
+        ? effectiveGoal + memoryGoalSuffix
+        : effectiveGoal;
+
+      // 6. LLM tool-use loop with safety controls. Awaited so the finally
+      // below runs after the loop, not as soon as its promise is returned —
+      // the run must stay cancellable while it loops.
+      return await this.runNativeLoop({
+        agent, run, service, events, depth, runState, recorder,
+        chain: chainResolution.chain,
+        llmTools, toolExecutor, systemText, effectiveGoal, goalWithMemory,
+      });
+    } finally {
+      this.activeRuns.delete(run.id);
+    }
+  }
+
+  // ── execute() phases ────────────────────────────────
+
+  private maxChainDepth(): number {
+    return this.configRef?.agents?.maxInvokeDepth ?? DEFAULT_MAX_CHAIN_DEPTH;
+  }
+
+  /**
+   * Paths that skip the native LLM loop entirely. Returns null when the run
+   * goes native. Deliberately not async: the native path must not yield here.
+   */
+  private tryShortCircuit(params: ExecuteParams, depth: number): Promise<ExecutionResult> | null {
+    const { agent } = params;
     // Builtin handler short-circuit — skip the LLM path entirely when the agent
     // is backed by a native function. Lets manual runs, chains, and the API
     // invoke handlers (like email:triage) without hitting LLM tool limits.
     if (agent.builtin_handler && this.builtinHandlers.has(agent.builtin_handler)) {
-      const handler = this.builtinHandlers.get(agent.builtin_handler)!;
-      events?.emit("agent:flow:run_started", {
-        agent_id: agent.id,
-        agent_name: agent.name,
-        run_id: run.id,
-        goal,
-      });
-      // Same normalization as the scheduler's cron path: a handler that throws
-      // or returns { ok: false } fails the run, and either way the outcome
-      // feeds the persistent circuit breaker. Manual "Run now" must count
-      // exactly like a scheduled run — otherwise a broken agent could be kept
-      // alive (or paused) depending only on who triggered it.
-      const outcome = await handler()
-        .then((raw) => normalizeDriverResult(raw))
-        .catch((err) => {
-          log.error(`Builtin handler "${agent.builtin_handler}" threw:`, err);
-          return driverThrewOutcome(err);
-        });
-
-      events?.emit("agent:flow:run_completed", {
-        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-        status: outcome.ok ? "completed" : "failed", steps_count: 1, tokens_used: 0,
-        result_preview: outcome.text.slice(0, 200),
-        error: outcome.error,
-      });
-      service.recordRunOutcome(agent.id, {
-        ok: outcome.ok,
-        error: outcome.error,
-        run_id: run.id,
-      });
-      this.activeRuns.delete(run.id);
-      if (!outcome.ok) {
-        log.error(`Builtin handler "${agent.builtin_handler}" failed — ${outcome.error}`);
-      }
-      return {
-        status: outcome.ok ? "completed" : "failed",
-        result: outcome.text,
-        error: outcome.error,
-        steps_count: 1,
-        tokens_used: 0,
-      };
+      return this.runBuiltinHandler(params, this.builtinHandlers.get(agent.builtin_handler)!);
     }
-
     // Route a claude_code agents al SDK — keep declarative chains/auto-eval
     // out of the way; the SDK-backed executor emits the same flow events.
     if (agent.executor_type === "claude_code") {
-      if (!this.claudeCodeExecutor) {
-        this.activeRuns.delete(run.id);
-        return {
-          status: "failed",
-          result: "",
-          error: "claude_code executor not wired — check module initialization",
-          steps_count: 0,
-          tokens_used: 0,
-        };
-      }
-      try {
-        const result = await this.claudeCodeExecutor.execute({
-          agent, goal, run, service, events, depth,
-        });
-        // We still want the declarative chains to run on completion.
-        this.executeDeclarativeChains(agent, run, result, service, depth, events);
-        return result;
-      } finally {
-        this.activeRuns.delete(run.id);
-      }
+      return this.runClaudeCode(params, depth);
     }
+    return null;
+  }
 
-    // Emit flow event: run started
+  private async runBuiltinHandler(params: ExecuteParams, handler: BuiltinHandler): Promise<ExecutionResult> {
+    const { agent, goal, run, service, events } = params;
     events?.emit("agent:flow:run_started", {
       agent_id: agent.id,
       agent_name: agent.name,
       run_id: run.id,
-      goal: goal.slice(0, 300),
-      trigger_type: run.trigger_type,
+      goal,
     });
-    service.logEvent({
-      run_id: run.id,
-      agent_id: agent.id,
-      agent_name: agent.name,
-      event_type: "run",
-      event_subtype: "started",
-      detail: `Goal: ${goal.slice(0, 200)}`,
-      raw_data: { goal: goal.slice(0, 300), trigger_type: run.trigger_type },
-    });
+    // Same normalization as the scheduler's cron path: a handler that throws
+    // or returns { ok: false } fails the run, and either way the outcome
+    // feeds the persistent circuit breaker. Manual "Run now" must count
+    // exactly like a scheduled run — otherwise a broken agent could be kept
+    // alive (or paused) depending only on who triggered it.
+    const outcome = await handler()
+      .then((raw) => normalizeDriverResult(raw))
+      .catch((err) => {
+        log.error(`Builtin handler "${agent.builtin_handler}" threw:`, err);
+        return driverThrewOutcome(err);
+      });
 
-    // 1. Resolve allowed tools (baseline social tools auto-included unless denied).
+    events?.emit("agent:flow:run_completed", {
+      agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+      status: outcome.ok ? "completed" : "failed", steps_count: 1, tokens_used: 0,
+      result_preview: outcome.text.slice(0, 200),
+      error: outcome.error,
+    });
+    service.recordRunOutcome(agent.id, {
+      ok: outcome.ok,
+      error: outcome.error,
+      run_id: run.id,
+    });
+    this.activeRuns.delete(run.id);
+    if (!outcome.ok) {
+      log.error(`Builtin handler "${agent.builtin_handler}" failed — ${outcome.error}`);
+    }
+    return {
+      status: outcome.ok ? "completed" : "failed",
+      result: outcome.text,
+      error: outcome.error,
+      steps_count: 1,
+      tokens_used: 0,
+    };
+  }
+
+  private async runClaudeCode(params: ExecuteParams, depth: number): Promise<ExecutionResult> {
+    const { agent, goal, run, service, events } = params;
+    if (!this.claudeCodeExecutor) {
+      this.activeRuns.delete(run.id);
+      return failedBeforeStart("claude_code executor not wired — check module initialization");
+    }
+    try {
+      const result = await this.claudeCodeExecutor.execute({
+        agent, goal, run, service, events, depth,
+      });
+      // We still want the declarative chains to run on completion.
+      this.executeDeclarativeChains(agent, run, result, service, depth, events);
+      return result;
+    } finally {
+      this.activeRuns.delete(run.id);
+    }
+  }
+
+  /**
+   * 1. Resolve allowed tools (baseline social tools auto-included unless denied).
+   * 2. kernel_agents_invoke: its schema is in the baseline, but the handler
+   *    needs per-run context (caller id, depth) to recurse safely. Only wire
+   *    the schema when the tool wasn't denied.
+   */
+  private resolveRunTools(
+    agent: Agent,
+    run: AgentRun,
+    service: AgentService,
+    events: EventBus | undefined,
+    depth: number,
+  ): { llmTools: LlmToolDef[]; toolExecutor: ToolExecutorMap } {
     const { llmTools, toolExecutor } = this.resolveTools(agent, service.getEmbeddingsClient());
 
-    // 2. kernel_agents_invoke: its schema is in the baseline, but the handler
-    //    needs per-run context (caller id, depth) to recurse safely. Only wire
-    //    the handler when the tool wasn't denied.
-    const deniedSet = new Set(parseJsonArray(agent.denied_tools));
+    const deniedSet = new Set(agentDeniedTools(agent));
     const invokeAllowed = !deniedSet.has("kernel_agents_invoke");
     if (invokeAllowed && !llmTools.some(t => t.name === "kernel_agents_invoke")) {
-      llmTools.push({
-        name: "kernel_agents_invoke",
-        description:
-          "Invoke another AI agent by its UUID and wait for its result. " +
-          "Use when you need a pointed, blocking answer from another agent. " +
-          "For async back-and-forth prefer kernel_agents_post_to_colleague; " +
-          "for group deliberation use kernel_agents_call_meeting.",
-        input_schema: {
-          type: "object",
-          properties: {
-            agent_id: { type: "string", description: "UUID of the target AI agent (not a tool name)" },
-            goal: { type: "string", description: "Goal/instruction for the target agent" },
-          },
-          required: ["agent_id", "goal"],
-        },
-      });
+      llmTools.push(invokeToolDef());
     }
 
-    toolExecutor.set("kernel_agents_invoke", async (args: unknown) => {
-      const input = args as { agent_id: string; goal: string };
-      const targetAgent = service.getAgent(input.agent_id);
-      if (!targetAgent) {
-        return { content: [{ type: "text" as const, text: `Agent not found: ${input.agent_id}` }], isError: true };
-      }
-      if (!targetAgent.active) {
-        return { content: [{ type: "text" as const, text: `Agent is inactive: ${targetAgent.name}` }], isError: true };
-      }
+    toolExecutor.set("kernel_agents_invoke", createInvokeHandler({
+      agent, run, service, events, depth,
+      getConfig: () => this.configRef,
+      execute: (p) => this.execute(p),
+      cancelRun: (runId) => this.cancelRun(runId),
+    }));
 
-      // Pre-recursion depth gate. The post-execute guard at the top of execute()
-      // also catches it but firing here avoids creating a doomed child run.
-      const cap = this.configRef?.agents?.maxInvokeDepth ?? DEFAULT_MAX_CHAIN_DEPTH;
-      if (depth + 1 > cap) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: `Cannot invoke "${targetAgent.name}": invocation chain at max depth (${cap}). ` +
-                  `Resolve the current task or break the recursion before calling another agent.`,
-          }],
-          isError: true,
-        };
-      }
+    return { llmTools, toolExecutor };
+  }
 
-      // Propagate root_run_id so nested invokes share a single budget root.
-      // If the calling run was itself an invoke target, its trigger_payload
-      // already carries root_run_id; otherwise this run IS the root.
-      let rootRunId = run.id;
-      try {
-        const tp = JSON.parse(run.trigger_payload || "{}") as Record<string, unknown>;
-        if (typeof tp.root_run_id === "string" && tp.root_run_id) {
-          rootRunId = tp.root_run_id;
-        }
-      } catch { /* ignore */ }
+  private noToolsResolved(agent: Agent): ExecutionResult {
+    const allowedParsed = agentAllowedTools(agent);
+    log.error(
+      `Agent "${agent.name}": no tools resolved. ` +
+      `allowed_tools=${JSON.stringify(allowedParsed)}, ` +
+      `denied_tools=${agent.denied_tools}, ` +
+      `total kernel tools=${this.allTools.length}, ` +
+      `matching=${this.allTools.filter(t => allowedParsed.includes(t.name)).map(t => t.name).join(",")}`,
+    );
+    return failedBeforeStart(
+      `No tools available for this agent (allowed: ${allowedParsed.join(", ")}; ${this.allTools.length} kernel tools loaded)`,
+    );
+  }
 
-      const targetRun = service.createRun({
-        agent_id: targetAgent.id,
-        trigger_type: "chain",
-        trigger_payload: {
-          source_agent_id: agent.id,
-          source_run_id: run.id,
-          root_run_id: rootRunId,
-          invoke_depth: depth + 1,
-        },
-        goal: input.goal,
-        parent_run_id: run.id,
-        parent_agent_id: agent.id,
-        depth: depth + 1,
-      });
-
-      service.updateRun(targetRun.id, { status: "running", started_at: isoNow() });
-      log.info(`Agent "${agent.name}" invoking agent "${targetAgent.name}" (depth: ${depth + 1})`);
-
-      // Save inter-agent conversation: source asks target
-      service.addMemory(agent.id, "assistant", `[To ${targetAgent.name}] ${input.goal.slice(0, 1000)}`, run.id);
-      service.addMemory(targetAgent.id, "user", `[From ${agent.name}] ${input.goal.slice(0, 1000)}`, run.id);
-
-      // Mirror into a generic conversation so the debate orchestrator and
-      // dashboard can observe the exchange as a unified thread. One convo per
-      // (topic_hash, participants) pair — reused if the same pair talks about
-      // the same topic within the same hash window.
-      const invokeConvo = service.findOrCreateChatConversation({
-        topic: input.goal.slice(0, 300),
-        participants: [agent.id, targetAgent.id],
-        initiator_agent_id: agent.id,
-      });
-      const questionMsg = service.postMessage({
-        conversation_id: invokeConvo.id,
-        from_agent_id: agent.id,
-        to_agent_id: targetAgent.id,
-        role: "question",
-        body: input.goal,
-        run_id: run.id,
-        meta: { via: "kernel_agents_invoke", depth: depth + 1 },
-      });
-
-      events?.emit("agent:flow:chain_triggered", {
-        source_agent_id: agent.id, source_agent_name: agent.name,
-        target_agent_id: targetAgent.id, target_agent_name: targetAgent.name,
-        chain_id: `invoke-${agent.id}-${targetAgent.id}`, chain_label: `${agent.name} → ${targetAgent.name}`,
-        run_id: targetRun.id,
-      });
-      service.logEvent({
-        run_id: targetRun.id, agent_id: targetAgent.id, agent_name: targetAgent.name,
-        event_type: "chain", event_subtype: "triggered",
-        detail: `${agent.name} -> ${targetAgent.name}`,
-        raw_data: { source_agent_id: agent.id, source_agent_name: agent.name, chain_id: `invoke-${agent.id}-${targetAgent.id}` },
-      });
-
-      // Hard timeout on the recursive await — prevents an unresponsive child
-      // (or a long sub-tree of invokes) from hanging the parent. We cancel
-      // the target run on timeout so its state doesn't stay 'running' forever.
-      const timeoutMs = this.configRef?.agents?.invokeTimeoutMs ?? DEFAULT_INVOKE_TIMEOUT_MS;
-      const TIMEOUT_SENTINEL: ExecutionResult = {
-        status: "failed",
-        result: "",
-        error: `Invoke timeout: ${targetAgent.name} did not return within ${timeoutMs}ms`,
-        steps_count: 0,
-        tokens_used: 0,
-      };
-      const result = await Promise.race<ExecutionResult>([
-        this.execute({
-          agent: targetAgent,
-          goal: input.goal,
-          run: targetRun,
-          service,
-          events,
-          depth: depth + 1,
-        }),
-        new Promise<ExecutionResult>((resolve) =>
-          setTimeout(() => {
-            // Best-effort cancel of the child run so its branch unwinds.
-            this.cancelRun(targetRun.id);
-            resolve(TIMEOUT_SENTINEL);
-          }, timeoutMs),
-        ),
-      ]);
-
-      service.updateRun(targetRun.id, {
-        status: result.status,
-        result: result.result,
-        error: result.error,
-        steps_count: result.steps_count,
-        tokens_used: result.tokens_used,
-        completed_at: isoNow(),
-      });
-
-      // Save target's response back to source agent's memory
-      const responseText = result.status === "failed" ? `[Error] ${result.error}` : result.result;
-      service.addMemory(targetAgent.id, "assistant", `[To ${agent.name}] ${responseText.slice(0, 1000)}`, targetRun.id);
-      service.addMemory(agent.id, "user", `[From ${targetAgent.name}] ${responseText.slice(0, 1000)}`, targetRun.id);
-
-      // Mirror the reply into the conversation. Role defaults to 'answer';
-      // the target's own LLM output may override this via self-marking
-      // (parsed in step 7 below), but from invoke we know at least it's an
-      // answer to the question — counter/stmt can still be applied by the
-      // parser when the target wraps its reply with a role marker.
-      const answerRole = extractRoleFromReply(result.result) ?? "answer";
-      service.postMessage({
-        conversation_id: invokeConvo.id,
-        from_agent_id: targetAgent.id,
-        to_agent_id: agent.id,
-        role: answerRole,
-        in_reply_to: questionMsg.id,
-        body: result.status === "failed" ? `[Error] ${result.error}` : stripRoleWrapper(result.result),
-        tokens: result.tokens_used,
-        run_id: targetRun.id,
-        meta: { via: "kernel_agents_invoke" },
-      });
-
-      return {
-        content: [{
-          type: "text" as const,
-          text: result.status === "failed"
-            ? `Agent "${targetAgent.name}" failed: ${result.error}`
-            : result.result,
-        }],
-        isError: result.status === "failed",
-      };
+  /**
+   * 3. Resolve the ordered (provider, model) fallback chain for this run —
+   * see buildModelChain for the dedupe/availability/tool-capability/health
+   * rules.
+   */
+  private resolveModelChain(agent: Agent, service: AgentService, toolCount: number): ModelChainResolution {
+    const resolution = buildModelChain({
+      agentName: agent.name,
+      agentChain: service.resolveModelChain(agent),
+      globalChain: this.configRef?.agents?.defaultModelChain ?? [],
+      providers: this.providers,
+      defaultProvider: this.defaultProvider,
+      toolCount,
     });
-
-    if (llmTools.length === 0) {
-      const allowedParsed: string[] = parseJsonArray(agent.allowed_tools);
-      log.error(
-        `Agent "${agent.name}": no tools resolved. ` +
-        `allowed_tools=${JSON.stringify(allowedParsed)}, ` +
-        `denied_tools=${agent.denied_tools}, ` +
-        `total kernel tools=${this.allTools.length}, ` +
-        `matching=${this.allTools.filter(t => allowedParsed.includes(t.name)).map(t => t.name).join(",")}`,
-      );
-      return {
-        status: "failed",
-        result: "",
-        error: `No tools available for this agent (allowed: ${allowedParsed.join(", ")}; ${this.allTools.length} kernel tools loaded)`,
-        steps_count: 0,
-        tokens_used: 0,
-      };
-    }
-
-    // 3. Resolve the model fallback chain. Each entry is (provider, model).
-    //    Agent-level chain wins; the global `agents.defaultModelChain` is
-    //    appended as a common tail (deduped by provider+model) so any agent
-    //    without a full custom 3-slot chain still benefits from global
-    //    fallbacks — this is the UX "1 default + 2 fallbacks for everyone".
-    //
-    //    Empty entries ({provider:"", model:""}) are dropped — they represent
-    //    an agent with no explicit preference. Without this drop they'd resolve
-    //    to `this.defaultProvider` and race ahead of the curated global chain
-    //    (regression: an agent with no chain + an exhausted default provider
-    //    would fall back to *any* available LLM regardless of user preference).
-    const agentChain = service.resolveModelChain(agent);
-    const globalChain = this.configRef?.agents?.defaultModelChain ?? [];
-    const seen = new Set<string>();
-    const rawChain: Array<{ provider: string; model: string }> = [];
-    for (const e of [...agentChain, ...globalChain]) {
-      if (!e.provider && !e.model) continue;
-      const key = `${e.provider}::${e.model}`;
-      if (seen.has(key)) continue;
-      seen.add(key);
-      rawChain.push(e);
-    }
-    // Last-resort safety net: if after the drop the chain is empty (no agent
-    // chain, no global chain configured), keep one entry so at least one
-    // attempt happens — using the configured default provider.
-    if (rawChain.length === 0) {
-      rawChain.push({ provider: this.defaultProvider, model: "" });
-    }
-    const effectiveChain: Array<{
-      provider: ChatLlmProvider;
-      model: string;
-      configProvider: string;
-    }> = [];
-    for (const entry of rawChain) {
-      const requestedName = entry.provider || this.defaultProvider;
-      // STRICT resolve: only use exactly the provider this chain entry
-      // requested. resolveProvider() used to fall back to *any* healthy
-      // alternative here — but that paired the alternative provider with
-      // the original (provider-specific) model name, producing nonsense
-      // like `claude/grok-4-fast-reasoning` → 400. The chain itself is
-      // the right place to express fallbacks; mid-resolve substitution
-      // contaminates models across providers.
-      const desired = this.providers.get(requestedName);
-      if (!desired || !desired.available()) continue; // skip — next entry handles it
-      effectiveChain.push({
-        provider: desired,
-        model: entry.model,
-        configProvider: entry.provider,
-      });
-    }
-    // Last-resort safety net: every chain entry pointed at an unavailable
-    // provider (no key, never started, etc). Pick any provider that's
-    // alive at all so the agent doesn't dead-end on config mistakes.
-    // Tool-capable only — grabbing "anything alive" is how a single-turn
-    // provider ended up being handed an agent's whole tool catalogue.
-    if (effectiveChain.length === 0) {
-      for (const [name, p] of this.providers) {
-        if (!p.available()) continue;
-        if (llmTools.length > 0 && p.supportsToolLoop === false) continue;
-        effectiveChain.push({ provider: p, model: "", configProvider: name });
-        log.warn(`Agent "${agent.name}": entire chain unavailable, last-resort fallback to ${name}/(default)`);
-        break;
-      }
-    }
-
-    // Drop providers that cannot execute the tools this run is about to send.
-    // Done after availability and before the health re-ordering, so a
-    // tool-incapable provider can never become effectiveChain[0].
-    const capable = selectToolCapable(effectiveChain, llmTools.length);
-    if (capable.dropped.length > 0) {
-      log.warn(
-        `Agent "${agent.name}": dropped ${capable.dropped.join(", ")} from the chain — ` +
-          `${llmTools.length} tools to run and those providers cannot execute a tool loop.`,
-      );
-      effectiveChain.length = 0;
-      effectiveChain.push(...capable.chain);
-    }
-
-    if (effectiveChain.length === 0) {
-      const toolBlocked = capable.dropped.length > 0;
+    if (!resolution.ok) {
       // This run just proved the cached readiness verdict wrong, or confirmed
       // it. Either way the next gate check should re-probe rather than trust a
       // verdict from before whatever broke.
       void import("../../core/llm/readiness.js")
         .then((m) => m.markLlmReadinessStale("an agent run found no usable provider"))
         .catch(() => { /* readiness is optional wiring — never break a run over it */ });
-      return {
-        status: "failed",
-        result: "",
-        error: toolBlocked
-          ? `No LLM provider in the chain can run tool calls. Dropped: ${capable.dropped.join(", ")}. ` +
-            `Configure a provider that supports tools (Settings → AI), or set this agent's executor to "claude_code" to use the CLI's own tool loop.`
-          : `No available LLM provider for chain: ${rawChain.map(e => `${e.provider || "(default)"}/${e.model || "(default)"}`).join(", ")}`,
-        steps_count: 0,
-        tokens_used: 0,
-      };
     }
-    // Re-order: push providers the health tracker has blocked (quota /
-    // auth / repeated transient) to the tail of the chain. Without this
-    // the executor would happily call effectiveChain[0] (e.g. Grok) on
-    // every agent run even when provider-health knows it's been 403ing
-    // for the last hour. Stable within each bucket so the user's chain
-    // order still wins among healthy candidates.
-    effectiveChain.sort((a, b) => {
-      const ab = providerHealth.isBlocked(a.provider.name) ? 1 : 0;
-      const bb = providerHealth.isBlocked(b.provider.name) ? 1 : 0;
-      return ab - bb;
-    });
-    // `provider` is kept for backward compat with downstream code — it tracks
-    // whichever entry in the chain is currently active.
-    let provider = effectiveChain[0].provider;
+    return resolution;
+  }
 
-    // 4. Interpolate variables in prompts
-    let vars: Record<string, string> = {};
-    try { vars = JSON.parse(agent.variables || "{}"); } catch { /* ignore */ }
+  /** 4. Interpolate {{variables}} in the goal and the agent's system prompt. */
+  private interpolatePrompts(agent: Agent, goal: string): {
+    lang: KernelLanguage;
+    effectiveGoal: string;
+    effectiveSystemPrompt: string;
+  } {
+    // Values are interpolated as stored (a non-string is stringified by replace).
+    const vars = agentVariables(agent) as Record<string, string>;
     const interpolate = (text: string): string =>
       text.replace(/\{\{(\w+)\}\}/g, (_, key) => vars[key] ?? `{{${key}}}`);
 
@@ -650,425 +470,50 @@ export class AgentExecutor {
     const effectiveGoal = interpolate(goal);
     const rawSystemPrompt = resolveAgentSystemPrompt(agent, lang);
     const effectiveSystemPrompt = interpolate(rawSystemPrompt);
+    return { lang, effectiveGoal, effectiveSystemPrompt };
+  }
 
-    // 5. Build system prompt (enriched with learnings)
-    const todayStr = new Date().toISOString().slice(0, 10);
-    const systemParts: string[] = [];
-    systemParts.push(effectiveSystemPrompt || promptDefaultAgent(lang));
-    systemParts.push(promptTodayDate(lang, todayStr));
-
-    // Procedural skills index — for each slug in agent.skills_json, surface a
-    // one-line entry (slug + frontmatter description) so the model knows the
-    // skill exists and what triggers it. Full body is loaded on demand via
-    // `kernel_skill_load`. Cheap on tokens — typically <50 tok per skill.
-    if (this.skillResolver && agent.skills_json) {
-      let attached: string[] = [];
-      try { attached = JSON.parse(agent.skills_json) as string[]; } catch { attached = []; }
-      if (Array.isArray(attached) && attached.length > 0) {
-        const idx = this.skillResolver.buildPromptIndex(attached);
-        if (idx) systemParts.push(idx);
-      }
-    }
-
-    if (depth > 0) {
-      systemParts.push(promptInvokedBy(lang, depth, maxChainDepth));
-    }
-
-    // Progressive-discovery hint — the LLM only sees a tiny bootstrap toolset
-    // (social baseline + workspace publish + meta tools). The full catalog is
-    // discoverable via the meta tools and reachable two ways: activate-and-call
-    // for ergonomic single calls, or code_run to compose multiple calls in one
-    // inference round.
-    if (agent.progressive_discovery) {
-      systemParts.push(promptProgressiveDiscovery(lang));
-    }
-
-    // Inject fleet directory — every agent knows every other agent by default.
-    // Re-rendered each run so new agents are visible without manual updates.
-    const directoryBlock = service.buildDirectoryBlock(agent.id);
-    if (directoryBlock) systemParts.push(directoryBlock);
-
-    // Inject global reporting-hierarchy context (rank, superiors, peers, subordinates).
-    // No-op if the agent has no rank assigned.
-    const hierarchyBlock = service.buildHierarchyBlock(agent.id);
-    if (hierarchyBlock) systemParts.push(hierarchyBlock);
-
-    // Inject unread office-inbox messages from colleagues. These are async
-    // requests/escalations from other agents in the same flow that the linear
-    // declarative chain cannot carry (e.g. Developer → Manager hand-back).
-    // We mark them read BEFORE the run starts so a provider retry doesn't
-    // re-inject them.
-    const inbox = service.getUnreadInbox(agent.id);
-    if (inbox.length > 0) {
-      const inboxEntries = inbox.map((m) => ({
-        senderName: service.getAgent(m.from_agent_id)?.name ?? m.from_agent_id,
-        timestamp: m.created_at.slice(0, 16).replace("T", " "),
-        subject: m.subject,
-        body: m.body,
-      }));
-      systemParts.push(promptInboxBlock(lang, inboxEntries));
-      service.markInboxRead(inbox.map(m => m.id));
-      events?.emit("agent:inbox:delivered", {
-        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-        count: inbox.length, message_ids: inbox.map(m => m.id),
-      });
-      service.logEvent({
-        run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-        event_type: "run", event_subtype: "inbox_delivered",
-        detail: `${inbox.length} pending inbox message(s) from colleagues`,
-        raw_data: { count: inbox.length, message_ids: inbox.map(m => m.id) },
-      });
-    }
-
-    // Semantic ranking gate — ONE embed of the goal serves all three rankers
-    // (learnings, similar runs, memory). Falls back to lexical when the flag
-    // is off, the embeddings client isn't wired, or the embed call fails.
-    // Costs ~50-100ms (local MiniLM) / <30ms (LMStudio) per run when enabled.
-    const useSemantic = !!this.configRef?.agents?.useSemanticRanking;
-    const embedClient = useSemantic ? service.getEmbeddingsClient() : null;
-    let goalVector: number[] | null = null;
-    if (embedClient) {
-      try {
-        const [vec] = await embedClient.embed([effectiveGoal]);
-        goalVector = vec ?? null;
-      } catch (err) {
-        log.debug(`Goal embed failed, falling back to lexical: ${err instanceof Error ? err.message : String(err)}`);
-      }
-    }
-    const cosW = this.configRef?.agents?.semanticRankingCosineWeight;
-    const minS = this.configRef?.agents?.semanticRankingMinScore;
-
-    // Inject learnings — ranked by relevance to current goal, not blind top-confidence
-    const learnings = goalVector
-      ? service.getRelevantLearningsByEmbedding(agent.id, effectiveGoal, goalVector, 15, cosW, minS)
-      : service.getRelevantLearnings(agent.id, effectiveGoal, 15);
-    const learningsBlock = promptLearningsBlock(lang, learnings);
-    if (learningsBlock) systemParts.push(learningsBlock);
-
-    // Inject performance stats summary
-    const stats = service.getAgentStats(agent.id);
-    const perfBlock = promptPerformanceBlock(lang, stats);
-    if (perfBlock) systemParts.push(perfBlock);
-
-    // Inject similar past runs — "when you were asked X, you produced Y"
-    // This is the core of semantic recall: recognize situations you've been in before.
-    const similarRuns = goalVector
-      ? service.findSimilarPastRunsByEmbedding(agent.id, effectiveGoal, goalVector, 3, 30, cosW, minS)
-      : service.findSimilarPastRuns(agent.id, effectiveGoal, 3);
-    if (similarRuns.length > 0) {
-      systemParts.push(
-        promptSimilarRunsBlock(
-          lang,
-          similarRuns.map((r) => ({
-            ok: r.status === "completed",
-            goal: r.goal.slice(0, 200).replace(/\s+/g, " "),
-            result: (r.result || r.error || "(empty)").slice(0, 300).replace(/\s+/g, " "),
-          })),
-        ),
-      );
-    }
-
-    // Inject conversational memory — ranked by goal relevance, not pure recency
-    const memory = goalVector
-      ? service.getRelevantMemoryByEmbedding(agent.id, effectiveGoal, goalVector, 50, 100, cosW, minS)
-      : service.getRelevantMemory(agent.id, effectiveGoal, 50);
-    let memoryBlock = "";
-    if (memory.length > 0) {
-      // System prompt: compact summary of relevance-ranked memory (chronological).
-      const summaryEntries = [...memory].reverse().map((m) => ({
-        role: m.role,
-        timestamp: m.created_at.slice(5, 16).replace("T", " "),
-        content: m.content.slice(0, 200),
-      }));
-      systemParts.push(promptMemorySummaryBlock(lang, summaryEntries));
-
-      // Short memory block injected directly into the goal (top 10 most relevant)
-      const suffixEntries = memory.slice(0, 10).map((m) => ({
-        role: m.role,
-        timestamp: m.created_at.slice(5, 16).replace("T", " "),
-        content: m.content.slice(0, 300),
-      }));
-      memoryBlock = promptMemoryGoalSuffix(lang, suffixEntries);
-    }
-
-    // Auto-inject a workspace/analysis hint so agents with access use the
-    // shared workspace proactively. No restriction → fleet-wide; explicit
-    // allow_list → whenever any kernel_workspace_* tool is granted (the
-    // upgrade pass in agents/index.ts ensures analysis tools are present too).
-    const allowedForHint: string[] = parseJsonArray(agent.allowed_tools);
-    const hasWorkspaceAccess =
-      allowedForHint.length === 0 ||
-      allowedForHint.some(t => t.startsWith("kernel_workspace_"));
-    if (hasWorkspaceAccess) {
-      systemParts.push(promptWorkspaceMandate(lang));
-    }
-
-    // Final language reinforcement — fights drift in weak local models that
-    // get pulled toward English by tool descriptions and code samples.
-    systemParts.push(promptStyleDirective(lang));
-
-    const systemText = systemParts.join("\n\n");
-
-    // Save user message to memory
-    // Don't save goal to memory here — the dashboard chat handler already
-    // persists the user's actual message via POST /api/agents/:id/memory.
-    // Saving the full conversationalGoal (with RULES, RECENT WORK, etc.)
-    // would pollute the chat history with system scaffolding.
-
-    // 5. Build initial messages — inject memory at the END of the goal (recency bias)
-    const goalWithMemory = memoryBlock
-      ? effectiveGoal + memoryBlock
-      : effectiveGoal;
-    const llmMessages: ChatMessage[] = [
-      { role: "user", content: goalWithMemory },
-    ];
-
-    // 6. LLM tool-use loop with safety controls — delegate to the shared core loop.
-    //    Persistence, event emission, and pretty logging are wired via hooks so the
-    //    loop stays provider-agnostic and reusable from chat/eval/triage.
+  /**
+   * 6. LLM tool-use loop with safety controls — delegate to the shared core loop.
+   *    Persistence, event emission, and pretty logging are wired via hooks so the
+   *    loop stays provider-agnostic and reusable from chat/eval/triage.
+   */
+  private async runNativeLoop(r: NativeLoopRun): Promise<ExecutionResult> {
+    const { agent, run, service, events, depth, recorder } = r;
     const maxIter = agent.max_iterations;
-    const maxTokens = agent.max_tokens ?? 150_000;
-    const maxConsecErrors = agent.max_errors ?? 3;
-    const timeoutMs = agent.timeout_ms || 300_000;
 
     let finalContent = "";
-    let totalTokensFromLoop = 0;
-    const toolsUsedSet = new Set<string>();
-    let abortReason = "";
-    let hitMaxIterations = false;
-    // Per-step running token counter so the LIVE UI can show cumulative
-    // consumption alongside each event without having to wait for the run
-    // to finish. Incremented inside onThought / onFinal hooks. The final
-    // `tokens_used` field on the run row remains the authoritative number
-    // — this just lets the timeline render `tokens_total: 1234` per step.
-    let runningTokens = 0;
+    let totalTokens = 0;
+    // `provider` is kept for backward compat with downstream code — it tracks
+    // whichever entry in the chain is currently active.
+    const active = { provider: r.chain[0].provider };
 
     try {
-      // Sticky fallback loop: try the primary first. If it throws a retryable
-      // error (quota / 429 / 402 / 404 / 5xx / network timeout), move to the
-      // next entry in the chain and restart the tool-loop with a fresh copy of
-      // the initial messages. Once an entry starts streaming successfully, it
-      // is committed for the rest of the run (no mid-run swap).
-      const initialMessagesSnapshot: ChatMessage[] = JSON.parse(JSON.stringify(llmMessages));
-      let loopResult: LlmLoopResult | undefined;
-      let chainIdx = 0;
-      while (chainIdx < effectiveChain.length) {
-        const entry = effectiveChain[chainIdx];
-        provider = entry.provider; // outer `provider` tracks the active entry
-        if (chainIdx > 0) {
-          // Reset messages on retry so the new model starts from the same goal
-          llmMessages.length = 0;
-          for (const m of JSON.parse(JSON.stringify(initialMessagesSnapshot)) as ChatMessage[]) {
-            llmMessages.push(m);
-          }
-        }
-        try {
-          loopResult = await runToolLoop({
-            provider: entry.provider,
-            systemText,
-            model: entry.model || undefined,
-            messages: llmMessages,
-            tools: llmTools,
-        executeTool: (name, input) => this.executeTool(toolExecutor, name, { ...input, __caller_agent_id: agent.id }),
-        caller: `agent:${agent.name}`,
-        budgets: {
-          maxIterations: maxIter,
-          maxTokens,
-          maxErrors: maxConsecErrors,
-          timeoutMs,
-        },
-        isCancelled: () => runState.cancelled,
-        hooks: {
-          onRateLimitWait: ({ waitMs, attempt }) => {
-            const detail = `Rate limited — waiting ${Math.round(waitMs / 1000)}s (attempt ${attempt}/3)`;
-            log.warn(`Agent "${agent.name}": ${detail}`);
-            events?.emit("agent:flow:step", {
-              agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-              step_number: stepNumber, type: "rate_limit_wait",
-              content_preview: detail, wait_ms: waitMs, attempt,
-            });
-            service.logEvent({
-              run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-              event_type: "step", event_subtype: "rate_limit_wait",
-              detail, raw_data: { wait_ms: waitMs, attempt },
-            });
-          },
-          onFinal: ({ content, tokens }) => {
-            stepNumber++;
-            const stepTokens = Number(tokens) || 0;
-            runningTokens += stepTokens;
-            service.addStep({
-              run_id: run.id, step_number: stepNumber, type: "final",
-              content, tokens,
-            });
-            events?.emit("agent:flow:step", {
-              agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-              step_number: stepNumber, type: "final",
-              content_preview: content.slice(0, 2000),
-              tokens: stepTokens,
-              tokens_total: runningTokens,
-            });
-            service.logEvent({
-              run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-              event_type: "step", event_subtype: "final",
-              detail: content.slice(0, 200),
-              raw_data: { step_number: stepNumber },
-              tokens_used: tokens,
-            });
-          },
-          onThought: ({ content, tokens }) => {
-            stepNumber++;
-            const stepTokens = Number(tokens) || 0;
-            runningTokens += stepTokens;
-            service.addStep({
-              run_id: run.id, step_number: stepNumber, type: "thought",
-              content, tokens,
-            });
-            events?.emit("agent:flow:step", {
-              agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-              step_number: stepNumber, type: "thought",
-              content_preview: content.slice(0, 2000),
-              tokens: stepTokens,
-              tokens_total: runningTokens,
-            });
-            service.logEvent({
-              run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-              event_type: "step", event_subtype: "thought",
-              detail: content.slice(0, 200),
-              raw_data: { step_number: stepNumber },
-              tokens_used: tokens,
-            });
-          },
-          onToolCall: ({ tool_name, tool_input, preview }) => {
-            stepNumber++;
-            toolsUsedSet.add(tool_name);
-            service.addStep({
-              run_id: run.id, step_number: stepNumber, type: "tool_call",
-              tool_name, tool_input,
-            });
-            events?.emit("agent:flow:step", {
-              agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-              step_number: stepNumber, type: "tool_call", tool_name,
-              content_preview: JSON.stringify(tool_input).slice(0, 800),
-              tokens_total: runningTokens,
-            });
-            service.logEvent({
-              run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-              event_type: "step", event_subtype: "tool_call",
-              detail: preview ? `${tool_name}(${preview})` : tool_name,
-              raw_data: { step_number: stepNumber, tool_name, tool_input },
-            });
-          },
-          onToolResult: ({ tool_name, text, isError }) => {
-            stepNumber++;
-            service.addStep({
-              run_id: run.id, step_number: stepNumber, type: "tool_result",
-              tool_name, tool_output: text,
-            });
-            events?.emit("agent:flow:step", {
-              agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-              step_number: stepNumber, type: "tool_result", tool_name,
-              // Preview was 200 chars which hid almost all tool output in the
-              // LIVE tab. 2000 covers most useful tool returns; full text
-              // stays in DB (tool_output) for the HISTORY tab.
-              content_preview: text.slice(0, 2000),
-              tokens_total: runningTokens,
-            });
-            service.logEvent({
-              run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-              event_type: "step", event_subtype: "tool_result",
-              detail: `${tool_name}: ${text.slice(0, 150)}`,
-              raw_data: { step_number: stepNumber, tool_name, is_error: isError },
-            });
-          },
-            },
-          });
-          break; // success (or soft abort via loopResult.abortReason) — commit this entry
-        } catch (innerErr) {
-          const retryable = isRetryableChainError(innerErr);
-          const nextIdx = chainIdx + 1;
-          if (!retryable || nextIdx >= effectiveChain.length) throw innerErr;
-          const fromLabel = `${entry.provider.name}/${entry.model || "(default)"}`;
-          const toEntry = effectiveChain[nextIdx];
-          const toLabel = `${toEntry.provider.name}/${toEntry.model || "(default)"}`;
-          const reason = innerErr instanceof Error ? innerErr.message : String(innerErr);
-          log.warn(`Agent "${agent.name}": ${fromLabel} failed (${reason.slice(0, 100)}), falling back to ${toLabel}`);
-          if (isProviderQuotaError(reason)) markProviderExhausted(entry.provider.name);
-          events?.emit("agent:flow:fallback_used", {
-            agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-            from_provider: entry.provider.name, from_model: entry.model,
-            to_provider: toEntry.provider.name, to_model: toEntry.model,
-            reason: reason.slice(0, 200),
-          });
-          service.logEvent({
-            run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-            event_type: "step", event_subtype: "fallback_used",
-            detail: `Fallback ${fromLabel} → ${toLabel}: ${reason.slice(0, 150)}`,
-            raw_data: { from_provider: entry.provider.name, from_model: entry.model,
-                        to_provider: toEntry.provider.name, to_model: toEntry.model, reason },
-          });
-          chainIdx = nextIdx;
-        }
-      }
-      if (!loopResult) {
-        throw new Error(`Model chain exhausted — all ${effectiveChain.length} entries failed without recovery`);
-      }
+      const loopResult = await this.runModelChain(r, active);
 
       finalContent = loopResult.finalContent;
-      totalTokensFromLoop = loopResult.totalTokens;
-      abortReason = loopResult.abortReason;
-      hitMaxIterations = loopResult.hitMaxIterations;
-      totalTokens += totalTokensFromLoop;
+      const abortReason = loopResult.abortReason;
+      totalTokens += loopResult.totalTokens;
 
       if (abortReason) {
         log.warn(`Agent "${agent.name}": ${abortReason}`);
       }
-      if (hitMaxIterations) {
+      if (loopResult.hitMaxIterations) {
         log.warn(`Agent "${agent.name}": hit max iterations (${maxIter})`);
       }
 
       if (abortReason) {
         // Safety-aborted — record as error step and fail the run
-        stepNumber++;
-        service.addStep({
-          run_id: run.id,
-          step_number: stepNumber,
-          type: "error",
-          content: `Safety abort: ${abortReason}`,
-        });
-        events?.emit("agent:flow:step", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          step_number: stepNumber, type: "error",
-          content_preview: `Safety abort: ${abortReason}`,
-        });
-        service.logEvent({
-          run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-          event_type: "step", event_subtype: "error",
-          detail: `Safety abort: ${abortReason}`,
-          raw_data: { step_number: stepNumber },
-        });
-
+        const error = `Safety abort: ${abortReason}`;
+        recorder.recordErrorStep(error, error);
         const failResult: ExecutionResult = {
           status: "failed",
           result: finalContent,
-          error: `Safety abort: ${abortReason}`,
-          steps_count: stepNumber,
+          error,
+          steps_count: recorder.stepNumber,
           tokens_used: totalTokens,
         };
-
-        events?.emit("agent:flow:run_completed", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          status: "failed", steps_count: stepNumber, tokens_used: totalTokens,
-          result_preview: finalContent.slice(0, 200), error: failResult.error,
-        });
-        service.logEvent({
-          run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-          event_type: "run", event_subtype: "completed",
-          detail: `Failed: ${failResult.error.slice(0, 200)}`,
-          raw_data: { status: "failed", steps_count: stepNumber, tokens_used: totalTokens },
-          tokens_used: totalTokens,
-        });
-
+        recorder.recordRunFailed(failResult.error, finalContent, totalTokens);
         return failResult;
       }
 
@@ -1076,7 +521,7 @@ export class AgentExecutor {
         status: "completed",
         result: finalContent,
         error: "",
-        steps_count: stepNumber,
+        steps_count: recorder.stepNumber,
         tokens_used: totalTokens,
       };
 
@@ -1086,14 +531,12 @@ export class AgentExecutor {
       }
 
       // Emit flow event: run completed
-      events?.emit("agent:flow:run_completed", {
-        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+      recorder.emit("agent:flow:run_completed", {
         status: execResult.status, steps_count: execResult.steps_count,
         tokens_used: execResult.tokens_used,
         result_preview: execResult.result.slice(0, 200),
       });
-      service.logEvent({
-        run_id: run.id, agent_id: agent.id, agent_name: agent.name,
+      recorder.logEvent({
         event_type: "run", event_subtype: "completed",
         detail: `${execResult.status}: ${execResult.steps_count} steps, ${execResult.tokens_used} tokens`,
         raw_data: { status: execResult.status, steps_count: execResult.steps_count, tokens_used: execResult.tokens_used },
@@ -1102,10 +545,7 @@ export class AgentExecutor {
 
       // Emit structured result for cross-module consumption
       if (execResult.status === "completed") {
-        events?.emit("agent:flow:result", {
-          agent_id: agent.id,
-          agent_name: agent.name,
-          run_id: run.id,
+        recorder.emit("agent:flow:result", {
           flow_id: agent.flow_id || "",
           result: execResult.result,
           trigger_type: run.trigger_type,
@@ -1113,7 +553,7 @@ export class AgentExecutor {
       }
 
       // 7. Post-completion: auto-evaluate and close feedback loop
-      await this.autoEvaluate(agent, run, effectiveGoal, execResult, [...toolsUsedSet], service, events);
+      await this.autoEvaluate(agent, run, r.effectiveGoal, execResult, [...recorder.toolsUsed], service, events);
 
       // 8. Post-completion: execute declarative chains
       this.executeDeclarativeChains(agent, run, execResult, service, depth, events);
@@ -1123,101 +563,15 @@ export class AgentExecutor {
       const errorMsg = err instanceof Error ? err.message : String(err);
 
       // Quota exhaustion: cycle through ALL remaining providers until one works
-      const isQuotaError = errorMsg.includes("insufficient_quota") || errorMsg.includes("exceeded your current quota") || errorMsg.includes("credit balance") || errorMsg.includes("API error 429") || errorMsg.includes("API error 402");
-      if (isQuotaError) {
-        // Try every available provider that isn't exhausted
-        for (const [, candidate] of this.providers) {
-          if (!candidate.available() || candidate.name === provider.name) continue;
-          // Use the shared health tracker (same state LlmClient consults)
-          // — covers xAI 403+credits, OpenAI insufficient_quota, Anthropic
-          // billing, and the exponential backoff windows. The legacy
-          // isProviderExhausted is kept as a belt-and-braces fallback.
-          if (providerHealth.isBlocked(candidate.name)) continue;
-          if (isProviderExhausted(candidate.name)) continue;
-
-          log.warn(`Agent "${agent.name}": ${provider.name} quota exhausted, trying ${candidate.name}`);
-          try {
-            // For local models (lmstudio), use a shorter goal to avoid context overflow
-            const retryGoal = candidate.name === "lmstudio"
-              ? effectiveGoal.slice(0, 2000)
-              : goalWithMemory;
-            const retrySystem = candidate.name === "lmstudio"
-              ? systemText.slice(0, 3000)
-              : systemText;
-            // Local models struggle with many tools — limit to 8 max
-            const retryTools = candidate.name === "lmstudio"
-              ? llmTools.slice(0, 8)
-              : llmTools;
-            const retryResult = await runToolLoop({
-              provider: candidate,
-              systemText: retrySystem,
-              model: undefined,
-              messages: [{ role: "user", content: retryGoal }],
-              tools: retryTools,
-              executeTool: (name, input) => this.executeTool(toolExecutor, name, { ...input, __caller_agent_id: agent.id }),
-              caller: `agent:${agent.name}/retry`,
-              budgets: { maxIterations: maxIter, maxTokens, maxErrors: maxConsecErrors, timeoutMs },
-              isCancelled: () => runState.cancelled,
-            });
-            const retryExecResult: ExecutionResult = {
-              status: retryResult.abortReason ? "failed" : "completed",
-              result: retryResult.finalContent,
-              error: retryResult.abortReason ? `Safety abort: ${retryResult.abortReason}` : "",
-              steps_count: stepNumber + retryResult.iterations,
-              tokens_used: totalTokens + retryResult.totalTokens,
-            };
-            service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, 2000), run.id);
-            events?.emit("agent:flow:run_completed", {
-              agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-              status: retryExecResult.status, steps_count: retryExecResult.steps_count,
-              tokens_used: retryExecResult.tokens_used,
-              result_preview: retryExecResult.result.slice(0, 200),
-            });
-            log.info(`Agent "${agent.name}": fallback to ${candidate.name} succeeded`);
-            return retryExecResult;
-          } catch (retryErr) {
-            const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            log.warn(`Agent "${agent.name}": ${candidate.name} also failed: ${retryMsg.slice(0, 100)}`);
-            if (retryMsg.includes("insufficient_quota") || retryMsg.includes("429") || retryMsg.includes("credit balance")) {
-              markProviderExhausted(candidate.name);
-            }
-            continue; // try next provider
-          }
-        }
+      if (isQuotaErrorMessage(errorMsg)) {
+        const retried = await this.retryOnOtherProviders(r, active.provider, totalTokens);
+        if (retried) return retried;
       }
 
       log.error(`Agent "${agent.name}" execution error:`, err);
 
-      stepNumber++;
-      service.addStep({
-        run_id: run.id,
-        step_number: stepNumber,
-        type: "error",
-        content: errorMsg,
-      });
-      events?.emit("agent:flow:step", {
-        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-        step_number: stepNumber, type: "error",
-        content_preview: errorMsg.slice(0, 200),
-      });
-      service.logEvent({
-        run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-        event_type: "step", event_subtype: "error",
-        detail: errorMsg.slice(0, 200),
-        raw_data: { step_number: stepNumber },
-      });
-      events?.emit("agent:flow:run_completed", {
-        agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-        status: "failed", steps_count: stepNumber, tokens_used: totalTokens,
-        result_preview: finalContent.slice(0, 200), error: errorMsg,
-      });
-      service.logEvent({
-        run_id: run.id, agent_id: agent.id, agent_name: agent.name,
-        event_type: "run", event_subtype: "completed",
-        detail: `Failed: ${errorMsg.slice(0, 200)}`,
-        raw_data: { status: "failed", steps_count: stepNumber, tokens_used: totalTokens },
-        tokens_used: totalTokens,
-      });
+      recorder.recordErrorStep(errorMsg, errorMsg.slice(0, 200));
+      recorder.recordRunFailed(errorMsg, finalContent, totalTokens);
 
       // Save error to conversational memory
       service.addMemory(agent.id, "assistant", `[Error] ${errorMsg.slice(0, 500)}`, run.id);
@@ -1226,17 +580,175 @@ export class AgentExecutor {
         status: "failed",
         result: finalContent,
         error: errorMsg,
-        steps_count: stepNumber,
+        steps_count: recorder.stepNumber,
         tokens_used: totalTokens,
       };
 
       // Auto-evaluate the failure so we still extract a lesson for next time
-      await this.autoEvaluate(agent, run, effectiveGoal, failedResult, [...toolsUsedSet], service, events);
+      await this.autoEvaluate(agent, run, r.effectiveGoal, failedResult, [...recorder.toolsUsed], service, events);
 
       return failedResult;
     } finally {
       this.activeRuns.delete(run.id);
     }
+  }
+
+  private loopBudgets(agent: Agent): LlmLoopBudgets {
+    return {
+      maxIterations: agent.max_iterations,
+      maxTokens: agent.max_tokens ?? 150_000,
+      maxErrors: agent.max_errors ?? 3,
+      timeoutMs: agent.timeout_ms || 300_000,
+    };
+  }
+
+  private toolRunner(toolExecutor: ToolExecutorMap, agent: Agent) {
+    return (name: string, input: Record<string, unknown>) =>
+      this.executeTool(toolExecutor, name, { ...input, __caller_agent_id: agent.id });
+  }
+
+  /**
+   * Sticky fallback loop: try the primary first. If it throws a retryable
+   * error (quota / 429 / 402 / 404 / 5xx / network timeout), move to the
+   * next entry in the chain and restart the tool-loop with a fresh copy of
+   * the initial messages. Once an entry starts streaming successfully, it
+   * is committed for the rest of the run (no mid-run swap).
+   *
+   * `active.provider` tracks the entry being attempted, so on a throw it
+   * names the provider that failed last.
+   */
+  private async runModelChain(r: NativeLoopRun, active: { provider: ChatLlmProvider }): Promise<LlmLoopResult> {
+    const { agent, recorder, chain } = r;
+    const llmMessages: ChatMessage[] = [
+      { role: "user", content: r.goalWithMemory },
+    ];
+    const initialMessagesSnapshot: ChatMessage[] = JSON.parse(JSON.stringify(llmMessages));
+    let loopResult: LlmLoopResult | undefined;
+    let chainIdx = 0;
+    while (chainIdx < chain.length) {
+      const entry = chain[chainIdx];
+      active.provider = entry.provider; // outer `provider` tracks the active entry
+      if (chainIdx > 0) {
+        // Reset messages on retry so the new model starts from the same goal
+        llmMessages.length = 0;
+        for (const m of JSON.parse(JSON.stringify(initialMessagesSnapshot)) as ChatMessage[]) {
+          llmMessages.push(m);
+        }
+      }
+      try {
+        loopResult = await runToolLoop({
+          provider: entry.provider,
+          systemText: r.systemText,
+          model: entry.model || undefined,
+          messages: llmMessages,
+          tools: r.llmTools,
+          executeTool: this.toolRunner(r.toolExecutor, agent),
+          caller: `agent:${agent.name}`,
+          budgets: this.loopBudgets(agent),
+          isCancelled: () => r.runState.cancelled,
+          hooks: recorder.loopHooks(),
+        });
+        break; // success (or soft abort via loopResult.abortReason) — commit this entry
+      } catch (innerErr) {
+        const retryable = isRetryableChainError(innerErr);
+        const nextIdx = chainIdx + 1;
+        if (!retryable || nextIdx >= chain.length) throw innerErr;
+        const fromLabel = `${entry.provider.name}/${entry.model || "(default)"}`;
+        const toEntry = chain[nextIdx];
+        const toLabel = `${toEntry.provider.name}/${toEntry.model || "(default)"}`;
+        const reason = innerErr instanceof Error ? innerErr.message : String(innerErr);
+        log.warn(`Agent "${agent.name}": ${fromLabel} failed (${reason.slice(0, 100)}), falling back to ${toLabel}`);
+        if (isProviderQuotaError(reason)) markProviderExhausted(entry.provider.name);
+        recorder.emit("agent:flow:fallback_used", {
+          from_provider: entry.provider.name, from_model: entry.model,
+          to_provider: toEntry.provider.name, to_model: toEntry.model,
+          reason: reason.slice(0, 200),
+        });
+        recorder.logEvent({
+          event_type: "step", event_subtype: "fallback_used",
+          detail: `Fallback ${fromLabel} → ${toLabel}: ${reason.slice(0, 150)}`,
+          raw_data: { from_provider: entry.provider.name, from_model: entry.model,
+                      to_provider: toEntry.provider.name, to_model: toEntry.model, reason },
+        });
+        chainIdx = nextIdx;
+      }
+    }
+    if (!loopResult) {
+      throw new Error(`Model chain exhausted — all ${chain.length} entries failed without recovery`);
+    }
+    return loopResult;
+  }
+
+  /**
+   * Quota exhaustion: try every available provider that isn't exhausted,
+   * outside the agent's chain. Returns the first result, or null when every
+   * candidate failed too (the caller then records the original error).
+   */
+  private async retryOnOtherProviders(
+    r: NativeLoopRun,
+    failedProvider: ChatLlmProvider,
+    totalTokens: number,
+  ): Promise<ExecutionResult | null> {
+    const { agent, run, service, recorder } = r;
+    // Try every available provider that isn't exhausted
+    for (const [, candidate] of this.providers) {
+      if (!candidate.available() || candidate.name === failedProvider.name) continue;
+      // Use the shared health tracker (same state LlmClient consults)
+      // — covers xAI 403+credits, OpenAI insufficient_quota, Anthropic
+      // billing, and the exponential backoff windows. The legacy
+      // isProviderExhausted is kept as a belt-and-braces fallback.
+      if (providerHealth.isBlocked(candidate.name)) continue;
+      if (isProviderExhausted(candidate.name)) continue;
+
+      log.warn(`Agent "${agent.name}": ${failedProvider.name} quota exhausted, trying ${candidate.name}`);
+      try {
+        // For local models (lmstudio), use a shorter goal to avoid context overflow
+        const retryGoal = candidate.name === "lmstudio"
+          ? r.effectiveGoal.slice(0, 2000)
+          : r.goalWithMemory;
+        const retrySystem = candidate.name === "lmstudio"
+          ? r.systemText.slice(0, 3000)
+          : r.systemText;
+        // Local models struggle with many tools — limit to 8 max
+        const retryTools = candidate.name === "lmstudio"
+          ? r.llmTools.slice(0, 8)
+          : r.llmTools;
+        const retryResult = await runToolLoop({
+          provider: candidate,
+          systemText: retrySystem,
+          model: undefined,
+          messages: [{ role: "user", content: retryGoal }],
+          tools: retryTools,
+          executeTool: this.toolRunner(r.toolExecutor, agent),
+          caller: `agent:${agent.name}/retry`,
+          budgets: this.loopBudgets(agent),
+          isCancelled: () => r.runState.cancelled,
+        });
+        const retryExecResult: ExecutionResult = {
+          status: retryResult.abortReason ? "failed" : "completed",
+          result: retryResult.finalContent,
+          error: retryResult.abortReason ? `Safety abort: ${retryResult.abortReason}` : "",
+          steps_count: recorder.stepNumber + retryResult.iterations,
+          tokens_used: totalTokens + retryResult.totalTokens,
+        };
+        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, 2000), run.id);
+        recorder.emit("agent:flow:run_completed", {
+          status: retryExecResult.status, steps_count: retryExecResult.steps_count,
+          tokens_used: retryExecResult.tokens_used,
+          result_preview: retryExecResult.result.slice(0, 200),
+        });
+        log.info(`Agent "${agent.name}": fallback to ${candidate.name} succeeded`);
+        return retryExecResult;
+      } catch (retryErr) {
+        const retryMsg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+        log.warn(`Agent "${agent.name}": ${candidate.name} also failed: ${retryMsg.slice(0, 100)}`);
+        if (retryMsg.includes("insufficient_quota") || retryMsg.includes("429") || retryMsg.includes("credit balance")) {
+          markProviderExhausted(candidate.name);
+        }
+        continue; // try next provider
+      }
+    }
+    return null;
   }
 
   /** Public accessor so other executors (claude_code) can hand off to the same auto-eval flow. */
@@ -1558,8 +1070,8 @@ export class AgentExecutor {
     llmTools: LlmToolDef[];
     toolExecutor: Map<string, (args: unknown) => Promise<ToolResult>>;
   } {
-    const allowed: string[] = parseJsonArray(agent.allowed_tools);
-    const denied: string[] = parseJsonArray(agent.denied_tools);
+    const allowed = agentAllowedTools(agent);
+    const denied = agentDeniedTools(agent);
     const deniedSet = new Set(denied);
 
     let filtered = this.allTools;
@@ -1776,37 +1288,6 @@ export class AgentExecutor {
   }
 }
 
-/**
- * Parse an optional <msg role="..." replies_to="..."> wrapper produced by an
- * agent. The wrapper is stripped before the content is returned to the caller
- * agent; the role is stored on the conversation message for debate detection.
- *
- * Accepted shape (whitespace tolerant):
- *   <msg role="counter" replies_to="abcd-..."> body... </msg>
- *
- * Returns the role string if the tag exists and role is a recognised value,
- * else null (caller falls back to 'answer' or 'stmt').
- */
-export function extractRoleFromReply(text: string):
-  "stmt" | "question" | "answer" | "counter" | "vote" | "summary" | null {
-  if (!text) return null;
-  const m = text.match(/<msg\b[^>]*\brole\s*=\s*"([a-z]+)"/i);
-  if (!m) return null;
-  const r = m[1].toLowerCase();
-  if (r === "stmt" || r === "question" || r === "answer" || r === "counter" || r === "vote" || r === "summary") {
-    return r;
-  }
-  return null;
-}
-
-/** Strip a leading/trailing <msg ...>...</msg> wrapper if present; return body. */
-export function stripRoleWrapper(text: string): string {
-  if (!text) return text;
-  const m = text.match(/^\s*<msg\b[^>]*>([\s\S]*?)<\/msg>\s*$/i);
-  if (m) return m[1].trim();
-  return text;
-}
-
 /** Resolve {{variable}} placeholders in a goal template */
 export function resolveGoal(
   template: string,
@@ -1822,20 +1303,6 @@ export function resolveGoal(
     }
     return value != null ? String(value) : "";
   });
-}
-
-/** Parse a JSON array that may be double-encoded (string of a string). */
-function parseJsonArray(raw: string): string[] {
-  try {
-    let parsed = JSON.parse(raw);
-    // Handle double-encoded JSON: '""[...]""' → parse again
-    if (typeof parsed === "string") {
-      parsed = JSON.parse(parsed);
-    }
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
 }
 
 /** Evaluate a chain condition against an execution result */

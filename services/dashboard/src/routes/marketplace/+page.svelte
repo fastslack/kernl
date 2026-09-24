@@ -2,10 +2,10 @@
   import { goto } from '$app/navigation';
   import { marketplace, activeTheme } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import Panel from '$lib/components/Panel.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Empty from '$lib/components/Empty.svelte';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import Badge from '$shared/components/Badge.svelte';
+  import Empty from '$shared/components/Empty.svelte';
   import {
     marketplaceInstall, marketplaceUninstall, marketplaceEnable, marketplaceDisable,
     marketplaceActivateTheme, marketplaceDeactivateTheme, marketplaceExport, marketplaceReview,

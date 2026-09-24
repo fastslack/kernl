@@ -257,11 +257,6 @@ export function getChatProviders(): Map<string, ChatLlmProvider> | null {
   return providerSource ? providerSource() : null;
 }
 
-/** The last verdict, or null before the first probe finishes. */
-export function getLlmReadiness(): LlmReadiness | null {
-  return cached;
-}
-
 /**
  * Force the next check to re-probe.
  *

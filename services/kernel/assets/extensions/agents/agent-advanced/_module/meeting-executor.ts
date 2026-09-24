@@ -20,6 +20,7 @@ import {
   log,
   isoNow,
   newId,
+  sleep,
   type EventBus,
   type KernelConfig,
   type KernelLanguage,
@@ -755,8 +756,4 @@ function emitThinking(
     round,
     ts: new Date().toISOString(),
   });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

@@ -9,8 +9,8 @@
  * no secrets and it is signed, so serving it to anyone is safe — and being
  * public is the point: it is how a friend finds you the first time.
  */
-import type { IncomingMessage, ServerResponse } from "node:http";
-import type { KernelHttpServer } from "../http-server.js";
+import type { IncomingMessage } from "node:http";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import { log } from "../logger.js";
 import { verifyRequest } from "./auth.js";
 import type { PeerClient } from "./client.js";
@@ -36,23 +36,16 @@ function absoluteUrl(req: IncomingMessage): string {
   return `${proto}://${host}${req.url ?? ""}`;
 }
 
-function param(req: IncomingMessage, name: string): string {
-  return (req as IncomingMessage & { params?: Record<string, string> }).params?.[name] ?? "";
-}
-
 export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRoutesDeps): void {
   // ── Public: who am I ────────────────────────────────────────
-  server.get("/.well-known/kernl", (_req, res: ServerResponse) => {
+  server.route("GET", "/.well-known/kernl", () => {
     const event = deps.currentDescriptor();
-    if (!event) {
-      server.json(res, 503, { error: "presence not ready" });
-      return;
-    }
-    server.json(res, 200, event);
+    if (!event) throw new HttpError(503, "presence not ready");
+    return event;
   });
 
   // ── Owner: our own identity ─────────────────────────────────
-  server.get("/api/peering/whoami", (_req, res) => {
+  server.route("GET", "/api/peering/whoami", () => {
     const event = deps.currentDescriptor();
     let descriptor: unknown = null;
     try {
@@ -60,60 +53,42 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
     } catch {
       descriptor = null;
     }
-    server.json(res, 200, { npub: deps.selfNpub(), descriptor });
+    return { npub: deps.selfNpub(), descriptor };
   });
 
   // ── Owner: friends ──────────────────────────────────────────
-  server.get("/api/peering/friends", (_req, res) => {
-    server.json(res, 200, { friends: deps.friends.list().map(publicView) });
+  server.route("GET", "/api/peering/friends", () => ({ friends: deps.friends.list().map(publicView) }));
+
+  server.route<{ npub?: string; petname?: string; note?: string }>("POST", "/api/peering/friends", ({ res, body }) => {
+    const npub = (body.npub ?? "").trim();
+    if (!npub || !hexOf(npub)) throw new HttpError(400, "a valid npub is required");
+    const friend = deps.friends.add({ npub, petname: body.petname, note: body.note });
+    if (!friend) throw new HttpError(400, "could not decode that npub");
+    // A 201, so written here. Without `req`: that keeps json() synchronous
+    // (no gzip), so the response is out before the helper looks at it.
+    server.json(res, 201, { friends: deps.friends.list().map(publicView) });
   });
 
-  server.post("/api/peering/friends", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ npub?: string; petname?: string; note?: string }>(req);
-      const npub = (body.npub ?? "").trim();
-      if (!npub || !hexOf(npub)) {
-        server.json(res, 400, { error: "a valid npub is required" });
-        return;
-      }
-      const friend = deps.friends.add({ npub, petname: body.petname, note: body.note });
-      if (!friend) {
-        server.json(res, 400, { error: "could not decode that npub" });
-        return;
-      }
-      server.json(res, 201, { friends: deps.friends.list().map(publicView) });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route<{ petname?: string; note?: string; trust?: Trust }>("PUT", "/api/peering/friends/:npub", ({ params: { npub }, body }) => {
+    if (body.trust && !["pending", "trusted", "revoked"].includes(body.trust)) {
+      throw new HttpError(400, "invalid trust value");
     }
+    const updated = deps.friends.update(npub, body);
+    if (!updated) throw new HttpError(404, "not found");
+    return { friends: deps.friends.list().map(publicView) };
   });
 
-  server.put("/api/peering/friends/:npub", async (req, res) => {
-    try {
-      const npub = param(req, "npub");
-      const body = await server.parseBody<{ petname?: string; note?: string; trust?: Trust }>(req);
-      if (body.trust && !["pending", "trusted", "revoked"].includes(body.trust)) {
-        server.json(res, 400, { error: "invalid trust value" });
-        return;
-      }
-      const updated = deps.friends.update(npub, body);
-      if (!updated) {
-        server.json(res, 404, { error: "not found" });
-        return;
-      }
-      server.json(res, 200, { friends: deps.friends.list().map(publicView) });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
-
-  server.delete("/api/peering/friends/:npub", (req, res) => {
-    deps.friends.remove(param(req, "npub"));
-    server.json(res, 200, { friends: deps.friends.list().map(publicView) });
+  server.route("DELETE", "/api/peering/friends/:npub", ({ params: { npub } }) => {
+    deps.friends.remove(npub);
+    return { friends: deps.friends.list().map(publicView) };
   });
 
   // ── Called by a friend: carry a request to a mutual friend ──
   // Last resort, for when two instances cannot see each other directly but
   // both can see this one.
+  //
+  // Left on the raw handler: it verifies a NIP-98 signature over the request,
+  // and answers 503 before reading the body at all when relaying is off.
   server.post("/api/peering/relay", async (req, res) => {
     if (!deps.client) {
       server.json(res, 503, { error: "relay not available" });
@@ -161,21 +136,15 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
   });
 
   // ── Owner: is this friend reachable right now? ──────────────
-  server.post("/api/peering/friends/:npub/probe", async (req, res) => {
-    try {
-      const npub = param(req, "npub");
-      const peer = await deps.resolver.resolve(npub);
-      if (!peer) {
-        server.json(res, 200, {
-          reachable: false,
-          error: deps.friends.get(npub)?.last_error ?? "unreachable",
-        });
-        return;
-      }
-      server.json(res, 200, { reachable: true, via: peer.kind, origin: peer.origin });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route("POST", "/api/peering/friends/:npub/probe", async ({ params: { npub } }) => {
+    const peer = await deps.resolver.resolve(npub);
+    if (!peer) {
+      return {
+        reachable: false,
+        error: deps.friends.get(npub)?.last_error ?? "unreachable",
+      };
     }
+    return { reachable: true, via: peer.kind, origin: peer.origin };
   });
 }
 

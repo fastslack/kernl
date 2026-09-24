@@ -1,4 +1,7 @@
-const es: Record<string, string> = {
+import type { LlmConnectKey } from "./llm-connect.en.js";
+
+// Exactly the keys of llm-connect.en.ts: a missing or extra key is a compile error.
+const es: Record<LlmConnectKey, string> = {
   "llm.title": "Conectá tu IA",
   "llm.lede": "¿Con qué IA querés que piense Kernl?",
   "llm.group.free": "Gratis",

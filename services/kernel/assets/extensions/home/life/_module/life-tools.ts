@@ -9,10 +9,14 @@ import { z } from "zod";
 import {
   type ToolDefinition,
   type SqliteDb,
+  defineTool,
+  defineToolNoInput,
   textResult,
   errorResult,
   newId,
   isoNow,
+  localDate,
+  kernelTimezone,
 } from "@kernl/extension-sdk";
 import {
   queryHabits,
@@ -35,18 +39,17 @@ const WEATHER_CODES: Record<number, string> = {
 
 export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_life_log",
       description:
         "Log a personal life entry: habit completion, water glass, mood (1-5), exercise, or daily note.",
-      inputSchema: z.object({
+      schema: z.object({
         type: z.enum(["habit", "water", "mood", "note", "exercise"]).describe("Type of log entry"),
         value: z.string().describe("For habit: habit name. For mood: 1-5. For water: ignored. For exercise/note: description."),
         date: z.string().optional().describe("Date (YYYY-MM-DD). Defaults to today."),
       }),
-      handler: async (args) => {
-        const input = args as { type: string; value: string; date?: string };
-        const date = input.date ?? new Date().toISOString().split("T")[0]!;
+      handler: async (input) => {
+        const date = input.date ?? localDate();
         try {
           db.prepare(
             `INSERT INTO life_log (id, type, value, date, created_at) VALUES (?, ?, ?, ?, ?)`,
@@ -56,14 +59,13 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
           return errorResult(`Failed to log: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
-    },
-    {
+    }),
+    defineToolNoInput({
       name: "kernel_life_status",
       description:
         "Get today's life tracking status: habits with streaks, water intake, mood, and daily summary.",
-      inputSchema: z.object({}),
       handler: async () => {
-        const today = new Date().toISOString().split("T")[0]!;
+        const today = localDate();
         const sections: string[] = ["# Life Status", `Date: ${today}`, ""];
 
         const summary = queryDailySummary(db);
@@ -102,12 +104,11 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
 
         return textResult(sections.join("\n"));
       },
-    },
-    {
+    }),
+    defineToolNoInput({
       name: "kernel_weather",
       description:
         "Get current weather, hourly rain probability for the next 24h, and 7-day forecast. Returns temperature, conditions, wind, UV, and precipitation data.",
-      inputSchema: z.object({}),
       handler: async () => {
         try {
           const w = await service.getWeather();
@@ -127,7 +128,7 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
             if (t < now || t - now > 24 * 3600_000) continue;
             const prob = h.precipitationProbability ?? 0;
             if (prob > maxRain) maxRain = prob;
-            const hh = new Date(h.time).toLocaleTimeString("en", { hour: "2-digit", minute: "2-digit", hour12: false, timeZone: process.env.TIMEZONE ?? "UTC" });
+            const hh = new Date(h.time).toLocaleTimeString("en", { timeZone: kernelTimezone(), hour: "2-digit", minute: "2-digit", hour12: false });
             const filled = Math.round(prob / 10);
             const bar = "█".repeat(filled) + "░".repeat(10 - filled);
             lines.push(`${hh}  ${bar} ${prob}%  ${WEATHER_CODES[h.weatherCode] ?? ""}`);
@@ -141,6 +142,6 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
           return errorResult(`Weather fetch failed: ${String(err)}`);
         }
       },
-    },
+    }),
   ];
 }

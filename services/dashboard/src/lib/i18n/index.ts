@@ -1,10 +1,25 @@
 import { writable, derived } from "svelte/store";
-import en from "./en.js";
+import en, { type I18nKey } from "./en.js";
 import es from "./es.js";
-import llmEn from "./llm-connect.en.js";
+import llmEn, { type LlmConnectKey } from "./llm-connect.en.js";
 import llmEs from "./llm-connect.es.js";
 
 export type Locale = "en" | "es" | "nl" | "de" | "fr" | "pt" | "ja" | "zh";
+
+/** Every key `t()` has a string for: the dashboard dictionary plus the LLM-connect strings. */
+export type TranslationKey = I18nKey | LlmConnectKey;
+export type { I18nKey, LlmConnectKey };
+
+/**
+ * What `t()` accepts as a key K. A string literal — or a union of them, such
+ * as `office.kind.${Kind}` over a literal union — must be a known key: any
+ * other literal is a typo and fails to compile. A key only known at runtime
+ * (typed `string`, or a template with a `string` hole like `nav.view.${id}`)
+ * is let through and resolved at runtime, falling back to the raw key.
+ */
+type KeyArg<K extends string> = {} extends Record<K, 1> ? K : K extends TranslationKey ? K : TranslationKey;
+
+export type Translate = <K extends string>(key: KeyArg<K>, params?: Record<string, string | number>) => string;
 
 // Feature strings live in their own files so parallel work on en.ts/es.ts
 // does not collide; they are merged here once.
@@ -31,7 +46,7 @@ export async function loadLocale(loc: Locale): Promise<void> {
 }
 
 /** Translate. Fallback chain: active locale → en → raw key. */
-export const t = derived(locale, ($locale) => {
+export const t = derived(locale, ($locale): Translate => {
   return (key: string, params?: Record<string, string | number>): string => {
     let text = translations[$locale]?.[key] ?? translations.en?.[key] ?? key;
     if (params) {

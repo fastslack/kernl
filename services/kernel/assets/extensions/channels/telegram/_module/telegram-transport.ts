@@ -1,5 +1,13 @@
 import { Bot, Context, InputFile, InlineKeyboard, type NextFunction } from "grammy";
-import { log, type KernelConfig, type VoiceService, type InlineButton } from "@kernl/extension-sdk";
+import { log, chunkText, type KernelConfig, type VoiceService, type InlineButton } from "@kernl/extension-sdk";
+
+/** Telegram's hard limit on a message's text. */
+const TELEGRAM_MAX_LENGTH = 4096;
+
+/** An edit replaces one message and cannot be split: keep what fits and mark the cut. */
+function fitOne(text: string): string {
+  return text.length <= TELEGRAM_MAX_LENGTH ? text : `${text.slice(0, TELEGRAM_MAX_LENGTH - 1)}…`;
+}
 
 export type { InlineButton };
 
@@ -150,7 +158,7 @@ export class TelegramTransport {
         // reply out-of-band (e.g. the top-agent stream edits its own message),
         // so we must NOT post a duplicate.
         if (response.text) {
-          await ctx.reply(response.text, {
+          await this.replyChunked(ctx, response.text, {
             parse_mode: response.parseMode ?? "Markdown",
             reply_parameters: response.replyToMessageId
               ? { message_id: response.replyToMessageId }
@@ -195,12 +203,12 @@ export class TelegramTransport {
 
         // Edit the original message if it exists, otherwise send new
         if (ctx.callbackQuery.message) {
-          await ctx.editMessageText(response.text, {
+          await ctx.editMessageText(fitOne(response.text), {
             parse_mode: response.parseMode ?? "Markdown",
             reply_markup: keyboard,
           });
         } else {
-          await ctx.reply(response.text, {
+          await this.replyChunked(ctx, response.text, {
             parse_mode: response.parseMode ?? "Markdown",
             reply_markup: keyboard,
           });
@@ -256,25 +264,25 @@ export class TelegramTransport {
               const synthesis = await this.voiceService.synthesize(textResponse.text);
               await ctx.replyWithVoice(new InputFile(synthesis.audio, "response.ogg"));
               // Also send text as caption or follow-up
-              await ctx.reply(textResponse.text, {
+              await this.replyChunked(ctx, textResponse.text, {
                 parse_mode: textResponse.parseMode ?? "Markdown",
               });
             } catch (synthErr) {
               log.warn("Telegram: voice synthesis failed, sending text only", synthErr);
-              await ctx.reply(textResponse.text, {
+              await this.replyChunked(ctx, textResponse.text, {
                 parse_mode: textResponse.parseMode ?? "Markdown",
               });
             }
           } else {
             // Just send text response
-            await ctx.reply(textResponse.text, {
+            await this.replyChunked(ctx, textResponse.text, {
               parse_mode: textResponse.parseMode ?? "Markdown",
             });
           }
         } else if (this.messageHandler) {
           // Fall back to regular message handler with transcribed text
           const textResponse = await this.messageHandler(transcription.text, context);
-          await ctx.reply(textResponse.text, {
+          await this.replyChunked(ctx, textResponse.text, {
             parse_mode: textResponse.parseMode ?? "Markdown",
           });
         } else {
@@ -377,14 +385,20 @@ export class TelegramTransport {
       replyToMessageId?: number;
     },
   ): Promise<number> {
-    const result = await this.bot.api.sendMessage(chatId, text, {
-      parse_mode: options?.parseMode ?? "Markdown",
-      disable_notification: options?.disableNotification,
-      reply_parameters: options?.replyToMessageId
-        ? { message_id: options.replyToMessageId }
-        : undefined,
-    });
-    return result.message_id;
+    // Over the limit it goes out as several messages; the first one carries
+    // the reply reference and the last one's id is returned.
+    let lastId = 0;
+    for (const [i, piece] of chunkText(text, TELEGRAM_MAX_LENGTH).entries()) {
+      const result = await this.bot.api.sendMessage(chatId, piece, {
+        parse_mode: options?.parseMode ?? "Markdown",
+        disable_notification: options?.disableNotification,
+        reply_parameters: i === 0 && options?.replyToMessageId
+          ? { message_id: options.replyToMessageId }
+          : undefined,
+      });
+      lastId = result.message_id;
+    }
+    return lastId;
   }
 
   /** Send to the default chat (for proactive notifications) */
@@ -487,6 +501,22 @@ export class TelegramTransport {
     }
   }
 
+  /**
+   * ctx.reply for a text that may be over Telegram's 4096 limit: a long reply
+   * goes out as several messages, the first carrying the reply reference and
+   * the last the keyboard.
+   */
+  private async replyChunked(ctx: Context, text: string, options: NonNullable<Parameters<Context["reply"]>[1]> = {}): Promise<void> {
+    const pieces = chunkText(text, TELEGRAM_MAX_LENGTH);
+    for (const [i, piece] of pieces.entries()) {
+      await ctx.reply(piece, {
+        ...options,
+        reply_parameters: i === 0 ? options.reply_parameters : undefined,
+        reply_markup: i === pieces.length - 1 ? options.reply_markup : undefined,
+      });
+    }
+  }
+
   /** Edit a previously sent message */
   async editMessage(
     chatId: number,
@@ -494,7 +524,7 @@ export class TelegramTransport {
     text: string,
     parseMode?: "Markdown" | "MarkdownV2" | "HTML",
   ): Promise<void> {
-    await this.bot.api.editMessageText(chatId, messageId, text, {
+    await this.bot.api.editMessageText(chatId, messageId, fitOne(text), {
       parse_mode: parseMode ?? "Markdown",
     });
   }

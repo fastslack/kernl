@@ -3,49 +3,37 @@
  * REST endpoints for managing the skill registry
  */
 
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import type { SkillRegistry } from "../../skills/registry.js";
-import type { SkillPermission } from "../../skills/types.js";
 import { log } from "../../core/logger.js";
+import { skillOperations } from "./operations.js";
 
 export function registerSkillRoutes(
   server: KernelHttpServer,
   skillRegistry: SkillRegistry,
 ): void {
 
-  // GET /api/skills — list all installed skills
-  server.get("/api/skills", (_req, res) => {
-    const skills = skillRegistry.getAllSkills();
-    const result = Array.from(skills.entries()).map(([id, state]) => ({
-      id,
-      name: state.manifest.name,
-      description: state.manifest.description,
-      version: state.manifest.version,
-      author: state.manifest.author,
-      homepage: state.manifest.homepage ?? null,
-      icon: state.manifest.icon ?? null,
-      category: state.manifest.category ?? "custom",
-      status: state.status,
-      permissions: state.manifest.permissions,
-      grantedPermissions: state.config.grantedPermissions,
-      tags: state.manifest.tags ?? [],
-      toolCount: state.skill ? state.skill.tools.length : 0,
-      loadedAt: state.loadedAt ?? null,
-      error: state.error ?? null,
-    }));
-    server.json(res, 200, { skills: result, total: result.length });
-  });
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The RPC action and the route are one function, so both roads answer alike.
+  const op = skillOperations(skillRegistry);
+  const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
+  ([
+    ["GET", "/api/skills", "skills.list"],
+    ["POST", "/api/skills/install", "skills.install"],
+    ["POST", "/api/skills/enable", "skills.enable"],
+    ["POST", "/api/skills/disable", "skills.disable"],
+    ["DELETE", "/api/skills/uninstall", "skills.uninstall"],
+  ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
-  // GET /api/skills/:id — get single skill
-  server.get("/api/skills/detail", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const id = url.searchParams.get("id");
-    if (!id) { server.json(res, 400, { error: "id required" }); return; }
+  // GET /api/skills/detail?id= — get single skill
+  server.route("GET", "/api/skills/detail", ({ query }) => {
+    const id = query.get("id");
+    if (!id) throw new HttpError(400, "id required");
 
     const state = skillRegistry.getSkill(id);
-    if (!state) { server.json(res, 404, { error: "Skill not found" }); return; }
+    if (!state) throw new HttpError(404, "Skill not found");
 
-    server.json(res, 200, {
+    return {
       id,
       name: state.manifest.name,
       description: state.manifest.description,
@@ -64,195 +52,44 @@ export function registerSkillRoutes(
       tools: state.skill ? state.skill.tools.map(t => ({ name: t.name, description: t.description })) : [],
       loadedAt: state.loadedAt ?? null,
       error: state.error ?? null,
-    });
-  });
-
-  // POST /api/skills/install — install from local, npm, git, or bundled
-  server.post("/api/skills/install", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        type: string;
-        path?: string;
-        package?: string;
-        version?: string;
-        url?: string;
-        ref?: string;
-        id?: string;
-        autoEnable?: boolean;
-      }>(req);
-
-      if (!body.type) { server.json(res, 400, { error: "type required (local|npm|git|bundled)" }); return; }
-
-      // For bundled skills already registered in the registry, just enable them
-      if (body.type === "bundled" && body.id) {
-        const existing = skillRegistry.getSkill(body.id);
-        if (existing) {
-          if (body.autoEnable !== false && existing.status !== "enabled") {
-            // Auto-grant all required permissions so enable succeeds
-            const needed = existing.manifest.permissions as SkillPermission[];
-            if (needed.length > 0) skillRegistry.grantPermissions(body.id, needed);
-            await skillRegistry.enableSkill(body.id);
-          }
-          const state = skillRegistry.getSkill(body.id);
-          server.json(res, 200, { success: true, skillId: body.id, status: state?.status ?? "installed" });
-          return;
-        }
-      }
-
-      let source: Parameters<typeof skillRegistry.install>[0];
-      switch (body.type) {
-        case "local":
-          if (!body.path) { server.json(res, 400, { error: "path required for local install" }); return; }
-          source = { type: "local", path: body.path };
-          break;
-        case "npm":
-          if (!body.package) { server.json(res, 400, { error: "package required for npm install" }); return; }
-          source = { type: "npm", package: body.package, version: body.version };
-          break;
-        case "git":
-          if (!body.url) { server.json(res, 400, { error: "url required for git install" }); return; }
-          source = { type: "git", url: body.url, ref: body.ref };
-          break;
-        case "bundled":
-          if (!body.id) { server.json(res, 400, { error: "id required for bundled install" }); return; }
-          source = { type: "bundled", id: body.id };
-          break;
-        default:
-          server.json(res, 400, { error: `Unknown install type: ${body.type}` });
-          return;
-      }
-
-      const skillId = await skillRegistry.install(source);
-      if (!skillId) {
-        server.json(res, 500, { error: "Installation failed — check server logs" });
-        return;
-      }
-
-      // Auto-enable if requested: first grant all required permissions
-      if (body.autoEnable !== false) {
-        const freshState = skillRegistry.getSkill(skillId);
-        if (freshState) {
-          const needed = freshState.manifest.permissions as SkillPermission[];
-          if (needed.length > 0) skillRegistry.grantPermissions(skillId, needed);
-        }
-        await skillRegistry.enableSkill(skillId);
-      }
-
-      const state = skillRegistry.getSkill(skillId);
-      server.json(res, 200, {
-        success: true,
-        skillId,
-        status: state?.status ?? "installed",
-      });
-    } catch (err) {
-      log.error("Failed to install skill", err);
-      server.json(res, 500, { error: String(err) });
-    }
-  });
-
-  // POST /api/skills/enable — enable a skill
-  server.post("/api/skills/enable", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string; grantPermissions?: boolean }>(req);
-      if (!body.id) { server.json(res, 400, { error: "id required" }); return; }
-
-      // Auto-grant all required permissions if requested (default: true for convenience)
-      const autoGrant = body.grantPermissions !== false;
-      if (autoGrant) {
-        const state = skillRegistry.getSkill(body.id);
-        if (state?.manifest.permissions) {
-          skillRegistry.grantPermissions(body.id, state.manifest.permissions);
-        }
-      }
-
-      const ok = await skillRegistry.enableSkill(body.id);
-      if (!ok) {
-        const state = skillRegistry.getSkill(body.id);
-        server.json(res, 400, { error: state?.error ?? "Failed to enable skill" });
-        return;
-      }
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
-
-  // POST /api/skills/disable — disable a skill
-  server.post("/api/skills/disable", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      if (!body.id) { server.json(res, 400, { error: "id required" }); return; }
-
-      await skillRegistry.disableSkill(body.id);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
-
-  // DELETE /api/skills/uninstall — uninstall a skill
-  server.delete("/api/skills/uninstall", async (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const id = url.searchParams.get("id");
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-
-      const ok = await skillRegistry.uninstall(id);
-      if (!ok) { server.json(res, 404, { error: "Skill not found or failed to remove" }); return; }
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+    };
   });
 
   // POST /api/skills/permissions — grant/revoke permissions
-  server.post("/api/skills/permissions", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        id: string;
-        action: "grant" | "revoke";
-        permissions: string[];
-      }>(req);
-
-      if (!body.id || !body.action || !body.permissions) {
-        server.json(res, 400, { error: "id, action, and permissions required" }); return;
-      }
-
-      const perms = body.permissions as Parameters<typeof skillRegistry.grantPermissions>[1];
-      if (body.action === "grant") {
-        skillRegistry.grantPermissions(body.id, perms);
-      } else {
-        skillRegistry.revokePermissions(body.id, perms);
-      }
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route<{
+    id: string;
+    action: "grant" | "revoke";
+    permissions: string[];
+  }>("POST", "/api/skills/permissions", ({ body }) => {
+    if (!body.id || !body.action || !body.permissions) {
+      throw new HttpError(400, "id, action, and permissions required");
     }
+
+    const perms = body.permissions as Parameters<typeof skillRegistry.grantPermissions>[1];
+    if (body.action === "grant") {
+      skillRegistry.grantPermissions(body.id, perms);
+    } else {
+      skillRegistry.revokePermissions(body.id, perms);
+    }
+    return { success: true };
   });
 
   // POST /api/skills/settings — update skill settings
-  server.post("/api/skills/settings", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string; settings: Record<string, unknown> }>(req);
-      if (!body.id || !body.settings) { server.json(res, 400, { error: "id and settings required" }); return; }
-
-      const ok = skillRegistry.updateSettings(body.id, body.settings);
-      if (!ok) { server.json(res, 404, { error: "Skill not found" }); return; }
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ id: string; settings: Record<string, unknown> }>("POST", "/api/skills/settings", ({ body }) => {
+    if (!body.id || !body.settings) throw new HttpError(400, "id and settings required");
+    if (!skillRegistry.updateSettings(body.id, body.settings)) throw new HttpError(404, "Skill not found");
+    return { success: true };
   });
 
   // GET /api/skills/catalog — built-in skill catalog (marketplace)
-  server.get("/api/skills/catalog", (_req, res) => {
+  server.route("GET", "/api/skills/catalog", () => {
     const installed = skillRegistry.getAllSkills();
     const catalog = BUNDLED_CATALOG.map(item => ({
       ...item,
       installed: installed.has(item.id),
       status: installed.get(item.id)?.status ?? null,
     }));
-    server.json(res, 200, { catalog });
+    return { catalog };
   });
 
   log.info("Skill routes registered (/api/skills/*)");

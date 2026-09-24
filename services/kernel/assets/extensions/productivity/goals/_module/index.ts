@@ -1,61 +1,38 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-} from "@kernl/extension-sdk";
+import { defineModule } from "@kernl/extension-sdk";
 import { goalsMigrations } from "./migrations/001_goals.js";
 import { GoalsService } from "./service.js";
 import { goalsTools } from "./tools.js";
 import { queryGoals } from "./dashboard-queries.js";
+import { goalsCalendarSource } from "./calendar.js";
 import { goalsRpcActions } from "./rpc-actions.js";
 
-export function createGoalsModule(): ExtensibleModule {
-  let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
-
-  return {
+export function createGoalsModule() {
+  return defineModule({
     name: "goals",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "goals", goalsMigrations);
-      dbRef = ctx.sqlite;
-
+    migrations: goalsMigrations,
+    async init(ctx) {
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
           "CREATE CONSTRAINT goal_id IF NOT EXISTS FOR (g:Goal) REQUIRE g.id IS UNIQUE",
         );
       }
-
-      const service = new GoalsService(ctx.sqlite, () => ctx.graph);
-      tools = goalsTools(service);
+      return new GoalsService(ctx.sqlite, () => ctx.graph);
     },
-
-    getTools() {
-      return tools;
+    tools: (s) => goalsTools(s),
+    rpc: (s) => goalsRpcActions(s),
+    // Not dashboardChannel: goals also refreshes the calendar channel.
+    dashboard: {
+      channels: [
+        { name: "goals", query: (db) => queryGoals(db) },
+      ],
+      channelMappings: [
+        { moduleKey: "goals", channels: ["goals", "calendar"] },
+      ],
+      calendarSources: [goalsCalendarSource],
+      stores: ["goals"],
+      fetchEndpoints: [
+        { url: "/api/dashboard/goals", store: "goals" },
+      ],
     },
-
-    getRpcActions() {
-      return dbRef ? goalsRpcActions(dbRef) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [
-          { name: "goals", query: (db) => queryGoals(db) },
-        ],
-        channelMappings: [
-          { moduleKey: "goals", channels: ["goals", "calendar"] },
-        ],
-        stores: ["goals"],
-        fetchEndpoints: [
-          { url: "/api/dashboard/goals", store: "goals" },
-        ],
-      };
-    },
-
-    async shutdown() {},
-  };
+  });
 }

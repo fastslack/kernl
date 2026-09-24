@@ -1,0 +1,3913 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`AgentExecutor.execute — characterization assembles every system-prompt block in order and persists the whole tool loop (semantic ranking): result 1`] = `
+{
+  "error": "",
+  "result": "after wait",
+  "status": "completed",
+  "steps_count": 1,
+  "tokens_used": 7,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization assembles every system-prompt block in order and persists the whole tool loop (semantic ranking): trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "Review {{team}} backlog",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: Review {{team}} backlog",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "Review {{team}} backlog",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "log",
+    "info",
+    "AgentExecutor: agent "Nadia" using progressive_discovery — 2 bootstrap tools, 2 discoverable.",
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 1,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "["pdf","xlsx"]",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getAgent",
+    [
+      "agent-2",
+    ],
+  ],
+  [
+    "svc",
+    "getAgent",
+    [
+      "ghost",
+    ],
+  ],
+  [
+    "svc",
+    "markInboxRead",
+    [
+      [
+        "in-1",
+        "in-2",
+      ],
+    ],
+  ],
+  [
+    "evt",
+    "agent:inbox:delivered",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "count": 2,
+      "message_ids": [
+        "in-1",
+        "in-2",
+      ],
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "2 pending inbox message(s) from colleagues",
+        "event_subtype": "inbox_delivered",
+        "event_type": "run",
+        "raw_data": {
+          "count": 2,
+          "message_ids": [
+            "in-1",
+            "in-2",
+          ],
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "getRelevantLearningsByEmbedding",
+    [
+      "agent-1",
+      "Review Ops backlog",
+      [
+        0.1,
+        0.2,
+        0.3,
+      ],
+      15,
+      0.7,
+      0.2,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRunsByEmbedding",
+    [
+      "agent-1",
+      "Review Ops backlog",
+      [
+        0.1,
+        0.2,
+        0.3,
+      ],
+      3,
+      30,
+      0.7,
+      0.2,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemoryByEmbedding",
+    [
+      "agent-1",
+      "Review Ops backlog",
+      [
+        0.1,
+        0.2,
+        0.3,
+      ],
+      50,
+      100,
+      0.7,
+      0.2,
+    ],
+  ],
+  [
+    "llm",
+    "alpha",
+    {
+      "messages": [
+        {
+          "content": 
+"Review Ops backlog
+
+--- YOUR RELEVANT MEMORY (reference this!) ---
+[03-03 09:00] Received: newest question
+[03-02 08:00] You said: older answer
+---
+"
+,
+          "role": "user",
+        },
+      ],
+      "model": "alpha-1",
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Skills
+- pdf
+- xlsx
+
+You were invoked by another agent (chain depth: 1/4).
+
+## Your toolbox grows on demand (progressive discovery)
+You start with a small set: social tools, workspace publish, and the meta-tools \`kernel_tool_search\`/\`kernel_tool_describe\`/\`kernel_tool_activate\`/\`kernel_code_run\`. The rest of the kernel catalog is NOT loaded — discover it via the meta-tools.
+
+**Recommended flow** to use a new capability (email, calendar, finance, trading, agents-mgmt, files, tasks, etc.):
+1. \`kernel_tool_search({ query: "email send" })\` → returns ranked names.
+2a. **Direct path**: \`kernel_tool_activate({ names: ["kernel_comms_send"] })\` → the tool appears in your toolbox and you call it normally on the next turn.
+2b. **Code-mode path** (compose several in 1 inference): \`kernel_code_run({ script: "const r = await tool('kernel_comms_search_inbox', {q:'invoice'}); return r.results.length;" })\`. Inside the script, \`tool(name, args)\` invokes any tool — use this when the task chains multiple steps.
+3. If you want the full schema first: \`kernel_tool_describe({ name })\`.
+
+Don't assume something is impossible: if you don't see the tool, search first. Better 1-2 extra searches than abandoning the goal.
+
+## Directory
+- Bob (agent-2)
+
+## Hierarchy
+Rank: Lead
+
+## PENDING REQUESTS FROM COLLEAGUES (office inbox — address BEFORE the goal)
+Each entry is async mail from another agent in your office. These often represent blockers or escalations that the normal chain could not deliver. Read them first and act on them — if a colleague asks you to re-dispatch or investigate, do that BEFORE continuing with your goal.
+
+### From Bob — [2026-03-01 10:11] Help
+Please check X
+
+### From ghost — [2026-03-02 01:02] Ping
+Are you there?
+
+## Learnings from past runs (most relevant to current goal first)
+- [AVOID] (confidence: 0.80) Do not guess
+- [PREFER] (confidence: 0.55) Cite sources
+
+## Performance (12 past runs)
+Success rate: 75% | Avg tokens: 900 | Avg steps: 4
+Common errors to avoid: timeout; 429
+
+## Similar past runs (reference these before reinventing)
+- ✓ Goal: "Summarize the week"
+  → Result: "Done well"
+- ✗ Goal: "Other"
+  → Result: "boom"
+
+## MEMORY (relevant past interactions — ALWAYS check before responding)
+[03-02 08:00] OUT: older answer
+[03-03 09:00] IN: newest question
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_workspace_search",
+        "kernel_tool_activate",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": Rate limited — waiting 4s (attempt 2/3)",
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "attempt": 2,
+      "content_preview": "Rate limited — waiting 4s (attempt 2/3)",
+      "run_id": "run-1",
+      "step_number": 0,
+      "type": "rate_limit_wait",
+      "wait_ms": 4200,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Rate limited — waiting 4s (attempt 2/3)",
+        "event_subtype": "rate_limit_wait",
+        "event_type": "step",
+        "raw_data": {
+          "attempt": 2,
+          "wait_ms": 4200,
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "after wait",
+        "run_id": "run-1",
+        "step_number": 1,
+        "tokens": 7,
+        "type": "final",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "after wait",
+      "run_id": "run-1",
+      "step_number": 1,
+      "tokens": 7,
+      "tokens_total": 7,
+      "type": "final",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "after wait",
+        "event_subtype": "final",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+        "tokens_used": 7,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      "after wait",
+      "run-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "result_preview": "after wait",
+      "run_id": "run-1",
+      "status": "completed",
+      "steps_count": 1,
+      "tokens_used": 7,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "completed: 1 steps, 7 tokens",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "completed",
+          "steps_count": 1,
+          "tokens_used": 7,
+        },
+        "run_id": "run-1",
+        "tokens_used": 7,
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:result",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "flow_id": "flow-9",
+      "result": "after wait",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "evt",
+    "agent:flow:auto_eval_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "getLearnings",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "addFeedback",
+    [
+      {
+        "agent_id": "agent-1",
+        "lesson": "keep it short",
+        "outcome": "success",
+        "rating": 4,
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:auto_eval",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "confidence": 0.9,
+      "issues": "none",
+      "outcome": "success",
+      "run_id": "run-1",
+      "score": 4,
+    },
+  ],
+  [
+    "svc",
+    "addLearning",
+    [
+      {
+        "agent_id": "agent-1",
+        "confidence": 0.74,
+        "content": "[auto] keep it short",
+        "source_runs": [
+          "run-1",
+        ],
+        "type": "prefer",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:learning_created",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "confidence": 0.74,
+      "content": "keep it short",
+      "learning_id": "learning-1",
+      "learning_type": "prefer",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "getLearnings",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:learning_deactivated",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "count": 1,
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "score=4 outcome=success lesson=yes",
+        "event_subtype": "auto_eval",
+        "event_type": "run",
+        "raw_data": {
+          "confidence": 0.9,
+          "deactivated_count": 1,
+          "has_lesson": true,
+          "learning_created": true,
+          "outcome": "success",
+          "score": 4,
+        },
+        "run_id": "run-1",
+        "tokens_used": 5,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getChainsBySource",
+    [
+      "agent-1",
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization builds the minimal prompt with lexical ranking and a Spanish override: result 1`] = `
+{
+  "error": "",
+  "result": "Listo",
+  "status": "completed",
+  "steps_count": 1,
+  "tokens_used": 13,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization builds the minimal prompt with lexical ranking and a Spanish override: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "Hacé {{algo}}",
+      "run_id": "run-1",
+      "trigger_type": "schedule",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: Hacé {{algo}}",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "Hacé {{algo}}",
+          "trigger_type": "schedule",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "["kernel_test_echo"]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "es",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "",
+        "timeout_ms": 60000,
+        "variables": "not json",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "Hacé {{algo}}",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "Hacé {{algo}}",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "Hacé {{algo}}",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "beta",
+    {
+      "messages": [
+        {
+          "content": "Hacé {{algo}}",
+          "role": "user",
+        },
+      ],
+      "system": 
+"Sos un agente autónomo. Ejecutá el objetivo indicado usando las herramientas disponibles. Pensá paso a paso. Al terminar, devolvé un resumen claro de lo que hiciste.
+
+Fecha de hoy: 2026-03-04.
+
+ESTILO: Respondé SIEMPRE en español rioplatense, salvo que el usuario te escriba en otro idioma o te pida explícitamente otro. Mensajes a colegas, summaries de workspace y outputs finales — todo en español."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "Listo",
+        "run_id": "run-1",
+        "step_number": 1,
+        "tokens": 13,
+        "type": "final",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "Listo",
+      "run_id": "run-1",
+      "step_number": 1,
+      "tokens": 13,
+      "tokens_total": 13,
+      "type": "final",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Listo",
+        "event_subtype": "final",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+        "tokens_used": 13,
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "result_preview": "Listo",
+      "run_id": "run-1",
+      "status": "completed",
+      "steps_count": 1,
+      "tokens_used": 13,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "completed: 1 steps, 13 tokens",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "completed",
+          "steps_count": 1,
+          "tokens_used": 13,
+        },
+        "run_id": "run-1",
+        "tokens_used": 13,
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:result",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "flow_id": "flow-9",
+      "result": "Listo",
+      "run_id": "run-1",
+      "trigger_type": "schedule",
+    },
+  ],
+  [
+    "svc",
+    "getChainsBySource",
+    [
+      "agent-1",
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization orders the model chain: dedupe, drop empties/unavailable/tool-incapable, blocked providers last: result 1`] = `
+{
+  "error": "API error 503: upstream",
+  "result": "",
+  "status": "failed",
+  "steps_count": 1,
+  "tokens_used": 0,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization orders the model chain: dedupe, drop empties/unavailable/tool-incapable, blocked providers last: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": dropped cc from the chain — 3 tools to run and those providers cannot execute a tool loop.",
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "go",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "go",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "go",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "a",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "model": "a1",
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": a/a1 failed (API error 503: upstream), falling back to c/c1",
+  ],
+  [
+    "evt",
+    "agent:flow:fallback_used",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "from_model": "a1",
+      "from_provider": "a",
+      "reason": "API error 503: upstream",
+      "run_id": "run-1",
+      "to_model": "c1",
+      "to_provider": "c",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Fallback a/a1 → c/c1: API error 503: upstream",
+        "event_subtype": "fallback_used",
+        "event_type": "step",
+        "raw_data": {
+          "from_model": "a1",
+          "from_provider": "a",
+          "reason": "API error 503: upstream",
+          "to_model": "c1",
+          "to_provider": "c",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "llm",
+    "c",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "model": "c1",
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": c/c1 failed (API error 503: upstream), falling back to b/b1",
+  ],
+  [
+    "evt",
+    "agent:flow:fallback_used",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "from_model": "c1",
+      "from_provider": "c",
+      "reason": "API error 503: upstream",
+      "run_id": "run-1",
+      "to_model": "b1",
+      "to_provider": "b",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Fallback c/c1 → b/b1: API error 503: upstream",
+        "event_subtype": "fallback_used",
+        "event_type": "step",
+        "raw_data": {
+          "from_model": "c1",
+          "from_provider": "c",
+          "reason": "API error 503: upstream",
+          "to_model": "b1",
+          "to_provider": "b",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "llm",
+    "b",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "model": "b1",
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "error",
+    [
+      "Agent "Nadia" execution error:",
+      "Error(API error 503: upstream)",
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "API error 503: upstream",
+        "run_id": "run-1",
+        "step_number": 1,
+        "type": "error",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "API error 503: upstream",
+      "run_id": "run-1",
+      "step_number": 1,
+      "type": "error",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "API error 503: upstream",
+        "event_subtype": "error",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "error": "API error 503: upstream",
+      "result_preview": "",
+      "run_id": "run-1",
+      "status": "failed",
+      "steps_count": 1,
+      "tokens_used": 0,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Failed: API error 503: upstream",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "failed",
+          "steps_count": 1,
+          "tokens_used": 0,
+        },
+        "run_id": "run-1",
+        "tokens_used": 0,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      "[Error] API error 503: upstream",
+      "run-1",
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization falls back to any alive tool-capable provider when the whole chain is unavailable: result 1`] = `
+{
+  "error": "",
+  "result": "fallback ok",
+  "status": "completed",
+  "steps_count": 1,
+  "tokens_used": 13,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization falls back to any alive tool-capable provider when the whole chain is unavailable: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": entire chain unavailable, last-resort fallback to alive/(default)",
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "go",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "go",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "go",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "alive",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "fallback ok",
+        "run_id": "run-1",
+        "step_number": 1,
+        "tokens": 13,
+        "type": "final",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "fallback ok",
+      "run_id": "run-1",
+      "step_number": 1,
+      "tokens": 13,
+      "tokens_total": 13,
+      "type": "final",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "fallback ok",
+        "event_subtype": "final",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+        "tokens_used": 13,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      "fallback ok",
+      "run-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "result_preview": "fallback ok",
+      "run_id": "run-1",
+      "status": "completed",
+      "steps_count": 1,
+      "tokens_used": 13,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "completed: 1 steps, 13 tokens",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "completed",
+          "steps_count": 1,
+          "tokens_used": 13,
+        },
+        "run_id": "run-1",
+        "tokens_used": 13,
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:result",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "flow_id": "flow-9",
+      "result": "fallback ok",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "getChainsBySource",
+    [
+      "agent-1",
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization fails precisely when only tool-incapable providers remain: result 1`] = `
+{
+  "error": "No LLM provider in the chain can run tool calls. Dropped: cc. Configure a provider that supports tools (Settings → AI), or set this agent's executor to "claude_code" to use the CLI's own tool loop.",
+  "result": "",
+  "status": "failed",
+  "steps_count": 0,
+  "tokens_used": 0,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization fails precisely when only tool-incapable providers remain: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": dropped cc from the chain — 3 tools to run and those providers cannot execute a tool loop.",
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization fails with the chain listing when no provider is available: result 1`] = `
+{
+  "error": "No available LLM provider for chain: off/(default)",
+  "result": "",
+  "status": "failed",
+  "steps_count": 0,
+  "tokens_used": 0,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization fails with the chain listing when no provider is available: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization records a safety abort as an error step and fails the run: result 1`] = `
+{
+  "error": "Safety abort: Token budget exhausted (500/100)",
+  "result": 
+"thinking out loud
+"
+,
+  "status": "failed",
+  "steps_count": 4,
+  "tokens_used": 500,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization records a safety abort as an error step and fails the run: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "go",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "go",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "go",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "p",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "thinking out loud",
+        "run_id": "run-1",
+        "step_number": 1,
+        "tokens": 500,
+        "type": "thought",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "thinking out loud",
+      "run_id": "run-1",
+      "step_number": 1,
+      "tokens": 500,
+      "tokens_total": 500,
+      "type": "thought",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "thinking out loud",
+        "event_subtype": "thought",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+        "tokens_used": 500,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "run_id": "run-1",
+        "step_number": 2,
+        "tool_input": {
+          "text": "a",
+        },
+        "tool_name": "kernel_test_echo",
+        "type": "tool_call",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "{"text":"a"}",
+      "run_id": "run-1",
+      "step_number": 2,
+      "tokens_total": 500,
+      "tool_name": "kernel_test_echo",
+      "type": "tool_call",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "kernel_test_echo(text=a)",
+        "event_subtype": "tool_call",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 2,
+          "tool_input": {
+            "text": "a",
+          },
+          "tool_name": "kernel_test_echo",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "run_id": "run-1",
+        "step_number": 3,
+        "tool_name": "kernel_test_echo",
+        "tool_output": "echo:a",
+        "type": "tool_result",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "echo:a",
+      "run_id": "run-1",
+      "step_number": 3,
+      "tokens_total": 500,
+      "tool_name": "kernel_test_echo",
+      "type": "tool_result",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "kernel_test_echo: echo:a",
+        "event_subtype": "tool_result",
+        "event_type": "step",
+        "raw_data": {
+          "is_error": false,
+          "step_number": 3,
+          "tool_name": "kernel_test_echo",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": Token budget exhausted (500/100)",
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "Safety abort: Token budget exhausted (500/100)",
+        "run_id": "run-1",
+        "step_number": 4,
+        "type": "error",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "Safety abort: Token budget exhausted (500/100)",
+      "run_id": "run-1",
+      "step_number": 4,
+      "type": "error",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Safety abort: Token budget exhausted (500/100)",
+        "event_subtype": "error",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 4,
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "error": "Safety abort: Token budget exhausted (500/100)",
+      "result_preview": 
+"thinking out loud
+"
+,
+      "run_id": "run-1",
+      "status": "failed",
+      "steps_count": 4,
+      "tokens_used": 500,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Failed: Safety abort: Token budget exhausted (500/100)",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "failed",
+          "steps_count": 4,
+          "tokens_used": 500,
+        },
+        "run_id": "run-1",
+        "tokens_used": 500,
+      },
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization cycles through other providers on a quota error (lmstudio gets the trimmed request): result 1`] = `
+{
+  "error": "",
+  "result": "local answer",
+  "status": "completed",
+  "steps_count": 1,
+  "tokens_used": 13,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization cycles through other providers on a quota error (lmstudio gets the trimmed request): trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "quota1",
+    {
+      "messages": [
+        {
+          "content": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+          "role": "user",
+        },
+      ],
+      "model": "q",
+      "system": 
+"SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": quota1 quota exhausted, trying quota2",
+  ],
+  [
+    "llm",
+    "quota2",
+    {
+      "messages": [
+        {
+          "content": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+          "role": "user",
+        },
+      ],
+      "system": 
+"SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": quota2 also failed: API error 429 again",
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": quota1 quota exhausted, trying lmstudio",
+  ],
+  [
+    "llm",
+    "lmstudio",
+    {
+      "messages": [
+        {
+          "content": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+          "role": "user",
+        },
+      ],
+      "system": "SSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSSS",
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      "local answer",
+      "run-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "result_preview": "local answer",
+      "run_id": "run-1",
+      "status": "completed",
+      "steps_count": 1,
+      "tokens_used": 13,
+    },
+  ],
+  [
+    "log",
+    "info",
+    "Agent "Nadia": fallback to lmstudio succeeded",
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization records a non-retryable error, saves it to memory and auto-evaluates the failure: result 1`] = `
+{
+  "error": "invalid request body",
+  "result": "",
+  "status": "failed",
+  "steps_count": 1,
+  "tokens_used": 0,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization records a non-retryable error, saves it to memory and auto-evaluates the failure: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "go",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "go",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "go",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "p",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "error",
+    [
+      "Agent "Nadia" execution error:",
+      "Error(invalid request body)",
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "invalid request body",
+        "run_id": "run-1",
+        "step_number": 1,
+        "type": "error",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "invalid request body",
+      "run_id": "run-1",
+      "step_number": 1,
+      "type": "error",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "invalid request body",
+        "event_subtype": "error",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "error": "invalid request body",
+      "result_preview": "",
+      "run_id": "run-1",
+      "status": "failed",
+      "steps_count": 1,
+      "tokens_used": 0,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Failed: invalid request body",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "failed",
+          "steps_count": 1,
+          "tokens_used": 0,
+        },
+        "run_id": "run-1",
+        "tokens_used": 0,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      "[Error] invalid request body",
+      "run-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:auto_eval_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "getLearnings",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "addFeedback",
+    [
+      {
+        "agent_id": "agent-1",
+        "lesson": "check input",
+        "outcome": "failure",
+        "rating": 1,
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:auto_eval",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "confidence": 0.7,
+      "issues": "bad",
+      "outcome": "failure",
+      "run_id": "run-1",
+      "score": 1,
+    },
+  ],
+  [
+    "svc",
+    "addLearning",
+    [
+      {
+        "agent_id": "agent-1",
+        "confidence": 0.41000000000000003,
+        "content": "[auto] check input",
+        "source_runs": [
+          "run-1",
+        ],
+        "type": "avoid",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:learning_created",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "confidence": 0.41000000000000003,
+      "content": "check input",
+      "learning_id": "learning-1",
+      "learning_type": "avoid",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "getLearnings",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:learning_deactivated",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "count": 1,
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "score=1 outcome=failure lesson=yes",
+        "event_subtype": "auto_eval",
+        "event_type": "run",
+        "raw_data": {
+          "confidence": 0.7,
+          "deactivated_count": 1,
+          "has_lesson": true,
+          "learning_created": true,
+          "outcome": "failure",
+          "score": 1,
+        },
+        "run_id": "run-1",
+        "tokens_used": 3,
+      },
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke per run and runs the invoked agent: result 1`] = `
+{
+  "error": "",
+  "result": 
+"thinking out loud
+parent done"
+,
+  "status": "completed",
+  "steps_count": 4,
+  "tokens_used": 24,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke per run and runs the invoked agent: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "go",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "go",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "go",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "p",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "thinking out loud",
+        "run_id": "run-1",
+        "step_number": 1,
+        "tokens": 11,
+        "type": "thought",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "thinking out loud",
+      "run_id": "run-1",
+      "step_number": 1,
+      "tokens": 11,
+      "tokens_total": 11,
+      "type": "thought",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "thinking out loud",
+        "event_subtype": "thought",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+        "tokens_used": 11,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "run_id": "run-1",
+        "step_number": 2,
+        "tool_input": {
+          "agent_id": "agent-2",
+          "goal": "say hi",
+        },
+        "tool_name": "kernel_agents_invoke",
+        "type": "tool_call",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "{"agent_id":"agent-2","goal":"say hi"}",
+      "run_id": "run-1",
+      "step_number": 2,
+      "tokens_total": 11,
+      "tool_name": "kernel_agents_invoke",
+      "type": "tool_call",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "kernel_agents_invoke(agent_id=agent-2 goal=say hi)",
+        "event_subtype": "tool_call",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 2,
+          "tool_input": {
+            "agent_id": "agent-2",
+            "goal": "say hi",
+          },
+          "tool_name": "kernel_agents_invoke",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getAgent",
+    [
+      "agent-2",
+    ],
+  ],
+  [
+    "svc",
+    "createRun",
+    [
+      {
+        "agent_id": "agent-2",
+        "depth": 1,
+        "goal": "say hi",
+        "parent_agent_id": "agent-1",
+        "parent_run_id": "run-1",
+        "trigger_payload": {
+          "invoke_depth": 1,
+          "root_run_id": "root-0",
+          "source_agent_id": "agent-1",
+          "source_run_id": "run-1",
+        },
+        "trigger_type": "chain",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "updateRun",
+    [
+      "child-run",
+      {
+        "started_at": "2026-03-04T05:06:07.000Z",
+        "status": "running",
+      },
+    ],
+  ],
+  [
+    "log",
+    "info",
+    "Agent "Nadia" invoking agent "Bob" (depth: 1)",
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      "[To Bob] say hi",
+      "run-1",
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-2",
+      "user",
+      "[From Nadia] say hi",
+      "run-1",
+    ],
+  ],
+  [
+    "svc",
+    "findOrCreateChatConversation",
+    [
+      {
+        "initiator_agent_id": "agent-1",
+        "participants": [
+          "agent-1",
+          "agent-2",
+        ],
+        "topic": "say hi",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "postMessage",
+    [
+      {
+        "body": "say hi",
+        "conversation_id": "convo-1",
+        "from_agent_id": "agent-1",
+        "meta": {
+          "depth": 1,
+          "via": "kernel_agents_invoke",
+        },
+        "role": "question",
+        "run_id": "run-1",
+        "to_agent_id": "agent-2",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:chain_triggered",
+    {
+      "chain_id": "invoke-agent-1-agent-2",
+      "chain_label": "Nadia → Bob",
+      "run_id": "child-run",
+      "source_agent_id": "agent-1",
+      "source_agent_name": "Nadia",
+      "target_agent_id": "agent-2",
+      "target_agent_name": "Bob",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-2",
+        "agent_name": "Bob",
+        "detail": "Nadia -> Bob",
+        "event_subtype": "triggered",
+        "event_type": "chain",
+        "raw_data": {
+          "chain_id": "invoke-agent-1-agent-2",
+          "source_agent_id": "agent-1",
+          "source_agent_name": "Nadia",
+        },
+        "run_id": "child-run",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-2",
+      "agent_name": "Bob",
+      "goal": "say hi",
+      "run_id": "child-run",
+    },
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-2",
+      "agent_name": "Bob",
+      "error": "",
+      "result_preview": "child says hi",
+      "run_id": "child-run",
+      "status": "completed",
+      "steps_count": 1,
+      "tokens_used": 0,
+    },
+  ],
+  [
+    "svc",
+    "recordRunOutcome",
+    [
+      "agent-2",
+      {
+        "error": "",
+        "ok": true,
+        "run_id": "child-run",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "updateRun",
+    [
+      "child-run",
+      {
+        "completed_at": "2026-03-04T05:06:07.000Z",
+        "error": "",
+        "result": "child says hi",
+        "status": "completed",
+        "steps_count": 1,
+        "tokens_used": 0,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-2",
+      "assistant",
+      "[To Nadia] child says hi",
+      "child-run",
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "user",
+      "[From Bob] child says hi",
+      "child-run",
+    ],
+  ],
+  [
+    "svc",
+    "postMessage",
+    [
+      {
+        "body": "child says hi",
+        "conversation_id": "convo-1",
+        "from_agent_id": "agent-2",
+        "in_reply_to": "msg-1",
+        "meta": {
+          "via": "kernel_agents_invoke",
+        },
+        "role": "answer",
+        "run_id": "child-run",
+        "to_agent_id": "agent-1",
+        "tokens": 0,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "run_id": "run-1",
+        "step_number": 3,
+        "tool_name": "kernel_agents_invoke",
+        "tool_output": "child says hi",
+        "type": "tool_result",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "child says hi",
+      "run_id": "run-1",
+      "step_number": 3,
+      "tokens_total": 11,
+      "tool_name": "kernel_agents_invoke",
+      "type": "tool_result",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "kernel_agents_invoke: child says hi",
+        "event_subtype": "tool_result",
+        "event_type": "step",
+        "raw_data": {
+          "is_error": false,
+          "step_number": 3,
+          "tool_name": "kernel_agents_invoke",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "llm",
+    "p",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+        {
+          "content": [
+            {
+              "text": "thinking out loud",
+              "type": "text",
+            },
+            {
+              "id": "tu-1",
+              "input": {
+                "agent_id": "agent-2",
+                "goal": "say hi",
+              },
+              "name": "kernel_agents_invoke",
+              "type": "tool_use",
+            },
+          ],
+          "role": "assistant",
+        },
+        {
+          "content": [
+            {
+              "content": "child says hi",
+              "is_error": false,
+              "tool_use_id": "tu-1",
+              "type": "tool_result",
+            },
+          ],
+          "role": "user",
+        },
+      ],
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "parent done",
+        "run_id": "run-1",
+        "step_number": 4,
+        "tokens": 13,
+        "type": "final",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "parent done",
+      "run_id": "run-1",
+      "step_number": 4,
+      "tokens": 13,
+      "tokens_total": 24,
+      "type": "final",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "parent done",
+        "event_subtype": "final",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 4,
+        },
+        "run_id": "run-1",
+        "tokens_used": 13,
+      },
+    ],
+  ],
+  [
+    "svc",
+    "addMemory",
+    [
+      "agent-1",
+      "assistant",
+      
+"thinking out loud
+parent done"
+,
+      "run-1",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "result_preview": 
+"thinking out loud
+parent done"
+,
+      "run_id": "run-1",
+      "status": "completed",
+      "steps_count": 4,
+      "tokens_used": 24,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "completed: 4 steps, 24 tokens",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "completed",
+          "steps_count": 4,
+          "tokens_used": 24,
+        },
+        "run_id": "run-1",
+        "tokens_used": 24,
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:result",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "flow_id": "flow-9",
+      "result": 
+"thinking out loud
+parent done"
+,
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "getChainsBySource",
+    [
+      "agent-1",
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization fails without calling the LLM when no tool resolves: result 1`] = `
+{
+  "error": "No tools available for this agent (allowed: nope; 2 kernel tools loaded)",
+  "result": "",
+  "status": "failed",
+  "steps_count": 0,
+  "tokens_used": 0,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization fails without calling the LLM when no tool resolves: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "log",
+    "error",
+    "Agent "Nadia": no tools resolved. allowed_tools=["nope"], denied_tools=["kernel_agents_invoke"], total kernel tools=2, matching=",
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization short-circuits: depth guard, builtin handler (ok and failing), claude_code unwired and wired: results 1`] = `
+[
+  {
+    "error": "Max chain depth exceeded (limit: 2)",
+    "result": "",
+    "status": "failed",
+    "steps_count": 0,
+    "tokens_used": 0,
+  },
+  {
+    "error": "",
+    "result": "fine",
+    "status": "completed",
+    "steps_count": 1,
+    "tokens_used": 0,
+  },
+  {
+    "error": "handler exploded",
+    "result": "",
+    "status": "failed",
+    "steps_count": 1,
+    "tokens_used": 0,
+  },
+  {
+    "error": "claude_code executor not wired — check module initialization",
+    "result": "",
+    "status": "failed",
+    "steps_count": 0,
+    "tokens_used": 0,
+  },
+  {
+    "error": "",
+    "result": "sdk",
+    "status": "completed",
+    "steps_count": 2,
+    "tokens_used": 9,
+  },
+]
+`;
+
+exports[`AgentExecutor.execute — characterization short-circuits: depth guard, builtin handler (ok and failing), claude_code unwired and wired: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "g",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "error": "",
+      "result_preview": "fine",
+      "run_id": "run-1",
+      "status": "completed",
+      "steps_count": 1,
+      "tokens_used": 0,
+    },
+  ],
+  [
+    "svc",
+    "recordRunOutcome",
+    [
+      "agent-1",
+      {
+        "error": "",
+        "ok": true,
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "g",
+      "run_id": "run-1",
+    },
+  ],
+  [
+    "log",
+    "error",
+    [
+      "Builtin handler "bad" threw:",
+      "Error(handler exploded)",
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "error": "handler exploded",
+      "result_preview": "",
+      "run_id": "run-1",
+      "status": "failed",
+      "steps_count": 1,
+      "tokens_used": 0,
+    },
+  ],
+  [
+    "svc",
+    "recordRunOutcome",
+    [
+      "agent-1",
+      {
+        "error": "handler exploded",
+        "ok": false,
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "log",
+    "error",
+    "Builtin handler "bad" failed — handler exploded",
+  ],
+  [
+    "svc",
+    "getChainsBySource",
+    [
+      "agent-1",
+    ],
+  ],
+]
+`;
+
+exports[`AgentExecutor.execute — characterization stops on cancellation and unregisters the run: result 1`] = `
+{
+  "error": "Safety abort: Cancelled by user",
+  "result": "",
+  "status": "failed",
+  "steps_count": 1,
+  "tokens_used": 11,
+}
+`;
+
+exports[`AgentExecutor.execute — characterization stops on cancellation and unregisters the run: trace 1`] = `
+[
+  [
+    "evt",
+    "agent:flow:run_started",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "goal": "go",
+      "run_id": "run-1",
+      "trigger_type": "manual",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Goal: go",
+        "event_subtype": "started",
+        "event_type": "run",
+        "raw_data": {
+          "goal": "go",
+          "trigger_type": "manual",
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "getEmbeddingsClient",
+    [],
+  ],
+  [
+    "svc",
+    "resolveModelChain",
+    [
+      {
+        "active": 1,
+        "allowed_tools": "[]",
+        "builtin_handler": "",
+        "denied_tools": "[]",
+        "description": "",
+        "executor_type": "native",
+        "flow_id": "flow-9",
+        "goal_template": "",
+        "id": "agent-1",
+        "language_override": "",
+        "max_errors": 3,
+        "max_iterations": 20,
+        "max_tokens": 100000,
+        "model": "",
+        "model_chain": "",
+        "name": "Nadia",
+        "progressive_discovery": 0,
+        "provider": "",
+        "rank_id": "",
+        "show_on_dashboard": 0,
+        "skills_json": "",
+        "system_prompt": "You are {{role}} for {{team}}. Unknown: {{missing}}.",
+        "timeout_ms": 60000,
+        "variables": "{"role":"an analyst","team":"Ops"}",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "buildDirectoryBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "buildHierarchyBlock",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getUnreadInbox",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantLearnings",
+    [
+      "agent-1",
+      "go",
+      15,
+    ],
+  ],
+  [
+    "svc",
+    "getAgentStats",
+    [
+      "agent-1",
+    ],
+  ],
+  [
+    "svc",
+    "findSimilarPastRuns",
+    [
+      "agent-1",
+      "go",
+      3,
+    ],
+  ],
+  [
+    "svc",
+    "getRelevantMemory",
+    [
+      "agent-1",
+      "go",
+      50,
+    ],
+  ],
+  [
+    "llm",
+    "p",
+    {
+      "messages": [
+        {
+          "content": "go",
+          "role": "user",
+        },
+      ],
+      "system": 
+"You are an analyst for Ops. Unknown: {{missing}}.
+
+Today's date: 2026-03-04.
+
+## Office workspaces — MANDATORY publication step
+Your office can own multiple named workspaces. Every workspace tool accepts an optional \`workspace: "<name>"\` — when omitted, it targets your office's default workspace named 'main'. A workspace can be \`shared: true\` so other offices can read it (they cannot write).
+
+**Picking a workspace**: use the default 'main' for general office artifacts. When you work on a discrete project or client with its own lifecycle (e.g. 'acme-yachts', 'q2-research'), call \`kernel_workspace_create\` once with \`{ name, description, shared }\` — then every subsequent tool call in this run passes \`workspace: "<that-name>"\`. Keep client work isolated so a future cleanup or archive is scoped.
+
+**At the START of the run**: call \`kernel_workspace_analysis_list\` (scope='all', limit=10) to see what other offices have recently published. If any title looks relevant, call \`kernel_workspace_read\` (pass the shared workspace's \`workspace_id\`) or \`kernel_workspace_search\` with a specific keyword to read the prior work before re-doing it.
+
+**At the END of the run**, BEFORE emitting your final message, call \`kernel_workspace_analysis_save\` whenever your output is an analysis, audit, review, plan, report, brief, summary of findings, decision doc, research note, or anything longer than ~3 paragraphs another agent might want to read later. Pass \`title\`, \`body\`, \`tags\`, and (optionally) \`workspace\` if it belongs to a project-scoped workspace rather than the default one.
+
+Skip only for trivial outputs (one-line confirmations, pure tool-dispatch runs with no analysis). If in doubt, publish.
+\`flow_id\` is auto-detected from your identity — never pass it.
+
+STYLE: ALWAYS respond in English, unless the user writes to you in another language or explicitly asks for one. Messages to colleagues, workspace summaries, and final outputs — all in English."
+,
+      "tools": [
+        "kernel_test_echo",
+        "kernel_workspace_search",
+        "kernel_agents_invoke",
+      ],
+    },
+  ],
+  [
+    "log",
+    "warn",
+    "Agent "Nadia": Cancelled by user",
+  ],
+  [
+    "svc",
+    "addStep",
+    [
+      {
+        "content": "Safety abort: Cancelled by user",
+        "run_id": "run-1",
+        "step_number": 1,
+        "type": "error",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:step",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "content_preview": "Safety abort: Cancelled by user",
+      "run_id": "run-1",
+      "step_number": 1,
+      "type": "error",
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Safety abort: Cancelled by user",
+        "event_subtype": "error",
+        "event_type": "step",
+        "raw_data": {
+          "step_number": 1,
+        },
+        "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "evt",
+    "agent:flow:run_completed",
+    {
+      "agent_id": "agent-1",
+      "agent_name": "Nadia",
+      "error": "Safety abort: Cancelled by user",
+      "result_preview": "",
+      "run_id": "run-1",
+      "status": "failed",
+      "steps_count": 1,
+      "tokens_used": 11,
+    },
+  ],
+  [
+    "svc",
+    "logEvent",
+    [
+      {
+        "agent_id": "agent-1",
+        "agent_name": "Nadia",
+        "detail": "Failed: Safety abort: Cancelled by user",
+        "event_subtype": "completed",
+        "event_type": "run",
+        "raw_data": {
+          "status": "failed",
+          "steps_count": 1,
+          "tokens_used": 11,
+        },
+        "run_id": "run-1",
+        "tokens_used": 11,
+      },
+    ],
+  ],
+]
+`;

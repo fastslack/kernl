@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import { textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
+import { defineTool, textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../../src/modules/agents/executor.js";
 import type { WorkspaceEvolverService } from "./service.js";
@@ -27,17 +27,15 @@ export function workspaceEvolverTools(
   if (!evolver) return [];
 
   return [
-    {
+    defineTool({
       name: "kernel_workspace_evolution_init",
       description:
         "Scaffold .evolve/policy.json + EVOLUTION.md + .evolve/checks/run-all.sh inside a workspace and ensure its git repo exists. " +
         "Idempotent — never overwrites existing content. Required once before run_cycle can operate on a workspace.",
-      inputSchema: z.object({
+      schema: z.object({
         workspace_id: z.string().describe("UUID of the target workspace"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
-        const id = typeof a.workspace_id === "string" ? a.workspace_id : "";
+      }),
+      handler: async ({ workspace_id: id }) => {
         if (!id) return errorResult("workspace_id required");
         try {
           const r = await evolver.init(id);
@@ -52,22 +50,20 @@ export function workspaceEvolverTools(
           return errorResult(`init failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_workspace_evolution_describe",
       description:
         "Inspect a workspace's evolver state: whether it's initialised, the loaded policy, the EVOLUTION.md objectives text, the current git head, and the recent evolution-run history.",
-      inputSchema: z.object({
+      schema: z.object({
         workspace_id: z.string().describe("UUID of the target workspace"),
         history_limit: z.number().int().positive().max(200).optional()
           .describe("Max evolution-run rows to include (default 20)"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
-        const id = typeof a.workspace_id === "string" ? a.workspace_id : "";
+      }),
+      handler: async ({ workspace_id: id, history_limit }) => {
         if (!id) return errorResult("workspace_id required");
-        const limit = typeof a.history_limit === "number" ? a.history_limit : 20;
+        const limit = history_limit ?? 20;
         try {
           const state = await evolver.describe(id);
           const history = agents?.listEvolutionRunsByWorkspace(id, limit) ?? [];
@@ -85,14 +81,14 @@ export function workspaceEvolverTools(
           return errorResult(`describe failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_workspace_evolution_run_cycle",
       description:
         "Run a full SEPL cycle on a workspace: snapshot baseline, dispatch the named agent with the given goal, run the policy evaluation, then either accept the candidate (eval passed) or reject + revert (eval failed). " +
         "Use when supervising another agent and want its filesystem changes gated on a tests-pass / health-check signal.",
-      inputSchema: z.object({
+      schema: z.object({
         workspace_id: z.string().describe("UUID of the target workspace"),
         agent_id: z.string().describe("UUID of the worker agent that will edit the workspace"),
         goal: z.string().describe("What the worker agent should do (becomes the run's goal text)"),
@@ -100,13 +96,9 @@ export function workspaceEvolverTools(
           .describe("Default true. When false, leaves dirty files on rejection so a human can triage."),
         notes: z.string().optional()
           .describe("Free-form notes stored in the evolution_run row's proposal field"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async ({ workspace_id: workspaceId, agent_id: agentId, goal, revert_on_fail, notes }) => {
         if (!executor) return errorResult("AgentExecutor not configured");
-        const workspaceId = typeof a.workspace_id === "string" ? a.workspace_id : "";
-        const agentId = typeof a.agent_id === "string" ? a.agent_id : "";
-        const goal = typeof a.goal === "string" ? a.goal : "";
         if (!workspaceId || !agentId || !goal) {
           return errorResult("workspace_id, agent_id and goal are required");
         }
@@ -116,8 +108,8 @@ export function workspaceEvolverTools(
             agent_id: agentId,
             goal,
             executor,
-            revertOnFail: typeof a.revert_on_fail === "boolean" ? a.revert_on_fail : undefined,
-            notes: typeof a.notes === "string" ? a.notes : undefined,
+            revertOnFail: revert_on_fail,
+            notes,
           });
           const ev = out.summary.evaluation;
           const lines = [
@@ -137,6 +129,6 @@ export function workspaceEvolverTools(
           return errorResult(`cycle failed: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
-    },
+    }),
   ];
 }

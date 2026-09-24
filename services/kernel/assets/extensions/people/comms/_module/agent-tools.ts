@@ -19,7 +19,7 @@
  * remain for back-compat — agents that already reference them keep working.
  */
 import { z } from "zod";
-import { type ToolDefinition, errorResult, structuredResult, textResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, errorResult, structuredResult, textResult } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
 import type { Communication } from "./types.js";
 
@@ -93,17 +93,16 @@ const EmailSendOutput = z.object({
 });
 
 function buildEmailSend(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_send",
     description:
       "Compose and send an email in ONE call. Replaces the legacy create→send 2-step. " +
       "Pass `to` + `subject` + `body` for a fresh email, or `reply_to_id` to reply within an existing thread. " +
       "Returns the sent communication id, thread, and Gmail message id when applicable.",
-    inputSchema: EmailSendInput,
+    schema: EmailSendInput,
     outputSchema: EmailSendOutput,
     tags: ["email", "send", "compose", "comms"],
-    async handler(args) {
-      const input = EmailSendInput.parse(args);
+    async handler(input) {
       try {
         const draft = service.create({
           channel: "email",
@@ -134,7 +133,7 @@ function buildEmailSend(service: CommsService): ToolDefinition {
         return errorResult(`email_send failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }
 
 // ── kernel_email_search ───────────────────────────────────────
@@ -161,16 +160,15 @@ const EmailSearchOutput = z.object({
 });
 
 function buildEmailSearch(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_search",
     description:
       "Search Gmail inbox. Returns structured message summaries (gmail_id, from, subject, snippet, labels). " +
       "Pair with `kernel_email_fetch` to materialize a hit as a stored Communication.",
-    inputSchema: EmailSearchInput,
+    schema: EmailSearchInput,
     outputSchema: EmailSearchOutput,
     tags: ["email", "search", "inbox", "comms"],
-    async handler(args) {
-      const { query, max_results, account_id } = EmailSearchInput.parse(args);
+    async handler({ query, max_results, account_id }) {
       try {
         const messages = await service.searchInbox(query, max_results, account_id);
         const out = { query, total: messages.length, messages };
@@ -188,7 +186,7 @@ function buildEmailSearch(service: CommsService): ToolDefinition {
         return errorResult(`email_search failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }
 
 // ── kernel_email_fetch ────────────────────────────────────────
@@ -212,16 +210,15 @@ const EmailFetchOutput = z.object({
 });
 
 function buildEmailFetch(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_fetch",
     description:
       "Fetch one Gmail message by id and persist it as an inbound Communication. Idempotent — re-fetching the same id returns the existing record. " +
       "Auto-matches sender against CRM contacts.",
-    inputSchema: EmailFetchInput,
+    schema: EmailFetchInput,
     outputSchema: EmailFetchOutput,
     tags: ["email", "fetch", "ingest", "comms"],
-    async handler(args) {
-      const { gmail_message_id, account_id } = EmailFetchInput.parse(args);
+    async handler({ gmail_message_id, account_id }) {
       try {
         const comm = await service.fetchEmail(gmail_message_id, account_id);
         const meta = JSON.parse(comm.metadata || "{}") as { from?: string };
@@ -245,7 +242,7 @@ function buildEmailFetch(service: CommsService): ToolDefinition {
         return errorResult(`email_fetch failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }
 
 // ── kernel_email_thread ───────────────────────────────────────
@@ -263,15 +260,14 @@ const EmailThreadOutput = z.object({
 });
 
 function buildEmailThread(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_thread",
     description:
       "Return every Communication in a thread, chronologically. Use this when you need full conversation context before composing a reply.",
-    inputSchema: EmailThreadInput,
+    schema: EmailThreadInput,
     outputSchema: EmailThreadOutput,
     tags: ["email", "thread", "context", "comms"],
-    async handler(args) {
-      const { thread_id } = EmailThreadInput.parse(args);
+    async handler({ thread_id }) {
       const comms = service.getThread(thread_id);
       const out = {
         thread_id,
@@ -291,7 +287,7 @@ function buildEmailThread(service: CommsService): ToolDefinition {
       ];
       return { ...textResult(lines.join("\n\n")), structuredContent: out };
     },
-  };
+  });
 }
 
 // ── kernel_email_classify ─────────────────────────────────────
@@ -316,16 +312,15 @@ const EmailClassifyOutput = z.object({
 });
 
 function buildEmailClassify(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_classify",
     description:
       "Stamp provenance / importance / action_required / stakeholder / topic_tags on an inbound email. " +
       "Idempotent: re-classifying overwrites the previous block. Used downstream by triage and the office router.",
-    inputSchema: EmailClassifyInput,
+    schema: EmailClassifyInput,
     outputSchema: EmailClassifyOutput,
     tags: ["email", "classify", "triage", "comms"],
-    async handler(args) {
-      const a = EmailClassifyInput.parse(args);
+    async handler(a) {
       const ok = service.setClassification(a.id, a);
       if (!ok) return errorResult(`Communication not found: ${a.id}`);
       const out = {
@@ -341,7 +336,7 @@ function buildEmailClassify(service: CommsService): ToolDefinition {
         `Classified ${a.id}: ${a.importance}/${a.provenance} → ${a.action_required}.`,
       );
     },
-  };
+  });
 }
 
 // ── kernel_email_drafts ───────────────────────────────────────
@@ -359,16 +354,15 @@ const EmailListOutput = z.object({
 });
 
 function buildEmailDrafts(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_drafts",
     description:
       "List your unsent email drafts, newest first. Filterable by contact, task, or account. " +
       "Use `kernel_email_send` to dispatch a draft after reviewing.",
-    inputSchema: EmailDraftsInput,
+    schema: EmailDraftsInput,
     outputSchema: EmailListOutput,
     tags: ["email", "drafts", "list", "comms"],
-    async handler(args) {
-      const { contact_id, task_id, account_id, limit } = EmailDraftsInput.parse(args);
+    async handler({ contact_id, task_id, account_id, limit }) {
       const rows = service.list({
         status: "draft",
         channel: "email",
@@ -389,7 +383,7 @@ function buildEmailDrafts(service: CommsService): ToolDefinition {
       ];
       return { ...textResult(lines.join("\n")), structuredContent: out };
     },
-  };
+  });
 }
 
 // ── kernel_email_inbox_recent ─────────────────────────────────
@@ -401,16 +395,15 @@ const EmailInboxRecentInput = z.object({
 });
 
 function buildEmailInboxRecent(service: CommsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_email_inbox_recent",
     description:
       "List recent INBOUND emails already stored in the kernel (e.g. fetched via `kernel_email_fetch` or sync). " +
       "For live Gmail search use `kernel_email_search` instead.",
-    inputSchema: EmailInboxRecentInput,
+    schema: EmailInboxRecentInput,
     outputSchema: EmailListOutput,
     tags: ["email", "inbox", "list", "recent", "comms"],
-    async handler(args) {
-      const { contact_id, account_id, limit } = EmailInboxRecentInput.parse(args);
+    async handler({ contact_id, account_id, limit }) {
       const rows = service.list({
         direction: "inbound",
         channel: "email",
@@ -430,5 +423,5 @@ function buildEmailInboxRecent(service: CommsService): ToolDefinition {
       ];
       return { ...textResult(lines.join("\n")), structuredContent: out };
     },
-  };
+  });
 }

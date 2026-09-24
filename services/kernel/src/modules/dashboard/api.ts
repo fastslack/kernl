@@ -1,8 +1,11 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { GraphDriver } from "../../core/db-drivers/graph-driver.js";
 import type { SystemRegistry } from "../../core/system-registry.js";
+import type { CalendarEvent, CalendarSource } from "../../core/types.js";
+import { log } from "../../core/logger.js";
 import { tableExists, safeGet, safeAll, today, daysFromNow } from "./query-helpers.js";
-import { CronExpressionParser } from "cron-parser";
+import { CORE_CALENDAR_SOURCES } from "./calendar-sources.js";
+import { dayStart, localParts, localDateOf } from "../../sdk/clock.js";
 
 // ── Extension-owned sections ─────────────────────────
 //
@@ -133,14 +136,9 @@ export interface DashboardAnalytics {
   pipeline: PipelineStatus | null;
 }
 
-export interface CalendarEvent {
-  id: string;
-  type: string;
-  title: string;
-  time: string | null;
-  color: string;
-  extra: string | null;
-}
+// Defined in core/types.ts with the calendar-source contract; re-exported
+// here, where the calendar payload types have always lived.
+export type { CalendarEvent };
 
 export interface CalendarData {
   start: string;
@@ -264,8 +262,7 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     )
     .all(now) as Array<{ id: string; title: string; trigger_at: string }>;
   for (const r of overdueReminders) {
-    const d = r.trigger_at.split("T")[0];
-    const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(r.trigger_at);
     overdue.push({ type: "reminder", id: r.id, title: r.title, date: d, time: t, priority: null, meta: null });
   }
 
@@ -295,10 +292,9 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
        WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?
        ORDER BY trigger_at`,
     )
-    .all(`${todayStr}T00:00:00`, `${rangeEnd}T00:00:00`) as Array<{ id: string; title: string; trigger_at: string; repeat: string }>;
+    .all(dayStart(todayStr), dayStart(rangeEnd)) as Array<{ id: string; title: string; trigger_at: string; repeat: string }>;
   for (const r of rangeReminders) {
-    const d = r.trigger_at.split("T")[0];
-    const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(r.trigger_at);
     const items = dayMap.get(d);
     if (items) items.push({ type: "reminder", id: r.id, title: r.title, date: d, time: t, priority: null, meta: r.repeat !== "none" ? r.repeat : null });
   }
@@ -308,11 +304,10 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     `SELECT id, title, start_at, type, status FROM events
      WHERE status NOT IN ('cancelled','completed') AND start_at >= ? AND start_at < ?
      ORDER BY start_at`,
-    [`${todayStr}T00:00:00`, `${rangeEnd}T00:00:00`],
+    [dayStart(todayStr), dayStart(rangeEnd)],
   );
   for (const ev of rangeEvents) {
-    const d = ev.start_at.split("T")[0];
-    const t = ev.start_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(ev.start_at);
     const items = dayMap.get(d);
     if (items) items.push({ type: "event", id: ev.id, title: ev.title, date: d, time: t, priority: null, meta: ev.status === "draft" ? `${ev.type} · draft` : ev.type });
   }
@@ -322,11 +317,10 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     `SELECT id, title, start_at, type FROM events
      WHERE status NOT IN ('cancelled','completed') AND start_at < ?
      ORDER BY start_at DESC LIMIT 10`,
-    [`${todayStr}T00:00:00`],
+    [dayStart(todayStr)],
   );
   for (const ev of overdueEvents) {
-    const d = ev.start_at.split("T")[0];
-    const t = ev.start_at.split("T")[1]?.slice(0, 5) ?? null;
+    const { date: d, time: t } = localParts(ev.start_at);
     overdue.push({ type: "event", id: ev.id, title: ev.title, date: d, time: t, priority: null, meta: ev.type });
   }
 
@@ -364,14 +358,14 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     `SELECT id, title, repo, created_at, closed_at, state FROM issues
      WHERE (created_at >= ? OR (closed_at IS NOT NULL AND closed_at >= ?))
      ORDER BY created_at DESC LIMIT 30`,
-    [threeDaysAgo, threeDaysAgo],
+    [dayStart(threeDaysAgo), dayStart(threeDaysAgo)],
   );
   for (const iss of issueEvents) {
-    const createdDate = iss.created_at.split("T")[0];
+    const createdDate = localDateOf(iss.created_at);
     const items = dayMap.get(createdDate);
     if (items) items.push({ type: "issue", id: iss.id, title: iss.title, date: createdDate, time: null, priority: null, meta: `opened · ${iss.repo.split("/").pop()}` });
     if (iss.closed_at) {
-      const closedDate = iss.closed_at.split("T")[0];
+      const closedDate = localDateOf(iss.closed_at);
       const closedItems = dayMap.get(closedDate);
       if (closedItems) closedItems.push({ type: "issue", id: iss.id + "-closed", title: iss.title, date: closedDate, time: null, priority: null, meta: `closed · ${iss.repo.split("/").pop()}` });
     }
@@ -395,8 +389,8 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
   for (let i = 0; i < 14; i++) {
     const d = daysFromNow(i);
     const taskCount = (db.prepare(`SELECT COUNT(*) AS c FROM tasks WHERE status NOT IN ('done') AND due_date = ? AND deleted_at IS NULL`).get(d) as { c: number }).c;
-    const reminderCount = (db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?`).get(`${d}T00:00:00`, `${daysFromNow(i + 1)}T00:00:00`) as { c: number }).c;
-    const issueCount = safeGet(db, `SELECT COUNT(*) AS c FROM issues WHERE state = 'open' AND created_at <= ? AND (closed_at IS NULL OR closed_at > ?)`, [`${d}T23:59:59`, `${d}T00:00:00`], { c: 0 }).c;
+    const reminderCount = (db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?`).get(dayStart(d), dayStart(daysFromNow(i + 1))) as { c: number }).c;
+    const issueCount = safeGet(db, `SELECT COUNT(*) AS c FROM issues WHERE state = 'open' AND created_at < ? AND (closed_at IS NULL OR closed_at > ?)`, [dayStart(daysFromNow(i + 1)), dayStart(d)], { c: 0 }).c;
     workloadForecast.push({ date: d, taskCount, issueCount, reminderCount, total: taskCount + issueCount + reminderCount });
   }
 
@@ -423,7 +417,7 @@ export function queryCrossModuleIntel(db: SqliteDb): CrossModuleIntel | null {
   const tasksCompleted = (
     db.prepare(
       `SELECT COUNT(*) AS c FROM tasks WHERE status = 'done' AND updated_at >= ? AND deleted_at IS NULL`,
-    ).get(`${weekAgo}T00:00:00`) as { c: number }
+    ).get(dayStart(weekAgo)) as { c: number }
   ).c;
 
   const issuesClosed = (
@@ -716,363 +710,63 @@ function dateRange(startDate: string, dayCount: number): { start: string; end: s
   };
 }
 
-function expandRecurring(
-  triggeredAt: string,
-  repeat: string,
-  start: string,
-  end: string,
-): string[] {
-  const dates: string[] = [];
-  const base = new Date(triggeredAt);
-  const endD = new Date(end + "T00:00:00Z");
-  let cur = new Date(base);
-
-  for (let i = 0; i < 200; i++) {
-    const ds = cur.toISOString().split("T")[0];
-    if (ds >= end) break;
-    if (ds >= start) dates.push(ds);
-    if (repeat === "daily") cur.setUTCDate(cur.getUTCDate() + 1);
-    else if (repeat === "weekly") cur.setUTCDate(cur.getUTCDate() + 7);
-    else if (repeat === "monthly") cur.setUTCMonth(cur.getUTCMonth() + 1);
-    else break;
-    if (cur > endD) break;
-  }
-  return dates;
-}
-
 function pushEvent(days: Record<string, CalendarEvent[]>, date: string, ev: CalendarEvent): void {
   if (!days[date]) days[date] = [];
   days[date].push(ev);
 }
 
+/**
+ * The calendar grid for `dayCount` days from `startDate`, plus the overdue
+ * list and the interval system processes.
+ *
+ * Entries come from calendar sources: the core's own (calendar-sources.ts)
+ * and those the modules register through `getDashboardDescriptor().calendarSources`
+ * (`DashboardRegistry.getCalendarSources()`), which the caller hands in. A
+ * source whose extension is not installed yields nothing.
+ *
+ * Sources run by `order`, and within a day events keep that order — the
+ * order this function used to query the tables in:
+ *
+ *    10 tasks (+ overdue)          ext tasks
+ *    20 reminders (+ overdue)      ext reminders
+ *    30 subscriptions              ext subscriptions
+ *    40 health appointments        ext health
+ *    50 home maintenance           core
+ *    60 vehicle maintenance        core
+ *    70 vehicle inspections        core
+ *    80 documents                  core
+ *    90 goals                      ext goals
+ *   100 meal plans                 core
+ *   110 research tasks             core
+ *   120 home insurance expiry      core
+ *   130 events (+ overdue)         ext events
+ *   140 agent schedules            core
+ */
 export function queryCalendar(
   db: SqliteDb,
   startDate: string,
   dayCount: number,
   sysRegistry?: SystemRegistry,
+  moduleSources: readonly CalendarSource[] = [],
 ): CalendarData {
   const { start, end } = dateRange(startDate, dayCount);
   const days: Record<string, CalendarEvent[]> = {};
   const overdue: CalendarEvent[] = [];
 
-  // 1. Tasks with due_date (in range + overdue)
-  {
-    const rows = safeAll<{ id: string; title: string; due_date: string; priority: string; status: string }>(db,
-      `SELECT id, title, due_date, priority, status FROM tasks
-       WHERE due_date IS NOT NULL AND due_date >= ? AND due_date < ? AND status != 'done' AND deleted_at IS NULL
-       ORDER BY due_date`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.due_date, {
-        id: r.id, type: "task", title: r.title, time: null,
-        color: "#5B9BF7", extra: r.priority,
-      });
+  // Array.prototype.sort is stable: equal orders keep core-first, then registration order.
+  const sources = [...CORE_CALENDAR_SOURCES, ...moduleSources].sort((a, b) => a.order - b.order);
+  for (const source of sources) {
+    let result;
+    try {
+      result = source.query(db, { start, end });
+    } catch (err) {
+      // A source is expected to swallow its own missing tables; one that
+      // throws anyway costs its own entries, not the whole calendar.
+      log.warn(`Calendar source "${source.id}" failed`, err);
+      continue;
     }
-    // Overdue tasks
-    const od = safeAll<{ id: string; title: string; due_date: string; priority: string }>(db,
-      `SELECT id, title, due_date, priority FROM tasks
-       WHERE status NOT IN ('done') AND due_date IS NOT NULL AND due_date < ? AND deleted_at IS NULL
-       ORDER BY due_date LIMIT 30`,
-      [start],
-    );
-    for (const r of od) {
-      overdue.push({ id: r.id, type: "task", title: r.title, time: r.due_date, color: "#5B9BF7", extra: r.priority });
-    }
-  }
-
-  // 2. Reminders (one-shot + recurring expansion)
-  {
-    const oneShot = safeAll<{ id: string; title: string; trigger_at: string }>(db,
-      `SELECT id, title, trigger_at FROM reminders
-       WHERE status IN ('active','snoozed') AND repeat = 'none'
-         AND trigger_at >= ? AND trigger_at < ?
-       ORDER BY trigger_at`,
-      [`${start}T00:00:00`, `${end}T00:00:00`],
-    );
-    for (const r of oneShot) {
-      const d = r.trigger_at.split("T")[0];
-      const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
-      pushEvent(days, d, {
-        id: r.id, type: "reminder", title: r.title, time: t,
-        color: "#F0883E", extra: null,
-      });
-    }
-
-    // Recurring reminders
-    const recurring = safeAll<{ id: string; title: string; trigger_at: string; repeat: string }>(db,
-      `SELECT id, title, trigger_at, repeat FROM reminders
-       WHERE status IN ('active','snoozed') AND repeat != 'none'`,
-    );
-    for (const r of recurring) {
-      const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
-      const expanded = expandRecurring(r.trigger_at, r.repeat, start, end);
-      for (const d of expanded) {
-        pushEvent(days, d, {
-          id: r.id + "-" + d, type: "reminder", title: r.title, time: t,
-          color: "#F0883E", extra: r.repeat,
-        });
-      }
-    }
-
-    // Overdue reminders
-    const odRem = safeAll<{ id: string; title: string; trigger_at: string }>(db,
-      `SELECT id, title, trigger_at FROM reminders
-       WHERE status IN ('active','snoozed') AND trigger_at < ?
-       ORDER BY trigger_at LIMIT 20`,
-      [new Date().toISOString()],
-    );
-    for (const r of odRem) {
-      const t = r.trigger_at.split("T")[1]?.slice(0, 5) ?? null;
-      overdue.push({ id: r.id, type: "reminder", title: r.title, time: t, color: "#F0883E", extra: null });
-    }
-  }
-
-  // 3. Subscriptions (next_billing)
-  {
-    const rows = safeAll<{ id: string; name: string; next_billing: string; amount_cents: number; currency: string }>(db,
-      `SELECT id, name, next_billing, amount_cents, currency FROM subscriptions
-       WHERE status = 'active' AND next_billing >= ? AND next_billing < ?
-       ORDER BY next_billing`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.next_billing, {
-        id: r.id, type: "subscription", title: r.name, time: null,
-        color: "#3DD68C", extra: (r.amount_cents / 100).toFixed(2) + " " + r.currency,
-      });
-    }
-  }
-
-  // 4. Health appointments
-  {
-    const rows = safeAll<{ id: string; title: string; date: string; provider: string }>(db,
-      `SELECT id, title, date, provider FROM health_appointments
-       WHERE status = 'scheduled' AND date >= ? AND date < ?
-       ORDER BY date`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.date, {
-        id: r.id, type: "health", title: r.title, time: null,
-        color: "#F04770", extra: r.provider,
-      });
-    }
-  }
-
-  // 5. Home maintenance (next_due)
-  {
-    const rows = safeAll<{ id: string; name: string; next_due: string }>(db,
-      `SELECT id, name, next_due FROM home_maintenance_items
-       WHERE next_due IS NOT NULL AND next_due >= ? AND next_due < ?
-       ORDER BY next_due`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.next_due, {
-        id: r.id, type: "maintenance", title: r.name, time: null,
-        color: "#D4A84B", extra: "home",
-      });
-    }
-  }
-
-  // 6. Vehicle maintenance (next_due_date)
-  {
-    const rows = safeAll<{ id: string; name: string; next_due_date: string; vehicle_name: string }>(db,
-      `SELECT vm.id, vm.name, vm.next_due_date, v.name AS vehicle_name
-       FROM vehicle_maintenance vm
-       JOIN vehicles v ON v.id = vm.vehicle_id
-       WHERE vm.next_due_date IS NOT NULL AND vm.next_due_date >= ? AND vm.next_due_date < ?
-         AND v.deleted_at IS NULL
-       ORDER BY vm.next_due_date`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.next_due_date, {
-        id: r.id, type: "vehicle", title: r.name, time: null,
-        color: "#D4A84B", extra: r.vehicle_name,
-      });
-    }
-  }
-
-  // 7. Vehicle inspections
-  {
-    const rows = safeAll<{ id: string; name: string; next_inspection: string }>(db,
-      `SELECT id, name, next_inspection FROM vehicles
-       WHERE deleted_at IS NULL AND next_inspection IS NOT NULL
-         AND next_inspection >= ? AND next_inspection < ?`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.next_inspection, {
-        id: r.id + "-insp", type: "vehicle", title: "Inspection: " + r.name, time: null,
-        color: "#D4A84B", extra: null,
-      });
-    }
-  }
-
-  // 8. Documents (expiry_date)
-  {
-    const rows = safeAll<{ id: string; title: string; expiry_date: string }>(db,
-      `SELECT id, title, expiry_date FROM documents
-       WHERE deleted_at IS NULL AND expiry_date IS NOT NULL
-         AND expiry_date >= ? AND expiry_date < ?
-       ORDER BY expiry_date`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.expiry_date, {
-        id: r.id, type: "document", title: r.title, time: null,
-        color: "#6E738A", extra: "expires",
-      });
-    }
-  }
-
-  // 9. Goals (target_date)
-  {
-    const rows = safeAll<{ id: string; title: string; target_date: string }>(db,
-      `SELECT id, title, target_date FROM goals
-       WHERE status != 'cancelled' AND target_date IS NOT NULL
-         AND target_date >= ? AND target_date < ?
-       ORDER BY target_date`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.target_date, {
-        id: r.id, type: "goal", title: r.title, time: null,
-        color: "#3DD6C8", extra: null,
-      });
-    }
-  }
-
-  // 10. Meal plans
-  {
-    const rows = safeAll<{ id: string; meal_type: string; date: string; recipe_name: string | null }>(db,
-      `SELECT mp.id, mp.meal_type, mp.date, r.name AS recipe_name
-       FROM meal_plans mp
-       LEFT JOIN recipes r ON r.id = mp.recipe_id
-       WHERE mp.date >= ? AND mp.date < ?
-       ORDER BY mp.date`,
-      [start, end],
-    );
-    for (const r of rows) {
-      pushEvent(days, r.date, {
-        id: r.id, type: "meal", title: r.recipe_name ?? r.meal_type, time: null,
-        color: "#da7756", extra: r.meal_type,
-      });
-    }
-  }
-
-  // 11. Research tasks (next_run_at)
-  {
-    const rows = safeAll<{ id: string; name: string; next_run_at: string }>(db,
-      `SELECT id, name, next_run_at FROM research_tasks
-       WHERE status = 'active' AND next_run_at IS NOT NULL
-         AND next_run_at >= ? AND next_run_at < ?
-       ORDER BY next_run_at`,
-      [`${start}T00:00:00`, `${end}T00:00:00`],
-    );
-    for (const r of rows) {
-      const d = r.next_run_at.split("T")[0];
-      const t = r.next_run_at.split("T")[1]?.slice(0, 5) ?? null;
-      pushEvent(days, d, {
-        id: r.id, type: "research", title: r.name, time: t,
-        color: "#8B7CF6", extra: null,
-      });
-    }
-  }
-
-  // 12. Insurance expiry (home_house singleton)
-  {
-    const house = safeGet(db,
-      `SELECT insurance_expiry FROM home_house WHERE id = 'house-profile'`,
-      [],
-      undefined as { insurance_expiry: string | null } | undefined,
-    );
-    if (house?.insurance_expiry && house.insurance_expiry >= start && house.insurance_expiry < end) {
-      pushEvent(days, house.insurance_expiry, {
-        id: "insurance-expiry", type: "document", title: "Home Insurance Expiry", time: null,
-        color: "#6E738A", extra: "insurance",
-      });
-    }
-  }
-
-  // 13. Events (from events module)
-  {
-    const rows = safeAll<{ id: string; title: string; start_at: string; type: string; status: string; duration_minutes: number }>(db,
-      `SELECT id, title, start_at, type, status, duration_minutes FROM events
-       WHERE status NOT IN ('cancelled','completed') AND start_at >= ? AND start_at < ?
-       ORDER BY start_at`,
-      [start + "T00:00:00", end + "T00:00:00"],
-    );
-    for (const r of rows) {
-      const d = r.start_at.split("T")[0];
-      const t = r.start_at.split("T")[1]?.slice(0, 5) ?? null;
-      pushEvent(days, d, {
-        id: r.id, type: "event", title: r.title, time: t,
-        color: "#E879A8", extra: r.status === "draft" ? `${r.type} · draft` : r.type,
-      });
-    }
-    // Overdue events (not cancelled/completed, start_at in the past)
-    const od = safeAll<{ id: string; title: string; start_at: string; type: string }>(db,
-      `SELECT id, title, start_at, type FROM events
-       WHERE status NOT IN ('cancelled','completed') AND start_at < ?
-       ORDER BY start_at DESC LIMIT 20`,
-      [start + "T00:00:00"],
-    );
-    for (const r of od) {
-      overdue.push({ id: r.id, type: "event", title: r.title, time: r.start_at, color: "#E879A8", extra: r.type });
-    }
-  }
-
-  // 14. Agent schedules (automation runs) — expand cron over the calendar window
-  // Cap expansions per agent so a `* * * * *` agent doesn't dump 43k events into the grid.
-  if (tableExists(db, "agent_schedules") && tableExists(db, "agents")) {
-    const rows = safeAll<{
-      agent_id: string;
-      agent_name: string;
-      cron_expression: string;
-      next_run_at: string;
-      builtin_handler: string;
-    }>(db,
-      `SELECT s.agent_id, a.name AS agent_name, s.cron_expression, s.next_run_at, a.builtin_handler
-       FROM agent_schedules s
-       JOIN agents a ON a.id = s.agent_id
-       WHERE s.active = 1 AND a.active = 1 AND s.cron_expression <> ''`,
-    );
-
-    const rangeStart = new Date(`${start}T00:00:00Z`);
-    const rangeEnd = new Date(`${end}T00:00:00Z`);
-    const MAX_PER_AGENT = 60; // hard cap per agent over the window
-
-    for (const r of rows) {
-      try {
-        const interval = CronExpressionParser.parse(r.cron_expression, {
-          tz: "UTC",
-          currentDate: rangeStart,
-          endDate: rangeEnd,
-        });
-        let count = 0;
-        while (count < MAX_PER_AGENT) {
-          let next: Date;
-          try { next = interval.next().toDate(); } catch { break; }
-          if (next >= rangeEnd) break;
-          const dStr = next.toISOString().split("T")[0];
-          const tStr = next.toISOString().split("T")[1].slice(0, 5);
-          pushEvent(days, dStr, {
-            id: `sched-${r.agent_id}-${next.getTime()}`,
-            type: "automation",
-            title: r.agent_name,
-            time: tStr,
-            color: r.builtin_handler ? "#8B7CF6" : "#3DD68C",
-            extra: r.cron_expression,
-          });
-          count++;
-        }
-      } catch {
-        // invalid cron — skip
-      }
-    }
+    for (const { date, ...ev } of result.events) pushEvent(days, date, ev);
+    if (result.overdue) overdue.push(...result.overdue);
   }
 
   // System processes
@@ -1132,9 +826,9 @@ export function querySystemTimeline(
     );
 
     for (const r of rows) {
-      const ds = r.next_run_at.split("T")[0];
+      const ds = localDateOf(r.next_run_at);
       if (ds >= start && ds < end) {
-        const t = r.next_run_at.split("T")[1]?.slice(0, 5) ?? null;
+        const t = localParts(r.next_run_at).time;
         pushEvent(days, ds, {
           id: r.id, type: "research", title: r.name,
           time: t, color: SYS_COLORS.research,
@@ -1146,7 +840,7 @@ export function querySystemTimeline(
       if (r.next_run_at < new Date().toISOString() && r.last_run_at) {
         overdue.push({
           id: r.id, type: "research", title: r.name,
-          time: r.next_run_at.split("T")[1]?.slice(0, 5) ?? null,
+          time: localParts(r.next_run_at).time,
           color: SYS_COLORS.research, extra: "overdue",
         });
       }

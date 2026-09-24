@@ -7,6 +7,7 @@ import { WORKSPACE_ROOT } from "../workspace-constants.js";
 import { OFFICE_HOME_WORKSPACE_NAME } from "../office-home.js";
 import { FLOW_KINDS, isFlowKind, type Agent, type AgentFlow, type FlowKind, type RepoIsolation } from "../types.js";
 import { applyRepoIsolation } from "../repo-isolation.js";
+import { agentVariables } from "../agent-fields.js";
 
 /**
  * Offices (flows) and the home directory every agent in one inherits.
@@ -203,12 +204,8 @@ export class AgentFlowsService {
       .all(flowId) as Array<{ id: string; variables: string }>;
     const update = this.db.prepare("UPDATE agents SET variables = ?, updated_at = ? WHERE id = ?");
     for (const row of rows) {
-      let vars: Record<string, unknown>;
-      try {
-        vars = JSON.parse(row.variables || "{}") as Record<string, unknown>;
-      } catch {
-        continue;
-      }
+      // Unreadable variables read as {}: no __cwd_path__, so the row is skipped.
+      const vars = agentVariables(row);
       if (typeof vars.__cwd_path__ !== "string" || !vars.__cwd_path__) continue;
       update.run(JSON.stringify(applyRepoIsolation(vars, isolation)), isoNow(), row.id);
     }

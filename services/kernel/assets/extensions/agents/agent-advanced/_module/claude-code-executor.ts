@@ -40,11 +40,13 @@ import {
   logLlmFail,
   isoNow,
   getProviderConfig,
+  safeJson,
   type KernelConfig,
   type EventBus,
   type SandboxDriverRegistry,
   type SandboxHandle,
   type SandboxRunOptions,
+  localDate,
 } from "@kernl/extension-sdk";
 import { failureNote } from "./failure-note.js";
 import {
@@ -1394,7 +1396,7 @@ export class ClaudeCodeExecutor {
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
     if (base) parts.push(base);
-    parts.push(promptTodayDate(lang, new Date().toISOString().slice(0, 10)));
+    parts.push(promptTodayDate(lang, localDate()));
     parts.push(promptClaudeCodeWorkInstructions(lang));
 
     // Inject learnings ranked by relevance to current goal — same closed-loop
@@ -1429,9 +1431,8 @@ export class ClaudeCodeExecutor {
     const unpack = <T>(key: string): T | undefined => {
       const v = raw[key];
       if (v == null) return undefined;
-      if (typeof v === "string") {
-        try { return JSON.parse(v) as T; } catch { return undefined; }
-      }
+      // Malformed JSON reads as "not set".
+      if (typeof v === "string") return safeJson<T | undefined>(v, undefined);
       return v as T;
     };
     const boolVar = (key: string, defaultVal: boolean): boolean => {

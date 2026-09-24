@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, type SqliteDb, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, type SqliteDb, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { IssueService } from "./service.js";
 import { IssueClient } from "./client.js";
 import { syncGitHubIssues } from "./github-sync.js";
@@ -14,24 +14,18 @@ function fmtDuration(secs: number): string {
 
 export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_issues_configure",
       description:
         "Configure a PAT (Personal Access Token) for GitHub or GitLab issue tracking. " +
         "For GitLab self-hosted, provide base_url (e.g. https://gitlab.mycompany.com).",
-      inputSchema: z.object({
+      schema: z.object({
         provider: z.enum(["github", "gitlab"]).describe("The provider to configure"),
         token: z.string().describe("Personal Access Token"),
         base_url: z.string().optional().describe("Base URL for GitLab self-hosted (omit for gitlab.com)"),
         username: z.string().optional().describe("Username (for display purposes)"),
       }),
-      handler: async (args) => {
-        const { provider, token, base_url, username } = args as {
-          provider: "github" | "gitlab";
-          token: string;
-          base_url?: string;
-          username?: string;
-        };
+      handler: async ({ provider, token, base_url, username }) => {
         service.setToken(provider, token, base_url, username);
         return textResult(
           `${provider} configured successfully.\n` +
@@ -39,25 +33,20 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
           `Use kernel_issues_sync to sync repos.`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_issues_sync",
       description:
         "Sync issues from configured providers. Provide specific repos or omit to re-sync all previously synced repos.",
-      inputSchema: z.object({
+      schema: z.object({
         provider: z.enum(["github", "gitlab"]).optional().describe("Limit sync to one provider"),
         repos: z
           .array(z.string())
           .optional()
           .describe('Repos to sync (e.g. ["owner/repo"]). Omit to re-sync all tracked repos.'),
       }),
-      handler: async (args) => {
-        const { provider, repos: inputRepos } = args as {
-          provider?: "github" | "gitlab";
-          repos?: string[];
-        };
-
+      handler: async ({ provider, repos: inputRepos }) => {
         const providers = provider
           ? [provider]
           : service.getConfiguredProviders();
@@ -105,26 +94,22 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
 
         return textResult(results.join("\n\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_issues_list",
       description:
         "List issues with optional filters. Returns most recently updated first.",
-      inputSchema: z.object({
+      schema: z.object({
         repo: z.string().optional().describe("Filter by repo (e.g. owner/repo)"),
         state: z.enum(["open", "closed", "merged"]).optional().describe("Filter by state"),
         provider: z.enum(["github", "gitlab"]).optional().describe("Filter by provider"),
         label: z.string().optional().describe("Filter by label name"),
         assignee: z.string().optional().describe("Filter by assignee username"),
         is_pr: z.boolean().optional().describe("Filter PRs/MRs only (true) or issues only (false)"),
-        limit: z.number().optional().describe("Max results (default 50)"),
+        limit: limitArg(200, "Max results (default 50)"),
       }),
-      handler: async (args) => {
-        const filters = args as {
-          repo?: string; state?: string; provider?: string;
-          label?: string; assignee?: string; is_pr?: boolean; limit?: number;
-        };
+      handler: async (filters) => {
         const issues = service.listIssues(filters);
         if (issues.length === 0) return textResult("No issues found.");
 
@@ -152,16 +137,15 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
         });
         return textResult(`Issues (${issues.length}):\n${lines.join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_issues_get",
       description: "Get full details of an issue including labels and time entries.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Issue ID (local UUID)"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const issue = service.getIssue(id);
         if (!issue) return errorResult(`Issue not found: ${id}`);
 
@@ -208,12 +192,11 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
 
         return textResult(text);
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_issues_stats",
       description: "Get aggregated statistics: by repo, provider, label, state, and assignee.",
-      inputSchema: z.object({}),
       handler: async () => {
         const stats = service.getStats();
         let text =
@@ -247,21 +230,17 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
 
         return textResult(text);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_issues_time_log",
       description: "Log time spent on an issue. Duration in minutes.",
-      inputSchema: z.object({
+      schema: z.object({
         issue_id: z.string().describe("Issue ID"),
         minutes: z.number().describe("Duration in minutes"),
         description: z.string().optional().describe("What was done"),
       }),
-      handler: async (args) => {
-        const { issue_id, minutes, description } = args as {
-          issue_id: string; minutes: number; description?: string;
-        };
-
+      handler: async ({ issue_id, minutes, description }) => {
         const issue = service.getIssue(issue_id);
         if (!issue) return errorResult(`Issue not found: ${issue_id}`);
 
@@ -272,16 +251,15 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
           `Total spent: ${fmtDuration(issue.time_spent + entry.duration)}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_issues_time_report",
       description: "Time tracking report: estimated vs spent, by issue. Optionally filter by repo.",
-      inputSchema: z.object({
+      schema: z.object({
         repo: z.string().optional().describe("Filter by repo"),
       }),
-      handler: async (args) => {
-        const { repo } = args as { repo?: string };
+      handler: async ({ repo }) => {
         const report = service.getTimeReport(repo);
 
         let text =
@@ -298,12 +276,11 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
 
         return textResult(text);
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_issues_repos",
       description: "List all tracked repos with their last sync time and item counts.",
-      inputSchema: z.object({}),
       handler: async () => {
         const repos = service.getTrackedRepos();
         if (repos.length === 0) return textResult("No repos tracked yet. Use kernel_issues_sync first.");
@@ -318,16 +295,15 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
         });
         return textResult(`Tracked Repositories (${repos.length}):\n${lines.join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_issues_velocity",
       description: "Velocity chart: opened vs closed issues per week over a time period.",
-      inputSchema: z.object({
+      schema: z.object({
         days: z.number().optional().describe("Lookback period in days (default 30)"),
       }),
-      handler: async (args) => {
-        const { days } = args as { days?: number };
+      handler: async ({ days }) => {
         const velocity = service.getVelocity(days ?? 30);
 
         if (velocity.length === 0) return textResult("No data for velocity report.");
@@ -346,6 +322,6 @@ export function issueTools(service: IssueService, db: SqliteDb): ToolDefinition[
 
         return textResult(text);
       },
-    },
+    }),
   ];
 }

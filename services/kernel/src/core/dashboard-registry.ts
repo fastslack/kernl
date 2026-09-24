@@ -13,6 +13,7 @@ import type {
   KernelModule,
   ExtensibleModule,
   AgentPanelTab,
+  CalendarSource,
 } from "./types.js";
 import { log } from "./logger.js";
 
@@ -74,6 +75,7 @@ export class DashboardRegistry {
   private registeredModules: string[] = [];
   private pages: DashboardPage[] = [];
   private agentPanelTabs: AgentPanelTab[] = [];
+  private calendarSources = new Map<string, CalendarSource>();
 
   /**
    * Collect dashboard descriptor from a module.
@@ -161,6 +163,15 @@ export class DashboardRegistry {
       }
     }
 
+    if (desc.calendarSources) {
+      for (const src of desc.calendarSources) {
+        if (this.calendarSources.has(src.id)) {
+          log.warn(`DashboardRegistry: duplicate calendar source "${src.id}" from module "${mod.name}", overwriting`);
+        }
+        this.calendarSources.set(src.id, src);
+      }
+    }
+
     log.debug(
       `DashboardRegistry: registered module "${mod.name}" ` +
       `(${desc.channels?.length ?? 0} ch, ${desc.nav?.length ?? 0} nav, ${desc.pages?.length ?? 0} pages)`,
@@ -184,6 +195,14 @@ export class DashboardRegistry {
     return [...this.channels.keys()];
   }
 
+  /**
+   * Calendar sources contributed by registered modules, for `queryCalendar()`.
+   * Unordered: the calendar sorts all sources by `order`.
+   */
+  getCalendarSources(): CalendarSource[] {
+    return [...this.calendarSources.values()];
+  }
+
   /** Merged channel mappings from all modules (tool-prefix → channels) */
   getChannelMappings(): ModuleChannelMapping[] {
     return this.channelMappings;
@@ -197,19 +216,19 @@ export class DashboardRegistry {
     // Auto-register channel endpoints
     for (const [name, ch] of this.channels) {
       const path = `/api/dashboard/${name}`;
-      server.get(path, async (_req: IncomingMessage, res: ServerResponse) => {
+      server.route("GET", path, async () => {
         try {
           const data = await ch.query(db, neo4j);
-          server.json(res, 200, data ? { available: true, ...(data as Record<string, unknown>) } : { available: false });
+          return data ? { available: true, ...(data as Record<string, unknown>) } : { available: false };
         } catch (err) {
           log.error(`Dashboard channel "${name}" query failed`, err);
-          server.json(res, 200, { available: false });
+          return { available: false };
         }
       });
       log.debug(`DashboardRegistry: auto-registered route ${path}`);
     }
 
-    // Serve module-declared static HTML pages
+    // Serve module-declared static HTML pages (HTML, so not server.route)
     for (const page of this.pages) {
       server.get(page.path, (_req: IncomingMessage, res: ServerResponse) => {
         try {

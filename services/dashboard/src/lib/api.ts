@@ -6,22 +6,49 @@ export function getAuthToken(): string | null {
 	return localStorage.getItem('kernel_auth_token');
 }
 
-/** Store auth token in localStorage */
-export function setAuthToken(token: string): void {
-	localStorage.setItem('kernel_auth_token', token);
-}
-
 /** Clear auth token */
 export function clearAuthToken(): void {
 	localStorage.removeItem('kernel_auth_token');
 }
 
-export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
-	const token = getAuthToken();
-	const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-	if (token) headers['Authorization'] = `Bearer ${token}`;
+/**
+ * Send the browser to /login carrying `?next=` so the user comes back to
+ * `next` afterwards. Does nothing on /login itself — a 401 there would
+ * otherwise loop. Returns whether it redirected.
+ */
+export function redirectToLogin(next: string): boolean {
+	if (window.location.pathname.startsWith('/login')) return false;
+	window.location.href = '/login?next=' + encodeURIComponent(next);
+	return true;
+}
 
-	const r = await fetch(url, { headers, ...opts });
+/**
+ * `fetch` for a kernel `/api/` route, returning the raw Response — no status
+ * handling, no JSON parsing. Sends a JSON content type unless `opts.headers`
+ * is given (which replaces it, as in `apiFetch`).
+ *
+ * No Authorization header here: the root layout patches window.fetch
+ * ($lib/auth-fetch) to add
+ * the bearer token to every same-origin `/api/` request (and to bounce a 401
+ * to /login). That interceptor only sees `fetch` — an EventSource, WebSocket
+ * or `<img src>` still has to carry the token some other way.
+ */
+export function apiFetchRaw(url: string, opts: RequestInit = {}): Promise<Response> {
+	return fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+}
+
+/**
+ * The `error` string a failed kernel response carries in its JSON body, or
+ * `undefined` when the body is not JSON or has none. Callers pick their own
+ * fallback (`?? \`HTTP ${r.status}\``, `|| r.statusText`, …). Consumes the body.
+ */
+export async function readApiError(r: Response): Promise<string | undefined> {
+	const body = (await r.json().catch(() => ({}))) as { error?: string } | null;
+	return body?.error;
+}
+
+export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unknown> {
+	const r = await apiFetchRaw(url, opts);
 
 	if (r.status === 401) {
 		// Send the user to /login rather than opening a native prompt().
@@ -34,18 +61,21 @@ export async function apiFetch(url: string, opts: RequestInit = {}): Promise<unk
 		// poor way to ask for a 64-character token when there is a login screen
 		// built for exactly this.
 		clearAuthToken();
-		if (typeof window !== 'undefined' && !window.location.pathname.startsWith('/login')) {
-			const next = encodeURIComponent(
-				window.location.pathname + window.location.search + window.location.hash,
-			);
-			window.location.href = `/login?next=${next}`;
+		if (typeof window !== 'undefined') {
+			redirectToLogin(window.location.pathname + window.location.search + window.location.hash);
 		}
 		throw new Error('Authentication required');
 	}
 
 	if (!r.ok) {
 		const err = await r.json().catch(() => ({ error: r.statusText })) as { error?: string };
-		throw new Error(err.error || r.statusText);
+		// The message stays exactly what it was; the parsed body rides along so
+		// callers that need more than a code — the reason a draft was rejected,
+		// which model produced it — can read it instead of re-fetching or
+		// guessing. Additive: nothing that only reads `.message` changes.
+		const e = new Error(err.error || r.statusText);
+		(e as Error & { body?: unknown }).body = err;
+		throw e;
 	}
 	return r.json();
 }
@@ -60,15 +90,6 @@ export function put(url: string, body: unknown) {
 
 export function del(url: string) {
 	return apiFetch(url, { method: 'DELETE' });
-}
-
-// ── Dashboard data ─────────────────────────────────────────────────
-export async function fetchDashboard() {
-	return rpcOrCall('dashboard.full', {}, () => apiFetch('/api/dashboard'));
-}
-
-export async function fetchDashboardSection(section: string) {
-	return rpcOrCall('dashboard.' + section, {}, () => apiFetch('/api/dashboard/' + section));
 }
 
 export async function fetchAgendaToday() {
@@ -227,17 +248,6 @@ export function completeShoppingList(id: string) {
 	return rpcOrCall('shopping.lists.complete', { id }, () => post('/api/shopping/complete-list', { id }));
 }
 
-export function reopenShoppingList(id: string) {
-	return rpcOrCall('shopping.lists.reopen', { id }, () => post('/api/shopping/reopen-list', { id }));
-}
-
-// ── Office Kit ─────────────────────────────────────────────────────
-/** Create/refresh a whole office (flow + agents + chains + cron + repo) in
- *  one call — consumed by the "New Office" wizard on /agents-flow. */
-export function createOffice(def: Record<string, unknown>) {
-	return rpcOrCall('offices.create', def, () => post('/api/offices/create', def));
-}
-
 // ── Comms ──────────────────────────────────────────────────────────
 export function createComm(body: Record<string, unknown>) {
 	return rpcOrCall('comms.create', body, () => post('/api/dashboard/comms/create', body));
@@ -284,11 +294,6 @@ export function approveEmailSuggestion(id: string, overrides: Record<string, unk
 	});
 }
 
-// ── Feeds / News ───────────────────────────────────────────────────
-export function refreshFeeds() {
-	return rpcOrCall('feeds.refresh', {}, () => post('/api/feeds/refresh', {}));
-}
-
 export function addFeed(url: string, name: string) {
 	return rpcOrCall('feeds.add', { url, name }, () => post('/api/feeds', { url, name }));
 }
@@ -322,17 +327,9 @@ export function createAgent(body: Record<string, unknown>) {
 	return rpcOrCall('agents.create', body, () => post('/api/agents', body));
 }
 
-export function triggerAgent(body: Record<string, unknown>) {
-	return rpcOrCall('agents.trigger', body, () => post('/api/agents/trigger', body));
-}
-
 // ── Prompt versions (Autogenesis RSPL) ─────────────────────────────
 export function listPromptVersions(agentId: string) {
 	return apiFetch('/api/agents/' + agentId + '/prompt-versions');
-}
-
-export function getPromptVersion(agentId: string, version: number) {
-	return apiFetch('/api/agents/' + agentId + '/prompt-versions/' + version);
 }
 
 export function diffPromptVersions(agentId: string, from: number, to: number) {
@@ -397,10 +394,6 @@ export function marketplaceActivateTheme(item_id: string) {
 
 export function marketplaceDeactivateTheme() {
 	return rpcOrCall('marketplace.theme.deactivate', {}, () => post('/api/marketplace/theme/deactivate', {}));
-}
-
-export function marketplaceImport(pkg: Record<string, unknown>) {
-	return rpcOrCall('marketplace.import', pkg, () => post('/api/marketplace/import', pkg));
 }
 
 export async function marketplaceExport(id: string) {
@@ -480,25 +473,18 @@ export async function* sendChatMessageStream(
 	},
 	signal?: AbortSignal,
 ): AsyncGenerator<ChatStreamEvent, void, unknown> {
-	const token = getAuthToken();
-	const headers: Record<string, string> = {
-		'Content-Type': 'application/json',
-		Accept: 'text/event-stream',
-	};
-	if (token) headers.Authorization = `Bearer ${token}`;
-
+	// Bearer token: added by the layout's window.fetch interceptor (/api/ URL).
 	const r = await fetch('/api/chat/message/stream', {
 		method: 'POST',
-		headers,
+		headers: {
+			'Content-Type': 'application/json',
+			Accept: 'text/event-stream',
+		},
 		body: JSON.stringify(body),
 		signal,
 	});
 	if (!r.ok || !r.body) {
-		const err = await r
-			.json()
-			.catch(() => ({ error: r.statusText }))
-			.then((j: { error?: string }) => j.error || r.statusText);
-		throw new Error(err);
+		throw new Error((await readApiError(r)) || r.statusText);
 	}
 
 	const reader = r.body.getReader();
@@ -564,36 +550,15 @@ export async function getDistilledFacts(opts: { category?: string; limit?: numbe
 	return res?.facts ?? [];
 }
 
-export async function getDistilledFactsForEpisode(episodeId: string): Promise<DistilledFact[]> {
-	const res = (await apiFetch(
-		'/api/chat/distilled-facts/episode?episode_id=' + encodeURIComponent(episodeId),
-	)) as { facts?: DistilledFact[] };
-	return res?.facts ?? [];
-}
-
 export async function getDistilledSummary(): Promise<DistilledSummary> {
 	const res = (await apiFetch('/api/chat/distilled-facts/summary')) as DistilledSummary;
 	return { categories: res?.categories ?? [], total: res?.total ?? 0 };
 }
 
-// ── AI Config ──────────────────────────────────────────────────────
-export function saveAiConfig(body: Record<string, unknown>) {
-	return rpcOrCall('config.ai.save', body, () => post('/api/config/ai', body));
-}
-
-// ── Google ─────────────────────────────────────────────────────────
-export function startGoogleAuth() {
-	return rpcOrCall('google.auth.start', {}, () => post('/api/google/auth/start', {}));
-}
-
 // Live Google/Gmail connection health: { status, needsReauth, authUrl, ... }.
 // Surfaces a dead refresh token (needs_reauth) so the UI can prompt a reconnect.
 export function fetchGoogleSyncStatus() {
-	return rpcOrCall('google.status', {}, () => apiFetch('/api/email-accounts/google-profile'));
-}
-
-export function revokeGoogleAuth() {
-	return rpcOrCall('google.auth.revoke', {}, () => post('/api/google/revoke', {}));
+	return rpcOrCall('google.status', {}, () => apiFetch('/api/google/status'));
 }
 
 // ── PII status ─────────────────────────────────────────────────────

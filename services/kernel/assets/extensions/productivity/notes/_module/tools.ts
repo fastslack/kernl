@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { NotesService } from "./service.js";
 
 /**
@@ -30,10 +30,10 @@ function normaliseEscapes(s: string): string {
 
 export function notesTools(service: NotesService): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_notes_create",
       description: "Create a new note. Supports tags, pinning, and linking to contacts or tasks.",
-      inputSchema: z.object({
+      schema: z.object({
         title: z.string().describe("Note title"),
         body: z.string().optional().describe("Note content (markdown supported)"),
         tags: z.string().optional().describe("Comma-separated tags"),
@@ -41,8 +41,7 @@ export function notesTools(service: NotesService): ToolDefinition[] {
         contact_id: z.string().optional().describe("Link to a CRM contact"),
         task_id: z.string().optional().describe("Link to a task"),
       }),
-      handler: async (args) => {
-        const input = args as { title: string; body?: string; tags?: string; pinned?: boolean; contact_id?: string; task_id?: string };
+      handler: async (input) => {
         const note = service.create({
           ...input,
           title: normaliseEscapes(input.title),
@@ -52,20 +51,19 @@ export function notesTools(service: NotesService): ToolDefinition[] {
           `Note created:\n  ID: ${note.id}\n  Title: ${note.title}\n  Tags: ${note.tags || "none"}\n  Pinned: ${note.pinned ? "yes" : "no"}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_notes_get",
       description:
         "Get a note by ID with full content. Supports paging via `offset` (default 0). " +
         "Large bodies (>20000 chars) are returned in chunks — the response includes the " +
         "total length and the next offset so the caller can fetch the remainder.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Note ID"),
         offset: z.number().optional().describe("Starting byte offset into the body (default 0). Use the `next offset` value from a prior truncated response to page through large notes."),
       }),
-      handler: async (args) => {
-        const { id, offset } = args as { id: string; offset?: number };
+      handler: async ({ id, offset }) => {
         const note = service.getById(id);
         if (!note) return errorResult(`Note not found: ${id}`);
 
@@ -89,12 +87,12 @@ export function notesTools(service: NotesService): ToolDefinition[] {
           `# ${note.title}\n\nTags: ${note.tags || "none"} | Created: ${note.created_at}${start > 0 ? ` | Showing chars ${start}–${end} of ${total}` : ""}\n\n---\n\n${chunk}${suffix}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_notes_update",
       description: "Update a note's title, body, tags, pin status, or links.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Note ID"),
         title: z.string().optional(),
         body: z.string().optional(),
@@ -103,11 +101,7 @@ export function notesTools(service: NotesService): ToolDefinition[] {
         contact_id: z.string().optional(),
         task_id: z.string().optional(),
       }),
-      handler: async (args) => {
-        const { id, ...changes } = args as {
-          id: string; title?: string; body?: string; tags?: string;
-          pinned?: boolean; contact_id?: string; task_id?: string;
-        };
+      handler: async ({ id, ...changes }) => {
         const updatePayload: Record<string, unknown> = { ...changes };
         if (changes.pinned !== undefined) updatePayload.pinned = changes.pinned ? 1 : 0;
         if (changes.title !== undefined) updatePayload.title = normaliseEscapes(changes.title);
@@ -117,28 +111,27 @@ export function notesTools(service: NotesService): ToolDefinition[] {
         if (!note) return errorResult(`Note not found: ${id}`);
         return textResult(`Note "${note.title}" updated.`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_notes_delete",
       description: "Permanently delete a note.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Note ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const ok = service.delete(id);
         if (!ok) return errorResult(`Note not found: ${id}`);
         return textResult("Note deleted.");
       },
-    },
+    }),
 
     {
       name: "kernel_notes_search",
       description: "Full-text search across all notes (titles, body, tags). Uses SQLite FTS5 for fast results.",
       inputSchema: z.object({
         query: z.string().describe("Search query (supports FTS5 syntax: AND, OR, NOT, quotes for phrases)"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
       }),
       handler: async (args) => {
         const a = args as Record<string, unknown>;
@@ -156,18 +149,17 @@ export function notesTools(service: NotesService): ToolDefinition[] {
       },
     },
 
-    {
+    defineTool({
       name: "kernel_notes_list",
       description: "List notes with optional filters by tag, linked contact/task, or pin status.",
-      inputSchema: z.object({
+      schema: z.object({
         tag: z.string().optional().describe("Filter by tag"),
         contact_id: z.string().optional().describe("Filter by linked contact"),
         task_id: z.string().optional().describe("Filter by linked task"),
         pinned: z.boolean().optional().describe("Filter pinned notes only"),
-        limit: z.number().optional().describe("Max results"),
+        limit: limitArg(200, "Max results"),
       }),
-      handler: async (args) => {
-        const filters = args as { tag?: string; contact_id?: string; task_id?: string; pinned?: boolean; limit?: number };
+      handler: async (filters) => {
         const notes = service.list(filters);
         if (notes.length === 0) return textResult("No notes found.");
 
@@ -176,6 +168,6 @@ export function notesTools(service: NotesService): ToolDefinition[] {
         );
         return textResult(`${notes.length} note(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
   ];
 }

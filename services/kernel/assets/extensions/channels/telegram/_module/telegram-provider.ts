@@ -1,5 +1,6 @@
 import {
   log,
+  formatNotification,
   type KernelConfig,
   type NotificationProvider,
   type NotificationPayload,
@@ -137,9 +138,6 @@ export class TelegramProvider implements NotificationProvider {
   }
 
   private formatPayload(payload: NotificationPayload): string {
-    const prefix = payload.priority === "high" ? "🚨 " : "";
-    const lines = [`${prefix}*${payload.title}*`];
-    if (payload.body) lines.push(payload.body);
-    return lines.join("\n");
+    return formatNotification(payload, { bold: "*", alert: "🚨 " });
   }
 }

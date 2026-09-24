@@ -16,9 +16,15 @@
     Root.svelte switches to this component based on the pathname.
   */
   import { onMount } from 'svelte';
-  import type { ExtPageContext } from './types.js';
+  import type { ExtPageContext } from '$shared/types';
+  import { jsonApi } from '$shared/api';
 
   export let ctx: ExtPageContext;
+
+  // Mutations surface the kernel's `{ error }`; the list loads only ever
+  // reported the status, and still do.
+  const api = jsonApi((p, i) => ctx.fetchRaw(p, i), { statusMessage: (s) => `http ${s}` });
+  const listApi = jsonApi((p, i) => ctx.fetchRaw(p, i), { statusMessage: (s) => `http ${s}`, bodyError: false });
 
   interface DirectoryItemPreview {
     identifier: string;
@@ -82,9 +88,7 @@
     busy = true;
     lastError = '';
     try {
-      const r = await ctx.fetchRaw('/api/cinema/directories?origin=local&limit=100');
-      if (!r.ok) throw new Error(`http ${r.status}`);
-      const body = await r.json();
+      const body = await listApi.getJson('/api/cinema/directories?origin=local&limit=100');
       mine = body.directories ?? [];
     } catch (err: any) {
       lastError = err?.message ?? String(err);
@@ -95,9 +99,7 @@
     busy = true;
     lastError = '';
     try {
-      const r = await ctx.fetchRaw('/api/cinema/directories?origin=federated&subscribed=1&limit=100');
-      if (!r.ok) throw new Error(`http ${r.status}`);
-      const body = await r.json();
+      const body = await listApi.getJson('/api/cinema/directories?origin=federated&subscribed=1&limit=100');
       following = body.directories ?? [];
     } catch (err: any) {
       lastError = err?.message ?? String(err);
@@ -112,9 +114,7 @@
       if (discoverCategory) params.set('category', discoverCategory);
       if (discoverOwner) params.set('owner', discoverOwner);
       params.set('limit', '50');
-      const r = await ctx.fetchRaw(`/api/cinema/directories/discover?${params.toString()}`);
-      if (!r.ok) throw new Error(`http ${r.status}`);
-      const body = await r.json();
+      const body = await listApi.getJson(`/api/cinema/directories/discover?${params.toString()}`);
       discovery = body.directories ?? [];
     } catch (err: any) {
       lastError = err?.message ?? String(err);
@@ -127,12 +127,9 @@
     activeItems = [];
     activeLoading = true;
     try {
-      const r = await ctx.fetchRaw(`/api/cinema/directories/${encodeURIComponent(dir.id)}`);
-      if (r.ok) {
-        const body = await r.json();
-        activeDir = body.directory;
-        activeItems = body.items ?? [];
-      }
+      const body = await listApi.getJson(`/api/cinema/directories/${encodeURIComponent(dir.id)}`);
+      activeDir = body.directory;
+      activeItems = body.items ?? [];
     } catch { /* */ }
     finally { activeLoading = false; }
   }
@@ -177,16 +174,7 @@
       const url = editForm.id
         ? `/api/cinema/directories/${editForm.id}/update`
         : `/api/cinema/directories`;
-      const r = await ctx.fetchRaw(url, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({} as any));
-        lastError = e.error ?? `http ${r.status}`;
-        return;
-      }
+      await api.postJson(url, body);
       createOpen = false;
       await loadMine();
     } catch (err: any) {
@@ -196,13 +184,7 @@
 
   async function publishDir(dir: Directory) {
     try {
-      const r = await ctx.fetchRaw(`/api/cinema/directories/${dir.id}/publish`, { method: 'POST' });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({} as any));
-        lastError = e.error ?? `http ${r.status}`;
-        return;
-      }
-      const body = await r.json();
+      const body = await api.postJson(`/api/cinema/directories/${dir.id}/publish`);
       lastError = '';
       alert(`✓ publicado a ${body.relays?.length ?? 0} relays`);
       await loadMine();
@@ -223,16 +205,7 @@
 
   async function followDiscovery(d: Directory & { signer_pubkey?: string }): Promise<void> {
     try {
-      const r = await ctx.fetchRaw(`/api/cinema/directories/${d.id}/follow`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ owner_pubkey: d.owner_pubkey }),
-      });
-      if (!r.ok) {
-        const e = await r.json().catch(() => ({} as any));
-        lastError = e.error ?? `http ${r.status}`;
-        return;
-      }
+      await api.postJson(`/api/cinema/directories/${d.id}/follow`, { owner_pubkey: d.owner_pubkey });
       // Move the user to the "following" view so they see it landed.
       view = 'following';
       await loadFollowing();

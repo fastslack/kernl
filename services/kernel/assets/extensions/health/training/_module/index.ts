@@ -1,12 +1,4 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-  type EventBus,
-} from "@kernl/extension-sdk";
+import { defineModule, dashboardChannel, type EventBus } from "@kernl/extension-sdk";
 import { trainingMigrations } from "./migrations/001_training.js";
 import { TrainingService } from "./service.js";
 import { trainingTools } from "./tools.js";
@@ -14,53 +6,29 @@ import { queryTraining } from "./dashboard-queries.js";
 import { trainingRpcActions } from "./rpc-actions.js";
 import { registerTrainingRoutes } from "./routes.js";
 
-export function createTrainingModule(): ExtensibleModule {
-  let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
-  let eventsRef: EventBus | null = null;
+export function createTrainingModule() {
+  let service: TrainingService | null = null;
+  let events: EventBus | null = null;
 
-  return {
+  return defineModule({
     name: "training",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "training", trainingMigrations);
-      dbRef = ctx.sqlite;
-      eventsRef = ctx.events;
-      const service = new TrainingService(ctx.sqlite);
-      tools = trainingTools(service);
+    migrations: trainingMigrations,
+    init(ctx) {
+      events = ctx.events;
+      service = new TrainingService(ctx.sqlite);
+      return service;
     },
-
-    getTools() {
-      return tools;
-    },
-
-    getRpcActions() {
-      return dbRef ? trainingRpcActions(dbRef) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        nav: [
-          { id: "training", label: "Train", icon: "\uD83D\uDCAA", group: "wellness", order: 30 },
-        ],
-        channels: [
-          { name: "training", query: (db) => queryTraining(db) },
-        ],
-        channelMappings: [
-          { moduleKey: "training", channels: ["training"] },
-        ],
-        stores: ["training"],
-        fetchEndpoints: [
-          { url: "/api/dashboard/training", store: "training" },
-        ],
-        registerRoutes: (server) => {
-          if (dbRef) {
-            registerTrainingRoutes(server, dbRef, eventsRef ?? undefined);
-          }
-        },
-      };
-    },
-
-    async shutdown() {},
-  };
+    tools: trainingTools,
+    rpc: (s) => trainingRpcActions({ service: s, events }),
+    dashboard: dashboardChannel("training", (db) => queryTraining(db), {
+      nav: [
+        { id: "training", label: "Train", icon: "💪", group: "wellness", order: 30 },
+      ],
+      registerRoutes: (server) => {
+        if (service) {
+          registerTrainingRoutes(server, service, events ?? undefined);
+        }
+      },
+    }),
+  });
 }

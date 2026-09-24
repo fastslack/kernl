@@ -1,36 +1,30 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
-import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 import type { KernelConfig } from "../../core/config.js";
 import { newId, isoNow } from "../../core/helpers.js";
+import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
+import { agentModelChain } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import type {
   Agent,
   AgentFlow,
-  FlowKind,
   AgentRank,
   AgentRun,
-  AgentStep,
   EventTrigger,
   AgentSchedule,
-  AgentFeedback,
-  AgentLearning,
   AgentChain,
   AgentOfficeInboxMessage,
   AgentPromptVersion,
-  AgentEvolutionRun,
   ModelChainEntry,
   AgentConversation,
-  AgentConversationSubscription,
   AgentMessage,
   AgentMessageRole,
-  AgentDebateCooldown,
 } from "./types.js";
 import { AgentChainsService } from "./services/chains-service.js";
 import { AgentEventLogService } from "./services/event-log-service.js";
 import { AgentEvolutionService } from "./services/evolution-service.js";
 import { AgentTriggersService } from "./services/triggers-service.js";
-import { AgentSchedulesService, type SchedulePatch } from "./services/schedules-service.js";
+import { AgentSchedulesService } from "./services/schedules-service.js";
 import { AgentPromptVersionsService } from "./services/prompt-versions-service.js";
 import { AgentSubscriptionsService } from "./services/subscriptions-service.js";
 import { AgentConversationsService } from "./services/conversations-service.js";
@@ -46,6 +40,75 @@ const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
 
 /** Stable topic so every auto-pause alert for the same pair lands in one thread. */
 const AUTO_PAUSE_ALERT_TOPIC = "Agent auto-pause alerts";
+
+/** The agent columns updateAgent may write, and how each field is stored. */
+const AGENT_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  system_prompt: "text",
+  goal_template: "text",
+  allowed_tools: "json",
+  denied_tools: "json",
+  provider: "text",
+  model: "text",
+  max_iterations: "text",
+  timeout_ms: "text",
+  active: "bool",
+  max_tokens: "text",
+  max_errors: "text",
+  variables: "json",
+  show_on_dashboard: "bool",
+  builtin_handler: "text",
+  rank_id: "text",
+  // An empty chain is stored as "" (not "[]"): "no chain, use the defaults".
+  model_chain: { to: (chain: ModelChainEntry[]) => (chain.length > 0 ? JSON.stringify(chain) : "") },
+  wake_on_inbox: "bool",
+  progressive_discovery: "bool",
+  skin_id: "text",
+  under_revision: "bool",
+  executor_type: "text",
+  skills: { column: "skills_json", to: (slugs: string[]) => JSON.stringify(slugs) },
+};
+
+/**
+ * Methods AgentService serves straight from one of its sub-services: same
+ * name, same signature, no logic of its own. They used to be written out one
+ * by one (96 of them, each repeating its full parameter types); now the
+ * table below binds them in the constructor, and the interface merged into
+ * the class gives them their types from the sub-service itself. Every
+ * existing `agentService.*` call site keeps working unchanged. A method with
+ * logic of its own stays written out in the class.
+ */
+const DELEGATED = {
+  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings"],
+  flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "assignAgentToFlow"],
+  ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
+  runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "addStep", "getSteps", "getRunEvents"],
+  triggers: ["addEventTrigger", "listEventTriggers", "getActiveEventTriggers", "removeEventTrigger", "updateTriggerLastFired"],
+  schedules: ["addSchedule", "listSchedules", "getDueSchedules", "removeSchedule", "getSchedule", "updateSchedule", "updateScheduleNextRun"],
+  feedback: ["addFeedback", "getFeedback"],
+  conversations: ["createConversation", "getConversation", "findOrCreateChatConversation", "listConversations", "closeConversation", "archiveConversation", "archiveClosedConversations", "parseParticipants", "addParticipant", "postMessage", "getMessage", "listMessages", "getDebateCooldown", "recordDebateCooldown", "countRecentAutoDebates"],
+  chains: ["addChain", "listChains", "getChainsBySource", "removeChain"],
+  eventLog: ["logEvent", "getEventLog", "getEventLogCount", "clearEventLog"],
+  promptVersions: ["activatePromptVersion", "listPromptVersions", "getPromptVersion", "getActivePromptVersion", "restorePromptVersion", "diffPromptVersions"],
+  evolution: ["createEvolutionRun", "updateEvolutionRun", "listEvolutionRuns", "listEvolutionRunsByWorkspace", "getEvolutionRun"],
+  subscriptions: ["subscribeAgentToConversation", "unsubscribeAgentFromConversation", "getSubscription", "listSubscriptionsForConversation", "listSubscriptionsForAgent", "markSubscriptionFired"],
+} as const;
+
+export interface AgentService extends
+  Pick<AgentMemoryService, (typeof DELEGATED)["memory"][number]>,
+  Pick<AgentFlowsService, (typeof DELEGATED)["flows"][number]>,
+  Pick<AgentRanksService, (typeof DELEGATED)["ranks"][number]>,
+  Pick<AgentRunsService, (typeof DELEGATED)["runs"][number]>,
+  Pick<AgentTriggersService, (typeof DELEGATED)["triggers"][number]>,
+  Pick<AgentSchedulesService, (typeof DELEGATED)["schedules"][number]>,
+  Pick<AgentFeedbackService, (typeof DELEGATED)["feedback"][number]>,
+  Pick<AgentConversationsService, (typeof DELEGATED)["conversations"][number]>,
+  Pick<AgentChainsService, (typeof DELEGATED)["chains"][number]>,
+  Pick<AgentEventLogService, (typeof DELEGATED)["eventLog"][number]>,
+  Pick<AgentPromptVersionsService, (typeof DELEGATED)["promptVersions"][number]>,
+  Pick<AgentEvolutionService, (typeof DELEGATED)["evolution"][number]>,
+  Pick<AgentSubscriptionsService, (typeof DELEGATED)["subscriptions"][number]> {}
 
 export class AgentService {
   /**
@@ -113,15 +176,14 @@ export class AgentService {
       (agentId, runCreatedAt, outcome) =>
         this.reinforceLearningsForRun(agentId, runCreatedAt, outcome),
     );
-  }
 
-  /** Inject the embeddings client. Idempotent — last writer wins. */
-  setEmbeddingsClient(client: EmbeddingsClient | null): void {
-    this.memory.setEmbeddingsClient(client);
-  }
-
-  getEmbeddingsClient(): EmbeddingsClient | null {
-    return this.memory.getEmbeddingsClient();
+    // Bind the pass-through methods listed in DELEGATED (see above).
+    for (const [sub, names] of Object.entries(DELEGATED)) {
+      const target = this[sub as keyof typeof DELEGATED] as unknown as Record<string, (...args: unknown[]) => unknown>;
+      for (const name of names) {
+        (this as unknown as Record<string, unknown>)[name] = target[name].bind(target);
+      }
+    }
   }
 
   /** @see AgentMemoryService.scheduleEmbed — `createRun` embeds its goal through here. */
@@ -137,46 +199,6 @@ export class AgentService {
 
 
   // ── Flows (offices) → AgentFlowsService ────────────
-
-  createFlow(input: { name: string; description?: string; color?: string; kind?: FlowKind; source_extension_id?: string }): AgentFlow {
-    return this.flows.createFlow(input);
-  }
-
-  /** Public entrypoint for the backfill script. Returns the workspace id or null. */
-  ensureOfficeHome(flowId: string): string | null {
-    return this.flows.ensureOfficeHome(flowId);
-  }
-
-  resolveFlowHome(flowId: string): { path: string; kind: "git" | "workspace"; flow: AgentFlow } | null {
-    return this.flows.resolveFlowHome(flowId);
-  }
-
-  setFlowRepo(flowId: string, repoPath: string): AgentFlow | undefined {
-    return this.flows.setFlowRepo(flowId, repoPath);
-  }
-
-  listFlows(): AgentFlow[] {
-    return this.flows.listFlows();
-  }
-
-  getFlow(id: string): AgentFlow | undefined {
-    return this.flows.getFlow(id);
-  }
-
-  updateFlow(
-    id: string,
-    updates: Partial<Pick<AgentFlow, "name" | "description" | "color" | "kind" | "repo_isolation">>,
-  ): AgentFlow | undefined {
-    return this.flows.updateFlow(id, updates);
-  }
-
-  deleteFlow(id: string): { unassigned: number } | null {
-    return this.flows.deleteFlow(id);
-  }
-
-  assignAgentToFlow(agentId: string, flowId: string): boolean {
-    return this.flows.assignAgentToFlow(agentId, flowId);
-  }
 
   /**
    * Make `agentId` the one lead of its office: it becomes `manager` and every
@@ -316,43 +338,6 @@ export class AgentService {
 
   // ── Ranks → AgentRanksService ───────────────────────
 
-  createRank(input: {
-    name: string;
-    level: number;
-    insignia?: string;
-    color?: string;
-    description?: string;
-  }): AgentRank {
-    return this.ranks.createRank(input);
-  }
-
-  listRanks(): AgentRank[] {
-    return this.ranks.listRanks();
-  }
-
-  getRank(id: string): AgentRank | undefined {
-    return this.ranks.getRank(id);
-  }
-
-  getTopAgent(): Agent | undefined {
-    return this.ranks.getTopAgent();
-  }
-
-  updateRank(
-    id: string,
-    updates: Partial<Pick<AgentRank, "name" | "level" | "insignia" | "color" | "description">>,
-  ): AgentRank | undefined {
-    return this.ranks.updateRank(id, updates);
-  }
-
-  deleteRank(id: string): boolean {
-    return this.ranks.deleteRank(id);
-  }
-
-  assignRankToAgent(agentId: string, rankId: string): boolean {
-    return this.ranks.assignRankToAgent(agentId, rankId);
-  }
-
 
   // ── Model fallback chain ────────────────────────────
 
@@ -363,22 +348,9 @@ export class AgentService {
    * Entries with blank provider AND blank model are filtered out.
    */
   resolveModelChain(agent: Agent): ModelChainEntry[] {
-    if (agent.model_chain) {
-      try {
-        const parsed = JSON.parse(agent.model_chain) as unknown;
-        if (Array.isArray(parsed)) {
-          const chain: ModelChainEntry[] = [];
-          for (const raw of parsed) {
-            if (!raw || typeof raw !== "object") continue;
-            const p = String((raw as Record<string, unknown>).provider ?? "");
-            const m = String((raw as Record<string, unknown>).model ?? "");
-            if (p || m) chain.push({ provider: p, model: m });
-          }
-          if (chain.length > 0) return chain;
-        }
-      } catch { /* fall through to single */ }
-    }
-    return [{ provider: agent.provider, model: agent.model }];
+    const chain = agentModelChain(agent);
+    // No usable chain (empty, malformed, or every entry blank) → the single pair.
+    return chain.length > 0 ? chain : [{ provider: agent.provider, model: agent.model }];
   }
 
   setModelChain(agentId: string, chain: ModelChainEntry[]): boolean {
@@ -702,48 +674,17 @@ export class AgentService {
     const agent = this.getAgent(id);
     if (!agent) return undefined;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (input.name !== undefined) { sets.push("name = ?"); params.push(input.name); }
-    if (input.description !== undefined) { sets.push("description = ?"); params.push(input.description); }
-    if (input.system_prompt !== undefined) { sets.push("system_prompt = ?"); params.push(input.system_prompt); }
-    if (input.goal_template !== undefined) { sets.push("goal_template = ?"); params.push(input.goal_template); }
-    if (input.allowed_tools !== undefined) { sets.push("allowed_tools = ?"); params.push(JSON.stringify(input.allowed_tools)); }
-    if (input.denied_tools !== undefined) { sets.push("denied_tools = ?"); params.push(JSON.stringify(input.denied_tools)); }
-    if (input.provider !== undefined) { sets.push("provider = ?"); params.push(input.provider); }
-    if (input.model !== undefined) { sets.push("model = ?"); params.push(input.model); }
-    if (input.max_iterations !== undefined) { sets.push("max_iterations = ?"); params.push(input.max_iterations); }
-    if (input.timeout_ms !== undefined) { sets.push("timeout_ms = ?"); params.push(input.timeout_ms); }
-    if (input.active !== undefined) {
-      sets.push("active = ?");
-      params.push(input.active ? 1 : 0);
-      // Reactivating clears the breaker: the user un-pausing an agent is
-      // telling us the underlying problem is handled, so it gets the full
-      // failure budget again instead of tripping on its next stumble.
-      if (input.active) {
-        sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
-      }
+    const { sets, params } = buildPatch(
+      // Only a known engine is written; anything else leaves the column alone.
+      { ...input, executor_type: input.executor_type === "native" || input.executor_type === "claude_code" ? input.executor_type : undefined },
+      AGENT_PATCH,
+    );
+    // Reactivating clears the breaker: the user un-pausing an agent is
+    // telling us the underlying problem is handled, so it gets the full
+    // failure budget again instead of tripping on its next stumble.
+    if (input.active) {
+      sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
     }
-    if (input.max_tokens !== undefined) { sets.push("max_tokens = ?"); params.push(input.max_tokens); }
-    if (input.max_errors !== undefined) { sets.push("max_errors = ?"); params.push(input.max_errors); }
-    if (input.variables !== undefined) { sets.push("variables = ?"); params.push(JSON.stringify(input.variables)); }
-    if (input.show_on_dashboard !== undefined) { sets.push("show_on_dashboard = ?"); params.push(input.show_on_dashboard ? 1 : 0); }
-    if (input.builtin_handler !== undefined) { sets.push("builtin_handler = ?"); params.push(input.builtin_handler); }
-    if (input.rank_id !== undefined) { sets.push("rank_id = ?"); params.push(input.rank_id); }
-    if (input.model_chain !== undefined) {
-      sets.push("model_chain = ?");
-      params.push(input.model_chain.length > 0 ? JSON.stringify(input.model_chain) : "");
-    }
-    if (input.wake_on_inbox !== undefined) { sets.push("wake_on_inbox = ?"); params.push(input.wake_on_inbox ? 1 : 0); }
-    if (input.progressive_discovery !== undefined) { sets.push("progressive_discovery = ?"); params.push(input.progressive_discovery ? 1 : 0); }
-    if (input.skin_id !== undefined) { sets.push("skin_id = ?"); params.push(input.skin_id); }
-    if (input.under_revision !== undefined) { sets.push("under_revision = ?"); params.push(input.under_revision ? 1 : 0); }
-    if (input.executor_type === "native" || input.executor_type === "claude_code") {
-      sets.push("executor_type = ?");
-      params.push(input.executor_type);
-    }
-    if (input.skills !== undefined) { sets.push("skills_json = ?"); params.push(JSON.stringify(input.skills)); }
 
     if (sets.length === 0) return agent;
 
@@ -940,30 +881,6 @@ export class AgentService {
 
   // ── Runs & steps → AgentRunsService ─────────────────
 
-  createRun(input: {
-    agent_id: string;
-    trigger_type?: "manual" | "event" | "schedule" | "chain";
-    trigger_payload?: Record<string, unknown>;
-    goal: string;
-    parent_run_id?: string;
-    parent_agent_id?: string;
-    depth?: number;
-  }): AgentRun {
-    return this.runs.createRun(input);
-  }
-
-  getRun(id: string): AgentRun | undefined {
-    return this.runs.getRun(id);
-  }
-
-  listRuns(filters?: {
-    agent_id?: string;
-    status?: string;
-    limit?: number;
-  }): AgentRun[] {
-    return this.runs.listRuns(filters);
-  }
-
   updateRun(
     id: string,
     updates: Partial<{
@@ -979,37 +896,7 @@ export class AgentService {
     this.runs.updateRun(id, updates);
   }
 
-  cancelRun(id: string): boolean {
-    return this.runs.cancelRun(id);
-  }
-
-  /** Mark stale "running"/"pending" runs as failed (e.g. after crash/restart) */
-  cleanupStaleRuns(): number {
-    return this.runs.cleanupStaleRuns();
-  }
-
   // ── Steps → AgentRunsService ────────────────────────
-
-  addStep(input: {
-    run_id: string;
-    step_number: number;
-    type: AgentStep["type"];
-    content?: string;
-    tool_name?: string;
-    tool_input?: Record<string, unknown>;
-    tool_output?: string;
-    tokens?: number;
-  }): AgentStep {
-    return this.runs.addStep(input);
-  }
-
-  getSteps(runId: string): AgentStep[] {
-    return this.runs.getSteps(runId);
-  }
-
-  getRunEvents(runId: string): Array<{ id: string; event_type: string; event_subtype: string; detail: string; raw_data: string; tokens_used: number; duration_ms: number; created_at: string }> {
-    return this.runs.getRunEvents(runId);
-  }
 
   getAdHocConnections(agentId: string): {
     invokedBy: Array<{ agent_id: string; agent_name: string; count: number; last_at: string }>;
@@ -1021,65 +908,7 @@ export class AgentService {
 
   // ── Event triggers → AgentTriggersService ───────────
 
-  addEventTrigger(input: {
-    agent_id: string;
-    event_name: string;
-    filter?: Record<string, unknown>;
-    cooldown_ms?: number;
-  }): EventTrigger {
-    return this.triggers.addEventTrigger(input);
-  }
-
-  listEventTriggers(agentId?: string): EventTrigger[] {
-    return this.triggers.listEventTriggers(agentId);
-  }
-
-  getActiveEventTriggers(): EventTrigger[] {
-    return this.triggers.getActiveEventTriggers();
-  }
-
-  removeEventTrigger(id: string): boolean {
-    return this.triggers.removeEventTrigger(id);
-  }
-
-  updateTriggerLastFired(id: string): void {
-    this.triggers.updateTriggerLastFired(id);
-  }
-
   // ── Schedules → AgentSchedulesService ───────────────
-
-  addSchedule(input: {
-    agent_id: string;
-    interval_ms?: number;
-    cron_expression?: string;
-    goal_override?: string;
-  }): AgentSchedule {
-    return this.schedules.addSchedule(input);
-  }
-
-  listSchedules(agentId?: string): AgentSchedule[] {
-    return this.schedules.listSchedules(agentId);
-  }
-
-  getDueSchedules(): Array<AgentSchedule & { agent_name: string }> {
-    return this.schedules.getDueSchedules();
-  }
-
-  removeSchedule(id: string): boolean {
-    return this.schedules.removeSchedule(id);
-  }
-
-  getSchedule(id: string): AgentSchedule | undefined {
-    return this.schedules.getSchedule(id);
-  }
-
-  updateSchedule(id: string, patch: SchedulePatch): AgentSchedule | undefined {
-    return this.schedules.updateSchedule(id, patch);
-  }
-
-  updateScheduleNextRun(id: string, nextRunAt: string, lastRunAt: string): void {
-    this.schedules.updateScheduleNextRun(id, nextRunAt, lastRunAt);
-  }
 
   // NOTE: `deactivateSchedule()` lived here for the old in-memory circuit
   // breaker, its only caller. The breaker now pauses the AGENT
@@ -1087,20 +916,6 @@ export class AgentService {
   // reactivating an agent resumes it without having to repair its cron too.
 
   // ── Feedback & stats → AgentFeedbackService ───────
-
-  addFeedback(input: {
-    agent_id: string;
-    run_id: string;
-    rating: number;
-    outcome?: AgentFeedback["outcome"];
-    lesson?: string;
-  }): AgentFeedback {
-    return this.feedback.addFeedback(input);
-  }
-
-  getFeedback(agentId: string, limit = 20): AgentFeedback[] {
-    return this.feedback.getFeedback(agentId, limit);
-  }
 
   getAgentStats(agentId: string): {
     total_runs: number;
@@ -1119,33 +934,7 @@ export class AgentService {
 
   // ── Learnings → AgentMemoryService ────────────────
 
-  addLearning(input: {
-    agent_id: string;
-    type: AgentLearning["type"];
-    content: string;
-    confidence?: number;
-    source_runs?: string[];
-  }): AgentLearning {
-    return this.memory.addLearning(input);
-  }
-
-  getLearnings(agentId: string): AgentLearning[] {
-    return this.memory.getLearnings(agentId);
-  }
-
   // ── Conversational memory → AgentMemoryService ────
-
-  addMemory(agentId: string, role: "user" | "assistant", content: string, runId = ""): void {
-    this.memory.addMemory(agentId, role, content, runId);
-  }
-
-  getMemory(agentId: string, limit = 20): Array<{ role: string; content: string; created_at: string }> {
-    return this.memory.getMemory(agentId, limit);
-  }
-
-  clearMemory(agentId: string): void {
-    this.memory.clearMemory(agentId);
-  }
 
 
   // ── Office inbox (async colleague-to-colleague mail within a flow) ────
@@ -1446,175 +1235,12 @@ export class AgentService {
 
   // ── Relevance ranking → AgentMemoryService ────────
 
-  getRelevantMemory(
-    agentId: string,
-    goal: string,
-    limit = 20,
-    pool = 100,
-  ): Array<{ role: string; content: string; created_at: string }> {
-    return this.memory.getRelevantMemory(agentId, goal, limit, pool);
-  }
-
-  getRelevantMemoryByEmbedding(
-    agentId: string,
-    goal: string,
-    goalVector: number[],
-    limit = 20,
-    pool = 100,
-    cosineWeight?: number,
-    minScore?: number,
-  ): Array<{ role: string; content: string; created_at: string }> {
-    return this.memory.getRelevantMemoryByEmbedding(agentId, goal, goalVector, limit, pool, cosineWeight, minScore);
-  }
-
-  findSimilarPastRuns(
-    agentId: string,
-    goal: string,
-    limit = 3,
-    pool = 30,
-  ): AgentRun[] {
-    return this.memory.findSimilarPastRuns(agentId, goal, limit, pool);
-  }
-
-  findSimilarPastRunsByEmbedding(
-    agentId: string,
-    goal: string,
-    goalVector: number[],
-    limit = 3,
-    pool = 30,
-    cosineWeight?: number,
-    minScore?: number,
-  ): AgentRun[] {
-    return this.memory.findSimilarPastRunsByEmbedding(agentId, goal, goalVector, limit, pool, cosineWeight, minScore);
-  }
-
-  getRelevantLearnings(
-    agentId: string,
-    goal: string,
-    limit = 15,
-  ): AgentLearning[] {
-    return this.memory.getRelevantLearnings(agentId, goal, limit);
-  }
-
-  getRelevantLearningsByEmbedding(
-    agentId: string,
-    goal: string,
-    goalVector: number[],
-    limit = 15,
-    cosineWeight?: number,
-    minScore?: number,
-  ): AgentLearning[] {
-    return this.memory.getRelevantLearningsByEmbedding(agentId, goal, goalVector, limit, cosineWeight, minScore);
-  }
-
-  updateLearningConfidence(id: string, delta: number): void {
-    this.memory.updateLearningConfidence(id, delta);
-  }
-
-  deactivateLearning(id: string): void {
-    this.memory.deactivateLearning(id);
-  }
-
-  getLearningsActiveAt(agentId: string, referenceTime: string): AgentLearning[] {
-    return this.memory.getLearningsActiveAt(agentId, referenceTime);
-  }
-
-  reinforceLearningsForRun(
-    agentId: string,
-    runCreatedAt: string,
-    outcome: "success" | "partial" | "failure" | "neutral",
-  ): { updated: number; deactivated: number } {
-    return this.memory.reinforceLearningsForRun(agentId, runCreatedAt, outcome);
-  }
-
-  cleanupLowConfidenceLearnings(agentId: string, minConfidence = 0.15): number {
-    return this.memory.cleanupLowConfidenceLearnings(agentId, minConfidence);
-  }
-
 
   // ── Conversations & messages → AgentConversationsService ────────────
 
   /** @see AgentConversationsService.computeTopicHash */
   static computeTopicHash(topic: string): string {
     return AgentConversationsService.computeTopicHash(topic);
-  }
-
-  createConversation(input: {
-    kind: "chat" | "meeting" | "debate";
-    topic: string;
-    participants: string[];
-    initiator_agent_id: string;
-    parent_conversation_id?: string;
-    meta?: Record<string, unknown>;
-  }): AgentConversation {
-    return this.conversations.createConversation(input);
-  }
-
-  getConversation(id: string): AgentConversation | undefined {
-    return this.conversations.getConversation(id);
-  }
-
-  findOrCreateChatConversation(input: {
-    topic: string;
-    participants: string[];
-    initiator_agent_id: string;
-  }): AgentConversation {
-    return this.conversations.findOrCreateChatConversation(input);
-  }
-
-  listConversations(opts?: {
-    agent_id?: string;
-    kind?: "chat" | "meeting" | "debate";
-    status?: "open" | "closed";
-    excludeArchived?: boolean;
-    limit?: number;
-  }): AgentConversation[] {
-    return this.conversations.listConversations(opts);
-  }
-
-  closeConversation(id: string): void {
-    this.conversations.closeConversation(id);
-  }
-
-  archiveConversation(id: string): boolean {
-    return this.conversations.archiveConversation(id);
-  }
-
-  archiveClosedConversations(opts?: { kind?: "chat" | "meeting" | "debate" }): number {
-    return this.conversations.archiveClosedConversations(opts);
-  }
-
-  parseParticipants(convo: AgentConversation): string[] {
-    return this.conversations.parseParticipants(convo);
-  }
-
-  addParticipant(conversationId: string, agentId: string): void {
-    this.conversations.addParticipant(conversationId, agentId);
-  }
-
-  postMessage(input: {
-    conversation_id: string;
-    from_agent_id: string;
-    to_agent_id?: string;
-    role?: AgentMessageRole;
-    in_reply_to?: string;
-    body: string;
-    tokens?: number;
-    run_id?: string;
-    meta?: Record<string, unknown>;
-  }): AgentMessage {
-    return this.conversations.postMessage(input);
-  }
-
-  getMessage(id: string): AgentMessage | undefined {
-    return this.conversations.getMessage(id);
-  }
-
-  listMessages(conversationId: string, opts?: {
-    limit?: number;
-    role?: AgentMessageRole;
-  }): AgentMessage[] {
-    return this.conversations.listMessages(conversationId, opts);
   }
 
   getCounterStats(conversationId: string): {
@@ -1626,83 +1252,10 @@ export class AgentService {
 
   // ── Debate cooldown register → AgentConversationsService ──
 
-  getDebateCooldown(topicHash: string): AgentDebateCooldown | undefined {
-    return this.conversations.getDebateCooldown(topicHash);
-  }
-
-  recordDebateCooldown(topicHash: string, debateConvId: string): void {
-    this.conversations.recordDebateCooldown(topicHash, debateConvId);
-  }
-
-  countRecentAutoDebates(sinceIsoTimestamp: string): number {
-    return this.conversations.countRecentAutoDebates(sinceIsoTimestamp);
-  }
-
 
   // ── Chains → AgentChainsService ─────────────────
 
-  addChain(input: {
-    source_agent_id: string;
-    target_agent_id: string;
-    label?: string;
-    condition?: Record<string, unknown>;
-    pass_result?: boolean;
-    delay_ms?: number;
-  }): AgentChain {
-    return this.chains.addChain(input);
-  }
-
-  listChains(agentId?: string): AgentChain[] {
-    return this.chains.listChains(agentId);
-  }
-
-  getChainsBySource(sourceId: string): AgentChain[] {
-    return this.chains.getChainsBySource(sourceId);
-  }
-
-  removeChain(id: string): boolean {
-    return this.chains.removeChain(id);
-  }
-
   // ── Event log → AgentEventLogService ──────────────
-
-  logEvent(data: {
-    run_id?: string;
-    agent_id?: string;
-    agent_name?: string;
-    event_type: string;
-    event_subtype?: string;
-    detail?: string;
-    raw_data?: Record<string, unknown>;
-    tokens_used?: number;
-    duration_ms?: number;
-  }): void {
-    this.eventLog.logEvent(data);
-  }
-
-  getEventLog(opts?: {
-    run_id?: string;
-    agent_id?: string;
-    event_type?: string;
-    limit?: number;
-    offset?: number;
-    since?: string;
-  }): unknown[] {
-    return this.eventLog.getEventLog(opts);
-  }
-
-  getEventLogCount(opts?: {
-    run_id?: string;
-    agent_id?: string;
-    event_type?: string;
-    since?: string;
-  }): number {
-    return this.eventLog.getEventLogCount(opts);
-  }
-
-  clearEventLog(opts?: { before?: string; agent_id?: string }): number {
-    return this.eventLog.clearEventLog(opts);
-  }
 
   // ── Dashboard Widgets ────────────────────────────
 
@@ -1817,97 +1370,8 @@ export class AgentService {
     return this.promptVersions.snapshotPrompt(agentId, input);
   }
 
-  activatePromptVersion(agentId: string, version: number): AgentPromptVersion | null {
-    return this.promptVersions.activatePromptVersion(agentId, version);
-  }
-
-  listPromptVersions(agentId: string, limit = 50): AgentPromptVersion[] {
-    return this.promptVersions.listPromptVersions(agentId, limit);
-  }
-
-  getPromptVersion(agentId: string, version: number): AgentPromptVersion | undefined {
-    return this.promptVersions.getPromptVersion(agentId, version);
-  }
-
-  getActivePromptVersion(agentId: string): AgentPromptVersion | undefined {
-    return this.promptVersions.getActivePromptVersion(agentId);
-  }
-
-  restorePromptVersion(agentId: string, version: number, note = ""): AgentPromptVersion | null {
-    return this.promptVersions.restorePromptVersion(agentId, version, note);
-  }
-
-  diffPromptVersions(
-    agentId: string,
-    fromVersion: number,
-    toVersion: number,
-  ): { from: AgentPromptVersion; to: AgentPromptVersion; lines: Array<{ kind: "same" | "added" | "removed"; text: string }> } | null {
-    return this.promptVersions.diffPromptVersions(agentId, fromVersion, toVersion);
-  }
-
   // ── Evolution runs (Autogenesis SEPL) → AgentEvolutionService ──
-
-  createEvolutionRun(input: {
-    agent_id: string;
-    base_version: number;
-    hypothesis: string;
-    proposal: string;
-    trigger_run_ids?: string[];
-    target?: AgentEvolutionRun["target"];
-    workspace_id?: string;
-    artifact_ref?: string;
-  }): AgentEvolutionRun {
-    return this.evolution.createEvolutionRun(input);
-  }
-
-  updateEvolutionRun(
-    id: string,
-    patch: Partial<Pick<AgentEvolutionRun,
-      "candidate_version" | "status" | "baseline_score" | "candidate_score" | "evaluation" | "error" | "committed_at" | "artifact_ref">>,
-  ): AgentEvolutionRun | undefined {
-    return this.evolution.updateEvolutionRun(id, patch);
-  }
-
-  listEvolutionRuns(agentId: string, limit = 20): AgentEvolutionRun[] {
-    return this.evolution.listEvolutionRuns(agentId, limit);
-  }
-
-  listEvolutionRunsByWorkspace(workspaceId: string, limit = 50): AgentEvolutionRun[] {
-    return this.evolution.listEvolutionRunsByWorkspace(workspaceId, limit);
-  }
-
-  getEvolutionRun(id: string): AgentEvolutionRun | undefined {
-    return this.evolution.getEvolutionRun(id);
-  }
 
   // ── Conversation subscriptions → AgentSubscriptionsService ───────────────
 
-  subscribeAgentToConversation(input: {
-    agent_id: string;
-    conversation_id: string;
-    mode?: "responder" | "observer";
-    filter_role?: string;
-  }): AgentConversationSubscription | null {
-    return this.subscriptions.subscribeAgentToConversation(input);
-  }
-
-  unsubscribeAgentFromConversation(agentId: string, conversationId: string): boolean {
-    return this.subscriptions.unsubscribeAgentFromConversation(agentId, conversationId);
-  }
-
-  getSubscription(id: string): AgentConversationSubscription | undefined {
-    return this.subscriptions.getSubscription(id);
-  }
-
-  listSubscriptionsForConversation(conversationId: string): AgentConversationSubscription[] {
-    return this.subscriptions.listSubscriptionsForConversation(conversationId);
-  }
-
-  listSubscriptionsForAgent(agentId: string): AgentConversationSubscription[] {
-    return this.subscriptions.listSubscriptionsForAgent(agentId);
-  }
-
-  markSubscriptionFired(id: string): void {
-    this.subscriptions.markSubscriptionFired(id);
-  }
 }

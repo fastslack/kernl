@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { TaskService } from "./service.js";
 
 function fmtMins(m: number): string {
@@ -11,11 +11,11 @@ function fmtMins(m: number): string {
 
 export function taskTools(service: TaskService): ToolDefinition[] {
   return [
-    {
+    defineTool({
       name: "kernel_tasks_create",
       description:
         "Create a new task. Supports GTD contexts (@home, @work, @errands), priority levels, effort estimation, progress tracking, and tags.",
-      inputSchema: z.object({
+      schema: z.object({
         title: z.string().describe("Task title"),
         description: z.string().optional().describe("Detailed description"),
         priority: z
@@ -59,22 +59,7 @@ export function taskTools(service: TaskService): ToolDefinition[] {
           .describe("RRULE for a recurring task, e.g. 'FREQ=WEEKLY' or 'FREQ=DAILY;INTERVAL=3'"),
         sort_order: z.number().int().optional().describe("Manual sort position"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          title: string;
-          description?: string;
-          priority?: "low" | "medium" | "high" | "urgent";
-          context?: string;
-          due_date?: string;
-          target_date?: string;
-          estimated_minutes?: number;
-          progress?: number;
-          tags?: string;
-          project_id?: string;
-          parent_task_id?: string;
-          recurrence?: string;
-          sort_order?: number;
-        };
+      handler: async (input) => {
         const task = service.create(input);
         const lines = [
           `Task created:`,
@@ -92,13 +77,13 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         if (task.recurrence) lines.push(`  Recurrence: ${task.recurrence}`);
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_list",
       description:
         "List tasks with optional filters by status, priority, GTD context, or tag. Sorted by priority then due date.",
-      inputSchema: z.object({
+      schema: z.object({
         status: z
           .enum(["todo", "in_progress", "done", "blocked"])
           .optional()
@@ -113,16 +98,7 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         parent_task_id: z.string().optional().describe("Filter by parent task (lists subtasks)"),
         include_deleted: z.boolean().optional().describe("Include soft-deleted tasks (default: false)"),
       }),
-      handler: async (args) => {
-        const filters = args as {
-          status?: "todo" | "in_progress" | "done" | "blocked";
-          priority?: "low" | "medium" | "high" | "urgent";
-          context?: string;
-          tag?: string;
-          project_id?: string;
-          parent_task_id?: string;
-          include_deleted?: boolean;
-        };
+      handler: async (filters) => {
         const tasks = service.list(filters);
         if (tasks.length === 0) return textResult("No tasks found.");
 
@@ -138,13 +114,13 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         });
         return textResult(`${tasks.length} task(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_update",
       description:
         "Update a task's fields. Status transitions auto-set timestamps: in_progress sets started_at, done sets completed_at and progress=100, reopening clears completed_at.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Task ID"),
         title: z.string().optional(),
         description: z.string().optional(),
@@ -161,24 +137,7 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         sort_order: z.number().int().optional().describe("Manual sort position"),
         recurrence: z.string().optional().describe("RRULE for a recurring task"),
       }),
-      handler: async (args) => {
-        const { id, ...changes } = args as {
-          id: string;
-          title?: string;
-          description?: string;
-          status?: "todo" | "in_progress" | "done" | "blocked";
-          priority?: "low" | "medium" | "high" | "urgent";
-          context?: string;
-          due_date?: string;
-          target_date?: string;
-          estimated_minutes?: number;
-          progress?: number;
-          tags?: string;
-          project_id?: string | null;
-          parent_task_id?: string | null;
-          sort_order?: number;
-          recurrence?: string;
-        };
+      handler: async ({ id, ...changes }) => {
         const task = service.update(id, changes);
         if (!task) return errorResult(`Task not found: ${id}`);
         const lines = [
@@ -194,16 +153,15 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         if (task.tags) lines.push(`  Tags: ${task.tags}`);
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_get",
       description: "Get a single task by ID, including its dependencies and subtasks.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Task ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const task = service.getById(id);
         if (!task) return errorResult(`Task not found: ${id}`);
         const lines = [
@@ -228,75 +186,66 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         }
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_delete",
       description: "Soft-delete a task (sets deleted_at; excluded from default lists, recoverable).",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Task ID to delete"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const ok = service.softDelete(id);
         if (!ok) return errorResult(`Task not found: ${id}`);
         return textResult(`Task deleted: ${id}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_add_dependency",
       description:
         "Add a dependency (task A depends on task B). SQLite is the source of truth; rejects self-dependencies and cycles. A todo task with an unfinished dependency is auto-set to 'blocked'.",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().describe("The task that has the dependency"),
         depends_on: z.string().describe("The task it depends on"),
       }),
-      handler: async (args) => {
-        const { task_id, depends_on } = args as { task_id: string; depends_on: string };
-        try {
-          service.addDependency(task_id, depends_on);
-        } catch (err) {
-          return errorResult(err instanceof Error ? err.message : String(err));
-        }
+      handler: async ({ task_id, depends_on }) => {
+        service.addDependency(task_id, depends_on);
         return textResult(`Dependency added: ${task_id} → depends on → ${depends_on}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_remove_dependency",
       description: "Remove a dependency between two tasks. Completing all deps auto-unblocks a task.",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().describe("The dependent task"),
         depends_on: z.string().describe("The dependency to remove"),
       }),
-      handler: async (args) => {
-        const { task_id, depends_on } = args as { task_id: string; depends_on: string };
+      handler: async ({ task_id, depends_on }) => {
         const ok = service.removeDependency(task_id, depends_on);
         if (!ok) return errorResult("No such dependency to remove.");
         return textResult(`Dependency removed: ${task_id} ⇏ ${depends_on}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_get_dependencies",
       description: "Get all dependencies for a task (from SQLite).",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().describe("Task ID to check dependencies for"),
       }),
-      handler: async (args) => {
-        const { task_id } = args as { task_id: string };
+      handler: async ({ task_id }) => {
         const deps = service.getDependencies(task_id);
         if (deps.length === 0)
           return textResult("No dependencies found for this task.");
         return textResult(`Dependencies:\n${deps.join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_tasks_blocked",
       description: "List tasks currently blocked, with the IDs of their unfinished dependencies.",
-      inputSchema: z.object({}),
       handler: async () => {
         const blocked = service.listBlocked();
         if (blocked.length === 0) return textResult("No blocked tasks.");
@@ -305,97 +254,84 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         );
         return textResult(`${blocked.length} blocked task(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_add_subtask",
       description: "Create a subtask under a parent task. The parent's progress rolls up from its subtasks.",
-      inputSchema: z.object({
+      schema: z.object({
         parent_id: z.string().describe("Parent task ID"),
         title: z.string().describe("Subtask title"),
         priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
         due_date: z.string().optional().describe("Due date (YYYY-MM-DD)"),
       }),
-      handler: async (args) => {
-        const { parent_id, ...input } = args as {
-          parent_id: string;
-          title: string;
-          priority?: "low" | "medium" | "high" | "urgent";
-          due_date?: string;
-        };
+      handler: async ({ parent_id, ...input }) => {
         if (!service.getById(parent_id)) return errorResult(`Parent task not found: ${parent_id}`);
         const sub = service.addSubtask(parent_id, input);
         return textResult(`Subtask created under ${parent_id}:\n  ${sub.title} (${sub.id})`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_reorder",
       description: "Set the manual sort order of tasks. Pass task IDs in the desired order.",
-      inputSchema: z.object({
+      schema: z.object({
         ordered_ids: z.array(z.string()).describe("Task IDs in the desired order"),
       }),
-      handler: async (args) => {
-        const { ordered_ids } = args as { ordered_ids: string[] };
+      handler: async ({ ordered_ids }) => {
         service.reorder(ordered_ids);
         return textResult(`Reordered ${ordered_ids.length} task(s).`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_recurrence_preview",
       description:
         "Preview the next due date for an RRULE without creating anything. Supports FREQ=DAILY|WEEKLY|MONTHLY, INTERVAL, and WEEKLY BYDAY.",
-      inputSchema: z.object({
+      schema: z.object({
         from_date: z.string().describe("Base date (YYYY-MM-DD)"),
         recurrence: z.string().describe("RRULE, e.g. 'FREQ=WEEKLY;BYDAY=MO'"),
       }),
-      handler: async (args) => {
-        const { from_date, recurrence } = args as { from_date: string; recurrence: string };
+      handler: async ({ from_date, recurrence }) => {
         const next = service.previewNextDue(from_date, recurrence);
         if (!next) return errorResult(`Could not parse recurrence rule: ${recurrence}`);
         return textResult(`Next occurrence after ${from_date}: ${next}`);
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_tasks_list_tags",
       description: "List all distinct tags across tasks.",
-      inputSchema: z.object({}),
       handler: async () => {
         const tags = service.listTags();
         if (tags.length === 0) return textResult("No tags yet.");
         return textResult(`${tags.length} tag(s):\n${tags.map((t) => `  #${t.name}`).join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_project_create",
       description: "Create a project to group tasks.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Project name"),
         color: z.string().optional().describe("Hex color, e.g. '#09f'"),
         icon: z.string().optional().describe("Icon name or emoji"),
         area: z.string().optional().describe("Life area, e.g. 'Work', 'Home'"),
         sort_order: z.number().int().optional(),
       }),
-      handler: async (args) => {
-        const input = args as {
-          name: string; color?: string; icon?: string; area?: string; sort_order?: number;
-        };
+      handler: async (input) => {
         const p = service.createProject(input);
         return textResult(`Project created:\n  ${p.name} (${p.id})`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_project_list",
       description: "List projects (active only by default).",
-      inputSchema: z.object({
+      schema: z.object({
         include_archived: z.boolean().optional().describe("Include archived projects"),
       }),
-      handler: async (args) => {
-        const { include_archived } = args as { include_archived?: boolean };
+      handler: async ({ include_archived }) => {
         const projects = service.listProjects({ include_archived });
         if (projects.length === 0) return textResult("No projects found.");
         const lines = projects.map(
@@ -403,12 +339,12 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         );
         return textResult(`${projects.length} project(s):\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_project_update",
       description: "Update a project's fields.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Project ID"),
         name: z.string().optional(),
         color: z.string().optional(),
@@ -417,41 +353,34 @@ export function taskTools(service: TaskService): ToolDefinition[] {
         sort_order: z.number().int().optional(),
         status: z.enum(["active", "archived"]).optional(),
       }),
-      handler: async (args) => {
-        const { id, ...changes } = args as {
-          id: string;
-          name?: string; color?: string; icon?: string; area?: string;
-          sort_order?: number; status?: "active" | "archived";
-        };
+      handler: async ({ id, ...changes }) => {
         const p = service.updateProject(id, changes);
         if (!p) return errorResult(`Project not found: ${id}`);
         return textResult(`Project updated: ${p.name} (${p.status})`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_project_archive",
       description: "Archive a project (hides it from the default list; tasks are unaffected).",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Project ID to archive"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const ok = service.archiveProject(id);
         if (!ok) return errorResult(`Project not found: ${id}`);
         return textResult(`Project archived: ${id}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_tasks_set_project",
       description: "Assign a task to a project, or clear it (pass project_id=null).",
-      inputSchema: z.object({
+      schema: z.object({
         task_id: z.string().describe("Task ID"),
         project_id: z.string().nullable().describe("Project ID, or null to clear"),
       }),
-      handler: async (args) => {
-        const { task_id, project_id } = args as { task_id: string; project_id: string | null };
+      handler: async ({ task_id, project_id }) => {
         const task = service.setProject(task_id, project_id);
         if (!task) return errorResult(`Task not found: ${task_id}`);
         return textResult(
@@ -460,6 +389,6 @@ export function taskTools(service: TaskService): ToolDefinition[] {
             : `Task ${task_id} removed from its project.`,
         );
       },
-    },
+    }),
   ];
 }

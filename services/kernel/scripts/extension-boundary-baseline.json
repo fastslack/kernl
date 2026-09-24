@@ -17,12 +17,15 @@
       "src/modules/chat/types.js"
     ],
     "bundle": [
-      "src/core/attestation.ts",
-      "src/core/auth.ts",
-      "src/core/canonical-json.ts",
       "src/core/elicit.ts",
       "src/core/i18n/prompts.ts",
-      "src/core/llm/chat-adapters.ts",
+      "src/core/llm/chat-claude.ts",
+      "src/core/llm/chat-factory.ts",
+      "src/core/llm/chat-instrumentation.ts",
+      "src/core/llm/chat-lmstudio.ts",
+      "src/core/llm/chat-messages.ts",
+      "src/core/llm/chat-openai.ts",
+      "src/core/llm/chat-provider.ts",
       "src/core/llm/claude-code-adapter.ts",
       "src/core/llm/claude-code-auth.ts",
       "src/core/llm/credentials.ts",
@@ -30,6 +33,9 @@
       "src/core/llm/logger.ts",
       "src/core/llm/provider-catalog.ts",
       "src/core/llm/provider-health.ts",
+      "src/core/llm/provider-quota.ts",
+      "src/core/llm/provider-resolution.ts",
+      "src/core/llm/retry.ts",
       "src/core/logger.ts",
       "src/core/mcp-unix-socket.ts",
       "src/core/request-context.ts",
@@ -55,14 +61,6 @@
     ],
     "bundle": [
       "src/core/compute-backend.ts"
-    ]
-  },
-  "people/events": {
-    "source": [
-      "src/modules/dashboard/api.js"
-    ],
-    "bundle": [
-      "src/modules/dashboard/api.ts"
     ]
   }
 }

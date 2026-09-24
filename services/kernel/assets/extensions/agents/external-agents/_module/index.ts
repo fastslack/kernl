@@ -1,10 +1,4 @@
-import {
-  type DashboardDescriptor,
-  type ExtensibleModule,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-} from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { externalAgentsMigrations } from "./migrations.js";
 import { ExternalAgentService } from "./service.js";
 import { externalAgentTools } from "./tools.js";
@@ -13,35 +7,22 @@ import { registerExternalAgentRoutes } from "./api-routes.js";
 export function createExternalAgentsModule(): ExtensibleModule & {
   getService(): ExternalAgentService | null;
 } {
-  let tools: ToolDefinition[] = [];
   let service: ExternalAgentService | null = null;
 
   return {
-    name: "external-agents",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "external-agents", externalAgentsMigrations);
-
-      service = new ExternalAgentService(ctx.sqlite, ctx.events, ctx.notifier);
-      tools = externalAgentTools(service);
-    },
-
-    getTools() {
-      return tools;
-    },
+    ...defineModule({
+      name: "external-agents",
+      migrations: externalAgentsMigrations,
+      init(ctx) {
+        service = new ExternalAgentService(ctx.sqlite, ctx.events, ctx.notifier);
+        return service;
+      },
+      tools: externalAgentTools,
+      dashboard: (svc) => (svc ? { registerRoutes: (server) => registerExternalAgentRoutes(server, svc) } : null),
+    }),
 
     getService() {
       return service;
     },
-
-    getDashboardDescriptor(): DashboardDescriptor | null {
-      if (!service) return null;
-      const svc = service;
-      return {
-        registerRoutes: (server) => registerExternalAgentRoutes(server, svc),
-      };
-    },
-
-    async shutdown() {},
   };
 }

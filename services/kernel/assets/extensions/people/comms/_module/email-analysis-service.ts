@@ -20,6 +20,7 @@ import {
   newId,
   isoNow,
   log,
+  localDate,
 } from "@kernl/extension-sdk";
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -284,7 +285,7 @@ export class EmailAnalysisService {
   private async analyzeEmail(commId: string, subject: string, body: string): Promise<LlmAnalysisResult> {
     // Truncate body to ~3000 chars to save tokens
     const truncatedBody = body.length > 3000 ? body.slice(0, 3000) + "\n[...truncated]" : body;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDate();
 
     const systemPrompt = `You are an assistant that analyzes emails and extracts actionable items.
 Today's date is ${today}.

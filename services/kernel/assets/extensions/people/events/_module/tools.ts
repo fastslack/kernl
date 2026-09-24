@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult, formatCents } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, formatCents, localDateOf, limitArg } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
 import type { EventWithSummary, AttendanceSummary } from "./types.js";
 
@@ -92,12 +92,12 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
     // ============================================================
     // EVENT CRUD
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_create",
       description:
         "Create a new event (e.g., futbol 5, dinner, meeting). Set min/max_attendees to enforce group size requirements. " +
         "[legacy CRUD] For agent flows that also invite contacts, prefer `kernel_event_schedule` — atomic create+invite with structured output.",
-      inputSchema: z.object({
+      schema: z.object({
         title: z.string().describe("Event title (e.g., 'Fulbito del Jueves')"),
         description: z.string().optional().describe("Event description"),
         type: z
@@ -131,22 +131,21 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           .describe("Currency code (default: EUR)"),
         notes: z.string().optional().describe("Additional notes"),
       }),
-      handler: async (args) => {
-        const event = service.create(args as Parameters<typeof service.create>[0]);
+      handler: async (input) => {
+        const event = service.create(input);
         return textResult(
           `Event created:\n\n${formatEventSummary({ ...event, attendees: [], summary: { yes: 0, no: 0, maybe: 0, pending: 0, waitlist: 0, total_invited: 0, spots_available: event.max_attendees ?? Infinity, needs_more: event.min_attendees, is_confirmed: false, is_full: false } })}`
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_get",
       description: "Get event details with attendance summary and attendee list.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Event ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const event = service.get(id);
         if (!event) return errorResult(`Event not found: ${id}`);
 
@@ -154,12 +153,12 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           `${formatEventSummary(event)}\n\n---\n\n${formatAttendeeList(event)}`
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_list",
       description: "List events with optional filters.",
-      inputSchema: z.object({
+      schema: z.object({
         status: z
           .enum(["draft", "open", "confirmed", "cancelled", "completed"])
           .optional()
@@ -170,10 +169,10 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           .describe("Filter by type"),
         from_date: z.string().optional().describe("From date (ISO)"),
         to_date: z.string().optional().describe("To date (ISO)"),
-        limit: z.number().optional().describe("Max results (default: 50)"),
+        limit: limitArg(200, "Max results (default: 50)"),
       }),
-      handler: async (args) => {
-        const events = service.list(args as Parameters<typeof service.list>[0]);
+      handler: async (filters) => {
+        const events = service.list(filters);
         if (events.length === 0) return textResult("No events found.");
 
         const lines = events.map(
@@ -181,12 +180,12 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
         );
         return textResult(`${events.length} event(s):\n\n${lines.join("\n\n---\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_update",
       description: "Update event details.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Event ID"),
         title: z.string().optional(),
         description: z.string().optional(),
@@ -201,99 +200,87 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
         cost_per_person_cents: z.number().optional(),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const { id, ...updates } = args as { id: string } & Record<string, unknown>;
+      handler: async ({ id, ...updates }) => {
         const event = service.update(id, updates);
         if (!event) return errorResult(`Event not found: ${id}`);
         return textResult(`Event updated:\n\n${formatEventSummary(event)}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_open",
       description:
         "Open event for RSVPs. Changes status from 'draft' to 'open'. " +
         "[legacy] Prefer `kernel_event_lifecycle` with action='open' — same effect, structured output, unified verb.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Event ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const event = service.open(id);
         if (!event) return errorResult(`Event not found: ${id}`);
         return textResult(`Event opened for RSVPs:\n\n${formatEventSummary(event)}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_cancel",
       description:
         "Cancel an event. " +
         "[legacy] Prefer `kernel_event_lifecycle` with action='cancel'.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Event ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const event = service.cancel(id);
         if (!event) return errorResult(`Event not found: ${id}`);
         return textResult(`Event cancelled:\n\n${formatEventSummary(event)}`);
       },
-    },
+    }),
 
     // ============================================================
     // INVITATIONS
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_invite",
       description:
         "Invite someone to an event. Can use contact_id (from CRM) or manual name/phone.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
         contact_id: z.string().optional().describe("Contact ID from CRM"),
         name: z.string().optional().describe("Name (if not from CRM)"),
         phone: z.string().optional().describe("Phone for notifications"),
       }),
-      handler: async (args) => {
-        const input = args as Parameters<typeof service.invite>[0];
-        try {
-          const attendee = service.invite(input);
-          return textResult(
-            `Invited: ${attendee.name || attendee.phone || attendee.contact_id}\n  Attendee ID: ${attendee.id}`
-          );
-        } catch (err) {
-          return errorResult(err instanceof Error ? err.message : String(err));
-        }
+      handler: async (input) => {
+        const attendee = service.invite(input);
+        return textResult(
+          `Invited: ${attendee.name || attendee.phone || attendee.contact_id}\n  Attendee ID: ${attendee.id}`
+        );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_invite_contacts",
       description: "Bulk invite multiple CRM contacts to an event.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
         contact_ids: z.array(z.string()).describe("Array of contact IDs"),
       }),
-      handler: async (args) => {
-        const { event_id, contact_ids } = args as {
-          event_id: string;
-          contact_ids: string[];
-        };
+      handler: async ({ event_id, contact_ids }) => {
         const attendees = service.inviteContacts(event_id, contact_ids);
         return textResult(
           `Invited ${attendees.length} contacts:\n${attendees.map((a) => `  - ${a.name || a.contact_id}`).join("\n")}`
         );
       },
-    },
+    }),
 
     // ============================================================
     // RSVP
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_rsvp",
       description:
         "Record RSVP for an attendee. Identify by attendee_id, contact_id, or phone. Auto-handles waitlist if event is full.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
         attendee_id: z.string().optional().describe("Attendee ID"),
         contact_id: z.string().optional().describe("Contact ID from CRM"),
@@ -301,8 +288,7 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
         status: z.enum(["yes", "no", "maybe"]).describe("RSVP response"),
         notes: z.string().optional().describe("Optional note (e.g., 'llego tarde')"),
       }),
-      handler: async (args) => {
-        const input = args as Parameters<typeof service.rsvp>[0];
+      handler: async (input) => {
         const attendee = service.rsvp(input);
         if (!attendee) {
           return errorResult(
@@ -326,30 +312,28 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         return textResult(msg);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_attendees",
       description: "List all attendees for an event grouped by RSVP status.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
       }),
-      handler: async (args) => {
-        const { event_id } = args as { event_id: string };
+      handler: async ({ event_id }) => {
         const event = service.get(event_id);
         if (!event) return errorResult(`Event not found: ${event_id}`);
         return textResult(formatAttendeeList(event));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_pending",
       description: "Get attendees who haven't responded yet (RSVP pending).",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
       }),
-      handler: async (args) => {
-        const { event_id } = args as { event_id: string };
+      handler: async ({ event_id }) => {
         const pending = service.getPendingRSVPs(event_id);
         if (pending.length === 0) {
           return textResult("Everyone has responded! No pending RSVPs.");
@@ -362,35 +346,33 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           `${pending.length} people haven't responded:\n${lines.join("\n")}\n\nConsider sending them a reminder.`
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_remove_attendee",
       description: "Remove an attendee from an event.",
-      inputSchema: z.object({
+      schema: z.object({
         attendee_id: z.string().describe("Attendee ID"),
       }),
-      handler: async (args) => {
-        const { attendee_id } = args as { attendee_id: string };
+      handler: async ({ attendee_id }) => {
         const removed = service.removeAttendee(attendee_id);
         if (!removed) return errorResult(`Attendee not found: ${attendee_id}`);
         return textResult("Attendee removed. Waitlist promoted if applicable.");
       },
-    },
+    }),
 
     // ============================================================
     // OVERVIEW & PLANNING
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_upcoming",
       description:
         "Get upcoming events in the next N days with attendance status. " +
         "[legacy] Prefer `kernel_event_upcoming` — same data, structured output for code_run.",
-      inputSchema: z.object({
+      schema: z.object({
         days: z.number().optional().describe("Days ahead to look (default: 7)"),
       }),
-      handler: async (args) => {
-        const { days } = args as { days?: number };
+      handler: async ({ days }) => {
         const events = service.upcoming(days ?? 7);
         if (events.length === 0) {
           return textResult(`No upcoming events in the next ${days ?? 7} days.`);
@@ -404,14 +386,13 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         return textResult(`Upcoming events:\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_events_needing_attention",
       description:
         "Get events that need attention: pending RSVPs or not enough confirmed attendees. " +
         "[legacy] Prefer `kernel_event_attention` — combines this with imminent (next-48h) events in one structured response.",
-      inputSchema: z.object({}),
       handler: async () => {
         const events = service.needingAttention();
         if (events.length === 0) {
@@ -431,17 +412,17 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         return textResult(`Events needing attention:\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
     // ============================================================
     // DUPLICATION & RECURRENCE
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_duplicate",
       description:
         "Duplicate an event for a new date (e.g., create next week's game). Copies all settings and optionally re-invites attendees. " +
         "[legacy] Prefer `kernel_event_lifecycle` with action='duplicate' — same effect via the unified verb.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Source event ID to duplicate"),
         new_start_at: z.string().describe("New start time in ISO 8601"),
         reinvite_attendees: z
@@ -453,15 +434,7 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           .optional()
           .describe("Only re-invite those who said 'yes' (default: false)"),
       }),
-      handler: async (args) => {
-        const { event_id, new_start_at, reinvite_attendees, reinvite_only_confirmed } =
-          args as {
-            event_id: string;
-            new_start_at: string;
-            reinvite_attendees?: boolean;
-            reinvite_only_confirmed?: boolean;
-          };
-
+      handler: async ({ event_id, new_start_at, reinvite_attendees, reinvite_only_confirmed }) => {
         const newEvent = service.duplicate(event_id, new_start_at, {
           reinviteAttendees: reinvite_attendees,
           reinviteOnlyConfirmed: reinvite_only_confirmed,
@@ -473,17 +446,16 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           `Event duplicated successfully!\n\n${formatEventSummary(newEvent)}\n\n${newEvent.attendees.length} attendees invited.`
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_next_recurrence",
       description:
         "Generate the next occurrence of a recurring event based on its recurrence rule.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID with recurrence rule"),
       }),
-      handler: async (args) => {
-        const { event_id } = args as { event_id: string };
+      handler: async ({ event_id }) => {
         const newEvent = service.generateNextRecurrence(event_id);
 
         if (!newEvent) {
@@ -497,21 +469,20 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           `Next occurrence created!\n\n${formatEventSummary(newEvent)}\n\n${newEvent.attendees.length} attendees invited.`
         );
       },
-    },
+    }),
 
     // ============================================================
     // COMPLETION & SUMMARY
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_complete",
       description:
         "Mark event as completed and get final summary with attendance stats and costs. " +
         "[legacy] Prefer `kernel_event_lifecycle` with action='complete' for the lifecycle change. (Keep this tool for the FINAL completion-summary payload — the summary fields aren't part of the unified verb.)",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID to complete"),
       }),
-      handler: async (args) => {
-        const { event_id } = args as { event_id: string };
+      handler: async ({ event_id }) => {
         const summary = service.completeWithSummary(event_id);
 
         if (!summary) return errorResult(`Event not found: ${event_id}`);
@@ -540,21 +511,20 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         return textResult(lines.filter(Boolean).join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_notification_text",
       description:
         "Get formatted notification text for an event (for Telegram, WhatsApp, Mattermost).",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
         format: z
           .enum(["short", "full", "attendees"])
           .optional()
           .describe("Text format: short (one-liner), full (detailed), attendees (list)"),
       }),
-      handler: async (args) => {
-        const { event_id, format } = args as { event_id: string; format?: string };
+      handler: async ({ event_id, format }) => {
         const text = service.getNotificationText(event_id);
 
         if (!text) return errorResult(`Event not found: ${event_id}`);
@@ -569,18 +539,17 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
             return textResult(text.full);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_imminent",
       description:
         "Get events happening in the next N hours (for proactive notifications). " +
         "[legacy] Prefer `kernel_event_attention` — returns this list along with events still missing confirmations.",
-      inputSchema: z.object({
+      schema: z.object({
         hours: z.number().optional().describe("Hours ahead to look (default: 48)"),
       }),
-      handler: async (args) => {
-        const { hours } = args as { hours?: number };
+      handler: async ({ hours }) => {
         const events = service.getImminent(hours ?? 48);
 
         if (events.length === 0) {
@@ -594,20 +563,19 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         return textResult(`**Events coming up:**\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
     // ============================================================
     // HISTORY & ANALYTICS
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_contact_history",
       description:
         "Get a contact's event participation history with reliability score.",
-      inputSchema: z.object({
+      schema: z.object({
         contact_id: z.string().describe("Contact ID from CRM"),
       }),
-      handler: async (args) => {
-        const { contact_id } = args as { contact_id: string };
+      handler: async ({ contact_id }) => {
         const history = service.getContactHistory(contact_id);
 
         if (history.events.length === 0) {
@@ -628,22 +596,21 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
           `**Recent Events:**`,
           ...history.events.slice(0, 10).map((e) => {
             const emoji = { yes: "✅", no: "❌", maybe: "❓", pending: "⏳", waitlist: "📋" }[e.rsvp_status] ?? "•";
-            return `  ${emoji} ${e.title} (${e.start_at.split("T")[0]})`;
+            return `  ${emoji} ${e.title} (${localDateOf(e.start_at)})`;
           }),
         ];
 
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_events_series",
       description: "Get all events in a recurring series.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Any event ID in the series"),
       }),
-      handler: async (args) => {
-        const { event_id } = args as { event_id: string };
+      handler: async ({ event_id }) => {
         const series = service.getRecurringSeries(event_id);
 
         if (series.length <= 1) {
@@ -652,29 +619,28 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         const lines = series.map((e) => {
           const statusIcon = { draft: "📝", open: "📢", confirmed: "✅", cancelled: "❌", completed: "🏁" }[e.status];
-          return `${statusIcon} ${e.start_at.split("T")[0]} - ${e.summary.yes}/${e.max_attendees ?? "∞"} confirmed`;
+          return `${statusIcon} ${localDateOf(e.start_at)} - ${e.summary.yes}/${e.max_attendees ?? "∞"} confirmed`;
         });
 
         return textResult(`**Recurring Series: ${series[0].title}**\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ============================================================
     // REMINDER INTEGRATION
     // ============================================================
-    {
+    defineTool({
       name: "kernel_events_reminder_data",
       description:
         "Get data needed to create a reminder for an event. Returns trigger time and formatted body. Use this before creating a reminder with kernel_reminders_create.",
-      inputSchema: z.object({
+      schema: z.object({
         event_id: z.string().describe("Event ID"),
         hours_before: z
           .number()
           .optional()
           .describe("Hours before event to trigger reminder (default: 24)"),
       }),
-      handler: async (args) => {
-        const { event_id, hours_before } = args as { event_id: string; hours_before?: number };
+      handler: async ({ event_id, hours_before }) => {
         const data = service.getReminderData(event_id, hours_before ?? 24);
 
         if (!data) {
@@ -705,6 +671,6 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
         return textResult(lines.join("\n"));
       },
-    },
+    }),
   ];
 }

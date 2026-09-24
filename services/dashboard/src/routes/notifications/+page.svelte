@@ -3,8 +3,9 @@
   import { notifications, unreadCount } from '$lib/stores.js';
   import type { DashboardNotification } from '$lib/stores.js';
   import { miniMd } from '$lib/mini-md.js';
-  import { timeAgo } from '$lib/utils.js';
+  import { timeAgo } from '$shared/utils';
   import { rpcOrCall } from '$lib/ws.js';
+  import { markNotifRead as markRead, markAllNotifsRead as markAllRead } from '$lib/notifications.js';
 
   // Emoji shortcodes + markdown rendering
   const emojiMap: Record<string, string> = {
@@ -123,18 +124,6 @@
   // ── API ──
   async function fetchChannels() {
     try { const d = await rpcOrCall('channels.list', {}, () => fetch('/api/channels').then(r => r.json())) as any; channels = d.channels ?? []; } catch {}
-  }
-
-  async function markRead(id: string) {
-    await rpcOrCall('notifications.markRead', { id }, () => fetch('/api/notifications/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id }) }).then(r => r.json()));
-    notifications.update(list => list.map(n => n.id === id ? { ...n, read: 1 } : n));
-    unreadCount.update(c => Math.max(0, c - 1));
-  }
-
-  async function markAllRead() {
-    await rpcOrCall('notifications.markAllRead', {}, () => fetch('/api/notifications/read', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ all: true }) }).then(r => r.json()));
-    notifications.update(list => list.map(n => ({ ...n, read: 1 })));
-    unreadCount.set(0);
   }
 
   async function deleteNotif(id: string) {
