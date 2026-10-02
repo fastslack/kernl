@@ -10,6 +10,10 @@
 </script>
 
 <script lang="ts">
+  import MicButton from '$lib/components/voice/MicButton.svelte';
+  import SpeakToggle from '$lib/components/voice/SpeakToggle.svelte';
+  import { confirmBeforeSend } from '$lib/voice/prefs.js';
+
   /**
    * The chat's composer: textarea, attachments (picker, drag-and-drop and
    * paste) and the send button.
@@ -24,6 +28,19 @@
   export let inputEl: HTMLTextAreaElement | undefined = undefined;
   export let sending = false;
   export let onSend: () => void = () => {};
+  /** A push-to-talk transcript, to be sent as the next message. */
+  export let onVoice: (text: string) => void = () => {};
+
+  function onTranscript(text: string) {
+    // Attachments waiting, a reply in flight, or review-first: the transcript
+    // goes into the box for the operator to finish and send.
+    if ($confirmBeforeSend || sending || pendingAttachments.length) {
+      input = input.trim() ? `${input.trim()} ${text}` : text;
+      inputEl?.focus();
+      return;
+    }
+    onVoice(text);
+  }
 
   let fileInputEl: HTMLInputElement;
   let dragActive = false;
@@ -180,6 +197,8 @@
           Enter to send · Shift+Enter newline
         {/if}
       </span>
+      <SpeakToggle size={32} />
+      <MicButton size={32} disabled={sending} on:transcript={(e) => onTranscript(e.detail)} />
       <button class="cx-send" on:click={onSend} disabled={sending || (!input.trim() && pendingAttachments.length === 0)}>
         {#if sending}
           <div class="cx-send-spinner"></div>

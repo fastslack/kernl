@@ -16,6 +16,9 @@ import type {
 } from "./types.js";
 import { log } from "./log.js";
 
+/** Markdown → text a voice can read; for channels that answer voice notes. */
+export { toSpeakable } from "./speech.js";
+
 // ── Text ────────────────────────────────────────────────────────
 
 export interface NotificationStyle {

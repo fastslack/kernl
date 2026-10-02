@@ -1,5 +1,5 @@
 import { Bot, Context, InputFile, InlineKeyboard, type NextFunction } from "grammy";
-import { log, chunkText, type KernelConfig, type VoiceService, type InlineButton } from "@kernl/extension-sdk";
+import { log, chunkText, toSpeakable, type KernelConfig, type VoiceService, type InlineButton } from "@kernl/extension-sdk";
 
 /** Telegram's hard limit on a message's text. */
 const TELEGRAM_MAX_LENGTH = 4096;
@@ -25,6 +25,9 @@ export interface TelegramMessageContext {
 /** Response to send back to Telegram */
 export interface TelegramResponse {
   text: string;
+  /** For a voice note: what to say out loud. Set when `text` is empty
+   *  because the answer was already streamed into the chat. */
+  speak?: string;
   parseMode?: "Markdown" | "MarkdownV2" | "HTML";
   replyToMessageId?: number;
   disableNotification?: boolean;
@@ -42,6 +45,9 @@ export type TelegramCallbackHandler = (
   data: string,
   context: TelegramMessageContext,
 ) => Promise<TelegramResponse>;
+
+/** Longer answers go out as text only: a three-minute voice note is a podcast. */
+const VOICE_REPLY_MAX_CHARS = 1500;
 
 /** Handler for voice messages */
 export type TelegramVoiceHandler = (
@@ -226,73 +232,12 @@ export class TelegramTransport {
       await ctx.reply("Photo received. Image processing not yet implemented.");
     });
 
-    // Voice messages (with transcription if VoiceService available)
-    this.bot.on("message:voice", async (ctx) => {
-      const context = this.extractContext(ctx);
-      log.info(`Telegram: voice message received from ${context.username ?? context.userId}`);
-
-      // Check if we can transcribe
-      if (!this.voiceService) {
-        await ctx.reply("Voice message received. Transcription not configured.");
-        return;
-      }
-
-      try {
-        // Download voice file
-        const file = await ctx.getFile();
-        const fileUrl = `https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`;
-
-        const response = await fetch(fileUrl);
-        if (!response.ok) {
-          throw new Error(`Failed to download voice: ${response.status}`);
-        }
-
-        const audioBuffer = Buffer.from(await response.arrayBuffer());
-        log.debug(`Telegram: downloaded voice file (${audioBuffer.length} bytes)`);
-
-        // Transcribe
-        const transcription = await this.voiceService.transcribe(audioBuffer);
-        log.info(`Telegram: transcribed voice: "${transcription.text.slice(0, 50)}..."`);
-
-        // If we have a voice handler, use it
-        if (this.voiceHandler) {
-          const textResponse = await this.voiceHandler(transcription.text, context);
-
-          // If respond with voice is enabled, synthesize and send audio
-          if (this.respondWithVoice && textResponse.text) {
-            try {
-              const synthesis = await this.voiceService.synthesize(textResponse.text);
-              await ctx.replyWithVoice(new InputFile(synthesis.audio, "response.ogg"));
-              // Also send text as caption or follow-up
-              await this.replyChunked(ctx, textResponse.text, {
-                parse_mode: textResponse.parseMode ?? "Markdown",
-              });
-            } catch (synthErr) {
-              log.warn("Telegram: voice synthesis failed, sending text only", synthErr);
-              await this.replyChunked(ctx, textResponse.text, {
-                parse_mode: textResponse.parseMode ?? "Markdown",
-              });
-            }
-          } else {
-            // Just send text response
-            await this.replyChunked(ctx, textResponse.text, {
-              parse_mode: textResponse.parseMode ?? "Markdown",
-            });
-          }
-        } else if (this.messageHandler) {
-          // Fall back to regular message handler with transcribed text
-          const textResponse = await this.messageHandler(transcription.text, context);
-          await this.replyChunked(ctx, textResponse.text, {
-            parse_mode: textResponse.parseMode ?? "Markdown",
-          });
-        } else {
-          // Just show transcription
-          await ctx.reply(`Transcription: "${transcription.text}"`);
-        }
-      } catch (err) {
-        log.error("Telegram: voice processing error", err);
-        await ctx.reply("Error processing voice message. Check logs.");
-      }
+    // Voice notes: transcribe, answer, and answer out loud. Detached from the
+    // update handler on purpose — the answer can be a minutes-long agent run,
+    // and grammy handles updates one at a time, so awaiting it here would
+    // freeze every other chat until the Chief finished.
+    this.bot.on("message:voice", (ctx) => {
+      void this.handleVoice(ctx).catch((err) => log.error("Telegram: voice handling crashed", err));
     });
 
     // Documents
@@ -514,6 +459,79 @@ export class TelegramTransport {
         reply_parameters: i === 0 ? options.reply_parameters : undefined,
         reply_markup: i === pieces.length - 1 ? options.reply_markup : undefined,
       });
+    }
+  }
+
+  /**
+   * One voice note, end to end. The status line is edited in place: "🎧" while
+   * whisper runs, then the transcript, so the operator sees what was heard
+   * before the answer arrives (and can tell a mishearing from a bad answer).
+   */
+  private async handleVoice(ctx: Context): Promise<void> {
+    const context = this.extractContext(ctx);
+    log.info(`Telegram: voice note from ${context.username ?? context.userId}`);
+    if (!this.voiceService?.enabled) {
+      await ctx.reply("🎤 Voice is turned off in Kernl (Settings → AI → Voice).");
+      return;
+    }
+    const chatId = ctx.chat?.id;
+    const status = await ctx.reply("🎧 …").catch(() => null);
+    const setStatus = async (text: string) => {
+      if (status && chatId !== undefined) {
+        await this.bot.api.editMessageText(chatId, status.message_id, fitOne(text)).catch(() => {});
+      } else {
+        await ctx.reply(text).catch(() => {});
+      }
+    };
+
+    let heard: string;
+    try {
+      const file = await ctx.getFile();
+      const response = await fetch(`https://api.telegram.org/file/bot${this.config.botToken}/${file.file_path}`);
+      if (!response.ok) throw new Error(`download failed: ${response.status}`);
+      const audio = Buffer.from(await response.arrayBuffer());
+      heard = (await this.voiceService.transcribe(audio, { mimeType: "audio/ogg" })).text;
+    } catch (err) {
+      log.error("Telegram: voice transcription failed", err);
+      await setStatus(`🎤 I couldn't transcribe that: ${err instanceof Error ? err.message : String(err)}`);
+      return;
+    }
+    if (!heard) {
+      await setStatus("🎤 I couldn't hear anything in that note.");
+      return;
+    }
+    await setStatus(`🎤 “${heard}”`);
+
+    const handler = this.voiceHandler ?? this.messageHandler;
+    if (!handler) {
+      await ctx.reply("Bot not ready yet.");
+      return;
+    }
+    let reply: TelegramResponse;
+    try {
+      reply = await handler(heard, context);
+    } catch (err) {
+      log.error("Telegram: voice handler failed", err);
+      await ctx.reply("Error processing voice message. Check logs.");
+      return;
+    }
+    if (reply.text) {
+      await this.replyChunked(ctx, reply.text, { parse_mode: reply.parseMode ?? "Markdown" })
+        .catch(() => this.replyChunked(ctx, reply.text));
+    }
+
+    const speak = (reply.speak ?? reply.text ?? "").trim();
+    if (!this.respondWithVoice || !speak) return;
+    if (speak.length > VOICE_REPLY_MAX_CHARS) {
+      await ctx.reply("🔇 Long answer — text only.").catch(() => {});
+      return;
+    }
+    try {
+      await ctx.replyWithChatAction("record_voice").catch(() => {});
+      const synthesis = await this.voiceService.synthesize(toSpeakable(speak), { format: "ogg" });
+      await ctx.replyWithVoice(new InputFile(synthesis.audio, "reply.ogg"));
+    } catch (err) {
+      log.warn("Telegram: voice reply failed, text only", err);
     }
   }
 

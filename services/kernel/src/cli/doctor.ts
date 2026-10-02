@@ -321,18 +321,19 @@ async function checkVoice(): Promise<DiagnosticResult> {
     };
   }
 
-  if (config.voice.sttProvider === "openai") {
-    return {
-      name: "Voice",
-      status: "pass",
-      message: `STT: openai (uses the OpenAI key from Settings → AI), TTS: ${config.voice.ttsProvider}`,
-    };
-  }
+  const { VoiceService } = await import("../voice/service.js");
+  const st = await new VoiceService(config).status();
+  const line = (side: { setting: string; active: string | null }) =>
+    side.active ? `${side.active}${side.setting === "auto" ? " (auto)" : ""}` : "none";
+  const blockers = [...st.stt.engines, ...st.tts.engines]
+    .filter((e) => !e.ready && e.reason)
+    .map((e) => `${e.engine}: ${e.reason}`);
 
   return {
     name: "Voice",
-    status: "pass",
-    message: `STT: ${config.voice.sttProvider}, TTS: ${config.voice.ttsProvider}`,
+    status: st.stt.active && st.tts.active ? "pass" : "warn",
+    message: `STT: ${line(st.stt)} (${st.stt.model}), TTS: ${line(st.tts)} (${st.tts.voice})`,
+    details: blockers.length ? blockers.join("\n") : undefined,
   };
 }
 

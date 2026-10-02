@@ -14,6 +14,8 @@
   import { fmtClock } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
+  import { speakReplies } from '$lib/voice/prefs.js';
+  import { speakText, speech } from '$lib/voice/speech.js';
 
   /** The selected agent — only the fields this tab renders. */
   export let agent: { name: string; description?: string; builtin_handler: string } | null = null;
@@ -46,6 +48,36 @@
   export let onSeeHistory: () => void = () => {};
   /** UUID chips inside a reply open the entity preview; the world owns it. */
   export let onOutputClick: (e: MouseEvent) => void = () => {};
+
+  // ── Reading the reply out loud ──────────────────────────────
+  // A reply is spoken when the message it answers was spoken, or when the
+  // speaker toggle is on. "The reply" is recognised by count, not timestamp:
+  // the thread is re-read from the agent's memory with server clocks, and the
+  // agent replies once per message, so the first agent message past the count
+  // at send time is the one.
+  let awaiting: { agentName: string | undefined; repliesBefore: number; spoken: boolean } | null = null;
+  $: replies = history.filter((m) => m.role === 'agent');
+
+  function noteSend(spoken: boolean) {
+    awaiting = { agentName: agent?.name, repliesBefore: replies.length, spoken };
+  }
+
+  $: if (awaiting && awaiting.agentName !== agent?.name) {
+    awaiting = null;
+    speech.stop();
+  }
+  $: if (awaiting && replies.length > awaiting.repliesBefore) {
+    const reply = replies[replies.length - 1];
+    if (awaiting.spoken || $speakReplies) speakText(reply.text);
+    awaiting = null;
+  }
+
+  let lastWasSpoken = false;
+  function send(text: string) {
+    noteSend(lastWasSpoken);
+    lastWasSpoken = false;
+    onSend(text);
+  }
 </script>
 
 <div class="chat-section">
@@ -144,7 +176,9 @@
       hint="Enter sends · Shift+Enter for a new line · the thread is saved with the agent"
       {suggestions}
       sendLabel={`Send to ${agent?.name}`}
-      on:send={(e) => onSend(e.detail)}
+      voice
+      on:spoken={() => { lastWasSpoken = true; }}
+      on:send={(e) => send(e.detail)}
     />
   {/if}
 </div>

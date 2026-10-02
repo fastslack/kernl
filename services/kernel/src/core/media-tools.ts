@@ -35,7 +35,7 @@ const execFileAsync = promisify(execFile);
  */
 const IN_CONTAINER = existsSync("/.dockerenv");
 
-export type MediaTool = "ffmpeg" | "ffprobe" | "whisper-cli";
+export type MediaTool = "ffmpeg" | "ffprobe" | "whisper-cli" | "piper";
 
 interface ToolSpec {
   /** Environment variable that overrides the binary name/path. */
@@ -74,6 +74,16 @@ const SPECS: Record<MediaTool, ToolSpec> = {
     usedFor: "generating subtitles offline with whisper.cpp",
     packages: { brew: "whisper-cpp", apt: "whisper.cpp", winget: "" },
   },
+  // Piper is the voice of Kernl (src/voice/tts.ts). No distro packages it;
+  // when it is missing the voice module downloads the upstream release into
+  // the data dir on first use, so the hint is only for the curious.
+  piper: {
+    envVar: "PIPER_BIN",
+    defaultBin: "piper",
+    versionArg: "--version",
+    usedFor: "speaking replies out loud with Piper",
+    packages: { brew: "", apt: "", winget: "" },
+  },
 };
 
 /**
@@ -95,6 +105,7 @@ const BUNDLE_DIR: Record<MediaTool, string> = {
   ffmpeg: "ffmpeg",
   ffprobe: "ffmpeg",
   "whisper-cli": "whisper",
+  piper: "piper",
 };
 
 /**
@@ -219,6 +230,9 @@ export function mediaToolBin(tool: MediaTool): string {
  */
 export function installHint(tool: MediaTool): string {
   const spec = SPECS[tool];
+  if (!spec.packages.apt && !spec.packages.brew && !spec.packages.winget) {
+    return `Kernl downloads it on first use; to use your own build, set ${spec.envVar} to its full path.`;
+  }
   if (IN_CONTAINER) {
     return `The container image should already carry ${spec.packages.apt} — please report this.`;
   }

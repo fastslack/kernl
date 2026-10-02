@@ -195,6 +195,7 @@ export async function bootstrap(): Promise<void> {
     chatService: core.chatModule.getService(),
     agentService: core.agentsModule.getService(),
     agentExecutor: core.agentsModule.getExecutor(),
+    httpServer: http.httpServer,
   });
 
   // ── 12. Graceful shutdown ──────────────────────────

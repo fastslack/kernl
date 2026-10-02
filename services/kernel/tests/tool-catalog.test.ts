@@ -81,7 +81,7 @@ function stubConfig(): KernelConfig {
       discord: { enabled: false, botToken: "", allowedUsers: [], allowedGuilds: [], allowedChannels: [] },
       webchat: { enabled: false, requireAuth: false },
     },
-    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
+    voice: { enabled: false, sttEngine: "auto" as const, whisperModel: "", language: "es", ttsEngine: "auto" as const, ttsVoice: "", ttsSpeed: 1, elevenLabsApiKey: "" },
     pii: { enabled: false, redactEmails: false, redactPhones: false, redactCreditCards: false, redactIbans: false, redactNames: false, warnOnSend: false, placeholder: "[REDACTED]" },
     ibkr: { gatewayUrl: "https://localhost:5000", accountId: "", enabled: false },
     saxo: { baseUrl: "", appKey: "", appSecret: "", certPath: "", certKeyPath: "", enabled: false },

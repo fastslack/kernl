@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 import { resolve } from "node:path";
 import type { ChannelConfig } from "../channels/types.js";
+import type { VoiceSettings } from "../voice/types.js";
+import { voiceSettingsFromEnv } from "../voice/settings.js";
 
 export type KernelLanguage = "es" | "en";
 
@@ -143,16 +145,8 @@ export interface KernelConfig {
   };
   // Multi-channel support
   channels: ChannelConfig;
-  // Voice (STT/TTS)
-  voice: {
-    enabled: boolean;
-    sttProvider: "openai" | "local-whisper";
-    ttsProvider: "elevenlabs" | "openai" | "system";
-    elevenLabsApiKey: string;
-    localWhisperPath: string;
-    defaultVoiceId: string;
-    respondWithVoice: boolean;
-  };
+  // Voice (STT/TTS) — read live by src/voice; Settings → AI → Voice.
+  voice: VoiceSettings;
   // PII (Personal Data) protection
   pii: {
     enabled: boolean;
@@ -490,15 +484,7 @@ export function loadConfig(): KernelConfig {
         apiKey: process.env.WEBCHAT_API_KEY || undefined,
       },
     },
-    voice: {
-      enabled: process.env.VOICE_ENABLED === "true",
-      sttProvider: (process.env.VOICE_STT_PROVIDER ?? "openai") as "openai" | "local-whisper",
-      ttsProvider: (process.env.VOICE_TTS_PROVIDER ?? "system") as "elevenlabs" | "openai" | "system",
-      elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
-      localWhisperPath: process.env.LOCAL_WHISPER_PATH ?? "",
-      defaultVoiceId: process.env.VOICE_DEFAULT_ID ?? "alloy",
-      respondWithVoice: process.env.VOICE_RESPOND_WITH_VOICE === "true",
-    },
+    voice: voiceSettingsFromEnv(process.env),
     pii: {
       enabled: process.env.PII_FILTER_ENABLED !== "false", // Default: enabled
       redactEmails: process.env.PII_REDACT_EMAILS !== "false",

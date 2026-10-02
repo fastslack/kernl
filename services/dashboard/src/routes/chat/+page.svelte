@@ -9,6 +9,8 @@
   import EpisodeSidebar from './EpisodeSidebar.svelte';
   import ChatModelPicker, { type ProviderWithModels } from './ChatModelPicker.svelte';
   import ChatInputArea, { type PendingAttach } from './ChatInputArea.svelte';
+  import { speakReplies } from '$lib/voice/prefs.js';
+  import { SentenceSplitter, speech, speakText } from '$lib/voice/speech.js';
   import PermissionModal, { type PendingPermission } from './PermissionModal.svelte';
 
   /**
@@ -121,8 +123,29 @@
     }
   }
 
+  // ── Voice ───────────────────────────────────────────────────
+  // The reply is read out when the message was spoken, or when the speaker
+  // toggle is on. Streamed replies are spoken a sentence at a time as they
+  // arrive; `splitter` is non-null only while this send should be heard.
+  let nextSendSpoken = false;
+  let splitter: SentenceSplitter | null = null;
+
+  function onVoice(text: string) {
+    input = text;
+    nextSendSpoken = true;
+    void doSend();
+  }
+
+  function speakPieces(pieces: string[]) {
+    for (const p of pieces) speech.push(p);
+  }
+
   async function doSend() {
+    const spoken = nextSendSpoken;
+    nextSendSpoken = false;
     if (sending || !selectedEpisodeId) return;
+    speech.stop();
+    splitter = spoken || $speakReplies ? new SentenceSplitter() : null;
     const msg = input.trim();
     if (!msg && pendingAttachments.length === 0) return;
 
@@ -171,6 +194,7 @@
         const data = await sendChatMessage(body) as any;
         if (data.message) {
           messages = [...messages, { role: 'assistant', content: data.message.content, created_at: new Date().toISOString() }];
+          if (splitter && typeof data.message.content === 'string') speakText(data.message.content);
         } else if (data.error) {
           appendError('Error: ' + data.error);
         }
@@ -180,6 +204,7 @@
       // restore attachments so user can retry
       pendingAttachments = sentAttachments;
     } finally {
+      splitter = null;
       sending = false;
       streamingActive = false;
       streamingBlocks = [];
@@ -209,6 +234,7 @@
 
   async function handleStreamEvent(ev: ChatStreamEvent) {
     if (ev.type === 'assistant_text') {
+      if (splitter) speakPieces(splitter.feed(ev.text));
       // Merge consecutive text into the last text block.
       const last = streamingBlocks[streamingBlocks.length - 1];
       if (last && last.type === 'text') {
@@ -237,6 +263,7 @@
         input: ev.input,
       };
     } else if (ev.type === 'done') {
+      if (splitter) speakPieces(splitter.end());
       // Replace the live stream with the persisted assistant message so its
       // content_blocks render the same on reload. Pass the rich blocks
       // through `content_blocks` so the rendering path picks them up.
@@ -571,6 +598,7 @@
         bind:inputEl
         {sending}
         onSend={doSend}
+        {onVoice}
       />
     {/if}
   </main>

@@ -19,6 +19,8 @@
   import SelectField from '$lib/components/settings/SelectField.svelte';
   import StatusPill from '$lib/components/settings/StatusPill.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
+  import VoiceStatusPanel from '$lib/components/settings/VoiceStatusPanel.svelte';
+  import VoicePicker from '$lib/components/settings/VoicePicker.svelte';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
@@ -232,6 +234,12 @@
   // ── Category → section mapping ───────────────
   // Keys the AI connections card owns — hidden from the generic renderer.
   const AI_RICH_KEYS = /^(LMSTUDIO_(BASE_URL|API_KEY)|MINIMAX_)/;
+  // Voice settings get their own card, with the live engine status on top.
+  const VOICE_KEYS = /^(VOICE_|ELEVENLABS_API_KEY$)/;
+  const VOICE_SELECTS: Record<string, string[]> = {
+    VOICE_STT_ENGINE: ['auto', 'whispercpp', 'groq', 'openai'],
+    VOICE_TTS_ENGINE: ['auto', 'piper', 'openai', 'elevenlabs'],
+  };
 
   function sectionForItem(it: CatalogItem): string {
     if (it.extension) {
@@ -258,11 +266,13 @@
       { id: 'cat-life', title: tr('settings.life.title'), desc: tr('settings.life.desc'), items: by('life') },
     ].filter((c) => c.items.length);
 
-    const aiLeft = by('ai').filter((i) => !AI_RICH_KEYS.test(i.key));
+    const aiLeft = by('ai').filter((i) => !AI_RICH_KEYS.test(i.key) && !VOICE_KEYS.test(i.key));
+    const voiceItems = by('ai').filter((i) => VOICE_KEYS.test(i.key));
     const chatLeft = by('chat').filter((i) => !AI_RICH_KEYS.test(i.key));
     const agentsLeft = by('agents').filter((i) => !AI_RICH_KEYS.test(i.key));
     out.ai = [
       { id: 'ai-advanced', title: tr('settings.ai.advanced_title'), desc: tr('settings.ai.advanced_desc'), items: aiLeft },
+      { id: 'ai-voice', title: tr('settings.voice.title'), desc: tr('settings.voice.desc'), items: voiceItems },
       { id: 'ai-chat', title: tr('settings.ai.chat_title'), desc: tr('settings.ai.chat_desc'), items: chatLeft },
       { id: 'ai-agents', title: tr('settings.ai.agents_title'), desc: tr('settings.ai.agents_desc'), items: agentsLeft },
     ].filter((c) => c.items.length);
@@ -1071,8 +1081,33 @@
             savingLabel={$t('settings.card.saving')}
             on:save={() => saveGenericCard(card)}
           >
+            {#if card.id === 'ai-voice'}
+              <VoiceStatusPanel refreshKey={cardState[card.id]?.savedMsg ? Date.now() : 0} />
+            {/if}
             {#each card.items as it (it.key)}
-              {#if it.key === 'KERNEL_DEFAULT_LANGUAGE'}
+              {#if it.key === 'VOICE_TTS_VOICE'}
+                <div class="fld-voice" id={`field-${it.key}`}>
+                  <span class="fld-lang-label">{loc(it.label) || it.key}</span>
+                  <VoicePicker
+                    bind:value={values[it.key]}
+                    engine={values.VOICE_TTS_ENGINE}
+                    language={values.VOICE_LANGUAGE}
+                  />
+                </div>
+              {:else if VOICE_SELECTS[it.key]}
+                <div class="fld-lang" id={`field-${it.key}`}>
+                  <div class="fld-lang-meta">
+                    <span class="fld-lang-label">{loc(it.label) || it.key}</span>
+                    <span class="fld-lang-desc">{loc(it.description)}</span>
+                    <span class="fld-lang-key">{it.key}</span>
+                  </div>
+                  <SelectField
+                    bind:value={values[it.key]}
+                    options={VOICE_SELECTS[it.key].map((v) => ({ value: v, label: v }))}
+                    disabled={it.readonly}
+                  />
+                </div>
+              {:else if it.key === 'KERNEL_DEFAULT_LANGUAGE'}
                 <div class="fld-lang" id={`field-${it.key}`}>
                   <div class="fld-lang-meta">
                     <span class="fld-lang-label">{loc(it.label) || it.key}</span>
@@ -1342,4 +1377,5 @@
     .wa-qr-box { flex-direction: column; align-items: center; }
     .fld-lang { grid-template-columns: 1fr; }
   }
+  .fld-voice { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; }
 </style>
