@@ -16,10 +16,11 @@ export function registerGoogleOAuthRoutes(
   db: SqliteDb,
   config: KernelConfig,
 ): void {
-  const { clientId, clientSecret, callbackPort } = config.google;
   const dashboardPort = config.dashboard.port;
 
+  // Read at call time so credentials saved from the dashboard apply without a restart.
   function makeAuth(): GoogleAuth {
+    const { clientId, clientSecret, callbackPort } = config.google;
     return new GoogleAuth(db, clientId, clientSecret, callbackPort);
   }
 

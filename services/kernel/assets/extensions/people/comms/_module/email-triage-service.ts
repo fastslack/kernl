@@ -61,6 +61,52 @@ export interface AttentionItem {
   draft_status: string;
 }
 
+// ── Answer parsing ───────────────────────────────────────────────────────────
+
+/** Index just past the `]` closing the array that opens at `start`, or -1. */
+function matchingBracket(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "[") depth++;
+    else if (c === "]" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * The model's JSON answer, from a response that may wrap it in reasoning
+ * prose, code fences or a draft. Reasoning text mentions brackets too
+ * ("output a JSON array with [idx]"), so slicing from the first `[` to the
+ * last `]` broke on exactly those models. Instead every array of objects that
+ * parses is a candidate, and the answer is the one that ends last — the final
+ * answer comes after the thinking and any draft — taking the outermost when
+ * arrays nest (an item may carry an array of its own). Null when no
+ * complete array is there (the response was cut off, or never answered).
+ */
+export function extractJsonArray(raw: string): unknown[] | null {
+  const text = raw.replace(/```(?:json)?/gi, "");
+  let best: { start: number; end: number; value: unknown[] } | null = null;
+  for (const m of text.matchAll(/\[\s*(?=\{|\])/g)) {
+    const start = m.index ?? 0;
+    const end = matchingBracket(text, start);
+    if (end === -1 || (best && end < best.end)) continue;
+    if (best && end === best.end) continue; // same close, later start: nested inside best
+    try {
+      const value = JSON.parse(text.slice(start, end));
+      if (Array.isArray(value)) best = { start, end, value };
+    } catch {
+      // a draft or an example in the reasoning — not the answer
+    }
+  }
+  return best?.value ?? null;
+}
+
 // ── Service ──────────────────────────────────────────────────────────────────
 
 export class EmailTriageService {
@@ -72,7 +118,9 @@ export class EmailTriageService {
   /** LLM call via global singleton (routes through mtwRequest) */
   private async llmChat(system: string, user: string): Promise<string> {
     const { llm } = await import("@kernl/extension-sdk");
-    const result = await llm().chat({ system, user, caller: "email-triage" });
+    // Reasoning models think out loud before the JSON; with the default 2048
+    // tokens a batch of 20 mails ran out mid-thought and returned no answer.
+    const result = await llm().chat({ system, user, caller: "email-triage", maxTokens: 8192 });
     return result.text;
   }
 
@@ -159,23 +207,21 @@ Respond ONLY with the JSON array.`;
     try {
       // Reasoning models (minimax/MiniMax-M2.x, DeepSeek-R1, Kimi…) prepend a
       // <think>…</think> block that breaks JSON.parse ("Unrecognized token '<'").
-      // Strip it first, then drop code fences, then slice to the JSON array in
-      // case the model wrapped it in prose ("Here is the result: [...]").
-      let cleaned = stripReasoning(rawText).replace(/```(?:json)?/gi, "").trim();
-      const lb = cleaned.indexOf("[");
-      const rb = cleaned.lastIndexOf("]");
-      if (lb !== -1 && rb > lb) cleaned = cleaned.slice(lb, rb + 1);
-      if (!cleaned) {
-        log.warn(`EmailTriage: LLM returned empty/answerless response (${emails.length} emails in batch)`);
-        return [];
-      }
-
-      const parsed = JSON.parse(cleaned) as Array<{
+      // Strip it first; extractJsonArray then finds the answer among the prose,
+      // code fences and drafts a model may wrap it in.
+      const parsed = extractJsonArray(stripReasoning(rawText)) as Array<{
         idx: number;
         urgency: Urgency;
         attention_needed: boolean;
         summary: string;
-      }>;
+      }> | null;
+      if (!parsed) {
+        log.warn(
+          `EmailTriage: no JSON answer in the response (${emails.length} emails in batch) — ` +
+            `raw response (first 500 chars): ${rawText.slice(0, 500)}`,
+        );
+        return [];
+      }
 
       return parsed.map((r) => ({
         gmail_id: emailSummaries[r.idx]?.gmail_id ?? "",

@@ -27,16 +27,19 @@ export interface GoogleSyncDashboardRpcDeps {
 
 export function googleSyncOperations(deps: GoogleSyncDashboardRpcDeps): Record<string, Operation> {
   const { db, config } = deps;
-  const { clientId, clientSecret, callbackPort } = config.google;
   const dashboardPort = config.dashboard.port;
+  // Read at call time, not once: credentials saved from AI Providers → Google
+  // update config.google in place and must work without a restart.
+  const hasCredentials = () => !!(config.google.clientId && config.google.clientSecret);
 
   function makeAuth(): GoogleAuth {
+    const { clientId, clientSecret, callbackPort } = config.google;
     return new GoogleAuth(db, clientId, clientSecret, callbackPort);
   }
 
   return {
     "google.status": async () => {
-      const credentialsConfigured = !!(clientId && clientSecret);
+      const credentialsConfigured = hasCredentials();
       const auth = makeAuth();
       // Live health probe: refreshes if needed, records needs_reauth when the
       // refresh token is dead. So a revoked token surfaces as needs_reauth,
@@ -80,7 +83,7 @@ export function googleSyncOperations(deps: GoogleSyncDashboardRpcDeps): Record<s
     // refresh_token leaves a stale row, and without `force` the user could
     // never re-auth.
     "google.auth.start": (input) => {
-      if (!clientId || !clientSecret) {
+      if (!hasCredentials()) {
         throw new HttpError(
           400,
           "Google credentials not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in .env (AI Providers → Google section).",
