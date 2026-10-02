@@ -157,6 +157,27 @@ export function processLiveEvents(ctx: LiveEventContext): void {
       continue;
     }
 
+    // A colleague letter (kernel_agents_post_to_colleague, or the mail triage
+    // handing a mail to the desk) → it flies from desk to desk, the sender
+    // says who it went to and the recipient what arrived. In the same office
+    // the sender also walks it over; across offices the packet arc carries it.
+    // The recipient usually wakes on it right away, and its RUN tag follows.
+    if (e.event === 'agent:inbox:posted') {
+      if (fromIdAny && toIdAny && fromIdAny !== toIdAny) {
+        const color = flowColor(fromIdAny);
+        const toName = ctx.agents.find(a => a.id === toIdAny)?.name ?? '';
+        const fromName = ctx.agents.find(a => a.id === fromIdAny)?.name ?? '';
+        const subject = String((e.data as any).subject ?? '');
+        spawnHandoffPacketFx(fromIdAny, toIdAny, color);
+        showAnimatedTag(fromIdAny, { icon: '📨', anim: 'bounce', color, label: `→ ${toName.slice(0, 12)}`, durationFrames: 220 });
+        showAnimatedTag(toIdAny, { icon: '📬', anim: 'pop', color, label: (subject || fromName).slice(0, 16), durationFrames: 240 });
+        if (ctx.scene && sameOffice(fromIdAny, toIdAny)) {
+          sendWalker(ctx.scene, ctx.walkers, fromIdAny, toIdAny, ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents, color, undefined, ctx.sittingWorkers, ctx.deskAabbs);
+        }
+      }
+      continue;
+    }
+
     // Infrastructure toggled (Docker container up/stop/pause/resume/restart):
     // walk the office's manager to the Repos Office power console and flip it.
     if (e.event === 'office:infra:changed') {

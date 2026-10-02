@@ -10,7 +10,9 @@
  * mutation a second time.
  *
  * So: reads race; writes go by WS and use HTTP only when the WS never sent
- * them; an error the kernel answered is final on both.
+ * them; an error the kernel answered is final on both — except "Unknown
+ * action", which the kernel answers before running anything: the action was
+ * never registered on the WS side, so its HTTP twin is the only road.
  */
 
 /** The kernel answered this request with an error: the request arrived and ran. */
@@ -18,6 +20,11 @@ export class RpcAnsweredError extends Error {
 	constructor(message: string) {
 		super(message);
 		this.name = 'RpcAnsweredError';
+	}
+
+	/** The kernel has no WS handler for the action, so nothing ran. */
+	get unknownAction(): boolean {
+		return this.message.startsWith('Unknown action');
 	}
 }
 
@@ -55,6 +62,7 @@ export async function callWithFallback<T>({ action, connected, ws, http, raceAft
 			// Only a request that never left can safely go again. A timeout
 			// may have run on the kernel, and an answered error did.
 			if (err instanceof RpcNotSentError) return http();
+			if (err instanceof RpcAnsweredError && err.unknownAction) return http();
 			throw err;
 		}
 	}
@@ -73,7 +81,7 @@ export async function callWithFallback<T>({ action, connected, ws, http, raceAft
 	try {
 		return await Promise.race([viaWs, viaHttp]);
 	} catch (err) {
-		if (err instanceof RpcAnsweredError) throw err;
+		if (err instanceof RpcAnsweredError && !err.unknownAction) throw err;
 		// Transport trouble on a read — one more HTTP attempt is harmless.
 		return http();
 	}

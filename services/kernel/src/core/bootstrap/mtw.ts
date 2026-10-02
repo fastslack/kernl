@@ -363,6 +363,8 @@ export async function initMtw(args: {
     "agent:flow:escalation",
     "agent:flow:question_asked",
     "agent:flow:question_answered",
+    // Colleague letters: AgentWorld3D flies them desk to desk.
+    "agent:inbox:posted",
   ] as const) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     events.on(evtName as any, (payload: any) => {

@@ -69,3 +69,31 @@ describe('callWithFallback', () => {
 		expect(h.calls()).toBe(0);
 	});
 });
+
+describe('callWithFallback — action the kernel does not know', () => {
+	// The kernel answers "Unknown action: x" before running anything, so the
+	// request never ran: HTTP is safe even for a write. Without this, a page
+	// whose action was never registered (mail's emails.list) hung on Loading.
+	const unknown = (action: string) => async () => { throw new RpcAnsweredError(`Unknown action: ${action}`); };
+
+	it('falls back to HTTP for a read', async () => {
+		const h = counter();
+		const out = await callWithFallback({ action: 'emails.list', connected: true, ws: unknown('emails.list'), http: h.http, raceAfterMs: 50 });
+		expect(out).toBe('http');
+		expect(h.calls()).toBe(1);
+	});
+
+	it('falls back to HTTP for a write, which never ran', async () => {
+		const h = counter();
+		const out = await callWithFallback({ action: 'emails.archive', connected: true, ws: unknown('emails.archive'), http: h.http });
+		expect(out).toBe('http');
+		expect(h.calls()).toBe(1);
+	});
+
+	it('still treats any other answered error as final', async () => {
+		const h = counter();
+		const ws = async () => { throw new RpcAnsweredError('Unknown agent'); };
+		await expect(callWithFallback({ action: 'agents.run', connected: true, ws, http: h.http })).rejects.toThrow('Unknown agent');
+		expect(h.calls()).toBe(0);
+	});
+});

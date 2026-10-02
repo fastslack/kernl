@@ -120,9 +120,13 @@
     let qs = `folder=${folder}&page=${page}&pageSize=${pageSize}`;
     if (query) qs += `&q=${encodeURIComponent(query)}`;
     if (selectedAccountId) qs += `&account_id=${encodeURIComponent(selectedAccountId)}`;
-    const d = await api('/api/emails?' + qs);
-    if (d) { emails = d.emails; total = d.total; page = d.page; }
-    loading = false;
+    // finally: a failed request must not leave the list stuck on "Loading…".
+    try {
+      const d = await api('/api/emails?' + qs);
+      if (d) { emails = d.emails; total = d.total; page = d.page; }
+    } finally {
+      loading = false;
+    }
   }
   async function loadCounts() {
     const qs = selectedAccountId ? `?account_id=${encodeURIComponent(selectedAccountId)}` : '';
