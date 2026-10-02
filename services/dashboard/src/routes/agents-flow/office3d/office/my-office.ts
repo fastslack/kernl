@@ -35,6 +35,8 @@ export function buildMyOffice(
   visitorChairs: Array<{ x: number; y: number; z: number }>;
   /** Point a seated visitor should face — the desk / occupant. */
   deskFacingPos: { x: number; y: number; z: number };
+  /** Midpoint of the doorway (south wall). Walkers must come in through it. */
+  doorPos: { x: number; z: number };
 } {
   const { cx, cz, w, d } = room;
 
@@ -357,5 +359,6 @@ export function buildMyOffice(
   // Visitors face the occupant across the desk.
   const deskFacingPos = { x: cx, y: 1.0, z: cmdCZ };
 
-  return { visitorPos, hitbox, noteDropPos, seatPos, seatFacingY, headPos, visitorChairs, deskFacingPos };
+  const doorPos = { x: cx, z: zDoor };
+  return { visitorPos, hitbox, noteDropPos, seatPos, seatFacingY, headPos, visitorChairs, deskFacingPos, doorPos };
 }

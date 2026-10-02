@@ -2,6 +2,10 @@ import { rt } from '../runtime.js';
 import { WALL_H, makeSignClickable } from './_shared.js';
 import { applyPBR, bakeVertexAO } from './_materials.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import {
+  RECEPTION_COUNTER_W, RECEPTION_COUNTER_D, RECEPTION_COLUMN_GAP, RECEPTION_WALL_GAP,
+  receptionPickupPos, receptionDriverPos,
+} from './reception-geometry.js';
 
 export interface ReceptionAnchors {
   dropPos: { x: number; y: number; z: number };        // counter top (package visual position)
@@ -24,8 +28,9 @@ export function buildReception(
   // the entrance look down the lobby and see the counter ahead of them.
   const counterZ = counterCZ;
   const counterH = 1.15;
-  const counterW = 10.0;
-  const counterD = 1.6;
+  // Footprint shared with the walker router (reception-geometry.ts).
+  const counterW = RECEPTION_COUNTER_W;
+  const counterD = RECEPTION_COUNTER_D;
 
   // ── Counter body (front panel — faces SOUTH / toward the doors) ──
   const panelMat = new rt.THREE.MeshStandardMaterial({ color: 0x1a2035, roughness: 0.35, metalness: 0.4 });
@@ -92,7 +97,7 @@ export function buildReception(
   const columnBaseMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a3050, roughness: 0.4, metalness: 0.3 });
   const colH = WALL_H - 0.1;
   for (const side of [-1, 1]) {
-    const colX = cx + side * (counterW / 2 + 0.9);
+    const colX = cx + side * (counterW / 2 + RECEPTION_COLUMN_GAP);
     // Base plinth
     const base = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.7, 0.2, 0.7), columnBaseMat);
     base.position.set(colX, 0.1, counterZ);
@@ -112,7 +117,7 @@ export function buildReception(
   // ably without crowding the wall, but tight enough to read as one room.
   // NOTE: ambiance.ts:buildActivityBoard uses the SAME gap (2.5) for its
   //       backWallSouthFaceZ. Keep them in sync.
-  const WALL_GAP_BEHIND_COUNTER = 2.5;
+  const WALL_GAP_BEHIND_COUNTER = RECEPTION_WALL_GAP;
   const backWallZ = counterZ - counterD / 2 - WALL_GAP_BEHIND_COUNTER;
   const backMat = new rt.THREE.MeshStandardMaterial({ color: 0x1d2540, roughness: 0.55, metalness: 0.2 });
   const backH = WALL_H - 0.5;
@@ -499,8 +504,8 @@ export function buildReception(
     // Drop point = centre of counter top (visible from both sides)
     dropPos: { x: cx, y: counterH + 0.2, z: counterZ },
     // Recipient walker stops on the INTERIOR side (north of counter)
-    frontPos: { x: cx, y: 0, z: counterZ - counterD / 2 - 1.1 },
+    frontPos: receptionPickupPos(cx, counterZ),
     // Delivery driver stops on the DOOR side (south of counter), facing the front
-    driverFrontPos: { x: cx, y: 0, z: counterZ + counterD / 2 + 1.1 },
+    driverFrontPos: receptionDriverPos(cx, counterZ),
   };
 }

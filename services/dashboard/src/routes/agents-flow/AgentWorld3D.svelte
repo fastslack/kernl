@@ -21,6 +21,7 @@
     flipInfraLever, updateInfraConsole, getInfraOperatorPos, getInfraFacePos,
     resetInfraConsole, toggleInfraBoard, INFRA_VIS, type InfraState,
     sendWalker, sendWalkerToPoint, sendCommuteWalker, updateWalkers, removeArrivedWalkers, syncSeatedVisibility, animateSitting,
+    setWalkZones, receptionObstacles,
     initDelivery, initDeliveryScene, enqueueDelivery, resetDelivery, markPackagePickedUp, updateDelivery,
     initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis,
     createAnimationRegistry, initAnimEffects,
@@ -1092,7 +1093,7 @@
   /** Build special rooms in fixed order from layout:
    *  [0]=Meeting A, [1]=Central Hall, [2]=Meeting B, [3]=My Office, [4+]=extra meeting rooms */
   function buildSpecialRooms(target: any) {
-    if (meetingRooms.length === 0) { myOfficePos = null; myOfficeHitbox = null; return; }
+    if (meetingRooms.length === 0) { myOfficePos = null; myOfficeHitbox = null; setWalkZones({}); return; }
 
     // Fixed slot assignments matching SPECIAL_CELLS order in layout.ts
     const hallSlot = meetingRooms[1] ?? meetingRooms[0]; // Central Hall = index 1
@@ -1122,6 +1123,13 @@
     myOfficeNoteDropPos = myOfficeResult.noteDropPos;
     myOfficeSeats = myOfficeResult.visitorChairs;
     myOfficeDeskFacing = myOfficeResult.deskFacingPos;
+    // Neither room is in the flow-room map, so tell the walker router about
+    // them: walkers enter the headquarters office only through its door and
+    // walk around the reception counter, columns and back wall.
+    setWalkZones({
+      myOffice: { rect: officeSlot, door: myOfficeResult.doorPos },
+      reception: receptionObstacles(receptionCX, hallSlot.cz),
+    });
     // Seat the top agent at the executive desk. The seeder
     // guarantees one agent with rank.level === 11; if multiple are
     // present we honor the first one and ignore the rest (seeder also
