@@ -449,6 +449,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "result_preview": "after wait",
           "status": "completed",
           "steps_count": 1,
           "tokens_used": 7,
@@ -548,16 +549,6 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
     ],
   ],
   [
-    "evt",
-    "agent:flow:learning_deactivated",
-    {
-      "agent_id": "agent-1",
-      "agent_name": "Nadia",
-      "count": 1,
-      "run_id": "run-1",
-    },
-  ],
-  [
     "svc",
     "logEvent",
     [
@@ -569,10 +560,18 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_type": "run",
         "raw_data": {
           "confidence": 0.9,
-          "deactivated_count": 1,
+          "deactivated_count": 0,
           "has_lesson": true,
+          "issues": "none",
+          "learning": {
+            "confidence": 0.74,
+            "content": "keep it short",
+            "id": "learning-1",
+            "type": "prefer",
+          },
           "learning_created": true,
           "outcome": "success",
+          "retired_learnings": [],
           "score": 4,
         },
         "run_id": "run-1",
@@ -828,6 +827,7 @@ ESTILO: Respondé SIEMPRE en español rioplatense, salvo que el usuario te escri
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "result_preview": "Listo",
           "status": "completed",
           "steps_count": 1,
           "tokens_used": 13,
@@ -1301,6 +1301,8 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "error": "API error 503: upstream",
+          "result_preview": "",
           "status": "failed",
           "steps_count": 1,
           "tokens_used": 0,
@@ -1589,6 +1591,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "result_preview": "fallback ok",
           "status": "completed",
           "steps_count": 1,
           "tokens_used": 13,
@@ -2216,6 +2219,11 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "error": "Safety abort: Token budget exhausted (500/100)",
+          "result_preview": 
+"thinking out loud
+"
+,
           "status": "failed",
           "steps_count": 4,
           "tokens_used": 500,
@@ -2767,6 +2775,8 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "error": "invalid request body",
+          "result_preview": "",
           "status": "failed",
           "steps_count": 1,
           "tokens_used": 0,
@@ -2864,16 +2874,6 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
     ],
   ],
   [
-    "evt",
-    "agent:flow:learning_deactivated",
-    {
-      "agent_id": "agent-1",
-      "agent_name": "Nadia",
-      "count": 1,
-      "run_id": "run-1",
-    },
-  ],
-  [
     "svc",
     "logEvent",
     [
@@ -2885,10 +2885,18 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_type": "run",
         "raw_data": {
           "confidence": 0.7,
-          "deactivated_count": 1,
+          "deactivated_count": 0,
           "has_lesson": true,
+          "issues": "bad",
+          "learning": {
+            "confidence": 0.41000000000000003,
+            "content": "check input",
+            "id": "learning-1",
+            "type": "avoid",
+          },
           "learning_created": true,
           "outcome": "failure",
+          "retired_learnings": [],
           "score": 1,
         },
         "run_id": "run-1",
@@ -3610,6 +3618,10 @@ parent done"
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "result_preview": 
+"thinking out loud
+parent done"
+,
           "status": "completed",
           "steps_count": 4,
           "tokens_used": 24,
@@ -4101,6 +4113,8 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "event_subtype": "completed",
         "event_type": "run",
         "raw_data": {
+          "error": "Safety abort: Cancelled by user",
+          "result_preview": "",
           "status": "failed",
           "steps_count": 1,
           "tokens_used": 11,

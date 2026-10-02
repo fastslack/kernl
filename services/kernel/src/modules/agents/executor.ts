@@ -31,6 +31,7 @@ import { RunRecorder } from "./executor/run-recorder.js";
 import { serializeCheckpoint, type RunCheckpoint } from "./executor/run-checkpoint.js";
 import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
 import { localDate } from "../../sdk/clock.js";
+import { retiredLearnings } from "./learning-diff.js";
 
 // Public surface kept on this module — callers import these from executor.js.
 export type { ExecutionResult } from "./executor/shared.js";
@@ -551,7 +552,12 @@ export class AgentExecutor {
       recorder.logEvent({
         event_type: "run", event_subtype: "completed",
         detail: `${execResult.status}: ${execResult.steps_count} steps, ${execResult.tokens_used} tokens`,
-        raw_data: { status: execResult.status, steps_count: execResult.steps_count, tokens_used: execResult.tokens_used },
+        raw_data: {
+          status: execResult.status, steps_count: execResult.steps_count, tokens_used: execResult.tokens_used,
+          // HISTORY opens this event into the same detail LIVE shows.
+          result_preview: execResult.result.slice(0, 500),
+          ...(execResult.error ? { error: execResult.error } : {}),
+        },
         tokens_used: execResult.tokens_used,
       });
 
@@ -860,7 +866,7 @@ export class AgentExecutor {
       }
 
       // Snapshot active learnings count BEFORE feedback for reinforcement diff
-      const learningsBefore = service.getLearnings(agent.id).length;
+      const learningsBefore = service.getLearnings(agent.id);
 
       // Persist feedback — this also reinforces/penalizes active learnings via addFeedback()
       const feedback = service.addFeedback({
@@ -879,12 +885,12 @@ export class AgentExecutor {
         score: evalResult.score,
         outcome: evalResult.outcome,
         confidence: evalResult.confidence,
-        issues: evalResult.issues.slice(0, 120),
+        issues: evalResult.issues,
       });
 
       // If the evaluator extracted a concrete lesson AND it is confident, store it
       // as a typed learning that will be injected into future runs.
-      let learningCreated: { type: string; content: string; confidence: number } | null = null;
+      let learningCreated: { id: string; type: string; content: string; confidence: number } | null = null;
       if (evalResult.lesson && evalResult.confidence >= 0.5) {
         const type: "avoid" | "prefer" | "insight" | "pattern" =
           evalResult.outcome === "failure" ? "avoid"
@@ -900,7 +906,7 @@ export class AgentExecutor {
           confidence: finalConfidence,
           source_runs: [run.id],
         });
-        learningCreated = { type: l.type, content: l.content, confidence: l.confidence };
+        learningCreated = { id: l.id, type: l.type, content: evalResult.lesson, confidence: l.confidence };
 
         events?.emit("agent:flow:learning_created", {
           agent_id: agent.id,
@@ -908,20 +914,21 @@ export class AgentExecutor {
           run_id: run.id,
           learning_id: l.id,
           learning_type: l.type,
-          content: evalResult.lesson.slice(0, 150),
+          content: evalResult.lesson,
           confidence: l.confidence,
         });
       }
 
-      // Detect learning auto-deactivations from cleanup logic (learnings that fell below threshold)
-      const learningsAfter = service.getLearnings(agent.id).length;
-      const deactivatedCount = Math.max(0, learningsBefore - learningsAfter + (learningCreated ? 1 : 0));
-      if (deactivatedCount > 0) {
+      // Learnings the cleanup retired (fell below the confidence floor): the
+      // ones active before grading that are gone now. The LIVE feed lists them.
+      const retired = retiredLearnings(learningsBefore, service.getLearnings(agent.id));
+      if (retired.length > 0) {
         events?.emit("agent:flow:learning_deactivated", {
           agent_id: agent.id,
           agent_name: agent.name,
           run_id: run.id,
-          count: deactivatedCount,
+          count: retired.length,
+          learnings: retired,
         });
       }
 
@@ -940,7 +947,11 @@ export class AgentExecutor {
           confidence: evalResult.confidence,
           has_lesson: !!evalResult.lesson,
           learning_created: !!learningCreated,
-          deactivated_count: deactivatedCount,
+          deactivated_count: retired.length,
+          // Everything LIVE showed for this grading, so HISTORY can show it too.
+          issues: evalResult.issues,
+          learning: learningCreated,
+          retired_learnings: retired,
         },
         tokens_used: evalResult.tokens_used,
       });

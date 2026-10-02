@@ -161,7 +161,10 @@ export class RunRecorder {
     this.logEvent({
       event_type: "run", event_subtype: "completed",
       detail: `Failed: ${error.slice(0, 200)}`,
-      raw_data: { status: "failed", steps_count: this.stepNumber, tokens_used: totalTokens },
+      raw_data: {
+        status: "failed", steps_count: this.stepNumber, tokens_used: totalTokens,
+        result_preview: finalContent.slice(0, 500), error,
+      },
       tokens_used: totalTokens,
     });
   }

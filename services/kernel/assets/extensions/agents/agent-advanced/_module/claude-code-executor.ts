@@ -946,6 +946,9 @@ export class ClaudeCodeExecutor {
           steps_count: execResult.steps_count,
           tokens_used: execResult.tokens_used,
           engine: "claude_code",
+          // HISTORY opens this event into the same detail LIVE shows.
+          result_preview: execResult.result.slice(0, 500),
+          ...(execResult.error ? { error: execResult.error } : {}),
         },
         tokens_used: execResult.tokens_used,
       });
@@ -1040,7 +1043,10 @@ export class ClaudeCodeExecutor {
         event_type: "run",
         event_subtype: "completed",
         detail: `[claude-code] failed: ${msg.slice(0, 180)}`,
-        raw_data: { status: "failed", steps_count: stepNumber, tokens_used: totalTokens, engine: "claude_code" },
+        raw_data: {
+          status: "failed", steps_count: stepNumber, tokens_used: totalTokens, engine: "claude_code",
+          result_preview: finalText.slice(0, 500), error: msg,
+        },
         tokens_used: totalTokens,
       });
 

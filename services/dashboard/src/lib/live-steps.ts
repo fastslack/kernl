@@ -90,6 +90,14 @@ export function liveEventSummary(e: AgentFlowEvent): string {
     return `Self-graded ${score}/5 — ${String(e.data.outcome ?? '')}`;
   }
   if (t === 'learning_created') return `Lesson learned: ${String(e.data.content ?? '')}`;
+  if (t === 'learning_deactivated') {
+    const retired = Array.isArray(e.data.learnings) ? (e.data.learnings as Array<{ content?: unknown }>) : [];
+    const n = Number(e.data.count ?? retired.length) || retired.length;
+    const noun = n === 1 ? 'lesson' : 'lessons';
+    return retired.length
+      ? `Retired ${n} ${noun}: ${retired.map((l) => String(l.content ?? '')).filter(Boolean).join(' · ')}`
+      : `Retired ${n} ${noun} below the confidence floor`;
+  }
   if (t === 'step') {
     const st = String(e.data.type ?? '');
     const preview = String(e.data.content_preview ?? '');

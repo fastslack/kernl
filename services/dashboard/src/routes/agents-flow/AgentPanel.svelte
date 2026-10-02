@@ -34,6 +34,8 @@
   import { isWorkspacePathHidden } from '$lib/workspace-tree.js';
   import { resolveAgentWorkspace, dependsOnGoogleAuth } from '$lib/agent-helpers.js';
   import { fetchRecentRunSummaries } from './recent-runs.js';
+  import { eventLogToFlowEvents, type HistoryStep } from '$lib/history-steps.js';
+  import { liveEventType } from '$lib/live-steps.js';
   import type { WorldAgent, WorldChain, WorldFlow, WorldStats } from './world-types.js';
 
   /** bind: — the drawer's close button clears it. */
@@ -326,7 +328,7 @@
 
   let runsLoading = false;
   let expandedRunId: string | null = null;
-  let runSteps: Array<{ step_number: number; type: string; content: string; tool_name: string; tool_output?: string; is_event?: boolean }> = [];
+  let runSteps: HistoryStep[] = [];
 
   // Track loading + error separately from `runSteps`. Without these, an empty
   // result (e.g. a meeting event, or a run that errored before producing any
@@ -445,46 +447,23 @@
       if (data?.error) throw new Error(String(data.error));
       const steps: any[] = data?.steps ?? [];
       const events: any[] = data?.events ?? [];
-      // Merge event_log entries (auto_eval, learning, etc.) that aren't already
-      // represented by a step into the timeline. We filter out "step" event_types
-      // since those are duplicates of agent_run_steps.
+      // Merge the event log (run started/completed, self-grading and the
+      // lessons it drew or retired) into the timeline as the same flow events
+      // LIVE shows, so HISTORY opens them into the same detail. "step" rows
+      // are duplicates of agent_run_steps and are skipped.
       const eventSteps = events
         .filter((ev: any) => ev.event_subtype && ev.event_subtype !== 'step' && ev.event_type !== 'step')
-        .map((ev: any, i: number) => {
-          const sub = String(ev.event_subtype || ev.event_type || 'event');
-          let rawData: Record<string, unknown> = {};
-          try { rawData = JSON.parse(ev.raw_data || '{}'); } catch {}
-          let detail = String(ev.detail || '');
-          if (sub === 'auto_eval') {
-            const score = Number(rawData.score ?? 0);
-            const outcome = String(rawData.outcome ?? '');
-            const stars = '★'.repeat(score) + '☆'.repeat(Math.max(0, 5 - score));
-            const lesson = rawData.lesson ? `\n**Lesson**: ${rawData.lesson}` : '';
-            detail = `${stars}  **${outcome.toUpperCase()}** — confidence ${Number(rawData.confidence ?? 0).toFixed(2)}${lesson}`;
-          } else if (sub === 'learning_created' || sub === 'learning_deactivated') {
-            const icon = sub === 'learning_created'
-              ? (rawData.learning_type === 'avoid' ? '🚫' : rawData.learning_type === 'prefer' ? '⭐' : '💡')
-              : '🗑️';
-            detail = `${icon} ${detail}`;
-          }
-          return {
-            step_number: 9000 + i,
-            type: sub,
-            content: detail,
-            tool_name: '',
-            is_event: true,
-            _ts: ev.created_at || '',
-          };
-        });
-      // Assign step_numbers that interleave with real steps by timestamp
-      const merged = [...steps.map((s: any) => ({ ...s, is_event: false, _ts: '' })), ...eventSteps];
-      // Real steps already ordered by step_number; events go at the end
-      // (they happen post-run during auto-eval). Renumber for display.
-      let num = 0;
-      for (const m of merged) {
-        num++;
-        m.step_number = num;
-      }
+        .flatMap((ev: any) => eventLogToFlowEvents(ev, runId))
+        .map((fe) => ({
+          step_number: 0, type: liveEventType(fe), content: '', tool_name: '',
+          is_event: true, event: fe, created_at: fe.ts,
+        }));
+      // One timeline in time order: "run started" first, the tool loop, then
+      // completion and grading. Stable sort keeps same-instant rows in place.
+      const merged = [...steps.map((s: any) => ({ ...s, is_event: false })), ...eventSteps]
+        .map((m, i) => ({ m, i, t: Date.parse(m.created_at ?? '') || 0 }))
+        .sort((x, y) => x.t - y.t || x.i - y.i)
+        .map(({ m }, n) => ({ ...m, step_number: n + 1 }));
       runSteps = merged;
     } catch (err) {
       if (expandedRunId === runId) {

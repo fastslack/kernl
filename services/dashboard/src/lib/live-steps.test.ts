@@ -58,6 +58,13 @@ describe("liveEventType", () => {
 });
 
 describe("liveEventSummary", () => {
+  it("says which lesson was retired instead of the raw event name", () => {
+    expect(liveEventSummary(ev({ count: 1, learnings: [{ content: "Do not retry on 4xx" }] }, "agent:flow:learning_deactivated")))
+      .toBe("Retired 1 lesson: Do not retry on 4xx");
+    expect(liveEventSummary(ev({ count: 3 }, "agent:flow:learning_deactivated")))
+      .toBe("Retired 3 lessons below the confidence floor");
+  });
+
   it("distinguishes a builtin run from a prompted one", () => {
     expect(liveEventSummary(ev({ builtin: true }, "agent:run_started")))
       .toBe("Builtin run (native code, no prompt)");

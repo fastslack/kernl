@@ -21,6 +21,8 @@
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
   } from '$lib/live-steps.js';
+  import { liveEventDetail } from '$lib/live-event-detail.js';
+  import LiveEventDetail from './LiveEventDetail.svelte';
 
   /** Name of the selected agent, for the hero header. */
   export let agentName = '';
@@ -115,7 +117,9 @@
         {@const ecat = liveStepCategory(e)}
         {@const stepKey = e.ts + '-' + i}
         {@const isOpen = expandedLiveSteps.has(stepKey)}
-        {@const hasDetail = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
+        {@const hasPayload = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
+        {@const detail = hasPayload ? null : liveEventDetail(e)}
+        {@const hasDetail = hasPayload || detail !== null}
         {@const dt = liveStepDeltaMs(i)}
         {@const stepTok = liveStepTokens(e)}
         {@const cumTok = liveStepTokensTotal(i)}
@@ -125,6 +129,7 @@
             type="button"
             class="live-step-summary"
             disabled={!hasDetail}
+            aria-expanded={hasDetail ? isOpen : undefined}
             on:click={() => hasDetail && toggleLiveStep(stepKey)}
             title={hasDetail ? (isOpen ? 'Hide details' : 'Show details') : ''}
           >
@@ -156,7 +161,9 @@
               {/if}
             </div>
           {/if}
-          {#if hasDetail && isOpen}
+          {#if detail && isOpen}
+            <LiveEventDetail {detail} {onOutputClick} />
+          {:else if hasPayload && isOpen}
             <div class="live-step-detail copy-wrap">
               <CopyTextBtn text={String(e.data.content_preview ?? '') || liveEventSummary(e)} title="Copy event content" />
               <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
@@ -360,6 +367,7 @@
     min-width:0;
   }
   .live-step-summary:disabled{cursor:default}
+  .live-step-summary:focus-visible{outline:2px solid rgba(106,160,255,.7);outline-offset:1px}
   .live-step-summary:hover:not(:disabled){
     background:rgba(255,255,255,.025);
     border-color:rgba(120,130,160,.15);

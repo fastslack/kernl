@@ -304,7 +304,11 @@ export interface KernelEvents {
     agent_id: string; agent_name: string; run_id: string;
     learning_id: string; learning_type: string; content: string; confidence: number;
   };
-  "agent:flow:learning_deactivated": { agent_id: string; agent_name: string; run_id: string; count: number };
+  "agent:flow:learning_deactivated": {
+    agent_id: string; agent_name: string; run_id: string; count: number;
+    /** The lessons retired by this run's cleanup. */
+    learnings: Array<{ id: string; type: string; content: string; confidence: number }>;
+  };
 
   // Chat module
   "chat.message": ChatMessagePayload;

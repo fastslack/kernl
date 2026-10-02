@@ -12,6 +12,17 @@
   import { triggerColor, fmtTokens, fmtRelTime } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
   import { emailCommId } from '$lib/agent-helpers.js';
+  import {
+    liveStepIcon, liveStepLabel, liveStepSummary, liveStepCategory, liveEventType,
+    summarizeToolCall, summarizeToolResult,
+  } from '$lib/live-steps.js';
+  import { liveEventDetail } from '$lib/live-event-detail.js';
+  import {
+    stepAsFlowEvent, historyStepDetail, groupHistoryRows, shortToolName,
+    type HistoryStep, type HistoryRow,
+  } from '$lib/history-steps.js';
+  import LiveEventDetail from './LiveEventDetail.svelte';
+  import StepPayload from './StepPayload.svelte';
 
   /** Lifetime counters for the selected agent, or null while unknown. */
   export let stats: {
@@ -27,10 +38,8 @@
   /** Which card is open. The parent owns it: loadRunSteps() sets it. */
   export let expandedRunId: string | null = null;
 
-  export let steps: Array<{
-    step_number: number; type: string; content: string;
-    tool_name: string; tool_output?: string; is_event?: boolean;
-  }> = [];
+  /** Stored steps plus event-log entries (carried as flow events). */
+  export let steps: HistoryStep[] = [];
   export let stepsLoading = false;
   export let stepsError: string | null = null;
 
@@ -46,6 +55,30 @@
   export let onOutputClick: (e: MouseEvent) => void = () => {};
   /** An email-send step offers a link to the real message. */
   export let onOpenEmail: (commId: string) => void = () => {};
+
+  // Which step rows are open. Purely visual, so it lives here rather than in
+  // the parent; keyed by run so two runs never share a row's state.
+  let openSteps = new Set<string>();
+  function stepKey(runId: string, s: HistoryStep): string {
+    return `${runId}:${s.step_number}`;
+  }
+  function toggleStep(key: string): void {
+    if (openSteps.has(key)) openSteps.delete(key); else openSteps.add(key);
+    openSteps = new Set(openSteps);
+  }
+  function rowKey(runId: string, r: HistoryRow): string {
+    return r.kind === 'tools' ? `${runId}:tools:${r.range}` : stepKey(runId, r.step);
+  }
+  function setAll(runId: string, rows: HistoryRow[], open: boolean): void {
+    const next = new Set([...openSteps].filter(k => !k.startsWith(runId + ':')));
+    if (open) for (const r of rows) next.add(rowKey(runId, r));
+    openSteps = next;
+  }
+  function stepCopyText(s: HistoryStep): string {
+    if (s.type === 'tool_call') return s.tool_input ?? '';
+    if (s.type === 'tool_result') return s.tool_output ?? '';
+    return s.content ?? '';
+  }
 </script>
 
 <div class="ip-body">
@@ -79,7 +112,7 @@
     <div class="ip-empty">No runs yet. Hit <b>Run now</b> to start one.</div>
   {:else}
     <div class="ip-runs">
-      {#each runs as run}
+      {#each runs as run (run.id)}
         <div class="ip-run-card" class:expanded={expandedRunId === run.id} class:run-fail={run.status === 'failed'} class:run-ok={run.status === 'completed'} class:run-live={run.status === 'running'}>
           <button class="ip-run-head" on:click={() => onToggleRun(run.id)}>
             <span class="ip-run-status" class:ok={run.status === 'completed'} class:fail={run.status === 'failed'} class:running={run.status === 'running'}>
@@ -143,33 +176,108 @@
               {:else if steps.length > 0}
                 {@const regularSteps = steps.filter(s => !s.is_event)}
                 {@const eventEntries = steps.filter(s => s.is_event)}
-                <div class="ip-steps-h">Steps <span class="ip-sec-c">{regularSteps.length}</span>{#if eventEntries.length}<span class="ip-sec-c ip-sec-c-ev">+ {eventEntries.length} events</span>{/if}</div>
-                <ol class="ip-steps">
-                  {#each steps as step}
-                    <li class="ip-step step-{step.type}" class:step-event={step.is_event}>
-                      <span class="ip-step-dot"></span>
-                      <div class="ip-step-body">
-                        <div class="ip-step-head">
-                          <span class="ip-step-num">{step.step_number}</span>
-                          {#if step.is_event}
-                            <span class="ip-step-ev-badge">{step.type === 'auto_eval' ? '📝' : step.type === 'learning_created' ? '💡' : step.type === 'learning_deactivated' ? '🗑️' : '📌'}</span>
-                          {/if}
-                          <span class="ip-step-type">{step.type.replace(/_/g, ' ')}</span>
-                          {#if step.tool_name}<code class="ip-step-tool">{step.tool_name}</code>{/if}
-                          {#if emailCommId(step.tool_name, step.tool_output ?? step.content)}
-                            <button class="email-view-link" on:click|stopPropagation={() => { const id = emailCommId(step.tool_name, step.tool_output ?? step.content); if (id) onOpenEmail(id); }} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
-                          {/if}
-                          {#if step.content}
-                            <button class="ip-copy-inline" title="copy step content" on:click={() => onCopy(step.content, 'step-' + run.id + '-' + step.step_number)}>{copiedKey === 'step-' + run.id + '-' + step.step_number ? '✓' : '⧉'}</button>
-                          {/if}
-                        </div>
-                        {#if step.content}
-                          <div class="ip-step-content ip-out-md" on:click={onOutputClick} role="presentation">
-                            {@html formatRunOutput(step.content)}
-                          </div>
-                        {/if}
-                      </div>
+                {@const rows = groupHistoryRows(steps)}
+                {@const allOpen = rows.every(r => openSteps.has(rowKey(run.id, r)))}
+                <div class="ip-steps-h">
+                  Steps <span class="ip-sec-c">{regularSteps.length}</span>
+                  {#if eventEntries.length}<span class="ip-sec-c ip-sec-c-ev">+ {eventEntries.length} events</span>{/if}
+                  <button type="button" class="hs-toggle-all" on:click={() => setAll(run.id, rows, !allOpen)}>
+                    {allOpen ? 'Collapse all' : 'Expand all'}
+                  </button>
+                </div>
+                <ol class="hs-steps">
+                  {#each rows as row (rowKey(run.id, row))}
+                  {#if row.kind === 'tools'}
+                    {@const gkey = rowKey(run.id, row)}
+                    {@const gOpen = openSteps.has(gkey)}
+                    {@const failed = row.uses.filter(u => !u.ok).length}
+                    <li class="hs-step hs-group live-cat-tool" class:hs-open={gOpen} class:hs-group-fail={failed > 0}>
+                      <span class="hs-dot"></span>
+                      <button type="button" class="hs-row hs-group-row" aria-expanded={gOpen}
+                              title={gOpen ? 'Hide tool calls' : 'Show every tool call with its input and output'}
+                              on:click={() => toggleStep(gkey)}>
+                        <span class="hs-num">{row.range}</span>
+                        <span class="hs-icon" aria-hidden="true">🔧</span>
+                        <span class="hs-type">{row.uses.length === 1 ? 'tool' : `${row.uses.length} tools`}</span>
+                        <span class="hs-chips">
+                          {#each row.uses as u, ui (ui)}
+                            {#if ui > 0}<span class="hs-chip-sep" aria-hidden="true">→</span>{/if}
+                            <span class="hs-chip" class:bad={!u.ok} class:pending={!u.result} title={u.fullName}>
+                              <span class="hs-chip-st" aria-label={!u.result ? 'no result' : u.ok ? 'succeeded' : 'failed'}>{!u.result ? '…' : u.ok ? '✓' : '✗'}</span>
+                              {u.name}
+                            </span>
+                          {/each}
+                        </span>
+                        {#if failed > 0}<span class="hs-fail-count">{failed} failed</span>{/if}
+                        <span class="hs-chev" aria-hidden="true">{gOpen ? '▾' : '▸'}</span>
+                      </button>
+                      {#if gOpen}
+                        <ol class="hs-uses">
+                          {#each row.uses as u, ui (ui)}
+                            {@const callTxt = u.call ? summarizeToolCall(u.fullName, u.call.tool_input ?? '') : ''}
+                            {@const resTxt = u.result ? summarizeToolResult(u.fullName, u.result.tool_output ?? '') : ''}
+                            {@const mail = u.result ? emailCommId(u.fullName, u.result.tool_output ?? '') : null}
+                            <li class="hs-use" class:bad={!u.ok}>
+                              <div class="hs-use-head">
+                                <span class="hs-chip-st">{!u.result ? '…' : u.ok ? '✓' : '✗'}</span>
+                                <code class="hs-tool" title={u.fullName}>{u.name}</code>
+                                <span class="hs-use-sum">{resTxt || callTxt || (u.result ? 'No output' : 'No result recorded')}</span>
+                                {#if mail}<button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(mail)}>📧 Ver email</button>{/if}
+                              </div>
+                              <div class="hs-use-body">
+                                {#if u.call}
+                                  <StepPayload detail={historyStepDetail(u.call)} copyText={u.call.tool_input ?? ''} {onOutputClick} />
+                                {/if}
+                                {#if u.result}
+                                  <StepPayload detail={historyStepDetail(u.result)} copyText={u.result.tool_output ?? ''} {onOutputClick} />
+                                {:else}
+                                  <p class="hs-pending-note">No result was recorded — the run ended before this call returned.</p>
+                                {/if}
+                              </div>
+                            </li>
+                          {/each}
+                        </ol>
+                      {/if}
                     </li>
+                  {:else}
+                    {@const step = row.step}
+                    {@const fe = step.event ?? stepAsFlowEvent(step)}
+                    {@const etype = liveEventType(fe)}
+                    {@const cat = liveStepCategory(fe)}
+                    {@const key = stepKey(run.id, step)}
+                    {@const isOpen = openSteps.has(key)}
+                    {@const detail = step.event ? liveEventDetail(step.event) : null}
+                    {@const hasDetail = step.event ? detail !== null : true}
+                    {@const mailId = emailCommId(step.tool_name, step.tool_output ?? step.content)}
+                    <li class="hs-step live-cat-{cat} hs-type-{etype}" class:hs-open={isOpen} class:hs-event={step.is_event}>
+                      <span class="hs-dot"></span>
+                      <button
+                        type="button"
+                        class="hs-row"
+                        disabled={!hasDetail}
+                        aria-expanded={hasDetail ? isOpen : undefined}
+                        title={hasDetail ? (isOpen ? 'Hide details' : 'Show details') : ''}
+                        on:click={() => hasDetail && toggleStep(key)}
+                      >
+                        <span class="hs-num">{step.step_number}</span>
+                        <span class="hs-icon" aria-hidden="true">{liveStepIcon(etype)}</span>
+                        <span class="hs-type">{liveStepLabel(etype)}</span>
+                        {#if step.tool_name}<code class="hs-tool" title={step.tool_name}>{shortToolName(step.tool_name)}</code>{/if}
+                        <span class="hs-text">{liveStepSummary(fe)}</span>
+                        {#if hasDetail}<span class="hs-chev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>{/if}
+                      </button>
+                      {#if mailId}
+                        <button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(mailId)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
+                      {/if}
+                      {#if isOpen && detail}
+                        <LiveEventDetail {detail} {onOutputClick} />
+                      {:else if isOpen && !step.event}
+                        <div class="hs-detail">
+                          <StepPayload detail={historyStepDetail(step)} copyText={stepCopyText(step)} {onOutputClick} />
+                        </div>
+                      {/if}
+                    </li>
+                  {/if}
                   {/each}
                 </ol>
               {:else}
@@ -392,61 +500,125 @@
   .ip-steps-h{
     font:600 10px 'Syne',sans-serif;color:#8a8fa8;
     text-transform:uppercase;letter-spacing:1.5px;margin-bottom:8px;
-    display:inline-flex;align-items:center;gap:6px;
+    display:flex;align-items:center;gap:6px;
   }
-  .ip-steps{
-    list-style:none;margin:0;padding:0;
+  .ip-sec-c-ev{color:#d4a84b;margin-left:2px}
+  .hs-toggle-all{
+    margin-left:auto;padding:3px 9px;border-radius:4px;cursor:pointer;
+    font:600 9.5px 'Manrope',sans-serif;letter-spacing:.3px;text-transform:none;
+    color:#a8b0c8;background:rgba(120,130,160,.08);border:1px solid rgba(120,130,160,.18);
+    transition:background .12s,color .12s;
+  }
+  .hs-toggle-all:hover{background:rgba(120,130,160,.16);color:#e0e3ee}
+  .hs-toggle-all:focus-visible,.hs-row:focus-visible{outline:2px solid rgba(106,160,255,.7);outline-offset:1px}
+
+  /* Steps timeline — one row per step, same reading as the LIVE tab. */
+  .hs-steps{
+    list-style:none;margin:0;padding:0 0 0 20px;position:relative;
     display:flex;flex-direction:column;gap:2px;
-    position:relative;padding-left:22px;
   }
-  .ip-steps::before{
-    content:'';position:absolute;left:7px;top:8px;bottom:8px;width:1px;
+  .hs-steps::before{
+    content:'';position:absolute;left:7px;top:10px;bottom:10px;width:1px;
     background:linear-gradient(180deg, rgba(120,130,160,.3) 0%, rgba(120,130,160,.05) 100%);
   }
-  .ip-step{
-    position:relative;padding:6px 10px;border-radius:6px;
-    transition:background .1s;
+  .hs-step{position:relative;padding:2px 0 2px 4px}
+  .hs-dot{
+    position:absolute;left:-17px;top:11px;width:9px;height:9px;border-radius:50%;
+    background:#3a3f52;border:2px solid #0b0d14;z-index:1;
   }
-  .ip-step:hover{background:rgba(255,255,255,.02)}
-  .ip-step-dot{
-    position:absolute;left:-18px;top:11px;
-    width:9px;height:9px;border-radius:50%;
-    background:#3a3f52;border:2px solid #0b0d14;
+  .hs-row{
+    width:100%;display:flex;align-items:center;gap:8px;min-width:0;
+    padding:6px 10px;border-radius:7px;border:1px solid transparent;
+    background:transparent;color:inherit;text-align:left;cursor:pointer;
+    font:500 10.5px 'JetBrains Mono',monospace;
+    transition:background .12s,border-color .12s;
   }
-  .step-tool_call .ip-step-dot{background:#fbbf24}
-  .step-tool_result .ip-step-dot{background:#6aa0ff}
-  .step-thought .ip-step-dot{background:#8a8fa8}
-  .step-final .ip-step-dot{background:#78dc8c;box-shadow:0 0 8px rgba(120,220,140,.5)}
-  .step-error .ip-step-dot{background:#ef5d6e}
-  .step-auto_eval .ip-step-dot{background:#f59e0b;box-shadow:0 0 8px rgba(245,158,11,.5)}
-  .step-learning_created .ip-step-dot{background:#d4a84b;box-shadow:0 0 8px rgba(212,168,75,.5)}
-  .step-learning_deactivated .ip-step-dot{background:#8a8fa8}
-  .step-chain_triggered .ip-step-dot{background:#a78bfa}
+  .hs-row:disabled{cursor:default}
+  .hs-row:hover:not(:disabled){background:rgba(255,255,255,.025);border-color:rgba(120,130,160,.15)}
+  .hs-open .hs-row{
+    background:rgba(255,255,255,.03);border-color:rgba(120,130,160,.18);
+    border-bottom-left-radius:0;border-bottom-right-radius:0;
+  }
+  .hs-num{color:#5a5f78;min-width:16px;text-align:right;font-variant-numeric:tabular-nums;flex-shrink:0}
+  .hs-icon{font-size:11px;flex-shrink:0}
+  .hs-type{
+    text-transform:uppercase;letter-spacing:.6px;font-size:9px;font-weight:700;flex-shrink:0;
+    padding:1px 6px;border-radius:3px;background:rgba(120,130,160,.12);color:#a0a5b8;
+  }
+  .hs-tool{
+    font:600 10px 'JetBrains Mono',monospace;color:#d0b87a;flex-shrink:1;min-width:0;
+    max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+    padding:1px 5px;border-radius:3px;background:rgba(208,184,122,.10);
+  }
+  .hs-text{
+    flex:1;min-width:0;color:#d6dae8;font:400 11.5px/1.4 'Manrope',sans-serif;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+  }
+  .hs-open .hs-text{white-space:normal}
+  .hs-chev{color:#6a6f82;font-size:11px;width:14px;text-align:center;flex-shrink:0}
+  .hs-open .hs-chev{color:#a0a5b8}
+  .hs-event .hs-row{background:rgba(212,168,75,.03)}
 
-  .ip-step-head{display:flex;align-items:center;gap:8px;font:500 10px 'JetBrains Mono',monospace;flex-wrap:wrap}
-  .ip-step-num{color:#6a6f82;min-width:18px}
-  .ip-step-ev-badge{font-size:13px;line-height:1}
-  .ip-step-type{
-    color:#a0a5b8;text-transform:uppercase;letter-spacing:.5px;font-size:9px;font-weight:600;
-    padding:1px 6px;border-radius:3px;background:rgba(120,130,160,.1);
+  .hs-detail{
+    position:relative;margin:0 0 4px;padding:10px 12px;
+    border:1px solid rgba(120,130,160,.18);border-top:none;border-radius:0 0 7px 7px;
+    background:rgba(8,10,18,.7);animation:hs-in .16s ease-out;
   }
-  .step-tool_call .ip-step-type{color:#fbbf24;background:rgba(251,191,36,.1)}
-  .step-tool_result .ip-step-type{color:#6aa0ff;background:rgba(106,160,255,.1)}
-  .step-final .ip-step-type{color:#78dc8c;background:rgba(120,220,140,.1)}
-  .step-error .ip-step-type{color:#ef5d6e;background:rgba(239,93,110,.1)}
-  .step-auto_eval .ip-step-type{color:#f59e0b;background:rgba(245,158,11,.12)}
-  .step-learning_created .ip-step-type{color:#d4a84b;background:rgba(212,168,75,.12)}
-  .step-learning_deactivated .ip-step-type{color:#8a8fa8;background:rgba(120,130,160,.1)}
-  .step-event{border-left:2px solid rgba(212,168,75,.4);margin-left:-2px}
-  .step-event .ip-step-content{background:rgba(212,168,75,.06);border:1px solid rgba(212,168,75,.12)}
-  .ip-sec-c-ev{color:#d4a84b;margin-left:6px}
-  .ip-step-tool{color:#d8dae3;font-weight:500;word-break:break-all}
-  .ip-step-content{
-    margin-top:4px;padding:6px 8px;border-radius:4px;
-    background:rgba(0,0,0,.2);
-    font:400 10px/1.5 'JetBrains Mono',monospace;
-    color:#b0b5c8;word-break:break-word;white-space:pre-wrap;
+  @keyframes hs-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: reduce){ .hs-detail{animation:none} }
+
+  /* Folded run of tool steps: one row, one chip per tool, opens into each call. */
+  .hs-group-row{align-items:center}
+  .hs-chips{flex:1;min-width:0;display:flex;flex-wrap:wrap;align-items:center;gap:4px 4px}
+  .hs-chip{
+    display:inline-flex;align-items:center;gap:4px;max-width:100%;
+    padding:2px 7px;border-radius:999px;
+    font:600 10px 'JetBrains Mono',monospace;color:#d8dbe8;
+    background:rgba(95,219,160,.08);border:1px solid rgba(95,219,160,.22);
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
   }
+  .hs-chip.bad{background:rgba(239,93,110,.10);border-color:rgba(239,93,110,.4);color:#f6c3ca}
+  .hs-chip.pending{background:rgba(120,130,160,.08);border-color:rgba(120,130,160,.25);color:#a8b0c8}
+  .hs-chip-st{font-weight:800;color:#5fdba0}
+  .bad .hs-chip-st,.hs-use.bad .hs-chip-st{color:#ef5d6e}
+  .pending .hs-chip-st{color:#9aa3c0}
+  .hs-chip-sep{color:#4f5570;font-size:10px}
+  .hs-fail-count{
+    flex-shrink:0;font:700 9px 'Manrope',sans-serif;letter-spacing:.4px;text-transform:uppercase;
+    color:#ef8090;padding:1px 6px;border-radius:3px;background:rgba(239,93,110,.12);
+  }
+  .hs-group-fail .hs-dot{background:#ef5d6e}
+
+  .hs-uses{
+    list-style:none;margin:0 0 4px;padding:8px 10px 10px;display:flex;flex-direction:column;gap:8px;
+    border:1px solid rgba(120,130,160,.18);border-top:none;border-radius:0 0 7px 7px;
+    background:rgba(8,10,18,.7);animation:hs-in .16s ease-out;
+  }
+  @media (prefers-reduced-motion: reduce){ .hs-uses{animation:none} }
+  .hs-use{border-left:2px solid rgba(95,219,160,.35);padding-left:10px}
+  .hs-use.bad{border-left-color:rgba(239,93,110,.6)}
+  .hs-use-head{display:flex;align-items:center;gap:8px;min-width:0;margin-bottom:6px}
+  .hs-use-head .hs-tool{max-width:45%}
+  .hs-use-sum{flex:1;min-width:0;font:400 11.5px/1.4 'Manrope',sans-serif;color:#c8cde0;
+    white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .hs-use-body{display:flex;flex-direction:column;gap:6px}
+  .hs-pending-note{margin:0;font:italic 400 11.5px 'Manrope',sans-serif;color:#7d839c}
+
+  /* Category colours — the same palette LIVE uses, so a tool reads the same in both tabs. */
+  .live-cat-shell  .hs-dot{background:#fbbf24} .live-cat-shell  .hs-type{background:rgba(251,191,36,.14);color:#fbbf24}
+  .live-cat-fs     .hs-dot{background:#6aa0ff} .live-cat-fs     .hs-type{background:rgba(106,160,255,.14);color:#6aa0ff}
+  .live-cat-web    .hs-dot{background:#4dd6e0} .live-cat-web    .hs-type{background:rgba(77,214,224,.14);color:#4dd6e0}
+  .live-cat-kernel .hs-dot{background:#5fdba0} .live-cat-kernel .hs-type{background:rgba(95,219,160,.14);color:#5fdba0}
+  .live-cat-mcp    .hs-dot{background:#c693ff} .live-cat-mcp    .hs-type{background:rgba(198,147,255,.14);color:#c693ff}
+  .live-cat-think  .hs-dot{background:#a78bfa} .live-cat-think  .hs-type{background:rgba(167,139,250,.14);color:#a78bfa}
+  .live-cat-final  .hs-dot{background:#78dc8c} .live-cat-final  .hs-type{background:rgba(120,220,140,.14);color:#78dc8c}
+  .live-cat-error  .hs-dot{background:#ef5d6e} .live-cat-error  .hs-type{background:rgba(239,93,110,.16);color:#ef8090}
+  .live-cat-tool   .hs-dot{background:#d0b87a} .live-cat-tool   .hs-type{background:rgba(208,184,122,.14);color:#d0b87a}
+  .live-cat-meta   .hs-dot{background:#9aa3c0}
+  .hs-type-auto_eval .hs-dot{background:#f59e0b} .hs-type-auto_eval .hs-type{color:#f59e0b;background:rgba(245,158,11,.12)}
+  .hs-type-learning_created .hs-dot{background:#d4a84b} .hs-type-learning_created .hs-type{color:#d4a84b;background:rgba(212,168,75,.12)}
+  .hs-type-run_started .hs-dot{background:#3dd68c}
+  .hs-type-run_completed .hs-dot{background:#78dc8c}
 
   /* Misc */
   .ip-loading,.ip-empty{
