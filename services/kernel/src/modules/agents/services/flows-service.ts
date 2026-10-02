@@ -8,6 +8,8 @@ import { OFFICE_HOME_WORKSPACE_NAME } from "../office-home.js";
 import { FLOW_KINDS, isFlowKind, type Agent, type AgentFlow, type FlowKind, type RepoIsolation } from "../types.js";
 import { applyRepoIsolation } from "../repo-isolation.js";
 import { agentVariables } from "../agent-fields.js";
+import { parseWorkspaceSpec, isEmptySpec, type WorkspaceSpec } from "../workspace-spec.js";
+import { prepareWorkspace, type WorkspaceSetupResult } from "../workspace-setup.js";
 
 /**
  * Offices (flows) and the home directory every agent in one inherits.
@@ -140,6 +142,74 @@ export class AgentFlowsService {
     }
     if (!wsId) return null;
     return { path: resolve(WORKSPACE_ROOT, wsId), kind: "workspace", flow };
+  }
+
+  // ── Declarative workspace (migration v47) ──────────
+  //
+  // The spec lives on the office-home workspace row and applies to whatever
+  // folder the home resolves to — the kernel workspace, or the host repo once
+  // promoted — so every agent that inherits the home gets it prepared.
+
+  private homeWorkspaceRow(flowId: string): { id: string; spec: string; setup_status: string; setup_error: string; setup_at: string | null } | null {
+    const flow = this.getFlow(flowId);
+    if (!flow) return null;
+    const wsId = this.ensureOfficeHomeWorkspace(flow);
+    return (this.db
+      .prepare("SELECT id, spec, setup_status, setup_error, setup_at FROM workspaces WHERE id = ?")
+      .get(wsId) as { id: string; spec: string; setup_status: string; setup_error: string; setup_at: string | null } | null) ?? null;
+  }
+
+  /** The office's workspace spec and the outcome of its last preparation. Null when the office doesn't exist. */
+  getFlowWorkspace(flowId: string): {
+    spec: WorkspaceSpec;
+    setup_status: string;
+    setup_error: string;
+    setup_at: string | null;
+  } | null {
+    const row = this.homeWorkspaceRow(flowId);
+    if (!row) return null;
+    let spec: WorkspaceSpec;
+    try {
+      spec = parseWorkspaceSpec(row.spec);
+    } catch {
+      spec = parseWorkspaceSpec({});
+    }
+    return { spec, setup_status: row.setup_status, setup_error: row.setup_error, setup_at: row.setup_at };
+  }
+
+  /** Validate and store the office's workspace spec. Throws on an invalid spec or unknown office. */
+  setFlowWorkspaceSpec(flowId: string, input: unknown): WorkspaceSpec {
+    const spec = parseWorkspaceSpec(input);
+    const row = this.homeWorkspaceRow(flowId);
+    if (!row) throw new Error(`Flow not found: ${flowId}`);
+    this.db
+      .prepare("UPDATE workspaces SET spec = ?, setup_status = '', setup_error = '', updated_at = ? WHERE id = ?")
+      .run(JSON.stringify(spec), isoNow(), row.id);
+    this.events.emit("data.changed", { module: "agents", action: "workspace_spec_set" });
+    return spec;
+  }
+
+  /**
+   * Make the office home match its spec. Null when there is nothing to do
+   * (unknown office, or an empty spec) — callers treat that as ready.
+   */
+  async prepareFlowWorkspace(flowId: string): Promise<{
+    path: string;
+    spec: WorkspaceSpec;
+    result: WorkspaceSetupResult;
+  } | null> {
+    const ws = this.getFlowWorkspace(flowId);
+    const home = this.resolveFlowHome(flowId);
+    if (!ws || !home || isEmptySpec(ws.spec)) return null;
+    const row = this.homeWorkspaceRow(flowId)!;
+    const result = await prepareWorkspace(home.path, ws.spec);
+    this.db
+      .prepare("UPDATE workspaces SET setup_status = ?, setup_error = ?, setup_at = ? WHERE id = ?")
+      .run(result.ready ? "ready" : "failed", result.errors.join("\n"), isoNow(), row.id);
+    if (!result.ready) {
+      log.warn(`Office ${home.flow.name}: workspace not ready — ${result.errors.join("; ")}`);
+    }
+    return { path: home.path, spec: ws.spec, result };
   }
 
   /**

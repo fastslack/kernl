@@ -752,6 +752,19 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE agent_runs ADD COLUMN conditions TEXT NOT NULL DEFAULT '[]';
     `,
   },
+  {
+    // Declarative workspaces. spec is a WorkspaceSpec (workspace-spec.ts):
+    // repos to clone, files to seed, MCP servers and skills for every agent
+    // that works in this workspace. The disk is the source of truth for what
+    // is prepared; setup_* only records the last attempt, for display.
+    version: 47,
+    sql: `
+      ALTER TABLE workspaces ADD COLUMN spec         TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE workspaces ADD COLUMN setup_status TEXT NOT NULL DEFAULT '';
+      ALTER TABLE workspaces ADD COLUMN setup_error  TEXT NOT NULL DEFAULT '';
+      ALTER TABLE workspaces ADD COLUMN setup_at     TEXT;
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

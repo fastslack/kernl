@@ -125,6 +125,11 @@ interface AgentVariablesMcp {
   /** Bloquea toda salida a red del subprocess. Default: false. */
   __no_network__?: boolean;
   /**
+   * Docker network the sandboxed run joins, overriding
+   * $KERNEL_AGENT_DOCKER_NETWORK (default `kernl_default`).
+   */
+  __sandbox_network__?: string;
+  /**
    * Lista de skills de Claude Code a cargar dentro del sandbox. Se resuelven
    * from ~/.claude/skills/ and the host plugins. The CLI auto-discovers them
    * una vez montados en $HOME/.claude/skills/<name>/.
@@ -349,6 +354,40 @@ function sanitizeUserMcpServers(
   return out;
 }
 
+/**
+ * Declarative workspace: the office home must match its spec before the agent
+ * starts — repos cloned, files seeded. A home that can't be prepared fails the
+ * run with the reason instead of letting the agent work in a half-built
+ * folder. The spec's MCP servers and skills join the agent's own (mutating
+ * `vars`); on a name clash the agent's wins.
+ */
+export async function prepareOfficeWorkspace(
+  service: AgentService,
+  runId: string,
+  flowId: string,
+  vars: Pick<AgentVariablesMcp, "__mcp_servers__" | "__skills__">,
+): Promise<void> {
+  const prepared = await service.prepareFlowWorkspace(flowId);
+  if (!prepared) return;
+  const { result, spec } = prepared;
+  if (!result.ready) {
+    service.setRunCondition(runId, {
+      type: "WorkspaceReady", status: "False", reason: "SetupFailed", message: result.errors.join("; "),
+    });
+    throw new Error(`Workspace not ready: ${result.errors.join("; ")}`);
+  }
+  const did = [...result.cloned.map((p) => `cloned ${p}`), ...result.written.map((p) => `wrote ${p}`)];
+  service.setRunCondition(runId, {
+    type: "WorkspaceReady", status: "True", reason: did.length > 0 ? "Prepared" : "AlreadyPrepared",
+    message: did.join(", "),
+  });
+  vars.__mcp_servers__ = {
+    ...(spec.mcp_servers as Record<string, McpServerConfig>),
+    ...(vars.__mcp_servers__ ?? {}),
+  };
+  vars.__skills__ = [...new Set([...(vars.__skills__ ?? []), ...spec.skills])];
+}
+
 export class ClaudeCodeExecutor {
   private configRef: KernelConfig | null = null;
   private wsService: WorkspaceService | null = null;
@@ -449,6 +488,7 @@ export class ClaudeCodeExecutor {
       const { cwd, officeHomeFlow } = this.resolveCwd(agent, run, service);
       cwdResolved = cwd;
       const vars = this.parseVariables(agent);
+      if (officeHomeFlow) await prepareOfficeWorkspace(service, run.id, officeHomeFlow.id, vars);
       let systemPrompt = this.buildSystemPrompt(agent, goal, service);
       // When the agent inherited its office home (no per-agent cwd override),
       // tell it where it is and where to persist office knowledge.

@@ -14,6 +14,7 @@ import type { SandboxDriverRegistry } from "../../core/sandbox/registry.js";
 import { ReactiveEngine } from "./reactive-engine.js";
 import { AgentScheduler } from "./scheduler.js";
 import { autoResumePolicy } from "./run-resume.js";
+import { workspaceSpecTools } from "./workspace-spec-tools.js";
 import { agentsTools } from "./tools.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -146,6 +147,7 @@ export function createAgentsModule(): AgentsModule {
       tools = [
         ...agentsTools(agentService, agentExecutor, ctx.events, () => meetingExecutor),
         ...auditTools(agentService),
+        ...workspaceSpecTools(agentService),
       ];
 
       // Upgrade pass: any agent that already produces output worth sharing

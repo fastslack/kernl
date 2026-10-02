@@ -157,7 +157,7 @@ export interface AgentRun {
  * last flipped. Upserted by type — a run holds at most one of each.
  */
 export interface RunCondition {
-  type: "ModelReady" | "Interrupted" | "Resumed" | "Aborted";
+  type: "ModelReady" | "Interrupted" | "Resumed" | "Aborted" | "WorkspaceReady";
   status: "True" | "False";
   reason: string;
   message: string;
