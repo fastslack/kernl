@@ -329,3 +329,39 @@ describe("AgentSandbox live (echo-test)", () => {
     expect(sandbox.status).toBe("stopped");
   }, 10_000);
 });
+
+// ── Environment isolation ─────────────────────────────────────────────────────
+
+describe("AgentSandbox environment", () => {
+  it("keeps the kernel's secrets out of the subprocess", async () => {
+    const dir = makeTmpAgentDir(
+      "env-probe",
+      makeMinimalManifest({ name: "env-probe", env: { DECLARED: "yes" } }),
+      `for await (const line of console) {
+         const req = JSON.parse(line);
+         const keys = Object.keys(process.env).sort();
+         process.stdout.write(JSON.stringify({ jsonrpc: "2.0", id: req.id, result: keys }) + "\\n");
+       }`,
+    );
+    const manifest = AgentManifestSchema.parse(
+      makeMinimalManifest({ name: "env-probe", env: { DECLARED: "yes" }, timeoutMs: 5000 }),
+    );
+
+    const previous = process.env.KERNEL_AUTH_TOKEN;
+    process.env.KERNEL_AUTH_TOKEN = "must-not-leak";
+    const sandbox = new AgentSandbox({ manifest, dir, entryPath: join(dir, "index.ts") });
+    try {
+      sandbox.setKernelTools([]);
+      await sandbox.start();
+      const keys = (await sandbox.call("env", {})) as string[];
+      expect(keys).not.toContain("KERNEL_AUTH_TOKEN");
+      expect(keys).toContain("DECLARED");
+      expect(keys).toContain("AGENT_NAME");
+      expect(keys).toContain("PATH");
+    } finally {
+      await sandbox.stop();
+      if (previous === undefined) delete process.env.KERNEL_AUTH_TOKEN;
+      else process.env.KERNEL_AUTH_TOKEN = previous;
+    }
+  }, 10_000);
+});

@@ -147,6 +147,21 @@ export interface AgentRun {
   parent_agent_id: string;
   /** 0 for top-level, parent.depth + 1 for chained runs. Capped by KERNEL_AGENT_MAX_DEPTH. */
   depth: number;
+  /** JSON array of RunCondition — what happened to the run, beyond its status. */
+  conditions: string;
+}
+
+/**
+ * One fact about a run, in the shape Kubernetes uses for conditions: a type,
+ * whether it holds, a machine-readable reason, a human message, and when it
+ * last flipped. Upserted by type — a run holds at most one of each.
+ */
+export interface RunCondition {
+  type: "ModelReady" | "Interrupted" | "Resumed" | "Aborted";
+  status: "True" | "False";
+  reason: string;
+  message: string;
+  last_transition_time: string;
 }
 
 /** Individual step within an agent run */

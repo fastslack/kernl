@@ -16,6 +16,7 @@
  */
 
 import type { Operation } from "../../sdk/args.js";
+import { resumeRun } from "./run-resume.js";
 import { pickArgs } from "../../sdk/args.js";
 import { HttpError, isHttpError } from "../../sdk/http-error.js";
 import { log } from "../../core/logger.js";
@@ -201,6 +202,16 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
         return { success: true, cancelled: runs.filter((run) => cancel(run.id)).length };
       }
       throw new HttpError(400, "agent_id or run_id required");
+    },
+
+    "agents.resume": (input) => {
+      const outcome = resumeRun(
+        { service: svc(), executor: requireExecutor(), events: events ?? undefined },
+        required(input, "run_id"),
+        "manual",
+      );
+      if (!outcome.ok) throw new HttpError(409, outcome.error);
+      return { success: true, run_id: str(input, "run_id"), status: "running", from_turn: outcome.fromTurn };
     },
 
     "agents.trigger": (input) => {

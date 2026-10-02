@@ -731,6 +731,27 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger        ON agent_runs(trigger_type);
     `,
   },
+  {
+    // Runs that survive a restart. A checkpoint is the native loop's
+    // conversation and counters, rewritten after every tool result; it lives
+    // in its own table because agent_runs is read with SELECT * by every
+    // listing and a conversation can run to hundreds of KB.
+    //
+    // conditions: why a run is in the state it is in, as a JSON array of
+    // { type, status, reason, message, last_transition_time }. `status` says
+    // where the run is; a condition says what happened to get it there
+    // (which model it settled on, that it was interrupted, why it aborted).
+    version: 46,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
+        run_id     TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+        data       TEXT NOT NULL,
+        resumes    INTEGER NOT NULL DEFAULT 0,
+        saved_at   TEXT NOT NULL
+      );
+      ALTER TABLE agent_runs ADD COLUMN conditions TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

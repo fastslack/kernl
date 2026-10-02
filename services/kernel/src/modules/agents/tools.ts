@@ -11,6 +11,7 @@ import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
 import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
+import { resumeRun } from "./run-resume.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -458,6 +459,26 @@ export function agentsTools(
       },
     }),
 
+    // ── kernel_agents_resume ─────────────────────────
+    defineTool({
+      name: "kernel_agents_resume",
+      description:
+        "Resume an interrupted agent run from its last checkpoint (native agents only). " +
+        "Use it on a run the kernel failed with 'resumable with kernel_agents_resume'. " +
+        "Tool calls whose outcome was lost are not repeated — the agent is told their result is unknown.",
+      schema: z.object({
+        run_id: z.string().describe("Run ID to resume"),
+      }),
+      handler: async (input) => {
+        const outcome = resumeRun({ service, executor, events }, input.run_id, "manual");
+        if (!outcome.ok) return errorResult(outcome.error);
+        return textResult(
+          `Resuming run ${input.run_id} from turn ${outcome.fromTurn}. ` +
+          `Follow it with kernel_agents_status.`,
+        );
+      },
+    }),
+
     // ── kernel_agents_status ─────────────────────────
     defineTool({
       name: "kernel_agents_status",
@@ -482,6 +503,13 @@ export function agentsTools(
         if (run.started_at) md += `- Started: ${run.started_at}\n`;
         if (run.completed_at) md += `- Completed: ${run.completed_at}\n`;
         if (run.error) md += `- Error: ${run.error}\n`;
+        const conditions = service.getRunConditions(run_id);
+        if (conditions.length > 0) {
+          md += `\n**Conditions:**\n`;
+          for (const c of conditions) {
+            md += `- ${c.type}=${c.status} (${c.reason}) since ${c.last_transition_time}${c.message ? ` — ${c.message}` : ""}\n`;
+          }
+        }
         if (run.result) md += `\n**Result:**\n${run.result}\n`;
 
         if (steps.length > 0) {

@@ -226,6 +226,19 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "alpha/alpha-1",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "alpha",
     {
@@ -711,6 +724,19 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "beta/(default)",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "beta",
     {
@@ -972,6 +998,19 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "a/a1",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "a",
     {
@@ -1049,6 +1088,19 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "c/c1",
+        "reason": "Fallback",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "c",
     {
@@ -1122,6 +1174,19 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
           "to_provider": "b",
         },
         "run_id": "run-1",
+      },
+    ],
+  ],
+  [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "b/b1",
+        "reason": "Fallback",
+        "status": "True",
+        "type": "ModelReady",
       },
     ],
   ],
@@ -1394,6 +1459,19 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
       "agent-1",
       "go",
       50,
+    ],
+  ],
+  [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "alive/(default)",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
     ],
   ],
   [
@@ -1846,6 +1924,19 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "p/(default)",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "p",
     {
@@ -1924,6 +2015,14 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "run_id": "run-1",
         "tokens_used": 500,
       },
+    ],
+  ],
+  [
+    "svc",
+    "saveCheckpoint",
+    [
+      "run-1",
+      "{"v":1,"messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"text","text":"thinking out loud"},{"type":"tool_use","id":"tu-1","name":"kernel_test_echo","input":{"text":"a"}}]}],"iterations":1,"totalTokens":500,"elapsedMs":0,"chainIdx":0,"stepNumber":1}",
     ],
   ],
   [
@@ -2023,9 +2122,30 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
     ],
   ],
   [
+    "svc",
+    "saveCheckpoint",
+    [
+      "run-1",
+      "{"v":1,"messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"text","text":"thinking out loud"},{"type":"tool_use","id":"tu-1","name":"kernel_test_echo","input":{"text":"a"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"echo:a","is_error":false}]}],"iterations":1,"totalTokens":500,"elapsedMs":0,"chainIdx":0,"stepNumber":3}",
+    ],
+  ],
+  [
     "log",
     "warn",
     "Agent "Nadia": Token budget exhausted (500/100)",
+  ],
+  [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "Token budget exhausted (500/100)",
+        "reason": "TokenBudget",
+        "status": "True",
+        "type": "Aborted",
+      },
+    ],
   ],
   [
     "svc",
@@ -2239,6 +2359,19 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
       "agent-1",
       "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
       50,
+    ],
+  ],
+  [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "quota1/q",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
     ],
   ],
   [
@@ -2509,6 +2642,19 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
       "agent-1",
       "go",
       50,
+    ],
+  ],
+  [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "p/(default)",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
     ],
   ],
   [
@@ -2890,6 +3036,19 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "p/(default)",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "p",
     {
@@ -2968,6 +3127,14 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "run_id": "run-1",
         "tokens_used": 11,
       },
+    ],
+  ],
+  [
+    "svc",
+    "saveCheckpoint",
+    [
+      "run-1",
+      "{"v":1,"messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"text","text":"thinking out loud"},{"type":"tool_use","id":"tu-1","name":"kernel_agents_invoke","input":{"agent_id":"agent-2","goal":"say hi"}}]}],"iterations":1,"totalTokens":11,"elapsedMs":0,"chainIdx":0,"stepNumber":1}",
     ],
   ],
   [
@@ -3283,6 +3450,14 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         },
         "run_id": "run-1",
       },
+    ],
+  ],
+  [
+    "svc",
+    "saveCheckpoint",
+    [
+      "run-1",
+      "{"v":1,"messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"text","text":"thinking out loud"},{"type":"tool_use","id":"tu-1","name":"kernel_agents_invoke","input":{"agent_id":"agent-2","goal":"say hi"}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-1","content":"child says hi","is_error":false}]}],"iterations":1,"totalTokens":11,"elapsedMs":0,"chainIdx":0,"stepNumber":3}",
     ],
   ],
   [
@@ -3794,6 +3969,19 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
     ],
   ],
   [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "p/(default)",
+        "reason": "Primary",
+        "status": "True",
+        "type": "ModelReady",
+      },
+    ],
+  ],
+  [
     "llm",
     "p",
     {
@@ -3833,6 +4021,19 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
     "log",
     "warn",
     "Agent "Nadia": Cancelled by user",
+  ],
+  [
+    "svc",
+    "setRunCondition",
+    [
+      "run-1",
+      {
+        "message": "Cancelled by user",
+        "reason": "Cancelled",
+        "status": "True",
+        "type": "Aborted",
+      },
+    ],
   ],
   [
     "svc",

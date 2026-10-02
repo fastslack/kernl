@@ -83,7 +83,7 @@ const DELEGATED = {
   memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings"],
   flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "assignAgentToFlow"],
   ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
-  runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "addStep", "getSteps", "getRunEvents"],
+  runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
   triggers: ["addEventTrigger", "listEventTriggers", "getActiveEventTriggers", "removeEventTrigger", "updateTriggerLastFired"],
   schedules: ["addSchedule", "listSchedules", "getDueSchedules", "removeSchedule", "getSchedule", "updateSchedule", "updateScheduleNextRun"],
   feedback: ["addFeedback", "getFeedback"],

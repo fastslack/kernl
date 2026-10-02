@@ -3,7 +3,16 @@ import type { EventBus } from "../../../core/event-bus.js";
 import { newId, isoNow } from "../../../core/helpers.js";
 import { log } from "../../../core/logger.js";
 import { buildPatch, type PatchColumn } from "../../../sdk/query-helpers.js";
-import type { Agent, AgentRun, AgentStep } from "../types.js";
+import type { Agent, AgentRun, AgentStep, RunCondition } from "../types.js";
+
+/** Terminal statuses: a run in one of these no longer needs its checkpoint. */
+const FINISHED: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
+
+export interface StoredCheckpoint {
+  data: string;
+  resumes: number;
+  saved_at: string;
+}
 
 /** Schedules the background embed of a row's text. Supplied by AgentMemoryService. */
 type ScheduleEmbed = (
@@ -142,6 +151,7 @@ export class AgentRunsService {
       parent_run_id: parentRunId,
       parent_agent_id: parentAgentId,
       depth,
+      conditions: "[]",
     };
 
     this.db
@@ -215,6 +225,76 @@ export class AgentRunsService {
     params.push(id);
 
     this.db.prepare(`UPDATE agent_runs SET ${sets.join(", ")} WHERE id = ?`).run(...params);
+    if (updates.status && FINISHED.has(updates.status)) this.deleteCheckpoint(id);
+  }
+
+  // ── Checkpoints ─────────────────────────────────────
+
+  /** Overwrite the run's checkpoint. Keeps the resume counter. */
+  saveCheckpoint(runId: string, data: string): void {
+    this.db
+      .prepare(
+        `INSERT INTO agent_run_checkpoints (run_id, data, resumes, saved_at) VALUES (?, ?, 0, ?)
+         ON CONFLICT(run_id) DO UPDATE SET data = excluded.data, saved_at = excluded.saved_at`,
+      )
+      .run(runId, data, isoNow());
+  }
+
+  getCheckpoint(runId: string): StoredCheckpoint | undefined {
+    return (this.db
+      .prepare("SELECT data, resumes, saved_at FROM agent_run_checkpoints WHERE run_id = ?")
+      .get(runId) as StoredCheckpoint | null | undefined) ?? undefined;
+  }
+
+  /** Put a failed/interrupted run back in flight for a resume. */
+  reopenRun(runId: string): void {
+    this.db
+      .prepare("UPDATE agent_runs SET status = 'running', error = '', completed_at = NULL WHERE id = ?")
+      .run(runId);
+  }
+
+  /** Count a resume attempt, so a run that keeps crashing the kernel stops being retried. */
+  markCheckpointResumed(runId: string): void {
+    this.db.prepare("UPDATE agent_run_checkpoints SET resumes = resumes + 1 WHERE run_id = ?").run(runId);
+  }
+
+  deleteCheckpoint(runId: string): void {
+    this.db.prepare("DELETE FROM agent_run_checkpoints WHERE run_id = ?").run(runId);
+  }
+
+  // ── Conditions ──────────────────────────────────────
+
+  getRunConditions(runId: string): RunCondition[] {
+    const row = this.db.prepare("SELECT conditions FROM agent_runs WHERE id = ?").get(runId) as
+      | { conditions: string }
+      | undefined;
+    if (!row) return [];
+    try {
+      const parsed = JSON.parse(row.conditions);
+      return Array.isArray(parsed) ? (parsed as RunCondition[]) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Upsert a condition by type. `last_transition_time` moves only when the
+   * status flips, so it answers "since when", not "when did we last look".
+   */
+  setRunCondition(runId: string, input: Omit<RunCondition, "last_transition_time">): void {
+    const conditions = this.getRunConditions(runId);
+    const existing = conditions.find((c) => c.type === input.type);
+    const now = isoNow();
+    if (existing) {
+      if (existing.status !== input.status) existing.last_transition_time = now;
+      existing.status = input.status;
+      existing.reason = input.reason;
+      existing.message = input.message;
+    } else {
+      conditions.push({ ...input, last_transition_time: now });
+    }
+    this.db.prepare("UPDATE agent_runs SET conditions = ? WHERE id = ?").run(JSON.stringify(conditions), runId);
+    this.events.emit("agent:run:condition", { run_id: runId, ...input });
   }
 
   cancelRun(id: string): boolean {
@@ -228,16 +308,63 @@ export class AgentRunsService {
 
   /** Mark stale "running"/"pending" runs as failed (e.g. after crash/restart) */
   cleanupStaleRuns(): number {
+    return this.recoverStaleRuns({ resumeWithinMs: 0, maxResumes: 0 }).failed;
+  }
+
+  /**
+   * Startup pass over the runs the last process left in flight.
+   *
+   * A run with a fresh checkpoint stays `running` and comes back in `resume`
+   * for the caller to continue once the executor is wired. Everything else is
+   * failed, as before — but a run whose checkpoint is merely too old, or that
+   * already used its automatic retries, keeps that checkpoint and says so in
+   * its error, so `kernel_agents_resume` can still pick it up by hand.
+   *
+   * The retry cap is what keeps a run that crashes the kernel from crashing
+   * it again on every boot.
+   */
+  recoverStaleRuns(opts: { resumeWithinMs: number; maxResumes: number }): { resume: string[]; failed: number } {
     const now = isoNow();
-    const result = this.db
+    const stale = this.db
       .prepare(
-        `UPDATE agent_runs SET status = 'failed', error = 'Stale run cleaned up on startup', completed_at = ?
-         WHERE status IN ('running', 'pending')`,
+        `SELECT r.id, c.saved_at, c.resumes, c.data IS NOT NULL AS has_checkpoint
+           FROM agent_runs r LEFT JOIN agent_run_checkpoints c ON c.run_id = r.id
+          WHERE r.status IN ('running', 'pending')`,
       )
-      .run(now);
-    const changes = result?.changes ?? 0;
-    if (changes > 0) {
-      log.info(`AgentService: cleaned up ${changes} stale runs`);
+      .all() as Array<{ id: string; saved_at: string | null; resumes: number | null; has_checkpoint: number }>;
+
+    const resume: string[] = [];
+    let failed = 0;
+    const fail = this.db.prepare(
+      `UPDATE agent_runs SET status = 'failed', error = ?, completed_at = ? WHERE id = ?`,
+    );
+    for (const run of stale) {
+      const age = run.saved_at ? Date.now() - Date.parse(run.saved_at) : Infinity;
+      const resumes = run.resumes ?? 0;
+      if (run.has_checkpoint && age < opts.resumeWithinMs && resumes < opts.maxResumes) {
+        resume.push(run.id);
+        this.setRunCondition(run.id, {
+          type: "Interrupted", status: "True", reason: "KernelRestart",
+          message: "The kernel restarted mid-run; resuming from the last checkpoint.",
+        });
+        continue;
+      }
+      const why = !run.has_checkpoint
+        ? "Stale run cleaned up on startup"
+        : resumes >= opts.maxResumes && opts.maxResumes > 0
+          ? `Interrupted by a kernel restart after ${resumes} automatic resume(s) — not retried again; resume by hand with kernel_agents_resume`
+          : "Interrupted by a kernel restart — resumable with kernel_agents_resume";
+      fail.run(why, now, run.id);
+      this.setRunCondition(run.id, {
+        type: "Interrupted", status: "True", reason: "KernelRestart", message: why,
+      });
+      failed++;
+    }
+    if (failed > 0) {
+      log.info(`AgentService: cleaned up ${failed} stale runs`);
+    }
+    if (resume.length > 0) {
+      log.info(`AgentService: ${resume.length} interrupted run(s) will resume from their checkpoint`);
     }
     // …and the meetings those runs were driving.
     //
@@ -260,7 +387,7 @@ export class AgentRunsService {
     if (closed > 0) {
       log.info(`AgentService: closed ${closed} meeting(s) stranded by the last shutdown`);
     }
-    return changes;
+    return { resume, failed };
   }
 
   // ── Steps ───────────────────────────────────────────

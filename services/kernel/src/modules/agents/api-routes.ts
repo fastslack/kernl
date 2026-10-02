@@ -90,6 +90,7 @@ export function registerAgentRoutes(
     ["POST", "/api/agents/trigger", "agents.trigger"],
     ["POST", "/api/agents/stop", "agents.stop"],
     ["POST", "/api/agents/run", "agents.run"],
+    ["POST", "/api/agents/runs/resume", "agents.resume"],
     ["GET", "/api/agents/runs/:id", "agents.runs.detail"],
     ["GET", "/api/agents/:id", "agents.detail"],
     ["PUT", "/api/agents/:id", "agents.update"],

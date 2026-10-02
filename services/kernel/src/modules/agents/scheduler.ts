@@ -8,6 +8,14 @@ import type { AgentExecutor } from "./executor.js";
 import type { BuiltinHandler } from "./builtin-handlers.js";
 import { normalizeDriverResult, driverThrewOutcome } from "./driver-result.js";
 import { resolveGoal } from "./executor.js";
+import { resumeRun } from "./run-resume.js";
+
+/**
+ * How long after start() the interrupted runs resume. Sandbox-agent tools are
+ * injected into the executor right after the scheduler starts; a resumed run
+ * resolves its tools when it begins, so it waits for them.
+ */
+const RESUME_DELAY_MS = 5_000;
 
 export class AgentScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -16,6 +24,8 @@ export class AgentScheduler {
   private registryId: string | null = null;
   private cleanupRegistryId: string | null = null;
   private builtinHandlers = new Map<string, BuiltinHandler>();
+  private pendingResumes: string[] = [];
+  private resumeTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(
     private service: AgentService,
@@ -27,6 +37,11 @@ export class AgentScheduler {
     private learningCleanupIntervalMs: number = 3_600_000,
     private learningMinConfidence: number = 0.15,
   ) {}
+
+  /** Runs left in flight by the last process, to continue once start() runs. */
+  setPendingResumes(runIds: string[]): void {
+    this.pendingResumes = [...runIds];
+  }
 
   /** Register builtin handlers (called from bootstrap) */
   setBuiltinHandlers(handlers: Map<string, BuiltinHandler>): void {
@@ -51,6 +66,10 @@ export class AgentScheduler {
     this.timer = setInterval(() => this.tick(), this.pollIntervalMs);
     this.timer.unref();
 
+    if (this.pendingResumes.length > 0) {
+      this.resumeTimer = setTimeout(() => this.resumeInterrupted(), RESUME_DELAY_MS);
+    }
+
     // Periodic cleanup of low-confidence learnings (dead knowledge hygiene)
     if (this.learningCleanupIntervalMs > 0) {
       if (this.systemRegistry) {
@@ -67,7 +86,33 @@ export class AgentScheduler {
     }
   }
 
+  /**
+   * Continue the runs recovered at startup. One that can't be resumed (agent
+   * deactivated meanwhile, unreadable checkpoint) would otherwise sit in
+   * `running` forever, so it is failed with the reason.
+   */
+  private resumeInterrupted(): void {
+    this.resumeTimer = null;
+    const ids = this.pendingResumes;
+    this.pendingResumes = [];
+    for (const runId of ids) {
+      const outcome = resumeRun({ service: this.service, executor: this.executor, events: this.events }, runId, "automatic");
+      if (!outcome.ok) {
+        log.warn(`Agent scheduler: could not resume run ${runId}: ${outcome.error}`);
+        this.service.updateRun(runId, {
+          status: "failed",
+          error: `Interrupted by a kernel restart and not resumable: ${outcome.error}`,
+          completed_at: isoNow(),
+        });
+      }
+    }
+  }
+
   stop(): void {
+    if (this.resumeTimer) {
+      clearTimeout(this.resumeTimer);
+      this.resumeTimer = null;
+    }
     if (this.timer) {
       clearInterval(this.timer);
       this.timer = null;

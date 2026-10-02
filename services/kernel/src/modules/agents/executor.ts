@@ -7,8 +7,8 @@ import { isProviderExhausted, markProviderExhausted } from "../../core/llm/chat-
 import * as providerHealth from "../../core/llm/provider-health.js";
 import type { ChatLlmProvider } from "../../core/llm/chat-adapters.js";
 import type { ChatMessage } from "../chat/types.js";
-import { runToolLoop } from "../../core/llm/tool-loop.js";
-import type { LlmLoopTool, LlmLoopResult, LlmLoopBudgets } from "../../core/llm/tool-loop.js";
+import { runToolLoop, prepareResumeMessages } from "../../core/llm/tool-loop.js";
+import type { LlmLoopTool, LlmLoopResult, LlmLoopBudgets, LlmLoopConfig } from "../../core/llm/tool-loop.js";
 import { buildToolSearch, buildToolDescribe, buildCodeRun } from "../meta/index.js";
 import { RankingService } from "../../core/ranking/service.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
@@ -28,6 +28,7 @@ import { agentAllowedTools, agentDeniedTools, agentVariables } from "./agent-fie
 import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from "./executor/model-chain.js";
 import { assembleSystemPrompt } from "./executor/system-prompt.js";
 import { RunRecorder } from "./executor/run-recorder.js";
+import { serializeCheckpoint, type RunCheckpoint } from "./executor/run-checkpoint.js";
 import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
 import { localDate } from "../../sdk/clock.js";
 
@@ -46,6 +47,8 @@ interface ExecuteParams {
   service: AgentService;
   events?: EventBus;
   depth?: number;
+  /** Continue an interrupted native run from this checkpoint instead of from the goal. */
+  resume?: RunCheckpoint;
 }
 
 /** Everything the tool-loop phase of a native run needs. */
@@ -63,6 +66,7 @@ interface NativeLoopRun {
   systemText: string;
   effectiveGoal: string;
   goalWithMemory: string;
+  resume?: RunCheckpoint;
 }
 
 /**
@@ -230,6 +234,10 @@ export class AgentExecutor {
       if (shortCircuit) return await shortCircuit;
 
       const recorder = new RunRecorder(agent, run, service, events);
+      if (params.resume) {
+        recorder.stepNumber = params.resume.stepNumber;
+        recorder.runningTokens = params.resume.totalTokens;
+      }
 
       // Emit flow event: run started
       recorder.emit("agent:flow:run_started", {
@@ -291,6 +299,7 @@ export class AgentExecutor {
         agent, run, service, events, depth, runState, recorder,
         chain: chainResolution.chain,
         llmTools, toolExecutor, systemText, effectiveGoal, goalWithMemory,
+        resume: params.resume,
       });
     } finally {
       this.activeRuns.delete(run.id);
@@ -505,6 +514,9 @@ export class AgentExecutor {
       if (abortReason) {
         // Safety-aborted — record as error step and fail the run
         const error = `Safety abort: ${abortReason}`;
+        service.setRunCondition(run.id, {
+          type: "Aborted", status: "True", reason: abortCategory(abortReason), message: abortReason,
+        });
         recorder.recordErrorStep(error, error);
         const failResult: ExecutionResult = {
           status: "failed",
@@ -618,17 +630,39 @@ export class AgentExecutor {
    * names the provider that failed last.
    */
   private async runModelChain(r: NativeLoopRun, active: { provider: ChatLlmProvider }): Promise<LlmLoopResult> {
-    const { agent, recorder, chain } = r;
+    const { agent, recorder, chain, resume } = r;
     const llmMessages: ChatMessage[] = [
       { role: "user", content: r.goalWithMemory },
     ];
     const initialMessagesSnapshot: ChatMessage[] = JSON.parse(JSON.stringify(llmMessages));
     let loopResult: LlmLoopResult | undefined;
     let chainIdx = 0;
+    // A resumed run continues its own conversation on the entry it had
+    // committed to. If the chain got shorter since, the conversation is
+    // still valid on any model — start over at the top of the chain.
+    let resumeFrom: LlmLoopConfig["resumeFrom"];
+    if (resume) {
+      const prepared = prepareResumeMessages(resume.messages);
+      llmMessages.length = 0;
+      llmMessages.push(...prepared.messages);
+      chainIdx = resume.chainIdx < chain.length ? resume.chainIdx : 0;
+      resumeFrom = { iterations: resume.iterations, totalTokens: resume.totalTokens, elapsedMs: resume.elapsedMs };
+      if (prepared.unknownToolCalls.length > 0) {
+        log.warn(
+          `Agent "${agent.name}": resuming run ${r.run.id} with ${prepared.unknownToolCalls.length} tool call(s) of unknown outcome`,
+        );
+      }
+    }
     while (chainIdx < chain.length) {
       const entry = chain[chainIdx];
       active.provider = entry.provider; // outer `provider` tracks the active entry
-      if (chainIdx > 0) {
+      const label = `${entry.provider.name}/${entry.model || "(default)"}`;
+      r.service.setRunCondition(r.run.id, {
+        type: "ModelReady", status: "True",
+        reason: chainIdx === 0 ? "Primary" : "Fallback",
+        message: label,
+      });
+      if (chainIdx > 0 && !resumeFrom) {
         // Reset messages on retry so the new model starts from the same goal
         llmMessages.length = 0;
         for (const m of JSON.parse(JSON.stringify(initialMessagesSnapshot)) as ChatMessage[]) {
@@ -646,7 +680,18 @@ export class AgentExecutor {
           caller: `agent:${agent.name}`,
           budgets: this.loopBudgets(agent),
           isCancelled: () => r.runState.cancelled,
-          hooks: recorder.loopHooks(),
+          resumeFrom,
+          hooks: {
+            ...recorder.loopHooks(),
+            onCheckpoint: (cp) => {
+              try {
+                r.service.saveCheckpoint(r.run.id, serializeCheckpoint(cp, chainIdx, recorder.stepNumber));
+              } catch (err) {
+                // A run must never fail because its safety net did.
+                log.warn(`Agent "${agent.name}": checkpoint write failed: ${err instanceof Error ? err.message : err}`);
+              }
+            },
+          },
         });
         break; // success (or soft abort via loopResult.abortReason) — commit this entry
       } catch (innerErr) {
@@ -671,6 +716,8 @@ export class AgentExecutor {
                       to_provider: toEntry.provider.name, to_model: toEntry.model, reason },
         });
         chainIdx = nextIdx;
+        // The next entry starts over from the goal, not from the checkpoint.
+        resumeFrom = undefined;
       }
     }
     if (!loopResult) {
@@ -1286,6 +1333,16 @@ export class AgentExecutor {
       };
     }
   }
+}
+
+/** Machine-readable reason for an Aborted condition, from the loop's abort message. */
+export function abortCategory(abortReason: string): string {
+  if (abortReason.startsWith("Cancelled")) return "Cancelled";
+  if (abortReason.startsWith("Timeout")) return "Timeout";
+  if (abortReason.startsWith("Token budget")) return "TokenBudget";
+  if (abortReason.includes("consecutive tool errors")) return "ToolErrors";
+  if (abortReason.includes("stuck in a loop")) return "StuckLoop";
+  return "Other";
 }
 
 /** Resolve {{variable}} placeholders in a goal template */

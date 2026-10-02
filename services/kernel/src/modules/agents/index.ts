@@ -13,6 +13,7 @@ import { AgentExecutor } from "./executor.js";
 import type { SandboxDriverRegistry } from "../../core/sandbox/registry.js";
 import { ReactiveEngine } from "./reactive-engine.js";
 import { AgentScheduler } from "./scheduler.js";
+import { autoResumePolicy } from "./run-resume.js";
 import { agentsTools } from "./tools.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -106,7 +107,10 @@ export function createAgentsModule(): AgentsModule {
       runMigrations(ctx.sqlite, "agents", agentsMigrations);
 
       agentService = new AgentService(ctx.sqlite, ctx.events, ctx.config);
-      agentService.cleanupStaleRuns();
+      // Runs the last process left in flight: the ones with a fresh
+      // checkpoint resume once the scheduler starts (every tool is wired by
+      // then); the rest are failed as before.
+      const recovered = agentService.recoverStaleRuns(autoResumePolicy());
       agentExecutor = new AgentExecutor();
       agentExecutor.setConfig(ctx.config);
 
@@ -137,6 +141,7 @@ export function createAgentsModule(): AgentsModule {
         ctx.config.agents?.learningCleanupIntervalMs ?? 3_600_000,
         ctx.config.agents?.learningMinConfidence ?? 0.15,
       );
+      agentScheduler.setPendingResumes(recovered.resume);
 
       tools = [
         ...agentsTools(agentService, agentExecutor, ctx.events, () => meetingExecutor),
