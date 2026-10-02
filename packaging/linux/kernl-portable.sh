@@ -12,7 +12,19 @@
 
 set -eu
 
-APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Follow symlinks before taking dirname: `ln -s .../kernl-x.y.z/kernl
+# ~/.local/bin/kernl` is the obvious way to put this on PATH, and without this
+# APP_DIR became ~/.local/bin and the exec below looked for ~/.local/bin/bin/bun.
+# A readlink loop rather than `readlink -f`, which is not POSIX.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+APP_DIR="$(cd "$(dirname "$SELF")" && pwd -P)"
 DATA_DIR="${KERNEL_DATA_DIR:-$HOME/.local/share/kernl}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kernl"
 
