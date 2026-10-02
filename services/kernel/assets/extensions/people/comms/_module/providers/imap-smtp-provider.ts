@@ -4,6 +4,7 @@ import nodemailer from "nodemailer";
 import type { InboxMessage } from "../types.js";
 import type { EmailProvider, ProviderCapabilities, SendEmailOptions, SendResult } from "./types.js";
 import { stripHtml } from "../gmail-helpers.js";
+import { extractBodies } from "./mime-decode.js";
 
 export interface ImapSmtpConfig {
   imap_host: string;
@@ -137,8 +138,11 @@ export class ImapSmtpProvider implements EmailProvider {
         if (!msg) throw new Error(`IMAP message not found: ${uid}`);
 
         const env = msg.envelope;
-        const source = msg.source ? msg.source.toString("utf-8") : "";
-        const { text, html } = splitMime(source);
+        const sourceBytes = msg.source ?? Buffer.alloc(0);
+        const source = sourceBytes.toString("utf-8"); // header parsing only
+        // Bodies come from the bytes: each part has its own transfer encoding
+        // and charset, which a UTF-8 string of the whole message cannot honour.
+        const { text, html } = extractBodies(sourceBytes);
 
         const fromEntry = env?.from?.[0];
         return {
@@ -184,32 +188,4 @@ export class ImapSmtpProvider implements EmailProvider {
 
     return result;
   }
-}
-
-function splitMime(raw: string): { text: string; html: string } {
-  if (!raw) return { text: "", html: "" };
-
-  const parts = raw.split(/\r?\n\r?\n/);
-  if (parts.length < 2) return { text: raw, html: "" };
-
-  const body = parts.slice(1).join("\n\n");
-  const boundaryMatch = parts[0].match(/boundary="?([^";\r\n]+)"?/i);
-  if (!boundaryMatch) {
-    const isHtml = /content-type:\s*text\/html/i.test(parts[0]);
-    return isHtml ? { text: "", html: body } : { text: body, html: "" };
-  }
-
-  const boundary = `--${boundaryMatch[1]}`;
-  const segments = body.split(boundary).filter((s) => s.trim() && !s.trim().startsWith("--"));
-  let text = "";
-  let html = "";
-  for (const seg of segments) {
-    const segParts = seg.split(/\r?\n\r?\n/);
-    if (segParts.length < 2) continue;
-    const header = segParts[0];
-    const content = segParts.slice(1).join("\n\n").trim();
-    if (/content-type:\s*text\/html/i.test(header)) html = content;
-    else if (/content-type:\s*text\/plain/i.test(header)) text = content;
-  }
-  return { text, html };
 }
