@@ -20,6 +20,7 @@
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
+    liveToolRows, type LiveRow,
   } from '$lib/live-steps.js';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
@@ -55,6 +56,26 @@
   function liveStepTokensTotal(i: number): number {
     return liveStepTokensTotalOf(events, i);
   }
+  // Consecutive calls to one tool fold into a single "tool ×N" row; opening it
+  // lists each call and result as ordinary rows right below it. Keyed by the
+  // run's oldest event, so a run keeps its open state while calls stream in.
+  let openRuns = new Set<string>();
+  function toggleRun(key: string): void {
+    if (openRuns.has(key)) openRuns.delete(key); else openRuns.add(key);
+    openRuns = new Set(openRuns);
+  }
+  type DisplayRow = LiveRow | { kind: 'event'; e: AgentFlowEvent; i: number; inRun: true };
+  $: displayRows = liveToolRows(events).flatMap((r): DisplayRow[] =>
+    r.kind === 'tools' && openRuns.has(r.key)
+      ? [r, ...r.items.map((x) => ({ kind: 'event' as const, ...x, inRun: true as const }))]
+      : [r]);
+  function runTitle(r: Extract<LiveRow, { kind: 'tools' }>): string {
+    const parts = [`${r.calls} calls`];
+    if (r.failed > 0) parts.push(`${r.failed} failed`);
+    if (r.pending > 0) parts.push(`${r.pending} running`);
+    return `${r.tool} — ${parts.join(', ')}`;
+  }
+
   $: liveRunElapsedMs = runElapsedMs(events);
   $: liveRunTokensTotal = runTokensTotal(events);
 </script>
@@ -112,7 +133,29 @@
     <div class="ip-empty">No events yet — stay tuned.</div>
   {:else}
     <ol class="live-timeline">
-      {#each events as e, i (e.ts + '-' + i)}
+      {#each displayRows as row (row.kind === 'tools' ? row.key : row.e.ts + '-' + row.i)}
+        {#if row.kind === 'tools'}
+        {@const newest = row.items[0].e}
+        {@const runOpen = openRuns.has(row.key)}
+        <li class="live-step live-step-tool_call live-step-run live-cat-{liveStepCategory(newest)}"
+            class:live-step-head={row.items[0].i === 0} class:live-step-open={runOpen}>
+          <span class="live-step-dot"></span>
+          <button type="button" class="live-step-summary" aria-expanded={runOpen}
+                  title={runTitle(row)} on:click={() => toggleRun(row.key)}>
+            <span class="live-step-icon">{liveStepIcon('tool_call')}</span>
+            <span class="live-step-type">{liveStepLabel(row.pending > 0 ? 'tool_call' : 'tool_result')}</span>
+            <code class="live-step-tool">{row.tool}</code>
+            <span class="live-run-count" class:bad={row.failed > 0} class:pending={row.pending > 0}>
+              {row.pending > 0 ? '…' : row.failed > 0 ? '✗' : '✓'} ×{row.calls}{#if row.failed > 0} · {row.failed} ✗{/if}
+            </span>
+            <span class="live-step-text">{liveStepSummary(newest)}</span>
+            <span class="live-step-clock">{fmtClock(newest.ts)}</span>
+            <span class="live-step-chev" aria-hidden="true">{runOpen ? '▾' : '▸'}</span>
+          </button>
+        </li>
+        {:else}
+        {@const e = row.e}
+        {@const i = row.i}
         {@const etype = liveEventType(e)}
         {@const ecat = liveStepCategory(e)}
         {@const stepKey = e.ts + '-' + i}
@@ -123,7 +166,7 @@
         {@const dt = liveStepDeltaMs(i)}
         {@const stepTok = liveStepTokens(e)}
         {@const cumTok = liveStepTokensTotal(i)}
-        <li class="live-step live-step-{etype} live-cat-{ecat}" class:live-step-head={i === 0} class:live-step-open={isOpen}>
+        <li class="live-step live-step-{etype} live-cat-{ecat}" class:live-step-head={i === 0} class:live-step-open={isOpen} class:live-step-in-run={'inRun' in row}>
           <span class="live-step-dot"></span>
           <button
             type="button"
@@ -172,6 +215,7 @@
             </div>
           {/if}
         </li>
+        {/if}
       {/each}
     </ol>
   {/if}
@@ -416,6 +460,18 @@
     transition:transform .14s;
   }
   .live-step-open .live-step-chev{color:#a0a5b8}
+
+  /* Folded run of calls to one tool: "✓ ×25", or "✗ ×25 · 2 ✗" when some failed. */
+  .live-run-count{
+    flex-shrink:0;padding:1px 6px;border-radius:999px;
+    font:700 9.5px 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;
+    color:#5fdba0;background:rgba(95,219,160,.12);
+  }
+  .live-run-count.bad{color:#ef8090;background:rgba(239,93,110,.14)}
+  .live-run-count.pending{color:#a8b0c8;background:rgba(120,130,160,.14)}
+  /* The calls of an opened run, indented under it on the same timeline. */
+  .live-step-in-run{padding-left:22px}
+  .live-step-in-run .live-step-dot{width:5px;height:5px;left:-16px;top:14px;border-width:1px}
 
   /* Expanded detail panel — the full JSON payload that used to live
      inline. Renders inside a card connected to the summary row above. */

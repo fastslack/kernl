@@ -15,6 +15,8 @@
   import { fade, fly } from 'svelte/transition';
   import { cubicOut } from 'svelte/easing';
   import { foldThinking } from '$lib/chat-md';
+  import { collapseRepeats } from '$lib/collapse-repeats.js';
+  import OfficeToolRun, { toolKeys, type OfficeToolCall } from './OfficeToolRun.svelte';
   import {
     startChatEpisode,
     sendChatMessageStream,
@@ -567,6 +569,15 @@ Kernel tools you have (use ONE per turn):
     }
   }
 
+  /** Consecutive calls whose cards would look the same (name + argument
+   *  keys) fold into one "×N" card; text blocks never fold. */
+  function foldKey(b: StreamBlock, i: number): string {
+    return b.type === 'tool_use' ? `tool:${b.name}\u0000${toolKeys(b.input)}` : `text:${i}`;
+  }
+  function toolCalls(items: StreamBlock[]): OfficeToolCall[] {
+    return items.filter((b): b is Extract<StreamBlock, { type: 'tool_use' }> => b.type === 'tool_use');
+  }
+
   function fmtToolInput(input: any): string {
     try {
       const s = JSON.stringify(input, null, 2);
@@ -771,22 +782,11 @@ Kernel tools you have (use ONE per turn):
               {m.role === 'user' ? 'You' : avatarText}
             </div>
             <div class="oc-body-inner">
-              {#each m.blocks as b}
-                {#if b.type === 'text'}
-                  <div class="oc-text">{@html formatMd(b.text)}</div>
+              {#each collapseRepeats(m.blocks, foldKey) as r}
+                {#if r.item.type === 'text'}
+                  <div class="oc-text">{@html formatMd(r.item.text)}</div>
                 {:else}
-                  <details class="oc-tool" class:oc-tool-error={b.is_error}>
-                    <summary>
-                      <span class="oc-tool-badge">{b.name}</span>
-                      <span class="oc-tool-summary">
-                        {Object.keys(b.input || {}).slice(0, 3).join(', ')}
-                      </span>
-                    </summary>
-                    <pre class="oc-tool-input">{fmtToolInput(b.input)}</pre>
-                    {#if b.result}
-                      <pre class="oc-tool-result">{b.result}</pre>
-                    {/if}
-                  </details>
+                  <OfficeToolRun calls={toolCalls(r.items)} />
                 {/if}
               {/each}
             </div>
@@ -797,22 +797,11 @@ Kernel tools you have (use ONE per turn):
           <div class="oc-msg oc-msg-assistant">
             <div class="oc-avatar">{avatarText}</div>
             <div class="oc-body-inner">
-              {#each streamingBlocks as b}
-                {#if b.type === 'text'}
-                  <div class="oc-text">{@html formatMd(b.text)}</div>
+              {#each collapseRepeats(streamingBlocks, foldKey) as r}
+                {#if r.item.type === 'text'}
+                  <div class="oc-text">{@html formatMd(r.item.text)}</div>
                 {:else}
-                  <details class="oc-tool" open={!b.result} class:oc-tool-error={b.is_error}>
-                    <summary>
-                      <span class="oc-tool-badge">{b.name}</span>
-                      <span class="oc-tool-summary">
-                        {b.result ? Object.keys(b.input || {}).slice(0, 3).join(', ') : 'running…'}
-                      </span>
-                    </summary>
-                    <pre class="oc-tool-input">{fmtToolInput(b.input)}</pre>
-                    {#if b.result}
-                      <pre class="oc-tool-result">{b.result}</pre>
-                    {/if}
-                  </details>
+                  <OfficeToolRun calls={toolCalls(r.items)} live />
                 {/if}
               {/each}
             </div>
@@ -1365,52 +1354,6 @@ Kernel tools you have (use ONE per turn):
     display: inline-block;
     text-align: left;
   }
-
-  .oc-tool {
-    margin: 6px 0;
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 6px;
-    background: rgba(255, 255, 255, 0.02);
-    font-size: 12px;
-    overflow: hidden;
-  }
-  .oc-tool.oc-tool-error { border-color: rgba(255, 80, 80, 0.4); background: rgba(255, 80, 80, 0.05); }
-  .oc-tool > summary {
-    list-style: none;
-    cursor: pointer;
-    padding: 6px 10px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    user-select: none;
-  }
-  .oc-tool > summary::-webkit-details-marker { display: none; }
-  .oc-tool-badge {
-    background: var(--cmd-color, #d4a84b);
-    color: #1a1a1a;
-    border-radius: 3px;
-    padding: 1px 6px;
-    font-weight: 600;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-  }
-  .oc-tool-summary { color: var(--text-2, #a0a0a0); font-family: ui-monospace, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .oc-tool-input,
-  .oc-tool-result {
-    margin: 0;
-    padding: 6px 10px;
-    border-top: 1px solid var(--border, #2a2a2a);
-    background: rgba(0, 0, 0, 0.22);
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    color: var(--text-2, #a0a0a0);
-    max-height: 240px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-  .oc-tool-result { color: var(--text-1, #f0f0f0); }
-  .oc-tool.oc-tool-error .oc-tool-result { color: #ff8080; }
 
   .oc-thinking { align-items: center; }
   .oc-thinking-dots { display: flex; gap: 4px; padding: 6px 0; }

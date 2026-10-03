@@ -11,6 +11,7 @@
  */
 
 import type { AgentFlowEvent } from './stores.js';
+import { collapseRepeats } from './collapse-repeats.js';
 
 export interface StoredStep {
   step_number: number | string;
@@ -49,6 +50,7 @@ function stepPayload(s: StoredStep): string {
 
 /** A stored step as the flow event LIVE would have received for it. */
 export function stepAsFlowEvent(s: StoredStep): AgentFlowEvent {
+  const isError = storedErrorFlag(s);
   return {
     event: 'agent:flow:step',
     data: {
@@ -56,6 +58,7 @@ export function stepAsFlowEvent(s: StoredStep): AgentFlowEvent {
       tool_name: s.tool_name ?? '',
       content_preview: stepPayload(s),
       step_number: Number(s.step_number),
+      ...(isError !== undefined ? { is_error: isError } : {}),
     },
     ts: s.created_at ?? '',
   };
@@ -177,9 +180,49 @@ export function shortToolName(name: string): string {
   return name.replace(/^mcp__.+?__/, '');
 }
 
-function looksFailed(output: string): boolean {
+/**
+ * A zod validation failure serialised as-is: an array of issues, each with a
+ * `code` and a `message` plus `path` or `expected`/`received`. Every element
+ * has to match, so an ordinary array of records is never taken for one.
+ */
+function isZodIssueArray(t: string): boolean {
+  if (!t.startsWith('[') || !/"code"/.test(t)) return false;
+  let v: unknown;
+  try { v = JSON.parse(t); } catch { return false; }
+  if (!Array.isArray(v) || v.length === 0) return false;
+  return v.every((el) => {
+    if (!el || typeof el !== 'object' || Array.isArray(el)) return false;
+    const o = el as Record<string, unknown>;
+    if (typeof o.code !== 'string' || typeof o.message !== 'string') return false;
+    return Array.isArray(o.path) || ('expected' in o && 'received' in o);
+  });
+}
+
+/** True when a tool's output reads as an error. Only a guess: used when the
+ *  step carries no `is_error` flag (runs recorded before it existed). */
+export function looksFailed(output: string): boolean {
   const t = output.trim();
-  return /^(error|failed|exception)\b/i.test(t) || /"is_?error"\s*:\s*true/i.test(t) || /^\{\s*"error"/.test(t);
+  return /^(error|failed|exception)\b/i.test(t) || /"is_?error"\s*:\s*true/i.test(t) || /^\{\s*"error"/.test(t)
+    || isZodIssueArray(t);
+}
+
+/**
+ * The recorded error flag of a stored tool_result step, if it has one. The
+ * kernel keeps it in the result row's tool_input (`{"is_error": true}`);
+ * older rows carry "{}" and give undefined.
+ */
+export function storedErrorFlag(s: StoredStep): boolean | undefined {
+  if (s.type !== 'tool_result') return undefined;
+  const v = tryJson(String(s.tool_input ?? ''));
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return undefined;
+  const flag = (v as Record<string, unknown>).is_error;
+  return typeof flag === 'boolean' ? flag : undefined;
+}
+
+/** Whether a tool result failed: the recorded flag when there is one,
+ *  otherwise the `looksFailed` guess on its output. */
+export function resultFailed(flag: unknown, output: string): boolean {
+  return typeof flag === 'boolean' ? flag : looksFailed(output);
 }
 
 function pairUses(steps: HistoryStep[]): ToolUse[] {
@@ -195,7 +238,7 @@ function pairUses(steps: HistoryStep[]): ToolUse[] {
     const open = uses.find((u) => u.fullName === fullName && u.call && !u.result);
     const use = open ?? (uses.push({ name: shortToolName(fullName), fullName, ok: true }), uses[uses.length - 1]);
     use.result = s;
-    use.ok = !looksFailed(String(s.tool_output ?? ''));
+    use.ok = !resultFailed(storedErrorFlag(s), String(s.tool_output ?? ''));
   }
   return uses;
 }
@@ -219,4 +262,34 @@ export function groupHistoryRows(steps: HistoryStep[]): HistoryRow[] {
   }
   flush();
   return rows;
+}
+
+/** One chip of a folded tool row: a run of consecutive calls to one tool. */
+export interface ToolChip {
+  name: string;
+  fullName: string;
+  /** Calls in the run. */
+  count: number;
+  /** Calls whose result reads as an error. */
+  failed: number;
+  /** Calls with no result recorded yet. */
+  pending: number;
+  uses: ToolUse[];
+}
+
+/**
+ * Fold consecutive calls to the same tool into one chip, so 25 liveness polls
+ * read `kernel_career_liveness ×25` instead of 25 chips joined by arrows. The
+ * counts let the chip stay honest: a run is only a success when every call in
+ * it succeeded.
+ */
+export function toolChips(uses: ToolUse[]): ToolChip[] {
+  return collapseRepeats(uses, (u) => u.fullName).map((r) => ({
+    name: r.item.name,
+    fullName: r.item.fullName,
+    count: r.count,
+    failed: r.items.filter((u) => u.result && !u.ok).length,
+    pending: r.items.filter((u) => !u.result).length,
+    uses: r.items,
+  }));
 }

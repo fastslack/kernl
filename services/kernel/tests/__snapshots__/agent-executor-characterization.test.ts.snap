@@ -2085,6 +2085,9 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       {
         "run_id": "run-1",
         "step_number": 3,
+        "tool_input": {
+          "is_error": false,
+        },
         "tool_name": "kernel_test_echo",
         "tool_output": "echo:a",
         "type": "tool_result",
@@ -2098,6 +2101,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "agent_id": "agent-1",
       "agent_name": "Nadia",
       "content_preview": "echo:a",
+      "is_error": false,
       "run_id": "run-1",
       "step_number": 3,
       "tokens_total": 500,
@@ -3421,6 +3425,9 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       {
         "run_id": "run-1",
         "step_number": 3,
+        "tool_input": {
+          "is_error": false,
+        },
         "tool_name": "kernel_agents_invoke",
         "tool_output": "child says hi",
         "type": "tool_result",
@@ -3434,6 +3441,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "agent_id": "agent-1",
       "agent_name": "Nadia",
       "content_preview": "child says hi",
+      "is_error": false,
       "run_id": "run-1",
       "step_number": 3,
       "tokens_total": 11,

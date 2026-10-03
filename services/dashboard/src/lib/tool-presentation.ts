@@ -232,3 +232,17 @@ export function kernlLink(name: string): ToolLink | null {
   if (!module) return null;
   return MODULE_SCREENS[module] ?? null;
 }
+
+/**
+ * Fold key for a transcript block: two tool calls share it when they would
+ * print the same card face — same tool, same argument summary — so a run of
+ * them can fold into one "×N" card without hiding anything that differed at a
+ * glance. Any other block gets a key of its own and never folds.
+ */
+export function toolCardKey<B extends { type?: string; name?: string; input?: Record<string, unknown> | null }>(
+  b: B,
+  i: number,
+): string {
+  if (b?.type !== "tool_use") return `block:${i}`;
+  return `tool:${b.name ?? ""}\u0000${summarizeInput(b.input)}`;
+}

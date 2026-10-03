@@ -16,6 +16,8 @@ import type { AgentFlowEvent } from './stores.js';
 import { ellipsize } from './display-format.js';
 import { sanitizePreview } from './run-format.js';
 import { isAbsoluteHostPath } from './host-path.js';
+import { collapseRepeats } from './collapse-repeats.js';
+import { resultFailed } from './history-steps.js';
 
 export type ToolCategory =
   | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
@@ -201,6 +203,18 @@ export function summarizeToolCall(toolName: string, inputPreview: string): strin
   const args = tryParseJson(inputPreview) as Record<string, unknown> | null;
   if (!toolName) return 'calling tool';
   if (!args || typeof args !== 'object') return toolName;
+  // The chief editing an agent or an office. The generic line read
+  // "kernel_agents_update · id=d22f8c60-… · max_iterations=40": the id was
+  // the headline and the change an afterthought. Say what changed, on whom.
+  const short = toolName.replace(/^mcp__.+?__/, '');
+  if (short === 'kernel_agents_update' || short === 'kernel_agents_flows_update') {
+    const what = short === 'kernel_agents_update' ? 'agent' : 'office';
+    const id = String(args.id ?? '').slice(0, 8);
+    const changes = Object.entries(args)
+      .filter(([k, v]) => k !== 'id' && !k.startsWith('__') && v !== undefined)
+      .map(([k, v]) => `${k} → ${ellipsize(typeof v === 'string' ? v : JSON.stringify(v), 40)}`);
+    return `Change ${what}${id ? ' ' + id : ''} settings${changes.length ? ' · ' + changes.slice(0, 3).join(' · ') : ''}`;
+  }
   switch (toolName) {
     case 'Bash': {
       const desc = typeof args.description === 'string' ? args.description : '';
@@ -440,4 +454,63 @@ export function runTokensTotal(events: AgentFlowEvent[]): number {
     if (Number.isFinite(v) && v > 0) return v;
   }
   return 0;
+}
+
+// ── Folding repeated tool calls ─────────────────────────────────────
+
+/** An event of the LIVE buffer with its index there (the Δt / token chips read it). */
+export interface LiveIndexed { e: AgentFlowEvent; i: number }
+
+export type LiveRow =
+  | ({ kind: 'event' } & LiveIndexed)
+  | {
+      kind: 'tools';
+      /** Stable while the run grows: new events arrive at the front, so the
+       *  oldest event of the run never changes. */
+      key: string;
+      tool: string;
+      /** tool_call events in the run. */
+      calls: number;
+      /** tool_result events flagged as an error (or, unflagged, reading as one). */
+      failed: number;
+      /** Calls still waiting for their result. */
+      pending: number;
+      /** Every call and result of the run, newest first like the buffer. */
+      items: LiveIndexed[];
+    };
+
+function isToolEvent(e: AgentFlowEvent): boolean {
+  const t = liveEventType(e);
+  return (t === 'tool_call' || t === 'tool_result') && Boolean(e.data.tool_name);
+}
+
+/**
+ * Fold consecutive calls to the same tool — calls and their results together —
+ * into one row when there are at least two calls; anything else stays one row
+ * per event. `events` is the LIVE buffer, newest first.
+ */
+export function liveToolRows(events: AgentFlowEvent[]): LiveRow[] {
+  const indexed = events.map((e, i) => ({ e, i }));
+  const runs = collapseRepeats(indexed, ({ e }, i) => (isToolEvent(e) ? `tool:${String(e.data.tool_name)}` : `ev:${i}`));
+  const rows: LiveRow[] = [];
+  for (const r of runs) {
+    const calls = r.items.filter((x) => liveEventType(x.e) === 'tool_call').length;
+    if (!isToolEvent(r.item.e) || calls < 2) {
+      for (const x of r.items) rows.push({ kind: 'event', ...x });
+      continue;
+    }
+    const results = r.items.filter((x) => liveEventType(x.e) === 'tool_result');
+    const tool = String(r.item.e.data.tool_name);
+    const oldest = r.items[r.items.length - 1];
+    rows.push({
+      kind: 'tools',
+      key: `tools:${oldest.e.ts}:${tool}`,
+      tool,
+      calls,
+      failed: results.filter((x) => resultFailed(x.e.data.is_error, String(x.e.data.content_preview ?? ''))).length,
+      pending: Math.max(0, calls - results.length),
+      items: r.items,
+    });
+  }
+  return rows;
 }

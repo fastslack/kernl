@@ -18,8 +18,8 @@
   } from '$lib/live-steps.js';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import {
-    stepAsFlowEvent, historyStepDetail, groupHistoryRows, shortToolName,
-    type HistoryStep, type HistoryRow,
+    stepAsFlowEvent, historyStepDetail, groupHistoryRows, shortToolName, toolChips,
+    type HistoryStep, type HistoryRow, type ToolChip,
   } from '$lib/history-steps.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
   import StepPayload from './StepPayload.svelte';
@@ -73,6 +73,13 @@
     const next = new Set([...openSteps].filter(k => !k.startsWith(runId + ':')));
     if (open) for (const r of rows) next.add(rowKey(runId, r));
     openSteps = next;
+  }
+  /** "mcp__kernel__kernel_career_liveness — 25 calls, 2 failed". */
+  function chipTitle(c: ToolChip): string {
+    const parts = [c.count === 1 ? '1 call' : `${c.count} calls`];
+    if (c.failed > 0) parts.push(`${c.failed} failed`);
+    if (c.pending > 0) parts.push(`${c.pending} without result`);
+    return `${c.fullName} — ${parts.join(', ')}`;
   }
   function stepCopyText(s: HistoryStep): string {
     if (s.type === 'tool_call') return s.tool_input ?? '';
@@ -200,11 +207,15 @@
                         <span class="hs-icon" aria-hidden="true">🔧</span>
                         <span class="hs-type">{row.uses.length === 1 ? 'tool' : `${row.uses.length} tools`}</span>
                         <span class="hs-chips">
-                          {#each row.uses as u, ui (ui)}
-                            {#if ui > 0}<span class="hs-chip-sep" aria-hidden="true">→</span>{/if}
-                            <span class="hs-chip" class:bad={!u.ok} class:pending={!u.result} title={u.fullName}>
-                              <span class="hs-chip-st" aria-label={!u.result ? 'no result' : u.ok ? 'succeeded' : 'failed'}>{!u.result ? '…' : u.ok ? '✓' : '✗'}</span>
-                              {u.name}
+                          {#each toolChips(row.uses) as c, ci (ci)}
+                            {#if ci > 0}<span class="hs-chip-sep" aria-hidden="true">→</span>{/if}
+                            <span class="hs-chip" class:bad={c.failed > 0 && c.pending === 0} class:pending={c.pending > 0}
+                                  title={chipTitle(c)}>
+                              <span class="hs-chip-st" aria-label={c.pending > 0 ? 'no result' : c.failed > 0 ? 'failed' : 'succeeded'}>{c.pending > 0 ? '…' : c.failed > 0 ? '✗' : '✓'}</span>
+                              <span class="hs-chip-name">{c.name}</span>
+                              {#if c.count > 1}
+                                <span class="hs-chip-count">×{c.count}{#if c.failed > 0}<span class="hs-chip-count-bad"> · {c.failed} ✗</span>{/if}</span>
+                              {/if}
                             </span>
                           {/each}
                         </span>
@@ -583,6 +594,16 @@
   .bad .hs-chip-st,.hs-use.bad .hs-chip-st{color:#ef5d6e}
   .pending .hs-chip-st{color:#9aa3c0}
   .hs-chip-sep{color:#4f5570;font-size:10px}
+  .hs-chip-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+  /* Run of identical calls: "×25", plus "· 2 ✗" when some of them failed. */
+  .hs-chip-count{
+    flex-shrink:0;padding:0 5px;border-radius:999px;
+    font:700 9px 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;
+    color:#5fdba0;background:rgba(95,219,160,.14);
+  }
+  .hs-chip.bad .hs-chip-count{color:#f6c3ca;background:rgba(239,93,110,.18)}
+  .hs-chip.pending .hs-chip-count{color:#a8b0c8;background:rgba(120,130,160,.16)}
+  .hs-chip-count-bad{color:#ef5d6e}
   .hs-fail-count{
     flex-shrink:0;font:700 9px 'Manrope',sans-serif;letter-spacing:.4px;text-transform:uppercase;
     color:#ef8090;padding:1px 6px;border-radius:3px;background:rgba(239,93,110,.12);

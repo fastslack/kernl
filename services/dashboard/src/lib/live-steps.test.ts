@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { AgentFlowEvent } from "./stores.js";
+import { liveToolRows } from "./live-steps.js";
 import {
   liveStepIcon,
   liveStepLabel,
@@ -132,6 +133,16 @@ describe("tryParseJson / basenameOf", () => {
 });
 
 describe("summarizeToolCall", () => {
+  it("says which agent the chief changed and what, instead of a raw id=…", () => {
+    expect(summarizeToolCall(
+      "mcp__kernel__kernel_agents_update",
+      '{"id":"d22f8c60-cfaf-4230-b0e7-3bb1def7f9c9","max_iterations":40}',
+    )).toBe("Change agent d22f8c60 settings · max_iterations → 40");
+    expect(summarizeToolCall(
+      "kernel_agents_flows_update",
+      '{"id":"4dbe35a9-0b32","name":"Career Office","description":"x"}',
+    )).toBe("Change office 4dbe35a9 settings · name → Career Office · description → x");
+  });
   it("prefers a Bash description over the command", () => {
     expect(summarizeToolCall("Bash", '{"description":"List files","command":"ls -la"}')).toBe("List files");
     expect(summarizeToolCall("Bash", '{"command":"ls -la"}')).toBe("$ ls -la");
@@ -247,5 +258,64 @@ describe("buffer maths", () => {
     expect(runElapsedMs(events)).toBe(10_000);
     expect(runTokensTotal(events)).toBe(300);
     expect(runElapsedMs([events[0]])).toBe(0);
+  });
+});
+
+describe("liveToolRows", () => {
+  let t = 0;
+  const ev = (type: string, tool = "", preview = ""): AgentFlowEvent => ({
+    event: "agent:flow:step",
+    data: { type, tool_name: tool, content_preview: preview },
+    ts: `2026-10-02T18:00:${String(t++).padStart(2, "0")}.000Z`,
+  });
+  // The buffer is newest first, so build it oldest-first and reverse.
+  const buffer = (...xs: AgentFlowEvent[]) => xs.reverse();
+  const polls = (n: number, tool = "kernel_career_liveness", out = (_i: number) => "ok") =>
+    Array.from({ length: n }, (_, i) => [ev("tool_call", tool, "{}"), ev("tool_result", tool, out(i))]).flat();
+
+  it("folds repeated calls with their results into one row", () => {
+    const rows = liveToolRows(buffer(ev("thought", "", "hm"), ...polls(25), ev("final", "", "done")));
+    expect(rows.map((r) => r.kind)).toEqual(["event", "tools", "event"]);
+    const g = rows[1] as Extract<ReturnType<typeof liveToolRows>[number], { kind: "tools" }>;
+    expect(g).toMatchObject({ tool: "kernel_career_liveness", calls: 25, failed: 0, pending: 0 });
+    expect(g.items).toHaveLength(50);
+    expect(g.items.map((x) => x.i)).toEqual(Array.from({ length: 50 }, (_, k) => k + 1));
+  });
+
+  it("leaves a single call and its result as two rows", () => {
+    expect(liveToolRows(buffer(...polls(1))).map((r) => r.kind)).toEqual(["event", "event"]);
+  });
+
+  it("counts failures and a call still waiting for its result", () => {
+    const xs = buffer(...polls(3, "A", (i) => (i === 0 ? "Error: nope" : "ok")), ev("tool_call", "A", "{}"));
+    const g = liveToolRows(xs)[0] as Extract<ReturnType<typeof liveToolRows>[number], { kind: "tools" }>;
+    expect(g).toMatchObject({ calls: 4, failed: 1, pending: 1 });
+  });
+
+  it("keeps its key while the run grows at the front", () => {
+    const base = polls(2, "A");
+    const k1 = (liveToolRows(buffer(...base))[0] as { key: string }).key;
+    const k2 = (liveToolRows(buffer(...base, ...polls(1, "A")))[0] as { key: string }).key;
+    expect(k2).toBe(k1);
+  });
+
+  it("a result's is_error flag wins over its text, both ways", () => {
+    const res = (preview: string, is_error?: boolean): AgentFlowEvent => {
+      const e = ev("tool_result", "A", preview);
+      if (is_error !== undefined) e.data.is_error = is_error;
+      return e;
+    };
+    const xs = buffer(
+      ev("tool_call", "A", "{}"), res("ok", true),
+      ev("tool_call", "A", "{}"), res("Error: nope", false),
+      ev("tool_call", "A", "{}"), res('[{"code":"invalid_type","expected":"string","received":"undefined","path":["text"],"message":"Required"}]'),
+    );
+    const g = liveToolRows(xs)[0] as Extract<ReturnType<typeof liveToolRows>[number], { kind: "tools" }>;
+    expect(g).toMatchObject({ calls: 3, failed: 2, pending: 0 });
+  });
+
+  it("does not merge calls to the same tool across another tool", () => {
+    const rows = liveToolRows(buffer(...polls(2, "A"), ...polls(1, "B"), ...polls(2, "A")));
+    expect(rows.map((r) => (r.kind === "tools" ? `${r.tool}×${r.calls}` : "ev"))).toEqual(["A×2", "ev", "ev", "A×2"]);
   });
 });

@@ -1,6 +1,8 @@
 <script lang="ts">
   import { onMount, tick, afterUpdate } from 'svelte';
-  import ToolCard from '$lib/components/ToolCard.svelte';
+  import ToolCardGroup from '$lib/components/ToolCardGroup.svelte';
+  import { collapseRepeats } from '$lib/collapse-repeats.js';
+  import { toolCardKey } from '$lib/tool-presentation.js';
   import {
     msgAuthError, streamAuthError, parseContentBlocks, parseStoredMessage,
     imageSrc, providerIcon, providerColor, isDateBreak, formatDateBreak,
@@ -516,11 +518,11 @@
                 {@const blocks = parseContentBlocks(m.content_blocks)}
                 {#if blocks.length > 0}
                   <div class="cx-msg-content">
-                    {#each blocks as b}
-                      {#if b.type === 'text'}
-                        {@html formatMd(b.text || '')}
-                      {:else if b.type === 'tool_use'}
-                        <ToolCard name={b.name} input={b.input} result={b._result} isError={!!b._is_error} />
+                    {#each collapseRepeats(blocks, toolCardKey) as r}
+                      {#if r.item.type === 'text'}
+                        {@html formatMd(r.item.text || '')}
+                      {:else if r.item.type === 'tool_use'}
+                        <ToolCardGroup calls={r.items.map((b) => ({ name: b.name, input: b.input, result: b._result, isError: !!b._is_error }))} />
                       {/if}
                     {/each}
                   </div>
@@ -553,11 +555,11 @@
             <div class="cx-msg-body">
               <div class="cx-msg-role">{selectedEp?.llm_provider || 'Assistant'} <span class="cx-msg-ts">live</span></div>
               <div class="cx-msg-content">
-                {#each streamingBlocks as b}
-                  {#if b.type === 'text'}
-                    {@html formatMd(b.text)}
+                {#each collapseRepeats(streamingBlocks, toolCardKey) as r}
+                  {#if r.item.type === 'text'}
+                    {@html formatMd(r.item.text)}
                   {:else}
-                    <ToolCard name={b.name} input={b.input} result={b.result} isError={!!b.is_error} />
+                    <ToolCardGroup calls={r.items.flatMap((b) => b.type === 'tool_use' ? [{ name: b.name, input: b.input, result: b.result, isError: !!b.is_error }] : [])} />
                   {/if}
                 {/each}
               </div>

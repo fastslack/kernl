@@ -5,7 +5,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { stepAsFlowEvent, historyStepDetail, eventLogToFlowEvents, groupHistoryRows } from "./history-steps.js";
+import { stepAsFlowEvent, historyStepDetail, eventLogToFlowEvents, groupHistoryRows, toolChips, looksFailed, storedErrorFlag } from "./history-steps.js";
 import { liveStepSummary } from "./live-steps.js";
 import { liveEventDetail } from "./live-event-detail.js";
 
@@ -151,5 +151,94 @@ describe("groupHistoryRows", () => {
     const g = rows[0] as Extract<ReturnType<typeof groupHistoryRows>[number], { kind: "tools" }>;
     expect(g.uses[1].name).toBe("B");
     expect(g.uses[1].result).toBeUndefined();
+  });
+});
+
+describe("toolChips", () => {
+  const s = (n: number, type: string, tool = "", extra: Record<string, unknown> = {}) =>
+    ({ step_number: n, type, content: "", tool_name: tool, tool_input: "{}", tool_output: "", ...extra }) as never;
+  const usesOf = (steps: never[]) => {
+    const g = groupHistoryRows(steps)[0] as Extract<ReturnType<typeof groupHistoryRows>[number], { kind: "tools" }>;
+    return g.uses;
+  };
+  const polls = (n: number, tool = "mcp__kernel__kernel_career_liveness", out = (_i: number) => "ok") =>
+    Array.from({ length: n }, (_, i) => [
+      s(i * 2 + 1, "tool_call", tool), s(i * 2 + 2, "tool_result", tool, { tool_output: out(i) }),
+    ]).flat();
+
+  it("folds 25 consecutive calls to one tool into a single chip", () => {
+    const chips = toolChips(usesOf(polls(25)));
+    expect(chips).toHaveLength(1);
+    expect(chips[0]).toMatchObject({ name: "kernel_career_liveness", count: 25, failed: 0, pending: 0 });
+    expect(chips[0].uses).toHaveLength(25);
+  });
+
+  it("counts the failed calls of a run", () => {
+    const chips = toolChips(usesOf(polls(5, undefined, (i) => (i === 1 || i === 3 ? "Error: boom" : "ok"))));
+    expect(chips[0]).toMatchObject({ count: 5, failed: 2, pending: 0 });
+  });
+
+  it("counts a call with no result as pending, not failed", () => {
+    const tool = "mcp__kernel__kernel_career_liveness";
+    const chips = toolChips(usesOf([...polls(2, tool), s(5, "tool_call", tool)]));
+    expect(chips[0]).toMatchObject({ count: 3, failed: 0, pending: 1 });
+  });
+
+  it("keeps non-consecutive calls to the same tool apart", () => {
+    const steps = [...polls(2, "A"), s(5, "tool_call", "B"), s(6, "tool_result", "B"), s(7, "tool_call", "A"), s(8, "tool_result", "A")];
+    expect(toolChips(usesOf(steps)).map((c) => `${c.name}×${c.count}`)).toEqual(["A×2", "B×1", "A×1"]);
+  });
+});
+
+describe("tool result error flag", () => {
+  const s = (n: number, type: string, tool = "", extra: Record<string, unknown> = {}) =>
+    ({ step_number: n, type, content: "", tool_name: tool, tool_input: "{}", tool_output: "", ...extra }) as never;
+  const zod = '[{"code":"invalid_type","expected":"string","received":"undefined","path":["text"],"message":"Required"}]';
+  const okOf = (...steps: never[]) => {
+    const g = groupHistoryRows(steps)[0] as Extract<ReturnType<typeof groupHistoryRows>[number], { kind: "tools" }>;
+    return g.uses.map((u) => u.ok);
+  };
+
+  it("a recorded is_error: true marks the call failed even when the output reads fine", () => {
+    expect(okOf(s(1, "tool_call", "A"), s(2, "tool_result", "A", { tool_input: '{"is_error":true}', tool_output: "ok" }))).toEqual([false]);
+  });
+
+  it("a recorded is_error: false marks the call succeeded even when the output reads as an error", () => {
+    expect(okOf(s(1, "tool_call", "A"), s(2, "tool_result", "A", { tool_input: '{"is_error":false}', tool_output: "Error: boom" }))).toEqual([true]);
+  });
+
+  it("without the flag (older runs) it falls back to the output", () => {
+    expect(okOf(
+      s(1, "tool_call", "A"), s(2, "tool_result", "A", { tool_output: zod }),
+      s(3, "tool_call", "B"), s(4, "tool_result", "B", { tool_output: "ok" }),
+    )).toEqual([false, true]);
+  });
+
+  it("storedErrorFlag reads only booleans on tool_result rows", () => {
+    expect(storedErrorFlag(s(1, "tool_result", "A", { tool_input: '{"is_error":true}' }))).toBe(true);
+    expect(storedErrorFlag(s(1, "tool_result", "A"))).toBeUndefined();
+    expect(storedErrorFlag(s(1, "tool_result", "A", { tool_input: '{"is_error":"yes"}' }))).toBeUndefined();
+    expect(storedErrorFlag(s(1, "tool_call", "A", { tool_input: '{"is_error":true}' }))).toBeUndefined();
+  });
+
+  it("stepAsFlowEvent carries the flag when the step has one", () => {
+    expect(stepAsFlowEvent(s(2, "tool_result", "A", { tool_input: '{"is_error":true}' })).data.is_error).toBe(true);
+    expect("is_error" in stepAsFlowEvent(s(2, "tool_result", "A")).data).toBe(false);
+  });
+});
+
+describe("looksFailed", () => {
+  it("recognises a zod issue array", () => {
+    expect(looksFailed('[{"code":"invalid_type","expected":"string","received":"undefined","path":["text"],"message":"Required"}]')).toBe(true);
+    expect(looksFailed('[{"code":"too_small","minimum":1,"type":"string","inclusive":true,"path":["q"],"message":"Too short"},{"code":"custom","path":[],"message":"Bad"}]')).toBe(true);
+  });
+
+  it("does not treat an ordinary JSON array as an error", () => {
+    expect(looksFailed('[{"id":1,"title":"Backend dev"},{"id":2,"title":"SRE"}]')).toBe(false);
+    expect(looksFailed("[]")).toBe(false);
+    // code + message alone is not enough: plenty of records have both.
+    expect(looksFailed('[{"code":"AR","message":"Argentina"},{"code":"UY","message":"Uruguay"}]')).toBe(false);
+    // one issue-shaped element among records is not a validation failure.
+    expect(looksFailed('[{"code":"x","message":"m","path":[]},{"id":2}]')).toBe(false);
   });
 });

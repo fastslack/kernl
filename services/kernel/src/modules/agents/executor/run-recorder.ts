@@ -5,8 +5,9 @@
  * agent event log (service.logEvent).
  *
  * Everything here used to be inline closures in AgentExecutor.execute(). The
- * payload shapes, key order and the order of the three writes are unchanged:
- * step row first, then the flow event, then the event-log line.
+ * order of the three writes is unchanged: step row first, then the flow
+ * event, then the event-log line. A tool_result also carries `is_error` on
+ * the step row (inside tool_input) and on the flow event.
  */
 
 import type { EventBus } from "../../../core/event-bus.js";
@@ -111,9 +112,12 @@ export class RunRecorder {
       },
       onToolResult: ({ tool_name, text, isError }) => {
         this.stepNumber++;
+        // agent_run_steps has no metadata column; a result row's tool_input
+        // is otherwise always "{}", so the error flag rides there. Rows
+        // written before this carry "{}" and readers fall back to guessing.
         service.addStep({
           run_id: run.id, step_number: this.stepNumber, type: "tool_result",
-          tool_name, tool_output: text,
+          tool_name, tool_input: { is_error: isError === true }, tool_output: text,
         });
         this.emit("agent:flow:step", {
           step_number: this.stepNumber, type: "tool_result", tool_name,
@@ -121,6 +125,7 @@ export class RunRecorder {
           // LIVE tab. 2000 covers most useful tool returns; full text
           // stays in DB (tool_output) for the HISTORY tab.
           content_preview: text.slice(0, 2000),
+          is_error: isError === true,
           tokens_total: this.runningTokens,
         });
         this.logEvent({
