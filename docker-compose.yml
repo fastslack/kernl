@@ -213,6 +213,14 @@ services:
       # user sees in a terminal. Read-only: this API exposes delete and move
       # over HTTP, so write access is a deliberate later step, not a default.
       - /home/fastslack/mtwProjects/LABS:/home/fastslack/mtwProjects/LABS:ro
+      # The operator's Claude Code login. claude_code agents run the CLI with
+      # HOME=$HOST_HOME and read their OAuth session from here; without these
+      # two mounts every claude_code run fails "OAuth session expired and could
+      # not be refreshed". Read-write, and shared with the host on purpose: the
+      # CLI rotates the refresh token, so host and container must write back to
+      # the same file or each refresh invalidates the other's session.
+      - ${HOST_HOME:-/home/fastslack}/.claude:${HOST_HOME:-/home/fastslack}/.claude
+      - ${HOST_HOME:-/home/fastslack}/.claude.json:${HOST_HOME:-/home/fastslack}/.claude.json
       # Host identity for the sandbox driver. Every -v it emits is resolved by
       # the daemon on the HOST, so it needs the operator's real home to find
       # the Claude CLI and credentials; inside the container HOME is /home/bun,
