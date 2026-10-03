@@ -607,14 +607,15 @@
      INFO PANEL — editorial/technical console, refined & data-dense
      ═══════════════════════════════════════════════════════════════ */
   .info-panel{
-    position:absolute;top:12px;right:12px;bottom:12px;
+    /* Flush with the 3D's top, right and bottom edges: a gutter there only
+       took width from the world. The container's rounded corners clip it. */
+    position:absolute;top:0;right:0;bottom:0;
     width:min(720px, 55vw); min-width:560px;
     overflow:hidden;
     background:linear-gradient(180deg, rgba(16,18,28,.96) 0%, rgba(11,13,20,.97) 100%);
     backdrop-filter:blur(16px) saturate(1.1);
-    border:1px solid rgba(120,130,160,.15);
-    border-radius:14px;
-    box-shadow:0 20px 60px -20px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
+    border-left:1px solid rgba(120,130,160,.15);
+    box-shadow:-20px 0 60px -20px rgba(0,0,0,.6);
     z-index:10;
     animation:slide .25s cubic-bezier(.2,.9,.25,1);
     display:flex;flex-direction:column;

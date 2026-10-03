@@ -251,18 +251,16 @@
 
   /* ── Live agent meeting side panel — does NOT cover the 3D ────── */
   .lm-side-panel{
-    /* Flush with the top of the 3D viewport, matching the 14px side margin.
-       It used to sit at top:64px, which cleared nothing on this side — the
-       stats pills and the 2D/3D toggle live at the far LEFT — and just left a
-       band of empty floor between the nav and the modal. */
-    position:absolute; top:14px; right:14px; z-index:var(--z-drawer);
+    /* Flush with the top and right edges of the 3D viewport, like the agent
+       and chief panels: a gutter there only took room from the world. */
+    position:absolute; top:0; right:0; z-index:var(--z-drawer);
     width:min(640px, 52vw);
     min-width:420px;
     /* Fit the content, don't always span to the bottom of the viewport. The
        panel was pinned top AND bottom, so a meeting with one short turn drew
        a full-height box that was mostly dead space. It still cannot grow past
        the viewport — beyond that the transcript scrolls. */
-    max-height:calc(100% - 28px);
+    max-height:100%;
     pointer-events:auto;
     animation:lm-side-in .25s ease-out;
     /* Establish a real flex parent so .live-meeting-modal can size its
@@ -279,8 +277,8 @@
     max-height:100%;
     min-height:0; /* allow flex children below to overflow:auto correctly */
     display:flex; flex-direction:column; padding:0;
-    border:1px solid #2a2f4a; background:#0f1018;
-    border-radius:8px;
+    border:1px solid #2a2f4a; border-top:0; border-right:0; background:#0f1018;
+    border-radius:0 0 0 8px;
     box-shadow:-8px 18px 60px rgba(0,0,0,.55);
     overflow:hidden; /* clip rounded corners */
   }

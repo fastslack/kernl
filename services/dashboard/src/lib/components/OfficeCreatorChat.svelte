@@ -878,20 +878,21 @@ Kernel tools you have (use ONE per turn):
   }
   .oc-modal {
     pointer-events: auto;
+    /* Flush with the 3D's top, right and bottom edges: a gutter there only
+       took width from the world. The container's rounded corners clip it. */
     position: absolute;
-    top: 12px;
-    right: 12px;
-    bottom: 12px;
+    top: 0;
+    right: 0;
+    bottom: 0;
     width: min(560px, 46vw);
     min-width: 420px;
     background:
       radial-gradient(ellipse 120% 40% at 50% 0%, color-mix(in srgb, var(--cmd-color, #c9a84c) 9%, transparent) 0%, transparent 60%),
       linear-gradient(180deg, rgba(18, 17, 24, 0.97) 0%, rgba(10, 10, 16, 0.98) 100%);
     backdrop-filter: blur(16px) saturate(1.1);
-    border: 1px solid color-mix(in srgb, var(--cmd-color, #c9a84c) 28%, transparent);
-    border-radius: 14px;
+    border-left: 1px solid color-mix(in srgb, var(--cmd-color, #c9a84c) 28%, transparent);
     box-shadow:
-      0 20px 60px -20px rgba(0, 0, 0, 0.7),
+      -20px 0 60px -20px rgba(0, 0, 0, 0.7),
       0 0 36px -16px color-mix(in srgb, var(--cmd-color, #c9a84c) 55%, transparent),
       0 0 0 1px rgba(255, 255, 255, 0.02) inset;
     display: flex;
@@ -917,7 +918,7 @@ Kernel tools you have (use ONE per turn):
     from { transform: translateX(24px); opacity: 0; }
   }
   @media (max-width: 920px) {
-    .oc-modal { width: min(560px, 94vw); min-width: 0; left: 12px; }
+    .oc-modal { width: auto; min-width: 0; left: 0; }
   }
   /* The chat surface (header + body + footer) is wrapped in .oc-stage so
      it can fly in as a single unit when phase flips to 'ready'. */
