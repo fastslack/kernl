@@ -23,6 +23,7 @@ import {
   kernelTimezone,
 } from "@kernl/extension-sdk";
 import { type AgendaItem, AGENDA_PROMPT_RULES, parseAgendaItems } from "./agenda-extract.js";
+import { mailLlmChat } from "./mail-llm.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -127,13 +128,11 @@ export class EmailTriageService {
     private config: KernelConfig,
   ) {}
 
-  /** LLM call via global singleton (routes through mtwRequest) */
+  /** LLM call on the mail model (see mail-llm.ts), else the default chain. */
   private async llmChat(system: string, user: string): Promise<string> {
-    const { llm } = await import("@kernl/extension-sdk");
     // Reasoning models think out loud before the JSON; with the default 2048
     // tokens a batch of 20 mails ran out mid-thought and returned no answer.
-    const result = await llm().chat({ system, user, caller: "email-triage", maxTokens: 8192 });
-    return result.text;
+    return mailLlmChat(this.db, this.config, { system, user, caller: "email-triage", maxTokens: 8192 });
   }
 
   /** Get unclassified emails (attention_needed = -1), limited to inbox and
