@@ -24,6 +24,10 @@
   import { buildCatalog, commonModels, rankModels, type ModelEntry } from '$lib/model-catalog.js';
   import { toolCapable, findProvider, type ProviderStatus } from '$lib/provider-health.js';
   import { bindListeners } from '$lib/outside-listeners.js';
+  import { modelPrices, priceKey, fmtPrice } from '$lib/model-prices.js';
+
+  // USD per million tokens, input / output — from the kernel's LiteLLM table.
+  const prices = modelPrices();
 
   /** Provider name as the agent stores it — may be `claude_code`, not the slug. */
   export let provider = '';
@@ -296,6 +300,10 @@
                 on:click|stopPropagation={() => choose(s.p.slug, r.id)}
               >
                 <span class="mp-opt-id">{r.id}</span>
+                {#if $prices.get(priceKey(s.p.slug, r.id))}
+                  {@const pr = $prices.get(priceKey(s.p.slug, r.id))}
+                  <span class="mp-opt-price" title="USD per million tokens — input / output">{pr ? fmtPrice(pr) : ''}</span>
+                {/if}
               </button>
             {/each}
             {#if !query.trim() && !expanded.has(s.p.slug) && s.total > s.rows.length}
@@ -385,6 +393,10 @@
   }
   .mp-why-tools{color:#ef5d6e;background:rgba(239,93,110,.1);border-color:rgba(239,93,110,.32)}
 
+  .mp-opt-price{
+    margin-left:auto;flex:none;padding-left:10px;
+    font:500 10px 'JetBrains Mono',monospace;color:#7d8299;font-variant-numeric:tabular-nums;
+  }
   .mp-opt{
     display:flex;align-items:center;gap:8px;width:100%;
     padding:5px 9px;border:none;border-radius:5px;background:none;

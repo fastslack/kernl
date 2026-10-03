@@ -38,6 +38,7 @@
   import { readChain, writeChain, runsOnClaudeCode, MAX_CHAIN_LINKS, type ChainLink } from '$lib/model-chain.js';
   import { linkHealth, chainUsable, type ProviderStatus } from '$lib/provider-health.js';
   import { loadPickerProviders } from '$lib/llm-provider-list.js';
+  import { refreshPrices } from '$lib/model-prices.js';
   import type { ModelEntry } from '$lib/model-catalog.js';
 
   /** The drawer's agent store (`AgentDrawer` publishes it on the overview slot). */
@@ -90,6 +91,22 @@
     providersLoaded = true;
   }
   loadProviders();
+
+  // ── Prices (shown in the pickers; refreshed on demand) ─────────────
+  let pricesBusy = false;
+  let pricesNote = '';
+  async function onRefreshPrices(): Promise<void> {
+    pricesBusy = true;
+    pricesNote = '';
+    try {
+      const n = await refreshPrices();
+      pricesNote = get(t)('agent.prices.refreshed', { n: String(n) });
+    } catch (e) {
+      pricesNote = (e as Error).message;
+    } finally {
+      pricesBusy = false;
+    }
+  }
 
   // ── Writing ──────────────────────────────────────────────────────
   /** Per-field write outcome, so the error lands on the control, not a toast. */
@@ -299,7 +316,13 @@
       <div class="rt-field">
         <div class="rt-lbl">
           <span>{$t('agent.config.model')}</span>
-          <span class="rt-lbl-note">{$t('agent.config.model_help')}</span>
+          <span class="rt-lbl-note">
+            {$t('agent.config.model_help')} ·
+            <button class="rt-price-link" type="button" on:click={onRefreshPrices} disabled={pricesBusy}
+                    title={$t('agent.prices.refresh_title')}>
+              {pricesBusy ? $t('agent.prices.refreshing') : pricesNote || $t('agent.prices.refresh')}
+            </button>
+          </span>
         </div>
 
         {#each links as link, i (i)}
@@ -462,6 +485,12 @@
     display:flex;align-items:baseline;justify-content:space-between;gap:8px;
     font:500 10px 'Manrope',sans-serif;color:#8a8fa8;
   }
+  .rt-price-link{
+    background:none;border:none;padding:0;cursor:pointer;font:inherit;
+    color:#9fb4e8;text-decoration:underline;text-underline-offset:2px;
+  }
+  .rt-price-link:hover:not(:disabled){color:#c4d3f7}
+  .rt-price-link:disabled{opacity:.6;cursor:wait}
   .rt-lbl-note{font:500 9px 'JetBrains Mono',monospace;color:#6a6f82}
 
   .rt-row{display:flex;align-items:center;gap:8px}

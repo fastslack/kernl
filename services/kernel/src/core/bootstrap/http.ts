@@ -280,6 +280,11 @@ export async function initHttpAndMcp(args: {
       // reports ready while agent runs keep serving the boot-time map), and
       // readiness. Shared by the old settings-save callback and the new
       // connect routes so both behave the same.
+      // Model prices (LiteLLM) and the cheapest-model translator. Re-priced
+      // after every provider change below, on boot and once a day.
+      const { registerPriceRoutes } = await import("../llm/price-routes.js");
+      const priceRoutes = registerPriceRoutes(httpServer, { db: sqlite, registry: llmRegistry });
+
       const refreshLlmConsumers = (why: string): void => {
         try { (chatModule.getService() as { reloadProviders?: () => void } | null)?.reloadProviders?.(); } catch { /* chat may be disabled */ }
         void import("../llm/chat-adapters.js").then(({ createChatProviders }) => {
@@ -288,6 +293,7 @@ export async function initHttpAndMcp(args: {
         }).catch(() => { /* agents may be disabled */ });
         reloadLlmClient(config);
         markLlmReadinessStale(why);
+        priceRoutes.refreshSoon(why);
       };
 
       registerLlmReadinessRoutes(httpServer);

@@ -72,6 +72,7 @@
     type CatalogSkill
   } from '$lib/skills.js';
   import { normalizeRepoUrl } from '$lib/skill-repos.js';
+  import SkillInfo, { type SkillManifest } from '../SkillInfo.svelte';
 
   // `SkillAgent` and nothing more: this tab reads `id`, `name` and
   // `skills_json`, and the three surfaces that mount it each hand over a
@@ -514,6 +515,16 @@
     return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n);
   }
 
+  /** The installed row's manifest, so the info card does not fetch it. */
+  function manifestOf(slug: string): SkillManifest | null {
+    return (bySlug.get(slug)?.manifest as SkillManifest | undefined) ?? null;
+  }
+
+  /** A catalogue entry's own manifest, else the installed row's. */
+  function entryManifest(e: { slug: string; manifest?: unknown }): SkillManifest | null {
+    return (e.manifest as SkillManifest | undefined) ?? manifestOf(e.slug);
+  }
+
   function descOf(slug: string): string {
     const item = bySlug.get(slug);
     return item ? skillDescription(item) : '';
@@ -681,6 +692,7 @@
               <span class="sk-main">
                 <span class="sk-slug">
                   {s.slug}
+                  <SkillInfo slug={s.slug} manifest={manifestOf(s.slug)} installed={s.installed} matches={s.matches ?? []} score={s.score} />
                   {#if !s.installed}<span class="sk-tag">{$t('agent.skills.catalogue_word')}</span>{/if}
                 </span>
                 {#if s.matches?.length}
@@ -812,7 +824,10 @@
               <li class="sk-row">
                 <span class="sk-glyph" aria-hidden="true">{isInstalled ? '▸' : '⬇'}</span>
                 <span class="sk-main">
-                  <span class="sk-slug">{e.slug}</span>
+                  <span class="sk-slug">
+                    {e.slug}
+                    <SkillInfo slug={e.slug} manifest={entryManifest(e)} installed={isInstalled} />
+                  </span>
                   {#if e.manifest?.description}
                     <span class="sk-desc">{e.manifest.description}</span>
                   {/if}
@@ -861,6 +876,7 @@
               <span class="sk-main">
                 <span class="sk-slug">
                   {e.slug}
+                  <SkillInfo slug={e.slug} manifest={entryManifest(e)} installed={isInstalled} />
                   {#if paid}<span class="sk-tag sk-tag-paid">{$t('agent.skills.paid')}</span>{/if}
                 </span>
                 {#if e.manifest?.description}

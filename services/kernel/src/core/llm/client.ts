@@ -815,6 +815,25 @@ export function createPinnedLlmClient(
   return new LlmClient({ ...link, fallbackChain: [], maxRetries: 0 });
 }
 
+/**
+ * A client over an explicit, ordered list of (provider, model) links — the
+ * first usable one is the primary, the rest its fallbacks. Links whose
+ * provider cannot be used right now are skipped, exactly as in the global
+ * chain. Returns null when none is usable.
+ *
+ * This is how "the cheapest model" runs: ModelPriceStore orders the links by
+ * price and this keeps everything else the driver does — retries, the 429
+ * limiter, health ordering, the call log.
+ */
+export function createChainLlmClient(links: Array<{ provider: string; model: string }>): LlmClient | null {
+  const materialized = links
+    .map((l) => materializeLink(l.provider, l.model))
+    .filter((l): l is LlmConfig => l !== null);
+  if (materialized.length === 0) return null;
+  const [primary, ...fallbackChain] = materialized;
+  return new LlmClient({ ...primary, fallbackChain });
+}
+
 /** Create LLM client from kernel config, wired up with primary + fallback chain. */
 export function createLlmClient(config: KernelConfig): LlmClient {
   return new LlmClient(buildLlmConfig(config));
