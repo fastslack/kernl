@@ -20,8 +20,12 @@
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
-    liveToolRows, type LiveRow,
+    liveDisplayRows, summarizeToolResult, type LiveRow, type LiveStepRow,
   } from '$lib/live-steps.js';
+  import { agentActionOf, type AgentAction } from '$lib/agent-actions.js';
+  import { t } from '$lib/i18n/index.js';
+  import AgentActionBody from './AgentActionBody.svelte';
+  import { shortToolName, resultFailed } from '$lib/history-steps.js';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
 
@@ -35,6 +39,26 @@
   export let onOutputClick: (e: MouseEvent) => void = () => {};
   /** A tool_result carrying an email id offers a link to the real message. */
   export let onOpenEmail: (commId: string) => void = () => {};
+  /** Agent id → name, so an action on another agent names it instead of a short id. */
+  export let nameOf: (id: string) => string | undefined = () => undefined;
+
+  // ── Acting on another agent ───────────────────────────────────────
+  // A message to a colleague, an edit, a learning, a run, a meeting, an
+  // escalation: the steps the 3D world animates. They render as a card that
+  // says to whom, what, and whether it landed — not as one more tool row.
+  function actionOf(row: { e: AgentFlowEvent; result?: { e: AgentFlowEvent } }): AgentAction | null {
+    if (liveEventType(row.e) !== 'tool_call') return null;
+    const res = row.result;
+    return agentActionOf(
+      String(row.e.data.tool_name ?? ''),
+      String(row.e.data.content_preview ?? ''),
+      res ? {
+        preview: String(res.e.data.content_preview ?? ''),
+        failed: resultFailed(res.e.data.is_error, String(res.e.data.content_preview ?? '')),
+      } : undefined,
+      nameOf,
+    );
+  }
 
   $: liveHeadEvent = events[0] ?? null;
 
@@ -64,8 +88,8 @@
     if (openRuns.has(key)) openRuns.delete(key); else openRuns.add(key);
     openRuns = new Set(openRuns);
   }
-  type DisplayRow = LiveRow | { kind: 'event'; e: AgentFlowEvent; i: number; inRun: true };
-  $: displayRows = liveToolRows(events).flatMap((r): DisplayRow[] =>
+  type DisplayRow = LiveStepRow | { kind: 'event'; e: AgentFlowEvent; i: number; inRun: true; result?: undefined; quiet?: undefined };
+  $: displayRows = liveDisplayRows(events).flatMap((r): DisplayRow[] =>
     r.kind === 'tools' && openRuns.has(r.key)
       ? [r, ...r.items.map((x) => ({ kind: 'event' as const, ...x, inRun: true as const }))]
       : [r]);
@@ -75,6 +99,15 @@
     if (r.pending > 0) parts.push(`${r.pending} running`);
     return `${r.tool} — ${parts.join(', ')}`;
   }
+
+  // The hero names the action when the newest event is one (its call, or the
+  // result that just came back for it).
+  $: heroAction = (() => {
+    const first = displayRows[0];
+    if (!first || first.kind !== 'event') return null;
+    if (first.i !== 0 && first.result?.i !== 0) return null;
+    return actionOf(first);
+  })();
 
   $: liveRunElapsedMs = runElapsedMs(events);
   $: liveRunTokensTotal = runTokensTotal(events);
@@ -96,11 +129,16 @@
         </div>
         <div class="live-now-body copy-wrap">
           <CopyTextBtn text={String(liveHeadEvent.data.content_preview ?? '') || liveEventSummary(liveHeadEvent)} title="Copy event content" />
-          <div class="live-now-lbl">{liveStepLabel(hType)}</div>
-          {#if hType === 'tool_call' && liveHeadEvent.data.tool_name}
-            <code class="live-tool">{liveHeadEvent.data.tool_name}</code>
+          {#if heroAction}
+            <div class="live-now-lbl live-now-action">{heroAction.icon} {$t('agent.action.kind_label')}</div>
+            <div class="live-now-action-body"><AgentActionBody action={heroAction} compact /></div>
+          {:else}
+            <div class="live-now-lbl">{liveStepLabel(hType)}</div>
+            {#if hType === 'tool_call' && liveHeadEvent.data.tool_name}
+              <code class="live-tool">{liveHeadEvent.data.tool_name}</code>
+            {/if}
+            <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
           {/if}
-          <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
         </div>
         <div class="live-now-clock">{fmtClock(liveHeadEvent.ts)}</div>
       </div>
@@ -166,7 +204,10 @@
         {@const dt = liveStepDeltaMs(i)}
         {@const stepTok = liveStepTokens(e)}
         {@const cumTok = liveStepTokensTotal(i)}
-        <li class="live-step live-step-{etype} live-cat-{ecat}" class:live-step-head={i === 0} class:live-step-open={isOpen} class:live-step-in-run={'inRun' in row}>
+        {@const res = 'result' in row ? row.result : undefined}
+        {@const resBad = !!res && resultFailed(res.e.data.is_error, String(res.e.data.content_preview ?? ''))}
+        {@const act = actionOf(row)}
+        <li class="live-step live-step-{etype} live-cat-{ecat}{act ? ` live-action live-action-${act.kind} live-action-${act.outcome}` : ''}" class:live-step-head={i === 0} class:live-step-open={isOpen} class:live-step-in-run={'inRun' in row} class:live-step-quiet={'quiet' in row && row.quiet}>
           <span class="live-step-dot"></span>
           <button
             type="button"
@@ -176,10 +217,17 @@
             on:click={() => hasDetail && toggleLiveStep(stepKey)}
             title={hasDetail ? (isOpen ? 'Hide details' : 'Show details') : ''}
           >
+            {#if act}
+              <AgentActionBody action={act} />
+            {:else}
             <span class="live-step-icon">{liveStepIcon(etype)}</span>
             <span class="live-step-type">{liveStepLabel(etype)}</span>
-            {#if e.data.tool_name}<code class="live-step-tool">{e.data.tool_name}</code>{/if}
-            <span class="live-step-text">{liveStepSummary(e)}</span>
+            {#if e.data.tool_name}<code class="live-step-tool" title={String(e.data.tool_name)}>{shortToolName(String(e.data.tool_name))}</code>{/if}
+            <!-- A call reads with its outcome: what it asked → what came back. -->
+            <span class="live-step-text">
+              {liveStepSummary(e)}{#if res}<span class="live-step-res" class:bad={resBad}> → {resBad ? '✗ ' : ''}{summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))}</span>{/if}
+            </span>
+            {/if}
             <span class="live-step-clock">{fmtClock(e.ts)}</span>
             {#if hasDetail}
               <span class="live-step-chev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
@@ -212,6 +260,12 @@
               <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
                 {@html formatRunOutput(liveEventSummary(e))}
               </div>
+              {#if res}
+                <div class="live-step-res-h" class:bad={resBad}>{resBad ? '✗ Error' : '← Result'}</div>
+                <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
+                  {@html formatRunOutput(liveEventSummary(res.e))}
+                </div>
+              {/if}
             </div>
           {/if}
         </li>
@@ -403,7 +457,7 @@
   /* ── Summary row — one line of plain-language action description.
      Whole row is a button: click to expand the JSON payload below. */
   .live-step-summary{
-    width:100%;display:flex;align-items:center;gap:8px;flex-wrap:nowrap;
+    width:100%;display:flex;align-items:flex-start;gap:8px;flex-wrap:nowrap;
     padding:6px 10px;border-radius:7px;border:1px solid transparent;
     background:transparent;color:inherit;text-align:left;cursor:pointer;
     font:500 10.5px 'JetBrains Mono',monospace;
@@ -450,10 +504,20 @@
      gracefully when the description is long. */
   .live-step-text{
     flex:1;min-width:0;
-    color:#d6dae8;font:400 11.5px/1.4 'Manrope',sans-serif;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    color:#d6dae8;font:400 11.5px/1.45 'Manrope',sans-serif;
+    /* Two lines, then an ellipsis: one line cut the sentence that said what
+       the step was for. The full text is one click away. */
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+    overflow:hidden;word-break:break-word;
   }
-  .live-step-open .live-step-text{white-space:normal}
+  .live-step-res{color:#8fd6a8}
+  .live-step-res.bad{color:#ef8090}
+  .live-step-res-h{margin:8px 0 4px;font:600 9.5px 'JetBrains Mono',monospace;letter-spacing:.6px;color:#8fd6a8;text-transform:uppercase}
+  .live-step-res-h.bad{color:#ef8090}
+  /* Housekeeping (loading tools): present, but not competing with real work. */
+  .live-step-quiet{opacity:.55}
+  .live-step-quiet:hover{opacity:1}
+  .live-step-open .live-step-text{-webkit-line-clamp:unset;line-clamp:none;display:block}
   .live-step-clock{color:#4a4f6a;font-size:9px;flex-shrink:0}
   .live-step-chev{
     color:#6a6f82;font-size:11px;width:14px;text-align:center;flex-shrink:0;
@@ -542,4 +606,31 @@
   }
   .live-totals-time{color:#9ec0ef;background:rgba(106,160,255,.10);border-color:rgba(106,160,255,.22)}
   .live-totals-tok {color:#bee2a3;background:rgba(120,220,140,.10);border-color:rgba(120,220,140,.22)}
+
+  /* ── Acting on another agent ─────────────
+     The steps the 3D world animates (the desk-to-desk shot of a message, an
+     edit's walk-over…) get a card of their own: an accent bar, the icon the
+     world pops over the desk, who it went to in plain words, what was said,
+     and whether it landed. Everything else in the timeline stays a quiet
+     one-liner, so these are what the eye finds first. */
+  .live-action{--act:#f0b44c}
+  .live-action-failed{--act:#ef5d6e}
+  .live-action .live-step-dot{
+    width:11px;height:11px;margin-left:-1.5px;
+    background:var(--act);box-shadow:0 0 0 3px color-mix(in srgb, var(--act) 22%, transparent);
+  }
+  .live-action .live-step-summary{
+    margin:3px 0;padding:9px 11px 10px;gap:10px;
+    font-family:'Manrope',sans-serif;
+    background:color-mix(in srgb, var(--act) 7%, transparent);
+    border:1px solid color-mix(in srgb, var(--act) 30%, transparent);
+    border-left:3px solid var(--act);
+  }
+  .live-action .live-step-summary:hover:not(:disabled){
+    background:color-mix(in srgb, var(--act) 11%, transparent);
+    border-color:color-mix(in srgb, var(--act) 45%, transparent);
+    border-left-color:var(--act);
+  }
+  .live-now-action{color:#f0b44c}
+  .live-now-action-body{display:flex;gap:10px;margin-top:4px}
 </style>

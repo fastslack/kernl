@@ -217,6 +217,15 @@ export function summarizeToolCall(toolName: string, inputPreview: string): strin
     return `Change ${what}${id ? ' ' + id : ''} settings${changes.length ? ' · ' + changes.slice(0, 3).join(' · ') : ''}`;
   }
   switch (toolName) {
+    case 'ToolSearch': {
+      // The agent loading tools before it calls them. Name what it loads.
+      const q = String(args.query ?? '');
+      const names = q.startsWith('select:')
+        ? q.slice(7).split(',').map((n) => n.trim().replace(/^mcp__.+?__/, '')).filter(Boolean)
+        : [];
+      if (names.length) return `Loads ${names.length === 1 ? 'tool' : 'tools'}: ${names.join(', ')}`;
+      return q ? `Looks for tools matching “${ellipsize(q, 60)}”` : 'Loads tools';
+    }
     case 'Bash': {
       const desc = typeof args.description === 'string' ? args.description : '';
       const cmd = typeof args.command === 'string' ? args.command : '';
@@ -350,8 +359,10 @@ export function liveStepSummary(e: AgentFlowEvent): string {
   const toolName = String(e.data.tool_name ?? '');
   if (etype === 'tool_call') return summarizeToolCall(toolName, preview);
   if (etype === 'tool_result') return summarizeToolResult(toolName, preview);
-  if (etype === 'thought') return ellipsize(preview, 140) || 'thinking…';
-  if (etype === 'final') return ellipsize(preview, 140) || 'finalizing…';
+  // Two lines' worth of prose, markdown marks out: the row wraps instead of
+  // cutting the one sentence that says what the agent is doing.
+  if (etype === 'thought') return ellipsize(plainStepText(preview), 260) || 'thinking…';
+  if (etype === 'final') return ellipsize(plainStepText(preview), 260) || 'finalizing…';
   if (etype === 'rate_limit_wait') return ellipsize(preview, 140) || 'rate-limit cooldown';
   if (etype === 'error') return ellipsize(preview, 140) || 'error';
   // Run lifecycle + meta — defer to the prose helper.
@@ -517,4 +528,68 @@ export function liveToolRows(events: AgentFlowEvent[]): LiveRow[] {
     });
   }
   return rows;
+}
+
+// ── Reading the timeline as steps, not as a log ─────────────────────
+
+/** An event row, with its tool result folded in when it had one. */
+export type LiveStepRow =
+  | Exclude<LiveRow, { kind: 'event' }>
+  | ({ kind: 'event'; result?: LiveIndexed; quiet?: boolean } & LiveIndexed);
+
+const isToolSearch = (tool: unknown) => String(tool ?? '') === 'ToolSearch';
+
+/** Markdown marks and runs of whitespace out, for a one-glance line. */
+export function plainStepText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\*\*|__|`/g, '')
+    .replace(/^#+\s*/gm, '')
+    .replace(/^\s*[-*]\s+/gm, '')
+    .replace(/\s*-{2,}\s*/g, ' — ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The LIVE rows a person reads: `liveToolRows`, then
+ *   - each tool call carries its own result (one row: what it asked, what came
+ *     back) instead of a CALLING TOOL row and a TOOL RESULT row apart;
+ *   - ToolSearch — the agent loading a tool before calling it — is marked
+ *     `quiet`, and its empty result is dropped;
+ *   - a THINKING row whose text the FINALIZING row right after repeats is dropped.
+ * Pairing is by tool name, oldest call first, so parallel calls to different
+ * tools still meet their own results.
+ */
+export function liveDisplayRows(events: AgentFlowEvent[]): LiveStepRow[] {
+  const rows: LiveStepRow[] = liveToolRows(events).map((r) => (r.kind === 'event' ? { ...r } : r));
+  const drop = new Set<LiveStepRow>();
+  const open = new Map<string, Extract<LiveStepRow, { kind: 'event' }>[]>();
+  // Oldest → newest: rows are newest first.
+  for (let k = rows.length - 1; k >= 0; k--) {
+    const r = rows[k];
+    if (r.kind !== 'event') continue;
+    const type = liveEventType(r.e);
+    const tool = String(r.e.data.tool_name ?? '');
+    if (type === 'tool_call' && tool) {
+      if (isToolSearch(tool)) r.quiet = true;
+      open.set(tool, [...(open.get(tool) ?? []), r]);
+    } else if (type === 'tool_result' && tool) {
+      const queue = open.get(tool);
+      const call = queue?.shift();
+      if (call) {
+        call.result = { e: r.e, i: r.i };
+        drop.add(r);
+      } else if (isToolSearch(tool)) {
+        drop.add(r);
+      }
+    } else if (type === 'final') {
+      const prev = rows[k + 1];
+      if (
+        prev && prev.kind === 'event' && liveEventType(prev.e) === 'thought' &&
+        plainStepText(String(prev.e.data.content_preview ?? '')) === plainStepText(String(r.e.data.content_preview ?? ''))
+      ) drop.add(prev);
+    }
+  }
+  return rows.filter((r) => !drop.has(r));
 }

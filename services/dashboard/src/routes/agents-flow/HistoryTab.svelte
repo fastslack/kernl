@@ -14,7 +14,7 @@
   import { emailCommId } from '$lib/agent-helpers.js';
   import {
     liveStepIcon, liveStepLabel, liveStepSummary, liveStepCategory, liveEventType,
-    summarizeToolCall, summarizeToolResult,
+    summarizeToolCall, summarizeToolResult, plainStepText,
   } from '$lib/live-steps.js';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import {
@@ -145,7 +145,8 @@
             </div>
           {/if}
           {#if run.result && expandedRunId !== run.id}
-            <div class="ip-run-prev">{run.result.slice(0, 160)}{run.result.length > 160 ? '…' : ''}</div>
+            {@const prev = plainStepText(run.result)}
+            <div class="ip-run-prev">{prev.slice(0, 200)}{prev.length > 200 ? '…' : ''}</div>
           {/if}
 
           {#if expandedRunId === run.id}
@@ -596,10 +597,12 @@
     padding:1px 5px;border-radius:3px;background:rgba(208,184,122,.10);
   }
   .hs-text{
-    flex:1;min-width:0;color:#d6dae8;font:400 11.5px/1.4 'Manrope',sans-serif;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    flex:1;min-width:0;color:#d6dae8;font:400 11.5px/1.45 'Manrope',sans-serif;
+    /* Two lines before the ellipsis, as in LIVE. */
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+    overflow:hidden;word-break:break-word;
   }
-  .hs-open .hs-text{white-space:normal}
+  .hs-open .hs-text{-webkit-line-clamp:unset;line-clamp:none;display:block}
   .hs-chev{color:#6a6f82;font-size:11px;width:14px;text-align:center;flex-shrink:0}
   .hs-open .hs-chev{color:#a0a5b8}
   .hs-event .hs-row{background:rgba(212,168,75,.03)}

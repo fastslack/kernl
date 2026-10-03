@@ -31,5 +31,12 @@
   .sp{position:relative;display:flex;flex-direction:column;gap:4px;min-width:0}
   .sp-lbl{font:700 9px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;color:#8a8fa8}
   .sp-empty{margin:0;font:italic 400 11.5px 'Manrope',sans-serif;color:#7d839c}
-  .sp-md{max-height:420px}
+  /* Capped, so it has to scroll itself: `.ip-out-md`'s overflow rule is
+     scoped to the components that declare it and does not reach here, and
+     without this a long payload spilled over the steps below it. */
+  .sp-md{
+    max-height:420px;overflow-y:auto;overflow-x:hidden;
+    word-break:break-word;overflow-wrap:anywhere;
+    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
+  }
 </style>

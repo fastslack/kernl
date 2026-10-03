@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { AgentFlowEvent } from "./stores.js";
-import { liveToolRows } from "./live-steps.js";
+import { liveToolRows, liveDisplayRows, plainStepText } from "./live-steps.js";
 import {
   liveStepIcon,
   liveStepLabel,
@@ -317,5 +317,76 @@ describe("liveToolRows", () => {
   it("does not merge calls to the same tool across another tool", () => {
     const rows = liveToolRows(buffer(...polls(2, "A"), ...polls(1, "B"), ...polls(2, "A")));
     expect(rows.map((r) => (r.kind === "tools" ? `${r.tool}×${r.calls}` : "ev"))).toEqual(["A×2", "ev", "ev", "A×2"]);
+  });
+});
+
+describe("liveDisplayRows", () => {
+  let t = 0;
+  const ev = (type: string, tool = "", preview = ""): AgentFlowEvent => ({
+    event: "agent:flow:step",
+    data: { type, tool_name: tool, content_preview: preview },
+    ts: `2026-10-03T05:00:${String(t++).padStart(2, "0")}.000Z`,
+  });
+  const buffer = (...xs: AgentFlowEvent[]) => xs.reverse();
+  const shape = (rows: ReturnType<typeof liveDisplayRows>) =>
+    rows.map((r) => r.kind === "event"
+      ? `${liveEventType(r.e)}${r.result ? "+result" : ""}${r.quiet ? ":quiet" : ""}`
+      : `tools:${r.tool}`);
+
+  it("puts each tool result on its call's row", () => {
+    const rows = liveDisplayRows(buffer(
+      ev("tool_call", "mcp__kernel__kernel_agents_update", '{"id":"x","max_iterations":40}'),
+      ev("tool_result", "mcp__kernel__kernel_agents_update", "Agent **Scout** updated."),
+    ));
+    expect(shape(rows)).toEqual(["tool_call+result"]);
+    const call = rows[0] as Extract<typeof rows[number], { kind: "event" }>;
+    expect(call.result?.e.data.content_preview).toBe("Agent **Scout** updated.");
+  });
+
+  it("marks ToolSearch quiet and drops its empty result", () => {
+    const rows = liveDisplayRows(buffer(
+      ev("tool_call", "ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_add_learning"}'),
+      ev("tool_result", "ToolSearch", ""),
+      ev("tool_call", "Read", '{"file_path":"/a.ts"}'),
+    ));
+    expect(shape(rows)).toEqual(["tool_call", "tool_call+result:quiet"]);
+  });
+
+  it("pairs parallel calls of different tools with their own results", () => {
+    const rows = liveDisplayRows(buffer(
+      ev("tool_call", "A", "{}"), ev("tool_call", "B", "{}"),
+      ev("tool_result", "B", "b-out"), ev("tool_result", "A", "a-out"),
+    ));
+    expect(shape(rows)).toEqual(["tool_call+result", "tool_call+result"]);
+    const [b, a] = rows as Extract<typeof rows[number], { kind: "event" }>[];
+    expect(a.result?.e.data.content_preview).toBe("a-out");
+    expect(b.result?.e.data.content_preview).toBe("b-out");
+  });
+
+  it("drops a THINKING row that FINALIZING repeats word for word", () => {
+    const same = "Listo. **ROOT_CAUSE:** el Scout tenía max_iterations bajo";
+    expect(shape(liveDisplayRows(buffer(ev("thought", "", same), ev("final", "", same))))).toEqual(["final"]);
+    expect(shape(liveDisplayRows(buffer(ev("thought", "", "otra cosa"), ev("final", "", same))))).toEqual(["final", "thought"]);
+  });
+
+  it("leaves a call still waiting for its result on its own", () => {
+    expect(shape(liveDisplayRows(buffer(ev("tool_call", "Bash", '{"command":"ls"}'))))).toEqual(["tool_call"]);
+  });
+});
+
+describe("plainStepText", () => {
+  it("drops markdown marks so a line reads as prose", () => {
+    expect(plainStepText("Listo. Resumen: -- **ROOT_CAUSE:** El Scout tenía `max_iterations`\n# Fix\n- subirlo")).toBe(
+      "Listo. Resumen: — ROOT_CAUSE: El Scout tenía max_iterations Fix subirlo");
+  });
+});
+
+describe("summarizeToolCall · ToolSearch", () => {
+  it("names the tools being loaded", () => {
+    expect(summarizeToolCall("ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_list,mcp__kernel__kernel_agents_flows_list"}'))
+      .toBe("Loads tools: kernel_agents_list, kernel_agents_flows_list");
+    expect(summarizeToolCall("ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_add_learning"}'))
+      .toBe("Loads tool: kernel_agents_add_learning");
+    expect(summarizeToolCall("ToolSearch", '{"query":"slack messages"}')).toBe("Looks for tools matching “slack messages”");
   });
 });
