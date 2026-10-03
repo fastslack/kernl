@@ -25,7 +25,7 @@ import {
 } from './index.js';
 import type { SittingWorkers } from './walkers/index.js';
 import type {
-  WorldAgent, WorldFlow, LiveMeeting, LiveTurn, MgmtEntry, AnimatedTagOpts,
+  WorldAgent, WorldFlow, LiveMeeting, LiveTurn, MgmtEntry, AnimatedTagOpts, CoordInfo,
 } from '../world-types.js';
 
 type RoomSlot = { cx: number; cz: number; w: number; d: number };
@@ -86,7 +86,7 @@ export interface LiveEventContext {
   pickFreeMyOfficeChair(): Vec3 | null;
   flowColor(aid: string): string;
   sameOffice(srcId: string, tgtId: string): boolean;
-  coordinateInMeetingRoom(srcId: string, tgtId: string, color: string): boolean;
+  coordinateInMeetingRoom(srcId: string, tgtId: string, color: string, info?: CoordInfo): boolean;
   spawnMeetingDecor(meetingId: string, room: RoomSlot, topic: string, onClick?: () => void): void;
   updateMeetingDecorTurn(meetingId: string, turnText: string): void;
   disposeMeetingDecor(meetingId: string): void;
@@ -319,7 +319,9 @@ export function processLiveEvents(ctx: LiveEventContext): void {
         // try the meeting visual first and only fall back to desk-to-desk
         // if no room is available (or the agents are in the same office).
         const color = flowColor(sid);
-        const wentToMeeting = !sameOffice(sid, tid) && coordinateInMeetingRoom(sid, tid, color);
+        const wentToMeeting = !sameOffice(sid, tid) && coordinateInMeetingRoom(sid, tid, color, {
+          kind: 'handoff', title: label, body: String(e.data.result_preview ?? e.data.payload_preview ?? ''),
+        });
         if (!wentToMeeting) {
           sendWalker(ctx.scene, ctx.walkers, sid, tid, ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents, color, undefined, ctx.sittingWorkers, ctx.deskAabbs);
         }
@@ -712,7 +714,9 @@ export function processLiveEvents(ctx: LiveEventContext): void {
       // For cross-office edits, route through a meeting room instead — the
       // manager and the edited agent "coordinate" face-to-face.
       if (ctx.scene && mgrId && tgtId) {
-        const wentToMeeting = !sameOffice(mgrId, tgtId) && coordinateInMeetingRoom(mgrId, tgtId, '#C67FE8');
+        const wentToMeeting = !sameOffice(mgrId, tgtId) && coordinateInMeetingRoom(mgrId, tgtId, '#C67FE8', {
+          kind: 'edit', title: `${mgrName} edited ${tgtName}: ${what}`, body: '',
+        });
         if (!wentToMeeting) {
           sendWalker(ctx.scene, ctx.walkers, mgrId, tgtId, ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents, '#C67FE8', undefined, ctx.sittingWorkers, ctx.deskAabbs);
         }
@@ -748,7 +752,12 @@ export function processLiveEvents(ctx: LiveEventContext): void {
       // (both sit and "coordinate"). Same-office stays as desk-to-desk so
       // small adjustments don't look as ceremonious as they really are.
       if (ctx.scene && fromId && toId) {
-        const wentToMeeting = !sameOffice(fromId, toId) && coordinateInMeetingRoom(fromId, toId, color);
+        const wentToMeeting = !sameOffice(fromId, toId) && coordinateInMeetingRoom(fromId, toId, color, {
+          kind: isDirective ? 'directive' : 'escalation',
+          title: String(e.data.subject ?? ''),
+          body: String(e.data.body_preview ?? e.data.body ?? ''),
+          messageId: e.data.message_id ? String(e.data.message_id) : undefined,
+        });
         if (!wentToMeeting) {
           sendWalker(ctx.scene, ctx.walkers, fromId, toId, ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents, color, undefined, ctx.sittingWorkers, ctx.deskAabbs);
         }

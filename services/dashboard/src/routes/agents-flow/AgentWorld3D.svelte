@@ -58,7 +58,9 @@
   import type {
     WorldAgent, WorldChain, WorldFlow, WorldRank, WorldStats,
     OfficeReport, PendingQuestion, LiveMeeting, MgmtEntry, AnimatedTagAnim,
+    CoordInfo, ActiveCoord,
   } from './world-types.js';
+  import CoordinationCard from './CoordinationCard.svelte';
 
   export let agents: WorldAgent[] = [];
   export let chains: WorldChain[] = [];
@@ -221,6 +223,10 @@
   // coordination (NOT a real LLM meeting). Tracked separately so we don't
   // double-book a room that's already hosting a real meeting and vice-versa.
   const activeCoordRooms = new Set<number>();
+  /** What each room's coordination is about — what a click on its table shows. */
+  let activeCoords: Record<number, ActiveCoord> = {};
+  /** The coordination card open over the world, if any. */
+  let openCoord: ActiveCoord | null = null;
   // Per-meeting visual decor: a glowing halo above the table + a CSS banner
   // showing topic and current turn. Created on meeting_requested, updated on
   // meeting_turn, disposed on meeting_ended. The banner uses CSS2DObject so
@@ -2214,8 +2220,19 @@
         for (const [id, idx] of meetingIdToRoom.entries()) {
           if (idx === hoveredMeetingRoomIdx) { mid = id; break; }
         }
+        // No meeting here, but two agents are "coordinating" at this table:
+        // that is a cross-office message drawn as a meeting — show it.
+        const coord = !mid ? activeCoords[hoveredMeetingRoomIdx] : undefined;
+        if (coord) {
+          openCoord = coord;
+          showLiveMeeting = false;
+          showMyOfficePanel = false;
+          selectedAgent = null;
+          return;
+        }
         if (!mid) mid = liveMeetingsList[0]?.id ?? null;
         if (mid) {
+          openCoord = null;
           activeMeetingId = mid;
           showLiveMeeting = true;
           showMyOfficePanel = false;
@@ -3912,7 +3929,7 @@
    *
    *  Returns true if the coordination was kicked off, false if no room is
    *  available (caller should fall back to a desk-to-desk visual). */
-  function coordinateInMeetingRoom(srcId: string, tgtId: string, color: string): boolean {
+  function coordinateInMeetingRoom(srcId: string, tgtId: string, color: string, info?: CoordInfo): boolean {
     if (!scene || meetingRoomSlots.length === 0) return false;
     // One walker per agent — if either is already in flight (real meeting,
     // commute, etc.) the coordination would silently no-op partway through.
@@ -3936,6 +3953,11 @@
       ? meetingRoomDoorPoint(room, hallCenterPos)
       : undefined;
     activeCoordRooms.add(roomIdx);
+    const coord: ActiveCoord = {
+      roomIdx, fromId: srcId, toId: tgtId, startedAt: Date.now(),
+      info: info ?? { kind: 'escalation', title: '', body: '' },
+    };
+    activeCoords = { ...activeCoords, [roomIdx]: coord };
 
     // Source sits at seat[0] (front side), target at seat[1] (back side) — the
     // two seats face each other across the table, perfect for a 1-on-1 coord.
@@ -3952,6 +3974,11 @@
           (w) => w.sourceId === srcId || w.sourceId === tgtId);
       }
       activeCoordRooms.delete(roomIdx);
+      // Only this coordination's entry: a newer one may already hold the room.
+      if (activeCoords[roomIdx] === coord) {
+        const { [roomIdx]: _gone, ...rest } = activeCoords;
+        activeCoords = rest;
+      }
     }
     const onArrive = (): void => {
       arrivedCount++;
@@ -4213,6 +4240,19 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   />
 
   <!-- My Office reports panel + report detail modal — see MyOfficePanel.svelte. -->
+  {#if openCoord}
+    <CoordinationCard
+      coord={openCoord}
+      {agents}
+      {flowColor}
+      officeOf={(id) => flows.find((f) => f.id === agents.find((x) => x.id === id)?.flow_id)?.name ?? ''}
+      live={activeCoords[openCoord.roomIdx] === openCoord}
+      onClose={() => (openCoord = null)}
+      onGoto={(id) => { openCoord = null; selectedAgent = id; focusAgent(); }}
+      onOutputClick={handleOutputClick}
+    />
+  {/if}
+
   <MyOfficePanel
     bind:showMyOfficePanel
     bind:myOfficeTab

@@ -1413,6 +1413,8 @@ export function agentsTools(
             to_agent_name: recipient?.name ?? toId,
             subject,
             body_preview: body.slice(0, 200),
+            // The whole message is in the inbox; this lets a viewer fetch it.
+            message_id: result.message.id,
             role,
             cross_office: crossOffice,
             is_manager_directive: isManager,

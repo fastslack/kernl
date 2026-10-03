@@ -35,3 +35,17 @@ describe("office dismissals", () => {
   });
 });
 
+describe("getInboxMessage", () => {
+  it("returns one office message whole, by id", () => {
+    const db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    const service = new AgentService(db, new EventBus());
+    const a = service.createAgent({ name: "Career Lead" });
+    const b = service.createAgent({ name: "Chief" });
+    const body = "Perfil y filtros cerrados. ".repeat(20);
+    const res = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "Perfil", body });
+    const got = service.getInboxMessage(res.message!.id);
+    expect(got).toMatchObject({ id: res.message!.id, from_agent_id: a.id, to_agent_id: b.id, subject: "Perfil", body });
+    expect(service.getInboxMessage("nope")).toBeNull();
+  });
+});

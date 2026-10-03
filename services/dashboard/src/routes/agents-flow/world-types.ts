@@ -89,6 +89,25 @@ export interface LiveMeeting {
 // ── Management log (prompt edits + escalations) ─────────
 // Visible record of every time a manager reshapes the fleet or escalates
 // across offices. The shell's ActivityPanel renders it.
+/** What two agents sitting at a meeting table are "coordinating" — a cross-
+ *  office message drawn as a meeting. Kept so a click on the table can say it. */
+export interface CoordInfo {
+  kind: 'directive' | 'escalation' | 'handoff' | 'edit';
+  /** One line: the subject, chain label or what was edited. */
+  title: string;
+  /** The message itself, when the event carried one (often a 200-char preview). */
+  body: string;
+  /** Inbox message id — GET /api/agents/inbox/:id returns the whole message. */
+  messageId?: string;
+}
+export interface ActiveCoord {
+  roomIdx: number;
+  fromId: string;
+  toId: string;
+  info: CoordInfo;
+  startedAt: number;
+}
+
 export interface MgmtEntry {
   kind: 'edit' | 'directive' | 'escalation';
   from: string; to: string;

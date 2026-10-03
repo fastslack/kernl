@@ -661,6 +661,15 @@ const es: Record<I18nKey, string> = {
   // Shell del drawer — chips del header, botones de acción, barra de tabs.
   // Los chips de tipo (LLM / SCRIPT / "Claude Code SDK") NO se traducen:
   // nombran un executor y un producto, no un concepto.
+  "office.coord.aria": "Qué están coordinando estos agentes",
+  "office.coord.kind_directive": "Directiva",
+  "office.coord.kind_escalation": "Escalación",
+  "office.coord.kind_handoff": "Traspaso",
+  "office.coord.kind_edit": "Edición",
+  "office.coord.live": "en la mesa ahora",
+  "office.coord.go_to": "Ir a {name}",
+  "office.coord.no_body": "El evento no trajo el texto del mensaje.",
+  "office.coord.note": "No es una reunión: es un mensaje entre oficinas que el mundo 3D dibuja como un encuentro en la mesa. El historial completo está en Actividad → Registro de gestión.",
   "office.fail.restart_title": "Se cortó por un reinicio del kernel",
   "office.fail.restart_why": "El kernel se reinició mientras corría. No es un error del agente: volver a correrlo alcanza.",
   "office.fail.max_turns_title": "Se quedó sin pasos ({n})",

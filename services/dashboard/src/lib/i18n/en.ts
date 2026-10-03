@@ -657,6 +657,15 @@ const en = {
   // Agent drawer shell — header chips, action buttons, tab bar.
   // The kind chips (LLM / SCRIPT / "Claude Code SDK") stay untranslated:
   // they name an executor type and a product, not a concept.
+  "office.coord.aria": "What these agents are coordinating",
+  "office.coord.kind_directive": "Directive",
+  "office.coord.kind_escalation": "Escalation",
+  "office.coord.kind_handoff": "Handoff",
+  "office.coord.kind_edit": "Edit",
+  "office.coord.live": "at the table now",
+  "office.coord.go_to": "Go to {name}",
+  "office.coord.no_body": "The event carried no message text.",
+  "office.coord.note": "Not a meeting: a cross-office message the 3D world draws as two agents meeting at the table. The full history is in Activity → Management log.",
   "office.fail.restart_title": "Cut short by a kernel restart",
   "office.fail.restart_why": "The kernel restarted while it ran. Not the agent's fault: running it again is enough.",
   "office.fail.max_turns_title": "Ran out of steps ({n})",

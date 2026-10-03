@@ -199,6 +199,11 @@ export function registerAgentRoutes(
     if (!Array.isArray(ids)) throw new HttpError(400, "run_ids (array) required");
     return ids.filter((x): x is string => typeof x === "string" && x.length > 0).slice(0, 1000);
   };
+  server.route("GET", "/api/agents/inbox/:id", ({ params: { id } }) => {
+    const message = service.getInboxMessage(id);
+    if (!message) throw new HttpError(404, "message not found");
+    return { message };
+  });
   server.route("GET", "/api/agents/office/dismissed", () => ({ run_ids: service.listOfficeDismissed() }));
   server.route("POST", "/api/agents/office/dismiss", ({ body }) => ({ dismissed: service.dismissOfficeRuns(runIdsOf(body)) }));
   server.route("POST", "/api/agents/office/restore", ({ body }) => ({ restored: service.restoreOfficeRuns(runIdsOf(body)) }));

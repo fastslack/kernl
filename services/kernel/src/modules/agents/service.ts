@@ -961,6 +961,11 @@ export class AgentService {
    * a unified conversation stream. The inbox row is kept for the legacy
    * "mark read on delivery" flow used by the executor.
    */
+  /** One office message, whole — the 3D's coordination card shows it. */
+  getInboxMessage(id: string): AgentOfficeInboxMessage | null {
+    return (this.db.prepare("SELECT * FROM agent_office_inbox WHERE id = ?").get(id) as AgentOfficeInboxMessage | undefined) ?? null;
+  }
+
   postToColleague(input: {
     from_agent_id: string;
     to_agent_id: string;
