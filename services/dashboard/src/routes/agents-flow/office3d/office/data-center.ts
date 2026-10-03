@@ -663,7 +663,7 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
 
   // ── 12. ACCENT WASH — magnetic green-tinted floor light ───────
   // Lower intensity than buildCommunicationsOffice — racks already glow.
-  const accentLight = new rt.THREE.PointLight(accent.getHex(), 0.4, Math.max(w, d) * 1.1);
+  const accentLight = new rt.THREE.PointLight(accent.getHex(), 0.8, Math.max(w, d) * 1.1);
   accentLight.position.set(cx, WALL_H - 0.6, cz);
   accentLight.decay = 2;
   accentLight.matrixAutoUpdate = false; accentLight.updateMatrix();
@@ -702,7 +702,7 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
   const dvStand = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.08, 0.35, 0.08), dvDeskMat);
   dvStand.position.set(dvx, 0.97, dvz - 0.15);
   scene.add(dvStand);
-  const dvGlow = new rt.THREE.PointLight(accent, 0.9, 4);
+  const dvGlow = new rt.THREE.PointLight(accent, 1.8, 4);
   dvGlow.position.set(dvx, 1.35, dvz + 0.2);
   scene.add(dvGlow);
   // Invisible hitbox over the whole workstation → click routes to /devops.

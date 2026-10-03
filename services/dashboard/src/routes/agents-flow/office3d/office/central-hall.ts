@@ -86,7 +86,7 @@ export function buildCentralHall(
 
   // ── Ceiling washes over extensions + entrance strip (softer than hall light) ──
   for (const ext of extensions ?? []) {
-    const wash = new rt.THREE.PointLight(0xffeedd, 0.45, Math.max(ext.w, ext.d) * 1.3);
+    const wash = new rt.THREE.PointLight(0xffeedd, 0.9, Math.max(ext.w, ext.d) * 1.3);
     wash.position.set(ext.cx, WALL_H - 0.2, ext.cz);
     wash.decay = 2;
     wash.matrixAutoUpdate = false; wash.updateMatrix();
@@ -95,7 +95,7 @@ export function buildCentralHall(
 
   // ── Ambient ceiling wash over the former Central Hall slot (the reception
   //    desk itself takes care of its own accent lighting). ──
-  const lobbyLight = new rt.THREE.PointLight(0xffeedd, 0.55, Math.max(w, d) * 1.5);
+  const lobbyLight = new rt.THREE.PointLight(0xffeedd, 1.1, Math.max(w, d) * 1.5);
   lobbyLight.position.set(cx, WALL_H - 0.2, cz);
   lobbyLight.decay = 2;
   lobbyLight.matrixAutoUpdate = false; lobbyLight.updateMatrix();

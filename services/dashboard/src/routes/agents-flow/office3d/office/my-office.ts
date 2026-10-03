@@ -7,6 +7,7 @@ import { applyPBR, bakeVertexAO } from './_materials.js';
 import { applyWorldTexture, scaleUV } from '../textures.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { addMyOfficeLights, addMyOfficeProps } from './my-office-lights.js';
 
 /**
  * Static props merged per material: every piece added here costs vertices,
@@ -332,6 +333,7 @@ export function buildMyOffice(
   const potMat = new rt.THREE.MeshStandardMaterial({ color: 0x4a3828, roughness: 0.6 });
   applyPBR(potMat, 'plastic');
   const leafMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a6e2a, roughness: 0.7 });
+  const plantSpots: Array<{ x: number; z: number; stand: any[] }> = [];
   for (const [px, pz] of [[cx - w / 2 + 1.2, cz + d / 2 - 1.0], [cx + w / 2 - 1.2, cz - d / 2 + 1.0]]) {
     const pot = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.2, 0.15, 0.4, 8), potMat);
     pot.position.set(px, 0.2, pz);
@@ -339,6 +341,7 @@ export function buildMyOffice(
     const leaves = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.45, 8, 6), leafMat);
     leaves.position.set(px, 0.75, pz);
     scene.add(leaves);
+    plantSpots.push({ x: px, z: pz, stand: [pot, leaves] });
   }
 
   // ── Large window (back wall, backlit glow) — at the occupant's back ──
@@ -539,11 +542,15 @@ export function buildMyOffice(
   // ── Warm ambient lighting — single PointLight (kept to one for perf) ──
   // Brighter + pulled toward the desk/visitor zone so the executive furniture
   // and the four chairs read as the lit centerpiece of the office.
-  const mainLight = new rt.THREE.PointLight(0xffe4b5, 1.7, Math.max(w, d) * 2.4);
+  const mainLight = new rt.THREE.PointLight(0xffe4b5, 3.4, Math.max(w, d) * 2.4);
   mainLight.position.set(cx, WALL_H - 0.1, deskFrontZ + 0.3);
   mainLight.decay = 2;
   mainLight.matrixAutoUpdate = false; mainLight.updateMatrix();
   scene.add(mainLight);
+
+  // Lamps and window that actually light the room (realism layer only).
+  addMyOfficeLights(scene, { deskLamp: lampGlow.position, floorLamp: { x: xR - 0.42, y: 1.62, z: cz + 1.75 }, windowMesh });
+  addMyOfficeProps(scene, { plants: plantSpots, bust: { x: shelfInX + 0.22, y: 2.9, z: shelfZ } });
 
   // ── Name sign (above the door, facing the hall) ──
   const signDiv = document.createElement('div');

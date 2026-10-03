@@ -8,6 +8,7 @@
 // camera controls and the pointer wiring stay there with the state they touch.
 import { applyRendererGrading, applySceneGrading, GRADING } from './grading.js';
 import { setTextureAnisotropy } from './textures.js';
+import { applyRealismEnvironment, realismPart } from './realism.js';
 import type { Vec3 } from './types.js';
 
 /** First renderer config the GPU accepts, most capable first; null when none is usable. */
@@ -131,6 +132,8 @@ export function applyEnvironment(THREE: any, renderer: any, scene: any): void {
   // Fog + environment intensity — unconditional (must apply even if PMREM
   // env generation above threw; environmentIntensity is `in`-guarded).
   applySceneGrading(scene);
+  // Photographic layer: swap in the real HDRI once it loads (office3d/realism.ts).
+  if (realismPart('env')) void applyRealismEnvironment(renderer, scene);
 }
 
 /** How far out the initial isometric camera sits so the whole block (streets included) is framed. */

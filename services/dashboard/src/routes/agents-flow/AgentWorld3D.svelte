@@ -1943,27 +1943,34 @@
     // render otherwise — see office3d/scene.ts ──
     ({ composer, gtaoPass, bloomPass } = await createPostProcessing(THREE, renderer, scene, camera, canvasEl));
 
-    // Build static structure in a group (reused by rebuildScene diff logic)
-    staticGroup = new THREE.Group();
-    staticGroup.userData._static = true;
-    buildFloor(staticGroup, corGrid.buildingBounds);
-    // Central Hall (meetingRooms[1]) anchors the staircase so the entrance
-    // lines up visually with the main indoor axis.
-    const hallHint = meetingRooms[1] ?? meetingRooms[0];
-    const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
-    buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
-    buildCorridorGrid(staticGroup, corGrid);
-    buildRooms(staticGroup, roomMap, computeRoomCounts());
-    buildThemedOffices(staticGroup);
-    buildSpecialRooms(staticGroup);
-    buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
-    if (hallCenterPos) {
-      const hSlot = meetingRooms[1] ?? meetingRooms[0];
-      buildActivityBoard(staticGroup, hallCenterPos.x, hallCenterPos.z, hSlot?.d ?? 8);
+    // Build static structure in a group (reused by rebuildScene diff logic).
+    // Skipped when it already exists: `scene` and THREE are set before the
+    // awaits above, so the reactive rebuildScene() can run in between and
+    // build (and add) the whole world first. Building again here left that
+    // copy orphaned in the scene — every office, light and street drawn
+    // twice, which doubled the draw calls and the frame time.
+    if (!staticGroup) {
+      staticGroup = new THREE.Group();
+      staticGroup.userData._static = true;
+      buildFloor(staticGroup, corGrid.buildingBounds);
+      // Central Hall (meetingRooms[1]) anchors the staircase so the entrance
+      // lines up visually with the main indoor axis.
+      const hallHint = meetingRooms[1] ?? meetingRooms[0];
+      const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
+      buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
+      buildCorridorGrid(staticGroup, corGrid);
+      buildRooms(staticGroup, roomMap, computeRoomCounts());
+      buildThemedOffices(staticGroup);
+      buildSpecialRooms(staticGroup);
+      buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
+      if (hallCenterPos) {
+        const hSlot = meetingRooms[1] ?? meetingRooms[0];
+        buildActivityBoard(staticGroup, hallCenterPos.x, hallCenterPos.z, hSlot?.d ?? 8);
+      }
+      buildDoorLeds(staticGroup, roomMap);
+      // buildElevator(staticGroup, corGrid.buildingBounds); // hidden for now
+      scene.add(staticGroup);
     }
-    buildDoorLeds(staticGroup, roomMap);
-    // buildElevator(staticGroup, corGrid.buildingBounds); // hidden for now
-    scene.add(staticGroup);
     // Office shell is now in the scene — the loader can show "waiting for staff".
     staticBuilt = true;
     bootStatus = dataLoaded ? 'deploying staff…' : 'waiting for agent data…';
