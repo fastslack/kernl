@@ -199,6 +199,9 @@ function isSafeIdentifier(value: unknown): value is string {
  */
 const KERNEL_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "kernel"]);
 
+/** Where every sandbox driver mounts the agent's cwd (and sets its workdir). */
+const SANDBOX_WORKSPACE_PATH = "/workspace";
+
 function isLocalMcpUrl(raw: string): boolean {
   try {
     const u = new URL(raw);
@@ -499,7 +502,13 @@ export class ClaudeCodeExecutor {
       // When the agent inherited its office home (no per-agent cwd override),
       // tell it where it is and where to persist office knowledge.
       if (officeHomeFlow) {
-        systemPrompt += "\n\n" + officeHomeGuidance(officeHomeFlow, cwd, resolveAgentLanguage(agent, this.configRef));
+        // Name the path the agent will actually see. In a sandbox the home is
+        // mounted at /workspace (docker-driver.ts, cube-driver.ts) and the
+        // kernel-side path does not exist in there: given `/app/data/...`,
+        // the agent spent its first turns on "No such file or directory" and
+        // then fell back to guessing.
+        const homeForAgent = this.resolveDriverSlug(vars) ? SANDBOX_WORKSPACE_PATH : cwd;
+        systemPrompt += "\n\n" + officeHomeGuidance(officeHomeFlow, homeForAgent, resolveAgentLanguage(agent, this.configRef));
       }
 
       // Default auth: if the `claude` CLI is logged in we use OAuth (the
