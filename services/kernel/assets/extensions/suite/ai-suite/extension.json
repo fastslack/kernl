@@ -17,7 +17,7 @@
         "label": "AI",
         "icon": "🤖",
         "order": 500,
-        "defaultView": "agents-flow"
+        "defaultView": "offices"
       }
     ],
     "navItems": [
@@ -34,6 +34,14 @@
         "label": "Agents",
         "icon": "🧠",
         "order": 20
+      },
+      {
+        "id": "offices",
+        "group": "ai",
+        "label": "Offices",
+        "icon": "🏢",
+        "order": 4,
+        "path": "/agents-flow?view=offices"
       },
       {
         "id": "agents-flow",

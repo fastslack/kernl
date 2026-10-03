@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { railParentOf, railViewsFor, buildNav } from './nav.js';
+import { railParentOf, railViewsFor, buildNav, activeTabId } from './nav.js';
 import type { NavGroup, NavView } from './constants.js';
 
 const VIEWS: NavView[] = [
@@ -137,4 +137,28 @@ describe('buildNav', () => {
     ]);
     expect(nav.navGroups.map((g) => g.id)).toEqual(['system']);
   });
+});
+
+describe('activeTabId', () => {
+	// "Oficinas" and "3D" are two tabs over one page: /agents-flow?view=offices
+	// and /agents-flow. Switching between them must not remount the 3D world,
+	// so they share the route and only the query tells them apart.
+	const paths = { offices: '/agents-flow?view=offices' };
+
+	it('marks the tab whose path override matches path and query', () => {
+		expect(activeTabId('/agents-flow', '?view=offices', paths)).toBe('offices');
+	});
+
+	it('falls back to the first path segment when no override matches', () => {
+		expect(activeTabId('/agents-flow', '', paths)).toBe('agents-flow');
+		expect(activeTabId('/agents-flow', '?agent=a1', paths)).toBe('agents-flow');
+	});
+
+	it('extra query params do not stop an override from matching', () => {
+		expect(activeTabId('/agents-flow', '?view=offices&agent=a1', paths)).toBe('offices');
+	});
+
+	it('home when the path is empty', () => {
+		expect(activeTabId('/', '', paths)).toBe('home');
+	});
 });

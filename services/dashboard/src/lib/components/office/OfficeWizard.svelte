@@ -86,13 +86,13 @@
 		showErrors = false;
 	}
 
-	function extensionAction(template: OfficeTemplate): { label: string; href: string | null; locked: boolean } {
+	function extensionAction(template: OfficeTemplate): { label: string; short: string; href: string | null; locked: boolean } {
 		const ext = template.extension;
-		if (!ext) return { label: '', href: null, locked: false };
-		if (ext.installed && ext.enabled) return { label: $t('office.wizard.ext_ready'), href: null, locked: false };
-		if (ext.entitlement && !ext.entitlement.licensed) return { label: $t('office.locked.store'), href: '/extensions', locked: true };
-		if (ext.installed) return { label: $t('office.wizard.ext_enable'), href: '/extensions', locked: false };
-		return { label: $t('office.wizard.ext_install'), href: '/extensions', locked: false };
+		if (!ext) return { label: '', short: '', href: null, locked: false };
+		if (ext.installed && ext.enabled) return { label: $t('office.wizard.ext_ready'), short: $t('office.wizard.ext_ready_short'), href: null, locked: false };
+		if (ext.entitlement && !ext.entitlement.licensed) return { label: $t('office.locked.store'), short: $t('office.locked.store'), href: '/extensions', locked: true };
+		if (ext.installed) return { label: $t('office.wizard.ext_enable'), short: $t('office.wizard.ext_enable_short'), href: '/extensions', locked: false };
+		return { label: $t('office.wizard.ext_install'), short: $t('office.wizard.ext_install_short'), href: '/extensions', locked: false };
 	}
 
 	async function draft() {
@@ -185,70 +185,63 @@
 		{#if !templates && !templatesError}
 			<p class="k-help">{$t('office.wizard.templates_loading')}</p>
 		{:else if templates}
+			{@const builtins = templates.templates.filter((tpl) => tpl.source === 'builtin')}
+			{@const fromExtensions = templates.templates.filter((tpl) => tpl.source !== 'builtin')}
+			<h3 class="wz-section">{$t('office.wizard.section_templates')}</h3>
 			<div class="wz-gallery">
-				{#each templates.templates as template (template.id)}
-					{#if template.source === 'builtin'}
-						<button class="wz-card" type="button" on:click={() => chooseTemplate(template)}>
-							<span class="wz-mini" style="--office:{template.color}" aria-hidden="true">
-								{#if template.agents.length === 0}
-									<span class="wz-mini-empty">{$t('office.wizard.empty_room')}</span>
-								{:else}
-									{#each template.agents.slice(0, 6) as agent, i (i)}
-										<span class="wz-mini-desk" class:wz-mini-desk--lead={agent.role === 'manager'}></span>
+				{#each builtins as template (template.id)}
+					<button class="wz-card" type="button" on:click={() => chooseTemplate(template)}>
+						<span class="wz-mini" style="--office:{template.color}" aria-hidden="true">
+							{#if template.agents.length === 0}
+								<span class="wz-mini-empty">{$t('office.wizard.empty_room')}</span>
+							{:else}
+								{#each template.agents.slice(0, 6) as agent, i (i)}
+									<span class="wz-mini-desk" class:wz-mini-desk--lead={agent.role === 'manager'}></span>
+								{/each}
+							{/if}
+						</span>
+						<span class="wz-card-body">
+							<span class="wz-card-name">{template.name}</span>
+							<span class="wz-card-desc">{template.description}</span>
+							{#if template.agents.length > 0}
+								<span class="wz-roles">
+									{#each template.agents as agent, i (i)}
+										<span class="wz-role">{#if agent.role === 'manager'}<Icon name="star" size={11} filled />{/if}{agent.name}</span>
 									{/each}
-								{/if}
-							</span>
-							<span class="wz-card-body">
-								<span class="wz-card-name">{template.name}</span>
-								<span class="wz-card-desc">{template.description}</span>
-								{#if template.agents.length > 0}
-									<span class="wz-roles">
-										{#each template.agents as agent, i (i)}
-											<span class="wz-role">{#if agent.role === 'manager'}<Icon name="star" size={11} filled />{/if}{agent.name}</span>
-										{/each}
-									</span>
-								{/if}
-							</span>
-						</button>
-					{:else}
-						{@const action = extensionAction(template)}
-						<article class="wz-card wz-card--ext">
-							<span class="wz-card-body">
-								<span class="wz-card-top">
-									<span class="wz-card-name">{template.name}</span>
-									{#if action.locked}<span class="wz-tag wz-tag--pro"><Icon name="lock" size={11} />{$t('office.common.pro')}</span>{/if}
 								</span>
-								<span class="wz-card-desc">{template.description}</span>
-								<span class="k-help">{$t('office.wizard.ext_note')}</span>
-								{#if action.href}
-									<a class="k-btn wz-card-action" href={action.href}>{action.label}</a>
-								{:else}
-									<span class="wz-card-ready"><Icon name="check" size={13} />{action.label}</span>
-								{/if}
-							</span>
-						</article>
-					{/if}
+							{/if}
+						</span>
+					</button>
 				{/each}
 			</div>
+			{#if fromExtensions.length > 0}
+				<h3 class="wz-section">{$t('office.wizard.section_extensions')}</h3>
+				<ul class="wz-ext-list">
+					{#each fromExtensions as template (template.id)}
+						{@const action = extensionAction(template)}
+						<li class="wz-ext" title={template.description}>
+							<span class="wz-ext-top">
+								<span class="wz-ext-name">{template.name}</span>
+								{#if action.locked}<span class="wz-tag wz-tag--pro"><Icon name="lock" size={11} />{$t('office.common.pro')}</span>{/if}
+								{#if action.href}
+									<a class="wz-ext-action" href={action.href} title={action.label}>{action.short}<Icon name="chev-r" size={12} /></a>
+								{:else}
+									<span class="wz-ext-ready" title={action.label}><Icon name="check" size={12} />{action.short}</span>
+								{/if}
+							</span>
+							<span class="wz-ext-desc">{template.description}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		{/if}
 
-		<div class="wz-or"><span>{$t('office.wizard.or_describe')}</span></div>
-		<div class="wz-describe">
-			<div class="k-field">
-				<label class="k-label" for="wz-describe">{$t('office.wizard.describe_label')}</label>
-				<textarea id="wz-describe" class="k-input" rows="3" maxlength="2000" bind:value={description} placeholder={$t('office.wizard.describe_ph')}></textarea>
-			</div>
-			<button class="k-btn" type="button" disabled={drafting || !description.trim()} on:click={draft}>
-				<Icon name="spark" />{drafting ? $t('office.wizard.drafting') : $t('office.wizard.draft')}
-			</button>
-		</div>
 		{#if draftMessage}
 			<p class="k-error" role="alert">{draftMessage}</p>
 			{#if draftDetail}
 				<details class="wz-draft-detail"><summary>{$t('office.wizard.draft_detail')}</summary><code>{draftDetail}</code></details>
 			{/if}
 		{/if}
-		<p class="k-help">{$t('office.wizard.draft_note')}</p>
 	{:else}
 		<div class="wz-grid">
 			<div class="wz-form">
@@ -384,6 +377,18 @@
 
 	<svelte:fragment slot="footer">
 		{#if step > 1}<button class="k-btn k-btn--ghost" type="button" on:click={back}>{$t('office.wizard.back')}</button>{/if}
+		{#if step === 1}
+			<!-- Describing the team is the alternative to a template, so it lives in the footer and leaves the body to the gallery. -->
+			<form class="wz-describe" on:submit|preventDefault={draft}>
+				<span class="wz-describe-icon" aria-hidden="true"><Icon name="spark" /></span>
+				<input class="k-input" type="text" maxlength="2000" bind:value={description}
+					aria-label={$t('office.wizard.describe_label')} aria-describedby="wz-draft-note" placeholder={$t('office.wizard.describe_ph')} />
+				<button class="k-btn" type="submit" disabled={drafting || !description.trim()} title={$t('office.wizard.draft_note')}>
+					{drafting ? $t('office.wizard.drafting') : $t('office.wizard.draft')}
+				</button>
+				<span id="wz-draft-note" class="wz-sr">{$t('office.wizard.draft_note')}</span>
+			</form>
+		{/if}
 		<span class="wz-spacer"></span>
 		{#if step === 1}
 			<button class="k-btn k-btn--ghost" type="button" on:click={() => dispatch('close')}>{$t('office.common.cancel')}</button>
@@ -410,39 +415,62 @@
 	.wz-step--current { color: var(--text-1); background: var(--surface-3); }
 	.wz-step--current .wz-step-n { background: var(--teal); border-color: var(--teal); color: var(--bg); }
 
-	.wz-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; }
+	.wz-section { margin: 0 0 8px; font: 500 11px/1.2 var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-3); }
+	.wz-section:not(:first-child) { margin-top: 16px; }
+	.wz-gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
 	.wz-card {
-		display: grid; grid-template-rows: auto 1fr; text-align: left; padding: 0; overflow: hidden; cursor: pointer;
+		display: grid; grid-template-columns: 76px minmax(0, 1fr); text-align: left; padding: 0; overflow: hidden; cursor: pointer;
 		border-radius: 12px; border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1);
 		transition: border-color 0.15s, transform 0.15s var(--ease-out);
 	}
 	.wz-card:hover { border-color: var(--text-3); transform: translateY(-1px); }
 	.wz-card:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-	.wz-card--ext { cursor: default; grid-template-rows: 1fr; }
-	.wz-card--ext:hover { transform: none; }
 	.wz-mini {
-		height: 72px; display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 8px; padding: 12px 24px;
-		background: #0b1220; border-bottom: 1px solid var(--border); box-shadow: inset 0 3px 0 var(--office);
+		display: flex; flex-wrap: wrap; align-content: center; justify-content: center; gap: 5px; padding: 8px 10px;
+		background: #0b1220; border-right: 1px solid var(--border); box-shadow: inset 3px 0 0 var(--office);
 	}
-	.wz-mini-empty { font: 400 9px/1 var(--font-mono); letter-spacing: 0.1em; color: #3a5a8c; }
-	.wz-mini-desk { width: 22px; height: 12px; border-radius: 2px; border: 1px solid #3a5a8c; }
+	.wz-mini-empty { font: 400 8.5px/1.3 var(--font-mono); letter-spacing: 0.1em; color: #3a5a8c; text-align: center; }
+	.wz-mini-desk { width: 18px; height: 9px; border-radius: 2px; border: 1px solid #3a5a8c; }
 	.wz-mini-desk--lead { border-color: var(--gold); }
-	.wz-card-body { display: grid; gap: 6px; padding: 12px 14px 14px; align-content: start; }
-	.wz-card-top { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
-	.wz-card-name { font: 600 14.5px/1.2 var(--font-display); }
-	.wz-card-desc { font-size: 12.5px; color: var(--text-2); }
-	.wz-card-action { justify-self: start; margin-top: 4px; }
-	.wz-card-ready { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--green); }
+	.wz-card-body { display: grid; gap: 4px; padding: 10px 12px; align-content: center; }
+	.wz-card-name { font: 600 14px/1.2 var(--font-display); }
+	.wz-card-desc { font-size: 12.5px; line-height: 1.4; color: var(--text-2); }
 	.wz-tag { display: inline-flex; align-items: center; gap: 4px; padding: 2px 6px; border-radius: 4px; font: 500 10px/1 var(--font-mono); text-transform: uppercase; letter-spacing: 0.08em; }
 	.wz-tag--pro { color: var(--text-2); border: 1px solid var(--border-h); }
+
+	/* Extension offices are created by their extension, so they are read-only tiles:
+	   two lines of description (the full text is in the tooltip) and one small action. */
+	.wz-ext-list { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 8px; }
+	.wz-ext { display: grid; gap: 4px; align-content: start; padding: 9px 12px 10px; border-radius: 10px; border: 1px solid var(--border); background: color-mix(in srgb, var(--surface-2) 60%, transparent); }
+	.wz-ext-top { display: flex; align-items: center; gap: 6px; min-width: 0; }
+	.wz-ext-name { flex: 1; min-width: 0; font: 600 13px/1.2 var(--font-display); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.wz-ext-desc {
+		font-size: 12px; line-height: 1.4; color: var(--text-2);
+		display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+	}
+	.wz-ext-action {
+		flex: none; display: inline-flex; align-items: center; gap: 2px; padding: 3px 6px 3px 8px; border-radius: 999px;
+		font: 500 11.5px/1 var(--font-body); color: var(--blue); text-decoration: none;
+		border: 1px solid color-mix(in srgb, var(--blue) 35%, transparent); background: color-mix(in srgb, var(--blue) 8%, transparent);
+		transition: background 0.15s, border-color 0.15s;
+	}
+	.wz-ext-action:hover { background: color-mix(in srgb, var(--blue) 16%, transparent); border-color: var(--blue); }
+	.wz-ext-action:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+	.wz-ext-ready { flex: none; display: inline-flex; align-items: center; gap: 4px; font: 500 11.5px/1 var(--font-body); color: var(--green); }
 	.wz-roles { display: flex; flex-wrap: wrap; gap: 4px; }
 	.wz-role { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px; border-radius: 4px; background: var(--surface-3); font-size: 11px; color: var(--text-2); }
 	.wz-role :global(.k-svg-icon), .wz-star { color: var(--gold); }
 	.wz-tool { font-family: var(--font-mono); font-size: 11px; }
 
-	.wz-or { display: grid; grid-template-columns: 1fr auto 1fr; gap: 12px; align-items: center; margin: 20px 0 12px; font-size: 12px; color: var(--text-3); }
-	.wz-or::before, .wz-or::after { content: ''; height: 1px; background: var(--border); }
-	.wz-describe { display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: end; }
+	.wz-describe {
+		flex: 1 1 auto; max-width: 720px; display: flex; align-items: center; gap: 8px; padding: 4px 4px 4px 12px;
+		border: 1px solid var(--border-h); border-radius: 10px; background: var(--surface-2);
+	}
+	.wz-describe:focus-within { border-color: var(--purple); box-shadow: 0 0 0 3px color-mix(in srgb, var(--purple) 22%, transparent); }
+	.wz-describe-icon { display: grid; color: var(--purple); }
+	.wz-describe .k-input { flex: 1; min-width: 0; height: 32px; border: 0; background: transparent; padding: 0; box-shadow: none; }
+	.wz-describe .k-input:focus-visible { outline: none; }
+	.wz-sr { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
 
 	.wz-grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 24px; align-items: start; }
 	.wz-form { display: grid; gap: 14px; }
@@ -474,7 +502,7 @@
 	@media (max-width: 860px) {
 		.wz-grid { grid-template-columns: 1fr; }
 		.wz-plan { display: none; }
-		.wz-describe, .wz-row2 { grid-template-columns: 1fr; }
+		.wz-row2 { grid-template-columns: 1fr; }
 	}
-	@media (prefers-reduced-motion: reduce) { .wz-card { transition: none; } .wz-card:hover { transform: none; } }
+	@media (prefers-reduced-motion: reduce) { .wz-card, .wz-ext-action { transition: none; } .wz-card:hover { transform: none; } }
 </style>

@@ -7,7 +7,6 @@
 	export let working = 0;
 	export let runsToday = 0;
 	export let inbox = 0;
-	export let railCollapsed = false;
 
 	const dispatch = createEventDispatcher<{
 		newoffice: void;
@@ -17,7 +16,6 @@
 		turntable: void;
 		perf: void;
 		inbox: void;
-		showrail: void;
 		registerrepo: void;
 	}>();
 
@@ -43,11 +41,6 @@
 <svelte:window on:click={() => (openMenu = null)} on:keydown={onWindowKeydown} />
 
 <header class="bar" class:bar--menu-open={openMenu !== null}>
-	{#if railCollapsed}
-		<button class="k-icon-btn" type="button" aria-label={$t('office.rail.expand')} on:click={() => dispatch('showrail')}>
-			<Icon name="panel" />
-		</button>
-	{/if}
 	<h1 class="bar-title">{$t('office.bar.title')}</h1>
 	<p class="bar-stats">
 		<span><b>{agents}</b> {$t(agents === 1 ? 'office.bar.agent' : 'office.bar.agents')}</span>
@@ -96,24 +89,24 @@
 		</div>
 
 		<span class="bar-sep" aria-hidden="true"></span>
-		<button class="k-btn k-btn--primary" type="button" on:click={() => dispatch('newoffice')}>
-			<Icon name="plus" />{$t('office.bar.new_office')}<kbd class="k-kbd bar-kbd-primary">N</kbd>
+		<button class="k-btn bar-new" type="button" on:click={() => dispatch('newoffice')}>
+			<Icon name="plus" />{$t('office.bar.new_office')}<kbd class="k-kbd bar-new-kbd">N</kbd>
 		</button>
 	</div>
 </header>
 
 <style>
 	.bar {
-		height: 52px; display: flex; align-items: center; gap: 16px; padding: 0 12px 0 16px; z-index: var(--z-chrome);
+		min-height: 64px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px 20px; z-index: var(--z-chrome);
 		background: color-mix(in srgb, var(--surface-1) 92%, transparent); border-bottom: 1px solid var(--border);
 	}
 	/* The bar is its own stacking context; lift it while a menu is open so the menu paints above the drawer. */
 	.bar--menu-open { z-index: var(--z-modal); }
-	.bar-title { margin: 0; font: 600 15px/1 var(--font-display); color: var(--text-1); }
-	.bar-stats { margin: 0; display: flex; gap: 14px; font: 400 12px/1 var(--font-mono); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+	.bar-title { margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); }
+	.bar-stats { margin: 0; display: flex; gap: 12px; font: 400 12px/1.4 var(--font-body); color: var(--text-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
 	.bar-stats b { color: var(--text-1); font-weight: 500; }
 	.bar-working b { color: var(--green); }
-	.bar-actions { margin-left: auto; display: flex; align-items: center; gap: 4px; }
+	.bar-actions { margin-left: auto; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 	.bar-inbox { position: relative; }
 	.bar-badge {
 		position: absolute; top: 2px; right: 1px; min-width: 16px; height: 16px; padding: 0 4px; border-radius: 8px;
@@ -134,6 +127,20 @@
 	a.bar-pop-item { text-decoration: none; }
 	.bar-pop-item--row { grid-template-columns: 16px 1fr auto; align-items: center; gap: 10px; font-weight: 500; }
 	.bar-pop-item:hover, .bar-pop-item:focus-visible { background: var(--surface-3); outline: none; }
-	.bar-kbd-primary { background: color-mix(in srgb, var(--bg) 15%, transparent); border-color: color-mix(in srgb, var(--bg) 30%, transparent); color: var(--bg); }
+	.bar-new {
+		color: var(--bg); border: 1px solid var(--gold); background: var(--gold);
+		font-weight: 700; box-shadow: 0 2px 6px rgb(0 0 0 / 15%);
+		transition: filter .15s;
+	}
+	.bar-new:hover { background: var(--gold); border-color: var(--gold); filter: brightness(1.08); }
+	.bar-new-kbd { color: inherit; background: transparent; border-color: currentColor; opacity: .65; }
+	@media (max-width: 700px) {
+		.bar { padding: 12px; gap: 10px; }
+		.bar-actions { width: 100%; margin-left: 0; }
+		.bar-actions :global(.k-btn), .bar-actions :global(.k-icon-btn) { min-height: 40px; }
+		.bar-sep, .bar-actions :global(kbd) { display: none; }
+		.bar-pop { min-width: 210px; }
+	}
+	@media (prefers-reduced-motion: reduce) { .bar-new { transition: none; } }
 	@media (max-width: 1100px) { .bar-stats { display: none; } }
 </style>

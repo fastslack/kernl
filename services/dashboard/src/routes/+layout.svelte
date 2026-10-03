@@ -8,7 +8,7 @@
   import { getChannelsForPage } from '$lib/page-channels.js';
   import { extPages as extPagesStore, extPagesReady } from '$lib/ext-host.js';
   import { NAV_GROUPS, VIEWS, VIEW_TO_GROUP, SUB_TAB_LABELS, type NavGroup, type NavView } from '$lib/constants.js';
-  import { railViewsFor, buildNav } from '$lib/nav.js';
+  import { railViewsFor, buildNav, activeTabId } from '$lib/nav.js';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
@@ -65,6 +65,10 @@
 
   // ── Navigation ───────────────────────────────────────────────────
   $: currentView = $page.url.pathname.split('/')[1] || 'home';
+  // The highlighted tab. Usually currentView, but two tabs can share a page
+  // through a query (Oficinas = /agents-flow?view=offices, 3D = /agents-flow).
+  // `navGroups` is listed so it recomputes once the manifest's paths arrive.
+  $: activeTab = activeTabId($page.url.pathname, $page.url.search, navGroups && viewPathOverrides);
   // System routes that were removed from the sub-tabs but still exist as
   // pages (reached via /system's internal sub-nav or direct URL). Without
   // this fallback they'd highlight the first group and render its tabs.
@@ -201,7 +205,7 @@
       preferred && group.views.some(v => v.id === preferred)
         ? preferred
         : group.views[0]?.id;
-    if (landing) goto('/' + landing);
+    if (landing) goto(viewPathOverrides[landing] ?? ('/' + landing));
   }
 
   // ── Page transition loader ──
@@ -629,8 +633,8 @@
             {#each headerTabs as view (view.id)}
               <button
                 class="tabrail-tab"
-                class:active={currentView === view.id}
-                aria-current={currentView === view.id ? 'page' : undefined}
+                class:active={activeTab === view.id}
+                aria-current={activeTab === view.id ? 'page' : undefined}
                 on:click={() => navigate(view.id)}
               >
                 {viewLabel(view)}

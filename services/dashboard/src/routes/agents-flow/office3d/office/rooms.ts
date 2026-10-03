@@ -135,10 +135,10 @@ export function buildRooms(
     // ── Room sign (above door wall) — name + live headcount subline ──
     const dw = roomWalls.find(rw => rw.id === dd)!;
     const signDiv = document.createElement('div');
-    signDiv.textContent = name.toUpperCase();
-    signDiv.style.cssText = `font:700 11px 'Syne',sans-serif;color:${color};letter-spacing:3px;
-      text-shadow:0 0 12px ${color}80, 0 0 4px ${color}40;
-      background:rgba(0,0,8,0.7);padding:3px 14px;border-radius:2px;text-align:center;`;
+    signDiv.textContent = name;
+    signDiv.style.cssText = `font:600 12px 'Manrope',sans-serif;color:#f0f0ed;letter-spacing:0;
+      border-left:3px solid ${color};box-shadow:0 2px 8px #0005;
+      background:rgba(23,24,27,0.94);padding:6px 10px;border-radius:6px;text-align:left;max-width:160px;white-space:normal;`;
     const rc = counts?.get(roomKey);
     if (rc && rc.total > 0) {
       const sub = document.createElement('div');
@@ -146,7 +146,7 @@ export function buildRooms(
       // toggles without rebuilding the static scene.
       sub.setAttribute('data-room-sub', roomKey);
       sub.textContent = `${rc.total} ${rc.total === 1 ? 'AGENT' : 'AGENTS'} · ${rc.active} ON`;
-      sub.style.cssText = `font:600 8px 'Syne',sans-serif;letter-spacing:1.5px;margin-top:2px;
+      sub.style.cssText = `font:500 9px 'Manrope',sans-serif;letter-spacing:0;margin-top:3px;
         color:${rc.active > 0 ? '#9fe8c0' : '#6a7390'};text-shadow:none;`;
       signDiv.appendChild(sub);
     }

@@ -148,3 +148,20 @@ export function buildNav(m: NavManifest, base: NavGroup[] = NAV_GROUPS): BuiltNa
 		viewPaths,
 	};
 }
+
+/**
+ * Which tab to highlight. Normally the first path segment; but an item can
+ * point at a query of another view's page (`/agents-flow?view=offices`) — two
+ * tabs over one page, so switching between them does not remount it. Such an
+ * item is active when the URL has its path and every one of its query params.
+ */
+export function activeTabId(pathname: string, search: string, viewPaths: Record<string, string>): string {
+	const here = new URLSearchParams(search);
+	for (const [id, target] of Object.entries(viewPaths)) {
+		const [p, q] = target.split('?');
+		if (!q || p !== pathname) continue;
+		const want = new URLSearchParams(q);
+		if ([...want].every(([k, v]) => here.get(k) === v)) return id;
+	}
+	return pathname.split('/')[1] || 'home';
+}

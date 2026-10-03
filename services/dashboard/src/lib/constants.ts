@@ -117,7 +117,7 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 	wellness: 'Overview', health: 'Health', training: 'Training', nutrition: 'Nutrition',
 	// `skills` has no tab any more — it redirects into /extensions?tab=skills.
 	// The label stays so the breadcrumb reads sanely during the redirect.
-	'ai-overview': 'Overview', agents: 'Agents', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
+	'ai-overview': 'Overview', agents: 'Agents', offices: 'Offices', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
 	cinema: 'Cinema',
 	books: 'Books',
 	music: 'Music',

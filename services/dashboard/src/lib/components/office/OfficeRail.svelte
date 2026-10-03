@@ -274,33 +274,34 @@
 
 <style>
 	.rail {
-		height: 100%; min-height: 0; display: grid; grid-template-rows: 52px auto 1fr auto;
+		height: 100%; min-height: 0; display: grid; grid-template-rows: 64px auto 1fr auto;
 		background: var(--surface-1); border-right: 1px solid var(--border); z-index: var(--z-chrome);
 	}
-	.rail--collapsed { grid-template-rows: 52px; width: 52px; place-items: center start; padding-left: 10px; }
+	.rail--collapsed { grid-template-rows: 64px; width: 52px; place-items: center start; padding-left: 10px; }
 	.rail-head { display: flex; align-items: center; justify-content: space-between; padding: 0 10px 0 16px; border-bottom: 1px solid var(--border); }
 	.rail-title { margin: 0; font: 600 14px/1 var(--font-display); color: var(--text-1); display: flex; align-items: baseline; gap: 8px; }
 	.rail-count { font: 400 12px/1 var(--font-mono); color: var(--text-3); }
 	.rail-search { padding: 12px 12px 8px; }
 	.rail-search-box {
-		display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 10px; color: var(--text-3);
+		display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 10px; color: var(--text-3);
 		background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
 	}
 	.rail-search-box:focus-within { border-color: var(--teal); }
 	.rail-search-box input { flex: 1; min-width: 0; background: none; border: 0; outline: 0; color: var(--text-1); font: 400 13px/1 var(--font-body); }
 	.rail-search-box input::placeholder { color: var(--text-3); }
-	.rail-list { overflow-y: auto; min-height: 0; padding: 4px 8px 12px; display: grid; align-content: start; gap: 2px; }
+	.rail-list { overflow-y: auto; min-height: 0; padding: 4px 8px 12px; display: grid; align-content: start; gap: 6px; }
 	.rail-empty { margin: 8px; font-size: 12.5px; color: var(--text-3); }
 	.rail-office { border-radius: var(--radius-sm); }
 	.rail-office--drop { box-shadow: inset 0 0 0 1px var(--teal); background: color-mix(in srgb, var(--teal) 6%, transparent); }
 	.rail-row { display: flex; align-items: center; gap: 2px; border-radius: var(--radius-sm); border: 1px solid transparent; }
-	.rail-row--sel { background: var(--surface-3); border-color: var(--border-h); }
+	.rail-row--sel { background: color-mix(in srgb, var(--gold) 8%, var(--surface-1)); border-color: color-mix(in srgb, var(--gold) 35%, var(--border)); box-shadow: inset 3px 0 var(--gold); }
 	.rail-toggle {
 		flex: 1; min-width: 0; display: grid; grid-template-columns: 14px 10px 1fr auto; align-items: center; gap: 8px;
-		padding: 7px 6px 7px 4px; border: 0; border-radius: var(--radius-sm); background: transparent;
+		padding: 10px 8px; border: 0; border-radius: var(--radius-sm); background: transparent;
 		color: var(--text-1); font: 600 13.5px/1.3 var(--font-body); text-align: left; cursor: pointer;
 	}
 	.rail-toggle:hover { background: var(--surface-2); }
+	.rail-row--sel .rail-toggle:hover { background: color-mix(in srgb, var(--gold) 12%, transparent); }
 	.rail-toggle:focus-visible { outline: 2px solid var(--teal); outline-offset: -2px; }
 	.rail-toggle--special { color: var(--text-2); font-weight: 500; }
 	.rail-chev { color: var(--text-3); display: grid; place-items: center; transition: transform 0.15s var(--ease-out); }
@@ -316,5 +317,6 @@
 	.rail-agents { list-style: none; margin: 0; padding: 2px 0 6px 28px; display: grid; gap: 1px; }
 	.rail-group { padding: 12px 8px 4px; }
 	.rail-foot { padding: 12px; border-top: 1px solid var(--border); }
+	@media (hover: none) { .rail-edit { opacity: 1; width: 36px; height: 36px; } }
 	@media (prefers-reduced-motion: reduce) { .rail-chev { transition: none; } }
 </style>
