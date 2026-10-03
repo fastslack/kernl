@@ -3,12 +3,99 @@ import type {
   EmailAction, EmailLabel, EmailListItem, EmailDetail,
   ThreadDetail, EmailCounts, EmailFolder,
 } from "./types.js";
+import { readFetchStatus, type FetchStatus } from "./fetch-status.js";
+
+export interface AccountSyncStatus {
+  account_id: string;
+  email: string;
+  label: string;
+  provider: string;
+  /** Messages Kernl already holds for this account (every folder). */
+  stored: number;
+  /** IMAP only: the fetcher's last word on this account; null = never reached it. */
+  fetch: FetchStatus | null;
+}
+
+/**
+ * IMAP accounts don't go through the Google sync: comms:inbox-fetch stores
+ * their mail in `communications`. This projects those rows onto the
+ * google_emails columns the mail view reads, so both kinds of account share
+ * one code path. Ids carry the `comm:` prefix — they can never collide with a
+ * Gmail id, and the write paths (star, read) use it to route back here.
+ */
+export const COMM_MAIL_PREFIX = "comm:";
+const GMAIL_SOURCE = "google_emails";
+const COMM_SOURCE = `(
+  SELECT 'comm:' || c.id AS gmail_id,
+         'comm:' || COALESCE(NULLIF(c.gmail_thread_id, ''), NULLIF(c.thread_id, ''), c.id) AS thread_id,
+         COALESCE(json_extract(c.metadata, '$.from'), '') AS from_email,
+         COALESCE(json_extract(c.metadata, '$.from_name'), '') AS from_name,
+         COALESCE(c.recipients_to, '') AS to_emails,
+         COALESCE(c.recipients_cc, '') AS cc_emails,
+         c.subject,
+         substr(COALESCE(c.body, ''), 1, 240) AS snippet,
+         COALESCE(c.body, '') AS body_text,
+         COALESCE(c.body_html, '') AS body_html,
+         COALESCE(NULLIF(c.sent_at, ''), c.created_at) AS date,
+         COALESCE(json_extract(c.metadata, '$.mail.is_read'), 0) AS is_read,
+         COALESCE(json_extract(c.metadata, '$.mail.is_starred'), 0) AS is_starred,
+         0 AS has_attachments,
+         CASE c.direction WHEN 'inbound' THEN '["INBOX"]' ELSE '["SENT"]' END AS labels,
+         length(COALESCE(c.body, '')) AS size_bytes,
+         c.account_id,
+         COALESCE(json_extract(c.metadata, '$.triage.urgency'), '') AS urgency,
+         COALESCE(json_extract(c.metadata, '$.triage.attention_needed'), -1) AS attention_needed,
+         COALESCE(json_extract(c.metadata, '$.triage.summary'), '') AS ai_summary,
+         '' AS draft_comm_id
+  FROM communications c
+  JOIN email_accounts a ON a.id = c.account_id AND a.provider = 'imap_smtp'
+  WHERE c.channel = 'email'
+    AND (c.direction = 'inbound' OR c.status = 'sent')
+)`;
 
 export class EmailService {
   constructor(
     private db: SqliteDb,
     private events: EventBus,
   ) {}
+
+  // ── Sources ────────────────────────────────────────
+
+  /** google_emails belongs to the google-sync extension, which may not be installed. */
+  private hasTable(name: string): boolean {
+    return !!this.db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name);
+  }
+
+  /** The sources holding an account's mail — both of them for the all-accounts view. */
+  private sourcesFor(accountId?: string): string[] {
+    const sources: string[] = [];
+    let provider: string | undefined;
+    if (accountId) {
+      provider = (this.db.prepare("SELECT provider FROM email_accounts WHERE id = ?").get(accountId) as
+        { provider: string } | undefined)?.provider;
+    }
+    if (provider !== "imap_smtp" && this.hasTable(GMAIL_SOURCE)) sources.push(GMAIL_SOURCE);
+    if ((!accountId || provider === "imap_smtp") && this.hasTable("communications")) sources.push(COMM_SOURCE);
+    return sources;
+  }
+
+  private sourceForId(id: string): string {
+    return id.startsWith(COMM_MAIL_PREFIX) ? COMM_SOURCE : GMAIL_SOURCE;
+  }
+
+  /** Flip or set one of the view flags an IMAP row keeps in metadata.mail. */
+  private setCommFlag(gmailId: string, flag: "is_read" | "is_starred", value?: number): boolean {
+    const id = gmailId.slice(COMM_MAIL_PREFIX.length);
+    const row = this.db.prepare(
+      `SELECT COALESCE(json_extract(metadata, '$.mail.${flag}'), 0) AS v FROM communications WHERE id = ?`
+    ).get(id) as { v: number } | undefined;
+    if (!row) return false;
+    const next = value ?? (row.v ? 0 : 1);
+    this.db.prepare(
+      `UPDATE communications SET metadata = json_set(COALESCE(NULLIF(metadata, ''), '{}'), '$.mail.${flag}', ?) WHERE id = ?`
+    ).run(next, id);
+    return !!next;
+  }
 
   // ── List & Search ──────────────────────────────────
 
@@ -29,39 +116,57 @@ export class EmailService {
     const offset = (page - 1) * pageSize;
 
     const { where, params } = this.buildFolderClause(folder, opts);
+    const sources = this.sourcesFor(opts.accountId);
 
-    const countSql = `
+    // Each source is paged on its own up to this page's end, then merged by
+    // date: correct for any page, and the Gmail query stays index-friendly.
+    let total = 0;
+    let merged: EmailListItem[] = [];
+    for (const src of sources) {
+      total += this.countThreads(src, where, params);
+      merged = merged.concat(this.listThreads(src, where, params, offset + pageSize, 0));
+    }
+    if (sources.length > 1) merged.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    const emails = merged.slice(offset, offset + pageSize);
+    return { emails, total, page, pageSize };
+  }
+
+  private actionJoins(where: string): string {
+    return `${where.includes("ea.") ? "LEFT JOIN email_actions ea ON ea.gmail_id = e.gmail_id" : ""}
+      ${where.includes("el_link") ? "LEFT JOIN email_actions el_link ON el_link.gmail_id = e.gmail_id AND el_link.action_type = 'label'" : ""}`;
+  }
+
+  private countThreads(src: string, where: string, params: unknown[]): number {
+    const sql = `
       SELECT COUNT(DISTINCT e.thread_id) as cnt
-      FROM google_emails e
-      ${where.includes("ea.") ? "LEFT JOIN email_actions ea ON ea.gmail_id = e.gmail_id" : ""}
-      ${where.includes("el_link") ? "LEFT JOIN email_actions el_link ON el_link.gmail_id = e.gmail_id AND el_link.action_type = 'label'" : ""}
+      FROM ${src} e
+      ${this.actionJoins(where)}
       WHERE ${where}
     `;
-    const total = (this.db.prepare(countSql).get(...params) as { cnt: number })?.cnt ?? 0;
+    return (this.db.prepare(sql).get(...params) as { cnt: number })?.cnt ?? 0;
+  }
 
-    // Thread-grouped: latest message per thread
+  /** Thread-grouped: latest message per thread. */
+  private listThreads(src: string, where: string, params: unknown[], limit: number, offset: number): EmailListItem[] {
     const sql = `
       SELECT e.gmail_id, e.thread_id, e.from_email, e.from_name, e.to_emails,
              e.subject, e.snippet, e.date, e.is_read, e.is_starred, e.has_attachments, e.labels,
              e.account_id,
-             (SELECT COUNT(*) FROM google_emails e2 WHERE e2.thread_id = e.thread_id) as message_count,
+             (SELECT COUNT(*) FROM ${src} e2 WHERE e2.thread_id = e.thread_id) as message_count,
              c.name as contact_name,
              e.urgency, e.attention_needed, e.ai_summary, e.draft_comm_id
-      FROM google_emails e
+      FROM ${src} e
       LEFT JOIN contacts c ON c.email = e.from_email AND c.email <> ''
-      ${where.includes("ea.") ? "LEFT JOIN email_actions ea ON ea.gmail_id = e.gmail_id" : ""}
-      ${where.includes("el_link") ? "LEFT JOIN email_actions el_link ON el_link.gmail_id = e.gmail_id AND el_link.action_type = 'label'" : ""}
+      ${this.actionJoins(where)}
       WHERE ${where}
       AND e.date = (
-        SELECT MAX(e3.date) FROM google_emails e3 WHERE e3.thread_id = e.thread_id
+        SELECT MAX(e3.date) FROM ${src} e3 WHERE e3.thread_id = e.thread_id
       )
       GROUP BY e.thread_id
       ORDER BY e.date DESC
       LIMIT ? OFFSET ?
     `;
-
-    const emails = this.db.prepare(sql).all(...params, pageSize, offset) as EmailListItem[];
-    return { emails, total, page, pageSize };
+    return this.db.prepare(sql).all(...params, limit, offset) as EmailListItem[];
   }
 
   private buildFolderClause(folder: EmailFolder, opts: {
@@ -136,7 +241,7 @@ export class EmailService {
 
   getEmail(gmailId: string): EmailDetail | null {
     const row = this.db.prepare(`
-      SELECT * FROM google_emails WHERE gmail_id = ?
+      SELECT * FROM ${this.sourceForId(gmailId)} e WHERE e.gmail_id = ?
     `).get(gmailId) as (Record<string, unknown> & { gmail_id: string }) | undefined;
     if (!row) return null;
 
@@ -145,7 +250,7 @@ export class EmailService {
 
   getThread(threadId: string): ThreadDetail | null {
     const rows = this.db.prepare(`
-      SELECT * FROM google_emails WHERE thread_id = ? ORDER BY date ASC
+      SELECT * FROM ${this.sourceForId(threadId)} e WHERE e.thread_id = ? ORDER BY e.date ASC
     `).all(threadId) as Array<Record<string, unknown> & { gmail_id: string; subject: string }>;
     if (!rows.length) return null;
 
@@ -154,6 +259,11 @@ export class EmailService {
       subject: rows[0].subject,
       messages: rows.map((r) => this.enrichEmail(r)),
     };
+  }
+
+  /** Record a Gmail message's HTML once fetched ('' = it has none, so it is never fetched again). */
+  saveGmailHtml(gmailId: string, html: string): void {
+    this.db.prepare(`UPDATE google_emails SET body_html = ? WHERE gmail_id = ?`).run(html, gmailId);
   }
 
   private enrichEmail(row: Record<string, unknown> & { gmail_id: string }): EmailDetail {
@@ -201,6 +311,8 @@ export class EmailService {
       subject: String(row.subject ?? ""),
       snippet: String(row.snippet ?? ""),
       body_text: String(row.body_text ?? ""),
+      body_html: row.body_html == null ? null : String(row.body_html),
+      account_id: String(row.account_id ?? ""),
       date: String(row.date ?? ""),
       is_read: Number(row.is_read ?? 0),
       is_starred: Number(row.is_starred ?? 0),
@@ -223,72 +335,76 @@ export class EmailService {
   getCounts(accountId?: string): EmailCounts {
     const accFilter = accountId ? " AND e.account_id = ?" : "";
     const p: unknown[] = accountId ? [accountId] : [];
+    const sources = this.sourcesFor(accountId);
 
-    const totalInbox = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e
-       WHERE e.labels LIKE '%"INBOX"%'
+    const totalInbox = this.countQuery(sources,
+      `WHERE e.labels LIKE '%"INBOX"%'
        AND NOT EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type IN ('archive','trash'))${accFilter}`,
       p,
     );
-    const unread = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e
-       WHERE e.labels LIKE '%"INBOX"%' AND e.is_read = 0
+    const unread = this.countQuery(sources,
+      `WHERE e.labels LIKE '%"INBOX"%' AND e.is_read = 0
        AND NOT EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type IN ('archive','trash'))${accFilter}`,
       p,
     );
-    const starred = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e WHERE e.is_starred = 1${accFilter}`,
+    const starred = this.countQuery(sources, `WHERE e.is_starred = 1${accFilter}`, p);
+    const sent = this.countQuery(sources, `WHERE e.labels LIKE '%"SENT"%'${accFilter}`, p);
+    const drafts = this.countQuery(sources, `WHERE e.labels LIKE '%"DRAFT"%'${accFilter}`, p);
+    const trash = this.countQuery(sources,
+      `WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'trash')${accFilter}`,
       p,
     );
-    const sent = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e WHERE e.labels LIKE '%"SENT"%'${accFilter}`,
-      p,
-    );
-    const drafts = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e WHERE e.labels LIKE '%"DRAFT"%'${accFilter}`,
-      p,
-    );
-    const trash = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e
-       WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'trash')${accFilter}`,
-      p,
-    );
-    const archived = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e
-       WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'archive')
+    const archived = this.countQuery(sources,
+      `WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'archive')
        AND NOT EXISTS (SELECT 1 FROM email_actions ea2 WHERE ea2.gmail_id = e.gmail_id AND ea2.action_type = 'trash')${accFilter}`,
       p,
     );
-    const snoozed = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e
-       WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'snooze' AND ea.value > datetime('now'))${accFilter}`,
+    const snoozed = this.countQuery(sources,
+      `WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'snooze' AND ea.value > datetime('now'))${accFilter}`,
       p,
     );
-    const important = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e
-       WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'important')${accFilter}`,
+    const important = this.countQuery(sources,
+      `WHERE EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type = 'important')${accFilter}`,
       p,
     );
 
-    const attention = this.countQuery(
-      `SELECT COUNT(*) as cnt FROM google_emails e WHERE e.attention_needed = 1${accFilter}`,
-      p,
-    );
+    const attention = this.countQuery(sources, `WHERE e.attention_needed = 1${accFilter}`, p);
 
     return { inbox: totalInbox, unread, starred, sent, drafts, trash, archived, snoozed, important, attention };
   }
 
-  private countQuery(sql: string, params: unknown[] = []): number {
-    try {
-      return (this.db.prepare(sql).get(...params) as { cnt: number })?.cnt ?? 0;
-    } catch {
-      return 0;
+  /** Per account: how much mail Kernl holds and, for IMAP, where the fetcher stands. */
+  getSyncStatus(): AccountSyncStatus[] {
+    const accounts = this.db.prepare(
+      "SELECT id, email, label, provider FROM email_accounts ORDER BY is_default DESC, label ASC"
+    ).all() as Array<{ id: string; email: string; label: string; provider: string }>;
+    return accounts.map((a) => ({
+      account_id: a.id,
+      email: a.email,
+      label: a.label,
+      provider: a.provider,
+      stored: this.countQuery(this.sourcesFor(a.id), "WHERE e.account_id = ?", [a.id]),
+      fetch: a.provider === "imap_smtp" ? readFetchStatus(this.db, a.id) : null,
+    }));
+  }
+
+  /** `SELECT COUNT(*)` with the same filter over every source, summed. */
+  private countQuery(sources: string[], where: string, params: unknown[] = []): number {
+    let n = 0;
+    for (const src of sources) {
+      try {
+        n += (this.db.prepare(`SELECT COUNT(*) as cnt FROM ${src} e ${where}`).get(...params) as { cnt: number })?.cnt ?? 0;
+      } catch {
+        // a source whose table is mid-migration counts as empty
+      }
     }
+    return n;
   }
 
   // ── Actions ────────────────────────────────────────
 
   toggleStar(gmailId: string): boolean {
+    if (gmailId.startsWith(COMM_MAIL_PREFIX)) return this.setCommFlag(gmailId, "is_starred");
     const row = this.db.prepare(`SELECT is_starred FROM google_emails WHERE gmail_id = ?`).get(gmailId) as { is_starred: number } | undefined;
     if (!row) return false;
     const next = row.is_starred ? 0 : 1;
@@ -297,6 +413,7 @@ export class EmailService {
   }
 
   toggleRead(gmailId: string): boolean {
+    if (gmailId.startsWith(COMM_MAIL_PREFIX)) return this.setCommFlag(gmailId, "is_read");
     const row = this.db.prepare(`SELECT is_read FROM google_emails WHERE gmail_id = ?`).get(gmailId) as { is_read: number } | undefined;
     if (!row) return false;
     const next = row.is_read ? 0 : 1;
@@ -305,6 +422,10 @@ export class EmailService {
   }
 
   markRead(gmailId: string): void {
+    if (gmailId.startsWith(COMM_MAIL_PREFIX)) {
+      this.setCommFlag(gmailId, "is_read", 1);
+      return;
+    }
     this.db.prepare(`UPDATE google_emails SET is_read = 1 WHERE gmail_id = ?`).run(gmailId);
   }
 

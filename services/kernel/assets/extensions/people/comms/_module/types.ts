@@ -19,6 +19,13 @@ export interface EmailAccount {
   updated_at: string;
 }
 
+export type AccountStatus = "ok" | "read_only" | "needs_attention";
+
+/** An account as the dashboard may see it: secrets masked, plus its state. */
+export interface EmailAccountView extends EmailAccount {
+  status: AccountStatus;
+}
+
 export interface Communication {
   id: string;
   channel: CommChannel;
@@ -182,6 +189,9 @@ export interface EmailDetail {
   subject: string;
   snippet: string;
   body_text: string;
+  /** Sanitized HTML part; '' = the message has none; null = a Gmail row whose HTML was never fetched. */
+  body_html: string | null;
+  account_id: string;
   date: string;
   is_read: number;
   is_starred: number;

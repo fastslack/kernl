@@ -8,6 +8,7 @@ import { fullSyncMigrations } from "./migrations/002_full_sync.js";
 import { emailTriageMigrations } from "./migrations/003_email_triage.js";
 import { accountIdMigrations } from "./migrations/004_account_id.js";
 import { authHealthMigrations } from "./migrations/005_auth_health.js";
+import { bodyHtmlMigrations } from "./migrations/006_body_html.js";
 import { GoogleAuth } from "./auth.js";
 import { GoogleClient } from "./google-client.js";
 import { CrmService } from "../../../people/crm/_module/service.js";
@@ -32,12 +33,13 @@ export function createGoogleSyncModule(): GoogleSyncModule {
     name: "google-sync",
 
     async init(ctx) {
-      // Five migration sets, each under its own key.
+      // Six migration sets, each under its own key.
       runMigrations(ctx.sqlite, "google-sync", googleSyncMigrations);
       runMigrations(ctx.sqlite, "google-sync-full", fullSyncMigrations);
       runMigrations(ctx.sqlite, "google-sync-triage", emailTriageMigrations);
       runMigrations(ctx.sqlite, "google-sync-account-id", accountIdMigrations);
       runMigrations(ctx.sqlite, "google-sync-auth-health", authHealthMigrations);
+      runMigrations(ctx.sqlite, "google-sync-body-html", bodyHtmlMigrations);
 
       const { clientId, clientSecret, callbackPort } = ctx.config.google;
 

@@ -10,7 +10,7 @@ import {
 import type { CrmService } from "../../../../people/crm/_module/service.js";
 import type { GoogleClient } from "../google-client.js";
 import type { Contact } from "../../../../people/crm/_module/types.js";
-import { extractGmailBody, stripHtml, extractHeader, parseEmailAddress, parseEmailName } from "../../../../people/comms/_module/gmail-helpers.js";
+import { extractGmailBody, stripHtml, storableHtml, extractHeader, parseEmailAddress, parseEmailName } from "../../../../people/comms/_module/gmail-helpers.js";
 
 const GMAIL_MESSAGES_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages";
 const MAX_BODY_LENGTH = 10_240; // 10KB truncation
@@ -85,9 +85,9 @@ export async function importGmailFull(
   const insertEmail = db.prepare(
     `INSERT OR IGNORE INTO google_emails
      (id, gmail_id, thread_id, from_email, from_name, to_emails, cc_emails,
-      subject, snippet, body_text, labels, date, size_bytes, has_attachments,
+      subject, snippet, body_text, body_html, labels, date, size_bytes, has_attachments,
       is_read, is_starred, created_at, account_id)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
 
   const insertSyncMap = db.prepare(
@@ -173,6 +173,7 @@ export async function importGmailFull(
           subject,
           msg.snippet ?? "",
           bodyText,
+          storableHtml(body.html),
           JSON.stringify(labelIds),
           date,
           msg.payload?.body?.size ?? 0,

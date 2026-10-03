@@ -1,4 +1,5 @@
 import type { GmailMessagePart } from "@kernl/extension-sdk";
+import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import type { CommMetadata } from "./types.js";
 
 /**
@@ -50,6 +51,20 @@ export function extractGmailBody(part: GmailMessagePart): { text: string; html: 
   }
 
   return { text, html };
+}
+
+/** Past this, a message's HTML is dropped and the view falls back to its text. */
+const MAX_STORED_HTML = 512 * 1024;
+
+/**
+ * A message's HTML part as it may be stored and shown: sanitized (no scripts,
+ * styles, frames or handlers) and capped — a truncated document would render
+ * broken, so an oversized one is dropped whole.
+ */
+export function storableHtml(html: string): string {
+  if (!html) return "";
+  const clean = sanitizeUserHtml(html);
+  return clean.length > MAX_STORED_HTML ? "" : clean;
 }
 
 const NAMED_ENTITIES: Record<string, string> = {

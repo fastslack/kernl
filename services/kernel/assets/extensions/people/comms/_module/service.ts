@@ -11,13 +11,16 @@ import {
   type Notifier,
   type PatchColumn,
   localDateOf,
+  decrypt,
+  encryptIfNeeded,
+  isEncrypted,
 } from "@kernl/extension-sdk";
 import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
 import type { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import type {
   Communication, CommAttachment, CommChannel, CommStatus, CommDirection, InboxMessage,
-  EmailAccount, EmailTemplate, EmailCampaign, CampaignRecipient,
+  EmailAccount, EmailAccountView, EmailTemplate, EmailCampaign, CampaignRecipient,
 } from "./types.js";
 import type { EmailProvider } from "./providers/types.js";
 import { GmailProvider } from "./providers/gmail-provider.js";
@@ -65,6 +68,31 @@ const MIME_MAP: Record<string, string> = {
 function guessMime(filename: string): string {
   const ext = extname(filename).toLowerCase();
   return MIME_MAP[ext] ?? "application/octet-stream";
+}
+
+/** What the API returns in place of a stored secret. */
+export const MASKED_SECRET = "••••••••";
+const SECRET_KEYS = ["pass", "api_key"] as const;
+
+// Logged once per process (not once per save) — see sealConfig.
+let warnedNoEncryptionKey = false;
+
+export const UNREADABLE_MAIL_PASSWORD =
+  "Stored mail password can't be opened (encryption key changed) — reconnect this mailbox";
+
+/**
+ * Whether a stored password is a sealed value rather than plaintext.
+ * `isEncrypted()` alone only checks the decoded length; also require the
+ * strict base64 `encrypt()` emits and rule out pure hex (same test the forge
+ * connection store uses).
+ */
+function looksSealed(value: string): boolean {
+  return (
+    isEncrypted(value) &&
+    value.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value) &&
+    !/^[0-9a-fA-F]+$/.test(value)
+  );
 }
 
 // ── Partial-update allow-lists ─────────────────────────
@@ -117,6 +145,7 @@ export class CommsService {
   private notifier: Notifier | null = null;
   private googleAuth: GoogleAuth | null = null;
   private resendFallbackKey = "";
+  private encryptionKey = "";
 
   constructor(
     private db: SqliteDb,
@@ -148,9 +177,62 @@ export class CommsService {
    * Stash provider-construction dependencies so new accounts can register
    * providers on-the-fly (e.g., right after POST /api/email-accounts).
    */
-  setProviderContext(ctx: { googleAuth?: GoogleAuth | null; resendFallbackKey?: string }): void {
+  setProviderContext(ctx: { googleAuth?: GoogleAuth | null; resendFallbackKey?: string; encryptionKey?: string }): void {
     if (ctx.googleAuth !== undefined) this.googleAuth = ctx.googleAuth;
     if (ctx.resendFallbackKey !== undefined) this.resendFallbackKey = ctx.resendFallbackKey;
+    if (ctx.encryptionKey !== undefined) this.encryptionKey = ctx.encryptionKey;
+  }
+
+  /** Seal an IMAP password before it is written. Without a key it stays as given (and says so). */
+  private sealConfig(provider: string, cfg: Record<string, unknown>): Record<string, unknown> {
+    if (provider !== "imap_smtp" || typeof cfg.pass !== "string" || !cfg.pass) return cfg;
+    if (!this.encryptionKey) {
+      if (!warnedNoEncryptionKey) {
+        warnedNoEncryptionKey = true;
+        log.warn("Comms: KERNEL_ENCRYPTION_KEY is not set — the mail password is stored in plaintext");
+      }
+      return cfg;
+    }
+    return { ...cfg, pass: encryptIfNeeded(cfg.pass, this.encryptionKey) };
+  }
+
+  /**
+   * The account's IMAP/SMTP config with the password opened. A value that does
+   * not open and does not look sealed is used as stored (legacy plaintext). A
+   * value that looks sealed but does not open (the key changed or is gone) is
+   * never handed out as the password: `pass` comes back empty and
+   * `pass_unreadable` is set, so nothing sends ciphertext to the server.
+   */
+  openImapConfig(account: EmailAccount): ImapSmtpConfig & { pass_unreadable?: true } {
+    const cfg = safeJson<Record<string, unknown>>(account.provider_config, {}) as unknown as ImapSmtpConfig;
+    if (typeof cfg.pass !== "string" || !cfg.pass) return cfg;
+    if (this.encryptionKey) {
+      try {
+        return { ...cfg, pass: decrypt(cfg.pass, this.encryptionKey) };
+      } catch { /* not sealed with this key — sealed with another, or legacy plaintext */ }
+    }
+    if (looksSealed(cfg.pass)) return { ...cfg, pass: "", pass_unreadable: true };
+    return cfg;
+  }
+
+  listAccountsForDisplay(): EmailAccountView[] {
+    return this.listAccounts().map((a) => this.maskAccount(a));
+  }
+
+  /**
+   * An account as the API/dashboard may return it: secrets masked, plus its
+   * computed status. The single gate every account-returning route goes
+   * through — a route that hands back a raw `addAccount`/`updateAccount`
+   * result instead of this bypasses the mask.
+   */
+  maskAccount(a: EmailAccount): EmailAccountView {
+    const cfg = safeJson<Record<string, unknown>>(a.provider_config, {});
+    for (const k of SECRET_KEYS) if (typeof cfg[k] === "string" && cfg[k]) cfg[k] = MASKED_SECRET;
+    // A provider that cannot register (bad config, unreadable password) needs
+    // attention even on a receive-only account.
+    const registered = this.providers.has(a.id) || this.registerAccountProvider(a.id).ok;
+    const status = !registered ? "needs_attention" : cfg.read_only === true ? "read_only" : "ok";
+    return { ...a, provider_config: JSON.stringify(cfg), status };
   }
 
   /**
@@ -162,6 +244,11 @@ export class CommsService {
   registerAccountProvider(accountId: string): { ok: boolean; reason?: string } {
     const account = this.getAccount(accountId);
     if (!account) return { ok: false, reason: "Account not found" };
+
+    // Drop any previously-registered provider first: if this attempt fails
+    // below, the account must stop looking "ok" (providers.has(id)) on a
+    // config that no longer works. Success paths re-add it below.
+    this.unregisterProvider(accountId);
 
     const rawConfig = safeJson<Record<string, unknown>>(account.provider_config, {});
 
@@ -181,7 +268,8 @@ export class CommsService {
     }
 
     if (account.provider === "imap_smtp") {
-      const cfg = rawConfig as unknown as ImapSmtpConfig;
+      const cfg = this.openImapConfig(account);
+      if (cfg.pass_unreadable) return { ok: false, reason: UNREADABLE_MAIL_PASSWORD };
       if (!cfg.imap_host || !cfg.smtp_host || !cfg.user || !cfg.pass) {
         return { ok: false, reason: "Incomplete IMAP/SMTP config (imap_host, smtp_host, user, pass required)" };
       }
@@ -818,10 +906,27 @@ export class CommsService {
       if (contact) contactId = contact.id;
     }
 
+    // Same threading rule as ingestInboundRaw (one shared helper): a provider
+    // that hands us In-Reply-To/References — today that's the IMAP/SMTP
+    // provider — gets its inbound rows threaded onto the mail they're
+    // replying to, instead of every fetch starting a fresh thread. The Gmail
+    // provider doesn't return rawHeaders yet, so this is a no-op for it and
+    // gmail_thread_id (set below) keeps doing that job as before. Header
+    // values are lower-cased and string-coerced here regardless of what the
+    // provider handed back, so metadata.raw_headers is ready to match on
+    // straight away and a non-string value can't throw further down.
+    const rawHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(fetched.rawHeaders ?? {})) rawHeaders[k.toLowerCase()] = String(v ?? "");
+    const referencedThreadId = this.findThreadIdFromReferences(rawHeaders);
+
     const meta = JSON.stringify({
       from: fetched.from,
       from_name: fetched.fromName,
       message_id_header: fetched.messageIdHeader,
+      // Only stored when the provider actually gave us something — keeps the
+      // metadata shape unchanged for providers (Gmail, Resend today) that
+      // don't return rawHeaders at all.
+      ...(Object.keys(rawHeaders).length ? { raw_headers: rawHeaders } : {}),
     });
 
     const comm = this.insertComm({
@@ -838,10 +943,26 @@ export class CommsService {
       gmail_thread_id: fetched.threadId,
       sent_at: fetched.date,
       metadata: meta,
+      ...(referencedThreadId ? { thread_id: referencedThreadId } : {}),
     });
 
     log.info(`Fetched email: ${gmailMessageId} → ${comm.id} (from: ${fetched.from})`);
     return comm;
+  }
+
+  /** Ingest the most recent inbox messages of one account right away (the cron fetcher does the rest). */
+  async pullRecent(accountId: string, limit = 20): Promise<number> {
+    const msgs = await this.searchInbox("", limit, accountId);
+    let n = 0;
+    for (const m of msgs) {
+      try {
+        await this.fetchEmail(m.gmail_id, accountId);
+        n++;
+      } catch (err) {
+        log.warn(`Comms: pullRecent ${accountId}/${m.gmail_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return n;
   }
 
   // ── Ingest Inbound (generic — webhook, IMAP fetcher, any source) ───
@@ -902,6 +1023,13 @@ export class CommsService {
       raw_headers: input.raw_headers ?? {},
     });
 
+    // Thread this inbound mail onto an existing row when In-Reply-To/References
+    // point at a message we already have (References newest-first, then
+    // In-Reply-To) — otherwise it stays its own thread root, same as before.
+    // This matters beyond dedup: it is what lets the auto-send tool see a
+    // client's reply as belonging to the thread it already answered.
+    const referencedThreadId = this.findThreadIdFromReferences(input.raw_headers);
+
     const comm = this.insertComm({
       direction: "inbound",
       status: "archived",
@@ -917,6 +1045,7 @@ export class CommsService {
       metadata: meta,
       created_at: now,
       updated_at: now,
+      ...(referencedThreadId ? { thread_id: referencedThreadId } : {}),
     });
     const id = comm.id;
 
@@ -1014,6 +1143,107 @@ export class CommsService {
     });
   }
 
+  // ── Auto-send (kernel_comms_request_missing_info) ────
+
+  /** True when any mail of this thread was already sent by the office on its own. */
+  threadHasAutoSend(threadKey: string): boolean {
+    return !!this.db.prepare(
+      `SELECT 1 FROM communications
+       WHERE (gmail_thread_id = ? OR thread_id = ? OR id = ?)
+         AND json_extract(metadata,'$.auto_sent') = 1 LIMIT 1`,
+    ).get(threadKey, threadKey, threadKey);
+  }
+
+  markAutoSent(id: string): void {
+    this.db.prepare(`UPDATE communications SET metadata = json_set(COALESCE(metadata,'{}'), '$.auto_sent', 1) WHERE id = ?`).run(id);
+  }
+
+  getSetting(key: string): string {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value ?? "";
+  }
+
+  /**
+   * Conservative cross-thread cap: true when an automatic mail already went to
+   * this sender, from this account, within `days` days — even in a different
+   * thread than the one being checked now (covers a sender who opens a fresh
+   * thread instead of replying to the one that already got an answer).
+   */
+  recentAutoSendToSender(accountId: string | null, senderEmail: string, days = 30): boolean {
+    const address = (senderEmail || "").trim();
+    if (!address) return false;
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    return !!this.db
+      .prepare(
+        `SELECT 1 FROM communications
+         WHERE json_extract(metadata,'$.auto_sent') = 1
+           AND account_id IS ?
+           AND recipients_to LIKE '%' || ? || '%'
+           AND created_at >= ?
+         LIMIT 1`,
+      )
+      .get(accountId, address, cutoff);
+  }
+
+  /**
+   * Look up the thread root for an inbound mail's In-Reply-To/References
+   * headers. One shared path for every ingestion route (webhook, IMAP fetch,
+   * anything else that lands raw headers) — both `ingestInboundRaw` and
+   * `fetchEmail` call this, so there is exactly one place threading can go
+   * wrong.
+   *
+   * Matches candidates against:
+   *  - `gmail_message_id`, in both the `extid:<id>` dedup-key form
+   *    (inbound rows) and the bare provider-returned form (outbound rows —
+   *    our own auto-reply is stored under its raw Message-ID, no `extid:`
+   *    prefix, so a client replying only to that Message-ID still threads).
+   *  - the raw header copy in `metadata.message_id_header`.
+   *
+   * References are checked newest-first (the header lists oldest → newest,
+   * so the immediate parent is last), then In-Reply-To. Returns null when
+   * nothing matches, so the caller keeps today's "own id is the thread root"
+   * default.
+   *
+   * Header values are coerced with String() before parsing: `rawHeaders` is
+   * typed as `Record<string, string>` but an untrusted webhook body can hand
+   * us anything JSON allows (e.g. References as an array) — this must not
+   * throw.
+   */
+  private findThreadIdFromReferences(rawHeaders: Record<string, unknown> | undefined): string | null {
+    if (!rawHeaders) return null;
+    const lower: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawHeaders)) lower[k.toLowerCase()] = String(v ?? "");
+
+    const extractIds = (raw?: string): string[] => {
+      if (!raw) return [];
+      const matches = raw.match(/<[^<>]+>/g);
+      return matches ?? [raw.trim()].filter(Boolean);
+    };
+
+    const references = extractIds(lower["references"]);
+    const inReplyTo = extractIds(lower["in-reply-to"]);
+    const candidates = [...references.slice().reverse(), ...inReplyTo];
+
+    for (const candidate of candidates) {
+      const bare = candidate.replace(/^<|>$/g, "").trim();
+      // All digits is an IMAP UID shape (how fetched rows key gmail_message_id),
+      // never a real Message-ID: a crafted header must not thread onto that row.
+      if (!bare || /^\d+$/.test(bare)) continue;
+      const found = this.db
+        .prepare(
+          `SELECT thread_id, id FROM communications
+           WHERE gmail_message_id IN (?, ?, ?, ?)
+              OR json_extract(metadata,'$.message_id_header') IN (?, ?)
+           LIMIT 1`,
+        )
+        .get(`extid:${bare}`, `extid:<${bare}>`, bare, `<${bare}>`, bare, `<${bare}>`) as
+        | { thread_id: string; id: string }
+        | undefined;
+      if (found) return found.thread_id || found.id;
+    }
+    return null;
+  }
+
   // ── Email Accounts ─────────────────────────────────
 
   addAccount(input: {
@@ -1046,7 +1276,7 @@ export class CommsService {
       provider: input.provider ?? "gmail",
       company: input.company ?? "",
       signature: input.signature ?? "",
-      provider_config: JSON.stringify(input.provider_config ?? {}),
+      provider_config: JSON.stringify(this.sealConfig(input.provider ?? "gmail", input.provider_config ?? {})),
       is_default: isDefault,
       created_at: now,
       updated_at: now,
@@ -1092,7 +1322,7 @@ export class CommsService {
 
   getAccountByEmail(email: string): EmailAccount | null {
     return (this.db
-      .prepare("SELECT * FROM email_accounts WHERE email = ?")
+      .prepare("SELECT * FROM email_accounts WHERE lower(email) = lower(?) ORDER BY created_at ASC LIMIT 1")
       .get(email) as EmailAccount | undefined) ?? null;
   }
 
@@ -1106,6 +1336,28 @@ export class CommsService {
     // If setting as default, clear other defaults
     if (changes.is_default === 1) {
       this.db.prepare("UPDATE email_accounts SET is_default = 0").run();
+    }
+
+    if (typeof changes.provider_config === "string") {
+      const incoming = safeJson<Record<string, unknown>>(changes.provider_config, {});
+      const stored = safeJson<Record<string, unknown>>(existing.provider_config, {});
+      for (const k of SECRET_KEYS) {
+        if (incoming[k] === MASKED_SECRET || incoming[k] === "" || incoming[k] === undefined) {
+          if (stored[k] !== undefined) {
+            incoming[k] = stored[k]; // already sealed as stored — do not seal twice
+          } else if (incoming[k] === MASKED_SECRET) {
+            // The mask arrived but nothing is actually stored (e.g. it was
+            // cleared, or never set) — drop it instead of sealing the literal
+            // mask string as if it were the real secret.
+            delete incoming[k];
+          }
+        }
+      }
+      // The /mail/accounts form rebuilds the config without read_only; a
+      // receive-only mailbox must not turn "ok" just because it was edited.
+      // An explicit value (connect sends true/false) still wins.
+      if (!("read_only" in incoming) && stored.read_only !== undefined) incoming.read_only = stored.read_only;
+      changes = { ...changes, provider_config: JSON.stringify(this.sealConfig(existing.provider, incoming)) };
     }
 
     // ACCOUNT_PATCH is the allow-list: a key outside it never reaches the SQL.
@@ -1194,7 +1446,10 @@ export class CommsService {
 
     if (account.provider === "imap_smtp") {
       const { ImapSmtpProvider } = await import("./providers/imap-smtp-provider.js");
-      const config = JSON.parse(account.provider_config || "{}");
+      const config = this.openImapConfig(account);
+      if (config.pass_unreadable) {
+        return { ok: false, provider: "imap_smtp", details: { imap: false, smtp: false, error: UNREADABLE_MAIL_PASSWORD } };
+      }
       const provider = new ImapSmtpProvider(config, account.email);
       const result = await provider.verify();
       return {

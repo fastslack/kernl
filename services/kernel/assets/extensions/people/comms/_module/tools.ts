@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
+import { MISSING_VOCAB, type MissingField, checkAutoSend, missingInfoBody, detectLang, sanitizeFirstName } from "./auto-send.js";
+import { parseEmailAddress } from "./gmail-helpers.js";
 
 const channelEnum = z.enum(["email", "whatsapp", "mattermost", "x", "instagram", "linkedin"]);
 const statusEnum = z.enum(["draft", "ready", "sending", "sent", "failed", "archived"]);
@@ -740,6 +742,55 @@ export function commsTools(service: CommsService): ToolDefinition[] {
           );
         } catch (err) {
           return errorResult(`Campaign send failed: ${err instanceof Error ? err.message : String(err)}`);
+        }
+      },
+    }),
+
+    defineTool({
+      name: "kernel_comms_request_missing_info",
+      description:
+        "Send the ONE automatic mail the office is allowed to send: ask the sender of an inbound client/gig mail " +
+        "for the details a proposal needs. Fixed template, no free text, one per thread. The kernel refuses and " +
+        "explains why when any rule is not met — in that case leave a draft instead.",
+      schema: z.object({
+        comm_id: z.string().describe("Inbound communication id (IMAP/Gmail mail in communications)"),
+        missing: z.array(z.string()).min(1).describe(`Subset of: ${MISSING_VOCAB.join(", ")}`),
+      }),
+      handler: async ({ comm_id, missing }) => {
+        const comm = service.getById(comm_id);
+        if (!comm) return errorResult(`No communication ${comm_id}.`);
+        if (comm.channel !== "email") return errorResult(`Not sent: comm ${comm_id} is not an email (channel: ${comm.channel}).`);
+        const meta = JSON.parse(comm.metadata || "{}");
+        const threadKey = comm.gmail_thread_id || comm.thread_id || comm.id;
+        const threadHasAutoSend = service.threadHasAutoSend(threadKey);
+        const rawHeaders = (meta.raw_headers ?? {}) as Record<string, string>;
+        const headers: Record<string, string> = {};
+        for (const [k, v] of Object.entries(rawHeaders)) headers[k.toLowerCase()] = String(v);
+        const dedupedMissing = [...new Set(missing)];
+        const verdict = checkAutoSend({
+          enabled: service.getSetting("comms.auto_send.enabled") === "true",
+          direction: comm.direction,
+          from: String(meta.from ?? ""),
+          autoLabel: String(meta.auto_label ?? ""),
+          threadHasAutoSend,
+          missing: dedupedMissing,
+          headers,
+        });
+        if (!verdict.ok) return errorResult(`Not sent: ${verdict.reason}`);
+        const senderAddress = parseEmailAddress(String(meta.from ?? ""));
+        if (service.recentAutoSendToSender(comm.account_id, senderAddress)) {
+          return errorResult("Not sent: An automatic mail already went to this sender in the last 30 days.");
+        }
+        const first = sanitizeFirstName(String(meta.from_name || meta.from || "").split(/[\s<@]/)[0] || "");
+        const body = missingInfoBody(detectLang(`${comm.subject}\n${comm.body}`), dedupedMissing as MissingField[], first);
+        const reply = service.createReply(comm_id, { body, include_quote: true });
+        service.markAutoSent(reply.id);
+        try {
+          const sent = await service.sendEmail(reply.id);
+          return textResult(`Sent to ${sent.recipients_to} (comm ${sent.id}).`);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return errorResult(`Not sent: ${message}. The reply is left as failed/draft for a manual send.`);
         }
       },
     }),

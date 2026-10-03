@@ -173,4 +173,61 @@ export const commsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Calendar items the triage pulled out of a mail. Links each one back to
+    // its mail and thread so a later message in the same thread moves the
+    // item instead of creating a second one.
+    version: 2,
+    sql: `
+      CREATE TABLE IF NOT EXISTS mail_agenda_links (
+        id           TEXT PRIMARY KEY,
+        source_table TEXT NOT NULL,
+        source_id    TEXT NOT NULL,
+        thread_key   TEXT NOT NULL,
+        kind         TEXT NOT NULL,
+        fingerprint  TEXT NOT NULL,
+        local_table  TEXT NOT NULL,
+        local_id     TEXT NOT NULL,
+        start_at     TEXT NOT NULL,
+        created_at   TEXT NOT NULL,
+        updated_at   TEXT NOT NULL
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_mail_agenda_thread_fp
+        ON mail_agenda_links(thread_key, fingerprint);
+      CREATE INDEX IF NOT EXISTS idx_mail_agenda_source
+        ON mail_agenda_links(source_table, source_id);
+    `,
+  },
+  {
+    // One letter per mail to the office router, whatever happens to the
+    // mail's triage row afterwards. 'sent' rows created today are what the
+    // daily cap counts; mail over the cap waits here as 'queued' (payload =
+    // the letter to post, message_id empty) until a later tick drains it.
+    version: 3,
+    sql: `
+      CREATE TABLE IF NOT EXISTS mail_office_letters (
+        source_table TEXT NOT NULL,
+        source_id    TEXT NOT NULL,
+        message_id   TEXT NOT NULL DEFAULT '',
+        status       TEXT NOT NULL DEFAULT 'sent',
+        payload      TEXT NOT NULL DEFAULT '{}',
+        created_at   TEXT NOT NULL,
+        PRIMARY KEY (source_table, source_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_mail_office_letters_status
+        ON mail_office_letters(status, created_at);
+    `,
+  },
+  {
+    // comms:inbox-fetch's progress per account (fetch-status.ts): lets the
+    // mail view tell "not downloaded yet" from "downloading" from "failed".
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS email_fetch_status (
+        account_id TEXT PRIMARY KEY,
+        status     TEXT NOT NULL DEFAULT '{}',
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
 ];

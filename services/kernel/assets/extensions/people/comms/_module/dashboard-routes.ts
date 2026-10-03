@@ -37,7 +37,8 @@ export function registerCommsDashboardRoutes(
   server.operation("GET", "/api/dashboard/comms/search", op["comms.search"]);
 
   // ── Accounts ────────────────────────────────────────────────
-  server.route("GET", "/api/dashboard/comms/accounts", () => commsService.listAccounts());
+  // Masked: this feeds the dashboard directly, same as GET /api/email-accounts.
+  server.route("GET", "/api/dashboard/comms/accounts", () => commsService.listAccountsForDisplay());
 
   // ── Templates ───────────────────────────────────────────────
   server.route("GET", "/api/dashboard/comms/templates", ({ query }) =>

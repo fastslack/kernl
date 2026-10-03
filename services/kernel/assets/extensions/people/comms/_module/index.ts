@@ -25,6 +25,8 @@ import { registerEmailRoutes } from "./email-routes.js";
 import { registerEmailSuggestionsRoutes } from "./email-suggestions-routes.js";
 import { commsDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { commsAgentDrivers } from "./agent-drivers.js";
+import { AgendaWriter, type EventsLike, type TasksLike, type RemindersLike } from "./agenda-writer.js";
+import { MailOfficeDispatch, type AgentsLike } from "./mail-office-dispatch.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
 import { queryComms } from "./dashboard-queries.js";
@@ -79,6 +81,44 @@ export function createCommsModule(): CommsModule {
   let eventsRef: EventBus | null = null;
   let configRef: KernelConfig | null = null;
   let notifierRef: Notifier | null = null;
+  let getModuleRef: ((name: string) => unknown) | null = null;
+
+  // Sibling services are looked up at tick time, not in initialize(): module
+  // init order is not guaranteed. Each one is cached once it resolves.
+  type WithService<T> = { getService?: () => T | null } | null | undefined;
+  const sibling = <T>(...names: string[]): T | null => {
+    if (!getModuleRef) return null;
+    for (const n of names) {
+      const svc = (getModuleRef(n) as WithService<T>)?.getService?.() ?? null;
+      if (svc) return svc;
+    }
+    return null;
+  };
+  let eventsSvc: EventsLike | null = null;
+  let tasksSvc: TasksLike | null = null;
+  let remindersSvc: RemindersLike | null = null;
+  let agentsSvc: AgentsLike | null = null;
+  let agendaRef: AgendaWriter | null = null;
+  let officeRef: MailOfficeDispatch | null = null;
+
+  const resolveAgenda = (): AgendaWriter | null => {
+    if (!dbRef) return null;
+    const before = [eventsSvc, tasksSvc, remindersSvc];
+    eventsSvc ??= sibling<EventsLike>("ext:events", "events");
+    tasksSvc ??= sibling<TasksLike>("ext:tasks", "tasks");
+    remindersSvc ??= sibling<RemindersLike>("ext:reminders", "reminders");
+    const changed = before[0] !== eventsSvc || before[1] !== tasksSvc || before[2] !== remindersSvc;
+    if (!agendaRef || changed) {
+      agendaRef = new AgendaWriter(dbRef, { events: eventsSvc, tasks: tasksSvc, reminders: remindersSvc });
+    }
+    return agendaRef;
+  };
+
+  const resolveOffice = (): MailOfficeDispatch | null => {
+    if (!dbRef) return null;
+    officeRef ??= new MailOfficeDispatch(dbRef, () => (agentsSvc ??= sibling<AgentsLike>("agents")));
+    return officeRef;
+  };
 
   return {
     name: "comms",
@@ -88,6 +128,7 @@ export function createCommsModule(): CommsModule {
       eventsRef = ctx.events;
       configRef = ctx.config;
       notifierRef = ctx.notifier;
+      getModuleRef = ctx.getModule ?? null;
       runMigrations(ctx.sqlite, "comms", commsMigrations);
       ensureEmailAccountsSchema(ctx.sqlite);
 
@@ -124,6 +165,7 @@ export function createCommsModule(): CommsModule {
       service.setProviderContext({
         googleAuth,
         resendFallbackKey: ctx.config.resend.apiKey,
+        encryptionKey: ctx.config.encryption.key,
       });
 
       // Register providers for every configured account
@@ -250,6 +292,8 @@ export function createCommsModule(): CommsModule {
         triage: () => emailTriageRef,
         events: () => eventsRef,
         notifier: () => notifierRef,
+        agenda: resolveAgenda,
+        office: resolveOffice,
       });
     },
 

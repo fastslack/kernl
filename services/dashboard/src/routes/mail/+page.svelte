@@ -4,6 +4,9 @@
   import { rpcOrCall } from '$lib/ws.js';
   import { listEmailSuggestions, fetchGoogleSyncStatus, apiFetchRaw } from '$lib/api';
   import AccountSwitcher from '$lib/components/AccountSwitcher.svelte';
+  import MailSyncBanner from '$lib/components/MailSyncBanner.svelte';
+  import EmailBody from '$lib/components/EmailBody.svelte';
+  import { bannerFor, nextPollMs, type SyncReport } from '$lib/mail-sync.js';
 
   // ── Types ────────────────────────────────────────
   interface EmailListItem {
@@ -14,7 +17,7 @@
     urgency?: string; attention_needed?: number; ai_summary?: string; draft_comm_id?: string;
   }
   interface EmailDetail extends EmailListItem {
-    cc_emails: string; body_text: string; size_bytes: number;
+    cc_emails: string; body_text: string; body_html: string | null; size_bytes: number;
     actions: Array<{ id: string; gmail_id: string; action_type: string; value: string; created_at: string }>;
     email_labels: Array<{ id: string; name: string; color: string }>;
     linked_tasks: Array<{ id: string; title: string; status: string }>;
@@ -63,6 +66,39 @@
     try { googleSync = await fetchGoogleSyncStatus() as typeof googleSync; }
     catch { googleSync = null; }
   }
+  // Per-account download status — drives the banner that explains an empty
+  // or half-downloaded mailbox. Polled fast while a download is moving; when
+  // Kernl gains mail, the list reloads so messages appear as they land.
+  let syncReport: SyncReport | null = null;
+  let syncTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastStored = -1;
+  async function loadSyncStatus() {
+    if (syncTimer) clearTimeout(syncTimer);
+    try {
+      const r = await apiFetchRaw('/api/emails/sync-status');
+      if (r.ok) syncReport = await r.json();
+    } catch {
+      // keep the last report; the next poll retries
+    }
+    // The remembered account was deleted: fall back to all accounts rather
+    // than filter by an id that matches nothing.
+    if (syncReport && selectedAccountId && !syncReport.accounts.some((a) => a.account_id === selectedAccountId)) {
+      try { localStorage.removeItem('mail.selected_account'); } catch {}
+      onAccountChange('');
+      return;
+    }
+    if (syncReport) {
+      const stored = syncReport.accounts
+        .filter((a) => !selectedAccountId || a.account_id === selectedAccountId)
+        .reduce((n, a) => n + a.stored, 0);
+      if (lastStored >= 0 && stored !== lastStored && !loading) { loadFolder(); loadCounts(); }
+      lastStored = stored;
+    }
+    syncTimer = setTimeout(loadSyncStatus, syncReport ? nextPollMs(syncReport.accounts) : 60000);
+  }
+  $: selectedSync = syncReport?.accounts.find((a) => a.account_id === selectedAccountId) ?? null;
+  $: syncExplainsEmpty = !!selectedSync && !!bannerFor(selectedSync);
+
   async function loadSuggestionsCount() {
     try {
       const r = await listEmailSuggestions(100) as { total?: number };
@@ -139,8 +175,10 @@
     selectedId = null;
     selectedEmail = null;
     thread = null;
+    lastStored = -1;
     loadFolder();
     loadCounts();
+    loadSyncStatus();
   }
   async function loadLabels() {
     const d = await api('/api/emails/labels');
@@ -273,10 +311,13 @@
   }
 
   onMount(() => {
-    loadFolder(); loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync();
+    loadFolder(); loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync(); loadSyncStatus();
     document.addEventListener('keydown', handleKey);
   });
-  onDestroy(() => { document.removeEventListener('keydown', handleKey); });
+  onDestroy(() => {
+    document.removeEventListener('keydown', handleKey);
+    if (syncTimer) clearTimeout(syncTimer);
+  });
 
   // Folders config
   const FOLDERS: Array<{ id: Folder; label: string; icon: string; countKey?: keyof Counts }> = [
@@ -368,6 +409,10 @@
       </span>
     </div>
 
+    {#if folder !== 'attention'}
+      <MailSyncBanner report={syncReport} accountId={selectedAccountId} on:select={(e) => onAccountChange(e.detail)} />
+    {/if}
+
     <div class="mail-rows">
       {#if folder === 'attention'}
         <!-- Attention Queue -->
@@ -419,7 +464,7 @@
       {:else if loading}
         <div class="mail-empty">Loading...</div>
       {:else if !emails.length}
-        <div class="mail-empty">No emails in this folder</div>
+        {#if !syncExplainsEmpty}<div class="mail-empty">No emails in this folder</div>{/if}
       {:else}
         {#each emails as em (em.gmail_id)}
           <button
@@ -557,7 +602,9 @@
       {/if}
 
       <!-- Body -->
-      <div class="detail-body">{selectedEmail.body_text || selectedEmail.snippet || '(empty)'}</div>
+      <div class="detail-body">
+        <EmailBody html={selectedEmail.body_html} text={selectedEmail.body_text || selectedEmail.snippet || ''} />
+      </div>
 
       <!-- Thread -->
       {#if selectedEmail.thread_id}
@@ -843,8 +890,6 @@
     font-size: 13px;
     line-height: 1.6;
     color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-word;
   }
 
   .thread-btn {

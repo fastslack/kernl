@@ -3,12 +3,14 @@ import en, { type I18nKey } from "./en.js";
 import es from "./es.js";
 import llmEn, { type LlmConnectKey } from "./llm-connect.en.js";
 import llmEs from "./llm-connect.es.js";
+import mailSyncEn, { type MailSyncKey } from "./mail-sync.en.js";
+import mailSyncEs from "./mail-sync.es.js";
 
 export type Locale = "en" | "es" | "nl" | "de" | "fr" | "pt" | "ja" | "zh";
 
-/** Every key `t()` has a string for: the dashboard dictionary plus the LLM-connect strings. */
-export type TranslationKey = I18nKey | LlmConnectKey;
-export type { I18nKey, LlmConnectKey };
+/** Every key `t()` has a string for: the dashboard dictionary plus the feature strings. */
+export type TranslationKey = I18nKey | LlmConnectKey | MailSyncKey;
+export type { I18nKey, LlmConnectKey, MailSyncKey };
 
 /**
  * What `t()` accepts as a key K. A string literal — or a union of them, such
@@ -23,7 +25,10 @@ export type Translate = <K extends string>(key: KeyArg<K>, params?: Record<strin
 
 // Feature strings live in their own files so parallel work on en.ts/es.ts
 // does not collide; they are merged here once.
-const translations: Record<string, Record<string, string>> = { en: { ...en, ...llmEn }, es: { ...es, ...llmEs } };
+const translations: Record<string, Record<string, string>> = {
+  en: { ...en, ...llmEn, ...mailSyncEn },
+  es: { ...es, ...llmEs, ...mailSyncEs },
+};
 
 /** Active locale. Defaults to "en" — same default as the backend
  *  (KernelConfig.language). */

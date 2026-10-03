@@ -15,8 +15,14 @@ import type { EmailService } from "./email-service.js";
 import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { EmailTriageService } from "./email-triage-service.js";
-import type { EmailFolder } from "./types.js";
+import type { EmailDetail, EmailFolder } from "./types.js";
+import { storableHtml } from "./gmail-helpers.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
+import { discover, normalizeEmail } from "./mail-discovery.js";
+import { connectMailAccount } from "./mail-connect.js";
+import { ImapSmtpProvider } from "./providers/imap-smtp-provider.js";
+import type { ServerEndpoint } from "./mail-providers.js";
+import { FETCH_BATCH, FETCH_POLL_MINUTES } from "./fetch-status.js";
 
 const VALID_FOLDERS = new Set<EmailFolder>([
   "inbox", "sent", "starred", "important", "drafts",
@@ -80,29 +86,57 @@ export function registerEmailRoutes(
     });
   });
 
+  /**
+   * Gmail rows synced before body_html existed carry NULL: fetch the HTML from
+   * Gmail the first time the message is opened and keep it. A failure leaves
+   * the row NULL (tried again next open) and the view shows the text body.
+   */
+  const ensureHtml = async (email: EmailDetail): Promise<void> => {
+    if (email.body_html !== null || !commsService) return;
+    const provider = commsService.getProvider(email.account_id || null) ?? commsService.getProvider(null);
+    if (provider?.name !== "gmail" || !provider.capabilities.fetchEmail) return;
+    try {
+      const fetched = await provider.fetchEmail(email.gmail_id);
+      email.body_html = storableHtml(fetched.bodyHtml);
+      emailService.saveGmailHtml(email.gmail_id, email.body_html);
+    } catch (err) {
+      log.warn(`emails: HTML fetch failed for ${email.gmail_id}: ${errorMessage(err)}`);
+    }
+  };
+
   // ── Email detail ───────────────────────────────
-  route("GET", "/api/emails/detail", "Failed to get email", ({ query }) => {
+  route("GET", "/api/emails/detail", "Failed to get email", async ({ query }) => {
     const gmailId = query.get("gmail_id");
     if (!gmailId) throw new HttpError(400, "Missing gmail_id");
     const email = emailService.getEmail(gmailId);
     if (!email) throw new HttpError(404, "Email not found");
+    await ensureHtml(email);
     // Auto mark as read
     emailService.markRead(gmailId);
     return email;
   });
 
   // ── Thread ─────────────────────────────────────
-  route("GET", "/api/emails/thread", "Failed to get thread", ({ query }) => {
+  route("GET", "/api/emails/thread", "Failed to get thread", async ({ query }) => {
     const threadId = query.get("thread_id");
     if (!threadId) throw new HttpError(400, "Missing thread_id");
     const thread = emailService.getThread(threadId);
     if (!thread) throw new HttpError(404, "Thread not found");
+    // One at a time: a long thread must not burst the Gmail API quota.
+    for (const m of thread.messages) await ensureHtml(m);
     return thread;
   });
 
   // ── Counts (sidebar badges) ────────────────────
   route("GET", "/api/emails/counts", "Failed to get counts", ({ query }) =>
     emailService.getCounts(query.get("account_id") ?? undefined));
+
+  // ── Sync status (explains an empty mailbox) ────
+  route("GET", "/api/emails/sync-status", "Failed to get sync status", () => ({
+    accounts: emailService.getSyncStatus(),
+    poll_minutes: FETCH_POLL_MINUTES,
+    batch: FETCH_BATCH,
+  }));
 
   // ── Toggle star ────────────────────────────────
   route<{ gmail_id: string }>("POST", "/api/emails/star", "Failed to toggle star", ({ body }) =>
@@ -323,7 +357,7 @@ export function registerEmailRoutes(
     const svc = commsService;
     const withMessage = (err: unknown) => ({ error: errorMessage(err) });
 
-    route("GET", "/api/email-accounts", "Failed to list accounts", () => svc.listAccounts());
+    route("GET", "/api/email-accounts", "Failed to list accounts", () => svc.listAccountsForDisplay());
 
     route<{
       label: string; email: string;
@@ -334,7 +368,7 @@ export function registerEmailRoutes(
       is_default?: boolean;
     }>("POST", "/api/email-accounts", withMessage, ({ body }) => {
       if (!body.label || !body.email) throw new HttpError(400, "Missing label or email");
-      return svc.addAccount(body);
+      return svc.maskAccount(svc.addAccount(body));
     });
 
     route<{
@@ -361,7 +395,7 @@ export function registerEmailRoutes(
 
       const account = svc.updateAccount(body.id, changes as Parameters<typeof svc.updateAccount>[1]);
       if (!account) throw new HttpError(404, "Account not found");
-      return account;
+      return svc.maskAccount(account);
     });
 
     route<{ id: string }>("POST", "/api/email-accounts/delete", "Failed to delete account", ({ body }) => {
@@ -374,6 +408,33 @@ export function registerEmailRoutes(
       "POST", "/api/email-accounts/test", (err) => ({ error: errorMessage(err), ok: false }), ({ body }) => {
         if (!body.id) throw new HttpError(400, "Missing id");
         return svc.testAccount(body.id);
+      },
+    );
+
+    const requireEmail = (raw: unknown): string => {
+      const email = normalizeEmail(typeof raw === "string" ? raw : "");
+      if (!email) throw new HttpError(400, "Invalid email");
+      return email;
+    };
+
+    route<{ email?: string }>("POST", "/api/email-accounts/discover", withMessage, ({ body }) =>
+      discover(requireEmail(body.email)));
+
+    // The body carries a password: nothing here may log it. The route wrapper
+    // logs only the thrown error, and connectMailAccount scrubs server text.
+    route<{ email?: string; password?: string; overrides?: { imap: ServerEndpoint; smtp: ServerEndpoint; user?: string } }>(
+      "POST", "/api/email-accounts/connect", withMessage, ({ body }) => {
+        const email = requireEmail(body.email);
+        if (typeof body.password !== "string" || !body.password.trim()) throw new HttpError(400, "Missing password");
+        return connectMailAccount(
+          { email, password: body.password, overrides: body.overrides },
+          {
+            comms: svc,
+            discover: (e) => discover(e),
+            verify: (cfg, opts) => new ImapSmtpProvider(cfg, email).verify({ timeoutMs: 10_000, ...opts }),
+            pullRecent: (id) => svc.pullRecent(id),
+          },
+        );
       },
     );
 
