@@ -394,6 +394,12 @@ export class ClaudeCodeExecutor {
   private sandboxRegistry: SandboxDriverRegistry | null = null;
   /** runId → AbortController, for external cancellation. */
   private activeRuns = new Map<string, AbortController>();
+  /**
+   * `${runId}:${tool_use_id}` → tool name, from each tool_use block until its
+   * tool_result arrives (then dropped). The SDK pairs the two by that id; see
+   * resolveToolNameFromResult.
+   */
+  private toolUseNames = new Map<string, string>();
   /** Cached path to the Claude Code CLI — null = already searched, not found. */
   private cachedClaudeBin: string | null | undefined = undefined;
   /**
@@ -1134,6 +1140,8 @@ export class ClaudeCodeExecutor {
         } else if (block.type === "tool_use") {
           const toolName = block.name ?? "";
           const toolInput = (block.input as Record<string, unknown>) ?? {};
+          const toolUseId = (block as { id?: string }).id;
+          if (toolUseId) this.toolUseNames.set(`${run.id}:${toolUseId}`, toolName);
           const stepNum = stepNumberRef();
           service.addStep({
             run_id: run.id,
@@ -1694,17 +1702,19 @@ export class ClaudeCodeExecutor {
     const id = typeof block === "object" && block !== null && "tool_use_id" in block
       ? String((block as { tool_use_id: unknown }).tool_use_id ?? "")
       : "";
+    // The id is the pairing. Labelling a result with the LAST tool called
+    // breaks as soon as a turn carries two calls: the chief's "Agent Scout
+    // updated." was recorded as ToolSearch's output.
+    const key = `${ctx.run.id}:${id}`;
+    const named = id ? this.toolUseNames.get(key) : undefined;
+    if (named !== undefined) {
+      this.toolUseNames.delete(key);
+      return named;
+    }
+    // An id we never saw (or none): the last call is the best guess left.
     const steps = ctx.service.getSteps(ctx.run.id);
     for (let i = steps.length - 1; i >= 0; i--) {
-      const s = steps[i];
-      if (s.type === "tool_call") {
-        try {
-          const inp = JSON.parse(s.tool_input || "{}");
-          // the SDK doesn't store the id in tool_input, so we return the last unmatched tool_call.
-          void inp;
-        } catch { /* ignore */ }
-        return s.tool_name;
-      }
+      if (steps[i].type === "tool_call") return steps[i].tool_name;
     }
     return id || "unknown";
   }
