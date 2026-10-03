@@ -284,6 +284,7 @@ export class CompactionService {
       system: SUMMARIZATION_SYSTEM,
       max_tokens: this.config.maxSummaryTokens,
       temperature: 0.3, // Lower temperature for more factual summary
+      caller: "chat:compaction",
     });
 
     return result.content;

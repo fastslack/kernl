@@ -9,6 +9,7 @@ export type { SqliteDb } from "../core/db/sqlite.js";
 export type { Neo4jClient } from "../core/db/neo4j.js";
 export type { GraphDriver, GraphResult } from "../core/db-drivers/graph-driver.js";
 export type { EventBus } from "../core/event-bus.js";
+export type { LlmCallRecord } from "../core/llm/call-log.js";
 export type { KernelConfig, KernelLanguage } from "../core/config.js";
 export type { KernelHttpServer, RouteMethod, RouteContext, RouteOptions } from "../core/http-server.js";
 export type { RpcAction } from "../core/mtw/rpc-handler.js";

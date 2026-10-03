@@ -73,6 +73,11 @@ export interface ChatCompletionResult {
   /** Prompt / completion split, when the provider reports it. */
   input_tokens?: number;
   output_tokens?: number;
+  /** Prompt tokens read from / written to the provider's prompt cache. */
+  cache_read_tokens?: number;
+  cache_write_tokens?: number;
+  /** Cost the provider reported for this call (Claude Code does). */
+  cost_usd?: number;
   tool_calls?: ToolUseBlock[];
   stop_reason?: string;
 }

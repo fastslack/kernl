@@ -1,4 +1,8 @@
 import * as providerHealth from "./provider-health.js";
+// Through the host, not ./call-log.js: extension bundles copy this file, and
+// the boundary gate keeps call-log out of them.
+import { recordLlmCall } from "../../sdk/facades.js";
+import { getCatalogEntry } from "./provider-catalog.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./logger.js";
 import type { ChatLlmProvider } from "./chat-provider.js";
 
@@ -14,6 +18,9 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
   marker.__healthInstrumented = true;
 
   const original = p.chatCompletion.bind(p);
+  // The call log groups by catalog slug ("claude-code"), adapters name
+  // themselves by their legacy alias ("claude_code").
+  const slug = getCatalogEntry(p.name)?.slug ?? p.name;
   p.chatCompletion = async (msgs, opts) => {
     const t0 = Date.now();
     const requestedModel = opts?.model;
@@ -53,6 +60,20 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
         caller,
         preview: result.content,
       });
+      recordLlmCall({
+        slug,
+        model: result.model || requestedModel || "",
+        ok: true,
+        latencyMs: durationMs,
+        // Adapters that only report a total leave the split undefined.
+        inputTokens: result.input_tokens,
+        outputTokens: result.output_tokens ?? (result.input_tokens === undefined ? result.tokens_used : undefined),
+        cacheReadTokens: result.cache_read_tokens,
+        cacheWriteTokens: result.cache_write_tokens,
+        costUsd: result.cost_usd,
+        caller,
+        startedAt: t0,
+      }, { silent: true });
       return result;
     } catch (err) {
       const durationMs = Date.now() - t0;
@@ -70,6 +91,16 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
         message,
         caller,
       });
+      recordLlmCall({
+        slug,
+        model: requestedModel ?? "(default)",
+        ok: false,
+        latencyMs: durationMs,
+        errorKind: kind,
+        errorMsg: message,
+        caller,
+        startedAt: t0,
+      }, { silent: true });
       throw err;
     }
   };

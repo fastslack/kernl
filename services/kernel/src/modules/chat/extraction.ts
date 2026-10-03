@@ -56,6 +56,7 @@ export class ExtractionPipeline {
           system: EXTRACTION_SYSTEM_PROMPT,
           max_tokens: 512,
           temperature: 0.1,
+          caller: "chat:extraction",
         },
       );
 

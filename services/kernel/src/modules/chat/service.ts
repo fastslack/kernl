@@ -1197,6 +1197,7 @@ export class ChatService {
         model: l.model || undefined,
         system: opts.system,
         tools: opts.tools,
+        caller: "chat",
       }),
       {
         // Caller-side schema/tool errors fail identically on every provider —

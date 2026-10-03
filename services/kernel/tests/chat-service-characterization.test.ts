@@ -106,7 +106,7 @@ describe("ChatService.chat — prompt + fallback chain", () => {
       promptChatIdentity("en", "p1", " (m1)"),
     ].join("\n\n");
     for (const c of calls) {
-      expect(Object.keys(c.opts!)).toEqual(["model", "system", "tools"]);
+      expect(Object.keys(c.opts!)).toEqual(["model", "system", "tools", "caller"]);
       expect(c.opts!.system).toBe(expectedSystem);
       expect(c.opts!.tools).toBeUndefined();
       expect(c.messages).toEqual([{ role: "user", content: "hello there" }]);

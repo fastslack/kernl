@@ -40,6 +40,9 @@ import {
   chooseKernelMcpTransport,
 } from "../mcp-unix-socket.js";
 import { claudeAuthEnv } from "./claude-code-auth.js";
+// Through the host, not ./call-log.js — see chat-instrumentation.ts.
+import { recordLlmCall } from "../../sdk/facades.js";
+import { sdkResultUsage, sumSdkUsage, type SdkModelUsage } from "../../sdk/llm-usage.js";
 import type {
   ChatMessage,
   ChatCompletionResult,
@@ -186,6 +189,8 @@ function resolveKernelSandboxDirs(cfg?: ClaudeCodeProviderOptions): string[] {
 
 export interface ChatStreamCallOptions {
   model?: string;
+  /** Tag for the LLM call log; defaults to "chat". */
+  caller?: string;
   system?: string;
   sessionId?: string;
   permission?: PermissionRequester;
@@ -282,6 +287,7 @@ export class ChatClaudeCodeProvider {
 
     let finalText = "";
     let totalTokens = 0;
+    let usage: SdkModelUsage[] = [];
     let stopReason: string | undefined;
     let authFailed = false;
 
@@ -302,6 +308,7 @@ export class ChatClaudeCodeProvider {
           if ("result" in msg && typeof msg.result === "string" && msg.result) {
             finalText = msg.result;
           }
+          usage = sdkResultUsage(msg, model);
           if ("usage" in msg && msg.usage) {
             const u = msg.usage as { input_tokens?: number; output_tokens?: number };
             totalTokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
@@ -324,10 +331,16 @@ export class ChatClaudeCodeProvider {
       throw new Error("claude_code: empty response from Claude Agent SDK");
     }
 
+    const sum = sumSdkUsage(usage);
     return {
       content: finalText,
       model,
       tokens_used: totalTokens,
+      input_tokens: sum.inputTokens,
+      output_tokens: sum.outputTokens,
+      cache_read_tokens: sum.cacheReadTokens,
+      cache_write_tokens: sum.cacheWriteTokens,
+      cost_usd: sum.costUsd,
       stop_reason: stopReason,
     };
   }
@@ -450,9 +463,12 @@ export class ChatClaudeCodeProvider {
 
     let finalText = "";
     let totalTokens = 0;
+    let usage: SdkModelUsage[] = [];
     let stopReason: string | undefined;
     let authFailed = false;
     let sessionId: string | undefined = opts.sessionId;
+    const startedAt = Date.now();
+    const caller = opts.caller ?? "chat";
 
     const promptIterable = this.buildPromptStream({ role: "user", content: userText });
     const q = query({ prompt: promptIterable, options });
@@ -529,6 +545,7 @@ export class ChatClaudeCodeProvider {
           if ("result" in msg && typeof msg.result === "string" && msg.result) {
             finalText = msg.result;
           }
+          usage = sdkResultUsage(msg, model);
           if ("usage" in msg && msg.usage) {
             const u = msg.usage as { input_tokens?: number; output_tokens?: number };
             totalTokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
@@ -544,15 +561,35 @@ export class ChatClaudeCodeProvider {
           }
         }
       }
+    } catch (err) {
+      recordStreamFailure(model, caller, startedAt, err instanceof Error ? err.message : String(err));
+      throw err;
     } finally {
       opts.signal?.removeEventListener("abort", onAbort);
       try { q.close(); } catch { /* already closed */ }
     }
 
     if (authFailed) {
-      throw new Error(
-        "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.",
-      );
+      const message = "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.";
+      recordStreamFailure(model, caller, startedAt, message);
+      throw new Error(message);
+    }
+
+    // One row per model: a turn on Opus can still spend Haiku tokens.
+    for (const u of usage) {
+      recordLlmCall({
+        slug: "claude-code",
+        model: u.model,
+        ok: true,
+        latencyMs: Date.now() - startedAt,
+        inputTokens: u.inputTokens,
+        outputTokens: u.outputTokens,
+        cacheReadTokens: u.cacheReadTokens,
+        cacheWriteTokens: u.cacheWriteTokens,
+        costUsd: u.costUsd,
+        caller,
+        startedAt,
+      });
     }
 
     return { finalText, tokensUsed: totalTokens, stopReason, sessionId };
@@ -705,4 +742,17 @@ function logToolIgnoredOnce(): void {
   log.warn(
     `claude_code provider: kernel tools are ignored in single-shot mode. Use chatCompletionStream() for full SDK loop.`,
   );
+}
+
+function recordStreamFailure(model: string, caller: string, startedAt: number, message: string): void {
+  recordLlmCall({
+    slug: "claude-code",
+    model,
+    ok: false,
+    latencyMs: Date.now() - startedAt,
+    errorKind: /authentication|login/i.test(message) ? "auth" : "transient",
+    errorMsg: message,
+    caller,
+    startedAt,
+  });
 }

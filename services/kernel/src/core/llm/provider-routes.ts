@@ -19,7 +19,7 @@ import { clearProviderExhausted } from "./chat-adapters.js";
 import { llm } from "./client.js";
 import { getAllHealth } from "./provider-health.js";
 import { ModelBlocklist } from "./model-blocklist.js";
-import { recent as recentCalls } from "./call-log.js";
+import { recent as recentCalls, usage as llmUsage, type UsageGroup } from "./call-log.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
 import { getChatProviders } from "./readiness.js";
 import { getCatalogEntry } from "./provider-catalog.js";
@@ -476,6 +476,25 @@ export function registerLlmProviderRoutes(
       failOnly: query.get("fail") === "1",
     }),
   }));
+
+  // GET /api/llm/usage — token totals from the daily rollup. Query params:
+  //   ?from=YYYY-MM-DD&to=YYYY-MM-DD   inclusive UTC days (default: all)
+  //   ?group=model|slug|caller|day     (default model)
+  //   ?slug=…&model=…                  narrow before grouping
+  server.route("GET", "/api/llm/usage", ({ query }) => {
+    const groups: UsageGroup[] = ["model", "slug", "caller", "day"];
+    const g = query.get("group") as UsageGroup | null;
+    const day = (v: string | null) => (v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : undefined);
+    return {
+      rows: llmUsage({
+        group: g && groups.includes(g) ? g : "model",
+        from: day(query.get("from")),
+        to: day(query.get("to")),
+        slug: query.get("slug") || undefined,
+        model: query.get("model") || undefined,
+      }),
+    };
+  });
 
   // ── Model blocklist admin ────────────────────────────────────────
   // GET /api/llm/blocklist           → all auto-blocked (slug, model) pairs

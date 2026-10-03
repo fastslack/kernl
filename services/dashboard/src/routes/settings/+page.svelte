@@ -24,6 +24,7 @@
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
+  import LlmUsage from '$lib/components/llm/LlmUsage.svelte';
   import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
   import WhatsAppCard from '$lib/components/whatsapp/WhatsAppCard.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
@@ -395,6 +396,7 @@
   $: richCards = {
     ai: [
       { id: 'providers', title: $t('llm.connections') },
+      { id: 'usage', title: $t('llm.usage.tab') },
     ],
     mail: [
       { id: 'mail-connect', title: $t('settings.mail.card') },
@@ -633,7 +635,7 @@
       {/if}
 
       <!-- ═══ Content ═══ -->
-      <div class="st-content">
+      <div class="st-content" class:fill={activeSection === 'ai' && activeCard === 'usage'}>
         {#if $page.url.searchParams.get('welcome') === '1'}
           <SetupChecklist />
         {/if}
@@ -664,6 +666,9 @@
             initialConnect={$page.url.searchParams.get('connect') ?? ''}
             on:advanced={() => revealCard('ai-advanced')}
           />
+        {/if}
+        {#if activeSection === 'ai' && activeCard === 'usage'}
+          <LlmUsage />
         {/if}
 
         <!-- ═══ Mail ═══ -->
@@ -998,6 +1003,9 @@
 
   /* Content */
   .st-content { overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+  /* A card that fills the pane and scrolls its own table (token usage). */
+  .st-content.fill { display: flex; flex-direction: column; overflow: hidden; }
+  .st-content.fill > * { flex-shrink: 0; }
 
   /* Shared small buttons */
   .btn-sm {

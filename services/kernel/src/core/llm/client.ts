@@ -127,6 +127,9 @@ export interface LlmChatResult {
   provider: LlmProvider;
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
 }
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
@@ -380,6 +383,9 @@ export class LlmClient {
           latencyMs: latency,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
+          cacheReadTokens: result.cacheReadTokens,
+          cacheWriteTokens: result.cacheWriteTokens,
+          costUsd: result.costUsd,
           caller: opts.caller,
           startedAt: t0,
         });
@@ -588,7 +594,11 @@ export class LlmClient {
           text: result.content,
           model: result.model,
           provider: "anthropic",
-          outputTokens: result.tokens_used,
+          inputTokens: result.input_tokens,
+          outputTokens: result.output_tokens ?? result.tokens_used,
+          cacheReadTokens: result.cache_read_tokens,
+          cacheWriteTokens: result.cache_write_tokens,
+          costUsd: result.cost_usd,
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -651,7 +661,12 @@ export class LlmClient {
 
     const data = await response.json() as {
       content: Array<{ type: string; text: string }>;
-      usage?: { input_tokens: number; output_tokens: number };
+      usage?: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
       model: string;
     };
 
@@ -661,6 +676,8 @@ export class LlmClient {
       provider: "anthropic",
       inputTokens: data.usage?.input_tokens,
       outputTokens: data.usage?.output_tokens,
+      cacheReadTokens: data.usage?.cache_read_input_tokens,
+      cacheWriteTokens: data.usage?.cache_creation_input_tokens,
     };
   }
 }

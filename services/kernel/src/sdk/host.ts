@@ -21,6 +21,7 @@ import type { LlmClient } from "../core/llm/client.js";
 import type { ProviderConfig } from "../core/llm/credentials.js";
 import type { KernelConfig } from "../core/config.js";
 import type { LlmStartInfo, LlmEndInfo, LlmFailInfo } from "../core/llm/logger.js";
+import type { LlmCallRecord } from "../core/llm/call-log.js";
 import type { MediaTool, MediaToolStatus } from "../core/media-tools.js";
 import type { KernelRequestContext } from "../core/request-context.js";
 import type { PeeringService } from "../core/peering/service.js";
@@ -56,6 +57,13 @@ export interface KernlHost {
   logLlmStart(info: LlmStartInfo): void;
   logLlmEnd(info: LlmEndInfo): void;
   logLlmFail(info: LlmFailInfo): void;
+  /**
+   * One row in the kernel's LLM call log, for an extension that drives a
+   * model without `llm()` (the Claude Agent SDK). Optional so a bundle built
+   * now still runs on a kernel whose host predates it; the call then goes
+   * unrecorded, as it did before.
+   */
+  recordLlmCall?(record: LlmCallRecord, opts?: { silent?: boolean }): void;
   getRequestContext(): KernelRequestContext;
   loadTransformers(): Promise<typeof import("@huggingface/transformers")>;
   mediaToolBin(tool: MediaTool): string;
@@ -120,6 +128,7 @@ const defaultHost: KernlHost = Object.freeze({
   logLlmStart: () => {},
   logLlmEnd: () => {},
   logLlmFail: () => {},
+  recordLlmCall: () => {},
   getRequestContext: () => ({ callerAgentId: "", callerRunId: "", callerDepth: 0 }),
   loadTransformers: () => notInstalled("loadTransformers"),
   mediaToolBin: () => notInstalled("mediaToolBin"),

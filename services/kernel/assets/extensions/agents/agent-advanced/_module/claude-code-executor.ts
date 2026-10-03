@@ -38,6 +38,9 @@ import {
   logLlmStart,
   logLlmEnd,
   logLlmFail,
+  recordLlmCall,
+  sdkResultUsage,
+  type SdkModelUsage,
   isoNow,
   getProviderConfig,
   safeJson,
@@ -868,10 +871,12 @@ export class ClaudeCodeExecutor {
       });
 
       const q = query({ prompt: goal, options });
+      let usage: SdkModelUsage[] = [];
 
       try {
         for await (const msg of q) {
           if (abortController.signal.aborted) break;
+          if (msg.type === "result") usage = sdkResultUsage(msg, llmModel);
           // Each `assistant` message is one LLM turn — log it so the operator
           // can see the SDK loop progress at the same granularity as the
           // OpenAI-shaped providers' instrumentProvider wrapper.
@@ -904,7 +909,35 @@ export class ClaudeCodeExecutor {
           message: err instanceof Error ? err.message : String(err),
           caller: llmCaller,
         });
+        recordLlmCall({
+          slug: "claude-code",
+          model: llmModel,
+          ok: false,
+          latencyMs: Date.now() - llmStartedAt,
+          errorKind: "transient",
+          errorMsg: err instanceof Error ? err.message : String(err),
+          caller: `agent:${agent.name}`,
+          startedAt: llmStartedAt,
+        }, { silent: true });
         throw err;
+      }
+
+      // Token usage per model for the whole run, so agent spend shows up
+      // next to chat and pipelines instead of only in agent_runs.tokens_used.
+      for (const u of usage) {
+        recordLlmCall({
+          slug: "claude-code",
+          model: u.model,
+          ok: true,
+          latencyMs: Date.now() - llmStartedAt,
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          cacheReadTokens: u.cacheReadTokens,
+          cacheWriteTokens: u.cacheWriteTokens,
+          costUsd: u.costUsd,
+          caller: `agent:${agent.name}`,
+          startedAt: llmStartedAt,
+        }, { silent: true });
       }
 
       // Loop closed cleanly — emit one summary line covering the whole run.

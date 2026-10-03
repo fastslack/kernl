@@ -38,6 +38,7 @@ export * from "./agent-vars.js";
 export * from "./migrations.js";
 export * from "./tool-builder.js";
 export * from "./formatting.js";
+export * from "./llm-usage.js";
 export * from "./fs-paths.js";
 export * from "./url-guard.js";
 export * from "./crypto.js";

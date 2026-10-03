@@ -177,7 +177,7 @@ export class ChatLmStudioProvider implements ChatLlmProvider {
       }>;
       model?: string;
       status?: string;
-      usage?: { total_tokens?: number };
+      usage?: { total_tokens?: number; input_tokens?: number; output_tokens?: number };
     };
 
     let content = "";
@@ -205,6 +205,8 @@ export class ChatLmStudioProvider implements ChatLlmProvider {
       content,
       model: d.model ?? model ?? "lmstudio",
       tokens_used: d.usage?.total_tokens ?? 0,
+      input_tokens: d.usage?.input_tokens,
+      output_tokens: d.usage?.output_tokens,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       stop_reason: d.status,
     };

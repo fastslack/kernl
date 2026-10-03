@@ -93,7 +93,12 @@ export class ChatClaudeProvider implements ChatLlmProvider {
         input?: Record<string, unknown>;
       }>;
       model: string;
-      usage?: { input_tokens?: number; output_tokens?: number };
+      usage?: {
+        input_tokens?: number;
+        output_tokens?: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
       stop_reason?: string;
     };
 
@@ -120,6 +125,10 @@ export class ChatClaudeProvider implements ChatLlmProvider {
       content,
       model: data.model ?? model,
       tokens_used: tokens,
+      input_tokens: data.usage?.input_tokens,
+      output_tokens: data.usage?.output_tokens,
+      cache_read_tokens: data.usage?.cache_read_input_tokens,
+      cache_write_tokens: data.usage?.cache_creation_input_tokens,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
       stop_reason: data.stop_reason,
     };

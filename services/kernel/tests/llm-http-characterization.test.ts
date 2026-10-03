@@ -490,7 +490,7 @@ describe("ChatClaudeProvider request", () => {
       tools,
       tool_choice: { type: "auto", disable_parallel_tool_use: true },
     }));
-    expect(r).toEqual({ content: "ab", model: "cm", tokens_used: 7, tool_calls: [{ type: "tool_use", id: "u1", name: "t1", input: { x: 1 } }], stop_reason: "tool_use" });
+    expect(r).toEqual({ content: "ab", model: "cm", tokens_used: 7, input_tokens: 3, output_tokens: 4, tool_calls: [{ type: "tool_use", id: "u1", name: "t1", input: { x: 1 } }], stop_reason: "tool_use" });
   });
 
   it("errors as `Claude API error <status>: <body>`; credit balance marks exhausted", async () => {
