@@ -217,6 +217,21 @@ describe("dashboard operations answer alike over RPC and HTTP", () => {
     expect(channelStore.tg.botToken).toBe("456:NEW");
   });
 
+  it("the WhatsApp card's actions are reachable over RPC, not only over HTTP", async () => {
+    // With the bridge up the card asks over RPC first; an action missing from
+    // the RPC map answers UNKNOWN_ACTION, which never falls back to HTTP.
+    for (const name of [
+      "channels.whatsapp.status",
+      "channels.whatsapp.link",
+      "channels.whatsapp.link_cancel",
+      "channels.whatsapp.chats",
+      "channels.whatsapp.logout",
+    ]) {
+      expect(() => rpc(name).catch(() => {})).not.toThrow();
+    }
+    await sameShape("channels.whatsapp.status", "/api/channels/whatsapp/status");
+  });
+
   it("failures reject over RPC (they used to resolve as { error }) and keep the HTTP status and body", async () => {
     const res = await http("POST", "/api/channels/start", { id: "x" });
     expect(res.status).toBe(400);

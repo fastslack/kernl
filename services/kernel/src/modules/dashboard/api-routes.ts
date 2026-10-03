@@ -240,6 +240,11 @@ export function registerDashboardRoutes(
     ["POST", "/api/channels/test", "channels.test"],
     ["GET", "/api/channels/qr", "channels.qr"],
     ["POST", "/api/channels/whatsapp/send", "channels.whatsapp.send"],
+    ["POST", "/api/channels/whatsapp/link", "channels.whatsapp.link"],
+    ["POST", "/api/channels/whatsapp/link/cancel", "channels.whatsapp.link_cancel"],
+    ["GET", "/api/channels/whatsapp/chats", "channels.whatsapp.chats"],
+    ["GET", "/api/channels/whatsapp/status", "channels.whatsapp.status"],
+    ["POST", "/api/channels/whatsapp/logout", "channels.whatsapp.logout"],
   ] as Array<[RouteMethod, string, string]>).forEach(bind);
 
   /**

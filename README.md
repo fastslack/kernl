@@ -203,9 +203,9 @@ Full guide → [`docs/architecture/extension-points.md`](./docs/architecture/ext
 ## 📦 More install options
 
 <details>
-<summary><b>Full stack — real-time bridge + WhatsApp</b></summary>
+<summary><b>Full stack — host-coupled mounts</b></summary>
 
-Adds the [mtwRequest](https://github.com/fastslack/mtwRequest) Rust server, the WhatsApp bridge, and host-coupled mounts (so on-host `claude_code` agents can edit your sibling repos). Needs a few host paths in `.env`:
+WhatsApp no longer needs this: the standard `docker compose up -d` already runs the [mtwRequest](https://github.com/fastslack/mtwRequest) Rust server and the WhatsApp bridge, and you link your phone from Settings → WhatsApp (QR or phone code) with nothing to configure. `docker-compose.full.yml` is only for building those two services from local source and for host-coupled mounts (so on-host `claude_code` agents can edit your sibling repos). Needs a few host paths in `.env`:
 
 ```bash
 git clone https://github.com/fastslack/kernl.git

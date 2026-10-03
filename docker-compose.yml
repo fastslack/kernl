@@ -8,11 +8,9 @@
 #      open http://localhost:3086
 #
 #  What you get: kernel API + MCP (http://localhost:3086/mcp), the dashboard,
-#  Neo4j (graph features), and SearXNG (key-free web search). The Rust bridge
-#  (mtw-request) and the WhatsApp bridge live in docker-compose.full.yml
-#  (the host-coupled full stack: `docker compose -f docker-compose.full.yml up`)
-#  and are intentionally omitted here — the kernel degrades gracefully
-#  without them.
+#  Neo4j (graph features), SearXNG (key-free web search), the Rust bridge
+#  (mtw-request — realtime engine, torrents), and the WhatsApp bridge
+#  (whatsapp-bridge). The kernel degrades gracefully if any sidecar is down.
 #
 #  Optional API keys can be supplied via the host environment or an .env
 #  file; everything below has safe defaults so the stack boots with
@@ -21,24 +19,15 @@
 name: kernl-public
 
 services:
-  # ── mtwRequest (Rust engine: torrents + realtime bridge) ─────
+  # ── mtwRequest (Rust engine: realtime + torrents) ─────────────
   #
-  # OPT-IN via the `torrents` profile, so the zero-config `docker compose up`
-  # is unchanged for anyone who does not have this image. Bring it in with:
-  #
-  #   BRIDGE_ENABLED=true RUST_BRIDGE_ENABLED=true \
-  #     docker compose --profile torrents up -d
-  #
-  # (or set those two in .env and use `--profile torrents` alone)
-  #
-  # Without it the Torrents extension has no engine: no DHT, no metadata, no
-  # byte stream — /api/torrents/capabilities reports backend "legacy" and the
-  # player says so instead of waiting on a swarm that can never form.
+  # Realtime engine: WebSocket server for kernel ↔ browser streams, WhatsApp
+  # integration (talks to whatsapp-bridge sidecar), torrent DHT + metadata +
+  # stream proxy.
   #
   # The image is built from the mtwRequest repo; override the namespace with
   # KERNEL_IMAGE_NAMESPACE if yours is tagged differently.
   mtw-request:
-    profiles: ["torrents"]
     image: ${KERNEL_IMAGE_NAMESPACE:-fastslack}/mtw-request:latest
     container_name: kernl-public-mtw-request
     restart: unless-stopped
@@ -59,6 +48,28 @@ services:
       # engine reads the same file the kernel writes. Read-only: the engine is a
       # consumer of that store, not an author.
       - kernel-data:/data:ro
+      # The engine's storage: downloaded files plus its state.json. Without a
+      # volume it lived in the container's writable layer, so recreating the
+      # container (an image pull, a compose change) silently threw away every
+      # download and the engine's memory of them — while the kernel's
+      # `torrents` table still listed them.
+      - mtw-torrents:/var/lib/mtwrequest/torrents
+      # Shared socket to the WhatsApp bridge (mtw.toml [whatsapp] socket)
+      - mtw-whatsapp-sock:/var/run/mtw-whatsapp
+
+  # ── WhatsApp bridge (Go, whatsmeow) ─────────────
+  # Idle until someone links an account from Settings; the session lives in
+  # mtw-whatsapp-data so updates never ask for a new QR.
+  whatsapp-bridge:
+    image: ${KERNEL_IMAGE_NAMESPACE:-fastslack}/mtw-whatsapp-bridge:latest
+    container_name: kernl-public-whatsapp-bridge
+    restart: unless-stopped
+    environment:
+      MTW_WHATSAPP_SOCKET: /var/run/mtw-whatsapp/whatsapp.sock
+      MTW_WHATSAPP_DB: /var/lib/mtw-whatsapp/session.db
+    volumes:
+      - mtw-whatsapp-sock:/var/run/mtw-whatsapp
+      - mtw-whatsapp-data:/var/lib/mtw-whatsapp
 
   # ── Kernl API (backend + MCP over HTTP) ─────────
   kernel:
@@ -103,11 +114,10 @@ services:
       # without this line the var stays on the host and never reaches the
       # kernel, so the bridge always logs "no servers configured".
       MCP_BRIDGE_SERVERS: ${MCP_BRIDGE_SERVERS:-}
-      # Rust bridge — OFF by default, so the stack still boots with nothing
-      # but the kernel. Turn both on (in .env or inline) together with
-      # `--profile torrents` to get the real torrent engine.
-      BRIDGE_ENABLED: ${BRIDGE_ENABLED:-false}
-      RUST_BRIDGE_ENABLED: ${RUST_BRIDGE_ENABLED:-false}
+      # Rust bridge — enabled by default. Both services run unconditionally;
+      # the kernel degrades gracefully if either is down or slow.
+      BRIDGE_ENABLED: ${BRIDGE_ENABLED:-true}
+      RUST_BRIDGE_ENABLED: ${RUST_BRIDGE_ENABLED:-true}
       # The engine creates the socket at /tmp/mtw-rust.sock inside ITS
       # container; that /tmp is the bridge-sock volume, which this container
       # mounts at /run/mtw. Same file, different path — hence the override.
@@ -304,5 +314,11 @@ volumes:
   kernel-data:
   # Carries /tmp/mtw-rust.sock between the engine and the kernel.
   bridge-sock:
+  # mtw-request's torrent storage (/var/lib/mtwrequest/torrents): data + state.
+  mtw-torrents:
+  # WhatsApp bridge socket (shared with mtw-request at /var/run/mtw-whatsapp).
+  mtw-whatsapp-sock:
+  # WhatsApp bridge session database (/var/lib/mtw-whatsapp/session.db).
+  mtw-whatsapp-data:
   neo4j-data:
   neo4j-logs:

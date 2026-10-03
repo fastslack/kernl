@@ -14,6 +14,9 @@
 #     bin/mcp-server.js           bundled kernel
 #     bin/static/                 static HTML pages
 #     bin/extensions/             pre-built .kernl bundles
+#     bin/mtw-server/, bin/whatsapp-bridge/  sidecars (not on win-x64)
+#     bin/mtw.binary.toml         mtw.toml template for the sidecars (under bin/
+#                                 so every format that ships bin/ ships it too)
 #     node_modules/               native deps (downloaded for $PLATFORM)
 #     dashboard/                  Svelte SPA build
 #     assets/                     extensions, agents, skills
@@ -217,6 +220,73 @@ case "$PLATFORM" in
         *)       chmod 0755 "$SRC_TREE/bin/ffmpeg/ffmpeg" "$SRC_TREE/bin/ffmpeg/ffprobe" 2>/dev/null || true ;;
       esac
       echo "  ffmpeg bundle: $(du -sh "$SRC_TREE/bin/ffmpeg" | cut -f1)"
+    fi
+    ;;
+esac
+
+# ── 2d) Vendor mtw-server + whatsapp-bridge ─────────────────────────
+# Docker runs both as their own services; a binary install has no compose
+# file, so the kernel runs them itself as supervised children
+# (services/kernel/src/core/bootstrap/sidecars.ts). Without them WhatsApp
+# cannot link at all on a native install: the kernel has nothing to hand the
+# QR / phone-code request to.
+#
+# The tarballs come from the mtwRequest release workflow, one top-level
+# directory each (mtw-server/, whatsapp-bridge/), copied as-is into bin/. The
+# mtw.toml template ships beside them; the kernel renders it into the per-user
+# data dir on every boot.
+#
+# Best-effort, like whisper and ffmpeg: a release without the assets still
+# produces a working package, it just has no bundled WhatsApp link. The
+# launchers only switch the kernel into binary-install mode when
+# bin/mtw-server/mtw-server is actually there.
+#
+# Not staged for win-x64: both binaries talk over unix sockets, and the
+# Windows zip has no supervisor-side equivalent yet.
+MTW_BIN_TAG="${MTW_BIN_TAG:-v0.4.0}"
+
+case "$PLATFORM" in
+  win-x64)
+    echo "▶ skipping mtw-server/whatsapp-bridge bundle (not supported on Windows)"
+    ;;
+  *)
+    MTW_BIN_BASE="https://github.com/fastslack/mtwRequest/releases/download/${MTW_BIN_TAG}"
+
+    for SIDECAR in mtw-server whatsapp-bridge; do
+      SIDECAR_URL="${MTW_BIN_BASE}/${SIDECAR}-${PLATFORM}.tar.gz"
+
+      if [ -n "${MTW_BIN_BUNDLE_DIR:-}" ] && [ -d "$MTW_BIN_BUNDLE_DIR/$SIDECAR" ]; then
+        # Same escape hatch as whisper/ffmpeg: a directory holding mtw-server/
+        # and whatsapp-bridge/, for local builds and same-run CI jobs.
+        echo "▶ vendoring $SIDECAR from $MTW_BIN_BUNDLE_DIR"
+        mkdir -p "$SRC_TREE/bin/$SIDECAR"
+        cp -a "$MTW_BIN_BUNDLE_DIR/$SIDECAR/." "$SRC_TREE/bin/$SIDECAR/"
+      else
+        echo "▶ downloading $SIDECAR ($PLATFORM, $MTW_BIN_TAG)"
+        TMP_S="$(mktemp -d)"
+        if curl -fsSL -o "$TMP_S/s.tar.gz" "$SIDECAR_URL"; then
+          tar xzf "$TMP_S/s.tar.gz" -C "$TMP_S"
+          mkdir -p "$SRC_TREE/bin/$SIDECAR"
+          cp -a "$TMP_S/$SIDECAR/." "$SRC_TREE/bin/$SIDECAR/"
+        else
+          echo "  WARN: no $SIDECAR bundle at $SIDECAR_URL"
+        fi
+        rm -rf "$TMP_S"
+      fi
+
+      if [ -f "$SRC_TREE/bin/$SIDECAR/$SIDECAR" ]; then
+        chmod 0755 "$SRC_TREE/bin/$SIDECAR/$SIDECAR"
+      fi
+    done
+
+    # Half a pair is useless — the kernel needs both — and a lone mtw-server
+    # would still flip the launchers into binary-install mode. Drop it.
+    if [ -f "$SRC_TREE/bin/mtw-server/mtw-server" ] && [ -f "$SRC_TREE/bin/whatsapp-bridge/whatsapp-bridge" ]; then
+      cp packaging/mtw.binary.toml "$SRC_TREE/bin/mtw.binary.toml"
+      echo "  mtw-server + whatsapp-bridge: $(du -sh "$SRC_TREE/bin/mtw-server" "$SRC_TREE/bin/whatsapp-bridge" | cut -f1 | tr '\n' ' ')"
+    else
+      rm -rf "$SRC_TREE/bin/mtw-server" "$SRC_TREE/bin/whatsapp-bridge"
+      echo "  WARN: mtw-server/whatsapp-bridge not bundled; WhatsApp linking needs them run separately"
     fi
     ;;
 esac

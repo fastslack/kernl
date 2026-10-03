@@ -1,8 +1,13 @@
-# mtwRequest Server Configuration (Docker)
-# Mounted as /app/mtw.toml inside the container
+# mtwRequest Server Configuration (binary installs: Linux tarball, macOS .app)
+#
+# Template, not a config: the kernel renders it to <data dir>/mtw/mtw.toml on
+# every boot (src/core/bootstrap/sidecars.ts), replacing {{DATA_DIR}} with the
+# per-user data directory, and starts mtw-server from that folder. Derived
+# from mtw.docker.toml; keep the channel list in step with it.
 
 [server]
-host = "0.0.0.0"
+# Loopback only: a desktop install has no reason to expose the bus.
+host = "127.0.0.1"
 port = 7741
 max_connections = 10000
 
@@ -18,9 +23,10 @@ max_message_size = "10MB"
 default = "json"
 
 # ── Data Store ──────────────────────────────────────────────
-# In Docker, kernel.db is mounted at /data/kernel.db (via ./data:/data:ro)
+# The kernel's own database, read-only from this side.
 [store]
-path = "/data/kernel.db"
+path = "{{DATA_DIR}}/data/kernel.db"
+readonly = true
 
 # Bridge — delegates writes to kernel via Unix socket (Rust→TS)
 [store.bridge]
@@ -136,11 +142,12 @@ auth = false
 history = 50
 
 # ── WhatsApp integration ────────────────────────────────────
-# Connects mtw-request to the whatsapp-bridge Go sidecar via a shared
-# Unix socket (mounted from the `mtw-whatsapp-sock` Docker volume).
+# Connects mtw-request to the whatsapp-bridge Go sidecar via a Unix socket
+# under the data dir (the kernel starts the bridge with the same path in
+# MTW_WHATSAPP_SOCKET).
 # Exposes whatsapp.* request actions and publishes events on the
 # whatsapp:* channels above.
 [whatsapp]
 enabled = true
-socket = "/var/run/mtw-whatsapp/whatsapp.sock"
+socket = "{{DATA_DIR}}/run/whatsapp.sock"
 connect_timeout_secs = 60

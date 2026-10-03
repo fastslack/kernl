@@ -17,7 +17,6 @@
   import Field from '$lib/components/settings/Field.svelte';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import SelectField from '$lib/components/settings/SelectField.svelte';
-  import StatusPill from '$lib/components/settings/StatusPill.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
   import VoiceStatusPanel from '$lib/components/settings/VoiceStatusPanel.svelte';
   import VoicePicker from '$lib/components/settings/VoicePicker.svelte';
@@ -26,6 +25,7 @@
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
   import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
+  import WhatsAppCard from '$lib/components/whatsapp/WhatsAppCard.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import {
     updateInfo, checking, updating, updateError, updateHint,
@@ -57,7 +57,6 @@
 
   // ── Load state ───────────────────────────────
   let loading = true;
-  let mounted = false;
   let loadErrors: Record<string, string> = {};
 
   let catalog: CatalogItem[] = [];
@@ -218,18 +217,6 @@
 
   function gotoSection(id: string) {
     goto(`/settings?section=${encodeURIComponent(id)}`, { noScroll: true, keepFocus: true });
-  }
-
-  // Section side effects (WA polling, lazy AI tests)
-  $: if (mounted && !loading) sectionFx(activeSection);
-  function sectionFx(sec: string) {
-    if (sec === 'channels') {
-      loadWaStatus();
-      startWaPolling();
-      loadWaSchema();
-    } else {
-      stopWaPolling();
-    }
   }
 
   // ── Category → section mapping ───────────────
@@ -547,105 +534,6 @@
     } catch (e: any) { flash(e.message, 'err'); }
   }
 
-  // ── WhatsApp (ported) ────────────────────────
-  let waStatus: any = {};
-  let waQrString = '';
-  let waPolling = false;
-  let waTestPhone = '';
-  let waTestMsg = '';
-  let waSending = false;
-  let waConfig: Record<string, any> = {};
-  let waSchemaLoaded = false;
-  let waSaving = false;
-  let waQrInterval: ReturnType<typeof setInterval> | null = null;
-
-  async function loadWaSchema() {
-    if (waSchemaLoaded) return;
-    waSchemaLoaded = true;
-    try {
-      const data = await rpcOrCall('channels.schema', { id: 'whatsapp' }, () => jfetch('/api/channels/schema?id=whatsapp')) as any;
-      waConfig = {};
-      for (const field of data.schema ?? []) {
-        waConfig[field.key] = data.config?.[field.key] ?? '';
-      }
-    } catch { /* fields stay editable, empty */ }
-  }
-
-  async function saveWaConfig() {
-    waSaving = true;
-    try {
-      await rpcOrCall('channels.config.save', { id: 'whatsapp', config: waConfig }, () =>
-        jfetch('/api/channels/config', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ id: 'whatsapp', config: waConfig }) }));
-      flash(`WhatsApp: ${$t('settings.card.saved')}`);
-    } catch (e: any) { flash(e.message, 'err'); }
-    finally { waSaving = false; }
-  }
-
-  async function loadWaStatus() {
-    try {
-      const data = await rpcOrCall('channels.qr', {}, () => jfetch('/api/channels/qr')) as any;
-      waStatus = data;
-      waQrString = data.qr || '';
-    } catch { /* ignore */ }
-  }
-
-  function startWaPolling() {
-    if (waPolling) return;
-    waPolling = true;
-    loadWaStatus();
-    waQrInterval = setInterval(async () => {
-      await loadWaStatus();
-      if (waStatus.connected) stopWaPolling();
-    }, 3000);
-  }
-
-  function stopWaPolling() {
-    waPolling = false;
-    if (waQrInterval) { clearInterval(waQrInterval); waQrInterval = null; }
-  }
-
-  async function startWhatsApp() {
-    try {
-      const data = await rpcOrCall('channels.start', { id: 'whatsapp' }, async () => {
-        const r = await fetch('/api/channels/start', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ id: 'whatsapp' }) });
-        const json = await r.json() as any;
-        if (!r.ok) json.error = json.error || json.detail || 'Start failed';
-        return json;
-      }) as any;
-      if (data.error) {
-        flash(`WhatsApp error: ${data.detail || data.error}`, 'err');
-        return;
-      }
-      flash('WhatsApp starting...');
-      startWaPolling();
-      await reloadChannels();
-    } catch (e: any) { flash(e.message, 'err'); }
-  }
-
-  async function stopWhatsApp() {
-    try {
-      await rpcOrCall('channels.stop', { id: 'whatsapp' }, () =>
-        jfetch('/api/channels/stop', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ id: 'whatsapp' }) }));
-      stopWaPolling();
-      waStatus = {};
-      waQrString = '';
-      flash('WhatsApp stopped');
-      await reloadChannels();
-    } catch (e: any) { flash(e.message, 'err'); }
-  }
-
-  async function sendWaTest() {
-    if (!waTestPhone || !waTestMsg) return;
-    waSending = true;
-    try {
-      const data = await rpcOrCall('channels.whatsapp.send', { phone: waTestPhone, message: waTestMsg }, () =>
-        jfetch('/api/channels/whatsapp/send', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ phone: waTestPhone, message: waTestMsg }) })) as any;
-      if (data.success) { flash('WhatsApp message sent!'); waTestMsg = ''; }
-      else flash(data.error || 'Send failed', 'err');
-    } catch (e: any) { flash(e.message, 'err'); }
-    finally { waSending = false; }
-  }
-
   // ── Section error banner ─────────────────────
   $: sectionError = (() => {
     // A load that failed outright is reported verbatim, not folded into the
@@ -676,12 +564,9 @@
     } finally {
       loading = false;
     }
-    mounted = true;
-    sectionFx(activeSection);
   });
 
   onDestroy(() => {
-    stopWaPolling();
     if (highlightTimer) clearTimeout(highlightTimer);
   });
 </script>
@@ -849,93 +734,7 @@
         {/if}
 
         {#if activeSection === 'channels' && activeCard === 'whatsapp'}
-          <!-- WhatsApp rich panel -->
-          <SettingsCard
-            cardId="whatsapp"
-            title={$t('settings.wa.title')}
-            description={$t('settings.wa.desc')}
-            showFooter={false}
-          >
-            <div slot="header">
-              <StatusPill
-                status={waStatus.connected ? 'ok' : waQrString ? 'warn' : 'neutral'}
-                label={waStatus.connected ? $t('settings.wa.connected') : waQrString ? $t('settings.wa.waiting') : $t('settings.wa.not_connected')}
-              />
-            </div>
-
-            <div class="wa-body">
-              {#if waStatus.connected}
-                <div class="wa-connected-box">
-                  <span class="wa-check">&#10003;</span>
-                  <div>
-                    <div class="wa-connected-text">{$t('settings.wa.connected')}</div>
-                    <div class="wa-connected-phone">+{waStatus.phoneNumber || '?'}</div>
-                  </div>
-                  <div class="wa-conn-actions">
-                    <button class="btn-sm del" on:click={stopWhatsApp}>{$t('settings.wa.disconnect')}</button>
-                    <button class="btn-sm" on:click={() => testChannel('whatsapp')}>{$t('settings.wa.test_notification')}</button>
-                  </div>
-                </div>
-              {:else if waQrString}
-                <div class="wa-qr-box">
-                  <img
-                    src="https://api.qrserver.com/v1/create-qr-code/?size=280x280&data={encodeURIComponent(waQrString)}"
-                    alt="WhatsApp QR Code"
-                    class="wa-qr-img"
-                    width="280"
-                    height="280"
-                  />
-                  <div class="wa-qr-instructions">
-                    <p><strong>1.</strong> {$t('settings.wa.step1')}</p>
-                    <p><strong>2.</strong> {$t('settings.wa.step2')}</p>
-                    <p><strong>3.</strong> {$t('settings.wa.step3')}</p>
-                    <p><strong>4.</strong> {$t('settings.wa.step4')}</p>
-                    <div class="wa-qr-actions">
-                      <button class="btn-sm" on:click={loadWaStatus}>{$t('settings.wa.refresh_qr')}</button>
-                      <button class="btn-sm del" on:click={stopWhatsApp}>{$t('settings.channels.cancel')}</button>
-                    </div>
-                  </div>
-                </div>
-              {:else}
-                {#if waStatus.error}
-                  <div class="wa-error-box"><strong>Error:</strong> {waStatus.error}</div>
-                {/if}
-                <p class="wa-hint">{$t('settings.wa.start_hint')}</p>
-                <button class="btn-sm primary" on:click={startWhatsApp}>{$t('settings.wa.start')}</button>
-              {/if}
-
-              <div class="wa-config">
-                <div class="ch-field">
-                  <span class="ch-flabel">{$t('settings.wa.allowed')}</span>
-                  <textarea class="wa-textarea" bind:value={waConfig['allowedNumbers']} placeholder="31612345678,34698765432"></textarea>
-                  <span class="ch-fhint">{$t('settings.wa.allowed_hint')}</span>
-                </div>
-                <div class="ch-field">
-                  <span class="ch-flabel">{$t('settings.wa.default_chat')}</span>
-                  <input class="prov-in" type="text" bind:value={waConfig['defaultChat']} placeholder="31612345678@s.whatsapp.net" />
-                  <span class="ch-fhint">{$t('settings.wa.default_chat_hint')}</span>
-                </div>
-                <button class="btn-sm primary" disabled={waSaving} on:click={saveWaConfig}>{$t('settings.wa.save_config')}</button>
-              </div>
-
-              {#if waStatus.connected}
-                <div class="wa-config">
-                  <div class="ch-form-title">{$t('settings.wa.test_title')}</div>
-                  <div class="ch-field">
-                    <span class="ch-flabel">{$t('settings.wa.phone')}</span>
-                    <input class="prov-in" type="text" bind:value={waTestPhone} placeholder="31635311380" />
-                  </div>
-                  <div class="ch-field">
-                    <span class="ch-flabel">{$t('settings.wa.message')}</span>
-                    <textarea class="wa-textarea" bind:value={waTestMsg} placeholder="Hello from Kernl!"></textarea>
-                  </div>
-                  <button class="btn-sm primary" disabled={waSending || !waTestPhone || !waTestMsg} on:click={sendWaTest}>
-                    {waSending ? $t('settings.wa.sending') : $t('settings.wa.send')}
-                  </button>
-                </div>
-              {/if}
-            </div>
-          </SettingsCard>
+          <WhatsAppCard mode="card" />
         {/if}
 
         <!-- ═══ Integrations (rich) ═══ -->
@@ -1211,8 +1010,6 @@
   .btn-sm:disabled { opacity: 0.35; cursor: default; }
   .btn-sm.primary { background: var(--teal); border-color: var(--teal); color: var(--bg); }
   .btn-sm.primary:hover:not(:disabled) { opacity: 0.85; background: var(--teal); }
-  .btn-sm.del { color: #ef4444; }
-  .btn-sm.del:hover:not(:disabled) { border-color: #ef4444; background: rgba(239,68,68,0.06); }
 
   /* ── Card tabs ──
      Section-level. Same wrap rule as the provider strip: never scroll
@@ -1270,37 +1067,6 @@
   .ch-fhint { font-size: 9px; color: var(--text-3); }
   .ch-form-actions { display: flex; gap: 6px; margin-top: 4px; }
   .ch-toggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); cursor: pointer; }
-
-  /* WhatsApp */
-  .wa-body { padding: 6px; display: flex; flex-direction: column; gap: 12px; }
-  .wa-connected-box {
-    display: flex; align-items: center; gap: 12px;
-    background: rgba(37,211,102,0.08); border: 1px solid rgba(37,211,102,0.25);
-    border-radius: 8px; padding: 12px;
-  }
-  .wa-check { font-size: 22px; color: #25D366; font-weight: bold; }
-  .wa-connected-text { font-size: 13px; font-weight: 600; color: var(--text-1); }
-  .wa-connected-phone { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); margin-top: 2px; }
-  .wa-conn-actions { margin-left: auto; display: flex; gap: 6px; }
-
-  .wa-qr-box { display: flex; gap: 20px; align-items: flex-start; }
-  .wa-qr-img { border-radius: 8px; border: 3px solid var(--border); background: #fff; flex-shrink: 0; }
-  .wa-qr-instructions { font-size: 12px; color: var(--text-2); line-height: 1.8; }
-  .wa-qr-instructions p { margin: 0; }
-  .wa-qr-actions { display: flex; gap: 6px; margin-top: 10px; }
-  .wa-error-box {
-    background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25);
-    border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #ef4444;
-  }
-  .wa-hint { font-size: 11px; color: var(--text-3); margin: 0; }
-  .wa-config { border-top: 1px solid var(--border); padding-top: 10px; }
-  .wa-textarea {
-    min-height: 52px; resize: vertical; font-family: var(--font-mono); font-size: 11px;
-    width: 100%; padding: 6px 10px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1);
-    outline: none; box-sizing: border-box;
-  }
-  .wa-textarea:focus { border-color: var(--teal); }
 
   /* Integrations */
   .int-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
@@ -1383,7 +1149,6 @@
   .fld-lang-key { font: 400 9px var(--font-mono); color: var(--text-3); }
 
   @media (max-width: 700px) {
-    .wa-qr-box { flex-direction: column; align-items: center; }
     .fld-lang { grid-template-columns: 1fr; }
   }
   .fld-voice { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; }

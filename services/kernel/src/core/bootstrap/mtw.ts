@@ -297,8 +297,14 @@ export async function initMtw(args: {
   // Any other extension that implements `MtwConnAwareProvider` can opt in by
   // exposing the same instance method — no core change needed.
   notificationRegistry.registerPreStartHook("whatsapp", (provider) => {
-    const aware = provider as unknown as Partial<MtwConnAwareProvider>;
+    const aware = provider as unknown as Partial<MtwConnAwareProvider> & {
+      setConfigPersister?: (fn: (patch: Record<string, unknown>) => Record<string, unknown>) => void;
+    };
     aware.setMtwConnection?.(mtwConn);
+    // First-link auto-config (defaultChat / allowedNumbers): only keys empty
+    // in the STORED config are filled, so values saved in Settings win; the
+    // provider takes the resulting stored config back. Throws on save failure.
+    aware.setConfigPersister?.((patch) => notificationRegistry.fillEmptyConfig("whatsapp", patch));
   });
 
   // publisherQueryChannel + the core/module channel maps are built above,

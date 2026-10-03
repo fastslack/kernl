@@ -157,6 +157,11 @@ export function dashboardRpcActions(deps: DashboardRpcDeps): RpcAction[] {
         "channels.stop",
         "channels.qr",
         "channels.whatsapp.send",
+        "channels.whatsapp.status",
+        "channels.whatsapp.link",
+        "channels.whatsapp.link_cancel",
+        "channels.whatsapp.chats",
+        "channels.whatsapp.logout",
       ])));
     }
   }

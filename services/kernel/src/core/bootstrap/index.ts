@@ -6,6 +6,9 @@
  * this file is the canonical view of how all those slices fit together.
  *
  * Stage order:
+ *   startSidecars    → binary installs only: mtw-server + whatsapp-bridge as
+ *                      supervised children (before loadConfig, which reads
+ *                      RUST_BRIDGE_SOCKET; the mtw stage reads KERNEL_URL)
  *   loadConfig + log level
  *   initDatabases    → sqlite, neo4j, events (+ security gates)
  *   initRegistries   → registries + ctx
@@ -43,6 +46,7 @@ import { initHttpAndMcp } from "./http.js";
 import { initMtw } from "./mtw.js";
 import { wireServicesLate } from "./services-late.js";
 import { installShutdownHandlers } from "./shutdown.js";
+import { startSidecars, resolveSidecarDirs } from "./sidecars.js";
 import type { MeshModule } from "../types/extensions/index.js";
 
 export async function bootstrap(): Promise<void> {
@@ -51,6 +55,12 @@ export async function bootstrap(): Promise<void> {
   // extensions reach the logger, the LLM driver and the request context
   // through this one slot.
   installKernlHost();
+
+  // ── Bundled sidecars (binary installs) ─────────────
+  // Before loadConfig, not just before the mtw stage: the config object reads
+  // RUST_BRIDGE_SOCKET when it is built, and the rust bridge connects in the
+  // bridges stage, ahead of mtw. No-op outside a Linux/macOS binary install.
+  const sidecars = await startSidecars(resolveSidecarDirs());
 
   // ── Config + log level ─────────────────────────────
   const config = loadConfig();
@@ -212,5 +222,6 @@ export async function bootstrap(): Promise<void> {
     mcpRouter: http.mcpRouter,
     mcpUnixSocket: http.mcpUnixSocket,
     httpServer: http.httpServer,
+    sidecars,
   });
 }

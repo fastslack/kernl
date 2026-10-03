@@ -77,6 +77,29 @@ export function dateRange(input: Record<string, unknown>): [string, number] {
   return [a.start || a.date || today(), Math.min(days && days > 0 ? Math.floor(days) : 150, 365)];
 }
 
+/**
+ * Digits-only international phone (8-15 digits, no leading 0) or null. Mirror
+ * of `normalizePhone` in the WhatsApp extension's provider: core does not
+ * import extension code, so the rule lives in both places.
+ */
+export function normalizeWhatsAppPhone(raw: string): string | null {
+  const s = String(raw ?? "");
+  // Letters or other symbols mean a typo: reject instead of dropping them.
+  if (!/^[0-9\s+\-().]*$/.test(s)) return null;
+  const digits = s.replace(/\D/g, "");
+  return /^[1-9][0-9]{7,14}$/.test(digits) ? digits : null;
+}
+
+/** What the channels.whatsapp.* ops need from the WhatsApp provider. */
+interface WhatsAppLinkProvider {
+  linkQr(): Promise<{ ok: boolean; error?: string; code?: string }>;
+  linkPhone(phone: string): Promise<{ ok: boolean; error?: string; code?: string }>;
+  linkCancel(): Promise<{ ok: boolean; error?: string; code?: string }>;
+  listChats(limit?: number): Promise<{ ok: boolean; items: unknown[]; error?: string }>;
+  status(): Promise<Record<string, unknown>>;
+  logout(): Promise<{ ok: boolean; error?: string; code?: string }>;
+}
+
 export function dashboardOperations(deps: DashboardOperationDeps): Record<string, Operation> {
   const { db, readChannel, getGraph, systemRegistry, calendarSources, config, notifier, events } = deps;
 
@@ -95,6 +118,30 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
     return registry;
   };
   const unread = (n: Notifier) => ({ success: true, unread: n.getUnreadCount() });
+  const requireWhatsApp = (): WhatsAppLinkProvider => {
+    const provider = requireRegistry().getProvider("whatsapp") as unknown as Partial<WhatsAppLinkProvider> | undefined;
+    if (!provider || typeof provider.linkQr !== "function") {
+      throw new HttpError(404, "WhatsApp provider not registered");
+    }
+    return provider as WhatsAppLinkProvider;
+  };
+  /**
+   * Linking is the user asking for WhatsApp: a channel row left `available`
+   * (installs from before WhatsApp was active by default) is activated and
+   * started the way `channels.start` does, so the card needs no Start button.
+   */
+  const ensureWhatsApp = async (): Promise<WhatsAppLinkProvider> => {
+    const reg = requireRegistry();
+    if (!reg.getProvider("whatsapp")) {
+      db.prepare("UPDATE marketplace_items SET status = 'active', updated_at = ? WHERE slug = ? AND type = 'channel'")
+        .run(new Date().toISOString(), "whatsapp");
+      if (!(await reg.startProvider("whatsapp"))) {
+        const error = 'Failed to start "whatsapp"';
+        throw new HttpError(400, error, { error, detail: reg.lastStartError || "Unknown error — check server logs" });
+      }
+    }
+    return requireWhatsApp();
+  };
 
   return {
     // ── Cross-module aggregators (no extension owns these) ──
@@ -224,6 +271,9 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
         else if (incoming === CHANNEL_SECRET_MASK) delete next[key];
       }
       if (!reg.saveConfig(id, next)) throw new HttpError(404, `Channel "${id}" not found in marketplace`);
+      // A running provider keeps the config it started with; hand it the saved
+      // one so it never acts (or auto-configures) on stale values.
+      reg.getProvider(id)?.configure(next);
       return { success: true };
     },
     "channels.test": async (input) => {
@@ -278,5 +328,38 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
       const ok = await provider.sendTo(jid, { title: "", body: message });
       return { success: ok, jid };
     },
+    // Linking: `{ mode: "qr" }` or `{ mode: "phone", phone }`. Provider-side
+    // failures (bridge down, not connected…) come back as `{ ok: false, error, code }`.
+    "channels.whatsapp.link": async (input) => {
+      const { mode, phone } = pickArgs(input, { mode: "string", phone: "string" });
+      if (mode === "qr") return (await ensureWhatsApp()).linkQr();
+      if (mode === "phone") {
+        const digits = normalizeWhatsAppPhone(phone ?? "");
+        if (!digits) throw new HttpError(400, "invalid_phone");
+        const res = await (await ensureWhatsApp()).linkPhone(digits);
+        if (!res.ok && res.code === "invalid_phone") throw new HttpError(400, "invalid_phone");
+        return res;
+      }
+      throw new HttpError(400, "invalid_mode");
+    },
+    "channels.whatsapp.link_cancel": () => requireWhatsApp().linkCancel(),
+    "channels.whatsapp.chats": (input) => {
+      const { limit } = pickArgs(input, { limit: "number" });
+      const n = limit && limit > 0 ? Math.min(Math.floor(limit), 500) : undefined;
+      return requireWhatsApp().listChats(n);
+    },
+    // `platform` lets the card explain Windows, where no bridge ships. A
+    // channel that is not running answers `inactive` (the card shows the link
+    // buttons; linking starts it) instead of a 404.
+    "channels.whatsapp.status": async () => {
+      const platform = process.platform;
+      if (platform === "win32") return { bridge_connected: false, state: "unknown", platform };
+      const provider = requireRegistry().getProvider("whatsapp") as unknown as Partial<WhatsAppLinkProvider> | undefined;
+      if (!provider || typeof provider.status !== "function") {
+        return { bridge_connected: false, state: "inactive", platform };
+      }
+      return { ...(await provider.status()), platform };
+    },
+    "channels.whatsapp.logout": () => requireWhatsApp().logout(),
   };
 }

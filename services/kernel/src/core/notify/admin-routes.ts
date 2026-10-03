@@ -58,12 +58,14 @@ export function registerNotificationAdminRoutes(
   // connection requires a fresh pairing.
   server.route("POST", "/api/notifications/:slug/logout", async ({ params: { slug } }) => {
     const provider = registry.getProvider(slug) as unknown as {
-      logout?: () => Promise<boolean>;
+      logout?: () => Promise<boolean | { ok: boolean }>;
     } | null;
     if (!provider || typeof provider.logout !== "function") {
       throw new HttpError(400, `provider ${slug} does not support logout`);
     }
-    const ok = await provider.logout();
+    // WhatsApp answers `{ ok, error? }`; other providers a boolean.
+    const res = await provider.logout();
+    const ok = typeof res === "boolean" ? res : !!res?.ok;
     if (!ok) throw new HttpError(500, "logout failed", { ok });
     return { ok };
   });
