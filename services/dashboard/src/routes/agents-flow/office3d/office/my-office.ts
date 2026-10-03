@@ -6,6 +6,58 @@ import {
 import { applyPBR, bakeVertexAO } from './_materials.js';
 import { applyWorldTexture, scaleUV } from '../textures.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+
+/**
+ * Static props merged per material: every piece added here costs vertices,
+ * not draw calls. The office is drawn twice a frame (shadow + screen) and
+ * almost nothing in it moves, so one mesh per material is the cheap way to
+ * add detail. `color` paints the piece through vertex colours, which lets one
+ * material carry many tints (book spines, a painting's bands).
+ */
+function propBatch(colored = false) {
+  const parts: any[] = [];
+  const tint = new rt.THREE.Color();
+  return {
+    add(geo: any, x: number, y: number, z: number, opts: {
+      ry?: number; rx?: number; rz?: number; color?: number;
+      /** Per-vertex colour from the vertex's local position, before placing. */
+      paint?: (px: number, py: number, pz: number) => number;
+    } = {}) {
+      const g = geo.index ? geo.toNonIndexed() : geo.clone();
+      geo.dispose();
+      const local = opts.paint ? g.attributes.position.array.slice() : null;
+      if (opts.rx) g.rotateX(opts.rx);
+      if (opts.rz) g.rotateZ(opts.rz);
+      if (opts.ry) g.rotateY(opts.ry);
+      g.translate(x, y, z);
+      if (colored) {
+        tint.set(opts.color ?? 0xffffff);
+        const n = g.attributes.position.count;
+        const c = new Float32Array(n * 3);
+        for (let i = 0; i < n; i++) {
+          if (local && opts.paint) tint.set(opts.paint(local[i * 3], local[i * 3 + 1], local[i * 3 + 2]));
+          c[i * 3] = tint.r; c[i * 3 + 1] = tint.g; c[i * 3 + 2] = tint.b;
+        }
+        g.setAttribute('color', new rt.THREE.BufferAttribute(c, 3));
+      }
+      parts.push(g);
+    },
+    /** One mesh for everything added, or null when nothing was. */
+    flush(scene: any, mat: any, shadows = false): any {
+      if (parts.length === 0) return null;
+      const merged = mergeGeometries(parts, false);
+      for (const g of parts) g.dispose();
+      parts.length = 0;
+      if (!merged) return null;
+      const mesh = new rt.THREE.Mesh(merged, mat);
+      mesh.castShadow = shadows; mesh.receiveShadow = shadows;
+      mesh.matrixAutoUpdate = false; mesh.updateMatrix();
+      scene.add(mesh);
+      return mesh;
+    },
+  };
+}
 
 /** Build the user's personal executive office. The door sign defaults to a
  *  generic label; callers should pass the top rank's name (uppercased)
@@ -220,31 +272,40 @@ export function buildMyOffice(
   }
 
   // ── Bookshelf (left wall) ──
-  const shelfMat = new rt.THREE.MeshStandardMaterial({ color: 0x3a1a08, roughness: 0.4, metalness: 0.05, vertexColors: true });
-  const shelfGeo = new RoundedBoxGeometry(0.4, 2.8, 2.5, 2, 0.016);
-  bakeVertexAO(shelfGeo, { floorY: -1.4, reach: 0.9, strength: 0.35 });
-  const shelfFrame = new rt.THREE.Mesh(shelfGeo, shelfMat);
-  shelfFrame.position.set(cx - w / 2 + WALL_T / 2 + 0.22, 1.5, cz - 0.3);
-  scene.add(shelfFrame);
-  // Book rows (colored blocks) — deterministic sizing so rebuilds are stable.
-  const bookColors = [0xc0392b, 0x2980b9, 0x27ae60, 0xf39c12, 0x8e44ad, 0x16a085, 0xd35400];
+  // An open case — back panel, two sides, five boards — so the books read.
+  // It used to be one solid 0.4-deep block with the books sunk inside it,
+  // which drew as a plain brown slab from every angle.
+  const shelfZ = cz - 0.3;
+  const shelfInX = cx - w / 2 + WALL_T / 2;
+  const caseParts = propBatch();
+  caseParts.add(new rt.THREE.BoxGeometry(0.05, 2.8, 2.5), shelfInX + 0.025, 1.5, shelfZ);
+  for (const s of [-1, 1]) caseParts.add(new rt.THREE.BoxGeometry(0.44, 2.8, 0.06), shelfInX + 0.22, 1.5, shelfZ + s * 1.22);
+  for (const by of [0.12, 0.38, 1.08, 1.78, 2.48, 2.88]) {
+    caseParts.add(new rt.THREE.BoxGeometry(0.44, 0.04, 2.44), shelfInX + 0.22, by, shelfZ);
+  }
+  caseParts.add(new rt.THREE.BoxGeometry(0.06, 0.26, 2.44), shelfInX + 0.41, 0.24, shelfZ);  // plinth front
+  caseParts.flush(scene, mahogany, true);
+  // Book rows — one merged, vertex-coloured mesh. Deterministic sizing so
+  // rebuilds are stable.
+  const bookColors = [0x8a2a22, 0x1f4f7a, 0x2c5e3a, 0xb07a24, 0x5a2e6e, 0x1d5e56, 0x9a4a1a, 0x2a2a3a];
+  const books = propBatch(true);
+  const shelfX = shelfInX + 0.22;
   for (let row = 0; row < 4; row++) {
-    for (let b = 0; b < 5; b++) {
-      const seed = row * 5 + b;
-      const bookH = 0.2 + ((seed * 37) % 15) / 100;
-      const bookW = 0.08 + ((seed * 53) % 5) / 100;
-      const book = new rt.THREE.Mesh(
-        new rt.THREE.BoxGeometry(0.15, bookH, bookW),
-        new rt.THREE.MeshStandardMaterial({ color: bookColors[seed % bookColors.length], roughness: 0.6 }),
-      );
-      book.position.set(
-        cx - w / 2 + WALL_T / 2 + 0.22,
-        0.4 + row * 0.7 + bookH / 2,
-        cz - 0.3 + 0.9 - b * 0.35,
-      );
-      scene.add(book);
+    let z = shelfZ + 1.08;
+    for (let b = 0; b < 9; b++) {
+      const seed = row * 9 + b;
+      const bookH = 0.24 + ((seed * 37) % 17) / 100;
+      const bookW = 0.07 + ((seed * 53) % 6) / 100;
+      // Every so often a book leans on its neighbour, and a gap breaks a row.
+      const lean = seed % 7 === 3 ? 0.18 : 0;
+      if (seed % 11 === 5) z -= 0.18;
+      books.add(new rt.THREE.BoxGeometry(0.2, bookH, bookW), shelfX, 0.4 + row * 0.7 + bookH / 2, z - bookW / 2,
+        { rx: lean, color: bookColors[(seed * 3) % bookColors.length] });
+      z -= bookW + 0.012;
+      if (z < shelfZ - 1.05) break;
     }
   }
+  books.flush(scene, new rt.THREE.MeshStandardMaterial({ roughness: 0.75, vertexColors: true }));
 
   // ── Leather sofa (right wall) ──
   const sofaMat = new rt.THREE.MeshStandardMaterial({ color: 0x1a0a02, roughness: 0.55, metalness: 0.05, vertexColors: true });
@@ -299,6 +360,165 @@ export function buildMyOffice(
     scene.add(frame);
   }
 
+  // ── Details ───────────────────────────────────────────────────────────
+  // Everything below is merged into one mesh per material (propBatch), so the
+  // whole set adds five draw calls; the merged book rows above saved more
+  // than that. Nothing here sits on the walker lane: visitors come straight
+  // in along x = cx and turn along the chair rows, so props stay against the
+  // walls, behind the desk, or beside it.
+  const xL = cx - w / 2 + WALL_T / 2;      // inner face of each wall
+  const xR = cx + w / 2 - WALL_T / 2;
+  const zB = zBack + WALL_T / 2;
+  const wood = propBatch();
+  const gold = propBatch();
+  const dark = propBatch();
+  const tinted = propBatch(true);
+  const glow = propBatch();
+  const T = rt.THREE;
+  const deskSurfY = deskTopY + 0.08;
+
+  // Flags flanking the window, behind the occupant — the room's rank.
+  for (const s of [-1, 1]) {
+    const fx = cx + s * (windowW / 2 + 0.55);
+    const fz = zB + 0.35;
+    gold.add(new T.CylinderGeometry(0.18, 0.2, 0.06, 14), fx, 0.03, fz);
+    gold.add(new T.CylinderGeometry(0.022, 0.022, 2.3, 6), fx, 1.18, fz);
+    gold.add(new T.SphereGeometry(0.06, 8, 6), fx, 2.36, fz);
+    // The banner hangs on the window side, a little slack.
+    const bx = fx - s * 0.33;
+    tinted.add(new T.BoxGeometry(0.6, 1.0, 0.02), bx, 1.72, fz, { rz: s * 0.05, color: s < 0 ? 0x6a1a2a : 0x1e2a5a });
+    tinted.add(new T.BoxGeometry(0.16, 0.16, 0.025), bx, 1.8, fz, { ry: 0, rz: Math.PI / 4, color: 0xc9a84c });
+    gold.add(new T.BoxGeometry(0.62, 0.05, 0.03), bx, 1.21, fz, { rz: s * 0.05 });
+  }
+
+  // Sideboard in the back-left corner: decanter, two glasses, a trophy.
+  const sbW = Math.min(1.6, (cx - windowW / 2 - 1.0) - (xL + 0.15));
+  if (sbW > 0.8) {
+    const sbX = xL + 0.15 + sbW / 2;
+    const sbZ = zB + 0.25;
+    wood.add(new RoundedBoxGeometry(sbW, 0.78, 0.46, 2, 0.02), sbX, 0.43, sbZ);
+    dark.add(new T.BoxGeometry(sbW - 0.06, 0.04, 0.4), sbX, 0.02, sbZ);
+    for (const dx of [-sbW / 4, sbW / 4]) gold.add(new T.BoxGeometry(0.16, 0.03, 0.03), sbX + dx, 0.62, sbZ + 0.24);
+    const topY = 0.82;
+    tinted.add(new T.CylinderGeometry(0.07, 0.09, 0.24, 10), sbX - sbW * 0.25, topY + 0.12, sbZ, { color: 0x8a4a14 });
+    gold.add(new T.SphereGeometry(0.035, 8, 6), sbX - sbW * 0.25, topY + 0.27, sbZ);
+    for (const dx of [0, 0.13]) tinted.add(new T.CylinderGeometry(0.035, 0.028, 0.09, 8), sbX - sbW * 0.05 + dx, topY + 0.045, sbZ + 0.05, { color: 0x9ab0c0 });
+    gold.add(new T.CylinderGeometry(0.06, 0.08, 0.05, 10), sbX + sbW * 0.3, topY + 0.025, sbZ);
+    gold.add(new T.CylinderGeometry(0.02, 0.02, 0.12, 6), sbX + sbW * 0.3, topY + 0.11, sbZ);
+    gold.add(new T.CylinderGeometry(0.09, 0.04, 0.12, 10, 1, true), sbX + sbW * 0.3, topY + 0.23, sbZ);
+  }
+
+  // Globe on a stand beside the desk, on the occupant's left.
+  {
+    const gx = cx - deskW / 2 - 0.75;
+    const gz = deskCZ - 0.1;
+    const gy = 1.0;
+    wood.add(new T.CylinderGeometry(0.26, 0.3, 0.06, 14), gx, 0.03, gz);
+    wood.add(new T.CylinderGeometry(0.045, 0.06, 0.6, 8), gx, 0.36, gz);
+    gold.add(new T.TorusGeometry(0.37, 0.014, 6, 36), gx, gy, gz, { rz: 0.41 });
+    gold.add(new T.TorusGeometry(0.36, 0.012, 6, 36), gx, gy, gz, { rx: Math.PI / 2 });
+    // Oceans and continents from a few summed sines over the sphere — no
+    // texture, and the same globe every rebuild.
+    const land = (px: number, py: number, pz: number) => {
+      const r = Math.hypot(px, py, pz) || 1;
+      const x = px / r, y = py / r, z = pz / r;
+      const n = Math.sin(x * 4.1 + 1.3) * Math.cos(z * 3.7) + Math.sin(y * 5.3 + x * 2.1) * 0.6 + Math.cos(z * 6.2 - y * 1.7) * 0.35;
+      if (Math.abs(y) > 0.9) return 0xd8dde0;   // ice caps
+      return n > 0.45 ? (n > 0.95 ? 0x8a7244 : 0x5f7438) : 0x1d4466;
+    };
+    tinted.add(new T.SphereGeometry(0.33, 24, 16), gx, gy, gz, { rz: 0.41, paint: land });
+  }
+
+  // The monitor's back shell, on the visitors' side: the screen glows toward
+  // the occupant only, instead of reading as a blue sign from the door.
+  dark.add(new T.BoxGeometry(1.34, 0.82, 0.04), cx + deskW * 0.18, deskTopY + 0.5, deskCZ - 0.25 + 0.045);
+  dark.add(new T.BoxGeometry(0.5, 0.3, 0.06), cx + deskW * 0.18, deskTopY + 0.5, deskCZ - 0.25 + 0.09);
+
+  // Desk accessories: keyboard on the occupant's side, phone, pen cup,
+  // folders and a photo turned toward him.
+  dark.add(new T.BoxGeometry(0.56, 0.025, 0.17), cx + deskW * 0.18, deskSurfY + 0.012, deskCZ - 0.55);
+  dark.add(new T.BoxGeometry(0.22, 0.06, 0.18), cx + deskW * 0.4, deskSurfY + 0.03, deskCZ - 0.15, { ry: -0.3 });
+  dark.add(new T.BoxGeometry(0.06, 0.04, 0.2), cx + deskW * 0.4 - 0.04, deskSurfY + 0.08, deskCZ - 0.15, { ry: -0.3 });
+  gold.add(new T.CylinderGeometry(0.045, 0.04, 0.12, 10), cx - deskW * 0.28, deskSurfY + 0.06, deskCZ - 0.4);
+  for (const [dx, rz] of [[-0.01, 0.2], [0.012, -0.15]] as [number, number][]) {
+    dark.add(new T.CylinderGeometry(0.008, 0.008, 0.18, 4), cx - deskW * 0.28 + dx, deskSurfY + 0.15, deskCZ - 0.4, { rz });
+  }
+  [0xe6dcc4, 0x8a2a22, 0x1f4f7a].forEach((col, i) => {
+    tinted.add(new T.BoxGeometry(0.34, 0.018, 0.25), cx - deskW * 0.06, deskSurfY + 0.01 + i * 0.019, deskCZ - 0.42,
+      { ry: (i - 1) * 0.09, color: col });
+  });
+  gold.add(new T.BoxGeometry(0.2, 0.15, 0.02), cx + deskW * 0.02, deskSurfY + 0.08, deskCZ - 0.15, { rx: 0.22 });
+  tinted.add(new T.BoxGeometry(0.15, 0.1, 0.005), cx + deskW * 0.02, deskSurfY + 0.08, deskCZ - 0.162, { rx: 0.22, color: 0x6f8aa0 });
+
+  // Lounge by the sofa: area rug, coffee table, floor lamp, and a painting.
+  {
+    const sofaZ = cz + 0.2;
+    const visitorRugEdge = cx + Math.min(deskW + 1.2, w - 1.4) / 2;
+    const loungeW = Math.min(2.6, xR - visitorRugEdge - 0.35);
+    if (loungeW > 1.5) {
+      const lx = xR - loungeW / 2 - 0.05;
+      tinted.add(new T.PlaneGeometry(loungeW, 3.0), lx, 0.031, sofaZ, { rx: -Math.PI / 2, color: 0x1c2442 });
+      gold.add(new T.PlaneGeometry(loungeW + 0.16, 3.16), lx, 0.029, sofaZ, { rx: -Math.PI / 2 });
+    }
+    const tx = xR - 1.55;
+    wood.add(new RoundedBoxGeometry(0.72, 0.06, 1.25, 2, 0.02), tx, 0.42, sofaZ);
+    for (const [ox, oz] of [[-0.3, -0.55], [0.3, -0.55], [-0.3, 0.55], [0.3, 0.55]] as [number, number][]) {
+      gold.add(new T.CylinderGeometry(0.02, 0.02, 0.39, 6), tx + ox, 0.2, sofaZ + oz);
+    }
+    [0x2c5e3a, 0xb07a24].forEach((col, i) => {
+      tinted.add(new T.BoxGeometry(0.3, 0.045, 0.22), tx, 0.475 + i * 0.046, sofaZ - 0.25, { ry: i * 0.25, color: col });
+    });
+    gold.add(new T.CylinderGeometry(0.13, 0.07, 0.07, 14, 1, true), tx, 0.485, sofaZ + 0.3);
+
+    const lampZ = sofaZ + 1.55;
+    const lampX = xR - 0.42;
+    gold.add(new T.CylinderGeometry(0.16, 0.18, 0.04, 12), lampX, 0.02, lampZ);
+    gold.add(new T.CylinderGeometry(0.018, 0.018, 1.55, 6), lampX, 0.8, lampZ);
+    tinted.add(new T.CylinderGeometry(0.16, 0.24, 0.3, 14, 1, true), lampX, 1.68, lampZ, { color: 0xe8d6a8 });
+    glow.add(new T.SphereGeometry(0.11, 8, 6), lampX, 1.62, lampZ);
+
+    // Dusk over hills, in horizontal bands — the canvas sits proud of the
+    // wall, the gold frame around it.
+    const px = xR - 0.04;
+    const pw = 1.7, ph = 1.05, py = 2.1;
+    gold.add(new T.BoxGeometry(0.05, ph + 0.12, pw + 0.12), px, py, sofaZ);
+    const bands = [0x1b1f3a, 0x2d2a52, 0x553060, 0x8a3c50, 0xc0643a, 0xe09a4a];
+    const bandH = (ph * 0.68) / bands.length;
+    bands.forEach((col, i) => {
+      tinted.add(new T.BoxGeometry(0.02, bandH, pw), px - 0.03, py + ph / 2 - bandH * (i + 0.5), sofaZ, { color: col });
+    });
+    tinted.add(new T.CylinderGeometry(0.12, 0.12, 0.02, 16), px - 0.035, py - ph * 0.12, sofaZ + 0.35, { rz: Math.PI / 2, color: 0xf6c870 });
+    tinted.add(new T.BoxGeometry(0.02, ph * 0.32, pw), px - 0.036, py - ph / 2 + ph * 0.16, sofaZ, { color: 0x14121e });
+    tinted.add(new T.BoxGeometry(0.02, ph * 0.12, pw * 0.55), px - 0.04, py - ph / 2 + ph * 0.34, sofaZ - pw * 0.2, { color: 0x14121e });
+  }
+
+  // Reading chair by the bookshelf, turned toward the room, with a side
+  // table. Parts are offset first and then turned about the chair's centre.
+  {
+    const leather = propBatch();
+    const rx0 = xL + 1.35, rz0 = shelfZ + 1.95, ry = 2.2;
+    const part = (geo: any, ox: number, oy: number, oz: number) => { geo.translate(ox, oy, oz); return geo; };
+    leather.add(part(new RoundedBoxGeometry(0.8, 0.22, 0.75, 2, 0.06), 0, 0.33, 0), rx0, 0, rz0, { ry });
+    leather.add(part(new RoundedBoxGeometry(0.8, 0.62, 0.18, 2, 0.06), 0, 0.68, -0.3), rx0, 0, rz0, { ry });
+    for (const sx of [-1, 1]) leather.add(part(new RoundedBoxGeometry(0.16, 0.42, 0.72, 2, 0.05), sx * 0.4, 0.46, 0), rx0, 0, rz0, { ry });
+    leather.flush(scene, leatherDark, true);
+    for (const [ox, oz] of [[-0.3, -0.28], [0.3, -0.28], [-0.3, 0.28], [0.3, 0.28]] as [number, number][]) {
+      gold.add(part(new T.CylinderGeometry(0.025, 0.02, 0.22, 6), ox, 0.11, oz), rx0, 0, rz0, { ry });
+    }
+    const stX = rx0 + 0.15, stZ = rz0 - 0.85;
+    wood.add(new T.CylinderGeometry(0.24, 0.24, 0.04, 16), stX, 0.56, stZ);
+    wood.add(new T.CylinderGeometry(0.035, 0.05, 0.54, 8), stX, 0.28, stZ);
+    wood.add(new T.CylinderGeometry(0.16, 0.18, 0.03, 14), stX, 0.015, stZ);
+    tinted.add(new T.BoxGeometry(0.22, 0.04, 0.16), stX - 0.02, 0.6, stZ + 0.02, { ry: 0.5, color: 0x8a2a22 });
+    tinted.add(new T.CylinderGeometry(0.04, 0.035, 0.08, 10), stX + 0.1, 0.62, stZ - 0.06, { color: 0xe8e0cc });
+  }
+
+  wood.flush(scene, mahogany, true);
+  gold.flush(scene, goldTrim);
+  dark.flush(scene, steelMat);
+  tinted.flush(scene, new T.MeshStandardMaterial({ roughness: 0.6, metalness: 0.05, vertexColors: true }), true);
+  glow.flush(scene, new T.MeshBasicMaterial({ color: 0xffd890, transparent: true, opacity: 0.7 }));
+
   // ── Large rug under the visitor seating zone (gold-bordered burgundy) ──
   const rugCZ = (deskFrontZ + backRowZ) / 2;
   const rugD = Math.min(backRowZ - deskFrontZ + 1.6, d - 2);
@@ -351,10 +571,12 @@ export function buildMyOffice(
   const visitorPos = { x: cx, y: 0, z: frontRowZ };
   // Note pile on the desk front edge, left of center (clear of the monitor).
   const noteDropPos = { x: cx - deskW * 0.22, y: deskTopY + 0.1, z: deskCZ + 0.25 };
-  // Occupant seated behind the desk, facing the door (+Z). Default humanoid
-  // forward is -Z, so rotating by π turns him to face the door / visitors.
+  // Occupant seated behind the desk, facing the door (+Z). The humanoid's
+  // front is already +Z (its tie sits at z=+0.16, and walkers face with
+  // atan2(dx, dz)), so no turn: π put his back to the desk and the visitors.
+  // The rank-and-file desks use π because they sit on the desk's +Z side.
   const seatPos = { x: cx, y: 0, z: cmdCZ };
-  const seatFacingY = Math.PI;
+  const seatFacingY = 0;
   const headPos = { x: cx, y: 1.7, z: cmdCZ };
   // Visitors face the occupant across the desk.
   const deskFacingPos = { x: cx, y: 1.0, z: cmdCZ };
