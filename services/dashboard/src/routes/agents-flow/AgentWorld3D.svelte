@@ -4237,7 +4237,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 <EmailModal bind:this={emailModal} />
 
 <style>
-  .world3d-container{position:relative;width:100%;height:100%;overflow:hidden;background:#020206}
+  .world3d-container{position:relative;width:100%;height:100%;overflow:hidden;overflow:clip;background:#020206}
   .world3d-canvas{width:100%;height:100%;position:relative}
   .scene-vignette{position:absolute;inset:0;z-index:2;pointer-events:none;
     background:radial-gradient(125% 115% at 50% 42%, transparent 55%, rgba(2,4,10,.42) 100%);

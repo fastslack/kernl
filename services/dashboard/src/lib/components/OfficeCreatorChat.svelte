@@ -303,6 +303,10 @@ Kernel tools you have (use ONE per turn):
     input: Record<string, unknown>;
   };
   let pendingPermission: PendingPermission | null = null;
+  /** "Allow all in this session": every later tool request in this
+   *  conversation is approved without asking. Cleared when the conversation
+   *  resets (model switch) and gone with the panel when it closes. */
+  let allowAllSession = false;
 
   onMount(async () => {
     // Resolve the model BEFORE opening the channel: the system prompt differs
@@ -362,7 +366,7 @@ Kernel tools you have (use ONE per turn):
     }
     phase = 'ready';
     await tick();
-    inputEl?.focus();
+    inputEl?.focus({ preventScroll: true });
   }
 
   /**
@@ -380,6 +384,7 @@ Kernel tools you have (use ONE per turn):
     messages = [];
     streamingBlocks = [];
     pendingPermission = null;
+    allowAllSession = false;
     provider = slug;
     model = id;
     rememberChoice(slug, id);
@@ -519,6 +524,10 @@ Kernel tools you have (use ONE per turn):
         respondChatPermission(ev.request_id, 'allow').catch((e) =>
           console.error('auto-approve failed', e),
         );
+      } else if (allowAllSession) {
+        respondChatPermission(ev.request_id, 'allow').catch((e) =>
+          console.error('session auto-approve failed', e),
+        );
       } else {
         pendingPermission = {
           request_id: ev.request_id,
@@ -546,8 +555,9 @@ Kernel tools you have (use ONE per turn):
     scrollToBottom();
   }
 
-  async function approvePermission(allow: boolean) {
+  async function approvePermission(allow: boolean, wholeSession = false) {
     if (!pendingPermission) return;
+    if (allow && wholeSession) allowAllSession = true;
     const p = pendingPermission;
     pendingPermission = null;
     try {
@@ -683,6 +693,12 @@ Kernel tools you have (use ONE per turn):
           <div class="oc-status">
             <span class="oc-dot"></span>
             <span>direct channel · online</span>
+            {#if allowAllSession}
+              <button class="oc-allowall" type="button" on:click={() => (allowAllSession = false)}
+                      title="Ask again before every tool call in this conversation">
+                all tools allowed · revoke
+              </button>
+            {/if}
           </div>
         </div>
       </div>
@@ -810,6 +826,26 @@ Kernel tools you have (use ONE per turn):
           </div>
         {/if}
       {/if}
+
+      <!-- Tool permission, inline at the end of the conversation: the chat
+           stays readable while deciding, and the request sits right after the
+           message that triggered it. -->
+      {#if pendingPermission}
+        <div class="oc-perm" role="group" aria-label="Tool permission request">
+          <div class="oc-perm-head">
+            <span class="oc-perm-q">{chatTitle} wants to use</span>
+            <span class="oc-perm-tool" title={pendingPermission.tool_name}>{pendingPermission.tool_name.replace(/^mcp__.+?__/, '')}</span>
+          </div>
+          <pre class="oc-perm-input">{fmtToolInput(pendingPermission.input)}</pre>
+          <div class="oc-perm-actions">
+            <button class="oc-perm-deny" type="button" on:click={() => approvePermission(false)}>Deny</button>
+            <span class="oc-perm-spacer"></span>
+            <button class="oc-perm-once" type="button" on:click={() => approvePermission(true)}>Allow once</button>
+            <button class="oc-perm-allow" type="button" on:click={() => approvePermission(true, true)}
+                    title="Approve this and every later tool call in this conversation">Allow all in this session</button>
+          </div>
+        </div>
+      {/if}
     </div>
 
     <footer class="oc-foot">
@@ -836,26 +872,17 @@ Kernel tools you have (use ONE per turn):
   </div>
 </div>
 
-{#if pendingPermission}
-  <div class="oc-perm-scrim" role="presentation"></div>
-  <div class="oc-perm-modal" role="dialog" aria-modal="true">
-    <div class="oc-perm-head">
-      <span>Tool permission</span>
-      <span class="oc-perm-tool">{pendingPermission.tool_name}</span>
-    </div>
-    <pre class="oc-perm-input">{fmtToolInput(pendingPermission.input)}</pre>
-    <div class="oc-perm-actions">
-      <button class="oc-perm-deny" on:click={() => approvePermission(false)}>Deny</button>
-      <button class="oc-perm-allow" on:click={() => approvePermission(true)}>Allow</button>
-    </div>
-  </div>
-{/if}
+
 
 <style>
   /* No backdrop — the panel docks to the right edge like the agent info
-     panel; the 3D world stays visible and clickable around it. */
+     panel; the 3D world stays visible and clickable around it. Absolute, not
+     fixed: positioned against the viewport it slid under the app header and
+     the command bar (its own header hidden) and under the message stream (its
+     composer cut off). Inside .world3d-container it gets the same box as the
+     agent panel. */
   .oc-overlay {
-    position: fixed;
+    position: absolute;
     inset: 0;
     z-index: 900;
     pointer-events: none;
@@ -1440,68 +1467,52 @@ Kernel tools you have (use ONE per turn):
   .oc-send:disabled { opacity: 0.4; cursor: not-allowed; }
   .oc-send:not(:disabled):hover { filter: brightness(1.08); }
 
-  /* Permission modal (mirrors /chat) */
-  .oc-perm-scrim {
-    position: fixed; inset: 0; z-index: 998; background: rgba(0,0,0,0.55); backdrop-filter: blur(2px);
-  }
-  .oc-perm-modal {
-    position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
-    z-index: 999; width: min(560px, 92vw);
-    background: var(--bg, #0d0d0d);
-    border: 1px solid var(--border, #2a2a2a);
+  /* Inline tool-permission card (was a modal over the whole page). */
+  .oc-perm {
+    margin: 4px 0 8px 44px;
+    border: 1px solid color-mix(in srgb, var(--cmd-color, #c9a84c) 45%, transparent);
     border-radius: 10px;
-    box-shadow: 0 18px 50px rgba(0,0,0,0.7);
+    background: color-mix(in srgb, var(--cmd-color, #c9a84c) 7%, rgba(12, 12, 18, 0.95));
     overflow: hidden;
+    animation: oc-perm-in 0.18s ease-out;
   }
+  @keyframes oc-perm-in { from { opacity: 0; transform: translateY(4px); } }
+  @media (prefers-reduced-motion: reduce) { .oc-perm { animation: none; } }
   .oc-perm-head {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 12px 16px; border-bottom: 1px solid var(--border, #2a2a2a);
-    font-weight: 600; color: var(--text-1, #f0f0f0);
+    display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+    padding: 10px 12px 6px;
+    font-size: 12px; color: var(--text-2, #b1b4bc);
   }
+  .oc-perm-q { font-weight: 600; }
   .oc-perm-tool {
-    background: var(--gold, #d4a84b);
-    color: #1a1a1a;
-    padding: 2px 8px;
-    border-radius: 4px;
-    font-family: ui-monospace, monospace;
-    font-size: 12px;
-    font-weight: 600;
+    font: 600 11px 'JetBrains Mono', monospace;
+    padding: 2px 8px; border-radius: 5px;
+    background: var(--cmd-color, #d4a84b); color: #17181b;
+    max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   }
   .oc-perm-input {
-    margin: 0;
-    padding: 12px 16px;
-    background: rgba(0,0,0,0.3);
-    border: 0;
-    font-family: ui-monospace, monospace;
-    font-size: 11px;
-    color: var(--text-2, #a0a0a0);
-    max-height: 280px;
-    overflow: auto;
-    white-space: pre-wrap;
-    word-break: break-word;
+    margin: 0 12px; padding: 8px 10px;
+    max-height: 180px; overflow: auto;
+    background: rgba(0, 0, 0, 0.35); border: 1px solid var(--border, #2a2a2a); border-radius: 6px;
+    font: 11.5px/1.5 'JetBrains Mono', monospace; color: var(--text-1, #f0f0ed);
+    white-space: pre-wrap; word-break: break-word;
   }
-  .oc-perm-actions {
-    display: flex; gap: 8px; justify-content: flex-end;
-    padding: 10px 16px 14px;
-    border-top: 1px solid var(--border, #2a2a2a);
-    background: rgba(255,255,255,0.02);
-  }
-  .oc-perm-deny,
-  .oc-perm-allow {
-    border: 1px solid var(--border, #2a2a2a);
-    background: transparent;
-    color: var(--text-1, #f0f0f0);
-    padding: 6px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    font-weight: 600;
-    font-size: 12px;
+  .oc-perm-actions { display: flex; align-items: center; gap: 8px; padding: 10px 12px 12px; }
+  .oc-perm-spacer { flex: 1; }
+  .oc-perm-deny, .oc-perm-once, .oc-perm-allow {
+    border: 1px solid var(--border, #2a2a2a); background: transparent;
+    color: var(--text-1, #f0f0ed); padding: 6px 12px; border-radius: 6px;
+    cursor: pointer; font-weight: 600; font-size: 12px;
   }
   .oc-perm-deny:hover { border-color: #ff8080; color: #ff8080; }
-  .oc-perm-allow {
-    background: var(--gold, #d4a84b);
-    color: #1a1a1a;
-    border-color: var(--gold, #d4a84b);
-  }
+  .oc-perm-once:hover { border-color: var(--cmd-color, #d4a84b); }
+  .oc-perm-allow { background: var(--cmd-color, #d4a84b); border-color: var(--cmd-color, #d4a84b); color: #17181b; }
   .oc-perm-allow:hover { filter: brightness(1.08); }
+  .oc-perm button:focus-visible, .oc-allowall:focus-visible { outline: 2px solid var(--cmd-color, #d4a84b); outline-offset: 2px; }
+  .oc-allowall {
+    margin-left: 8px; padding: 1px 7px; border-radius: 999px; cursor: pointer;
+    font: 600 9.5px 'JetBrains Mono', monospace; letter-spacing: .3px; text-transform: none;
+    color: #fbbf24; background: rgba(251, 191, 36, 0.1); border: 1px solid rgba(251, 191, 36, 0.4);
+  }
+  .oc-allowall:hover { background: rgba(251, 191, 36, 0.2); }
 </style>
