@@ -1,11 +1,12 @@
 <script lang="ts">
   /**
-   * First-run setup wizard — 4 steps:
+   * First-run setup wizard — 5 steps:
    *   0 — Language (ES / EN, persisted via setUserLocale)
    *   1 — Connect your AI: pick a provider from the kernel catalog, then
    *       connect it (tested with a real tool call before anything is saved)
    *   2 — Hire a team
-   *   3 — Done
+   *   3 — Connect mail (optional)
+   *   4 — Done
    *
    * Completion is recorded in localStorage as `kernl.setupComplete=1`,
    * which +layout.svelte checks to skip re-prompting on subsequent visits.
@@ -14,15 +15,16 @@
   import OfficeStep from '$lib/components/setup/OfficeStep.svelte';
   import { t, locale, setUserLocale, type Locale } from '$lib/i18n/index.js';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
+  import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
   import ProviderGrid from '$lib/components/llm/ProviderGrid.svelte';
   import ProviderConnect from '$lib/components/llm/ProviderConnect.svelte';
   import { fetchCatalog, type CatalogResponse, type ProbeResult } from '$lib/llm-connect.js';
 
   // ── Wizard state ──────────────────────────────────────────────
-  // 4 steps: language -> provider -> hire a team -> done. The team step exists
+  // 5 steps: language -> provider -> hire a team -> mail -> done. The team step exists
   // because finishing setup on an empty 3D floor is the worst first impression
   // this product can make.
-  const TOTAL = 4;
+  const TOTAL = 5;
   let step = 0;
 
   // Step 0 — language
@@ -119,6 +121,7 @@
     step === 0 ? $t('setup.step_language')
     : step === 1 ? $t('setup.step_llm')
     : step === 2 ? 'Your team'
+    : step === 3 ? $t('setup.step_mail')
     : $t('setup.step_done');
 </script>
 
@@ -274,8 +277,14 @@
         <OfficeStep on:done={next} />
       </section>
 
+    {:else if step === 3}
+      <!-- ─────────────────────── Step 4 ─ Connect mail ─── -->
+      <section class="step-card llm-step">
+        <MailConnectCard mode="step" on:connected={next} on:skip={next} />
+      </section>
+
     {:else}
-      <!-- ─────────────────────────── Step 4 ─ Done ─── -->
+      <!-- ─────────────────────────── Step 5 ─ Done ─── -->
       <section class="step-card done">
         <div class="done-medal" aria-hidden="true">
           <svg viewBox="0 0 64 64">

@@ -25,6 +25,7 @@
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
+  import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import {
     updateInfo, checking, updating, updateError, updateHint,
@@ -188,7 +189,7 @@
   }
 
   // ── Sections / routing ───────────────────────
-  const CORE_SECTIONS = ['general', 'ai', 'channels', 'integrations', 'security', 'advanced', 'about'];
+  const CORE_SECTIONS = ['general', 'ai', 'mail', 'channels', 'integrations', 'security', 'advanced', 'about'];
   $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`) }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
 
@@ -407,6 +408,9 @@
   $: richCards = {
     ai: [
       { id: 'providers', title: $t('llm.connections') },
+    ],
+    mail: [
+      { id: 'mail-connect', title: $t('settings.mail.card') },
     ],
     channels: [
       { id: 'channels-runtime', title: $t('settings.channels.runtime_title') },
@@ -775,6 +779,11 @@
             initialConnect={$page.url.searchParams.get('connect') ?? ''}
             on:advanced={() => revealCard('ai-advanced')}
           />
+        {/if}
+
+        <!-- ═══ Mail ═══ -->
+        {#if activeSection === 'mail' && activeCard === 'mail-connect'}
+          <MailConnectCard mode="card" />
         {/if}
 
         <!-- ═══ Channels (rich) ═══ -->
