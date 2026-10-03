@@ -13,7 +13,9 @@
   import { formatToolInput } from '$lib/tool-presentation.js';
 
   export let permission: PendingPermission;
-  export let onRespond: (allow: boolean) => void = () => {};
+  /** 'allow_all' lets this tool and every later one through for the rest of
+   *  the conversation; the kernel stops asking (PermissionBus.allowAll). */
+  export let onRespond: (decision: 'allow' | 'deny' | 'allow_all') => void = () => {};
 </script>
 
 <div class="cx-perm-scrim" role="presentation"></div>
@@ -27,8 +29,11 @@
     <pre class="cx-perm-input">{formatToolInput(permission.input)}</pre>
   </div>
   <div class="cx-perm-actions">
-    <button class="cx-perm-deny" on:click={() => onRespond(false)}>Deny</button>
-    <button class="cx-perm-allow" on:click={() => onRespond(true)}>Allow</button>
+    <button class="cx-perm-deny" on:click={() => onRespond('deny')}>Deny</button>
+    <span class="cx-perm-spacer"></span>
+    <button class="cx-perm-all" on:click={() => onRespond('allow_all')}
+            title="Allow this and every tool it asks for during the rest of this conversation, without asking again">Allow all</button>
+    <button class="cx-perm-allow" on:click={() => onRespond('allow')}>Allow</button>
   </div>
 </div>
 
@@ -115,4 +120,16 @@
     border-color: var(--gold);
   }
   .cx-perm-allow:hover { filter: brightness(1.1); }
+  .cx-perm-spacer { flex: 1; }
+  .cx-perm-all {
+    border: 1px solid color-mix(in srgb, var(--gold) 55%, transparent);
+    background: color-mix(in srgb, var(--gold) 10%, transparent);
+    color: var(--gold);
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .cx-perm-all:hover { background: color-mix(in srgb, var(--gold) 18%, transparent); }
 </style>

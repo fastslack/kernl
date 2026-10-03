@@ -517,7 +517,8 @@ export async function* sendChatMessageStream(
 
 export function respondChatPermission(
 	request_id: string,
-	behavior: 'allow' | 'deny',
+	/** 'allow_all': this request and every later one in the conversation. */
+	behavior: 'allow' | 'deny' | 'allow_all',
 	reason?: string,
 ) {
 	return post('/api/chat/permission/respond', { request_id, behavior, reason });

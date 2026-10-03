@@ -297,13 +297,18 @@
     scrollBottom();
   }
 
-  async function approvePermission(allow: boolean) {
+  async function approvePermission(decision: 'allow' | 'deny' | 'allow_all') {
     if (!pendingPermission) return;
     const p = pendingPermission;
     pendingPermission = null;
     try {
-      await respondChatPermission(p.request_id, allow ? 'allow' : 'deny');
+      await respondChatPermission(p.request_id, decision);
     } catch (e: any) {
+      // A kernel older than "Allow all" answers 400 and the request would sit
+      // until its 10-minute timeout: allow at least this one.
+      if (decision === 'allow_all') {
+        try { await respondChatPermission(p.request_id, 'allow'); return; } catch { /* fall through */ }
+      }
       console.error('permission respond failed', e);
     }
   }

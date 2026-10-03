@@ -364,6 +364,10 @@ export class ChatClaudeCodeProvider {
     // Without it we fall back to bypassPermissions so the SDK doesn't block.
     const canUseTool: CanUseTool | undefined = opts.permission
       ? async (toolName, toolInput) => {
+          // "Allow all" was chosen earlier in this conversation: no prompt.
+          if (opts.permission!.allowsAll?.()) {
+            return { behavior: "allow", updatedInput: toolInput } as PermissionResult;
+          }
           const requestId = newId();
           sink({
             type: "permission_request",

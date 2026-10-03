@@ -114,6 +114,7 @@ export function registerChatRoutes(
           episode_id: episodeId,
           tool_name: input.tool_name,
         }),
+        allowsAll: () => permissionBus.allowsAll(episodeId),
       };
 
       try {
@@ -159,11 +160,11 @@ export function registerChatRoutes(
 
   server.route<{
     request_id: string;
-    behavior: "allow" | "deny";
+    behavior: "allow" | "deny" | "allow_all";
     reason?: string;
   }>("POST", "/api/chat/permission/respond", ({ body }) => {
-    if (!body.request_id || (body.behavior !== "allow" && body.behavior !== "deny")) {
-      throw new HttpError(400, "request_id and behavior (allow|deny) required");
+    if (!body.request_id || (body.behavior !== "allow" && body.behavior !== "deny" && body.behavior !== "allow_all")) {
+      throw new HttpError(400, "request_id and behavior (allow|deny|allow_all) required");
     }
     let ok: boolean;
     try {

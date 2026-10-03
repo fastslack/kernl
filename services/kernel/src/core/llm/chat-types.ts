@@ -131,4 +131,9 @@ export interface PermissionRequester {
     tool_name: string;
     input: Record<string, unknown>;
   }): Promise<{ behavior: "allow" | "deny"; reason?: string }>;
+  /**
+   * True once the user chose "Allow all" for this conversation: the provider
+   * then lets every tool through without emitting a prompt.
+   */
+  allowsAll?(): boolean;
 }
