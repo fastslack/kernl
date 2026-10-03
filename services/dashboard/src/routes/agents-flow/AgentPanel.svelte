@@ -1052,6 +1052,7 @@ Boss says: "${msg}"`;
         onCopy={copy}
         onOutputClick={handleOutputClick}
         onOpenEmail={(id) => openEmail(id)}
+        nameOf={(id) => agents.find((a) => a.id === id)?.name}
       />
     </svelte:fragment>
 

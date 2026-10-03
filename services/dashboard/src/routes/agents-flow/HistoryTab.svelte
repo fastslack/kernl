@@ -22,6 +22,8 @@
     type HistoryStep, type HistoryRow, type ToolChip,
   } from '$lib/history-steps.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
+  import AgentActionBody from './AgentActionBody.svelte';
+  import { agentActionOf } from '$lib/agent-actions.js';
   import StepPayload from './StepPayload.svelte';
 
   /** Lifetime counters for the selected agent, or null while unknown. */
@@ -55,6 +57,8 @@
   export let onOutputClick: (e: MouseEvent) => void = () => {};
   /** An email-send step offers a link to the real message. */
   export let onOpenEmail: (commId: string) => void = () => {};
+  /** Agent id → name, so an action on another agent names it instead of a short id. */
+  export let nameOf: (id: string) => string | undefined = () => undefined;
 
   // Which step rows are open. Purely visual, so it lives here rather than in
   // the parent; keyed by run so two runs never share a row's state.
@@ -67,7 +71,9 @@
     openSteps = new Set(openSteps);
   }
   function rowKey(runId: string, r: HistoryRow): string {
-    return r.kind === 'tools' ? `${runId}:tools:${r.range}` : stepKey(runId, r.step);
+    if (r.kind === 'tools') return `${runId}:tools:${r.range}`;
+    if (r.kind === 'action') return `${runId}:action:${(r.use.call ?? r.use.result)?.step_number ?? 0}`;
+    return stepKey(runId, r.step);
   }
   function setAll(runId: string, rows: HistoryRow[], open: boolean): void {
     const next = new Set([...openSteps].filter(k => !k.startsWith(runId + ':')));
@@ -250,6 +256,34 @@
                         </ol>
                       {/if}
                     </li>
+                  {:else if row.kind === 'action'}
+                    {@const u = row.use}
+                    {@const akey = rowKey(run.id, row)}
+                    {@const aOpen = openSteps.has(akey)}
+                    {@const act = agentActionOf(u.fullName, u.call?.tool_input ?? '', u.result ? { preview: String(u.result.tool_output ?? ''), failed: !u.ok } : undefined, nameOf)}
+                    {#if act}
+                    <li class="hs-step hs-action hs-action-{act.outcome}" class:hs-open={aOpen}>
+                      <span class="hs-dot"></span>
+                      <button type="button" class="hs-row hs-action-row" aria-expanded={aOpen}
+                              title={aOpen ? 'Hide details' : 'Show details'} on:click={() => toggleStep(akey)}>
+                        <span class="hs-num">{(u.call ?? u.result)?.step_number ?? ''}</span>
+                        <AgentActionBody action={act} />
+                        <span class="hs-chev" aria-hidden="true">{aOpen ? '▾' : '▸'}</span>
+                      </button>
+                      {#if aOpen}
+                        <div class="hs-use-body">
+                          {#if u.call}
+                            <StepPayload detail={historyStepDetail(u.call)} copyText={u.call.tool_input ?? ''} {onOutputClick} />
+                          {/if}
+                          {#if u.result}
+                            <StepPayload detail={historyStepDetail(u.result)} copyText={u.result.tool_output ?? ''} {onOutputClick} />
+                          {:else}
+                            <p class="hs-pending-note">No result was recorded — the run ended before this call returned.</p>
+                          {/if}
+                        </div>
+                      {/if}
+                    </li>
+                    {/if}
                   {:else}
                     {@const step = row.step}
                     {@const fe = step.event ?? stepAsFlowEvent(step)}
@@ -664,4 +698,23 @@
     border-radius:999px; white-space:nowrap;
   }
   .email-view-link:hover{ background:rgba(91,141,239,.28); color:#fff; }
+
+  /* An agent acting on another agent — same card as the LIVE tab
+     (AgentActionBody), so a message, an edit or a run stands out of the
+     tool noise with its recipient and outcome. */
+  .hs-action{--act:#f0b44c}
+  .hs-action-failed{--act:#ef5d6e}
+  .hs-action .hs-dot{background:var(--act);box-shadow:0 0 0 3px color-mix(in srgb, var(--act) 22%, transparent)}
+  .hs-action .hs-action-row{
+    align-items:flex-start;gap:10px;margin:3px 0;padding:9px 11px 10px;
+    background:color-mix(in srgb, var(--act) 7%, transparent);
+    border:1px solid color-mix(in srgb, var(--act) 30%, transparent);
+    border-left:3px solid var(--act);
+  }
+  .hs-action .hs-action-row:hover{
+    background:color-mix(in srgb, var(--act) 11%, transparent);
+    border-color:color-mix(in srgb, var(--act) 45%, transparent);
+    border-left-color:var(--act);
+  }
+  .hs-action .hs-num{padding-top:2px}
 </style>

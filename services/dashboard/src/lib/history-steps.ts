@@ -10,6 +10,7 @@
  * Pure — no Svelte, no fetch.
  */
 
+import { isAgentActionTool } from './agent-actions.js';
 import type { AgentFlowEvent } from './stores.js';
 import { collapseRepeats } from './collapse-repeats.js';
 
@@ -171,7 +172,9 @@ export interface ToolUse {
 
 export type HistoryRow =
   | { kind: 'step'; step: HistoryStep }
-  | { kind: 'tools'; steps: HistoryStep[]; uses: ToolUse[]; range: string };
+  | { kind: 'tools'; steps: HistoryStep[]; uses: ToolUse[]; range: string }
+  /** An agent acting on another agent (agent-actions.ts): its call and result, on their own. */
+  | { kind: 'action'; use: ToolUse };
 
 const isTool = (s: HistoryStep) => !s.is_event && (s.type === 'tool_call' || s.type === 'tool_result');
 
@@ -243,9 +246,15 @@ function pairUses(steps: HistoryStep[]): ToolUse[] {
   return uses;
 }
 
-/** Group consecutive tool steps (two or more) into a single row. */
+/**
+ * Group consecutive tool steps (two or more) into a single row. An agent
+ * acting on another agent — a colleague message, an edit, a run… — never
+ * folds into such a group: it gets a row of its own, call and result paired,
+ * because it is the step a person goes looking for.
+ */
 export function groupHistoryRows(steps: HistoryStep[]): HistoryRow[] {
   const rows: HistoryRow[] = [];
+  const openActions: Array<Extract<HistoryRow, { kind: 'action' }>> = [];
   let run: HistoryStep[] = [];
   const flush = () => {
     if (run.length >= 2) {
@@ -257,6 +266,21 @@ export function groupHistoryRows(steps: HistoryStep[]): HistoryRow[] {
     run = [];
   };
   for (const s of steps) {
+    if (isTool(s) && isAgentActionTool(s.tool_name)) {
+      flush();
+      const fullName = s.tool_name || 'tool';
+      if (s.type === 'tool_call') {
+        const row = { kind: 'action' as const, use: { name: shortToolName(fullName), fullName, call: s, ok: true } };
+        rows.push(row);
+        openActions.push(row);
+        continue;
+      }
+      const ok = !resultFailed(storedErrorFlag(s), String(s.tool_output ?? ''));
+      const open = openActions.find((r) => r.use.fullName === fullName && !r.use.result);
+      if (open) { open.use.result = s; open.use.ok = ok; }
+      else rows.push({ kind: 'action', use: { name: shortToolName(fullName), fullName, result: s, ok } });
+      continue;
+    }
     if (isTool(s)) run.push(s);
     else { flush(); rows.push({ kind: 'step', step: s }); }
   }

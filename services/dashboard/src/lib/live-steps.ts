@@ -12,6 +12,7 @@
  * output — merging them would change both surfaces.
  */
 
+import { isAgentActionTool } from './agent-actions.js';
 import type { AgentFlowEvent } from './stores.js';
 import { ellipsize } from './display-format.js';
 import { sanitizePreview } from './run-format.js';
@@ -491,7 +492,10 @@ function isToolEvent(e: AgentFlowEvent): boolean {
  */
 export function liveToolRows(events: AgentFlowEvent[]): LiveRow[] {
   const indexed = events.map((e, i) => ({ e, i }));
-  const runs = collapseRepeats(indexed, ({ e }, i) => (isToolEvent(e) ? `tool:${String(e.data.tool_name)}` : `ev:${i}`));
+  // An agent acting on another agent never folds: three messages in a row
+  // are three recipients, and each one has to stay readable on its own.
+  const runs = collapseRepeats(indexed, ({ e }, i) =>
+    (isToolEvent(e) && !isAgentActionTool(e.data.tool_name) ? `tool:${String(e.data.tool_name)}` : `ev:${i}`));
   const rows: LiveRow[] = [];
   for (const r of runs) {
     const calls = r.items.filter((x) => liveEventType(x.e) === 'tool_call').length;
