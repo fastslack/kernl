@@ -21,6 +21,8 @@
   import KernlBugsTab from './KernlBugsTab.svelte';
   import { bugsApi } from '$lib/kernl-bugs.js';
   import { summarizeRunContext, explainFailure, type RunContext } from '$lib/office/failure-explain.js';
+  import { planFix, fmtLimit, type FixPlan, type AgentLimits, type RecentRun } from '$lib/office/failure-fix.js';
+  import { updateAgent } from '$lib/api.js';
   import type { OfficeReport, PendingQuestion, WorldAgent } from './world-types.js';
 
   /** bind: — the 3D office's My Office hitbox toggles it too. */
@@ -93,6 +95,89 @@
     const id = g.reports[0].runId;
     return id ? (id in runCtx ? runCtx[id] : undefined) : null;
   };
+
+  // ── What fixes each failure, from the agent as it is NOW ──
+  // GET /api/agents/:id once per failing agent: its current limits and its
+  // recent runs say whether the problem is already gone (the limit was raised,
+  // a later run completed), being retried, or still needs the fix.
+  let agentNow: Record<string, { limits: AgentLimits; runs: RecentRun[] } | null> = {};
+  const agentRequested = new Set<string>();
+  function loadAgentNow(agentId: string, force = false): void {
+    if (!agentId || (!force && agentRequested.has(agentId))) return;
+    agentRequested.add(agentId);
+    fetch(`/api/agents/${encodeURIComponent(agentId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => {
+        agentNow = { ...agentNow, [agentId]: b?.agent ? { limits: b.agent, runs: Array.isArray(b.runs) ? b.runs : [] } : null };
+      })
+      .catch(() => { agentNow = { ...agentNow, [agentId]: null }; });
+  }
+  $: groupsOnScreen.forEach(g => loadAgentNow(g.agentId));
+  /** The error the card explains — the report's, or its run's when the report only said "failed". */
+  function errorTextOf(g: ReportGroup): string {
+    const c = ctxOf(g, runCtx);
+    return !g.text.trim() || /^failed\.?$/i.test(g.text.trim()) ? (c?.error || g.text) : g.text;
+  }
+  const planOf = (g: ReportGroup, _a: unknown, _c: unknown): FixPlan | undefined => {
+    if (!(g.agentId in agentNow)) return undefined;
+    const now = agentNow[g.agentId];
+    return planFix(explainFailure(errorTextOf(g)), now?.limits, now?.runs ?? [], g.latestTs);
+  };
+
+  // "Arreglar": apply the plan's change, then run the agent again.
+  let fixing: Record<string, boolean> = {};
+  async function autoFix(g: ReportGroup): Promise<void> {
+    const plan = planOf(g, agentNow, runCtx);
+    if (!plan || fixing[g.agentId] || (plan.kind !== 'raise' && plan.kind !== 'rerun')) return;
+    fixing = { ...fixing, [g.agentId]: true };
+    const name = agentNameOf(g.agentId);
+    try {
+      if (plan.kind === 'raise') {
+        const res: any = await updateAgent(g.agentId, { [plan.field]: plan.to });
+        if (res?.success === false || res?.error) throw new Error(String(res.error ?? 'update failed'));
+      }
+      await retryAgent(g.agentId);
+      fixerStatus = plan.kind === 'raise'
+        ? $t('office.fix.fixed', { name, what: `${fmtLimit(plan.field, plan.from)} → ${fmtLimit(plan.field, plan.to)}` })
+        : $t('office.fix.fixed_rerun', { name });
+    } catch (e) {
+      fixerStatus = $t('office.fix.failed', { name, error: (e as Error).message });
+    } finally {
+      fixing = { ...fixing, [g.agentId]: false };
+      // The new run shows up in the agent's runs: the card moves to "running".
+      setTimeout(() => loadAgentNow(g.agentId, true), 1500);
+    }
+  }
+
+  // "Que lo resuelva el Chief": the same brief as the report's fixer, sent to
+  // whoever holds the top rank. Handed over, the failure leaves the board.
+  async function askChief(g: ReportGroup): Promise<void> {
+    const chief = topAgent();
+    if (!chief || chiefRunning) return;
+    const report = g.reports[0];
+    const c = ctxOf(g, runCtx);
+    const body = [
+      errorTextOf(g),
+      g.count > 1 ? `(failed ${g.count} times with this error)` : '',
+      c?.goal ? `Goal of the failing run: ${c.goal}` : '',
+      c?.lastStep ? `Last step before it stopped: ${c.lastStep}` : '',
+    ].filter(Boolean).join('\n');
+    const goal = buildFixerGoal(report, body);
+    try {
+      const res: any = await rpcOrCall('agents.run', { agent_id: chief.id, goal }, async () => {
+        const r = await fetch('/api/agents/run', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: chief.id, goal }),
+        });
+        return r.json();
+      });
+      if (!(res?.success || res?.run_id)) throw new Error(String(res?.error ?? 'run failed'));
+      removeReports(g.reports);
+      fixerStatus = $t('office.fix.chief_sent', { name: g.agentName });
+    } catch (e) {
+      fixerStatus = $t('office.fix.failed', { name: g.agentName, error: (e as Error).message });
+    }
+  }
 
   // "Volver a correr": run the agent again with its default goal.
   let retrying: Record<string, boolean> = {};
@@ -470,6 +555,8 @@
                 <FailureGroupCard {g} ctx={ctxOf(g, runCtx)} retrying={!!retrying[g.agentId]}
                                   onOpen={() => openReport = g.reports[0]} onDismiss={() => dismissGroup(g)}
                                   onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)}
+                                  plan={planOf(g, agentNow, runCtx)} fixing={!!fixing[g.agentId]} chiefBusy={chiefRunning}
+                                  onAutoFix={() => autoFix(g)} onAskChief={() => askChief(g)}
                                   onReport={(ask) => reportToKernl(g, ask)} reported={reportedRuns.has(g.reports[0].runId ?? '')}
                                   onOpenKernl={() => myOfficeTab = 'kernl'} />
               </div>
@@ -576,6 +663,8 @@
                                   retrying={!!retrying[g.agentId]}
                                   onOpen={() => openReport = g.reports[0]} onDismiss={() => dismissGroup(g)}
                                   onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)}
+                                  plan={planOf(g, agentNow, runCtx)} fixing={!!fixing[g.agentId]} chiefBusy={chiefRunning}
+                                  onAutoFix={() => autoFix(g)} onAskChief={() => askChief(g)}
                                   onReport={(ask) => reportToKernl(g, ask)} reported={reportedRuns.has(g.reports[0].runId ?? '')}
                                   onOpenKernl={() => myOfficeTab = 'kernl'} />
               </div>

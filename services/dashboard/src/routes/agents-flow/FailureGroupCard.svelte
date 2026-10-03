@@ -14,6 +14,7 @@
   import { LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { explainFailure, type RunContext } from '$lib/office/failure-explain.js';
   import type { ReportGroup } from '$lib/office/report-groups.js';
+  import { fmtLimit, type FixPlan } from '$lib/office/failure-fix.js';
 
   export let g: ReportGroup;
   /** The newest run's context; undefined while loading, null if it failed to load. */
@@ -25,6 +26,14 @@
   export let onDismiss: () => void;
   export let onRetry: () => void;
   export let onSettings: () => void;
+  /** What fixes it, from the agent as it is now (failure-fix.ts); undefined while loading. */
+  export let plan: FixPlan | undefined = undefined;
+  /** The one-click fix is being applied. */
+  export let fixing = false;
+  export let onAutoFix: () => void = () => {};
+  /** Hand the failure to the chief. Disabled while the chief is already running. */
+  export let onAskChief: () => void = () => {};
+  export let chiefBusy = false;
   /** "Report to Kernl": file this failure as a bug in Kernl itself (KernlBugsTab). */
   export let onReport: ((askChief: boolean) => Promise<void>) | null = null;
   /** Already filed from this card. */
@@ -48,10 +57,15 @@
     }
   }
 
-
   // A report that only carried the status ("failed") reads the run's own error.
   $: errorText = !g.text.trim() || /^failed\.?$/i.test(g.text.trim()) ? (ctx?.error || g.text) : g.text;
   $: ex = explainFailure(errorText);
+
+  $: resolved = plan?.kind === 'resolved';
+  // The chief is offered for anything a click cannot fix, and as the other
+  // way out of a mechanical fix — never for a dead model session, which no
+  // agent can renew.
+  $: offerChief = !!plan && plan.kind !== 'resolved' && plan.kind !== 'running' && plan.kind !== 'llm' && plan.kind !== 'rerun';
 
   function fmtDuration(ms: number): string {
     const s = Math.round(ms / 1000);
@@ -61,7 +75,7 @@
   }
 </script>
 
-<div class="fg">
+<div class="fg" class:fg-resolved={resolved}>
   <div class="fg-head">
     <span class="fg-dot" style="background:{g.color}"></span>
     <span class="fg-name" style="color:{g.color}">{g.agentName}</span>
@@ -81,8 +95,20 @@
     <span class="fg-why">{$t(ex.whyKey, ex.params)}</span>
   </button>
 
+  {#if plan?.kind === 'resolved'}
+    <p class="fg-state fg-state-ok">
+      {plan.how === 'limit_raised'
+        ? $t('office.fix.resolved_limit', { from: fmtLimit(plan.field, plan.from), to: fmtLimit(plan.field, plan.to) })
+        : $t('office.fix.resolved_ok', { when: fmtRelTime(new Date(plan.at).toISOString()) })}
+    </p>
+  {:else if plan?.kind === 'running'}
+    <p class="fg-state fg-state-run">{$t('office.fix.running')}</p>
+  {/if}
+
   <!-- What it was doing when it stopped. -->
-  {#if ctx === undefined}
+  {#if resolved}
+    <!-- Solved: the run's context is history; the card only has to say so. -->
+  {:else if ctx === undefined}
     <div class="fg-ctx fg-ctx-loading"><span class="fg-skel"></span><span class="fg-skel fg-skel-short"></span></div>
   {:else if ctx}
     <dl class="fg-ctx">
@@ -99,14 +125,34 @@
   <code class="fg-raw" title={errorText}>{errorText || '—'}</code>
 
   <div class="fg-actions">
-    {#if ex.fix === 'settings'}
-      <button class="fg-fix" type="button" on:click={onSettings}>{$t('office.fail.fix_settings')}</button>
-    {:else if ex.fix === 'llm'}
+    {#if resolved}
+      <button class="fg-fix fg-fix-ok" type="button" on:click={onDismiss}>{$t('office.fix.archive')}</button>
+    {:else if plan?.kind === 'raise' || plan?.kind === 'rerun'}
+      <!-- The fix, spelled out on the button: what changes, then the re-run. -->
+      <button class="fg-fix fg-fix-auto" type="button" on:click={onAutoFix} disabled={fixing || retrying}>
+        {fixing ? '…' : plan.kind === 'raise'
+          ? $t(`office.fix.raise_${plan.field}`, { from: fmtLimit(plan.field, plan.from), to: fmtLimit(plan.field, plan.to) })
+          : $t('office.fix.rerun')}
+      </button>
+      {#if plan.kind === 'raise'}
+        <button class="fg-fix fg-fix-2" type="button" on:click={onSettings}>{$t('office.fail.fix_settings')}</button>
+      {/if}
+    {:else if plan?.kind === 'llm' || (!plan && ex.fix === 'llm')}
       <a class="fg-fix" href={LLM_SETTINGS_HREF}>{$t('office.fail.fix_llm')}</a>
+    {:else if !plan}
+      {#if ex.fix === 'settings'}
+        <button class="fg-fix" type="button" on:click={onSettings}>{$t('office.fail.fix_settings')}</button>
+      {/if}
+      <button class="fg-fix" class:fg-fix-2={ex.fix !== 'retry'} type="button" on:click={onRetry} disabled={retrying}>
+        {retrying ? '…' : $t('office.fail.fix_retry')}
+      </button>
     {/if}
-    <button class="fg-fix" class:fg-fix-2={ex.fix !== 'retry'} type="button" on:click={onRetry} disabled={retrying}>
-      {retrying ? '…' : $t('office.fail.fix_retry')}
-    </button>
+    {#if offerChief}
+      <button class="fg-fix fg-fix-chief" class:fg-fix-2={plan?.kind === 'raise'} type="button" on:click={onAskChief}
+              disabled={chiefBusy} title={chiefBusy ? $t('office.fix.chief_busy') : $t('office.fix.chief_title')}>
+        ★ {$t('office.fix.chief')}
+      </button>
+    {/if}
     {#if onReport && g.reports[0].runId}
       {#if reported}
         <button class="fg-link fg-reported" type="button" on:click={onOpenKernl}>{$t('office.kernl.reported')} ↗</button>
@@ -128,9 +174,11 @@
     {/if}
     <span class="fg-spacer"></span>
     <button class="fg-link" type="button" on:click={onOpen}>{$t('office.chief.see_report')}</button>
-    <button class="fg-link fg-link-dim" type="button" on:click={onDismiss}>
-      {g.count > 1 ? $t('office.chief.dismiss_n', { n: String(g.count) }) : $t('office.chief.dismiss')}
-    </button>
+    {#if !resolved}
+      <button class="fg-link fg-link-dim" type="button" on:click={onDismiss}>
+        {g.count > 1 ? $t('office.chief.dismiss_n', { n: String(g.count) }) : $t('office.chief.dismiss')}
+      </button>
+    {/if}
   </div>
 </div>
 
@@ -204,6 +252,25 @@
   .fg-link-dim{color:#8a8fa8}
   .fg-link-dim:hover{color:#dde0ea}
   @media (prefers-reduced-motion: reduce){ .fg-skel{animation:none} }
+
+  /* The one-click fix: green, it is the action the card recommends. */
+  .fg-fix-auto{color:#06140b;background:#78dc8c;border-color:#78dc8c;height:auto;min-height:26px;padding:4px 11px;text-align:left}
+  .fg-fix-auto:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
+  /* The chief's gold, as in his office. */
+  .fg-fix-chief{color:#1a1206;background:#c9a84c;border-color:#c9a84c}
+  .fg-fix-chief:hover:not(:disabled){background:#d8b95c}
+  .fg-fix-chief.fg-fix-2{color:#e3c76e;background:rgba(201,168,76,.08);border-color:rgba(201,168,76,.4)}
+  .fg-fix-chief.fg-fix-2:hover:not(:disabled){background:rgba(201,168,76,.16)}
+  .fg-fix-chief:disabled{cursor:not-allowed}
+  .fg-fix-ok{color:#06140b;background:#78dc8c;border-color:#78dc8c}
+
+  .fg-state{margin:0;padding:6px 9px;border-radius:7px;font:600 11.5px/1.4 'Manrope',sans-serif}
+  .fg-state-ok{color:#9ff0b0;background:rgba(120,220,140,.1);border:1px solid rgba(120,220,140,.28)}
+  .fg-state-run{color:#9fd0ff;background:rgba(124,196,255,.08);border:1px solid rgba(124,196,255,.25)}
+  /* A solved problem stops reading as an alarm. */
+  .fg-resolved{background:rgba(120,220,140,.035);border-color:rgba(120,220,140,.2);border-left-color:rgba(120,220,140,.65)}
+  .fg-resolved .fg-title{color:#c9cdda;text-decoration:line-through;text-decoration-color:rgba(201,205,218,.4)}
+  .fg-resolved .fg-why, .fg-resolved .fg-raw{opacity:.55}
   /* Report to Kernl — a link-weight action with a two-item menu. */
   .fg-report{position:relative}
   .fg-report-menu{
