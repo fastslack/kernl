@@ -38,7 +38,7 @@
   import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
   import { traitsOf } from '$lib/office/office-kinds.js';
   import ModelPicker from './ModelPicker.svelte';
-  import { readChain, writeChain } from '$lib/model-chain.js';
+  import { readChain, primaryModelPatch } from '$lib/model-chain.js';
   import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
 
   const dispatch = createEventDispatcher();
@@ -141,7 +141,9 @@
   let headModelError = '';
   async function setHeadModel(next: { provider: string; model: string }) {
     headModelError = '';
-    await detail.patch(writeChain([next, ...headChain.slice(1)]));
+    // A non-Claude model on a claude_code agent also moves it to the kernel
+    // executor — the Claude Code CLI cannot run it (model-chain.ts).
+    await detail.patch(primaryModelPatch(agent ?? {}, headChain, next));
     headModelError = String($detail.error || '');
   }
 

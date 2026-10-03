@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { readChain, writeChain, MAX_CHAIN_LINKS } from "./model-chain.js";
+import { readChain, writeChain, MAX_CHAIN_LINKS, runsOnClaudeCode, primaryModelPatch } from "./model-chain.js";
 
 describe("readChain", () => {
   it("reads the loose pair when there is no chain", () => {
@@ -142,5 +142,38 @@ describe("corruption edge cases", () => {
       expect(typeof result.model).toBe("string");
       expect(typeof result.provider).toBe("string");
     });
+  });
+});
+
+describe("runsOnClaudeCode", () => {
+  it("accepts Claude models and a Claude provider's default", () => {
+    expect(runsOnClaudeCode({ provider: "claude-code", model: "claude-opus-5" })).toBe(true);
+    expect(runsOnClaudeCode({ provider: "claude_code", model: "" })).toBe(true);
+    expect(runsOnClaudeCode({ provider: "anthropic", model: "claude-sonnet-5-5" })).toBe(true);
+  });
+  it("refuses any other model", () => {
+    expect(runsOnClaudeCode({ provider: "minimax", model: "MiniMax-M3" })).toBe(false);
+    expect(runsOnClaudeCode({ provider: "openai", model: "" })).toBe(false);
+  });
+});
+
+describe("primaryModelPatch", () => {
+  it("moves a claude_code agent to the kernel executor when the model is not Claude", () => {
+    const p = primaryModelPatch({ executor_type: "claude_code" }, [], { provider: "minimax", model: "MiniMax-M3" });
+    expect(p.executor_type).toBe("native");
+    expect(p.provider).toBe("minimax");
+    expect(p.model).toBe("MiniMax-M3");
+  });
+  it("keeps the executor for a Claude model, and keeps the fallbacks", () => {
+    const p = primaryModelPatch({ executor_type: "claude_code" }, [
+      { provider: "claude-code", model: "claude-opus-4-6" }, { provider: "openai", model: "gpt-5" },
+    ], { provider: "claude-code", model: "claude-opus-5" });
+    expect(p.executor_type).toBeUndefined();
+    expect(JSON.parse(p.model_chain)).toEqual([
+      { provider: "claude-code", model: "claude-opus-5" }, { provider: "openai", model: "gpt-5" },
+    ]);
+  });
+  it("never touches a native agent's executor", () => {
+    expect(primaryModelPatch({ executor_type: "native" }, [], { provider: "minimax", model: "MiniMax-M3" }).executor_type).toBeUndefined();
   });
 });

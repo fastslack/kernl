@@ -35,7 +35,7 @@
   import { onDestroy, tick } from 'svelte';
   import { get, type Readable } from 'svelte/store';
   import ModelPicker from '../ModelPicker.svelte';
-  import { readChain, writeChain, MAX_CHAIN_LINKS, type ChainLink } from '$lib/model-chain.js';
+  import { readChain, writeChain, runsOnClaudeCode, MAX_CHAIN_LINKS, type ChainLink } from '$lib/model-chain.js';
   import { linkHealth, chainUsable, type ProviderStatus } from '$lib/provider-health.js';
   import { loadPickerProviders } from '$lib/llm-provider-list.js';
   import type { ModelEntry } from '$lib/model-catalog.js';
@@ -110,7 +110,12 @@
 
   /** The chain, as three columns, in one write. */
   function saveChain(next: ChainLink[]) {
-    return write(writeChain(next));
+    const fields: Record<string, unknown> = writeChain(next);
+    // The Claude Code CLI only runs Claude models: a primary it cannot run
+    // moves the agent to the kernel executor in the same write, instead of
+    // saving a pick that fails every run on its first turn.
+    if (executor === 'claude_code' && next[0] && !runsOnClaudeCode(next[0])) fields.executor_type = 'native';
+    return write(fields);
   }
   /**
    * Any of the three chain columns busy means the chain is busy — and while
