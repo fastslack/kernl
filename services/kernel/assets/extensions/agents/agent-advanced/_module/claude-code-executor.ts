@@ -1191,11 +1191,16 @@ export class ClaudeCodeExecutor {
           const isError = Boolean((block as { is_error?: boolean }).is_error);
           const toolName = this.resolveToolNameFromResult(block, ctx);
           const stepNum = stepNumberRef();
+          // The error flag rides in the result row's tool_input, as the
+          // native recorder does (run-recorder.ts). Without it the LIVE and
+          // HISTORY tabs fall back to guessing from the text, and a refusal
+          // like `No agent named "X" found in your office` reads as success.
           service.addStep({
             run_id: run.id,
             step_number: stepNum,
             type: "tool_result",
             tool_name: toolName,
+            tool_input: { is_error: isError },
             tool_output: toolResultText,
           });
           events?.emit("agent:flow:step", {
@@ -1206,6 +1211,7 @@ export class ClaudeCodeExecutor {
             type: "tool_result",
             tool_name: toolName,
             content_preview: toolResultText.slice(0, 2000),
+            is_error: isError,
           });
           service.logEvent({
             run_id: run.id,
