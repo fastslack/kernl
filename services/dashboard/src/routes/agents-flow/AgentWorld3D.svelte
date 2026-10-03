@@ -707,7 +707,7 @@
     finally { questionsLoaded = true; }
   }
   let showMyOfficePanel = false;
-  let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity' = 'overview';
+  let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity' | 'kernl' = 'overview';
   let officeReportsLoaded = false;
 
   // "Send to fixer" lives in MyOfficePanel.svelte with the report modal. Its

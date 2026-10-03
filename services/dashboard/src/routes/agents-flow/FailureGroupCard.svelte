@@ -25,6 +25,29 @@
   export let onDismiss: () => void;
   export let onRetry: () => void;
   export let onSettings: () => void;
+  /** "Report to Kernl": file this failure as a bug in Kernl itself (KernlBugsTab). */
+  export let onReport: ((askChief: boolean) => Promise<void>) | null = null;
+  /** Already filed from this card. */
+  export let reported = false;
+  export let onOpenKernl: () => void = () => {};
+
+  let reportOpen = false;
+  let reportBusy = false;
+  let reportError = '';
+  async function report(askChief: boolean): Promise<void> {
+    if (!onReport || reportBusy) return;
+    reportBusy = true;
+    reportError = '';
+    try {
+      await onReport(askChief);
+      reportOpen = false;
+    } catch (e) {
+      reportError = (e as Error).message;
+    } finally {
+      reportBusy = false;
+    }
+  }
+
 
   // A report that only carried the status ("failed") reads the run's own error.
   $: errorText = !g.text.trim() || /^failed\.?$/i.test(g.text.trim()) ? (ctx?.error || g.text) : g.text;
@@ -84,6 +107,25 @@
     <button class="fg-fix" class:fg-fix-2={ex.fix !== 'retry'} type="button" on:click={onRetry} disabled={retrying}>
       {retrying ? '…' : $t('office.fail.fix_retry')}
     </button>
+    {#if onReport && g.reports[0].runId}
+      {#if reported}
+        <button class="fg-link fg-reported" type="button" on:click={onOpenKernl}>{$t('office.kernl.reported')} ↗</button>
+      {:else}
+        <span class="fg-report">
+          <button class="fg-link" type="button" aria-haspopup="menu" aria-expanded={reportOpen}
+                  on:click={() => (reportOpen = !reportOpen)} disabled={reportBusy}>
+            {reportBusy ? '…' : $t('office.kernl.report')}
+          </button>
+          {#if reportOpen}
+            <span class="fg-report-menu" role="menu">
+              <button role="menuitem" type="button" on:click={() => report(true)}>{$t('office.kernl.report_ask_chief')}</button>
+              <button role="menuitem" type="button" on:click={() => report(false)}>{$t('office.kernl.report_as_is')}</button>
+            </span>
+          {/if}
+          {#if reportError}<span class="fg-report-err">{reportError}</span>{/if}
+        </span>
+      {/if}
+    {/if}
     <span class="fg-spacer"></span>
     <button class="fg-link" type="button" on:click={onOpen}>{$t('office.chief.see_report')}</button>
     <button class="fg-link fg-link-dim" type="button" on:click={onDismiss}>
@@ -162,4 +204,18 @@
   .fg-link-dim{color:#8a8fa8}
   .fg-link-dim:hover{color:#dde0ea}
   @media (prefers-reduced-motion: reduce){ .fg-skel{animation:none} }
+  /* Report to Kernl — a link-weight action with a two-item menu. */
+  .fg-report{position:relative}
+  .fg-report-menu{
+    position:absolute;left:0;bottom:calc(100% + 6px);z-index:5;min-width:230px;padding:5px;border-radius:8px;
+    display:flex;flex-direction:column;background:#11131d;border:1px solid rgba(120,130,160,.28);
+    box-shadow:0 14px 30px -10px rgba(0,0,0,.7);
+  }
+  .fg-report-menu button{
+    padding:7px 10px;border-radius:6px;border:none;background:none;cursor:pointer;text-align:left;
+    font:600 11.5px 'Manrope',sans-serif;color:#dde0ea;
+  }
+  .fg-report-menu button:hover{background:rgba(255,255,255,.06)}
+  .fg-reported{color:#78dc8c}
+  .fg-report-err{font:500 11px 'Manrope',sans-serif;color:#ef8090}
 </style>

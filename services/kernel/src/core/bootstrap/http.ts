@@ -113,6 +113,7 @@ export async function initHttpAndMcp(args: {
     getWorkspaceService(): unknown;
     getReflectionOptimizer(): unknown;
     getWorkspaceEvolver(): unknown;
+    getKernlBugs?(): import("../../modules/agents/kernl-bugs-service.js").KernlBugService | null;
   };
   rustBridge: RustBridge | null;
   rustDelegates: ReturnType<typeof createRustDelegates> | null;
@@ -544,6 +545,13 @@ export async function initHttpAndMcp(args: {
           return officeSourcesFrom(installed, catalog, (f) => ext?.service?.hasLicense(f) ?? false);
         },
       );
+
+      // Kernl's own bug reports — local queue, published to GitHub on the operator's OK.
+      const kernlBugs = agentsModule.getKernlBugs?.();
+      if (kernlBugs) {
+        const { registerKernlBugRoutes } = await import("../../modules/agents/kernl-bugs-routes.js");
+        registerKernlBugRoutes(httpServer, { bugs: kernlBugs, service: agentService, executor: agentExecutor, events });
+      }
     }
 
     // Replace local formula computation with Rust if available.

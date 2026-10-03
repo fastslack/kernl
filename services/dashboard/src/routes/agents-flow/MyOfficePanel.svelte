@@ -18,13 +18,33 @@
   import { groupReports, reportKey, plainPreview, type ReportGroup } from '$lib/office/report-groups.js';
   import OfficeQuestionCard from './OfficeQuestionCard.svelte';
   import FailureGroupCard from './FailureGroupCard.svelte';
+  import KernlBugsTab from './KernlBugsTab.svelte';
+  import { bugsApi } from '$lib/kernl-bugs.js';
   import { summarizeRunContext, explainFailure, type RunContext } from '$lib/office/failure-explain.js';
   import type { OfficeReport, PendingQuestion, WorldAgent } from './world-types.js';
 
   /** bind: — the 3D office's My Office hitbox toggles it too. */
   export let showMyOfficePanel: boolean;
   /** bind: — the inbox shortcut opens straight on Questions. */
-  export let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity';
+  export let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity' | 'kernl';
+  /** Kernl bug reports waiting for a decision — the Kernl tab's badge. */
+  let kernlCount = 0;
+  /** Runs filed as Kernl bugs from this panel — the card shows "Reported". */
+  let reportedRuns = new Set<string>();
+  async function reportToKernl(g: ReportGroup, askChief: boolean): Promise<void> {
+    const runId = g.reports[0].runId;
+    if (!runId) return;
+    await bugsApi.reportRun(runId, { askChief });
+    reportedRuns = new Set([...reportedRuns, runId]);
+    void refreshKernlCount();
+  }
+  // The badge has to show what the chief filed while the tab was closed, so
+  // the panel asks on its own instead of relying on the tab being mounted.
+  async function refreshKernlCount(): Promise<void> {
+    try { kernlCount = (await bugsApi.list()).filter((b) => b.status === 'new').length; }
+    catch { /* an older kernel has no /api/kernl/bugs: no badge */ }
+  }
+  $: if (showMyOfficePanel) void refreshKernlCount();
   /** bind: — appended to by live events, trimmed by the actions here. */
   export let officeReports: OfficeReport[];
   /** bind: — polled by the world, which also lights the top agent's halo from it. */
@@ -390,6 +410,11 @@
         {$t('office.chief.tab_activity')}
         {#if activityReports.length > 0}<span class="mo-tab-badge">{activityReports.length}</span>{/if}
       </button>
+      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'kernl'} class:active={myOfficeTab === 'kernl'}
+              on:click={() => myOfficeTab = 'kernl'} title={$t('office.kernl.tab_title')}>
+        {$t('office.kernl.tab')}
+        {#if kernlCount > 0}<span class="mo-tab-badge mo-tab-badge-q">{kernlCount}</span>{/if}
+      </button>
     </div>
 
     <div class="or-scroll">
@@ -444,7 +469,9 @@
               <div out:slide|local={{ duration: 280, easing: quintOut }}>
                 <FailureGroupCard {g} ctx={ctxOf(g, runCtx)} retrying={!!retrying[g.agentId]}
                                   onOpen={() => openReport = g.reports[0]} onDismiss={() => dismissGroup(g)}
-                                  onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)} />
+                                  onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)}
+                                  onReport={(ask) => reportToKernl(g, ask)} reported={reportedRuns.has(g.reports[0].runId ?? '')}
+                                  onOpenKernl={() => myOfficeTab = 'kernl'} />
               </div>
             {/each}
           </div>
@@ -548,7 +575,9 @@
                 <FailureGroupCard {g} ctx={ctxOf(g, runCtx)} audited={g.reports.some(r => r.runId) ? audited : null}
                                   retrying={!!retrying[g.agentId]}
                                   onOpen={() => openReport = g.reports[0]} onDismiss={() => dismissGroup(g)}
-                                  onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)} />
+                                  onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)}
+                                  onReport={(ask) => reportToKernl(g, ask)} reported={reportedRuns.has(g.reports[0].runId ?? '')}
+                                  onOpenKernl={() => myOfficeTab = 'kernl'} />
               </div>
             {/each}
           </div>
@@ -616,11 +645,13 @@
             {/each}
           </div>
         {/if}
+      {:else if myOfficeTab === 'kernl'}
+        <KernlBugsTab bind:count={kernlCount} {onOutputClick} />
       {/if}
     </div>  <!-- /or-scroll -->
 
     <!-- Footer: the everyday action in sight, the destructive one behind ⋯. -->
-    {#if officeReports.length > 0 || pendingQuestions.length > 0}
+    {#if myOfficeTab !== 'kernl' && (officeReports.length > 0 || pendingQuestions.length > 0)}
       <div class="or-footer">
         {#if myOfficeTab === 'activity' || myOfficeTab === 'overview'}
           {#if activityReports.length > 0}

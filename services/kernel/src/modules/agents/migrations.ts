@@ -827,6 +827,43 @@ export const agentsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Kernl's own bugs, filed by the chief or the operator from a failed run,
+    // published to GitHub only with the operator's OK. See kernl-bugs-service.ts.
+    version: 49,
+    sql: `
+      CREATE TABLE IF NOT EXISTS kernl_bug_reports (
+        id            TEXT PRIMARY KEY,
+        fingerprint   TEXT NOT NULL UNIQUE,
+        title         TEXT NOT NULL,
+        area          TEXT NOT NULL DEFAULT '',
+        diagnosis     TEXT NOT NULL DEFAULT '',
+        repro         TEXT NOT NULL DEFAULT '',
+        context_json  TEXT NOT NULL DEFAULT '{}',
+        source        TEXT NOT NULL DEFAULT 'operator' CHECK(source IN ('chief','operator')),
+        run_id        TEXT NOT NULL DEFAULT '',
+        agent_id      TEXT NOT NULL DEFAULT '',
+        occurrences   INTEGER NOT NULL DEFAULT 1,
+        status        TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','published','fixed','dismissed')),
+        issue_url     TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL,
+        last_seen_at  TEXT NOT NULL,
+        published_at  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_kernl_bugs_status ON kernl_bug_reports(status, last_seen_at);
+      CREATE INDEX IF NOT EXISTS idx_kernl_bugs_run    ON kernl_bug_reports(run_id);
+      -- Every run folded into a report, so a later diagnosis of any of them
+      -- (the chief, after the operator reported it) lands on the same report.
+      CREATE TABLE IF NOT EXISTS kernl_bug_runs (
+        run_id TEXT PRIMARY KEY,
+        bug_id TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS kernl_bug_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

@@ -16,6 +16,9 @@ import { AgentScheduler } from "./scheduler.js";
 import { autoResumePolicy } from "./run-resume.js";
 import { workspaceSpecTools } from "./workspace-spec-tools.js";
 import { QuestionTriager } from "./question-triager.js";
+import { KernlBugService } from "./kernl-bugs-service.js";
+import { kernlBugTools } from "./kernl-bugs-tools.js";
+import { commentOnRepeat } from "./kernl-bugs-github.js";
 import { agentsTools } from "./tools.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -58,6 +61,8 @@ export interface AgentsModule extends ExtensibleModule {
   // ── Live accessors used by other stages (http routes, services) ──
   getWorkspaceService(): WorkspaceServiceLike | null;
   getReflectionOptimizer(): ReflectionOptimizerLike | null;
+  /** Kernl's own bug reports (kernl-bugs-service.ts); null before initialize. */
+  getKernlBugs(): KernlBugService | null;
   getWorkspaceEvolver(): WorkspaceEvolverLike | null;
   getMeetingExecutor(): MeetingExecutorLike | null;
   getAltExecutor(type: string): AltExecutorLike | null;
@@ -83,6 +88,7 @@ export function createAgentsModule(): AgentsModule {
   let reactiveEngine: ReactiveEngine | null = null;
   let agentScheduler: AgentScheduler | null = null;
   let questionTriager: QuestionTriager | null = null;
+  let kernlBugs: KernlBugService | null = null;
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -150,10 +156,15 @@ export function createAgentsModule(): AgentsModule {
       questionTriager = new QuestionTriager(agentService, agentExecutor, ctx.events);
       questionTriager.start();
 
+      // Kernl's own bugs, filed by the chief or the operator. The key seals the GitHub token.
+      kernlBugs = new KernlBugService(ctx.sqlite, ctx.config.encryption.key);
+      const bugs = kernlBugs;
+
       tools = [
         ...agentsTools(agentService, agentExecutor, ctx.events, () => meetingExecutor),
         ...auditTools(agentService),
         ...workspaceSpecTools(agentService),
+        ...kernlBugTools({ bugs, service: agentService, onRepeatPublished: (bug) => { void commentOnRepeat(bugs, bug); } }),
       ];
 
       // Upgrade pass: any agent that already produces output worth sharing
@@ -235,6 +246,10 @@ export function createAgentsModule(): AgentsModule {
 
     getReflectionOptimizer() {
       return reflectionOptimizer;
+    },
+
+    getKernlBugs() {
+      return kernlBugs;
     },
 
     getWorkspaceEvolver() {
