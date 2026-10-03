@@ -251,7 +251,10 @@ export function processLiveEvents(ctx: LiveEventContext): void {
       // Plain workers below the lead never make this trip — they just log to
       // My Office and let their manager pick it up via the audit chain.
       const agentObj = ctx.agents.find(a => a.id === aid);
-      const shouldReport = isOfficeLeader(aid);
+      // Except the top agent itself: My Office IS its office, so "walking in
+      // to file the report" was the chief getting up, touring the hall and
+      // sitting back down — reporting to itself.
+      const shouldReport = aid !== ctx.topAgentId && isOfficeLeader(aid);
 
       if (!hasChain && ctx.myOfficePos && ctx.scene && aid && shouldReport) {
         const agentName = agentObj?.name ?? 'Agent';
@@ -343,28 +346,38 @@ export function processLiveEvents(ctx: LiveEventContext): void {
         // above already owns the chip, and an agent only ever shows one.
         pulseThinkingMonitor(aid);
         // ── Top-agent-only command effects ────────────────────────
-        // When the top agent fires an agent/flow CRUD tool, mark
-        // it visually so the user can see the order being issued. A
-        // paper-plane shoots from his desk toward the central hall —
-        // the destination office may not exist yet (creation case) or
-        // is being torn down (deletion case), so the hall is the
-        // safest neutral target.
+        // When the top agent fires an agent/flow CRUD tool, mark it so the
+        // user sees what was done and TO WHOM: the tag names the target, and
+        // the paper plane lands on the target's desk. "ORDEN" with a plane to
+        // the hall read as an order nobody received — it was the chief
+        // editing an agent's settings (kernel_agents_update).
         if (ctx.topAgentId && aid === ctx.topAgentId && ctx.topAgentSeatPos && ctx.hallCenterPos) {
+          const args = (() => {
+            try { return JSON.parse(String(e.data.content_preview ?? '{}')) as Record<string, unknown>; } catch { return {}; }
+          })();
+          const targetId = String(args.id ?? args.agent_id ?? args.flow_id ?? '');
+          const targetAgent = ctx.agents.find(a => a.id === targetId);
+          const targetName = targetAgent?.name ?? ctx.flows.find(f => f.id === targetId)?.name ?? String(args.name ?? '');
           let cmd: { label: string; color: number; hex: string } | null = null;
           if (toolName.endsWith('kernel_agents_create')) cmd = { label: 'NEW AGENT',  color: 0x3DD68C, hex: '#3DD68C' };
           else if (toolName.endsWith('kernel_agents_flows_create')) cmd = { label: 'NEW OFFICE', color: 0x5B8DEF, hex: '#5B8DEF' };
           else if (toolName.endsWith('kernel_agents_delete')) cmd = { label: 'DESPIDO',    color: 0xF04770, hex: '#F04770' };
           else if (toolName.endsWith('kernel_agents_flows_delete')) cmd = { label: 'CIERRE',     color: 0xF04770, hex: '#F04770' };
-          else if (toolName.endsWith('kernel_agents_update') || toolName.endsWith('kernel_agents_flows_update')) cmd = { label: 'ORDEN',      color: 0xC9A84C, hex: '#C9A84C' };
+          else if (toolName.endsWith('kernel_agents_update') || toolName.endsWith('kernel_agents_flows_update')) cmd = { label: 'AJUSTE', color: 0xC9A84C, hex: '#C9A84C' };
           if (cmd && ctx.scene) {
+            const label = targetName ? `${cmd.label} → ${targetName.slice(0, 14)}` : cmd.label;
+            const dest = (targetAgent && ctx.deskPos.get(targetAgent.id)) || ctx.hallCenterPos;
             showAnimatedTag(ctx.topAgentId, {
               icon: '✪', anim: 'pulse', color: cmd.hex,
-              label: cmd.label, durationFrames: 220,
+              label, durationFrames: 260,
             });
+            if (targetAgent && ctx.deskPos.get(targetAgent.id)) {
+              showAnimatedTag(targetAgent.id, { icon: '✪', anim: 'pop', color: cmd.hex, label: cmd.label, durationFrames: 220 });
+            }
             tryFireAnim(`top-agent-cmd:${ctx.topAgentId}`, 2.0, () => {
               ctx.animRegistry.add(paperPlane(ctx.scene, {
                 from: { x: ctx.topAgentSeatPos!.x, z: ctx.topAgentSeatPos!.z },
-                to:   { x: ctx.hallCenterPos!.x,   z: ctx.hallCenterPos!.z   },
+                to:   { x: dest!.x, z: dest!.z },
                 archHeight: 4, durationSec: 1.4,
                 color: cmd!.color,
                 tag: `top-agent-cmd:${ctx.topAgentId}`,
@@ -403,7 +416,7 @@ export function processLiveEvents(ctx: LiveEventContext): void {
       // Bad self-eval (score<=2) → senior ranks rush to the top agent's office.
       // Low-rank agents escalate through the chain of command (their manager
       // will pick up the signal via the audit flow), not in person.
-      if (score <= 2 && ctx.myOfficePos && ctx.scene && aid && isSeniorRank(aid)) {
+      if (score <= 2 && ctx.myOfficePos && ctx.scene && aid && aid !== ctx.topAgentId && isSeniorRank(aid)) {
         const agentName = ctx.agents.find(a => a.id === aid)?.name ?? 'Agent';
         setTimeout(() => {
           const seatPt = pickFreeMyOfficeChair() ?? ctx.myOfficePos!;
