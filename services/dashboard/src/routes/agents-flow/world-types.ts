@@ -55,6 +55,11 @@ export interface PendingQuestion {
   context: string;
   options: Array<{ label: string; value?: string; url?: string }>;
   created_at: string;
+  status?: 'triage' | 'pending' | 'answered' | 'dismissed';
+  chief_note?: string;
+  answered_by?: '' | 'chief' | 'human';
+  selected_option?: string;
+  answered_at?: string | null;
 }
 
 // ── Live meeting transcripts ──────────────────

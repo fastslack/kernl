@@ -5,9 +5,10 @@
 
 import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import { agentOperations } from "./operations.js";
-import type { AgentService } from "./service.js";
+import type { AgentService, QuestionStatus } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
+import { answerAndDeliver } from "./question-delivery.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
 import { log } from "../../core/logger.js";
@@ -193,80 +194,30 @@ export function registerAgentRoutes(
 
   // ── Escalated questions (human-in-the-loop) ─────────────
   server.route("GET", "/api/agents/questions", ({ query }) => {
-    const status = (query.get("status") as "pending" | "answered" | "dismissed" | null) ?? "pending";
+    const status = (query.get("status") as QuestionStatus | null) ?? "pending";
+    const answeredBy = query.get("answered_by");
     const limit = parseInt(query.get("limit") ?? "50", 10);
-    const questions = service.listQuestions({ status, limit });
+    const questions = service.listQuestions({
+      status,
+      answered_by: answeredBy === "chief" || answeredBy === "human" ? answeredBy : undefined,
+      limit,
+    });
     return { questions, total: questions.length };
   });
 
   server.route<{ selected_index: number; selected_option: string; note?: string }>(
     "POST", "/api/agents/questions/:id/answer", ({ params: { id }, body }) => {
-      if (typeof body.selected_index !== "number" || typeof body.selected_option !== "string") {
+      if (typeof body.selected_index !== "number" || typeof body.selected_option !== "string" || !body.selected_option.trim()) {
         throw new HttpError(400, "selected_index and selected_option required");
       }
-      const result = service.answerQuestion(id, body);
-      if (!result) throw new HttpError(404, "Question not found or already answered");
-      events?.emit("agent:flow:question_answered" as any, {
-        question_id: id,
-        from_agent_id: result.from_agent_id,
-        question: result.question,
-        selected_option: body.selected_option,
+      const result = answerAndDeliver(service, executor, events, id, {
         selected_index: body.selected_index,
-        ts: new Date().toISOString(),
+        selected_option: body.selected_option.trim(),
+        note: body.note,
+        answered_by: "human",
       });
-
-      // Auto-resume — the agent that asked the question goes back to work
-      // with the answer in its inbox + goal. Without this, the answer just
-      // sits in agent_office_inbox waiting for someone to re-run the agent
-      // manually, and the user thinks the kernel ignored the approval.
-      let resumeRunId: string | undefined;
-      try {
-        const asker = service.getAgent(result.from_agent_id);
-        if (asker && asker.active) {
-          const noteSuffix = body.note ? `\n\nAdditional note: ${body.note}` : "";
-          const resumeGoal =
-            `Your supervisor answered your earlier question.\n\n` +
-            `**Question:** ${result.question}\n\n` +
-            `**Answer:** ${body.selected_option}${noteSuffix}\n\n` +
-            `Resume from where you stopped: act on the answer using your tools. ` +
-            `Do not re-ask the same question.`;
-          const run = service.createRun({
-            agent_id: asker.id,
-            trigger_type: "manual",
-            goal: resumeGoal,
-            trigger_payload: { resume_question_id: id },
-          });
-          resumeRunId = run.id;
-          service.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
-          executor
-            .execute({ agent: asker, goal: resumeGoal, run, service, events })
-            .then((r) => {
-              service.updateRun(run.id, {
-                status: r.status,
-                result: r.result,
-                error: r.error,
-                steps_count: r.steps_count,
-                tokens_used: r.tokens_used,
-                completed_at: new Date().toISOString(),
-              });
-            })
-            .catch((err) => {
-              service.updateRun(run.id, {
-                status: "failed",
-                error: String(err),
-                completed_at: new Date().toISOString(),
-              });
-            });
-        }
-      } catch (resumeErr) {
-        // Auto-resume is best-effort. The answer is already saved + queued
-        // in the agent's inbox, so a manual re-run still works.
-        events?.emit("data.changed", { module: "agents", action: "auto_resume_failed" });
-        // eslint-disable-next-line no-console
-        console.warn("auto-resume after answer failed", resumeErr);
-      }
-
-      return { success: true, resume_run_id: resumeRunId ?? null };
+      if (!result) throw new HttpError(404, "Question not found or already answered");
+      return { success: true, resume_run_id: result.resume_run_id };
     },
   );
 

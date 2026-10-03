@@ -136,6 +136,12 @@ export interface AgentQuestionAskedPayload {
   asked_at: string;
 }
 
+/** A question entered the chief's triage queue (not yet addressed to the human). */
+export interface AgentQuestionTriagePayload {
+  question_id: string;
+  agent_id: string;
+}
+
 export interface AgentFlowResultPayload {
   agent_id: string;
   agent_name: string;
@@ -283,6 +289,7 @@ export interface KernelEvents {
   "agent.alert": AgentAlertPayload;
   "agent:auto_paused": AgentAutoPausedPayload;
   "agent:question_asked": AgentQuestionAskedPayload;
+  "agent:question_triage": AgentQuestionTriagePayload;
 
   // Agent flow (real-time execution)
   "agent:flow:run_started": AgentFlowRunStartedPayload;

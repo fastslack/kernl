@@ -22,10 +22,10 @@
  *   • `office:infra:changed` is consumed by a handler that reads nothing but
  *     `flow_id` / `action` / `ok`, so emitting it gives the identical animation
  *     without needing a Docker socket the kernel container does not have.
- *   • `agent:flow:escalation` and `agent:flow:question_asked` are emitted by
- *     the TOOL handlers in `modules/agents/tools.ts`, never by the service
- *     methods underneath them. A builtin handler calling the service directly
- *     therefore has to emit them itself or the walker never leaves its desk.
+ *   • `agent:flow:escalation` is emitted by the TOOL handler in
+ *     `modules/agents/tools.ts`, never by the service method underneath it.
+ *     A builtin handler calling the service directly therefore has to emit it
+ *     itself or the walker never leaves its desk.
  *
  * ── Walker budget ─────────────────────────────────────────────────────────
  * The 3D caps concurrent walkers at `max(6, min(20, ceil(agents/4)))` and
@@ -520,18 +520,7 @@ export function boardCrisisDirector(deps: {
           options: T.options.map((label, i) => ({
             label, value: ["restore", "investigate", "hold"][i] ?? String(i),
           })),
-        });
-        // The service emits `agent:question_asked` (the notification bell).
-        // The 3D listens for the flow-namespaced one, which only the tool
-        // handler emits — so the walk to My Office needs this line.
-        events.emit("agent:flow:question_asked", {
-          question_id: question.id,
-          from_agent_id: crisisConvener.id,
-          from_agent_name: crisisConvener.name,
-          flow_id: crisisConvener.flow_id ?? "",
-          question: T.question(victim.name),
-          options: T.options,
-          ts: new Date().toISOString(),
+          direct_to_human: true,
         });
         log_.push(`Pregunta ${question.id} elevada al operador.`);
 

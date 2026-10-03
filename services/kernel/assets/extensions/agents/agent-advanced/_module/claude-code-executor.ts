@@ -539,6 +539,13 @@ export class ClaudeCodeExecutor {
       const allowed = rawAllowed.map(translateTool);
       const denied = rawDenied.map(translateTool);
 
+      // Every agent may ask the chief. An explicit allow-list would otherwise
+      // hide the tool from the agent (an empty list already means "all").
+      const ASK_SUPERVISOR = "mcp__kernel__kernel_agents_ask_supervisor";
+      if (allowed.length > 0 && !allowed.includes(ASK_SUPERVISOR) && !denied.includes(ASK_SUPERVISOR)) {
+        allowed.push(ASK_SUPERVISOR);
+      }
+
       // Env inherited by the subprocess. When going through OAuth we strip API
       // keys from the environment so the CLI falls back to ~/.claude.json creds.
       const childEnv: Record<string, string | undefined> = {
@@ -1444,6 +1451,16 @@ export class ClaudeCodeExecutor {
     if (base) parts.push(base);
     parts.push(promptTodayDate(lang, localDate()));
     parts.push(promptClaudeCodeWorkInstructions(lang));
+
+    // Same nudge the native executor gets from the directory block
+    // (AgentService.buildDirectoryBlock), which this prompt leaves out.
+    const denied = this.parseJsonArray(agent.denied_tools);
+    if (!denied.includes("kernel_agents_ask_supervisor") && !denied.includes("mcp__kernel__kernel_agents_ask_supervisor")) {
+      parts.push(
+        "## Asking the chief\n" +
+          "- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.",
+      );
+    }
 
     // Inject learnings ranked by relevance to current goal — same closed-loop
     // the native executor uses (executor.ts:576). Without this, claude_code

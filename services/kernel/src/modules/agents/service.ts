@@ -35,6 +35,16 @@ import { AgentRunsService } from "./services/runs-service.js";
 import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 
+export type QuestionStatus = "triage" | "pending" | "answered" | "dismissed";
+export interface AgentQuestion {
+  id: string; from_agent_id: string; flow_id: string; meeting_id: string; run_id: string;
+  question: string; context: string; options: Array<{ label: string; value?: string; url?: string }>;
+  status: QuestionStatus; selected_option: string; selected_index: number;
+  answered_note: string; answered_at: string | null;
+  answered_by: "" | "chief" | "human"; chief_note: string; triage_started_at: string | null;
+  created_at: string;
+}
+
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
 const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
 
@@ -434,7 +444,8 @@ export class AgentService {
     }
 
     lines.push("## How to reach anyone above");
-    lines.push("- `kernel_agents_post_to_colleague({ to_agent_id, subject, body })` — async, non-blocking. They read it on their next run and reply through their own outbox. Use for clarifications, escalations, and back-and-forth threads. Works ACROSS offices.");
+    lines.push("- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.");
+    lines.push("- `kernel_agents_post_to_colleague({ to_agent_id, subject, body })` — async, non-blocking. They read it on their next run and reply through their own outbox. Use for clarifications and back-and-forth threads between agents. Works ACROSS offices.");
     lines.push("- `kernel_agents_invoke({ agent_id, goal })` — blocking. You wait for their result. Use for single pointed questions that must be resolved before you continue.");
     lines.push("- `kernel_agents_call_meeting({ topic, attendee_ids })` — group deliberation. Use when 2+ other agents need to converge on an answer and you want their input recorded. You become moderator (or the highest-ranked attendee takes over).");
     lines.push("- When replying to another agent, wrap your output like `<msg role=\"answer\" replies_to=\"<their-message-id>\">...</msg>`. Valid roles: `answer` (agreeing/informing), `counter` (disagreeing — triggers debate if 2+ of you disagree), `question`, `stmt`, `summary`, `vote`. If you skip the wrapper your reply defaults to `answer`.");
@@ -1140,11 +1151,12 @@ export class AgentService {
   }
 
   /** Full inbox listing for dashboard/debug views. */
-  // ── Escalated questions (human-in-the-loop) ────────────
-  // An agent stuck on an open question escalates to the user via
-  // kernel_agents_ask_supervisor, supplying canned answer options. The user
-  // picks one from the My Office panel; the answer is posted back to the
-  // asking agent's inbox so the next run sees it.
+  // ── Escalated questions (human-in-the-loop, via the chief's triage) ────
+  // An agent stuck on an open question escalates via kernel_agents_ask_supervisor.
+  // The chief triages everyone else's questions first (status 'triage') and
+  // either answers them itself or escalates to the human (status 'pending'),
+  // who picks an option from the My Office panel. The chief's own questions —
+  // and anyone's when there is no active chief — go straight to 'pending'.
   createQuestion(input: {
     from_agent_id: string;
     flow_id?: string;
@@ -1152,63 +1164,64 @@ export class AgentService {
     run_id?: string;
     question: string;
     context?: string;
-    options: Array<{ label: string; value?: string }>;
-  }): { id: string } {
+    options: Array<{ label: string; value?: string; url?: string }>;
+    /** Skip the chief: the question goes straight to the human. */
+    direct_to_human?: boolean;
+  }): { id: string; status: "triage" | "pending" } {
     const id = newId();
     const askedAt = isoNow();
+    // The chief triages everyone else's questions; its own (or any question
+    // when there is no active chief, or one the caller addresses to the human
+    // explicitly) goes straight to the human.
+    const chief = input.direct_to_human ? undefined : this.getTopAgent();
+    const status: "triage" | "pending" = chief && chief.id !== input.from_agent_id ? "triage" : "pending";
     this.db
       .prepare(
         `INSERT INTO agent_questions
           (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        id,
-        input.from_agent_id,
-        input.flow_id ?? "",
-        input.meeting_id ?? "",
-        input.run_id ?? "",
-        input.question,
-        input.context ?? "",
-        JSON.stringify(input.options),
-        askedAt,
+        id, input.from_agent_id, input.flow_id ?? "", input.meeting_id ?? "", input.run_id ?? "",
+        input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt,
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });
-
-    // A question blocks the agent until someone answers it, and the only place
-    // it showed up was a panel you had to already be looking at — so an agent
-    // could sit waiting on the operator indefinitely with nothing said. Unlike
-    // agent-to-agent chatter, a question is addressed to a human by
-    // construction, which is what makes it safe to ring the bell for.
-    this.events.emit("agent:question_asked", {
-      question_id: id,
-      agent_id: input.from_agent_id,
-      agent_name: this.getAgent(input.from_agent_id)?.name ?? "An agent",
-      question: input.question,
-      context: input.context ?? "",
-      options: input.options.map((o) => o.label),
-      run_id: input.run_id ?? "",
-      asked_at: askedAt,
-    });
-    return { id };
+    if (status === "pending") this.emitQuestionForHuman(id);
+    else this.events.emit("agent:question_triage", { question_id: id, agent_id: input.from_agent_id });
+    return { id, status };
   }
 
-  listQuestions(opts?: { status?: "pending" | "answered" | "dismissed"; limit?: number }): Array<{
-    id: string; from_agent_id: string; flow_id: string; meeting_id: string; run_id: string;
-    question: string; context: string; options: Array<{ label: string; value?: string }>;
-    status: string; selected_option: string; selected_index: number;
-    answered_note: string; answered_at: string | null; created_at: string;
-  }> {
-    let sql = "SELECT * FROM agent_questions";
-    const params: unknown[] = [];
-    if (opts?.status) {
-      sql += " WHERE status = ?";
-      params.push(opts.status);
-    }
-    sql += " ORDER BY created_at DESC LIMIT ?";
-    params.push(opts?.limit ?? 50);
-    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
+  /** Ring the operator's bell and send the asker's walker to My Office. Only
+   *  for questions addressed to the human (status 'pending'): agent-to-chief
+   *  traffic would drown both. */
+  private emitQuestionForHuman(id: string): void {
+    const q = this.getQuestion(id);
+    if (!q) return;
+    const agentName = this.getAgent(q.from_agent_id)?.name ?? "An agent";
+    const options = q.options.map((o) => o.label);
+    this.events.emit("agent:question_asked", {
+      question_id: q.id,
+      agent_id: q.from_agent_id,
+      agent_name: agentName,
+      question: q.question,
+      context: q.context,
+      options,
+      run_id: q.run_id,
+      asked_at: q.created_at,
+    });
+    this.events.emit("agent:flow:question_asked", {
+      question_id: q.id,
+      from_agent_id: q.from_agent_id,
+      from_agent_name: agentName,
+      flow_id: q.flow_id,
+      question: q.question,
+      options,
+      ts: isoNow(),
+    });
+  }
+
+  private mapQuestionRow(r: Record<string, unknown>): AgentQuestion {
+    return {
       id: String(r.id),
       from_agent_id: String(r.from_agent_id),
       flow_id: String(r.flow_id ?? ""),
@@ -1219,53 +1232,111 @@ export class AgentService {
       options: (() => {
         try { return JSON.parse(String(r.options || "[]")); } catch { return []; }
       })(),
-      status: String(r.status ?? "pending"),
+      status: String(r.status ?? "pending") as QuestionStatus,
       selected_option: String(r.selected_option ?? ""),
       selected_index: Number(r.selected_index ?? -1),
       answered_note: String(r.answered_note ?? ""),
       answered_at: r.answered_at == null ? null : String(r.answered_at),
+      answered_by: String(r.answered_by ?? "") as AgentQuestion["answered_by"],
+      chief_note: String(r.chief_note ?? ""),
+      triage_started_at: r.triage_started_at == null ? null : String(r.triage_started_at),
       created_at: String(r.created_at ?? ""),
-    }));
+    };
   }
 
-  answerQuestion(id: string, input: { selected_index: number; selected_option: string; note?: string }): { from_agent_id: string; question: string } | null {
-    const q = this.db.prepare("SELECT from_agent_id, question, options, status FROM agent_questions WHERE id = ?").get(id) as
-      | { from_agent_id: string; question: string; options: string; status: string }
-      | undefined;
-    if (!q || q.status !== "pending") return null;
+  getQuestion(id: string): AgentQuestion | undefined {
+    const r = this.db.prepare("SELECT * FROM agent_questions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return r ? this.mapQuestionRow(r) : undefined;
+  }
+
+  listQuestions(opts?: { status?: QuestionStatus; answered_by?: "chief" | "human"; limit?: number }): AgentQuestion[] {
+    let sql = "SELECT * FROM agent_questions WHERE 1=1";
+    const params: unknown[] = [];
+    if (opts?.status) { sql += " AND status = ?"; params.push(opts.status); }
+    if (opts?.answered_by) { sql += " AND answered_by = ?"; params.push(opts.answered_by); }
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(opts?.limit ?? 50);
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapQuestionRow(r));
+  }
+
+  /** Record an answer. The chief answers questions in triage, the human the
+   *  pending ones. Getting the answer to the asker is `answerAndDeliver`'s job. */
+  answerQuestion(
+    id: string,
+    input: { selected_index: number; selected_option: string; note?: string; answered_by: "chief" | "human" },
+  ): { from_agent_id: string; question: string } | null {
+    const expected = input.answered_by === "chief" ? "triage" : "pending";
+    const q = this.getQuestion(id);
+    if (!q || q.status !== expected) return null;
     this.db
       .prepare(
         `UPDATE agent_questions
-         SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?
-         WHERE id=?`,
+         SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?, answered_by=?
+         WHERE id=? AND status=?`,
       )
-      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), id);
-
-    // Post the answer back to the asking agent so they pick it up on next run.
-    // Find the user's identity: the human is represented as "__top_agent__
-    // General" in the inbox (sender). We reuse postToColleague only if such
-    // an agent exists; otherwise insert directly into the inbox as a note.
-    const asker = this.getAgent(q.from_agent_id);
-    if (asker) {
-      const inboxId = newId();
-      this.db
-        .prepare(
-          `INSERT INTO agent_office_inbox
-            (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
-           VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
-        )
-        .run(
-          inboxId,
-          asker.flow_id ?? "",
-          q.from_agent_id,
-          `ANSWER: ${q.question.slice(0, 160)}`,
-          `Your supervisor answered your question.\n\n**Question:** ${q.question}\n\n**Answer:** ${input.selected_option}${input.note ? `\n\n**Note:** ${input.note}` : ""}`,
-          isoNow(),
-        );
-    }
-
+      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.answered_by, id, expected);
     this.events.emit("data.changed", { module: "agents", action: "question_answered" });
     return { from_agent_id: q.from_agent_id, question: q.question };
+  }
+
+  /** Leave an answered question's answer in the asker's inbox, for when it
+   *  cannot be relaunched right away. The sender is the headquarters. */
+  postAnswerToInbox(id: string): boolean {
+    const q = this.getQuestion(id);
+    if (!q || q.status !== "answered") return false;
+    const asker = this.getAgent(q.from_agent_id);
+    if (!asker) return false;
+    const who = q.answered_by === "chief" ? "The chief" : "Your supervisor";
+    this.db
+      .prepare(
+        `INSERT INTO agent_office_inbox
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
+         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+      )
+      .run(
+        newId(),
+        asker.flow_id ?? "",
+        q.from_agent_id,
+        `ANSWER: ${q.question.slice(0, 160)}`,
+        `${who} answered your question.\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
+          (q.answered_note && q.answered_note !== q.selected_option ? `\n\n**Note:** ${q.answered_note}` : ""),
+        isoNow(),
+      );
+    return true;
+  }
+
+  /** Chief hands a question to the human. */
+  escalateQuestion(id: string, reason: string): boolean {
+    const r = this.db
+      .prepare("UPDATE agent_questions SET status='pending', chief_note=? WHERE id=? AND status='triage'")
+      .run(reason, id);
+    if (r.changes === 0) return false;
+    this.events.emit("data.changed", { module: "agents", action: "question_escalated" });
+    this.emitQuestionForHuman(id);
+    return true;
+  }
+
+  markTriageStarted(ids: string[]): void {
+    if (ids.length === 0) return;
+    const ph = ids.map(() => "?").join(",");
+    this.db.prepare(`UPDATE agent_questions SET triage_started_at=? WHERE status='triage' AND id IN (${ph})`).run(isoNow(), ...ids);
+  }
+
+  /** Questions stuck in triage since before `olderThanIso` go to the human. */
+  expireTriage(olderThanIso: string): number {
+    const rows = this.db
+      .prepare("SELECT id FROM agent_questions WHERE status='triage' AND created_at < ?")
+      .all(olderThanIso) as Array<{ id: string }>;
+    let n = 0;
+    for (const { id } of rows) {
+      if (this.escalateQuestion(id, "auto-escalated: the chief did not triage this question in time")) n++;
+    }
+    return n;
+  }
+
+  hasRunningRun(agentId: string): boolean {
+    return this.listRuns({ agent_id: agentId, status: "running", limit: 1 }).length > 0;
   }
 
   dismissQuestion(id: string): boolean {

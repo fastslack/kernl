@@ -681,12 +681,20 @@
 
   // ── Pending questions from agents (top-agent inbox) ──────────────
   let pendingQuestions: PendingQuestion[] = [];
+  // Questions the chief hasn't resolved yet (count only) and the ones it
+  // resolved on its own — read-only audit trail for MyOfficePanel.
+  let triageCount = 0;
+  let chiefAnswered: PendingQuestion[] = [];
   async function loadPendingQuestions() {
     try {
-      const res = await fetch('/api/agents/questions?status=pending&limit=50');
-      if (!res.ok) return;
-      const data = await res.json();
-      pendingQuestions = (data.questions ?? []) as PendingQuestion[];
+      const [pending, triage, chief] = await Promise.all([
+        fetch('/api/agents/questions?status=pending&limit=50'),
+        fetch('/api/agents/questions?status=triage&limit=50'),
+        fetch('/api/agents/questions?status=answered&answered_by=chief&limit=10'),
+      ]);
+      if (pending.ok) pendingQuestions = ((await pending.json()).questions ?? []) as PendingQuestion[];
+      if (triage.ok) triageCount = ((await triage.json()).questions ?? []).length;
+      if (chief.ok) chiefAnswered = ((await chief.json()).questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
   }
   let showMyOfficePanel = false;
@@ -2144,9 +2152,13 @@
     });
     renderer.domElement.addEventListener('click', () => {
       if (hoveredTopAgent) {
-        // Click on the figure → open the office-architect chat. The HQ
-        // menu's 'New Office' button is still wired to the same flag for
-        // discoverability, but this gesture is the canonical one.
+        // Questions waiting for the human win: the chief's figure is where
+        // the operator looks when its halo turns red. With none pending the
+        // gesture keeps opening the office-architect chat.
+        if (pendingQuestions.length > 0) {
+          openTopAgentMessages();
+          return;
+        }
         showOfficeModal = true;
         selectedAgent = null;
         showMyOfficePanel = false;
@@ -4185,6 +4197,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     bind:officeReports
     bind:officeReportsLoaded
     bind:pendingQuestions
+    {triageCount}
+    {chiefAnswered}
     bind:fixerStatus
     {auditedRunIds}
     {agents}

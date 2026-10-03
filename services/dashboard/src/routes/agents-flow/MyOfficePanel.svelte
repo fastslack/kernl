@@ -26,6 +26,10 @@
   export let officeReportsLoaded: boolean;
   /** bind: — polled by the world, which also lights the top agent's halo from it. */
   export let pendingQuestions: PendingQuestion[];
+  /** Questions the chief is still triaging (count only). */
+  export let triageCount = 0;
+  /** Recent questions the chief resolved on its own — read-only audit. */
+  export let chiefAnswered: PendingQuestion[] = [];
   export let auditedRunIds: Set<string>;
   export let agents: WorldAgent[];
   export let flowColor: (aid: string) => string;
@@ -65,6 +69,29 @@
     try {
       await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
       pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
+    } finally {
+      questionSubmitting = { ...questionSubmitting, [q.id]: false };
+    }
+  }
+
+  // Free-text answers — for when none of the chief's options fit. Sent as
+  // selected_index -1 so the kernel knows it's not one of the fixed options.
+  let freeText: Record<string, string> = {};
+  async function answerFree(q: PendingQuestion) {
+    const text = (freeText[q.id] ?? '').trim();
+    if (!text || questionSubmitting[q.id]) return;
+    questionSubmitting = { ...questionSubmitting, [q.id]: true };
+    try {
+      const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ selected_index: -1, selected_option: text, note: text }),
+      });
+      if (res.ok) {
+        pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
+        const { [q.id]: _, ...rest } = freeText;
+        freeText = rest;
+      }
     } finally {
       questionSubmitting = { ...questionSubmitting, [q.id]: false };
     }
@@ -355,11 +382,17 @@
       {:else if myOfficeTab === 'questions'}
         <!-- ═══ QUESTIONS ═══ -->
         {#if pendingQuestions.length === 0}
-          <div class="or-empty">No pending questions. Agents will pin them here when stuck.</div>
+          <div class="or-empty">No questions for you. Agents ask the chief first; what it can't decide lands here.</div>
+          {#if triageCount > 0}
+            <div class="or-section-hint" style="text-align:center;padding:0 16px 16px">The chief is reviewing {triageCount} question(s).</div>
+          {/if}
         {:else}
           <div class="or-section">
             <span class="or-section-title or-section-q">❓ Pending questions · {pendingQuestions.length}</span>
             <span class="or-section-hint">agents waiting for your call</span>
+            {#if triageCount > 0}
+              <span class="or-section-hint">· the chief is reviewing {triageCount}</span>
+            {/if}
             <button class="mo-bulk-btn mo-bulk-dismiss" on:click={dismissAllQuestions} disabled={bulkBusy}>
               {bulkBusy ? '…' : `Dismiss all (${pendingQuestions.length})`}
             </button>
@@ -378,6 +411,9 @@
                           disabled={!!questionSubmitting[q.id]}>×</button>
                 </div>
                 <div class="bq-question">{q.question}</div>
+                {#if q.chief_note}
+                  <div class="bq-chief-note">Chief escalated: {q.chief_note}</div>
+                {/if}
                 {#if q.context}
                   <details class="bq-context">
                     <summary>ver contexto</summary>
@@ -402,9 +438,30 @@
                     </button>
                   {/each}
                 </div>
+                <form class="bq-free" on:submit|preventDefault={() => answerFree(q)}>
+                  <input class="bq-free-input" placeholder="Other answer…"
+                         bind:value={freeText[q.id]}
+                         disabled={!!questionSubmitting[q.id]} />
+                  <button class="bq-free-send" type="submit"
+                          disabled={!!questionSubmitting[q.id] || !(freeText[q.id] ?? '').trim()}>Send</button>
+                </form>
               </div>
             {/each}
           </div>
+        {/if}
+        {#if chiefAnswered.length > 0}
+          <details class="bq-chief-history">
+            <summary>Resolved by the chief · {chiefAnswered.length}</summary>
+            {#each chiefAnswered as q (q.id)}
+              {@const agent = agents.find(a => a.id === q.from_agent_id)}
+              <div class="bq-chief-row">
+                <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
+                <span class="bq-from">{agent?.name ?? q.from_agent_id.slice(0, 8)}</span>
+                <span class="bq-chief-q">{q.question}</span>
+                <span class="bq-chief-a">→ {q.selected_option}</span>
+              </div>
+            {/each}
+          </details>
         {/if}
       {:else if myOfficeTab === 'errors'}
         <!-- ═══ ERRORS ═══ -->
@@ -818,7 +875,7 @@
     border-radius:4px; font:500 11px/1.5 'JetBrains Mono',monospace; color:#8b90af;
     white-space:pre-wrap; word-break:break-word; max-height:160px; overflow-y:auto;
   }
-  .bq-options{ display:flex; flex-direction:column; gap:5px; }
+  .bq-options{ display:grid; grid-template-columns:1fr 1fr; gap:5px; }
   .bq-option{
     display:flex; align-items:center; gap:8px;
     padding:8px 10px; background:#161827; color:#cbd0e8;
@@ -856,6 +913,16 @@
   .bq-option-link:hover:not(:disabled) .bq-option-linkico{
     opacity:1; transform:translate(2px,-2px);
   }
+  .bq-chief-note{ font:500 10.5px 'Manrope',sans-serif; color:#f0b86e; background:#2a2214; border-left:2px solid #f0b86e; padding:5px 8px; border-radius:3px; margin:4px 0 6px; }
+  .bq-free{ display:flex; gap:5px; margin-top:6px; }
+  .bq-free-input{ flex:1; min-width:0; padding:7px 9px; background:#11131f; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:500 11px 'Manrope',sans-serif; }
+  .bq-free-send{ padding:7px 11px; background:#1f2440; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
+  .bq-free-send:disabled{ opacity:.45; cursor:default; }
+  .bq-chief-history{ margin-top:12px; font:500 11px 'Manrope',sans-serif; color:#9aa0bd; }
+  .bq-chief-history summary{ cursor:pointer; padding:4px 0; }
+  .bq-chief-row{ display:flex; align-items:baseline; gap:6px; padding:4px 0; border-top:1px solid #1e2236; }
+  .bq-chief-q{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bq-chief-a{ color:#8fd6a8; white-space:nowrap; }
   /* Direct link chip — surfaces the URL from `context` above the options
      so the user can preview the link without having to commit to an answer. */
   .bq-direct-link{

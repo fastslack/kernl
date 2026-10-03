@@ -15,6 +15,7 @@ import { ReactiveEngine } from "./reactive-engine.js";
 import { AgentScheduler } from "./scheduler.js";
 import { autoResumePolicy } from "./run-resume.js";
 import { workspaceSpecTools } from "./workspace-spec-tools.js";
+import { QuestionTriager } from "./question-triager.js";
 import { agentsTools } from "./tools.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -81,6 +82,7 @@ export function createAgentsModule(): AgentsModule {
   let agentExecutor: AgentExecutor | null = null;
   let reactiveEngine: ReactiveEngine | null = null;
   let agentScheduler: AgentScheduler | null = null;
+  let questionTriager: QuestionTriager | null = null;
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -143,6 +145,10 @@ export function createAgentsModule(): AgentsModule {
         ctx.config.agents?.learningMinConfidence ?? 0.15,
       );
       agentScheduler.setPendingResumes(recovered.resume);
+
+      // Office agents' questions reach the chief in batches; see question-triager.ts.
+      questionTriager = new QuestionTriager(agentService, agentExecutor, ctx.events);
+      questionTriager.start();
 
       tools = [
         ...agentsTools(agentService, agentExecutor, ctx.events, () => meetingExecutor),
@@ -292,6 +298,7 @@ export function createAgentsModule(): AgentsModule {
 
     async shutdown() {
       agentScheduler?.stop();
+      questionTriager?.stop();
       reactiveEngine?.stop();
       // Workspace compose / debate / inbox-waker / subscription teardown is
       // owned by the `ext:agent-advanced` extension's own shutdown().

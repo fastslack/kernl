@@ -742,6 +742,45 @@ export const agentsMigrations: Migration[] = [
     `,
   },
   {
+    // Questions go to the chief first: a new 'triage' state sits in front of
+    // 'pending' (= waiting for the human). SQLite cannot alter a CHECK, so the
+    // table is rebuilt.
+    version: 45,
+    sql: `
+      CREATE TABLE agent_questions_new (
+        id                TEXT PRIMARY KEY,
+        from_agent_id     TEXT NOT NULL,
+        flow_id           TEXT NOT NULL DEFAULT '',
+        meeting_id        TEXT NOT NULL DEFAULT '',
+        run_id            TEXT NOT NULL DEFAULT '',
+        question          TEXT NOT NULL,
+        context           TEXT NOT NULL DEFAULT '',
+        options           TEXT NOT NULL DEFAULT '[]',
+        status            TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(status IN ('triage','pending','answered','dismissed')),
+        selected_option   TEXT NOT NULL DEFAULT '',
+        selected_index    INTEGER NOT NULL DEFAULT -1,
+        answered_note     TEXT NOT NULL DEFAULT '',
+        answered_at       TEXT,
+        answered_by       TEXT NOT NULL DEFAULT '',
+        chief_note        TEXT NOT NULL DEFAULT '',
+        triage_started_at TEXT,
+        created_at        TEXT NOT NULL
+      );
+      INSERT INTO agent_questions_new
+        (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status,
+         selected_option, selected_index, answered_note, answered_at, answered_by, created_at)
+      SELECT id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status,
+             selected_option, selected_index, answered_note, answered_at,
+             CASE WHEN status = 'answered' THEN 'human' ELSE '' END, created_at
+      FROM agent_questions;
+      DROP TABLE agent_questions;
+      ALTER TABLE agent_questions_new RENAME TO agent_questions;
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_status ON agent_questions(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_from   ON agent_questions(from_agent_id, created_at);
+    `,
+  },
+  {
     // Runs that survive a restart. A checkpoint is the native loop's
     // conversation and counters, rewritten after every tool result; it lives
     // in its own table because agent_runs is read with SELECT * by every

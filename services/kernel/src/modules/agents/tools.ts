@@ -11,7 +11,9 @@ import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
 import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
+import { answerAndDeliver } from "./question-delivery.js";
 import { resumeRun } from "./run-resume.js";
+import { formatTriageQuestion } from "./question-format.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -1166,11 +1168,11 @@ export function agentsTools(
     }),
 
     // ── kernel_agents_ask_supervisor ──────────────────────
-    // Human-in-the-loop. When an agent (especially a manager after a meeting)
-    // has an open question it cannot resolve itself, it sends the question
-    // here with a small set of canned answers. The question shows up in the
-    // user's My Office panel with clickable buttons. When the user picks one,
-    // the answer gets posted back to the asking agent's inbox.
+    // The question goes to the chief first (status 'triage'), who answers it
+    // or hands it to the human (status 'pending') with a reason. Only what
+    // the chief escalates reaches the user's My Office panel with clickable
+    // buttons. When the human picks one, the answer gets posted back to the
+    // asking agent's inbox.
     ...(() => {
       const askSupervisorSchema = z.object({
         question: z.string().describe("The question, in one sentence."),
@@ -1179,7 +1181,7 @@ export function agentsTools(
           label: z.string().describe("Short option label the user sees as a button."),
           value: z.string().optional().describe("Optional internal value; defaults to label."),
           url: z.string().optional().describe("If set, picking this option opens the URL in a new browser tab (e.g. 'Yes — open the link' style options). Must be http(s)://."),
-        })).min(2).max(6).describe("2–6 multiple-choice options."),
+        })).length(4).describe("Exactly 4 multiple-choice options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
         ...CALLER_AGENT_ID_FIELD,
       });
@@ -1205,7 +1207,7 @@ export function agentsTools(
             return label ? { label, value, ...(url ? { url } : {}) } : null;
           })
           .filter((x): x is { label: string; value: string; url?: string } => x !== null);
-        if (options.length < 2) return errorResult("Need at least 2 options");
+        if (options.length !== 4) return errorResult("Provide exactly 4 non-empty options.");
 
         const res = service.createQuestion({
           from_agent_id: caller.id,
@@ -1221,17 +1223,10 @@ export function agentsTools(
           context: input.context ?? "",
           options,
         });
-        events.emit("agent:flow:question_asked" as any, {
-          question_id: res.id,
-          from_agent_id: caller.id,
-          from_agent_name: caller.name,
-          flow_id: caller.flow_id ?? "",
-          question,
-          options: options.map(o => o.label),
-          ts: new Date().toISOString(),
-        });
         return textResult(
-          `Question ${res.id} escalated to your supervisor. The answer will land in your inbox.`,
+          res.status === "triage"
+            ? `Question ${res.id} sent to the chief. The answer will come back to you; keep working on what doesn't depend on it.`
+            : `Question ${res.id} escalated to your supervisor. The answer will come back to you; keep working on what doesn't depend on it.`,
         );
       };
 
@@ -1239,11 +1234,89 @@ export function agentsTools(
         defineTool({
           name: "kernel_agents_ask_supervisor",
           description:
-            "Escalate an open question to your supervisor (the human user, at the top of the org) with multiple-choice answers. " +
-            "Use this after a meeting or when a decision requires human input. Provide 2-5 concrete options. " +
-            "The answer comes back as an inbox message on your next run.",
+            "Ask the chief about a doubt you can't resolve alone: unclear requirements, priorities, or a decision you are not authorized to make. " +
+            "Give exactly 4 concrete options, your preferred one first. The chief answers or escalates it to the human. " +
+            "Don't wait idle: keep working on what doesn't depend on it. The answer comes back as a new run or an inbox message. " +
+            "Never re-ask a question that was already answered.",
           schema: askSupervisorSchema,
           handler: askSupervisorHandler,
+        }),
+      ];
+    })(),
+
+    // ── Chief triage of agent questions ─────────────────
+    // Questions from office agents land in 'triage'. The chief is woken in
+    // batches (QuestionTriager) and resolves each one here: answer it, or
+    // hand it to the human with a reason.
+    ...(() => {
+      const chiefOnly = (input: { __caller_agent_id?: string }) => {
+        const callerId = resolveCallerAgentId(input);
+        const chief = service.getTopAgent();
+        return chief && callerId === chief.id ? chief : null;
+      };
+      const NOT_CHIEF = "Only the chief can triage questions.";
+      return [
+        defineTool({
+          name: "kernel_agents_questions_triage_list",
+          description: "Chief only. List the office agents' questions waiting for your triage, with their 4 options.",
+          schema: z.object({ ...CALLER_AGENT_ID_FIELD }),
+          handler: async (input) => {
+            if (!chiefOnly(input)) return errorResult(NOT_CHIEF);
+            const qs = service.listQuestions({ status: "triage", limit: 50 });
+            if (qs.length === 0) return textResult("No questions waiting for triage.");
+            return textResult(qs.map((q) => formatTriageQuestion(q, service)).join("\n\n"));
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_questions_answer",
+          description:
+            "Chief only. Answer a question in triage: pick one of its options by 0-based `selected_index`, or write `text` when none fits. " +
+            "The asking agent gets the answer and resumes.",
+          schema: z.object({
+            question_id: z.string(),
+            selected_index: z.number().int().optional().describe("0-based index of the chosen option (0-3)."),
+            text: z.string().optional().describe("Free-text answer, when no option fits."),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            if (!chiefOnly(input)) return errorResult(NOT_CHIEF);
+            const q = service.getQuestion(input.question_id);
+            if (!q || q.status !== "triage") return errorResult(`Question ${input.question_id} is not waiting for triage.`);
+            const text = input.text?.trim() ?? "";
+            let selected_index = -1;
+            let selected_option = text;
+            if (!text) {
+              const i = input.selected_index;
+              if (i === undefined || i < 0 || i >= q.options.length) {
+                return errorResult(`Give a selected_index between 0 and ${q.options.length - 1}, or a text answer.`);
+              }
+              selected_index = i;
+              selected_option = q.options[i].label;
+            }
+            const res = answerAndDeliver(service, executor, events, q.id, {
+              selected_index, selected_option, note: text || undefined, answered_by: "chief",
+            });
+            if (!res) return errorResult(`Could not answer ${q.id}.`);
+            return textResult(`Answered ${q.id}: ${selected_option}`);
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_questions_escalate",
+          description:
+            "Chief only. Hand a question in triage to the human, with a one-line reason they will read. " +
+            "Use for product or business decisions, money, irreversible actions, or anything you are not sure about.",
+          schema: z.object({
+            question_id: z.string(),
+            reason: z.string().describe("Why the human has to decide this. One line."),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            if (!chiefOnly(input)) return errorResult(NOT_CHIEF);
+            if (!service.escalateQuestion(input.question_id, input.reason.trim())) {
+              return errorResult(`Question ${input.question_id} is not waiting for triage.`);
+            }
+            return textResult(`Escalated ${input.question_id} to the human.`);
+          },
         }),
       ];
     })(),
@@ -1255,7 +1328,8 @@ export function agentsTools(
         "Leave an async message in another agent's inbox. Works ACROSS offices — every agent can reach every other agent. " +
         "The recipient does NOT run immediately — the message appears as a 'PENDING REQUESTS FROM COLLEAGUES' block " +
         "in their system prompt the next time they run, then is marked read. " +
-        "Use this for blockers, clarifications, escalations, and hand-backs. For blocking one-shot questions use " +
+        "Use this for blockers, clarifications and hand-backs between agents. For a doubt that needs a decision from above use " +
+        "kernel_agents_ask_supervisor. For blocking one-shot questions use " +
         "kernel_agents_invoke; for group deliberation use kernel_agents_call_meeting. " +
         "To continue a thread, pass `in_reply_to_message_id` (the conversation-message id of the turn you are replying to) " +
         "or an explicit `conversation_id`. To signal disagreement with something the recipient (or a peer) said, set " +
