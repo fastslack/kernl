@@ -185,6 +185,46 @@ describe("HTML bodies in the mail view", () => {
   });
 });
 
+describe("Gmail inbox tabs", () => {
+  function setLabels(gmailId: string, labels: string[], read = 0) {
+    db.run("UPDATE google_emails SET labels = ?, is_read = ? WHERE gmail_id = ?", [JSON.stringify(labels), read, gmailId]);
+  }
+
+  beforeEach(() => {
+    addGmail("p1", "g1", "2026-10-01T09:00:00.000Z");
+    setLabels("p1", ["INBOX", "CATEGORY_PERSONAL"]);
+    addGmail("u1", "g1", "2026-10-01T09:01:00.000Z");
+    setLabels("u1", ["INBOX", "CATEGORY_UPDATES"], 1);
+    addGmail("pr1", "g1", "2026-10-01T09:02:00.000Z");
+    setLabels("pr1", ["INBOX", "UNREAD", "CATEGORY_PROMOTIONS"]);
+    addGmail("s1", "g1", "2026-10-01T09:03:00.000Z");
+    setLabels("s1", ["INBOX", "CATEGORY_SOCIAL"]);
+    addComm("c1", "i1", "2026-10-01T10:00:00.000Z");
+  });
+
+  it("filters the inbox to one tab", () => {
+    const ids = (category: "primary" | "updates" | "promotions" | "social" | "forums") =>
+      mail.listEmails({ folder: "inbox", category }).emails.map((e) => e.gmail_id);
+    expect(ids("updates")).toEqual(["u1"]);
+    expect(ids("promotions")).toEqual(["pr1"]);
+    expect(ids("social")).toEqual(["s1"]);
+    expect(ids("forums")).toEqual([]);
+  });
+
+  it("puts uncategorized mail, IMAP included, in Primary", () => {
+    expect(mail.listEmails({ folder: "inbox", category: "primary" }).emails.map((e) => e.gmail_id))
+      .toEqual(["comm:c1", "p1"]);
+  });
+
+  it("counts each tab's threads and unread ones", () => {
+    const c = mail.getCounts("g1").categories;
+    expect(c.primary).toEqual({ total: 1, unread: 1 });
+    expect(c.updates).toEqual({ total: 1, unread: 0 });
+    expect(c.promotions.total).toBe(1);
+    expect(c.forums).toEqual({ total: 0, unread: 0 });
+  });
+});
+
 describe("storableHtml", () => {
   it("sanitizes scripts and handlers away but keeps images and links", () => {
     const out = storableHtml(`<p onclick="x()">hi<script>alert(1)</script></p><img src="https://a.b/c.png"><a href="https://a.b">l</a>`);

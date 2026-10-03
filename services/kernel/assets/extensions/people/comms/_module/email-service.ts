@@ -1,7 +1,7 @@
 import { type SqliteDb, type EventBus, newId, isoNow } from "@kernl/extension-sdk";
 import type {
   EmailAction, EmailLabel, EmailListItem, EmailDetail,
-  ThreadDetail, EmailCounts, EmailFolder,
+  ThreadDetail, EmailCounts, EmailFolder, EmailCategory,
 } from "./types.js";
 import { readFetchStatus, type FetchStatus } from "./fetch-status.js";
 
@@ -52,6 +52,26 @@ const COMM_SOURCE = `(
   WHERE c.channel = 'email'
     AND (c.direction = 'inbound' OR c.status = 'sent')
 )`;
+
+/** The Gmail label behind each inbox tab but Primary. */
+const CATEGORY_LABELS: Record<Exclude<EmailCategory, "primary">, string> = {
+  updates: "CATEGORY_UPDATES",
+  promotions: "CATEGORY_PROMOTIONS",
+  social: "CATEGORY_SOCIAL",
+  forums: "CATEGORY_FORUMS",
+};
+export const EMAIL_CATEGORIES: EmailCategory[] = ["primary", "updates", "promotions", "social", "forums"];
+
+/**
+ * SQL for one tab. Primary is the absence of the other four labels, the way
+ * Gmail draws it — so IMAP mail, which carries no category, lands there.
+ */
+function categoryClause(category: EmailCategory): string {
+  if (category === "primary") {
+    return Object.values(CATEGORY_LABELS).map((l) => `e.labels NOT LIKE '%"${l}"%'`).join(" AND ");
+  }
+  return `e.labels LIKE '%"${CATEGORY_LABELS[category]}"%'`;
+}
 
 export class EmailService {
   constructor(
@@ -109,6 +129,7 @@ export class EmailService {
     page?: number;
     pageSize?: number;
     accountId?: string;
+    category?: EmailCategory;
   } = {}): { emails: EmailListItem[]; total: number; page: number; pageSize: number } {
     const folder = opts.folder ?? "inbox";
     const page = opts.page ?? 1;
@@ -172,6 +193,7 @@ export class EmailService {
   private buildFolderClause(folder: EmailFolder, opts: {
     query?: string; label?: string; from?: string;
     dateFrom?: string; dateTo?: string; accountId?: string;
+    category?: EmailCategory;
   }): { where: string; params: unknown[] } {
     const conditions: string[] = [];
     const params: unknown[] = [];
@@ -233,6 +255,7 @@ export class EmailService {
       conditions.push("e.account_id = ?");
       params.push(opts.accountId);
     }
+    if (opts.category) conditions.push(`(${categoryClause(opts.category)})`);
 
     return { where: conditions.length ? conditions.join(" AND ") : "1=1", params };
   }
@@ -370,7 +393,17 @@ export class EmailService {
 
     const attention = this.countQuery(sources, `WHERE e.attention_needed = 1${accFilter}`, p);
 
-    return { inbox: totalInbox, unread, starred, sent, drafts, trash, archived, snoozed, important, attention };
+    const categories = {} as EmailCounts["categories"];
+    for (const c of EMAIL_CATEGORIES) {
+      const inCategory = `WHERE e.labels LIKE '%"INBOX"%' AND (${categoryClause(c)})
+       AND NOT EXISTS (SELECT 1 FROM email_actions ea WHERE ea.gmail_id = e.gmail_id AND ea.action_type IN ('archive','trash'))${accFilter}`;
+      categories[c] = {
+        total: this.countQuery(sources, inCategory, p),
+        unread: this.countQuery(sources, `${inCategory} AND e.is_read = 0`, p),
+      };
+    }
+
+    return { inbox: totalInbox, unread, starred, sent, drafts, trash, archived, snoozed, important, attention, categories };
   }
 
   /** Per account: how much mail Kernl holds and, for IMAP, where the fetcher stands. */

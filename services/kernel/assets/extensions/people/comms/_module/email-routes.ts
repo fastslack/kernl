@@ -15,7 +15,8 @@ import type { EmailService } from "./email-service.js";
 import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { EmailTriageService } from "./email-triage-service.js";
-import type { EmailDetail, EmailFolder } from "./types.js";
+import type { EmailCategory, EmailDetail, EmailFolder } from "./types.js";
+import { EMAIL_CATEGORIES } from "./email-service.js";
 import { storableHtml } from "./gmail-helpers.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import { discover, normalizeEmail } from "./mail-discovery.js";
@@ -73,6 +74,8 @@ export function registerEmailRoutes(
   route("GET", "/api/emails", "Failed to list emails", ({ query }) => {
     const folder = (query.get("folder") ?? "inbox") as EmailFolder;
     if (!VALID_FOLDERS.has(folder)) throw new HttpError(400, "Invalid folder");
+    const category = (query.get("category") || undefined) as EmailCategory | undefined;
+    if (category && !EMAIL_CATEGORIES.includes(category)) throw new HttpError(400, "Invalid category");
     return emailService.listEmails({
       folder,
       query: query.get("q") ?? undefined,
@@ -83,6 +86,7 @@ export function registerEmailRoutes(
       page: Number(query.get("page") ?? 1),
       pageSize: Number(query.get("pageSize") ?? 50),
       accountId: query.get("account_id") ?? undefined,
+      category,
     });
   });
 

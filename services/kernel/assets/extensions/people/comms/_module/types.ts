@@ -141,6 +141,9 @@ export type EmailFolder =
   | "inbox" | "sent" | "starred" | "important" | "drafts"
   | "trash" | "archived" | "snoozed" | "all";
 
+/** Gmail's inbox tabs. "primary" is whatever carries none of the other four. */
+export type EmailCategory = "primary" | "updates" | "promotions" | "social" | "forums";
+
 export interface EmailAction {
   id: string;
   gmail_id: string;
@@ -226,4 +229,6 @@ export interface EmailCounts {
   snoozed: number;
   important: number;
   attention: number;
+  /** Inbox messages per Gmail tab, with how many of them are unread. */
+  categories: Record<EmailCategory, { total: number; unread: number }>;
 }

@@ -29,13 +29,24 @@
     ai_summary: string; draft_comm_id: string; draft_body: string; draft_status: string;
   }
   interface TriageStats { unclassified: number; attention_needed: number; critical: number; high: number; drafts_pending: number }
-  interface Counts { inbox: number; unread: number; starred: number; sent: number; drafts: number; trash: number; archived: number; snoozed: number; important: number; attention: number }
+  interface Counts { inbox: number; unread: number; starred: number; sent: number; drafts: number; trash: number; archived: number; snoozed: number; important: number; attention: number; categories?: Record<Category, { total: number; unread: number }> }
   interface EmailLabel { id: string; name: string; color: string; created_at: string }
+
+  /** Gmail's inbox tabs; Primary is the mail that carries none of the other four. */
+  type Category = 'primary' | 'updates' | 'promotions' | 'social' | 'forums';
+  const CATEGORY_TABS: { id: Category; label: string; icon: string }[] = [
+    { id: 'primary', label: 'Principal', icon: '📥' },
+    { id: 'updates', label: 'Notificaciones', icon: '🔔' },
+    { id: 'promotions', label: 'Promociones', icon: '🏷️' },
+    { id: 'social', label: 'Social', icon: '👥' },
+    { id: 'forums', label: 'Foros', icon: '💬' },
+  ];
 
   type Folder = 'inbox' | 'sent' | 'starred' | 'important' | 'drafts' | 'trash' | 'archived' | 'snoozed' | 'all' | 'attention';
 
   // ── State ────────────────────────────────────────
   let folder: Folder = 'inbox';
+  let category: Category = 'primary';
   let selectedAccountId = '';
   let emails: EmailListItem[] = [];
   let total = 0;
@@ -154,6 +165,9 @@
   async function loadFolder() {
     loading = true;
     let qs = `folder=${folder}&page=${page}&pageSize=${pageSize}`;
+    // Primary with no categorized mail is the whole inbox, so the filter is
+    // safe to send even when the tabs are hidden (IMAP, Gmail without tabs).
+    if (folder === 'inbox') qs += `&category=${category}`;
     if (query) qs += `&q=${encodeURIComponent(query)}`;
     if (selectedAccountId) qs += `&account_id=${encodeURIComponent(selectedAccountId)}`;
     // finally: a failed request must not leave the list stuck on "Loading…".
@@ -172,6 +186,7 @@
   function onAccountChange(accountId: string) {
     selectedAccountId = accountId;
     page = 1;
+    category = 'primary';
     selectedId = null;
     selectedEmail = null;
     thread = null;
@@ -258,6 +273,14 @@
     folder = f; page = 1; selectedId = null; selectedEmail = null; thread = null;
     if (f === 'attention') { loadAttention(); } else { loadFolder(); }
   }
+  function selectCategory(c: Category) {
+    category = c; page = 1; selectedId = null; selectedEmail = null; thread = null;
+    loadFolder();
+  }
+  // Primary always; the rest only when they hold mail. With nothing but Primary
+  // there is nothing to tell apart, and the row stays hidden.
+  $: visibleTabs = CATEGORY_TABS.filter((t) => t.id === 'primary' || (counts.categories?.[t.id]?.total ?? 0) > 0);
+  $: showTabs = folder === 'inbox' && visibleTabs.length > 1;
   function selectEmail(gmailId: string) { selectedId = gmailId; loadDetail(gmailId); }
   function doSearch() { page = 1; loadFolder(); }
 
@@ -399,6 +422,26 @@
       <input type="text" placeholder="Search emails..." bind:value={query} on:keydown={(e) => e.key === 'Enter' && doSearch()} />
       <button on:click={doSearch}>Search</button>
     </div>
+
+    {#if showTabs}
+      <div class="category-tabs" role="tablist">
+        {#each visibleTabs as t (t.id)}
+          {@const unreadInTab = counts.categories?.[t.id]?.unread ?? 0}
+          <button
+            class="category-tab"
+            class:active={category === t.id}
+            role="tab"
+            aria-selected={category === t.id}
+            title="{t.label}: {counts.categories?.[t.id]?.total ?? 0} mensajes, {unreadInTab} sin leer"
+            on:click={() => selectCategory(t.id)}
+          >
+            <span class="category-icon">{t.icon}</span>
+            <span class="category-label">{t.label}</span>
+            {#if unreadInTab > 0}<span class="category-unread">{unreadInTab}</span>{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
 
     <div class="mail-list-header">
       <span class="folder-title">{folder.charAt(0).toUpperCase() + folder.slice(1)} ({total})</span>
@@ -777,6 +820,34 @@
     color: var(--text-2);
   }
   .folder-title { font-weight: 600; }
+  .category-tabs { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .category-tab {
+    flex: 1 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 7px 7px 5px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-2);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .category-tab:hover { background: var(--surface-hover, var(--surface)); color: var(--text); }
+  .category-tab.active { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
+  .category-icon { font-size: 12px; flex-shrink: 0; }
+  .category-unread {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    flex-shrink: 0;
+  }
   .pagination { display: flex; gap: 4px; align-items: center; }
   .pagination button { background: none; border: none; color: var(--text-2); cursor: pointer; font-size: 13px; padding: 2px 4px; }
   .pagination button:hover { color: var(--text); }
