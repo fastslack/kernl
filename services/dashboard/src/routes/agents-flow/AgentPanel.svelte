@@ -1061,6 +1061,7 @@ Boss says: "${msg}"`;
         events={liveCurrentRunEvents}
         onOutputClick={handleOutputClick}
         onOpenEmail={(id) => openEmail(id)}
+        nameOf={(id) => agents.find((a) => a.id === id)?.name}
       />
     </svelte:fragment>
 
