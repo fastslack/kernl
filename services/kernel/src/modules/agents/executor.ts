@@ -82,6 +82,7 @@ const SOCIAL_TOOL_BASELINE = [
   "kernel_agents_directory",
   "kernel_agents_memory",
   "kernel_agents_inbox",
+  "kernel_agents_inbox_ack",
   "kernel_agents_post_to_colleague",
   "kernel_agents_call_meeting",
   "kernel_agents_invoke",

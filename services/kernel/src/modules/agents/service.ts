@@ -1047,16 +1047,17 @@ export class AgentService {
     return { message: msg, conversation_message: convoMsg, conversation };
   }
 
-  /** Return unread inbox messages for an agent, oldest first. */
-  getUnreadInbox(agentId: string, limit = 20): AgentOfficeInboxMessage[] {
+  /** Return unread inbox messages for an agent, oldest first; with `sinceIso`,
+   *  only letters created at or after that instant. */
+  getUnreadInbox(agentId: string, limit = 20, sinceIso = ""): AgentOfficeInboxMessage[] {
     return this.db
       .prepare(
         `SELECT * FROM agent_office_inbox
-         WHERE to_agent_id = ? AND status = 'unread'
+         WHERE to_agent_id = ? AND status = 'unread' AND created_at >= ?
          ORDER BY created_at ASC
          LIMIT ?`,
       )
-      .all(agentId, limit) as AgentOfficeInboxMessage[];
+      .all(agentId, sinceIso, limit) as AgentOfficeInboxMessage[];
   }
 
   /** Mark inbox messages as read. No-op if the list is empty. */
@@ -1070,6 +1071,72 @@ export class AgentService {
          WHERE id IN (${placeholders}) AND status = 'unread'`,
       )
       .run(isoNow(), ...messageIds);
+  }
+
+  /** Mark read exactly those of `messageIds` that are unread letters addressed
+   *  to `agentId`. Returns how many were acknowledged. */
+  ackInboxFor(agentId: string, messageIds: string[]): number {
+    if (!agentId || messageIds.length === 0) return 0;
+    const placeholders = messageIds.map(() => "?").join(",");
+    const res = this.db
+      .prepare(
+        `UPDATE agent_office_inbox
+         SET status = 'read', read_at = ?
+         WHERE id IN (${placeholders}) AND to_agent_id = ? AND status = 'unread'`,
+      )
+      .run(isoNow(), ...messageIds, agentId);
+    return Number(res.changes ?? 0);
+  }
+
+  /** Agents (active, wake_on_inbox, no builtin handler) holding unread letters
+   *  created before `olderThanIso` and — when given — at or after `newerThanIso`.
+   *  Builtin-handler agents never run an LLM, so they can never ack a letter. */
+  listAgentsWithUnackedInbox(olderThanIso: string, newerThanIso = ""): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT i.to_agent_id AS id
+         FROM agent_office_inbox i JOIN agents a ON a.id = i.to_agent_id
+         WHERE i.status = 'unread' AND i.created_at < ? AND i.created_at >= ?
+           AND a.active = 1 AND COALESCE(a.wake_on_inbox, 1) = 1
+           AND COALESCE(a.builtin_handler, '') = ''`,
+      )
+      .all(olderThanIso, newerThanIso) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /** Count one more wake attempt on exactly these unread letters (the ones actually
+   *  surfaced in the wake goal — not every unread letter the agent holds). */
+  bumpInboxWakeAttempts(messageIds: string[]): void {
+    if (messageIds.length === 0) return;
+    const ph = messageIds.map(() => "?").join(",");
+    this.db
+      .prepare(
+        `UPDATE agent_office_inbox SET wake_attempts = wake_attempts + 1
+         WHERE id IN (${ph}) AND status = 'unread'`,
+      )
+      .run(...messageIds);
+  }
+
+  /** Archive (unread → archived, read_at stays NULL) letters that exhausted their wakes.
+   *  Skips letters whose recipient agent has a run still 'running' or 'pending' — that
+   *  run is the one processing the exhausting wake, so its letters must survive until
+   *  it finishes (or fails) rather than being archived out from under it mid-run. */
+  archiveExhaustedInbox(maxAttempts: number): AgentOfficeInboxMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM agent_office_inbox
+         WHERE status = 'unread' AND wake_attempts >= ?
+           AND to_agent_id NOT IN (
+             SELECT agent_id FROM agent_runs WHERE status IN ('running', 'pending')
+           )`,
+      )
+      .all(maxAttempts) as AgentOfficeInboxMessage[];
+    if (rows.length === 0) return rows;
+    const ph = rows.map(() => "?").join(",");
+    this.db
+      .prepare(`UPDATE agent_office_inbox SET status = 'archived' WHERE id IN (${ph})`)
+      .run(...rows.map((r) => r.id));
+    return rows;
   }
 
   /** Full inbox listing for dashboard/debug views. */

@@ -45,11 +45,23 @@ const PRIVILEGED_AGENT_NAMES = new Set<string>([
 type PolicyOk = { ok: true; caller: ReturnType<AgentService["getAgent"]> | null };
 type PolicyErr = { ok: false; error: string };
 
+/**
+ * The calling agent's id, from whichever channel carried it: the in-process
+ * executor injects `__caller_agent_id` into the args; the MCP path (claude_code
+ * agents: stdio bridge → unix socket → server.ts) strips every `__*` arg and
+ * carries the caller only in the request context. "" when neither has one
+ * (a human call from the dashboard or API).
+ */
+export function resolveCallerAgentId(input: { __caller_agent_id?: unknown } | null | undefined): string {
+  const injected = typeof input?.__caller_agent_id === "string" ? input.__caller_agent_id : "";
+  return injected || getRequestContext().callerAgentId || "";
+}
+
 function resolveCaller(
   args: Record<string, unknown>,
   service: AgentService,
 ): ReturnType<AgentService["getAgent"]> | null {
-  const id = typeof args.__caller_agent_id === "string" ? args.__caller_agent_id : null;
+  const id = resolveCallerAgentId(args);
   if (!id) return null;
   return service.getAgent(id) ?? null;
 }
@@ -128,6 +140,8 @@ function enforceAgentMgmtPolicy(
 // declare it explicitly (as an optional field) so it survives the
 // defineTool() schema.parse() step; without that, agent-to-agent policy
 // enforcement and messaging would silently stop working once wrapped.
+// Agents that call tools over MCP (claude_code) carry the caller in the
+// request context instead — always read it through resolveCallerAgentId().
 const CALLER_AGENT_ID_FIELD = {
   __caller_agent_id: z.string().optional().describe(
     "[internal] injected by the agent executor when this tool is invoked from an agent run. Not meant to be set by external callers.",
@@ -1170,7 +1184,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       });
       const askSupervisorHandler = async (input: z.infer<typeof askSupervisorSchema>) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         if (!callerId) return errorResult("Caller agent context missing — ask_supervisor is only usable from an agent run.");
         const caller = service.getAgent(callerId);
         if (!caller) return errorResult(`Caller agent not found: ${callerId}`);
@@ -1257,7 +1271,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         if (!callerId) {
           return errorResult("Caller agent context missing — kernel_agents_post_to_colleague is only usable from an agent run.");
         }
@@ -1355,7 +1369,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("No agent_id provided and no caller context available.");
 
@@ -1374,6 +1388,25 @@ export function agentsTools(
           lines.push(m.body);
         }
         return textResult(lines.join("\n"));
+      },
+    }),
+
+    // ── kernel_agents_inbox_ack ───────────────────────
+    defineTool({
+      name: "kernel_agents_inbox_ack",
+      description:
+        "Acknowledge office-inbox letters you have finished handling. Unacknowledged letters are " +
+        "handed to you again by the inbox sweeper (up to 3 times), so ack every letter you completed.",
+      schema: z.object({
+        message_ids: z.array(z.string()).min(1).describe("Inbox message ids (from kernel_agents_inbox)"),
+        ...CALLER_AGENT_ID_FIELD,
+      }),
+      handler: async (input) => {
+        const callerId = resolveCallerAgentId(input);
+        if (!callerId) return errorResult("Caller agent context missing — kernel_agents_inbox_ack is only usable from an agent run.");
+        const acked = service.ackInboxFor(callerId, input.message_ids);
+        if (acked === 0) return errorResult("None of those ids are unread letters addressed to you.");
+        return textResult(`Acknowledged ${acked} letter(s).`);
       },
     }),
 
@@ -1401,11 +1434,11 @@ export function agentsTools(
         if (!input.attendee_ids || input.attendee_ids.length === 0) {
           return errorResult("Need at least one attendee");
         }
-        // The calling agent's ID is injected by the executor via __caller_agent_id
-        // (set in the tool args when invoked from the LLM loop).
+        // The calling agent's ID comes from the executor's injected arg or,
+        // over MCP, from the request context (resolveCallerAgentId).
         // If missing, the first attendee becomes moderator.
-        const callerId = input.__caller_agent_id;
-        const moderatorId = callerId ?? input.attendee_ids[0];
+        const callerId = resolveCallerAgentId(input);
+        const moderatorId = callerId || input.attendee_ids[0];
         const attendeeIds = input.attendee_ids.filter(id => id !== moderatorId);
 
         if (attendeeIds.length === 0) {
@@ -1462,7 +1495,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("agent_id is required (no caller context).");
         const conversationId = input.conversation_id;
@@ -1498,7 +1531,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("agent_id is required (no caller context).");
         const conversationId = input.conversation_id;
@@ -1522,7 +1555,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("agent_id is required (no caller context).");
 

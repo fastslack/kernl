@@ -732,6 +732,16 @@ export const agentsMigrations: Migration[] = [
     `,
   },
   {
+    // Agents run by the claude_code executor never mark their inbox read, and
+    // InboxWaker fires once per post: a letter that lands while its recipient
+    // is busy was never looked at again. The sweeper re-wakes on unacked
+    // letters and gives up after a few attempts; this counts them.
+    version: 44,
+    sql: `
+      ALTER TABLE agent_office_inbox ADD COLUMN wake_attempts INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
     // Runs that survive a restart. A checkpoint is the native loop's
     // conversation and counters, rewritten after every tool result; it lives
     // in its own table because agent_runs is read with SELECT * by every

@@ -436,12 +436,15 @@ function reflectAll(ctx: BuiltinHandlerContext): BuiltinHandler {
       | { runCycle: (agentId: string, overrides?: Record<string, unknown>) => Promise<unknown> }
       | undefined;
     const service = ctx.services?.agentService as
-      | { listAgents: (f?: { active?: boolean }) => Array<{ id: string; name: string }> }
+      | { listAgents: (f?: { active?: boolean }) => Array<{ id: string; name: string; variables?: string }> }
       | undefined;
     if (!optimizer || !service) return "Reflection optimizer not configured.";
     const agents = service.listAgents({ active: true });
     let proposed = 0, accepted = 0, skipped = 0, failed = 0;
     for (const a of agents) {
+      let optedOut = false;
+      try { optedOut = JSON.parse(a.variables || "{}").reflection_opt_out === true; } catch { /* bad json → keep */ }
+      if (optedOut) { skipped++; continue; }
       try {
         const run = (await optimizer.runCycle(a.id)) as
           | { status: string } | null;

@@ -84,6 +84,7 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
   let ctxRef: ModuleContext | null = null;
   let agentsRef: AgentsModule | null = null;
   let meetingExecutorRef: MeetingExecutor | null = null;
+  let inboxWakerRef: InboxWaker | null = null;
 
   return {
     name: "ext:agent-advanced",
@@ -177,7 +178,15 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
         ctx.events,
         { quietMs: ctx.config.agents?.inboxWakeQuietMs ?? 300_000 },
       );
+      inboxWakerRef = inboxWaker;
       inboxWaker.start();
+      inboxWaker.startSweep(120_000, (letters) => {
+        void ctx.notifier?.send({
+          title: `Office inbox: ${letters.length} letter(s) never handled`,
+          body: letters.map((l) => `• ${l.subject}`).join("\n"),
+          priority: "normal",
+        });
+      });
 
       // Conversation subscriptions — agents that follow a conversation get a
       // run on every matching new turn. Kill switch:
@@ -265,6 +274,7 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
 
     async shutdown() {
       if (!started) return;
+      inboxWakerRef?.stopSweep();
       stopWorkspaceComposeReaper();
       // Drain any still-running compose stacks so we don't leak containers.
       await shutdownAllCompose();
