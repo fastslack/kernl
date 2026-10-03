@@ -62,6 +62,10 @@
   $: agent = ($store?.agent ?? {}) as Record<string, any>;
   $: links = readChain(agent);
   $: executor = String(agent.executor_type || 'native') === 'claude_code' ? 'claude_code' : 'native';
+  // A builtin handler short-circuits the LLM path (executor.ts), so neither
+  // the engine nor the model chain does anything for it — say so instead of
+  // offering controls that change nothing.
+  $: isScript = !!agent.builtin_handler;
   // The claude_code executor runs tools inside the SDK's own loop, so a
   // provider that cannot carry the kernel's native loop is not a problem
   // there. That is the second remedy the error message offers, and flipping
@@ -194,11 +198,15 @@
   // the last one is late enough to be one write and early enough that nobody
   // waits for it.
   const DEBOUNCE_MS = 600;
-  const NUMERICS: Array<{ key: string; label: string; unit: string; min: number; step: number; hint: string }> = [
-    { key: 'max_iterations', label: 'max iterations', unit: '', min: 1, step: 1, hint: 'How many tool-loop turns one run may take.' },
-    { key: 'max_tokens', label: 'token budget', unit: 'tokens', min: 0, step: 1000, hint: 'Total tokens one run may spend.' },
-    { key: 'timeout_ms', label: 'timeout', unit: 'ms', min: 1000, step: 1000, hint: 'The kernel kills the run after this.' },
-    { key: 'max_errors', label: 'max errors', unit: '', min: 0, step: 1, hint: 'Consecutive step errors before the run gives up.' },
+  // Labels and help are i18n keys: these four were raw column names
+  // ("max iterations", "timeout … ms") and nobody could tell what each one
+  // stopped. `scale` is display units per stored unit — the timeout is stored
+  // in ms and read in seconds.
+  const NUMERICS: Array<{ key: string; label: string; help: string; unit: string; min: number; step: number; scale: number }> = [
+    { key: 'max_iterations', label: 'agent.config.steps', help: 'agent.config.steps_help', unit: 'agent.config.unit_steps', min: 1, step: 1, scale: 1 },
+    { key: 'max_tokens', label: 'agent.config.tokens', help: 'agent.config.tokens_help', unit: 'agent.config.unit_tokens', min: 0, step: 1000, scale: 1 },
+    { key: 'timeout_ms', label: 'agent.config.timeout', help: 'agent.config.timeout_help', unit: 'agent.config.unit_seconds', min: 1, step: 10, scale: 1000 },
+    { key: 'max_errors', label: 'agent.config.errors', help: 'agent.config.errors_help', unit: 'agent.config.unit_errors', min: 0, step: 1, scale: 1 },
   ];
 
   const timers: Record<string, ReturnType<typeof setTimeout>> = {};
@@ -218,7 +226,7 @@
     }
     const spec = NUMERICS.find((s) => s.key === key);
     const clamped = spec ? Math.max(spec.min, Math.round(n)) : Math.round(n);
-    void write({ [key]: clamped }).finally(() => {
+    void write({ [key]: clamped * (spec?.scale ?? 1) }).finally(() => {
       delete pending[key];
       pending = pending;
     });
@@ -234,7 +242,9 @@
   function numValue(key: string): string {
     if (key in pending) return pending[key];
     const v = agent[key];
-    return v === undefined || v === null || v === '' ? '' : String(v);
+    if (v === undefined || v === null || v === '') return '';
+    const scale = NUMERICS.find((s) => s.key === key)?.scale ?? 1;
+    return String(Math.round(Number(v) / scale));
   }
 
   // Flush, do not drop. Typing into a numeric and closing the drawer inside
@@ -277,156 +287,193 @@
 </script>
 
 <section class="rt" class:rt-compact={compact} bind:this={sectionEl}>
-  <div class="rt-head">
-    <h3 class="rt-h">{$t('agent.runtime.title')}</h3>
-    {#if running}
-      <span class="rt-next" role="status">{$t('agent.runtime.applies_next_run')}</span>
-    {/if}
-  </div>
+  {#if running}
+    <p class="rt-next" role="status">{$t('agent.runtime.applies_next_run')}</p>
+  {/if}
 
-  <!-- ── Model chain ── -->
-  <div class="rt-field">
-    <div class="rt-lbl">
-      <span>{$t('agent.runtime.model')}</span>
-      {#if links.length > 1}<span class="rt-lbl-note">primary + {links.length - 1} fallback{links.length > 2 ? 's' : ''}</span>{/if}
-    </div>
+  {#if !isScript}
+    <!-- ── Engine and model ── -->
+    <div class="cfg-group">
+      <header class="cfg-gh">
+        <h3 class="cfg-h">{$t('agent.config.engine_title')}</h3>
+        <p class="cfg-sub">{$t('agent.config.engine_sub')}</p>
+      </header>
 
-    {#each links as link, i (i)}
-      {@const h = health[i]}
-      <div class="rt-row">
-        <span class="rt-rank" aria-hidden="true">{i + 1}</span>
-        <div class="rt-row-main">
-          <ModelPicker
-            bind:this={pickers[i]}
-            provider={link.provider}
-            model={link.model}
-            {providers}
-            {requiresTools}
-            busy={chainSaving}
-            disabled={chainSaving}
-            error={i === 0 ? chainError : ''}
-            on:change={(e) => setLink(i, e.detail)}
-          />
+      <div class="rt-field">
+        <div class="rt-lbl">
+          <span>{$t('agent.config.executor')}</span>
+          {#if $store?.saving?.has('executor_type')}<span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>{/if}
         </div>
-        {#if h.label}
-          <span class="rt-why" class:rt-why-bad={!h.usable} class:rt-why-warn={h.usable && h.state !== 'ok'} title={h.detail}>
-            {h.label}
-          </span>
+        <div class="rt-seg" role="group" aria-label={$t('agent.runtime.executor_aria')}>
+          <button class="rt-seg-b" class:on={executor === 'native'} on:click={() => setExecutor('native')}>
+            <span class="rt-seg-t">Kernl</span>
+            <span class="rt-seg-d">{$t('agent.config.executor_native')}</span>
+          </button>
+          <button class="rt-seg-b" class:on={executor === 'claude_code'} on:click={() => setExecutor('claude_code')}>
+            <span class="rt-seg-t">Claude Code</span>
+            <span class="rt-seg-d">{$t('agent.config.executor_claude_code')}</span>
+          </button>
+        </div>
+        {#if fieldError.executor_type}<p class="rt-err">{fieldError.executor_type}</p>{/if}
+      </div>
+
+      <div class="rt-field">
+        <div class="rt-lbl">
+          <span>{$t('agent.config.model')}</span>
+          <span class="rt-lbl-note">{$t('agent.config.model_help')}</span>
+        </div>
+
+        {#each links as link, i (i)}
+          {@const h = health[i]}
+          <div class="rt-row">
+            <span class="rt-rank" title={i === 0 ? $t('agent.config.primary') : $t('agent.config.fallback')}>{i === 0 ? '★' : i + 1}</span>
+            <div class="rt-row-main">
+              <ModelPicker
+                bind:this={pickers[i]}
+                provider={link.provider}
+                model={link.model}
+                {providers}
+                {requiresTools}
+                busy={chainSaving}
+                disabled={chainSaving}
+                error={i === 0 ? chainError : ''}
+                on:change={(e) => setLink(i, e.detail)}
+              />
+            </div>
+            {#if h.label}
+              <span class="rt-why" class:rt-why-bad={!h.usable} class:rt-why-warn={h.usable && h.state !== 'ok'} title={h.detail}>
+                {h.label}
+              </span>
+            {/if}
+            {#if links.length > 1}
+              <button
+                class="rt-x"
+                disabled={chainSaving}
+                title={i === 0
+                  ? 'Remove the primary — row 2 is promoted in its place'
+                  : 'Remove this fallback'}
+                on:click={() => removeLink(i)}
+              >×</button>
+            {/if}
+          </div>
+        {/each}
+
+        {#if draft}
+          <div class="rt-row">
+            <span class="rt-rank" aria-hidden="true">{links.length + 1}</span>
+            <div class="rt-row-main">
+              <ModelPicker
+                provider={draft.provider}
+                model={draft.model}
+                {providers}
+                {requiresTools}
+                busy={chainSaving}
+                disabled={chainSaving}
+                placeholder={$t('agent.runtime.choose_fallback')}
+                on:change={(e) => commitDraft(e.detail)}
+              />
+            </div>
+            <button class="rt-x" disabled={chainSaving} title={$t('agent.runtime.cancel')} on:click={() => (draft = null)}>×</button>
+          </div>
         {/if}
-        {#if links.length > 1}
-          <button
-            class="rt-x"
-            disabled={chainSaving}
-            title={i === 0
-              ? 'Remove the primary — row 2 is promoted in its place'
-              : 'Remove this fallback'}
-            on:click={() => removeLink(i)}
-          >×</button>
+
+        {#if canAdd}
+          <button class="rt-add" disabled={chainSaving} on:click={() => (draft = { provider: '', model: '' })}>
+            {$t('agent.config.add_fallback')}
+          </button>
+        {/if}
+
+        {#if chainError}
+          <p class="rt-err">{chainError}</p>
+        {:else if deadChain}
+          <p class="rt-dead">
+            No link in this chain can run this agent. That is the failure the
+            executor reports as “No LLM provider in the chain can run tool calls”.
+          </p>
+        {:else if executor === 'claude_code'}
+          <p class="rt-note">{$t('agent.config.claude_code_note')}</p>
         {/if}
       </div>
-    {/each}
-
-    {#if draft}
-      <div class="rt-row">
-        <span class="rt-rank" aria-hidden="true">{links.length + 1}</span>
-        <div class="rt-row-main">
-          <ModelPicker
-            provider={draft.provider}
-            model={draft.model}
-            {providers}
-            {requiresTools}
-            busy={chainSaving}
-            disabled={chainSaving}
-            placeholder={$t('agent.runtime.choose_fallback')}
-            on:change={(e) => commitDraft(e.detail)}
-          />
-        </div>
-        <button class="rt-x" disabled={chainSaving} title={$t('agent.runtime.cancel')} on:click={() => (draft = null)}>×</button>
-      </div>
-    {/if}
-
-    {#if canAdd}
-      <button class="rt-add" disabled={chainSaving} on:click={() => (draft = { provider: '', model: '' })}>
-        + add fallback
-      </button>
-    {/if}
-
-    {#if chainError}
-      <p class="rt-err">{chainError}</p>
-    {:else if deadChain}
-      <p class="rt-dead">
-        No link in this chain can run this agent. That is the failure the
-        executor reports as “No LLM provider in the chain can run tool calls”.
-      </p>
-    {/if}
-  </div>
-
-  <!-- ── Executor ── -->
-  <div class="rt-field">
-    <div class="rt-lbl">
-      <span>{$t('agent.runtime.executor')}</span>
-      {#if $store?.saving?.has('executor_type')}<span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>{/if}
     </div>
-    <div class="rt-seg" role="group" aria-label={$t('agent.runtime.executor_aria')}>
-      <button
-        class="rt-seg-b"
-        class:on={executor === 'native'}
-        title={$t('agent.runtime.native_hint')}
-        on:click={() => setExecutor('native')}
-      >native</button>
-      <button
-        class="rt-seg-b"
-        class:on={executor === 'claude_code'}
-        title={$t('agent.runtime.claude_code_hint')}
-        on:click={() => setExecutor('claude_code')}
-      >claude_code</button>
+  {:else}
+    <div class="cfg-group cfg-group-muted">
+      <header class="cfg-gh">
+        <h3 class="cfg-h">{$t('agent.config.engine_title')}</h3>
+        <p class="cfg-sub">{$t('agent.config.script_note', { handler: String(agent.builtin_handler) })}</p>
+      </header>
     </div>
-    {#if fieldError.executor_type}
-      <p class="rt-err">{fieldError.executor_type}</p>
-    {:else if executor === 'claude_code'}
-      <p class="rt-note">Tools run inside the CLI's own loop, so a provider that cannot carry the kernel's loop is not a problem here.</p>
-    {/if}
-  </div>
+  {/if}
 
   <!-- ── Limits ── -->
-  {#each NUMERICS as n (n.key)}
-    <div class="rt-field">
-      <div class="rt-lbl">
-        <span>{n.label}</span>
-        {#if $store?.saving?.has(n.key)}
-          <span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>
-        {:else if n.key in pending}
-          <span class="rt-lbl-note">…</span>
-        {/if}
+  <div class="cfg-group">
+    <header class="cfg-gh">
+      <h3 class="cfg-h">{$t('agent.config.limits_title')}</h3>
+      <p class="cfg-sub">{$t('agent.config.limits_sub')}</p>
+    </header>
+    {#each NUMERICS as n (n.key)}
+      <div class="rt-lim">
+        <div class="rt-lim-txt">
+          <label class="rt-lim-l" for="rt-{n.key}">
+            {$t(n.label)}
+            {#if $store?.saving?.has(n.key)}
+              <span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>
+            {:else if n.key in pending}
+              <span class="rt-lbl-note">…</span>
+            {/if}
+          </label>
+          <span class="rt-lim-h">{$t(n.help)}</span>
+          {#if fieldError[n.key]}<span class="rt-err">{fieldError[n.key]}</span>{/if}
+        </div>
+        <div class="rt-num" class:rt-num-err={!!fieldError[n.key]}>
+          <input
+            id="rt-{n.key}"
+            type="number"
+            min={n.min}
+            step={n.step}
+            value={numValue(n.key)}
+            on:input={(e) => onNumber(n.key, e.currentTarget.value)}
+          />
+          <span class="rt-unit">{$t(n.unit)}</span>
+        </div>
       </div>
-      <div class="rt-num" class:rt-num-err={!!fieldError[n.key]}>
-        <input
-          type="number"
-          min={n.min}
-          step={n.step}
-          value={numValue(n.key)}
-          title={n.hint}
-          on:input={(e) => onNumber(n.key, e.currentTarget.value)}
-        />
-        {#if n.unit}<span class="rt-unit">{n.unit}</span>{/if}
-      </div>
-      {#if fieldError[n.key]}<p class="rt-err">{fieldError[n.key]}</p>{/if}
-    </div>
-  {/each}
+    {/each}
+  </div>
 </section>
 
 <style>
-  .rt{margin-bottom:18px}
-  .rt-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
-  .rt-h{
-    font:600 10px 'Syne',sans-serif;
-    color:#8a8fa8;text-transform:uppercase;letter-spacing:1.5px;margin:0;
-  }
+  .rt{display:flex;flex-direction:column;gap:12px;margin-bottom:12px}
   .rt-next{
+    margin:0;align-self:flex-start;
     font:500 9.5px 'JetBrains Mono',monospace;color:#fbbf24;
     padding:2px 7px;border-radius:5px;
     background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.25);
   }
+
+  /* One card per question the operator asks ("what thinks for it?", "when
+     does a run stop?"). ConfigTab draws its other groups with the same rules —
+     copies, because Svelte scopes CSS per component. */
+  .cfg-group{
+    padding:12px 14px 4px;border-radius:10px;
+    background:rgba(255,255,255,.018);border:1px solid rgba(120,130,160,.14);
+  }
+  .cfg-group-muted{padding-bottom:12px}
+  .cfg-gh{margin-bottom:10px}
+  .cfg-h{
+    margin:0;font:600 10.5px 'Syne',sans-serif;
+    color:#c9cde0;text-transform:uppercase;letter-spacing:1.4px;
+  }
+  .cfg-sub{margin:3px 0 0;font:500 11px/1.4 'Manrope',sans-serif;color:#7d8299}
+  .cfg-group-muted .cfg-sub{margin:4px 0 0}
+
+  /* Limits: label + what it stops on the left, the number on the right. */
+  .rt-lim{
+    display:grid;grid-template-columns:minmax(0,1fr) 150px;gap:4px 14px;align-items:center;
+    padding:8px 0;border-top:1px solid rgba(120,130,160,.08);
+  }
+  .rt-lim:first-of-type{border-top:0}
+  .rt-lim-txt{display:flex;flex-direction:column;gap:2px;min-width:0}
+  .rt-lim-l{display:flex;align-items:baseline;gap:8px;font:600 12px 'Manrope',sans-serif;color:#dde0ea}
+  .rt-lim-h{font:500 10.5px/1.35 'Manrope',sans-serif;color:#7d8299}
 
   /* Stacked, full width. See the header comment — two columns inside a
      560px drawer put two hit targets at ~240px each side by side. */
@@ -444,6 +491,7 @@
     flex:none;width:16px;text-align:center;
     font:600 10px 'JetBrains Mono',monospace;color:#6a6f82;
   }
+  .rt-row + .rt-row .rt-rank{color:#55596b}
   .rt-why{
     flex:none;font:600 9px 'JetBrains Mono',monospace;
     padding:3px 7px;border-radius:5px;white-space:nowrap;
@@ -472,12 +520,15 @@
   .rt-seg-b{
     flex:1;padding:7px 10px;background:rgba(20,24,38,.85);
     border:none;border-right:1px solid rgba(120,130,160,.18);
-    color:#8a8fa8;cursor:pointer;
-    font:600 10.5px 'JetBrains Mono',monospace;
+    color:#8a8fa8;cursor:pointer;text-align:left;
+    display:flex;flex-direction:column;gap:2px;
   }
+  .rt-seg-t{font:700 11.5px 'Manrope',sans-serif}
+  .rt-seg-d{font:500 10px/1.35 'Manrope',sans-serif;opacity:.8}
   .rt-seg-b:last-child{border-right:none}
   .rt-seg-b:hover{color:#d8dae3;background:rgba(26,31,48,.9)}
   .rt-seg-b.on{color:#0a0e14;background:#9fb4e8}
+  .rt-seg-b:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:-2px}
 
   .rt-num{
     display:flex;align-items:center;gap:8px;
@@ -494,7 +545,7 @@
   }
   .rt-unit{flex:none;color:#6a6f82;font:500 10px 'JetBrains Mono',monospace}
 
-  .rt-err{margin:0;font:500 10.5px/1.4 'Manrope',sans-serif;color:#ef5d6e}
+  .rt-err{margin:0;display:block;font:500 10.5px/1.4 'Manrope',sans-serif;color:#ef5d6e}
   .rt-dead{
     margin:2px 0 0;padding:7px 9px;border-radius:6px;
     font:500 10.5px/1.45 'Manrope',sans-serif;color:#f0a4ad;

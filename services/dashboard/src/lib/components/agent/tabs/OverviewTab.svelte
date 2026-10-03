@@ -8,12 +8,10 @@
       MandateSection     what is it supposed to be (collapsed)
       <slot name="auth">     the one dependency that expires on its own
       TriggeringSection  what makes it run
-      GoalSection        what it runs on when nobody says
-      RuntimeSection     what carries it out — the only editable block
-      ToolsSection       what it may touch (collapsed)
-      VariablesSection   what it was handed (collapsed)
-      AppearanceSection  what it looks like
       <slot name="footer">   the office environment, which is not the agent's
+
+  It only reads. Everything that sets the agent up — engine, model, limits,
+  goal, tools, variables, skin — lives in ConfigTab, grouped and explained.
 
   The three slots are the pieces that belong to whoever mounts the drawer: the
   3D world's run-output renderer, its Google re-login flow and its office
@@ -28,18 +26,10 @@
   embedded mount on /agents does, and it is the shorter path.
 -->
 <script lang="ts">
-  import { createEventDispatcher } from 'svelte';
   import type { Readable } from 'svelte/store';
   import VerdictLine from '../VerdictLine.svelte';
   import MandateSection from '../sections/MandateSection.svelte';
   import TriggeringSection from '../sections/TriggeringSection.svelte';
-  import GoalSection from '../sections/GoalSection.svelte';
-  import RuntimeSection from '../sections/RuntimeSection.svelte';
-  import ToolsSection from '../sections/ToolsSection.svelte';
-  import VariablesSection from '../sections/VariablesSection.svelte';
-  import AppearanceSection from '../sections/AppearanceSection.svelte';
-
-  const dispatch = createEventDispatcher<{ skin: { skinId: string } }>();
 
   /** The drawer's agent store (`AgentDrawer` publishes it on the overview slot). */
   export let store: Readable<any> & { patch: (fields: Record<string, unknown>) => Promise<void> };
@@ -60,31 +50,8 @@
   export let schedules: any[] | null = null;
   export let connections: { invokedBy?: any[]; invoked?: any[] } | null = null;
 
-  // ── RuntimeSection ──
-  /** A run is in flight. Changes still save; they take effect next run. */
-  export let running = false;
-  /**
-   * Bound out so the caller can reach RuntimeSection's methods — the run
-   * failure card's remedies steer the model picker and the executor.
-   */
-  export let runtimeSection: RuntimeSection | null = null;
-
-  // ── AppearanceSection ──
-  export let skins: Array<{ manifest: { id: string; name: string; description?: string } }> = [];
-  export let savingSkin = false;
-
   /** Collapsed state, held by the caller so it survives a close/reopen. */
-  export let collapsed: { mandate: boolean; tools: boolean; variables: boolean } = {
-    mandate: true,
-    tools: true,
-    variables: false,
-  };
-
-  /**
-   * Is the detail row in? Runtime edits the three limits only that row
-   * carries, so the block below waits for it exactly as it did inline.
-   */
-  export let ready = true;
+  export let collapsed: { mandate: boolean } = { mandate: true };
 
   $: agent = ($store ?? {}).agent ?? null;
 </script>
@@ -99,24 +66,6 @@
   <slot name="auth" />
 
   <TriggeringSection {store} {compact} {chains} {triggers} {schedules} {connections} />
-
-  {#if ready}
-    <GoalSection {store} {compact} />
-
-    <RuntimeSection bind:this={runtimeSection} {store} {compact} {running} />
-
-    <ToolsSection {store} {compact} bind:collapsed={collapsed.tools} />
-
-    <VariablesSection {store} {compact} bind:collapsed={collapsed.variables} />
-
-    <AppearanceSection
-      {store}
-      {compact}
-      {skins}
-      saving={savingSkin}
-      on:change={(e) => dispatch('skin', e.detail)}
-    />
-  {/if}
 
   <slot name="footer" />
 </div>

@@ -21,7 +21,8 @@
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
   import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
   import OverviewTab from '$lib/components/agent/tabs/OverviewTab.svelte';
-  // Type only: OverviewTab mounts it now, but `runtimeSectionRef` — the handle
+  import ConfigTab from '$lib/components/agent/tabs/ConfigTab.svelte';
+  // Type only: ConfigTab mounts it, but `runtimeSectionRef` — the handle
   // the run-failure remedies steer — is still typed and held here.
   import type RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
   import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
@@ -193,7 +194,7 @@
 
   // Collapsible section state. It lives here and not inside each section so
   // that closing and reopening the drawer does not forget it.
-  let collapsed = { tools: true, variables: false, mandate: true };
+  let collapsed = { mandate: true };
 
   // ── Talk to agent ──────────────────────────────
   let chatInput = '';
@@ -312,7 +313,7 @@
 
   // ── Agent panel tabs ───────────────────────────
   // Core ids are literals; extension-contributed tabs use dynamic ids.
-  let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
+  let panelTab: 'info' | 'config' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
   let agentRuns: Array<{ id: string; status: string; steps_count: number; tokens_used: number; trigger_type: string; created_at: string; result?: string; error?: string }> = [];
   let workspaceFiles: Array<{ path: string; type: string; size: number }> = [];
   let workspaceFileContent: { path: string; content: string } | null = null;
@@ -519,10 +520,22 @@
   // component's scope, so the mapping has to live here rather than inside
   // the card.
   let runtimeSectionRef: RuntimeSection | null = null;
+  /**
+   * The engine and the model chain live on the Configuración tab, which is
+   * not mounted while the failure card (on Overview) is the one being read.
+   * Open it and wait a tick so `runtimeSectionRef` points at a live section.
+   */
+  async function openRuntime(): Promise<RuntimeSection | null> {
+    if (panelTab !== 'config') {
+      selectPanelTab('config');
+      await tick();
+    }
+    return runtimeSectionRef;
+  }
   function handleRunFailureRemedy(kind: RemedyKind): void {
     switch (kind) {
       case 'pick-tool-capable-provider':
-        void runtimeSectionRef?.focusPrimaryPicker({ requireTools: true });
+        void openRuntime().then((rt) => rt?.focusPrimaryPicker({ requireTools: true }));
         break;
       case 'switch-executor-claude-code':
         // Routed through RuntimeSection's own `setExecutor`, not
@@ -532,7 +545,7 @@
         // `store.patch()` here would set the store's `error` and nothing
         // would ever render it, silently losing exactly the drift this
         // remedy exists to report.
-        void runtimeSectionRef?.setExecutor('claude_code');
+        void openRuntime().then((rt) => rt?.setExecutor('claude_code'));
         break;
       case 'configure-provider':
         void goto(LLM_SETTINGS_HREF);
@@ -599,7 +612,7 @@
   let _deepLinkTab: typeof panelTab | null = (() => {
     try {
       const t = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
-      return t && ['info', 'live', 'history', 'memory', 'chat', 'workspace', 'skills'].includes(t) ? (t as typeof panelTab) : null;
+      return t && ['info', 'config', 'live', 'history', 'memory', 'chat', 'workspace', 'skills'].includes(t) ? (t as typeof panelTab) : null;
     } catch { return null; }
   })();
   $: if (selectedAgent && selectedAgent !== lastSelectedAgent) {
@@ -902,13 +915,7 @@ Boss says: "${msg}"`;
         triggers={agentDetail?.triggers ?? null}
         schedules={agentDetail?.schedules ?? null}
         connections={agentDetail?.adhocConnections ?? null}
-        running={liveIsRunning}
-        skins={availableSkins}
-        {savingSkin}
-        ready={!!agentDetail?.agent}
         bind:collapsed
-        bind:runtimeSection={runtimeSectionRef}
-        on:skin={(e) => changeSkin(e.detail.skinId)}
       >
         <!-- ─── Latest result hero card ───
              The failure card lives in here, so it only appears when the last
@@ -986,6 +993,22 @@ Boss says: "${msg}"`;
           {/if}
         </svelte:fragment>
       </OverviewTab>
+    </svelte:fragment>
+
+    <!-- ──────────────── CONFIG TAB ────────────────
+         Filled here rather than left to the drawer's default for what only
+         this component has: the skin registry and its write (which repaints
+         the node in the world), and the handle the failure remedies steer. -->
+    <svelte:fragment slot="config" let:store>
+      <ConfigTab
+        {store}
+        running={liveIsRunning}
+        skins={availableSkins}
+        {savingSkin}
+        ready={!!agentDetail?.agent}
+        bind:runtimeSection={runtimeSectionRef}
+        on:skin={(e) => changeSkin(e.detail.skinId)}
+      />
     </svelte:fragment>
 
     <!-- ──────────────── SKILLS TAB ────────────────

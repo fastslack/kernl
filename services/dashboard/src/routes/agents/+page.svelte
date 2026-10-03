@@ -696,7 +696,6 @@
                 compact
                 loading={loadingDetail}
                 lastRun={selectedAgentRuns[0] ?? null}
-                running={runningAgentIds.has(selectedAgent.id)}
               >
                 <!-- The one block of the overview this page adds. It calls
                      back into this scope, so it goes in as a slot rather than
