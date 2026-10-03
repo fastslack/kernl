@@ -665,6 +665,7 @@ const es: Record<I18nKey, string> = {
   "agent.drawer.tab_message": "Mensaje",
   "agent.drawer.tab_config": "Configuración",
   "agent.head.kind_llm": "IA",
+  "agent.head.change_model_title": "Cambiar el modelo — lista con precios (USD por millón de tokens, entrada / salida)",
   "agent.head.kind_script": "Script",
   "agent.head.kind_function": "Función interna",
   "agent.head.fallbacks": "+{n} de respaldo",

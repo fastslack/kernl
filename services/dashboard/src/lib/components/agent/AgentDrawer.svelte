@@ -37,6 +37,9 @@
   // entero, y de acá sólo salen tres helpers puros.
   import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
   import { traitsOf } from '$lib/office/office-kinds.js';
+  import ModelPicker from './ModelPicker.svelte';
+  import { readChain, writeChain } from '$lib/model-chain.js';
+  import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
 
   const dispatch = createEventDispatcher();
 
@@ -121,6 +124,26 @@
   }
 
   $: agent = $detail.agent ?? listRow;
+
+  // ── Model, switched from the header chip ──────────────────────────
+  // The chip opens the same picker as Configuración (with prices) and writes
+  // the primary link of the chain; fallbacks stay as they are. Providers load
+  // on first open: N model calls are not worth making for a glance.
+  let headProviders: PickerProvider[] = [];
+  let headProvidersLoading = false;
+  function loadHeadProviders() {
+    if (headProviders.length || headProvidersLoading) return;
+    headProvidersLoading = true;
+    void loadPickerProviders().then((list) => { headProviders = list; headProvidersLoading = false; });
+  }
+  $: headChain = readChain(agent ?? {});
+  $: headSaving = !!$detail.saving && (['provider', 'model', 'model_chain'] as const).some((k) => $detail.saving.has(k));
+  let headModelError = '';
+  async function setHeadModel(next: { provider: string; model: string }) {
+    headModelError = '';
+    await detail.patch(writeChain([next, ...headChain.slice(1)]));
+    headModelError = String($detail.error || '');
+  }
 
   // ── ¿Este agente puede usar skills? ───────────────────────────────
   // Un agente con `builtin_handler` registrado corta el camino LLM en
@@ -325,12 +348,30 @@
                  script. Two chips of two styles plus an id read as noise. -->
             {#if agentType(agent) === 'llm'}
               {@const fb = modelChainFallbacks(agent.model_chain)}
-              <span class="ip-chip ip-chip-llm" title={agent.provider ? `${agent.provider} / ${agent.model}` : $t('agent.drawer.kind_llm_title')}>
-                <b>{$t('agent.head.kind_llm')}</b>{#if agent.model}<span class="ip-chip-v">{agent.model}</span>{/if}{#if fb > 0}<span class="ip-chip-x" title={$t('agent.drawer.fallbacks_title')}>+{fb}</span>{/if}
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
+                <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
+                             providers={headProviders} requiresTools={true}
+                             busy={headSaving} disabled={headSaving} error={headModelError}
+                             on:change={(e) => setHeadModel(e.detail)}>
+                  <span class="ip-chip ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
+                        title={headModelError || $t('agent.head.change_model_title')}>
+                    <b>{$t('agent.head.kind_llm')}</b>{#if agent.model}<span class="ip-chip-v">{agent.model}</span>{/if}{#if fb > 0}<span class="ip-chip-x" title={$t('agent.drawer.fallbacks_title')}>+{fb}</span>{/if}<span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
+                  </span>
+                </ModelPicker>
               </span>
             {:else if agentType(agent) === 'claude_code'}
-              <span class="ip-chip ip-chip-sdk" title={agent.model ? `SDK model: ${agent.model}` : `SDK default model: ${CLAUDE_CODE_DEFAULT_MODEL}`}>
-                <b>Claude Code</b><span class="ip-chip-v">{agent.model || CLAUDE_CODE_DEFAULT_MODEL}</span>
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
+                <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
+                             providers={headProviders} requiresTools={false}
+                             busy={headSaving} disabled={headSaving} error={headModelError}
+                             on:change={(e) => setHeadModel(e.detail)}>
+                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError}
+                        title={headModelError || $t('agent.head.change_model_title')}>
+                    <b>Claude Code</b><span class="ip-chip-v">{agent.model || CLAUDE_CODE_DEFAULT_MODEL}</span><span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
+                  </span>
+                </ModelPicker>
               </span>
             {:else}
               <span class="ip-chip ip-chip-script" title={agent.builtin_handler ? String(agent.builtin_handler) : $t('agent.drawer.kind_script_title')}>
@@ -629,6 +670,12 @@
   .ip-chip-llm{--chip:#6fe4b8}
   .ip-chip-sdk{--chip:#c8a8ff}
   .ip-chip-script{--chip:#f0a040}
+  /* The model chip is the model picker's trigger. */
+  .ip-chip-pick{display:inline-flex;min-width:0}
+  .ip-chip-btn{cursor:pointer;transition:border-color .12s, background .12s}
+  .ip-chip-btn:hover{border-color:color-mix(in srgb, var(--chip) 55%, transparent);background:color-mix(in srgb, var(--chip) 8%, transparent)}
+  .ip-chip-caret{margin-left:7px;font-size:9px;color:#8a8fa8}
+  .ip-chip-err{border-color:rgba(239,93,110,.65)}
   .ip-flow{color:#dde0ea;font-weight:600}
   .ip-flow::before{content:'';width:8px;height:8px;border-radius:2px;background:var(--f, var(--flow-color))}
   .ip-office { position: relative; max-width: 200px; cursor: pointer; }

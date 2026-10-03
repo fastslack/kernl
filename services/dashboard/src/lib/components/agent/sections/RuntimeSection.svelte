@@ -37,7 +37,7 @@
   import ModelPicker from '../ModelPicker.svelte';
   import { readChain, writeChain, MAX_CHAIN_LINKS, type ChainLink } from '$lib/model-chain.js';
   import { linkHealth, chainUsable, type ProviderStatus } from '$lib/provider-health.js';
-  import { modelEntries } from '$lib/llm-models.js';
+  import { loadPickerProviders } from '$lib/llm-provider-list.js';
   import type { ModelEntry } from '$lib/model-catalog.js';
 
   /** The drawer's agent store (`AgentDrawer` publishes it on the overview slot). */
@@ -85,35 +85,9 @@
   let draft: ChainLink | null = null;
 
   // ── Providers ────────────────────────────────────────────────────
-  // Same two calls the chat's picker makes (routes/chat/+page.svelte:521-546):
-  // the status list, then each ready provider's models in parallel. Offline
-  // providers are kept in the list — dimmed, with their reason — because what
-  // could be configured is exactly what someone reading a chain failure needs
-  // to see.
   async function loadProviders() {
-    try {
-      const r = await fetch('/api/llm-providers');
-      if (!r.ok) return;
-      const body = await r.json();
-      const list = (body.providers ?? []) as ProviderStatus[];
-      providers = await Promise.all(
-        list.map(async (p) => {
-          if (!p.ready) return { ...p, models: [] } as Provider;
-          try {
-            const mr = await fetch(`/api/llm-providers/${encodeURIComponent(p.slug)}/models`);
-            if (!mr.ok) return { ...p, models: [] } as Provider;
-            const mb = await mr.json();
-            return { ...p, models: modelEntries(mb.models) as ModelEntry[] } as Provider;
-          } catch {
-            return { ...p, models: [] } as Provider;
-          }
-        }),
-      );
-    } catch {
-      /* the section still renders; rows just cannot explain themselves */
-    } finally {
-      providersLoaded = true;
-    }
+    providers = await loadPickerProviders();
+    providersLoaded = true;
   }
   loadProviders();
 

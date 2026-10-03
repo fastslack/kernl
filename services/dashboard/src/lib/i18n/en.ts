@@ -661,6 +661,7 @@ const en = {
   "agent.drawer.tab_message": "Message",
   "agent.drawer.tab_config": "Settings",
   "agent.head.kind_llm": "AI",
+  "agent.head.change_model_title": "Change the model — list with prices (USD per million tokens, input / output)",
   "agent.head.kind_script": "Script",
   "agent.head.kind_function": "Built-in function",
   "agent.head.fallbacks": "+{n} fallback",

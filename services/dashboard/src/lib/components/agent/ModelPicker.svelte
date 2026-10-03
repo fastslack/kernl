@@ -83,7 +83,9 @@
   function place() {
     if (!trigger) return;
     const r = trigger.getBoundingClientRect();
-    const width = Math.max(300, Math.min(r.width, 460));
+    // A bare trigger is a chip a few words wide; the menu still needs room
+    // for an id and its price.
+    const width = $$slots.default ? 400 : Math.max(300, Math.min(r.width, 460));
     // Flip above the trigger when there is no room below it — a fallback row
     // near the bottom of the drawer would otherwise open off-screen.
     const below = window.innerHeight - r.bottom;
@@ -228,8 +230,11 @@
 
 <svelte:window on:keydown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); close(); } }} />
 
+<!-- With slot content the trigger is bare: the caller draws it (the drawer
+     header's model chip) and this keeps only the menu behaviour. -->
 <button
   class="mp-trigger"
+  class:mp-bare={$$slots.default}
   class:mp-err={!!error}
   class:mp-busy={busy}
   bind:this={trigger}
@@ -239,8 +244,12 @@
   aria-expanded={open}
   on:click|stopPropagation={toggle}
 >
-  <span class="mp-value" class:mp-placeholder={!provider && !model}>{currentLabel}</span>
-  <span class="mp-caret" aria-hidden="true">{busy ? '◌' : '▾'}</span>
+  {#if $$slots.default}
+    <slot {open} />
+  {:else}
+    <span class="mp-value" class:mp-placeholder={!provider && !model}>{currentLabel}</span>
+    <span class="mp-caret" aria-hidden="true">{busy ? '◌' : '▾'}</span>
+  {/if}
 </button>
 
 {#if open}
@@ -330,6 +339,10 @@
   .mp-trigger:disabled{opacity:.5;cursor:not-allowed}
   .mp-trigger.mp-err{border-color:rgba(239,93,110,.65);background:rgba(239,93,110,.08)}
   .mp-trigger.mp-busy{cursor:wait}
+  .mp-trigger.mp-bare{width:auto;max-width:100%;padding:0;border:none;background:none;border-radius:6px;font:inherit;color:inherit}
+  .mp-trigger.mp-bare:hover:not(:disabled){background:none}
+  .mp-trigger.mp-bare:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .mp-trigger.mp-bare.mp-err{background:none}
   .mp-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .mp-placeholder{color:#6a6f82}
   .mp-caret{color:#6a6f82;font-size:10px;flex:none}
