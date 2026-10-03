@@ -1,9 +1,12 @@
-# mtwRequest Server Configuration (binary installs: Linux tarball, macOS .app)
+# mtwRequest Server Configuration (binary installs: Linux tarball, macOS .app,
+# Windows)
 #
 # Template, not a config: the kernel renders it to <data dir>/mtw/mtw.toml on
 # every boot (src/core/bootstrap/sidecars.ts), replacing {{DATA_DIR}} with the
-# per-user data directory, and starts mtw-server from that folder. Derived
-# from mtw.docker.toml; keep the channel list in step with it.
+# per-user data directory and {{WHATSAPP_SOCKET}} with the bridge endpoint (a
+# unix socket under the data dir, or a per-install named pipe on Windows),
+# both TOML-escaped, and starts mtw-server from that folder. Derived from
+# mtw.docker.toml; keep the channel list in step with it.
 
 [server]
 # Loopback only: a desktop install has no reason to expose the bus.
@@ -142,12 +145,13 @@ auth = false
 history = 50
 
 # ── WhatsApp integration ────────────────────────────────────
-# Connects mtw-request to the whatsapp-bridge Go sidecar via a Unix socket
-# under the data dir (the kernel starts the bridge with the same path in
-# MTW_WHATSAPP_SOCKET).
+# Connects mtw-request to the whatsapp-bridge Go sidecar over a local
+# endpoint: a Unix socket under the data dir, or a per-install named pipe
+# (\\.\pipe\kernl-<id>-whatsapp) on Windows. The kernel renders the value
+# and starts the bridge with the same one in MTW_WHATSAPP_SOCKET.
 # Exposes whatsapp.* request actions and publishes events on the
 # whatsapp:* channels above.
 [whatsapp]
 enabled = true
-socket = "{{DATA_DIR}}/run/whatsapp.sock"
+socket = "{{WHATSAPP_SOCKET}}"
 connect_timeout_secs = 60

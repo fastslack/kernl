@@ -43,6 +43,13 @@ cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 # ffmpeg, so an install without one generates no subtitles whatever the user
 # picks in the UI.
 [ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$PKG_DIR/"
+# mtw-server + whatsapp-bridge (stage-payload 2d) and the mtw.toml template the
+# kernel renders on boot — sidecars.ts looks for them under <app>/bin/.
+if [ -f "$SRC_TREE/bin/mtw-server/mtw-server.exe" ] && [ -f "$SRC_TREE/bin/whatsapp-bridge/whatsapp-bridge.exe" ]; then
+  mkdir -p "$PKG_DIR/bin"
+  cp -a "$SRC_TREE/bin/mtw-server" "$SRC_TREE/bin/whatsapp-bridge" "$PKG_DIR/bin/"
+  cp "$SRC_TREE/bin/mtw.binary.toml" "$PKG_DIR/bin/mtw.binary.toml"
+fi
 cp -a "$SRC_TREE/node_modules" "$PKG_DIR/"
 cp -a "$SRC_TREE/dashboard"    "$PKG_DIR/"
 cp -a "$SRC_TREE/assets"       "$PKG_DIR/"
@@ -72,6 +79,11 @@ Where your data lives:
 Stopping the kernel:
   - Close the start.bat console window, OR
   - Ctrl-C in that window.
+
+WhatsApp:
+  - Bundled — mtw-server and the bridge ship inside this package and the
+    kernel supervises them over named pipes. Link your phone from
+    Settings -> Channels -> WhatsApp (QR or phone code).
 
 Optional features (graph analytics, ML trading):
   - Install Neo4j Desktop from https://neo4j.com/download/

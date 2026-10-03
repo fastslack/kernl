@@ -1,7 +1,7 @@
 /**
  * Keeps one long-lived child process alive.
  *
- * Binary installs (Linux tarball, macOS .app) ship `mtw-server` and the Go
+ * Binary installs (Linux tarball, macOS .app, Windows) ship `mtw-server` and the Go
  * `whatsapp-bridge` next to the kernel instead of running them as Docker
  * services, so something has to play the role compose's `restart:` plays
  * there: start the process, bring it back when it dies, and take it down with
@@ -15,6 +15,11 @@
  * Logging names the sidecar, the pid and the exit code only. The command line
  * and environment are never logged: env carries socket and session paths
  * today, and nothing stops it from carrying a secret tomorrow.
+ *
+ * With `stdinShutdown` the child gets a stdin pipe and stop() closes it
+ * first: the bundled binaries (run with MTW_EXIT_ON_STDIN_EOF=1) shut down
+ * cleanly at EOF, which is the only graceful stop Windows offers — there a
+ * SIGTERM is an immediate TerminateProcess. Signals stay as the fallback.
  *
  * Child stdout goes to the kernel's stderr, not its stdout: with the MCP stdio
  * transport the kernel's stdout is the protocol stream, and one stray log line
@@ -43,12 +48,29 @@ export interface SidecarSpec {
   cwd?: string;
   minBackoffMs?: number;
   maxBackoffMs?: number;
+  /**
+   * Give the child a stdin pipe and close it first on stop(), before any
+   * signal: the child is expected to exit at stdin EOF.
+   */
+  stdinShutdown?: boolean;
+  /** How long stop() waits for each graceful step. Defaults to 5 s. */
+  killGraceMs?: number;
 }
 
 type Proc = ReturnType<typeof Bun.spawn>;
 
 const STABLE_UPTIME_MS = 60_000;
 const KILL_GRACE_MS = 5_000;
+const SIGTERM_GRACE_AFTER_EOF_MS = 2_000;
+
+/** Closes a child's stdin pipe, if it has one; a gone child is fine. */
+const endStdin = (proc: Proc | null): void => {
+  try { (proc?.stdin as { end(): void } | undefined)?.end?.(); } catch { /* gone */ }
+};
+
+/** Whether `proc` exits within `ms`. */
+const exitsWithin = (proc: Proc, ms: number): Promise<boolean> =>
+  Promise.race([proc.exited.then(() => true), Bun.sleep(ms).then(() => false)]);
 
 export class SidecarSupervisor {
   private readonly spec: SidecarSpec;
@@ -98,12 +120,20 @@ export class SidecarSupervisor {
       return;
     }
 
-    try { proc.kill("SIGTERM"); } catch { /* already gone */ }
-    const exitedInTime = await Promise.race([
-      proc.exited.then(() => true),
-      Bun.sleep(KILL_GRACE_MS).then(() => false),
-    ]);
-    if (!exitedInTime) {
+    const grace = this.spec.killGraceMs ?? KILL_GRACE_MS;
+    let exited = false;
+    let termWait = grace;
+    if (this.spec.stdinShutdown) {
+      endStdin(proc);
+      exited = await exitsWithin(proc, grace);
+      if (!exited) log.warn(`sidecar ${this.spec.name}: did not exit at stdin EOF, sending SIGTERM`);
+      termWait = SIGTERM_GRACE_AFTER_EOF_MS;
+    }
+    if (!exited) {
+      try { proc.kill("SIGTERM"); } catch { /* already gone */ }
+      exited = await exitsWithin(proc, termWait);
+    }
+    if (!exited) {
       log.warn(`sidecar ${this.spec.name}: did not exit on SIGTERM, sending SIGKILL`);
       try { proc.kill("SIGKILL"); } catch { /* already gone */ }
       await proc.exited;
@@ -124,6 +154,7 @@ export class SidecarSupervisor {
       this.restartTimer = null;
     }
     if (this.alive) {
+      endStdin(this.proc);
       try { this.proc?.kill("SIGTERM"); } catch { /* already gone */ }
     }
   }
@@ -142,7 +173,7 @@ export class SidecarSupervisor {
       proc = this.spawnFn([command, ...args], {
         cwd,
         env: { ...base, ...env },
-        stdin: "ignore",
+        stdin: this.spec.stdinShutdown ? "pipe" : "ignore",
         stdout: 2,
         stderr: "inherit",
       });
@@ -213,14 +244,32 @@ const canonical = (p: string): string => {
   try { return realpathSync(p); } catch { return p; }
 };
 
+/** Whether a `tasklist /FO CSV /NH` line names `command`'s executable. */
+export function windowsImageMatches(tasklistCsv: string, command: string): boolean {
+  const line = tasklistCsv.trim();
+  if (!line.startsWith('"')) return false; // "INFO: No tasks…" or nothing
+  const image = line.slice(1, line.indexOf('"', 1));
+  const want = command.split(/[\\/]/).pop() ?? "";
+  return image !== "" && image.toLowerCase() === want.toLowerCase();
+}
+
 /**
- * Whether `pid` runs `command` as its executable. /proc on Linux; `ps`
+ * Whether `pid` runs `command` as its executable. `tasklist` on Windows (by
+ * image name: it does not print the full path), /proc on Linux, `ps`
  * elsewhere. A pid we cannot inspect never matches, so a recycled pid is
  * never killed. `matchScriptArgv` also accepts the path as argv[1] (a shell
  * script run by its interpreter): a test seam for fake binaries, never set in
  * production, where `gdb <binary>` at a recycled pid would otherwise match.
  */
 function runsCommand(pid: number, command: string, matchScriptArgv = false): boolean {
+  if (process.platform === "win32") {
+    try {
+      const res = Bun.spawnSync(["tasklist", "/FI", `PID eq ${pid}`, "/FO", "CSV", "/NH"], { stdout: "pipe", stderr: "ignore" });
+      return windowsImageMatches(res.stdout.toString(), command);
+    } catch {
+      return false;
+    }
+  }
   const want = canonical(command);
   if (existsSync(`/proc/${pid}`)) {
     try {

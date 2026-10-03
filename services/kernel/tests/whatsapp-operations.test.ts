@@ -193,11 +193,12 @@ describe("WhatsApp that is not running yet", () => {
     expect(calls).toEqual(["start:whatsapp"]);
   });
 
-  it("Windows reports unknown with the platform", async () => {
+  it("Windows asks the provider like any platform", async () => {
     Object.defineProperty(process, "platform", { value: "win32" });
     const { ops } = setup();
+    await ops["channels.whatsapp.link"]({ mode: "qr" }); // starts the channel: the provider is registered
     expect(await ops["channels.whatsapp.status"]({})).toEqual({
-      bridge_connected: false, state: "unknown", platform: "win32",
+      bridge_connected: true, state: "idle", platform: "win32",
     });
   });
 });

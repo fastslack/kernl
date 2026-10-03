@@ -348,12 +348,11 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
       const n = limit && limit > 0 ? Math.min(Math.floor(limit), 500) : undefined;
       return requireWhatsApp().listChats(n);
     },
-    // `platform` lets the card explain Windows, where no bridge ships. A
-    // channel that is not running answers `inactive` (the card shows the link
-    // buttons; linking starts it) instead of a 404.
+    // Every platform asks the provider; `platform` rides along for the card.
+    // A channel that is not running answers `inactive` (the card shows the
+    // link buttons; linking starts it) instead of a 404.
     "channels.whatsapp.status": async () => {
       const platform = process.platform;
-      if (platform === "win32") return { bridge_connected: false, state: "unknown", platform };
       const provider = requireRegistry().getProvider("whatsapp") as unknown as Partial<WhatsAppLinkProvider> | undefined;
       if (!provider || typeof provider.status !== "function") {
         return { bridge_connected: false, state: "inactive", platform };

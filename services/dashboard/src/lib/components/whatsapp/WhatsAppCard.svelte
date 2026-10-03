@@ -90,7 +90,6 @@
 
   $: phoneDigits = normalizePhone(phoneRaw);
   $: phoneInvalid = phoneRaw.length > 0 && !phoneDigits;
-  $: isWindowsBridge = status.platform === 'win32';
   $: bridgeDown = status.state === 'unknown' && !status.bridge_connected;
 
   // Waiting for a phone-code request to come back with an actual code.
@@ -528,7 +527,7 @@
           <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5" /><path d="M9 8V2" /><path d="M15 8V2" /><path d="M18 8v5a6 6 0 0 1-12 0V8Z" /><line x1="3" y1="3" x2="21" y2="21" /></svg>
         </div>
         <h3 class="wa-empty-title">{$t('settings.wa.bridge_title')}</h3>
-        <p class="wa-empty-text">{isWindowsBridge ? $t('settings.wa.err.windows') : $t('settings.wa.err.bridge')}</p>
+        <p class="wa-empty-text">{$t('settings.wa.err.bridge')}</p>
       </div>
 
     {:else if view === 'qr'}

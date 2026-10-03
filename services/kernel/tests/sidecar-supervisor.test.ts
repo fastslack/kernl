@@ -2,8 +2,8 @@ import { describe, it, expect, afterEach } from "bun:test";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync, copyFileSync, rmSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { SidecarSupervisor, reapOrphan } from "../src/core/sidecars/supervisor.js";
-import { startSidecars } from "../src/core/bootstrap/sidecars.js";
+import { SidecarSupervisor, reapOrphan, windowsImageMatches } from "../src/core/sidecars/supervisor.js";
+import { bridgeEnvAllowlist, sidecarEndpoints, startSidecars } from "../src/core/bootstrap/sidecars.js";
 
 const TEMPLATE = path.resolve(import.meta.dir, "../../../packaging/mtw.binary.toml");
 
@@ -77,6 +77,14 @@ describe("SidecarSupervisor", () => {
   });
 });
 
+/**
+ * The tail of every fake bundled binary: like the real ones, exit at stdin EOF
+ * when MTW_EXIT_ON_STDIN_EOF=1, otherwise run until SIGTERM.
+ */
+const FAKE_LOOP =
+  `if [ "$MTW_EXIT_ON_STDIN_EOF" = 1 ]; then cat >/dev/null; exit 0; fi\n` +
+  `trap 'exit 0' TERM\nwhile true; do sleep 0.1; done`;
+
 function fakeApp(opts: { bridge?: boolean; server?: boolean; templateAtRoot?: boolean } = {}) {
   const appDir = tmp();
   const dataDir = tmp();
@@ -87,7 +95,7 @@ function fakeApp(opts: { bridge?: boolean; server?: boolean; templateAtRoot?: bo
       path.join(appDir, "bin/whatsapp-bridge/whatsapp-bridge"),
       `echo "$MTW_WHATSAPP_SOCKET|$MTW_WHATSAPP_DB" > "${dataDir}/bridge.env"\n` +
         `echo "\${SIDECAR_TEST_SECRET:-none}|\${PATH:+path}" > "${dataDir}/bridge.inherit"\n` +
-        `trap 'exit 0' TERM\nwhile true; do sleep 0.1; done`,
+        FAKE_LOOP,
     );
   }
   if (opts.server !== false) {
@@ -95,7 +103,7 @@ function fakeApp(opts: { bridge?: boolean; server?: boolean; templateAtRoot?: bo
       path.join(appDir, "bin/mtw-server/mtw-server"),
       `echo "$RUST_BRIDGE_SOCKET|$(pwd)" > "${dataDir}/server.env"\n` +
         `echo "$MTW_HOST|$MTW_PORT|\${SIDECAR_TEST_SECRET:-none}" > "${dataDir}/server.inherit"\n` +
-        `trap 'exit 0' TERM\nwhile true; do sleep 0.1; done`,
+        FAKE_LOOP,
     );
   }
   return { appDir, dataDir };
@@ -105,6 +113,7 @@ describe("startSidecars", () => {
   it("startSidecars is a no-op without the flag or binaries", async () => {
     const full = fakeApp();
     expect(await startSidecars({ ...full, env: {}, platform: "linux" })).toEqual([]);
+    // win32 looks for the .exe pair, which this bundle does not have.
     expect(await startSidecars({ ...full, env: { KERNL_BINARY_INSTALL: "1" }, platform: "win32" })).toEqual([]);
     const noBridge = fakeApp({ bridge: false });
     expect(await startSidecars({ ...noBridge, env: { KERNL_BINARY_INSTALL: "1" }, platform: "linux" })).toEqual([]);
@@ -252,5 +261,165 @@ describe("sidecar hardening", () => {
     expect(await reapOrphan(pidFile, bin, { graceMs: 300, matchScriptArgv: true })).toBe(true);
     const exited = await Promise.race([orphan.exited.then(() => true), Bun.sleep(2000).then(() => false)]);
     expect(exited).toBe(true);
+  });
+});
+
+describe("sidecarEndpoints", () => {
+  it("keeps the unix socket paths under the data dir off Windows", () => {
+    const e = sidecarEndpoints("linux", "/home/u/.local/share/kernl");
+    expect(e.whatsapp).toBe("/home/u/.local/share/kernl/run/whatsapp.sock");
+    expect(e.rust).toBe("/home/u/.local/share/kernl/run/mtw-rust.sock");
+  });
+
+  it("uses per-install named pipes on Windows, with a per-boot random nonce", () => {
+    const e = sidecarEndpoints("win32", "C:\\Users\\Ana María\\AppData\\Local\\Kernl\\data");
+    expect(e.whatsapp).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-whatsapp$/);
+    expect(e.rust).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-rust$/);
+  });
+
+  it("gives two installs different pipes and one install the same pipe whatever the case (same nonce)", () => {
+    const nonce = "deadbeef0001";
+    const a = sidecarEndpoints("win32", "C:\\Users\\ana\\AppData\\Local\\Kernl\\data", nonce);
+    const b = sidecarEndpoints("win32", "C:\\Users\\beto\\AppData\\Local\\Kernl\\data", nonce);
+    const a2 = sidecarEndpoints("win32", "c:\\users\\ANA\\appdata\\local\\kernl\\data", nonce);
+    expect(a.whatsapp).not.toBe(b.whatsapp);
+    expect(a2.whatsapp).toBe(a.whatsapp);
+  });
+
+  it("shares the same nonce between whatsapp and rust in one boot, and differs across boots", () => {
+    const dataDir = "C:\\Users\\ana\\AppData\\Local\\Kernl\\data";
+    const bootA = sidecarEndpoints("win32", dataDir);
+    const bootB = sidecarEndpoints("win32", dataDir);
+    const nonceOf = (pipe: string) => pipe.match(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-([0-9a-f]{12})-/)?.[1];
+    const nonceA = nonceOf(bootA.whatsapp);
+    const nonceR = nonceOf(bootA.rust);
+    expect(nonceA).toBeTruthy();
+    expect(nonceA).toBe(nonceR);
+    expect(nonceOf(bootB.whatsapp)).not.toBe(nonceA);
+  });
+
+  it("keeps the prefix stable across boots for the same install (Review Focus 4)", () => {
+    const dataDir = "C:\\Users\\ana\\AppData\\Local\\Kernl\\data";
+    const bootA = sidecarEndpoints("win32", dataDir);
+    const bootB = sidecarEndpoints("win32", dataDir);
+    const prefixOf = (pipe: string) => pipe.match(/^(\\\\\.\\pipe\\kernl-[0-9a-f]{10})-/)?.[1];
+    expect(prefixOf(bootA.whatsapp)).toBe(prefixOf(bootB.whatsapp));
+    expect(prefixOf(bootA.rust)).toBe(prefixOf(bootB.rust));
+  });
+});
+
+describe("windowsImageMatches", () => {
+  it("matches the image name tasklist prints for the pid", () => {
+    const csv = '"whatsapp-bridge.exe","4242","Console","1","12,345 K"\r\n';
+    expect(windowsImageMatches(csv, "C:\\Kernl\\bin\\whatsapp-bridge\\whatsapp-bridge.exe")).toBe(true);
+    expect(windowsImageMatches(csv, "C:\\Kernl\\bin\\mtw-server\\mtw-server.exe")).toBe(false);
+  });
+
+  it("never matches when tasklist found nothing", () => {
+    expect(windowsImageMatches("INFO: No tasks are running which match the specified criteria.\r\n", "x.exe")).toBe(false);
+    expect(windowsImageMatches("", "x.exe")).toBe(false);
+  });
+});
+
+describe("stdin shutdown", () => {
+  it("stops a child that exits at stdin EOF without waiting for the kill", async () => {
+    // Exits as soon as stdin closes; ignores SIGTERM, so only the EOF can stop it in time.
+    const bin = script(path.join(tmp(), "eof-exit"), `trap '' TERM\ncat >/dev/null\nexit 0`);
+    const sup = new SidecarSupervisor({ name: "eof", command: bin, stdinShutdown: true });
+    cleanup.push(() => sup.stop());
+    sup.start();
+    await Bun.sleep(100);
+    const t0 = Date.now();
+    await sup.stop();
+    expect(Date.now() - t0).toBeLessThan(2_000);
+    expect(sup.running).toBe(false);
+  });
+
+  it("still kills a child that ignores stdin, after the grace period", async () => {
+    const bin = script(path.join(tmp(), "ignore-all"), `trap '' TERM\nwhile true; do sleep 0.1; done`);
+    const sup = new SidecarSupervisor({ name: "stubborn", command: bin, stdinShutdown: true, killGraceMs: 300 });
+    cleanup.push(() => sup.stop());
+    sup.start();
+    await Bun.sleep(100);
+    const t0 = Date.now();
+    await sup.stop();
+    // The EOF wait was honoured before any signal.
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(300);
+    expect(sup.running).toBe(false);
+  }, 10_000);
+});
+
+/**
+ * A spawn that records argv and env and runs nothing: a .exe does not run
+ * here. The fake proc exits on kill() or when its stdin is closed.
+ */
+function recordingSpawn(spawned: Array<{ cmd: string[]; env: Record<string, string> }>): typeof Bun.spawn {
+  let nextPid = 900_000;
+  return ((cmd: string[], opts: { env?: Record<string, string> }) => {
+    spawned.push({ cmd, env: { ...(opts?.env ?? {}) } });
+    let exit!: (code: number) => void;
+    const exited = new Promise<number>((resolve) => { exit = resolve; });
+    return {
+      pid: nextPid++,
+      exited,
+      kill: () => exit(0),
+      stdin: { end: () => exit(0) },
+    };
+  }) as unknown as typeof Bun.spawn;
+}
+
+/**
+ * The Windows bundle layout: the .exe pair and the template under bin/. The
+ * data dir is as Windows-shaped as a Linux filesystem allows: a space, a
+ * non-ASCII letter and a backslash inside a name.
+ */
+function makeWindowsInstall() {
+  const appDir = tmp();
+  const dataDir = path.join(tmp(), "Ana María", "AppData\\Local\\Kernl\\data");
+  mkdirSync(dataDir, { recursive: true });
+  for (const f of ["bin/mtw-server/mtw-server.exe", "bin/whatsapp-bridge/whatsapp-bridge.exe"]) {
+    mkdirSync(path.join(appDir, path.dirname(f)), { recursive: true });
+    writeFileSync(path.join(appDir, f), "");
+  }
+  copyFileSync(TEMPLATE, path.join(appDir, "bin/mtw.binary.toml"));
+  return { appDir, dataDir };
+}
+
+describe("startSidecars on win32", () => {
+  it("starts the .exe pair with pipe endpoints, the stdin contract and the Windows env", async () => {
+    const { appDir, dataDir } = makeWindowsInstall();
+    const spawned: Array<{ cmd: string[]; env: Record<string, string> }> = [];
+    const env: NodeJS.ProcessEnv = { KERNL_BINARY_INSTALL: "1" };
+    const sups = await startSidecars({ appDir, dataDir, env, platform: "win32", spawnFn: recordingSpawn(spawned) });
+    cleanup.push(async () => { await Promise.all(sups.map(s => s.stop())); });
+    expect(sups).toHaveLength(2);
+    const bridge = spawned.find((s) => s.cmd[0].endsWith("whatsapp-bridge.exe"))!;
+    const server = spawned.find((s) => s.cmd[0].endsWith("mtw-server.exe"))!;
+    expect(bridge.env.MTW_WHATSAPP_SOCKET).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-whatsapp$/);
+    expect(bridge.env.MTW_EXIT_ON_STDIN_EOF).toBe("1");
+    expect(server.env.MTW_EXIT_ON_STDIN_EOF).toBe("1");
+    expect(env.RUST_BRIDGE_SOCKET).toMatch(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-[0-9a-f]{12}-rust$/);
+    expect(server.env.RUST_BRIDGE_SOCKET).toBe(env.RUST_BRIDGE_SOCKET!);
+    // Same boot, same nonce on both names.
+    const nonceOf = (pipe: string) => pipe.match(/^\\\\\.\\pipe\\kernl-[0-9a-f]{10}-([0-9a-f]{12})-/)?.[1];
+    expect(nonceOf(bridge.env.MTW_WHATSAPP_SOCKET)).toBe(nonceOf(env.RUST_BRIDGE_SOCKET!));
+    // A Windows endpoint renders into a config mtw-server parses.
+    const toml = readFileSync(path.join(dataDir, "mtw", "mtw.toml"), "utf8");
+    expect(toml).toContain(`socket = "${bridge.env.MTW_WHATSAPP_SOCKET.replace(/\\/g, "\\\\")}"`);
+    expect(toml).not.toContain("{{WHATSAPP_SOCKET}}");
+    const parsed = Bun.TOML.parse(toml) as { whatsapp: { socket: string }; store: { path: string } };
+    expect(parsed.whatsapp.socket).toBe(bridge.env.MTW_WHATSAPP_SOCKET);
+    // The DATA_DIR-derived paths round-trip with the space, the "í" and the backslashes intact.
+    expect(dataDir).toContain("Ana María");
+    expect(dataDir).toContain("\\");
+    expect(parsed.store.path).toBe(`${dataDir}/data/kernel.db`);
+    expect(toml).not.toContain("{{DATA_DIR}}");
+    for (const s of sups) await s.stop();
+    expect(sups.every(s => !s.running)).toBe(true);
+  });
+
+  it("lets the bridge inherit the Windows system variables Go needs", () => {
+    expect(bridgeEnvAllowlist("win32")).toEqual(expect.arrayContaining(["SystemRoot", "USERPROFILE", "LOCALAPPDATA", "TEMP", "TMP"]));
+    expect(bridgeEnvAllowlist("linux")).not.toContain("SystemRoot");
   });
 });
