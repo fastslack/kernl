@@ -607,6 +607,7 @@
     if (_deepLinkTab) {
       panelTab = _deepLinkTab;
       if (_deepLinkTab === 'workspace') loadWorkspaceFiles();
+      if (_deepLinkTab === 'history') loadAgentRuns();
       _deepLinkTab = null;
     } else {
       panelTab = runningAgentIds.has(selectedAgent) ? 'live' : 'info';
