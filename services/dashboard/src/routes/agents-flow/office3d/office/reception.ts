@@ -2,6 +2,9 @@ import { rt } from '../runtime.js';
 import { WALL_H, makeSignClickable } from './_shared.js';
 import { applyPBR, bakeVertexAO } from './_materials.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import { applyWorldTexture, scaleUV } from '../textures.js';
+import { buildReceptionDecor } from './reception-decor.js';
 import {
   RECEPTION_COUNTER_W, RECEPTION_COUNTER_D, RECEPTION_COLUMN_GAP, RECEPTION_WALL_GAP,
   receptionPickupPos, receptionDriverPos,
@@ -33,8 +36,9 @@ export function buildReception(
   const counterD = RECEPTION_COUNTER_D;
 
   // ── Counter body (front panel — faces SOUTH / toward the doors) ──
-  const panelMat = new rt.THREE.MeshStandardMaterial({ color: 0x1a2035, roughness: 0.35, metalness: 0.4 });
-  applyPBR(panelMat, 'metal'); // reception counter front panel — structural metal
+  // Walnut front: warm wood against the gold fluting and the black stone top.
+  const panelMat = new rt.THREE.MeshStandardMaterial({ color: 0x4a2c18, roughness: 0.55, metalness: 0 });
+  applyWorldTexture(panelMat, 'wood', { normalScale: 0.25 });
   // panelMat is dedicated to this counter front panel only (verified) → safe
   // to enable vertexColors. Bake contact-shadow AO at the panel's local bottom
   // (-counterH/2) so it darkens where it meets the marble floor. Subtle
@@ -42,6 +46,7 @@ export function buildReception(
   panelMat.vertexColors = true;
   panelMat.needsUpdate = true;
   const panelGeo = new RoundedBoxGeometry(counterW, counterH, 0.15, 2, 0.02);
+  scaleUV(panelGeo, counterW / 2.5, 1); // grain at real-world scale along the 10u front
   bakeVertexAO(panelGeo, { floorY: -counterH / 2, reach: counterH * 0.35, strength: 0.35 });
   const panel = new rt.THREE.Mesh(
     panelGeo,
@@ -68,7 +73,10 @@ export function buildReception(
   }
 
   // ── Counter top slab (polished marble with gold rim) ──
-  const topMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a3555, roughness: 0.15, metalness: 0.6 });
+  // Polished black granite: dark enough to frame the gold, glossy enough to
+  // catch the lobby lights and the environment.
+  const topMat = new rt.THREE.MeshStandardMaterial({ color: 0x121419, roughness: 0.2, metalness: 0 });
+  if ('envMapIntensity' in topMat) topMat.envMapIntensity = 1.3;
   // Polished marble counter top — prominent camera-facing slab. Subtle
   // RoundedBoxGeometry chamfer (segments=2) rounds the edges for a finished
   // stone look. No vertexColors here (floats at counter height, not grounded).
@@ -90,6 +98,19 @@ export function buildReception(
     rim.position.set(cx, counterH + 0.05, counterZ + dz);
     scene.add(rim);
   }
+
+  // ── Warm LED coves: under the stone lip and along the toe kick, so the
+  // counter floats on light (bloom picks the strips up).
+  const ledMat = new rt.THREE.MeshStandardMaterial({
+    color: 0xffd9a0, emissive: new rt.THREE.Color(0xffb866), emissiveIntensity: 1.6,
+  });
+  const frontZ = counterZ + counterD / 2;
+  const lipLed = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW, 0.025, 0.025), ledMat);
+  lipLed.position.set(cx, counterH - 0.03, frontZ + 0.02);
+  scene.add(lipLed);
+  const toeLed = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW - 0.1, 0.02, 0.03), ledMat);
+  toeLed.position.set(cx, 0.05, frontZ + 0.01);
+  scene.add(toeLed);
 
   // ── Flanking gold columns (hotel entrance feel) ──
   const columnMat = new rt.THREE.MeshStandardMaterial({ color: 0xb89648, roughness: 0.3, metalness: 0.7 });
@@ -119,7 +140,7 @@ export function buildReception(
   //       backWallSouthFaceZ. Keep them in sync.
   const WALL_GAP_BEHIND_COUNTER = RECEPTION_WALL_GAP;
   const backWallZ = counterZ - counterD / 2 - WALL_GAP_BEHIND_COUNTER;
-  const backMat = new rt.THREE.MeshStandardMaterial({ color: 0x1d2540, roughness: 0.55, metalness: 0.2 });
+  const backMat = new rt.THREE.MeshStandardMaterial({ color: 0x141a2c, roughness: 0.7, metalness: 0.05 });
   const backH = WALL_H - 0.5;
   const back = new rt.THREE.Mesh(
     new rt.THREE.BoxGeometry(counterW + 0.8, backH, 0.1),
@@ -127,14 +148,48 @@ export function buildReception(
   );
   back.position.set(cx, backH / 2, backWallZ);
   scene.add(back);
-  // Horizontal gold divider on the back wall
-  const divider = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW + 0.6, 0.08, 0.06), goldMat);
-  divider.position.set(cx, 2.0, backWallZ + 0.04);
-  scene.add(divider);
+  // Walnut slats on the back wall's lobby face: a wainscot under the video
+  // wall and two full-height panels outside the flanking screens. One merged
+  // mesh. Slats stay within 0.03 of the wall face so the screens, their gold
+  // frames and the activity board (all further out) sit cleanly on top.
+  const slatMat = new rt.THREE.MeshStandardMaterial({ color: 0x5a3820, roughness: 0.6, metalness: 0 });
+  applyWorldTexture(slatMat, 'wood', { normalScale: 0.2 });
+  const SLAT_W = 0.06, SLAT_GAP = 0.045, SLAT_D = 0.03;
+  const wallFaceZ = backWallZ + 0.05;
+  const slatGeos: any[] = [];
+  const addSlats = (x0: number, x1: number, y0: number, y1: number) => {
+    for (let x = x0 + SLAT_W / 2; x <= x1 - SLAT_W / 2; x += SLAT_W + SLAT_GAP) {
+      const g = new rt.THREE.BoxGeometry(SLAT_W, y1 - y0, SLAT_D);
+      scaleUV(g, 0.15, (y1 - y0) / 2.5);
+      g.translate(x, (y0 + y1) / 2, wallFaceZ + SLAT_D / 2);
+      slatGeos.push(g);
+    }
+  };
+  const halfBack = (counterW + 0.8) / 2;
+  const WAINSCOT_H = 1.2;
+  const panelInner = 4.3; // clear of the flanking screens (cx ± 2.8 ± 1.27)
+  addSlats(cx - panelInner, cx + panelInner, 0, WAINSCOT_H);
+  addSlats(cx - halfBack, cx - panelInner, 0, backH - 0.15);
+  addSlats(cx + panelInner, cx + halfBack, 0, backH - 0.15);
+  const slats = new rt.THREE.Mesh(mergeGeometries(slatGeos, false), slatMat);
+  for (const g of slatGeos) g.dispose();
+  slats.receiveShadow = true;
+  slats.matrixAutoUpdate = false; slats.updateMatrix();
+  scene.add(slats);
+  // Gold cap rail on the wainscot, with a warm LED cove washing up the wall.
+  const capRail = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(panelInner * 2, 0.05, 0.06), goldMat);
+  capRail.position.set(cx, WAINSCOT_H + 0.025, wallFaceZ + 0.03);
+  scene.add(capRail);
+  const wallLed = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(panelInner * 2 - 0.1, 0.02, 0.02), ledMat);
+  wallLed.position.set(cx, WAINSCOT_H + 0.06, wallFaceZ + 0.045);
+  scene.add(wallLed);
   // Upper crown strip
   const crown = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW + 1.2, 0.15, 0.15), goldMat);
   crown.position.set(cx, backH - 0.05, backWallZ);
   scene.add(crown);
+  const crownLed = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW + 0.6, 0.02, 0.02), ledMat);
+  crownLed.position.set(cx, backH - 0.14, backWallZ + 0.08);
+  scene.add(crownLed);
 
   // ── RECEPTION sign on the back wall — matches the style of office signs ──
   const signDiv = document.createElement('div');
@@ -222,6 +277,7 @@ export function buildReception(
   // ── Side planters with topiaries flanking the front (guides visitors) ──
   const potMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a3050, roughness: 0.5, metalness: 0.3 });
   const leafMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a6e2a, roughness: 0.75 });
+  const topiaries: Array<{ x: number; z: number; stand: any[] }> = [];
   for (const side of [-1, 1]) {
     const px = cx + side * (counterW / 2 + 0.3);
     const pz = counterZ + counterD / 2 + 0.8;
@@ -231,6 +287,7 @@ export function buildReception(
     const foliage = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.35, 10, 8), leafMat);
     foliage.position.set(px, 0.85, pz);
     scene.add(foliage);
+    topiaries.push({ x: px, z: pz, stand: [pot, foliage] });
   }
 
   // ── Executive office chair for the receptionist ─────────────
@@ -364,12 +421,15 @@ export function buildReception(
   // and a ring of tear-drop crystals.
   const chainMat = new rt.THREE.MeshStandardMaterial({ color: 0x4a3a14, roughness: 0.45, metalness: 0.7 });
   applyPBR(chainMat, 'trim'); // chandelier gold chain — accent trim
+  const chandelierParts: any[] = [];
   const chain = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.014, 0.014, 1.4, 6), chainMat);
   chain.position.set(cx, WALL_H - 0.7, counterZ);
   scene.add(chain);
+  chandelierParts.push(chain);
   const chandBody = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.18, 14, 10), goldMat);
   chandBody.position.set(cx, WALL_H - 1.45, counterZ);
   scene.add(chandBody);
+  chandelierParts.push(chandBody);
   // Glowing core
   const chandGlow = new rt.THREE.Mesh(
     new rt.THREE.SphereGeometry(0.1, 10, 8),
@@ -380,6 +440,7 @@ export function buildReception(
   );
   chandGlow.position.set(cx, WALL_H - 1.45, counterZ);
   scene.add(chandGlow);
+  chandelierParts.push(chandGlow);
   // 8 crystal tear-drops hanging from the body
   const crystalMat = new rt.THREE.MeshStandardMaterial({
     color: 0xffe4a0, transparent: true, opacity: 0.85,
@@ -392,6 +453,7 @@ export function buildReception(
     cr.position.set(cx + Math.cos(a) * 0.22, WALL_H - 1.62, counterZ + Math.sin(a) * 0.22);
     cr.rotation.x = Math.PI; // tip pointing DOWN
     scene.add(cr);
+    chandelierParts.push(cr);
   }
 
   // ── Velvet rope stanchions flanking the front of the counter ──
@@ -438,12 +500,15 @@ export function buildReception(
   // Off-centered so it doesn't block the bell. Black marble base with gold trim.
   const vaseX = cx + counterW / 2 - 1.8;
   const vaseBaseMat = new rt.THREE.MeshStandardMaterial({ color: 0x0a0e1a, roughness: 0.15, metalness: 0.4 });
+  const vaseParts: any[] = [];
   const vase = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.09, 0.13, 0.42, 14), vaseBaseMat);
   vase.position.set(vaseX, counterH + 0.31, counterZ);
   scene.add(vase);
+  vaseParts.push(vase);
   const vaseRim = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.095, 0.095, 0.025, 14), goldMat);
   vaseRim.position.set(vaseX, counterH + 0.52, counterZ);
   scene.add(vaseRim);
+  vaseParts.push(vaseRim);
   // Bouquet: 4 small spheres at varying heights, warm petals
   const petalMat = new rt.THREE.MeshStandardMaterial({
     color: 0xd8b25a, roughness: 0.75,
@@ -458,12 +523,14 @@ export function buildReception(
       counterZ + Math.sin(a) * 0.05,
     );
     scene.add(petal);
+    vaseParts.push(petal);
   }
   // A single tall stem in the centre for height
   const stemMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a4a2a, roughness: 0.85 });
   const stem = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.008, 0.008, 0.22, 6), stemMat);
   stem.position.set(vaseX, counterH + 0.62, counterZ);
   scene.add(stem);
+  vaseParts.push(stem);
 
   // ── Wall sconces flanking the video wall (warm uplights) ──
   const sconceMat = new rt.THREE.MeshStandardMaterial({
@@ -499,6 +566,15 @@ export function buildReception(
   );
   platform.position.set(cx, 0.02, counterZ - WALL_GAP_BEHIND_COUNTER / 2);
   scene.add(platform);
+
+  // ── Lounges + glTF props (sofas, plants, chandelier, vase) ──
+  buildReceptionDecor(scene, {
+    cx, counterZ, topiaries,
+    // Hung over the visitors' side of the counter, not over its centre: from
+    // the lobby camera a fitting above the counter covers the activity board.
+    chandelier: { at: { x: cx, y: WALL_H - 0.1, z: counterZ + counterD / 2 + 1.6 }, stand: chandelierParts },
+    vase: { at: { x: vaseX, y: counterH + 0.1, z: counterZ }, stand: vaseParts },
+  });
 
   return {
     // Drop point = centre of counter top (visible from both sides)

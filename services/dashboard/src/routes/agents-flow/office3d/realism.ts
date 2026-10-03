@@ -80,6 +80,12 @@ export function setVisible(obj: any, _data: unknown, on: boolean): void {
   obj.visible = on;
 }
 
+/** Switch for a glTF prop that replaces primitive stand-ins (shown when it is off). */
+export function swapStandIn(obj: any, d: { stand: any[] }, on: boolean): void {
+  obj.visible = on;
+  for (const m of d.stand) m.visible = !on;
+}
+
 if (typeof window !== 'undefined') {
   (window as any).kernlRealismPart = (part: RealismPart, on: boolean) => {
     let n = 0;

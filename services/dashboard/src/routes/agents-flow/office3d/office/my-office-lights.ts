@@ -7,7 +7,7 @@
 // Cost: three PointLights, no shadows. Every light is evaluated for every lit
 // fragment in the whole scene, so keep this list short.
 import { rt } from '../runtime.js';
-import { realismPart, registerRealismSwitch, setVisible } from '../realism.js';
+import { realismPart, registerRealismSwitch, setVisible, swapStandIn } from '../realism.js';
 import { placeModel } from '../models.js';
 
 type P = { x: number; y: number; z: number };
@@ -97,8 +97,8 @@ export function addMyOfficeProps(scene: any, opts: {
       .then((obj) => {
         if (!obj) return;
         const data = { stand: p.stand };
-        applyPlantState(obj, data, true);
-        registerRealismSwitch('models', obj, data, applyPlantState);
+        swapStandIn(obj, data, true);
+        registerRealismSwitch('models', obj, data, swapStandIn);
       });
   });
   void placeModel(scene, 'marble_bust_01', opts.bust, { height: 0.5, ry: Math.PI / 2 })
@@ -116,10 +116,4 @@ function applyWindowState(mat: any, d: { before: WindowState; after: WindowState
   mat.emissiveIntensity = v.emissiveIntensity; mat.roughness = v.roughness; mat.metalness = v.metalness;
   mat.transparent = v.transparent; mat.opacity = v.opacity;
   mat.needsUpdate = true;
-}
-
-/** The glTF plant replaces its primitive stand-in (pot cylinder + leaf sphere). */
-function applyPlantState(obj: any, d: { stand: any[] }, on: boolean): void {
-  obj.visible = on;
-  for (const m of d.stand) m.visible = !on;
 }

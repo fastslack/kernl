@@ -16,6 +16,20 @@ export const RECEPTION_WALL_GAP = 2.5;
 /** Clearance kept between a walker's centre line and any reception piece. */
 const MARGIN = 0.25;
 
+/** Waiting lounges, one each side of the lobby runner, south of the counter:
+ *  a rug with a sofa against its outer edge facing the runner, a coffee table
+ *  in front of it and a plant at each end. Centre offsets from (cx, counterZ). */
+export const RECEPTION_LOUNGE_X = 6.9;
+export const RECEPTION_LOUNGE_Z = 7.5;
+/** Rug size (x, z). The furniture fits inside it. */
+export const RECEPTION_LOUNGE_RUG_W = 3.4;
+export const RECEPTION_LOUNGE_RUG_D = 3.8;
+
+/** Centre of each lounge; `side` is -1 west of the runner, +1 east. */
+export function receptionLounges(cx: number, counterZ: number): Array<{ x: number; z: number; side: -1 | 1 }> {
+  return ([-1, 1] as const).map((side) => ({ x: cx + side * RECEPTION_LOUNGE_X, z: counterZ + RECEPTION_LOUNGE_Z, side }));
+}
+
 /** Z of the back wall's centre plane. */
 export function receptionBackWallZ(counterZ: number): number {
   return counterZ - RECEPTION_COUNTER_D / 2 - RECEPTION_WALL_GAP;
@@ -34,7 +48,8 @@ export function receptionDriverPos(cx: number, counterZ: number): Vec3 {
 
 /**
  * The solid pieces of the reception as walker obstacles: the counter (with its
- * overhanging top and rims), the two columns and the back wall. Kept as
+ * overhanging top and rims), the two columns, the back wall and the two
+ * waiting lounges (the whole rug, so nobody walks across the coffee table). Kept as
  * separate boxes, not one block: the pickup spot sits between the counter and
  * the back wall, and walkers reach it through the open sides.
  */
@@ -53,5 +68,9 @@ export function receptionObstacles(cx: number, counterZ: number): Aabb2D[] {
     box(cx + colOff - COLUMN_HALF, cx + colOff + COLUMN_HALF, counterZ - COLUMN_HALF, counterZ + COLUMN_HALF),
     // Back wall is counterW + 0.8 wide; its gold crown overhangs to counterW + 1.2.
     box(cx - halfW - 0.6, cx + halfW + 0.6, backZ - 0.08, backZ + 0.08),
+    ...receptionLounges(cx, counterZ).map((l) => box(
+      l.x - RECEPTION_LOUNGE_RUG_W / 2, l.x + RECEPTION_LOUNGE_RUG_W / 2,
+      l.z - RECEPTION_LOUNGE_RUG_D / 2, l.z + RECEPTION_LOUNGE_RUG_D / 2,
+    )),
   ];
 }
