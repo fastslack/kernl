@@ -13,17 +13,20 @@
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { fmtRelTime } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
-  import { firstUrlIn, urlForOption, buildFixerGoal } from '$lib/agent-helpers.js';
+  import { urlForOption, buildFixerGoal } from '$lib/agent-helpers.js';
+  import { t } from '$lib/i18n/index.js';
+  import { groupReports, reportKey, plainPreview, type ReportGroup } from '$lib/office/report-groups.js';
+  import OfficeQuestionCard from './OfficeQuestionCard.svelte';
+  import FailureGroupCard from './FailureGroupCard.svelte';
+  import { summarizeRunContext, explainFailure, type RunContext } from '$lib/office/failure-explain.js';
   import type { OfficeReport, PendingQuestion, WorldAgent } from './world-types.js';
 
   /** bind: — the 3D office's My Office hitbox toggles it too. */
   export let showMyOfficePanel: boolean;
   /** bind: — the inbox shortcut opens straight on Questions. */
-  export let myOfficeTab: 'overview' | 'questions' | 'errors';
+  export let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity';
   /** bind: — appended to by live events, trimmed by the actions here. */
   export let officeReports: OfficeReport[];
-  /** bind: — the backlog fetch runs again once the list is cleared. */
-  export let officeReportsLoaded: boolean;
   /** bind: — polled by the world, which also lights the top agent's halo from it. */
   export let pendingQuestions: PendingQuestion[];
   /** Questions the chief is still triaging (count only). */
@@ -41,6 +44,57 @@
   /** "Go to agent desk": select the agent, then fly the camera to it. */
   export let selectAgent: (id: string) => void;
   export let focusAgent: () => void;
+  /** The backlog or the questions are still loading: show a skeleton, never
+   *  "all clear" — an empty list before the data arrives is not good news. */
+  export let loading = false;
+  /** Is the chief itself running right now? Shown in the header. */
+  export let chiefRunning = false;
+  /** "Hablar": open the chief's chat (the world owns it). */
+  export let openChiefChat: () => void = () => {};
+  /** Open an agent's drawer on its Settings tab — the fix for limit failures. */
+  export let openAgentSettings: (agentId: string) => void = () => {};
+
+  // ── Failure context: what each failing run was doing ──
+  // One fetch per run (GET /api/agents/runs/:id), for the newest run of each
+  // problem on screen. undefined = loading, null = could not load.
+  let runCtx: Record<string, RunContext | null> = {};
+  const ctxRequested = new Set<string>();
+  function ensureCtx(runId: string | undefined): void {
+    if (!runId || ctxRequested.has(runId)) return;
+    ctxRequested.add(runId);
+    fetch(`/api/agents/runs/${encodeURIComponent(runId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((b) => { runCtx = { ...runCtx, [runId]: b?.run ? summarizeRunContext(b.run, b.steps ?? []) : null }; })
+      .catch(() => { runCtx = { ...runCtx, [runId]: null }; });
+  }
+  $: groupsOnScreen = groupReports(officeReports.filter(r => r.status === 'failed')).slice(0, 20);
+  $: groupsOnScreen.forEach(g => ensureCtx(g.reports[0].runId));
+  const ctxOf = (g: ReportGroup, _dep: unknown): RunContext | null | undefined => {
+    const id = g.reports[0].runId;
+    return id ? (id in runCtx ? runCtx[id] : undefined) : null;
+  };
+
+  // "Volver a correr": run the agent again with its default goal.
+  let retrying: Record<string, boolean> = {};
+  async function retryAgent(agentId: string): Promise<void> {
+    if (retrying[agentId]) return;
+    retrying = { ...retrying, [agentId]: true };
+    try {
+      await rpcOrCall('agents.run', { agent_id: agentId }, async () => {
+        const r = await fetch('/api/agents/run', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: agentId }),
+        });
+        return r.json();
+      });
+      fixerStatus = $t('office.fail.retried', { name: agentNameOf(agentId) });
+      setTimeout(() => { fixerStatus = ''; }, 5000);
+    } finally {
+      retrying = { ...retrying, [agentId]: false };
+    }
+  }
+
+  const agentNameOf = (id: string) => agents.find(a => a.id === id)?.name ?? id.slice(0, 8);
 
   let questionSubmitting: Record<string, boolean> = {};
   async function answerQuestion(q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) {
@@ -76,10 +130,9 @@
 
   // Free-text answers — for when none of the chief's options fit. Sent as
   // selected_index -1 so the kernel knows it's not one of the fixed options.
-  let freeText: Record<string, string> = {};
-  async function answerFree(q: PendingQuestion) {
-    const text = (freeText[q.id] ?? '').trim();
-    if (!text || questionSubmitting[q.id]) return;
+  // Resolves true when it landed, so the card can clear its input.
+  async function answerFree(q: PendingQuestion, text: string): Promise<boolean> {
+    if (!text || questionSubmitting[q.id]) return false;
     questionSubmitting = { ...questionSubmitting, [q.id]: true };
     try {
       const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
@@ -87,11 +140,8 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ selected_index: -1, selected_option: text, note: text }),
       });
-      if (res.ok) {
-        pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
-        const { [q.id]: _, ...rest } = freeText;
-        freeText = rest;
-      }
+      if (res.ok) pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
+      return res.ok;
     } finally {
       questionSubmitting = { ...questionSubmitting, [q.id]: false };
     }
@@ -99,9 +149,9 @@
 
   // Bulk actions for the My Office panel.
   let bulkBusy = false;
-  async function dismissAllQuestions() {
+  async function dismissAllQuestions(ask = true) {
     if (bulkBusy || pendingQuestions.length === 0) return;
-    if (!confirm(`Dismiss all ${pendingQuestions.length} pending questions?`)) return;
+    if (ask && !confirm($t('office.chief.confirm_dismiss_questions', { n: String(pendingQuestions.length) }))) return;
     bulkBusy = true;
     const snapshot = [...pendingQuestions];
     try {
@@ -115,20 +165,64 @@
     }
   }
   function clearErrors() {
-    if (officeReports.filter(r => r.status === 'failed').length === 0) return;
-    officeReports = officeReports.filter(r => r.status !== 'failed');
+    removeReports(officeReports.filter(r => r.status === 'failed'));
   }
   function clearActivity() {
-    if (officeReports.filter(r => r.status !== 'failed').length === 0) return;
-    officeReports = officeReports.filter(r => r.status === 'failed');
+    removeReports(officeReports.filter(r => r.status !== 'failed'));
   }
   function clearAllOfficeData() {
-    if (!confirm('Clear ALL reports and dismiss ALL pending questions?')) return;
-    void dismissAllQuestions();
-    officeReports = [];
-    officeReportsLoaded = false;
+    if (!confirm($t('office.chief.confirm_clear_everything'))) return;
+    void dismissAllQuestions(false);
+    // Not a reload: the list is rebuilt from agent_runs, which would bring
+    // back everything this just cleared if it were not recorded.
+    removeReports(officeReports);
   }
   let openReport: OfficeReport | null = null;
+
+  // ── Dismiss: drop reports from the office without acting on them ──
+  // Every way a report leaves the office goes through here, and is RECORDED
+  // (POST /api/agents/office/dismiss): the office rebuilds its list from the
+  // agents' runs on each load, and an unrecorded dismissal came straight back.
+  // Live-only entries (handoffs) have no run id and are never reloaded anyway.
+  function removeReports(reports: OfficeReport[]): void {
+    if (reports.length === 0) return;
+    const keys = new Set(reports.map(reportKey));
+    officeReports = officeReports.filter(r => !keys.has(reportKey(r)));
+    const runIds = reports.map(r => r.runId).filter((id): id is string => !!id);
+    if (runIds.length) {
+      void fetch('/api/agents/office/dismiss', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ run_ids: runIds }),
+      }).catch(() => { /* the view already dropped them; a retry happens on the next dismissal */ });
+    }
+  }
+  function dropReports(keys: Set<string>): void {
+    removeReports(officeReports.filter(r => keys.has(reportKey(r))));
+  }
+  function dismissGroup(g: ReportGroup): void {
+    dropReports(new Set(g.reports.map(reportKey)));
+  }
+  function dismissReport(r: OfficeReport): void {
+    dropReports(new Set([reportKey(r)]));
+  }
+  /** A failure is dismissed with its repeats — the group it was opened from. */
+  function groupOf(r: OfficeReport): ReportGroup | null {
+    if (r.status !== 'failed') return null;
+    return groupReports(officeReports.filter(x => x.status === 'failed'))
+      .find(g => g.reports.some(x => reportKey(x) === reportKey(r))) ?? null;
+  }
+  $: openReportGroupSize = openReport ? (groupOf(openReport)?.count ?? 1) : 0;
+  function dismissOpenReport(r: OfficeReport): void {
+    const g = groupOf(r);
+    if (g) dismissGroup(g); else dismissReport(r);
+    openReport = null;
+  }
+
+  // Activity tab: one agent's reports at a time, a card opened in place.
+  let activityAgent: string | null = null;
+  let expandedKey: string | null = null;
+  let moreOpen = false;
 
   // ── "Send to fixer" — dispatch the open report to a fixing agent ──
   // The list below is a name-matched whitelist of active claude_code agents
@@ -200,7 +294,8 @@
         openReport = null;
         // Force a reactive remove. Filter handles the case where the same
         // report object lives in officeReports under a different reference.
-        officeReports = officeReports.filter(r => (r.runId ?? `${r.agentId}-${r.ts}`) !== targetKey);
+        // Sent is handled: recorded like a dismissal so it does not return.
+        removeReports(officeReports.filter(r => reportKey(r) === targetKey));
         fixerStatus = `✓ sent to ${fixer.name} · run ${String(res.run_id || '').slice(0, 8)}`;
       } else {
         fixerStatus = `✗ ${res?.error || 'failed to dispatch'}`;
@@ -235,293 +330,322 @@
   $: displayReportText = (fullReportText ?? openReport?.text ?? '');
 </script>
 
-<!-- My Office Reports Panel -->
+<!-- The chief's office -->
 {#if showMyOfficePanel}
   {@const errorReports = officeReports.filter(r => r.status === 'failed')}
   {@const activityReports = officeReports.filter(r => r.status !== 'failed')}
+  {@const errorGroups = groupReports(errorReports)}
+  {@const chief = topAgent()}
+  {@const needsYou = pendingQuestions.length + errorGroups.length}
   <div class="info-panel office-reports-panel">
-    <div class="ip-head">
-      <div class="ip-head-left">
-        <div class="ip-glyph" style="color:#c9a84c">&#9733;</div>
-        <div class="ip-head-txt">
-          <div class="ip-name">My Office</div>
-          <div class="ip-sub">
-            <span style="color:#f0b874">{pendingQuestions.length} questions</span>
-            <span class="ip-dot"></span>
-            <span style="color:#ef5d6e">{errorReports.length} errors</span>
-            <span class="ip-dot"></span>
-            <span style="color:#8a8fa8">{activityReports.length} activity</span>
-          </div>
+    <!-- Header: whose office, what the chief is doing, and the two ways to
+         reach the chief itself. -->
+    <div class="ip-head mo-head">
+      <div class="ip-glyph mo-glyph" aria-hidden="true">&#9733;</div>
+      <div class="ip-head-txt">
+        <div class="ip-name">{$t('office.chief.title')}</div>
+        <div class="mo-status">
+          {#if chiefRunning}
+            <span class="mo-chip mo-chip-run"><span class="mo-pulse"></span>{$t('office.chief.status_running', { name: chief?.name ?? 'Chief' })}</span>
+          {:else}
+            <span class="mo-chip">{$t('office.chief.status_idle', { name: chief?.name ?? 'Chief' })}</span>
+          {/if}
+          {#if triageCount > 0}
+            <span class="mo-chip mo-chip-q">{$t('office.chief.status_triage', { n: String(triageCount) })}</span>
+          {/if}
         </div>
       </div>
-      <button class="ip-close" on:click={() => showMyOfficePanel = false} aria-label="close">×</button>
+      <div class="mo-head-actions">
+        {#if chief}
+          <button class="mo-btn" type="button" on:click={openChiefChat} title={$t('office.chief.talk_title')}>
+            {$t('office.chief.talk')}
+          </button>
+          <button class="mo-btn mo-btn-primary" type="button" title={$t('office.chief.open_agent_title')}
+                  on:click={() => { selectAgent(chief.id); showMyOfficePanel = false; focusAgent(); }}>
+            {$t('office.chief.open_agent')} →
+          </button>
+        {/if}
+        <button class="ip-close" on:click={() => showMyOfficePanel = false} aria-label={$t('office.chief.close')}>×</button>
+      </div>
     </div>
 
-    <!-- Tabs: Overview · Questions · Errors -->
-    <div class="ip-tabs mo-tabs">
-      <button class="ip-tab" class:active={myOfficeTab === 'overview'}
-              on:click={() => myOfficeTab = 'overview'}>Overview</button>
-      <button class="ip-tab" class:active={myOfficeTab === 'questions'}
+    <div class="ip-tabs mo-tabs" role="tablist">
+      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'overview'} class:active={myOfficeTab === 'overview'}
+              on:click={() => myOfficeTab = 'overview'}>
+        {$t('office.chief.tab_now')}
+        {#if needsYou > 0}<span class="mo-tab-badge mo-tab-badge-q">{needsYou}</span>{/if}
+      </button>
+      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'questions'} class:active={myOfficeTab === 'questions'}
               on:click={() => myOfficeTab = 'questions'}>
-        Questions
+        {$t('office.chief.tab_questions')}
         {#if pendingQuestions.length > 0}<span class="mo-tab-badge mo-tab-badge-q">{pendingQuestions.length}</span>{/if}
       </button>
-      <button class="ip-tab" class:active={myOfficeTab === 'errors'}
+      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'errors'} class:active={myOfficeTab === 'errors'}
               on:click={() => myOfficeTab = 'errors'}>
-        Errors
-        {#if errorReports.length > 0}<span class="mo-tab-badge mo-tab-badge-err">{errorReports.length}</span>{/if}
+        {$t('office.chief.tab_errors')}
+        {#if errorGroups.length > 0}<span class="mo-tab-badge mo-tab-badge-err">{errorGroups.length}</span>{/if}
+      </button>
+      <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'activity'} class:active={myOfficeTab === 'activity'}
+              on:click={() => myOfficeTab = 'activity'}>
+        {$t('office.chief.tab_activity')}
+        {#if activityReports.length > 0}<span class="mo-tab-badge">{activityReports.length}</span>{/if}
       </button>
     </div>
 
     <div class="or-scroll">
       {#if myOfficeTab === 'overview'}
-        <!-- ═══ OVERVIEW ═══ at-a-glance summary -->
-        {#if officeReports.length === 0 && pendingQuestions.length === 0}
-          <div class="or-empty">No reports yet. Agents will come here when they finish tasks.</div>
-        {:else}
-          <div class="mo-overview">
-            <!-- KPI strip -->
-            <div class="mo-kpis">
-              <button class="mo-kpi mo-kpi-q" disabled={pendingQuestions.length === 0}
-                      on:click={() => myOfficeTab = 'questions'}>
-                <span class="mo-kpi-num">{pendingQuestions.length}</span>
-                <span class="mo-kpi-lbl">Pending Q</span>
-              </button>
-              <button class="mo-kpi mo-kpi-err" disabled={errorReports.length === 0}
-                      on:click={() => myOfficeTab = 'errors'}>
-                <span class="mo-kpi-num">{errorReports.length}</span>
-                <span class="mo-kpi-lbl">Errors</span>
-              </button>
-              <div class="mo-kpi mo-kpi-act">
-                <span class="mo-kpi-num">{activityReports.length}</span>
-                <span class="mo-kpi-lbl">Activity</span>
+        <!-- ═══ NOW: what needs the operator ═══ -->
+        {#if loading && needsYou === 0}
+          <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
+            <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
+            {#each [0, 1, 2] as n (n)}
+              <div class="mo-skel-card" style="animation-delay:{n * 120}ms">
+                <span class="mo-skel-line mo-skel-w30"></span>
+                <span class="mo-skel-line mo-skel-w90"></span>
+                <span class="mo-skel-line mo-skel-w60"></span>
               </div>
+            {/each}
+          </div>
+        {:else if needsYou === 0}
+          <div class="mo-allgood">
+            <span class="mo-allgood-ico" aria-hidden="true">✓</span>
+            <div>
+              <div class="mo-allgood-t">{$t('office.chief.all_good')}</div>
+              <div class="mo-allgood-s">{$t('office.chief.all_good_sub')}</div>
             </div>
-
-            <!-- Latest question (1) -->
-            {#if pendingQuestions.length > 0}
-              {@const q = pendingQuestions[0]}
-              {@const agent = agents.find(a => a.id === q.from_agent_id)}
-              <div class="or-section">
-                <span class="or-section-title or-section-q">❓ Latest question</span>
-                {#if pendingQuestions.length > 1}
-                  <button class="or-section-more" on:click={() => myOfficeTab = 'questions'}>
-                    +{pendingQuestions.length - 1} more →
-                  </button>
-                {/if}
-              </div>
-              <div class="bq-card mo-overview-q" on:click={() => myOfficeTab = 'questions'} role="button" tabindex="0"
-                   on:keydown={e => e.key === 'Enter' && (myOfficeTab = 'questions')}>
-                <div class="bq-head">
-                  <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
-                  <span class="bq-from">{agent?.name ?? q.from_agent_id.slice(0, 8)}</span>
-                  <span class="bq-time">{fmtRelTime(q.created_at)}</span>
-                </div>
-                <div class="bq-question">{q.question}</div>
-              </div>
-            {/if}
-
-            <!-- Latest error (1) -->
-            {#if errorReports.length > 0}
-              {@const r = errorReports[0]}
-              <div class="or-section">
-                <span class="or-section-title or-section-fail">⚠ Latest error</span>
-                {#if errorReports.length > 1}
-                  <button class="or-section-more" on:click={() => myOfficeTab = 'errors'}>
-                    +{errorReports.length - 1} more →
-                  </button>
-                {/if}
-              </div>
-              <button class="or-card or-fail" on:click={() => openReport = r}>
-                <div class="or-card-header">
-                  <span class="or-dot" style="background:{r.color}"></span>
-                  <span class="or-status status-fail">!</span>
-                  <span class="or-name" style="color:{r.color}">{r.agentName}</span>
-                  <span class="or-time">{fmtRelTime(new Date(r.ts).toISOString())}</span>
-                </div>
-                <div class="or-card-body">{r.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{r.text.length > 140 ? '...' : ''}</div>
-              </button>
-              <!-- The 140-char preview cuts exactly where the kernel says how
-                   to fix it, so the fix travels as a chip instead of prose.
-                   Outside the card: an <a> inside a <button> is invalid. -->
-              {#if isLlmConfigError(r.text)}
-                <a class="llm-fix llm-fix-row" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-              {/if}
-            {/if}
-
-            <!-- Recent activity (handoff + completed, last 5) -->
-            {#if activityReports.length > 0}
-              <div class="or-section">
-                <span class="or-section-title">Recent activity</span>
-                {#if activityReports.length > 5}
-                  <span class="or-section-hint">showing 5 of {activityReports.length}</span>
-                {/if}
-              </div>
-              <div class="office-reports-list">
-                {#each activityReports.slice(0, 5) as report (report.runId ?? `${report.agentId}-${report.ts}`)}
-                  <button class="or-card" class:or-handoff={report.status === 'handoff'}
-                          out:slide|local={{ duration: 320, easing: quintOut }}
-                          on:click={() => openReport = report}>
-                    <div class="or-card-header">
-                      <span class="or-dot" style="background:{report.color}"></span>
-                      <span class="or-status"
-                            class:status-ok={report.status === 'completed'}
-                            class:status-handoff={report.status === 'handoff'}>
-                        {report.status === 'completed' ? '✓' : '→'}
-                      </span>
-                      <span class="or-name" style="color:{report.color}">{report.agentName}</span>
-                      <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
-                    </div>
-                    <div class="or-card-body">{report.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{report.text.length > 140 ? '...' : ''}</div>
-                  </button>
-                {/each}
-              </div>
-            {/if}
           </div>
         {/if}
+
+        {#if pendingQuestions.length > 0}
+          <div class="or-section">
+            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
+            {#if pendingQuestions.length > 2}
+              <button class="or-section-more" on:click={() => myOfficeTab = 'questions'}>{$t('office.chief.see_all')} →</button>
+            {/if}
+          </div>
+          <div class="bq-list">
+            {#each pendingQuestions.slice(0, 2) as q (q.id)}
+              <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
+                                  busy={!!questionSubmitting[q.id]}
+                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree} />
+            {/each}
+          </div>
+        {/if}
+
+        {#if errorGroups.length > 0}
+          <div class="or-section">
+            <span class="or-section-title or-section-fail">{$t('office.chief.needs_fix', { n: String(errorGroups.length) })}</span>
+            {#if errorGroups.length > 3}
+              <button class="or-section-more" on:click={() => myOfficeTab = 'errors'}>{$t('office.chief.see_all')} →</button>
+            {/if}
+          </div>
+          <div class="office-reports-list">
+            {#each errorGroups.slice(0, 3) as g (g.key)}
+              <div out:slide|local={{ duration: 280, easing: quintOut }}>
+                <FailureGroupCard {g} ctx={ctxOf(g, runCtx)} retrying={!!retrying[g.agentId]}
+                                  onOpen={() => openReport = g.reports[0]} onDismiss={() => dismissGroup(g)}
+                                  onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)} />
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+        {#if activityReports.length > 0}
+          <div class="or-section">
+            <span class="or-section-title">{$t('office.chief.latest_activity')}</span>
+            <button class="or-section-more" on:click={() => myOfficeTab = 'activity'}>{$t('office.chief.see_all')} →</button>
+          </div>
+          <div class="office-reports-list">
+            {#each activityReports.slice(0, 3) as report (reportKey(report))}
+              <button class="or-card" class:or-handoff={report.status === 'handoff'} on:click={() => openReport = report}>
+                <div class="or-card-header">
+                  <span class="or-dot" style="background:{report.color}"></span>
+                  <span class="or-status" class:status-ok={report.status === 'completed'} class:status-handoff={report.status === 'handoff'}>
+                    {report.status === 'completed' ? '✓' : '→'}
+                  </span>
+                  <span class="or-name" style="color:{report.color}">{report.agentName}</span>
+                  <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
+                </div>
+                <div class="or-card-body">{plainPreview(report.text, 140)}</div>
+              </button>
+            {/each}
+          </div>
+        {/if}
+
       {:else if myOfficeTab === 'questions'}
         <!-- ═══ QUESTIONS ═══ -->
-        {#if pendingQuestions.length === 0}
-          <div class="or-empty">No questions for you. Agents ask the chief first; what it can't decide lands here.</div>
+        {#if loading && pendingQuestions.length === 0}
+          <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
+            <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
+            {#each [0, 1, 2] as n (n)}
+              <div class="mo-skel-card" style="animation-delay:{n * 120}ms">
+                <span class="mo-skel-line mo-skel-w30"></span>
+                <span class="mo-skel-line mo-skel-w90"></span>
+                <span class="mo-skel-line mo-skel-w60"></span>
+              </div>
+            {/each}
+          </div>
+        {:else if pendingQuestions.length === 0}
+          <div class="or-empty">{$t('office.chief.no_questions')}</div>
           {#if triageCount > 0}
-            <div class="or-section-hint" style="text-align:center;padding:0 16px 16px">The chief is reviewing {triageCount} question(s).</div>
+            <div class="or-section-hint mo-center">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
           {/if}
         {:else}
           <div class="or-section">
-            <span class="or-section-title or-section-q">❓ Pending questions · {pendingQuestions.length}</span>
-            <span class="or-section-hint">agents waiting for your call</span>
-            {#if triageCount > 0}
-              <span class="or-section-hint">· the chief is reviewing {triageCount}</span>
-            {/if}
-            <button class="mo-bulk-btn mo-bulk-dismiss" on:click={dismissAllQuestions} disabled={bulkBusy}>
-              {bulkBusy ? '…' : `Dismiss all (${pendingQuestions.length})`}
+            <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
+            <button class="mo-bulk-btn mo-bulk-dismiss" on:click={() => dismissAllQuestions()} disabled={bulkBusy}>
+              {bulkBusy ? '…' : $t('office.chief.dismiss_all', { n: String(pendingQuestions.length) })}
             </button>
           </div>
           <div class="bq-list">
             {#each pendingQuestions as q (q.id)}
-              {@const agent = agents.find(a => a.id === q.from_agent_id)}
-              {@const ctxUrl = firstUrlIn(q.context)}
-              <div class="bq-card">
-                <div class="bq-head">
-                  <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
-                  <span class="bq-from">{agent?.name ?? q.from_agent_id.slice(0, 8)}</span>
-                  <span class="bq-time">{fmtRelTime(q.created_at)}</span>
-                  <button class="bq-dismiss" title="Dismiss without answering"
-                          on:click={() => dismissQuestion(q)}
-                          disabled={!!questionSubmitting[q.id]}>×</button>
-                </div>
-                <div class="bq-question">{q.question}</div>
-                {#if q.chief_note}
-                  <div class="bq-chief-note">Chief escalated: {q.chief_note}</div>
-                {/if}
-                {#if q.context}
-                  <details class="bq-context">
-                    <summary>ver contexto</summary>
-                    <div class="bq-context-body">{q.context}</div>
-                  </details>
-                {/if}
-                {#if ctxUrl}
-                  <a class="bq-direct-link" href={ctxUrl} target="_blank" rel="noopener noreferrer" title={ctxUrl}>
-                    🔗 {new URL(ctxUrl).host}
-                  </a>
-                {/if}
-                <div class="bq-options">
-                  {#each q.options as opt, i}
-                    {@const optUrl = urlForOption(q, opt)}
-                    <button class="bq-option" class:bq-option-link={!!optUrl}
-                            on:click={() => answerQuestion(q, i, opt)}
-                            disabled={!!questionSubmitting[q.id]}
-                            title={optUrl ? `Opens ${optUrl}` : opt.label}>
-                      <span class="bq-option-idx">{i + 1}</span>
-                      <span class="bq-option-lbl">{opt.label}</span>
-                      {#if optUrl}<span class="bq-option-linkico" aria-hidden="true">↗</span>{/if}
-                    </button>
-                  {/each}
-                </div>
-                <form class="bq-free" on:submit|preventDefault={() => answerFree(q)}>
-                  <input class="bq-free-input" placeholder="Other answer…"
-                         bind:value={freeText[q.id]}
-                         disabled={!!questionSubmitting[q.id]} />
-                  <button class="bq-free-send" type="submit"
-                          disabled={!!questionSubmitting[q.id] || !(freeText[q.id] ?? '').trim()}>Send</button>
-                </form>
-              </div>
+              <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
+                                  busy={!!questionSubmitting[q.id]}
+                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree} />
             {/each}
           </div>
         {/if}
         {#if chiefAnswered.length > 0}
           <details class="bq-chief-history">
-            <summary>Resolved by the chief · {chiefAnswered.length}</summary>
+            <summary>{$t('office.chief.resolved_by_chief', { n: String(chiefAnswered.length) })}</summary>
             {#each chiefAnswered as q (q.id)}
-              {@const agent = agents.find(a => a.id === q.from_agent_id)}
               <div class="bq-chief-row">
                 <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
-                <span class="bq-from">{agent?.name ?? q.from_agent_id.slice(0, 8)}</span>
+                <span class="bq-from">{agentNameOf(q.from_agent_id)}</span>
                 <span class="bq-chief-q">{q.question}</span>
                 <span class="bq-chief-a">→ {q.selected_option}</span>
               </div>
             {/each}
           </details>
         {/if}
+
       {:else if myOfficeTab === 'errors'}
-        <!-- ═══ ERRORS ═══ -->
-        {#if errorReports.length === 0}
-          <div class="or-empty">No errors. Failed runs will appear here for triage.</div>
+        <!-- ═══ ERRORS, grouped ═══ -->
+        {#if loading && errorGroups.length === 0}
+          <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
+            <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
+            {#each [0, 1, 2] as n (n)}
+              <div class="mo-skel-card" style="animation-delay:{n * 120}ms">
+                <span class="mo-skel-line mo-skel-w30"></span>
+                <span class="mo-skel-line mo-skel-w90"></span>
+                <span class="mo-skel-line mo-skel-w60"></span>
+              </div>
+            {/each}
+          </div>
+        {:else if errorGroups.length === 0}
+          <div class="or-empty">{$t('office.chief.no_errors')}</div>
         {:else}
           <div class="or-section">
-            <span class="or-section-title or-section-fail">⚠ Errors · {errorReports.length}</span>
-            <span class="or-section-hint">routed to Error Auditor for triage</span>
-            <button class="mo-bulk-btn mo-bulk-clear" on:click={clearErrors}>
-              Mark all as read ({errorReports.length})
-            </button>
+            <span class="or-section-title or-section-fail">
+              {$t('office.chief.errors_summary', { groups: String(errorGroups.length), n: String(errorReports.length) })}
+            </span>
+            <button class="mo-bulk-btn mo-bulk-clear" on:click={clearErrors}>{$t('office.chief.dismiss_all_errors')}</button>
           </div>
           <div class="office-reports-list">
-            {#each errorReports as report (report.runId ?? `${report.agentId}-${report.ts}`)}
-              <button class="or-card or-fail"
-                      out:slide|local={{ duration: 320, easing: quintOut }}
-                      on:click={() => openReport = report}>
-                <div class="or-card-header">
-                  <span class="or-dot" style="background:{report.color}"></span>
-                  <span class="or-status status-fail">!</span>
-                  <span class="or-name" style="color:{report.color}">{report.agentName}</span>
-                  {#if report.runId && auditedRunIds.has(report.runId)}
-                    <span class="or-audited" title="Error Auditor triaged this failure">✓ audited</span>
-                  {:else if report.runId}
-                    <span class="or-audit-pending" title="Waiting for the Error Auditor to pick this up">● pending</span>
-                  {/if}
-                  <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
-                </div>
-                <div class="or-card-body">{report.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{report.text.length > 140 ? '...' : ''}</div>
+            {#each errorGroups as g (g.key)}
+              {@const audited = g.reports.filter(r => r.runId && auditedRunIds.has(r.runId)).length}
+              <div out:slide|local={{ duration: 280, easing: quintOut }}>
+                <FailureGroupCard {g} ctx={ctxOf(g, runCtx)} audited={g.reports.some(r => r.runId) ? audited : null}
+                                  retrying={!!retrying[g.agentId]}
+                                  onOpen={() => openReport = g.reports[0]} onDismiss={() => dismissGroup(g)}
+                                  onRetry={() => retryAgent(g.agentId)} onSettings={() => openAgentSettings(g.agentId)} />
+              </div>
+            {/each}
+          </div>
+        {/if}
+
+      {:else if myOfficeTab === 'activity'}
+        <!-- ═══ ACTIVITY, filterable, expandable in place ═══ -->
+        {#if loading && activityReports.length === 0}
+          <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
+            <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
+            {#each [0, 1, 2] as n (n)}
+              <div class="mo-skel-card" style="animation-delay:{n * 120}ms">
+                <span class="mo-skel-line mo-skel-w30"></span>
+                <span class="mo-skel-line mo-skel-w90"></span>
+                <span class="mo-skel-line mo-skel-w60"></span>
+              </div>
+            {/each}
+          </div>
+        {:else if activityReports.length === 0}
+          <div class="or-empty">{$t('office.chief.no_activity')}</div>
+        {:else}
+          {@const byAgent = [...new Map(activityReports.map(r => [r.agentId, r])).values()]}
+          <div class="mo-filters" role="group" aria-label={$t('office.chief.filter_aria')}>
+            <button class="mo-filter" class:on={!activityAgent} on:click={() => activityAgent = null}>
+              {$t('office.chief.filter_all')} <span>{activityReports.length}</span>
+            </button>
+            {#each byAgent as a (a.agentId)}
+              <button class="mo-filter" class:on={activityAgent === a.agentId} style="--c:{a.color}"
+                      on:click={() => activityAgent = activityAgent === a.agentId ? null : a.agentId}>
+                <span class="mo-filter-dot"></span>{a.agentName}
+                <span>{activityReports.filter(r => r.agentId === a.agentId).length}</span>
               </button>
-              {#if isLlmConfigError(report.text)}
-                <a class="llm-fix llm-fix-row" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-              {/if}
+            {/each}
+          </div>
+          <div class="office-reports-list">
+            {#each activityReports.filter(r => !activityAgent || r.agentId === activityAgent) as report (reportKey(report))}
+              {@const k = reportKey(report)}
+              <div class="or-card mo-act" class:or-handoff={report.status === 'handoff'} class:mo-act-open={expandedKey === k}
+                   out:slide|local={{ duration: 280, easing: quintOut }}>
+                <button class="mo-act-head" type="button" aria-expanded={expandedKey === k}
+                        on:click={() => expandedKey = expandedKey === k ? null : k}>
+                  <div class="or-card-header">
+                    <span class="or-dot" style="background:{report.color}"></span>
+                    <span class="or-status" class:status-ok={report.status === 'completed'} class:status-handoff={report.status === 'handoff'}>
+                      {report.status === 'completed' ? '✓' : '→'}
+                    </span>
+                    <span class="or-name" style="color:{report.color}">{report.agentName}</span>
+                    <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
+                    <span class="mo-caret" aria-hidden="true">{expandedKey === k ? '▾' : '▸'}</span>
+                  </div>
+                  {#if expandedKey !== k}
+                    <div class="or-card-body">{plainPreview(report.text, 160)}</div>
+                  {/if}
+                </button>
+                {#if expandedKey === k}
+                  <div class="mo-act-body ip-out-md" on:click={onOutputClick} role="presentation" transition:slide|local={{ duration: 200 }}>
+                    {@html formatRunOutput(report.text)}
+                  </div>
+                  <div class="mo-group-actions">
+                    <button class="mo-link" type="button" on:click={() => openReport = report}>{$t('office.chief.see_full_report')}</button>
+                    <button class="mo-link mo-link-dim" type="button" on:click={() => dismissReport(report)}>{$t('office.chief.dismiss')}</button>
+                  </div>
+                {/if}
+              </div>
             {/each}
           </div>
         {/if}
       {/if}
     </div>  <!-- /or-scroll -->
 
-    {#if myOfficeTab === 'overview' && (officeReports.length > 0 || pendingQuestions.length > 0)}
+    <!-- Footer: the everyday action in sight, the destructive one behind ⋯. -->
+    {#if officeReports.length > 0 || pendingQuestions.length > 0}
       <div class="or-footer">
-        {#if officeReports.filter(r => r.status !== 'failed').length > 0}
-          <button class="office-clear-btn office-clear-btn-soft" on:click={clearActivity}
-                  title="Remove handoff + completed cards from this view">
-            Mark activity read
-          </button>
+        {#if myOfficeTab === 'activity' || myOfficeTab === 'overview'}
+          {#if activityReports.length > 0}
+            <button class="office-clear-btn office-clear-btn-soft" on:click={clearActivity}>{$t('office.chief.mark_activity_read')}</button>
+          {/if}
+        {:else if myOfficeTab === 'errors' && errorReports.length > 0}
+          <button class="office-clear-btn office-clear-btn-soft" on:click={clearErrors}>{$t('office.chief.dismiss_all_errors')}</button>
         {/if}
-        <button class="office-clear-btn office-clear-btn-danger" on:click={clearAllOfficeData}
-                title="Dismiss every pending question AND clear all reports">
-          Clear everything
-        </button>
-      </div>
-    {:else if myOfficeTab === 'errors' && officeReports.length > 0}
-      <div class="or-footer">
-        <button class="office-clear-btn" on:click={() => { officeReports = []; officeReportsLoaded = false; }}>Clear all reports</button>
+        <div class="mo-more">
+          <button class="office-clear-btn" type="button" aria-haspopup="menu" aria-expanded={moreOpen}
+                  on:click|stopPropagation={() => moreOpen = !moreOpen} title={$t('office.chief.more')}>⋯</button>
+          {#if moreOpen}
+            <div class="mo-more-menu" role="menu">
+              <button class="mo-more-item mo-more-danger" role="menuitem" on:click={() => { moreOpen = false; clearAllOfficeData(); }}>
+                {$t('office.chief.clear_everything')}
+              </button>
+            </div>
+          {/if}
+        </div>
       </div>
     {/if}
   </div>
 {/if}
+
+<svelte:window on:click={() => (moreOpen = false)} />
 
 <!-- Report Detail Modal -->
 {#if openReport}
@@ -534,27 +658,33 @@
             class:status-ok={openReport.status === 'completed'}
             class:status-fail={openReport.status === 'failed'}
             class:status-handoff={openReport.status === 'handoff'}>
-            {openReport.status === 'completed' ? 'Completed' : openReport.status === 'failed' ? 'Failed' : 'Handoff'}
+            {openReport.status === 'completed' ? $t('office.chief.st_completed') : openReport.status === 'failed' ? $t('office.chief.st_failed') : $t('office.chief.st_handoff')}
           </span>
           <span class="rm-name" style="color:{openReport.color}">{openReport.agentName}</span>
         </div>
         <div class="rm-head-right">
           <span class="rm-time">{new Date(openReport.ts).toLocaleString()}</span>
-          <button class="rm-close" on:click={() => openReport = null}>×</button>
+          <button class="rm-close" on:click={() => openReport = null} aria-label={$t('office.chief.close')}>×</button>
         </div>
       </div>
       <div class="rm-body ip-out-md" on:click={onOutputClick} role="presentation">
         {#if fullReportLoading && !fullReportText}
-          <div style="color:#6a6f82;font:500 11px 'JetBrains Mono',monospace">Loading full report…</div>
+          <div style="color:#6a6f82;font:500 11px 'JetBrains Mono',monospace">{$t('office.chief.loading_report')}</div>
         {/if}
         {@html formatRunOutput(displayReportText)}
       </div>
       <div class="rm-actions">
+        <!-- Desestimar: drops this report (and its repeats, for a failure)
+             from the office without acting on it. -->
+        <button class="rm-action rm-action-dismiss" on:click={() => openReport && dismissOpenReport(openReport)}>
+          {openReportGroupSize > 1 ? $t('office.chief.dismiss_n', { n: String(openReportGroupSize) }) : $t('office.chief.dismiss')}
+        </button>
+        <span class="rm-spacer"></span>
         <button class="rm-action" on:click={() => openReport && copy(displayReportText, 'report-' + openReport.ts)}>
-          {copiedKey === 'report-' + openReport?.ts ? '✓ copied' : '⧉ Copy full text'}
+          {copiedKey === 'report-' + openReport?.ts ? '✓ ' + $t('office.chief.copied') : '⧉ ' + $t('office.chief.copy')}
         </button>
         {#if isLlmConfigError(displayReportText)}
-          <a class="rm-action rm-action-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
+          <a class="rm-action rm-action-fix" href={LLM_SETTINGS_HREF}>⚙ {$t('office.chief.configure_llm')} →</a>
         {/if}
         <button class="rm-action" on:click={() => {
           if (openReport) {
@@ -564,21 +694,17 @@
             focusAgent();
           }
         }}>
-          Go to agent desk →
+          {$t('office.chief.go_to_agent')} →
         </button>
-
-        <!-- Send-to-fixer: primary dispatches to the resolved fixer; the ▾
-             sibling opens a small picker so the user can override the
-             default. Only rendered when at least one fixer agent exists. -->
         {#if activeFixer}
           <div class="rm-fixer-wrap">
             <button class="rm-action rm-fixer-primary" on:click={sendReportToFixer} disabled={sendingToFixer}
-                    title="Dispatch the report body to {activeFixer.name} so they can diagnose + fix it">
-              {sendingToFixer ? '⏳ sending…' : `🛠 Send to ${activeFixer.name}`}
+                    title={$t('office.chief.send_to_title', { name: activeFixer.name })}>
+              {sendingToFixer ? '⏳ …' : `🛠 ${$t('office.chief.send_to', { name: activeFixer.name })}`}
             </button>
             {#if fixerCandidates.length > 1}
               <button class="rm-fixer-dropdown" on:click|stopPropagation={() => fixerPickerOpen = !fixerPickerOpen}
-                      disabled={sendingToFixer} title="Pick a different fixer" aria-haspopup="true" aria-expanded={fixerPickerOpen}>▾</button>
+                      disabled={sendingToFixer} title={$t('office.chief.pick_fixer')} aria-haspopup="true" aria-expanded={fixerPickerOpen}>▾</button>
             {/if}
             {#if fixerPickerOpen}
               <div class="rm-fixer-menu" role="menu" on:click|stopPropagation>
@@ -593,7 +719,6 @@
             {/if}
           </div>
         {/if}
-
         {#if fixerStatus}
           <span class="rm-fixer-status">{fixerStatus}</span>
         {/if}
@@ -635,9 +760,7 @@
     padding:18px 18px 12px;
     border-bottom:1px solid rgba(120,130,160,.08);
     flex-shrink:0;
-  }
-  .ip-head-left{display:flex;gap:12px;align-items:flex-start;min-width:0;flex:1}
-  .ip-glyph{
+  }  .ip-glyph{
     width:32px;height:32px;border-radius:8px;
     display:grid;place-items:center;
     font:500 15px 'JetBrains Mono',monospace;
@@ -658,12 +781,6 @@
   }
   /* Wraps instead of overflowing: a long flow name plus an id used to push the
      row past the panel edge. */
-  .ip-sub{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:7px;
-    font:500 10px 'JetBrains Mono',monospace;
-    color:#7a7f92;
-  }
-  .ip-dot{width:3px;height:3px;border-radius:50%;background:#4a4f66}
   .ip-close{
     background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.12);
     color:#8a8fa8;
@@ -703,17 +820,7 @@
      The kernel already names the screen in prose ("Settings → AI"); this is
      that sentence as something you can click, wherever the failure surfaces:
      the chat error banner, the failed reply, and the office error card. */
-  .llm-fix{
-    flex-shrink:0;align-self:center;
-    padding:3px 9px;border-radius:999px;text-decoration:none;white-space:nowrap;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(201,168,76,.10);
-    border:1px solid rgba(201,168,76,.45);
-    color:#d4a84b;transition:background .12s,border-color .12s;
-  }
-  .llm-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b}
-  /* Under a card rather than beside a message: own line, indented to the card. */
-  .llm-fix-row{display:inline-block;align-self:flex-start;margin:6px 0 2px 12px}
+    /* Under a card rather than beside a message: own line, indented to the card. */
 
   /* ── Modal ──────────────────── */
   .modal-overlay{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}
@@ -761,32 +868,8 @@
   .mo-tab-badge-err{background:rgba(239,93,110,.22);color:#ef5d6e}
 
   /* ── My Office overview (KPIs + previews) ──────── */
-  .mo-overview{padding:8px 4px}
-  .mo-kpis{
-    display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
-    padding:8px 10px 4px;
-  }
-  .mo-kpi{
-    display:flex;flex-direction:column;gap:2px;align-items:flex-start;
-    padding:10px 12px;border:1px solid rgba(120,130,160,.18);border-radius:8px;
-    background:rgba(120,130,160,.04);
-    color:#cbd0e8;cursor:pointer;text-align:left;
-    transition:background .12s, border-color .12s;
-  }
-  .mo-kpi:hover:not(:disabled){background:rgba(120,130,160,.1);border-color:rgba(120,130,160,.35)}
-  .mo-kpi:disabled{cursor:default;opacity:.55}
-  .mo-kpi-num{font:800 22px 'Syne',sans-serif;line-height:1}
-  .mo-kpi-lbl{font:600 9px 'JetBrains Mono',monospace;letter-spacing:.6px;text-transform:uppercase;color:#8a8fa8}
-  .mo-kpi-q .mo-kpi-num{color:#f0b874}
-  .mo-kpi-q{border-color:rgba(240,184,116,.25)}
-  .mo-kpi-err .mo-kpi-num{color:#ef5d6e}
-  .mo-kpi-err{border-color:rgba(239,93,110,.25)}
-  .mo-kpi-act .mo-kpi-num{color:#7a9aff}
-  .mo-kpi-act{border-color:rgba(122,154,255,.25)}
 
   /* Compact overview question preview — clickable card hint */
-  .mo-overview-q{cursor:pointer;transition:background .12s}
-  .mo-overview-q:hover{background:linear-gradient(180deg, rgba(240,184,116,.16) 0%, rgba(240,184,116,.04) 100%)}
   .or-section-more{
     margin-left:auto;background:none;border:none;cursor:pointer;
     font:600 10px 'JetBrains Mono',monospace;color:#7a9aff;padding:2px 4px;
@@ -814,25 +897,17 @@
   .office-clear-btn-soft{
     background:rgba(120,130,160,.08);border-color:rgba(120,130,160,.3);color:#8a8fa8;
   }
-  .office-clear-btn-soft:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.5);color:#cbd0e8}
-  .office-clear-btn-danger{
-    background:rgba(239,93,110,.08);border-color:rgba(239,93,110,.3);color:#ef5d6e;
-    margin-left:auto;
-  }
-  .office-clear-btn-danger:hover{background:rgba(239,93,110,.18);border-color:rgba(239,93,110,.5)}
-  .or-card{
+  .office-clear-btn-soft:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.5);color:#cbd0e8}  .or-card{
     display:flex;flex-direction:column;gap:4px;width:100%;
     padding:10px 12px;border:none;border-radius:8px;
     background:rgba(120,130,160,.04);color:#c0c5d8;cursor:pointer;
     text-align:left;transition:background .12s;
     border-left:3px solid transparent;
   }
-  .or-card:hover{background:rgba(201,168,76,.08)}
-  .or-card.or-fail{border-left-color:rgba(239,93,110,.5);background:rgba(239,93,110,.04)}
-  .or-card.or-handoff{border-left-color:rgba(61,214,200,.4);background:rgba(61,214,200,.03)}
+  .or-card:hover{background:rgba(201,168,76,.08)}  .or-card.or-handoff{border-left-color:rgba(61,214,200,.4);background:rgba(61,214,200,.03)}
   .or-section{
     display:flex;align-items:baseline;gap:8px;
-    padding:6px 4px 2px 4px;margin-top:4px;
+    padding:10px 14px 2px;margin-top:4px;
   }
   .or-section:first-child{margin-top:0}
   .or-section-title{
@@ -844,119 +919,17 @@
   .or-section-hint{font:500 9px 'JetBrains Mono',monospace;color:#5a5f7a}
 
   /* ── Top-agent question cards ─────────────────────── */
-  .bq-list{ display:flex; flex-direction:column; gap:10px; padding:0 14px 12px; }
-  .bq-card{
-    background:linear-gradient(180deg, rgba(240,184,116,.08) 0%, rgba(240,184,116,.02) 100%);
-    border:1px solid rgba(240,184,116,.25); border-left:3px solid #f0b874;
-    border-radius:8px; padding:10px 12px;
-  }
-  .bq-head{ display:flex; align-items:center; gap:8px; margin-bottom:6px; font:600 10px 'JetBrains Mono',monospace; color:#cbd0e8; }
-  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
-  .bq-from{ color:#e7e9f4; }
-  .bq-time{ margin-left:auto; color:#6b7090; font-size:9px; }
-  .bq-dismiss{
-    background:transparent; border:none; color:#6b7090; font-size:16px;
-    cursor:pointer; padding:0 3px; line-height:1;
-  }
-  .bq-dismiss:hover{ color:#ef5d6e; }
-  .bq-question{
-    font:600 13px/1.45 'Manrope',sans-serif; color:#e7e9f4;
-    margin:0 0 8px; word-break:break-word;
-  }
-  .bq-context{ margin:0 0 8px; }
-  .bq-context summary{
-    cursor:pointer; color:#8b90af; font:500 10px 'JetBrains Mono',monospace;
-    list-style:none;
-  }
-  .bq-context summary::-webkit-details-marker{ display:none; }
-  .bq-context summary::before{ content:'▸ '; color:#6b7090; }
-  .bq-context[open] summary::before{ content:'▾ '; }
-  .bq-context-body{
-    margin-top:6px; padding:8px 10px; background:#0a0b14; border:1px solid #1f2236;
-    border-radius:4px; font:500 11px/1.5 'JetBrains Mono',monospace; color:#8b90af;
-    white-space:pre-wrap; word-break:break-word; max-height:160px; overflow-y:auto;
-  }
-  .bq-options{ display:grid; grid-template-columns:1fr 1fr; gap:5px; }
-  .bq-option{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 10px; background:#161827; color:#cbd0e8;
-    border:1px solid #2a2f4a; border-radius:5px;
-    font:600 11px 'Manrope',sans-serif;
-    cursor:pointer; transition:all .12s; text-align:left;
-  }
-  .bq-option:hover:not(:disabled){
-    background:#252840; border-color:#f0b874; color:#f4e1a3;
-    transform:translateY(-1px);
-  }
-  .bq-option:disabled{ opacity:.5; cursor:not-allowed; }
-  .bq-option-idx{
-    flex-shrink:0; width:20px; height:20px; border-radius:3px;
-    background:#0a0b14; display:inline-flex; align-items:center; justify-content:center;
-    font:700 10px 'JetBrains Mono',monospace; color:#f0b874;
-  }
-  .bq-option-lbl{ flex:1; word-break:break-word; }
-  /* Options that open a URL — make them visually distinct (subtle teal tint
+  .bq-list{ display:flex; flex-direction:column; gap:10px; padding:0 14px 12px; }  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
+  .bq-from{ color:#e7e9f4; }  /* Options that open a URL — make them visually distinct (subtle teal tint
      + arrow chevron). */
-  .bq-option-link{
-    border-color:rgba(61,214,200,.35);
-    background:linear-gradient(180deg, #161827 0%, #15212a 100%);
-  }
-  .bq-option-link:hover:not(:disabled){
-    border-color:#3dd6c8;
-    background:linear-gradient(180deg, #1a2f33 0%, #142329 100%);
-    color:#a8e4dc;
-  }
-  .bq-option-link .bq-option-idx{ color:#3dd6c8; }
-  .bq-option-linkico{
-    flex-shrink:0; color:#3dd6c8; font:700 11px 'JetBrains Mono',monospace;
-    opacity:.7; transition:opacity .12s, transform .12s;
-  }
-  .bq-option-link:hover:not(:disabled) .bq-option-linkico{
-    opacity:1; transform:translate(2px,-2px);
-  }
-  .bq-chief-note{ font:500 10.5px 'Manrope',sans-serif; color:#f0b86e; background:#2a2214; border-left:2px solid #f0b86e; padding:5px 8px; border-radius:3px; margin:4px 0 6px; }
-  .bq-free{ display:flex; gap:5px; margin-top:6px; }
-  .bq-free-input{ flex:1; min-width:0; padding:7px 9px; background:#11131f; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:500 11px 'Manrope',sans-serif; }
-  .bq-free-send{ padding:7px 11px; background:#1f2440; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
-  .bq-free-send:disabled{ opacity:.45; cursor:default; }
-  .bq-chief-history{ margin-top:12px; font:500 11px 'Manrope',sans-serif; color:#9aa0bd; }
+  .bq-chief-history{ margin:12px 14px; font:500 11px 'Manrope',sans-serif; color:#9aa0bd; }
   .bq-chief-history summary{ cursor:pointer; padding:4px 0; }
   .bq-chief-row{ display:flex; align-items:baseline; gap:6px; padding:4px 0; border-top:1px solid #1e2236; }
   .bq-chief-q{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bq-chief-a{ color:#8fd6a8; white-space:nowrap; }
   /* Direct link chip — surfaces the URL from `context` above the options
      so the user can preview the link without having to commit to an answer. */
-  .bq-direct-link{
-    display:inline-flex; align-items:center; gap:5px;
-    margin:6px 0 2px;
-    padding:4px 9px;
-    border:1px solid rgba(61,214,200,.3);
-    background:rgba(61,214,200,.08);
-    border-radius:14px;
-    color:#88e0d6; text-decoration:none;
-    font:600 10.5px 'JetBrains Mono',monospace;
-    letter-spacing:.2px;
-    transition:all .12s;
-    max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
-  .bq-direct-link:hover{
-    background:rgba(61,214,200,.16);
-    border-color:rgba(61,214,200,.5);
-    color:#c8f0ea;
-  }
-  .or-audited{
-    font:700 8px 'JetBrains Mono',monospace;letter-spacing:.4px;
-    padding:2px 6px;border-radius:4px;
-    background:rgba(120,220,140,.13);color:#78dc8c;
-    border:1px solid rgba(120,220,140,.3);
-  }
-  .or-audit-pending{
-    font:700 8px 'JetBrains Mono',monospace;letter-spacing:.4px;
-    padding:2px 6px;border-radius:4px;
-    background:rgba(201,168,76,.08);color:#c9a84c;
-    border:1px dashed rgba(201,168,76,.3);
-  }
-  .or-card-header{
+    .or-card-header{
     display:flex;align-items:center;gap:6px;
   }
   .or-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
@@ -974,9 +947,7 @@
     font:400 11px/1.4 'Manrope',sans-serif;color:#8a8fa8;
     display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
     overflow:hidden;word-break:break-word;padding-left:29px;
-  }
-  .or-card.or-fail .or-card-body{color:#cf7080}
-  .or-footer{
+  }  .or-footer{
     padding:8px 12px;border-top:1px solid rgba(120,130,160,.1);
     display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap;
   }
@@ -1081,4 +1052,111 @@
     font:600 10px 'JetBrains Mono',monospace;color:#9aa5b8;
     margin-right:auto;padding-left:4px;
   }
+
+  /* ═══ Chief's office — header, "needs you", groups, activity ═══ */
+  .mo-head{align-items:center}
+  .mo-glyph{color:#c9a84c;--flow-color:#c9a84c}
+  .mo-status{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-top:2px}
+  .mo-chip{
+    display:inline-flex;align-items:center;gap:6px;height:20px;padding:0 8px;border-radius:999px;
+    font:600 10.5px 'Manrope',sans-serif;color:#a0a5b8;
+    background:rgba(120,130,160,.1);border:1px solid rgba(120,130,160,.22);
+  }
+  .mo-chip-run{color:#7cc4ff;background:rgba(124,196,255,.1);border-color:rgba(124,196,255,.32)}
+  .mo-chip-q{color:#f0b874;background:rgba(240,184,116,.1);border-color:rgba(240,184,116,.3)}
+  .mo-pulse{width:6px;height:6px;border-radius:50%;background:currentColor;animation:mo-pulse 1.4s ease-in-out infinite}
+  @keyframes mo-pulse{50%{opacity:.35;transform:scale(.8)}}
+  .mo-head-actions{display:flex;align-items:center;gap:6px;margin-left:auto;flex:none}
+  .mo-btn{
+    height:32px;padding:0 12px;border-radius:8px;cursor:pointer;
+    font:600 12px 'Manrope',sans-serif;color:#dde0ea;
+    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.22);
+    transition:background .15s, border-color .15s;
+  }
+  .mo-btn:hover{background:rgba(255,255,255,.07);border-color:rgba(120,130,160,.4)}
+  .mo-btn-primary{color:#0a0e14;background:#c9a84c;border-color:#c9a84c}
+  .mo-btn-primary:hover{background:#d8b85a;border-color:#d8b85a}
+  .mo-btn:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .ip-close{width:32px;height:32px}
+
+  .mo-allgood{
+    display:flex;align-items:center;gap:12px;margin:14px;padding:14px 16px;border-radius:10px;
+    background:rgba(120,220,140,.06);border:1px solid rgba(120,220,140,.22);
+  }
+  .mo-allgood-ico{
+    width:30px;height:30px;border-radius:50%;display:grid;place-items:center;flex:none;
+    color:#0a0e14;background:#78dc8c;font:700 15px 'Manrope',sans-serif;
+  }
+  .mo-allgood-t{font:700 13px 'Manrope',sans-serif;color:#dfe2ec}
+  .mo-allgood-s{font:500 11.5px 'Manrope',sans-serif;color:#8a8fa8}
+  .mo-center{text-align:center;padding:0 16px 16px}  .mo-group-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:2px 12px 9px}
+  .mo-link{
+    background:none;border:none;padding:0;cursor:pointer;
+    font:600 11px 'Manrope',sans-serif;color:#9fb4e8;
+  }
+  .mo-link:hover{color:#c4d3f7;text-decoration:underline;text-underline-offset:2px}
+  .mo-link-dim{color:#8a8fa8}
+  .mo-link-dim:hover{color:#dde0ea}
+
+  .mo-filters{display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px 4px}
+  .mo-filter{
+    display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:999px;cursor:pointer;
+    font:600 11px 'Manrope',sans-serif;color:#c4c8d6;
+    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.22);
+  }
+  .mo-filter span:last-child{font:600 10px 'JetBrains Mono',monospace;color:#7a7f92}
+  .mo-filter-dot{width:7px;height:7px;border-radius:2px;background:var(--c, #8a8fa8)}
+  .mo-filter.on{color:#0a0e14;background:#dde0ea;border-color:#dde0ea}
+  .mo-filter.on span:last-child{color:#3a3f52}
+  .mo-act{padding:0;display:block}
+  .mo-act-head{display:block;width:100%;padding:9px 12px;background:none;border:none;cursor:pointer;text-align:left;color:inherit}
+  .mo-caret{color:#6a6f82;font-size:10px;margin-left:4px}
+  .mo-act-body{margin:0 12px 8px;max-height:420px}
+  .mo-act-open{border-color:rgba(120,130,160,.35)}
+
+  .mo-tab-badge{
+    margin-left:6px;font:700 9px 'JetBrains Mono',monospace;padding:1px 6px;border-radius:999px;
+    color:#a0a5b8;background:rgba(120,130,160,.16);
+  }
+  .mo-more{position:relative;margin-left:auto}
+  .mo-more-menu{
+    position:absolute;right:0;bottom:calc(100% + 6px);min-width:200px;padding:5px;border-radius:8px;z-index:5;
+    background:#11131d;border:1px solid rgba(120,130,160,.28);box-shadow:0 14px 30px -10px rgba(0,0,0,.7);
+  }
+  .mo-more-item{
+    display:block;width:100%;padding:7px 10px;border-radius:6px;border:none;background:none;cursor:pointer;text-align:left;
+    font:600 12px 'Manrope',sans-serif;color:#dde0ea;
+  }
+  .mo-more-item:hover{background:rgba(255,255,255,.06)}
+  .mo-more-danger{color:#ef5d6e}
+  .mo-more-danger:hover{background:rgba(239,93,110,.12)}
+
+  .rm-spacer{flex:1}
+  .rm-action-dismiss{color:#c4c8d6}
+  .rm-action-dismiss:hover{color:#ef5d6e;border-color:rgba(239,93,110,.45)}
+  @media (prefers-reduced-motion: reduce){ .mo-pulse{animation:none} }
+
+  /* ── Loading skeleton ── */
+  .mo-skel{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+  .mo-skel-h{display:flex;align-items:center;gap:8px;font:600 11px 'Manrope',sans-serif;color:#8a8fa8;margin-bottom:2px}
+  .mo-spin{
+    width:12px;height:12px;border-radius:50%;flex:none;
+    border:2px solid rgba(201,168,76,.25);border-top-color:#c9a84c;
+    animation:mo-spin .8s linear infinite;
+  }
+  @keyframes mo-spin{to{transform:rotate(360deg)}}
+  .mo-skel-card{
+    display:flex;flex-direction:column;gap:7px;padding:12px;border-radius:8px;
+    background:rgba(255,255,255,.02);border:1px solid rgba(120,130,160,.12);
+    animation:mo-skel-in .3s ease-out both;
+  }
+  @keyframes mo-skel-in{from{opacity:0;transform:translateY(4px)}}
+  .mo-skel-line{
+    height:9px;border-radius:4px;
+    background:linear-gradient(90deg, rgba(120,130,160,.10) 0%, rgba(120,130,160,.24) 50%, rgba(120,130,160,.10) 100%);
+    background-size:200% 100%;animation:mo-shimmer 1.3s ease-in-out infinite;
+  }
+  @keyframes mo-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+  .mo-skel-w30{width:30%}.mo-skel-w60{width:60%}.mo-skel-w90{width:90%}
+  @media (prefers-reduced-motion: reduce){ .mo-spin, .mo-skel-line, .mo-skel-card{animation:none} }
 </style>

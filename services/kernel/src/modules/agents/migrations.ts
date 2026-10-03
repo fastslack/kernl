@@ -814,6 +814,19 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE workspaces ADD COLUMN setup_at     TEXT;
     `,
   },
+  {
+    // What the operator dismissed in the chief's office. The office rebuilds
+    // its report list from agent_runs on every load, so without this a
+    // dismissed failure came straight back. Keyed by run id; the run itself
+    // is untouched.
+    version: 48,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_office_dismissed (
+        run_id       TEXT PRIMARY KEY,
+        dismissed_at TEXT NOT NULL
+      );
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

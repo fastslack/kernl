@@ -615,6 +615,13 @@
       return t && ['info', 'config', 'live', 'history', 'memory', 'chat', 'workspace', 'skills'].includes(t) ? (t as typeof panelTab) : null;
     } catch { return null; }
   })();
+  /** Open `agentId` on `tab` — the chief's office uses it to land a limit
+   *  failure's fix on Settings. Same mechanism as the ?tab= deep link. */
+  export function showAgentTab(agentId: string, tab: typeof panelTab): void {
+    if (selectedAgent === agentId) { selectPanelTab(tab); return; }
+    _deepLinkTab = tab;
+    selectedAgent = agentId;
+  }
   $: if (selectedAgent && selectedAgent !== lastSelectedAgent) {
     lastSelectedAgent = selectedAgent;
     if (_deepLinkTab) {

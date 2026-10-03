@@ -193,6 +193,16 @@ export function registerAgentRoutes(
   // ── Event Log endpoints ────────────────────────────
 
   // ── Escalated questions (human-in-the-loop) ─────────────
+  // ── Chief's office: dismissed reports (run ids) ─────────────
+  const runIdsOf = (body: unknown): string[] => {
+    const ids = (body as { run_ids?: unknown })?.run_ids;
+    if (!Array.isArray(ids)) throw new HttpError(400, "run_ids (array) required");
+    return ids.filter((x): x is string => typeof x === "string" && x.length > 0).slice(0, 1000);
+  };
+  server.route("GET", "/api/agents/office/dismissed", () => ({ run_ids: service.listOfficeDismissed() }));
+  server.route("POST", "/api/agents/office/dismiss", ({ body }) => ({ dismissed: service.dismissOfficeRuns(runIdsOf(body)) }));
+  server.route("POST", "/api/agents/office/restore", ({ body }) => ({ restored: service.restoreOfficeRuns(runIdsOf(body)) }));
+
   server.route("GET", "/api/agents/questions", ({ query }) => {
     const status = (query.get("status") as QuestionStatus | null) ?? "pending";
     const answeredBy = query.get("answered_by");

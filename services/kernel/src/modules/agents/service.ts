@@ -1249,6 +1249,33 @@ export class AgentService {
     return r ? this.mapQuestionRow(r) : undefined;
   }
 
+  // ── Chief's office: dismissed reports ─────────────────────────────
+  /** Record runs the operator dismissed from the office. Returns how many were new. */
+  dismissOfficeRuns(runIds: string[]): number {
+    const now = new Date().toISOString();
+    const ins = this.db.prepare("INSERT OR IGNORE INTO agent_office_dismissed (run_id, dismissed_at) VALUES (?, ?)");
+    let added = 0;
+    this.db.transaction(() => {
+      for (const id of runIds) if (id) added += ins.run(id, now).changes;
+    })();
+    return added;
+  }
+
+  /** Bring dismissed runs back into the office. Returns how many were removed. */
+  restoreOfficeRuns(runIds: string[]): number {
+    const del = this.db.prepare("DELETE FROM agent_office_dismissed WHERE run_id = ?");
+    let removed = 0;
+    this.db.transaction(() => {
+      for (const id of runIds) if (id) removed += del.run(id).changes;
+    })();
+    return removed;
+  }
+
+  listOfficeDismissed(): string[] {
+    return (this.db.prepare("SELECT run_id FROM agent_office_dismissed ORDER BY dismissed_at").all() as Array<{ run_id: string }>)
+      .map((r) => r.run_id);
+  }
+
   listQuestions(opts?: { status?: QuestionStatus; answered_by?: "chief" | "human"; limit?: number }): AgentQuestion[] {
     let sql = "SELECT * FROM agent_questions WHERE 1=1";
     const params: unknown[] = [];

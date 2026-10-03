@@ -685,6 +685,8 @@
   // resolved on its own — read-only audit trail for MyOfficePanel.
   let triageCount = 0;
   let chiefAnswered: PendingQuestion[] = [];
+  /** First answer in: until then the office cannot say "nothing pending". */
+  let questionsLoaded = false;
   async function loadPendingQuestions() {
     try {
       const [pending, triage, chief] = await Promise.all([
@@ -696,9 +698,10 @@
       if (triage.ok) triageCount = ((await triage.json()).questions ?? []).length;
       if (chief.ok) chiefAnswered = ((await chief.json()).questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
+    finally { questionsLoaded = true; }
   }
   let showMyOfficePanel = false;
-  let myOfficeTab: 'overview' | 'questions' | 'errors' = 'overview';
+  let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity' = 'overview';
   let officeReportsLoaded = false;
 
   // "Send to fixer" lives in MyOfficePanel.svelte with the report modal. Its
@@ -787,9 +790,12 @@
   }
 
   /** Load recent completed runs from ALL agents on first open — fills the report backlog. */
+  /** The backlog fetch is in flight — the office shows a skeleton, not "all clear". */
+  let officeLoading = false;
   async function loadOfficeReportsFromApi() {
     if (officeReportsLoaded) return;
     officeReportsLoaded = true;
+    officeLoading = true;
     try {
       const historical: OfficeReport[] = [];
       // Fetch last 5 runs per MANAGER (completed + failed) and last 3 FAILURES
@@ -832,12 +838,20 @@
           } catch { /* skip agent */ }
         }),
       ];
+      // What the operator already dismissed in the chief's office stays out —
+      // this list is rebuilt from agent_runs on every load.
+      const dismissedReq = fetch('/api/agents/office/dismissed')
+        .then(r => (r.ok ? r.json() : { run_ids: [] }))
+        .then((b: { run_ids?: string[] }) => new Set(b.run_ids ?? []))
+        .catch(() => new Set<string>());
       await Promise.all(fetches);
+      const dismissed = await dismissedReq;
       // Merge: keep live reports on top, add historical below (deduped by timestamp proximity)
       const liveTs = new Set(officeReports.map(r => r.ts));
-      const deduped = historical.filter(h => !liveTs.has(h.ts));
+      const deduped = historical.filter(h => !liveTs.has(h.ts) && !(h.runId && dismissed.has(h.runId)));
       const merged = [...officeReports, ...deduped].sort((a, b) => b.ts - a.ts).slice(0, 100);
       officeReports = merged;
+      officeLoading = false;
 
       // Backfill audited run IDs by fetching the Error Auditor's recent runs
       // and parsing each run's goal for the original `Run ID: <id>` marker.
@@ -856,6 +870,7 @@
         } catch { /* best effort */ }
       }
     } catch { /* best effort */ }
+    finally { officeLoading = false; }
   }
 
   function flowColor(aid: string) { return resolveFlowColor(aid, agents, flows); }
@@ -4202,7 +4217,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     bind:showMyOfficePanel
     bind:myOfficeTab
     bind:officeReports
-    bind:officeReportsLoaded
     bind:pendingQuestions
     {triageCount}
     {chiefAnswered}
@@ -4216,6 +4230,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     onOutputClick={handleOutputClick}
     selectAgent={(id) => { selectedAgent = id; }}
     {focusAgent}
+    loading={officeLoading || !questionsLoaded}
+    openAgentSettings={(id) => { showMyOfficePanel = false; agentPanel?.showAgentTab(id, 'config'); focusAgent(); }}
+    chiefRunning={!!topAgent() && runningAgentIds.has(topAgent()?.id ?? '')}
+    openChiefChat={() => { showMyOfficePanel = false; selectedAgent = null; showOfficeModal = true; }}
   />
 
   <!-- Selected agent's drawer — see AgentPanel.svelte. -->
