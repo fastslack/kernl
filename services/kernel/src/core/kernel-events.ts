@@ -97,7 +97,8 @@ export interface AgentFlowRunCompletedPayload {
   agent_id: string;
   agent_name: string;
   run_id: string;
-  status: "completed" | "failed";
+  /** "cancelled" only from agents.stop — the operator stopped it. */
+  status: "completed" | "failed" | "cancelled";
   steps_count: number;
   tokens_used: number;
   result_preview: string;

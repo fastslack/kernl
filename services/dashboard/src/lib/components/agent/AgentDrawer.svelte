@@ -147,6 +147,10 @@
     headModelError = String($detail.error || '');
   }
 
+  /** Detener was clicked; cleared once the run is really gone. */
+  let stopping = false;
+  $: if (!running) stopping = false;
+
   // ── ¿Este agente puede usar skills? ───────────────────────────────
   // Un agente con `builtin_handler` registrado corta el camino LLM en
   // executor.ts:238 y retorna con `tokens_used: 0`; el índice de skills se
@@ -309,23 +313,28 @@
             {:else}
               <div class="ip-name">{agent.name}</div>
             {/if}
-            <span class="ip-state" class:ip-state-on={agent.active === 1 && !running} class:ip-state-off={agent.active !== 1}
-                  class:ip-state-run={running} class:ip-state-tripped={autoPaused}
-                  title={running
-                    ? $t('agent.head.state_running_title')
-                    : agent.active === 1
-                      ? $t('agent.head.state_active_title')
+            <!-- The schedule switch. It used to be a separate Pausar/Reanudar
+                 button next to Ejecutar; both live on the state they change
+                 now. Same `resume` event: the listener reads `active`. -->
+            <button class="ip-state" type="button" role="switch" aria-checked={agent.active === 1}
+                    class:ip-state-on={agent.active === 1} class:ip-state-off={agent.active !== 1}
+                    class:ip-state-tripped={autoPaused}
+                    disabled={togglingPause}
+                    title={agent.active === 1
+                      ? $t('agent.head.state_active_title') + ' ' + $t('agent.head.switch_to_pause')
                       : autoPaused
                         ? $t('agent.head.state_auto_title', { n: String(agent.consecutive_failures) })
-                        : $t('agent.head.state_paused_title')}>
-              <span class="led" class:on={agent.active === 1}></span>{running
-                ? $t('agent.head.state_running')
+                        : $t('agent.head.state_paused_title') + ' ' + $t('agent.head.switch_to_resume')}
+                    on:click={() => dispatch('resume')}>
+              <span class="ip-sw" aria-hidden="true"><span class="ip-sw-knob"></span></span>
+              <span class="ip-state-l">{togglingPause
+                ? '…'
                 : agent.active === 1
                   ? $t('agent.head.state_active')
                   : autoPaused
                     ? $t('agent.head.state_auto')
-                    : $t('agent.head.state_paused')}
-            </span>
+                    : $t('agent.head.state_paused')}</span>
+            </button>
             {#if !editingName}
               <!-- Last in the row, so showing it on hover moves nothing. -->
               <button class="ip-name-edit-btn" type="button" title={$t('agent.drawer.rename_title')}
@@ -386,26 +395,29 @@
         <!-- Pause y Resume emiten el MISMO evento `resume`: son un único toggle y
              quien escucha decide el sentido leyendo `active`. -->
         <div class="ip-actions">
-        <button class="ip-btn ip-btn-primary" on:click={() => dispatch('run')} disabled={starting} title={agent.active !== 1 ? 'Manual run — overrides pause' : 'Run this agent now'}>
-          <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
-          <span>{starting ? $t('agent.head.starting') : $t('agent.head.run')}</span>
+        <!-- One button, two states: ▶ Ejecutar while idle, ◼ Detener while a
+             run is in flight (POST /api/agents/stop, raised as `stop`). The
+             glyph is one clip-path that morphs triangle ⇄ square, and a ring
+             turns around it while the agent works. -->
+        <button class="ip-btn ip-run" class:ip-run-on={running} class:ip-run-wait={starting || stopping}
+                type="button"
+                aria-label={running ? $t('agent.head.stop') : $t('agent.head.run')}
+                title={running
+                  ? $t('agent.head.stop_title')
+                  : agent.active !== 1 ? $t('agent.head.run_paused_title') : $t('agent.head.run_title')}
+                disabled={starting || stopping}
+                on:click={() => { if (running) { stopping = true; dispatch('stop'); } else dispatch('run'); }}>
+          <span class="ip-run-ico" aria-hidden="true"><span class="ip-run-glyph"></span></span>
+          <span class="ip-run-l">
+            {starting
+              ? $t('agent.head.starting')
+              : stopping
+                ? $t('agent.head.stopping')
+                : running
+                  ? $t('agent.head.stop')
+                  : $t('agent.head.run')}
+          </span>
         </button>
-        {#if agent.active === 1}
-          <button class="ip-btn ip-btn-warn" on:click={() => dispatch('resume')} disabled={togglingPause} title={$t('agent.drawer.pause_title')}>
-            <span class="ip-btn-ico">⏸</span>
-            <span>{togglingPause ? '…' : $t('agent.head.pause')}</span>
-          </button>
-        {:else}
-          <button class="ip-btn ip-btn-resume" on:click={() => dispatch('resume')} disabled={togglingPause} title={$t('agent.drawer.resume_title')}>
-            <span class="ip-btn-ico">▶</span>
-            <span>{togglingPause ? '…' : $t('agent.head.resume')}</span>
-          </button>
-        {/if}
-        {#if $$slots.chat}
-          <button class="ip-btn ip-btn-ghost" on:click={() => selectTab('chat')}>
-            <span class="ip-btn-ico">✎</span><span>{$t('agent.drawer.tab_message')}</span>
-          </button>
-        {/if}
         {#if devopsOffice}
           <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
             <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
@@ -723,14 +735,6 @@
   .ip-btn:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
   .ip-btn:disabled{opacity:.5;cursor:wait}
   .ip-btn-ico{font:500 11px 'JetBrains Mono',monospace;color:#8a8fa8}
-  .ip-btn-primary{
-    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
-  }
-  .ip-btn-primary .ip-btn-ico{color:inherit}
-  .ip-btn-primary:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
-  .ip-btn-primary:disabled{opacity:.5;cursor:wait;background:rgba(120,220,140,.3);border-color:rgba(120,220,140,.2)}
-  .ip-btn-warn .ip-btn-ico{color:#fbbf24}
-  .ip-btn-resume .ip-btn-ico{color:#78dc8c}
   /* Watch-live link (CREATIVOS → Scene Studio). Violet to match that office's
      colour, so the way through is findable without reading the label. */
   .ip-btn-live{
@@ -794,15 +798,30 @@
      A pill next to the name: the first thing read, with the word, not only
      the colour. */
   .ip-state{
-    display:inline-flex;align-items:center;gap:6px;flex:none;
-    padding:2px 9px 2px 8px;border-radius:999px;
-    font:600 10.5px 'Manrope',sans-serif;
+    display:inline-flex;align-items:center;gap:7px;flex:none;
+    height:24px;padding:0 10px 0 4px;border-radius:999px;cursor:pointer;
+    font:600 11px 'Manrope',sans-serif;
     background:color-mix(in srgb, currentColor 10%, transparent);
     border:1px solid color-mix(in srgb, currentColor 30%, transparent);
+    transition:color .25s, background .25s, border-color .25s;
   }
+  .ip-state:hover:not(:disabled){background:color-mix(in srgb, currentColor 18%, transparent)}
+  .ip-state:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .ip-state:disabled{cursor:wait;opacity:.75}
+  /* The switch inside the pill: knob right = on. */
+  .ip-sw{
+    position:relative;width:26px;height:16px;border-radius:999px;flex:none;
+    background:color-mix(in srgb, currentColor 28%, transparent);
+    transition:background .25s;
+  }
+  .ip-sw-knob{
+    position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+    background:currentColor;box-shadow:0 1px 3px rgba(0,0,0,.4);
+    transition:transform .28s cubic-bezier(.34,1.56,.64,1);
+  }
+  .ip-state-on .ip-sw-knob{transform:translateX(10px)}
   .ip-state-on{color:#78dc8c}
   .ip-state-off{color:#fbbf24}
-  .ip-state-run{color:#7cc4ff}
   /* An agent the kernel stopped reads as a fault, not as a warning: the
      operator did not choose this state and something upstream is broken. */
   .ip-state-tripped{color:#f87171}
@@ -825,16 +844,46 @@
     color:var(--text-2); background:rgba(0,0,0,.28); border-radius:5px;
   }
   .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
-  .ip-state .led{
-    width:6px;height:6px;border-radius:50%;
-    background:currentColor;
+  @media (prefers-reduced-motion: reduce){ .ip-sw-knob, .ip-state{transition:none} }
+
+  /* ── Run ⇄ Stop ─────────────────
+     One button. Idle: filled green, ▶. Running: red outline, ◼, a ring
+     turning around the glyph. The glyph is a single clip-path whose four
+     points move from a triangle to a square, so the change is a morph and
+     not a swap. */
+  .ip-run{
+    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
+    min-width:112px;justify-content:center;
+    transition:background .25s, color .25s, border-color .25s, box-shadow .25s;
   }
-  .ip-state .led.on{
-    box-shadow:0 0 6px currentColor;
-    animation:led-pulse 2s ease-in-out infinite;
+  .ip-run:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
+  .ip-run-on{
+    background:rgba(240,71,112,.1);color:#ff8fa8;border-color:rgba(240,71,112,.55);
+    box-shadow:0 0 0 0 rgba(240,71,112,.4);animation:ip-run-pulse 1.8s ease-out infinite;
   }
-  @keyframes led-pulse{50%{opacity:.55}}
-  @media (prefers-reduced-motion: reduce){ .ip-state .led.on{animation:none} }
+  .ip-run-on:hover:not(:disabled){background:rgba(240,71,112,.2);border-color:rgba(240,71,112,.8)}
+  .ip-run:disabled{cursor:wait;opacity:.8}
+  @keyframes ip-run-pulse{0%{box-shadow:0 0 0 0 rgba(240,71,112,.35)}70%{box-shadow:0 0 0 7px rgba(240,71,112,0)}100%{box-shadow:0 0 0 0 rgba(240,71,112,0)}}
+  .ip-run-ico{position:relative;width:14px;height:14px;display:grid;place-items:center;flex:none}
+  .ip-run-glyph{
+    width:9px;height:10px;background:currentColor;
+    clip-path:polygon(0 0, 100% 50%, 100% 50%, 0 100%);
+    transition:clip-path .3s cubic-bezier(.4,0,.2,1), width .3s, height .3s;
+  }
+  .ip-run-on .ip-run-glyph{width:8px;height:8px;border-radius:1px;clip-path:polygon(0 0, 100% 0, 100% 100%, 0 100%)}
+  /* The working ring. */
+  .ip-run-on .ip-run-ico::after, .ip-run-wait .ip-run-ico::after{
+    content:'';position:absolute;inset:-3px;border-radius:50%;
+    border:1.5px solid transparent;border-top-color:currentColor;border-right-color:currentColor;
+    animation:ip-run-spin .9s linear infinite;
+  }
+  @keyframes ip-run-spin{to{transform:rotate(360deg)}}
+  .ip-run-l{transition:opacity .2s}
+  @media (prefers-reduced-motion: reduce){
+    .ip-run, .ip-run-glyph{transition:none}
+    .ip-run-on{animation:none}
+    .ip-run-on .ip-run-ico::after, .ip-run-wait .ip-run-ico::after{animation:none}
+  }
 
 
   /* ── LIVE tab ── */

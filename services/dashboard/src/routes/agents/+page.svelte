@@ -141,6 +141,21 @@
     finally { starting = false; }
   }
 
+  /** Detener: cancel the selected agent's run in flight. */
+  async function stopSelected() {
+    if (!selectedAgent) return;
+    try {
+      const r = await fetch('/api/agents/stop', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ agent_id: selectedAgent.id }),
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(b.error || `HTTP ${r.status}`);
+      flash(b.cancelled ? '⏹ stopped' : 'nothing to stop');
+    } catch (e: any) { flash('✗ ' + (e?.message ?? String(e))); }
+  }
+
   /** Pause and Resume are one toggle; which way it goes is read off the row. */
   async function togglePause() {
     if (!selectedAgent) return;
@@ -683,6 +698,7 @@
             bind:panelTab
             on:close={backToOverview}
             on:run={runSelected}
+            on:stop={stopSelected}
             on:resume={togglePause}
             on:revision={(e) => resolveRevision(e.detail.mode)}
             on:rename-begin={beginEditName}

@@ -658,7 +658,7 @@
     const t = evt.event.split(':').pop() ?? '';
     if (t === 'run_started') return `Goal: ${String(evt.data.goal ?? '').slice(0, 120)}`;
     if (t === 'run_completed') {
-      const status = evt.data.status === 'completed' ? 'Success' : 'Failed';
+      const status = evt.data.status === 'completed' ? 'Success' : evt.data.status === 'cancelled' ? 'Stopped' : 'Failed';
       return `${status} | ${evt.data.steps_count ?? 0} steps | ${evt.data.tokens_used ?? 0} tokens | ${String(evt.data.result_preview ?? evt.data.error ?? '').slice(0, 150)}`;
     }
     if (t === 'chain_triggered') return `Triggering "${evt.data.target_agent_name}" via chain "${evt.data.chain_label}"`;

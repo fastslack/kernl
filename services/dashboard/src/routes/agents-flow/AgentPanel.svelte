@@ -725,6 +725,26 @@
     }
   }
 
+  /** Detener: cancel this agent's run in flight. The LIVE stream reports the end. */
+  async function stopAgent() {
+    if (!selectedAgent) return;
+    try {
+      const res: any = await rpcOrCall('agents.stop', { agent_id: selectedAgent }, async () => {
+        const r = await fetch('/api/agents/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agent_id: selectedAgent }),
+        });
+        return r.json();
+      });
+      startMsg = res?.cancelled ? '⏹ stopped' : `✗ ${res?.error || 'nothing to stop'}`;
+    } catch (e: any) {
+      startMsg = `✗ ${e?.message || 'network error'}`;
+    } finally {
+      setTimeout(() => { startMsg = ''; }, 5000);
+    }
+  }
+
   async function talkToAgent(text?: string) {
     const msg = (text ?? chatInput).trim();
     if (!selectedAgent || !msg || chatSending) return;
@@ -888,6 +908,7 @@ Boss says: "${msg}"`;
     on:close={() => { selectedAgent = null; }}
     on:tab={(e) => selectPanelTab(e.detail.tab)}
     on:run={startAgent}
+    on:stop={stopAgent}
     on:resume={togglePause}
     on:revision={(e) => resolveRevision(e.detail.mode)}
     on:rename-begin={beginEditName}

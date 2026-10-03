@@ -192,6 +192,21 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       const cancel = (runId: string) => {
         if (!executor.cancelRun(runId)) return false;
         service.updateRun(runId, { status: "cancelled", completed_at: now() });
+        // Say so: the dashboard counts an agent as running until it sees
+        // run_completed for the run, and a silent cancel left Stop on
+        // "stopping…" and the agent busy until a reload.
+        const run = service.getRun(runId);
+        const agent = run ? service.getAgent(run.agent_id) : null;
+        events?.emit("agent:flow:run_completed", {
+          agent_id: run?.agent_id ?? "",
+          agent_name: agent?.name ?? "",
+          run_id: runId,
+          status: "cancelled",
+          steps_count: run?.steps_count ?? 0,
+          tokens_used: run?.tokens_used ?? 0,
+          result_preview: "",
+          error: "Stopped by the operator",
+        });
         return true;
       };
       const runId = str(input, "run_id");

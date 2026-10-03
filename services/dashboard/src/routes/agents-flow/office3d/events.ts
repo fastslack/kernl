@@ -206,6 +206,12 @@ export function processLiveEvents(ctx: LiveEventContext): void {
         }
       }
     }
+    else if (t === 'run_completed' && e.data.status === 'cancelled') {
+      // The operator pressed Detener. Not a failure: no error effects, no
+      // report in My Office — just say it stopped.
+      showAnimatedTag(aid, { icon: '⏹', anim: 'pop', color: '#8a8fa8', label: 'STOPPED', durationFrames: 160 });
+      if (aid === ctx.selectedAgent) refreshSelectedAgentRuns();
+    }
     else if (t === 'run_completed') {
       const failed = e.data.status !== 'completed';
       // (#3) Tag carries the result icon (✅ pop / ❌ shake). Failed runs
@@ -920,7 +926,7 @@ export function processLiveEvents(ctx: LiveEventContext): void {
     const agentName = ctx.agents.find(a => a.id === String(ev.data.agent_id ?? ''))?.name ?? '';
     let text = t;
     if (t === 'run_started') text = 'started';
-    else if (t === 'run_completed') text = ev.data.status === 'completed' ? 'done' : 'failed';
+    else if (t === 'run_completed') text = ev.data.status === 'completed' ? 'done' : ev.data.status === 'cancelled' ? 'stopped' : 'failed';
     else if (t === 'chain_triggered') text = `→ ${String(ev.data.target_agent_name ?? '').slice(0, 15)}`;
     else if (t === 'step') text = String(ev.data.type === 'tool_call' ? ev.data.tool_name : ev.data.type ?? '').slice(0, 20);
     const ts = ev.data.ts ?? ev.ts;
