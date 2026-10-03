@@ -3,7 +3,7 @@ import { Database } from "bun:sqlite";
 import { rehydrateStoredSettings } from "../src/core/bootstrap/stored-settings.js";
 import type { KernelConfig } from "../src/core/config.js";
 
-const KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SOME_SETTING"];
+const KEYS = ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "SOME_SETTING", "CHAT_PREFERRED_PROVIDER", "CHAT_PREFERRED_MODEL"];
 let saved: Record<string, string | undefined>;
 let db: InstanceType<typeof Database>;
 
@@ -45,6 +45,14 @@ describe("rehydrateStoredSettings", () => {
     rehydrateStoredSettings(db, cfg);
     expect(process.env.GOOGLE_CLIENT_ID).toBe("from-env");
     expect(cfg.google.clientId).toBe("from-env");
+  });
+
+  it("brings back the model last picked in a chat", () => {
+    db.run("INSERT INTO app_settings VALUES ('CHAT_PREFERRED_PROVIDER', 'claude-code'), ('CHAT_PREFERRED_MODEL', 'claude-opus-5')");
+    const cfg = { ...config(), chat: { preferredProvider: "", preferredModel: "" } } as unknown as KernelConfig;
+    rehydrateStoredSettings(db, cfg);
+    expect(cfg.chat.preferredProvider).toBe("claude-code");
+    expect(cfg.chat.preferredModel).toBe("claude-opus-5");
   });
 
   it("is a no-op on a fresh install where the settings table doesn't exist yet", () => {

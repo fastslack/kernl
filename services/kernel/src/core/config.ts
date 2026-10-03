@@ -67,6 +67,14 @@ export interface KernelConfig {
   chat: {
     defaultProvider: string;
     defaultModel: string;
+    /**
+     * The model last picked in a chat (CHAT_PREFERRED_*). New chats that do
+     * not name a model start on it. Chat only: unlike CHAT_DEFAULT_*, the LLM
+     * driver never reads these, so a pick in the chat does not move every
+     * other LLM call in the kernel.
+     */
+    preferredProvider: string;
+    preferredModel: string;
     extractionModel: string;
     contextBudget: number;
     maxEpisodeMessages: number;
@@ -398,6 +406,8 @@ export function loadConfig(): KernelConfig {
     chat: {
       defaultProvider: process.env.CHAT_DEFAULT_PROVIDER ?? "",
       defaultModel: process.env.CHAT_DEFAULT_MODEL ?? "",
+      preferredProvider: process.env.CHAT_PREFERRED_PROVIDER ?? "",
+      preferredModel: process.env.CHAT_PREFERRED_MODEL ?? "",
       extractionModel: process.env.CHAT_EXTRACTION_MODEL ?? "",
       contextBudget: parseInt(process.env.CHAT_CONTEXT_BUDGET ?? "2000", 10),
       maxEpisodeMessages: parseInt(process.env.CHAT_MAX_EPISODE_MESSAGES ?? "100", 10),

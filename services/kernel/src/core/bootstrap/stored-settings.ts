@@ -37,6 +37,11 @@ export function rehydrateStoredSettings(sqlite: SqliteDb, config: KernelConfig):
   // Config fields read once from the environment, which modules copy at init.
   if (!config.google.clientId) config.google.clientId = process.env.GOOGLE_CLIENT_ID ?? "";
   if (!config.google.clientSecret) config.google.clientSecret = process.env.GOOGLE_CLIENT_SECRET ?? "";
+  // The model last picked in a chat, saved by the chat itself.
+  if (config.chat) {
+    if (!config.chat.preferredProvider) config.chat.preferredProvider = process.env.CHAT_PREFERRED_PROVIDER ?? "";
+    if (!config.chat.preferredModel) config.chat.preferredModel = process.env.CHAT_PREFERRED_MODEL ?? "";
+  }
 
   return restored;
 }

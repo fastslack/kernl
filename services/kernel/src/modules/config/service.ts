@@ -165,6 +165,28 @@ const SETTING_CATALOG: SettingDef[] = [
     applyToConfig: (v, c) => { c.chat.defaultModel = v; },
   },
   {
+    key: "CHAT_PREFERRED_PROVIDER",
+    label: { en: "Chat Last-Picked Provider", es: "Proveedor elegido en el chat" },
+    description: {
+      en: "Provider last picked in a chat; new chats start on it. Saved automatically when you pick a model. Chat only — other LLM calls keep their own defaults.",
+      es: "Proveedor elegido por última vez en un chat; los chats nuevos arrancan con él. Se guarda solo al elegir un modelo. Solo afecta al chat: las demás llamadas LLM mantienen sus valores por defecto.",
+    },
+    category: "chat",
+    type: "string",
+    applyToConfig: (v, c) => { c.chat.preferredProvider = v; },
+  },
+  {
+    key: "CHAT_PREFERRED_MODEL",
+    label: { en: "Chat Last-Picked Model", es: "Modelo elegido en el chat" },
+    description: {
+      en: "Model last picked in a chat; empty means the provider's own default. Saved automatically when you pick a model.",
+      es: "Modelo elegido por última vez en un chat; vacío es el modelo por defecto del proveedor. Se guarda solo al elegir un modelo.",
+    },
+    category: "chat",
+    type: "string",
+    applyToConfig: (v, c) => { c.chat.preferredModel = v; },
+  },
+  {
     key: "CHAT_SYSTEM_PROMPT",
     label: { en: "Chat System Prompt", es: "Prompt de sistema del chat" },
     description: { en: "System prompt prepended to every chat conversation.", es: "Prompt de sistema que se antepone a cada conversación." },

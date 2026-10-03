@@ -96,7 +96,7 @@ function stubConfig(): KernelConfig {
       braveApiKey: "", googleCseKey: "", googleCseCx: "", searxngBaseUrl: "",
     },
     chat: {
-      defaultProvider: "stub", defaultModel: "stub-model", extractionModel: "", contextBudget: 2000,
+      defaultProvider: "stub", defaultModel: "stub-model", preferredProvider: "", preferredModel: "", extractionModel: "", contextBudget: 2000,
       maxEpisodeMessages: 100, decayIntervalMs: 3600000, patternDetectionIntervalMs: 86400000,
       systemPrompt: "You are a test assistant.",
     },

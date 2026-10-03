@@ -261,14 +261,24 @@ export class ChatService {
     instructions?: string;
   }): Episode {
     const now = isoNow();
+    // A chat that names its model keeps it, and that pick is remembered.
+    // One that does not starts on the last pick, while its provider is still
+    // installed; otherwise on the configured default.
+    const preferred = this.config.chat.preferredProvider;
+    const start = input.provider
+      ? { provider: input.provider, model: input.model || "" }
+      : preferred && this.providers.has(preferred)
+        ? { provider: preferred, model: this.config.chat.preferredModel || "" }
+        : { provider: this.defaultProvider, model: input.model || this.config.chat.defaultModel };
+    if (input.provider) this.rememberModelPick(input.provider, input.model || "");
     const episode: Episode = {
       id: newId(),
       title: input.title || "",
       summary: "",
       status: "active",
       message_count: 0,
-      llm_provider: input.provider || this.defaultProvider,
-      llm_model: input.model || this.config.chat.defaultModel,
+      llm_provider: start.provider,
+      llm_model: start.model,
       total_tokens: 0,
       instructions: input.instructions || "",
       created_at: now,
@@ -368,8 +378,22 @@ export class ChatService {
     this.db
       .prepare("UPDATE chat_episodes SET llm_provider = ?, llm_model = ?, updated_at = ? WHERE id = ?")
       .run(provider, nextModel, now, id);
+    this.rememberModelPick(provider, nextModel);
     this.events.emit("data.changed", { module: "chat", action: "episode_provider" });
     return { ...episode, llm_provider: provider, llm_model: nextModel, updated_at: now };
+  }
+
+  /**
+   * Make a model pick the starting point of the next chat. Applied to the live
+   * config at once, so the next chat gets it even if saving fails; the config
+   * module persists it on the event (CHAT_PREFERRED_*).
+   */
+  private rememberModelPick(provider: string, model: string): void {
+    if (provider === this.config.chat.preferredProvider && model === this.config.chat.preferredModel) return;
+    this.config.chat.preferredProvider = provider;
+    this.config.chat.preferredModel = model;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    this.events.emit("chat.model_picked" as any, { provider, model }).catch(() => {});
   }
 
   /** Hard-delete an episode and all its messages.
