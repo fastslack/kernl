@@ -194,7 +194,7 @@
 
   // Collapsible section state. It lives here and not inside each section so
   // that closing and reopening the drawer does not forget it.
-  let collapsed = { mandate: true };
+  let collapsed = { mandate: false };
 
   // ── Talk to agent ──────────────────────────────
   let chatInput = '';

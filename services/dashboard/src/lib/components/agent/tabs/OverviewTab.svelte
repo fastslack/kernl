@@ -51,7 +51,7 @@
   export let connections: { invokedBy?: any[]; invoked?: any[] } | null = null;
 
   /** Collapsed state, held by the caller so it survives a close/reopen. */
-  export let collapsed: { mandate: boolean } = { mandate: true };
+  export let collapsed: { mandate: boolean } = { mandate: false };
 
   $: agent = ($store ?? {}).agent ?? null;
 </script>
@@ -76,9 +76,14 @@
      `.ip-body`, and Svelte scopes CSS per component. */
   .ip-body{
     flex:1;overflow-y:auto;overflow-x:hidden;
-    padding:16px 18px 24px;
+    padding:16px 18px 16px;
+    /* A column, so an open Mandate can take the height left below it. */
+    display:flex;flex-direction:column;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
+  /* Nothing else in the column may be squeezed to make room for it. */
+  .ip-body > :global(*){flex-shrink:0}
+  .ip-body > :global(.ip-mandate-open){flex-shrink:1}
   .ip-body::-webkit-scrollbar{width:6px}
   .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
   .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}

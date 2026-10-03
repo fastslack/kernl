@@ -14,6 +14,7 @@
 -->
 <script lang="ts">
   import type { Readable } from 'svelte/store';
+  import { formatRunOutput } from '$lib/run-format.js';
 
   /** The drawer's agent store (`AgentDrawer` publishes it on the overview slot). */
   export let store: Readable<any>;
@@ -32,7 +33,7 @@
   /** Detail fetch in flight, same reason as `prompt`. Null → ask the store. */
   export let loading: boolean | null = null;
   /** Bindable so the caller can keep the state across a close/reopen. */
-  export let collapsed = true;
+  export let collapsed = false;
 
   $: state = $store ?? {};
   $: agent = (state.agent ?? {}) as Record<string, any>;
@@ -70,7 +71,7 @@
   }
 </script>
 
-<section class="ip-sec ip-mandate" class:sec-compact={compact}>
+<section class="ip-sec ip-mandate" class:sec-compact={compact} class:ip-mandate-open={!collapsed && !!text}>
   <div class="ip-sec-hrow">
     <button class="ip-sec-h ip-sec-btn" on:click={() => (collapsed = !collapsed)}>
       <span class="ip-caret" class:open={!collapsed}>▸</span>
@@ -88,7 +89,9 @@
 
   {#if !collapsed}
     {#if text}
-      <pre class="ip-pre ip-pre-scroll">{text}</pre>
+      <!-- Rendered, not raw: prompts are written in markdown. formatRunOutput
+           escapes HTML first (the same renderer as the run output). -->
+      <div class="ip-mandate-md">{@html formatRunOutput(text)}</div>
     {:else if builtin}
       <div class="ip-mandate-alt">
         Runs a builtin handler — no system prompt.
@@ -170,14 +173,31 @@
     padding:2px 7px;border-radius:4px;
     border:1px solid rgba(120,130,160,.12);
   }
-  .ip-pre{
-    margin:0;padding:12px;border-radius:8px;
-    background:rgba(0,0,0,.3);
-    border:1px solid rgba(120,130,160,.1);
-    font:400 11px/1.55 'JetBrains Mono',monospace;
-    color:#d8dae3;white-space:pre-wrap;word-break:break-word;
+  /* Open, the mandate takes the rest of the tab's height and scrolls
+     inside; with little room left it still gets 260px. */
+  .ip-mandate-open{flex:1 1 0;min-height:260px;display:flex;flex-direction:column}
+  .ip-mandate-md{
+    flex:1;min-height:0;overflow-y:auto;
+    padding:12px 16px;border-radius:8px;
+    background:rgba(0,0,0,.28);border:1px solid rgba(120,130,160,.1);
+    font:400 12.5px/1.6 'Manrope',sans-serif;color:#d0d4e0;
+    word-break:break-word;overflow-wrap:anywhere;
+    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
-  .ip-pre-scroll{max-height:260px;overflow-y:auto}
+  .ip-mandate-md :global(.md-h){font:700 13px 'Syne',sans-serif;color:#e5e8f0;margin:14px 0 6px;letter-spacing:.3px}
+  .ip-mandate-md :global(h3.md-h){font-size:14.5px;color:#fff}
+  .ip-mandate-md :global(h5.md-h){font-size:12px;color:#c8ccd8;text-transform:uppercase;letter-spacing:.6px}
+  .ip-mandate-md :global(.md-h:first-child), .ip-mandate-md :global(.md-p:first-child){margin-top:0}
+  .ip-mandate-md :global(.md-p){margin:6px 0}
+  .ip-mandate-md :global(.md-ul), .ip-mandate-md :global(.md-ol){margin:6px 0 6px 20px;padding:0}
+  .ip-mandate-md :global(li){margin:3px 0}
+  .ip-mandate-md :global(strong){color:#f0f2f7;font-weight:700}
+  .ip-mandate-md :global(.md-code){font:500 11.5px 'JetBrains Mono',monospace;background:rgba(120,130,160,.14);padding:1px 5px;border-radius:4px;color:#e5e8f0}
+  .ip-mandate-md :global(.md-codeblock){
+    margin:8px 0;padding:10px 12px;border-radius:6px;background:#0a0b14;border:1px solid rgba(120,130,160,.16);
+    font:500 11px/1.5 'JetBrains Mono',monospace;color:#cbd0e8;white-space:pre-wrap;overflow-x:auto;
+  }
+  .ip-mandate-md :global(a){color:#9fb4e8}
   .ip-icon-btn{
     background:rgba(120,130,160,.08);
     border:1px solid rgba(120,130,160,.15);
