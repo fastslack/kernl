@@ -21,10 +21,7 @@
  * re-flattened into a transcript every time.
  */
 
-import { existsSync } from "node:fs";
-import { homedir } from "node:os";
-import { join, resolve } from "node:path";
-import { findOnPath } from "../fs-paths.js";
+import { findClaudeCli } from "../../sdk/claude-cli.js";
 import {
   query,
   type Options,
@@ -663,53 +660,11 @@ export class ChatClaudeCodeProvider {
     return childEnv;
   }
 
-  /** Mirror of ClaudeCodeExecutor.findClaudeCodeBinary with the same resolution order. */
+  /** Same resolution as the sign-in command and the agents executor — see sdk/claude-cli.ts. */
   private findBinary(): string | undefined {
     if (this.cachedBin !== undefined) return this.cachedBin ?? undefined;
-
-    const override = this.cfg.cliPath || process.env.CLAUDE_CODE_PATH;
-    if (override && existsSync(override)) {
-      this.cachedBin = override;
-      return override;
-    }
-
-    // In-process PATH scan: `which` does not exist on Windows, and there it
-    // also has to try PATHEXT to find claude.exe or npm's claude.cmd.
-    const onPath = findOnPath("claude");
-    if (onPath) {
-      this.cachedBin = onPath;
-      return onPath;
-    }
-
-    const hostCli = process.env.HOST_CLAUDE_CLI;
-    if (hostCli && existsSync(hostCli)) {
-      this.cachedBin = hostCli;
-      return hostCli;
-    }
-
-    const home = homedir();
-    const candidates = process.platform === "win32"
-      ? [
-          // The native installer's location, then npm's global shim.
-          join(home, ".local", "bin", "claude.exe"),
-          join(process.env.APPDATA || join(home, "AppData", "Roaming"), "npm", "claude.cmd"),
-        ]
-      : [
-          `${home}/.local/bin/claude`,
-          "/usr/local/bin/claude",
-          "/usr/bin/claude",
-          resolve(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"),
-          "/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
-        ];
-    for (const c of candidates) {
-      if (existsSync(c)) {
-        this.cachedBin = c;
-        return c;
-      }
-    }
-
-    this.cachedBin = null;
-    return undefined;
+    this.cachedBin = findClaudeCli({ override: this.cfg.cliPath });
+    return this.cachedBin ?? undefined;
   }
 }
 

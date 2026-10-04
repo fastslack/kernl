@@ -357,7 +357,7 @@ EXT_DEPS="$(node -e "
     '@anthropic-ai/claude-agent-sdk', '@modelcontextprotocol/sdk',
   ]);
   // ...except the two SDKs the bundled extensions actually depend on, on
-  // Windows, where they ship inside the package instead.
+  // Windows and macOS, where they ship inside the package instead.
   //
   // Ten bundled extensions declare one of these -- Cinema, Shop, Comms and
   // filesystem-commander among them -- so leaving them out parks all of them
@@ -369,8 +369,16 @@ EXT_DEPS="$(node -e "
   // that fails there is nothing to fall back to.
   //
   // Deliberate trade: ~100 MB of installer so the features work offline and on
-  // first boot. Windows only for now -- measure before extending it.
-  if (process.env.PLATFORM && process.env.PLATFORM.startsWith('win')) {
+  // first boot.
+  //
+  // macOS joined for a sharper reason: the agent SDK's platform package is
+  // where the claude CLI lives, and it is the only CLI a .dmg user has.
+  // Without it the subscription connection printed a bare claude to run, the
+  // terminal answered command not found, and a Pro or Max subscription could
+  // not be connected at all. The native CLI is the
+  // bulk of it (~200 MB unpacked). Linux packages still go without: measure
+  // before extending further.
+  if (process.env.PLATFORM && (process.env.PLATFORM.startsWith('win') || process.env.PLATFORM.startsWith('darwin'))) {
     ON_DEMAND.delete('@anthropic-ai/claude-agent-sdk');
     ON_DEMAND.delete('@modelcontextprotocol/sdk');
   }
