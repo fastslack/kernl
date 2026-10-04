@@ -3,10 +3,11 @@
 // master console where the responsible agent walks to switch an office's
 // infrastructure on/off. Shows DETAILED live state for every office:
 //   • a colour-coded breaker LED per office (3D, emissive)
-//   • a digital readout of the action in progress (CSS2D)
-//   • an "ops board" listing every office + its live state (CSS2D)
+//   • a digital readout of the action in progress, on the cabinet's own display
+//   • an "ops board" listing every office + its live state (CSS2D, on demand)
 //   • a master lever that flips up (ON) / down (OFF) when toggled
 import { rt } from './runtime.js';
+import { tagProp, glowOnHover, canvasPanel, type CanvasPanel } from './wall-screen.js';
 
 export type InfraState = 'running' | 'stopped' | 'paused' | 'error' | 'booting' | 'absent';
 
@@ -33,11 +34,10 @@ interface ConsoleState {
   leverTarget: number; // radians (target rotation.x)
   leverCur: number;
   breakers: Map<string, Breaker>;
-  readoutEl: HTMLDivElement | null;
+  readout: CanvasPanel | null;
   boardEl: HTMLDivElement | null;
   boardObj: any;            // the board's CSS2DObject (toggle .visible)
   boardVisible: boolean;
-  hintMat: any;             // emissive "click me" indicator on the cabinet
   offices: InfraOffice[];
   operatorPos: { x: number; y: number; z: number };
   facePos: { x: number; y: number; z: number };
@@ -94,20 +94,18 @@ export function buildPowerConsole(
     rail.position.set(s * 0.85, 0.5, 0);
     group.add(rail);
   }
-  // "Click me" indicator — a small pulsing cyan screen on the cabinet front
-  // that hints the console is interactive (toggles the power-grid board).
-  const hintMat = new THREE.MeshStandardMaterial({
-    color: 0x0a1620, emissive: new THREE.Color(0x2ad6ff), emissiveIntensity: 0.7, roughness: 0.3,
-  });
-  const hint = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.03), hintMat);
-  hint.position.set(0, 0.62, 0.32);
-  group.add(hint);
-  const hintFrame = new THREE.Mesh(
-    new THREE.BoxGeometry(0.56, 0.22, 0.02),
+  // Readout display on the cabinet front — the action in progress, lit like
+  // a panel meter. It used to float over the console as a title.
+  const bezel = new THREE.Mesh(
+    new THREE.BoxGeometry(1.36, 0.32, 0.02),
     new THREE.MeshStandardMaterial({ color: 0x1a2230, roughness: 0.5, metalness: 0.5 }),
   );
-  hintFrame.position.set(0, 0.62, 0.305);
-  group.add(hintFrame);
+  bezel.position.set(0, 0.7, 0.315);
+  group.add(bezel);
+  const readout = canvasPanel(1.3, 0.26, 400, 80);
+  readout.mesh.position.set(0, 0.7, 0.327);
+  group.add(readout.mesh);
+  drawReadout(readout, 'IDLE', true);
 
   // ── Tilted control panel on top (faces the operator) ──
   const panelMat = new THREE.MeshStandardMaterial({ color: 0x161a24, roughness: 0.4, metalness: 0.4 });
@@ -172,32 +170,10 @@ export function buildPowerConsole(
 
   scene.add(group);
 
-  // ── CSS2D digital readout (the action currently in progress) ──
-  let readoutEl: HTMLDivElement | null = null;
+  // ── Ops board: the full list of offices + live state (CSS2D) ──
   let boardEl: HTMLDivElement | null = null;
   let boardObj: any = null;
   if (rt.CSS2DObject) {
-    readoutEl = document.createElement('div');
-    readoutEl.style.cssText = `font:800 11px 'Fira Code',monospace;color:#7fe3b0;letter-spacing:1px;
-      background:linear-gradient(#0a1410,#08120d);border:1px solid #1d4a36;border-radius:3px;
-      padding:3px 10px;text-shadow:0 0 6px #2fae74;white-space:nowrap;min-width:150px;text-align:center;`;
-    readoutEl.textContent = 'POWER CONTROL · IDLE';
-    // The readout is the console's title: clicking it does what clicking the
-    // cabinet does (show/hide the power-grid board), and says so.
-    readoutEl.style.pointerEvents = 'auto';
-    readoutEl.style.cursor = 'pointer';
-    readoutEl.title = 'Show / hide the power grid of every office';
-    readoutEl.setAttribute('role', 'button');
-    readoutEl.setAttribute('tabindex', '0');
-    readoutEl.addEventListener('pointerdown', (e) => e.stopPropagation());
-    readoutEl.addEventListener('click', (e) => { e.stopPropagation(); toggleInfraBoard(); });
-    readoutEl.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleInfraBoard(); }
-    });
-    const ro = new rt.CSS2DObject(readoutEl);
-    ro.position.set(consoleX, 1.95, consoleZ);
-    scene.add(ro);
-
     // Ops board — the full list of offices + live state. HIDDEN by default;
     // clicking the console (hitbox below) toggles it. Floats above the console.
     boardEl = document.createElement('div');
@@ -217,12 +193,16 @@ export function buildPowerConsole(
   );
   hitbox.position.set(0, 1.0, 0.1);
   hitbox.renderOrder = -1;
-  hitbox.userData.isInfraConsole = true;
+  tagProp(hitbox, {
+    tip: () => 'Power control — show / hide the power grid of every office',
+    click: () => { toggleInfraBoard(); },
+    hover: glowOnHover([readout.mat], 1.3),
+  });
   group.add(hitbox);
 
   con = {
     group, leverArm, leverTarget: LEVER_OFF, leverCur: LEVER_OFF,
-    breakers, readoutEl, boardEl, boardObj, boardVisible: false, hintMat, offices, operatorPos, facePos,
+    breakers, readout, boardEl, boardObj, boardVisible: false, offices, operatorPos, facePos,
   };
   renderBoard();
   return { operatorPos, facePos, hitbox };
@@ -255,12 +235,29 @@ export function getInfraBreakerState(flowId: string): InfraState | null {
 
 /** Flash the readout with the action in progress. */
 export function setInfraReadout(text: string, ok = true): void {
-  if (!con?.readoutEl) return;
-  const c = ok ? '#7fe3b0' : '#ef9a9a';
-  const glow = ok ? '#2fae74' : '#b03030';
-  con.readoutEl.textContent = text;
-  con.readoutEl.style.color = c;
-  con.readoutEl.style.textShadow = `0 0 6px ${glow}`;
+  if (!con?.readout) return;
+  drawReadout(con.readout, text.replace(/^POWER CONTROL\s*·\s*/i, ''), ok);
+}
+
+/** Paint the cabinet display: a fixed "POWER CONTROL" caption over the status. */
+function drawReadout(panel: CanvasPanel, status: string, ok: boolean): void {
+  const g = panel.g;
+  if (!g) return;
+  const W = panel.canvas.width, H = panel.canvas.height;
+  g.fillStyle = '#08120d'; g.fillRect(0, 0, W, H);
+  g.strokeStyle = '#1d4a36'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, W - 3, H - 3);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.font = `700 16px 'Fira Code', monospace`;
+  g.fillStyle = '#4f8f72';
+  g.fillText('POWER CONTROL', W / 2, 20);
+  g.font = `800 30px 'Fira Code', monospace`;
+  g.fillStyle = ok ? '#7fe3b0' : '#ef9a9a';
+  g.shadowColor = ok ? '#2fae74' : '#b03030'; g.shadowBlur = 10;
+  let t = status.toUpperCase();
+  while (t.length > 1 && g.measureText(t).width > W - 24) t = t.slice(0, -1);
+  g.fillText(t, W / 2, 54);
+  g.shadowBlur = 0;
+  panel.refresh();
 }
 
 /** Throw the master lever up (ON) or down (OFF) — animated by updateInfraConsole. */
@@ -275,8 +272,6 @@ export function updateInfraConsole(_dt: number, timeSec: number): void {
   // Lever easing
   con.leverCur += (con.leverTarget - con.leverCur) * 0.18;
   if (con.leverArm) con.leverArm.rotation.x = con.leverCur;
-  // Gently pulse the "click me" indicator so the console reads as interactive.
-  if (con.hintMat) con.hintMat.emissiveIntensity = 0.55 + Math.sin(timeSec * 2.2) * 0.3;
   // Pulse breakers that are booting (fast) or error/paused.
   for (const b of con.breakers.values()) {
     const vis = INFRA_VIS[b.state];

@@ -37,6 +37,7 @@
     resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
+  import { propOf, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
   import {
     createRenderer, configureRenderer, createLabelRenderer, applyEnvironment,
     initialCameraDistance, createPostProcessing,
@@ -194,7 +195,6 @@
   // each office's own door sign. Live-updated from `office:infra:changed`.
   let infraState = new Map<string, InfraState>();      // flowId → current state
   let reposOperatorPos: { x: number; y: number; z: number } | null = null;
-  let infraConsoleHitbox: any = null;                  // click → toggle power-grid board
   // ── Top agent (holder of the highest rank, seated in My Office) ──
   // Populated by placeTopAgent() after buildSpecialRooms. The hitbox sits
   // around the torso so the raycaster can route clicks on the figure
@@ -1393,10 +1393,10 @@
 
   // Hitboxes over FREE racks in the Repos Office — populated on every scene
   // rebuild and fed into the raycaster so click → open the register modal.
-  let freeRepoRackHitboxes: any[] = [];
-  // Hitbox over the DevOps workstation (desk + monitor) in the Repos/DevOps
-  // office — click navigates to the DevOps control panel (/devops).
-  let devopsTerminalHitbox: any = null;
+  // Interactive props of the themed offices (racks, wall screens, consoles —
+  // see office3d/wall-screen.ts). Rebuilt with the offices; each carries its
+  // own tooltip and click in `userData.prop`.
+  let officeProps: any[] = [];
   // /devops is a paid extension's page; without it active the route is the
   // "extension not available" screen, so the 3D world never links there.
   function hasDevopsPanel(): boolean {
@@ -1409,10 +1409,8 @@
   let registerRepoModal: RegisterRepoModal | null = null;
 
   function buildThemedOffices(target: any) {
-    freeRepoRackHitboxes = [];
-    devopsTerminalHitbox = null;
+    officeProps = [];
     reposOperatorPos = null;
-    infraConsoleHitbox = null;
     resetInfraConsole();
     // Every flow office that can carry infrastructure (a Docker container).
     const infraOffices = [...roomMap.keys()]
@@ -1435,9 +1433,8 @@
         // mainframe console + UPS + patch panel + KVM + ops chair + printout
         // stack + DIRECTORY wall panel. Racks light up per registered repo.
         // See office.ts:buildDataCenterOffice.
-        // The in-world titles are clickable: rack nameplates and directory
-        // rows open that repo, the free-racks chip registers one, the NOC
-        // desk title opens the DevOps panel.
+        // Its props are clickable: a rack or a directory row opens that repo,
+        // a free rack registers one, the NOC desk opens the DevOps panel.
         const handles = buildDataCenterOffice(officeGroup, room, reposBookmarks, {
           openRepo: (r) => goto(`/repos#repo-${encodeURIComponent(r.id)}`),
           openRepos: () => goto('/repos'),
@@ -1445,13 +1442,12 @@
           openDevops: hasDevopsPanel() ? () => goto('/devops') : undefined,
           openPowerGrid: () => { toggleInfraBoard(); },
         });
-        if (handles?.freeRackHitboxes?.length) freeRepoRackHitboxes.push(...handles.freeRackHitboxes);
-        if (handles?.devopsTerminalHitbox) devopsTerminalHitbox = handles.devopsTerminalHitbox;
+        if (handles?.props?.length) officeProps.push(...handles.props);
         // Master POWER console — where managers come to switch their office's
         // infrastructure on/off. Holds a breaker LED per office + a clickable
         // hitbox that toggles the full power-grid board.
         const pc = buildPowerConsole(officeGroup, room, infraOffices, handles?.powerConsoleSpot);
-        if (pc) { reposOperatorPos = pc.operatorPos; infraConsoleHitbox = pc.hitbox; }
+        if (pc) { reposOperatorPos = pc.operatorPos; officeProps.push(pc.hitbox); }
       }
     }
     // Paint whatever infra state we already know onto the fresh console. The
@@ -2460,9 +2456,8 @@
     let rayTargetsHitbox: any = null;
     let rayTargetsMRCount = -1;
     let rayTargetsTopAgent: any = null;
-    let rayTargetsFreeRackCount = -1;
-    let rayTargetsInfraConsole: any = null;
-    let rayTargetsDevopsTerminal: any = null;
+    let rayTargetsProps: any[] | null = null;
+    let rayTargetsPropCount = -1;
     function getRayTargets(): any[] {
       const invalidateHint = rayTargetsCache === null; // module-level reset (e.g. top-agent rebuild)
       if (
@@ -2472,9 +2467,8 @@
         rayTargetsHitbox !== myOfficeHitbox ||
         rayTargetsMRCount !== meetingRoomHitboxes.length ||
         rayTargetsTopAgent !== topAgentHitbox ||
-        rayTargetsFreeRackCount !== freeRepoRackHitboxes.length ||
-        rayTargetsInfraConsole !== infraConsoleHitbox ||
-        rayTargetsDevopsTerminal !== devopsTerminalHitbox
+        rayTargetsProps !== officeProps ||
+        rayTargetsPropCount !== officeProps.length
       ) {
         rayTargetsCacheLocal = Array.from(deskGroups.values());
         // The top agent's hitbox sits INSIDE the My Office hitbox in world
@@ -2484,19 +2478,14 @@
         if (topAgentHitbox) rayTargetsCacheLocal.push(topAgentHitbox);
         if (myOfficeHitbox) rayTargetsCacheLocal.push(myOfficeHitbox);
         for (const hb of meetingRoomHitboxes) rayTargetsCacheLocal.push(hb);
-        // FREE racks in the Repos Office — click = open register modal.
-        for (const hb of freeRepoRackHitboxes) rayTargetsCacheLocal.push(hb);
-        // Power console in the Repos Office — click = toggle the power-grid board.
-        if (infraConsoleHitbox) rayTargetsCacheLocal.push(infraConsoleHitbox);
-        // DevOps workstation — click = open the DevOps control panel (/devops).
-        if (devopsTerminalHitbox) rayTargetsCacheLocal.push(devopsTerminalHitbox);
+        // Office props (racks, wall screens, consoles) — hover/click via userData.prop.
+        for (const p of officeProps) rayTargetsCacheLocal.push(p);
         rayTargetsDeskSize = deskGroups.size;
         rayTargetsHitbox = myOfficeHitbox;
         rayTargetsMRCount = meetingRoomHitboxes.length;
         rayTargetsTopAgent = topAgentHitbox;
-        rayTargetsFreeRackCount = freeRepoRackHitboxes.length;
-        rayTargetsInfraConsole = infraConsoleHitbox;
-        rayTargetsDevopsTerminal = devopsTerminalHitbox;
+        rayTargetsProps = officeProps;
+        rayTargetsPropCount = officeProps.length;
         rayTargetsCache = rayTargetsCacheLocal; // sync the module-level handle
       }
       // Active walkers (walking the floor or seated in a meeting) come and go
@@ -2513,9 +2502,17 @@
     }
 
     let hoveredTopAgent = false;
-    let hoveredFreeRack = false;
-    let hoveredInfraConsole = false;
-    let hoveredDevopsTerminal = false;
+    let hoveredProp: { prop: InteractiveProp; hit: PropHit } | null = null;
+    /** Move the hover to `next`, telling the old and new prop so they can glow. */
+    const setHoveredProp = (next: { prop: InteractiveProp; hit: PropHit } | null) => {
+      if (hoveredProp?.prop !== next?.prop) {
+        hoveredProp?.prop.hover?.(false);
+        next?.prop.hover?.(true);
+      }
+      hoveredProp = next;
+    };
+    // Leaving the canvas must drop the glow, or the last prop stays lit.
+    renderer.domElement.addEventListener('mouseleave', () => { setHoveredProp(null); worldTip = null; });
     let hoveredWorld: { kind: string; hit: WorldHit } | null = null;
     let hoveredLot: Lot | null = null;
     let lastHoverRayAt = 0;
@@ -2536,21 +2533,18 @@
       hoveredMyOffice = false;
       hoveredMeetingRoomIdx = -1;
       hoveredTopAgent = false;
-      hoveredFreeRack = false;
-      hoveredInfraConsole = false;
-      hoveredDevopsTerminal = false;
+      let nextProp: { prop: InteractiveProp; hit: PropHit } | null = null;
       hoveredWorld = null;
       worldTip = null;
       hoveredLot = null;
       if (hits.length) {
         // The top agent's hitbox sits inside My Office's hitbox so the
         // raycaster might list both. Prefer the top-agent hit (smaller,
-        // more specific) over the room hit when both are present. The infra
-        // console sits inside the Repos Office — prefer it the same way.
+        // more specific) over the room hit when both are present. Office props
+        // sit inside their room the same way — prefer them too.
+        const propHit = hits.find(h => propOf(h.object));
         let o = hits.find(h => h.object.userData.isTopAgent)?.object
-          ?? hits.find(h => h.object.userData.isInfraConsole)?.object
-          ?? hits.find(h => h.object.userData.isDevopsTerminal)?.object
-          ?? hits.find(h => h.object.userData.isFreeRepoRack)?.object
+          ?? propHit?.object
           ?? hits[0].object;
         // The nearest hit belongs to a world plugin: it says whether it is interactive.
         const worldKind = hits[0].object === o ? worldOwner(o) : null;
@@ -2559,23 +2553,19 @@
           hoveredTopAgent = true;
           hoveredAgent = null;
           renderer.domElement.style.cursor = 'pointer';
-        } else if (o.userData.isInfraConsole) {
-          hoveredInfraConsole = true;
+        } else if (propHit && o === propHit.object) {
+          const prop = propOf(o)!;
+          const hit: PropHit = { uv: propHit.uv ?? null };
+          nextProp = { prop, hit };
           hoveredAgent = null;
-          renderer.domElement.style.cursor = 'pointer';
-        } else if (o.userData.isDevopsTerminal) {
-          hoveredDevopsTerminal = true;
-          hoveredAgent = null;
-          renderer.domElement.style.cursor = 'pointer';
+          renderer.domElement.style.cursor = prop.click ? 'pointer' : 'grab';
+          const tip = prop.tip(hit);
+          worldTip = tip ? { x: e.clientX - r.left, y: e.clientY - r.top, text: tip } : null;
         } else if (worldKind && worldTipText !== null) {
           hoveredWorld = { kind: worldKind, hit: hits[0] };
           hoveredAgent = null;
           renderer.domElement.style.cursor = 'pointer';
           worldTip = worldTipText ? { x: e.clientX - r.left, y: e.clientY - r.top, text: worldTipText } : null;
-        } else if (o.userData.isFreeRepoRack) {
-          hoveredFreeRack = true;
-          hoveredAgent = null;
-          renderer.domElement.style.cursor = 'pointer';
         } else if (o.userData.isMeetingRoom) {
           hoveredMeetingRoomIdx = o.userData.meetingRoomIndex ?? -1;
           hoveredAgent = null;
@@ -2596,6 +2586,7 @@
         hoveredLot = lotHit ? lotAtPoint(freeLots, lotHit.point.x, lotHit.point.z) : null;
         renderer.domElement.style.cursor = hoveredLot ? 'pointer' : 'grab';
       }
+      setHoveredProp(nextProp);
     });
     // A drag that orbits the camera ends in a click too; only a still click picks a lot.
     let pressAt = { x: 0, y: 0 };
@@ -2618,31 +2609,15 @@
         showMyOfficePanel = false;
         return;
       }
-      if (hoveredInfraConsole) {
-        // Click on the power console → show/hide the full power-grid board
-        // (which is hidden by default to keep the office clean).
-        toggleInfraBoard();
-        return;
-      }
-      if (hoveredDevopsTerminal) {
-        // Click on the DevOps workstation → open the full DevOps control panel.
-        // Replaces the old floating quick-console button with an in-world,
-        // discoverable entry point sitting on the office floor.
-        // Same action as the desk's title (see buildDataCenterOffice): the
-        // DevOps panel when its extension is active, the power grid otherwise.
-        devopsTerminalHitbox?.userData?.nocAction?.();
+      if (hoveredProp?.prop.click) {
+        // An office prop (rack, wall screen, console): it knows what it does.
+        // Only a still click — an orbit drag that ends on a rack must not
+        // open that repo.
+        if (Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5) hoveredProp.prop.click(hoveredProp.hit);
         return;
       }
       if (hoveredWorld) {
         if (worldInstances.get(hoveredWorld.kind)?.click?.(hoveredWorld.hit)) return;
-      }
-      if (hoveredFreeRack) {
-        // Click on a FREE server rack → open the register-repo modal. Goes
-        // through the shared opener rather than flipping the flag and clearing
-        // fields by hand: doing it by hand skipped loading the checkouts the
-        // kernel can see, the focus handoff, and every field added since.
-        registerRepoModal?.open();
-        return;
       }
       if (hoveredMeetingRoomIdx >= 0) {
         // Find a meeting currently placed in this room; if none, pick any
