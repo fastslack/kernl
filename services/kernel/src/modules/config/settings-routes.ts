@@ -37,6 +37,8 @@ interface CatalogItem {
   configured: boolean;
   /** Slug of the contributing extension; absent for core settings. */
   extension?: string;
+  /** Live option source for the field's picker (extension settings only). */
+  source?: string;
   updated_at?: string;
 }
 
@@ -94,13 +96,14 @@ export function registerSettingsRoutes(
       id: section.id,
       label: section.label,
       icon: section.icon,
-      fields: section.fields.map((f) =>
-        toItem(
+      fields: section.fields.map((f) => ({
+        ...toItem(
           { ...f, label: f.labelI18n, description: f.descriptionI18n },
           rows.get(f.key),
           section.extension,
         ),
-      ),
+        ...(f.source ? { source: f.source } : {}),
+      })),
     }));
 
     return { settings: core, extensionSections };

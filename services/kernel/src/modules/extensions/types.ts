@@ -204,7 +204,16 @@ export interface ExtensionSettingsField {
   description?: LocalizedText;
   /** Initial value seeded into the settings store on activation. */
   default?: string;
+  /**
+   * Where the dashboard takes the choices from, for a `string` field.
+   * `email_accounts`: a picker over the mail accounts configured in Kernl
+   * (plus free addresses); the value stays a comma-separated address list.
+   */
+  source?: ExtensionSettingSource;
 }
+
+/** Live option sources a settings field may draw its choices from. */
+export type ExtensionSettingSource = "email_accounts";
 
 /** Settings section contributed by an extension to the dashboard Settings UI. */
 export interface ExtensionSettingsBlock {
