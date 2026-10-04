@@ -27,7 +27,7 @@ import {
   type LicenseStatus,
   type LicenseStatusReport,
 } from "./types.js";
-import { verifyLicenseJwt } from "./verify.js";
+import { normalizeLicenseInput, verifyLicenseJwt } from "./verify.js";
 
 /**
  * XDG-ish config path. We deliberately stay under `~/.config/kernl/` so
@@ -54,7 +54,8 @@ export function createLicenseService(opts: LicenseServiceOptions = {}): LicenseS
   async function readJwtFile(): Promise<string | null> {
     if (!existsSync(path)) return null;
     try {
-      const raw = (await readFile(path, "utf-8")).trim();
+      // Same cleanup as a paste: a hand-copied license.jwt may carry a wrapped line.
+      const raw = normalizeLicenseInput(await readFile(path, "utf-8"));
       return raw.length > 0 ? raw : null;
     } catch (err) {
       log.warn(`license: failed to read ${path}`, err);
@@ -107,15 +108,16 @@ export function createLicenseService(opts: LicenseServiceOptions = {}): LicenseS
     sku: (): LicenseSku | null =>
       cached.status === "valid" ? (cached.claim?.sku ?? null) : null,
 
-    async set(jwt) {
-      const result = await verifyAndCache(jwt.trim());
+    async set(input) {
+      const jwt = normalizeLicenseInput(input);
+      const result = await verifyAndCache(jwt);
       if (result.status !== "valid") {
         throw new LicenseError(result.status, result.message ?? "License rejected");
       }
       await mkdir(dirname(path), { recursive: true });
       // Atomic write to avoid leaving the file in a half-truncated state on crash.
       const tmp = `${path}.tmp`;
-      await writeFile(tmp, jwt.trim() + "\n", "utf-8");
+      await writeFile(tmp, jwt + "\n", "utf-8");
       await chmod(tmp, 0o600);
       await renameWithRetry(tmp, path);
       return result;
