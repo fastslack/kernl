@@ -382,7 +382,8 @@ EXT_DEPS="$(node -e "
       if (e.isDirectory()) walk(p);
       else if (e.name.endsWith('.js')) {
         const src = fs.readFileSync(p, 'utf8');
-        for (const m of src.matchAll(/(?:\bfrom|\brequire\()\s*[\"']([^\"'\n]+)[\"']/g)) {
+        // import( too: WhatsApp loads its mtw client only with await import().
+        for (const m of src.matchAll(/(?:\bfrom|\brequire\(|\bimport\()\s*[\"']([^\"'\n]+)[\"']/g)) {
           const spec = m[1];
           if (spec.startsWith('.') || spec.startsWith('/') || spec.startsWith('node:')) continue;
           const name = spec.startsWith('@') ? spec.split('/').slice(0, 2).join('/') : spec.split('/')[0];
