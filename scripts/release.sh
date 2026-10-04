@@ -16,6 +16,9 @@
 # Usage:
 #   scripts/release.sh 0.2.3            prepare locally, stop before pushing
 #   scripts/release.sh 0.2.3 --push     …and push, which starts the CI build
+#
+# Both need a green release rehearsal for the current dev commit, pushed:
+#   gh workflow run release.yml --ref dev     (builds all four, publishes nothing)
 #   scripts/release.sh --cask 0.2.3     after CI: point the Homebrew cask at
 #                                       the DMGs that were actually published
 #
@@ -72,7 +75,7 @@ NODE
 }
 
 usage() {
-  sed -n '2,25p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,28p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 2
 }
 
@@ -147,10 +150,12 @@ esac
 VERSION="$1"; shift
 PUSH=0
 SKIP_TESTS=0
+SKIP_REHEARSAL=0
 for arg in "$@"; do
   case "$arg" in
     --push) PUSH=1 ;;
     --skip-tests) SKIP_TESTS=1 ;;   # for a re-run after tests already passed
+    --no-rehearsal) SKIP_REHEARSAL=1 ;;   # last resort; see the rehearsal check
     *) die "unknown option: $arg" ;;
   esac
 done
@@ -181,6 +186,35 @@ if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
   die "tag $TAG already exists on the remote"
 fi
 ok "on $DEV_BRANCH, clean, $CURRENT → $VERSION, $TAG is free"
+
+# The tag is the first time CI builds the four packages for real. Every red
+# release so far (v0.2.6, v0.3.0, v0.3.2) failed there for something a
+# rehearsal would have shown: a version that did not match the tag, and an
+# extension-boundary baseline that only held on the bun the developer ran.
+# `gh workflow run release.yml --ref dev` builds and smoke-tests all four
+# platforms without publishing, so require a green one for this exact commit
+# — not for an older one: other work keeps landing on dev between the
+# rehearsal and the tag. The bump commit made below only touches "version"
+# fields, which is why the commit before it is the one that has to be green.
+if [[ "$SKIP_REHEARSAL" -eq 0 ]]; then
+  step "Release rehearsal"
+  command -v gh >/dev/null || die "gh is required to check the release rehearsal (or pass --no-rehearsal)"
+  HEAD_SHA="$(git rev-parse HEAD)"
+  git fetch -q origin "$DEV_BRANCH"
+  [[ "$(git rev-parse "origin/$DEV_BRANCH")" == "$HEAD_SHA" ]] \
+    || die "$DEV_BRANCH is not pushed as-is (origin/$DEV_BRANCH differs) — push it, then rehearse: gh workflow run release.yml --ref $DEV_BRANCH"
+  GREEN="$(gh run list --repo "$REPO_SLUG" --workflow release.yml --event workflow_dispatch \
+    --commit "$HEAD_SHA" --status success --limit 1 --json url -q '.[0].url // ""')"
+  if [[ -z "$GREEN" ]]; then
+    RUNNING="$(gh run list --repo "$REPO_SLUG" --workflow release.yml --event workflow_dispatch \
+      --commit "$HEAD_SHA" --limit 1 --json status,url -q '.[0] | select(.status != "completed") | .url' 2>/dev/null || true)"
+    [[ -n "$RUNNING" ]] && die "the rehearsal for ${HEAD_SHA:0:7} is still running: $RUNNING — wait for it to go green"
+    die "no green release rehearsal for ${HEAD_SHA:0:7} — run: gh workflow run release.yml --ref $DEV_BRANCH, wait for it, then re-run this"
+  fi
+  ok "rehearsal green for ${HEAD_SHA:0:7}: $GREEN"
+else
+  warn "skipping the release rehearsal check — the tag will be the first full build of this commit"
+fi
 
 if [[ "$SKIP_TESTS" -eq 0 ]]; then
   step "Type-check and tests"
