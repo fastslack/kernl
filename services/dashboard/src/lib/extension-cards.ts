@@ -102,7 +102,8 @@ export interface CardActionContext {
 export interface CardAction {
   label: string;
   disabled: boolean;
-  kind: 'buy' | 'get' | 'update' | 'manage' | 'pricing';
+  /** `resume` reopens the checkout of a purchase still waiting for payment. */
+  kind: 'buy' | 'get' | 'update' | 'manage' | 'pricing' | 'resume';
 }
 
 /**
@@ -115,13 +116,10 @@ export interface CardAction {
  */
 export function actionForCard(vm: PricedCard, ctx: CardActionContext = {}): CardAction {
   const purchase = ctx.purchase;
-  if (purchase && (purchase.state === 'pending' || purchase.state === 'paid')) {
-    return {
-      label: purchase.state === 'paid' ? 'Installing…' : 'Waiting for payment…',
-      disabled: true,
-      kind: 'buy',
-    };
-  }
+  if (purchase?.state === 'paid') return { label: 'Installing…', disabled: true, kind: 'buy' };
+  // A pending checkout is never a dead end: whoever closed the Stripe tab gets
+  // it back from here (cancelling lives next to the button, on the page).
+  if (purchase?.state === 'pending') return { label: 'Continue payment ↗', disabled: false, kind: 'resume' };
   if (ctx.installing) return { label: 'Installing…', disabled: true, kind: 'get' };
   if (vm.updateAvailable) return { label: `Update to v${vm.version}`, disabled: false, kind: 'update' };
   if (vm.status === 'for_sale') {

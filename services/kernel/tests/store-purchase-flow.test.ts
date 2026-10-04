@@ -215,6 +215,21 @@ describe("CheckoutService", () => {
     expect(checkouts.listOpen().map((r) => r.session_id).sort()).toEqual(["cs_a", "cs_b"]);
   });
 
+  test("cancel drops a pending checkout so the card stops waiting on it", () => {
+    checkouts.create({ sessionId: "cs_a", slug: "devops", priceId: "p", checkoutUrl: "u" });
+    expect(checkouts.cancel("cs_a")).toBe(true);
+    expect(checkouts.get("cs_a")).toBeNull();
+    expect(checkouts.pendingForSlug("devops")).toBeNull();
+    expect(checkouts.listOpen()).toHaveLength(0);
+  });
+
+  test("cancel never touches a checkout that was already paid", () => {
+    checkouts.create({ sessionId: "cs_paid", slug: "devops", priceId: "p", checkoutUrl: "u" });
+    checkouts.setState("cs_paid", "paid");
+    expect(checkouts.cancel("cs_paid")).toBe(false);
+    expect(checkouts.get("cs_paid")?.state).toBe("paid");
+  });
+
   test("pruneExpired only drops unpaid rows past their window", () => {
     checkouts.create({ sessionId: "cs_old", slug: "tv-station", priceId: "p", checkoutUrl: "u" });
     checkouts.create({ sessionId: "cs_paid", slug: "sleep", priceId: "p", checkoutUrl: "u" });

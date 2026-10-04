@@ -8,6 +8,7 @@
  *                                         license summary, open checkouts
  *   POST /api/store/checkout            → { slug } → { session_id, url }
  *   GET  /api/store/checkout/:sessionId → poll a purchase to completion
+ *   POST /api/store/checkout/:sessionId/cancel → abandon a still-unpaid purchase
  *   POST /api/store/install             → { slug } — install something the
  *                                         license already covers
  *
@@ -143,6 +144,22 @@ export function registerStoreRoutes(server: KernelHttpServer, deps: StoreRoutesD
     log.info(`store: checkout ${session.id} opened for ${slug}`);
 
     return { session_id: session.id, url: session.url, state: "pending" };
+  });
+
+  // ── POST /api/store/checkout/:sessionId/cancel ───────────────────────
+  // The way out of "waiting for payment": the buyer closed the Stripe tab or
+  // the promo code didn't apply. Paid rows are refused — that money already
+  // moved, and the poll is what turns it into a license.
+
+  server.route("POST", "/api/store/checkout/:sessionId/cancel", async ({ params: { sessionId } }) => {
+    const row = deps.checkouts.get(sessionId);
+    if (!row) return { cancelled: false };
+    if (row.state !== "pending") {
+      throw new HttpError(409, "This checkout was already paid — it can't be cancelled from here.");
+    }
+    deps.checkouts.cancel(sessionId);
+    log.info(`store: checkout ${sessionId} for ${row.slug} cancelled by the user`);
+    return { cancelled: true };
   });
 
   // ── GET /api/store/checkout/:sessionId ───────────────────────────────

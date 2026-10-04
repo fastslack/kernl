@@ -401,6 +401,32 @@
     }
   }
 
+  /** Sessions the user abandoned — their in-flight polls stop on the next tick. */
+  const cancelledSessions = new Set<string>();
+  let cancelling: Record<string, boolean> = {};
+
+  /**
+   * Abandon a purchase still waiting for payment: the Stripe tab was closed,
+   * or a promo code didn't apply. The card goes back to its Buy button.
+   */
+  async function cancelPurchase(slug: string): Promise<void> {
+    const p = purchases[slug];
+    if (!p?.sessionId) return;
+    cancelling = { ...cancelling, [slug]: true };
+    try {
+      const r = await fetch(`${BASE}/api/store/checkout/${encodeURIComponent(p.sessionId)}/cancel`, { method: 'POST' });
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
+      cancelledSessions.add(p.sessionId);
+      delete purchases[slug];
+      purchases = { ...purchases };
+    } catch (e) {
+      purchases[slug] = { ...p, error: (e as Error).message };
+      purchases = { ...purchases };
+    } finally {
+      cancelling = { ...cancelling, [slug]: false };
+    }
+  }
+
   /**
    * Poll a checkout until it resolves. 2.5s is a good cadence: the webhook
    * usually lands within a second or two of payment, and the user is looking at
@@ -408,6 +434,7 @@
    */
   function pollCheckout(sessionId: string, slug: string): void {
     const tick = async (): Promise<void> => {
+      if (cancelledSessions.has(sessionId)) return;
       try {
         // A cached poll response would freeze the purchase mid-flight and the
         // card would never leave "Waiting for payment…".
@@ -416,6 +443,7 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const body = await r.json();
+        if (cancelledSessions.has(sessionId)) return;
         purchases[slug] = {
           sessionId,
           state: body.state,
@@ -727,6 +755,11 @@
   /** Route a card button press to the right thing. */
   function onCardAction(vm: CardVM, kind: ReturnType<typeof actionFor>['kind']): void {
     if (kind === 'manage') return openCard(vm);
+    if (kind === 'resume') {
+      const url = purchases[vm.slug]?.url;
+      if (url) window.open(url, '_blank', 'noopener');
+      return;
+    }
     if (kind === 'pricing') {
       window.open(PRICING_URL, '_blank', 'noopener');
       return;
@@ -1868,7 +1901,14 @@
             {#if purchase?.state === 'failed' && purchase.error}
               <div class="card-error-msg">⚠︎ {purchase.error}</div>
             {:else if purchase?.state === 'pending'}
-              <div class="pcard-hint">Finish the payment in the tab that opened — this card updates itself.</div>
+              <div class="pcard-hint">
+                Finish the payment in Stripe — this card updates itself.
+                <button
+                  type="button" class="pcard-cancel"
+                  disabled={cancelling[vm.slug]}
+                  on:click={() => cancelPurchase(vm.slug)}
+                >{cancelling[vm.slug] ? 'Cancelling…' : 'Cancel purchase'}</button>
+              </div>
             {/if}
           </article>
         {/each}
@@ -3191,6 +3231,14 @@
     border-left: 2px solid var(--gold);
     padding: 7px 9px; border-radius: 6px;
   }
+  .pcard-cancel {
+    display: block; margin-top: 6px; padding: 0;
+    background: none; border: 0; cursor: pointer;
+    font: inherit; font-weight: 600; color: var(--text-2, #aab);
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  .pcard-cancel:hover:not(:disabled) { color: var(--text-1, #fff); }
+  .pcard-cancel:disabled { opacity: .6; cursor: default; }
 
   @keyframes pcard-in {
     from { opacity: 0; transform: translateY(10px) scale(0.985); }
