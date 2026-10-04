@@ -112,5 +112,12 @@ export function contactOperations(service: CrmService, events?: EventBus | null)
       changed("log_interaction");
       return { ok: true, id: interaction.id };
     },
+
+    "contacts.followUp": (input) => {
+      const args = pickArgs(input, { days: "number", limit: "number" });
+      const days = Math.min(Math.max(Number(args.days) || 30, 1), 365);
+      const limit = Math.min(Math.max(Number(args.limit) || 5, 1), 50);
+      return service.followUps(days, limit);
+    },
   };
 }

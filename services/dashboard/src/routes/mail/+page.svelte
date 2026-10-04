@@ -333,7 +333,13 @@
     }
   }
 
+  const FOLDER_IDS: Folder[] = ['inbox', 'sent', 'starred', 'important', 'drafts', 'trash', 'archived', 'snoozed', 'all', 'attention'];
+
   onMount(() => {
+    // `/mail?folder=attention` opens straight on that folder (the Social
+    // overview links here); anything else falls back to the inbox.
+    const wanted = new URLSearchParams(window.location.search).get('folder') as Folder | null;
+    if (wanted && FOLDER_IDS.includes(wanted)) folder = wanted;
     loadFolder(); loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync(); loadSyncStatus();
     document.addEventListener('keydown', handleKey);
   });

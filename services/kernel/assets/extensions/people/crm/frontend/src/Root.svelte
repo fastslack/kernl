@@ -1,13 +1,14 @@
 <script lang="ts">
   /*
-    Root router for the crm view. The dashboard host routes by FIRST URL
+    Root router for the crm view ("Resumen" of the Social group: the
+    SocialOverview; the contact manager lives on /people). The dashboard host routes by FIRST URL
     segment only, so both /crm and /crm/leads mount this same bundle
     (view "crm") — and same-view URL changes do NOT remount it. This wrapper
     picks the sub-page from the current pathname and re-checks on every
     `kernl:navigate` event the host route broadcasts.
   */
   import { onDestroy } from 'svelte';
-  import CrmPage from './CrmPage.svelte';
+  import SocialOverview from './SocialOverview.svelte';
   import LeadsPage from './LeadsPage.svelte';
   import type { ExtPageContext } from '$shared/types';
 
@@ -30,5 +31,5 @@
 {#if sub === 'leads'}
   <LeadsPage {ctx} />
 {:else}
-  <CrmPage {ctx} />
+  <SocialOverview {ctx} />
 {/if}
