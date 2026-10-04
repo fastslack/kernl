@@ -314,8 +314,8 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     tag: { es: "con tu suscripción", en: "with your subscription" },
     pricing: { es: "Incluido en tu suscripción Pro o Max.", en: "Included in your Pro or Max subscription." },
     steps: {
-      es: ["Necesitás una suscripción Claude Pro o Max", "Iniciá sesión con el comando de abajo, en una terminal", "Volvé acá y tocá Detectar"],
-      en: ["You need a Claude Pro or Max subscription", "Sign in with the command below, in a terminal", "Come back and click Detect"],
+      es: ["Necesitás una suscripción Claude Pro o Max", "Iniciá sesión con tu cuenta de Claude, abajo", "Si no se conecta solo, tocá Detectar"],
+      en: ["You need a Claude Pro or Max subscription", "Sign in with your Claude account, below", "If it doesn't connect on its own, click Detect"],
     },
     models: { recommended: "sonnet" },
     toolCap: 64,

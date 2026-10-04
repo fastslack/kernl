@@ -182,6 +182,7 @@
       <ProviderConnect
         provider={dialogProvider}
         loginCommand={catalog?.claudeCodeLoginCommand ?? 'claude'}
+        browserLogin={catalog?.claudeCodeBrowserLogin ?? false}
         on:back={() => (dialogSlug = '')}
         on:connected={onConnected}
       />

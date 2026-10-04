@@ -264,6 +264,7 @@
             <ProviderConnect
               provider={chosenProvider}
               loginCommand={catalog?.claudeCodeLoginCommand ?? 'claude'}
+              browserLogin={catalog?.claudeCodeBrowserLogin ?? false}
               on:back={() => (chosenSlug = '')}
               on:connected={onConnected}
             />
