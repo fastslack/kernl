@@ -13,6 +13,7 @@
 import type { Vec3 } from './types.js';
 import { pathLength, interpolatePath, pathDirection } from './anim/path.js';
 import { computeCarrierPose } from './anim/poses/walk.js';
+import { freeDropSpot, type Spot } from './drop-spot.js';
 
 let THREE: any;
 let CSS2DObject: any;
@@ -289,6 +290,18 @@ export function markPackagePickedUp(flowId: string): void {
   active = null;
 }
 
+/** World positions of every parcel in the scene except `self`. */
+function parcelsIn(scene: any, self: any): Spot[] {
+  const out: Spot[] = [];
+  const v = new THREE.Vector3();
+  scene.traverse((o: any) => {
+    if (o === self || !o.userData?.kernlPackage || !o.visible) return;
+    o.getWorldPosition(v);
+    out.push({ x: v.x, y: v.y, z: v.z });
+  });
+  return out;
+}
+
 function createPackage(info: DeliveryInfo): { mesh: any; label: any } {
   const parsed = parseInt(info.flowColor.replace('#', ''), 16);
   const colorNum = info.packageColor ?? (Number.isFinite(parsed) && parsed > 0 ? parsed : 0xc9a84c);
@@ -300,6 +313,9 @@ function createPackage(info: DeliveryInfo): { mesh: any; label: any } {
       emissive: col.clone().multiplyScalar(0.35), emissiveIntensity: 0.4,
     }),
   );
+  // Lets the drop find every parcel already in the scene, including one a
+  // previous copy of this module left behind.
+  mesh.userData.kernlPackage = true;
   // Brown paper tape accents
   const tapeMat = new THREE.MeshStandardMaterial({ color: 0x8a6a3a, roughness: 0.9 });
   for (const dy of [0, 1]) {
@@ -467,8 +483,10 @@ export function updateDelivery(scene: any, deltaSec: number): void {
         // Lift package out of the hand and drop onto the counter in world space
         const { receptionDrop } = ctx;
         if (active.pkg.parent) active.pkg.parent.remove(active.pkg);
+        // Never set it down where another parcel already sits.
+        const spot = freeDropSpot(receptionDrop, parcelsIn(scene, active.pkg));
         scene.add(active.pkg);
-        active.pkg.position.set(receptionDrop.x, receptionDrop.y, receptionDrop.z);
+        active.pkg.position.set(spot.x, spot.y, spot.z);
         if (active.pkgLabel) {
           if (active.pkgLabel.parent) active.pkgLabel.parent.remove(active.pkgLabel);
           active.pkg.add(active.pkgLabel);
