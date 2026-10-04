@@ -893,6 +893,17 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_agent_inbox_project     ON agent_office_inbox(to_agent_id, project_id, status);
     `,
   },
+  {
+    // Builtin agents stopped embedding their run goals (runs-service.ts): the
+    // goal is a fixed string per agent and no similarity lookup reads them.
+    // Drop the vectors already stored; the next VACUUM returns the space.
+    version: 52,
+    sql: `
+      UPDATE agent_runs SET goal_embedding = NULL, goal_embedding_model = ''
+       WHERE goal_embedding IS NOT NULL
+         AND agent_id IN (SELECT id FROM agents WHERE builtin_handler IS NOT NULL AND builtin_handler <> '');
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

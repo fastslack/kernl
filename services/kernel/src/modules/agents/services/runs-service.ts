@@ -77,8 +77,8 @@ export class AgentRunsService {
     //    between that check and here, OR another path could call createRun
     //    directly without the check (e.g. extension-facade, chain-runner).
     const agentRow = this.db
-      .prepare("SELECT active FROM agents WHERE id = ?")
-      .get(input.agent_id) as { active: number } | undefined;
+      .prepare("SELECT active, builtin_handler FROM agents WHERE id = ?")
+      .get(input.agent_id) as { active: number; builtin_handler: string | null } | undefined;
     if (!agentRow) {
       throw new Error(`createRun: agent ${input.agent_id} not found`);
     }
@@ -189,7 +189,11 @@ export class AgentRunsService {
         run.parent_run_id, run.parent_agent_id, run.depth, run.project_id,
       );
 
-    if (run.goal && run.goal.length >= 5) {
+    // Builtin agents never reach the LLM executor, so nothing ever ranks their
+    // runs by similarity — and their goal is the same fixed string every poll.
+    // Embedding them stored one identical 6 KB vector per run (hundreds of MB).
+    const isBuiltin = !!agentRow.builtin_handler;
+    if (!isBuiltin && run.goal && run.goal.length >= 5) {
       this.scheduleEmbed("agent_runs", "goal_embedding", "goal_embedding_model", run.id, run.goal);
     }
     return run;

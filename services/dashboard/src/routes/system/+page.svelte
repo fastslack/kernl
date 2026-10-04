@@ -15,6 +15,8 @@
   import BarChart from '$shared/components/BarChart.svelte';
   import Empty from '$shared/components/Empty.svelte';
   import AutomationsPanel from '$lib/components/system/AutomationsPanel.svelte';
+  import StoragePanel from '$lib/components/system/StoragePanel.svelte';
+  import { t } from '$lib/i18n';
   import { fmtMs, fmtTimeShort } from '$shared/utils';
 
   $: sd = ($systemAgenda as any);
@@ -24,7 +26,10 @@
 
   // Deep-linkable como las secciones de Settings: /automations redirige a
   // ?tab=automation, así que un bookmark viejo sigue aterrizando en su vista.
-  $: activeTab = $page.url.searchParams.get('tab') === 'automation' ? 'automation' : 'processes';
+  const TABS = ['processes', 'automation', 'storage'] as const;
+  $: activeTab = (TABS as readonly string[]).includes($page.url.searchParams.get('tab') ?? '')
+    ? ($page.url.searchParams.get('tab') as (typeof TABS)[number])
+    : 'processes';
   function gotoTab(id: string) {
     goto(id === 'processes' ? '/system' : `/system?tab=${id}`, { noScroll: true, keepFocus: true });
   }
@@ -79,10 +84,20 @@
     aria-selected={activeTab === 'automation'}
     on:click={() => gotoTab('automation')}
   >Automation</button>
+  <button
+    type="button"
+    role="tab"
+    class="card-tab"
+    class:active={activeTab === 'storage'}
+    aria-selected={activeTab === 'storage'}
+    on:click={() => gotoTab('storage')}
+  >{$t('storage.tab')}</button>
 </div>
 
 {#if activeTab === 'automation'}
   <AutomationsPanel />
+{:else if activeTab === 'storage'}
+  <StoragePanel />
 {:else if !sd || !sd.available}
   <Panel cls="anim"><Empty message="System registry not available." /></Panel>
 {:else}

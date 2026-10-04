@@ -31,6 +31,7 @@ import {
   runMigrations,
   type SqliteDb,
   type AgentDriver,
+  type RetentionPolicy,
   log,
 } from "@kernl/extension-sdk";
 import { cinemaMigrations } from "./migrations/001_cinema_titles.js";
@@ -57,6 +58,7 @@ import { tmdbFromEnv } from "./canonical/tmdb.js";
 import { MediaProbeRunner } from "./media-runner.js";
 import { ingestNextChunk } from "./ingester.js";
 import { cinemaAgentDrivers } from "./agent-drivers.js";
+import { cinemaRetentionPolicies } from "./retention.js";
 import path from "node:path";
 
 export interface CinemaModule extends ExtensibleModule {
@@ -317,6 +319,11 @@ export function createCinemaModule(): CinemaModule {
      * All deps are live getters because graph/embeddings/providers are
      * rebound post-init (setSearchInfra / setNostrIdentity).
      */
+    /** Catalogue retention (opt-in): untouched archive.org titles. */
+    getRetentionPolicies(): RetentionPolicy[] {
+      return cinemaRetentionPolicies();
+    },
+
     getAgentDrivers(): AgentDriver[] {
       return cinemaAgentDrivers({
         service: () => service,
