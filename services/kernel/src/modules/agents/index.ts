@@ -116,6 +116,12 @@ export function createAgentsModule(): AgentsModule {
       runMigrations(ctx.sqlite, "agents", agentsMigrations);
 
       agentService = new AgentService(ctx.sqlite, ctx.events, ctx.config);
+      // Offices that predate lots (migration 50) get theirs now, biggest first.
+      try {
+        agentService.syncLots();
+      } catch (err) {
+        log.warn(`Office lot backfill failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
       // Runs the last process left in flight: the ones with a fresh
       // checkpoint resume once the scheduler starts (every tool is wired by
       // then); the rest are failed as before.

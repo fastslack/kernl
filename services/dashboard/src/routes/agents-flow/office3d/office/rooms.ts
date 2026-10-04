@@ -30,6 +30,16 @@ export function buildRooms(
 
   for (const [roomKey, room] of rooms) {
     const { cx, cz, w, d, color, name } = room;
+    // Each office lives in its own group, every piece tagged with what it is,
+    // so the construction stage can raise the walls of a new office and pop
+    // its furniture in (construction/stage.ts) without rebuilding anything.
+    const g = new rt.THREE.Group();
+    g.userData.flowId = roomKey;
+    scene.add(g);
+    const tag = (from: number, part: 'floor' | 'wall' | 'decor' | 'sign') => {
+      for (let i = from; i < g.children.length; i++) g.children[i].userData.part = part;
+    };
+    let mark = 0;
     const dd = (room as any).doorDir || (room.side === 1 ? 'top' : 'bottom');
     const col = new rt.THREE.Color(color);
 
@@ -45,7 +55,8 @@ export function buildRooms(
       floorMat,
     );
     rf.rotation.x = -Math.PI / 2; rf.position.set(cx, 0.02, cz); rf.receiveShadow = true;
-    scene.add(rf);
+    g.add(rf);
+    tag(mark, 'floor'); mark = g.children.length;
 
     // ── 4 walls — door on the wall facing the hall ──
     const roomWalls = [
@@ -56,10 +67,12 @@ export function buildRooms(
     ];
     for (const rw of roomWalls) {
       if (rw.id === dd) {
-        addWallWithDoor(scene, rw.px, rw.pz, rw.len, rw.isX, doorW, wallMat, wallBright, col);
+        addWallWithDoor(g, rw.px, rw.pz, rw.len, rw.isX, doorW, wallMat, wallBright, col);
       } else {
-        addWall(scene, rw.px, rw.pz, rw.len, rw.isX, wallMat, wallBright);
+        addWall(g, rw.px, rw.pz, rw.len, rw.isX, wallMat, wallBright);
       }
+      for (let i = mark; i < g.children.length; i++) g.children[i].userData.wallId = rw.id;
+      tag(mark, 'wall'); mark = g.children.length;
     }
 
     // ── Whiteboard — on the wall opposite the door, with scribbles/chart ──
@@ -78,18 +91,18 @@ export function buildRooms(
       const board = new rt.THREE.Mesh(new rt.THREE.PlaneGeometry(BW, BH), boardMats[roomIdx % 2]);
       board.position.set(bx, 1.75, bz);
       board.rotation.y = rotY;
-      scene.add(board);
+      g.add(board);
       const frame = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(BW + 0.12, BH + 0.12, 0.03), boardFrameMat);
       frame.position.set(bx, 1.75, bz);
       frame.rotation.y = rotY;
       frame.translateZ(-0.02); // behind the board face
-      scene.add(frame);
+      g.add(frame);
       // Marker tray
       const tray = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(BW * 0.5, 0.04, 0.08), boardFrameMat);
       tray.position.set(bx, 1.75 - BH / 2 - 0.06, bz);
       tray.rotation.y = rotY;
       tray.translateZ(0.05);
-      scene.add(tray);
+      g.add(tray);
     }
     roomIdx++;
 
@@ -99,7 +112,7 @@ export function buildRooms(
     const cPanel = new rt.THREE.Mesh(panelGeo, panelMat2);
     cPanel.rotation.x = Math.PI / 2;
     cPanel.position.set(cx, WALL_H - 0.05, cz);
-    scene.add(cPanel);
+    g.add(cPanel);
 
     // ── Floor standing lamp — placed in a back corner, opposite the door ──
     const cornerInset = 0.9;
@@ -117,20 +130,20 @@ export function buildRooms(
     });
     const lampBase = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.25, 0.28, 0.06, 12), baseLampMat);
     lampBase.position.set(lx, 0.03, lz);
-    scene.add(lampBase);
+    g.add(lampBase);
     const lampPole = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.03, 0.03, 1.6, 8), poleMat);
     lampPole.position.set(lx, 0.83, lz);
-    scene.add(lampPole);
+    g.add(lampPole);
     const lampShade = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.15, 0.18, 0.3, 12), shadeMat);
     lampShade.position.set(lx, 1.78, lz);
-    scene.add(lampShade);
+    g.add(lampShade);
     const lampGlowDisc = new rt.THREE.Mesh(
       new rt.THREE.CircleGeometry(1.2, 12),
       new rt.THREE.MeshBasicMaterial({ color: 0xffeedd, transparent: true, opacity: 0.04, side: 2 }),
     );
     lampGlowDisc.rotation.x = -Math.PI / 2;
     lampGlowDisc.position.set(lx, 0.015, lz);
-    scene.add(lampGlowDisc);
+    g.add(lampGlowDisc);
 
     // ── Room sign (above door wall) — name + live headcount subline ──
     const dw = roomWalls.find(rw => rw.id === dd)!;
@@ -158,8 +171,10 @@ export function buildRooms(
       display:none;color:#667;text-shadow:none;`;
     signDiv.appendChild(infra);
     makeSignClickable(signDiv, { cx, cz, w, d, name: name.toUpperCase() });
+    tag(mark, 'decor'); mark = g.children.length;
     const lbl = new rt.CSS2DObject(signDiv);
     lbl.position.set(dw.px, WALL_H + 0.4, dw.pz);
-    scene.add(lbl);
+    g.add(lbl);
+    tag(mark, 'sign');
   }
 }

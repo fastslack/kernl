@@ -21,6 +21,8 @@
 	export let templates: OfficeTemplatesResponse | null = null;
 	export let templatesError = false;
 	export let existingNames: string[] = [];
+	/** The free lot the wizard was opened from, if any: the office is built there. */
+	export let lot = '';
 
 	const dispatch = createEventDispatcher<{ close: void; created: { report: OfficeReport; name: string; agentCount: number } }>();
 	const STEPS = [1, 2, 3, 4] as const;
@@ -154,7 +156,7 @@
 		creating = true;
 		createMessage = '';
 		const definition = definitionFromWizard(state);
-		const result = await createOfficeFromWizard(definition);
+		const result = await createOfficeFromWizard(lot ? { ...definition, lot } : definition);
 		creating = false;
 		if (result.ok) {
 			dispatch('created', { report: result.report, name: definition.name, agentCount: definition.agents.length });

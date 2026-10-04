@@ -864,6 +864,15 @@ export const agentsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // The fixed plot each office is built on in the 3D world ("col,row", see
+    // assets/extensions/_shared/office-lots.ts). '' = no lot yet; the flows
+    // service assigns and backfills it (syncLots).
+    version: 50,
+    sql: `
+      ALTER TABLE agent_flows ADD COLUMN lot_id TEXT NOT NULL DEFAULT '';
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

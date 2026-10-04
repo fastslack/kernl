@@ -91,7 +91,7 @@ const AGENT_PATCH: Record<string, PatchColumn> = {
  */
 const DELEGATED = {
   memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings"],
-  flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "getFlowWorkspace", "setFlowWorkspaceSpec", "prepareFlowWorkspace", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "assignAgentToFlow"],
+  flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "getFlowWorkspace", "setFlowWorkspaceSpec", "prepareFlowWorkspace", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "assignAgentToFlow", "syncLots"],
   ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
   runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
   triggers: ["addEventTrigger", "listEventTriggers", "getActiveEventTriggers", "removeEventTrigger", "updateTriggerLastFired"],
@@ -194,6 +194,18 @@ export class AgentService {
         (this as unknown as Record<string, unknown>)[name] = target[name].bind(target);
       }
     }
+
+    // Keep every office on a lot of the 3D floor whichever path wrote its
+    // agents (create, edit, office kit, MCP): each one announces itself here.
+    events.on("data.changed", (payload) => {
+      const p = payload as { module?: string; action?: string } | undefined;
+      if (p?.module !== "agents" || p.action === "lots_synced") return;
+      try {
+        this.flows.syncLots();
+      } catch (err) {
+        log.warn(`syncLots failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
   }
 
   /** @see AgentMemoryService.scheduleEmbed — `createRun` embeds its goal through here. */

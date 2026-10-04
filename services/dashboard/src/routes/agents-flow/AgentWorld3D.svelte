@@ -42,6 +42,10 @@
     initialCameraDistance, createPostProcessing,
   } from './office3d/scene.js';
   import { processLiveEvents, type LiveEventContext } from './office3d/events.js';
+  import { buildLotMarkers, lotAtPoint } from './office3d/office/lots.js';
+  import { createConstructionDirector } from './office3d/construction/director.js';
+  import { createConstructionStage, type ConstructionStage } from './office3d/construction/stage.js';
+  import type { Lot } from '$shared/office-lots.js';
   import OfficeCreatorChat from '$lib/components/OfficeCreatorChat.svelte';
   import RegisterRepoModal from './RegisterRepoModal.svelte';
   import EmailModal from './EmailModal.svelte';
@@ -245,6 +249,25 @@
     entryCX: number; pedOuterZ1: number; streetDrop: number; southLaneZ: number;
     plinthOuterZ1: number; plinthDrop: number;
   } | null = null;
+  // ── New offices: a construction crew builds them on their lot ──
+  // The director decides when (hidden while the team is still being created,
+  // then one build at a time); the stage draws it. See office3d/construction/.
+  const construction = createConstructionDirector();
+  let constructionStage: ConstructionStage | null = null;
+  /** Bumped whenever the set of offices on the floor changes, to recompute the plan. */
+  let constructionVersion = 0;
+  construction.onChange(() => { constructionVersion++; });
+  /** The build in progress — drives the Skip chip. */
+  let constructionFlowId: string | null = null;
+  /** Offices under construction whose desks are not in yet. */
+  const desksPendingFlows = new Set<string>();
+  /** Offices whose seated agents stay hidden until their arrival walkers take over. */
+  const seatedHiddenFlows = new Set<string>();
+  let freeLots: Lot[] = [];
+  /** The free lots' merged ground mesh — raycast to tell which lot is under the pointer. */
+  let lotGround: any = null;
+  /** Console-only: slow a build down to look at it (`__constructionSpeed(0.2)`). */
+  let constructionTimeScale = 1;
   // Dedupe deliveries: at most one active truck per flow, and throttle re-triggers
   const DELIVERY_COOLDOWN_SEC = 12;
   const lastDeliveryAtByFlow = new Map<string, number>();
@@ -565,9 +588,13 @@
     for (const id of [...seenAgentIds]) {
       if (!currentIds.has(id)) seenAgentIds.delete(id);
     }
+    // A new office's team arrives in the construction crew's car, not by taxi.
+    const underConstruction = construction.hiddenFlowIds();
+    if (constructionFlowId) underConstruction.add(constructionFlowId);
     for (const a of agents) {
       if (seenAgentIds.has(a.id)) continue;
       seenAgentIds.add(a.id);
+      if (a.flow_id && underConstruction.has(a.flow_id)) continue;
       const agentId = a.id;
       const agentColor = flowColor(agentId);
       const dp = deskPos.get(agentId);
@@ -620,6 +647,135 @@
       }
     }
     seenAgentIds = seenAgentIds; // trigger Svelte reactivity on the Set mutation
+  }
+
+  // ── Office construction (office3d/construction/) ──────────────────
+
+  /** An office's team — the top agent sits in the headquarters office, not in it. */
+  function officeAgents(flowId: string): WorldAgent[] {
+    const topId = topAgent()?.id;
+    return agents.filter(a => a.flow_id === flowId && a.id !== topId);
+  }
+
+  /** Tell the director what offices exist right now. */
+  function observeOffices(): void {
+    if (!construction.primed) return;
+    construction.observe(
+      flows.map(f => ({ id: f.id, agentCount: officeAgents(f.id).length, hasLot: !!f.lot_id })),
+      Date.now(),
+    );
+  }
+
+  /** Lay the floor out, leaving off the offices still waiting for their crew. */
+  function applyPlan(a: WorldAgent[], c: WorldChain[], f: WorldFlow[], r: WorldRank[]): void {
+    const plan = computeFloorPlan(a, c, f, r, { hiddenFlowIds: construction.hiddenFlowIds() });
+    deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid;
+    meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
+    freeLots = plan.freeLots ?? [];
+  }
+
+  function lotLabels() {
+    return {
+      title: $translate('office.construction.lot_free'),
+      capacity: (n: number) => $translate('office.construction.lot_capacity', { n }),
+      action: $translate('office.construction.lot_action'),
+    };
+  }
+
+  /** A free lot was clicked: open the new-office wizard to build there. */
+  function pickFreeLot(lot: Lot): void {
+    dispatch('newoffice', { lotId: lot.id });
+  }
+
+  /** The wizard finished creating an office: build it as soon as it shows up. */
+  export function officeCreated(flowId: string): void {
+    construction.markReady(flowId);
+  }
+
+  construction.onPhase((flowId, phase) => {
+    if (phase === 'truck-in') {
+      constructionFlowId = flowId;
+      desksPendingFlows.add(flowId);
+      return;
+    }
+    if (phase !== 'done') return;
+    if (constructionFlowId === flowId) constructionFlowId = null;
+    constructionStage?.finished(flowId);
+    // Skipped before the desks or the agents came in: put everyone in place now.
+    const deskless = desksPendingFlows.delete(flowId);
+    const hidden = seatedHiddenFlows.delete(flowId);
+    if (deskless || hidden) rebuildScene();
+  });
+
+  /** Nobody is watching: offices appear finished rather than being built in a hidden tab. */
+  function skipConstructionWhenHidden(): void {
+    if (document.hidden) construction.skip();
+  }
+
+  function makeConstructionStage(): ConstructionStage {
+    return createConstructionStage({
+      scene,
+      room: (id) => roomMap.get(id),
+      roomGroups: (id) => staticGroup ? staticGroup.children.filter((c: any) => c.userData?.flowId === id) : [],
+      street: () => taxiContext,
+      routing: () => corGrid.segments.length ? { rooms: roomMap, grid: corGrid, coreRooms: meetingRooms } : null,
+      color: (id) => flows.find(f => f.id === id)?.color || '#6366f1',
+      agentCount: (id) => officeAgents(id).length,
+      setDurations: (id, d) => construction.setDurations(id, d),
+      showDesks: (id) => {
+        desksPendingFlows.delete(id);
+        seatedHiddenFlows.add(id);
+        rebuildScene();
+      },
+      sendAgents: sendConstructionAgents,
+      frame: (x, z, span) => {
+        if (!camera || !controls) return;
+        if (performance.now() - lastUserSteerAt < 4000) return; // the user is steering
+        tweenCameraTo(x, 0, z, x + span * 0.25, span * 0.9, z + span * 0.7);
+      },
+    });
+  }
+
+  /** The office's team steps out of the car and walks in to their desks. */
+  function sendConstructionAgents(flowId: string, outdoor: Array<{ x: number; y: number; z: number }>): void {
+    const team = officeAgents(flowId);
+    const room = roomMap.get(flowId);
+    team.forEach((a, i) => {
+      setTimeout(() => {
+        if (scene && receptionFrontPos) {
+          const drop = { ...outdoor[0], x: outdoor[0].x + ((i % 3) - 1) * 0.6 };
+          sendCommuteWalker({
+            scene, walkers, agentId: a.id, mode: 'arrive',
+            exitPoint: receptionFrontPos,
+            deskPos, rooms: roomMap, corridorGrid: corGrid,
+            agents, color: flowColor(a.id),
+            deskAabbs, sittingWorkers,
+            outdoorWaypoints: [drop, outdoor[1], outdoor[2]],
+            meetingRoomObstacles: meetingRoomSlots,
+          });
+        }
+        if (i === team.length - 1) releaseSeated(flowId);
+      }, i * 450);
+    });
+    if (team.length === 0) releaseSeated(flowId);
+    if (room && scene) {
+      animRegistry.add(chyronLabel(scene, {
+        position: { x: room.cx, y: 5.5, z: room.cz },
+        html: `🏗️ <b>${escapeBannerText($translate('office.construction.banner'))}</b><br><span style="font-size:10px;opacity:.85">${escapeBannerText(room.name.slice(0, 28))}</span>`,
+        color: room.color,
+        durationSec: 4,
+        tag: `construction:${flowId}`,
+      }));
+    }
+  }
+
+  /** Every walker is out: seated agents without one (walker cap) just appear. */
+  function releaseSeated(flowId: string): void {
+    seatedHiddenFlows.delete(flowId);
+    for (const a of officeAgents(flowId)) {
+      if (walkers.some(w => w.sourceId === a.id)) continue;
+      sittingWorkers.get(a.id)?.setVisible(true);
+    }
   }
 
   /** Diff agents' rank_id against the cached map; fire a pillar-of-light over
@@ -1103,8 +1259,14 @@
     for (const [flowId, room] of roomMap) {
       const flow = flows.find(f => f.id === flowId);
       const theme = traitsOf(flow).theme;
+      if (theme === 'standard') continue;
+      // Tagged like the room's own furniture, so a construction crew can pop it in.
+      const officeGroup = new THREE.Group();
+      officeGroup.userData.flowId = flowId;
+      officeGroup.userData.part = 'decor';
+      target.add(officeGroup);
       if (theme === 'communications') {
-        buildCommunicationsOffice(target, room);
+        buildCommunicationsOffice(officeGroup, room);
       } else if (theme === 'data-center') {
         // Vintage data center theme — server racks, CRT terminals, tape reels,
         // mainframe console + UPS + patch panel + KVM + ops chair + printout
@@ -1113,7 +1275,7 @@
         // The in-world titles are clickable: rack nameplates and directory
         // rows open that repo, the free-racks chip registers one, the NOC
         // desk title opens the DevOps panel.
-        const handles = buildDataCenterOffice(target, room, reposBookmarks, {
+        const handles = buildDataCenterOffice(officeGroup, room, reposBookmarks, {
           openRepo: (r) => goto(`/repos#repo-${encodeURIComponent(r.id)}`),
           openRepos: () => goto('/repos'),
           registerRepo: () => registerRepoModal?.open(),
@@ -1125,7 +1287,7 @@
         // Master POWER console — where managers come to switch their office's
         // infrastructure on/off. Holds a breaker LED per office + a clickable
         // hitbox that toggles the full power-grid board.
-        const pc = buildPowerConsole(target, room, infraOffices, handles?.powerConsoleSpot);
+        const pc = buildPowerConsole(officeGroup, room, infraOffices, handles?.powerConsoleSpot);
         if (pc) { reposOperatorPos = pc.operatorPos; infraConsoleHitbox = pc.hitbox; }
       }
     }
@@ -1900,6 +2062,27 @@
     configureRenderer(THREE, renderer, canvasEl);
 
     labelRenderer = createLabelRenderer(css2d, canvasEl);
+    // The right button pans the camera. OrbitControls swallows the browser's
+    // context menu on the canvas only, so the titles, signs and nameplates in
+    // this layer (pointer-events:auto) still popped it up mid-navigation.
+    labelRenderer.domElement.addEventListener('contextmenu', (ev: MouseEvent) => ev.preventDefault());
+    // A pan (right/middle drag) or a zoom (wheel) that starts on a label never
+    // reached the camera. Hand it to the canvas; OrbitControls then follows the
+    // pointer on the document. The left button stays with the label (clicks on titles).
+    labelRenderer.domElement.addEventListener('pointerdown', (ev: PointerEvent) => {
+      if (ev.button === 0 || ev.target === renderer.domElement) return;
+      renderer.domElement.dispatchEvent(new PointerEvent('pointerdown', ev));
+    });
+    labelRenderer.domElement.addEventListener('wheel', (ev: WheelEvent) => {
+      if (ev.target === renderer.domElement) return;
+      // A label with its own scrolling list keeps the wheel.
+      for (let el = ev.target as HTMLElement | null; el && el !== labelRenderer.domElement; el = el.parentElement) {
+        const oy = getComputedStyle(el).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return;
+      }
+      ev.preventDefault();
+      renderer.domElement.dispatchEvent(new WheelEvent('wheel', ev));
+    }, { passive: false });
 
     // Delegated click handler for the ⏻ power chips embedded in the CSS2D
     // nameplates (furniture.ts). The chip carries pointer-events:auto so it
@@ -1972,6 +2155,8 @@
     // Stamp camera motion (fires during damping too) — drives the full-rate
     // CSS2D label rendering while orbiting/panning/zooming.
     controls.addEventListener('change', () => { lastControlChangeAt = performance.now(); });
+    // 'start' fires only for the user's own drag/zoom — never for a scripted tween.
+    controls.addEventListener('start', () => { lastUserSteerAt = performance.now(); });
 
     // ── Global lighting (key/fill/rim) — see office3d/office/lighting.ts ──
     // World bounds → tightened shadow frustum (shadow texels 2–4× denser).
@@ -1998,6 +2183,7 @@
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
       buildRooms(staticGroup, roomMap, computeRoomCounts());
+      lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
       buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
@@ -2035,8 +2221,33 @@
       spawnTradeCelebration('DEMO', isBuy ? 'buy' : 'sell', 0, isBuy);
       return true;
     };
+    // Office construction: replays the build of an existing office (cosmetic — the
+    // office is hidden for the replay and comes back as it was).
+    (window as any).__constructionDemo = (flowId?: string) => {
+      const id = flowId ?? [...roomMap.keys()][0];
+      if (!id || !roomMap.has(id)) { console.warn('[constructionDemo] no office to build'); return false; }
+      construction.replay(id, officeAgents(id).length);
+      return id;
+    };
+    // Jump a build to a phase and progress, e.g. __constructionSeek('build', 0.5) — pair with __constructionSpeed(0).
+    (window as any).__constructionSeek = (phase: string, progress = 0) => {
+      for (let i = 0; i < 2000; i++) {
+        const a = construction.active();
+        if (!a || (a.phase === phase && a.progress >= progress)) return a;
+        construction.tick(0.05, performance.now());
+      }
+      return construction.active();
+    };
+    (window as any).__constructionSpeed = (x: number = 1) => { constructionTimeScale = Math.max(0, x); return constructionTimeScale; };
+    (window as any).__constructionState = () => ({
+      active: construction.active(),
+      hidden: [...construction.hiddenFlowIds()],
+      stage: constructionStage?.debug() ?? null,
+    });
     (window as any).__animDemos = () => {
       const list = [
+        '__constructionDemo()    — a crew builds an office (replays an existing one)',
+        '__constructionSpeed(0.2) / __constructionSeek("build", 0.5) — slow down / jump a build',
         '__deliveryDemo()        — camión de correo/paquete (mail)',
         '__taxiDemo()            — a car/taxi drives up to the front and leaves',
         '__taxiDemo("#4ddbff")   — taxi with a custom body colour',
@@ -2133,6 +2344,7 @@
     let hoveredFreeRack = false;
     let hoveredInfraConsole = false;
     let hoveredDevopsTerminal = false;
+    let hoveredLot: Lot | null = null;
     let lastHoverRayAt = 0;
     renderer.domElement.addEventListener('mousemove', (e: MouseEvent) => {
       // While a camera drag is in progress (orbit/pan: any button held) hover
@@ -2154,6 +2366,7 @@
       hoveredFreeRack = false;
       hoveredInfraConsole = false;
       hoveredDevopsTerminal = false;
+      hoveredLot = null;
       if (hits.length) {
         // The top agent's hitbox sits inside My Office's hitbox so the
         // raycaster might list both. Prefer the top-agent hit (smaller,
@@ -2193,9 +2406,22 @@
           hoveredAgent = o.userData.agentId || null;
           renderer.domElement.style.cursor = hoveredAgent ? 'pointer' : 'grab';
         }
-      } else { hoveredAgent = null; renderer.domElement.style.cursor = 'grab'; }
+      } else {
+        hoveredAgent = null;
+        // Nothing else under the pointer: a free lot? (click = start an office there)
+        const lotHit = lotGround ? ray.intersectObject(lotGround, false)[0] : null;
+        hoveredLot = lotHit ? lotAtPoint(freeLots, lotHit.point.x, lotHit.point.z) : null;
+        renderer.domElement.style.cursor = hoveredLot ? 'pointer' : 'grab';
+      }
     });
-    renderer.domElement.addEventListener('click', () => {
+    // A drag that orbits the camera ends in a click too; only a still click picks a lot.
+    let pressAt = { x: 0, y: 0 };
+    renderer.domElement.addEventListener('pointerdown', (e: PointerEvent) => { pressAt = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener('click', (e: MouseEvent) => {
+      if (hoveredLot) {
+        if (Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5) pickFreeLot(hoveredLot);
+        return;
+      }
       if (hoveredTopAgent) {
         // Questions waiting for the human win: the chief's figure is where
         // the operator looks when its halo turns red. With none pending the
@@ -2970,6 +3196,8 @@
   // motion (including damping) the CSS2D labels render at FULL frame rate so
   // they stay glued to the scene instead of trailing at half rate.
   let lastControlChangeAt = 0;
+  /** Last time the user grabbed the camera themselves (OrbitControls 'start'). */
+  let lastUserSteerAt = -Infinity;
 
   // Perf stats (computed inside animate loop and fed to PerfOverlay)
   const perfFrameTimes: number[] = [];
@@ -3021,6 +3249,19 @@
     // Drive every registered Ticker — camera tweens, halo pulses, trade
     // particles, bubble fades. Finished tickers self-dispose and drop out.
     animRegistry.tick(deltaSec, sceneTimeSec);
+
+    // Office construction — a failure here must never break the world: finish the build instead.
+    if (staticGroup) {
+      try {
+        const cdt = deltaSec * constructionTimeScale;
+        construction.tick(cdt, now);
+        constructionStage ??= makeConstructionStage();
+        constructionStage.update(cdt, sceneTimeSec, construction.active());
+      } catch (err) {
+        console.error('[construction] failed — finishing the build:', err);
+        construction.skip();
+      }
+    }
 
     // Build set of agents currently being spoken to (a walker arrived at their desk)
     const beingSpokenTo = new Set<string>();
@@ -3514,7 +3755,7 @@
   function sceneFingerprint(): string {
     const a = agents.map(x => `${x.id}:${x.flow_id}:${x.active}:${x.rank_id ?? ''}:${x.skin_id ?? ''}:${x.name}`).sort().join('|');
     const c = chains.map(x => `${x.source_agent_id}>${x.target_agent_id}:${x.active}`).sort().join('|');
-    const f = flows.map(x => `${x.id}:${x.kind ?? ''}:${x.name}:${x.color}:${x.active}`).sort().join('|');
+    const f = flows.map(x => `${x.id}:${x.kind ?? ''}:${x.name}:${x.color}:${x.active}:${x.lot_id ?? ''}`).sort().join('|');
     const r = ranks.map(x => `${x.id}:${x.color}:${x.insignia}:${x.level}`).sort().join('|');
     return `${a}#${c}#${f}#${r}`;
   }
@@ -3528,11 +3769,13 @@
   }
 
   $: if (agents.length > 0 && THREE) {
-    const key = sceneFingerprint();
+    // A new office goes pending (hidden) here, before the plan is laid out,
+    // so it never flashes on the floor ahead of its construction crew.
+    observeOffices();
+    const key = sceneFingerprint() + `#c${constructionVersion}`;
     if (key !== lastReactiveKey) {
       lastReactiveKey = key;
-      const plan = computeFloorPlan(agents, chains, flows, ranks);
-      deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid; meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
+      applyPlan(agents, chains, flows, ranks);
       rebuildScene();
       // Active toggles reach here without a static rebuild — refresh the
       // "N AGENTS · M ON" sublines on the room signs in place.
@@ -3547,6 +3790,8 @@
         seenAgentIds = new Set(agents.map(a => a.id));
         onboardingPrimed = true;
       }
+      // Same for construction: the offices already here never get built again.
+      if (!construction.primed && flows.length > 0) construction.prime(flows.map(f => f.id));
     }
   }
 
@@ -3589,15 +3834,21 @@
 
     // Fingerprint: agent IDs + flow assignments + flow count + each flow's kind/name/color
     // (kind picks the room theme, name the door sign, color the floor/sign). If unchanged, only desks need refreshing.
-    const flowLayoutKey = flows.map(f => `${f.id}:${f.kind ?? ''}:${f.name}:${f.color}`).sort().join('|');
-    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}`;
+    const flowLayoutKey = flows.map(f => `${f.id}:${f.kind ?? ''}:${f.name}:${f.color}:${f.lot_id ?? ''}`).sort().join('|');
+    // Offices waiting for their crew are off the floor; when one gets built the static scene changes.
+    const hiddenKey = [...construction.hiddenFlowIds()].sort().join(',');
+    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}|h:${hiddenKey}`;
     const layoutChanged = layoutKey !== lastLayoutKey;
     lastLayoutKey = layoutKey;
 
     if (layoutChanged) {
       // Full rebuild — remove static geometry group and recreate
       if (staticGroup) {
-        staticGroup.traverse((c: any) => { c.geometry?.dispose(); if (c.material) { if (Array.isArray(c.material)) c.material.forEach((m: any) => m.dispose()); else c.material.dispose(); } });
+        staticGroup.traverse((c: any) => {
+          c.geometry?.dispose(); if (c.material) { if (Array.isArray(c.material)) c.material.forEach((m: any) => m.dispose()); else c.material.dispose(); }
+          // CSS2D labels keep their DOM node when an ancestor leaves the scene.
+          if (c.isCSS2DObject) c.element?.remove();
+        });
         scene.remove(staticGroup);
       }
       staticGroup = new THREE.Group();
@@ -3609,6 +3860,7 @@
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
       buildRooms(staticGroup, roomMap, computeRoomCounts());
+      lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
       buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
@@ -3662,8 +3914,13 @@
       humanoidPool = null;
     }
 
-    const r = buildDesks(scene, agents, flows, deskPos, runningAgentIds, ranks, humanoidPool);
+    // An office under construction gets its desks only once its walls are up.
+    const deskAgents = desksPendingFlows.size ? agents.filter(a => !desksPendingFlows.has(a.flow_id ?? '')) : agents;
+    const r = buildDesks(scene, deskAgents, flows, deskPos, runningAgentIds, ranks, humanoidPool);
     deskGroups = r.deskGroups; deskLabels = r.deskLabels; sittingWorkers = r.sittingWorkers; deskAabbs = r.deskAabbs;
+    for (const fid of seatedHiddenFlows) {
+      for (const a of officeAgents(fid)) sittingWorkers.get(a.id)?.setVisible(false);
+    }
     // The top agent is filtered out of buildDesks (no flow grid slot for
     // him). His seated entry was wiped by sittingWorkers.clear() above, so
     // re-add it now that the new map is in place.
@@ -3685,8 +3942,7 @@
 
   onMount(() => {
     // (The drawer's extension-contributed tabs load in AgentPanel's onMount.)
-    const plan = computeFloorPlan(agents, chains, flows, ranks);
-    deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid; meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
+    applyPlan(agents, chains, flows, ranks);
     // Build the scene; surface any fatal error on the loader instead of leaving
     // it spinning forever (the old behavior on a mid-build throw).
     buildScene()
@@ -3707,6 +3963,7 @@
         bootError = 'No se pudo construir la escena 3D: ' + (e?.message ?? String(e));
       });
     restoreUiState();
+    document.addEventListener('visibilitychange', skipConstructionWhenHidden);
     // Pull the repo registry now so the first scene build paints the rack
     // tags + directory panel; if the fetch resolves after buildScene we
     // trigger a one-shot rebuild so the racks light up without a full reload.
@@ -3744,6 +4001,9 @@
     // Dispose every pending Ticker — fires onDispose callbacks (scene/material
     // cleanup for trade celebrations) so we don't leak ahead of the renderer.
     animRegistry.clear();
+    constructionStage?.dispose();
+    constructionStage = null;
+    document.removeEventListener('visibilitychange', skipConstructionWhenHidden);
     if (composer) { composer.dispose(); composer = null; }
     if (renderer) { renderer.dispose(); renderer.domElement?.parentNode?.removeChild(renderer.domElement); }
     if (labelRenderer?.domElement?.parentNode) labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
@@ -4218,6 +4478,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   <!-- New Office chat — replaces the legacy form. Talks directly to the AI
        architect, which uses the kernel_agents_* tools to spin up the flow +
        CEO + team based on the conversation. -->
+  {#if constructionFlowId}
+    <button type="button" class="construction-skip" on:click={() => construction.skip()}>
+      🏗️ {$translate('office.construction.skip')} ▸
+    </button>
+  {/if}
+
   {#if showOfficeModal}
     <OfficeCreatorChat
       topAgentName={topAgent()?.name ?? highestRank()?.name ?? 'Chief'}
@@ -4349,6 +4615,14 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
      itself absolutely in the top-right corner and fades in on hover. */
   :global(.copy-wrap){position:relative}
 
+  /* Skip chip while a construction crew builds a new office. */
+  .construction-skip{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:12;
+    padding:7px 16px;border-radius:999px;cursor:pointer;
+    font:700 11px 'Manrope',sans-serif;letter-spacing:.2px;color:#f2d38a;
+    background:rgba(14,16,24,.88);backdrop-filter:blur(8px);border:1px solid #f2b70566;
+    box-shadow:0 6px 18px rgba(0,0,0,.45);transition:border-color .15s,color .15s}
+  .construction-skip:hover{color:#ffe7a8;border-color:#f2b705}
+  .construction-skip:focus-visible{outline:2px solid #f2b705;outline-offset:2px}
   .hud{position:absolute;bottom:12px;left:12px;background:rgba(14,16,24,.9);backdrop-filter:blur(12px);border:1px solid rgba(16,185,129,.2);border-radius:10px;padding:10px 14px;z-index:10}
   .hud-t{display:flex;align-items:center;gap:6px;font:700 8px 'Syne',sans-serif;color:var(--green,#3dd68c);letter-spacing:1.5px;margin-bottom:6px}
   .hud-p{width:6px;height:6px;border-radius:50%;background:var(--green,#3dd68c);animation:p 1.5s ease-in-out infinite}

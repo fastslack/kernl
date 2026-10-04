@@ -27,6 +27,8 @@ export interface OfficeDefinition {
 	repoIsolation?: Isolation;
 	agents: OfficeDefinitionAgent[];
 	cron?: { agent: string; every: string; goal?: string };
+	/** Lot of the 3D floor to build on ("col,row"), when the office was started from one. */
+	lot?: string;
 }
 
 export interface OfficeTemplate {

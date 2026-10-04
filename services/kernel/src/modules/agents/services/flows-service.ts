@@ -10,6 +10,10 @@ import { applyRepoIsolation } from "../repo-isolation.js";
 import { agentVariables } from "../agent-fields.js";
 import { parseWorkspaceSpec, isEmptySpec, type WorkspaceSpec } from "../workspace-spec.js";
 import { prepareWorkspace, type WorkspaceSetupResult } from "../workspace-setup.js";
+import { lotFits, parseLotId, pickLot } from "../../../../assets/extensions/_shared/office-lots.js";
+
+/** How long a new office may still move to a bigger lot while its agents arrive. */
+const LOT_SETTLE_MS = 10 * 60_000;
 
 /**
  * Offices (flows) and the home directory every agent in one inherits.
@@ -32,6 +36,8 @@ export class AgentFlowsService {
     color?: string;
     kind?: FlowKind;
     source_extension_id?: string;
+    /** A free lot the operator picked on the 3D floor; ignored if taken or not a lot. */
+    lot_id?: string;
   }): AgentFlow {
     const kind = input.kind ?? "general";
     if (!isFlowKind(kind)) {
@@ -47,15 +53,16 @@ export class AgentFlowsService {
       kind,
       repo_isolation: "",
       source_extension_id: input.source_extension_id ?? "",
+      lot_id: this.freeLotOrEmpty(input.lot_id, kind),
       created_at: now,
       updated_at: now,
     };
     this.db
       .prepare(
-        `INSERT INTO agent_flows (id, name, description, color, active, kind, source_extension_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO agent_flows (id, name, description, color, active, kind, source_extension_id, lot_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(flow.id, flow.name, flow.description, flow.color, flow.active, flow.kind, flow.source_extension_id, flow.created_at, flow.updated_at);
+      .run(flow.id, flow.name, flow.description, flow.color, flow.active, flow.kind, flow.source_extension_id, flow.lot_id ?? "", flow.created_at, flow.updated_at);
     // Every office gets a kernel-workspace home automatically (DB-only — the
     // on-disk folder convention is seeded lazily by the executor / set_repo so
     // flow creation stays test-safe). Best-effort: a failure here must not
@@ -300,12 +307,74 @@ export class AgentFlowsService {
         )
         .run(now, id);
       const moved = this.db.prepare("UPDATE agents SET flow_id = '', updated_at = ? WHERE flow_id = ?").run(now, id);
-      this.db.prepare("UPDATE agent_flows SET active = 0, updated_at = ? WHERE id = ?").run(now, id);
+      this.db.prepare("UPDATE agent_flows SET active = 0, lot_id = '', updated_at = ? WHERE id = ?").run(now, id);
       return { unassigned: Number(moved.changes) };
     });
     const result = trx();
     this.events.emit("data.changed", { module: "agents", action: "flow_deleted" });
     return result;
+  }
+
+  // ── Lots (migration v50) ───────────────────────────
+  //
+  // Every office with agents sits on a fixed plot of the 3D floor. The plot
+  // is chosen once, nearest the hall among the free ones that fit, and then
+  // never changes — so creating or growing an office never moves another.
+  // An office still being set up (younger than LOT_SETTLE_MS) may move to a
+  // bigger lot while its agents arrive one by one.
+
+  /** `lotId` if it is a lot no active office stands on, else ''. */
+  private freeLotOrEmpty(lotId: string | undefined, _kind: string): string {
+    const lot = parseLotId(lotId);
+    if (!lot) return "";
+    const taken = this.db.prepare("SELECT 1 FROM agent_flows WHERE active = 1 AND lot_id = ?").get(lot.id);
+    return taken ? "" : lot.id;
+  }
+
+  /**
+   * Give every office with agents a lot, and move an office still being set
+   * up whose team outgrew its lot. Idempotent; returns how many rows changed.
+   */
+  syncLots(): number {
+    const rows = this.db
+      .prepare(
+        `SELECT f.id, f.kind, f.lot_id, f.created_at,
+                (SELECT COUNT(*) FROM agents a
+                  WHERE a.flow_id = f.id
+                    AND COALESCE(a.rank_id, '') NOT IN (
+                      SELECT id FROM agent_ranks WHERE level = (SELECT MAX(level) FROM agent_ranks)
+                    )) AS agents
+           FROM agent_flows f
+          WHERE f.active = 1`,
+      )
+      .all() as Array<{ id: string; kind: string | null; lot_id: string; created_at: string; agents: number }>;
+
+    const taken = new Set(rows.filter((r) => parseLotId(r.lot_id)).map((r) => r.lot_id));
+    const now = Date.now();
+    const pending = rows
+      .filter((r) => r.agents > 0)
+      .filter((r) => {
+        const lot = parseLotId(r.lot_id);
+        if (!lot) return true;
+        const settling = now - Date.parse(r.created_at) < LOT_SETTLE_MS;
+        return settling && !lotFits(lot, r.agents, r.kind);
+      })
+      // Biggest first, so a backfill puts the big teams nearest the hall.
+      .sort((a, b) => b.agents - a.agents || a.created_at.localeCompare(b.created_at));
+    if (pending.length === 0) return 0;
+
+    const update = this.db.prepare("UPDATE agent_flows SET lot_id = ? WHERE id = ?");
+    const trx = this.db.transaction(() => {
+      for (const r of pending) {
+        taken.delete(r.lot_id);
+        const lot = pickLot(taken, r.agents, r.kind);
+        taken.add(lot.id);
+        update.run(lot.id, r.id);
+      }
+    });
+    trx();
+    this.events.emit("data.changed", { module: "agents", action: "lots_synced" });
+    return pending.length;
   }
 
   assignAgentToFlow(agentId: string, flowId: string): boolean {

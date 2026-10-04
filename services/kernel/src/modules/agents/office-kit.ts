@@ -100,6 +100,8 @@ export interface OfficeDefinition {
   kind?: FlowKind;
   /** How repo agents run when `repo` is set. Default 'host', the historical posture. */
   repoIsolation?: RepoIsolation;
+  /** Lot of the 3D floor to build on ("col,row"), when the operator picked one. New offices only. */
+  lot?: string;
 }
 
 export interface MaterializeOpts {
@@ -318,6 +320,7 @@ export function officeDefinitionFromJson(raw: unknown): OfficeDefinition {
     modelChain: Array.isArray(o.modelChain) ? (o.modelChain as ModelChainEntry[]) : undefined,
     kind: typeof o.kind === "string" ? (o.kind as FlowKind) : undefined,
     repoIsolation: typeof o.repoIsolation === "string" ? (o.repoIsolation as RepoIsolation) : undefined,
+    lot: str(o.lot),
     agents,
     cron: cronValid
       ? { agent: resolvedCronAgent!, every: cronRaw!.every as string | number, goal: str(cronRaw!.goal) }
@@ -465,6 +468,7 @@ export function materializeOffice(
       description: def.description,
       color: def.color ?? defaultOfficeColor(def.name),
       kind: def.kind,
+      lot_id: def.lot,
     });
     flow = { id: created.id };
   } else if (def.color || def.description || def.kind) {

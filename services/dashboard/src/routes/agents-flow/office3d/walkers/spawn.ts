@@ -21,13 +21,16 @@ import {
   zoneObstacles,
 } from './pathfinding.js';
 
+/** Size of every standing humanoid on the floor — walkers, and anyone who must read as one of them. */
+export const WALKER_SCALE = 1.3;
+
 // Local helper — resolve the agent's skin from the shared registry, then
 // build the per-mesh humanoid in the right outfit.
 function buildWalkerHumanoid(srcId: string, agents: Array<{ id: string; skin_id?: string }>, color: string) {
   const agent = agents.find(a => a.id === srcId);
   const skin = resolveSkin(agent?.skin_id);
   const palette = skin.pickPalette(srcId);
-  return skin.createHumanoid({ flowColor: color, palette, scale: 1.3, walker: true });
+  return skin.createHumanoid({ flowColor: color, palette, scale: WALKER_SCALE, walker: true });
 }
 
 const BASE_MAX_WALKERS = 6;

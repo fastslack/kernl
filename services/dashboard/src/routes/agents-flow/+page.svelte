@@ -514,8 +514,17 @@
     }
   }
 
+  /** The lot the wizard was opened from (a click on a free lot in 3D); '' = any. */
+  let wizardLot = '';
+  function openWizard(lotId = ''): void {
+    wizardLot = lotId;
+    wizardOpen = true;
+  }
+
   async function onOfficeCreated(e: CustomEvent<{ report: OfficeReport; name: string; agentCount: number }>) {
     wizardOpen = false;
+    // The team is complete: the construction crew can start as soon as the office shows up.
+    world?.officeCreated(e.detail.report.flowId);
     await refresh();
     const { report, name, agentCount } = e.detail;
     const lead = agents.find((a) => a.flow_id === report.flowId && a.role === 'manager');
@@ -557,7 +566,7 @@
     const action = shortcutFor(e);
     if (!action || action === 'close' || action === 'help') return;
     e.preventDefault();
-    if (action === 'new-office') wizardOpen = true;
+    if (action === 'new-office') openWizard();
     else if (action === 'new-meeting') openMeetingModal();
     else if (action === 'search') {
       if (directoryView) document.querySelector<HTMLInputElement>('.directory input')?.focus();
@@ -569,7 +578,7 @@
   function applyDeepLinks() {
     try {
       const url = new URL(window.location.href);
-      if (url.searchParams.get('new') === 'office') wizardOpen = true;
+      if (url.searchParams.get('new') === 'office') openWizard();
       const officeId = url.searchParams.get('office');
       if (officeId) void openPanel(officeId);
       if (url.searchParams.has('new') || url.searchParams.has('office')) {
@@ -692,7 +701,7 @@
       on:officeedit={(e) => openPanel(e.detail.id)}
       on:agentselect={(e) => { panelOfficeId = null; activityOpen = false; selectedAgentId = e.detail.id; world?.focusAgentById(e.detail.id); }}
       on:agentmove={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
-      on:newoffice={() => (wizardOpen = true)}
+      on:newoffice={() => openWizard()}
       on:headquarters={() => world?.openHeadquartersInbox()}
       on:togglecollapse={toggleRail}
     />
@@ -703,7 +712,7 @@
         working={effectiveRunning.size}
         runsToday={todayRuns}
         inbox={inboxCount}
-        on:newoffice={() => (wizardOpen = true)}
+        on:newoffice={() => openWizard()}
         on:meeting={openMeetingModal}
         on:activity={toggleActivity}
         on:fit={() => enterWorld(() => world?.fitAll())}
@@ -730,7 +739,7 @@
           on:officeclick={(e) => openPanel(e.detail.flowId)}
           on:inbox={(e) => (inboxCount = e.detail.count)}
           on:moveagent={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
-          on:newoffice={() => (wizardOpen = true)}
+          on:newoffice={(e) => openWizard(e.detail?.lotId ?? '')}
           on:agentselect={(e) => { selectedAgentId = e.detail.id; if (e.detail.id) { panelOfficeId = null; activityOpen = false; } }}
           on:sceneready={onSceneReady}
           on:meetings={(e) => (meetings = e.detail.list)}
@@ -801,6 +810,7 @@
     templates={templatesResponse}
     {templatesError}
     existingNames={activeFlows.map((f) => f.name)}
+    lot={wizardLot}
     on:close={() => (wizardOpen = false)}
     on:created={onOfficeCreated}
   />

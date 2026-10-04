@@ -26,6 +26,7 @@ export interface AgentFlow {
   repo_isolation?: RepoIsolation | "";    // '' = the office has no repo
   source_extension_id?: string;           // '' = created by the operator
   auto_debate?: number;                   // 0/1
+  lot_id?: string;                        // "col,row" plot in the 3D world; '' = none yet
   created_at: string;
   updated_at: string;
 }
