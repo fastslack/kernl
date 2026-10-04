@@ -73,3 +73,16 @@ describe("license.set with a messy paste", () => {
     expect((err as Error).message).not.toContain("invalid characters");
   });
 });
+
+describe("a rejected paste leaves the current license alone", () => {
+  it("keeps the saved license's status when the new one is rejected", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "lic-"));
+    const svc = createLicenseService({ path: join(dir, "license.jwt") });
+    await svc.refresh();
+    const before = svc.status();
+    await svc.set("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.bm90LWEtc2lnbmF0dXJl").catch(() => {});
+    expect(svc.status()).toEqual(before);
+    expect(svc.jwt()).toBeNull();
+  });
+});
+

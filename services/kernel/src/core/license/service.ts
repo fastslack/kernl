@@ -110,9 +110,14 @@ export function createLicenseService(opts: LicenseServiceOptions = {}): LicenseS
 
     async set(input) {
       const jwt = normalizeLicenseInput(input);
-      const result = await verifyAndCache(jwt);
-      if (result.status !== "valid") {
-        throw new LicenseError(result.status, result.message ?? "License rejected");
+      // Verify before touching the cache: a rejected paste must not replace
+      // the status of the license still on disk (it used to, locking every
+      // paid extension until the next restart).
+      try {
+        await verifyLicenseJwt(jwt);
+      } catch (err) {
+        const kind: LicenseStatus = err instanceof LicenseError ? err.kind : "invalid";
+        throw new LicenseError(kind, err instanceof Error ? err.message : "License rejected");
       }
       await mkdir(dirname(path), { recursive: true });
       // Atomic write to avoid leaving the file in a half-truncated state on crash.
@@ -120,7 +125,7 @@ export function createLicenseService(opts: LicenseServiceOptions = {}): LicenseS
       await writeFile(tmp, jwt + "\n", "utf-8");
       await chmod(tmp, 0o600);
       await renameWithRetry(tmp, path);
-      return result;
+      return verifyAndCache(jwt);
     },
 
     async clear() {
