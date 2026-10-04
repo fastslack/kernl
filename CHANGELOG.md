@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A provider out of quota could stop the fallback to the next one.** When
+  the table that remembers exhausted providers could not be written, the
+  error escaped and the run failed instead of moving on; the write is now
+  best effort and the fallback continues.
+
+## [0.4.0] - 2026-10-04
+
 ### Upgrading from 0.3.2
 
 - **Without `TIMEZONE`, the kernel now uses this machine's timezone**, not
