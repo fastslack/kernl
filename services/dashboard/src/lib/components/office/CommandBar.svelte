@@ -7,6 +7,8 @@
 	export let working = 0;
 	export let runsToday = 0;
 	export let inbox = 0;
+	/** View-menu entries offered by world plugins (extension buildings), e.g. hide a roof. */
+	export let extraItems: Array<{ id: string; label: string }> = [];
 
 	const dispatch = createEventDispatcher<{
 		newoffice: void;
@@ -15,6 +17,7 @@
 		fit: void;
 		turntable: void;
 		perf: void;
+		extra: { id: string };
 		inbox: void;
 		registerrepo: void;
 	}>();
@@ -78,6 +81,11 @@
 					<button class="bar-pop-item bar-pop-item--row" type="button" role="menuitem" on:click|stopPropagation={() => pick(() => dispatch('perf'))}>
 						<Icon name="activity" /><span>{$t('office.bar.view_perf')}</span><kbd class="k-kbd">⇧P</kbd>
 					</button>
+					{#each extraItems as item (item.id)}
+						<button class="bar-pop-item bar-pop-item--row" type="button" role="menuitem" on:click|stopPropagation={() => pick(() => dispatch('extra', { id: item.id }))}>
+							<Icon name="eye" /><span>{item.label}</span>
+						</button>
+					{/each}
 					<button class="bar-pop-item bar-pop-item--row" type="button" role="menuitem" on:click|stopPropagation={() => pick(() => dispatch('registerrepo'))}>
 						<Icon name="plus" /><span>{$t('office.bar.register_repo')}</span>
 					</button>

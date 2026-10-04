@@ -582,6 +582,7 @@ export function buildStreets(
 
 export function buildCorridorGrid(scene: any, grid: CorridorGrid) {
   for (const seg of grid.segments) {
+    if (seg.outdoor) continue;
     const isH = Math.abs(seg.z1 - seg.z2) < 0.1;
     const len = isH ? Math.abs(seg.x2 - seg.x1) : Math.abs(seg.z2 - seg.z1);
     const cx = isH ? (seg.x1 + seg.x2) / 2 : seg.x1;

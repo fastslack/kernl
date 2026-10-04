@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../app.css';
+  import { setExtWorlds } from '$lib/world-plugins.js';
   import { onMount, onDestroy, tick } from 'svelte';
   import { goto, beforeNavigate, afterNavigate } from '$app/navigation';
   import { page } from '$app/stores';
@@ -524,6 +525,7 @@
 
     // 4. Publish extension page bundles for the [...ext] host route.
     extPagesStore.set(Array.isArray(m.extPages) ? m.extPages : []);
+    setExtWorlds(m.extWorlds);
     extPagesReady.set(true);
 
     navGroups = nav.navGroups;

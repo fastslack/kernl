@@ -5,6 +5,7 @@
 	import OfficeBlueprint from './OfficeBlueprint.svelte';
 	import RepoPicker from './RepoPicker.svelte';
 	import { t, locale } from '$lib/i18n/index.js';
+	import { extWorlds, extensionKindLabel } from '$lib/world-plugins.js';
 	import { OFFICE_KINDS } from '$lib/office/office-kinds.js';
 	import { OFFICE_PALETTE } from '$lib/office/office-palette.js';
 	import { CADENCE_PRESETS, everyFor, humanEvery } from '$lib/office/cadence.js';
@@ -270,7 +271,7 @@
 						<div class="k-field">
 							<label class="k-label" for="wz-kind">{$t('office.panel.kind')}</label>
 							<select id="wz-kind" class="k-input" bind:value={state.kind} title={$t('office.kind.help')}>
-								{#each OFFICE_KINDS as kind (kind)}<option value={kind}>{$t(`office.kind.${kind}`)}</option>{/each}
+								{#each [...OFFICE_KINDS, ...$extWorlds.flatMap((w) => w.kinds.map((k) => k.id))] as kind (kind)}<option value={kind}>{extensionKindLabel(kind, $locale) ?? $t(`office.kind.${kind}`)}</option>{/each}
 							</select>
 						</div>
 					</div>
@@ -354,7 +355,7 @@
 					<p class="wz-summary">{summary}</p>
 					<dl class="wz-review">
 						<dt>{$t('office.wizard.review_office')}</dt>
-						<dd>{state.name.trim()} · {$t(`office.kind.${state.kind}`)}</dd>
+						<dd>{state.name.trim()} · {extensionKindLabel(state.kind, $locale) ?? $t(`office.kind.${state.kind}`)}</dd>
 						<dt>{$t('office.wizard.review_team')}</dt>
 						<dd>{#each named as agent, i (agent.key)}{#if i > 0} · {/if}{#if agent.lead}<span class="wz-star">★</span> {/if}{agent.name.trim()}{/each}</dd>
 						<dt>{$t('office.wizard.review_chain')}</dt>

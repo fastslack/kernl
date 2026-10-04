@@ -28,7 +28,8 @@
 	import RepoPicker from './RepoPicker.svelte';
 	import { isAbsoluteHostPath } from '$lib/host-path.js';
 	import { apiFetch, createAgent } from '$lib/api.js';
-	import { t } from '$lib/i18n/index.js';
+	import { t, locale } from '$lib/i18n/index.js';
+	import { extWorlds, extensionKindLabel } from '$lib/world-plugins.js';
 	import { OFFICE_KINDS, officeKindOf, traitsOf } from '$lib/office/office-kinds.js';
 	import { OFFICE_PALETTE } from '$lib/office/office-palette.js';
 	import { CADENCE_PRESETS, checkEvery, choiceForInterval, everyFor, parseEvery, type CadenceChoice } from '$lib/office/cadence.js';
@@ -125,7 +126,10 @@
 		repoNote = '';
 		repoConfirmRemove = false;
 	}
-	$: kind = officeKindOf(office);
+	// Kinds installed extensions declare (their own building in 3D) keep their id.
+	$: extKinds = $extWorlds.flatMap((w) => w.kinds.map((k) => k.id));
+	$: kind = office?.kind && extKinds.includes(office.kind) ? office.kind : officeKindOf(office);
+	$: kindLabel = (k: string) => extensionKindLabel(k, $locale) ?? $t(`office.kind.${k}`);
 	$: traits = traitsOf(office);
 	$: nameTaken = !!office && name.trim().toLowerCase() !== office.name.trim().toLowerCase()
 		&& otherOfficeNames.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase());
@@ -182,7 +186,7 @@
 	}
 
 	function saveKind(e: Event) {
-		const value = (e.currentTarget as HTMLSelectElement).value as (typeof OFFICE_KINDS)[number];
+		const value = (e.currentTarget as HTMLSelectElement).value;
 		void save('kind', { kind: value });
 	}
 
@@ -416,7 +420,7 @@
 				<button class="k-icon-btn" type="button" aria-label={$t('office.common.close')} on:click={() => dispatch('close')}><Icon name="x" /></button>
 			</div>
 			<div class="op-chips">
-				<span class="k-chip op-kind">{$t(`office.kind.${kind}`)}</span>
+				<span class="k-chip op-kind">{kindLabel(kind)}</span>
 				<span class="k-chip">{$t('office.panel.agents', { n: agents.length })}</span>
 				{#if working > 0}
 					<span class="k-chip op-working"><span class="k-led k-led--working" aria-hidden="true"></span>{$t('office.panel.working', { n: working })}</span>
@@ -448,7 +452,7 @@
 					<label class="k-label" for={ids.kind}>{$t('office.panel.kind')}<span class="op-status">{statusText('kind')}</span></label>
 					<select id={ids.kind} class="k-input" value={kind} title={$t('office.kind.help')}
 						on:change={saveKind}>
-						{#each OFFICE_KINDS as k (k)}<option value={k}>{$t(`office.kind.${k}`)}</option>{/each}
+						{#each [...OFFICE_KINDS, ...extKinds] as k (k)}<option value={k}>{kindLabel(k)}</option>{/each}
 					</select>
 				</div>
 			</div>

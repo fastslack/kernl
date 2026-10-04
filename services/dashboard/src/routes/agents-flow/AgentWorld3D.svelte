@@ -43,6 +43,14 @@
   } from './office3d/scene.js';
   import { processLiveEvents, type LiveEventContext } from './office3d/events.js';
   import { buildLotMarkers, lotAtPoint } from './office3d/office/lots.js';
+  import { setGroundHeight } from './office3d/walkers/ground.js';
+  import { rpcPost } from '$lib/api';
+  import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+  import { applyPBR } from './office3d/office/_materials.js';
+  import { applyWorldTexture, scaleUV } from './office3d/textures.js';
+  import { extWorlds, loadWorldPlugin, worldForKind } from '$lib/world-plugins.js';
+  import { takesNoLot } from '$shared/office-lots.js';
+  import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldViewItem } from '$shared/world-plugin.js';
   import { createConstructionDirector } from './office3d/construction/director.js';
   import { createConstructionStage, type ConstructionStage } from './office3d/construction/stage.js';
   import type { Lot } from '$shared/office-lots.js';
@@ -55,7 +63,7 @@
   import MyOfficePanel from './MyOfficePanel.svelte';
   import AgentPanel from './AgentPanel.svelte';
   // Aliased: `t` is a local name all over this file, including `{#each … as t}` in markup.
-  import { t as translate } from '$lib/i18n/index.js';
+  import { t as translate, locale } from '$lib/i18n/index.js';
   import {
     meetingRoomDoorPoint, getMeetingSeatPositions, pickFreeChair,
     sameOffice as sameOfficeOf, type SeatedWalker,
@@ -264,6 +272,25 @@
   /** Offices whose seated agents stay hidden until their arrival walkers take over. */
   const seatedHiddenFlows = new Set<string>();
   let freeLots: Lot[] = [];
+  // ── World plugins: buildings extensions add (see $shared/world-plugin.ts) ──
+  /** Loaded plugins by office kind. */
+  const worldPlugins = new Map<string, WorldPlugin>();
+  /** Kinds whose plugin bundle is being imported. */
+  const worldPluginsLoading = new Set<string>();
+  /** Sites of the off-grid buildings in the current plan, by kind. */
+  let offGridSites = new Map<string, OffGridSite>();
+  /** Mounted plugin instances, by kind (re-mounted on every scene rebuild). */
+  const worldInstances = new Map<string, WorldPluginInstance>();
+  /** One overlay layer per kind for the plugin's own UI. */
+  const worldOverlays = new Map<string, HTMLElement>();
+  let worldOverlayRoot: HTMLElement;
+  /** Window commands a plugin registered, to remove them when it unmounts. */
+  const worldCommands = new Map<string, string[]>();
+  /** Tooltip a plugin asked for under the pointer. */
+  let worldTip: { x: number; y: number; text: string } | null = null;
+  /** Bumped when a plugin arrives or the manifest's plugin list changes: re-plan and rebuild. */
+  let worldVersion = 0;
+  const unsubExtWorlds = extWorlds.subscribe(() => { worldVersion++; });
   /** The free lots' merged ground mesh — raycast to tell which lot is under the pointer. */
   let lotGround: any = null;
   /** Console-only: slow a build down to look at it (`__constructionSpeed(0.2)`). */
@@ -668,10 +695,144 @@
 
   /** Lay the floor out, leaving off the offices still waiting for their crew. */
   function applyPlan(a: WorldAgent[], c: WorldChain[], f: WorldFlow[], r: WorldRank[]): void {
-    const plan = computeFloorPlan(a, c, f, r, { hiddenFlowIds: construction.hiddenFlowIds() });
+    ensureWorldPlugins(f);
+    const plan = computeFloorPlan(a, c, f, r, {
+      hiddenFlowIds: construction.hiddenFlowIds(),
+      offGridSites: (kind) => {
+        const plugin = worldPlugins.get(kind);
+        return plugin?.site ? (b, zs) => plugin.site!(b, zs) : null;
+      },
+    });
     deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid;
     meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
     freeLots = plan.freeLots ?? [];
+    offGridSites = plan.offGridSites ?? new Map();
+    // Plugin buildings with stairs or streets lift and drop the walkers on the way.
+    const grounds = [...offGridSites.values()].map(st => st.groundHeight).filter((g): g is (x: number, z: number) => number => !!g);
+    setGroundHeight(grounds.length ? (x, z) => {
+      for (const g of grounds) { const y = g(x, z); if (y !== 0) return y; }
+      return 0;
+    } : null);
+  }
+
+  /** Import the world plugins the offices need; the scene rebuilds once one arrives. */
+  function ensureWorldPlugins(list: WorldFlow[]): void {
+    for (const fl of list) {
+      const kind = fl.kind ?? '';
+      if (!kind || worldPlugins.has(kind) || worldPluginsLoading.has(kind)) continue;
+      const info = worldForKind(kind);
+      if (!info) continue;
+      worldPluginsLoading.add(kind);
+      loadWorldPlugin(info)
+        .then(plugin => {
+          for (const k of plugin.kinds) worldPlugins.set(k, plugin);
+          worldPlugins.set(kind, plugin);
+          worldVersion++;
+        })
+        .catch(err => console.error(`[world] ${info.slug}: plugin failed to load`, err))
+        .finally(() => worldPluginsLoading.delete(kind));
+    }
+  }
+
+  /** Offices drawn on the grid: off-grid ones are drawn by their plugin. */
+  function gridRooms(): Map<string, RoomInfo> {
+    if (offGridSites.size === 0) return roomMap;
+    const out = new Map(roomMap);
+    for (const [fid] of roomMap) {
+      if (takesNoLot(flows.find(f => f.id === fid)?.kind)) out.delete(fid);
+    }
+    return out;
+  }
+
+  /** Main building plus plugin buildings, for the camera and the key light's shadow frustum. */
+  function worldBounds(): { minX: number; maxX: number; minZ: number; maxZ: number } {
+    const b = { ...corGrid.buildingBounds };
+    for (const st of offGridSites.values()) {
+      const e = st.extent;
+      b.minX = Math.min(b.minX, e.minX); b.maxX = Math.max(b.maxX, e.maxX);
+      b.minZ = Math.min(b.minZ, e.minZ); b.maxZ = Math.max(b.maxZ, e.maxZ);
+    }
+    return b;
+  }
+
+  /** What the core lends world plugins. */
+  function worldHost(): WorldHost {
+    return {
+      THREE, CSS2DObject,
+      mergeGeometries: (geos, useGroups = false) => mergeGeometries(geos, useGroups),
+      applyPBR: (mat, role) => { applyPBR(mat, role as any); },
+      applyWorldTexture: (mat, kind) => applyWorldTexture(mat, kind as any),
+      scaleUV,
+      rpc: (action, args = {}) => rpcPost(action, args),
+      navigate: (path) => goto(path),
+      focus: (rect) => focusOffice(rect),
+      locale: get(locale),
+      hasPage: (view) => get(extPages).some((p) => p.view === view),
+      invalidate: () => rebuildScene(),
+    };
+  }
+
+  /** Mount every loaded plugin whose offices are in the plan, under `target`. */
+  function mountWorldPlugins(target: any): void {
+    unmountWorldPlugins();
+    const byKind = new Map<string, WorldFlow[]>();
+    for (const fl of flows) {
+      const kind = fl.kind ?? '';
+      if (!worldPlugins.has(kind) || !roomMap.has(fl.id)) continue;
+      if (!byKind.has(kind)) byKind.set(kind, []);
+      byKind.get(kind)!.push(fl);
+    }
+    for (const [kind, offices] of byKind) {
+      const plugin = worldPlugins.get(kind)!;
+      let overlay = worldOverlays.get(kind);
+      if (!overlay && worldOverlayRoot) {
+        overlay = document.createElement('div');
+        overlay.className = 'world-plugin-layer';
+        worldOverlayRoot.appendChild(overlay);
+        worldOverlays.set(kind, overlay);
+      }
+      const group = new THREE.Group();
+      group.userData.part = 'decor';
+      group.userData.worldPlugin = kind;
+      target.add(group);
+      try {
+        const inst = plugin.mount({
+          host: worldHost(), target: group, site: offGridSites.get(kind) ?? null, overlay: overlay!,
+          offices: offices.map(o => ({ id: o.id, name: o.name, color: o.color, kind })),
+          camera, canvasRect: () => renderer.domElement.getBoundingClientRect(),
+        });
+        worldInstances.set(kind, inst);
+        const cmds = inst.consoleCommands?.() ?? {};
+        for (const [name, fn] of Object.entries(cmds)) (window as any)[name] = fn;
+        worldCommands.set(kind, Object.keys(cmds));
+      } catch (err) {
+        console.error(`[world] ${kind}: mount failed`, err);
+      }
+    }
+    rayTargetsCache = null;
+    // The shell lists the plugins' View-menu entries.
+    if (worldInstances.size) dispatch('worldchange');
+  }
+
+  function unmountWorldPlugins(): void {
+    for (const [kind, inst] of worldInstances) {
+      try { inst.dispose(); } catch (err) { console.error(`[world] ${kind}: dispose failed`, err); }
+      for (const name of worldCommands.get(kind) ?? []) delete (window as any)[name];
+    }
+    worldInstances.clear();
+    worldCommands.clear();
+    worldTip = null;
+  }
+
+  /** The world plugin kind a scene object belongs to (its group is tagged by mountWorldPlugins). */
+  function worldOwner(obj: any): string | null {
+    for (let o = obj; o; o = o.parent) if (o.userData?.worldPlugin) return o.userData.worldPlugin as string;
+    return null;
+  }
+
+  /** View-menu entries the mounted plugins offer (the shell lists them under Vista). */
+  export function pluginViewItems(): WorldViewItem[] {
+    return [...worldInstances.values()].flatMap(inst => inst.viewItems?.() ?? []);
   }
 
   function lotLabels() {
@@ -1256,6 +1417,8 @@
     // Every flow office that can carry infrastructure (a Docker container).
     const infraOffices = [...roomMap.keys()]
       .map(fid => ({ flowId: fid, name: flows.find(f => f.id === fid)?.name || '?', color: flows.find(f => f.id === fid)?.color || '#4a4f6a' }));
+    // Buildings of world plugins (extensions) — they draw their offices themselves.
+    mountWorldPlugins(target);
     for (const [flowId, room] of roomMap) {
       const flow = flows.find(f => f.id === flowId);
       const theme = traitsOf(flow).theme;
@@ -1337,6 +1500,7 @@
     setWalkZones({
       myOffice: { rect: officeSlot, door: myOfficeResult.doorPos },
       reception: receptionObstacles(receptionCX, hallSlot.cz),
+      plugins: [...offGridSites.values()].flatMap(st => st.obstacles),
     });
     // Seat the top agent at the executive desk. The seeder
     // guarantees one agent with rank.level === 11; if multiple are
@@ -2111,7 +2275,7 @@
     // streetscape added by buildStreets — sidewalk + street extends ~15u past
     // the building bounds, and with FOV 35° the default cd based only on the
     // desks was clipping the entire block outside the frame.
-    const cd = initialCameraDistance(deskPos, corGrid.buildingBounds);
+    const cd = initialCameraDistance(deskPos, worldBounds());
     camera = new THREE.PerspectiveCamera(35, canvasEl.clientWidth / canvasEl.clientHeight, 0.5, 600);
     // Isometric angle: 45° from high above, looking down at the office
     camera.position.set(cd * 0.7, cd * 0.8, cd * 0.7);
@@ -2127,6 +2291,9 @@
     // which clamped the zoom too aggressively.
     controls.minDistance = 2;
     controls.maxDistance = 300;
+    // Wheel zoom goes toward the point under the cursor, not the screen centre:
+    // with plugin buildings beside the main one the world is too wide to zoom on a fixed target.
+    controls.zoomToCursor = true;
 
     // ── Rotation with the reception as the axis (see setRotationMode / turntableRotate) ──
     // The turntable's elevation range is the complement of the polar limits.
@@ -2160,7 +2327,7 @@
 
     // ── Global lighting (key/fill/rim) — see office3d/office/lighting.ts ──
     // World bounds → tightened shadow frustum (shadow texels 2–4× denser).
-    setupLighting(scene, corGrid.buildingBounds);
+    setupLighting(scene, worldBounds());
 
     // ── Post-processing: MSAA composer + bloom (GTAO off) on dpr ≤ 1.5, direct
     // render otherwise — see office3d/scene.ts ──
@@ -2182,7 +2349,7 @@
       const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
-      buildRooms(staticGroup, roomMap, computeRoomCounts());
+      buildRooms(staticGroup, gridRooms(), computeRoomCounts());
       lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
@@ -2254,6 +2421,8 @@
         '__tradeDemo()           — trade celebration (buy, green)',
         '__tradeDemo(false)      — trade celebration (sell, red)',
       ];
+      // …and whatever the mounted world plugins offer.
+      for (const inst of worldInstances.values()) list.push(...(inst.consoleHelp?.() ?? []));
       console.log('Test animations:\n  ' + list.join('\n  '));
       return ['__deliveryDemo', '__taxiDemo', '__tradeDemo'];
     };
@@ -2334,9 +2503,12 @@
       // every frame, so they can't live in the cached static set. Append their
       // groups fresh each call — the list is tiny (≤20) and this is the only
       // way a moving/seated agent becomes hoverable + clickable wherever it is.
-      if (walkers.length === 0) return rayTargetsCacheLocal;
+      // World plugins' click targets (their meshes may be replaced as data changes).
+      const picks = [...worldInstances.values()].flatMap(inst => inst.pickTargets());
+      if (walkers.length === 0 && picks.length === 0) return rayTargetsCacheLocal;
       const out = rayTargetsCacheLocal.slice();
       for (const w of walkers) out.push(w.group);
+      out.push(...picks);
       return out;
     }
 
@@ -2344,6 +2516,7 @@
     let hoveredFreeRack = false;
     let hoveredInfraConsole = false;
     let hoveredDevopsTerminal = false;
+    let hoveredWorld: { kind: string; hit: WorldHit } | null = null;
     let hoveredLot: Lot | null = null;
     let lastHoverRayAt = 0;
     renderer.domElement.addEventListener('mousemove', (e: MouseEvent) => {
@@ -2366,6 +2539,8 @@
       hoveredFreeRack = false;
       hoveredInfraConsole = false;
       hoveredDevopsTerminal = false;
+      hoveredWorld = null;
+      worldTip = null;
       hoveredLot = null;
       if (hits.length) {
         // The top agent's hitbox sits inside My Office's hitbox so the
@@ -2377,6 +2552,9 @@
           ?? hits.find(h => h.object.userData.isDevopsTerminal)?.object
           ?? hits.find(h => h.object.userData.isFreeRepoRack)?.object
           ?? hits[0].object;
+        // The nearest hit belongs to a world plugin: it says whether it is interactive.
+        const worldKind = hits[0].object === o ? worldOwner(o) : null;
+        const worldTipText = worldKind ? worldInstances.get(worldKind)?.hover?.(hits[0], { x: e.clientX, y: e.clientY }) ?? null : null;
         if (o.userData.isTopAgent) {
           hoveredTopAgent = true;
           hoveredAgent = null;
@@ -2389,6 +2567,11 @@
           hoveredDevopsTerminal = true;
           hoveredAgent = null;
           renderer.domElement.style.cursor = 'pointer';
+        } else if (worldKind && worldTipText !== null) {
+          hoveredWorld = { kind: worldKind, hit: hits[0] };
+          hoveredAgent = null;
+          renderer.domElement.style.cursor = 'pointer';
+          worldTip = worldTipText ? { x: e.clientX - r.left, y: e.clientY - r.top, text: worldTipText } : null;
         } else if (o.userData.isFreeRepoRack) {
           hoveredFreeRack = true;
           hoveredAgent = null;
@@ -2449,6 +2632,9 @@
         // DevOps panel when its extension is active, the power grid otherwise.
         devopsTerminalHitbox?.userData?.nocAction?.();
         return;
+      }
+      if (hoveredWorld) {
+        if (worldInstances.get(hoveredWorld.kind)?.click?.(hoveredWorld.hit)) return;
       }
       if (hoveredFreeRack) {
         // Click on a FREE server rack → open the register-repo modal. Goes
@@ -2738,10 +2924,13 @@
   // Reusable temporaries (no per-frame allocation). Initialised once THREE
   // has loaded (initScene → initTurntableTemps).
   let _ttUP: any = null, _ttC: any = null, _ttQ: any = null, _ttQ2: any = null,
-      _ttView: any = null, _ttRight: any = null, _ttTest: any = null, _ttE: any = null;
+      _ttView: any = null, _ttRight: any = null, _ttTest: any = null, _ttE: any = null,
+      _ttRay: any = null, _ttNdc: any = null, _ttFloor: any = null, _ttHit: any = null;
   function initTurntableTemps() {
     if (_ttUP || !THREE) return;
     _ttUP = new THREE.Vector3(0, 1, 0);
+    _ttRay = new THREE.Raycaster(); _ttNdc = new THREE.Vector2();
+    _ttFloor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); _ttHit = new THREE.Vector3();
     _ttC = new THREE.Vector3(); _ttQ = new THREE.Quaternion(); _ttQ2 = new THREE.Quaternion();
     _ttView = new THREE.Vector3(); _ttRight = new THREE.Vector3();
     _ttTest = new THREE.Vector3(); _ttE = new THREE.Vector3();
@@ -2759,6 +2948,24 @@
     }
     if (hallCenterPos) return { x: hallCenterPos.x, y: RECEPTION_PIVOT_Y, z: hallCenterPos.z };
     return { x: 0, y: RECEPTION_PIVOT_Y, z: 0 };
+  }
+
+  /** Orbit pivot for a drag starting at (clientX, clientY): the floor point under
+   *  the cursor, so that point stays put on screen while the view turns around it
+   *  (the "orbit around cursor" of Blender / Google Earth / Sketchfab). Rays that
+   *  miss the floor or hit it absurdly far away (near the horizon) fall back to
+   *  the point the camera looks at. */
+  function pivotUnderCursor(clientX: number, clientY: number): { x: number; y: number; z: number } {
+    initTurntableTemps();
+    const fallback = { x: controls.target.x, y: 0, z: controls.target.z };
+    if (!camera || !renderer || !_ttRay) return fallback;
+    const r = renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return fallback;
+    _ttNdc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    _ttRay.setFromCamera(_ttNdc, camera);
+    const hit = _ttRay.ray.intersectPlane(_ttFloor, _ttHit);
+    if (!hit || hit.distanceTo(camera.position) > camera.position.distanceTo(controls.target) * 4) return fallback;
+    return { x: hit.x, y: 0, z: hit.z };
   }
 
   function _rotAround(P: any, C: any, q: any) { P.sub(C).applyQuaternion(q).add(C); }
@@ -2781,13 +2988,15 @@
       if (_ttRight.lengthSq() > 1e-6) {
         _ttRight.normalize();
         const qp = _ttQ2.setFromAxisAngle(_ttRight, dPolar);
-        // Try the pitch on a copy of the camera: only apply it if the resulting
-        // elevation stays inside the allowed range.
+        // Try the pitch on a copy of the camera: only apply it if the view's
+        // elevation (camera seen from its target — a rigid rotation turns that
+        // vector by qp whatever the pivot) stays in range and the camera stays
+        // above the floor.
         _ttTest.copy(camera.position);
         _rotAround(_ttTest, C, qp);
-        const e = _ttE.subVectors(_ttTest, C);
+        const e = _ttE.subVectors(camera.position, controls.target).applyQuaternion(qp);
         const el = Math.atan2(e.y, Math.hypot(e.x, e.z));
-        if (el >= TURNTABLE_MIN_EL && el <= TURNTABLE_MAX_EL) {
+        if (el >= TURNTABLE_MIN_EL && el <= TURNTABLE_MAX_EL && _ttTest.y > 1) {
           camera.position.copy(_ttTest);
           _rotAround(controls.target, C, qp);
         }
@@ -2798,6 +3007,7 @@
 
   // Custom drag state (only active in 'turntable' mode).
   let _ttDragging = false, _ttLastX = 0, _ttLastY = 0;
+  let _ttPivot: { x: number; y: number; z: number } | null = null;
   function onWorldPointerDown(ev: PointerEvent) {
     if (ev.button !== 0 || !camera || !controls) return;
     if (rotationMode === 'recenter') {
@@ -2807,19 +3017,21 @@
       controls.update();
       return; // OrbitControls (enableRotate ON) hace el giro
     }
-    // turntable: we handle the rotation ourselves
+    // turntable: we handle the rotation ourselves, around the floor point under the cursor
     _ttDragging = true;
     _ttLastX = ev.clientX; _ttLastY = ev.clientY;
+    _ttPivot = pivotUnderCursor(ev.clientX, ev.clientY);
   }
   function onWorldPointerMove(ev: PointerEvent) {
     if (!_ttDragging || rotationMode !== 'turntable') return;
     const dx = ev.clientX - _ttLastX, dy = ev.clientY - _ttLastY;
     _ttLastX = ev.clientX; _ttLastY = ev.clientY;
     if (dx === 0 && dy === 0) return;
-    turntableRotate(orbitPivot(), -dx * TURNTABLE_ROT_SPEED, -dy * TURNTABLE_ROT_SPEED);
+    turntableRotate(_ttPivot ?? orbitPivot(), -dx * TURNTABLE_ROT_SPEED, -dy * TURNTABLE_ROT_SPEED);
   }
   function onWorldPointerUp() {
     _ttDragging = false;
+    _ttPivot = null;
   }
 
   /** Aplica el modo a OrbitControls (enableRotate) y persiste la preferencia. */
@@ -3073,7 +3285,9 @@
   export function focusOfficeById(flowId: string): boolean {
     const room = roomMap.get(flowId);
     if (!room) return false;
-    focusOffice(room);
+    // A plugin building is framed whole: its room may be only an office inside it.
+    const site = offGridSites.get(flows.find(f => f.id === flowId)?.kind ?? '');
+    focusOffice(site ? site.focus : room);
     return true;
   }
 
@@ -3082,6 +3296,7 @@
     if (!camera || !controls || roomMap.size === 0) return;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     const boxes: Array<{ cx: number; cz: number; w: number; d: number }> = [...roomMap.values(), ...meetingRooms];
+    for (const st of offGridSites.values()) boxes.push(st.focus);
     for (const b of boxes) {
       minX = Math.min(minX, b.cx - b.w / 2);
       maxX = Math.max(maxX, b.cx + b.w / 2);
@@ -3237,6 +3452,29 @@
     if (bloomPass) bloomPass.enabled = qualityTier >= 1;
   }
 
+  /**
+   * Zoom-to-cursor (controls.zoomToCursor) parks the orbit target straight in
+   * front of the camera at the old radius — off the floor. Pan speed is scaled
+   * by the camera→target distance, so with the target hanging above the floor
+   * a right-drag slid the floor slower than the pointer: it felt like dragging
+   * through mud, worse the more you had zoomed. Slide the target back down the
+   * same line of sight onto the floor: the view is unchanged, the pan is 1:1 again.
+   */
+  const _floorFwd = { x: 0, y: 0, z: 0 };
+  function keepOrbitTargetOnFloor(): void {
+    if (!camera || !controls || Math.abs(controls.target.y) < 0.25) return;
+    // After update() the camera looks exactly at the target: that is the line of sight.
+    _floorFwd.x = controls.target.x - camera.position.x;
+    _floorFwd.y = controls.target.y - camera.position.y;
+    _floorFwd.z = controls.target.z - camera.position.z;
+    const len = Math.hypot(_floorFwd.x, _floorFwd.y, _floorFwd.z) || 1;
+    _floorFwd.x /= len; _floorFwd.y /= len; _floorFwd.z /= len;
+    if (_floorFwd.y > -0.05) return; // looking at the horizon: no floor point to anchor to
+    const t = -camera.position.y / _floorFwd.y;
+    if (!(t > 0) || t > 2000) return;
+    controls.target.set(camera.position.x + _floorFwd.x * t, 0, camera.position.z + _floorFwd.z * t);
+  }
+
   function animate(now: number = performance.now()) {
     animId = requestAnimationFrame(animate);
     fc++;
@@ -3245,10 +3483,14 @@
     lastFrameTime = now;
     sceneTimeSec += deltaSec;
     controls.update();
+    keepOrbitTargetOnFloor();
 
     // Drive every registered Ticker — camera tweens, halo pulses, trade
     // particles, bubble fades. Finished tickers self-dispose and drop out.
     animRegistry.tick(deltaSec, sceneTimeSec);
+    for (const [kind, inst] of worldInstances) {
+      try { inst.tick(deltaSec); } catch (err) { console.error(`[world] ${kind}: tick failed`, err); }
+    }
 
     // Office construction — a failure here must never break the world: finish the build instead.
     if (staticGroup) {
@@ -3772,7 +4014,7 @@
     // A new office goes pending (hidden) here, before the plan is laid out,
     // so it never flashes on the floor ahead of its construction crew.
     observeOffices();
-    const key = sceneFingerprint() + `#c${constructionVersion}`;
+    const key = sceneFingerprint() + `#c${constructionVersion}#w${worldVersion}`;
     if (key !== lastReactiveKey) {
       lastReactiveKey = key;
       applyPlan(agents, chains, flows, ranks);
@@ -3837,7 +4079,7 @@
     const flowLayoutKey = flows.map(f => `${f.id}:${f.kind ?? ''}:${f.name}:${f.color}:${f.lot_id ?? ''}`).sort().join('|');
     // Offices waiting for their crew are off the floor; when one gets built the static scene changes.
     const hiddenKey = [...construction.hiddenFlowIds()].sort().join(',');
-    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}|h:${hiddenKey}`;
+    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}|h:${hiddenKey}|w:${worldVersion}`;
     const layoutChanged = layoutKey !== lastLayoutKey;
     lastLayoutKey = layoutKey;
 
@@ -3859,7 +4101,7 @@
       const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
-      buildRooms(staticGroup, roomMap, computeRoomCounts());
+      buildRooms(staticGroup, gridRooms(), computeRoomCounts());
       lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
@@ -3995,6 +4237,8 @@
     resizeObserver = null;
     if (animId) cancelAnimationFrame(animId);
     if (reposRefreshTimer) { clearInterval(reposRefreshTimer); reposRefreshTimer = null; }
+    unmountWorldPlugins();
+    unsubExtWorlds();
     if (infraRefreshTimer) { clearInterval(infraRefreshTimer); infraRefreshTimer = null; }
     if (questionsRefreshTimer) { clearInterval(questionsRefreshTimer); questionsRefreshTimer = null; }
     if (sceneReadyFallbackTimer) { clearTimeout(sceneReadyFallbackTimer); sceneReadyFallbackTimer = null; }
@@ -4462,6 +4706,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   <PerfOverlay bind:visible={showPerfHud} stats={perfStats} extra={perfExtra} label="baseline" />
 
+  <!-- World plugins' own UI (each plugin gets a layer) and the tooltip a plugin asks for. -->
+  <div class="world-plugin-overlay" bind:this={worldOverlayRoot}></div>
+  {#if worldTip}
+    <div class="wp-tip" style="left:{worldTip.x + 14}px;top:{worldTip.y + 12}px">{worldTip.text}</div>
+  {/if}
+
 
   <!-- Send-to-fixer toast — page-level so it survives the report modal
        closing on dispatch. Auto-clears via the same setTimeout that owns
@@ -4783,5 +5033,14 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   @media (prefers-reduced-motion: reduce) {
     :global(.atag-think-dot) { animation: none; opacity: .85; }
     :global(.atag-icon) { animation: none; }
+  }
+  /* World plugins draw their panels in here; only their own elements take clicks. */
+  .world-plugin-overlay { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+  .world-plugin-overlay :global(.world-plugin-layer) { position: absolute; inset: 0; }
+  .world-plugin-overlay :global(.world-plugin-layer > *) { pointer-events: auto; }
+  .wp-tip {
+    position: absolute; z-index: 7; pointer-events: none; white-space: nowrap;
+    background: rgba(17, 19, 24, 0.92); color: #e6e8ee; border: 1px solid rgba(255, 194, 61, 0.5); border-radius: 6px;
+    padding: 3px 7px; font: 500 11px 'IBM Plex Mono', monospace;
   }
 </style>

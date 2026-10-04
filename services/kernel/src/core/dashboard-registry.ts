@@ -60,6 +60,17 @@ export interface DashboardManifest {
     /** Render the view full-bleed (no inner shell padding). */
     fullBleed?: boolean;
   }>;
+  /**
+   * 3D world plugins of active extensions (`frontend.worlds`): the dashboard
+   * imports `/ext-assets/<slug>/<entry>?v=<version>` when an office of one of
+   * `kinds` exists. Contract: assets/extensions/_shared/world-plugin.ts.
+   */
+  extWorlds: Array<{
+    slug: string;
+    entry: string;
+    version: string;
+    kinds: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
+  }>;
 }
 
 // ── Registry ─────────────────────────────────────────────
@@ -268,6 +279,7 @@ export class DashboardRegistry {
     const navGroups = [...this.navGroups];
     const agentPanelTabs = [...this.agentPanelTabs];
     const extPages: DashboardManifest["extPages"] = [];
+    const extWorlds: DashboardManifest["extWorlds"] = [];
 
     if (extensionService) {
       try {
@@ -288,6 +300,10 @@ export class DashboardRegistry {
                   title?: string;
                   channels?: string[];
                   fullBleed?: boolean;
+                }>;
+                worlds?: Array<{
+                  entry?: string;
+                  kinds?: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
                 }>;
               };
             };
@@ -319,6 +335,17 @@ export class DashboardRegistry {
                   ? p.channels.filter((c): c is string => typeof c === "string")
                   : undefined,
                 fullBleed: p.fullBleed === true ? true : undefined,
+              });
+            }
+
+            // 3D world plugin bundles (entry relative to frontend/, like pages).
+            for (const w of frontend.worlds ?? []) {
+              if (!w?.entry || !Array.isArray(w.kinds) || w.kinds.length === 0) continue;
+              extWorlds.push({
+                slug: row.slug,
+                entry: w.entry.replace(/^frontend\//, ""),
+                version: manifest.version ?? "0.0.0",
+                kinds: w.kinds.filter((k: { id: string }) => typeof k?.id === "string"),
               });
             }
 
@@ -394,6 +421,7 @@ export class DashboardRegistry {
       })),
       agentPanelTabs,
       extPages,
+      extWorlds,
     };
   }
 

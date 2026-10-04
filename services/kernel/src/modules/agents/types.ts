@@ -1,9 +1,24 @@
+import { registerOffGridKinds } from "../../../assets/extensions/_shared/office-lots.js";
+
 /** What an office is, for the room it gets in 3D and the buttons its agents show. */
-export const FLOW_KINDS = ["general", "devops", "communications", "creative", "warehouse"] as const;
-export type FlowKind = (typeof FLOW_KINDS)[number];
+export const FLOW_KINDS = ["general", "devops", "communications", "creative"] as const;
+/** A core kind, or one an installed extension declares (manifest `frontend.worlds[].kinds`). */
+export type FlowKind = (typeof FLOW_KINDS)[number] | (string & {});
+
+/** Kinds declared by installed extensions, e.g. an extension that draws its own building. */
+const extensionKinds = new Set<string>();
+
+/** Accept extension-declared office kinds (called when an extension loads or installs). */
+export function registerExtensionFlowKinds(kinds: ReadonlyArray<{ id: string; offGrid?: boolean }>): void {
+  for (const k of kinds) {
+    if (typeof k?.id !== "string" || !/^[a-z][a-z0-9-]{0,39}$/.test(k.id)) continue;
+    extensionKinds.add(k.id);
+    if (k.offGrid) registerOffGridKinds([k.id]);
+  }
+}
 
 export function isFlowKind(v: unknown): v is FlowKind {
-  return typeof v === "string" && (FLOW_KINDS as readonly string[]).includes(v);
+  return typeof v === "string" && ((FLOW_KINDS as readonly string[]).includes(v) || extensionKinds.has(v));
 }
 
 /** How agents of an office that works on a repo are run. */

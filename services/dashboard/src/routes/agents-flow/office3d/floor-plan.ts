@@ -6,8 +6,9 @@
 import type { AgentData, ChainData, FlowData, RankData, Vec3, RoomInfo, FloorPlan } from './types.js';
 import {
   CORE_CELLS, LOT_CORRIDOR_W, cellRect, colCenterX, colWidth, extentRing, layoutDesks,
-  lotsWithin, parseLotId, pickLot, rowCenterZ, rowDepth, type Lot,
+  lotsWithin, parseLotId, pickLot, rowCenterZ, rowDepth, takesNoLot, type Lot,
 } from '$shared/office-lots.js';
+import type { OffGridSite, WorldAabb } from '$shared/world-plugin.js';
 
 export type { Lot };
 
@@ -23,6 +24,8 @@ function topRankIds(ranks: RankData[]): Set<string> {
 
 export interface CorridorSegment {
   x1: number; z1: number; x2: number; z2: number; width: number;
+  /** Walkable but not drawn as corridor floor (e.g. a street crossing to a plugin building). */
+  outdoor?: boolean;
 }
 
 export interface CorridorGrid {
@@ -37,6 +40,12 @@ export interface FloorPlanOptions {
   /** Offices left off the floor entirely — not drawn, desks not placed, lot shown free.
    *  Used while an office waits for its construction crew. */
   hiddenFlowIds?: ReadonlySet<string>;
+  /**
+   * Building sites of world plugins, by office kind (see $shared/world-plugin.ts).
+   * Offices of an off-grid kind (office-lots.ts → takesNoLot) stand in that
+   * site; without one yet (plugin still loading) they are left off the floor.
+   */
+  offGridSites?: (kind: string) => ((bounds: WorldAabb, hCorridorZs: number[]) => OffGridSite) | null | undefined;
 }
 
 type Rect = { cx: number; cz: number; w: number; d: number };
@@ -59,6 +68,8 @@ export function computeFloorPlan(
   meetingRooms: Rect[];
   hallExtensions: Rect[];
   freeLots: Lot[];
+  /** Sites of world-plugin buildings, by office kind (empty without off-grid offices). */
+  offGridSites: Map<string, OffGridSite>;
 } {
   const deskPositions = new Map<string, Vec3>();
   const rooms = new Map<string, RoomInfo>();
@@ -68,6 +79,7 @@ export function computeFloorPlan(
       deskPositions, rooms, meetingRooms: [], hallExtensions: [], freeLots: [],
       corridor: { centerX: 0, width: CORRIDOR_W, startZ: -10, endZ: 10 },
       corridorGrid: { segments: [], nodes: [], buildingBounds: { minX: -20, maxX: 20, minZ: -20, maxZ: 20 } },
+      offGridSites: new Map(),
     };
   }
 
@@ -88,6 +100,15 @@ export function computeFloorPlan(
 
   // ── Lots ──
   const flowById = new Map(flows.map(f => [f.id, f]));
+
+  // An off-grid office takes no lot: its agents sit in a world plugin's own
+  // building, placed once the main building's bounds are known (see below).
+  const offGridGroups = new Map<string, AgentData[]>();
+  for (const [fid, group] of flowGroups) {
+    if (!takesNoLot(flowById.get(fid)?.kind)) continue;
+    offGridGroups.set(fid, group);
+    flowGroups.delete(fid);
+  }
   const lotByFlow = new Map<string, Lot>();
   const taken = new Set<string>();
   // Lots held by hidden offices stay reserved for them: no fallback may take one.
@@ -193,15 +214,48 @@ export function computeFloorPlan(
   nodes.push({ x: bMinX, y: 0, z: bMaxZ });
   nodes.push({ x: bMaxX, y: 0, z: bMaxZ });
 
-  const corridorGrid: CorridorGrid = {
+  let corridorGrid: CorridorGrid = {
     segments, nodes,
     buildingBounds: { minX: bMinX, maxX: bMaxX, minZ: bMinZ, maxZ: bMaxZ },
   };
 
+  // ── Off-grid offices: each world plugin's building, computed from the main
+  //    building's bounds; its corridor link is appended for the walkers. ──
+  const offGridSites = new Map<string, OffGridSite>();
+  const idsByKind = new Map<string, string[]>();
+  const hZs = hCorridorZsOf(corridorGrid);
+  for (const [fid, group] of offGridGroups) {
+    const flow = flowById.get(fid);
+    const kind = flow?.kind ?? '';
+    let site = offGridSites.get(kind);
+    if (!site) {
+      const make = opts.offGridSites?.(kind);
+      if (!make) continue;                       // plugin not loaded (yet): off the floor
+      site = make(corridorGrid.buildingBounds, hZs);
+      offGridSites.set(kind, site);
+      corridorGrid = {
+        segments: [...corridorGrid.segments, ...site.extraSegments],
+        nodes: [...corridorGrid.nodes, ...site.extraNodes],
+        buildingBounds: corridorGrid.buildingBounds,
+      };
+    }
+    rooms.set(fid, {
+      ...site.room,
+      color: flow?.color || '#4a4f6a',
+      name: flow?.name || `?[${fid.slice(0, 6)}]`,
+      lotId: '',
+    } as any);
+    if (!idsByKind.has(kind)) idsByKind.set(kind, []);
+    idsByKind.get(kind)!.push(...group.map(a => a.id));
+  }
+  for (const [kind, ids] of idsByKind) {
+    for (const [id, p] of offGridSites.get(kind)!.desks(ids)) deskPositions.set(id, p);
+  }
+
   return {
     deskPositions, rooms,
     corridor: { centerX: 0, width: CORRIDOR_W, startZ: bMinZ, endZ: bMaxZ },
-    corridorGrid, meetingRooms, hallExtensions, freeLots,
+    corridorGrid, meetingRooms, hallExtensions, freeLots, offGridSites,
   };
 }
 
@@ -213,4 +267,11 @@ export function nearestCorridorNode(point: Vec3, grid: CorridorGrid): Vec3 {
     if (d < bestD) { bestD = d; best = n; }
   }
   return best;
+}
+
+/** Z of every horizontal corridor (plugins line their links up with one). */
+export function hCorridorZsOf(grid: CorridorGrid): number[] {
+  const zs = new Set<number>();
+  for (const s of grid.segments) if (Math.abs(s.z1 - s.z2) < 0.1 && Math.abs(s.x1 - s.x2) > 0.1) zs.add(s.z1);
+  return [...zs].sort((a, b) => a - b);
 }

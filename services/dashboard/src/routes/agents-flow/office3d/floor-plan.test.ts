@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'bun:test';
 import { computeFloorPlan } from './floor-plan.js';
-import { cellRect, lotAt } from '$shared/office-lots.js';
+import { cellRect, lotAt, registerOffGridKinds } from '$shared/office-lots.js';
+import type { OffGridSite, WorldAabb } from '$shared/world-plugin.js';
+import { buildPath, segHitsAabb } from './walkers/pathfinding.js';
 import type { AgentData, FlowData } from './types.js';
 
 const agent = (id: string, flowId: string): AgentData => ({
@@ -81,3 +83,67 @@ describe('computeFloorPlan', () => {
 	});
 });
 
+describe('computeFloorPlan — off-grid offices (world plugins)', () => {
+	registerOffGridKinds(['test-yard']);
+	const yard = (id: string): FlowData => ({ ...flow(id, 'Yard'), kind: 'test-yard' } as FlowData);
+
+	/** A plain building 30u east of the main one, door on its west wall at a corridor Z. */
+	const fakeSite = (b: WorldAabb, zs: number[]): OffGridSite => {
+		const z = zs.reduce((best, v) => (Math.abs(v) < Math.abs(best) ? v : best), zs[0] ?? 0);
+		const x0 = b.maxX + 30, w = 16, d = 12;
+		const room = { cx: x0 + w / 2, cz: z, w, d, doorDir: 'left' as const, doorX: x0, doorCZ: z, doorZ: z, corridorZ: z, side: -1 as const };
+		return {
+			room,
+			extraSegments: [{ x1: b.maxX, z1: z, x2: x0, z2: z, width: 4, outdoor: true }],
+			extraNodes: [{ x: b.maxX, y: 0, z }, { x: x0 - 1, y: 0, z }],
+			obstacles: [
+				{ minX: x0 - 0.25, maxX: x0 + 0.25, minZ: z - d / 2, maxZ: z - 1.6 },
+				{ minX: x0 - 0.25, maxX: x0 + 0.25, minZ: z + 1.6, maxZ: z + d / 2 },
+			],
+			extent: { minX: b.maxX, maxX: x0 + w, minZ: z - d / 2, maxZ: z + d / 2 },
+			focus: room,
+			desks: (ids) => new Map(ids.map((id, i) => [id, { x: x0 + 3 + (i % 4) * 3, y: 0, z: z - 2 + Math.floor(i / 4) * 3 }])),
+		};
+	};
+	const opts = { offGridSites: (k: string) => (k === 'test-yard' ? fakeSite : null) };
+
+	it('stands an off-grid office in its plugin building, never on a lot', () => {
+		const fp = computeFloorPlan([...team('f1', 3), ...team('y', 6)], [], [flow('f1', 'A', '-1,1'), yard('y')], [], opts);
+		const room = fp.rooms.get('y')!;
+		expect((room as any).lotId).toBe('');
+		expect(room.cx).toBeGreaterThan(fp.corridorGrid.buildingBounds.maxX + 30);
+		expect(fp.offGridSites.has('test-yard')).toBe(true);
+		expect(fp.freeLots.length).toBe(computeFloorPlan(team('f1', 3), [], [flow('f1', 'A', '-1,1')]).freeLots.length);
+	});
+
+	it('seats the agents where the plugin says', () => {
+		const fp = computeFloorPlan(team('y', 6), [], [yard('y')], [], opts);
+		const site = fp.offGridSites.get('test-yard')!;
+		for (const a of team('y', 6)) {
+			const p = fp.deskPositions.get(a.id)!;
+			expect(Math.abs(p.x - site.room.cx)).toBeLessThan(site.room.w / 2);
+		}
+	});
+
+	it('links the building to the corridors and keeps the main bounds', () => {
+		const plain = computeFloorPlan(team('f1', 3), [], [flow('f1', 'A', '-1,1')]);
+		const fp = computeFloorPlan([...team('f1', 3), ...team('y', 2)], [], [flow('f1', 'A', '-1,1'), yard('y')], [], opts);
+		expect(fp.corridorGrid.buildingBounds).toEqual(plain.corridorGrid.buildingBounds);
+		expect(fp.corridorGrid.segments.length).toBe(plain.corridorGrid.segments.length + 1);
+	});
+
+	it('leaves an off-grid office off the floor while its plugin is not loaded', () => {
+		const fp = computeFloorPlan(team('y', 2), [], [yard('y')]);
+		expect(fp.rooms.has('y')).toBe(false);
+		expect(fp.offGridSites.size).toBe(0);
+	});
+
+	it('walks agents into the building through its door only', () => {
+		const fp = computeFloorPlan([...team('f1', 3), ...team('y', 2)], [], [flow('f1', 'A', '-1,1'), yard('y')], [], opts);
+		const site = fp.offGridSites.get('test-yard')!;
+		const src = fp.rooms.get('f1')!, tgt = fp.rooms.get('y')!;
+		const path = buildPath(fp.deskPositions.get('f1-0')!, fp.deskPositions.get('y-0')!, src, tgt, fp.corridorGrid);
+		expect(path[path.length - 1]).toEqual(fp.deskPositions.get('y-0')!);
+		for (let i = 1; i < path.length; i++) for (const wall of site.obstacles) expect(segHitsAabb(path[i - 1], path[i], wall)).toBe(false);
+	});
+});

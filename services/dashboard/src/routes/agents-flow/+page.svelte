@@ -125,6 +125,8 @@
   // Flow selector
   let selectedFlowId: string | null = null;
   let flows: FlowData[] = [];
+  /** View-menu entries the 3D world's plugins offer (refreshed when the scene is ready and after each one runs). */
+  let worldViewItems: Array<{ id: string; label: string; run(): void }> = [];
   let ranks: RankData[] = [];
 
   // Derived
@@ -498,6 +500,7 @@
   }
 
   function onSceneReady() {
+    worldViewItems = world?.pluginViewItems() ?? [];
     const id = pendingFocusOfficeId;
     pendingFocusOfficeId = null;
     if (id && id === panelOfficeId) world?.focusOfficeById(id);
@@ -712,12 +715,14 @@
         working={effectiveRunning.size}
         runsToday={todayRuns}
         inbox={inboxCount}
+        extraItems={worldViewItems}
         on:newoffice={() => openWizard()}
         on:meeting={openMeetingModal}
         on:activity={toggleActivity}
         on:fit={() => enterWorld(() => world?.fitAll())}
         on:turntable={() => enterWorld(() => world?.toggleRotationMode())}
         on:perf={() => enterWorld(() => world?.togglePerfHud())}
+        on:extra={(e) => enterWorld(() => { worldViewItems.find((i) => i.id === e.detail.id)?.run(); worldViewItems = world?.pluginViewItems() ?? []; })}
         on:inbox={() => enterWorld(() => world?.openHeadquartersInbox())}
         on:registerrepo={() => enterWorld(() => world?.openRegisterRepo())}
       />
@@ -742,6 +747,7 @@
           on:newoffice={(e) => openWizard(e.detail?.lotId ?? '')}
           on:agentselect={(e) => { selectedAgentId = e.detail.id; if (e.detail.id) { panelOfficeId = null; activityOpen = false; } }}
           on:sceneready={onSceneReady}
+          on:worldchange={() => { worldViewItems = world?.pluginViewItems() ?? []; }}
           on:meetings={(e) => (meetings = e.detail.list)}
           on:mgmtlog={(e) => (mgmtEntries = e.detail.entries)}
           on:humanmeeting={(e) => (humanMeeting = e.detail)}
