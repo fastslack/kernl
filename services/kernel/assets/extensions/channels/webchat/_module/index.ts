@@ -1,4 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "@kernl/extension-sdk";
+import { notificationChannelModule } from "@kernl/extension-sdk";
 import { WebChatProvider } from "./webchat-provider.js";
 
 /**
@@ -6,19 +6,8 @@ import { WebChatProvider } from "./webchat-provider.js";
  * factory on the kernel-wide NotificationRegistry during `initialize()`.
  * The HTTP server is attached via a pre-start hook in `bootstrap/http.ts`.
  */
-export function createWebChatModule(): KernelModule {
-  return {
-    name: "ext:webchat",
-    async initialize(ctx: ModuleContext) {
-      ctx.notifier
-        .getRegistry()
-        .registerFactory("webchat", () => new WebChatProvider());
-    },
-    getTools(): ToolDefinition[] {
-      return [];
-    },
-    async shutdown() {},
-  };
+export function createWebChatModule() {
+  return notificationChannelModule("ext:webchat", "webchat", () => new WebChatProvider());
 }
 
 export { WebChatProvider };

@@ -2,13 +2,15 @@ import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { EventBus } from "../../../core/event-bus.js";
 import type { KernelConfig } from "../../../core/config.js";
 import { newId, isoNow } from "../../../core/helpers.js";
+import { HttpError } from "../../../sdk/http-error.js";
 import { computeNextCronRun } from "../cron-utils.js";
+import { kernelTimezone } from "../../../sdk/clock.js";
 import type { AgentSchedule } from "../types.js";
 
 /** A cadence the kernel refuses: below the rate-limit floor, or no cadence at all. */
-export class ScheduleValidationError extends Error {
+export class ScheduleValidationError extends HttpError {
   constructor(message: string) {
-    super(message);
+    super(400, message);
     this.name = "ScheduleValidationError";
   }
 }
@@ -78,6 +80,8 @@ export class AgentSchedulesService {
       last_run_at: null,
       active: 1,
       created_at: now,
+      project_id: null,
+      per_project: 0,
     };
 
     this.db
@@ -152,7 +156,8 @@ export class AgentSchedulesService {
         `SELECT s.*, a.name as agent_name
          FROM agent_schedules s
          JOIN agents a ON s.agent_id = a.id
-         WHERE s.next_run_at <= ? AND s.active = 1 AND a.active = 1`,
+         WHERE s.next_run_at <= ? AND s.active = 1 AND a.active = 1
+         AND NOT (s.per_project = 1 AND s.project_id IS NULL)`,
       )
       .all(now) as Array<AgentSchedule & { agent_name: string }>;
   }
@@ -213,6 +218,7 @@ export class AgentSchedulesService {
   }
 
   private nextRunFor(intervalMs: number, cronExpr: string): string {
-    return cronExpr ? computeNextCronRun(cronExpr, "UTC") : new Date(Date.now() + intervalMs).toISOString();
+    // The scheduler advances in the kernel zone; the first fire has to as well.
+    return cronExpr ? computeNextCronRun(cronExpr, kernelTimezone()) : new Date(Date.now() + intervalMs).toISOString();
   }
 }

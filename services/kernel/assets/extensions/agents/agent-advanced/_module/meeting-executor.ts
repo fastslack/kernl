@@ -20,6 +20,7 @@ import {
   log,
   isoNow,
   newId,
+  sleep,
   type EventBus,
   type KernelConfig,
   type KernelLanguage,
@@ -58,6 +59,8 @@ export interface MeetingRequest {
   rounds?: number;
   /** "normal" | "urgent" — affects 3D animation color. */
   urgency?: string;
+  /** Project of the run that called the meeting; the meeting's run inherits it. */
+  project_id?: string | null;
   /**
    * Grace period between `meeting_requested` and `meeting_started`, in ms —
    * the time the 3D walkers get to reach the table before the first turn is
@@ -222,6 +225,7 @@ export class MeetingExecutor {
         attendees: attendees.map(a => a.id),
       },
       goal: `Meeting: ${request.topic}`,
+      project_id: request.project_id ?? null,
     });
     service.updateRun(run.id, { status: "running", started_at: isoNow() });
 
@@ -531,7 +535,7 @@ export class MeetingExecutor {
     // Save to all participants' memory
     const memContent = `${mode === "debate" ? "Debate" : "Meeting"}: "${request.topic}" — ${summary.slice(0, 500)}`;
     for (const a of agents) {
-      service.addMemory(a.id, "assistant", memContent, run.id);
+      service.addMemory(a.id, "assistant", memContent, run.id, run.project_id ?? null);
     }
 
     // Debate mode: post the verdict back into the source conversation so the
@@ -755,8 +759,4 @@ function emitThinking(
     round,
     ts: new Date().toISOString(),
   });
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
 }

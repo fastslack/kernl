@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { defineTool, textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
+import { defineTool, textResult, errorResult, type ToolDefinition, limitArg } from "@kernl/extension-sdk";
 import type { ApiRegistryService } from "./service.js";
 import type { ApiSeedData } from "./types.js";
 
@@ -136,7 +136,7 @@ export function apiRegistryTools(service: ApiRegistryService, loadSeedData: () =
         is_free: z.boolean().optional().describe("Filter by free/paid"),
         has_key: z.boolean().optional().describe("Filter by whether API key is configured"),
         capabilities: z.array(CapabilitySchema).optional().describe("Filter by capabilities"),
-        limit: z.number().optional().describe("Max results (default 100)"),
+        limit: limitArg(500, "Max results (default 100)"),
         offset: z.number().optional().describe("Pagination offset"),
       }),
       handler: async (query) => {
@@ -161,7 +161,7 @@ export function apiRegistryTools(service: ApiRegistryService, loadSeedData: () =
         query: z.string().describe("Search query"),
         category_id: z.string().optional(),
         is_free: z.boolean().optional(),
-        limit: z.number().optional(),
+        limit: limitArg(200),
       }),
       handler: async (input) => {
         const apis = service.searchApis(input);

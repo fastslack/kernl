@@ -10,6 +10,7 @@
 import { readFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import { log } from "../logger.js";
+import { jsonObject } from "../helpers.js";
 import { assetsRoot } from "../assets-root.js";
 import type { SqliteDb } from "../db/sqlite.js";
 import type {
@@ -153,8 +154,7 @@ export class LlmProviderRegistry {
           // Upgrade path: refresh manifest_json when the logo or category changed
           // against the bundled manifest (migrates old rows with category="llm").
           if (!fileManifest) continue;
-          let m: Record<string, unknown> = {};
-          try { m = JSON.parse(existing.manifest_json) as Record<string, unknown>; } catch { m = {}; }
+          const m = jsonObject(existing.manifest_json);
           if (m.logo === fileManifest.logo && m.category === fileManifest.category) continue;
           this.db
             .prepare("UPDATE installed_extensions SET manifest_json = ?, updated_at = ? WHERE id = ?")

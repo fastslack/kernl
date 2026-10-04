@@ -2,7 +2,7 @@
  * HTTP API routes for lights dashboard
  */
 
-import { type KernelHttpServer, log } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer, log } from "@kernl/extension-sdk";
 import type { LightsService } from "./service.js";
 
 export function registerLightsRoutes(
@@ -10,7 +10,7 @@ export function registerLightsRoutes(
   service: LightsService,
 ): void {
   // GET /api/dashboard/lights - Dashboard panel data
-  server.get("/api/dashboard/lights", async (_req, res) => {
+  server.route("GET", "/api/dashboard/lights", async () => {
     try {
       const devices = service.listDevices();
       const zones = service.listZones();
@@ -37,7 +37,7 @@ export function registerLightsRoutes(
         byRoom[room].push(ds);
       }
 
-      server.json(res, 200, {
+      return {
         available: true,
         summary: {
           totalDevices: devices.length,
@@ -83,127 +83,70 @@ export function registerLightsRoutes(
           days: s.days,
           enabled: s.enabled,
         })),
-      });
+      };
     } catch (error) {
+      // Deliberately generic: the device error stays in the log.
       log.error(`Lights dashboard error: ${error}`);
-      server.json(res, 500, { error: "Failed to fetch lights data" });
+      throw new HttpError(500, "Failed to fetch lights data");
     }
   });
 
   // POST /api/lights/:deviceId/on - Turn on device
-  server.post("/api/lights/:deviceId/on", async (req, res) => {
-    const deviceId = req.url?.split("/")[3];
-    if (!deviceId) {
-      server.json(res, 400, { error: "Missing device ID" });
-      return;
-    }
-
-    const success = await service.turnOn(deviceId);
-    server.json(res, success ? 200 : 500, { success });
-  });
+  server.route("POST", "/api/lights/:deviceId/on", async ({ params: { deviceId } }) =>
+    commandResult(await service.turnOn(deviceId)));
 
   // POST /api/lights/:deviceId/off - Turn off device
-  server.post("/api/lights/:deviceId/off", async (req, res) => {
-    const deviceId = req.url?.split("/")[3];
-    if (!deviceId) {
-      server.json(res, 400, { error: "Missing device ID" });
-      return;
-    }
-
-    const success = await service.turnOff(deviceId);
-    server.json(res, success ? 200 : 500, { success });
-  });
+  server.route("POST", "/api/lights/:deviceId/off", async ({ params: { deviceId } }) =>
+    commandResult(await service.turnOff(deviceId)));
 
   // POST /api/lights/:deviceId/toggle - Toggle device
-  server.post("/api/lights/:deviceId/toggle", async (req, res) => {
-    const deviceId = req.url?.split("/")[3];
-    if (!deviceId) {
-      server.json(res, 400, { error: "Missing device ID" });
-      return;
-    }
-
-    const success = await service.toggle(deviceId);
-    server.json(res, success ? 200 : 500, { success });
-  });
+  server.route("POST", "/api/lights/:deviceId/toggle", async ({ params: { deviceId } }) =>
+    commandResult(await service.toggle(deviceId)));
 
   // POST /api/lights/:deviceId/state - Set device state
-  server.post("/api/lights/:deviceId/state", async (req, res) => {
-    const deviceId = req.url?.split("/")[3];
-    if (!deviceId) {
-      server.json(res, 400, { error: "Missing device ID" });
-      return;
-    }
-
+  server.route<{
+    on?: boolean;
+    brightness?: number;
+    color?: { r: number; g: number; b: number };
+  }>("POST", "/api/lights/:deviceId/state", async ({ params: { deviceId }, body }) => {
+    let success: boolean;
     try {
-      const body = await server.parseBody<{
-        on?: boolean;
-        brightness?: number;
-        color?: { r: number; g: number; b: number };
-      }>(req);
-
       // Convert brightness from 0-100 to 0-255
       const state = {
         on: body.on,
-        brightness: body.brightness !== undefined 
-          ? Math.round((body.brightness / 100) * 255) 
+        brightness: body.brightness !== undefined
+          ? Math.round((body.brightness / 100) * 255)
           : undefined,
         color: body.color,
       };
 
-      const success = await service.setState(deviceId, state);
-      server.json(res, success ? 200 : 500, { success });
+      success = await service.setState(deviceId, state);
     } catch {
-      server.json(res, 400, { error: "Invalid request body" });
+      throw new HttpError(400, "Invalid request body");
     }
+    return commandResult(success);
   });
 
   // POST /api/lights/all/on - Turn on all lights
-  server.post("/api/lights/all/on", async (_req, res) => {
-    const result = await service.turnOnAll();
-    server.json(res, 200, result);
-  });
+  server.route("POST", "/api/lights/all/on", () => service.turnOnAll());
 
   // POST /api/lights/all/off - Turn off all lights
-  server.post("/api/lights/all/off", async (_req, res) => {
-    const result = await service.turnOffAll();
-    server.json(res, 200, result);
-  });
+  server.route("POST", "/api/lights/all/off", () => service.turnOffAll());
 
   // POST /api/lights/zones/:zoneId/on - Turn on zone
-  server.post("/api/lights/zones/:zoneId/on", async (req, res) => {
-    const zoneId = req.url?.split("/")[4];
-    if (!zoneId) {
-      server.json(res, 400, { error: "Missing zone ID" });
-      return;
-    }
-
-    const result = await service.turnOnZone(zoneId);
-    server.json(res, 200, result);
-  });
+  server.route("POST", "/api/lights/zones/:zoneId/on", ({ params: { zoneId } }) => service.turnOnZone(zoneId));
 
   // POST /api/lights/zones/:zoneId/off - Turn off zone
-  server.post("/api/lights/zones/:zoneId/off", async (req, res) => {
-    const zoneId = req.url?.split("/")[4];
-    if (!zoneId) {
-      server.json(res, 400, { error: "Missing zone ID" });
-      return;
-    }
-
-    const result = await service.turnOffZone(zoneId);
-    server.json(res, 200, result);
-  });
+  server.route("POST", "/api/lights/zones/:zoneId/off", ({ params: { zoneId } }) => service.turnOffZone(zoneId));
 
   // POST /api/lights/scenes/:sceneId/apply - Apply scene
-  server.post("/api/lights/scenes/:sceneId/apply", async (req, res) => {
-    const sceneId = req.url?.split("/")[4];
-    if (!sceneId) {
-      server.json(res, 400, { error: "Missing scene ID" });
-      return;
-    }
-
-    const result = await service.applyScene(sceneId);
-    server.json(res, 200, result);
-  });
+  server.route("POST", "/api/lights/scenes/:sceneId/apply", ({ params: { sceneId } }) => service.applyScene(sceneId));
 
   log.info("Lights API routes registered");
+}
+
+/** A device command answers `{ success }`: 200 when it took, 500 when it didn't. */
+function commandResult(success: boolean): { success: true } {
+  if (!success) throw new HttpError(500, "Light command failed", { success: false });
+  return { success: true };
 }

@@ -37,6 +37,11 @@ import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modul
 import { createStoreModule } from "../../modules/store/index.js";
 import { createChatModule } from "../../modules/chat/index.js";
 import { createAgentsModule } from "../../modules/agents/index.js";
+import { createProjectsModule } from "../../modules/projects/index.js";
+import { setProjectRunLookup } from "../outbound-guard.js";
+import { useProjects } from "../host-runtime.js";
+import { setOfficeSchedulesChangedHook } from "../../modules/agents/extension-facade.js";
+import { projectsHostFor } from "../../modules/projects/sdk-host.js";
 import { configureAudit as configurePromptSanitizerAudit } from "../prompt-sanitizer.js";
 import { applyPerformanceIndexes } from "../db/performance-indexes.js";
 import type { MeshModule } from "../types/extensions/index.js";
@@ -47,6 +52,7 @@ export interface CoreModulesResult {
   extensionsModule: ExtensionsModuleHandle;
   chatModule: ReturnType<typeof createChatModule>;
   agentsModule: ReturnType<typeof createAgentsModule>;
+  projectsModule: ReturnType<typeof createProjectsModule>;
 
   // Late-bound slots (mutated by later stages).
   metaCatalogSlot: { value: () => ToolDefinition[] };
@@ -256,6 +262,10 @@ export async function initCoreModules(args: {
   registry.register(chatModule);
   const agentsModule = createAgentsModule();
   registry.register(agentsModule);
+  // Projects: products/businesses offices work for. After agents — its
+  // tables reference flows and it registers the project gate on agents.
+  const projectsModule = createProjectsModule();
+  registry.register(projectsModule);
   // Office environments moved to the paid DevOps extension. The shared
   // container an office's agents run commands in is a DevOps capability, not a
   // base-install one; that extension registers it behind `pro:devops`, so an
@@ -281,6 +291,38 @@ export async function initCoreModules(args: {
   // ── Initialize every registered module ─────────────
   await registry.initializeAll(ctx);
 
+  // Projects ↔ agents seam: createRun validates project_id through it.
+  const projectsService = projectsModule.getService();
+  if (projectsService) {
+    agentsModule.registerProjectGate(projectsService.gate());
+    projectsModule.setAgentLookups({
+      getRun: (id) => agentsModule.getService()?.getRun(id),
+      flowOf: (agentId) => agentsModule.getService()?.getAgent(agentId)?.flow_id ?? "",
+      flowName: (flowId) => agentsModule.getService()?.getFlow(flowId)?.name ?? flowId,
+      listFlows: () => (agentsModule.getService()?.listFlows() ?? []).filter((f) => f.active === 1),
+    });
+    // A rejected draft's note becomes a learning for that project.
+    ctx.events.on("outbox:rejected", (p) => {
+      const e = p as { agent_id: string; project_id: string; note: string };
+      if (!e.agent_id) return;
+      agentsModule.getService()?.addLearning({
+        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id,
+      });
+    });
+    // A bundle reinstall replaces an office agent's schedules → re-clone.
+    setOfficeSchedulesChangedHook((flowId) => projectsService.syncOfficeSchedules(flowId));
+    // Extensions reach projects + outbox through @kernl/extension-sdk.
+    const outbox = projectsModule.getOutbox();
+    const connector = projectsModule.getConnector();
+    if (outbox) {
+      useProjects(() => projectsHostFor(projectsService, outbox, (pid, kind) => connector?.records(pid, kind) ?? []));
+    }
+    // MCP dispatch refuses outbound tools to callers whose run has a project.
+    setProjectRunLookup((runId) => agentsModule.getService()?.getRun(runId)?.project_id ?? null);
+    // Offices seeded since the last boot may carry new per_project templates.
+    try { projectsService.syncAllOfficeSchedules(); } catch (err) { log.warn(`projects: schedule sync failed: ${String(err)}`); }
+  }
+
   // ── Performance indexes (post-migrations) ──────────
   applyPerformanceIndexes(ctx.sqlite);
 
@@ -292,6 +334,7 @@ export async function initCoreModules(args: {
     extensionsModule,
     chatModule,
     agentsModule,
+    projectsModule,
     metaCatalogSlot,
     metaIdentitySlot,
     metaCostRouterSlot,

@@ -36,11 +36,19 @@
         "order": 20
       },
       {
+        "id": "offices",
+        "group": "ai",
+        "label": "Offices",
+        "icon": "🏢",
+        "order": 5,
+        "path": "/agents-flow?view=offices"
+      },
+      {
         "id": "agents-flow",
         "group": "ai",
         "label": "3D",
         "icon": "🧊",
-        "order": 5
+        "order": 4
       },
       {
         "id": "autogenesis",

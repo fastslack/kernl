@@ -3,7 +3,7 @@
   "id": "com.kernl.youtube",
   "slug": "youtube",
   "name": "YouTube",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "YouTube account management + video metadata + resumable uploads via Data API v3 (OAuth2).",
   "author": "Kernl",

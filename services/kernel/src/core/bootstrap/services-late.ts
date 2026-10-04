@@ -1,7 +1,7 @@
 /**
  * Stage: late services that depend on every prior stage being up.
  *
- *  - Voice service (STT/TTS).
+ *  - Voice service (STT/TTS) and its /api/voice/* routes.
  *  - RateLimiter (wrapped to fire-and-forget Rust delegate when available).
  *  - Orchestrator (central message router; sees the final tool catalog).
  *  - `notificationRegistry.startAll()` — instantiates the active providers
@@ -23,12 +23,12 @@ import type { createRustDelegates } from "../rust/delegates.js";
 import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import { Orchestrator } from "../orchestrator.js";
 import { wireMessageRouting } from "../message-routing.js";
-import { getProviderConfig } from "../llm/credentials.js";
-import { VoiceService } from "../../voice/index.js";
+import type { KernelHttpServer } from "../http-server.js";
+import { VoiceService, registerVoiceRoutes } from "../../voice/index.js";
 import { RateLimiter, type PairingManager } from "../../security/index.js";
 
 export interface ServicesLateResult {
-  voiceService: VoiceService | null;
+  voiceService: VoiceService;
   rateLimiter: RateLimiter;
   orchestrator: Orchestrator;
 }
@@ -47,40 +47,21 @@ export async function wireServicesLate(args: {
   chatService: unknown;
   agentService: unknown;
   agentExecutor: unknown;
+  httpServer: KernelHttpServer | null;
 }): Promise<ServicesLateResult> {
   const {
     config, sqlite, neo4j, events, notifier,
     registry, notificationRegistry, dbRegistry, pairingManager,
     rustDelegates,
-    chatService, agentService, agentExecutor,
+    chatService, agentService, agentExecutor, httpServer,
   } = args;
 
   // ── Voice Service (STT/TTS) ────────────────────────
-  let voiceService: VoiceService | null = null;
-  if (config.voice.enabled) {
-    try {
-      const openaiApiKey = getProviderConfig("openai").apiKey;
-      voiceService = new VoiceService({
-        stt: {
-          provider: config.voice.sttProvider,
-          openaiApiKey,
-          localWhisperPath: config.voice.localWhisperPath,
-        },
-        tts: {
-          provider: config.voice.ttsProvider,
-          elevenLabsApiKey: config.voice.elevenLabsApiKey,
-          openaiApiKey,
-          defaultVoice: {
-            voiceId: config.voice.defaultVoiceId,
-            name: config.voice.defaultVoiceId,
-          },
-        },
-      });
-      log.info(`Voice service initialized (STT: ${config.voice.sttProvider}, TTS: ${config.voice.ttsProvider})`);
-    } catch (err) {
-      log.error("Failed to initialize voice service", err);
-    }
-  }
+  // Always built: it reads config.voice on every call, so turning voice on in
+  // Settings works without a restart. The routes answer 409 while it is off.
+  const voiceService = new VoiceService(config);
+  if (httpServer) registerVoiceRoutes(httpServer, voiceService);
+  log.info(`Voice service ready (enabled: ${config.voice.enabled}, STT: ${config.voice.sttEngine}, TTS: ${config.voice.ttsEngine})`);
 
   // ── Rate Limiter (security) ────────────────────────
   const rateLimiter = new RateLimiter({ rateLimitWindow: 60 });
@@ -117,6 +98,7 @@ export async function wireServicesLate(args: {
     agentService: agentService as Parameters<typeof wireMessageRouting>[0]["agentService"],
     agentExecutor: agentExecutor as Parameters<typeof wireMessageRouting>[0]["agentExecutor"],
     events,
+    voiceService,
   });
 
   const activeProviders = notificationRegistry.getStatuses().filter((s) => s.connected);
@@ -189,6 +171,5 @@ export async function wireServicesLate(args: {
       });
   });
 
-  void voiceService; // exported but currently only held for future hooks
   return { voiceService, rateLimiter, orchestrator };
 }

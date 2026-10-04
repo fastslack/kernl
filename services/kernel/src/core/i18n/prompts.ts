@@ -13,6 +13,7 @@
  */
 
 import type { KernelLanguage } from "../config.js";
+import { kernelTimezone } from "../../sdk/clock.js";
 
 // ── Date formatting ───────────────────────────────────────────────────
 
@@ -44,7 +45,8 @@ export function formatDateForLang(
 ): string {
   const d = input instanceof Date ? input : new Date(input);
   if (Number.isNaN(d.getTime())) return "";
-  return new Intl.DateTimeFormat(bcp47ForLang(lang), options).format(d);
+  // The kernel's TIMEZONE unless the caller picked one; not the process's.
+  return new Intl.DateTimeFormat(bcp47ForLang(lang), { timeZone: kernelTimezone(), ...options }).format(d);
 }
 
 // ── Date / lineage ──────────────────────────────────────────────────────

@@ -12,7 +12,19 @@
 
 set -eu
 
-APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Follow symlinks before taking dirname: `ln -s .../kernl-x.y.z/kernl
+# ~/.local/bin/kernl` is the obvious way to put this on PATH, and without this
+# APP_DIR became ~/.local/bin and the exec below looked for ~/.local/bin/bin/bun.
+# A readlink loop rather than `readlink -f`, which is not POSIX.
+SELF="$0"
+while [ -L "$SELF" ]; do
+  LINK="$(readlink "$SELF")"
+  case "$LINK" in
+    /*) SELF="$LINK" ;;
+    *)  SELF="$(dirname "$SELF")/$LINK" ;;
+  esac
+done
+APP_DIR="$(cd "$(dirname "$SELF")" && pwd -P)"
 DATA_DIR="${KERNEL_DATA_DIR:-$HOME/.local/share/kernl}"
 CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/kernl"
 
@@ -46,6 +58,18 @@ if [ -f "$APP_DIR/data/kernel.db" ] && [ ! -f "$DATA_DIR/data/kernel.db" ]; then
   echo "kernl: found a database inside the install folder ($APP_DIR/data)." >&2
   echo "kernl: move it so updates cannot touch it:" >&2
   echo "kernl:   mv \"$APP_DIR/data\"/* \"$DATA_DIR/data/\"" >&2
+fi
+
+# Bundled mtw-server + whatsapp-bridge (stage-payload.sh, section 2d). The
+# kernel supervises them (src/core/bootstrap/sidecars.ts); these exports turn
+# on its side of both bridges and point it at the sockets under the data dir.
+# Absent from a payload built before the binaries were published, in which
+# case nothing changes.
+if [ -x "$APP_DIR/bin/mtw-server/mtw-server" ]; then
+  export KERNL_BINARY_INSTALL=1 BRIDGE_ENABLED=true RUST_BRIDGE_ENABLED=true
+  export KERNEL_URL=ws://127.0.0.1:7741/ws
+  export RUST_BRIDGE_SOCKET="$DATA_DIR/run/mtw-rust.sock"
+  export KERNL_APP_DIR="$APP_DIR" KERNL_DATA_DIR="$DATA_DIR"
 fi
 
 cd "$DATA_DIR"

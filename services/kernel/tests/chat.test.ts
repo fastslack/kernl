@@ -58,7 +58,7 @@ function stubConfig(): KernelConfig {
       discord: { enabled: false, botToken: "", allowedUsers: [], allowedGuilds: [], allowedChannels: [] },
       webchat: { enabled: false, requireAuth: false },
     },
-    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
+    voice: { enabled: false, sttEngine: "auto" as const, whisperModel: "", language: "es", ttsEngine: "auto" as const, ttsVoice: "", ttsSpeed: 1, elevenLabsApiKey: "" },
     pii: { enabled: false, redactEmails: false, redactPhones: false, redactCreditCards: false, redactIbans: false, redactNames: false, warnOnSend: false, placeholder: "[REDACTED]" },
     ibkr: { gatewayUrl: "https://localhost:5000", accountId: "", enabled: false },
     saxo: { baseUrl: "", appKey: "", appSecret: "", certPath: "", certKeyPath: "", enabled: false },
@@ -79,6 +79,8 @@ function stubConfig(): KernelConfig {
     chat: {
       defaultProvider: "stub",
       defaultModel: "stub-model",
+      preferredProvider: "",
+      preferredModel: "",
       extractionModel: "",
       contextBudget: 2000,
       maxEpisodeMessages: 100,
@@ -258,6 +260,40 @@ describe("ChatService", () => {
 
     it("uses defaults when no provider/model specified", () => {
       const ep = service.createEpisode({});
+      expect(ep.llm_provider).toBe("stub");
+      expect(ep.llm_model).toBe("stub-model");
+    });
+
+    it("starts the next chat on the model last picked in one", () => {
+      const first = service.createEpisode({});
+      service.updateEpisodeProvider(first.id, "openai", "gpt-4o-mini");
+      const next = service.createEpisode({});
+      expect(next.llm_provider).toBe("openai");
+      expect(next.llm_model).toBe("gpt-4o-mini");
+    });
+
+    it("remembers a model named when a chat is opened", () => {
+      service.createEpisode({ provider: "openai", model: "gpt-4o" });
+      const next = service.createEpisode({ title: "Later" });
+      expect(next.llm_provider).toBe("openai");
+      expect(next.llm_model).toBe("gpt-4o");
+    });
+
+    it("raises the pick so the settings store can save it", async () => {
+      const seen: unknown[] = [];
+      events.on("chat.model_picked", (p: unknown) => { seen.push(p); });
+      const ep = service.createEpisode({});
+      service.updateEpisodeProvider(ep.id, "openai", "gpt-4o-mini");
+      await new Promise((r) => setTimeout(r, 0));
+      expect(seen).toEqual([{ provider: "openai", model: "gpt-4o-mini" }]);
+    });
+
+    it("ignores a remembered provider that is no longer installed", () => {
+      const cfg = stubConfig();
+      cfg.chat.preferredProvider = "gone";
+      cfg.chat.preferredModel = "old-model";
+      const fresh = new ChatService(db, () => null, events, cfg);
+      const ep = fresh.createEpisode({});
       expect(ep.llm_provider).toBe("stub");
       expect(ep.llm_model).toBe("stub-model");
     });

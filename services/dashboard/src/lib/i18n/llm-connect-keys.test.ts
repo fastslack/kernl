@@ -1,7 +1,11 @@
 import { describe, it, expect } from "bun:test";
-import en from "./llm-connect.en.js";
-import es from "./llm-connect.es.js";
+import enDict from "./llm-connect.en.js";
+import esDict from "./llm-connect.es.js";
 import { errorView } from "../llm-connect.js";
+
+// Looked up by computed keys below; the dictionaries' own types only admit known keys.
+const en: Record<string, string> = enDict;
+const es: Record<string, string> = esDict;
 
 describe("llm-connect strings", () => {
   it("en and es define the same keys, none empty", () => {

@@ -6,14 +6,21 @@ import {
   newId,
   isoNow,
   log,
+  buildPatch,
+  safeJson,
   type Notifier,
+  type PatchColumn,
+  localDateOf,
+  decrypt,
+  encryptIfNeeded,
+  isEncrypted,
 } from "@kernl/extension-sdk";
 import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import { GoogleClient } from "../../../integration/google-sync/_module/google-client.js";
 import type { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import type {
   Communication, CommAttachment, CommChannel, CommStatus, CommDirection, InboxMessage,
-  EmailAccount, EmailTemplate, EmailCampaign, CampaignRecipient,
+  EmailAccount, EmailAccountView, EmailTemplate, EmailCampaign, CampaignRecipient,
 } from "./types.js";
 import type { EmailProvider } from "./providers/types.js";
 import { GmailProvider } from "./providers/gmail-provider.js";
@@ -26,6 +33,21 @@ import {
 } from "./gmail-helpers.js";
 
 const ATTACHMENTS_DIR = "./data/attachments";
+
+const NO_EMAIL_PROVIDER = "No email provider configured. Add an email account or authenticate with Google first.";
+
+/** The communications columns, in INSERT order. */
+const COMM_COLUMNS = [
+  "id", "channel", "direction", "status", "subject", "body", "body_html",
+  "contact_id", "task_id", "account_id", "thread_id", "in_reply_to",
+  "recipients_to", "recipients_cc", "recipients_bcc",
+  "gmail_message_id", "gmail_thread_id",
+  "scheduled_at", "sent_at", "error_message", "metadata",
+  "created_at", "updated_at",
+] as const satisfies ReadonlyArray<keyof Communication>;
+
+const INSERT_COMM_SQL =
+  `INSERT INTO communications (${COMM_COLUMNS.join(", ")}) VALUES (${COMM_COLUMNS.map(() => "?").join(", ")})`;
 
 const MIME_MAP: Record<string, string> = {
   ".pdf": "application/pdf",
@@ -48,12 +70,82 @@ function guessMime(filename: string): string {
   return MIME_MAP[ext] ?? "application/octet-stream";
 }
 
+/** What the API returns in place of a stored secret. */
+export const MASKED_SECRET = "••••••••";
+const SECRET_KEYS = ["pass", "api_key"] as const;
+
+// Logged once per process (not once per save) — see sealConfig.
+let warnedNoEncryptionKey = false;
+
+export const UNREADABLE_MAIL_PASSWORD =
+  "Stored mail password can't be opened (encryption key changed) — reconnect this mailbox";
+
+/**
+ * Whether a stored password is a sealed value rather than plaintext.
+ * `isEncrypted()` alone only checks the decoded length; also require the
+ * strict base64 `encrypt()` emits and rule out pure hex (same test the forge
+ * connection store uses).
+ */
+function looksSealed(value: string): boolean {
+  return (
+    isEncrypted(value) &&
+    value.length % 4 === 0 &&
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value) &&
+    !/^[0-9a-fA-F]+$/.test(value)
+  );
+}
+
+// ── Partial-update allow-lists ─────────────────────────
+// Each is the full set of columns its update method may write. The column
+// names used to come straight from the caller's keys (`${key} = ?`); now a
+// key these maps don't name is dropped before it reaches the SQL. They match
+// what the tools, routes and dashboard operations already send.
+
+/** The communications columns update() may write. */
+const COMM_PATCH: Record<string, PatchColumn> = {
+  subject: "text",
+  body: "text",
+  // Sanitize HTML at the only edit gate so we can't store raw scripts.
+  // body is plain text; only body_html goes through the sanitizer.
+  body_html: { to: (html: unknown) => sanitizeUserHtml(String(html)) },
+  status: "text",
+  recipients_to: "text",
+  recipients_cc: "text",
+  recipients_bcc: "text",
+  scheduled_at: "text",
+  contact_id: "text",
+  task_id: "text",
+  account_id: "text",
+};
+
+/** The email_accounts columns updateAccount() may write (callers pass is_default as 0/1, provider_config as a string). */
+const ACCOUNT_PATCH: Record<string, PatchColumn> = {
+  label: "text",
+  email: "text",
+  type: "text",
+  company: "text",
+  signature: "text",
+  provider_config: "text",
+  is_default: "text",
+};
+
+/** The email_templates columns updateTemplate() may write (variables is re-derived, never taken from the caller). */
+const TEMPLATE_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  subject: "text",
+  body: "text",
+  body_html: "text",
+  category: "text",
+  account_id: "text",
+};
+
 export class CommsService {
   private providers = new Map<string, EmailProvider>();
   private legacyGmailProvider: GmailProvider | null = null;
   private notifier: Notifier | null = null;
   private googleAuth: GoogleAuth | null = null;
   private resendFallbackKey = "";
+  private encryptionKey = "";
 
   constructor(
     private db: SqliteDb,
@@ -85,9 +177,62 @@ export class CommsService {
    * Stash provider-construction dependencies so new accounts can register
    * providers on-the-fly (e.g., right after POST /api/email-accounts).
    */
-  setProviderContext(ctx: { googleAuth?: GoogleAuth | null; resendFallbackKey?: string }): void {
+  setProviderContext(ctx: { googleAuth?: GoogleAuth | null; resendFallbackKey?: string; encryptionKey?: string }): void {
     if (ctx.googleAuth !== undefined) this.googleAuth = ctx.googleAuth;
     if (ctx.resendFallbackKey !== undefined) this.resendFallbackKey = ctx.resendFallbackKey;
+    if (ctx.encryptionKey !== undefined) this.encryptionKey = ctx.encryptionKey;
+  }
+
+  /** Seal an IMAP password before it is written. Without a key it stays as given (and says so). */
+  private sealConfig(provider: string, cfg: Record<string, unknown>): Record<string, unknown> {
+    if (provider !== "imap_smtp" || typeof cfg.pass !== "string" || !cfg.pass) return cfg;
+    if (!this.encryptionKey) {
+      if (!warnedNoEncryptionKey) {
+        warnedNoEncryptionKey = true;
+        log.warn("Comms: KERNEL_ENCRYPTION_KEY is not set — the mail password is stored in plaintext");
+      }
+      return cfg;
+    }
+    return { ...cfg, pass: encryptIfNeeded(cfg.pass, this.encryptionKey) };
+  }
+
+  /**
+   * The account's IMAP/SMTP config with the password opened. A value that does
+   * not open and does not look sealed is used as stored (legacy plaintext). A
+   * value that looks sealed but does not open (the key changed or is gone) is
+   * never handed out as the password: `pass` comes back empty and
+   * `pass_unreadable` is set, so nothing sends ciphertext to the server.
+   */
+  openImapConfig(account: EmailAccount): ImapSmtpConfig & { pass_unreadable?: true } {
+    const cfg = safeJson<Record<string, unknown>>(account.provider_config, {}) as unknown as ImapSmtpConfig;
+    if (typeof cfg.pass !== "string" || !cfg.pass) return cfg;
+    if (this.encryptionKey) {
+      try {
+        return { ...cfg, pass: decrypt(cfg.pass, this.encryptionKey) };
+      } catch { /* not sealed with this key — sealed with another, or legacy plaintext */ }
+    }
+    if (looksSealed(cfg.pass)) return { ...cfg, pass: "", pass_unreadable: true };
+    return cfg;
+  }
+
+  listAccountsForDisplay(): EmailAccountView[] {
+    return this.listAccounts().map((a) => this.maskAccount(a));
+  }
+
+  /**
+   * An account as the API/dashboard may return it: secrets masked, plus its
+   * computed status. The single gate every account-returning route goes
+   * through — a route that hands back a raw `addAccount`/`updateAccount`
+   * result instead of this bypasses the mask.
+   */
+  maskAccount(a: EmailAccount): EmailAccountView {
+    const cfg = safeJson<Record<string, unknown>>(a.provider_config, {});
+    for (const k of SECRET_KEYS) if (typeof cfg[k] === "string" && cfg[k]) cfg[k] = MASKED_SECRET;
+    // A provider that cannot register (bad config, unreadable password) needs
+    // attention even on a receive-only account.
+    const registered = this.providers.has(a.id) || this.registerAccountProvider(a.id).ok;
+    const status = !registered ? "needs_attention" : cfg.read_only === true ? "read_only" : "ok";
+    return { ...a, provider_config: JSON.stringify(cfg), status };
   }
 
   /**
@@ -100,10 +245,12 @@ export class CommsService {
     const account = this.getAccount(accountId);
     if (!account) return { ok: false, reason: "Account not found" };
 
-    const rawConfig = (() => {
-      try { return JSON.parse(account.provider_config || "{}") as Record<string, unknown>; }
-      catch { return {}; }
-    })();
+    // Drop any previously-registered provider first: if this attempt fails
+    // below, the account must stop looking "ok" (providers.has(id)) on a
+    // config that no longer works. Success paths re-add it below.
+    this.unregisterProvider(accountId);
+
+    const rawConfig = safeJson<Record<string, unknown>>(account.provider_config, {});
 
     if (account.provider === "gmail") {
       if (!this.googleAuth) return { ok: false, reason: "Google OAuth not configured (set GOOGLE_CLIENT_ID/GOOGLE_CLIENT_SECRET)" };
@@ -121,7 +268,8 @@ export class CommsService {
     }
 
     if (account.provider === "imap_smtp") {
-      const cfg = rawConfig as unknown as ImapSmtpConfig;
+      const cfg = this.openImapConfig(account);
+      if (cfg.pass_unreadable) return { ok: false, reason: UNREADABLE_MAIL_PASSWORD };
       if (!cfg.imap_host || !cfg.smtp_host || !cfg.user || !cfg.pass) {
         return { ok: false, reason: "Incomplete IMAP/SMTP config (imap_host, smtp_host, user, pass required)" };
       }
@@ -192,11 +340,10 @@ export class CommsService {
     // (agents pass "" for "none"; ?? wouldn't catch it → invalid FK value).
     const accountId = (input.account_id || this.getDefaultAccountId()) || null;
 
-    const comm: Communication = {
+    return this.insertComm({
       id,
       channel: input.channel ?? "email",
       direction: input.direction ?? "outbound",
-      status: "draft",
       subject: input.subject ?? "",
       body: input.body ?? "",
       body_html: sanitizeUserHtml(input.body_html ?? ""),
@@ -208,6 +355,35 @@ export class CommsService {
       recipients_to: recipientsTo,
       recipients_cc: input.recipients_cc ?? "",
       recipients_bcc: input.recipients_bcc ?? "",
+      created_at: now,
+      updated_at: now,
+    });
+  }
+
+  /**
+   * Insert one communications row. Every column not given takes the default a
+   * fresh outbound email draft has (thread_id defaults to the row's own id,
+   * timestamps to now). Returns the row as stored, keys in column order.
+   */
+  private insertComm(fields: Partial<Communication>): Communication {
+    const now = isoNow();
+    const id = fields.id ?? newId();
+    const comm: Communication = {
+      id,
+      channel: "email",
+      direction: "outbound",
+      status: "draft",
+      subject: "",
+      body: "",
+      body_html: "",
+      contact_id: null,
+      task_id: null,
+      account_id: null,
+      thread_id: id,
+      in_reply_to: "",
+      recipients_to: "",
+      recipients_cc: "",
+      recipients_bcc: "",
       gmail_message_id: "",
       gmail_thread_id: "",
       scheduled_at: null,
@@ -216,30 +392,83 @@ export class CommsService {
       metadata: "{}",
       created_at: now,
       updated_at: now,
+      ...fields,
     };
 
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
-
+    this.db.prepare(INSERT_COMM_SQL).run(...COMM_COLUMNS.map((c) => comm[c]));
     return comm;
+  }
+
+  /**
+   * The send lifecycle shared by every channel: mark the row 'sending', run the
+   * provider call, then either mark it 'sent' (recording the provider's
+   * message/thread ids when it returns them), emit contact.interaction and
+   * return the fresh row — or mark it 'failed' with the error message, log and
+   * rethrow.
+   */
+  private async withSendLifecycle(
+    comm: Communication,
+    label: string,
+    send: () => Promise<{
+      providerIds?: { messageId: string; threadId: string };
+      interaction: { type: string; summary: string };
+      logMessage: string;
+    }>,
+  ): Promise<Communication> {
+    const id = comm.id;
+    this.db
+      .prepare("UPDATE communications SET status = 'sending', updated_at = ? WHERE id = ?")
+      .run(isoNow(), id);
+
+    try {
+      const { providerIds, interaction, logMessage } = await send();
+
+      const now = isoNow();
+      if (providerIds) {
+        this.db
+          .prepare(
+            `UPDATE communications
+             SET status = 'sent', sent_at = ?, gmail_message_id = ?, gmail_thread_id = ?, error_message = '', updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(now, providerIds.messageId, providerIds.threadId, now, id);
+      } else {
+        this.db
+          .prepare(
+            `UPDATE communications
+             SET status = 'sent', sent_at = ?, error_message = '', updated_at = ?
+             WHERE id = ?`,
+          )
+          .run(now, now, id);
+      }
+
+      if (comm.contact_id) {
+        await this.events.emit("contact.interaction", {
+          contactId: comm.contact_id,
+          ...interaction,
+        });
+      }
+
+      log.info(logMessage);
+      return this.getById(id)!;
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      this.db
+        .prepare(
+          "UPDATE communications SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
+        )
+        .run(errorMsg, isoNow(), id);
+
+      log.error(`${label} send failed: ${id}`, err);
+      throw err;
+    }
+  }
+
+  /** The provider for an account, or the standard "none configured" error. */
+  private requireProvider(accountId?: string | null): EmailProvider {
+    const provider = this.getProvider(accountId);
+    if (!provider) throw new Error(NO_EMAIL_PROVIDER);
+    return provider;
   }
 
   // ── Update ──────────────────────────────────────────
@@ -304,18 +533,8 @@ export class CommsService {
       return null;
     }
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    for (const [key, value] of Object.entries(changes)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        // Sanitize HTML at the only edit gate so we can't store raw scripts.
-        // body is plain text; only body_html goes through the sanitizer.
-        params.push(key === "body_html" ? sanitizeUserHtml(String(value)) : value);
-      }
-    }
-
+    // COMM_PATCH is the allow-list: a key outside it never reaches the SQL.
+    const { sets, params } = buildPatch(changes, COMM_PATCH);
     if (sets.length === 0) return existing;
 
     const now = isoNow();
@@ -524,6 +743,53 @@ export class CommsService {
       .all(threadId) as Communication[];
   }
 
+  /** A thread with each message's contact name (empty when unknown), for the
+   *  dashboard's thread view. */
+  getThreadWithContactNames(threadId: string): Array<Communication & { contact_name: string }> {
+    const messages = this.getThread(threadId);
+    const contactIds = [...new Set(messages.map((m) => m.contact_id).filter((id): id is string => !!id))];
+    const names = new Map<string, string>();
+    if (contactIds.length > 0) {
+      try {
+        const rows = this.db
+          .prepare(`SELECT id, name FROM contacts WHERE id IN (${contactIds.map(() => "?").join(",")})`)
+          .all(...contactIds) as { id: string; name: string }[];
+        for (const row of rows) names.set(row.id, row.name);
+      } catch { /* contacts table may not exist */ }
+    }
+    return messages.map((m) => ({ ...m, contact_name: (m.contact_id && names.get(m.contact_id)) || "" }));
+  }
+
+  /** The dashboard's search over stored communications (not the mailbox —
+   *  that is searchInbox): subject/body/recipients text, plus exact filters. */
+  searchStored(filters: { q?: string; channel?: string; status?: string; direction?: string; limit?: number }): Array<{
+    id: string; channel: string; subject: string; direction: string; status: string;
+    recipients_to: string; contact_name: string; updated_at: string;
+  }> {
+    const conditions: string[] = [];
+    const params: string[] = [];
+    const q = filters.q?.trim() ?? "";
+    if (q) {
+      const like = `%${q}%`;
+      conditions.push("(c.subject LIKE ? OR c.body LIKE ? OR c.recipients_to LIKE ?)");
+      params.push(like, like, like);
+    }
+    if (filters.channel)   { conditions.push("c.channel = ?");   params.push(filters.channel); }
+    if (filters.status)    { conditions.push("c.status = ?");    params.push(filters.status); }
+    if (filters.direction) { conditions.push("c.direction = ?"); params.push(filters.direction); }
+
+    const where = conditions.length ? "WHERE " + conditions.join(" AND ") : "";
+    return this.db.prepare(
+      `SELECT c.id, c.channel, c.subject, c.direction, c.status, c.recipients_to,
+              COALESCE(ct.name, '') as contact_name,
+              COALESCE(c.sent_at, c.updated_at) as updated_at
+       FROM communications c
+       LEFT JOIN contacts ct ON ct.id = c.contact_id
+       ${where}
+       ORDER BY c.updated_at DESC LIMIT ?`,
+    ).all(...params, Math.min(filters.limit || 20, 50)) as ReturnType<CommsService["searchStored"]>;
+  }
+
   // ── Send Email ──────────────────────────────────────
 
   async sendEmail(id: string): Promise<Communication> {
@@ -535,16 +801,10 @@ export class CommsService {
     }
     if (!comm.recipients_to) throw new Error("No recipients specified");
 
-    const provider = this.getProvider(comm.account_id);
-    if (!provider) throw new Error("No email provider configured. Add an email account or authenticate with Google first.");
+    const provider = this.requireProvider(comm.account_id);
     if (!provider.capabilities.send) throw new Error(`Provider ${provider.name} does not support sending`);
 
-    // Mark as sending
-    this.db
-      .prepare("UPDATE communications SET status = 'sending', updated_at = ? WHERE id = ?")
-      .run(isoNow(), id);
-
-    try {
+    return this.withSendLifecycle(comm, "Email", async () => {
       const meta = parseMetadata(comm.metadata);
       const mimeReplyTo = meta.reply_to_message_id || undefined;
       const attachments = this.getAttachments(id);
@@ -565,36 +825,12 @@ export class CommsService {
         })),
       });
 
-      const now = isoNow();
-      this.db
-        .prepare(
-          `UPDATE communications
-           SET status = 'sent', sent_at = ?, gmail_message_id = ?, gmail_thread_id = ?, error_message = '', updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(now, result.messageId, result.threadId, now, id);
-
-      if (comm.contact_id) {
-        await this.events.emit("contact.interaction", {
-          contactId: comm.contact_id,
-          type: "email",
-          summary: `Sent: ${comm.subject}`,
-        });
-      }
-
-      log.info(`Email sent via ${provider.name}: ${id}`);
-      return this.getById(id)!;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.db
-        .prepare(
-          "UPDATE communications SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
-        )
-        .run(errorMsg, isoNow(), id);
-
-      log.error(`Email send failed: ${id}`, err);
-      throw err;
-    }
+      return {
+        providerIds: { messageId: result.messageId, threadId: result.threadId },
+        interaction: { type: "email", summary: `Sent: ${comm.subject}` },
+        logMessage: `Email sent via ${provider.name}: ${id}`,
+      };
+    });
   }
 
   // ── Send WhatsApp ──────────────────────────────────
@@ -614,60 +850,30 @@ export class CommsService {
     if (!waProvider?.isReady()) throw new Error("WhatsApp provider not connected. Check WHATSAPP_ENABLED and QR pairing.");
     if (!waProvider.sendTo) throw new Error("WhatsApp provider does not support sendTo");
 
-    // Mark as sending
-    this.db
-      .prepare("UPDATE communications SET status = 'sending', updated_at = ? WHERE id = ?")
-      .run(isoNow(), id);
-
-    try {
+    return this.withSendLifecycle(comm, "WhatsApp", async () => {
       // Build JID from phone number (strip spaces/dashes, ensure @s.whatsapp.net)
       const phone = comm.recipients_to.replace(/[\s\-\+\(\)]/g, "");
       const jid = phone.includes("@") ? phone : `${phone}@s.whatsapp.net`;
 
-      const success = await waProvider.sendTo(jid, {
+      // sendTo was checked above; the narrowing does not reach into this closure.
+      const success = await waProvider.sendTo!(jid, {
         title: comm.subject || "",
         body: comm.body || "",
       });
 
       if (!success) throw new Error("WhatsApp provider returned false — message not delivered");
 
-      const now = isoNow();
-      this.db
-        .prepare(
-          `UPDATE communications
-           SET status = 'sent', sent_at = ?, error_message = '', updated_at = ?
-           WHERE id = ?`,
-        )
-        .run(now, now, id);
-
-      if (comm.contact_id) {
-        await this.events.emit("contact.interaction", {
-          contactId: comm.contact_id,
-          type: "whatsapp",
-          summary: `WhatsApp: ${(comm.body || "").slice(0, 80)}`,
-        });
-      }
-
-      log.info(`WhatsApp sent: ${id} → ${jid}`);
-      return this.getById(id)!;
-    } catch (err) {
-      const errorMsg = err instanceof Error ? err.message : String(err);
-      this.db
-        .prepare(
-          "UPDATE communications SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?",
-        )
-        .run(errorMsg, isoNow(), id);
-
-      log.error(`WhatsApp send failed: ${id}`, err);
-      throw err;
-    }
+      return {
+        interaction: { type: "whatsapp", summary: `WhatsApp: ${(comm.body || "").slice(0, 80)}` },
+        logMessage: `WhatsApp sent: ${id} → ${jid}`,
+      };
+    });
   }
 
   // ── Search Inbox ──────────────────────────────────
 
   async searchInbox(query: string, maxResults = 10, accountId?: string): Promise<InboxMessage[]> {
-    const provider = this.getProvider(accountId);
-    if (!provider) throw new Error("No email provider configured. Add an email account or authenticate with Google first.");
+    const provider = this.requireProvider(accountId);
     if (!provider.capabilities.searchInbox) throw new Error(`Provider ${provider.name} does not support inbox search`);
 
     return provider.searchInbox(query, maxResults);
@@ -676,8 +882,7 @@ export class CommsService {
   // ── Fetch Email ───────────────────────────────────
 
   async fetchEmail(gmailMessageId: string, accountId?: string): Promise<Communication> {
-    const provider = this.getProvider(accountId);
-    if (!provider) throw new Error("No email provider configured. Add an email account or authenticate with Google first.");
+    const provider = this.requireProvider(accountId);
     if (!provider.capabilities.fetchEmail) throw new Error(`Provider ${provider.name} does not support fetching emails`);
 
     // Dedup PER ACCOUNT: the same Message-ID legitimately exists once per
@@ -701,63 +906,63 @@ export class CommsService {
       if (contact) contactId = contact.id;
     }
 
-    const now = isoNow();
-    const id = newId();
+    // Same threading rule as ingestInboundRaw (one shared helper): a provider
+    // that hands us In-Reply-To/References — today that's the IMAP/SMTP
+    // provider — gets its inbound rows threaded onto the mail they're
+    // replying to, instead of every fetch starting a fresh thread. The Gmail
+    // provider doesn't return rawHeaders yet, so this is a no-op for it and
+    // gmail_thread_id (set below) keeps doing that job as before. Header
+    // values are lower-cased and string-coerced here regardless of what the
+    // provider handed back, so metadata.raw_headers is ready to match on
+    // straight away and a non-string value can't throw further down.
+    const rawHeaders: Record<string, string> = {};
+    for (const [k, v] of Object.entries(fetched.rawHeaders ?? {})) rawHeaders[k.toLowerCase()] = String(v ?? "");
+    const referencedThreadId = this.findThreadIdFromReferences(rawHeaders);
+
     const meta = JSON.stringify({
       from: fetched.from,
       from_name: fetched.fromName,
       message_id_header: fetched.messageIdHeader,
+      // Only stored when the provider actually gave us something — keeps the
+      // metadata shape unchanged for providers (Gmail, Resend today) that
+      // don't return rawHeaders at all.
+      ...(Object.keys(rawHeaders).length ? { raw_headers: rawHeaders } : {}),
     });
 
-    const comm: Communication = {
-      id,
-      channel: "email",
+    const comm = this.insertComm({
       direction: "inbound",
       status: "archived",
       subject: fetched.subject,
       body: fetched.body,
       body_html: sanitizeUserHtml(fetched.bodyHtml),
       contact_id: contactId,
-      task_id: null,
       account_id: accountId ?? this.getDefaultAccountId(),
-      thread_id: id,
-      in_reply_to: "",
       recipients_to: fetched.to,
       recipients_cc: fetched.cc,
-      recipients_bcc: "",
       gmail_message_id: gmailMessageId,
       gmail_thread_id: fetched.threadId,
-      scheduled_at: null,
       sent_at: fetched.date,
-      error_message: "",
       metadata: meta,
-      created_at: now,
-      updated_at: now,
-    };
+      ...(referencedThreadId ? { thread_id: referencedThreadId } : {}),
+    });
 
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
-
-    log.info(`Fetched email: ${gmailMessageId} → ${id} (from: ${fetched.from})`);
+    log.info(`Fetched email: ${gmailMessageId} → ${comm.id} (from: ${fetched.from})`);
     return comm;
+  }
+
+  /** Ingest the most recent inbox messages of one account right away (the cron fetcher does the rest). */
+  async pullRecent(accountId: string, limit = 20): Promise<number> {
+    const msgs = await this.searchInbox("", limit, accountId);
+    let n = 0;
+    for (const m of msgs) {
+      try {
+        await this.fetchEmail(m.gmail_id, accountId);
+        n++;
+      } catch (err) {
+        log.warn(`Comms: pullRecent ${accountId}/${m.gmail_id}: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
+    return n;
   }
 
   // ── Ingest Inbound (generic — webhook, IMAP fetcher, any source) ───
@@ -809,7 +1014,6 @@ export class CommsService {
     }
 
     const now = isoNow();
-    const id = newId();
     const accountId = input.account_id ?? this.getDefaultAccountId() ?? null;
     const meta = JSON.stringify({
       from: input.from,
@@ -819,52 +1023,31 @@ export class CommsService {
       raw_headers: input.raw_headers ?? {},
     });
 
-    const comm: Communication = {
-      id,
-      channel: "email",
+    // Thread this inbound mail onto an existing row when In-Reply-To/References
+    // point at a message we already have (References newest-first, then
+    // In-Reply-To) — otherwise it stays its own thread root, same as before.
+    // This matters beyond dedup: it is what lets the auto-send tool see a
+    // client's reply as belonging to the thread it already answered.
+    const referencedThreadId = this.findThreadIdFromReferences(input.raw_headers);
+
+    const comm = this.insertComm({
       direction: "inbound",
       status: "archived",
       subject: input.subject ?? "(no subject)",
       body: input.body ?? "",
       body_html: sanitizeUserHtml(input.body_html ?? ""),
       contact_id: contactId,
-      task_id: null,
       account_id: accountId,
-      thread_id: id,
-      in_reply_to: "",
       recipients_to: input.to ?? "",
       recipients_cc: input.cc ?? "",
-      recipients_bcc: "",
       gmail_message_id: dedupKey,
-      gmail_thread_id: "",
-      scheduled_at: null,
       sent_at: input.received_at ?? now,
-      error_message: "",
       metadata: meta,
       created_at: now,
       updated_at: now,
-    };
-
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
+      ...(referencedThreadId ? { thread_id: referencedThreadId } : {}),
+    });
+    const id = comm.id;
 
     log.info(`Comms: ingested inbound ${sourceTag} email from ${input.from} → ${id}`);
 
@@ -933,7 +1116,7 @@ export class CommsService {
     let body = options?.body ?? "";
     if (includeQuote && parent.body) {
       const senderName = parentMeta.from_name || parentMeta.from || "sender";
-      const dateStr = parent.sent_at?.split("T")[0] ?? parent.created_at.split("T")[0];
+      const dateStr = (parent.sent_at ? localDateOf(parent.sent_at) : undefined) ?? localDateOf(parent.created_at);
       const quoted = quoteBody(parent.body, senderName, dateStr);
       body = body ? `${body}\n\n${quoted}` : quoted;
     }
@@ -944,60 +1127,121 @@ export class CommsService {
       quoted_text: parent.body?.slice(0, 2000) || "",
     });
 
-    const now = isoNow();
-    const id = newId();
-
     // Inherit thread and gmail threading
-    const threadId = parent.thread_id || parent.id;
-
-    const comm: Communication = {
-      id,
-      channel: "email",
-      direction: "outbound",
-      status: "draft",
+    return this.insertComm({
       subject,
       body,
-      body_html: "",
       contact_id: parent.contact_id,
       task_id: parent.task_id,
       account_id: parent.account_id,
-      thread_id: threadId,
+      thread_id: parent.thread_id || parent.id,
       in_reply_to: parent.id,
       recipients_to: recipientsTo,
       recipients_cc: recipientsCc,
-      recipients_bcc: "",
-      gmail_message_id: "",
       gmail_thread_id: parent.gmail_thread_id,
-      scheduled_at: null,
-      sent_at: null,
-      error_message: "",
       metadata: meta,
-      created_at: now,
-      updated_at: now,
+    });
+  }
+
+  // ── Auto-send (kernel_comms_request_missing_info) ────
+
+  /** True when any mail of this thread was already sent by the office on its own. */
+  threadHasAutoSend(threadKey: string): boolean {
+    return !!this.db.prepare(
+      `SELECT 1 FROM communications
+       WHERE (gmail_thread_id = ? OR thread_id = ? OR id = ?)
+         AND json_extract(metadata,'$.auto_sent') = 1 LIMIT 1`,
+    ).get(threadKey, threadKey, threadKey);
+  }
+
+  markAutoSent(id: string): void {
+    this.db.prepare(`UPDATE communications SET metadata = json_set(COALESCE(metadata,'{}'), '$.auto_sent', 1) WHERE id = ?`).run(id);
+  }
+
+  getSetting(key: string): string {
+    const row = this.db.prepare("SELECT value FROM app_settings WHERE key = ?").get(key) as { value: string } | undefined;
+    return row?.value ?? "";
+  }
+
+  /**
+   * Conservative cross-thread cap: true when an automatic mail already went to
+   * this sender, from this account, within `days` days — even in a different
+   * thread than the one being checked now (covers a sender who opens a fresh
+   * thread instead of replying to the one that already got an answer).
+   */
+  recentAutoSendToSender(accountId: string | null, senderEmail: string, days = 30): boolean {
+    const address = (senderEmail || "").trim();
+    if (!address) return false;
+    const cutoff = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    return !!this.db
+      .prepare(
+        `SELECT 1 FROM communications
+         WHERE json_extract(metadata,'$.auto_sent') = 1
+           AND account_id IS ?
+           AND recipients_to LIKE '%' || ? || '%'
+           AND created_at >= ?
+         LIMIT 1`,
+      )
+      .get(accountId, address, cutoff);
+  }
+
+  /**
+   * Look up the thread root for an inbound mail's In-Reply-To/References
+   * headers. One shared path for every ingestion route (webhook, IMAP fetch,
+   * anything else that lands raw headers) — both `ingestInboundRaw` and
+   * `fetchEmail` call this, so there is exactly one place threading can go
+   * wrong.
+   *
+   * Matches candidates against:
+   *  - `gmail_message_id`, in both the `extid:<id>` dedup-key form
+   *    (inbound rows) and the bare provider-returned form (outbound rows —
+   *    our own auto-reply is stored under its raw Message-ID, no `extid:`
+   *    prefix, so a client replying only to that Message-ID still threads).
+   *  - the raw header copy in `metadata.message_id_header`.
+   *
+   * References are checked newest-first (the header lists oldest → newest,
+   * so the immediate parent is last), then In-Reply-To. Returns null when
+   * nothing matches, so the caller keeps today's "own id is the thread root"
+   * default.
+   *
+   * Header values are coerced with String() before parsing: `rawHeaders` is
+   * typed as `Record<string, string>` but an untrusted webhook body can hand
+   * us anything JSON allows (e.g. References as an array) — this must not
+   * throw.
+   */
+  private findThreadIdFromReferences(rawHeaders: Record<string, unknown> | undefined): string | null {
+    if (!rawHeaders) return null;
+    const lower: Record<string, string> = {};
+    for (const [k, v] of Object.entries(rawHeaders)) lower[k.toLowerCase()] = String(v ?? "");
+
+    const extractIds = (raw?: string): string[] => {
+      if (!raw) return [];
+      const matches = raw.match(/<[^<>]+>/g);
+      return matches ?? [raw.trim()].filter(Boolean);
     };
 
-    this.db
-      .prepare(
-        `INSERT INTO communications
-         (id, channel, direction, status, subject, body, body_html,
-          contact_id, task_id, account_id, thread_id, in_reply_to,
-          recipients_to, recipients_cc, recipients_bcc,
-          gmail_message_id, gmail_thread_id,
-          scheduled_at, sent_at, error_message, metadata,
-          created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .run(
-        comm.id, comm.channel, comm.direction, comm.status,
-        comm.subject, comm.body, comm.body_html,
-        comm.contact_id, comm.task_id, comm.account_id, comm.thread_id, comm.in_reply_to,
-        comm.recipients_to, comm.recipients_cc, comm.recipients_bcc,
-        comm.gmail_message_id, comm.gmail_thread_id,
-        comm.scheduled_at, comm.sent_at, comm.error_message, comm.metadata,
-        comm.created_at, comm.updated_at,
-      );
+    const references = extractIds(lower["references"]);
+    const inReplyTo = extractIds(lower["in-reply-to"]);
+    const candidates = [...references.slice().reverse(), ...inReplyTo];
 
-    return comm;
+    for (const candidate of candidates) {
+      const bare = candidate.replace(/^<|>$/g, "").trim();
+      // All digits is an IMAP UID shape (how fetched rows key gmail_message_id),
+      // never a real Message-ID: a crafted header must not thread onto that row.
+      if (!bare || /^\d+$/.test(bare)) continue;
+      const found = this.db
+        .prepare(
+          `SELECT thread_id, id FROM communications
+           WHERE gmail_message_id IN (?, ?, ?, ?)
+              OR json_extract(metadata,'$.message_id_header') IN (?, ?)
+           LIMIT 1`,
+        )
+        .get(`extid:${bare}`, `extid:<${bare}>`, bare, `<${bare}>`, bare, `<${bare}>`) as
+        | { thread_id: string; id: string }
+        | undefined;
+      if (found) return found.thread_id || found.id;
+    }
+    return null;
   }
 
   // ── Email Accounts ─────────────────────────────────
@@ -1032,7 +1276,7 @@ export class CommsService {
       provider: input.provider ?? "gmail",
       company: input.company ?? "",
       signature: input.signature ?? "",
-      provider_config: JSON.stringify(input.provider_config ?? {}),
+      provider_config: JSON.stringify(this.sealConfig(input.provider ?? "gmail", input.provider_config ?? {})),
       is_default: isDefault,
       created_at: now,
       updated_at: now,
@@ -1078,7 +1322,7 @@ export class CommsService {
 
   getAccountByEmail(email: string): EmailAccount | null {
     return (this.db
-      .prepare("SELECT * FROM email_accounts WHERE email = ?")
+      .prepare("SELECT * FROM email_accounts WHERE lower(email) = lower(?) ORDER BY created_at ASC LIMIT 1")
       .get(email) as EmailAccount | undefined) ?? null;
   }
 
@@ -1094,16 +1338,30 @@ export class CommsService {
       this.db.prepare("UPDATE email_accounts SET is_default = 0").run();
     }
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    for (const [key, value] of Object.entries(changes)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        params.push(value);
+    if (typeof changes.provider_config === "string") {
+      const incoming = safeJson<Record<string, unknown>>(changes.provider_config, {});
+      const stored = safeJson<Record<string, unknown>>(existing.provider_config, {});
+      for (const k of SECRET_KEYS) {
+        if (incoming[k] === MASKED_SECRET || incoming[k] === "" || incoming[k] === undefined) {
+          if (stored[k] !== undefined) {
+            incoming[k] = stored[k]; // already sealed as stored — do not seal twice
+          } else if (incoming[k] === MASKED_SECRET) {
+            // The mask arrived but nothing is actually stored (e.g. it was
+            // cleared, or never set) — drop it instead of sealing the literal
+            // mask string as if it were the real secret.
+            delete incoming[k];
+          }
+        }
       }
+      // The /mail/accounts form rebuilds the config without read_only; a
+      // receive-only mailbox must not turn "ok" just because it was edited.
+      // An explicit value (connect sends true/false) still wins.
+      if (!("read_only" in incoming) && stored.read_only !== undefined) incoming.read_only = stored.read_only;
+      changes = { ...changes, provider_config: JSON.stringify(this.sealConfig(existing.provider, incoming)) };
     }
 
+    // ACCOUNT_PATCH is the allow-list: a key outside it never reaches the SQL.
+    const { sets, params } = buildPatch(changes, ACCOUNT_PATCH);
     if (sets.length === 0) return existing;
 
     sets.push("updated_at = ?");
@@ -1188,7 +1446,10 @@ export class CommsService {
 
     if (account.provider === "imap_smtp") {
       const { ImapSmtpProvider } = await import("./providers/imap-smtp-provider.js");
-      const config = JSON.parse(account.provider_config || "{}");
+      const config = this.openImapConfig(account);
+      if (config.pass_unreadable) {
+        return { ok: false, provider: "imap_smtp", details: { imap: false, smtp: false, error: UNREADABLE_MAIL_PASSWORD } };
+      }
       const provider = new ImapSmtpProvider(config, account.email);
       const result = await provider.verify();
       return {
@@ -1299,16 +1560,8 @@ export class CommsService {
     const existing = this.getTemplate(id);
     if (!existing) return null;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    for (const [key, value] of Object.entries(changes)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        params.push(value);
-      }
-    }
-
+    // TEMPLATE_PATCH is the allow-list: a key outside it never reaches the SQL.
+    const { sets, params } = buildPatch(changes, TEMPLATE_PATCH);
     if (sets.length === 0) return existing;
 
     // Re-detect variables if subject/body changed

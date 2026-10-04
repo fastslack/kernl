@@ -20,7 +20,9 @@ import {
   newId,
   isoNow,
   log,
+  localDate,
 } from "@kernl/extension-sdk";
+import { mailLlmChat } from "./mail-llm.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,11 +92,9 @@ export class EmailAnalysisService {
     private config: KernelConfig,
   ) {}
 
-  /** LLM call via global singleton */
+  /** LLM call on the mail model (see mail-llm.ts), else the default chain. */
   private async llmChat(system: string, user: string): Promise<string> {
-    const { llm } = await import("@kernl/extension-sdk");
-    const result = await llm().chat({ system, user, caller: "email-analysis" });
-    return result.text;
+    return mailLlmChat(this.db, this.config, { system, user, caller: "email-analysis" });
   }
 
   /** Called by the scheduler — analyzes up to maxEmails unanalyzed inbound emails */
@@ -284,7 +284,7 @@ export class EmailAnalysisService {
   private async analyzeEmail(commId: string, subject: string, body: string): Promise<LlmAnalysisResult> {
     // Truncate body to ~3000 chars to save tokens
     const truncatedBody = body.length > 3000 ? body.slice(0, 3000) + "\n[...truncated]" : body;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = localDate();
 
     const systemPrompt = `You are an assistant that analyzes emails and extracts actionable items.
 Today's date is ${today}.

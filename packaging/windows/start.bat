@@ -61,6 +61,19 @@ REM before it, and an unbounded file under %LOCALAPPDATA% is its own bug.
 set "LOG_FILE=%DATA_DIR%\logs\kernl.log"
 if exist "%LOG_FILE%" move /y "%LOG_FILE%" "%LOG_FILE%.1" >nul 2>&1
 
+REM Bundled mtw-server + whatsapp-bridge (stage-payload.sh, section 2d). The
+REM kernel supervises them over named pipes (src/core/bootstrap/sidecars.ts);
+REM these turn on its side of both links. Absent from a package built without
+REM the binaries, in which case nothing changes.
+if exist "%APP_DIR%bin\mtw-server\mtw-server.exe" if exist "%APP_DIR%bin\whatsapp-bridge\whatsapp-bridge.exe" (
+  set "KERNL_BINARY_INSTALL=1"
+  set "BRIDGE_ENABLED=true"
+  set "RUST_BRIDGE_ENABLED=true"
+  set "KERNEL_URL=ws://127.0.0.1:7741/ws"
+  set "KERNL_APP_DIR=%APP_DIR%"
+  set "KERNL_DATA_DIR=%DATA_DIR%"
+)
+
 REM Foreground: run the kernel. Console window stays open so the user
 REM can see logs / Ctrl-C to stop.
 REM

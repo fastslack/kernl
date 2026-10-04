@@ -10,7 +10,7 @@
    * This is that way in: what is registered, what the kernel can reach, who
    * each repo is shared with, and how to take it back.
    */
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { rpcPost } from '$lib/api.js';
 
   type Repo = {
@@ -118,7 +118,20 @@
 
   $: unregistered = candidates.filter((c) => !c.registered);
 
-  onMount(load);
+  // `/repos#repo-<id>` — the 3D data center's rack nameplates and directory
+  // rows link here. Once the list is in, scroll that repo into view and
+  // highlight it for a moment.
+  let focusId = '';
+  async function focusFromHash(): Promise<void> {
+    const m = /^#repo-(.+)$/.exec(window.location.hash);
+    if (!m) return;
+    focusId = decodeURIComponent(m[1]);
+    await tick();
+    document.getElementById(`repo-${focusId}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    setTimeout(() => (focusId = ''), 2400);
+  }
+
+  onMount(async () => { await load(); await focusFromHash(); });
 </script>
 
 <svelte:head><title>Repos · Kernl</title></svelte:head>
@@ -232,7 +245,7 @@
   {:else}
     <ul class="rp-list">
       {#each repos as r (r.id)}
-        <li class="rp-item">
+        <li class="rp-item" id={`repo-${r.id}`} class:rp-focus={focusId === r.id}>
           <div class="rp-item-main">
             <div class="rp-item-top">
               <b class="rp-name">{r.name}</b>
@@ -315,6 +328,7 @@
 
   .rp-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
   .rp-item { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid var(--border-1); border-radius: 8px; }
+  .rp-item.rp-focus { border-color: var(--accent, #6366f1); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent, #6366f1) 35%, transparent); transition: box-shadow .3s, border-color .3s; }
   .rp-item-main { min-width: 0; flex: 1; }
   .rp-item-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .rp-name { font-size: 13px; color: var(--text-1); }

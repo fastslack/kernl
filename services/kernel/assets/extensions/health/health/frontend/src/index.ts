@@ -9,16 +9,6 @@
  */
 import HealthPage from "./HealthPage.svelte";
 import WellnessPage from "./WellnessPage.svelte";
-import type { ExtPageContext } from "$shared/types";
+import { createMount } from "$shared/mount";
 
-export type { ExtPageContext };
-
-export function mount(target: HTMLElement, ctx: ExtPageContext): { destroy(): void } {
-  const Component = ctx.view === "wellness" ? WellnessPage : HealthPage;
-  const page = new Component({ target, props: { ctx } });
-  return {
-    destroy() {
-      page.$destroy();
-    },
-  };
-}
+export const mount = createMount(HealthPage, { wellness: WellnessPage });

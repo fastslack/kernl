@@ -19,6 +19,13 @@ export interface EmailAccount {
   updated_at: string;
 }
 
+export type AccountStatus = "ok" | "read_only" | "needs_attention";
+
+/** An account as the dashboard may see it: secrets masked, plus its state. */
+export interface EmailAccountView extends EmailAccount {
+  status: AccountStatus;
+}
+
 export interface Communication {
   id: string;
   channel: CommChannel;
@@ -134,6 +141,9 @@ export type EmailFolder =
   | "inbox" | "sent" | "starred" | "important" | "drafts"
   | "trash" | "archived" | "snoozed" | "all";
 
+/** Gmail's inbox tabs. "primary" is whatever carries none of the other four. */
+export type EmailCategory = "primary" | "updates" | "promotions" | "social" | "forums";
+
 export interface EmailAction {
   id: string;
   gmail_id: string;
@@ -182,6 +192,9 @@ export interface EmailDetail {
   subject: string;
   snippet: string;
   body_text: string;
+  /** Sanitized HTML part; '' = the message has none; null = a Gmail row whose HTML was never fetched. */
+  body_html: string | null;
+  account_id: string;
   date: string;
   is_read: number;
   is_starred: number;
@@ -216,4 +229,6 @@ export interface EmailCounts {
   snoozed: number;
   important: number;
   attention: number;
+  /** Inbox messages per Gmail tab, with how many of them are unread. */
+  categories: Record<EmailCategory, { total: number; unread: number }>;
 }

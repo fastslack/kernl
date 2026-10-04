@@ -14,7 +14,7 @@
  *     re-ingesting an existing identifier.
  */
 
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, jsonArray } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
 import type {
   ArchiveScrapeRow,
@@ -94,9 +94,6 @@ export function isNoiseCollection(collections: string[]): boolean {
   }
   return false;
 }
-
-/** Public access for SQL builders that need the same list. */
-export const NOISE_COLLECTION_SLUGS = Array.from(NOISE_COLLECTION_BLOCKLIST);
 
 interface TitleRow {
   identifier: string;
@@ -226,6 +223,62 @@ function canonExistsSql(list?: string): string {
      WHERE cn.qid = mt.qid AND mt.qid <> ''
        AND ${IDENTIFIED_SQL}${listClause}
   )`;
+}
+
+/**
+ * Append the base catalogue conditions every read path shares: visibility,
+ * torrent availability, watchlist, collection, film/series kind, year range,
+ * language and tags. Like the canon and media clauses below, these live in
+ * one place so `list`, `countAll` and `filterByIds` can never disagree about
+ * which titles a filter selects.
+ */
+function pushBaseClauses(
+  filter: CinemaListFilter,
+  where: string[],
+  params: unknown[],
+): void {
+  if (filter.hidden !== true) where.push("t.hidden = 0");
+  if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
+  if (filter.watchlist === true) where.push("t.watchlist = 1");
+
+  if (filter.collection) {
+    // collection_json is a JSON array string; LIKE is good enough until FTS.
+    where.push("t.collection_json LIKE ?");
+    params.push(`%"${filter.collection}"%`);
+  }
+  // Films vs series. The archive files serials under the television
+  // collections, so membership is the only thing that distinguishes them.
+  if (filter.kind === "series") {
+    where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
+  } else if (filter.kind === "film") {
+    where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
+  }
+  if (filter.yearMin) {
+    where.push("t.year >= ?");
+    params.push(filter.yearMin);
+  }
+  if (filter.yearMax) {
+    where.push("t.year <= ?");
+    params.push(filter.yearMax);
+  }
+  if (filter.language) {
+    // upstream language is sometimes a 2-letter code, sometimes "English",
+    // sometimes empty. case-insensitive prefix match catches both.
+    where.push("LOWER(t.language) LIKE ?");
+    params.push(`${filter.language.toLowerCase()}%`);
+  }
+  // Tag filtering uses LIKE over the JSON array. Cheaper than json_each
+  // for single-tag lookups and avoids the JOIN overhead. Multi-tag with
+  // match='all' AND-chains; match='any' OR-chains.
+  const tagList: string[] = [];
+  if (filter.tag) tagList.push(filter.tag);
+  if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
+  if (tagList.length > 0) {
+    const matchAll = (filter.tagsMatch ?? "all") === "all";
+    const clauses = tagList.map(() => "t.subject_json LIKE ?");
+    where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
+    for (const tag of tagList) params.push(`%"${tag}"%`);
+  }
 }
 
 /**
@@ -395,14 +448,14 @@ interface RunRow {
   finished_at: string | null;
 }
 
-const PARSE_JSON_ARRAY = (raw: string): string[] => {
-  if (!raw) return [];
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed.map(String) : [];
-  } catch {
-    return [];
-  }
+const PARSE_JSON_ARRAY = (raw: string): string[] => jsonArray(raw).map(String);
+
+/** The plain cinema_ingest_runs columns updateRun overwrites (counters are added separately). */
+const RUN_PATCH: Record<string, PatchColumn> = {
+  cursor: "text",
+  status: "text",
+  error: "text",
+  finished_at: "text",
 };
 
 /** Coerce a Solr/scrape multi-valued field that may arrive as `T | T[] | undefined`. */
@@ -527,42 +580,7 @@ export class CinemaService {
     if (ids.length === 0) return [];
     const where: string[] = ["t.deleted_at IS NULL", `t.identifier IN (${ids.map(() => "?").join(",")})`];
     const params: unknown[] = [...ids];
-
-    if (filter.hidden !== true) where.push("t.hidden = 0");
-    if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
-    if (filter.watchlist === true) where.push("t.watchlist = 1");
-    if (filter.collection) {
-      where.push("t.collection_json LIKE ?");
-      params.push(`%"${filter.collection}"%`);
-    }
-    // Films vs series. The archive files serials under the television
-    // collections, so membership is the only thing that distinguishes them.
-    if (filter.kind === "series") {
-      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
-    } else if (filter.kind === "film") {
-      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
-    }
-    if (filter.yearMin) {
-      where.push("t.year >= ?");
-      params.push(filter.yearMin);
-    }
-    if (filter.yearMax) {
-      where.push("t.year <= ?");
-      params.push(filter.yearMax);
-    }
-    if (filter.language) {
-      where.push("LOWER(t.language) LIKE ?");
-      params.push(`${filter.language.toLowerCase()}%`);
-    }
-    const tagList: string[] = [];
-    if (filter.tag) tagList.push(filter.tag);
-    if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
-    if (tagList.length > 0) {
-      const matchAll = (filter.tagsMatch ?? "all") === "all";
-      const clauses = tagList.map(() => "t.subject_json LIKE ?");
-      where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
-      for (const tag of tagList) params.push(`%"${tag}"%`);
-    }
+    pushBaseClauses(filter, where, params);
 
     if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
     pushCanonClauses(filter, where, params);
@@ -646,49 +664,7 @@ export class CinemaService {
   list(filter: CinemaListFilter = {}): CinemaTitle[] {
     const where: string[] = ["t.deleted_at IS NULL"];
     const params: unknown[] = [];
-
-    if (filter.hidden !== true) where.push("t.hidden = 0");
-    if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
-    if (filter.watchlist === true) where.push("t.watchlist = 1");
-
-    if (filter.collection) {
-      // collection_json is a JSON array string; LIKE is good enough until FTS.
-      where.push("t.collection_json LIKE ?");
-      params.push(`%"${filter.collection}"%`);
-    }
-    // Films vs series. The archive files serials under the television
-    // collections, so membership is the only thing that distinguishes them.
-    if (filter.kind === "series") {
-      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
-    } else if (filter.kind === "film") {
-      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
-    }
-    if (filter.yearMin) {
-      where.push("t.year >= ?");
-      params.push(filter.yearMin);
-    }
-    if (filter.yearMax) {
-      where.push("t.year <= ?");
-      params.push(filter.yearMax);
-    }
-    if (filter.language) {
-      // upstream language is sometimes a 2-letter code, sometimes "English",
-      // sometimes empty. case-insensitive prefix match catches both.
-      where.push("LOWER(t.language) LIKE ?");
-      params.push(`${filter.language.toLowerCase()}%`);
-    }
-    // Tag filtering uses LIKE over the JSON array. Cheaper than json_each
-    // for single-tag lookups and avoids the JOIN overhead. Multi-tag with
-    // match='all' AND-chains; match='any' OR-chains.
-    const tagList: string[] = [];
-    if (filter.tag) tagList.push(filter.tag);
-    if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
-    if (tagList.length > 0) {
-      const matchAll = (filter.tagsMatch ?? "all") === "all";
-      const clauses = tagList.map(() => "t.subject_json LIKE ?");
-      where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
-      for (const tag of tagList) params.push(`%"${tag}"%`);
-    }
+    pushBaseClauses(filter, where, params);
 
     if (filter.identifiedOnly) where.push(IDENTIFIED_SQL);
     pushCanonClauses(filter, where, params);
@@ -774,41 +750,7 @@ export class CinemaService {
   countAll(filter: CinemaListFilter = {}): number {
     const where: string[] = ["t.deleted_at IS NULL"];
     const params: unknown[] = [];
-    if (filter.hidden !== true) where.push("t.hidden = 0");
-    if (filter.hasTorrent !== false) where.push("t.has_torrent = 1");
-    if (filter.watchlist === true) where.push("t.watchlist = 1");
-    if (filter.collection) {
-      where.push("t.collection_json LIKE ?");
-      params.push(`%"${filter.collection}"%`);
-    }
-    // Films vs series. The archive files serials under the television
-    // collections, so membership is the only thing that distinguishes them.
-    if (filter.kind === "series") {
-      where.push("(t.collection_json LIKE '%\"classic_tv\"%' OR t.collection_json LIKE '%\"television\"%')");
-    } else if (filter.kind === "film") {
-      where.push("t.collection_json NOT LIKE '%\"classic_tv\"%' AND t.collection_json NOT LIKE '%\"television\"%'");
-    }
-    if (filter.yearMin) {
-      where.push("t.year >= ?");
-      params.push(filter.yearMin);
-    }
-    if (filter.yearMax) {
-      where.push("t.year <= ?");
-      params.push(filter.yearMax);
-    }
-    if (filter.language) {
-      where.push("LOWER(t.language) LIKE ?");
-      params.push(`${filter.language.toLowerCase()}%`);
-    }
-    const tagList: string[] = [];
-    if (filter.tag) tagList.push(filter.tag);
-    if (filter.tags && filter.tags.length > 0) tagList.push(...filter.tags);
-    if (tagList.length > 0) {
-      const matchAll = (filter.tagsMatch ?? "all") === "all";
-      const clauses = tagList.map(() => "t.subject_json LIKE ?");
-      where.push(`(${clauses.join(matchAll ? " AND " : " OR ")})`);
-      for (const tag of tagList) params.push(`%"${tag}"%`);
-    }
+    pushBaseClauses(filter, where, params);
     // The canonical join is only paid for when the filter actually asks about
     // identity — a count is otherwise a pure scan over cinema_titles and there
     // is no reason to make it join two more tables.
@@ -1110,15 +1052,11 @@ export class CinemaService {
   }
 
   updateRun(id: string, patch: IngestRunUpdate): void {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    if (patch.cursor !== undefined) { sets.push("cursor = ?"); params.push(patch.cursor); }
+    const { sets, params } = buildPatch(patch, RUN_PATCH);
+    // Counters are deltas: they add to the stored value instead of replacing it.
     if (patch.fetched !== undefined) { sets.push("fetched = fetched + ?"); params.push(patch.fetched); }
     if (patch.upserted !== undefined) { sets.push("upserted = upserted + ?"); params.push(patch.upserted); }
     if (patch.embedded !== undefined) { sets.push("embedded = embedded + ?"); params.push(patch.embedded); }
-    if (patch.status !== undefined) { sets.push("status = ?"); params.push(patch.status); }
-    if (patch.error !== undefined) { sets.push("error = ?"); params.push(patch.error); }
-    if (patch.finished_at !== undefined) { sets.push("finished_at = ?"); params.push(patch.finished_at); }
     if (sets.length === 0) return;
     params.push(id);
     this.db.prepare(`UPDATE cinema_ingest_runs SET ${sets.join(", ")} WHERE id = ?`).run(...params);
@@ -1221,10 +1159,8 @@ export class CinemaService {
 
     for (const r of rows) {
       titlesScanned++;
-      let parsed: unknown;
-      try { parsed = JSON.parse(r.subject_json); } catch { continue; }
-      if (!Array.isArray(parsed)) continue;
-      for (const raw of parsed) {
+      // Malformed or non-array subjects contribute nothing.
+      for (const raw of jsonArray(r.subject_json)) {
         if (typeof raw !== "string") continue;
         const trimmed = raw.trim();
         if (trimmed.length < 2) continue;
@@ -1348,16 +1284,6 @@ export class CinemaService {
       this.globalMean = row?.m ?? 3.5;
     }
     return this.globalMean;
-  }
-  private bayesianScore(minVotes = 5): string {
-    if (this.globalMean === null) {
-      const row = this.db
-        .prepare("SELECT AVG(avg_rating) AS m FROM cinema_titles WHERE num_reviews > 0")
-        .get() as { m: number | null } | undefined;
-      this.globalMean = row?.m ?? 3.5;
-    }
-    const C = this.globalMean;
-    return `(((t.num_reviews * t.avg_rating) + (${minVotes} * ${C})) / (t.num_reviews + ${minVotes}))`;
   }
 
   /**

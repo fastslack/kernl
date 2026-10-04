@@ -50,6 +50,16 @@ describe("office-kit", () => {
 
   afterEach(() => db.close());
 
+  it("builds a new office on the lot the operator picked", () => {
+    const def = officeDefinitionFromJson({
+      name: "On The Lot", lot: "2,2",
+      agents: [{ name: "Lead", role: "manager", prompt: "You lead." }],
+    });
+    const report = materializeOffice(db, service, def);
+    const row = db.prepare("SELECT lot_id FROM agent_flows WHERE id = ?").get(report.flowId) as { lot_id: string };
+    expect(row.lot_id).toBe("2,2");
+  });
+
   it("materializes flow + agents + chains + cron with resolved defaults", () => {
     const report = materializeOffice(db, service, fixture());
 

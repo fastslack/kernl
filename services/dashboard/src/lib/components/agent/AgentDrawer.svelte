@@ -22,11 +22,15 @@
 <script lang="ts">
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onMount } from 'svelte';
+  import { extPages } from '$lib/ext-host.js';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
   // Contenido por defecto del tab Overview. Quien monta el drawer puede
   // reemplazarlo por el suyo (el mundo 3D lo hace, para meterle sus tres
   // bloques propios en el orden que corresponde), pero no está obligado.
   import OverviewTab from './tabs/OverviewTab.svelte';
+  // Contenido por defecto del tab Configuración, igual que OverviewTab: sale
+  // entero del store. El 3D lo reemplaza para sumarle las skins.
+  import ConfigTab from './tabs/ConfigTab.svelte';
   // Sólo para el badge del tab Skills: el conteo sale del agente que el shell
   // ya tiene, no de un prop más que el padre tenga que mantener.
   import { parseAttachedSkills } from '$lib/skills.js';
@@ -34,6 +38,9 @@
   // entero, y de acá sólo salen tres helpers puros.
   import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
   import { traitsOf } from '$lib/office/office-kinds.js';
+  import ModelPicker from './ModelPicker.svelte';
+  import { readChain, primaryModelPatch } from '$lib/model-chain.js';
+  import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
 
   const dispatch = createEventDispatcher();
 
@@ -73,7 +80,7 @@
   // Vive acá; el padre lo espeja con bind: porque todavía decide el tab
   // inicial (live si el agente está corriendo, o el ?tab= del deep-link) y
   // consulta cuál está abierto cuando llega el fin de un run.
-  export let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
+  export let panelTab: 'info' | 'config' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
 
   function selectTab(tab: typeof panelTab) {
     panelTab = tab;
@@ -119,6 +126,32 @@
 
   $: agent = $detail.agent ?? listRow;
 
+  // ── Model, switched from the header chip ──────────────────────────
+  // The chip opens the same picker as Configuración (with prices) and writes
+  // the primary link of the chain; fallbacks stay as they are. Providers load
+  // on first open: N model calls are not worth making for a glance.
+  let headProviders: PickerProvider[] = [];
+  let headProvidersLoading = false;
+  function loadHeadProviders() {
+    if (headProviders.length || headProvidersLoading) return;
+    headProvidersLoading = true;
+    void loadPickerProviders().then((list) => { headProviders = list; headProvidersLoading = false; });
+  }
+  $: headChain = readChain(agent ?? {});
+  $: headSaving = !!$detail.saving && (['provider', 'model', 'model_chain'] as const).some((k) => $detail.saving.has(k));
+  let headModelError = '';
+  async function setHeadModel(next: { provider: string; model: string }) {
+    headModelError = '';
+    // A non-Claude model on a claude_code agent also moves it to the kernel
+    // executor — the Claude Code CLI cannot run it (model-chain.ts).
+    await detail.patch(primaryModelPatch(agent ?? {}, headChain, next));
+    headModelError = String($detail.error || '');
+  }
+
+  /** Detener was clicked; cleared once the run is really gone. */
+  let stopping = false;
+  $: if (!running) stopping = false;
+
   // ── ¿Este agente puede usar skills? ───────────────────────────────
   // Un agente con `builtin_handler` registrado corta el camino LLM en
   // executor.ts:238 y retorna con `tokens_used: 0`; el índice de skills se
@@ -154,7 +187,9 @@
   $: autoPausedAgo = autoPaused ? sinceLabel(agent?.auto_paused_at ?? '') : '';
   // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
   // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
-  $: devopsOffice = traitsOf(flow).devopsLink;
+  // The panel is a paid extension's page: without `com.kernl.devops` active,
+  // /devops is the "extension not available" screen, so the link stays hidden.
+  $: devopsOffice = traitsOf(flow).devopsLink && $extPages.some((p) => p.view === 'devops');
   // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
   // office is watching it happen — so the drawer offers the way through. The
   // link carries no piece id on purpose: Scene Studio opens whichever piece is
@@ -242,11 +277,23 @@
 
   {#if agent}
     <div class="info-panel" class:ip-compact={compact} style={flow?.color ? `--flow-color:${flow.color}` : ''}>
-      <!-- Header: type glyph + name + role + close -->
+      <!-- Header: one band, two lines. Who it is and whether it is on (name +
+           state), what it is in plain words (office · kind · model · id), and
+           the actions on the same band — they used to take a row of their own
+           under a three-line identity block, and the panel lost ~70px of
+           height to it. -->
       <div class="ip-head">
-        <div class="ip-head-left">
-          <div class="ip-glyph">{agentType(agent) === 'llm' ? '◆' : agentType(agent) === 'claude_code' ? '◇' : agentType(agent) === 'function' ? '▣' : '▲'}</div>
-          <div class="ip-head-txt">
+        <!-- The id is rarely read, so it left the meta line (where it was
+             always the part cut off) for the glyph: hover shows it, a click
+             copies it. -->
+        <button class="ip-glyph" type="button"
+                title={`${$t('agent.drawer.agent_id_title')}: ${agent.id} — ${$t('agent.drawer.copy_id_title')}`}
+                aria-label={$t('agent.drawer.copy_id_title')}
+                on:click|stopPropagation={() => copy(agent.id, 'agent-id')}>
+          {copiedKey === 'agent-id' ? '✓' : agentType(agent) === 'llm' ? '◆' : agentType(agent) === 'claude_code' ? '◇' : agentType(agent) === 'function' ? '▣' : '▲'}
+        </button>
+        <div class="ip-head-txt">
+          <div class="ip-title-row">
             {#if editingName}
               <div class="ip-name-edit">
                 <!-- svelte-ignore a11y-autofocus -->
@@ -267,12 +314,37 @@
                   on:click={() => dispatch('rename-cancel')} disabled={savingName}>×</button>
               </div>
             {:else}
-              <div class="ip-name">
-                {agent.name}
-                <button class="ip-name-edit-btn" title={$t('agent.drawer.rename_title')} on:click={() => dispatch('rename-begin')}>✎</button>
-              </div>
+              <div class="ip-name">{agent.name}</div>
             {/if}
-            <div class="ip-sub">
+            <!-- The schedule switch. It used to be a separate Pausar/Reanudar
+                 button next to Ejecutar; both live on the state they change
+                 now. Same `resume` event: the listener reads `active`. -->
+            <button class="ip-state" type="button" role="switch" aria-checked={agent.active === 1}
+                    class:ip-state-on={agent.active === 1} class:ip-state-off={agent.active !== 1}
+                    class:ip-state-tripped={autoPaused}
+                    disabled={togglingPause}
+                    title={agent.active === 1
+                      ? $t('agent.head.state_active_title') + ' ' + $t('agent.head.switch_to_pause')
+                      : autoPaused
+                        ? $t('agent.head.state_auto_title', { n: String(agent.consecutive_failures) })
+                        : $t('agent.head.state_paused_title') + ' ' + $t('agent.head.switch_to_resume')}
+                    on:click={() => dispatch('resume')}>
+              <span class="ip-sw" aria-hidden="true"><span class="ip-sw-knob"></span></span>
+              <span class="ip-state-l">{togglingPause
+                ? '…'
+                : agent.active === 1
+                  ? $t('agent.head.state_active')
+                  : autoPaused
+                    ? $t('agent.head.state_auto')
+                    : $t('agent.head.state_paused')}</span>
+            </button>
+            {#if !editingName}
+              <!-- Last in the row, so showing it on hover moves nothing. -->
+              <button class="ip-name-edit-btn" type="button" title={$t('agent.drawer.rename_title')}
+                      aria-label={$t('agent.drawer.rename_title')} on:click={() => dispatch('rename-begin')}>✎</button>
+            {/if}
+          </div>
+          <div class="ip-meta">
               {#if movableOffices.length > 0}
                 <label class="ip-office" style="--f:{flow?.color ?? 'var(--text-3)'}">
                   <span class="ip-office-dot" aria-hidden="true"></span>
@@ -286,79 +358,69 @@
               {:else if flow}
                 <span class="ip-flow" style="--f:{flow.color}">{flow.name}</span>
               {/if}
-              <span class="ip-dot"></span>
-              <span class="ip-id" title={$t('agent.drawer.agent_id_title')}>
-                {agent.id.slice(0, 8)}
-                <button class="ip-copy-inline" on:click|stopPropagation={() => copy(agent.id, 'agent-id')} title={$t('agent.drawer.copy_id_title')}>{copiedKey === 'agent-id' ? '✓' : '⧉'}</button>
+            <!-- What runs it, as ONE chip: the kind, then the model or the
+                 script. Two chips of two styles plus an id read as noise. -->
+            {#if agentType(agent) === 'llm'}
+              {@const fb = modelChainFallbacks(agent.model_chain)}
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
+                <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
+                             providers={headProviders} requiresTools={true}
+                             busy={headSaving} disabled={headSaving} error={headModelError}
+                             on:change={(e) => setHeadModel(e.detail)}>
+                  <span class="ip-chip ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
+                        title={headModelError || $t('agent.head.change_model_title')}>
+                    <b>{$t('agent.head.kind_llm')}</b>{#if agent.model}<span class="ip-chip-v">{agent.model}</span>{/if}{#if fb > 0}<span class="ip-chip-x" title={$t('agent.drawer.fallbacks_title')}>+{fb}</span>{/if}<span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
+                  </span>
+                </ModelPicker>
               </span>
-            </div>
-            <div class="ip-tags">
-              {#if agentType(agent) === 'llm'}
-                {@const fb = modelChainFallbacks(agent.model_chain)}
-                <span class="ip-tag ip-tag-llm" title={$t('agent.drawer.kind_llm_title')}>LLM</span>
-                {#if agent.model}
-                  <span class="ip-tag ip-tag-model" title={agent.provider ? `${agent.provider} / ${agent.model}` : agent.model}>{agent.model}</span>
-                {/if}
-                {#if fb > 0}
-                  <span class="ip-tag ip-tag-fallback" title={$t('agent.drawer.fallbacks_title')}>+{fb} fallback{fb > 1 ? 's' : ''}</span>
-                {/if}
-              {:else if agentType(agent) === 'claude_code'}
-                <span class="ip-tag ip-tag-sdk" title={$t('agent.drawer.kind_claude_code_title')}>Claude Code SDK</span>
-                <span class="ip-tag ip-tag-model" title={agent.model ? `SDK model: ${agent.model}` : `SDK default model: ${CLAUDE_CODE_DEFAULT_MODEL}`}>
-                  {agent.model || CLAUDE_CODE_DEFAULT_MODEL}{!agent.model ? ' (default)' : ''}
-                </span>
-              {:else}
-                <span class="ip-tag ip-tag-script" title={$t('agent.drawer.kind_script_title')}>SCRIPT</span>
-                {#if agent.builtin_handler}
-                  <span class="ip-tag ip-tag-handler" title={$t('agent.drawer.builtin_id_title')}>{agent.builtin_handler}</span>
-                {/if}
-              {/if}
-            </div>
+            {:else if agentType(agent) === 'claude_code'}
+              <!-- svelte-ignore a11y-no-static-element-interactions -->
+              <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
+                <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
+                             providers={headProviders} requiresTools={false}
+                             busy={headSaving} disabled={headSaving} error={headModelError}
+                             on:change={(e) => setHeadModel(e.detail)}>
+                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError}
+                        title={headModelError || $t('agent.head.change_model_title')}>
+                    <b>Claude Code</b><span class="ip-chip-v">{agent.model || CLAUDE_CODE_DEFAULT_MODEL}</span><span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
+                  </span>
+                </ModelPicker>
+              </span>
+            {:else}
+              <span class="ip-chip ip-chip-script" title={agent.builtin_handler ? String(agent.builtin_handler) : $t('agent.drawer.kind_script_title')}>
+                <b>{agentType(agent) === 'function' ? $t('agent.head.kind_function') : $t('agent.head.kind_script')}</b>{#if agent.builtin_handler}<span class="ip-chip-v">{String(agent.builtin_handler).replace(/^script:/, '')}</span>{/if}
+              </span>
+            {/if}
           </div>
         </div>
-        <button class="ip-close" on:click={() => dispatch('close')} aria-label={$t('agent.drawer.close_title')}>×</button>
-      </div>
 
-      <!-- Primary actions. The run state leads the row: it is what Pause and
-           Resume change, so it belongs with them and not floating in the body.
-
-           Pause y Resume emiten el MISMO evento `resume`: son un único toggle y
-           quien escucha decide el sentido leyendo `active`. Dos nombres para el
-           mismo handler no agregarían nada. -->
-      <div class="ip-actions">
-        <span class="ip-state" class:ip-state-on={agent.active === 1} class:ip-state-off={agent.active !== 1}
-              class:ip-state-tripped={autoPaused}
-              title={agent.active === 1
-                ? 'Schedule and event triggers are live'
-                : autoPaused
-                  ? `Auto-paused after ${agent.consecutive_failures} consecutive failures. Resume clears the counter.`
-                  : 'Paused — schedule and triggers are off. Manual runs still work.'}>
-          <span class="led" class:on={agent.active === 1}></span>{agent.active
-            ? 'active'
-            : autoPaused
-              ? 'auto-paused'
-              : 'paused'}
-        </span>
-        <button class="ip-btn ip-btn-primary" on:click={() => dispatch('run')} disabled={starting} title={agent.active !== 1 ? 'Manual run — overrides pause' : 'Run this agent now'}>
-          <span class="ip-btn-ico">{starting ? '●' : '▶'}</span>
-          <span>{starting ? 'starting…' : 'Run now'}</span>
+        <!-- Pause y Resume emiten el MISMO evento `resume`: son un único toggle y
+             quien escucha decide el sentido leyendo `active`. -->
+        <div class="ip-actions">
+        <!-- One button, two states: ▶ Ejecutar while idle, ◼ Detener while a
+             run is in flight (POST /api/agents/stop, raised as `stop`). The
+             glyph is one clip-path that morphs triangle ⇄ square, and a ring
+             turns around it while the agent works. -->
+        <button class="ip-btn ip-run" class:ip-run-on={running} class:ip-run-wait={starting || stopping}
+                type="button"
+                aria-label={running ? $t('agent.head.stop') : $t('agent.head.run')}
+                title={running
+                  ? $t('agent.head.stop_title')
+                  : agent.active !== 1 ? $t('agent.head.run_paused_title') : $t('agent.head.run_title')}
+                disabled={starting || stopping}
+                on:click={() => { if (running) { stopping = true; dispatch('stop'); } else dispatch('run'); }}>
+          <span class="ip-run-ico" aria-hidden="true"><span class="ip-run-glyph"></span></span>
+          <span class="ip-run-l">
+            {starting
+              ? $t('agent.head.starting')
+              : stopping
+                ? $t('agent.head.stopping')
+                : running
+                  ? $t('agent.head.stop')
+                  : $t('agent.head.run')}
+          </span>
         </button>
-        {#if agent.active === 1}
-          <button class="ip-btn ip-btn-warn" on:click={() => dispatch('resume')} disabled={togglingPause} title={$t('agent.drawer.pause_title')}>
-            <span class="ip-btn-ico">⏸</span>
-            <span>{togglingPause ? '…' : 'Pause'}</span>
-          </button>
-        {:else}
-          <button class="ip-btn ip-btn-resume" on:click={() => dispatch('resume')} disabled={togglingPause} title={$t('agent.drawer.resume_title')}>
-            <span class="ip-btn-ico">▶</span>
-            <span>{togglingPause ? '…' : 'Resume'}</span>
-          </button>
-        {/if}
-        {#if $$slots.chat}
-          <button class="ip-btn ip-btn-ghost" on:click={() => selectTab('chat')}>
-            <span class="ip-btn-ico">✎</span><span>{$t('agent.drawer.tab_message')}</span>
-          </button>
-        {/if}
         {#if devopsOffice}
           <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
             <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
@@ -383,6 +445,8 @@
         {#if startMsg}
           <span class="ip-start-msg" class:ok={startMsg.startsWith('✓')} class:err={startMsg.startsWith('✗')} class:pause={startMsg.startsWith('⏸')}>{startMsg}</span>
         {/if}
+        </div>
+        <button class="ip-close" on:click={() => dispatch('close')} aria-label={$t('agent.drawer.close_title')}>×</button>
       </div>
 
       <!-- Why the breaker tripped. The state chip above can only say "paused",
@@ -408,6 +472,7 @@
       <!-- Tabs -->
       <div class="ip-tabs">
         <button class="ip-tab" class:active={panelTab === 'info'} on:click={() => selectTab('info')}>{$t('agent.drawer.tab_overview')}</button>
+        <button class="ip-tab" class:active={panelTab === 'config'} on:click={() => selectTab('config')}>{$t('agent.drawer.tab_config')}</button>
         {#if running && $$slots.live}
           <button class="ip-tab ip-tab-live" class:active={panelTab === 'live'} on:click={() => selectTab('live')}>
             <span class="live-dot"></span>LIVE
@@ -448,7 +513,13 @@
            Sobrescribirlo es para agregar, no para llenar un hueco. -->
       {#if panelTab === 'info'}
         <slot name="overview" store={detail}>
-          <OverviewTab store={detail} {compact} {running} />
+          <OverviewTab store={detail} {compact} />
+        </slot>
+      {/if}
+
+      {#if panelTab === 'config'}
+        <slot name="config" store={detail}>
+          <ConfigTab store={detail} {compact} {running} />
         </slot>
       {/if}
 
@@ -512,14 +583,15 @@
      en los dos lados.
      ═══════════════════════════════════════════════════════════════ */
   .info-panel{
-    position:absolute;top:12px;right:12px;bottom:12px;
+    /* Flush with the 3D's top, right and bottom edges: a gutter there only
+       took width from the world. The container's rounded corners clip it. */
+    position:absolute;top:0;right:0;bottom:0;
     width:min(720px, 55vw); min-width:560px;
     overflow:hidden;
     background:linear-gradient(180deg, rgba(16,18,28,.96) 0%, rgba(11,13,20,.97) 100%);
     backdrop-filter:blur(16px) saturate(1.1);
-    border:1px solid rgba(120,130,160,.15);
-    border-radius:14px;
-    box-shadow:0 20px 60px -20px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
+    border-left:1px solid rgba(120,130,160,.15);
+    box-shadow:-20px 0 60px -20px rgba(0,0,0,.6);
     z-index:10;
     animation:slide .25s cubic-bezier(.2,.9,.25,1);
     display:flex;flex-direction:column;
@@ -544,41 +616,46 @@
     width:auto;min-width:0;
     flex:1;min-height:0;
     animation:none;
+    /* The overlay is flush with the 3D's edges; as a block in a column it
+       keeps its own frame. */
+    border:1px solid rgba(120,130,160,.15);
+    border-radius:14px;
+    box-shadow:0 20px 60px -20px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
   }
 
   /* ── Header ───────────────────── */
   .ip-head{
-    display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
-    padding:18px 18px 12px;
+    display:flex;align-items:center;gap:12px;flex-wrap:wrap;
+    padding:12px 14px 12px 16px;
     border-bottom:1px solid rgba(120,130,160,.08);
     flex-shrink:0;
   }
-  .ip-head-left{display:flex;gap:12px;align-items:flex-start;min-width:0;flex:1}
   .ip-glyph{
-    width:32px;height:32px;border-radius:8px;
+    width:36px;height:36px;border-radius:9px;
     display:grid;place-items:center;
     font:500 15px 'JetBrains Mono',monospace;
     color:var(--flow-color);
-    background:color-mix(in srgb, var(--flow-color) 8%, transparent);
-    border:1px solid color-mix(in srgb, var(--flow-color) 30%, transparent);
-    flex-shrink:0;
+    background:color-mix(in srgb, var(--flow-color) 10%, transparent);
+    border:1px solid color-mix(in srgb, var(--flow-color) 32%, transparent);
+    flex-shrink:0;padding:0;cursor:copy;transition:background .15s, border-color .15s;
   }
+  .ip-glyph:hover{background:color-mix(in srgb, var(--flow-color) 18%, transparent);border-color:color-mix(in srgb, var(--flow-color) 55%, transparent)}
+  .ip-glyph:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
   /* One rhythm for the whole header. The name, the identity row and the tag
      row used ad-hoc 4px/5px margins, so nothing lined up with anything. */
-  .ip-head-txt{min-width:0;flex:1;display:flex;flex-direction:column;gap:7px}
+  .ip-head-txt{min-width:0;flex:1 1 240px;display:flex;flex-direction:column;gap:4px}
+  .ip-title-row{display:flex;align-items:center;gap:6px;min-width:0}
   .ip-name{
-    font:600 17px/1.1 'Syne',sans-serif;
-    color:#f0f2f7;
-    letter-spacing:-.01em;
-    word-break:break-word;
-    display:inline-flex;align-items:center;gap:8px;
+    font:600 17px/1.2 'Syne',sans-serif;min-width:0;
+    color:#f0f2f7;letter-spacing:-.01em;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
   }
   .ip-name-edit-btn{
     border:none;background:transparent;color:#7a7f92;cursor:pointer;
-    font-size:13px;padding:2px 4px;border-radius:3px;opacity:0;
+    font-size:13px;padding:2px 5px;border-radius:5px;opacity:0;
     transition:opacity .12s, color .12s, background .12s;
   }
-  .ip-name:hover .ip-name-edit-btn{opacity:1}
+  .ip-title-row:hover .ip-name-edit-btn, .ip-name-edit-btn:focus-visible{opacity:1}
   .ip-name-edit-btn:hover{color:#ecc968;background:rgba(201,168,76,0.12)}
   .ip-name-edit{display:flex;align-items:center;gap:6px}
   .ip-name-input{
@@ -596,65 +673,42 @@
   .ip-name-btn-ok:hover{border-color:#3dd68c;color:#3dd68c;background:rgba(61,214,140,0.1)}
   .ip-name-btn-cancel:hover{border-color:#f04770;color:#f04770;background:rgba(240,71,112,0.1)}
   .ip-name-btn:disabled{opacity:0.5;cursor:wait}
-  /* Wraps instead of overflowing: a long flow name plus an id used to push the
-     row past the panel edge. */
-  .ip-sub{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:7px;
-    font:500 10px 'JetBrains Mono',monospace;
-    color:#7a7f92;
+  /* Second line: two chips of ONE shape — where it sits, what runs it. */
+  .ip-meta{display:flex;align-items:center;gap:6px;flex-wrap:nowrap;min-width:0;white-space:nowrap}
+  .ip-chip, .ip-flow, .ip-office{
+    display:inline-flex;align-items:center;gap:6px;height:22px;padding:0 8px;min-width:0;
+    border-radius:6px;font:500 11px 'Manrope',sans-serif;color:#c4c8d6;
+    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.18);
   }
-  .ip-flow{
-    color:var(--f, var(--flow-color));
-    font-weight:600;text-transform:uppercase;letter-spacing:.6px;
-    font-size:10px;line-height:1.5;padding:3px 8px;border-radius:5px;
-    background:color-mix(in srgb, var(--f, var(--flow-color)) 10%, transparent);
-    border:1px solid color-mix(in srgb, var(--f, var(--flow-color)) 25%, transparent);
-  }
-  .ip-office { position: relative; display: inline-flex; align-items: center; gap: 6px; max-width: 180px; }
+  .ip-chip b{font-weight:700;color:var(--chip, #c4c8d6)}
+  .ip-chip-v{font:500 11px 'JetBrains Mono',monospace;color:#c9d0e0;overflow:hidden;text-overflow:ellipsis}
+  .ip-chip-v::before{content:'';display:inline-block;width:1px;height:10px;margin:0 7px 0 1px;background:rgba(120,130,160,.3);vertical-align:-1px}
+  .ip-chip-x{font:600 10px 'JetBrains Mono',monospace;color:#8a8fa8}
+  .ip-chip-llm{--chip:#6fe4b8}
+  .ip-chip-sdk{--chip:#c8a8ff}
+  .ip-chip-script{--chip:#f0a040}
+  /* The model chip is the model picker's trigger. */
+  .ip-chip-pick{display:inline-flex;min-width:0}
+  .ip-chip-btn{cursor:pointer;transition:border-color .12s, background .12s}
+  .ip-chip-btn:hover{border-color:color-mix(in srgb, var(--chip) 55%, transparent);background:color-mix(in srgb, var(--chip) 8%, transparent)}
+  .ip-chip-caret{margin-left:7px;font-size:9px;color:#8a8fa8}
+  .ip-chip-err{border-color:rgba(239,93,110,.65)}
+  .ip-flow{color:#dde0ea;font-weight:600}
+  .ip-flow::before{content:'';width:8px;height:8px;border-radius:2px;background:var(--f, var(--flow-color))}
+  .ip-office { position: relative; max-width: 200px; cursor: pointer; }
+  .ip-office:hover { border-color: rgba(120,130,160,.35); }
   .ip-office-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--f); flex: none; }
   .ip-office-select {
-    appearance: none; background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm);
-    color: var(--text-2); font: inherit; padding: 1px 4px; max-width: 160px; text-overflow: ellipsis; cursor: pointer;
+    appearance: none; background: transparent; border: none; border-radius: var(--radius-sm);
+    color: #dde0ea; font: inherit; font-weight: 600; padding: 0; max-width: 170px; text-overflow: ellipsis; cursor: pointer; outline: none;
+    /* As wide as the office name, not as wide as the longest option. */
+    field-sizing: content;
   }
-  .ip-office-select:hover { border-color: var(--border-h); color: var(--text-1); }
-  .ip-office-select:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
-  .ip-dot{width:3px;height:3px;border-radius:50%;background:#4a4f66}
-  .ip-tags{
-    display:flex;align-items:center;gap:6px;flex-wrap:wrap;
-  }
-  /* Same metrics as .ip-flow so every chip in the header sits on one baseline
-     and reads as one family. */
-  .ip-tag{
-    font:700 10px/1.5 'JetBrains Mono',monospace;letter-spacing:.6px;
-    padding:3px 8px;border-radius:5px;text-transform:uppercase;
-    border:1px solid transparent;white-space:nowrap;
-  }
-  .ip-tag-llm{
-    color:#6fe4b8;background:rgba(111,228,184,0.1);border-color:rgba(111,228,184,0.35);
-  }
-  .ip-tag-model{
-    color:#c9d0e0;background:rgba(70,90,130,0.18);border-color:rgba(120,140,180,0.25);
-    font-weight:500;letter-spacing:0;text-transform:none;
-  }
-  .ip-tag-script{
-    color:#f0a040;background:rgba(240,160,64,0.1);border-color:rgba(240,160,64,0.4);
-  }
-  .ip-tag-handler{
-    color:#b8a060;background:rgba(184,160,96,0.08);border-color:rgba(184,160,96,0.22);
-    font-weight:500;letter-spacing:0;text-transform:none;
-  }
-  .ip-tag-sdk{
-    color:#c8a8ff;background:rgba(160,120,240,0.12);border-color:rgba(160,120,240,0.4);
-  }
-  .ip-tag-fallback{
-    color:#8a8fa8;background:rgba(80,90,120,0.12);border-color:rgba(120,130,160,0.22);
-    font-weight:500;letter-spacing:0;text-transform:none;
-  }
-  .ip-id{display:inline-flex;align-items:center;gap:4px;color:#8a8fa8}
+  .ip-office:focus-within { border-color: rgba(120,170,255,.6); }
   .ip-close{
     background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.12);
     color:#8a8fa8;
-    width:28px;height:28px;
+    width:32px;height:32px;
     border-radius:8px;
     font:400 18px/1 'Syne',sans-serif;
     cursor:pointer;transition:all .15s;
@@ -664,46 +718,26 @@
   .ip-close:hover{background:rgba(239,93,110,.12);border-color:rgba(239,93,110,.3);color:#ef5d6e}
 
   /* ── Primary actions ─────────── */
+  /* Inside the header band now, pushed to the right edge. */
   .ip-actions{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;
-    padding:12px 18px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
+    display:flex;align-items:center;gap:6px;flex-wrap:wrap;justify-content:flex-end;
+    margin-left:auto;
   }
+  /* One button shape. Only "Ejecutar" is filled; everything else is the same
+     quiet outline, and the colour that says what a button does lives in its
+     icon — four differently filled buttons in a row read as four warnings. */
   .ip-btn{
     display:inline-flex;align-items:center;gap:6px;
-    padding:8px 14px;border-radius:8px;
-    font:600 11px 'Syne',sans-serif;letter-spacing:.4px;
-    cursor:pointer;transition:all .15s;
-    border:1px solid transparent;
+    height:32px;padding:0 12px;border-radius:8px;
+    font:600 12px 'Manrope',sans-serif;letter-spacing:0;
+    cursor:pointer;transition:background .15s, border-color .15s, color .15s;
+    border:1px solid rgba(120,130,160,.22);
+    background:rgba(255,255,255,.03);color:#dde0ea;
   }
-  .ip-btn-ico{font:500 11px 'JetBrains Mono',monospace}
-  .ip-btn-primary{
-    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
-    box-shadow:0 6px 16px -8px rgba(120,220,140,.5);
-  }
-  .ip-btn-primary:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
-  .ip-btn-primary:disabled{opacity:.5;cursor:wait;background:rgba(120,220,140,.3);border-color:rgba(120,220,140,.2)}
-  .ip-btn-ghost{
-    background:rgba(255,255,255,.03);
-    border-color:rgba(120,130,160,.2);
-    color:#d8dae3;
-  }
-  .ip-btn-ghost:hover{background:rgba(255,255,255,.06);border-color:rgba(120,130,160,.35)}
-  .ip-btn-warn{
-    background:rgba(251,191,36,.08);
-    border-color:rgba(251,191,36,.35);
-    color:#fbbf24;
-  }
-  .ip-btn-warn:hover:not(:disabled){background:rgba(251,191,36,.18);border-color:rgba(251,191,36,.55)}
-  .ip-btn-warn:disabled{opacity:.5;cursor:wait}
-  .ip-btn-resume{
-    background:rgba(120,220,140,.08);
-    border-color:rgba(120,220,140,.35);
-    color:#78dc8c;
-  }
-  .ip-btn-resume:hover:not(:disabled){background:rgba(120,220,140,.18);border-color:rgba(120,220,140,.55)}
-  .ip-btn-resume:disabled{opacity:.5;cursor:wait}
+  .ip-btn:hover:not(:disabled){background:rgba(255,255,255,.07);border-color:rgba(120,130,160,.4)}
+  .ip-btn:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .ip-btn:disabled{opacity:.5;cursor:wait}
+  .ip-btn-ico{font:500 11px 'JetBrains Mono',monospace;color:#8a8fa8}
   /* Watch-live link (CREATIVOS → Scene Studio). Violet to match that office's
      colour, so the way through is findable without reading the label. */
   .ip-btn-live{
@@ -764,16 +798,31 @@
     background:rgba(120,130,160,.15);color:#a0a5b8;
   }
   /* ── Run state ─────────────────
-     Leads the action row and is separated from the buttons by a rule, so it
-     reads as the state those buttons act on rather than a fourth control.
-     Same 8px/14px box as .ip-btn so both sit on one baseline. */
+     A pill next to the name: the first thing read, with the word, not only
+     the colour. */
   .ip-state{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:8px 12px 8px 0;margin-right:4px;
-    border-right:1px solid rgba(120,130,160,.15);
-    font:600 10px 'JetBrains Mono',monospace;
-    text-transform:lowercase;letter-spacing:.4px;
+    display:inline-flex;align-items:center;gap:7px;flex:none;
+    height:24px;padding:0 10px 0 4px;border-radius:999px;cursor:pointer;
+    font:600 11px 'Manrope',sans-serif;
+    background:color-mix(in srgb, currentColor 10%, transparent);
+    border:1px solid color-mix(in srgb, currentColor 30%, transparent);
+    transition:color .25s, background .25s, border-color .25s;
   }
+  .ip-state:hover:not(:disabled){background:color-mix(in srgb, currentColor 18%, transparent)}
+  .ip-state:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .ip-state:disabled{cursor:wait;opacity:.75}
+  /* The switch inside the pill: knob right = on. */
+  .ip-sw{
+    position:relative;width:26px;height:16px;border-radius:999px;flex:none;
+    background:color-mix(in srgb, currentColor 28%, transparent);
+    transition:background .25s;
+  }
+  .ip-sw-knob{
+    position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;
+    background:currentColor;box-shadow:0 1px 3px rgba(0,0,0,.4);
+    transition:transform .28s cubic-bezier(.34,1.56,.64,1);
+  }
+  .ip-state-on .ip-sw-knob{transform:translateX(10px)}
   .ip-state-on{color:#78dc8c}
   .ip-state-off{color:#fbbf24}
   /* An agent the kernel stopped reads as a fault, not as a warning: the
@@ -798,24 +847,47 @@
     color:var(--text-2); background:rgba(0,0,0,.28); border-radius:5px;
   }
   .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
-  .ip-state .led{
-    width:6px;height:6px;border-radius:50%;
-    background:#fbbf24;
-  }
-  .ip-state .led.on{
-    background:#78dc8c;box-shadow:0 0 6px #78dc8c;
-    animation:led-pulse 2s ease-in-out infinite;
-  }
-  @keyframes led-pulse{50%{opacity:.55}}
+  @media (prefers-reduced-motion: reduce){ .ip-sw-knob, .ip-state{transition:none} }
 
-  /* ── Copy inline (id del agente) ── */
-  .ip-copy-inline{
-    background:transparent;border:none;
-    color:#6a6f82;cursor:pointer;
-    font:400 11px monospace;line-height:1;padding:1px 4px;border-radius:3px;
-    transition:color .12s;margin-left:4px;
+  /* ── Run ⇄ Stop ─────────────────
+     One button. Idle: filled green, ▶. Running: red outline, ◼, a ring
+     turning around the glyph. The glyph is a single clip-path whose four
+     points move from a triangle to a square, so the change is a morph and
+     not a swap. */
+  .ip-run{
+    background:#78dc8c;color:#0a0e14;border-color:#78dc8c;
+    min-width:112px;justify-content:center;
+    transition:background .25s, color .25s, border-color .25s, box-shadow .25s;
   }
-  .ip-copy-inline:hover{color:#d8dae3;background:rgba(120,130,160,.1)}
+  .ip-run:hover:not(:disabled){background:#8ee4a0;border-color:#8ee4a0}
+  .ip-run-on{
+    background:rgba(240,71,112,.1);color:#ff8fa8;border-color:rgba(240,71,112,.55);
+    box-shadow:0 0 0 0 rgba(240,71,112,.4);animation:ip-run-pulse 1.8s ease-out infinite;
+  }
+  .ip-run-on:hover:not(:disabled){background:rgba(240,71,112,.2);border-color:rgba(240,71,112,.8)}
+  .ip-run:disabled{cursor:wait;opacity:.8}
+  @keyframes ip-run-pulse{0%{box-shadow:0 0 0 0 rgba(240,71,112,.35)}70%{box-shadow:0 0 0 7px rgba(240,71,112,0)}100%{box-shadow:0 0 0 0 rgba(240,71,112,0)}}
+  .ip-run-ico{position:relative;width:14px;height:14px;display:grid;place-items:center;flex:none}
+  .ip-run-glyph{
+    width:9px;height:10px;background:currentColor;
+    clip-path:polygon(0 0, 100% 50%, 100% 50%, 0 100%);
+    transition:clip-path .3s cubic-bezier(.4,0,.2,1), width .3s, height .3s;
+  }
+  .ip-run-on .ip-run-glyph{width:8px;height:8px;border-radius:1px;clip-path:polygon(0 0, 100% 0, 100% 100%, 0 100%)}
+  /* The working ring. */
+  .ip-run-on .ip-run-ico::after, .ip-run-wait .ip-run-ico::after{
+    content:'';position:absolute;inset:-3px;border-radius:50%;
+    border:1.5px solid transparent;border-top-color:currentColor;border-right-color:currentColor;
+    animation:ip-run-spin .9s linear infinite;
+  }
+  @keyframes ip-run-spin{to{transform:rotate(360deg)}}
+  .ip-run-l{transition:opacity .2s}
+  @media (prefers-reduced-motion: reduce){
+    .ip-run, .ip-run-glyph{transition:none}
+    .ip-run-on{animation:none}
+    .ip-run-on .ip-run-ico::after, .ip-run-wait .ip-run-ico::after{animation:none}
+  }
+
 
   /* ── LIVE tab ── */
   .ip-tab-live{

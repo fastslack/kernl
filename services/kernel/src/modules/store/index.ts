@@ -33,6 +33,7 @@ import { runStoreUpdates } from "./auto-update.js";
 import { registerStoreRoutes } from "./api-routes.js";
 import { storeMigrations } from "./migrations.js";
 import { CheckoutService } from "./checkout-service.js";
+import { refreshLicenseIfDue, REFRESH_INTERVAL_MS } from "./license-refresh.js";
 import { runMigrations } from "../../core/db/migrations.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
@@ -49,6 +50,8 @@ export function createStoreModule(deps: StoreModuleDeps): ExtensibleModule {
   let tools: ToolDefinition[] = [];
   let checkouts: CheckoutService | null = null;
   let ctxRef: ModuleContext | null = null;
+  let refreshTimer: ReturnType<typeof setInterval> | null = null;
+  let firstRefresh: ReturnType<typeof setTimeout> | null = null;
   const storeUrl = process.env.KERNEL_STORE_URL ?? DEFAULT_STORE_URL;
 
   return {
@@ -58,6 +61,17 @@ export function createStoreModule(deps: StoreModuleDeps): ExtensibleModule {
       ctxRef = ctx;
       checkouts = new CheckoutService(ctx.sqlite);
       tools = buildTools(ctx, deps, storeUrl, ctx.license);
+
+      // Pick up All-Access renewals (see license-refresh.ts). Once shortly
+      // after boot, so a kernel that was off on renewal day catches up, then
+      // twice a day. Unref'd: a pending check never keeps the process alive.
+      const refresh = () => {
+        void refreshLicenseIfDue({ storeUrl, license: ctx.license });
+      };
+      firstRefresh = setTimeout(refresh, 60_000);
+      firstRefresh.unref?.();
+      refreshTimer = setInterval(refresh, REFRESH_INTERVAL_MS);
+      refreshTimer.unref?.();
     },
     getTools() {
       return tools;
@@ -77,7 +91,11 @@ export function createStoreModule(deps: StoreModuleDeps): ExtensibleModule {
         },
       };
     },
-    async shutdown() {},
+    async shutdown() {
+      if (firstRefresh) clearTimeout(firstRefresh);
+      if (refreshTimer) clearInterval(refreshTimer);
+      firstRefresh = refreshTimer = null;
+    },
   };
 }
 

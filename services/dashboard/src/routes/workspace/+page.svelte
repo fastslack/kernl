@@ -2,7 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { renderMarkdown } from '$lib/workspace-md.js';
   import { highlightCode, detectLang } from '$lib/workspace-highlight.js';
-  import { timeAgo } from '$lib/utils.js';
+  import { timeAgo } from '$shared/utils';
 
   type WorkspaceRow = { id: string; name: string; description: string; shared: boolean; files: number; bytes: number; mtime: number };
   type Office = { flow_id: string; name: string; color: string; workspaces: WorkspaceRow[] };

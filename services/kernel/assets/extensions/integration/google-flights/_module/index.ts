@@ -4,13 +4,7 @@
  * factory is also exported here for direct use in tests.
  */
 
-import {
-  runMigrations,
-  type KernelModule,
-  type ModuleContext,
-  type ToolDefinition,
-  log,
-} from "@kernl/extension-sdk";
+import { defineModule, type KernelModule } from "@kernl/extension-sdk";
 import { googleFlightsMigrations } from "./migrations.js";
 import { GoogleFlightsService } from "./service.js";
 import { googleFlightsTools } from "./tools.js";
@@ -21,15 +15,13 @@ export interface GoogleFlightsModule extends KernelModule {
 }
 
 export function createGoogleFlightsModule(): GoogleFlightsModule {
-  let tools: ToolDefinition[] = [];
   let service: GoogleFlightsService | null = null;
 
-  return {
+  const mod = defineModule({
     name: "google-flights",
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "google-flights", googleFlightsMigrations);
+    migrations: googleFlightsMigrations,
+    init(ctx) {
       service = new GoogleFlightsService(ctx.sqlite);
-      tools = googleFlightsTools(service);
 
       // Flights Concierge agent seeding is disabled — during the fleet
       // consolidation pass the agent was migrated into a different office.
@@ -49,16 +41,17 @@ export function createGoogleFlightsModule(): GoogleFlightsModule {
       //   log.warn(`google-flights: Flights Concierge seed skipped: ${err}`);
       // }
       void seedFlightsAgent; // keep import alive (re-enable to restore)
+      return service;
     },
-    getTools() {
-      return tools;
-    },
+    tools: (s) => googleFlightsTools(s),
+  });
+
+  return Object.assign(mod, {
     getService() {
       if (!service) throw new Error("google-flights module not initialized");
       return service;
     },
-    async shutdown() {},
-  };
+  });
 }
 
 export type { GoogleFlightsService } from "./service.js";

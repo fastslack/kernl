@@ -931,7 +931,6 @@
     background: rgba(245,230,204,0.07);
     border-color: var(--mp-line);
   }
-  .full-icon.sm { width: 28px; height: 28px; font-size: 13px; }
   .full-icon.danger:hover { color: #e87b85; background: rgba(155,35,53,0.16); }
 
   .pill {

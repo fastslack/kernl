@@ -1,4 +1,4 @@
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type {
   TravelTrip, TravelFlight, TravelAccommodation, TravelActivity,
   TravelExpense, TravelPackingItem, TravelDocument,
@@ -55,7 +55,7 @@ export class TravelService {
     if (filters?.status) { sql += " AND status = ?"; params.push(filters.status); }
     if (filters?.upcoming) {
       sql += " AND end_date >= ?";
-      params.push(new Date().toISOString().split("T")[0]);
+      params.push(localDate());
     }
     sql += " ORDER BY start_date ASC";
     return this.db.prepare(sql).all(...params) as TravelTrip[];
@@ -194,7 +194,7 @@ export class TravelService {
       id: newId(), trip_id: input.trip_id, category: input.category ?? "other",
       description: input.description, amount_cents: input.amount_cents,
       currency: input.currency ?? "EUR",
-      date: input.date ?? isoNow().split("T")[0],
+      date: input.date ?? localDate(),
       payment_method: input.payment_method ?? "",
       receipt_url: "", notes: input.notes ?? "", created_at: isoNow(),
     };

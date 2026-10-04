@@ -3,9 +3,9 @@
    * Generic plugin frontend renderer.
    * Interprets a PluginFrontendDescriptor JSON to render KPIs, panels, tables.
    */
-  import Panel from './Panel.svelte';
-  import KpiCard from './KpiCard.svelte';
-  import Badge from './Badge.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import Badge from '$shared/components/Badge.svelte';
 
   export let descriptor: any;
   export let data: any;

@@ -1,10 +1,11 @@
 <script lang="ts">
+  import { goto } from '$app/navigation';
   import { agents, skills, automations } from '$lib/stores.js';
-  import KpiCard from '$lib/components/KpiCard.svelte';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import QuickAction from '$lib/components/QuickAction.svelte';
-  import OverviewCard from '$lib/components/OverviewCard.svelte';
-  import Empty from '$lib/components/Empty.svelte';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import QuickAction from '$shared/components/QuickAction.svelte';
+  import OverviewCard from '$shared/components/OverviewCard.svelte';
+  import Empty from '$shared/components/Empty.svelte';
 
   // Data from stores
   $: ag = ($agents as any);
@@ -50,9 +51,9 @@
 
 <!-- Quick Actions -->
 <div class="quick-actions">
-  <QuickAction label="New Agent" icon={ICONS.newAgent} variant="primary" href="/agents" />
-  <QuickAction label="Browse Skills" icon={ICONS.browseSkills} variant="purple" href="/extensions?tab=skills" />
-  <QuickAction label="Skill Store" icon={ICONS.skillStore} variant="teal" href="/extensions?tab=discover" />
+  <QuickAction label="New Agent" icon={ICONS.newAgent} variant="primary" navigate={goto} href="/agents" />
+  <QuickAction label="Browse Skills" icon={ICONS.browseSkills} variant="purple" navigate={goto} href="/extensions?tab=skills" />
+  <QuickAction label="Skill Store" icon={ICONS.skillStore} variant="teal" navigate={goto} href="/extensions?tab=discover" />
 </div>
 
 <!-- KPI Row -->
@@ -68,7 +69,7 @@
 <!-- Overview Grid -->
 <div class="overview-grid">
   <!-- Agents Card -->
-  <OverviewCard title="Agents" icon={ICONS.agents} iconColor="var(--purple)" actions={[{ label: 'Manage Agents', href: '/agents' }]}>
+  <OverviewCard title="Agents" icon={ICONS.agents} iconColor="var(--purple)" navigate={goto} actions={[{ label: 'Manage Agents', href: '/agents' }]}>
     {#if agentsAvailable && agentsList.length > 0}
       <ul class="card-list">
         {#each agentsList.slice(0, 4) as agent}
@@ -84,7 +85,7 @@
   </OverviewCard>
 
   <!-- Skills Card -->
-  <OverviewCard title="Installed Skills" icon={ICONS.skills} iconColor="var(--blue)" actions={[{ label: 'View Skills', href: '/extensions?tab=skills' }, { label: 'Browse Store', href: '/extensions?tab=discover' }]}>
+  <OverviewCard title="Installed Skills" icon={ICONS.skills} iconColor="var(--blue)" navigate={goto} actions={[{ label: 'View Skills', href: '/extensions?tab=skills' }, { label: 'Browse Store', href: '/extensions?tab=discover' }]}>
     {#if skillsList.length > 0}
       <ul class="card-list">
         {#each skillsList.slice(0, 4) as skill}
@@ -100,7 +101,7 @@
   </OverviewCard>
 
   <!-- Automations Card -->
-  <OverviewCard title="Automations" icon={ICONS.automations} iconColor="var(--gold)" actions={[{ label: 'View Automations', href: '/automations' }]}>
+  <OverviewCard title="Automations" icon={ICONS.automations} iconColor="var(--gold)" navigate={goto} actions={[{ label: 'View Automations', href: '/automations' }]}>
     {#if automationsList.length > 0}
       <ul class="card-list">
         {#each automationsList.slice(0, 4) as auto}

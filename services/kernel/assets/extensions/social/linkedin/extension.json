@@ -3,7 +3,7 @@
   "id": "com.kernl.linkedin",
   "slug": "linkedin",
   "name": "LinkedIn",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "LinkedIn personal-profile + company-page posting via OAuth2 (UGC Posts API).",
   "author": "Kernl",

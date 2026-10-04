@@ -1,4 +1,4 @@
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type {
   LearningResource, LearningHighlight, LearningFlashcard,
   LearningReview, LearningGoal, ResourceType, ResourceStatus, HighlightType,
@@ -41,6 +41,8 @@ export class LearningService {
     url?: string; isbn?: string; source?: string;
     status?: ResourceStatus; priority?: "low" | "medium" | "high";
     total_pages?: number; total_hours?: number; tags?: string[]; notes?: string;
+    rating?: number; started_at?: string; completed_at?: string;
+    current_page?: number; spent_hours?: number; summary?: string;
   }): LearningResource {
     const now = isoNow();
     const resource: LearningResource = {
@@ -48,11 +50,11 @@ export class LearningService {
       author: input.author ?? "", url: input.url ?? "",
       isbn: input.isbn ?? "", source: input.source ?? "",
       status: input.status ?? "wishlist", priority: input.priority ?? "medium",
-      rating: null, started_at: null, completed_at: null,
-      total_pages: input.total_pages ?? 0, current_page: 0,
-      total_hours: input.total_hours ?? 0, spent_hours: 0,
+      rating: input.rating ?? null, started_at: input.started_at ?? null, completed_at: input.completed_at ?? null,
+      total_pages: input.total_pages ?? 0, current_page: input.current_page ?? 0,
+      total_hours: input.total_hours ?? 0, spent_hours: input.spent_hours ?? 0,
       tags: JSON.stringify(input.tags ?? []),
-      notes: input.notes ?? "", summary: "",
+      notes: input.notes ?? "", summary: input.summary ?? "",
       created_at: now, updated_at: now,
     };
     this.db.prepare(`
@@ -71,6 +73,8 @@ export class LearningService {
   }
 
   updateResource(id: string, changes: Partial<{
+    type: ResourceType; title: string; author: string; url: string; isbn: string; source: string;
+    total_pages: number; total_hours: number;
     status: ResourceStatus; priority: "low" | "medium" | "high";
     current_page: number; spent_hours: number; rating: number;
     notes: string; summary: string; tags: string[];
@@ -86,9 +90,12 @@ export class LearningService {
       updated_at: isoNow(),
     };
     this.db.prepare(`
-      UPDATE learning_resources SET status=?,priority=?,current_page=?,spent_hours=?,rating=?,
+      UPDATE learning_resources SET type=?,title=?,author=?,url=?,isbn=?,source=?,total_pages=?,total_hours=?,
+      status=?,priority=?,current_page=?,spent_hours=?,rating=?,
       notes=?,summary=?,tags=?,started_at=?,completed_at=?,updated_at=? WHERE id=?
     `).run(
+      updated.type,updated.title,updated.author,updated.url,updated.isbn,updated.source,
+      updated.total_pages,updated.total_hours,
       updated.status,updated.priority,updated.current_page,updated.spent_hours,updated.rating,
       updated.notes,updated.summary,updated.tags,updated.started_at,updated.completed_at,
       updated.updated_at,id,
@@ -98,6 +105,8 @@ export class LearningService {
 
   listResources(filters?: {
     type?: ResourceType; status?: ResourceStatus; search?: string; limit?: number;
+    /** In-progress first, then the wishlist, then the rest (the dashboard's order). */
+    inProgressFirst?: boolean;
   }): LearningResource[] {
     let sql = "SELECT * FROM learning_resources WHERE 1=1";
     const params: unknown[] = [];
@@ -108,7 +117,9 @@ export class LearningService {
       const q = `%${filters.search}%`;
       params.push(q, q, q);
     }
-    sql += " ORDER BY updated_at DESC";
+    sql += filters?.inProgressFirst
+      ? " ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'wishlist' THEN 1 ELSE 2 END, updated_at DESC"
+      : " ORDER BY updated_at DESC";
     if (filters?.limit) { sql += " LIMIT ?"; params.push(filters.limit); }
     return this.db.prepare(sql).all(...params) as LearningResource[];
   }
@@ -153,7 +164,7 @@ export class LearningService {
     front: string; back: string; deck?: string;
     resource_id?: string; tags?: string[];
   }): LearningFlashcard {
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
     const now = isoNow();
     const card: LearningFlashcard = {
       id: newId(), resource_id: input.resource_id ?? null,
@@ -176,9 +187,12 @@ export class LearningService {
   }
 
   getDueCards(deck?: string, limit = 20): LearningFlashcard[] {
-    const today = new Date().toISOString().split("T")[0];
+    // Compared against the full timestamp, not today's date: a date-only
+    // next_review ("2026-07-01") still sorts before any time that day, and a
+    // full timestamp (written by the dashboard's old review path) is not
+    // skipped for being longer than the date string.
     let sql = "SELECT * FROM learning_flashcards WHERE next_review <= ?";
-    const params: unknown[] = [today];
+    const params: unknown[] = [isoNow()];
     if (deck) { sql += " AND deck = ?"; params.push(deck); }
     sql += " ORDER BY next_review ASC LIMIT ?";
     params.push(limit);
@@ -206,7 +220,7 @@ export class LearningService {
   }
 
   listDecks(): Array<{ deck: string; total: number; due: number }> {
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
     return this.db.prepare(`
       SELECT deck, COUNT(*) as total,
              SUM(CASE WHEN next_review <= ? THEN 1 ELSE 0 END) as due
@@ -253,10 +267,31 @@ export class LearningService {
       by_status[r.status] = (by_status[r.status] ?? 0) + 1;
       by_type[r.type] = (by_type[r.type] ?? 0) + 1;
     }
-    const today = new Date().toISOString().split("T")[0];
+    const today = localDate();
     const due_cards = (this.db.prepare("SELECT COUNT(*) as c FROM learning_flashcards WHERE next_review <= ?").get(today) as { c: number }).c;
     const decks = (this.db.prepare("SELECT COUNT(DISTINCT deck) as c FROM learning_flashcards").get() as { c: number }).c;
     const highlights = (this.db.prepare("SELECT COUNT(*) as c FROM learning_highlights").get() as { c: number }).c;
     return { total: resources.length, by_status, by_type, due_cards, decks, highlights };
+  }
+
+  /** The dashboard's learning header: resource totals, due and total cards,
+   *  and reviews over the last seven days. */
+  getDashboardStats(): {
+    totalResources: number; byStatus: Array<{ status: string; count: number }>;
+    dueCards: number; totalCards: number; weeklyReviews: number;
+  } {
+    const count = (sql: string, ...params: unknown[]) => (this.db.prepare(sql).get(...params) as { c: number }).c;
+    return {
+      totalResources: count("SELECT COUNT(*) as c FROM learning_resources"),
+      byStatus: this.db.prepare(
+        "SELECT status, COUNT(*) as count FROM learning_resources GROUP BY status",
+      ).all() as Array<{ status: string; count: number }>,
+      dueCards: count("SELECT COUNT(*) as c FROM learning_flashcards WHERE next_review <= ?", isoNow()),
+      totalCards: count("SELECT COUNT(*) as c FROM learning_flashcards"),
+      weeklyReviews: count(
+        "SELECT COUNT(*) as c FROM learning_reviews WHERE reviewed_at >= ?",
+        new Date(Date.now() - 7 * 86400000).toISOString(),
+      ),
+    };
   }
 }

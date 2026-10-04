@@ -16,7 +16,7 @@
  * transaction that flips the row.
  */
 
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { DbDriverRegistry } from "./db-driver-registry.js";
 
 function slugOf(req: unknown): string | null {
@@ -26,59 +26,44 @@ function slugOf(req: unknown): string | null {
   return slug;
 }
 
+/** The validated `:slug`, or a 400. */
+function requireSlug(params: Record<string, string>): string {
+  const slug = slugOf({ params });
+  if (!slug) throw new HttpError(400, "invalid slug");
+  return slug;
+}
+
 export function registerDbDriverRoutes(
   server: KernelHttpServer,
   registry: DbDriverRegistry,
 ): void {
-  server.get("/api/db-drivers", (_req, res) => {
-    server.json(res, 200, { drivers: registry.getAllStatuses() });
-  });
+  server.route("GET", "/api/db-drivers", () => ({ drivers: registry.getAllStatuses() }));
 
-  server.get("/api/db-drivers/:slug", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) {
-      server.json(res, 400, { error: "invalid slug" });
-      return;
-    }
+  server.route("GET", "/api/db-drivers/:slug", ({ params }) => {
+    const slug = requireSlug(params);
     const row = registry.getAllStatuses().find((r) => {
       const s = r.status as { slug?: string };
       return s.slug === slug;
     });
-    if (!row) {
-      server.json(res, 404, { error: "driver not found" });
-      return;
-    }
-    server.json(res, 200, row);
+    if (!row) throw new HttpError(404, "driver not found");
+    return row;
   });
 
-  server.get("/api/db-drivers/:slug/schema", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) {
-      server.json(res, 400, { error: "invalid slug" });
-      return;
-    }
-    const schema = registry.getConfigSchema(slug);
-    if (!schema) {
-      server.json(res, 404, { error: "driver not found" });
-      return;
-    }
-    server.json(res, 200, { schema });
+  server.route("GET", "/api/db-drivers/:slug/schema", ({ params }) => {
+    const schema = registry.getConfigSchema(requireSlug(params));
+    if (!schema) throw new HttpError(404, "driver not found");
+    return { schema };
   });
 
-  server.get("/api/db-drivers/:slug/config", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) {
-      server.json(res, 400, { error: "invalid slug" });
-      return;
-    }
-    const config = registry.loadConfig(slug);
-    if (config === null) {
-      server.json(res, 404, { error: "driver not found" });
-      return;
-    }
-    server.json(res, 200, { config });
+  server.route("GET", "/api/db-drivers/:slug/config", ({ params }) => {
+    const config = registry.loadConfig(requireSlug(params));
+    if (config === null) throw new HttpError(404, "driver not found");
+    return { config };
   });
 
+  // Left on the raw handler: an empty or malformed body must stay a 400.
+  // The helper reads an empty body as `{}`, which would reach validation
+  // and, for a driver with no required fields, save an empty config.
   server.put("/api/db-drivers/:slug/config", async (req, res) => {
     const slug = slugOf(req);
     if (!slug) {
@@ -140,47 +125,27 @@ export function registerDbDriverRoutes(
     server.json(res, 200, { saved: true, running: !!row?.active });
   });
 
-  server.post("/api/db-drivers/:slug/activate", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) {
-      server.json(res, 400, { error: "invalid slug" });
-      return;
-    }
-    const ok = await registry.setActive(slug);
+  server.route("POST", "/api/db-drivers/:slug/activate", async ({ params }) => {
+    const ok = await registry.setActive(requireSlug(params));
     if (!ok) {
-      server.json(res, 500, {
-        ok: false,
-        error: registry.lastStartError ?? "activate failed",
-      });
-      return;
+      const error = registry.lastStartError ?? "activate failed";
+      throw new HttpError(500, error, { ok: false, error });
     }
-    server.json(res, 200, { ok: true });
+    return { ok: true };
   });
 
-  server.post("/api/db-drivers/:slug/start", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) {
-      server.json(res, 400, { error: "invalid slug" });
-      return;
-    }
-    const ok = await registry.startDriver(slug);
+  server.route("POST", "/api/db-drivers/:slug/start", async ({ params }) => {
+    const ok = await registry.startDriver(requireSlug(params));
     if (!ok) {
-      server.json(res, 500, {
-        ok: false,
-        error: registry.lastStartError ?? "start failed",
-      });
-      return;
+      const error = registry.lastStartError ?? "start failed";
+      throw new HttpError(500, error, { ok: false, error });
     }
-    server.json(res, 200, { ok: true });
+    return { ok: true };
   });
 
-  server.post("/api/db-drivers/:slug/stop", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) {
-      server.json(res, 400, { error: "invalid slug" });
-      return;
-    }
-    const ok = await registry.stopDriver(slug);
-    server.json(res, ok ? 200 : 404, { ok });
+  server.route("POST", "/api/db-drivers/:slug/stop", async ({ params }) => {
+    const ok = await registry.stopDriver(requireSlug(params));
+    if (!ok) throw new HttpError(404, "driver not running", { ok });
+    return { ok };
   });
 }

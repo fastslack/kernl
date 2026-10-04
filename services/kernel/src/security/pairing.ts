@@ -6,6 +6,7 @@
 import { randomBytes } from "crypto";
 import { log } from "../core/logger.js";
 import type { PairingCode, SecurityConfig } from "./types.js";
+import { kernelTimezone } from "../sdk/clock.js";
 
 /**
  * Pairing Manager
@@ -235,7 +236,7 @@ export function formatApprovalNotification(pairing: PairingCode): string {
     `User ID: ${pairing.userId}\n` +
     `Chat ID: ${pairing.chatId}\n` +
     `Code: **${pairing.code}**\n` +
-    `Expires: ${pairing.expiresAt.toLocaleString()}\n\n` +
+    `Expires: ${pairing.expiresAt.toLocaleString(undefined, { timeZone: kernelTimezone() })}\n\n` +
     `To approve: /pair approve ${pairing.code}\n` +
     `To deny: /pair deny ${pairing.code}`
   );

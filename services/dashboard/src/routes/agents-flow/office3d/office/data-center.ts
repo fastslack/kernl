@@ -1,9 +1,12 @@
 import { rt } from '../runtime.js';
-import { esc } from '../esc.js';
 import type { RoomInfo } from '../types.js';
 import { WALL_H } from './_shared.js';
 import { applyPBR } from './_materials.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import {
+  tagProp, glowOnHover, canvasPanel, fitText, listPartAt, listHeight,
+  type ListLayout, type PropHit,
+} from '../wall-screen.js';
 
 /** Minimal repo descriptor used by buildDataCenterOffice to label racks +
  *  the wall directory. Comes from /api/dashboard/repos (channel: repos). */
@@ -21,25 +24,95 @@ export interface RepoBookmark {
  * style server racks against the far wall (one rack per registered repo plus
  * spares), a CRT terminal cluster on a side wall, mainframe console + tape-reel
  * cabinet + UPS + KVM + patch panel + ops chair + printout pile in the corners,
- * and a backlit "DIRECTORY" panel on the wall listing every registered repo.
+ * and a backlit "DIRECTORY" screen on the wall listing every registered repo.
+ *
+ * Nothing here floats over the room: every piece of information lives on an
+ * object (rack nameplates, the directory screen, the NOC monitors) and every
+ * action is a prop (see wall-screen.ts) — hover shows what it does, click
+ * does it.
  *
  * Repos list arrives via the `repos` arg — left empty just renders empty/dark
  * racks. Caller is expected to call `buildDataCenterOffice` again whenever the
  * registry changes (the scene rebuild path already does this on flow refresh).
  */
 export interface DataCenterHandles {
-  /** Invisible hitboxes over each FREE rack. Tag with `userData.isFreeRepoRack`
-   *  + `userData.rackIndex`. Caller pushes these into the raycaster targets
-   *  so click opens the "register a repo here" modal. */
-  freeRackHitboxes: any[];
-  /** Invisible hitbox over the DevOps workstation (desk + monitor). Tagged with
-   *  `userData.isDevopsTerminal`. Caller pushes it into the raycaster targets so
-   *  click navigates to the DevOps control panel (/devops). */
-  devopsTerminalHitbox: any;
+  /** Every interactive prop in the room (racks, directory screen, NOC desk,
+   *  UPS), each tagged with `userData.prop`. The caller adds them to the
+   *  raycaster targets; hover and click go through the prop itself. */
+  props: any[];
+  /** Free floor spot for the master power console (infra-power.ts): against the
+   *  patch-panel wall, door side, clear of the desk grid. `face` is the unit
+   *  vector the console's front (and its operator) points to. */
+  powerConsoleSpot: { x: number; z: number; face: { x: number; z: number } };
 }
 
-export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBookmark[] = []): DataCenterHandles {
-  const freeRackHitboxes: any[] = [];
+/** What the room's props do. Every one is optional: a prop whose action is
+ *  missing still shows its information, it just isn't clickable. */
+export interface DataCenterActions {
+  /** Open one registered repo (rack nameplate, directory row). */
+  openRepo?: (repo: RepoBookmark) => void;
+  /** Open the whole repo registry (directory header). */
+  openRepos?: () => void;
+  /** Open the register-a-repo modal (free racks chip, directory footer). */
+  registerRepo?: () => void;
+  /** Open the DevOps control panel (NOC desk title). Only pass it when the
+   *  paid DevOps extension is active — otherwise /devops is a dead end. */
+  openDevops?: () => void;
+  /** Fallback for the NOC desk without the DevOps extension: show the power
+   *  grid of every office (infra-power.ts board). */
+  openPowerGrid?: () => void;
+}
+
+// LED materials that blink on occupied racks — ticked by updateDataCenter().
+// Module-level like infra-power's console state: one data center per scene,
+// reset on every rebuild.
+let blinkMats: Array<{ mat: any; base: any; speed: number; phase: number }> = [];
+
+/** Per-frame: flicker the activity LEDs on occupied racks. */
+export function updateDataCenter(timeSec: number): void {
+  for (const b of blinkMats) {
+    const s = Math.sin(timeSec * b.speed + b.phase);
+    // Mostly on, with short dark blips — reads as disk/network activity.
+    b.mat.color.copy(b.base).multiplyScalar(s > 0.55 ? 0.25 : 1);
+  }
+}
+
+/** An invisible box the raycaster can hit. Opacity 0 rather than
+ *  `visible: false`, which the raycaster skips. */
+function hitbox(wx: number, hy: number, wz: number): any {
+  const m = new rt.THREE.Mesh(
+    new rt.THREE.BoxGeometry(wx, hy, wz),
+    new rt.THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  );
+  m.renderOrder = -1;
+  return m;
+}
+
+/** Nameplate canvas: repo name in amber, branch in green underneath. */
+function drawNameplate(g: CanvasRenderingContext2D, w: number, h: number, name: string, branch?: string): void {
+  g.fillStyle = '#0a0806'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#ffb84a66'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, w - 3, h - 3);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#ffb84a';
+  g.shadowColor = '#ffb84a'; g.shadowBlur = 8;
+  g.font = `700 ${branch ? 30 : 36}px Syne, sans-serif`;
+  g.fillText(fitText(g, name.toUpperCase(), w - 20), w / 2, branch ? h * 0.36 : h / 2);
+  if (branch) {
+    g.shadowColor = '#4cff7a'; g.fillStyle = '#4cff7a';
+    g.font = `600 22px 'IBM Plex Mono', monospace`;
+    g.fillText(fitText(g, branch, w - 20), w / 2, h * 0.74);
+  }
+  g.shadowBlur = 0;
+}
+
+export function buildDataCenterOffice(
+  scene: any,
+  room: RoomInfo,
+  repos: RepoBookmark[] = [],
+  actions: DataCenterActions = {},
+): DataCenterHandles {
+  const props: any[] = [];
+  blinkMats = [];
   const { cx, cz, w, d, color } = room;
   const dd = room.doorDir || (room.side === 1 ? 'top' : 'bottom');
   const accent = new rt.THREE.Color(color);
@@ -99,8 +172,8 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
   //  - vented black front insert
   //  - 6×3 LED grid (green / amber, sparse red) — DARK on empty racks
   //  - vertical brand stripe in the flow accent colour
-  //  - amber backlit nameplate at the top
-  //  - CSS2D floating label with the repo name (or "FREE" placeholder)
+  //  - amber backlit nameplate at the top, the repo's name + branch drawn on it
+  //  - a hitbox: occupied → open that repo, free → register one
   const isX = farWall.id === 'top' || farWall.id === 'bottom';
   const wallLen = isX ? w : d;
   const usableLen = Math.max(2, wallLen - 2.6);
@@ -121,6 +194,16 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
   scene.add(platform);
   // Dim/dark variants for empty racks
   const labelDark = new rt.THREE.MeshStandardMaterial({ color: 0x141618, roughness: 0.9, metalness: 0 });
+  const ledGeo = new rt.THREE.BoxGeometry(0.05, 0.05, 0.02);
+  // Activity LEDs: a few phase-shifted copies of green/amber so occupied racks
+  // flicker out of sync instead of pulsing as one block.
+  const activityMats: any[] = [];
+  for (let k = 0; k < 4; k++) {
+    const base = new rt.THREE.Color(k % 2 === 0 ? 0x4cff7a : 0xffb84a);
+    const mat = new rt.THREE.MeshBasicMaterial({ color: base.clone() });
+    blinkMats.push({ mat, base, speed: 3.1 + k * 1.7, phase: k * 1.9 });
+    activityMats.push(mat);
+  }
   for (let i = 0; i < rackCount; i++) {
     const repo: RepoBookmark | undefined = repos[i];
     const occupied = !!repo;
@@ -162,8 +245,10 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
         const h = hash(i * 37 + c, r);
         const tint = !occupied
           ? labelDark
-          : ((h % 17 === 0) ? labelRed : ((h % 3 === 0) ? labelAmber : labelGreen));
-        const led = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.05, 0.05, 0.02), tint);
+          : ((h % 17 === 0) ? labelRed
+            : (h % 5 === 1) ? activityMats[h % activityMats.length]
+            : ((h % 3 === 0) ? labelAmber : labelGreen));
+        const led = new rt.THREE.Mesh(ledGeo, tint);
         const ledOff = -(rackW - 0.32) / 2 + (c + 0.5) * ((rackW - 0.32) / 3);
         const ledY = rackBaseY + 0.45 + r * 0.32;
         led.position.set(
@@ -208,43 +293,178 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
       rz + (isX ? -farWall.nz * (rackD / 2 + 0.025) : 0),
     );
     scene.add(nameplate);
-    // Invisible hitbox over the whole rack — only for FREE racks so that
-    // click → register-repo modal. Occupied racks open a future repo-detail
-    // modal eventually (TODO); for now only FREE is wired.
-    if (!occupied) {
-      const hbGeo = isX
-        ? new rt.THREE.BoxGeometry(rackW + 0.05, rackH + 0.2, rackD + 0.2)
-        : new rt.THREE.BoxGeometry(rackD + 0.2, rackH + 0.2, rackW + 0.05);
-      const hb = new rt.THREE.Mesh(hbGeo, new rt.THREE.MeshBasicMaterial({ visible: false }));
-      hb.position.set(rx, rackBaseY + rackH / 2 + 0.05, rz);
-      hb.userData.isFreeRepoRack = true;
-      hb.userData.rackIndex = i;
-      scene.add(hb);
-      freeRackHitboxes.push(hb);
-    }
-    // CSS2D label floating above the rack. Click-through; the per-rack hitbox
-    // (above) is what carries the action.
-    if (rt.CSS2DObject) {
-      const labelDiv = document.createElement('div');
-      const txt = (repo?.name ?? 'FREE').toUpperCase().slice(0, 14);
-      labelDiv.textContent = txt;
-      labelDiv.title = occupied ? `${repo!.name} · ${repo!.path ?? ''}` : 'Free rack — register a repo with kernel_repos_register';
-      labelDiv.style.cssText = occupied
-        ? `font:700 9px 'Syne',sans-serif;color:#ffb84a;letter-spacing:1.5px;
-           text-shadow:0 0 6px #ffb84a80;background:rgba(0,0,8,0.78);
-           padding:2px 6px;border-radius:2px;border:1px solid #ffb84a40;
-           pointer-events:none;white-space:nowrap;`
-        : `font:600 8px 'Syne',sans-serif;color:#3a3a3a;letter-spacing:1.5px;
-           background:rgba(0,0,8,0.5);padding:2px 6px;border-radius:2px;
-           border:1px solid #2a2a2a;pointer-events:none;white-space:nowrap;`;
-      const lbl = new rt.CSS2DObject(labelDiv);
-      lbl.position.set(
-        rx + (isX ? 0 : -farWall.nx * 0.05),
-        rackBaseY + rackH + 0.18,
-        rz + (isX ? -farWall.nz * 0.05 : 0),
+    // The repo's name on the rack itself, where a floating tag used to be:
+    // it reads when you look at the rack and stays out of the way otherwise.
+    const glowMats: any[] = [nameplate.material];
+    if (occupied) {
+      const plate = canvasPanel(rackW - 0.16, 0.24, 256, 96);
+      if (plate.g) drawNameplate(plate.g, 256, 96, repo!.name, repo!.default_branch);
+      plate.refresh();
+      // Same face as the rack's front insert, LEDs and backing plate (offset
+      // along -farWall normal, like them), just proud of the backing plate.
+      plate.mesh.position.set(
+        rx - farWall.nx * (rackD / 2 + 0.04),
+        rackBaseY + rackH - 0.2,
+        rz - farWall.nz * (rackD / 2 + 0.04),
       );
-      scene.add(lbl);
+      plate.mesh.rotation.y = Math.atan2(-farWall.nx, -farWall.nz);
+      scene.add(plate.mesh);
+      glowMats.push(plate.mat);
     }
+    const hb = isX ? hitbox(rackW, rackH + 0.2, rackD + 0.2) : hitbox(rackD + 0.2, rackH + 0.2, rackW);
+    hb.position.set(rx, rackBaseY + rackH / 2 + 0.05, rz);
+    const glowPlate = glowOnHover(glowMats.slice(1));
+    const r = repo;
+    tagProp(hb, {
+      tip: () => r
+        ? `${r.name}${r.default_branch ? ` · ${r.default_branch}` : ''}${actions.openRepo ? ' — open repo' : ''}`
+        : (actions.registerRepo ? 'Free rack — register a repo' : 'Free rack'),
+      click: r
+        ? (actions.openRepo ? () => actions.openRepo!(r) : undefined)
+        : actions.registerRepo,
+      hover: (on) => {
+        // Free racks have only the dim backing plate; light it up instead.
+        nameplate.material.emissiveIntensity = on ? 0.6 : (occupied ? 0.35 : 0.12);
+        glowPlate(on);
+      },
+    });
+    scene.add(hb);
+    props.push(hb);
+  }
+
+  // Unit vector along the rack row, and the room-facing normal of the far wall.
+  const rowAxis = isX ? { x: 1, z: 0 } : { x: 0, z: 1 };
+  const farN = { x: farWall.nx, z: farWall.nz };
+  const rowPoint = (along: number, out: number, y: number) => new rt.THREE.Vector3(
+    farWall.midX + rowAxis.x * along + farN.x * out, y, farWall.midZ + rowAxis.z * along + farN.z * out,
+  );
+
+  // ── 1b. COLD AISLE — perforated raised-floor tiles + hazard line ──
+  // Canvas textures, built once per office: a perforated tile grid in front of
+  // the racks and a yellow/black stripe marking the edge of the rack zone.
+  const aisleDepth = 1.1;
+  {
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 64;
+    const g = c.getContext('2d');
+    if (g) {
+      g.fillStyle = '#2b3140'; g.fillRect(0, 0, 64, 64);
+      g.strokeStyle = '#151922'; g.lineWidth = 2; g.strokeRect(1, 1, 62, 62);
+      g.fillStyle = '#121620';
+      for (let yy = 8; yy < 60; yy += 7) for (let xx = 8; xx < 60; xx += 7) g.fillRect(xx, yy, 3, 3);
+    }
+    const tex = new rt.THREE.CanvasTexture(c);
+    tex.wrapS = tex.wrapT = rt.THREE.RepeatWrapping;
+    tex.repeat.set(Math.round(rackTotalW / 0.6), Math.round(aisleDepth / 0.6) || 1);
+    const tiles = new rt.THREE.Mesh(
+      new rt.THREE.PlaneGeometry(rackTotalW, aisleDepth),
+      new rt.THREE.MeshStandardMaterial({ map: tex, roughness: 0.8, metalness: 0.3 }),
+    );
+    tiles.rotation.x = -Math.PI / 2;
+    if (!isX) tiles.rotation.z = Math.PI / 2;
+    tiles.position.copy(rowPoint(0, rackD + 0.2 + aisleDepth / 2, 0.035));
+    tiles.receiveShadow = true;
+    scene.add(tiles);
+  }
+  {
+    const c = document.createElement('canvas');
+    c.width = 64; c.height = 8;
+    const g = c.getContext('2d');
+    if (g) {
+      g.fillStyle = '#f2c230'; g.fillRect(0, 0, 64, 8);
+      g.fillStyle = '#111';
+      for (let k = -8; k < 64; k += 16) { g.beginPath(); g.moveTo(k, 8); g.lineTo(k + 8, 0); g.lineTo(k + 16, 0); g.lineTo(k + 8, 8); g.fill(); }
+    }
+    const tex = new rt.THREE.CanvasTexture(c);
+    tex.wrapS = rt.THREE.RepeatWrapping;
+    tex.repeat.set(Math.round(rackTotalW / 0.5), 1);
+    const stripeLine = new rt.THREE.Mesh(
+      new rt.THREE.PlaneGeometry(rackTotalW + 0.6, 0.08),
+      new rt.THREE.MeshBasicMaterial({ map: tex }),
+    );
+    stripeLine.rotation.x = -Math.PI / 2;
+    if (!isX) stripeLine.rotation.z = Math.PI / 2;
+    stripeLine.position.copy(rowPoint(0, rackD + 0.2 + aisleDepth + 0.05, 0.037));
+    scene.add(stripeLine);
+  }
+
+  // ── 1c. OVERHEAD CABLE LADDER above the rack fronts ─────────────
+  // Two rails + rungs, with a bundle of patch cables dropping into each
+  // occupied rack — the rack row stops reading as a row of black boxes.
+  {
+    const ladderY = rackBaseY + rackH + 0.28;
+    const ladderOut = rackD * 0.55;
+    for (const edge of [-0.18, 0.18]) {
+      const rail = new rt.THREE.Mesh(
+        isX ? new rt.THREE.BoxGeometry(rackTotalW + 0.4, 0.05, 0.04) : new rt.THREE.BoxGeometry(0.04, 0.05, rackTotalW + 0.4),
+        conduitMat,
+      );
+      rail.position.copy(rowPoint(0, ladderOut + edge, ladderY));
+      scene.add(rail);
+    }
+    const rungGeo = isX ? new rt.THREE.BoxGeometry(0.03, 0.03, 0.36) : new rt.THREE.BoxGeometry(0.36, 0.03, 0.03);
+    for (let off = -rackTotalW / 2; off <= rackTotalW / 2 + 1e-3; off += 0.4) {
+      const rung = new rt.THREE.Mesh(rungGeo, conduitMat);
+      rung.position.copy(rowPoint(off, ladderOut, ladderY - 0.01));
+      scene.add(rung);
+    }
+    // Cable bundle resting on the ladder, the full length of the row.
+    const bundle = new rt.THREE.Mesh(
+      isX ? new rt.THREE.BoxGeometry(rackTotalW, 0.07, 0.22) : new rt.THREE.BoxGeometry(0.22, 0.07, rackTotalW),
+      new rt.THREE.MeshStandardMaterial({ color: 0x2a5bd7, roughness: 0.7 }),
+    );
+    bundle.position.copy(rowPoint(0, ladderOut, ladderY + 0.05));
+    scene.add(bundle);
+    const dropColors = [0x2a5bd7, 0xffb84a, 0x4cff7a];
+    const dropGeo = new rt.THREE.CylinderGeometry(0.025, 0.025, ladderY - (rackBaseY + rackH), 6);
+    for (let i = 0; i < Math.min(repos.length, rackCount); i++) {
+      const off = -rackTotalW / 2 + (i + 0.5) * rackW;
+      for (let k = 0; k < 3; k++) {
+        const drop = new rt.THREE.Mesh(dropGeo, new rt.THREE.MeshStandardMaterial({ color: dropColors[k], roughness: 0.6 }));
+        drop.position.copy(rowPoint(off - 0.1 + k * 0.1, ladderOut, (ladderY + rackBaseY + rackH) / 2));
+        scene.add(drop);
+      }
+    }
+  }
+
+  // ── 1d. CRAC COOLING UNIT at the end of the row away from the ops corner ──
+  // Tall white precision-cooling cabinet with fan grilles and a small status
+  // display. The ops corner (NOC desk + power console) sits on the
+  // patch-panel wall, so the CRAC takes the opposite end of the row.
+  const ppWallSign = (() => {
+    const pw = WALLS[sideWallIds[1]];
+    const dot = (pw.midX - cx) * rowAxis.x + (pw.midZ - cz) * rowAxis.z;
+    return dot >= 0 ? 1 : -1;
+  })();
+  {
+    const cracAlong = -ppWallSign * (rackTotalW / 2 + 1.1);
+    const cracPos = rowPoint(cracAlong, 0.45, 1.0);
+    const crac = new rt.THREE.Group();
+    crac.position.copy(cracPos);
+    crac.rotation.y = Math.atan2(farN.x, farN.z); // local +Z faces into the room
+    const shellMat = new rt.THREE.MeshStandardMaterial({ color: 0xdfe3ea, roughness: 0.55, metalness: 0.2 });
+    applyPBR(shellMat, 'plastic');
+    const shell = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(1.4, 2.0, 0.8), shellMat);
+    shell.castShadow = true;
+    crac.add(shell);
+    const grilleMat = new rt.THREE.MeshStandardMaterial({ color: 0x3a3f4a, roughness: 0.6, metalness: 0.5 });
+    for (const fy of [0.45, -0.25]) {
+      const ring = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.26, 0.26, 0.03, 20), grilleMat);
+      ring.rotation.x = Math.PI / 2;
+      ring.position.set(0, fy, 0.41);
+      crac.add(ring);
+      for (let s = 0; s < 3; s++) {
+        const blade = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.44, 0.03, 0.01), ventDark);
+        blade.rotation.z = (s / 3) * Math.PI;
+        blade.position.set(0, fy, 0.43);
+        crac.add(blade);
+      }
+    }
+    const lcd = new rt.THREE.Mesh(new rt.THREE.PlaneGeometry(0.34, 0.14),
+      new rt.THREE.MeshStandardMaterial({ color: 0x001018, emissive: new rt.THREE.Color(0x2ad6ff), emissiveIntensity: 0.9 }));
+    lcd.position.set(0.38, 0.85, 0.405);
+    crac.add(lcd);
+    scene.add(crac);
   }
 
   // ── 2. CRT TERMINAL CLUSTER on the side wall ───────────────────
@@ -414,8 +634,11 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
   // ── 5. UPS / BATTERY CABINET next to the mainframe console ─────
   // Big square cabinet with a top vent, status panel and big chunky red
   // power button. Sits flush to the console.
-  const upsX = consoleX + (doorWall.id === 'left' || doorWall.id === 'right' ? 0 : 1.55);
-  const upsZ = consoleZ + (doorWall.id === 'top' || doorWall.id === 'bottom' ? 0 : 1.55);
+  // Step away from the side wall the console backs onto (toward the room),
+  // not a fixed +1.55: with the console in a corner that pushed the UPS
+  // halfway through the wall.
+  const upsX = consoleX + (doorWall.id === 'left' || doorWall.id === 'right' ? 0 : otherSide.nx * 1.55);
+  const upsZ = consoleZ + (doorWall.id === 'top' || doorWall.id === 'bottom' ? 0 : otherSide.nz * 1.55);
   const upsBody = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.85, 1.5, 0.6), chassis);
   upsBody.position.set(upsX, 0.75, upsZ);
   scene.add(upsBody);
@@ -440,17 +663,9 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
   upsBtn.rotation.x = Math.PI / 2;
   upsBtn.position.set(upsX + 0.25, 0.7, upsZ + 0.31);
   scene.add(upsBtn);
-  // "UPS / BATTERY" label
-  if (rt.CSS2DObject) {
-    const lDiv = document.createElement('div');
-    lDiv.textContent = 'UPS';
-    lDiv.style.cssText = `font:700 9px 'Syne',sans-serif;color:#ffb84a;letter-spacing:2px;
-      text-shadow:0 0 4px #ffb84a80;background:rgba(0,0,0,0.6);padding:1px 4px;
-      pointer-events:none;`;
-    const lbl = new rt.CSS2DObject(lDiv);
-    lbl.position.set(upsX, 1.65, upsZ);
-    scene.add(lbl);
-  }
+  // Named on hover rather than by a floating "UPS" tag. Nothing to click.
+  tagProp(upsBody, { tip: () => 'UPS · battery backup' });
+  props.push(upsBody);
 
   // ── 6. PATCH PANEL on the wall next to the terminal desk ───────
   // A 3-row patch panel with little dotted ports + a tangle of patch
@@ -599,46 +814,111 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
     scene.add(perf);
   }
 
-  // ── 9. WALL "DIRECTORY" PANEL — backlit list of all registered repos ──
-  // Anchored INSIDE the room on the side wall that holds the patch panel
-  // (sideWallIds[1]) at chest+head height so it reads as a wall-mounted
-  // print-out, NOT as a second title competing with the room's door sign.
-  // Header trimmed to "DIRECTORY" (no "REPOS" prefix) for the same reason —
-  // the door sign already shouts "REPOS OFFICE" loud enough.
-  if (rt.CSS2DObject) {
-    const dirDiv = document.createElement('div');
-    const lines: string[] = repos.length === 0
-      ? ['<em style="color:#5a5a5a">(empty registry)</em><br><span style="color:#7a7a7a;font-size:8px">click a FREE rack to register</span>']
-      : repos.slice(0, 18).map((r) => {
-          const br = r.default_branch ? ` <span style="color:#4cff7a">[${esc(r.default_branch)}]</span>` : '';
-          const lang = r.language ? ` <span style="color:#7a7a7a">·${esc(r.language)}</span>` : '';
-          return `<span style="color:#ffb84a">${esc(r.name)}</span>${br}${lang}`;
-        });
-    if (repos.length > 18) lines.push(`<span style="color:#7a7a7a">…+${repos.length - 18} more</span>`);
-    dirDiv.innerHTML = `
-      <div style="font:700 9px 'Syne',sans-serif;color:#ffb84a;letter-spacing:2.5px;
-        text-shadow:0 0 6px #ffb84a80;border-bottom:1px solid #ffb84a30;
-        padding-bottom:2px;margin-bottom:4px;text-align:center;opacity:.85;">
-        DIRECTORY
-      </div>
-      <div style="font:600 9px 'IBM Plex Mono',monospace;color:#c8b48a;
-        line-height:1.45;letter-spacing:0.5px;">
-        ${lines.join('<br>')}
-      </div>`;
-    dirDiv.style.cssText = `background:rgba(0,0,8,0.82);padding:6px 10px;border-radius:3px;
-      border:1px solid #ffb84a35;box-shadow:0 0 14px #ffb84a20, inset 0 0 5px #1a1410;
-      min-width:150px;max-width:230px;pointer-events:none;`;
-    const dirLbl = new rt.CSS2DObject(dirDiv);
-    // Anchor on the patch-panel wall, head-height, pushed slightly INSIDE the
-    // room so it visually attaches to the inside wall face. Different wall
-    // from the door sign + lower than wall-top = no longer reads as a title.
-    const ppWallRef = WALLS[sideWallIds[1]];
-    dirLbl.position.set(
-      ppWallRef.midX + ppWallRef.nx * 0.15,
+  // ── 9. WALL "DIRECTORY" SCREEN — backlit list of all registered repos ──
+  // Mounted on the inside face of the terminal wall, above the CRT desk, at
+  // head height. Drawn on a canvas, so it's part of the wall rather than a
+  // floating title over it. Every line is a way in: header → the registry, a
+  // row → that repo, "…more" → the registry, footer → register one more. The
+  // raycast UV says which line was hit (listPartAt).
+  {
+    const MAX_ROWS = 8;
+    type Line = { text: string; branch?: string; lang?: string; dim?: boolean; go?: () => void; tip: string };
+    const lines: Line[] = repos.slice(0, MAX_ROWS).map((r) => ({
+      text: r.name, branch: r.default_branch, lang: r.language,
+      go: actions.openRepo ? () => actions.openRepo!(r) : undefined,
+      tip: `${r.name}${r.path ? ` · ${r.path}` : ''}${actions.openRepo ? ' — open repo' : ''}`,
+    }));
+    if (repos.length === 0) lines.push({ text: '(empty registry)', dim: true, tip: 'No repos registered yet' });
+    if (repos.length > MAX_ROWS) {
+      lines.push({ text: `…+${repos.length - MAX_ROWS} more`, dim: true, go: actions.openRepos, tip: 'See every registered repo' });
+    }
+    const W = 480;
+    const geom = { pad: 16, headerH: 52, rowH: 38, rows: lines.length, footerH: actions.registerRepo ? 44 : 0 };
+    const layout: ListLayout = { ...geom, height: listHeight(geom) };
+    const pxPerM = W / 1.5;
+    const screen = canvasPanel(1.5, layout.height / pxPerM, W, layout.height);
+    const g = screen.g;
+    if (g) {
+      g.fillStyle = '#05040a'; g.fillRect(0, 0, W, layout.height);
+      g.strokeStyle = '#ffb84a55'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, W - 3, layout.height - 3);
+      g.textBaseline = 'middle';
+      // Header
+      const hy = layout.pad + layout.headerH / 2;
+      g.textAlign = 'center';
+      g.font = `700 26px Syne, sans-serif`;
+      g.fillStyle = '#ffb84a'; g.shadowColor = '#ffb84a'; g.shadowBlur = 10;
+      g.fillText(`DIRECTORY${actions.openRepos ? '  ›' : ''}`, W / 2, hy - 6);
+      g.shadowBlur = 0;
+      g.font = `500 15px 'IBM Plex Mono', monospace`;
+      g.fillStyle = '#8a8170';
+      g.fillText(`${repos.length} repo${repos.length === 1 ? '' : 's'}`, W / 2, hy + 16);
+      g.fillStyle = '#ffb84a40';
+      g.fillRect(layout.pad, layout.pad + layout.headerH - 2, W - layout.pad * 2, 2);
+      // Rows
+      g.textAlign = 'left';
+      lines.forEach((ln, i) => {
+        const y = layout.pad + layout.headerH + i * layout.rowH + layout.rowH / 2;
+        let x = layout.pad + 6;
+        g.font = `600 20px 'IBM Plex Mono', monospace`;
+        g.fillStyle = ln.dim ? '#7a7a7a' : '#ffb84a';
+        const name = fitText(g, ln.text, W * 0.5);
+        g.fillText(name, x, y);
+        x += g.measureText(name).width + 10;
+        if (ln.branch) {
+          g.fillStyle = '#4cff7a';
+          const br = fitText(g, `[${ln.branch}]`, W - x - 90);
+          g.fillText(br, x, y);
+          x += g.measureText(br).width + 10;
+        }
+        if (ln.lang && x < W - 90) {
+          g.font = `500 16px 'IBM Plex Mono', monospace`;
+          g.fillStyle = '#7a7a7a';
+          g.fillText(fitText(g, ln.lang, W - x - 40), x, y);
+        }
+        if (ln.go) {
+          g.textAlign = 'right'; g.fillStyle = '#ffb84a99'; g.font = `600 20px 'IBM Plex Mono', monospace`;
+          g.fillText('›', W - layout.pad - 6, y);
+          g.textAlign = 'left';
+        }
+      });
+      // Footer
+      if (layout.footerH > 0) {
+        const fy = layout.pad + layout.headerH + lines.length * layout.rowH;
+        g.setLineDash([6, 5]); g.strokeStyle = '#ffb84a40'; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(layout.pad, fy + 3); g.lineTo(W - layout.pad, fy + 3); g.stroke();
+        g.setLineDash([]);
+        g.font = `600 18px 'IBM Plex Mono', monospace`;
+        g.fillStyle = '#4cff7a'; g.fillText('＋', layout.pad + 6, fy + layout.footerH / 2 + 2);
+        g.fillStyle = '#9aa3b5'; g.fillText('register a repo', layout.pad + 32, fy + layout.footerH / 2 + 2);
+      }
+    }
+    screen.refresh();
+    screen.mesh.position.set(
+      terminalWall.midX + terminalWall.nx * 0.04,
       WALL_H * 0.72,
-      ppWallRef.midZ + ppWallRef.nz * 0.15,
+      terminalWall.midZ + terminalWall.nz * 0.04,
     );
-    scene.add(dirLbl);
+    screen.mesh.rotation.y = Math.atan2(terminalWall.nx, terminalWall.nz);
+    const partOf = (hit: PropHit) => (hit.uv ? listPartAt(layout, hit.uv.y) : null);
+    tagProp(screen.mesh, {
+      tip: (hit) => {
+        const part = partOf(hit);
+        if (!part) return 'Repo directory';
+        if (part.kind === 'header') return actions.openRepos ? 'Open the repo registry' : 'Repo directory';
+        if (part.kind === 'footer') return 'Register a repo';
+        return lines[part.index]?.tip ?? null;
+      },
+      click: (hit) => {
+        const part = partOf(hit);
+        if (!part) return;
+        if (part.kind === 'header') actions.openRepos?.();
+        else if (part.kind === 'footer') actions.registerRepo?.();
+        else lines[part.index]?.go?.();
+      },
+      hover: glowOnHover([screen.mat], 1.2),
+    });
+    scene.add(screen.mesh);
+    props.push(screen.mesh);
   }
 
   // ── 11. SIGNAGE LIGHTBOX above the rack row ────────────────────
@@ -663,7 +943,7 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
 
   // ── 12. ACCENT WASH — magnetic green-tinted floor light ───────
   // Lower intensity than buildCommunicationsOffice — racks already glow.
-  const accentLight = new rt.THREE.PointLight(accent.getHex(), 0.4, Math.max(w, d) * 1.1);
+  const accentLight = new rt.THREE.PointLight(accent.getHex(), 0.8, Math.max(w, d) * 1.1);
   accentLight.position.set(cx, WALL_H - 0.6, cz);
   accentLight.decay = 2;
   accentLight.matrixAutoUpdate = false; accentLight.updateMatrix();
@@ -678,46 +958,152 @@ export function buildDataCenterOffice(scene: any, room: RoomInfo, repos: RepoBoo
   wash.position.set(cx, 0.03, cz);
   scene.add(wash);
 
-  // ── DevOps terminal — a clickable workstation that opens the control panel.
-  // Desk + monitor with a glowing accent screen + a floating label. The
-  // invisible hitbox is returned so the raycaster routes clicks → /devops.
-  const dvx = cx - w / 2 + 1.9;
-  const dvz = cz - d / 2 + 1.9;
+  // ── 13. OPS CORNER — NOC desk (→ /devops) + power console spot ──
+  // Both live on the patch-panel wall, out of the desk grid: the NOC desk
+  // toward the rack row, the master power console (infra-power.ts) toward the
+  // door. The NOC desk is the in-world way into the DevOps control panel.
+  const opsWall = WALLS[sideWallIds[1]];
+  const opsN = { x: opsWall.nx, z: opsWall.nz };
+  const toFar = { x: -farN.x, z: -farN.z };
+  const opsAlongLen = (opsWall.id === 'top' || opsWall.id === 'bottom') ? w : d;
+  const nocAlong = opsAlongLen / 2 - 3.0;
+  const dvx = opsWall.midX + opsN.x * 1.15 + toFar.x * nocAlong;
+  const dvz = opsWall.midZ + opsN.z * 1.15 + toFar.z * nocAlong;
+  const noc = new rt.THREE.Group();
+  noc.position.set(dvx, 0, dvz);
+  noc.rotation.y = Math.atan2(opsN.x, opsN.z); // local +Z faces into the room
   const dvDeskMat = new rt.THREE.MeshStandardMaterial({ color: 0x1b2233, roughness: 0.7, metalness: 0.3 });
-  const dvDesk = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(1.3, 0.08, 0.7), dvDeskMat);
-  dvDesk.position.set(dvx, 0.75, dvz);
-  scene.add(dvDesk);
-  for (const lx of [-0.55, 0.55]) for (const lz of [-0.28, 0.28]) {
-    const dvLeg = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.06, 0.75, 0.06), dvDeskMat);
-    dvLeg.position.set(dvx + lx, 0.375, dvz + lz);
-    scene.add(dvLeg);
+  applyPBR(dvDeskMat, 'metal');
+  const dvDesk = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(2.1, 0.06, 0.85), dvDeskMat);
+  dvDesk.position.set(0, 0.76, 0);
+  dvDesk.castShadow = true; dvDesk.receiveShadow = true;
+  noc.add(dvDesk);
+  // Front edge glow strip in the office accent.
+  const edge = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(2.1, 0.02, 0.02),
+    new rt.THREE.MeshBasicMaterial({ color: accent.clone().multiplyScalar(1.2) }));
+  edge.position.set(0, 0.74, 0.43);
+  noc.add(edge);
+  for (const lx of [-0.98, 0.98]) {
+    const side = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.06, 0.74, 0.78), dvDeskMat);
+    side.position.set(lx, 0.37, 0);
+    noc.add(side);
   }
-  // Monitor: dark bezel + emissive screen in the office accent.
-  const dvBezel = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.98, 0.6, 0.05), new rt.THREE.MeshStandardMaterial({ color: 0x0a0d16, roughness: 0.5 }));
-  dvBezel.position.set(dvx, 1.28, dvz - 0.15);
-  scene.add(dvBezel);
-  const dvScreen = new rt.THREE.Mesh(new rt.THREE.PlaneGeometry(0.88, 0.5), new rt.THREE.MeshStandardMaterial({ color: accent, emissive: accent, emissiveIntensity: 1.1, roughness: 0.3 }));
-  dvScreen.position.set(dvx, 1.28, dvz - 0.121);
-  scene.add(dvScreen);
-  const dvStand = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.08, 0.35, 0.08), dvDeskMat);
-  dvStand.position.set(dvx, 0.97, dvz - 0.15);
-  scene.add(dvStand);
-  const dvGlow = new rt.THREE.PointLight(accent, 0.9, 4);
-  dvGlow.position.set(dvx, 1.35, dvz + 0.2);
+  // What the desk is for — the DevOps panel when its extension is active, the
+  // power grid otherwise; something real either way, never a dead link. It
+  // is written on the monitors' title bar instead of floating over the desk.
+  const nocAction = actions.openDevops ?? actions.openPowerGrid;
+  const [nocTitle, nocTip] = actions.openDevops
+    ? ['DEVOPS CONSOLE', 'DevOps console — deploys · containers · logs']
+    : ['OPS CONSOLE', 'Ops console — power grid of every office'];
+  // Monitor screens: a small dashboard drawn once on a canvas — title bar,
+  // a latency sparkline and a row of build bars. Drawn at 2× for a legible title.
+  const screenTex = (() => {
+    const c = document.createElement('canvas');
+    c.width = 256; c.height = 144;
+    const g = c.getContext('2d');
+    if (g) {
+      g.scale(2, 2);
+      g.fillStyle = '#060a14'; g.fillRect(0, 0, 128, 72);
+      g.fillStyle = '#' + accent.getHexString(); g.fillRect(0, 0, 128, 14);
+      g.fillStyle = '#ffffff'; g.font = `700 8px Syne, sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(nocTitle, 64, 7.5);
+      g.fillStyle = '#0b1222'; g.fillRect(4, 17, 120, 26);
+      g.strokeStyle = '#4cff7a'; g.lineWidth = 1.5; g.beginPath();
+      for (let k = 0; k <= 24; k++) {
+        const yy = 32 - Math.sin(k * 0.7) * 7 - (hash(k, 3) % 6);
+        if (k === 0) g.moveTo(6 + k * 4.8, yy); else g.lineTo(6 + k * 4.8, yy);
+      }
+      g.stroke();
+      for (let k = 0; k < 12; k++) {
+        const hgt = 6 + (hash(k, 9) % 18);
+        g.fillStyle = k === 7 ? '#ff4a3a' : (k % 4 === 0 ? '#ffb84a' : '#2a8cff');
+        g.fillRect(6 + k * 10, 68 - hgt, 7, hgt);
+      }
+    }
+    return new rt.THREE.CanvasTexture(c);
+  })();
+  const bezelMat2 = new rt.THREE.MeshStandardMaterial({ color: 0x0a0d16, roughness: 0.5 });
+  const screenMat = new rt.THREE.MeshBasicMaterial({ map: screenTex, toneMapped: false });
+  for (const [mx, rotY] of [[-0.68, 0.32], [0, 0], [0.68, -0.32]] as const) {
+    const mon = new rt.THREE.Group();
+    mon.position.set(mx, 1.2, -0.22 + Math.abs(mx) * 0.12);
+    mon.rotation.y = rotY;
+    const bz = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.66, 0.42, 0.04), bezelMat2);
+    mon.add(bz);
+    const sc = new rt.THREE.Mesh(new rt.THREE.PlaneGeometry(0.6, 0.36), screenMat);
+    sc.position.z = 0.021;
+    mon.add(sc);
+    const st = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.05, 0.22, 0.05), dvDeskMat);
+    st.position.set(0, -0.3, -0.03);
+    mon.add(st);
+    noc.add(mon);
+  }
+  // Keyboard, mouse, mug.
+  const kb2 = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.5, 0.025, 0.16),
+    new rt.THREE.MeshStandardMaterial({ color: 0x23293a, roughness: 0.6 }));
+  kb2.position.set(0, 0.8, 0.18);
+  noc.add(kb2);
+  const mouse = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.06, 0.025, 0.1),
+    new rt.THREE.MeshStandardMaterial({ color: 0x23293a, roughness: 0.6 }));
+  mouse.position.set(0.36, 0.8, 0.2);
+  noc.add(mouse);
+  const mug = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.045, 0.04, 0.1, 12),
+    new rt.THREE.MeshStandardMaterial({ color: 0xe8e4da, roughness: 0.4 }));
+  mug.position.set(-0.75, 0.84, 0.2);
+  noc.add(mug);
+  // Operator chair, pulled out a little.
+  const nocChair = new rt.THREE.Group();
+  nocChair.position.set(0.1, 0, 0.8);
+  const ncMat = new rt.THREE.MeshStandardMaterial({ color: 0x1a1a22, roughness: 0.8 });
+  const ncSeat = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.48, 0.07, 0.46), ncMat);
+  ncSeat.position.y = 0.46;
+  nocChair.add(ncSeat);
+  const ncBack = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.46, 0.55, 0.06), ncMat);
+  ncBack.position.set(0, 0.78, 0.22);
+  nocChair.add(ncBack);
+  const ncStem = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.03, 0.03, 0.42, 8), stem2Mat);
+  ncStem.position.y = 0.22;
+  nocChair.add(ncStem);
+  noc.add(nocChair);
+  scene.add(noc);
+  const dvGlow = new rt.THREE.PointLight(accent, 1.4, 3.5);
+  dvGlow.position.set(dvx + opsN.x * 0.6, 1.4, dvz + opsN.z * 0.6);
   scene.add(dvGlow);
-  // Invisible hitbox over the whole workstation → click routes to /devops.
-  const dvTerm = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(1.4, 1.7, 0.9), new rt.THREE.MeshBasicMaterial({ visible: false }));
-  dvTerm.position.set(dvx, 0.85, dvz);
-  dvTerm.userData.isDevopsTerminal = true;
-  scene.add(dvTerm);
-  if (rt.CSS2DObject) {
-    const dvEl = document.createElement('div');
-    dvEl.textContent = '🛠 DevOps — open panel';
-    dvEl.style.cssText = 'font:600 11px/1.2 system-ui;color:#fff;background:rgba(99,102,241,.85);padding:3px 8px;border-radius:6px;white-space:nowrap;pointer-events:none;';
-    const dvLbl = new rt.CSS2DObject(dvEl);
-    dvLbl.position.set(dvx, 1.85, dvz);
-    scene.add(dvLbl);
+  // Hitbox over the whole workstation: hover names it, click opens it.
+  const dvTerm = hitbox(2.2, 1.7, 1.0);
+  dvTerm.position.set(0, 0.85, 0);
+  tagProp(dvTerm, { tip: () => nocTip, click: nocAction, hover: glowOnHover([screenMat], 1.3) });
+  noc.add(dvTerm);
+  props.push(dvTerm);
+
+  // Power console spot — same wall, toward the door, in front of the patch
+  // panel's neighbour. Pulled 1.7 off the wall so its operator stands clear.
+  const powerConsoleSpot = {
+    x: opsWall.midX + opsN.x * 1.7 - toFar.x * 2.6,
+    z: opsWall.midZ + opsN.z * 1.7 - toFar.z * 2.6,
+    face: opsN,
+  };
+
+  // ── 14. FIRE EXTINGUISHER beside the door ───────────────────────
+  {
+    const dN = { x: doorWall.nx, z: doorWall.nz };
+    const ex = doorWall.midX + dN.x * 0.2 - rowAxis.x * ppWallSign * 2.3;
+    const ez = doorWall.midZ + dN.z * 0.2 - rowAxis.z * ppWallSign * 2.3;
+    const redMat = new rt.THREE.MeshStandardMaterial({ color: 0xc81e1e, roughness: 0.35, metalness: 0.3 });
+    const body = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.1, 0.1, 0.5, 14), redMat);
+    body.position.set(ex, 0.55, ez);
+    scene.add(body);
+    const valve = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.035, 0.05, 0.1, 10),
+      new rt.THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.4, metalness: 0.6 }));
+    valve.position.set(ex, 0.85, ez);
+    scene.add(valve);
+    const sign = new rt.THREE.Mesh(new rt.THREE.PlaneGeometry(0.22, 0.22),
+      new rt.THREE.MeshStandardMaterial({ color: 0xd42020, emissive: new rt.THREE.Color(0x601010), emissiveIntensity: 0.6 }));
+    sign.position.set(ex - dN.x * 0.17, 1.35, ez - dN.z * 0.17);
+    sign.rotation.y = Math.atan2(dN.x, dN.z);
+    scene.add(sign);
   }
 
-  return { freeRackHitboxes, devopsTerminalHitbox: dvTerm };
+  return { props, powerConsoleSpot };
 }

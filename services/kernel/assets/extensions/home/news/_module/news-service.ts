@@ -11,7 +11,7 @@
 
 import type { Database } from "bun:sqlite";
 import { createHash } from "node:crypto";
-import { type GraphDriver, log, newId, isoNow } from "@kernl/extension-sdk";
+import { type GraphDriver, type PatchColumn, log, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
 
 // ── Types ──────────────────────────────────────────────
 
@@ -73,6 +73,26 @@ export interface NewsData {
   fetchedAt: string;
   errors: Array<{ feedId: string; feedName: string; error: string }>;
 }
+
+/** The user_feeds columns updateFeed may write. */
+const FEED_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  url: "text",
+  category: "text",
+  color: "text",
+  icon: "text",
+  is_active: "bool",
+  sort_order: "text",
+};
+
+/** The news_columns columns updateColumn may write. */
+const COLUMN_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  color: "text",
+  icon: "text",
+  is_active: "bool",
+  sort_order: "text",
+};
 
 // ── Cache ──────────────────────────────────────────────
 
@@ -290,39 +310,9 @@ export class NewsService {
     const feed = this.getFeed(id);
     if (!feed) return null;
 
-    const fields: string[] = [];
-    const values: unknown[] = [];
+    if (updates.url !== undefined) this.cache.invalidate(id); // URL changed, invalidate cache
 
-    if (updates.name !== undefined) {
-      fields.push("name = ?");
-      values.push(updates.name);
-    }
-    if (updates.url !== undefined) {
-      fields.push("url = ?");
-      values.push(updates.url);
-      this.cache.invalidate(id); // URL changed, invalidate cache
-    }
-    if (updates.category !== undefined) {
-      fields.push("category = ?");
-      values.push(updates.category);
-    }
-    if (updates.color !== undefined) {
-      fields.push("color = ?");
-      values.push(updates.color);
-    }
-    if (updates.icon !== undefined) {
-      fields.push("icon = ?");
-      values.push(updates.icon);
-    }
-    if (updates.is_active !== undefined) {
-      fields.push("is_active = ?");
-      values.push(updates.is_active ? 1 : 0);
-    }
-    if (updates.sort_order !== undefined) {
-      fields.push("sort_order = ?");
-      values.push(updates.sort_order);
-    }
-
+    const { sets: fields, params: values } = buildPatch(updates, FEED_PATCH);
     if (fields.length === 0) return feed;
 
     fields.push("updated_at = ?");
@@ -503,15 +493,7 @@ export class NewsService {
     const col = this.getColumn(id);
     if (!col) return null;
 
-    const fields: string[] = [];
-    const values: unknown[] = [];
-
-    if (updates.name !== undefined) { fields.push("name = ?"); values.push(updates.name); }
-    if (updates.color !== undefined) { fields.push("color = ?"); values.push(updates.color); }
-    if (updates.icon !== undefined) { fields.push("icon = ?"); values.push(updates.icon); }
-    if (updates.is_active !== undefined) { fields.push("is_active = ?"); values.push(updates.is_active ? 1 : 0); }
-    if (updates.sort_order !== undefined) { fields.push("sort_order = ?"); values.push(updates.sort_order); }
-
+    const { sets: fields, params: values } = buildPatch(updates, COLUMN_PATCH);
     if (fields.length === 0) return col;
 
     fields.push("updated_at = ?");

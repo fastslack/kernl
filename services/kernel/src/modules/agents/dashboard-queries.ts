@@ -1,5 +1,6 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { tableExists, safeAll, safeGet, toRecord } from "../../core/db/query-helpers.js";
+import { localDate, dayStart } from "../../sdk/clock.js";
 
 export interface DashboardAgents {
   kpis: {
@@ -39,8 +40,8 @@ export function queryAgents(db: SqliteDb): DashboardAgents | null {
   const activeAgents = (db.prepare("SELECT COUNT(*) as c FROM agents WHERE active = 1").get() as { c: number }).c;
   const totalRuns = (db.prepare("SELECT COUNT(*) as c FROM agent_runs").get() as { c: number }).c;
 
-  const today = new Date().toISOString().slice(0, 10);
-  const runsToday = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE created_at >= ?").get(today) as { c: number }).c;
+  const todayStart = dayStart(localDate());
+  const runsToday = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE created_at >= ?").get(todayStart) as { c: number }).c;
   const completedRuns = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE status = 'completed'").get() as { c: number }).c;
   const failedRuns = (db.prepare("SELECT COUNT(*) as c FROM agent_runs WHERE status = 'failed'").get() as { c: number }).c;
   const totalTokens = (db.prepare("SELECT COALESCE(SUM(tokens_used), 0) as c FROM agent_runs").get() as { c: number }).c;

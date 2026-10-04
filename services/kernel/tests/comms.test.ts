@@ -129,6 +129,66 @@ describe("CommsService", () => {
     expect(result?.status).toBe("archived");
   });
 
+  // ── Update allow-lists ──────────────────────────────
+  // The column names used to come straight from the caller's keys. A key
+  // outside each method's allow-list must never reach the SQL: not written,
+  // and not able to inject into the SET clause either.
+
+  it("update() writes only allow-listed columns", () => {
+    const comm = service.create({ subject: "Draft" });
+    const before = db.prepare("SELECT direction, channel, thread_id, created_at FROM communications WHERE id = ?").get(comm.id);
+    const updated = service.update(comm.id, {
+      subject: "Kept",
+      direction: "inbound",
+      channel: "whatsapp",
+      thread_id: "hijack",
+      created_at: "1970-01-01",
+      "subject = 'pwned', body": "x",
+    } as unknown as Parameters<CommsService["update"]>[1]);
+    expect(updated?.subject).toBe("Kept");
+    const after = db.prepare("SELECT direction, channel, thread_id, created_at FROM communications WHERE id = ?").get(comm.id);
+    expect(after).toEqual(before);
+  });
+
+  it("update() still sanitizes body_html", () => {
+    const comm = service.create({});
+    const updated = service.update(comm.id, { body_html: "<p>ok</p><script>alert(1)</script>" });
+    expect(updated?.body_html).toContain("<p>ok</p>");
+    expect(updated?.body_html).not.toContain("<script>");
+  });
+
+  it("update() with only non-allow-listed keys changes nothing", () => {
+    const comm = service.create({ subject: "Same" });
+    const updated = service.update(comm.id, { direction: "inbound" } as unknown as Parameters<CommsService["update"]>[1]);
+    expect(updated?.updated_at).toBe(comm.updated_at);
+    expect(updated?.direction).toBe(comm.direction);
+  });
+
+  it("updateAccount() writes only allow-listed columns", () => {
+    const account = service.addAccount({ label: "Acc", email: "acc@test.com" });
+    const updated = service.updateAccount(account.id, {
+      label: "Renamed",
+      provider: "resend",
+      created_at: "1970-01-01",
+    } as unknown as Parameters<CommsService["updateAccount"]>[1]);
+    expect(updated?.label).toBe("Renamed");
+    expect(updated?.provider).toBe(account.provider);
+    expect(updated?.created_at).toBe(account.created_at);
+  });
+
+  it("updateTemplate() writes only allow-listed columns", () => {
+    const template = service.createTemplate({ name: "Tpl", subject: "Hi {{name}}" });
+    const updated = service.updateTemplate(template.id, {
+      name: "Tpl2",
+      variables: '["injected"]',
+      created_at: "1970-01-01",
+    } as unknown as Parameters<CommsService["updateTemplate"]>[1]);
+    expect(updated?.name).toBe("Tpl2");
+    expect(updated?.created_at).toBe(template.created_at);
+    // variables is always re-derived from the content, never taken from the caller.
+    expect(JSON.parse(updated!.variables)).toEqual(["name"]);
+  });
+
   // ── Get ─────────────────────────────────────────────
 
   it("gets communication by ID", () => {

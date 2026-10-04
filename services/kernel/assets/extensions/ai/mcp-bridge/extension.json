@@ -3,7 +3,7 @@
   "id": "com.kernl.mcp-bridge",
   "slug": "mcp-bridge",
   "name": "MCP Connections",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "type": "module",
   "description": "Connect Kernl to external MCP servers and use their tools from chat and your agents. Paste a URL and it works out the transport, the auth scheme and the OAuth endpoints on its own; sign in from the dashboard, see each connection's real status, and hand a server's tools to a specific agent. Connections reconnect without restarting the kernel.",
   "author": "Kernl",

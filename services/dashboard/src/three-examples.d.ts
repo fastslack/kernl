@@ -13,3 +13,7 @@ declare module 'three/examples/jsm/geometries/RoundedBoxGeometry.js' {
     );
   }
 }
+
+declare module 'three/examples/jsm/utils/BufferGeometryUtils.js' {
+  export function mergeGeometries(geometries: any[], useGroups?: boolean): any;
+}

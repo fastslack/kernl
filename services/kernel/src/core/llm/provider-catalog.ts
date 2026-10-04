@@ -367,3 +367,17 @@ export function modelsUrl(baseUrl: string): string {
 export function quirksFor(slug: string, model: string): ModelQuirks | undefined {
   return getCatalogEntry(slug)?.quirks?.[model];
 }
+
+/**
+ * Apply the per-model request tweaks the provider documents (sampling,
+ * template flags) to an OpenAI-style request body, in place. The caller's own
+ * temperature still wins; `top_p` and `extraBody` always apply. Shared by
+ * `LlmClient` and `ChatOpenAiProvider` so both doors send the same body.
+ */
+export function applyModelQuirks(body: Record<string, unknown>, slug: string, model: string): void {
+  const quirks = quirksFor(slug, model);
+  if (!quirks) return;
+  if (body.temperature === undefined && quirks.temperature !== undefined) body.temperature = quirks.temperature;
+  if (quirks.topP !== undefined) body.top_p = quirks.topP;
+  if (quirks.extraBody) Object.assign(body, quirks.extraBody);
+}

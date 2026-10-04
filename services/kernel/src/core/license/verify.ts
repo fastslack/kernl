@@ -33,6 +33,40 @@ export function expectedIssuer(): string {
 }
 
 /**
+ * Turn whatever the user pasted into the JWT it contains.
+ *
+ * A license copied out of an email or a chat is rarely the bare token: mail
+ * clients wrap the long line and put zero-width spaces or soft hyphens where
+ * they break it, and people copy it with quotes, a "Bearer " prefix or the
+ * sentence around it. None of that is ever part of a JWT (base64url + dots),
+ * so it is all dropped before verification instead of reaching atob() and
+ * failing with "The string contains invalid characters".
+ */
+export function normalizeLicenseInput(raw: string): string {
+  const compact = raw
+    .replace(/[\u00AD\u200B-\u200F\u2028\u2029\u2060\uFEFF]/g, "")
+    .replace(/^\s*bearer\s+/i, "");
+  // Every license header is base64url JSON, so the token starts with "eyJ".
+  const at = compact.indexOf("eyJ");
+  if (at < 0) return raw.trim();
+  // From there, token characters with any whitespace between them: mail
+  // clients turn the box's line wraps into newlines OR spaces. A blank line or
+  // any other character ends it.
+  const run = /^[A-Za-z0-9_\-.]+(?:[ \t]*\r?\n?[ \t]*[A-Za-z0-9_\-.]+)*/.exec(compact.slice(at))?.[0] ?? "";
+  const parts = run.replace(/\s+/g, "").split(".");
+  if (parts.length < 3 || !parts[0] || !parts[1] || !parts[2]) return raw.trim();
+  // The signature is the last segment and nothing marks where it ends, so text
+  // copied after it ("Unlocks …") would be glued on. An RS256 signature under
+  // our 2048-bit key is always exactly RS256_SIG_CHARS long: cut it there.
+  let sig = parts[2];
+  if (sig.length > RS256_SIG_CHARS) sig = sig.slice(0, RS256_SIG_CHARS);
+  return `${parts[0]}.${parts[1]}.${sig}`;
+}
+
+/** base64url length of a 256-byte (2048-bit RSA) signature, unpadded. */
+const RS256_SIG_CHARS = 342;
+
+/**
  * Parse and cryptographically verify a license JWT.
  *
  * @throws LicenseError on any failure (signature, expiry, claim shape).
@@ -127,20 +161,6 @@ export async function verifyLicenseJwt(jwt: string): Promise<LicenseClaim> {
   return claim as LicenseClaim;
 }
 
-/**
- * Optional second-line check: refuse to accept a JWT bound to a different
- * machine. The caller passes in the local fingerprint; if the claim has a
- * machine_id, they must match.
- */
-export function checkMachineBinding(claim: LicenseClaim, localMachineId: string): void {
-  if (claim.machine_id != null && claim.machine_id !== localMachineId) {
-    throw new LicenseError(
-      "machine_mismatch",
-      `License is bound to a different machine (${claim.machine_id})`,
-    );
-  }
-}
-
 // ─── Helpers ─────────────────────────────────────────────────
 
 async function importPublicKey(pem: string): Promise<CryptoKey> {
@@ -180,7 +200,15 @@ function b64urlToB64(b64url: string): string {
 // Pinned to an ArrayBuffer-backed view: TS 5.7+ made Uint8Array generic, and
 // WebCrypto's BufferSource rejects the SharedArrayBuffer-compatible default.
 function base64ToBytes(b64: string): Uint8Array<ArrayBuffer> {
-  const bin = atob(b64);
+  let bin: string;
+  try {
+    bin = atob(b64);
+  } catch {
+    throw new LicenseError(
+      "invalid",
+      "This doesn't look like a complete license: some characters got changed or cut when it was copied. Copy it again from the purchase email or from lifekernl.com/account and paste it here.",
+    );
+  }
   const buf = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
   return buf;

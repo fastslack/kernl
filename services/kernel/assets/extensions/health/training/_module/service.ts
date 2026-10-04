@@ -1,4 +1,4 @@
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, newId, isoNow, localDate } from "@kernl/extension-sdk";
 import type {
   TrainingExercise, TrainingProgram, TrainingSessionTemplate,
   TrainingTemplateExercise, TrainingWorkout, TrainingSet,
@@ -191,7 +191,7 @@ export class TrainingService {
       `).get(input.exercise_name, input.workout_id) as { best: number | null };
       if (!prevBest.best || volume > prevBest.best) {
         set.is_pr = 1;
-        this.recordPr({ exercise_name: input.exercise_name, pr_type: "volume", value: volume, unit: "kg*reps", workout_id: input.workout_id, date: new Date().toISOString().split("T")[0] });
+        this.recordPr({ exercise_name: input.exercise_name, pr_type: "volume", value: volume, unit: "kg*reps", workout_id: input.workout_id, date: localDate() });
       }
     }
 
@@ -203,6 +203,15 @@ export class TrainingService {
            set.is_warmup,set.is_pr,set.notes,set.created_at);
 
     return set;
+  }
+
+  /** Delete a workout and its sets. False when there was no such workout. */
+  deleteWorkout(id: string): boolean {
+    const run = this.db.transaction(() => {
+      this.db.prepare("DELETE FROM training_sets WHERE workout_id = ?").run(id);
+      return this.db.prepare("DELETE FROM training_workouts WHERE id = ?").run(id).changes > 0;
+    });
+    return run();
   }
 
   getWorkout(id: string): (TrainingWorkout & { sets: TrainingSet[] }) | undefined {
@@ -232,7 +241,7 @@ export class TrainingService {
       pr_type: input.pr_type, value: input.value,
       unit: input.unit ?? "kg",
       workout_id: input.workout_id ?? null,
-      date: input.date ?? isoNow().split("T")[0],
+      date: input.date ?? localDate(),
       notes: input.notes ?? "", created_at: isoNow(),
     };
     this.db.prepare(`
@@ -270,7 +279,7 @@ export class TrainingService {
     const cardio: TrainingCardio = {
       id: newId(), workout_id: input.workout_id ?? null,
       sport: input.sport,
-      date: input.date ?? isoNow().split("T")[0],
+      date: input.date ?? localDate(),
       duration_minutes: input.duration_minutes,
       distance_m: input.distance_m ?? null,
       avg_pace_min_km: input.avg_pace_min_km ?? (input.distance_m
@@ -345,6 +354,24 @@ export class TrainingService {
       });
     }
     return results;
+  }
+
+  /** Totals over the last `weeks` weeks as one period (getWeeklySummary splits them by week). */
+  getPeriodTotals(weeks = 4): {
+    period: { from: string; weeks: number };
+    workouts: { count: number; total_minutes: number | null; total_calories: number | null };
+    cardio: { count: number; total_minutes: number | null; total_distance: number | null };
+    prs: { count: number };
+  } {
+    const since = new Date(Date.now() - weeks * 7 * 86400000).toISOString().split("T")[0];
+    const workouts = this.db.prepare(
+      "SELECT COUNT(*) as count, SUM(duration_minutes) as total_minutes, SUM(calories_burned) as total_calories FROM training_workouts WHERE date >= ?",
+    ).get(since) as { count: number; total_minutes: number | null; total_calories: number | null };
+    const cardio = this.db.prepare(
+      "SELECT COUNT(*) as count, SUM(duration_minutes) as total_minutes, SUM(distance_m) as total_distance FROM training_cardio WHERE date >= ?",
+    ).get(since) as { count: number; total_minutes: number | null; total_distance: number | null };
+    const prs = this.db.prepare("SELECT COUNT(*) as count FROM training_prs WHERE date >= ?").get(since) as { count: number };
+    return { period: { from: since, weeks }, workouts, cardio, prs };
   }
 
   private seedDefaultExercises(): void {

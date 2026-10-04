@@ -29,6 +29,7 @@
  */
 
 import { log } from "../logger.js";
+import { sleep } from "./retry.js";
 
 // ── Async counting semaphore ────────────────────────────────────────────
 // Permits are handed directly to the next waiter on release (no permit
@@ -129,8 +130,6 @@ function gateFor(slug: string): SlugGate {
   }
   return g;
 }
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 
 // ── Public API ─────────────────────────────────────────────────────────
 

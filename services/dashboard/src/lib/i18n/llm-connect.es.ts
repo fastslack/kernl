@@ -1,4 +1,7 @@
-const es: Record<string, string> = {
+import type { LlmConnectKey } from "./llm-connect.en.js";
+
+// Exactly the keys of llm-connect.en.ts: a missing or extra key is a compile error.
+const es: Record<LlmConnectKey, string> = {
   "llm.title": "Conectá tu IA",
   "llm.lede": "¿Con qué IA querés que piense Kernl?",
   "llm.group.free": "Gratis",
@@ -83,5 +86,33 @@ const es: Record<string, string> = {
   "llm.banner_fix": "Configurar IA",
   "llm.banner_dismiss": "Descartar",
   "llm.configure_in_settings": "Configurar en Configuración → IA",
+  "llm.usage.tab": "Uso de tokens",
+  "llm.usage.range.today": "Hoy",
+  "llm.usage.range.7d": "7 días",
+  "llm.usage.range.30d": "30 días",
+  "llm.usage.range.all": "Todo",
+  "llm.usage.group.model": "Modelo",
+  "llm.usage.group.caller": "Quién llama",
+  "llm.usage.group.day": "Día",
+  "llm.usage.refresh": "Actualizar",
+  "llm.usage.calls": "Llamadas",
+  "llm.usage.fails": "Fallidas",
+  "llm.usage.fails_n": "{n} fallidas",
+  "llm.usage.input": "Entrada",
+  "llm.usage.output": "Salida",
+  "llm.usage.cache": "Caché",
+  "llm.usage.cache_read": "Caché leída",
+  "llm.usage.cache_write": "Caché escrita",
+  "llm.usage.cost": "Costo",
+  "llm.usage.cache_read_short": "Caché lect.",
+  "llm.usage.cache_write_short": "Caché escr.",
+  "llm.usage.share": "Peso",
+  "llm.usage.untagged": "(sin etiqueta)",
+  "llm.usage.filtered": "Modelo: {model}",
+  "llm.usage.clear_filter": "Ver todos los modelos",
+  "llm.usage.drill": "Ver quién usa {model}",
+  "llm.usage.empty": "Todavía no hay llamadas a LLM en este rango.",
+  "llm.usage.chart_label": "Tokens por día: entrada, salida y caché",
+  "llm.usage.note": "Costo: Claude Code informa el suyo (lo que cobraría la API; con suscripción no se factura); el resto es estimado (≈) con precios de LiteLLM, sin contar la caché. Días en UTC. Antes del 3/10/2026 no se registraban la entrada y la caché de Claude Code ni las corridas de agentes.",
 };
 export default es;

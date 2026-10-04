@@ -68,3 +68,35 @@ describe("zodToJsonSchema", () => {
     });
   });
 });
+
+describe("zodToJsonSchema — wrappers", () => {
+  it("describes a limitArg as an optional number and clamps it", async () => {
+    const { limitArg } = await import("../src/sdk/tool-builder.js");
+    const schema = z.object({ limit: limitArg(200, "Max results (default 20)") });
+    expect(zodToJsonSchema(schema)).toEqual({
+      type: "object",
+      properties: { limit: { type: "number", description: "Max results (default 20) (max 200)" } },
+    });
+    expect(schema.parse({ limit: 10_000 })).toEqual({ limit: 200 });
+    expect(schema.parse({ limit: 0 })).toEqual({ limit: 1 });
+    expect(schema.parse({ limit: 7.9 })).toEqual({ limit: 7 });
+    expect(schema.parse({})).toEqual({});
+  });
+
+  it("does not require a field that has a default, and keeps its type", () => {
+    const schema = z.object({
+      id: z.string(),
+      limit: z.number().optional().default(20),
+      page: z.number().default(1),
+    });
+    expect(zodToJsonSchema(schema)).toEqual({
+      type: "object",
+      properties: {
+        id: { type: "string" },
+        limit: { type: "number", default: 20 },
+        page: { type: "number", default: 1 },
+      },
+      required: ["id"],
+    });
+  });
+});

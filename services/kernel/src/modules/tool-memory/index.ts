@@ -19,7 +19,7 @@ import type {
   ToolDefinition,
   ToolResult,
 } from "../../core/types.js";
-import { errorResult, structuredResult } from "../../core/helpers.js";
+import { errorResult, safeJson, structuredResult } from "../../core/helpers.js";
 import { getRequestContext } from "../../core/request-context.js";
 import { runMigrations } from "../../core/db/migrations.js";
 import { toolMemoryMigrations } from "./migrations.js";
@@ -118,8 +118,9 @@ function buildSearch(get: () => ToolMemoryService | null): ToolDefinition {
         results: results.map((r) => ({
           tool: r.record.tool,
           similarity: r.record.similarity,
-          input: tryParse(r.record.input_json),
-          output: tryParse(r.record.output_json),
+          // Parsed when the stored text is JSON, the raw text otherwise.
+          input: safeJson<unknown>(r.record.input_json, r.record.input_json),
+          output: safeJson<unknown>(r.record.output_json, r.record.output_json),
           receipt_id: r.record.receipt_id,
           succeeded: r.record.succeeded === 1,
           created_at: r.record.created_at,
@@ -176,8 +177,4 @@ function buildExport(get: () => ToolMemoryService | null): ToolDefinition {
       return structuredResult({ rows, total: rows.length });
     },
   });
-}
-
-function tryParse(s: string): unknown {
-  try { return JSON.parse(s); } catch { return s; }
 }

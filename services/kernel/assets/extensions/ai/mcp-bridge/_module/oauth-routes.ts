@@ -14,8 +14,8 @@
  */
 
 import { createHash, randomBytes } from "node:crypto";
-import type { IncomingMessage, ServerResponse } from "node:http";
-import { type KernelHttpServer, log } from "@kernl/extension-sdk";
+import type { ServerResponse } from "node:http";
+import { HttpError, type KernelHttpServer, log } from "@kernl/extension-sdk";
 import type { McpStore } from "./store.js";
 import type { McpRegistry } from "./registry.js";
 
@@ -82,15 +82,8 @@ export function registerMcpOAuthRoutes(server: KernelHttpServer, deps: McpOAuthD
     res.end(html);
   };
 
-  const readBody = async (req: IncomingMessage): Promise<Record<string, unknown>> => {
-    try {
-      return ((await server.readJsonBody(req)) ?? {}) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  };
-
   // ── GET /auth/mcp/callback ──────────────────────────────
+  // Stays a raw handler: it answers with an HTML page, not JSON.
   server.get("/auth/mcp/callback", async (req, res) => {
     const url = new URL(req.url ?? "/", deps.publicOrigin());
     const error = url.searchParams.get("error");
@@ -179,16 +172,12 @@ export function registerMcpOAuthRoutes(server: KernelHttpServer, deps: McpOAuthD
   });
 
   // ── POST /api/mcp/auth/revoke ───────────────────────────
-  server.post("/api/mcp/auth/revoke", async (req, res) => {
-    const body = (await readBody(req)) as { server_id?: string };
+  server.route<{ server_id?: string }>("POST", "/api/mcp/auth/revoke", async ({ body }) => {
     const srv = body.server_id ? store.get(body.server_id) : null;
-    if (!srv) {
-      server.json(res, 404, { error: "Server not found" });
-      return;
-    }
+    if (!srv) throw new HttpError(404, "Server not found");
     await registry.disconnect(srv.id);
     store.clearTokens(srv.id);
     store.setStatus(srv.id, "needs_auth", "Signed out.");
-    server.json(res, 200, { success: true });
+    return { success: true };
   });
 }

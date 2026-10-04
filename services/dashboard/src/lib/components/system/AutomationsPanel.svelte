@@ -6,11 +6,11 @@
     /system y la ruta vieja redirige acá.
   */
   import { planner, systemAgenda } from '$lib/stores.js';
-  import Panel from '$lib/components/Panel.svelte';
-  import Empty from '$lib/components/Empty.svelte';
-  import DayModal from '$lib/components/DayModal.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import Empty from '$shared/components/Empty.svelte';
+  import DayModal from '$shared/components/DayModal.svelte';
   import { TL_COLORS, TL_MONTHS, FREQ_COLORS, FREQ_ORDER } from '$lib/constants.js';
-  import { freqLabel, freqDisplay } from '$lib/utils.js';
+  import { freqLabel, freqDisplay } from '$shared/utils';
 
   // Use planner data (same as Planner page) - it has calendar grid + systemProcesses
   $: cal = ($planner as any);

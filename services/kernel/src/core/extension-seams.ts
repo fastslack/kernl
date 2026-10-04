@@ -101,10 +101,16 @@ export interface TelegramReplyLike {
   text: string;
   parseMode?: string;
   inlineKeyboard?: unknown;
+  /** For a voice note: what to say out loud, when `text` is empty because
+   *  the answer was already streamed into the chat. */
+  speak?: string;
 }
 
 export interface TelegramTransportLike {
   onMessage(handler: (text: string, ctx: TelegramInboundContext) => Promise<TelegramReplyLike>): void;
+  /** Voice notes, already transcribed. Optional: older bundles lack it. */
+  onVoice?(handler: (transcription: string, ctx: TelegramInboundContext) => Promise<TelegramReplyLike>): void;
+  setVoiceService?(service: import("../voice/service.js").VoiceService, respondWithVoice?: boolean): void;
   onCallback(handler: (data: string, ctx: TelegramInboundContext) => Promise<TelegramReplyLike>): void;
   /** Send a message and return its message_id (used to drive streamed edits). */
   send(

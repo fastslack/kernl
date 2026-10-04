@@ -119,6 +119,17 @@ name = "whatsapp:status"
 auth = false
 history = 1
 
+# Acks, errors and ready/paired events: transient, never replayed.
+[[channels]]
+name = "whatsapp:events"
+auth = false
+history = 0
+
+[[channels]]
+name = "whatsapp:pairing"
+auth = false
+history = 1
+
 [[channels]]
 name = "whatsapp:inbound"
 auth = false

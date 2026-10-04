@@ -6,6 +6,10 @@
  * this file is the canonical view of how all those slices fit together.
  *
  * Stage order:
+ *   startSidecars    → binary installs only: mtw-server + whatsapp-bridge as
+ *                      supervised children (before loadConfig, which reads
+ *                      RUST_BRIDGE_SOCKET; the mtw stage reads KERNEL_URL);
+ *                      mtw-server itself starts once initDatabases is done
  *   loadConfig + log level
  *   initDatabases    → sqlite, neo4j, events (+ security gates)
  *   initRegistries   → registries + ctx
@@ -30,7 +34,7 @@
 
 import { loadConfig } from "../config.js";
 import { setLogLevel, log } from "../logger.js";
-import { installKernlHost } from "../host-runtime.js";
+import { installKernlHost, useTimezone } from "../host-runtime.js";
 import { initDatabases } from "./databases.js";
 import { initRegistries } from "./registries.js";
 import { initCoreModules } from "./core-modules.js";
@@ -43,6 +47,7 @@ import { initHttpAndMcp } from "./http.js";
 import { initMtw } from "./mtw.js";
 import { wireServicesLate } from "./services-late.js";
 import { installShutdownHandlers } from "./shutdown.js";
+import { startSidecars, resolveSidecarDirs } from "./sidecars.js";
 import type { MeshModule } from "../types/extensions/index.js";
 
 export async function bootstrap(): Promise<void> {
@@ -52,9 +57,21 @@ export async function bootstrap(): Promise<void> {
   // through this one slot.
   installKernlHost();
 
+  // ── Bundled sidecars (binary installs) ─────────────
+  // Before loadConfig, not just before the mtw stage: the config object reads
+  // RUST_BRIDGE_SOCKET when it is built, and the rust bridge connects in the
+  // bridges stage, ahead of mtw. No-op outside a binary install. mtw-server
+  // itself waits for the gate below: it reads kernel.db, which must already
+  // be open in WAL by the time it arrives (see serverGate in sidecars.ts).
+  let databaseReady!: () => void;
+  const serverGate = new Promise<void>(resolve => { databaseReady = resolve; });
+  const sidecars = await startSidecars({ ...resolveSidecarDirs(), serverGate });
+
   // ── Config + log level ─────────────────────────────
   const config = loadConfig();
   setLogLevel(config.logLevel as "debug" | "info" | "warn" | "error");
+  // A getter, not the value: the TIMEZONE setting mutates config at runtime.
+  useTimezone(() => config.timezone);
 
   const transport = config.mcp.transport;
   const useStdio = transport === "stdio" || transport === "both";
@@ -62,6 +79,7 @@ export async function bootstrap(): Promise<void> {
 
   // ── 1. Databases + security gates ─────────────────
   const { sqlite, neo4j, events } = await initDatabases(config);
+  databaseReady();
 
   // ── 2. Registries + ctx ───────────────────────────
   const registries = initRegistries({ config, sqlite, neo4j, events });
@@ -193,6 +211,7 @@ export async function bootstrap(): Promise<void> {
     chatService: core.chatModule.getService(),
     agentService: core.agentsModule.getService(),
     agentExecutor: core.agentsModule.getExecutor(),
+    httpServer: http.httpServer,
   });
 
   // ── 12. Graceful shutdown ──────────────────────────
@@ -209,5 +228,6 @@ export async function bootstrap(): Promise<void> {
     mcpRouter: http.mcpRouter,
     mcpUnixSocket: http.mcpUnixSocket,
     httpServer: http.httpServer,
+    sidecars,
   });
 }

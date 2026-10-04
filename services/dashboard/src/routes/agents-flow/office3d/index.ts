@@ -3,12 +3,13 @@ export { buildNameplate, NAMEPLATE_HEIGHT, type NameplateOpts, type NameplateRan
 export { computeFloorPlan, nearestCorridorNode, type CorridorGrid, type CorridorSegment } from './floor-plan.js';
 export { initHumanoid, createHumanoid, animateWalk, animateRun, animateSitting } from './humanoid.js';
 export { initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool } from './humanoid-pool.js';
-export { initOffice, buildFloor, buildStreets, buildCorridor, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, setupLighting, type ReceptionAnchors, type DataCenterHandles, type RepoBookmark } from './office/index.js';
+export { initOffice, buildFloor, buildStreets, buildCorridor, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, setupLighting, type ReceptionAnchors, type DataCenterHandles, type DataCenterActions, type RepoBookmark } from './office/index.js';
 export { applyRendererGrading, applySceneGrading, GRADING } from './grading.js';
 export { initDelivery, initDeliveryScene, enqueueDelivery, resetDelivery, markPackagePickedUp, updateDelivery, type DeliveryInfo, type DeliveryContext } from './delivery.js';
 export { initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis, type TaxiContext, type TaxiArrivalOpts } from './taxi.js';
 export { initFurniture, buildDesks, buildHallways, type HallwayLine } from './furniture.js';
-export { initWalkers, sendWalker, sendWalkerToPoint, sendCommuteWalker, updateWalkers, removeArrivedWalkers, syncSeatedVisibility } from './walkers/index.js';
+export { initWalkers, sendWalker, sendWalkerToPoint, sendCommuteWalker, updateWalkers, removeArrivedWalkers, syncSeatedVisibility, setWalkZones } from './walkers/index.js';
+export { receptionObstacles } from './office/reception-geometry.js';
 export { initAmbiance, buildAmbiance, buildWallClock, buildActivityBoard, updateActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance } from './ambiance/index.js';
 export { initRedAlertDecor, buildRadarDish, buildSandbagBarrier, buildCrates, type RadarDishHandle } from './red-alert-decor.js';
 export {

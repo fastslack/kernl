@@ -91,3 +91,32 @@ export function writeChain(links: ChainLink[]): {
     model_chain: JSON.stringify(usable),
   };
 }
+
+/**
+ * Can the claude_code executor run this link? It hands the model to the
+ * Claude Code CLI, which only knows Claude models: given "MiniMax-M3" it
+ * answers "There's an issue with the selected model" and every run of the
+ * agent fails on its first turn. A Claude provider, or a model named claude-*,
+ * is fine; an empty model on a Claude provider means its default.
+ */
+export function runsOnClaudeCode(link: ChainLink): boolean {
+  const provider = link.provider.toLowerCase().replace(/[^a-z]/g, "");
+  if (link.model) return /^claude/i.test(link.model) || /^(opus|sonnet|haiku)\b/i.test(link.model);
+  return provider === "claudecode" || provider === "claude" || provider === "anthropic" || provider === "";
+}
+
+/**
+ * The fields to write when `link` becomes an agent's primary model. Picking a
+ * model the claude_code executor cannot run moves the agent to the kernel's
+ * own executor in the same write, which runs any provider in the chain —
+ * otherwise the pick is saved and silently never used.
+ */
+export function primaryModelPatch(
+  agent: { executor_type?: string },
+  chain: ChainLink[],
+  link: ChainLink,
+): Record<string, string> {
+  const fields: Record<string, string> = writeChain([link, ...chain.slice(1)]);
+  if (agent.executor_type === "claude_code" && !runsOnClaudeCode(link)) fields.executor_type = "native";
+  return fields;
+}

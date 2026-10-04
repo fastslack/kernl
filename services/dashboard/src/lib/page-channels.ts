@@ -17,9 +17,11 @@ export const PAGE_CHANNELS: Record<string, string[]> = {
 
   // Work
   '/tasks': ['dashboard'],
-  '/issues': ['issues'],
   '/planner': ['dashboard', 'calendar'],
   '/automations': ['calendar', 'systemAgenda', 'agenda'],
+  // /sysoverview and /automations were folded into /system, which reads the
+  // same systemAgenda store; without it the page only ever said "not available".
+  '/system': ['dashboard', 'calendar', 'systemAgenda', 'agenda'],
 
   // Finance
   '/finance': ['finance', 'dashboard'],

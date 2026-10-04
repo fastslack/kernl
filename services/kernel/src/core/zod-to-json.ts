@@ -1,4 +1,4 @@
-import { type ZodType, ZodObject, ZodString, ZodNumber, ZodBoolean, ZodOptional, ZodEnum, ZodArray, ZodDefault, ZodAny } from "zod";
+import { type ZodType, ZodObject, ZodString, ZodNumber, ZodBoolean, ZodOptional, ZodEnum, ZodArray, ZodDefault, ZodAny, ZodEffects } from "zod";
 
 /**
  * Minimal Zod → JSON Schema converter for MCP tool input schemas.
@@ -9,6 +9,22 @@ export function zodToJsonSchema(schema: ZodType<unknown>): Record<string, unknow
 }
 
 function convertType(schema: ZodType<unknown>): Record<string, unknown> {
+  // A transform/refine (e.g. the SDK's limitArg) accepts what its inner type
+  // accepts: describe that, keeping the outer description.
+  if (schema instanceof ZodEffects) {
+    const result = convertType((schema as ZodEffects<ZodType<unknown>>).innerType());
+    if (schema.description && !result.description) result.description = schema.description;
+    return result;
+  }
+
+  // `.optional().default(n)` nests an optional inside the default; describe
+  // the inner type (object properties unwrap their own optionals below).
+  if (schema instanceof ZodOptional) {
+    const result = convertType((schema as ZodOptional<ZodType<unknown>>).unwrap());
+    if (schema.description && !result.description) result.description = schema.description;
+    return result;
+  }
+
   // Unwrap ZodDefault to its inner type
   if (schema instanceof ZodDefault) {
     const inner = (schema as ZodDefault<ZodType<unknown>>)._def.innerType;
@@ -23,12 +39,10 @@ function convertType(schema: ZodType<unknown>): Record<string, unknown> {
     const required: string[] = [];
 
     for (const [key, value] of Object.entries(shape)) {
-      if (value instanceof ZodOptional) {
-        properties[key] = convertType((value as ZodOptional<ZodType<unknown>>).unwrap());
-      } else {
-        properties[key] = convertType(value);
-        required.push(key);
-      }
+      properties[key] = convertType(value);
+      // A field with a default is optional to the caller too; it used to be
+      // listed as required, so clients had to send it.
+      if (!value.isOptional()) required.push(key);
     }
 
     const result: Record<string, unknown> = {

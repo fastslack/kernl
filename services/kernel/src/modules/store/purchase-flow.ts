@@ -22,6 +22,13 @@ import type { LicenseService } from "../../core/license/types.js";
 import { fetchLicenseBySession } from "./client.js";
 import { CheckoutService, type CheckoutRow } from "./checkout-service.js";
 
+/**
+ * The `slug` an All-Access checkout is recorded under. It names no catalog
+ * item: the subscription unlocks everything, so there is no one bundle to
+ * install — applying the license IS the purchase, and the row finishes there.
+ */
+export const ALL_ACCESS_SLUG = "all-access";
+
 export interface PurchaseFlowDeps {
   storeUrl: string;
   license: Pick<LicenseService, "set" | "jwt">;
@@ -81,6 +88,12 @@ export async function advanceCheckout(
 
     deps.checkouts.setState(sessionId, "paid");
     row = deps.checkouts.get(sessionId) ?? { ...row, state: "paid" };
+  }
+
+  if (row.state === "paid" && slug === ALL_ACCESS_SLUG) {
+    deps.checkouts.setState(sessionId, "done");
+    log.info(`store: All-Access active from checkout ${sessionId}`);
+    return deps.checkouts.get(sessionId) ?? { ...row, state: "done" };
   }
 
   if (row.state === "paid") {

@@ -32,7 +32,7 @@
   const HOOD_DESCRIPTIONS: Record<string, string> = {
     core: 'Central nervous system: MCP server, EventBus, databases, mtwRequest',
     data: 'Data layer: SQLite, Neo4j, persistent storage engines',
-    work: 'Task management, planning, issues, reminders, time tracking',
+    work: 'Task management, planning, reminders, time tracking',
     people: 'CRM, communications, Google sync, chat, events, social',
     finance: 'Finance, subscriptions, shopping, trading, markets',
     wellness: 'Health tracking, training, nutrition, wearables, meals',
@@ -42,7 +42,7 @@
   };
 
   const MOD_NEIGHBORHOOD: Record<string, string> = {
-    tasks: 'work', issues: 'work', reminders: 'work', 'time-tracking': 'work', calendar: 'work', planner: 'work',
+    tasks: 'work', reminders: 'work', 'time-tracking': 'work', calendar: 'work', planner: 'work',
     crm: 'people', comms: 'people', 'google-sync': 'people', chat: 'people', events: 'people', prospecting: 'people', twitter: 'people',
     finance: 'finance', subscriptions: 'finance', shopping: 'finance', trading: 'finance',
     health: 'wellness', training: 'wellness', nutrition: 'wellness', wearables: 'wellness', meals: 'wellness',
@@ -1228,7 +1228,6 @@
   .hood-badge b { color: #8b7cf6; }
   .hud-btn { padding: 4px 12px; border-radius: 4px; border: 1px solid rgba(61,214,200,0.2); background: rgba(20,20,30,0.9); color: #8a8ea2; font: 9px 'JetBrains Mono', monospace; cursor: pointer; }
   .hud-btn:hover { border-color: #3dd6c8; color: #3dd6c8; }
-  .active-btn { border-color: #3dd68c; color: #3dd68c; }
   .verbosity-btn { min-width: 90px; text-align: center; letter-spacing: 0.5px; font-weight: 600; }
   .v-debug { border-color: #ef4444; color: #ef4444; }
   .v-debug:hover { border-color: #ef4444; color: #ef4444; }

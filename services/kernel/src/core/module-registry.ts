@@ -1,4 +1,5 @@
 import type { AgentDriver, AgentDriverResult, KernelModule, ModuleContext, ResourceProvider, ToolDefinition } from "./types.js";
+import { guardOutbound } from "./outbound-guard.js";
 import type { DashboardRegistry } from "./dashboard-registry.js";
 import type { SqliteDb } from "./db/sqlite.js";
 import type { RpcAction } from "./mtw/rpc-handler.js";
@@ -154,7 +155,8 @@ export class ModuleRegistry {
   getAllTools(): ToolDefinition[] {
     return this.modules
       .filter((m) => this.initializedModules.has(m.name))
-      .flatMap((m) => m.getTools());
+      .flatMap((m) => m.getTools())
+      .map(guardOutbound);
   }
 
   /**

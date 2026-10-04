@@ -642,6 +642,70 @@ jobs:
           }
           Write-Host "extension pages are served"
 
+          # The bundled pair is best-effort, exactly like whisper/ffmpeg/every
+          # other platform in stage-payload.sh section 2d: a release cut
+          # before mtwRequest has published win-x64 assets for $MTW_BIN_TAG
+          # (or the v0.4.0 default) still produces a working Kernl package,
+          # just without a bundled WhatsApp link. So this check only turns
+          # strict once the binaries actually made it into the install dir —
+          # if they didn't, it warns and moves on instead of failing the
+          # whole Windows job (which would also withhold the Linux/macOS
+          # artifacts, since `release` needs all three).
+          $bundled = (Test-Path (Join-Path $dir "bin\mtw-server\mtw-server.exe")) -and
+                     (Test-Path (Join-Path $dir "bin\whatsapp-bridge\whatsapp-bridge.exe"))
+          if (-not $bundled) {
+            $tagLabel = $(if ($env:MTW_BIN_TAG) { $env:MTW_BIN_TAG } else { 'v0.4.0' })
+            Write-Host "::warning::mtw-server/whatsapp-bridge not bundled (no mtwRequest release assets for $tagLabel) — WhatsApp smoke skipped"
+          } else {
+            if (-not (Test-Path (Join-Path $dir "bin\mtw.binary.toml"))) {
+              Write-Host "::error::missing after install: bin\mtw.binary.toml (bundled without its mtw.toml template)"
+              exit 1
+            }
+            Write-Host "  present: bin\mtw-server\mtw-server.exe"
+            Write-Host "  present: bin\whatsapp-bridge\whatsapp-bridge.exe"
+            Write-Host "  present: bin\mtw.binary.toml"
+
+            # The bundled pair must come up and link: mtw-server reaches the
+            # bridge over its named pipe and the kernel reaches mtw-server.
+            $tokenFile = Join-Path $env:LOCALAPPDATA "Kernl\data\.kernel-auth-token"
+            if (-not (Test-Path $tokenFile)) {
+              Write-Host "::error::auth token file not found at $tokenFile — cannot poll the WhatsApp status endpoint"
+              exit 1
+            }
+            $token = (Get-Content $tokenFile -Raw).Trim()
+            $linked = $false
+            foreach ($i in 1..60) {
+              try {
+                $s = Invoke-RestMethod -Uri "http://localhost:3086/api/channels/whatsapp/status" `
+                       -Headers @{ Authorization = "Bearer $token" } -TimeoutSec 5
+                if ($s.bridge_connected -eq $true) { $linked = $true; break }
+              } catch { }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $linked) {
+              Write-Host "::error::mtw-server/whatsapp-bridge never connected (bridge_connected stayed false)"
+              if (Test-Path $log) { Get-Content $log -Tail 80 }
+              exit 1
+            }
+            Write-Host "  whatsapp bridge connected through named pipes"
+
+            # bridge_connected above only proves the WhatsApp card is up; it
+            # says nothing about the kernel's own link to mtw-server's tool
+            # pipe (every delegated Rust tool — torrent, etc. — goes through
+            # it). Require the kernel's connect line too.
+            $rb = $false
+            foreach ($i in 1..30) {
+              if (Select-String -Path $log -Pattern 'RustBridge: connected to \\\\\.\\pipe\\kernl-' -Quiet) { $rb = $true; break }
+              Start-Sleep -Seconds 2
+            }
+            if (-not $rb) {
+              Write-Host "::error::kernel never reached mtw-server's tool pipe"
+              if (Test-Path $log) { Get-Content $log -Tail 80 }
+              exit 1
+            }
+            Write-Host "  kernel connected to mtw-server's tool pipe"
+          }
+
       # ── Sign (opt-in via secrets) ───────────────────────────────
       - name: Sign artifacts
         if: env.WINDOWS_CERT_DATA != ''

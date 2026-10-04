@@ -4,9 +4,10 @@
   The ranking, grouping and matching are not reimplemented here: they live in
   `$lib/model-catalog.js` and `$lib/model-filter.js`, already proven against a
   67-model OpenAI account, and the chat's own picker consumes exactly the same
-  three functions (routes/chat/+page.svelte:8). What is different here is the
-  shape, not the logic — over there the menu is inline in a 12k-line page, here
-  it is a component the runtime panel mounts once per chain row.
+  three functions (routes/chat/ChatModelPicker.svelte). What is different here is the
+  shape, not the logic — over there it is the chat's one header menu (with the
+  episode lock and quota status), here it is a component the runtime panel
+  mounts once per chain row.
 
   A provider that cannot run a tool loop is rendered DISABLED WITH ITS REASON
   rather than filtered out. Hiding it would hide the exact provider named in
@@ -23,6 +24,10 @@
   import { buildCatalog, commonModels, rankModels, type ModelEntry } from '$lib/model-catalog.js';
   import { toolCapable, findProvider, type ProviderStatus } from '$lib/provider-health.js';
   import { bindListeners } from '$lib/outside-listeners.js';
+  import { modelPrices, priceKey, fmtPrice } from '$lib/model-prices.js';
+
+  // USD per million tokens, input / output — from the kernel's LiteLLM table.
+  const prices = modelPrices();
 
   /** Provider name as the agent stores it — may be `claude_code`, not the slug. */
   export let provider = '';
@@ -82,7 +87,9 @@
   function place() {
     if (!trigger) return;
     const r = trigger.getBoundingClientRect();
-    const width = Math.max(300, Math.min(r.width, 460));
+    // A bare trigger is a chip a few words wide; the menu still needs room
+    // for an id and its price.
+    const width = $$slots.default ? 400 : Math.max(300, Math.min(r.width, 460));
     // Flip above the trigger when there is no room below it — a fallback row
     // near the bottom of the drawer would otherwise open off-screen.
     const below = window.innerHeight - r.bottom;
@@ -227,8 +234,11 @@
 
 <svelte:window on:keydown={(e) => { if (e.key === 'Escape' && open) { e.stopPropagation(); close(); } }} />
 
+<!-- With slot content the trigger is bare: the caller draws it (the drawer
+     header's model chip) and this keeps only the menu behaviour. -->
 <button
   class="mp-trigger"
+  class:mp-bare={$$slots.default}
   class:mp-err={!!error}
   class:mp-busy={busy}
   bind:this={trigger}
@@ -238,8 +248,12 @@
   aria-expanded={open}
   on:click|stopPropagation={toggle}
 >
-  <span class="mp-value" class:mp-placeholder={!provider && !model}>{currentLabel}</span>
-  <span class="mp-caret" aria-hidden="true">{busy ? '◌' : '▾'}</span>
+  {#if $$slots.default}
+    <slot {open} />
+  {:else}
+    <span class="mp-value" class:mp-placeholder={!provider && !model}>{currentLabel}</span>
+    <span class="mp-caret" aria-hidden="true">{busy ? '◌' : '▾'}</span>
+  {/if}
 </button>
 
 {#if open}
@@ -286,6 +300,10 @@
                 on:click|stopPropagation={() => choose(s.p.slug, r.id)}
               >
                 <span class="mp-opt-id">{r.id}</span>
+                {#if $prices.get(priceKey(s.p.slug, r.id))}
+                  {@const pr = $prices.get(priceKey(s.p.slug, r.id))}
+                  <span class="mp-opt-price" title="USD per million tokens — input / output">{pr ? fmtPrice(pr) : ''}</span>
+                {/if}
               </button>
             {/each}
             {#if !query.trim() && !expanded.has(s.p.slug) && s.total > s.rows.length}
@@ -329,6 +347,10 @@
   .mp-trigger:disabled{opacity:.5;cursor:not-allowed}
   .mp-trigger.mp-err{border-color:rgba(239,93,110,.65);background:rgba(239,93,110,.08)}
   .mp-trigger.mp-busy{cursor:wait}
+  .mp-trigger.mp-bare{width:auto;max-width:100%;padding:0;border:none;background:none;border-radius:6px;font:inherit;color:inherit}
+  .mp-trigger.mp-bare:hover:not(:disabled){background:none}
+  .mp-trigger.mp-bare:focus-visible{outline:2px solid rgba(120,170,255,.7);outline-offset:2px}
+  .mp-trigger.mp-bare.mp-err{background:none}
   .mp-value{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .mp-placeholder{color:#6a6f82}
   .mp-caret{color:#6a6f82;font-size:10px;flex:none}
@@ -371,6 +393,10 @@
   }
   .mp-why-tools{color:#ef5d6e;background:rgba(239,93,110,.1);border-color:rgba(239,93,110,.32)}
 
+  .mp-opt-price{
+    margin-left:auto;flex:none;padding-left:10px;
+    font:500 10px 'JetBrains Mono',monospace;color:#7d8299;font-variant-numeric:tabular-nums;
+  }
   .mp-opt{
     display:flex;align-items:center;gap:8px;width:100%;
     padding:5px 9px;border:none;border-radius:5px;background:none;

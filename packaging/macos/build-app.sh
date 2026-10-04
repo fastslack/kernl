@@ -112,6 +112,18 @@ if [ "${1:-}" = "token" ]; then
   exit 1
 fi
 
+# Bundled mtw-server + whatsapp-bridge (stage-payload.sh, section 2d). The
+# kernel supervises them (src/core/bootstrap/sidecars.ts); these exports turn
+# on its side of both bridges and point it at the sockets under the data dir.
+# Absent from a bundle built before the binaries were published, in which
+# case nothing changes.
+if [ -x "$APP_DIR/bin/mtw-server/mtw-server" ]; then
+  export KERNL_BINARY_INSTALL=1 BRIDGE_ENABLED=true RUST_BRIDGE_ENABLED=true
+  export KERNEL_URL=ws://127.0.0.1:7741/ws
+  export RUST_BRIDGE_SOCKET="$DATA_DIR/run/mtw-rust.sock"
+  export KERNL_APP_DIR="$APP_DIR" KERNL_DATA_DIR="$DATA_DIR"
+fi
+
 # Anchor SQLite + workspaces under the per-user data dir.
 cd "$DATA_DIR"
 
@@ -223,6 +235,21 @@ cp "$SRC_TREE/bin/mcp-server.js" "$APP_BUNDLE/Contents/Resources/"
 # subtitle at all — which is precisely what it did until now, since macOS also
 # hides Homebrew from a Finder-launched app.
 [ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$APP_BUNDLE/Contents/Resources/"
+# mtw-server + whatsapp-bridge, kept under bin/ because that is where the
+# wrapper above and the kernel's sidecar stage look for them, with the
+# mtw.toml template beside them in bin/ (a payload staged before the template
+# moved there has it at its root). Present only when stage-payload found the
+# release assets.
+if [ -d "$SRC_TREE/bin/mtw-server" ] && [ -d "$SRC_TREE/bin/whatsapp-bridge" ]; then
+  mkdir -p "$APP_BUNDLE/Contents/Resources/bin"
+  cp -a "$SRC_TREE/bin/mtw-server"      "$APP_BUNDLE/Contents/Resources/bin/"
+  cp -a "$SRC_TREE/bin/whatsapp-bridge" "$APP_BUNDLE/Contents/Resources/bin/"
+  if [ -f "$SRC_TREE/bin/mtw.binary.toml" ]; then
+    cp  "$SRC_TREE/bin/mtw.binary.toml" "$APP_BUNDLE/Contents/Resources/bin/"
+  else
+    cp  "$SRC_TREE/mtw.binary.toml"     "$APP_BUNDLE/Contents/Resources/bin/"
+  fi
+fi
 cp -a "$SRC_TREE/node_modules" "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/dashboard"    "$APP_BUNDLE/Contents/Resources/"
 cp -a "$SRC_TREE/assets"       "$APP_BUNDLE/Contents/Resources/"

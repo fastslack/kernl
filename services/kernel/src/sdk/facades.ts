@@ -9,6 +9,7 @@ import type { KernelConfig } from "../core/config.js";
 import type { LlmClient } from "../core/llm/client.js";
 import type { ProviderConfig } from "../core/llm/credentials.js";
 import type { LlmStartInfo, LlmEndInfo, LlmFailInfo } from "../core/llm/logger.js";
+import type { LlmCallRecord } from "../core/llm/call-log.js";
 import type { MediaTool, MediaToolStatus } from "../core/media-tools.js";
 import type { KernelRequestContext } from "../core/request-context.js";
 import type { PeeringService } from "../core/peering/service.js";
@@ -41,6 +42,11 @@ export function logLlmEnd(info: LlmEndInfo): void {
 
 export function logLlmFail(info: LlmFailInfo): void {
   getHost().logLlmFail(info);
+}
+
+/** Record a model call made outside `llm()` so it shows in token usage. */
+export function recordLlmCall(record: LlmCallRecord, opts?: { silent?: boolean }): void {
+  getHost().recordLlmCall?.(record, opts);
 }
 
 /**

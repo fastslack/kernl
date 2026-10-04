@@ -45,7 +45,8 @@ describe("reminders RPC → service", () => {
   it("reschedule moves trigger_at", async () => {
     const r = env.service.create({ title: "R", trigger_at: "2026-07-01T10:00:00Z" });
     await env.call("reminders.reschedule", { id: r.id, trigger_at: "2026-07-05T10:00:00Z" });
-    expect(env.service.getById(r.id)!.trigger_at).toBe("2026-07-05T10:00:00Z");
+    // Stored as the canonical UTC instant (toInstant).
+    expect(env.service.getById(r.id)!.trigger_at).toBe("2026-07-05T10:00:00.000Z");
   });
 
   it("update renames a reminder", async () => {

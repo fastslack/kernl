@@ -1,192 +1,138 @@
 /**
- * Learning RPC Actions — resources, highlights, flashcards, goals via mtwRequest.
+ * Learning RPC Actions — resources, highlights, flashcards via mtwRequest.
+ *
+ * These have no HTTP twin. They used to be raw SQL beside LearningService
+ * and had drifted from it: `learning.resources.create` wrote NULL into the
+ * NOT NULL page/hour columns unless all four were sent, a review wrote a
+ * full timestamp where the service writes a date (so the service's due
+ * query skipped those cards on their due day), and enum values reached the
+ * CHECK constraints unvalidated. Now each one calls the service.
  */
 
-import crypto from "node:crypto";
-import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import type { LearningService } from "./service.js";
+import type { HighlightType, ResourceStatus, ResourceType } from "./types.js";
 
-export function learningRpcActions(db: SqliteDb): RpcAction[] {
-  return [
-    {
-      name: "learning.resources.list",
-      handler: async (args) => {
-        const status = typeof args.status === "string" ? args.status : "";
-        const type = typeof args.type === "string" ? args.type : "";
-        const limit = Math.min(200, typeof args.limit === "number" ? args.limit : 50);
+const TYPES: ReadonlyArray<ResourceType> = ["book", "article", "course", "paper", "podcast", "video", "other"];
+const STATUSES: ReadonlyArray<ResourceStatus> = ["wishlist", "in_progress", "completed", "abandoned", "paused"];
+const PRIORITIES = ["low", "medium", "high"] as const;
+const HIGHLIGHT_TYPES: ReadonlyArray<HighlightType> = ["highlight", "note", "quote", "action_item", "question"];
 
-        let where = "1=1";
-        const params: unknown[] = [];
-        if (status) { where += " AND status = ?"; params.push(status); }
-        if (type) { where += " AND type = ?"; params.push(type); }
+/** Everything the service lets a caller write on a resource, but tags. */
+const RESOURCE_FIELDS = {
+  type: "string", title: "string", author: "string", url: "string", isbn: "string", source: "string",
+  status: "string", priority: "string", rating: "number", started_at: "string", completed_at: "string",
+  total_pages: "number", current_page: "number", total_hours: "number", spent_hours: "number",
+  notes: "string", summary: "string",
+} as const;
 
-        const rows = db.prepare(
-          `SELECT id, type, title, author, url, status, priority, rating, started_at, completed_at,
-                  total_pages, current_page, total_hours, spent_hours, tags, notes, created_at, updated_at
-           FROM learning_resources WHERE ${where}
-           ORDER BY CASE status WHEN 'in_progress' THEN 0 WHEN 'wishlist' THEN 1 ELSE 2 END, updated_at DESC LIMIT ?`,
-        ).all(...params, limit);
-        return { resources: rows };
-      },
+/** Tags arrive as an array, a JSON array string, or a comma list. */
+function tagList(v: unknown): string[] | undefined {
+  if (Array.isArray(v)) return v.filter((t): t is string => typeof t === "string");
+  if (typeof v !== "string") return undefined;
+  try {
+    const parsed: unknown = JSON.parse(v);
+    if (Array.isArray(parsed)) return parsed.filter((t): t is string => typeof t === "string");
+  } catch { /* not JSON: a comma list */ }
+  return v.split(",").map((t) => t.trim()).filter(Boolean);
+}
+
+export function learningRpcActions(service: LearningService): RpcAction[] {
+  const oneOf = (value: string | undefined, allowed: ReadonlyArray<string>, key: string) => {
+    if (value !== undefined && !allowed.includes(value)) throw new HttpError(400, `Invalid ${key}. Allowed: ${allowed.join(", ")}`);
+  };
+  const resourceFields = (input: Record<string, unknown>) => {
+    const fields = pickArgs(input, RESOURCE_FIELDS);
+    oneOf(fields.type, TYPES, "type");
+    oneOf(fields.status, STATUSES, "status");
+    oneOf(fields.priority, PRIORITIES, "priority");
+    return {
+      ...fields,
+      type: fields.type as ResourceType | undefined,
+      status: fields.status as ResourceStatus | undefined,
+      priority: fields.priority as (typeof PRIORITIES)[number] | undefined,
+      tags: tagList(input.tags),
+    };
+  };
+  /** Drop the keys left undefined: the service spreads changes over the row. */
+  const defined = <T extends Record<string, unknown>>(o: T): Partial<T> =>
+    Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+  return rpcActionsFrom({
+    "learning.resources.list": (input) => {
+      const args = pickArgs(input, { status: "string", type: "string", limit: "number" });
+      return {
+        resources: service.listResources({
+          status: (args.status || undefined) as ResourceStatus | undefined,
+          type: (args.type || undefined) as ResourceType | undefined,
+          limit: Math.min(200, args.limit ?? 50),
+          inProgressFirst: true,
+        }),
+      };
     },
-    {
-      name: "learning.resources.detail",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const resource = db.prepare("SELECT * FROM learning_resources WHERE id = ?").get(id);
-        if (!resource) throw new Error("Not found");
-        const highlights = db.prepare(
-          "SELECT id, content, location, type, created_at FROM learning_highlights WHERE resource_id = ? ORDER BY created_at",
-        ).all(id);
-        return { resource, highlights };
-      },
+
+    "learning.resources.detail": (input) => {
+      const { id } = pickArgs(input, { id: "string" });
+      if (!id) throw new HttpError(400, "Missing id");
+      const resource = service.getResource(id);
+      if (!resource) throw new HttpError(404, "Not found");
+      return { resource, highlights: service.listHighlights(id) };
     },
-    {
-      name: "learning.resources.create",
-      handler: async (args) => {
-        const title = typeof args.title === "string" ? args.title.trim() : "";
-        if (!title) throw new Error("Title required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO learning_resources (id, type, title, author, url, isbn, source, status, priority, rating,
-           started_at, completed_at, total_pages, current_page, total_hours, spent_hours, tags, notes, summary, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id, args.type ?? "book", title, args.author ?? "", args.url ?? "",
-          args.isbn ?? "", args.source ?? "", args.status ?? "wishlist",
-          args.priority ?? "medium", args.rating ?? null,
-          args.started_at ?? null, args.completed_at ?? null,
-          args.total_pages ?? null, args.current_page ?? null,
-          args.total_hours ?? null, args.spent_hours ?? null,
-          typeof args.tags === "string" ? args.tags : JSON.stringify(args.tags ?? []),
-          args.notes ?? "", args.summary ?? "", now, now,
-        );
-        return { ok: true, id };
-      },
+
+    "learning.resources.create": (input) => {
+      const { title: rawTitle, ...fields } = resourceFields(input);
+      const title = rawTitle?.trim() ?? "";
+      if (!title) throw new HttpError(400, "Title required");
+      const resource = service.addResource({ ...fields, title });
+      return { ok: true, id: resource.id };
     },
-    {
-      name: "learning.resources.update",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const fields: string[] = [];
-        const vals: unknown[] = [];
-        for (const f of ["type", "title", "author", "url", "isbn", "source", "status", "priority", "rating",
-          "started_at", "completed_at", "total_pages", "current_page", "total_hours", "spent_hours", "tags", "notes", "summary"]) {
-          if (args[f] !== undefined) {
-            fields.push(`${f} = ?`);
-            vals.push(f === "tags" && typeof args[f] !== "string" ? JSON.stringify(args[f]) : args[f]);
-          }
-        }
-        if (!fields.length) throw new Error("No fields");
-        const now = new Date().toISOString();
-        fields.push("updated_at = ?"); vals.push(now);
-        vals.push(id);
-        db.prepare(`UPDATE learning_resources SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
-        return { ok: true };
-      },
+
+    "learning.resources.update": (input) => {
+      const { id } = pickArgs(input, { id: "string" });
+      if (!id) throw new HttpError(400, "Missing id");
+      const changes = defined(resourceFields(input));
+      if (Object.keys(changes).length === 0) throw new HttpError(400, "No fields");
+      if (!service.updateResource(id, changes)) throw new HttpError(404, "Not found");
+      return { ok: true };
     },
-    {
-      name: "learning.highlights.list",
-      handler: async (args) => {
-        const resourceId = typeof args.resource_id === "string" ? args.resource_id : "";
-        if (!resourceId) throw new Error("resource_id required");
-        const rows = db.prepare(
-          "SELECT id, content, location, type, created_at FROM learning_highlights WHERE resource_id = ? ORDER BY created_at",
-        ).all(resourceId);
-        return { highlights: rows };
-      },
+
+    "learning.highlights.list": (input) => {
+      const { resource_id } = pickArgs(input, { resource_id: "string" });
+      if (!resource_id) throw new HttpError(400, "resource_id required");
+      return { highlights: service.listHighlights(resource_id) };
     },
-    {
-      name: "learning.highlights.add",
-      handler: async (args) => {
-        const resourceId = typeof args.resource_id === "string" ? args.resource_id : "";
-        const content = typeof args.content === "string" ? args.content.trim() : "";
-        if (!resourceId || !content) throw new Error("resource_id and content required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          "INSERT INTO learning_highlights (id, resource_id, content, location, type, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-        ).run(id, resourceId, content, args.location ?? "", args.type ?? "highlight", now);
-        return { ok: true, id };
-      },
+
+    "learning.highlights.add": (input) => {
+      const args = pickArgs(input, { resource_id: "string", content: "string", location: "string", type: "string" });
+      const content = args.content?.trim() ?? "";
+      if (!args.resource_id || !content) throw new HttpError(400, "resource_id and content required");
+      oneOf(args.type, HIGHLIGHT_TYPES, "type");
+      if (!service.getResource(args.resource_id)) throw new HttpError(404, "Resource not found");
+      const highlight = service.addHighlight({
+        resource_id: args.resource_id,
+        content,
+        location: args.location,
+        type: args.type as HighlightType | undefined,
+      });
+      return { ok: true, id: highlight.id };
     },
-    {
-      name: "learning.flashcards.due",
-      handler: async (args) => {
-        const deck = typeof args.deck === "string" ? args.deck : "";
-        const limit = Math.min(50, typeof args.limit === "number" ? args.limit : 20);
-        const now = new Date().toISOString();
 
-        let where = "(next_review IS NULL OR next_review <= ?)";
-        const params: unknown[] = [now];
-        if (deck) { where += " AND deck = ?"; params.push(deck); }
-
-        const rows = db.prepare(
-          `SELECT id, resource_id, deck, front, back, tags, ease_factor, interval_days, repetitions, next_review, last_reviewed
-           FROM learning_flashcards WHERE ${where} ORDER BY next_review ASC NULLS FIRST LIMIT ?`,
-        ).all(...params, limit);
-        return { cards: rows };
-      },
+    "learning.flashcards.due": (input) => {
+      const { deck, limit } = pickArgs(input, { deck: "string", limit: "number" });
+      return { cards: service.getDueCards(deck || undefined, Math.min(50, limit ?? 20)) };
     },
-    {
-      name: "learning.flashcards.review",
-      handler: async (args) => {
-        const cardId = typeof args.card_id === "string" ? args.card_id : "";
-        const quality = typeof args.quality === "number" ? args.quality : 3;
-        if (!cardId || quality < 0 || quality > 5) throw new Error("card_id and quality (0-5) required");
 
-        const card = db.prepare("SELECT * FROM learning_flashcards WHERE id = ?").get(cardId) as any;
-        if (!card) throw new Error("Card not found");
-
-        // SM-2 algorithm
-        let ef = card.ease_factor;
-        let interval = card.interval_days;
-        let reps = card.repetitions;
-
-        if (quality >= 3) {
-          if (reps === 0) interval = 1;
-          else if (reps === 1) interval = 6;
-          else interval = Math.round(interval * ef);
-          reps++;
-        } else {
-          reps = 0;
-          interval = 1;
-        }
-        ef = Math.max(1.3, ef + (0.1 - (5 - quality) * (0.08 + (5 - quality) * 0.02)));
-
-        const now = new Date().toISOString();
-        const nextReview = new Date(Date.now() + interval * 86400000).toISOString();
-
-        db.prepare(
-          "UPDATE learning_flashcards SET ease_factor = ?, interval_days = ?, repetitions = ?, next_review = ?, last_reviewed = ?, updated_at = ? WHERE id = ?",
-        ).run(ef, interval, reps, nextReview, now, now, cardId);
-
-        // Log review
-        const reviewId = crypto.randomUUID();
-        db.prepare("INSERT INTO learning_reviews (id, card_id, quality, reviewed_at) VALUES (?, ?, ?, ?)")
-          .run(reviewId, cardId, quality, now);
-
-        return { ok: true, nextReview, interval, easeFactor: ef };
-      },
+    "learning.flashcards.review": (input) => {
+      const { card_id } = pickArgs(input, { card_id: "string" });
+      const quality = pickArgs(input, { quality: "number" }).quality ?? 3;
+      if (!card_id || !Number.isInteger(quality) || quality < 0 || quality > 5) {
+        throw new HttpError(400, "card_id and quality (0-5) required");
+      }
+      const card = service.reviewCard(card_id, quality);
+      if (!card) throw new HttpError(404, "Card not found");
+      return { ok: true, nextReview: card.next_review, interval: card.interval_days, easeFactor: card.ease_factor };
     },
-    {
-      name: "learning.stats",
-      handler: async () => {
-        const total = db.prepare("SELECT COUNT(*) as c FROM learning_resources").get() as { c: number };
-        const byStatus = db.prepare(
-          "SELECT status, COUNT(*) as count FROM learning_resources GROUP BY status",
-        ).all();
-        const dueCards = db.prepare(
-          "SELECT COUNT(*) as c FROM learning_flashcards WHERE next_review IS NULL OR next_review <= ?",
-        ).get(new Date().toISOString()) as { c: number };
-        const totalCards = db.prepare("SELECT COUNT(*) as c FROM learning_flashcards").get() as { c: number };
-        const recentReviews = db.prepare(
-          "SELECT COUNT(*) as c FROM learning_reviews WHERE reviewed_at >= ?",
-        ).get(new Date(Date.now() - 7 * 86400000).toISOString()) as { c: number };
-        return { totalResources: total.c, byStatus, dueCards: dueCards.c, totalCards: totalCards.c, weeklyReviews: recentReviews.c };
-      },
-    },
-  ];
+
+    "learning.stats": () => service.getDashboardStats(),
+  });
 }

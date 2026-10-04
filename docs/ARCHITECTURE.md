@@ -80,7 +80,7 @@ Single-user, self-hosted by default. Key invariants (see `SECURITY.md` and the
   `services/kernel/src/index.ts`.
 - **Add an extension** → see a sibling under
   `services/kernel/assets/extensions/<category>/` for the `extension.json` +
-  `_module/` + `_wrapper/` shape, then `bun run build:extensions`.
+  `_module/` shape, then `bun run build:extensions`.
 - **Run the stack** → `docker compose up -d --build`, then open
   `http://localhost:3086`. Or `bun run dev` for stdio MCP.
 

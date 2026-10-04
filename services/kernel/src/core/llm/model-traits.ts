@@ -128,13 +128,3 @@ export function classifyModel(slug: string, modelId: string): ModelTraits {
   return traits;
 }
 
-/** Short emoji string for compact UI rendering inside <option> labels. */
-export function traitIcons(t: ModelTraits): string {
-  if (!t.chat) return "";
-  const out: string[] = [];
-  if (t.vision)      out.push("👁");
-  if (t.reasoning)   out.push("🧠");
-  if (t.longContext) out.push("📜");
-  if (t.fast)        out.push("⚡");
-  return out.join("");
-}

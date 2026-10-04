@@ -27,22 +27,12 @@
 	let conflict: string | null = null;
 	let taEl: HTMLTextAreaElement;
 
-	function authHeaders(): Record<string, string> {
-		const h: Record<string, string> = {};
-		if (typeof localStorage !== 'undefined') {
-			const t = localStorage.getItem('kernel_auth_token');
-			if (t) h['Authorization'] = `Bearer ${t}`;
-		}
-		return h;
-	}
-
 	async function load(): Promise<void> {
 		loading = true;
 		error = null;
 		try {
 			const r = await fetch(
-				`/api/fs/read?provider=${encodeURIComponent(providerId)}&path=${encodeURIComponent(path)}&text=1`,
-				{ headers: authHeaders() }
+				`/api/fs/read?provider=${encodeURIComponent(providerId)}&path=${encodeURIComponent(path)}&text=1`
 			);
 			if (r.status === 413) {
 				error = 'File too large to edit.';
@@ -77,7 +67,7 @@
 		try {
 			const r = await fetch('/api/fs/write', {
 				method: 'POST',
-				headers: { 'Content-Type': 'application/json', ...authHeaders() },
+				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					provider: providerId,
 					path,

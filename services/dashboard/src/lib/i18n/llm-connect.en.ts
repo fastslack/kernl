@@ -1,4 +1,4 @@
-const en: Record<string, string> = {
+const en = {
   "llm.title": "Connect your AI",
   "llm.lede": "Which AI should Kernl think with?",
   "llm.group.free": "Free",
@@ -83,5 +83,37 @@ const en: Record<string, string> = {
   "llm.banner_fix": "Set up AI",
   "llm.banner_dismiss": "Dismiss",
   "llm.configure_in_settings": "Configure in Settings → AI",
-};
+  "llm.usage.tab": "Token usage",
+  "llm.usage.range.today": "Today",
+  "llm.usage.range.7d": "7 days",
+  "llm.usage.range.30d": "30 days",
+  "llm.usage.range.all": "All",
+  "llm.usage.group.model": "Model",
+  "llm.usage.group.caller": "Caller",
+  "llm.usage.group.day": "Day",
+  "llm.usage.refresh": "Refresh",
+  "llm.usage.calls": "Calls",
+  "llm.usage.fails": "Failed",
+  "llm.usage.fails_n": "{n} failed",
+  "llm.usage.input": "Input",
+  "llm.usage.output": "Output",
+  "llm.usage.cache": "Cache",
+  "llm.usage.cache_read": "Cache read",
+  "llm.usage.cache_write": "Cache write",
+  "llm.usage.cost": "Cost",
+  "llm.usage.cache_read_short": "Cache rd",
+  "llm.usage.cache_write_short": "Cache wr",
+  "llm.usage.share": "Share",
+  "llm.usage.untagged": "(untagged)",
+  "llm.usage.filtered": "Model: {model}",
+  "llm.usage.clear_filter": "Show all models",
+  "llm.usage.drill": "See who uses {model}",
+  "llm.usage.empty": "No LLM calls in this range yet.",
+  "llm.usage.chart_label": "Tokens per day: input, output and cache",
+  "llm.usage.note": "Cost: Claude Code reports its own (what the API would charge — a subscription doesn't bill it); other models are estimated (≈) from LiteLLM prices, cache unpriced. Days are UTC. Before 3 Oct 2026, Claude Code input, cache and agent runs were not recorded.",
+} satisfies Record<string, string>;
+
+/** Every key of the LLM-connect strings. `llm-connect.es.ts` is typed against it. */
+export type LlmConnectKey = keyof typeof en;
+
 export default en;

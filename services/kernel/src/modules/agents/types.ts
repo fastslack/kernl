@@ -1,9 +1,29 @@
 /** What an office is, for the room it gets in 3D and the buttons its agents show. */
 export const FLOW_KINDS = ["general", "devops", "communications", "creative"] as const;
-export type FlowKind = (typeof FLOW_KINDS)[number];
+/** A core kind, or one an installed extension declares (manifest `frontend.worlds[].kinds`). */
+export type FlowKind = (typeof FLOW_KINDS)[number] | (string & {});
+
+/** Kinds declared by installed extensions, e.g. an extension that draws its own building. */
+const extensionKinds = new Set<string>();
+/** The ones that stand in a building of their own: they take no lot on the office grid. */
+const offGridKinds = new Set<string>();
+
+/** Accept extension-declared office kinds (called when an extension loads or installs). */
+export function registerExtensionFlowKinds(kinds: ReadonlyArray<{ id: string; offGrid?: boolean }>): void {
+  for (const k of kinds) {
+    if (typeof k?.id !== "string" || !/^[a-z][a-z0-9-]{0,39}$/.test(k.id)) continue;
+    extensionKinds.add(k.id);
+    if (k.offGrid) offGridKinds.add(k.id);
+  }
+}
+
+/** Offices an extension stands in its own building (no lot on the grid). */
+export function isOffGridKind(kind: string | null | undefined): boolean {
+  return !!kind && offGridKinds.has(kind);
+}
 
 export function isFlowKind(v: unknown): v is FlowKind {
-  return typeof v === "string" && (FLOW_KINDS as readonly string[]).includes(v);
+  return typeof v === "string" && ((FLOW_KINDS as readonly string[]).includes(v) || extensionKinds.has(v));
 }
 
 /** How agents of an office that works on a repo are run. */
@@ -26,6 +46,7 @@ export interface AgentFlow {
   repo_isolation?: RepoIsolation | "";    // '' = the office has no repo
   source_extension_id?: string;           // '' = created by the operator
   auto_debate?: number;                   // 0/1
+  lot_id?: string;                        // "col,row" plot in the 3D world; '' = none yet
   created_at: string;
   updated_at: string;
 }
@@ -147,6 +168,23 @@ export interface AgentRun {
   parent_agent_id: string;
   /** 0 for top-level, parent.depth + 1 for chained runs. Capped by KERNEL_AGENT_MAX_DEPTH. */
   depth: number;
+  /** JSON array of RunCondition — what happened to the run, beyond its status. */
+  conditions: string;
+  /** Project this run works for (src/modules/projects). null = none. */
+  project_id: string | null;
+}
+
+/**
+ * One fact about a run, in the shape Kubernetes uses for conditions: a type,
+ * whether it holds, a machine-readable reason, a human message, and when it
+ * last flipped. Upserted by type — a run holds at most one of each.
+ */
+export interface RunCondition {
+  type: "ModelReady" | "Interrupted" | "Resumed" | "Aborted" | "WorkspaceReady";
+  status: "True" | "False";
+  reason: string;
+  message: string;
+  last_transition_time: string;
 }
 
 /** Individual step within an agent run */
@@ -186,6 +224,10 @@ export interface AgentSchedule {
   last_run_at: string | null;
   active: number;          // 0/1
   created_at: string;
+  /** Project this schedule runs for. null = none (or a per_project template). */
+  project_id: string | null;
+  /** 1 = template cloned once per project assigned to the office. */
+  per_project: number;
 }
 
 /** User feedback on a completed agent run */
@@ -210,6 +252,8 @@ export interface AgentLearning {
   active: number;          // 0/1
   created_at: string;
   updated_at: string;
+  /** null = craft learning (all projects); set = only for that project. */
+  project_id: string | null;
 }
 
 /** Immutable snapshot of an agent's system_prompt + goal_template at a point in time. */
@@ -271,6 +315,8 @@ export interface AgentOfficeInboxMessage {
   related_run_id: string;
   created_at: string;
   read_at: string | null;
+  /** Project the letter belongs to. null = none. */
+  project_id: string | null;
 }
 
 /** Generic fleet-wide conversation. Subsumes 1-to-1 chats, meetings, debates. */

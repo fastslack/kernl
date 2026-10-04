@@ -97,7 +97,8 @@ export interface AgentFlowRunCompletedPayload {
   agent_id: string;
   agent_name: string;
   run_id: string;
-  status: "completed" | "failed";
+  /** "cancelled" only from agents.stop — the operator stopped it. */
+  status: "completed" | "failed" | "cancelled";
   steps_count: number;
   tokens_used: number;
   result_preview: string;
@@ -134,6 +135,12 @@ export interface AgentQuestionAskedPayload {
   options: string[];
   run_id: string;
   asked_at: string;
+}
+
+/** A question entered the chief's triage queue (not yet addressed to the human). */
+export interface AgentQuestionTriagePayload {
+  question_id: string;
+  agent_id: string;
 }
 
 export interface AgentFlowResultPayload {
@@ -283,6 +290,7 @@ export interface KernelEvents {
   "agent.alert": AgentAlertPayload;
   "agent:auto_paused": AgentAutoPausedPayload;
   "agent:question_asked": AgentQuestionAskedPayload;
+  "agent:question_triage": AgentQuestionTriagePayload;
 
   // Agent flow (real-time execution)
   "agent:flow:run_started": AgentFlowRunStartedPayload;
@@ -304,7 +312,11 @@ export interface KernelEvents {
     agent_id: string; agent_name: string; run_id: string;
     learning_id: string; learning_type: string; content: string; confidence: number;
   };
-  "agent:flow:learning_deactivated": { agent_id: string; agent_name: string; run_id: string; count: number };
+  "agent:flow:learning_deactivated": {
+    agent_id: string; agent_name: string; run_id: string; count: number;
+    /** The lessons retired by this run's cleanup. */
+    learnings: Array<{ id: string; type: string; content: string; confidence: number }>;
+  };
 
   // Chat module
   "chat.message": ChatMessagePayload;
@@ -334,6 +346,25 @@ export interface KernelEvents {
 
   // Architecture 3D beams (generic, emitted by any module)
   "arch.cross_module": ArchCrossModulePayload;
+
+  // Projects (src/modules/projects): outbox drafts awaiting human approval
+  "outbox:changed": OutboxChangedPayload;
+  "outbox:rejected": OutboxRejectedPayload;
+}
+
+/** An outbox item changed state (proposed, edited, approved, sent, failed…). */
+export interface OutboxChangedPayload {
+  id: string;
+  project_id: string;
+  status: string;
+}
+
+/** The user rejected a draft with a note — becomes a project learning. */
+export interface OutboxRejectedPayload {
+  item_id: string;
+  agent_id: string;
+  project_id: string;
+  note: string;
 }
 
 /**
@@ -341,7 +372,3 @@ export interface KernelEvents {
  */
 export type KernelEventName = keyof KernelEvents;
 
-/**
- * Helper type to get payload type for a specific event
- */
-export type KernelEventPayload<K extends KernelEventName> = KernelEvents[K];

@@ -1,213 +1,132 @@
 /**
  * Voice Service
- * Unified interface for speech-to-text and text-to-speech
+ *
+ * One door onto speech for every channel: the dashboard's mic button, Telegram
+ * voice notes, anything later. It reads `config.voice` on every call rather
+ * than at construction, so a change saved in Settings applies to the next
+ * utterance without a restart.
  */
 
-import { log } from "../core/logger.js";
-import { getProviderConfig } from "../core/llm/credentials.js";
-import { SttService } from "./stt.js";
-import { TtsService } from "./tts.js";
+import { existsSync } from "node:fs";
+import { spawn } from "node:child_process";
+import type { KernelConfig } from "../core/config.js";
+import { mediaToolBin, probeMediaTool } from "../core/media-tools.js";
+import { SttService, isCloudSttConfigured, pickWhisperModel, sttChain } from "./stt.js";
+import { TtsService, isTtsEngineConfigured, resolveVoice, ttsChain } from "./tts.js";
+import {
+  adoptDownloadedPiper,
+  downloadedPiperBin,
+  piperArchiveName,
+  piperVoicePath,
+  whisperModelPath,
+  VOICE_CATALOG,
+  type VoiceOption,
+} from "./downloads.js";
 import type {
+  EngineStatus,
   IVoiceService,
-  VoiceServiceConfig,
-  TranscriptionResult,
+  SttEngine,
   SynthesisResult,
-  TranscribeOptions,
   SynthesizeOptions,
-  VoiceConfig,
+  TranscribeOptions,
+  TranscriptionResult,
+  TtsEngine,
+  VoiceSettings,
+  VoiceStatus,
 } from "./types.js";
 
-/**
- * Main Voice Service
- * Combines STT and TTS capabilities
- */
 export class VoiceService implements IVoiceService {
-  private stt: SttService;
-  private tts: TtsService;
+  private readonly stt: SttService;
+  private readonly tts: TtsService;
 
-  constructor(config: VoiceServiceConfig) {
-    this.stt = new SttService(config.stt);
-    this.tts = new TtsService(config.tts);
-    
-    log.info(`VoiceService: initialized with STT=${config.stt.provider}, TTS=${config.tts.provider}`);
+  constructor(private readonly config: Pick<KernelConfig, "voice">) {
+    const settings = () => this.config.voice;
+    this.stt = new SttService(settings);
+    this.tts = new TtsService(settings);
+    adoptDownloadedPiper();
   }
 
-  /**
-   * Transcribe audio to text
-   */
-  async transcribe(
-    audio: Buffer,
-    options?: TranscribeOptions
-  ): Promise<TranscriptionResult> {
+  get enabled(): boolean {
+    return this.config.voice.enabled;
+  }
+
+  transcribe(audio: Buffer, options?: TranscribeOptions): Promise<TranscriptionResult> {
     return this.stt.transcribe(audio, options);
   }
 
-  /**
-   * Synthesize text to audio
-   */
-  async synthesize(
-    text: string,
-    options?: SynthesizeOptions
-  ): Promise<SynthesisResult> {
+  synthesize(text: string, options?: SynthesizeOptions): Promise<SynthesisResult> {
     return this.tts.synthesize(text, options);
   }
 
-  /**
-   * Get available TTS voices
-   */
-  async getVoices(): Promise<VoiceConfig[]> {
-    return this.tts.getVoices();
+  /** The voices Settings offers, with whether each Piper one is already on disk. */
+  suggestedVoices(): Array<VoiceOption & { downloaded: boolean }> {
+    return VOICE_CATALOG.map((v) => ({
+      ...v,
+      downloaded: v.engine === "piper" ? existsSync(piperVoicePath(v.id)) : true,
+    }));
   }
 
-  /**
-   * Check if STT is ready
-   */
-  isSttReady(): boolean {
-    return this.stt.isReady();
-  }
+  /** What would run right now, and what each engine still needs. Never throws. */
+  async status(): Promise<VoiceStatus> {
+    const s: VoiceSettings = this.config.voice;
+    const model = await pickWhisperModel(s).catch(() => s.whisperModel || "small");
 
-  /**
-   * Check if TTS is ready
-   */
-  isTtsReady(): boolean {
-    return this.tts.isReady();
-  }
+    const sttEngines: EngineStatus[] = await Promise.all(
+      (["whispercpp", "groq", "openai"] as SttEngine[]).map(async (engine) => {
+        if (engine !== "whispercpp") {
+          const ok = isCloudSttConfigured(engine);
+          return { engine, ready: ok, reason: ok ? undefined : `Connect ${engine === "groq" ? "Groq" : "OpenAI"} in Settings → AI` };
+        }
+        const bin = await probeMediaTool("whisper-cli");
+        if (!bin.available) return { engine, ready: false, reason: bin.reason ?? "whisper-cli not found" };
+        const have = existsSync(whisperModelPath(model));
+        return { engine, ready: have, downloadable: !have, reason: have ? undefined : `Model ggml-${model}.bin downloads on first use` };
+      }),
+    );
 
-  /**
-   * Get STT provider name
-   */
-  getSttProvider(): string {
-    return this.stt.getProvider();
-  }
+    const voice = resolveVoice("piper", s);
+    const ttsEngines: EngineStatus[] = await Promise.all(
+      (["piper", "openai", "elevenlabs"] as TtsEngine[]).map(async (engine) => {
+        if (engine !== "piper") {
+          const ok = isTtsEngineConfigured(engine, s);
+          return { engine, ready: ok, reason: ok ? undefined : engine === "openai" ? "Connect OpenAI in Settings → AI" : "Add an ElevenLabs API key" };
+        }
+        const binReady = await piperRuns();
+        const voiceReady = existsSync(piperVoicePath(voice));
+        const canDownload = binReady || piperArchiveName() !== null;
+        if (binReady && voiceReady) return { engine, ready: true };
+        return {
+          engine,
+          ready: false,
+          downloadable: canDownload,
+          reason: canDownload
+            ? `${binReady ? "" : "Piper and "}voice ${voice} download on first use`
+            : `No Piper build for ${process.platform}/${process.arch}`,
+        };
+      }),
+    );
 
-  /**
-   * Get TTS provider name
-   */
-  getTtsProvider(): string {
-    return this.tts.getProvider();
-  }
+    const firstUsable = <T extends { engine: string; ready: boolean; downloadable?: boolean }>(chain: string[], list: T[]) =>
+      chain.map((e) => list.find((x) => x.engine === e)).find((x) => x && (x.ready || x.downloadable))?.engine ?? null;
 
-  /**
-   * Process a voice message from a channel
-   * Transcribes the audio and optionally responds with voice
-   */
-  async processVoiceMessage(
-    audio: Buffer,
-    respondWithVoice: boolean = false,
-    messageHandler?: (text: string) => Promise<string>
-  ): Promise<{
-    transcription: TranscriptionResult;
-    response?: string;
-    responseAudio?: SynthesisResult;
-  }> {
-    // Transcribe the incoming audio
-    const transcription = await this.transcribe(audio);
-
-    const result: {
-      transcription: TranscriptionResult;
-      response?: string;
-      responseAudio?: SynthesisResult;
-    } = { transcription };
-
-    // If there's a message handler, process the transcribed text
-    if (messageHandler && transcription.text) {
-      result.response = await messageHandler(transcription.text);
-
-      // If voice response is requested, synthesize it
-      if (respondWithVoice && result.response) {
-        result.responseAudio = await this.synthesize(result.response);
-      }
-    }
-
-    return result;
-  }
-
-  /**
-   * Create a voice-enabled chat flow
-   * Useful for voice-based interactions
-   */
-  createVoiceChatHandler(
-    chatHandler: (text: string) => Promise<string>,
-    options?: {
-      respondWithVoice?: boolean;
-      transcribeOptions?: TranscribeOptions;
-      synthesizeOptions?: SynthesizeOptions;
-    }
-  ): (audio: Buffer) => Promise<{
-    inputText: string;
-    outputText: string;
-    outputAudio?: Buffer;
-  }> {
-    return async (audio: Buffer) => {
-      // Transcribe input
-      const transcription = await this.transcribe(audio, options?.transcribeOptions);
-      
-      // Get response from chat handler
-      const outputText = await chatHandler(transcription.text);
-
-      const result: {
-        inputText: string;
-        outputText: string;
-        outputAudio?: Buffer;
-      } = {
-        inputText: transcription.text,
-        outputText,
-      };
-
-      // Synthesize response if requested
-      if (options?.respondWithVoice !== false) {
-        const synthesis = await this.synthesize(outputText, options?.synthesizeOptions);
-        result.outputAudio = synthesis.audio;
-      }
-
-      return result;
+    return {
+      enabled: s.enabled,
+      language: s.language,
+      stt: { setting: s.sttEngine, active: firstUsable(sttChain(s.sttEngine), sttEngines) as SttEngine | null, engines: sttEngines, model },
+      tts: { setting: s.ttsEngine, active: firstUsable(ttsChain(s.ttsEngine), ttsEngines) as TtsEngine | null, engines: ttsEngines, voice: s.ttsEngine === "auto" || s.ttsEngine === "piper" ? voice : resolveVoice(s.ttsEngine, s) },
     };
   }
 }
 
-/**
- * Create a VoiceService from environment variables
- */
-export function createVoiceServiceFromEnv(): VoiceService | null {
-  const openaiKey = getProviderConfig("openai").apiKey || undefined;
-  const elevenLabsKey = process.env.ELEVENLABS_API_KEY;
-
-  // Determine STT provider
-  let sttProvider: VoiceServiceConfig["stt"]["provider"] = "openai";
-  if (process.env.LOCAL_WHISPER_PATH) {
-    sttProvider = "local-whisper";
-  }
-
-  // Determine TTS provider
-  let ttsProvider: VoiceServiceConfig["tts"]["provider"] = "system";
-  if (elevenLabsKey) {
-    ttsProvider = "elevenlabs";
-  } else if (openaiKey) {
-    ttsProvider = "openai";
-  }
-
-  // Check if we have minimum config
-  if (!openaiKey && !process.env.LOCAL_WHISPER_PATH) {
-    log.warn("VoiceService: no STT provider configured (set OPENAI_API_KEY or LOCAL_WHISPER_PATH)");
-    return null;
-  }
-
-  const config: VoiceServiceConfig = {
-    stt: {
-      provider: sttProvider,
-      openaiApiKey: openaiKey,
-      localWhisperPath: process.env.LOCAL_WHISPER_PATH,
-    },
-    tts: {
-      provider: ttsProvider,
-      elevenLabsApiKey: elevenLabsKey,
-      openaiApiKey: openaiKey,
-      defaultVoice: {
-        voiceId: process.env.TTS_DEFAULT_VOICE || "alloy",
-        name: process.env.TTS_DEFAULT_VOICE_NAME || "Alloy",
-      },
-    },
-  };
-
-  return new VoiceService(config);
+/** Piper is runnable as resolved now (env/bundle/PATH/earlier download). */
+async function piperRuns(): Promise<boolean> {
+  if (existsSync(downloadedPiperBin())) return true;
+  const status = await probeMediaTool("piper");
+  if (status.available) return true;
+  // probeMediaTool caches for a minute; a fresh PATH lookup is cheap enough.
+  return new Promise((resolve) => {
+    const p = spawn(mediaToolBin("piper"), ["--version"], { stdio: "ignore" });
+    p.on("error", () => resolve(false));
+    p.on("close", (code) => resolve(code === 0));
+  });
 }

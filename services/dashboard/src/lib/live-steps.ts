@@ -12,10 +12,13 @@
  * output — merging them would change both surfaces.
  */
 
+import { isAgentActionTool } from './agent-actions.js';
 import type { AgentFlowEvent } from './stores.js';
 import { ellipsize } from './display-format.js';
 import { sanitizePreview } from './run-format.js';
 import { isAbsoluteHostPath } from './host-path.js';
+import { collapseRepeats } from './collapse-repeats.js';
+import { resultFailed } from './history-steps.js';
 
 export type ToolCategory =
   | 'shell' | 'fs' | 'web' | 'kernel' | 'mcp' | 'think' | 'final'
@@ -90,6 +93,14 @@ export function liveEventSummary(e: AgentFlowEvent): string {
     return `Self-graded ${score}/5 — ${String(e.data.outcome ?? '')}`;
   }
   if (t === 'learning_created') return `Lesson learned: ${String(e.data.content ?? '')}`;
+  if (t === 'learning_deactivated') {
+    const retired = Array.isArray(e.data.learnings) ? (e.data.learnings as Array<{ content?: unknown }>) : [];
+    const n = Number(e.data.count ?? retired.length) || retired.length;
+    const noun = n === 1 ? 'lesson' : 'lessons';
+    return retired.length
+      ? `Retired ${n} ${noun}: ${retired.map((l) => String(l.content ?? '')).filter(Boolean).join(' · ')}`
+      : `Retired ${n} ${noun} below the confidence floor`;
+  }
   if (t === 'step') {
     const st = String(e.data.type ?? '');
     const preview = String(e.data.content_preview ?? '');
@@ -193,7 +204,28 @@ export function summarizeToolCall(toolName: string, inputPreview: string): strin
   const args = tryParseJson(inputPreview) as Record<string, unknown> | null;
   if (!toolName) return 'calling tool';
   if (!args || typeof args !== 'object') return toolName;
+  // The chief editing an agent or an office. The generic line read
+  // "kernel_agents_update · id=d22f8c60-… · max_iterations=40": the id was
+  // the headline and the change an afterthought. Say what changed, on whom.
+  const short = toolName.replace(/^mcp__.+?__/, '');
+  if (short === 'kernel_agents_update' || short === 'kernel_agents_flows_update') {
+    const what = short === 'kernel_agents_update' ? 'agent' : 'office';
+    const id = String(args.id ?? '').slice(0, 8);
+    const changes = Object.entries(args)
+      .filter(([k, v]) => k !== 'id' && !k.startsWith('__') && v !== undefined)
+      .map(([k, v]) => `${k} → ${ellipsize(typeof v === 'string' ? v : JSON.stringify(v), 40)}`);
+    return `Change ${what}${id ? ' ' + id : ''} settings${changes.length ? ' · ' + changes.slice(0, 3).join(' · ') : ''}`;
+  }
   switch (toolName) {
+    case 'ToolSearch': {
+      // The agent loading tools before it calls them. Name what it loads.
+      const q = String(args.query ?? '');
+      const names = q.startsWith('select:')
+        ? q.slice(7).split(',').map((n) => n.trim().replace(/^mcp__.+?__/, '')).filter(Boolean)
+        : [];
+      if (names.length) return `Loads ${names.length === 1 ? 'tool' : 'tools'}: ${names.join(', ')}`;
+      return q ? `Looks for tools matching “${ellipsize(q, 60)}”` : 'Loads tools';
+    }
     case 'Bash': {
       const desc = typeof args.description === 'string' ? args.description : '';
       const cmd = typeof args.command === 'string' ? args.command : '';
@@ -327,8 +359,10 @@ export function liveStepSummary(e: AgentFlowEvent): string {
   const toolName = String(e.data.tool_name ?? '');
   if (etype === 'tool_call') return summarizeToolCall(toolName, preview);
   if (etype === 'tool_result') return summarizeToolResult(toolName, preview);
-  if (etype === 'thought') return ellipsize(preview, 140) || 'thinking…';
-  if (etype === 'final') return ellipsize(preview, 140) || 'finalizing…';
+  // Two lines' worth of prose, markdown marks out: the row wraps instead of
+  // cutting the one sentence that says what the agent is doing.
+  if (etype === 'thought') return ellipsize(plainStepText(preview), 260) || 'thinking…';
+  if (etype === 'final') return ellipsize(plainStepText(preview), 260) || 'finalizing…';
   if (etype === 'rate_limit_wait') return ellipsize(preview, 140) || 'rate-limit cooldown';
   if (etype === 'error') return ellipsize(preview, 140) || 'error';
   // Run lifecycle + meta — defer to the prose helper.
@@ -432,4 +466,130 @@ export function runTokensTotal(events: AgentFlowEvent[]): number {
     if (Number.isFinite(v) && v > 0) return v;
   }
   return 0;
+}
+
+// ── Folding repeated tool calls ─────────────────────────────────────
+
+/** An event of the LIVE buffer with its index there (the Δt / token chips read it). */
+export interface LiveIndexed { e: AgentFlowEvent; i: number }
+
+export type LiveRow =
+  | ({ kind: 'event' } & LiveIndexed)
+  | {
+      kind: 'tools';
+      /** Stable while the run grows: new events arrive at the front, so the
+       *  oldest event of the run never changes. */
+      key: string;
+      tool: string;
+      /** tool_call events in the run. */
+      calls: number;
+      /** tool_result events flagged as an error (or, unflagged, reading as one). */
+      failed: number;
+      /** Calls still waiting for their result. */
+      pending: number;
+      /** Every call and result of the run, newest first like the buffer. */
+      items: LiveIndexed[];
+    };
+
+function isToolEvent(e: AgentFlowEvent): boolean {
+  const t = liveEventType(e);
+  return (t === 'tool_call' || t === 'tool_result') && Boolean(e.data.tool_name);
+}
+
+/**
+ * Fold consecutive calls to the same tool — calls and their results together —
+ * into one row when there are at least two calls; anything else stays one row
+ * per event. `events` is the LIVE buffer, newest first.
+ */
+export function liveToolRows(events: AgentFlowEvent[]): LiveRow[] {
+  const indexed = events.map((e, i) => ({ e, i }));
+  // An agent acting on another agent never folds: three messages in a row
+  // are three recipients, and each one has to stay readable on its own.
+  const runs = collapseRepeats(indexed, ({ e }, i) =>
+    (isToolEvent(e) && !isAgentActionTool(e.data.tool_name) ? `tool:${String(e.data.tool_name)}` : `ev:${i}`));
+  const rows: LiveRow[] = [];
+  for (const r of runs) {
+    const calls = r.items.filter((x) => liveEventType(x.e) === 'tool_call').length;
+    if (!isToolEvent(r.item.e) || calls < 2) {
+      for (const x of r.items) rows.push({ kind: 'event', ...x });
+      continue;
+    }
+    const results = r.items.filter((x) => liveEventType(x.e) === 'tool_result');
+    const tool = String(r.item.e.data.tool_name);
+    const oldest = r.items[r.items.length - 1];
+    rows.push({
+      kind: 'tools',
+      key: `tools:${oldest.e.ts}:${tool}`,
+      tool,
+      calls,
+      failed: results.filter((x) => resultFailed(x.e.data.is_error, String(x.e.data.content_preview ?? ''))).length,
+      pending: Math.max(0, calls - results.length),
+      items: r.items,
+    });
+  }
+  return rows;
+}
+
+// ── Reading the timeline as steps, not as a log ─────────────────────
+
+/** An event row, with its tool result folded in when it had one. */
+export type LiveStepRow =
+  | Exclude<LiveRow, { kind: 'event' }>
+  | ({ kind: 'event'; result?: LiveIndexed; quiet?: boolean } & LiveIndexed);
+
+const isToolSearch = (tool: unknown) => String(tool ?? '') === 'ToolSearch';
+
+/** Markdown marks and runs of whitespace out, for a one-glance line. */
+export function plainStepText(text: string): string {
+  return text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\*\*|__|`/g, '')
+    .replace(/^#+\s*/gm, '')
+    .replace(/^\s*[-*]\s+/gm, '')
+    .replace(/\s*-{2,}\s*/g, ' — ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * The LIVE rows a person reads: `liveToolRows`, then
+ *   - each tool call carries its own result (one row: what it asked, what came
+ *     back) instead of a CALLING TOOL row and a TOOL RESULT row apart;
+ *   - ToolSearch — the agent loading a tool before calling it — is marked
+ *     `quiet`, and its empty result is dropped;
+ *   - a THINKING row whose text the FINALIZING row right after repeats is dropped.
+ * Pairing is by tool name, oldest call first, so parallel calls to different
+ * tools still meet their own results.
+ */
+export function liveDisplayRows(events: AgentFlowEvent[]): LiveStepRow[] {
+  const rows: LiveStepRow[] = liveToolRows(events).map((r) => (r.kind === 'event' ? { ...r } : r));
+  const drop = new Set<LiveStepRow>();
+  const open = new Map<string, Extract<LiveStepRow, { kind: 'event' }>[]>();
+  // Oldest → newest: rows are newest first.
+  for (let k = rows.length - 1; k >= 0; k--) {
+    const r = rows[k];
+    if (r.kind !== 'event') continue;
+    const type = liveEventType(r.e);
+    const tool = String(r.e.data.tool_name ?? '');
+    if (type === 'tool_call' && tool) {
+      if (isToolSearch(tool)) r.quiet = true;
+      open.set(tool, [...(open.get(tool) ?? []), r]);
+    } else if (type === 'tool_result' && tool) {
+      const queue = open.get(tool);
+      const call = queue?.shift();
+      if (call) {
+        call.result = { e: r.e, i: r.i };
+        drop.add(r);
+      } else if (isToolSearch(tool)) {
+        drop.add(r);
+      }
+    } else if (type === 'final') {
+      const prev = rows[k + 1];
+      if (
+        prev && prev.kind === 'event' && liveEventType(prev.e) === 'thought' &&
+        plainStepText(String(prev.e.data.content_preview ?? '')) === plainStepText(String(r.e.data.content_preview ?? ''))
+      ) drop.add(prev);
+    }
+  }
+  return rows.filter((r) => !drop.has(r));
 }

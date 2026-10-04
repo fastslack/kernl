@@ -73,7 +73,37 @@ export function slugify(text: string): string {
     .slice(0, 48);
 }
 
+// ── Number Helpers ────────────────────────────────────────────
+
+/**
+ * Bound `n` to `[min, max]`. No rounding, and NaN passes through as NaN —
+ * callers that need an integer or a NaN fallback do that before calling.
+ */
+export function clamp(n: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Parse a query-string integer and bound it to `[min, max]`. A missing,
+ * empty or non-numeric value yields `fallback` (returned as-is, unclamped).
+ *
+ * @example
+ * ```typescript
+ * const limit = clampInt(query.get("limit"), 50, 1, 500);
+ * ```
+ */
+export function clampInt(raw: string | null | undefined, fallback: number, min: number, max: number): number {
+  const n = raw ? parseInt(raw, 10) : NaN;
+  if (!Number.isFinite(n)) return fallback;
+  return clamp(n, min, max);
+}
+
 // ── Async Helpers ─────────────────────────────────────────────
+
+/** Resolve after `ms` milliseconds. */
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 /**
  * Execute a promise without awaiting, logging errors at debug level.
@@ -222,4 +252,33 @@ export function stripInternalArgs(args: unknown): unknown {
     if (!key.startsWith("__")) out[key] = value;
   }
   return out;
+}
+
+// ── JSON columns ────────────────────────────────────────────────
+
+/**
+ * Parse stored JSON, or return `fallback` when it is empty, malformed or —
+ * given an `is` guard — not the expected shape. For TEXT columns holding
+ * JSON (tool lists, variables, chains): a bad row must degrade to the
+ * default, not throw out of whatever was reading it.
+ */
+export function safeJson<T>(raw: string | null | undefined, fallback: T, is?: (v: unknown) => v is T): T {
+  if (!raw) return fallback;
+  try {
+    const value = JSON.parse(raw) as unknown;
+    if (is && !is(value)) return fallback;
+    return value as T;
+  } catch {
+    return fallback;
+  }
+}
+
+/** A stored JSON array, `[]` for anything else. */
+export function jsonArray<T = unknown>(raw: string | null | undefined): T[] {
+  return safeJson<T[]>(raw, [], Array.isArray as (v: unknown) => v is T[]);
+}
+
+/** A stored JSON object, `{}` for anything else (arrays and null included). */
+export function jsonObject<T extends Record<string, unknown> = Record<string, unknown>>(raw: string | null | undefined): T {
+  return safeJson<T>(raw, {} as T, (v): v is T => typeof v === "object" && v !== null && !Array.isArray(v));
 }

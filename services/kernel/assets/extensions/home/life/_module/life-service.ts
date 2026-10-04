@@ -1,4 +1,4 @@
-import { log, type SqliteDb, type KernelConfig, type SystemRegistry } from "@kernl/extension-sdk";
+import { log, type SqliteDb, type KernelConfig, type SystemRegistry, localDate } from "@kernl/extension-sdk";
 import { queryDailySummary, queryHabits, queryWaterIntake, queryMoodLog } from "../../../../../src/modules/dashboard/life-queries.js";
 
 // ── Module-level caches ───────────────────────
@@ -230,7 +230,7 @@ export class LifeService {
   }
 
   async getLifeData(): Promise<LifeData> {
-    const today = new Date().toISOString().split("T")[0]!;
+    const today = localDate();
 
     const results = await Promise.allSettled([
       this.fetchWeather(),
@@ -343,7 +343,7 @@ export class LifeService {
     if (this.cache.inCooldown("sunTimes")) return this.cache.getStale<SunTimesData>("sunTimes");
     try {
       const { lat, lon } = this.config;
-      const today = new Date().toISOString().split("T")[0];
+      const today = localDate();
       const url = `https://api.sunrise-sunset.org/json?lat=${lat}&lng=${lon}&formatted=0&date=${today}`;
       const res = await fetch(url, { signal: AbortSignal.timeout(10_000) });
       if (!res.ok) {

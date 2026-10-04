@@ -1,0 +1,856 @@
+// Bun Snapshot v1, https://bun.sh/docs/test/snapshots
+
+exports[`dashboard calendar (characterization) returns the same full payload for a seeded database 1`] = `
+"{
+ "start": "2090-03-01",
+ "dayCount": 45,
+ "days": {
+  "2090-03-02": [
+   {
+    "id": "t-in2",
+    "type": "task",
+    "title": "Call plumber",
+    "time": null,
+    "color": "#5B9BF7",
+    "extra": "low"
+   }
+  ],
+  "2090-03-10": [
+   {
+    "id": "t-in",
+    "type": "task",
+    "title": "Pay rent",
+    "time": null,
+    "color": "#5B9BF7",
+    "extra": "high"
+   },
+   {
+    "id": "r-one",
+    "type": "reminder",
+    "title": "Dentist call",
+    "time": "09:30",
+    "color": "#F0883E",
+    "extra": null
+   },
+   {
+    "id": "r-daily-2090-03-10",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "s-1",
+    "type": "subscription",
+    "title": "Streaming",
+    "time": null,
+    "color": "#3DD68C",
+    "extra": "12.99 EUR"
+   },
+   {
+    "id": "h-1",
+    "type": "health",
+    "title": "Checkup",
+    "time": null,
+    "color": "#F04770",
+    "extra": "Dr. Ruiz"
+   },
+   {
+    "id": "hm-1",
+    "type": "maintenance",
+    "title": "Boiler service",
+    "time": null,
+    "color": "#D4A84B",
+    "extra": "home"
+   },
+   {
+    "id": "vm-1",
+    "type": "vehicle",
+    "title": "Oil change",
+    "time": null,
+    "color": "#D4A84B",
+    "extra": "Golf"
+   },
+   {
+    "id": "v-1-insp",
+    "type": "vehicle",
+    "title": "Inspection: Golf",
+    "time": null,
+    "color": "#D4A84B",
+    "extra": null
+   },
+   {
+    "id": "d-1",
+    "type": "document",
+    "title": "Passport",
+    "time": null,
+    "color": "#6E738A",
+    "extra": "expires"
+   },
+   {
+    "id": "g-1",
+    "type": "goal",
+    "title": "Run a marathon",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": null
+   },
+   {
+    "id": "mp-1",
+    "type": "meal",
+    "title": "Paella",
+    "time": null,
+    "color": "#da7756",
+    "extra": "lunch"
+   },
+   {
+    "id": "mp-2",
+    "type": "meal",
+    "title": "dinner",
+    "time": null,
+    "color": "#da7756",
+    "extra": "dinner"
+   },
+   {
+    "id": "rt-1",
+    "type": "research",
+    "title": "Market scan",
+    "time": "06:15",
+    "color": "#8B7CF6",
+    "extra": null
+   },
+   {
+    "id": "insurance-expiry",
+    "type": "document",
+    "title": "Home Insurance Expiry",
+    "time": null,
+    "color": "#6E738A",
+    "extra": "insurance"
+   },
+   {
+    "id": "e-1",
+    "type": "event",
+    "title": "Padel",
+    "time": "19:00",
+    "color": "#E879A8",
+    "extra": "sports · draft"
+   }
+  ],
+  "2090-03-12": [
+   {
+    "id": "r-snz",
+    "type": "reminder",
+    "title": "Snoozed one",
+    "time": "18:05",
+    "color": "#F0883E",
+    "extra": null
+   },
+   {
+    "id": "r-daily-2090-03-12",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-08": [
+   {
+    "id": "r-daily-2090-03-08",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-09": [
+   {
+    "id": "r-daily-2090-03-09",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-11": [
+   {
+    "id": "r-daily-2090-03-11",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-13": [
+   {
+    "id": "r-daily-2090-03-13",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "r-weekly-2090-03-13",
+    "type": "reminder",
+    "title": "Trash out",
+    "time": "20:00",
+    "color": "#F0883E",
+    "extra": "weekly"
+   },
+   {
+    "id": "sched-a-1-3793089600000",
+    "type": "automation",
+    "title": "Weekly digest",
+    "time": "12:00",
+    "color": "#3DD68C",
+    "extra": "0 12 * * 1"
+   }
+  ],
+  "2090-03-14": [
+   {
+    "id": "r-daily-2090-03-14",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-15": [
+   {
+    "id": "r-daily-2090-03-15",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "r-monthly-2090-03-15",
+    "type": "reminder",
+    "title": "Budget review",
+    "time": "10:00",
+    "color": "#F0883E",
+    "extra": "monthly"
+   },
+   {
+    "id": "e-2",
+    "type": "event",
+    "title": "Conference",
+    "time": "09:00",
+    "color": "#E879A8",
+    "extra": "professional"
+   }
+  ],
+  "2090-03-16": [
+   {
+    "id": "r-daily-2090-03-16",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-17": [
+   {
+    "id": "r-daily-2090-03-17",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-18": [
+   {
+    "id": "r-daily-2090-03-18",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-19": [
+   {
+    "id": "r-daily-2090-03-19",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-20": [
+   {
+    "id": "r-daily-2090-03-20",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "r-weekly-2090-03-20",
+    "type": "reminder",
+    "title": "Trash out",
+    "time": "20:00",
+    "color": "#F0883E",
+    "extra": "weekly"
+   },
+   {
+    "id": "g-2",
+    "type": "goal",
+    "title": "Finished goal",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": null
+   },
+   {
+    "id": "sched-a-1-3793694400000",
+    "type": "automation",
+    "title": "Weekly digest",
+    "time": "12:00",
+    "color": "#3DD68C",
+    "extra": "0 12 * * 1"
+   }
+  ],
+  "2090-03-21": [
+   {
+    "id": "r-daily-2090-03-21",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-22": [
+   {
+    "id": "r-daily-2090-03-22",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-23": [
+   {
+    "id": "r-daily-2090-03-23",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-24": [
+   {
+    "id": "r-daily-2090-03-24",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-25": [
+   {
+    "id": "r-daily-2090-03-25",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-26": [
+   {
+    "id": "r-daily-2090-03-26",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-27": [
+   {
+    "id": "r-daily-2090-03-27",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "r-weekly-2090-03-27",
+    "type": "reminder",
+    "title": "Trash out",
+    "time": "20:00",
+    "color": "#F0883E",
+    "extra": "weekly"
+   },
+   {
+    "id": "sched-a-1-3794299200000",
+    "type": "automation",
+    "title": "Weekly digest",
+    "time": "12:00",
+    "color": "#3DD68C",
+    "extra": "0 12 * * 1"
+   }
+  ],
+  "2090-03-28": [
+   {
+    "id": "r-daily-2090-03-28",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-29": [
+   {
+    "id": "r-daily-2090-03-29",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-30": [
+   {
+    "id": "r-daily-2090-03-30",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-31": [
+   {
+    "id": "r-daily-2090-03-31",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-01": [
+   {
+    "id": "r-daily-2090-04-01",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "s-2",
+    "type": "subscription",
+    "title": "Cloud",
+    "time": null,
+    "color": "#3DD68C",
+    "extra": "5.00 USD"
+   },
+   {
+    "id": "sched-a-2-3794700600000",
+    "type": "automation",
+    "title": "Monthly cleanup",
+    "time": "03:30",
+    "color": "#8B7CF6",
+    "extra": "30 3 1 * *"
+   }
+  ],
+  "2090-04-02": [
+   {
+    "id": "r-daily-2090-04-02",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-03": [
+   {
+    "id": "r-daily-2090-04-03",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "r-weekly-2090-04-03",
+    "type": "reminder",
+    "title": "Trash out",
+    "time": "20:00",
+    "color": "#F0883E",
+    "extra": "weekly"
+   },
+   {
+    "id": "sched-a-1-3794904000000",
+    "type": "automation",
+    "title": "Weekly digest",
+    "time": "12:00",
+    "color": "#3DD68C",
+    "extra": "0 12 * * 1"
+   }
+  ],
+  "2090-04-04": [
+   {
+    "id": "r-daily-2090-04-04",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-05": [
+   {
+    "id": "r-daily-2090-04-05",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-06": [
+   {
+    "id": "r-daily-2090-04-06",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-07": [
+   {
+    "id": "r-daily-2090-04-07",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-08": [
+   {
+    "id": "r-daily-2090-04-08",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-09": [
+   {
+    "id": "r-daily-2090-04-09",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-10": [
+   {
+    "id": "r-daily-2090-04-10",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   },
+   {
+    "id": "r-weekly-2090-04-10",
+    "type": "reminder",
+    "title": "Trash out",
+    "time": "20:00",
+    "color": "#F0883E",
+    "extra": "weekly"
+   },
+   {
+    "id": "sched-a-1-3795508800000",
+    "type": "automation",
+    "title": "Weekly digest",
+    "time": "12:00",
+    "color": "#3DD68C",
+    "extra": "0 12 * * 1"
+   }
+  ],
+  "2090-04-11": [
+   {
+    "id": "r-daily-2090-04-11",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-12": [
+   {
+    "id": "r-daily-2090-04-12",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-13": [
+   {
+    "id": "r-daily-2090-04-13",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-04-14": [
+   {
+    "id": "r-daily-2090-04-14",
+    "type": "reminder",
+    "title": "Vitamins",
+    "time": "08:00",
+    "color": "#F0883E",
+    "extra": "daily"
+   }
+  ],
+  "2090-03-06": [
+   {
+    "id": "r-weekly-2090-03-06",
+    "type": "reminder",
+    "title": "Trash out",
+    "time": "20:00",
+    "color": "#F0883E",
+    "extra": "weekly"
+   },
+   {
+    "id": "sched-a-1-3792484800000",
+    "type": "automation",
+    "title": "Weekly digest",
+    "time": "12:00",
+    "color": "#3DD68C",
+    "extra": "0 12 * * 1"
+   }
+  ],
+  "2090-03-01": [
+   {
+    "id": "sched-a-2-3792022200000",
+    "type": "automation",
+    "title": "Monthly cleanup",
+    "time": "03:30",
+    "color": "#8B7CF6",
+    "extra": "30 3 1 * *"
+   }
+  ]
+ },
+ "overdue": [
+  {
+   "id": "t-over2",
+   "type": "task",
+   "title": "Older overdue",
+   "time": "2089-12-24",
+   "color": "#5B9BF7",
+   "extra": "medium"
+  },
+  {
+   "id": "t-over",
+   "type": "task",
+   "title": "Overdue task",
+   "time": "2090-02-01",
+   "color": "#5B9BF7",
+   "extra": "urgent"
+  },
+  {
+   "id": "r-past",
+   "type": "reminder",
+   "title": "Old reminder",
+   "time": "10:00",
+   "color": "#F0883E",
+   "extra": null
+  },
+  {
+   "id": "e-over",
+   "type": "event",
+   "title": "Past party",
+   "time": "2090-02-14T21:00:00",
+   "color": "#E879A8",
+   "extra": "social"
+  }
+ ],
+ "systemProcesses": [
+  {
+   "name": "Weekly backup",
+   "module": "backup",
+   "intervalMs": 604800000,
+   "nextRunAt": "2090-03-03T02:00:00.000Z"
+  },
+  {
+   "name": "Heartbeat",
+   "module": "core",
+   "intervalMs": 60000,
+   "nextRunAt": "2090-03-01T00:01:00.000Z"
+  }
+ ]
+}"
+`;
+
+exports[`dashboard system timeline (characterization) returns the same full payload for a seeded database 1`] = `
+"{
+ "start": "2090-03-01",
+ "dayCount": 45,
+ "days": {
+  "2090-03-10": [
+   {
+    "id": "rt-1",
+    "type": "research",
+    "title": "Market scan",
+    "time": "06:15",
+    "color": "#8B7CF6",
+    "extra": "every 1d"
+   },
+   {
+    "id": "p-int-week-2090-03-10",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-03-03": [
+   {
+    "id": "p-int-week-2090-03-03",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-03-17": [
+   {
+    "id": "p-int-week-2090-03-17",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-03-24": [
+   {
+    "id": "p-int-week-2090-03-24",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-03-31": [
+   {
+    "id": "p-int-week-2090-03-31",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-04-07": [
+   {
+    "id": "p-int-week-2090-04-07",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-04-14": [
+   {
+    "id": "p-int-week-2090-04-14",
+    "type": "interval",
+    "title": "Weekly backup",
+    "time": null,
+    "color": "#3DD6C8",
+    "extra": "backup · every 7d"
+   }
+  ],
+  "2090-03-05": [
+   {
+    "id": "p-cache",
+    "type": "cache",
+    "title": "Feed cache",
+    "time": "13:45",
+    "color": "#6E738A",
+    "extra": "news"
+   }
+  ]
+ },
+ "overdue": [
+  {
+   "id": "rt-over",
+   "type": "research",
+   "title": "Stale scan",
+   "time": "00:00",
+   "color": "#8B7CF6",
+   "extra": "overdue"
+  }
+ ],
+ "systemProcesses": [
+  {
+   "name": "Weekly backup",
+   "module": "backup",
+   "intervalMs": 604800000,
+   "nextRunAt": "2090-03-03T02:00:00.000Z",
+   "type": "interval",
+   "description": "d",
+   "status": "idle",
+   "lastRunAt": "2090-02-24T02:00:00.000Z",
+   "runCount": 3
+  },
+  {
+   "name": "Heartbeat",
+   "module": "core",
+   "intervalMs": 60000,
+   "nextRunAt": "2090-03-01T00:01:00.000Z",
+   "type": "interval",
+   "description": "d",
+   "status": "idle",
+   "runCount": 3
+  },
+  {
+   "name": "Feed cache",
+   "module": "news",
+   "intervalMs": 3600000,
+   "nextRunAt": "2090-03-05T13:45:00.000Z",
+   "type": "cache",
+   "description": "d",
+   "status": "idle",
+   "runCount": 3
+  }
+ ]
+}"
+`;

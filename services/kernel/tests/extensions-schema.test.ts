@@ -106,4 +106,31 @@ describe("extension manifest validator", () => {
     });
     expect(r.ok).toBe(true);
   });
+
+  it("keeps a settings field's source and rejects an unknown one", () => {
+    const field = { key: "WAREHOUSE_REPORT_TO", type: "string", label: "To" };
+    const ok = validateManifest({ ...baseValid, settings: { fields: [{ ...field, source: "email_accounts" }] } });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.manifest.settings?.fields[0].source).toBe("email_accounts");
+    const bad = validateManifest({ ...baseValid, settings: { fields: [{ ...field, source: "contacts" }] } });
+    expect(bad.ok).toBe(false);
+  });
+});
+
+describe("frontend.worlds (3D world plugins)", () => {
+  const withWorlds = (worlds: unknown) => ({ ...baseValid, frontend: { worlds } });
+
+  it("accepts a world bundle with off-grid kinds and labels", () => {
+    const r = validateManifest(withWorlds([{ entry: "frontend/world.js", kinds: [{ id: "yard", offGrid: true, labels: { en: "Yard", es: "Patio" } }] }]));
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects a kind that is not a lowercase slug, and an empty kind list", () => {
+    expect(validateManifest(withWorlds([{ entry: "frontend/world.js", kinds: [{ id: "Bad Kind" }] }])).ok).toBe(false);
+    expect(validateManifest(withWorlds([{ entry: "frontend/world.js", kinds: [] }])).ok).toBe(false);
+  });
+
+  it("rejects an entry that escapes the extension dir", () => {
+    expect(validateManifest(withWorlds([{ entry: "../evil.js", kinds: [{ id: "yard" }] }])).ok).toBe(false);
+  });
 });

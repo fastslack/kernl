@@ -1,4 +1,4 @@
-import { type KernelModule, type ModuleContext, type ToolDefinition, runMigrations } from "@kernl/extension-sdk";
+import { defineModule } from "@kernl/extension-sdk";
 import { giteaChannelMigrations } from "./migrations.js";
 import { GiteaConnectionsService } from "./connections-service.js";
 import { GiteaRepoProvider } from "./provider.js";
@@ -6,29 +6,22 @@ import { giteaChannelTools } from "./tools.js";
 
 const TRIAGE_REGISTER_PROVIDER_EVENT = "triage:register-provider";
 
-export function createGiteaChannelModule(): KernelModule {
-  let tools: ToolDefinition[] = [];
-
-  return {
+export function createGiteaChannelModule() {
+  return defineModule({
     name: "gitea-channel",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "ext:gitea-channel", giteaChannelMigrations);
-      const connections = new GiteaConnectionsService(ctx.sqlite);
+    migrations: giteaChannelMigrations,
+    migrationsKey: "ext:gitea-channel",
+    async init(ctx) {
+      const connections = new GiteaConnectionsService(ctx.sqlite, ctx.config.encryption?.key ?? "");
       const provider = new GiteaRepoProvider(connections);
-      tools = giteaChannelTools(connections, provider);
 
       // Topo sort guarantees triage's listener is in place because we
       // declared dependencies=[com.kernl.triage].
       await ctx.events.emit(TRIAGE_REGISTER_PROVIDER_EVENT, { provider });
+      return { connections, provider };
     },
-
-    getTools(): ToolDefinition[] {
-      return tools;
-    },
-
-    async shutdown() {},
-  };
+    tools: ({ connections, provider }) => giteaChannelTools(connections, provider),
+  });
 }
 
 export default createGiteaChannelModule;

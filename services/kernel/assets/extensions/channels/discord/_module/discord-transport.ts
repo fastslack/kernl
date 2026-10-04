@@ -18,6 +18,8 @@ import {
 } from "discord.js";
 import {
   log,
+  chunkText,
+  mimeToAttachmentType,
   type ChannelTransport,
   type ChannelMessageHandler,
   type ChannelCallbackHandler,
@@ -25,8 +27,18 @@ import {
   type ChannelResponse,
   type ChannelStatus,
   type ChannelConfig,
-  type ChannelAttachment,
 } from "@kernl/extension-sdk";
+
+/** Discord's hard limit on a message's content. */
+const DISCORD_MAX_LENGTH = 2000;
+
+/**
+ * An edit or an interaction update replaces one message, so it cannot be
+ * split: keep what fits and mark the cut.
+ */
+function fitOne(text: string): string {
+  return text.length <= DISCORD_MAX_LENGTH ? text : `${text.slice(0, DISCORD_MAX_LENGTH - 1)}…`;
+}
 
 export class DiscordTransport implements ChannelTransport {
   readonly platform = "discord" as const;
@@ -208,7 +220,7 @@ export class DiscordTransport implements ChannelTransport {
 
     // Handle attachments
     for (const [, attachment] of message.attachments) {
-      const type = this.getAttachmentType(attachment.contentType || "");
+      const type = mimeToAttachmentType(attachment.contentType || "");
       channelMessage.attachments!.push({
         type,
         url: attachment.url,
@@ -256,20 +268,13 @@ export class DiscordTransport implements ChannelTransport {
       const response = await this.callbackHandler(callbackData, context);
       
       await interaction.update({
-        content: response.text,
+        content: fitOne(response.text),
         components: this.buildComponents(response.buttons),
       });
     } catch (err) {
       log.error("Discord: interaction handler error", err);
       await interaction.reply({ content: "Error processing action", ephemeral: true });
     }
-  }
-
-  private getAttachmentType(mimeType: string): ChannelAttachment["type"] {
-    if (mimeType.startsWith("image/")) return "image";
-    if (mimeType.startsWith("audio/")) return "audio";
-    if (mimeType.startsWith("video/")) return "video";
-    return "document";
   }
 
   private buildComponents(buttons?: ChannelResponse["buttons"]): ActionRowBuilder<ButtonBuilder>[] {
@@ -308,32 +313,30 @@ export class DiscordTransport implements ChannelTransport {
     return this.sendResponse(channel as TextChannel | DMChannel, response);
   }
 
+  /**
+   * Discord rejects a message over 2000 characters, so a long reply goes out
+   * as several: the first one replies to the user's message, the last one
+   * carries the buttons, and its id is the one returned.
+   */
   private async sendResponse(
     channel: TextChannel | DMChannel,
     response: ChannelResponse,
     replyToId?: string
   ): Promise<string> {
-    const options: {
-      content: string;
-      components?: ActionRowBuilder<ButtonBuilder>[];
-      reply?: { messageReference: string };
-    } = {
-      content: response.text,
-    };
-
-    // Add buttons
+    const pieces = chunkText(response.text, DISCORD_MAX_LENGTH);
     const components = this.buildComponents(response.buttons);
-    if (components.length > 0) {
-      options.components = components;
+    let lastId = "";
+    for (const [i, content] of pieces.entries()) {
+      const options: {
+        content: string;
+        components?: ActionRowBuilder<ButtonBuilder>[];
+        reply?: { messageReference: string };
+      } = { content };
+      if (i === pieces.length - 1 && components.length > 0) options.components = components;
+      if (i === 0 && replyToId) options.reply = { messageReference: replyToId };
+      lastId = (await channel.send(options)).id;
     }
-
-    // Reply to specific message
-    if (replyToId) {
-      options.reply = { messageReference: replyToId };
-    }
-
-    const result = await channel.send(options);
-    return result.id;
+    return lastId;
   }
 
   async sendToDefault(response: ChannelResponse): Promise<string | null> {
@@ -354,7 +357,7 @@ export class DiscordTransport implements ChannelTransport {
     const message = await textChannel.messages.fetch(messageId);
     
     await message.edit({
-      content: response.text,
+      content: fitOne(response.text),
       components: this.buildComponents(response.buttons),
     });
   }

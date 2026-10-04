@@ -2,6 +2,7 @@ import { z } from "zod";
 import type { ToolDefinition } from "../../core/types.js";
 import type { MarketplaceService } from "./service.js";
 import { textResult, errorResult } from "../../core/helpers.js";
+import { formatCents } from "../../core/formatting.js";
 import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
 
 /**
@@ -38,7 +39,7 @@ export function marketplaceTools(service: MarketplaceService): ToolDefinition[] 
             : i.status === "disabled" ? " [DISABLED]"
             : i.status === "error" ? " [ERROR]" : "";
           const verified = i.verified ? " ✓" : "";
-          const price = i.price_cents > 0 ? ` €${(i.price_cents / 100).toFixed(2)}` : "";
+          const price = i.price_cents > 0 ? ` €${formatCents(i.price_cents)}` : "";
           return `${m.icon ?? "📦"} **${m.name}** v${m.version} — ${m.type}${badge}${verified}${price}\n` +
                  `  ${m.description}\n  ID: ${i.id}  ·  source: ${i.origin.provider}`;
         });
@@ -103,7 +104,7 @@ export function marketplaceTools(service: MarketplaceService): ToolDefinition[] 
 
         const lines = items.map(i => {
           const stars = i.avg_rating > 0 ? ` (${i.avg_rating.toFixed(1)}★)` : "";
-          const price = i.price_cents === 0 ? "FREE" : `€${(i.price_cents / 100).toFixed(2)}`;
+          const price = i.price_cents === 0 ? "FREE" : `€${formatCents(i.price_cents)}`;
           const badge = i.status === "active" ? " [ACTIVE]" : i.status === "installed" ? " [INSTALLED]" : "";
           return `${i.icon} **${i.name}** v${i.version} — ${i.type}${badge}\n  ${i.description}\n  ${price}${stars} · ${i.install_count} installs · by ${i.author}\n  ID: ${i.id}`;
         });
@@ -129,7 +130,7 @@ export function marketplaceTools(service: MarketplaceService): ToolDefinition[] 
         md += `Type: ${item.type} | Category: ${item.category} | Status: ${item.status}\n`;
         md += `Author: ${item.author} | License: ${item.license}\n`;
         md += `Rating: ${item.avg_rating.toFixed(1)}★ (${item.review_count} reviews) | Installs: ${item.install_count}\n`;
-        if (item.price_cents > 0) md += `Price: €${(item.price_cents / 100).toFixed(2)}\n`;
+        if (item.price_cents > 0) md += `Price: €${formatCents(item.price_cents)}\n`;
         if (tags.length > 0) md += `Tags: ${tags.join(", ")}\n`;
         if (deps.length > 0) md += `Dependencies: ${deps.join(", ")}\n`;
         md += `\n${item.description}`;

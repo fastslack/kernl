@@ -193,11 +193,6 @@ export function detectInstall(): Promise<InstallInfo> {
   return installCache;
 }
 
-/** Tests, and nothing else. */
-export function resetInstallCache(): void {
-  installCache = null;
-}
-
 async function describe(): Promise<InstallInfo> {
   const here = moduleDir();
   const marks = process.platform === "win32" ? await windowsMsiMarks() : {};

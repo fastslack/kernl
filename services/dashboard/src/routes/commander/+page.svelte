@@ -439,13 +439,7 @@
 		try {
 			const r = await fetch('/api/fs/archive/open', {
 				method: 'POST',
-				headers: {
-					'Content-Type': 'application/json',
-					...(typeof localStorage !== 'undefined' &&
-					localStorage.getItem('kernel_auth_token')
-						? { Authorization: `Bearer ${localStorage.getItem('kernel_auth_token')}` }
-						: {})
-				},
+				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({
 					source_provider: activeT!.providerId,
 					path: fullPath

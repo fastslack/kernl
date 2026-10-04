@@ -14,6 +14,7 @@ import { newId, isoNow } from "../../core/helpers.js";
 import { estimateTokens } from "./memory-decay.js";
 import type { Message, Episode, ChatMessage } from "./types.js";
 import type { ChatLlmProvider } from "../../core/llm/chat-adapters.js";
+import { localDateOf, localDate } from "../../sdk/clock.js";
 
 // ── Types ─────────────────────────────────────────────
 
@@ -168,7 +169,7 @@ export class CompactionService {
       result.summaryTokens = estimateTokens(summary);
 
       // Create summary message
-      const summaryContent = `[SUMMARY - ${isoNow().split("T")[0]}]\n\n${summary}`;
+      const summaryContent = `[SUMMARY - ${localDate()}]\n\n${summary}`;
       const summaryMessageId = newId();
       const now = isoNow();
 
@@ -247,7 +248,7 @@ export class CompactionService {
 
     for (const msg of messages) {
       const roleLabel = msg.role === "user" ? "User" : msg.role === "assistant" ? "Assistant" : "System";
-      const timestamp = msg.created_at.split("T")[0];
+      const timestamp = localDateOf(msg.created_at);
       
       // Truncate very long messages
       const content = msg.content.length > 1000
@@ -283,6 +284,7 @@ export class CompactionService {
       system: SUMMARIZATION_SYSTEM,
       max_tokens: this.config.maxSummaryTokens,
       temperature: 0.3, // Lower temperature for more factual summary
+      caller: "chat:compaction",
     });
 
     return result.content;

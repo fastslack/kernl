@@ -7,6 +7,13 @@ import {
 } from "@kernl/extension-sdk";
 import type { FinanceAccount, FinanceTransaction, FinanceBudget, AccountType, TransactionType, BudgetPeriod } from "./types.js";
 
+export interface TransactionFilters {
+  account_id?: string;
+  type?: TransactionType;
+  category?: string;
+  from_date?: string;
+  to_date?: string;
+}
 
 export class FinanceService {
   constructor(
@@ -165,27 +172,38 @@ export class FinanceService {
     return { from_tx: fromTx, to_tx: toTx };
   }
 
-  listTransactions(filters?: {
-    account_id?: string;
-    type?: TransactionType;
-    category?: string;
-    from_date?: string;
-    to_date?: string;
-    limit?: number;
-  }): FinanceTransaction[] {
-    let sql = "SELECT * FROM finance_transactions WHERE 1=1";
-    const params: unknown[] = [];
-
-    if (filters?.account_id) { sql += " AND account_id = ?"; params.push(filters.account_id); }
-    if (filters?.type) { sql += " AND type = ?"; params.push(filters.type); }
-    if (filters?.category) { sql += " AND category = ?"; params.push(filters.category); }
-    if (filters?.from_date) { sql += " AND date >= ?"; params.push(filters.from_date); }
-    if (filters?.to_date) { sql += " AND date <= ?"; params.push(filters.to_date); }
-
-    sql += " ORDER BY date DESC, created_at DESC";
-    if (filters?.limit) { sql += " LIMIT ?"; params.push(filters.limit); }
-
+  listTransactions(filters?: TransactionFilters & { limit?: number; offset?: number }): FinanceTransaction[] {
+    const { where, params } = this.transactionWhere(filters);
+    let sql = `SELECT * FROM finance_transactions WHERE ${where} ORDER BY date DESC, created_at DESC`;
+    if (filters?.limit) {
+      sql += " LIMIT ? OFFSET ?";
+      params.push(filters.limit, filters.offset ?? 0);
+    }
     return this.db.prepare(sql).all(...params) as FinanceTransaction[];
+  }
+
+  /** How many transactions match, for paging `listTransactions`. */
+  countTransactions(filters?: TransactionFilters): number {
+    const { where, params } = this.transactionWhere(filters);
+    return (this.db.prepare(`SELECT COUNT(*) as c FROM finance_transactions WHERE ${where}`).get(...params) as { c: number }).c;
+  }
+
+  /** Summed amount per transaction type since `fromDate` (inclusive). */
+  totalsByTypeSince(fromDate: string): { type: TransactionType; total: number }[] {
+    return this.db.prepare(
+      "SELECT type, SUM(amount_cents) as total FROM finance_transactions WHERE date >= ? GROUP BY type",
+    ).all(fromDate) as { type: TransactionType; total: number }[];
+  }
+
+  private transactionWhere(filters?: TransactionFilters): { where: string; params: Array<string | number> } {
+    let where = "1=1";
+    const params: Array<string | number> = [];
+    if (filters?.account_id) { where += " AND account_id = ?"; params.push(filters.account_id); }
+    if (filters?.type) { where += " AND type = ?"; params.push(filters.type); }
+    if (filters?.category) { where += " AND category = ?"; params.push(filters.category); }
+    if (filters?.from_date) { where += " AND date >= ?"; params.push(filters.from_date); }
+    if (filters?.to_date) { where += " AND date <= ?"; params.push(filters.to_date); }
+    return { where, params };
   }
 
   // ── Budgets ────────────────────────────────────────

@@ -16,6 +16,7 @@ import {
 } from "./memory-decay.js";
 import type { Message } from "./types.js";
 import { type PiiFilter, getGlobalPiiFilter } from "../../core/pii-filter.js";
+import { localDate } from "../../sdk/clock.js";
 
 export interface RetrievedContext {
   memories: ScoredMemory[];
@@ -274,7 +275,7 @@ export class ContextEngine {
       // Due flashcards (if message mentions study/review/learn/flashcard)
       const learningKeywords = /\b(study|learn|review|flashcard|card|quiz|repas|estudi|aprender)\b/i;
       if (learningKeywords.test(msgLower)) {
-        const today = new Date().toISOString().split("T")[0];
+        const today = localDate();
         const dueRow = this.db
           .prepare("SELECT COUNT(*) as n FROM learning_flashcards WHERE next_review <= ?")
           .get(today) as { n: number } | undefined;
@@ -342,7 +343,7 @@ export class ContextEngine {
       // Habits & wellness (if message mentions habit/water/mood/health)
       const wellnessKeywords = /\b(habit|water|mood|health|wellness|salud|agua|humor)\b/i;
       if (wellnessKeywords.test(msgLower)) {
-        const today = new Date().toISOString().split("T")[0];
+        const today = localDate();
         const waterRow = this.db
           .prepare("SELECT COUNT(*) as n FROM life_log WHERE type='water' AND date=?")
           .get(today) as { n: number } | undefined;

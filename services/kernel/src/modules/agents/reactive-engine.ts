@@ -83,14 +83,27 @@ export class ReactiveEngine {
       const variables = { event: payload as Record<string, unknown> };
       const goal = resolveGoal(agent.goal_template, variables) || `Triggered by event: ${eventName}`;
 
+      // An event about a project (project:* from src/modules/projects) runs
+      // for that project; the gate in createRun refuses offices not serving it.
+      const projectId = typeof (payload as Record<string, unknown> | null)?.project_id === "string"
+        ? ((payload as Record<string, unknown>).project_id as string)
+        : null;
+
       // Create and execute run (fire-and-forget)
+      let run;
+      try {
+        run = this.service.createRun({
+          agent_id: agent.id,
+          trigger_type: "event",
+          trigger_payload: payload as Record<string, unknown>,
+          goal,
+          project_id: projectId,
+        });
+      } catch (err) {
+        log.debug(`ReactiveEngine: trigger ${trigger.id} not run — ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
       this.activeRuns++;
-      const run = this.service.createRun({
-        agent_id: agent.id,
-        trigger_type: "event",
-        trigger_payload: payload as Record<string, unknown>,
-        goal,
-      });
 
       this.service.updateTriggerLastFired(trigger.id);
 

@@ -12,6 +12,7 @@
  */
 import type { IncomingMessage } from "node:http";
 import {
+  HttpError,
   type KernelHttpServer,
   log,
   peering as currentPeering,
@@ -32,47 +33,31 @@ export function registerCinemaFriendsRoutes(
   dirsRef: () => DirectoriesService | null,
 ): void {
   // ── Called by another kernel ────────────────────────────────
-  server.get(FRIENDS_ENDPOINT, async (req, res) => {
+  server.route("GET", FRIENDS_ENDPOINT, async ({ req }) => {
     const peering = currentPeering();
     const dirs = dirsRef();
-    if (!peering || !dirs) {
-      server.json(res, 503, { error: "not available" });
-      return;
+    if (!peering || !dirs) throw new HttpError(503, "not available");
+    const auth = await verifyRequest({
+      req,
+      url: absoluteUrl(req),
+      friends: peering.friends,
+    });
+    if (!auth.ok) {
+      // The caller learns nothing about which check failed, on purpose.
+      log.debug(`cinema: friend-view refused — ${auth.reason}`);
+      throw new HttpError(401, "unauthorized");
     }
-    try {
-      const auth = await verifyRequest({
-        req,
-        url: absoluteUrl(req),
-        friends: peering.friends,
-      });
-      if (!auth.ok) {
-        // The caller learns nothing about which check failed, on purpose.
-        log.debug(`cinema: friend-view refused — ${auth.reason}`);
-        server.json(res, 401, { error: "unauthorized" });
-        return;
-      }
-      const directories = dirs.listForFriend();
-      log.info(`cinema: served ${directories.length} directories to ${auth.npub?.slice(0, 16)}…`);
-      server.json(res, 200, { directories });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+    const directories = dirs.listForFriend();
+    log.info(`cinema: served ${directories.length} directories to ${auth.npub?.slice(0, 16)}…`);
+    return { directories };
   });
 
   // ── Called by the owner ─────────────────────────────────────
-  server.post("/api/cinema/directories/sync-friends", async (_req, res) => {
+  server.route("POST", "/api/cinema/directories/sync-friends", async () => {
     const peering = currentPeering();
     const dirs = dirsRef();
-    if (!peering || !dirs) {
-      server.json(res, 503, { error: "peering not available" });
-      return;
-    }
-    try {
-      const sync = new FriendsDirectorySync({ peering, directories: dirs });
-      const results = await sync.syncAll();
-      server.json(res, 200, { results });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+    if (!peering || !dirs) throw new HttpError(503, "peering not available");
+    const sync = new FriendsDirectorySync({ peering, directories: dirs });
+    return { results: await sync.syncAll() };
   });
 }

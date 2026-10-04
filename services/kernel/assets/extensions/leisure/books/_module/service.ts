@@ -1,4 +1,4 @@
-import { type SqliteDb, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, isoNow, safeJson } from "@kernl/extension-sdk";
 import type {
   BookItem,
   BookListFilter,
@@ -219,7 +219,7 @@ export class BooksService {
     ).get(key) as { payload_json: string; cached_at: string } | undefined;
     if (!row) return null;
     if (Date.now() - new Date(row.cached_at).getTime() > SEARCH_CACHE_TTL_MS) return null;
-    try { return JSON.parse(row.payload_json); } catch { return null; }
+    return safeJson<{ items: BookItem[]; total: number } | null>(row.payload_json, null);
   }
 
   private writeCache(key: string, payload: { items: BookItem[]; total: number }): void {

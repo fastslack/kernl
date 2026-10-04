@@ -112,4 +112,29 @@ export const marketplaceMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_catalog_repos_url ON catalog_repos(url);
     `,
   },
+  {
+    // Default catalog subscription: ECC's skill library (MIT). Seeded as a
+    // migration, not a boot-time seeder, so it lands exactly once per
+    // database — a user who unsubscribes doesn't get it back on the next
+    // boot. Only the subscription is created; nothing is installed.
+    //
+    // Pinned to a release tag: SKILL.md bodies are injected into agent
+    // prompts, so the catalog should not track a third-party `main`. The
+    // row starts unsynced (items_found 0); the `marketplace:sync-repos`
+    // agent or a manual sync clones it.
+    version: 3,
+    sql: `
+      INSERT OR IGNORE INTO catalog_repos
+        (id, url, ref, name, description, added_at, updated_at)
+      VALUES (
+        'default-ecc',
+        'https://github.com/affaan-m/ECC',
+        'v2.2.1',
+        'affaan-m/ECC',
+        'ECC skill library — procedural skills for agents (planning, verification, decision-making, ops).',
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+        strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      );
+    `,
+  },
 ];

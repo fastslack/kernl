@@ -3,7 +3,7 @@
   "id": "com.kernl.life",
   "slug": "life",
   "name": "Life",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "sdk": 1,
   "type": "module",
   "description": "Weather, clocks, and personal widgets.",

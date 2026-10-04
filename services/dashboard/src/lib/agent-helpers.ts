@@ -8,7 +8,7 @@
  * did stayed behind.
  */
 
-import { escapeHtml } from './sanitize.js';
+import { escapeHtml } from '$shared/escape.js';
 import { isAbsoluteHostPath } from './host-path.js';
 
 /** `#5b8def` → 0x5b8def, for three.js material colours. Falls back on junk. */

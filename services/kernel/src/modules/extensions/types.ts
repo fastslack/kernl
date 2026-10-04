@@ -104,6 +104,15 @@ export interface FrontendBlock {
     /** Optional page title. */
     title?: string;
   }>;
+  /**
+   * 3D world plugins: buildings this extension adds to the office world for
+   * offices of its kinds (contract in assets/extensions/_shared/world-plugin.ts).
+   */
+  worlds?: Array<{
+    /** Bundle path relative to the extension dir, e.g. "frontend/world.js". */
+    entry: string;
+    kinds: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
+  }>;
 }
 
 export interface ThemeBlock {
@@ -204,7 +213,16 @@ export interface ExtensionSettingsField {
   description?: LocalizedText;
   /** Initial value seeded into the settings store on activation. */
   default?: string;
+  /**
+   * Where the dashboard takes the choices from, for a `string` field.
+   * `email_accounts`: a picker over the mail accounts configured in Kernl
+   * (plus free addresses); the value stays a comma-separated address list.
+   */
+  source?: ExtensionSettingSource;
 }
+
+/** Live option sources a settings field may draw its choices from. */
+export type ExtensionSettingSource = "email_accounts";
 
 /** Settings section contributed by an extension to the dashboard Settings UI. */
 export interface ExtensionSettingsBlock {

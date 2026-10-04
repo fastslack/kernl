@@ -11,9 +11,10 @@ import { readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { tmpdir } from "node:os";
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
 import { assetsDir } from "../../core/assets-root.js";
 import { isPathInside } from "../../core/fs-paths.js";
+import { safeJson } from "../../core/helpers.js";
 import type { ExtensionService } from "./service.js";
 import { BUNDLE_EXT } from "./bundle.js";
 import {
@@ -33,89 +34,78 @@ export function registerExtensionsRoutes(
 ): void {
   // ── List / filter ────────────────────────────────────────────────────
 
-  server.get("/api/extensions", (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const type = url.searchParams.get("type") as ExtensionType | null;
-      const status = url.searchParams.get("status") as ExtensionStatus | null;
-      const query = (url.searchParams.get("q") ?? "").toLowerCase();
+  server.route("GET", "/api/extensions", ({ query }) => {
+    const type = query.get("type") as ExtensionType | null;
+    const status = query.get("status") as ExtensionStatus | null;
+    const q = (query.get("q") ?? "").toLowerCase();
 
-      let rows = service.list({
-        type: type ?? undefined,
-        status: status ?? undefined,
-      });
+    let rows = service.list({
+      type: type ?? undefined,
+      status: status ?? undefined,
+    });
 
-      if (query) {
-        rows = rows.filter(
-          (r) =>
-            r.name.toLowerCase().includes(query) ||
-            r.slug.toLowerCase().includes(query) ||
-            r.id.toLowerCase().includes(query),
-        );
-      }
-
-      // Return parsed manifests inline so the UI doesn't have to call each item.
-      //
-      // `entitlement` says why a paid extension that installed cleanly is not
-      // running. The kernel already knew — entitlement.ts derives the feature
-      // and downgrades the row to "installed" — but it kept that to itself, so
-      // the UI showed a healthy-looking card whose tools simply did not exist.
-      // Nothing named the missing feature, and nothing pointed at
-      // /settings/license, which is the page that fixes it.
-      const items = rows.map((r) => {
-        const manifest = safeParse(r.manifest_json);
-        const paid = manifest ? isPaidExtension(manifest as EntitlementManifest) : false;
-        const feature = paid ? requiredFeature(manifest as EntitlementManifest) : null;
-        return {
-          ...r,
-          manifest,
-          source: safeParse(r.source_json),
-          granted_permissions: safeParse(r.granted_permissions_json),
-          settings: safeParse(r.settings_json),
-          install_receipt: safeParse(r.install_receipt_json),
-          entitlement: feature
-            ? { required_feature: feature, licensed: service.hasLicense(feature) }
-            : null,
-        };
-      });
-
-      server.json(res, 200, {
-        items,
-        total: items.length,
-        stats: computeStats(rows),
-      });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+    if (q) {
+      rows = rows.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          r.slug.toLowerCase().includes(q) ||
+          r.id.toLowerCase().includes(q),
+      );
     }
+
+    // Return parsed manifests inline so the UI doesn't have to call each item.
+    //
+    // `entitlement` says why a paid extension that installed cleanly is not
+    // running. The kernel already knew — entitlement.ts derives the feature
+    // and downgrades the row to "installed" — but it kept that to itself, so
+    // the UI showed a healthy-looking card whose tools simply did not exist.
+    // Nothing named the missing feature, and nothing pointed at
+    // /settings/license, which is the page that fixes it.
+    const items = rows.map((r) => {
+      const manifest = safeJson<unknown>(r.manifest_json, null);
+      const paid = manifest ? isPaidExtension(manifest as EntitlementManifest) : false;
+      const feature = paid ? requiredFeature(manifest as EntitlementManifest) : null;
+      return {
+        ...r,
+        manifest,
+        source: safeJson<unknown>(r.source_json, null),
+        granted_permissions: safeJson<unknown>(r.granted_permissions_json, null),
+        settings: safeJson<unknown>(r.settings_json, null),
+        install_receipt: safeJson<unknown>(r.install_receipt_json, null),
+        entitlement: feature
+          ? { required_feature: feature, licensed: service.hasLicense(feature) }
+          : null,
+      };
+    });
+
+    return {
+      items,
+      total: items.length,
+      stats: computeStats(rows),
+    };
   });
 
   // ── Detail ───────────────────────────────────────────────────────────
 
-  server.get("/api/extensions/item/:id", (req, res) => {
-    try {
-      const id = (req as unknown as { params?: Record<string, string> }).params?.id;
-      if (!id) {
-        server.json(res, 400, { error: "id required" });
-        return;
-      }
-      const row = service.get(id) ?? service.getBySlug(id);
-      if (!row) {
-        server.json(res, 404, { error: "Extension not found" });
-        return;
-      }
-      server.json(res, 200, {
-        item: {
-          ...row,
-          manifest: safeParse(row.manifest_json),
-          source: safeParse(row.source_json),
-          granted_permissions: safeParse(row.granted_permissions_json),
-          settings: safeParse(row.settings_json),
-          install_receipt: safeParse(row.install_receipt_json),
-        },
-      });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  /** An extension by id, falling back to slug. */
+  const requireExtension = (id: string) => {
+    const row = service.get(id) ?? service.getBySlug(id);
+    if (!row) throw new HttpError(404, "Extension not found");
+    return row;
+  };
+
+  server.route("GET", "/api/extensions/item/:id", ({ params: { id } }) => {
+    const row = requireExtension(id);
+    return {
+      item: {
+        ...row,
+        manifest: safeJson<unknown>(row.manifest_json, null),
+        source: safeJson<unknown>(row.source_json, null),
+        granted_permissions: safeJson<unknown>(row.granted_permissions_json, null),
+        settings: safeJson<unknown>(row.settings_json, null),
+        install_receipt: safeJson<unknown>(row.install_receipt_json, null),
+      },
+    };
   });
 
   // ── Brand logos (kernel-bundled, for extensions without install_path) ──
@@ -171,7 +161,7 @@ export function registerExtensionsRoutes(
       const row = service.get(id) ?? service.getBySlug(id);
       if (!row) { server.json(res, 404, { error: "Extension not found" }); return; }
 
-      const manifest = safeParse(row.manifest_json) as { logo?: string } | null;
+      const manifest = safeJson<unknown>(row.manifest_json, null) as { logo?: string } | null;
       const logo = manifest?.logo;
       if (!logo || !row.install_path) {
         server.json(res, 404, { error: "No logo" });
@@ -291,21 +281,13 @@ export function registerExtensionsRoutes(
 
   // ── Install (JSON payload w/ bundle_path on the server) ─────────────
 
-  server.post("/api/extensions/install", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ bundle_path?: string }>(req);
-      if (!body.bundle_path) {
-        server.json(res, 400, { error: "bundle_path required" });
-        return;
-      }
-      const row = await service.installFromBundle(body.bundle_path, {
-        type: "file",
-        filename: body.bundle_path,
-      });
-      server.json(res, 200, { success: true, item: row });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ bundle_path?: string }>("POST", "/api/extensions/install", async ({ body }) => {
+    if (!body.bundle_path) throw new HttpError(400, "bundle_path required");
+    const row = await service.installFromBundle(body.bundle_path, {
+      type: "file",
+      filename: body.bundle_path,
+    });
+    return { success: true, item: row };
   });
 
   /**
@@ -320,28 +302,22 @@ export function registerExtensionsRoutes(
    * the same version during development. Entitlement is re-checked against the
    * INCOMING manifest either way, so this cannot be used to sidestep a licence.
    */
-  server.post("/api/extensions/item/:id/update", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ bundle_path?: string; force?: boolean }>(req);
-      if (!body.bundle_path) {
-        server.json(res, 400, { error: "bundle_path required" });
-        return;
-      }
+  server.route<{ bundle_path?: string; force?: boolean }>(
+    "POST", "/api/extensions/item/:id/update", async ({ body }) => {
+      if (!body.bundle_path) throw new HttpError(400, "bundle_path required");
       const result = await service.update(
         body.bundle_path,
         { type: "file", filename: body.bundle_path },
         { force: body.force === true },
       );
-      server.json(res, 200, {
+      return {
         success: true,
         from: result.from,
         to: result.to,
         item: result.extension,
-      });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
+      };
+    },
+  );
 
   // ── Install from browser upload (base64 payload) ────────────────────
 
@@ -410,57 +386,28 @@ export function registerExtensionsRoutes(
 
   // ── Enable / disable / uninstall ─────────────────────────────────────
 
-  server.post("/api/extensions/item/:id/enable", async (req, res) => {
-    try {
-      const id = (req as unknown as { params?: Record<string, string> }).params?.id;
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      await service.enable(id);
-      server.json(res, 200, { success: true, item: service.get(id) });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("POST", "/api/extensions/item/:id/enable", async ({ params: { id } }) => {
+    await service.enable(id);
+    return { success: true, item: service.get(id) };
   });
 
-  server.post("/api/extensions/item/:id/disable", async (req, res) => {
-    try {
-      const id = (req as unknown as { params?: Record<string, string> }).params?.id;
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      await service.disable(id);
-      server.json(res, 200, { success: true, item: service.get(id) });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("POST", "/api/extensions/item/:id/disable", async ({ params: { id } }) => {
+    await service.disable(id);
+    return { success: true, item: service.get(id) };
   });
 
-  server.delete?.("/api/extensions/item/:id", async (req, res) => {
-    try {
-      const id = (req as unknown as { params?: Record<string, string> }).params?.id;
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      await service.uninstall(id);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("DELETE", "/api/extensions/item/:id", async ({ params: { id } }) => {
+    await service.uninstall(id);
+    return { success: true };
   });
   // Fallback for transports without DELETE (POST equivalent).
-  server.post("/api/extensions/item/:id/uninstall", async (req, res) => {
-    try {
-      const id = (req as unknown as { params?: Record<string, string> }).params?.id;
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      await service.uninstall(id);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("POST", "/api/extensions/item/:id/uninstall", async ({ params: { id } }) => {
+    await service.uninstall(id);
+    return { success: true };
   });
 }
 
 // ── Helpers ────────────────────────────────────────────────────────────
-
-function safeParse(raw: string): unknown {
-  try { return JSON.parse(raw); }
-  catch { return null; }
-}
 
 interface StatsBlock {
   total: number;

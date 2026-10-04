@@ -11,8 +11,11 @@
  *   - (nothing)     → caller's default workspace (name='main', auto-created)
  *
  * Identity resolution:
- *   The executor injects `__caller_agent_id` into every tool call. Tools use
- *   it to derive the caller's `flow_id`. Explicit `flow_id` argument still wins.
+ *   The caller's office comes from who the caller is, never from an argument:
+ *   the `__caller_agent_id` the native executor injects, or the caller the
+ *   MCP request carries (X-Caller-* headers, for CLI agents). An explicit
+ *   `flow_id` argument used to win over both, which let any agent act on
+ *   another office's private workspaces by naming it.
  *
  * Security:
  *   - Path traversal blocked (no ../ escapes).
@@ -31,7 +34,10 @@ import {
   textResult,
   errorResult,
   log,
+  defineTool,
+  getRequestContext,
   type ToolDefinition,
+  limitArg,
 } from "@kernl/extension-sdk";
 import { resolve, relative, join, normalize, dirname } from "node:path";
 import { execFile } from "node:child_process";
@@ -68,14 +74,13 @@ async function ensureWorkspaceDir(workspaceId: string): Promise<string> {
   return dir;
 }
 
-/** Derive the caller's flow_id from executor-injected __caller_agent_id. */
+/** The caller's office, from its identity: the injected id, else the MCP request's caller. */
 function resolveCallerFlowId(
   args: Record<string, unknown>,
   agents: AgentService | null,
 ): string | null {
-  const explicit = typeof args.flow_id === "string" && args.flow_id ? args.flow_id : null;
-  if (explicit) return explicit;
-  const callerId = typeof args.__caller_agent_id === "string" ? args.__caller_agent_id : null;
+  const injected = typeof args.__caller_agent_id === "string" ? args.__caller_agent_id : "";
+  const callerId = injected || getRequestContext().callerAgentId;
   if (callerId && agents) {
     const agent = agents.getAgent(callerId);
     if (agent?.flow_id) return agent.flow_id;
@@ -221,18 +226,18 @@ export function workspaceTools(
 
   return [
     // ── kernel_workspace_create ────────────────
-    {
+    defineTool({
       name: "kernel_workspace_create",
       description:
         "Create a new workspace owned by your office. Use to keep per-client or per-project work isolated. " +
         "Set `shared: true` if you want other offices to be able to read it (they still cannot write).",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Short workspace name, unique within your office (e.g. 'acme-yachts', 'q2-research')"),
         description: z.string().optional().describe("One-liner describing what this workspace holds"),
         shared: z.boolean().optional().describe("If true, other offices can READ (never write)"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         if (!wsService) return errorResult("Workspace service unavailable");
         const callerFlowId = resolveCallerFlowId(a, agents);
         if (!callerFlowId) return errorResult("No flow_id — agent is not assigned to an office");
@@ -256,19 +261,19 @@ export function workspaceTools(
           `Use it by passing \`workspace: "${ws.name}"\` on every workspace tool call.`,
         );
       },
-    },
+    }),
 
     // ── kernel_workspace_list_workspaces ───────
-    {
+    defineTool({
       name: "kernel_workspace_list_workspaces",
       description:
         "List workspaces visible to you. `scope: 'mine'` (default) → workspaces your office owns. " +
         "`scope: 'shared'` → workspaces other offices have shared. `scope: 'all'` → both.",
-      inputSchema: z.object({
+      schema: z.object({
         scope: z.enum(["mine", "shared", "all"]).optional().describe("Default 'all'"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         if (!wsService) return errorResult("Workspace service unavailable");
         const callerFlowId = resolveCallerFlowId(a, agents);
         if (!callerFlowId) return errorResult("No flow_id — agent is not assigned to an office");
@@ -293,21 +298,21 @@ export function workspaceTools(
         if (lines.length === 0) return textResult("No workspaces match. Create one with `kernel_workspace_create`.");
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
     // ── kernel_workspace_write ─────────────────
-    {
+    defineTool({
       name: "kernel_workspace_write",
       description:
         "Write or create a file in one of your office's workspaces. Path is relative to the workspace root. " +
         "Directories are auto-created. Target the default 'main' workspace unless you pass `workspace` or `workspace_id`.",
-      inputSchema: z.object({
+      schema: z.object({
         ...wsSelectorSchema,
         path: z.string().describe("Relative file path (e.g. 'src/index.ts', 'analyses/notes.md')"),
         content: z.string().describe("File content to write"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         const r = resolveWs(a, "write");
         if (!r.ok) return errorResult(r.error);
         const path = String(a.path ?? "");
@@ -336,20 +341,20 @@ export function workspaceTools(
         log.info(`Workspace: wrote ${r.ws.id}/${path} (${content.length} bytes) [ws=${r.ws.name}]`);
         return textResult(`Wrote \`${path}\` in workspace **${wsLabel(r.ws, r.callerFlowId)}** (${content.length} bytes)`);
       },
-    },
+    }),
 
     // ── kernel_workspace_read ──────────────────
-    {
+    defineTool({
       name: "kernel_workspace_read",
       description:
         "Read a file from a workspace. By default reads your office's 'main' workspace. " +
         "To read a shared workspace from another office, pass `workspace_id` (from `kernel_workspace_list_workspaces` scope='shared').",
-      inputSchema: z.object({
+      schema: z.object({
         ...wsSelectorSchema,
         path: z.string().describe("Relative file path"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         const r = resolveWs(a, "read");
         if (!r.ok) return errorResult(r.error);
         const path = String(a.path ?? "");
@@ -362,18 +367,18 @@ export function workspaceTools(
           return errorResult(`File not found: ${path}`);
         }
       },
-    },
+    }),
 
     // ── kernel_workspace_list ──────────────────
-    {
+    defineTool({
       name: "kernel_workspace_list",
       description: "List files and directories in a workspace. Defaults to your office's 'main' workspace.",
-      inputSchema: z.object({
+      schema: z.object({
         ...wsSelectorSchema,
         path: z.string().optional().describe("Subdirectory to list (default: root)"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         const r = resolveWs(a, "read");
         if (!r.ok) return errorResult(r.error);
         const path = typeof a.path === "string" ? a.path : "";
@@ -390,18 +395,18 @@ export function workspaceTools(
           return textResult(`Workspace **${r.ws.name}** is empty. Use \`kernel_workspace_write\` to create files.`);
         }
       },
-    },
+    }),
 
     // ── kernel_workspace_delete ─────────────────
-    {
+    defineTool({
       name: "kernel_workspace_delete",
       description: "Delete a file from your office's workspace. Cannot delete from shared workspaces owned by other offices.",
-      inputSchema: z.object({
+      schema: z.object({
         ...wsSelectorSchema,
         path: z.string().describe("File to delete"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         const r = resolveWs(a, "write");
         if (!r.ok) return errorResult(r.error);
         const path = String(a.path ?? "");
@@ -415,20 +420,20 @@ export function workspaceTools(
           return errorResult(`File not found: ${path}`);
         }
       },
-    },
+    }),
 
     // ── kernel_workspace_search ─────────────────
-    {
+    defineTool({
       name: "kernel_workspace_search",
       description:
         "Search for text across workspace files (case-insensitive). Defaults to your office's workspaces. " +
         "Pass `scope='shared'` to also search shared workspaces of other offices; `scope='all'` for every readable workspace.",
-      inputSchema: z.object({
+      schema: z.object({
         query: z.string().describe("Text to find"),
         scope: z.enum(["mine", "shared", "all"]).optional().describe("Default 'all' (your workspaces + shared ones from others)"),
         workspace_id: z.string().optional().describe("Restrict search to one workspace"),
         path_filter: z.string().optional().describe("Only match files whose path contains this string (e.g. 'analyses/', '.md')"),
-      }) as z.ZodType<unknown>,
+      }),
       outputSchema: z.object({
         query: z.string(),
         scope: z.string(),
@@ -444,10 +449,10 @@ export function workspaceTools(
           })),
         })),
         total: z.number().int(),
-      }) as z.ZodType<unknown>,
+      }),
       tags: ["workspace", "search"],
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         if (!wsService) return errorResult("Workspace service unavailable");
         const callerFlowId = resolveCallerFlowId(a, agents);
         if (!callerFlowId) return errorResult("No flow_id — agent is not assigned to an office");
@@ -512,23 +517,23 @@ export function workspaceTools(
         if (results.length >= MAX_SEARCH_RESULTS) lines.push(`\n_…results truncated at ${MAX_SEARCH_RESULTS}._`);
         return { ...textResult(lines.join("\n")), structuredContent: structured };
       },
-    },
+    }),
 
     // ── kernel_workspace_analysis_save ─────────
-    {
+    defineTool({
       name: "kernel_workspace_analysis_save",
       description:
         "Publish an analysis as 'analyses/YYYY-MM-DD-<slug>.md' in a workspace of your choice. " +
         "Frontmatter (title, author, tags, date, workspace) is added automatically. Defaults to your 'main' workspace.",
-      inputSchema: z.object({
+      schema: z.object({
         ...wsSelectorSchema,
         title: z.string().describe("Short human title (used for slug + frontmatter)"),
         body: z.string().describe("Markdown body of the analysis"),
         tags: z.array(z.string()).optional().describe("Optional tags (e.g. ['security','audit'])"),
         author: z.string().optional().describe("Optional author name (default: agent name)"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         const r = resolveWs(a, "write");
         if (!r.ok) return errorResult(r.error);
         const title = String(a.title ?? "").trim();
@@ -578,20 +583,20 @@ export function workspaceTools(
             : "Workspace is private — other offices will NOT see this. Mark the workspace `shared` if you want fleet-wide discovery."),
         );
       },
-    },
+    }),
 
     // ── kernel_workspace_analysis_list ─────────
-    {
+    defineTool({
       name: "kernel_workspace_analysis_list",
       description:
         "List analyses (markdown files under analyses/) with their frontmatter. " +
         "scope='mine' (default) searches your workspaces; 'shared' = shared by others; 'all' = both.",
-      inputSchema: z.object({
+      schema: z.object({
         scope: z.enum(["mine", "shared", "all"]).optional().describe("Default 'all'"),
         workspace_id: z.string().optional().describe("Restrict to one workspace"),
         tag_filter: z.string().optional().describe("Only analyses whose tags include this string"),
-        limit: z.number().optional().describe("Max results (default 30)"),
-      }) as z.ZodType<unknown>,
+        limit: limitArg(200, "Max results (default 30)"),
+      }),
       outputSchema: z.object({
         scope: z.string(),
         analyses: z.array(z.object({
@@ -608,10 +613,10 @@ export function workspaceTools(
         })),
         total: z.number().int(),
         truncated: z.boolean(),
-      }) as z.ZodType<unknown>,
+      }),
       tags: ["workspace", "analysis", "list"],
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         if (!wsService) return errorResult("Workspace service unavailable");
         const callerFlowId = resolveCallerFlowId(a, agents);
         if (!callerFlowId) return errorResult("No flow_id — agent is not assigned to an office");
@@ -693,22 +698,22 @@ export function workspaceTools(
         if (rows.length > trimmed.length) lines.push(`\n_…${rows.length - trimmed.length} more (raise \`limit\`)._`);
         return { ...textResult(lines.join("\n")), structuredContent: structured };
       },
-    },
+    }),
 
     // ── kernel_workspace_exec ──────────────────
-    {
+    defineTool({
       name: "kernel_workspace_exec",
       description:
         "Execute a shell command inside one of YOUR OWN workspaces (owner-only) using an isolated Docker container. " +
         "The workspace is mounted at /workspace. Bun is the runtime (use `bun install`, `bun run <script>`, `bunx <cli>`). Network disabled by default. Max 60 seconds.",
-      inputSchema: z.object({
+      schema: z.object({
         ...wsSelectorSchema,
         command: z.string().describe("Shell command to run (e.g. 'bun install', 'bun run build', 'bunx astro build')"),
         network: z.boolean().optional().describe("Enable network access (default: false, required for `bun install` and any other dependency download)"),
         timeout_ms: z.number().optional().describe("Timeout in ms (default 60000, max 60000)"),
-      }) as z.ZodType<unknown>,
-      handler: async (args: unknown) => {
-        const a = args as Record<string, unknown>;
+      }),
+      handler: async (input) => {
+        const a: Record<string, unknown> = input;
         const r = resolveWs(a, "write"); // exec requires owner
         if (!r.ok) return errorResult(r.error);
         const command = String(a.command ?? "");
@@ -780,6 +785,6 @@ export function workspaceTools(
           return errorResult(`Command failed:\n${output || e.message || String(err)}`.slice(0, 3000));
         }
       },
-    },
+    }),
   ];
 }

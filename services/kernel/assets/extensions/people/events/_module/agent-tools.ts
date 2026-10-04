@@ -16,7 +16,7 @@
  * `[legacy]` nudges in their description.
  */
 import { z } from "zod";
-import { type ToolDefinition, errorResult, structuredResult, textResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, errorResult, structuredResult, textResult, localDate, localParts } from "@kernl/extension-sdk";
 import type { EventsService } from "./service.js";
 import type { EventWithSummary, EventAttendee } from "./types.js";
 
@@ -117,7 +117,7 @@ export function agentEventsTools(service: EventsService): ToolDefinition[] {
 
 const EventScheduleInput = z.object({
   title: z.string(),
-  start_at: z.string().describe("ISO datetime."),
+  start_at: z.string().describe("ISO datetime. Without Z or an offset it is local time (the kernel's TIMEZONE)."),
   end_at: z.string().optional(),
   duration_minutes: z.number().int().positive().optional(),
   type: z.string().optional(),
@@ -137,16 +137,15 @@ const EventScheduleOutput = EventSummarySchema.extend({
 });
 
 function buildEventSchedule(service: EventsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_event_schedule",
     description:
       "Create an event and invite contacts in ONE call. Replaces the legacy create→invite_contacts " +
       "2-step. Returns the typed event with attendance summary plus the count of successful invites.",
-    inputSchema: EventScheduleInput,
+    schema: EventScheduleInput,
     outputSchema: EventScheduleOutput,
     tags: ["events", "schedule", "create", "invite", "calendar"],
-    async handler(args) {
-      const input = EventScheduleInput.parse(args);
+    async handler(input) {
       try {
         const created = service.create({
           title: input.title,
@@ -183,7 +182,7 @@ function buildEventSchedule(service: EventsService): ToolDefinition {
         return errorResult(`event_schedule failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }
 
 // ── kernel_event_today ────────────────────────────────────────
@@ -198,21 +197,20 @@ const EventListOutput = z.object({
 });
 
 function buildEventToday(service: EventsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_event_today",
     description:
-      "Return every event that starts today (local UTC date). Skips cancelled events by default. " +
+      "Return every event that starts today (the kernel's local date). Skips cancelled events by default. " +
       "Use this for the 'what's on my calendar today' question — pair with `kernel_event_upcoming` " +
       "for a longer horizon.",
-    inputSchema: EventTodayInput,
+    schema: EventTodayInput,
     outputSchema: EventListOutput,
     tags: ["events", "today", "list", "agenda", "calendar"],
-    async handler(args) {
-      const { include_cancelled } = EventTodayInput.parse(args);
-      const today = new Date().toISOString().slice(0, 10);
+    async handler({ include_cancelled }) {
+      const today = localDate();
       const events = service.list({
-        from_date: `${today}T00:00:00Z`,
-        to_date: `${today}T23:59:59Z`,
+        from_date: today,
+        to_date: today,
         limit: 100,
       });
       const filtered = include_cancelled ? events : events.filter((e) => e.status !== "cancelled");
@@ -223,13 +221,13 @@ function buildEventToday(service: EventsService): ToolDefinition {
       const lines = [
         `**${filtered.length} event(s) today** (${today}):`,
         ...filtered.map((e) => {
-          const t = e.start_at.slice(11, 16);
+          const t = localParts(e.start_at).time ?? "";
           return `- ${t} · ${e.title}${e.location ? ` _(${e.location})_` : ""} · ${e.summary.yes}/${e.min_attendees} confirmed`;
         }),
       ];
       return { ...textResult(lines.join("\n")), structuredContent: out };
     },
-  };
+  });
 }
 
 // ── kernel_event_upcoming ─────────────────────────────────────
@@ -239,16 +237,15 @@ const EventUpcomingInput = z.object({
 });
 
 function buildEventUpcoming(service: EventsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_event_upcoming",
     description:
       "Events scheduled within the next N days (default 7). Skips past and cancelled events. " +
       "Returns a structured list — easier to filter or roll up via `kernel_code_run`.",
-    inputSchema: EventUpcomingInput,
+    schema: EventUpcomingInput,
     outputSchema: EventListOutput,
     tags: ["events", "upcoming", "list", "calendar"],
-    async handler(args) {
-      const { days } = EventUpcomingInput.parse(args);
+    async handler({ days }) {
       const events = service.upcoming(days);
       const out = { total: events.length, events: events.map(eventSummary) };
       if (events.length === 0) {
@@ -262,7 +259,7 @@ function buildEventUpcoming(service: EventsService): ToolDefinition {
       ];
       return { ...textResult(lines.join("\n")), structuredContent: out };
     },
-  };
+  });
 }
 
 // ── kernel_event_attention ────────────────────────────────────
@@ -280,17 +277,16 @@ const EventAttentionOutput = z.object({
 });
 
 function buildEventAttention(service: EventsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_event_attention",
     description:
       "What needs your attention RIGHT NOW: events that aren't yet confirmed (yes < min_attendees) " +
       "plus events starting within the imminent_hours window (default 48h). One call to know what " +
       "to chase before the day fills up.",
-    inputSchema: EventAttentionInput,
+    schema: EventAttentionInput,
     outputSchema: EventAttentionOutput,
     tags: ["events", "attention", "imminent", "follow-up", "calendar"],
-    async handler(args) {
-      const { imminent_hours } = EventAttentionInput.parse(args);
+    async handler({ imminent_hours }) {
       const needing = service.needingAttention();
       const imminent = service.getImminent(imminent_hours);
       const out = {
@@ -316,7 +312,7 @@ function buildEventAttention(service: EventsService): ToolDefinition {
         : lines.join("\n");
       return { ...textResult(text), structuredContent: out };
     },
-  };
+  });
 }
 
 // ── kernel_event_lifecycle ────────────────────────────────────
@@ -337,17 +333,16 @@ const EventLifecycleOutput = z.object({
 });
 
 function buildEventLifecycle(service: EventsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_event_lifecycle",
     description:
       "Unified verb for event lifecycle: open / cancel / complete / duplicate. Replaces the four " +
       "separate kernel_events_open / cancel / complete / duplicate tools. Returns the resulting " +
       "event (or the new duplicate) with attendance summary.",
-    inputSchema: EventLifecycleInput,
+    schema: EventLifecycleInput,
     outputSchema: EventLifecycleOutput,
     tags: ["events", "lifecycle", "control", "calendar"],
-    async handler(args) {
-      const input = EventLifecycleInput.parse(args);
+    async handler(input) {
       try {
         let event: EventWithSummary | null = null;
         switch (input.action) {
@@ -374,7 +369,7 @@ function buildEventLifecycle(service: EventsService): ToolDefinition {
         return errorResult(`event_lifecycle(${input.action}) failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }
 
 // ── kernel_event_rsvp_summary ─────────────────────────────────
@@ -390,17 +385,16 @@ const EventRsvpSummaryOutput = z.object({
 });
 
 function buildEventRsvpSummary(service: EventsService): ToolDefinition {
-  return {
+  return defineTool({
     name: "kernel_event_rsvp_summary",
     description:
       "Full RSVP picture for one event: typed attendees[] + pending[] + the attendance summary. " +
       "Use before calling `kernel_email_send` to chase pending RSVPs — pending[].phone is the " +
       "list to ping.",
-    inputSchema: EventRsvpSummaryInput,
+    schema: EventRsvpSummaryInput,
     outputSchema: EventRsvpSummaryOutput,
     tags: ["events", "rsvp", "attendees", "follow-up", "calendar"],
-    async handler(args) {
-      const { event_id } = EventRsvpSummaryInput.parse(args);
+    async handler({ event_id }) {
       const event = service.get(event_id);
       if (!event) return errorResult(`Event not found: ${event_id}`);
       const attendees = service.getAttendees(event_id);
@@ -422,5 +416,5 @@ function buildEventRsvpSummary(service: EventsService): ToolDefinition {
       }
       return { ...textResult(lines.join("\n")), structuredContent: out };
     },
-  };
+  });
 }

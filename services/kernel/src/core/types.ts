@@ -50,6 +50,12 @@ export interface ToolDefinition {
    */
   sideEffects?: string[];
   /**
+   * Publishes or sends something outside Kernl (post, email, message, upload).
+   * Runs that work for a project never get these — they draft through
+   * kernel_outbox_propose and a human approves. See src/modules/projects.
+   */
+  outbound?: boolean;
+  /**
    * Static cost metadata for this tool. Optional; when present, the MCP
    * server enforces it pre-flight against any `_meta.budget` the client
    * sent, and updates rolling p50 stats post-flight (see
@@ -412,6 +418,59 @@ export interface AgentPanelTab {
   order?: number;
 }
 
+// ── Dashboard calendar ───────────────────────────────
+
+/** One entry of the dashboard calendar: a cell on the day grid or a row of the overdue list. */
+export interface CalendarEvent {
+  id: string;
+  type: string;
+  title: string;
+  /** `HH:MM`, or null for all-day entries. Overdue entries may carry a full timestamp. */
+  time: string | null;
+  color: string;
+  extra: string | null;
+}
+
+/** A calendar event placed on a day of the grid. */
+export interface CalendarSourceEvent extends CalendarEvent {
+  /** Day it lands on, `YYYY-MM-DD`. */
+  date: string;
+}
+
+/** The window a calendar source is asked for: `YYYY-MM-DD`, `end` exclusive. */
+export interface CalendarWindow {
+  start: string;
+  end: string;
+}
+
+export interface CalendarSourceResult {
+  /** Events inside the window, in the order they appear within their day. */
+  events: CalendarSourceEvent[];
+  /** Entries for the overdue list (things due before the window, or before now). */
+  overdue?: CalendarEvent[];
+}
+
+/**
+ * Something that puts entries on the dashboard calendar. The dashboard owns
+ * the grid (window, merge, system processes); each module that owns dated
+ * rows contributes a source through `DashboardDescriptor.calendarSources`,
+ * so the dashboard never reads another module's tables.
+ *
+ * A source must not throw when its tables are missing (its extension not
+ * installed): it yields nothing — use `safeAll`/`safeGet`.
+ */
+export interface CalendarSource {
+  /** Unique id, e.g. the module name. */
+  id: string;
+  /**
+   * Position among all sources. Within a day, events keep the order of their
+   * sources (lower first), and the overdue list is built the same way. See
+   * `queryCalendar()` for the numbers already taken.
+   */
+  order: number;
+  query(db: SqliteDb, window: CalendarWindow): CalendarSourceResult;
+}
+
 /** Descriptor returned by self-registering modules */
 export interface DashboardDescriptor {
   nav?: DashboardNavItem[];
@@ -426,6 +485,8 @@ export interface DashboardDescriptor {
   pages?: DashboardPage[];
   /** Custom tabs contributed to the 3D agent/office panel. */
   agentPanelTabs?: AgentPanelTab[];
+  /** Entries this module puts on the dashboard calendar (`queryCalendar`). */
+  calendarSources?: CalendarSource[];
 }
 
 /** Module that can optionally provide dashboard integration */

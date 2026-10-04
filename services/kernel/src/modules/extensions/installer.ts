@@ -16,6 +16,7 @@ import { log } from "../../core/logger.js";
 import { runMigrations, type Migration } from "../../core/db/migrations.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { ExtensionManifest } from "./schema.js";
+import { registerWorldKinds } from "./loader.js";
 
 /**
  * Hooks provided by the host kernel. Each handler picks what it needs;
@@ -298,6 +299,8 @@ async function installOffice(
     log.warn(`office ${manifest.slug}: agents subsystem unavailable`);
     return;
   }
+  // 0) Office kinds the extension's world plugins draw, so its office keeps its kind.
+  registerWorldKinds({ frontend: manifest.frontend });
   // 1) Office spec → upserts the flow row (+ extended metadata).
   if (manifest.office) {
     const payload = JSON.parse(await readFile(join(installDir, manifest.office), "utf-8"));

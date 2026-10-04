@@ -11,7 +11,7 @@
  * is already gated behind the kernel's local-bind / pairing model.
  */
 
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { LicenseService } from "./types.js";
 import { LicenseError } from "./types.js";
 import { log } from "../logger.js";
@@ -24,11 +24,11 @@ export function registerLicenseRoutes(
   // Cheap read of the in-memory cache. The cache is warmed on boot and
   // updated by /set + /clear, so no I/O happens here unless the caller
   // explicitly hits /refresh (not exposed by default).
-  server.get("/api/license/status", (_req, res) => {
+  server.route("GET", "/api/license/status", () => {
     const report = license.status();
     // Surface a flattened view that's easier to consume from Svelte —
     // expanding `claim` keeps the API stable when LicenseClaim grows.
-    server.json(res, 200, {
+    return {
       status: report.status,
       isPro: license.isPro(),
       sku: report.claim?.sku ?? null,
@@ -37,7 +37,7 @@ export function registerLicenseRoutes(
       issued_at: report.claim?.iat ?? null,
       expires_at: report.claim?.exp ?? null,
       message: report.message ?? null,
-    });
+    };
   });
 
   // ── GET /api/license/export ──────────────────────────────────────
@@ -54,19 +54,20 @@ export function registerLicenseRoutes(
   // good until 2036 should not ride along with every poll. This route is
   // reached only when someone asks for it, and the UI copies the result to
   // the clipboard rather than rendering it on screen.
-  server.get("/api/license/export", (_req, res) => {
+  server.route("GET", "/api/license/export", () => {
     const jwt = license.jwt();
-    if (!jwt) {
-      server.json(res, 404, { error: "No license installed" });
-      return;
-    }
-    server.json(res, 200, { jwt });
+    if (!jwt) throw new HttpError(404, "No license installed");
+    return { jwt };
   });
 
   // ── POST /api/license/set ────────────────────────────────────────
   // Body: { jwt: string }. Validates + persists atomically. Returns 400 on
   // any rejection with the typed `status` so the UI can render the right
   // call-to-action (renew vs paste-correct-key vs etc.).
+  //
+  // Left on the raw handler: every failure, a malformed body included, has
+  // to answer `{ status, message }`, which the helper's body parsing would
+  // turn into `{ error }` for the malformed case.
   server.post("/api/license/set", async (req, res) => {
     try {
       const body = await server.parseBody<{ jwt?: string }>(req);
@@ -93,9 +94,9 @@ export function registerLicenseRoutes(
   // ── POST /api/license/clear ──────────────────────────────────────
   // Idempotent — calling it twice is fine. We don't return a 404 if there's
   // no license; the caller just wanted the file gone.
-  server.post("/api/license/clear", async (_req, res) => {
+  server.route("POST", "/api/license/clear", async () => {
     await license.clear();
     log.info("license: cleared");
-    server.json(res, 200, { status: "none" });
+    return { status: "none" };
   });
 }

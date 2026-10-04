@@ -1,225 +1,82 @@
-import type { KernelHttpServer } from "@kernl/extension-sdk";
-import type { TwitterService } from "./service.js";
+import { HttpError, isHttpError, type KernelHttpServer, type Operation } from "@kernl/extension-sdk";
+import { publicAccount, type TwitterService } from "./service.js";
 import type { TwitterPublisher } from "./publisher.js";
+import { twitterOperations } from "./operations.js";
+
+type Method = Parameters<KernelHttpServer["operation"]>[0];
 
 export function registerTwitterRoutes(
   server: KernelHttpServer,
   service: TwitterService,
   publisher: TwitterPublisher,
 ): void {
+  /**
+   * A POST route whose failures — anything but a deliberate HttpError — all
+   * answer 400 "Invalid request", as these routes always have. The RPC side
+   * of the same operation keeps the underlying message.
+   */
+  const invalidAs400 = (op: Operation): Operation => async (input) => {
+    try {
+      return await op(input);
+    } catch (err) {
+      if (isHttpError(err)) throw err;
+      throw new HttpError(400, "Invalid request");
+    }
+  };
+
+  // ── Operations shared with the WS RPC (operations.ts) ─────────
+  // The page reaches these through rpcOrCall, WS first and HTTP when the
+  // bridge is down, so both roads run the same function.
+  const op = twitterOperations(service, publisher);
+  ([
+    ["POST", "/api/twitter/accounts", "twitter.accounts.create"],
+    ["POST", "/api/twitter/accounts/update", "twitter.accounts.update"],
+    ["POST", "/api/twitter/posts", "twitter.posts.create"],
+    ["POST", "/api/twitter/posts/update", "twitter.posts.update"],
+    ["POST", "/api/twitter/posts/approve", "twitter.posts.approve"],
+    ["POST", "/api/twitter/posts/publish", "twitter.posts.publish"],
+    ["POST", "/api/twitter/posts/delete", "twitter.posts.delete"],
+    ["POST", "/api/twitter/sync-metrics", "twitter.syncMetrics"],
+    ["POST", "/api/twitter/check-mentions", "twitter.checkMentions"],
+    ["GET", "/api/twitter/performance", "twitter.performance"],
+  ] as Array<[Method, string, string]>).forEach(([method, path, name]) =>
+    server.operation(method, path, method === "POST" ? invalidAs400(op[name]) : op[name]));
+
   // ── Accounts ───────────────────────────────────────
 
-  server.get("/api/twitter/accounts", (_req, res) => {
-    server.json(res, 200, service.listAccounts());
-  });
-
-  server.post("/api/twitter/accounts", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        handle: string;
-        display_name?: string;
-        api_key?: string;
-        api_secret?: string;
-        access_token?: string;
-        access_secret?: string;
-      }>(req);
-      if (!body.handle) {
-        server.json(res, 400, { error: "handle is required" });
-        return;
-      }
-      const account = service.addAccount(body);
-      server.json(res, 200, account);
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.post("/api/twitter/accounts/update", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        id: string;
-        handle?: string;
-        display_name?: string;
-        api_key?: string;
-        api_secret?: string;
-        access_token?: string;
-        access_secret?: string;
-        status?: string;
-      }>(req);
-      if (!body.id) {
-        server.json(res, 400, { error: "id is required" });
-        return;
-      }
-      const { id, ...changes } = body;
-      const account = service.updateAccount(id, changes);
-      if (!account) {
-        server.json(res, 404, { error: "Account not found" });
-        return;
-      }
-      server.json(res, 200, account);
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
+  // Credentials leave masked; see publicAccount.
+  server.route("GET", "/api/twitter/accounts", () => service.listAccounts().map(publicAccount));
 
   // ── Posts ──────────────────────────────────────────
 
-  server.get("/api/twitter/posts", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const status = url.searchParams.get("status") ?? undefined;
-    const account_id = url.searchParams.get("account_id") ?? undefined;
-    const post_type = url.searchParams.get("post_type") ?? undefined;
-    const limit = parseInt(url.searchParams.get("limit") ?? "50", 10);
-    const offset = parseInt(url.searchParams.get("offset") ?? "0", 10);
+  server.route("GET", "/api/twitter/posts", ({ query }) => {
+    const status = query.get("status") ?? undefined;
+    const account_id = query.get("account_id") ?? undefined;
+    const post_type = query.get("post_type") ?? undefined;
+    const limit = parseInt(query.get("limit") ?? "50", 10);
+    const offset = parseInt(query.get("offset") ?? "0", 10);
 
-    server.json(res, 200, service.listPosts({ status, account_id, post_type, limit, offset }));
-  });
-
-  server.post("/api/twitter/posts", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        account_id: string;
-        content: string;
-        post_type?: string;
-        status?: string;
-        scheduled_at?: string;
-        reply_to_x_id?: string;
-        quote_x_id?: string;
-      }>(req);
-      if (!body.account_id || !body.content) {
-        server.json(res, 400, { error: "account_id and content are required" });
-        return;
-      }
-      const post = service.createPost(body);
-      server.json(res, 200, post);
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.post("/api/twitter/posts/update", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        id: string;
-        content?: string;
-        post_type?: string;
-        status?: string;
-        scheduled_at?: string | null;
-      }>(req);
-      if (!body.id) {
-        server.json(res, 400, { error: "id is required" });
-        return;
-      }
-      const { id, ...changes } = body;
-      const post = service.updatePost(id, changes);
-      if (!post) {
-        server.json(res, 404, { error: "Post not found" });
-        return;
-      }
-      server.json(res, 200, post);
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.post("/api/twitter/posts/approve", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      const post = service.approvePost(body.id);
-      if (!post) {
-        server.json(res, 400, { error: "Post not found or not in draft/queued status" });
-        return;
-      }
-      server.json(res, 200, post);
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.post("/api/twitter/posts/publish", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      const result = await publisher.publishNow(body.id);
-      if (!result.ok) {
-        server.json(res, 400, { error: result.error });
-        return;
-      }
-      server.json(res, 200, { ok: true, x_post_id: result.x_post_id });
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.post("/api/twitter/posts/delete", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      const post = service.getPost(body.id);
-      if (!post) {
-        server.json(res, 404, { error: "Post not found" });
-        return;
-      }
-      // Only allow deleting drafts/queued/failed
-      if (post.status === "posted") {
-        server.json(res, 400, { error: "Cannot delete a posted tweet from here" });
-        return;
-      }
-      service.deletePost(body.id);
-      server.json(res, 200, { ok: true });
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
+    return service.listPosts({ status, account_id, post_type, limit, offset });
   });
 
   // ── Queue ─────────────────────────────────────────
 
-  server.get("/api/twitter/queue", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const account_id = url.searchParams.get("account_id") ?? undefined;
-    server.json(res, 200, service.getQueue(account_id));
-  });
+  server.route("GET", "/api/twitter/queue", ({ query }) =>
+    service.getQueue(query.get("account_id") ?? undefined));
 
   // ── Mentions ──────────────────────────────────────
 
-  server.get("/api/twitter/mentions", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const account_id = url.searchParams.get("account_id") ?? undefined;
-    const unread_only = url.searchParams.get("unread_only") === "1";
-    server.json(res, 200, service.listMentions({ account_id, unread_only }));
+  server.route("GET", "/api/twitter/mentions", ({ query }) => {
+    const account_id = query.get("account_id") ?? undefined;
+    const unread_only = query.get("unread_only") === "1";
+    return service.listMentions({ account_id, unread_only });
   });
 
-  // ── Metrics & Sync ────────────────────────────────
+  // ── Metrics ───────────────────────────────────────
 
-  server.post("/api/twitter/sync-metrics", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ account_id: string }>(req);
-      const synced = await publisher.syncMetrics(body.account_id);
-      server.json(res, 200, { ok: true, synced });
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.post("/api/twitter/check-mentions", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ account_id: string }>(req);
-      const added = await publisher.checkMentions(body.account_id);
-      server.json(res, 200, { ok: true, new_mentions: added });
-    } catch {
-      server.json(res, 400, { error: "Invalid request" });
-    }
-  });
-
-  server.get("/api/twitter/metrics", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const account_id = url.searchParams.get("account_id") ?? "";
-    const days = parseInt(url.searchParams.get("days") ?? "30", 10);
-    server.json(res, 200, service.getMetricsTrend(account_id, days));
-  });
-
-  server.get("/api/twitter/performance", (req, res) => {
-    const url = new URL(req.url ?? "/", "http://localhost");
-    const account_id = url.searchParams.get("account_id") ?? "";
-    const days = parseInt(url.searchParams.get("days") ?? "30", 10);
-    server.json(res, 200, service.getPerformanceReport(account_id, days));
+  server.route("GET", "/api/twitter/metrics", ({ query }) => {
+    const account_id = query.get("account_id") ?? "";
+    const days = parseInt(query.get("days") ?? "30", 10);
+    return service.getMetricsTrend(account_id, days);
   });
 }

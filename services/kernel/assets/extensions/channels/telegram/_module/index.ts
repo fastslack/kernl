@@ -1,4 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "@kernl/extension-sdk";
+import { notificationChannelModule } from "@kernl/extension-sdk";
 import { TelegramProvider } from "./telegram-provider.js";
 
 /**
@@ -8,19 +8,8 @@ import { TelegramProvider } from "./telegram-provider.js";
  * `NotificationRegistry.startAll()` once the user activates the channel
  * through the marketplace.
  */
-export function createTelegramModule(): KernelModule {
-  return {
-    name: "ext:telegram",
-    async initialize(ctx: ModuleContext) {
-      ctx.notifier
-        .getRegistry()
-        .registerFactory("telegram", () => new TelegramProvider());
-    },
-    getTools(): ToolDefinition[] {
-      return [];
-    },
-    async shutdown() {},
-  };
+export function createTelegramModule() {
+  return notificationChannelModule("ext:telegram", "telegram", () => new TelegramProvider());
 }
 
 export { TelegramProvider };

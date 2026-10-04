@@ -1,44 +1,11 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import type { ExtPageContext } from './types.js';
+  import type { ExtPageContext } from '$shared/types';
+  // Type-only (erased at build): the wire shapes the books module returns.
+  import type { BookItem, BookFile, BookDetails } from '../../_module/types.js';
 
   /** Host-provided context — auth-aware fetch, locale, navigation. */
   export let ctx: ExtPageContext;
-
-  // ── Types ──────────────────────────────────────────────────────────
-  interface BookItem {
-    identifier: string;
-    title: string;
-    creator: string;
-    year: number | null;
-    description: string;
-    language: string;
-    subject: string[];
-    downloads: number;
-    cover_url: string;
-    read_url: string;
-    in_watchlist?: boolean;
-    read_progress?: number;
-  }
-
-  interface BookFile {
-    name: string;
-    format: string;
-    size: number;
-    url: string;
-  }
-
-  interface BookDetails {
-    identifier: string;
-    title: string;
-    creator: string;
-    year: number | null;
-    description: string;
-    language: string;
-    subject: string[];
-    files: BookFile[];
-    primary_file: BookFile | null;
-  }
 
   // ── Search state ──────────────────────────────────────────────────
   let query = '';

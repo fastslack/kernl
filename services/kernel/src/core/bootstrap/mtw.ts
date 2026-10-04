@@ -39,10 +39,11 @@ import type { LlmClient } from "../llm/client.js";
 import type { RustBridge } from "../rust/bridge.js";
 import type { createRustDelegates } from "../rust/delegates.js";
 import { MtwPublisher } from "../mtw/publisher.js";
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { MtwRequestArchInfo } from "../../modules/dashboard/architecture-routes.js";
 import type { ExtensionHandles } from "./extensions.js";
 import type { LifeService } from "../types/extensions/index.js";
+import { localDate } from "../../sdk/clock.js";
 
 export interface MtwResult {
   mtwPublisher: MtwPublisher | null;
@@ -94,7 +95,7 @@ export async function initMtw(args: {
   // with BRIDGE_ENABLED=false (no mtwRequest broker), so without this the
   // dashboard's channel stores would never hydrate and every push-driven
   // page (home overview, life, finance…) would hang on "Loading…".
-  const { queryFullDashboard, queryAnalytics, queryCrossModuleIntel, queryCalendar, querySystemTimeline } =
+  const { queryFullDashboard, queryAnalytics, queryCalendar, querySystemTimeline } =
     await import("../../modules/dashboard/api.js");
   const { systemRegistry } = await import("../system-registry.js");
 
@@ -105,19 +106,17 @@ export async function initMtw(args: {
     dashboard: () => queryFullDashboard(sqlite, (name) => dashboardRegistry.queryChannel(name, sqlite, neo4j)),
     analytics: () => queryAnalytics(sqlite, dbRegistry.getGraph()),
     agenda: () => {
-      const d = new Date().toISOString().split("T")[0];
+      const d = localDate();
       return querySystemTimeline(sqlite, d, 150, systemRegistry);
-    },
-    crossIntel: () => {
-      const r = queryCrossModuleIntel(sqlite);
-      return r ? { available: true, ...r } : { available: false };
     },
     life: () => (lifeService ? lifeService.getLifeData() : { available: false }),
     calendar: () => {
-      const d = new Date().toISOString().split("T")[0];
-      return queryCalendar(sqlite, d, 150, systemRegistry);
+      const d = localDate();
+      return queryCalendar(sqlite, d, 150, systemRegistry, dashboardRegistry.getCalendarSources());
     },
-    systemAgenda: () => ({ processes: systemRegistry.list(), stats: systemRegistry.getStats() }),
+    // Same shape as the dashboard.systemAgenda operation: /system shows nothing
+    // until it sees `available`.
+    systemAgenda: () => ({ available: true, processes: systemRegistry.list(), stats: systemRegistry.getStats() }),
   };
   // Pick up extension-contributed channels at boot time. Modules opt in
   // by implementing `getQueryChannels()` — see KernelModule type.
@@ -142,12 +141,10 @@ export async function initMtw(args: {
   // WS gateway is absent (free stack) or disconnected. Returns the same
   // shape the publisher would broadcast, or 404 for an unknown channel.
   if (httpServer) {
-    httpServer.get("/api/channel/:name", async (req, res) => {
-      const name = (req as unknown as { params?: { name?: string } }).params?.name
-        ?? new URL(req.url ?? "/", "http://localhost").pathname.split("/").pop() ?? "";
+    httpServer.route("GET", "/api/channel/:name", async ({ params: { name } }) => {
       const data = await publisherQueryChannel(name);
-      if (data === undefined) { httpServer.json(res, 404, { error: `unknown channel: ${name}` }); return; }
-      httpServer.json(res, 200, data as Record<string, unknown>);
+      if (data === undefined) throw new HttpError(404, `unknown channel: ${name}`);
+      return data;
     });
   }
 
@@ -183,6 +180,7 @@ export async function initMtw(args: {
     agentExecutor: agentsModule.getExecutor() as Parameters<typeof dashboardRpcActions>[0]["agentExecutor"],
     llmRegistry,
     configService,
+    mtwRequestArch,
   }));
 
   // Each extension's slice of dashboard RPC actions.
@@ -248,6 +246,9 @@ export async function initMtw(args: {
   // (and any client) can call them when the Rust bridge / WS transport is off —
   // e.g. the zero-config public stack (BRIDGE_ENABLED=false). Same dispatch as
   // the WS path. POST /api/rpc/<action> with the args as the JSON body.
+  //
+  // Left on the raw handler: an empty body is a 400 here, where the helper
+  // would read it as `{}` and run the action with no args.
   if (httpServer) {
     httpServer.post("/api/rpc/:action", async (req, res) => {
       const action = (req as unknown as { params?: { action?: string } }).params?.action
@@ -292,8 +293,14 @@ export async function initMtw(args: {
   // Any other extension that implements `MtwConnAwareProvider` can opt in by
   // exposing the same instance method — no core change needed.
   notificationRegistry.registerPreStartHook("whatsapp", (provider) => {
-    const aware = provider as unknown as Partial<MtwConnAwareProvider>;
+    const aware = provider as unknown as Partial<MtwConnAwareProvider> & {
+      setConfigPersister?: (fn: (patch: Record<string, unknown>) => Record<string, unknown>) => void;
+    };
     aware.setMtwConnection?.(mtwConn);
+    // First-link auto-config (defaultChat / allowedNumbers): only keys empty
+    // in the STORED config are filled, so values saved in Settings win; the
+    // provider takes the resulting stored config back. Throws on save failure.
+    aware.setConfigPersister?.((patch) => notificationRegistry.fillEmptyConfig("whatsapp", patch));
   });
 
   // publisherQueryChannel + the core/module channel maps are built above,
@@ -358,6 +365,8 @@ export async function initMtw(args: {
     "agent:flow:escalation",
     "agent:flow:question_asked",
     "agent:flow:question_answered",
+    // Colleague letters: AgentWorld3D flies them desk to desk.
+    "agent:inbox:posted",
   ] as const) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     events.on(evtName as any, (payload: any) => {

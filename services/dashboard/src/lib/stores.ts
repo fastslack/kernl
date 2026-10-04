@@ -6,9 +6,7 @@ export const serverTz = writable('UTC');
 // Core data stores — populated by WS messages and HTTP fetches
 export const data = writable<Record<string, unknown> | null>(null);
 export const analytics = writable<Record<string, unknown> | null>(null);
-export const issues = writable<Record<string, unknown> | null>(null);
 export const automations = writable<Record<string, unknown> | null>(null);
-export const crossIntel = writable<Record<string, unknown> | null>(null);
 export const life = writable<Record<string, unknown> | null>(null);
 export const comms = writable<Record<string, unknown> | null>(null);
 export const house = writable<Record<string, unknown> | null>(null);
@@ -80,9 +78,7 @@ export const lastRefresh = writable<Date | null>(null);
 export const storeMap: Record<string, ReturnType<typeof writable>> = {
 	data,
 	analytics,
-	issues,
 	automations,
-	crossIntel,
 	life,
 	comms,
 	house,
@@ -114,11 +110,3 @@ export function ensureStore(name: string): ReturnType<typeof writable> {
 	return storeMap[name];
 }
 
-// Bulk update all stores from a full fetch
-export function setAllStores(d: Record<string, unknown>) {
-	for (const [key, val] of Object.entries(d)) {
-		if (key in storeMap) {
-			storeMap[key].set(val as Record<string, unknown>);
-		}
-	}
-}

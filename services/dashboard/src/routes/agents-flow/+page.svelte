@@ -1,11 +1,14 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { onMount, onDestroy, tick } from 'svelte';
+  import { page } from '$app/stores';
+  import { goto } from '$app/navigation';
   import { get } from 'svelte/store';
   import { agentFlowEvents, type AgentFlowEvent } from '$lib/stores.js';
   import { runAgent } from '$lib/api.js';
   import { rpcOrCall } from '$lib/ws.js';
   import MessageStream from './MessageStream.svelte';
   import AgentWorld3D from './AgentWorld3D.svelte';
+  import OfficeDirectory from '$lib/components/office/OfficeDirectory.svelte';
   import OfficeRail from '$lib/components/office/OfficeRail.svelte';
   import CommandBar from '$lib/components/office/CommandBar.svelte';
   import OfficePanel from '$lib/components/office/OfficePanel.svelte';
@@ -95,6 +98,17 @@
   let hostTimer: ReturnType<typeof setInterval>;
   let hostCurrent: { repo: string; iid: string } | null = null;  // issue the host engine is resolving
   let hostDeploying = false;  // a deploy is in flight on the host → animate the Deployer
+  // Oficinas and 3D are two tabs of the top bar over this one page:
+  // /agents-flow?view=offices and /agents-flow. The URL is the source of truth,
+  // so the tab bar, the back button and a shared link all agree, and switching
+  // never remounts the 3D world.
+  $: directoryView = $page.url.searchParams.get('view') === 'offices';
+  async function showWorld(): Promise<void> {
+    if (!directoryView) return;
+    const u = new URL($page.url);
+    u.searchParams.delete('view');
+    await goto(u.pathname + u.search, { keepFocus: true, noScroll: true });
+  }
   let streamOpen = false;
   let streamAutoScroll = true;
   let streamHeight = 280;
@@ -111,6 +125,8 @@
   // Flow selector
   let selectedFlowId: string | null = null;
   let flows: FlowData[] = [];
+  /** View-menu entries the 3D world's plugins offer (refreshed when the scene is ready and after each one runs). */
+  let worldViewItems: Array<{ id: string; label: string; run(): void }> = [];
   let ranks: RankData[] = [];
 
   // Derived
@@ -304,7 +320,7 @@
     // The live transcript is a right-hand panel too; either drawer would cover it.
     activityOpen = false;
     panelOfficeId = null;
-    world?.openLiveMeeting(resolution.meetingId);
+    void enterWorld(() => world?.openLiveMeeting(resolution.meetingId));
   }
 
   function waitingCardFor(pending: PendingAgentMeeting | null, resolution: AgentMeetingResolution | null): WaitingCard | null {
@@ -360,6 +376,7 @@
       // The human meeting's own chat panel is a right-hand surface too; either drawer would cover it.
       activityOpen = false;
       panelOfficeId = null;
+      await enterWorld();
       const started = world?.startHumanMeeting({
         topic: start.topic,
         description: start.context,
@@ -461,6 +478,12 @@
     if (envAvailable === null) void loadLicense();
   }
 
+  async function enterWorld(action?: () => void) {
+    await showWorld();
+    await tick();
+    action?.();
+  }
+
   /** The office environment ships with the DevOps extension license (pro:devops), not a 404 probe. */
   async function loadLicense() {
     try {
@@ -477,6 +500,7 @@
   }
 
   function onSceneReady() {
+    worldViewItems = world?.pluginViewItems() ?? [];
     const id = pendingFocusOfficeId;
     pendingFocusOfficeId = null;
     if (id && id === panelOfficeId) world?.focusOfficeById(id);
@@ -493,8 +517,17 @@
     }
   }
 
+  /** The lot the wizard was opened from (a click on a free lot in 3D); '' = any. */
+  let wizardLot = '';
+  function openWizard(lotId = ''): void {
+    wizardLot = lotId;
+    wizardOpen = true;
+  }
+
   async function onOfficeCreated(e: CustomEvent<{ report: OfficeReport; name: string; agentCount: number }>) {
     wizardOpen = false;
+    // The team is complete: the construction crew can start as soon as the office shows up.
+    world?.officeCreated(e.detail.report.flowId);
     await refresh();
     const { report, name, agentCount } = e.detail;
     const lead = agents.find((a) => a.flow_id === report.flowId && a.role === 'manager');
@@ -536,16 +569,19 @@
     const action = shortcutFor(e);
     if (!action || action === 'close' || action === 'help') return;
     e.preventDefault();
-    if (action === 'new-office') wizardOpen = true;
+    if (action === 'new-office') openWizard();
     else if (action === 'new-meeting') openMeetingModal();
-    else if (action === 'search') void rail?.focusSearch();
-    else if (action === 'fit') world?.fitAll();
+    else if (action === 'search') {
+      if (directoryView) document.querySelector<HTMLInputElement>('.directory input')?.focus();
+      else void rail?.focusSearch();
+    }
+    else if (action === 'fit') void enterWorld(() => world?.fitAll());
   }
 
   function applyDeepLinks() {
     try {
       const url = new URL(window.location.href);
-      if (url.searchParams.get('new') === 'office') wizardOpen = true;
+      if (url.searchParams.get('new') === 'office') openWizard();
       const officeId = url.searchParams.get('office');
       if (officeId) void openPanel(officeId);
       if (url.searchParams.has('new') || url.searchParams.has('office')) {
@@ -634,7 +670,7 @@
     const t = evt.event.split(':').pop() ?? '';
     if (t === 'run_started') return `Goal: ${String(evt.data.goal ?? '').slice(0, 120)}`;
     if (t === 'run_completed') {
-      const status = evt.data.status === 'completed' ? 'Success' : 'Failed';
+      const status = evt.data.status === 'completed' ? 'Success' : evt.data.status === 'cancelled' ? 'Stopped' : 'Failed';
       return `${status} | ${evt.data.steps_count ?? 0} steps | ${evt.data.tokens_used ?? 0} tokens | ${String(evt.data.result_preview ?? evt.data.error ?? '').slice(0, 150)}`;
     }
     if (t === 'chain_triggered') return `Triggering "${evt.data.target_agent_name}" via chain "${evt.data.chain_label}"`;
@@ -656,7 +692,8 @@
 <svelte:window on:keydown={onShortcut} />
 
 <div class="flow-shell">
-  <div class="office-layout" class:office-layout--collapsed={railCollapsed}>
+  <div class="office-layout" class:office-layout--collapsed={railCollapsed} class:office-layout--directory={directoryView}>
+    <div class="office-rail-container" class:rail-hidden={directoryView}>
     <OfficeRail
       bind:this={rail}
       model={railModel}
@@ -667,28 +704,31 @@
       on:officeedit={(e) => openPanel(e.detail.id)}
       on:agentselect={(e) => { panelOfficeId = null; activityOpen = false; selectedAgentId = e.detail.id; world?.focusAgentById(e.detail.id); }}
       on:agentmove={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
-      on:newoffice={() => (wizardOpen = true)}
+      on:newoffice={() => openWizard()}
       on:headquarters={() => world?.openHeadquartersInbox()}
       on:togglecollapse={toggleRail}
     />
+    </div>
     <div class="office-main">
       <CommandBar
         agents={agents.length}
         working={effectiveRunning.size}
         runsToday={todayRuns}
         inbox={inboxCount}
-        {railCollapsed}
-        on:newoffice={() => (wizardOpen = true)}
+        extraItems={worldViewItems}
+        on:newoffice={() => openWizard()}
         on:meeting={openMeetingModal}
         on:activity={toggleActivity}
-        on:fit={() => world?.fitAll()}
-        on:turntable={() => world?.toggleRotationMode()}
-        on:perf={() => world?.togglePerfHud()}
-        on:inbox={() => world?.openHeadquartersInbox()}
-        on:showrail={toggleRail}
-        on:registerrepo={() => world?.openRegisterRepo()}
+        on:fit={() => enterWorld(() => world?.fitAll())}
+        on:turntable={() => enterWorld(() => world?.toggleRotationMode())}
+        on:perf={() => enterWorld(() => world?.togglePerfHud())}
+        on:extra={(e) => enterWorld(() => { worldViewItems.find((i) => i.id === e.detail.id)?.run(); worldViewItems = world?.pluginViewItems() ?? []; })}
+        on:inbox={() => enterWorld(() => world?.openHeadquartersInbox())}
+        on:registerrepo={() => enterWorld(() => world?.openRegisterRepo())}
       />
       <div class="world3d-wrapper">
+        {#if !directoryView}
+        <div class="world-layer">
         <AgentWorld3D
           bind:this={world}
           {agents}
@@ -704,14 +744,24 @@
           on:officeclick={(e) => openPanel(e.detail.flowId)}
           on:inbox={(e) => (inboxCount = e.detail.count)}
           on:moveagent={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
-          on:newoffice={() => (wizardOpen = true)}
+          on:newoffice={(e) => openWizard(e.detail?.lotId ?? '')}
           on:agentselect={(e) => { selectedAgentId = e.detail.id; if (e.detail.id) { panelOfficeId = null; activityOpen = false; } }}
           on:sceneready={onSceneReady}
+          on:worldchange={() => { worldViewItems = world?.pluginViewItems() ?? []; }}
           on:meetings={(e) => (meetings = e.detail.list)}
           on:mgmtlog={(e) => (mgmtEntries = e.detail.entries)}
           on:humanmeeting={(e) => (humanMeeting = e.detail)}
-          on:liveopen={() => { activityOpen = false; panelOfficeId = null; }}
+          on:liveopen={() => { void showWorld(); activityOpen = false; panelOfficeId = null; }}
         />
+        </div>
+        {/if}
+        {#if directoryView}
+          <OfficeDirectory model={railModel} loading={!dataLoaded} error={dataError} inbox={inboxCount}
+            on:select={(e) => openPanel(e.detail.id)}
+            on:headquarters={() => enterWorld(() => world?.openHeadquartersInbox())}
+            on:agent={(e) => enterWorld(() => world?.focusAgentById(e.detail.id))}
+            on:retry={refresh} />
+        {/if}
         <OfficePanel
           open={!!panelOffice}
           office={panelOffice}
@@ -742,13 +792,13 @@
           top="0px"
           on:close={() => (activityOpen = false)}
           on:tab={(e) => (activityTab = e.detail.tab)}
-          on:openmeeting={(e) => { activityOpen = false; panelOfficeId = null; world?.openLiveMeeting(e.detail.id); }}
+          on:openmeeting={(e) => { activityOpen = false; panelOfficeId = null; void enterWorld(() => world?.openLiveMeeting(e.detail.id)); }}
           on:archive={(e) => world?.dismissMeeting(e.detail.id)}
           on:archiveall={() => world?.dismissAllReadMeetings()}
           on:convene={openMeetingModal}
           on:retry={retryAgentMeeting}
           on:dismisswaiting={() => (agentMeeting = null)}
-          on:openhuman={() => { activityOpen = false; world?.openHumanMeeting(); }}
+          on:openhuman={() => { activityOpen = false; void enterWorld(() => world?.openHumanMeeting()); }}
         />
         <Toast
           message={toast.message}
@@ -766,6 +816,7 @@
     templates={templatesResponse}
     {templatesError}
     existingNames={activeFlows.map((f) => f.name)}
+    lot={wizardLot}
     on:close={() => (wizardOpen = false)}
     on:created={onOfficeCreated}
   />
@@ -824,15 +875,28 @@
     grid-template-columns: 272px minmax(0, 1fr);
   }
   .office-layout--collapsed { grid-template-columns: 52px minmax(0, 1fr); }
+  .office-layout.office-layout--directory { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
+  .office-rail-container { min-height: 0; overflow: hidden; }
+  .office-rail-container.rail-hidden { display: none; }
   .office-main {
     min-width: 0;
     min-height: 0;
     display: grid;
-    grid-template-rows: 52px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
   }
+  .world-layer { position: absolute; inset: 0; isolation: isolate; }
   .world3d-wrapper {
     position: relative;
     min-height: 0;
+    /* Edge to edge: the rail and the command bar already frame the world. */
     overflow: hidden;
+  }
+  @media (max-width: 900px) {
+    .office-layout { grid-template-columns: 220px minmax(0, 1fr); }
+    .office-layout--collapsed { grid-template-columns: 52px minmax(0, 1fr); }
+  }
+  @media (max-width: 700px) {
+    .office-layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(120px, 28%) minmax(0, 1fr); }
+    .office-layout--collapsed { grid-template-columns: 52px minmax(0, 1fr); grid-template-rows: minmax(0, 1fr); }
   }
 </style>

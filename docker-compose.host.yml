@@ -1,0 +1,37 @@
+# Host folders for the kernel. Opt-in, never loaded by default:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up -d kernel
+#
+# (add -f docker-compose.gpu.yml as well when you use that one; the order of
+# the two overlays does not matter). Once applied, every later `compose`
+# command for the stack has to name the same files, or the next recreate
+# drops these mounts.
+#
+# It lives apart from docker-compose.yml because these mounts reach into the
+# host: a default stack mounting a fixed home folder would make Docker create
+# that path as root on a machine that does not have it, and a missing
+# ~/.claude.json would come back as an empty directory.
+#
+# ── Variables (in .env next to this file) ──────────────────────────────────
+# KERNL_FS_ROOT  required. The host folder the Filesystem Commander browses,
+#                mounted read-only at the same path so its breadcrumbs match
+#                what you see in a terminal.
+# HOST_HOME      optional, defaults to your $HOME. Where ~/.claude and
+#                ~/.claude.json are; both must exist (run `claude` once).
+
+services:
+  kernel:
+    environment:
+      FS_COMMANDER_ALLOWED_ROOTS: ${KERNL_FS_ROOT:?set KERNL_FS_ROOT in .env to the folder the Filesystem Commander may browse}
+    volumes:
+      # Read-only: the commander exposes delete and move over HTTP, so write
+      # access is a deliberate later step, not a default.
+      - ${KERNL_FS_ROOT}:${KERNL_FS_ROOT}:ro
+      # The operator's Claude Code login. claude_code agents run the CLI with
+      # HOME=$HOST_HOME and read their OAuth session from here; without these
+      # two mounts every claude_code run fails "OAuth session expired and could
+      # not be refreshed". Read-write, and shared with the host on purpose: the
+      # CLI rotates the refresh token, so host and container must write back to
+      # the same file or each refresh invalidates the other's session.
+      - ${HOST_HOME:-${HOME}}/.claude:${HOST_HOME:-${HOME}}/.claude
+      - ${HOST_HOME:-${HOME}}/.claude.json:${HOST_HOME:-${HOME}}/.claude.json

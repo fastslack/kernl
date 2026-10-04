@@ -11,7 +11,7 @@
  * instance pairing between Kernl deployments.
  */
 
-import type { KernelHttpServer } from "./http-server.js";
+import { HttpError, type KernelHttpServer } from "./http-server.js";
 import type { PairingManager } from "../security/index.js";
 
 export function registerPairingAdminRoutes(
@@ -19,57 +19,33 @@ export function registerPairingAdminRoutes(
   pairingManager: PairingManager,
 ): void {
   // GET /api/security/pairing/pending — codes waiting for approval.
-  server.get("/api/security/pairing/pending", (_req, res) => {
-    try {
-      const pending = pairingManager.getPendingPairings();
-      server.json(res, 200, { items: pending });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
+  server.route("GET", "/api/security/pairing/pending", () => ({
+    items: pairingManager.getPendingPairings(),
+  }));
 
   // GET /api/security/pairing/approved — users already approved.
-  server.get("/api/security/pairing/approved", (_req, res) => {
-    try {
-      const map = pairingManager.getApprovedUsers();
-      const items: Array<{ platform: string; userId: string }> = [];
-      for (const [platform, users] of map) {
-        for (const userId of users) items.push({ platform, userId });
-      }
-      server.json(res, 200, { items });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
+  server.route("GET", "/api/security/pairing/approved", () => {
+    const map = pairingManager.getApprovedUsers();
+    const items: Array<{ platform: string; userId: string }> = [];
+    for (const [platform, users] of map) {
+      for (const userId of users) items.push({ platform, userId });
     }
+    return { items };
   });
 
   // POST /api/security/pairing/approve { code } — approve a pending code.
-  server.post("/api/security/pairing/approve", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ code: string }>(req);
-      if (!body.code) { server.json(res, 400, { error: "code required" }); return; }
-      const pairing = pairingManager.approve(body.code);
-      if (!pairing) {
-        server.json(res, 404, { error: "code not found or expired" });
-        return;
-      }
-      server.json(res, 200, { success: true, pairing });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ code: string }>("POST", "/api/security/pairing/approve", ({ body }) => {
+    if (!body.code) throw new HttpError(400, "code required");
+    const pairing = pairingManager.approve(body.code);
+    if (!pairing) throw new HttpError(404, "code not found or expired");
+    return { success: true, pairing };
   });
 
   // POST /api/security/pairing/revoke { platform, userId } — drop approval.
-  server.post("/api/security/pairing/revoke", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ platform: string; userId: string }>(req);
-      if (!body.platform || !body.userId) {
-        server.json(res, 400, { error: "platform and userId required" });
-        return;
-      }
-      const revoked = pairingManager.revoke(body.platform, body.userId);
-      server.json(res, revoked ? 200 : 404, { success: revoked });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route<{ platform: string; userId: string }>("POST", "/api/security/pairing/revoke", ({ body }) => {
+    if (!body.platform || !body.userId) throw new HttpError(400, "platform and userId required");
+    const revoked = pairingManager.revoke(body.platform, body.userId);
+    if (!revoked) throw new HttpError(404, "revoke failed", { success: false });
+    return { success: true };
   });
 }

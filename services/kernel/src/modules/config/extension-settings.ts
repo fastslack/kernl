@@ -16,6 +16,7 @@ import type { SettingDef, SettingType } from "./types.js";
 import type {
   ExtensionManifest,
   ExtensionSettingsField,
+  ExtensionSettingSource,
   LocalizedText,
 } from "../extensions/types.js";
 import { log } from "../../core/logger.js";
@@ -23,6 +24,8 @@ import { log } from "../../core/logger.js";
 const VALID_TYPES: ReadonlySet<string> = new Set([
   "string", "number", "boolean", "secret", "json",
 ]);
+
+const SOURCES: ReadonlySet<string> = new Set<ExtensionSettingSource>(["email_accounts"]);
 
 /** Minimal duck-type of ExtensionService — avoids a hard module dependency. */
 export interface ExtensionRowLike {
@@ -40,6 +43,8 @@ export interface ExtensionSettingDef extends SettingDef {
   default: string;
   labelI18n: LocalizedText;
   descriptionI18n: LocalizedText;
+  /** Where the dashboard takes the field's choices from (string fields only). */
+  source?: ExtensionSettingSource;
 }
 
 export interface ExtensionSettingsSection {
@@ -125,6 +130,7 @@ export class ExtensionSettingsRegistry {
           sensitive: f.type === "secret",
           extension: row.slug,
           default: f.default ?? "",
+          ...(f.source && SOURCES.has(f.source) && f.type === "string" ? { source: f.source } : {}),
         });
       }
       if (!fields.length) continue;

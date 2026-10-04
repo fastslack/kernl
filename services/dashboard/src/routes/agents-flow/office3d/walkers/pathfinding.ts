@@ -467,3 +467,175 @@ export function nearestVCorrXBetween(x1: number, x2: number, grid: CorridorGrid)
   }
   return best;
 }
+
+// ── Walk zones: the special rooms outside the flow-room map ─────────────────
+//
+// The headquarters office and the reception are built from the special-room
+// slots, not from `rooms`, so no router ever saw them: walkers to the top
+// agent's office came down the back corridor and stepped straight through its
+// north wall, and package pickups walked through the reception's back wall.
+// The scene registers both here on every rebuild, and every walker builder
+// treats them as solid.
+
+export interface WalkRect { cx: number; cz: number; w: number; d: number }
+
+export interface WalkZones {
+  /** Headquarters office: a walled rectangle whose only opening is `door`. */
+  myOffice?: { rect: WalkRect; door: { x: number; z: number } };
+  /** Solid pieces of the reception (counter, columns, back wall). */
+  reception?: Aabb2D[];
+  /** Walls of buildings world plugins add (split around their doors). */
+  plugins?: Aabb2D[];
+}
+
+let walkZones: WalkZones = {};
+
+/** Register the special rooms for every walker built from now on. */
+export function setWalkZones(zones: WalkZones): void {
+  walkZones = zones;
+}
+
+function insideRect(p: { x: number; z: number }, r: WalkRect): boolean {
+  return p.x >= r.cx - r.w / 2 && p.x <= r.cx + r.w / 2 && p.z >= r.cz - r.d / 2 && p.z <= r.cz + r.d / 2;
+}
+
+/** The registered zones as obstacles. Pass `enteringMyOffice` when the walk
+ *  ends inside the headquarters office — its walls are then crossed through
+ *  the door instead of avoided whole. */
+export function zoneObstacles(enteringMyOffice = false): Aabb2D[] {
+  const out: Aabb2D[] = [...(walkZones.reception ?? []), ...(walkZones.plugins ?? [])];
+  const mo = walkZones.myOffice;
+  if (mo && !enteringMyOffice) {
+    const r = mo.rect;
+    out.push({
+      minX: r.cx - r.w / 2 - WALL_HALF, maxX: r.cx + r.w / 2 + WALL_HALF,
+      minZ: r.cz - r.d / 2 - WALL_HALF, maxZ: r.cz + r.d / 2 + WALL_HALF,
+    });
+  }
+  return out;
+}
+
+export interface PointWalkInput {
+  from: Vec3;
+  targetPoint: Vec3;
+  /** The office the walker leaves from (its desk's room). */
+  srcRoom: RoomInfo | undefined;
+  rooms: Map<string, RoomInfo>;
+  corridorGrid: CorridorGrid;
+  /** Desks to walk around (the walker's own desk already filtered out). */
+  deskObstacles: Aabb2D[];
+  /** Door midpoint of the meeting room being entered, if any. */
+  viaPoint?: Vec3;
+  meetingRoomObstacles?: ReadonlyArray<WalkRect>;
+  /** Index into meetingRoomObstacles of the room being entered. */
+  meetingRoomObstacleExempt?: number;
+}
+
+/**
+ * Path for a walker going from its desk to an arbitrary point: out through its
+ * office door, along the corridors, and in through the destination's door —
+ * an office's, a meeting room's (`viaPoint`) or the headquarters office's —
+ * then around every desk, wall and special-room obstacle on the way.
+ */
+export function planPointWalk(input: PointWalkInput): Vec3[] {
+  const { from, targetPoint, srcRoom, rooms, corridorGrid, deskObstacles, viaPoint,
+    meetingRoomObstacles, meetingRoomObstacleExempt } = input;
+
+  // Find which room contains the destination point — if the walker is
+  // walking into a room (an office, a meeting room, …), that room must be
+  // exempt from the avoidance pass. Otherwise its walls count as
+  // obstacles and the L-shaped detour ends up cutting a diagonal back
+  // across an adjacent room's wall.
+  const targetRoom = roomContaining(targetPoint, rooms);
+  const myOffice = walkZones.myOffice;
+  const intoMyOffice = !targetRoom && !viaPoint && !!myOffice && insideRect(targetPoint, myOffice.rect);
+
+  // The table inside the room we are walking INTO is solid. Every other
+  // meeting room is already excluded wholesale by meetingRoomAabbs, so only
+  // the exempt one needs its furniture spelled out.
+  const exemptSlot =
+    meetingRoomObstacles && meetingRoomObstacleExempt !== undefined && meetingRoomObstacleExempt >= 0
+      ? meetingRoomObstacles[meetingRoomObstacleExempt]
+      : undefined;
+  const obstacles: Aabb2D[] = [
+    ...deskObstacles,
+    ...roomAabbs(rooms, new Set([srcRoom, targetRoom])),
+    ...(meetingRoomObstacles
+      ? meetingRoomAabbs(meetingRoomObstacles, meetingRoomObstacleExempt ?? -1)
+      : []),
+    ...(exemptSlot ? [meetingTableAabb(exemptSlot)] : []),
+    ...zoneObstacles(intoMyOffice),
+  ];
+
+  // Build path: desk → door → corridor → target point (using real corridor positions)
+  const pts: Vec3[] = [];
+  pts.push({ ...from });
+
+  if (srcRoom && corridorGrid.segments.length > 0) {
+    // Use exact door position (respects doorDir: left/right/top/bottom)
+    const srcDoorX = (srcRoom as any).doorX ?? srcRoom.cx;
+    const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
+
+    // Inside room → line up on the opening → out through the door. A
+    // hardcoded X-first L-shape is only correct for a door on a ±Z wall;
+    // side doors with off-centre desks would step through solid wall.
+    pts.push(...exitViaDoor(from, srcRoom));
+
+    // Step into nearest corridor
+    const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, corridorGrid);
+    pts.push({ ...srcCorrNode });
+
+    // Walk corridors to target. Aim at the DOORWAY, not at the destination
+    // itself: the corridor node nearest a seat can be on the far side of the
+    // room from its only door, and the leg from there cuts back across it.
+    const approach = viaPoint
+      ?? (intoMyOffice ? { x: myOffice!.door.x, y: 0, z: myOffice!.door.z } : targetPoint);
+    const tgtCorrNode = nearestCorridorNode(approach, corridorGrid);
+    if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1 || Math.abs(srcCorrNode.z - tgtCorrNode.z) > 1) {
+      const srcHZ = nearestHCorrZ(srcCorrNode.z, corridorGrid);
+      const tgtHZ = nearestHCorrZ(tgtCorrNode.z, corridorGrid);
+      if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1) {
+        const vCorrX = nearestVCorrXBetween(srcCorrNode.x, tgtCorrNode.x, corridorGrid);
+        pts.push({ x: vCorrX, y: 0, z: srcHZ });
+        if (Math.abs(srcHZ - tgtHZ) > 1) {
+          pts.push({ x: vCorrX, y: 0, z: tgtHZ });
+        }
+        pts.push({ x: tgtCorrNode.x, y: 0, z: tgtHZ });
+      } else if (Math.abs(srcHZ - tgtHZ) > 1) {
+        const vCorrX = nearestVCorrX(srcCorrNode.x, corridorGrid);
+        pts.push({ x: vCorrX, y: 0, z: srcHZ });
+        pts.push({ x: vCorrX, y: 0, z: tgtHZ });
+      }
+    }
+    pts.push({ ...tgtCorrNode });
+  }
+  // Getting IN is the same problem as getting out: route through the
+  // destination's own door instead of one straight shot from the corridor.
+  if (targetRoom) {
+    pts.push(...enterViaDoor(targetPoint, targetRoom));
+  } else if (intoMyOffice) {
+    pts.push(...enterViaDoor(targetPoint, rectAsRoom(myOffice!.rect, myOffice!.door)));
+  } else if (viaPoint) {
+    // Meeting rooms aren't in the `rooms` map — they hand us their door
+    // midpoint instead. Square up on the doorway, step through, and only then
+    // turn toward the seat.
+    if (exemptSlot) {
+      // stopInsideDoor: the table sits on the room's centreline, so the
+      // generic slide waypoint would land on it. Stop at the doorway and
+      // let the avoidance pass walk around the table to the chair.
+      pts.push(...enterViaDoor(targetPoint, rectAsRoom(exemptSlot, viaPoint), { stopInsideDoor: true }));
+    } else {
+      pts.push({ ...viaPoint });
+    }
+  }
+  pts.push({ ...targetPoint });
+
+  // Clean duplicates
+  const dedup: Vec3[] = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const prev = dedup[dedup.length - 1];
+    if (Math.abs(pts[i].x - prev.x) > 0.3 || Math.abs(pts[i].z - prev.z) > 0.3) dedup.push(pts[i]);
+  }
+  // Route around desk / wall / special-room AABBs
+  return avoidDesks(dedup, obstacles);
+}

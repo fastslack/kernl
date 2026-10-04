@@ -1,54 +1,30 @@
 /**
- * HTTP routes for reminders. Mirrors the tasks module pattern: simple
- * action endpoints (dismiss, snooze) backed by direct SQL writes.
+ * HTTP routes for reminders: the detail lookup, and the dismiss/snooze
+ * fallback of the `reminders.*` RPC actions (both roads run the same
+ * function; see operations.ts).
  */
-import type { KernelHttpServer, SqliteDb, EventBus } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer, type EventBus } from "@kernl/extension-sdk";
+import type { ReminderService } from "./service.js";
+import { reminderOperations } from "./operations.js";
 
 export function registerRemindersRoutes(
   server: KernelHttpServer,
-  db: SqliteDb,
+  service: ReminderService,
   events: EventBus,
 ): void {
   // GET /api/reminders/detail?id=<uuid> — used by the dashboard's hash-link
   // resolver (clicking a UUID in a tool-result opens its detail modal). All
   // columns including notify_* flags are returned; the modal renderer picks
   // which to show.
-  server.get("/api/reminders/detail", (req, res) => {
-    try {
-      const url = new URL(req.url ?? "/", "http://localhost");
-      const id = url.searchParams.get("id");
-      if (!id) { server.json(res, 400, { error: "Missing id" }); return; }
-      const reminder = db.prepare("SELECT * FROM reminders WHERE id = ?").get(id);
-      if (!reminder) { server.json(res, 404, { error: "Not found" }); return; }
-      server.json(res, 200, { reminder });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
+  server.route("GET", "/api/reminders/detail", ({ query }) => {
+    const id = query.get("id");
+    if (!id) throw new HttpError(400, "Missing id");
+    const reminder = service.getById(id);
+    if (!reminder) throw new HttpError(404, "Not found");
+    return { reminder };
   });
 
-  server.post("/api/reminders/dismiss", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string }>(req);
-      if (!body.id) { server.json(res, 400, { error: "Missing id" }); return; }
-      const now = new Date().toISOString();
-      db.prepare("UPDATE reminders SET status = 'dismissed', updated_at = ? WHERE id = ?")
-        .run(now, body.id);
-      events.emit("data.changed", { module: "reminders", action: "dismiss" });
-      server.json(res, 200, { ok: true });
-    } catch { server.json(res, 400, { error: "Invalid request" }); }
-  });
-
-  server.post("/api/reminders/snooze", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ id: string; minutes?: number }>(req);
-      if (!body.id) { server.json(res, 400, { error: "Missing id" }); return; }
-      const mins = body.minutes ?? 30;
-      const snoozedUntil = new Date(Date.now() + mins * 60_000).toISOString();
-      const now = new Date().toISOString();
-      db.prepare("UPDATE reminders SET status = 'snoozed', snoozed_until = ?, updated_at = ? WHERE id = ?")
-        .run(snoozedUntil, now, body.id);
-      events.emit("data.changed", { module: "reminders", action: "snooze" });
-      server.json(res, 200, { ok: true });
-    } catch { server.json(res, 400, { error: "Invalid request" }); }
-  });
+  const op = reminderOperations(service, events);
+  server.operation("POST", "/api/reminders/dismiss", op["reminders.dismiss"]);
+  server.operation("POST", "/api/reminders/snooze", op["reminders.snooze"]);
 }

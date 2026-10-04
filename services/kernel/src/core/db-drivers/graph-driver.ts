@@ -137,16 +137,3 @@ export interface GraphDriver extends BaseDbDriver {
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-/**
- * Convenience predicate for consumers: "can this driver run my query?".
- * Returns the missing capability name when the answer is no, else null.
- */
-export function missingCapability(
-  driver: GraphDriver,
-  required: Array<keyof GraphCapabilities>,
-): keyof GraphCapabilities | null {
-  for (const cap of required) {
-    if (!driver.capabilities[cap]) return cap;
-  }
-  return null;
-}

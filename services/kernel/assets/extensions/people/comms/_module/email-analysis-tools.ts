@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { textResult, errorResult, type ToolDefinition } from "@kernl/extension-sdk";
+import { defineTool, textResult, type ToolDefinition } from "@kernl/extension-sdk";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { TaskPayload, ReminderPayload, ContactPayload, ShoppingPayload } from "./email-analysis-service.js";
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";
@@ -108,155 +108,130 @@ export function emailAnalysisTools(
 
   return [
     // ── kernel_email_analyze ──────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_email_analyze",
       description: "Analyze a fetched email (by comm_id) using AI and extract actionable suggestions (tasks, reminders, contacts, shopping items). Suggestions require approval before being created.",
-      inputSchema: z.object({
+      schema: z.object({
         comm_id: z.string().describe("ID of the communication (must already be fetched with kernel_comms_fetch_email)"),
       }),
-      handler: async (args) => {
-        const { comm_id } = args as { comm_id: string };
-        try {
-          const result = await analysisService.analyzeById(comm_id);
-          const lines: string[] = [
-            `## Email Analysis`,
-            `**Summary:** ${result.summary || "(no summary)"}`,
-            `**Suggestions found:** ${result.suggestions.length}`,
-            "",
-          ];
-          if (result.suggestions.length === 0) {
-            lines.push("No actionable items detected in this email.");
-          } else {
-            lines.push("### Pending Suggestions (use kernel_email_approve to create)");
-            for (const s of result.suggestions) {
-              lines.push(fmtSuggestion(s));
-            }
+      handler: async ({ comm_id }) => {
+        const result = await analysisService.analyzeById(comm_id);
+        const lines: string[] = [
+          `## Email Analysis`,
+          `**Summary:** ${result.summary || "(no summary)"}`,
+          `**Suggestions found:** ${result.suggestions.length}`,
+          "",
+        ];
+        if (result.suggestions.length === 0) {
+          lines.push("No actionable items detected in this email.");
+        } else {
+          lines.push("### Pending Suggestions (use kernel_email_approve to create)");
+          for (const s of result.suggestions) {
+            lines.push(fmtSuggestion(s));
           }
-          return textResult(lines.join("\n"));
-        } catch (err) {
-          return errorResult(String(err));
         }
+        return textResult(lines.join("\n"));
       },
-    },
+    }),
 
     // ── kernel_email_pending ──────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_email_pending",
       description: "List all pending email analysis suggestions awaiting approval. Returns suggestions with their IDs for use with kernel_email_approve or kernel_email_dismiss.",
-      inputSchema: z.object({
+      schema: z.object({
         limit: z.number().int().min(1).max(100).default(30).describe("Max suggestions to return"),
       }),
-      handler: async (args) => {
-        const { limit } = args as { limit: number };
-        try {
-          const suggestions = analysisService.getPendingSuggestions(limit);
-          if (suggestions.length === 0) {
-            return textResult("No pending email suggestions. Use kernel_email_analyze or kernel_email_sync_analyze to scan your inbox.");
-          }
-          const lines = [
-            `## Pending Email Suggestions (${suggestions.length})`,
-            "",
-            "Use `kernel_email_approve` to create an item, or `kernel_email_dismiss` to skip it.",
-            "",
-          ];
-          for (const s of suggestions) {
-            lines.push(fmtSuggestion(s));
-            lines.push("");
-          }
-          return textResult(lines.join("\n"));
-        } catch (err) {
-          return errorResult(String(err));
+      handler: async ({ limit }) => {
+        const suggestions = analysisService.getPendingSuggestions(limit);
+        if (suggestions.length === 0) {
+          return textResult("No pending email suggestions. Use kernel_email_analyze or kernel_email_sync_analyze to scan your inbox.");
         }
+        const lines = [
+          `## Pending Email Suggestions (${suggestions.length})`,
+          "",
+          "Use `kernel_email_approve` to create an item, or `kernel_email_dismiss` to skip it.",
+          "",
+        ];
+        for (const s of suggestions) {
+          lines.push(fmtSuggestion(s));
+          lines.push("");
+        }
+        return textResult(lines.join("\n"));
       },
-    },
+    }),
 
     // ── kernel_email_approve ──────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_email_approve",
       description: "Approve a pending email suggestion and immediately create the corresponding entity (task, reminder, contact, or shopping item). Optionally override fields before creating.",
-      inputSchema: z.object({
+      schema: z.object({
         suggestion_id: z.string().describe("ID of the suggestion to approve"),
         overrides: z.record(z.unknown()).optional().describe("Optional field overrides, e.g. {\"priority\": \"high\", \"due_date\": \"2026-03-10\"}"),
       }),
-      handler: async (args) => {
-        const { suggestion_id, overrides } = args as { suggestion_id: string; overrides?: Record<string, unknown> };
-        try {
-          const result = await analysisService.approveSuggestion(
-            suggestion_id,
-            overrides as Partial<TaskPayload>,
-            approveServices,
-          );
-          return textResult(`✓ Approved: created **${result.type}** \`${result.created_id}\``);
-        } catch (err) {
-          return errorResult(String(err));
-        }
+      handler: async ({ suggestion_id, overrides }) => {
+        const result = await analysisService.approveSuggestion(
+          suggestion_id,
+          overrides as Partial<TaskPayload>,
+          approveServices,
+        );
+        return textResult(`✓ Approved: created **${result.type}** \`${result.created_id}\``);
       },
-    },
+    }),
 
     // ── kernel_email_dismiss ──────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_email_dismiss",
       description: "Dismiss a pending email suggestion without creating anything.",
-      inputSchema: z.object({
+      schema: z.object({
         suggestion_id: z.string().describe("ID of the suggestion to dismiss"),
       }),
-      handler: async (args) => {
-        const { suggestion_id } = args as { suggestion_id: string };
-        try {
-          analysisService.dismissSuggestion(suggestion_id);
-          return textResult(`Suggestion \`${suggestion_id}\` dismissed.`);
-        } catch (err) {
-          return errorResult(String(err));
-        }
+      handler: async ({ suggestion_id }) => {
+        analysisService.dismissSuggestion(suggestion_id);
+        return textResult(`Suggestion \`${suggestion_id}\` dismissed.`);
       },
-    },
+    }),
 
     // ── kernel_email_sync_analyze ─────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_email_sync_analyze",
       description: "Fetch recent emails from Gmail inbox and run AI analysis to extract actionable suggestions. Call kernel_email_pending afterwards to review.",
-      inputSchema: z.object({
+      schema: z.object({
         days_back: z.number().int().min(1).max(30).default(3).describe("How many days back to scan"),
         max_emails: z.number().int().min(1).max(30).default(10).describe("Max emails to fetch and analyze"),
         query: z.string().optional().describe("Additional Gmail query filter (e.g. 'from:boss@company.com is:unread')"),
       }),
-      handler: async (args) => {
-        const { days_back, max_emails, query } = args as { days_back: number; max_emails: number; query?: string };
-        try {
-          const gmailQuery = [`newer_than:${days_back}d`, "is:unread", query].filter(Boolean).join(" ");
-          const messages = await commsService.searchInbox(gmailQuery, max_emails);
+      handler: async ({ days_back, max_emails, query }) => {
+        const gmailQuery = [`newer_than:${days_back}d`, "is:unread", query].filter(Boolean).join(" ");
+        const messages = await commsService.searchInbox(gmailQuery, max_emails);
 
-          if (messages.length === 0) {
-            return textResult(`No unread emails found in the last ${days_back} days.`);
-          }
-
-          let fetched = 0;
-          const fetchErrors: string[] = [];
-          for (const msg of messages) {
-            try {
-              await commsService.fetchEmail(msg.gmail_id);
-              fetched++;
-            } catch (e) {
-              fetchErrors.push(`"${msg.subject}": ${String(e)}`);
-            }
-          }
-
-          const analysis = await analysisService.analyzeNewEmails(max_emails);
-
-          const lines = [
-            `## Email Sync & Analysis`,
-            `- Found: ${messages.length} emails`,
-            `- Fetched: ${fetched}`,
-            `- Analyzed: ${analysis.analyzed}`,
-            `- New suggestions: **${analysis.suggestions}**`,
-          ];
-          if (fetchErrors.length > 0) lines.push(`- Fetch errors: ${fetchErrors.join("; ")}`);
-          if (analysis.suggestions > 0) lines.push("", "Run `kernel_email_pending` to review suggestions.");
-          return textResult(lines.join("\n"));
-        } catch (err) {
-          return errorResult(String(err));
+        if (messages.length === 0) {
+          return textResult(`No unread emails found in the last ${days_back} days.`);
         }
+
+        let fetched = 0;
+        const fetchErrors: string[] = [];
+        for (const msg of messages) {
+          try {
+            await commsService.fetchEmail(msg.gmail_id);
+            fetched++;
+          } catch (e) {
+            fetchErrors.push(`"${msg.subject}": ${String(e)}`);
+          }
+        }
+
+        const analysis = await analysisService.analyzeNewEmails(max_emails);
+
+        const lines = [
+          `## Email Sync & Analysis`,
+          `- Found: ${messages.length} emails`,
+          `- Fetched: ${fetched}`,
+          `- Analyzed: ${analysis.analyzed}`,
+          `- New suggestions: **${analysis.suggestions}**`,
+        ];
+        if (fetchErrors.length > 0) lines.push(`- Fetch errors: ${fetchErrors.join("; ")}`);
+        if (analysis.suggestions > 0) lines.push("", "Run `kernel_email_pending` to review suggestions.");
+        return textResult(lines.join("\n"));
       },
-    },
+    }),
   ];
 }

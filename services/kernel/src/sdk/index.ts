@@ -25,11 +25,22 @@ export * from "./facades.js";
 export * from "./types.js";
 
 export * from "./helpers.js";
+export * from "./http-error.js";
+export * from "./args.js";
+export * from "./module.js";
+export * from "./channels.js";
 export * from "./query-helpers.js";
+export {
+  kernelTimezone, localDate, localDateTime, addDays, dayStart, localDayRange,
+  toInstant, localParts, localDateOf,
+} from "./clock.js";
+export * from "./agent-vars.js";
 export * from "./migrations.js";
 export * from "./tool-builder.js";
 export * from "./formatting.js";
+export * from "./llm-usage.js";
 export * from "./fs-paths.js";
+export * from "./mcp-transport.js";
 export * from "./url-guard.js";
 export * from "./crypto.js";
 export * from "./secrets.js";
@@ -40,3 +51,4 @@ export * from "./license-gate.js";
 export * from "./ranking.js";
 export * from "./cosine.js";
 export * from "./embeddings.js";
+export * from "./projects.js";

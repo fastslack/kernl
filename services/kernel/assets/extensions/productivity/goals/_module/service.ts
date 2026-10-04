@@ -103,6 +103,25 @@ export class GoalsService {
     return this.db.prepare(sql).all(...params) as Goal[];
   }
 
+  /** The dashboard's goal list: each goal with its key-result count and the
+   *  average progress of those key results (each capped at 100%), active
+   *  goals first, most recently updated first. */
+  listWithProgress(status?: string): Array<Goal & { kr_count: number; progress: number }> {
+    let where = "1=1";
+    const params: unknown[] = [];
+    if (status) { where += " AND g.status = ?"; params.push(status); }
+    return this.db.prepare(
+      `SELECT g.id, g.title, g.description, g.type, g.status, g.parent_id, g.target_date,
+              g.created_at, g.updated_at,
+              (SELECT COUNT(*) FROM key_results kr WHERE kr.goal_id = g.id) as kr_count,
+              (SELECT CASE WHEN COUNT(*) = 0 THEN 0
+                ELSE ROUND(AVG(CASE WHEN kr2.target_value > 0 THEN MIN(kr2.current_value / kr2.target_value * 100, 100) ELSE 0 END))
+               END FROM key_results kr2 WHERE kr2.goal_id = g.id) as progress
+       FROM goals g WHERE ${where}
+       ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END, g.updated_at DESC`,
+    ).all(...params) as Array<Goal & { kr_count: number; progress: number }>;
+  }
+
   // ── Key Results ────────────────────────────────────
 
   addKeyResult(input: {

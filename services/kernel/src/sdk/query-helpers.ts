@@ -1,4 +1,5 @@
 import type { SqliteDb } from "../core/db/sqlite.js";
+import { toInstant } from "./clock.js";
 
 /**
  * Check if a table exists in the database.
@@ -64,18 +65,37 @@ export function toRecord(rows: Array<{ key: string; count: number }>): Record<st
   return rec;
 }
 
-/**
- * Today's date as ISO string (YYYY-MM-DD).
- */
-export function today(): string {
-  return new Date().toISOString().split("T")[0];
-}
+// Dates live in clock.ts (kernel timezone); re-exported for existing imports.
+export { today, daysFromNow } from "./clock.js";
 
 /**
- * Date N days from now as ISO string (YYYY-MM-DD).
+ * Rewrite the timestamps in `columns` that are not UTC instants yet (no
+ * trailing Z) as instants, read by `toInstant`: a value without a zone is
+ * the kernel's local time. Idempotent, so a module can run it at every boot;
+ * a missing table or column is skipped. Returns how many values changed.
  */
-export function daysFromNow(n: number): string {
-  return new Date(Date.now() + n * 86_400_000).toISOString().split("T")[0];
+export function normalizeInstants(db: SqliteDb, table: string, columns: readonly string[]): number {
+  let changed = 0;
+  for (const column of columns) {
+    let rows: Array<{ rid: number; v: string }>;
+    try {
+      rows = db.prepare(
+        `SELECT rowid AS rid, ${column} AS v FROM ${table}
+          WHERE ${column} IS NOT NULL AND ${column} <> '' AND ${column} NOT LIKE '%Z'`,
+      ).all() as Array<{ rid: number; v: string }>;
+    } catch {
+      continue;
+    }
+    const update = db.prepare(`UPDATE ${table} SET ${column} = ? WHERE rowid = ?`);
+    for (const r of rows) {
+      const next = toInstant(r.v);
+      if (next && next !== r.v) {
+        update.run(next, r.rid);
+        changed++;
+      }
+    }
+  }
+  return changed;
 }
 
 /**
@@ -109,4 +129,47 @@ export function safeQueryOne<T>(db: SqliteDb, sql: string, ...params: unknown[])
 export function countRows(db: SqliteDb, table: string, where?: string, params: unknown[] = []): number {
   const sql = where ? `SELECT COUNT(*) as c FROM ${table} WHERE ${where}` : `SELECT COUNT(*) as c FROM ${table}`;
   return (db.prepare(sql).get(...params) as { c: number }).c;
+}
+
+// ── Partial updates ──────────────────────────────────────────
+
+/**
+ * How a patch field reaches its column: stored as is, JSON-encoded, as 0/1,
+ * or with its own column name and/or conversion.
+ */
+export type PatchColumn =
+  | "text"
+  | "json"
+  | "bool"
+  | { column?: string; to?: (value: never) => unknown };
+
+/**
+ * The SET clause of a partial UPDATE: one `col = ?` per field of `patch`
+ * that `spec` lists and that is not undefined, in `spec` order.
+ *
+ * Replaces the `if (input.x !== undefined) { sets.push("x = ?"); params.push(…) }`
+ * ladder every service wrote by hand. `spec` is also the allow-list: a key
+ * it does not name never reaches the SQL, so the column names can't come
+ * from the caller. The caller adds its own extras (updated_at, side columns)
+ * to the returned arrays before running the UPDATE.
+ */
+export function buildPatch(
+  patch: object,
+  spec: Record<string, PatchColumn>,
+): { sets: string[]; params: unknown[] } {
+  const sets: string[] = [];
+  const params: unknown[] = [];
+  const values = patch as Record<string, unknown>;
+  for (const [field, kind] of Object.entries(spec)) {
+    const value = values[field];
+    if (value === undefined) continue;
+    if (kind === "text") { sets.push(`${field} = ?`); params.push(value); }
+    else if (kind === "json") { sets.push(`${field} = ?`); params.push(JSON.stringify(value)); }
+    else if (kind === "bool") { sets.push(`${field} = ?`); params.push(value ? 1 : 0); }
+    else {
+      sets.push(`${kind.column ?? field} = ?`);
+      params.push(kind.to ? kind.to(value as never) : value);
+    }
+  }
+  return { sets, params };
 }

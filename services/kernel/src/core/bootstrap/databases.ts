@@ -18,6 +18,7 @@ import { Neo4jClient } from "../db/neo4j.js";
 import { EventBus } from "../event-bus.js";
 import { systemRegistry } from "../system-registry.js";
 import { resolvePersistentSecret } from "./secrets.js";
+import { rehydrateStoredSettings } from "./stored-settings.js";
 
 /** KERNEL_ALLOW_UNAUTH is opt-in: accept "1"/"true" (case-insensitive). */
 function unauthAllowed(): boolean {
@@ -31,6 +32,10 @@ export async function initDatabases(config: KernelConfig): Promise<{
   events: EventBus;
 }> {
   const sqlite = openSqlite(config.sqlite.path);
+  // Before any module copies a config value: settings saved from the
+  // dashboard (Google OAuth credentials among them) must be in place.
+  const restored = rehydrateStoredSettings(sqlite, config);
+  if (restored > 0) log.info(`Config: restored ${restored} stored setting(s) into the environment`);
   const neo4j = new Neo4jClient();
   await neo4j.connect(config.neo4j);
   if (!config.neo4j.password) {

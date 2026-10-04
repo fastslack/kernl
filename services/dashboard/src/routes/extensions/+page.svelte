@@ -1,5 +1,6 @@
 <script lang="ts">
-  import { onMount, onDestroy } from 'svelte';
+  import { readApiError } from '$lib/api.js';
+  import { onMount, onDestroy, tick } from 'svelte';
   import { t } from '$lib/i18n/index.js';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
   import SkillsHub from '$lib/components/SkillsHub.svelte';
@@ -400,6 +401,77 @@
     }
   }
 
+  /** Sessions the user abandoned — their in-flight polls stop on the next tick. */
+  const cancelledSessions = new Set<string>();
+  let cancelling: Record<string, boolean> = {};
+
+  /**
+   * Abandon a purchase still waiting for payment: the Stripe tab was closed,
+   * or a promo code didn't apply. The card goes back to its Buy button.
+   */
+  async function cancelPurchase(slug: string): Promise<void> {
+    const p = purchases[slug];
+    if (!p?.sessionId) return;
+    cancelling = { ...cancelling, [slug]: true };
+    try {
+      const r = await fetch(`${BASE}/api/store/checkout/${encodeURIComponent(p.sessionId)}/cancel`, { method: 'POST' });
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
+      cancelledSessions.add(p.sessionId);
+      delete purchases[slug];
+      purchases = { ...purchases };
+    } catch (e) {
+      purchases[slug] = { ...p, error: (e as Error).message };
+      purchases = { ...purchases };
+    } finally {
+      cancelling = { ...cancelling, [slug]: false };
+    }
+  }
+
+  // ── All-Access ───────────────────────────────────────────────────────
+
+  /** The key the kernel records a subscription checkout under (ALL_ACCESS_SLUG). */
+  const ALL_ACCESS = 'all-access';
+  /** Yearly first: it's the cheaper plan per month, and the one people come here for. */
+  let aaPeriod: 'monthly' | 'yearly' = 'yearly';
+  let aaStarting = false;
+  $: aaPurchase = purchases[ALL_ACCESS];
+  $: aaPrice = (allAccess?.[aaPeriod]?.price_cents ? allAccess?.[aaPeriod] : allAccess?.monthly) ?? null;
+
+  /**
+   * Subscribe without leaving Kernl: the kernel opens Stripe Checkout for the
+   * chosen period, this page polls, and the license lands on its own — the
+   * same path an extension purchase takes, minus the install.
+   */
+  async function buyAllAccess(): Promise<void> {
+    aaStarting = true;
+    try {
+      const r = await fetch(`${BASE}/api/store/checkout`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ plan: ALL_ACCESS, period: aaPeriod }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      purchases[ALL_ACCESS] = { sessionId: body.session_id, state: 'pending', error: null, url: body.url };
+      purchases = { ...purchases };
+      window.open(body.url, '_blank', 'noopener');
+      pollCheckout(body.session_id, ALL_ACCESS);
+    } catch (e) {
+      purchases[ALL_ACCESS] = { sessionId: '', state: 'failed', error: (e as Error).message, url: '' };
+      purchases = { ...purchases };
+    } finally {
+      aaStarting = false;
+    }
+  }
+
+  /** The "or All-Access" links: bring the strip into view instead of leaving Kernl. */
+  async function showAllAccess(): Promise<void> {
+    previewed = null;
+    tab = 'discover';
+    await tick();
+    document.querySelector('.aa')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  }
+
   /**
    * Poll a checkout until it resolves. 2.5s is a good cadence: the webhook
    * usually lands within a second or two of payment, and the user is looking at
@@ -407,6 +479,7 @@
    */
   function pollCheckout(sessionId: string, slug: string): void {
     const tick = async (): Promise<void> => {
+      if (cancelledSessions.has(sessionId)) return;
       try {
         // A cached poll response would freeze the purchase mid-flight and the
         // card would never leave "Waiting for payment…".
@@ -415,6 +488,7 @@
         });
         if (!r.ok) throw new Error(`HTTP ${r.status}`);
         const body = await r.json();
+        if (cancelledSessions.has(sessionId)) return;
         purchases[slug] = {
           sessionId,
           state: body.state,
@@ -454,8 +528,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ slug }),
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       await Promise.all([fetchList(), fetchCatalog()]);
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
@@ -476,8 +549,7 @@
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ id: entry.id }),
       });
-      const body = await r.json().catch(() => ({}));
-      if (!r.ok) throw new Error(body.error ?? `HTTP ${r.status}`);
+      if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       await Promise.all([fetchList(), fetchCatalog()]);
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
@@ -728,6 +800,11 @@
   /** Route a card button press to the right thing. */
   function onCardAction(vm: CardVM, kind: ReturnType<typeof actionFor>['kind']): void {
     if (kind === 'manage') return openCard(vm);
+    if (kind === 'resume') {
+      const url = purchases[vm.slug]?.url;
+      if (url) window.open(url, '_blank', 'noopener');
+      return;
+    }
     if (kind === 'pricing') {
       window.open(PRICING_URL, '_blank', 'noopener');
       return;
@@ -951,8 +1028,7 @@
     try {
       const r = await fetch(`${BASE}${url}`, { method: 'POST' });
       if (!r.ok) {
-        const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-        throw new Error(body.error ?? `HTTP ${r.status}`);
+        throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
       }
       await fetchList();
       if (selected?.id === id) selected = items.find((i) => i.id === id) ?? null;
@@ -981,8 +1057,7 @@
           body: JSON.stringify({ filename: uploadFile.name, base64 }),
         });
         if (!r.ok) {
-          const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-          throw new Error(body.error ?? `HTTP ${r.status}`);
+          throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
         }
       } else {
         const r = await fetch(`${BASE}/api/extensions/install`, {
@@ -991,8 +1066,7 @@
           body: JSON.stringify({ bundle_path: uploadPath }),
         });
         if (!r.ok) {
-          const body = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
-          throw new Error(body.error ?? `HTTP ${r.status}`);
+          throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
         }
       }
       showUpload = false;
@@ -1770,38 +1844,83 @@
     someone who doesn't already have it. It's the highest-value thing on the
     page, so it gets the top slot and the only gradient on the screen.
   -->
-  {#if tab === 'discover' && forSaleCount > 0 && allAccess?.monthly?.price_cents}
+  {#if tab === 'discover' && (forSaleCount > 0 || aaPurchase) && aaPrice?.price_cents}
     <section class="aa anim">
       <div class="aa-glow" aria-hidden="true"></div>
       <div class="aa-body">
         <div class="aa-kicker">All-Access</div>
         <h2 class="aa-title">
-          {#if ownedCount > 0}
+          {#if aaPurchase?.state === 'done'}
+            All-Access is active
+          {:else if ownedCount > 0}
             Unlock the other {forSaleCount} premium extension{forSaleCount === 1 ? '' : 's'}
           {:else}
             Unlock all {forSaleCount} premium extension{forSaleCount === 1 ? '' : 's'}
           {/if}
         </h2>
         <p class="aa-sub">
-          Every paid extension, plus everything released while you're subscribed.
-          Cancel whenever — extensions you bought outright stay yours.
+          {#if aaPurchase?.state === 'done'}
+            Your license now covers every paid extension. Install the ones you want below.
+          {:else}
+            Every paid extension, plus everything released while you're subscribed.
+            Cancel whenever — extensions you bought outright stay yours.
+          {/if}
         </p>
-      </div>
-      <div class="aa-buy">
-        <div class="aa-price">
-          <span class="aa-price-sym">{priceParts(allAccess.monthly.price_cents, allAccess.monthly.currency).sym}</span>
-          <span class="aa-price-num">{priceParts(allAccess.monthly.price_cents, allAccess.monthly.currency).num}</span>
-          <span class="aa-price-per">/mo</span>
-        </div>
-        {#if allAccess.yearly?.price_cents}
-          <div class="aa-alt">
-            or {fmtMoney(allAccess.yearly.price_cents, allAccess.yearly.currency)}/year
-          </div>
+        {#if aaPurchase?.state === 'failed' && aaPurchase.error}
+          <div class="card-error-msg">⚠︎ {aaPurchase.error}</div>
         {/if}
-        <a class="aa-cta" href={PRICING_URL} target="_blank" rel="noopener noreferrer">
-          Get All-Access
-        </a>
       </div>
+      {#if aaPurchase?.state !== 'done'}
+        <div class="aa-buy">
+          {#if allAccess?.monthly?.price_cents && allAccess?.yearly?.price_cents}
+            <div class="aa-period" role="radiogroup" aria-label="Billing period">
+              <button
+                role="radio"
+                aria-checked={aaPeriod === 'monthly'}
+                class:on={aaPeriod === 'monthly'}
+                disabled={aaPurchase?.state === 'pending'}
+                on:click={() => (aaPeriod = 'monthly')}
+              >Monthly</button>
+              <button
+                role="radio"
+                aria-checked={aaPeriod === 'yearly'}
+                class:on={aaPeriod === 'yearly'}
+                disabled={aaPurchase?.state === 'pending'}
+                on:click={() => (aaPeriod = 'yearly')}
+              >Yearly</button>
+            </div>
+          {/if}
+          <div class="aa-price">
+            <span class="aa-price-sym">{priceParts(aaPrice.price_cents, aaPrice.currency).sym}</span>
+            <span class="aa-price-num">{priceParts(aaPrice.price_cents, aaPrice.currency).num}</span>
+            <span class="aa-price-per">{aaPrice === allAccess?.yearly ? '/year' : '/mo'}</span>
+          </div>
+          {#if aaPrice === allAccess?.yearly}
+            <div class="aa-alt">
+              {fmtMoney(Math.round(aaPrice.price_cents / 12), aaPrice.currency)}/mo, billed once a year
+            </div>
+          {/if}
+          {#if aaPurchase?.state === 'pending' || aaPurchase?.state === 'paid'}
+            <div class="aa-wait">
+              {aaPurchase.state === 'paid' ? 'Applying your license…' : 'Waiting for payment in the Stripe tab…'}
+            </div>
+            {#if aaPurchase.state === 'pending'}
+              <div class="aa-wait-actions">
+                <button class="aa-link" on:click={() => window.open(aaPurchase?.url, '_blank', 'noopener')}>
+                  Reopen payment
+                </button>
+                <button class="aa-link" disabled={cancelling[ALL_ACCESS]} on:click={() => cancelPurchase(ALL_ACCESS)}>
+                  {cancelling[ALL_ACCESS] ? 'Cancelling…' : 'Cancel'}
+                </button>
+              </div>
+            {/if}
+          {:else}
+            <button class="aa-cta" disabled={aaStarting || !storeReachable} on:click={buyAllAccess}>
+              {aaStarting ? 'Opening checkout…' : 'Get All-Access'}
+            </button>
+          {/if}
+        </div>
+      {/if}
     </section>
   {/if}
 
@@ -1872,7 +1991,14 @@
             {#if purchase?.state === 'failed' && purchase.error}
               <div class="card-error-msg">⚠︎ {purchase.error}</div>
             {:else if purchase?.state === 'pending'}
-              <div class="pcard-hint">Finish the payment in the tab that opened — this card updates itself.</div>
+              <div class="pcard-hint">
+                Finish the payment in Stripe — this card updates itself.
+                <button
+                  type="button" class="pcard-cancel"
+                  disabled={cancelling[vm.slug]}
+                  on:click={() => cancelPurchase(vm.slug)}
+                >{cancelling[vm.slug] ? 'Cancelling…' : 'Cancel purchase'}</button>
+              </div>
             {/if}
           </article>
         {/each}
@@ -2004,9 +2130,9 @@
           <!-- A for_sale card is by definition not covered, so the presence of
                some other license is irrelevant here. -->
           {#if vm.provider === 'store' && act.kind === 'buy'}
-            <a class="card-aa" href={PRICING_URL} target="_blank" rel="noopener noreferrer">
+            <button class="card-aa" on:click={showAllAccess}>
               or All-Access
-            </a>
+            </button>
           {/if}
         </div>
 
@@ -2065,9 +2191,9 @@
         on:click={() => onCardAction(vm, act.kind)}
       >{act.label}</button>
       {#if vm.status === 'for_sale' && act.kind === 'buy'}
-        <a class="act-btn act-secondary" href={PRICING_URL} target="_blank" rel="noopener noreferrer">
+        <button class="act-btn act-secondary" on:click={showAllAccess}>
           See All-Access
-        </a>
+        </button>
       {/if}
     </div>
 
@@ -3040,10 +3166,30 @@
     box-shadow: 0 3px 16px color-mix(in srgb, var(--gold) 32%, transparent);
     transition: transform .2s, box-shadow .2s;
   }
-  .aa-cta:hover {
+  .aa-cta { border: none; cursor: pointer; }
+  .aa-cta:hover:not(:disabled) {
     transform: translateY(-1px);
     box-shadow: 0 6px 24px color-mix(in srgb, var(--gold) 45%, transparent);
   }
+  .aa-cta:disabled { opacity: .6; cursor: default; }
+  .aa-period {
+    display: inline-flex; margin-bottom: 8px;
+    border: 1px solid var(--border, color-mix(in srgb, var(--text-2) 30%, transparent));
+    border-radius: 8px; overflow: hidden;
+  }
+  .aa-period button {
+    background: transparent; border: none; cursor: pointer;
+    padding: 4px 11px; font-size: 11.5px; font-weight: 600; color: var(--text-2);
+  }
+  .aa-period button.on { background: color-mix(in srgb, var(--gold) 22%, transparent); color: var(--text-1); }
+  .aa-period button:disabled { cursor: default; }
+  .aa-wait { margin-top: 10px; font-size: 12px; color: var(--text-1); }
+  .aa-wait-actions { display: flex; gap: 12px; justify-content: flex-end; margin-top: 4px; }
+  .aa-link {
+    background: none; border: none; padding: 0; cursor: pointer;
+    font-size: 11.5px; color: var(--text-2); text-decoration: underline;
+  }
+  .aa-link:disabled { cursor: default; opacity: .6; }
 
   /* ── Storefront cards ────────────────────────────────────────────
      Bigger than the utility grid, with the price as the second-loudest thing
@@ -3195,6 +3341,14 @@
     border-left: 2px solid var(--gold);
     padding: 7px 9px; border-radius: 6px;
   }
+  .pcard-cancel {
+    display: block; margin-top: 6px; padding: 0;
+    background: none; border: 0; cursor: pointer;
+    font: inherit; font-weight: 600; color: var(--text-2, #aab);
+    text-decoration: underline; text-underline-offset: 2px;
+  }
+  .pcard-cancel:hover:not(:disabled) { color: var(--text-1, #fff); }
+  .pcard-cancel:disabled { opacity: .6; cursor: default; }
 
   @keyframes pcard-in {
     from { opacity: 0; transform: translateY(10px) scale(0.985); }
@@ -3448,6 +3602,7 @@
   .card-aa {
     font-size: 11.5px; color: var(--text-2); text-decoration: none;
     white-space: nowrap;
+    background: none; border: none; padding: 0; cursor: pointer; font-family: inherit;
   }
   .card-aa:hover { color: var(--ext-module); text-decoration: underline; }
 
