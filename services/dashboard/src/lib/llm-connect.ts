@@ -44,6 +44,8 @@ export interface CatalogResponse {
   chain: ChainLink[];
   claudeCodeTransition: "cli" | "legacy-token" | "none";
   claudeCodeLoginCommand: string;
+  /** The kernel can sign Claude Code in by opening the approval page itself. */
+  claudeCodeBrowserLogin?: boolean;
 }
 
 export interface ProbeResult {
@@ -165,6 +167,15 @@ export const testProvider = (slug: string, input: ConnectInput = {}) => call<Pro
 export const connectProvider = (slug: string, input: ConnectInput = {}) => call<ProbeResult>(providerUrl(slug, "connect"), send("POST", input));
 export const detectProvider = (slug: string) => call<DetectResult>(providerUrl(slug, "detect"), send("POST", {}));
 export const disconnectProvider = (slug: string) => call<{ chain: ChainLink[] }>(providerUrl(slug, "connection"), { method: "DELETE" });
+export interface ClaudeLoginStatus {
+  state: "idle" | "waiting" | "done" | "failed";
+  url?: string;
+  error?: string;
+  detail?: string;
+}
+export const startClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", send("POST", {}));
+export const claudeLoginStatus = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login");
+export const cancelClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", { method: "DELETE" });
 export const saveChain = (links: ChainLink[]) => call<{ chain: ChainLink[] }>("/api/llm/chain", send("PUT", { links }));
 
 /** Models of a provider that is already connected and running. */
