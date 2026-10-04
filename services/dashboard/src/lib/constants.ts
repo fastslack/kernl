@@ -111,7 +111,7 @@ export const NAV_GROUPS: NavGroup[] = [
 // Short labels for sub-tabs (matching vanilla app)
 export const SUB_TAB_LABELS: Record<string, string> = {
 	home: 'Overview', news: 'News', life: 'Life', shopping: 'Shop', house: 'House',
-	work: 'Overview', tasks: 'Tasks', planner: 'Planner', issues: 'Issues', reminders: 'Alerts',
+	work: 'Overview', tasks: 'Tasks', planner: 'Planner', reminders: 'Alerts',
 	crm: 'Overview', people: 'Contacts', mail: 'Mail', comms: 'Comms', chat: 'Chat', 'x-manager': 'X', irc: 'IRC',
 	finance: 'Overview', subscriptions: 'Subscriptions',
 	wellness: 'Overview', health: 'Health', training: 'Training', nutrition: 'Nutrition',
@@ -146,7 +146,6 @@ export const WS_CHANNEL_MAP: Record<string, string> = {
 	dashboard: 'data',
 	analytics: 'analytics',
 	agenda: 'automations',
-	crossIntel: 'crossIntel',
 	life: 'life',
 	calendar: 'planner',
 	systemAgenda: 'systemAgenda',

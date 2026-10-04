@@ -75,7 +75,6 @@ export function lifeTools(service: LifeService, db: SqliteDb): ToolDefinition[] 
         sections.push(`- Interactions: ${summary.interactions}`);
         sections.push(`- Reminders fired: ${summary.remindersFired}`);
         sections.push(`- Purchases: ${summary.purchases}`);
-        if (summary.issuesClosed > 0) sections.push(`- Issues closed: ${summary.issuesClosed}`);
         sections.push("");
 
         const habits = queryHabits(db, today);

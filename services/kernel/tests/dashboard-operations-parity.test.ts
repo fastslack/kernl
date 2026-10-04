@@ -159,12 +159,10 @@ describe("dashboard operations answer alike over RPC and HTTP", () => {
     await sameShape("config.ai.agents", "/api/config/ai/agents");
   });
 
-  it("pii.status, systemAgenda, health and cross-intel answer the same fields on both roads", async () => {
+  it("pii.status, systemAgenda and health answer the same fields on both roads", async () => {
     await sameShape("pii.status", "/api/pii/status");
     await sameShape("dashboard.systemAgenda", "/api/dashboard/system-agenda");
     await sameShape("server.health", "/api/health");
-    const { viaRpc } = await sameShape("dashboard.crossIntel", "/api/dashboard/cross-intel");
-    expect(viaRpc).toEqual({ available: false });
   });
 
   it("the timeline window takes start/days on both roads, date/limit kept as aliases", () => {

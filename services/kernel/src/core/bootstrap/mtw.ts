@@ -95,7 +95,7 @@ export async function initMtw(args: {
   // with BRIDGE_ENABLED=false (no mtwRequest broker), so without this the
   // dashboard's channel stores would never hydrate and every push-driven
   // page (home overview, life, finance…) would hang on "Loading…".
-  const { queryFullDashboard, queryAnalytics, queryCrossModuleIntel, queryCalendar, querySystemTimeline } =
+  const { queryFullDashboard, queryAnalytics, queryCalendar, querySystemTimeline } =
     await import("../../modules/dashboard/api.js");
   const { systemRegistry } = await import("../system-registry.js");
 
@@ -108,10 +108,6 @@ export async function initMtw(args: {
     agenda: () => {
       const d = localDate();
       return querySystemTimeline(sqlite, d, 150, systemRegistry);
-    },
-    crossIntel: () => {
-      const r = queryCrossModuleIntel(sqlite);
-      return r ? { available: true, ...r } : { available: false };
     },
     life: () => (lifeService ? lifeService.getLifeData() : { available: false }),
     calendar: () => {

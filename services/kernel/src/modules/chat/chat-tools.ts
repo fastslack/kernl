@@ -48,14 +48,6 @@ const CHAT_TOOL_WHITELIST = new Set([
   "kernel_life_log",
   "kernel_life_status",
 
-  // Issues (GitHub/GitLab)
-  "kernel_issues_list",
-  "kernel_issues_get",
-  "kernel_issues_stats",
-  "kernel_issues_sync",
-  "kernel_issues_velocity",
-  "kernel_issues_repos",
-
   // Events
   "kernel_events_create",
   "kernel_events_list",

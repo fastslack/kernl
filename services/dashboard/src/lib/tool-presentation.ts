@@ -56,7 +56,6 @@ const MODULE_ICONS: Record<string, string> = {
   google: "🔎",
   health: "💚",
   irc: "💬",
-  issues: "🐛",
   learning: "📚",
   lights: "💡",
   linkedin: "💼",

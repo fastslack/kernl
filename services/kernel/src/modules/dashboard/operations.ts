@@ -29,7 +29,6 @@ import {
   queryKpis,
   queryFullDashboard,
   queryAgenda,
-  queryCrossModuleIntel,
   querySystemTimeline,
   queryCalendar,
   type DashboardChannelReader,
@@ -148,10 +147,6 @@ export function dashboardOperations(deps: DashboardOperationDeps): Record<string
     "dashboard.full": () => queryFullDashboard(db, readChannel),
     "dashboard.kpis": () => queryKpis(db),
     "dashboard.agenda": () => queryAgenda(db),
-    "dashboard.crossIntel": () => {
-      const data = queryCrossModuleIntel(db);
-      return data ? { available: true, ...data } : { available: false };
-    },
     // Every module's calendar entries (its `calendarSources`) plus the core's.
     // It used to be the events extension's RPC, calling into this module.
     "dashboard.calendar": (input) => {
