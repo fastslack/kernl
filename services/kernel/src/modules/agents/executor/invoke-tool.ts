@@ -110,8 +110,8 @@ export function createInvokeHandler(deps: InvokeHandlerDeps): (args: unknown) =>
     log.info(`Agent "${agent.name}" invoking agent "${targetAgent.name}" (depth: ${depth + 1})`);
 
     // Save inter-agent conversation: source asks target
-    service.addMemory(agent.id, "assistant", `[To ${targetAgent.name}] ${input.goal.slice(0, 1000)}`, run.id);
-    service.addMemory(targetAgent.id, "user", `[From ${agent.name}] ${input.goal.slice(0, 1000)}`, run.id);
+    service.addMemory(agent.id, "assistant", `[To ${targetAgent.name}] ${input.goal.slice(0, 1000)}`, run.id, run.project_id ?? null);
+    service.addMemory(targetAgent.id, "user", `[From ${agent.name}] ${input.goal.slice(0, 1000)}`, run.id, run.project_id ?? null);
 
     // Mirror into a generic conversation so the debate orchestrator and
     // dashboard can observe the exchange as a unified thread. One convo per
@@ -185,8 +185,8 @@ export function createInvokeHandler(deps: InvokeHandlerDeps): (args: unknown) =>
 
     // Save target's response back to source agent's memory
     const responseText = result.status === "failed" ? `[Error] ${result.error}` : result.result;
-    service.addMemory(targetAgent.id, "assistant", `[To ${agent.name}] ${responseText.slice(0, 1000)}`, targetRun.id);
-    service.addMemory(agent.id, "user", `[From ${targetAgent.name}] ${responseText.slice(0, 1000)}`, targetRun.id);
+    service.addMemory(targetAgent.id, "assistant", `[To ${agent.name}] ${responseText.slice(0, 1000)}`, targetRun.id, targetRun.project_id ?? null);
+    service.addMemory(agent.id, "user", `[From ${targetAgent.name}] ${responseText.slice(0, 1000)}`, targetRun.id, targetRun.project_id ?? null);
 
     // Mirror the reply into the conversation. Role defaults to 'answer';
     // the target's own LLM output may override this via self-marking

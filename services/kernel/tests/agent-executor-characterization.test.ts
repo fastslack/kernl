@@ -521,3 +521,34 @@ describe("AgentExecutor.execute — characterization", () => {
     expect(h.trace).toMatchSnapshot("trace");
   });
 });
+
+describe("AgentExecutor — request context for native tool calls", () => {
+  it("runs every tool call with the caller's agent, run and depth in the request context", async () => {
+    const { getRequestContext } = await import("../src/core/request-context.js");
+    const seen: unknown[] = [];
+    const ctxTool: ToolDefinition = {
+      name: "kernel_test_ctx",
+      description: "Report the request context",
+      inputSchema: z.object({}),
+      handler: async () => {
+        seen.push({ ...getRequestContext() });
+        return { content: [{ type: "text", text: "ok" }] };
+      },
+    } as unknown as ToolDefinition;
+    const h = makeHarness();
+    const ex = new AgentExecutor();
+    ex.setConfig({ language: "en", agents: { defaultModelChain: [{ provider: "alpha", model: "alpha-1" }] } } as never);
+    ex.setKernelTools([ctxTool]);
+    const alpha = h.provider("alpha", [() => toolUse("kernel_test_ctx", {}), () => final("done")]);
+    ex.setProviders(new Map([["alpha", alpha]]), "alpha");
+    await ex.execute({
+      agent: makeAgent({ system_prompt: "x" }),
+      goal: "go",
+      run: makeRun({ id: "run-ctx" }),
+      service: h.service,
+      events: h.events,
+      depth: 2,
+    });
+    expect(seen).toEqual([{ callerAgentId: "agent-1", callerRunId: "run-ctx", callerDepth: 2 }]);
+  });
+});

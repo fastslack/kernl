@@ -211,6 +211,8 @@ export function cinemaTools(deps: CinemaToolDeps): ToolDefinition[] {
 
     defineTool({
       name: "kernel_cinema_subs_publish",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Announce a locally-generated subtitle to every publishable discovery provider (Nostr, archive.org S3 if configured). Records the local row first, then broadcasts. Caller is responsible for the file already existing on disk (or a webseed URL).",
       schema: z.object({

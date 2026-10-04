@@ -32,6 +32,7 @@ import type {
   WorkspaceServiceLike,
   ReflectionOptimizerLike,
   WorkspaceEvolverLike,
+  ProjectGateLike,
 } from "./advanced-types.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 
@@ -57,6 +58,8 @@ export interface AgentsModule extends ExtensibleModule {
   registerWorkspaceService(svc: WorkspaceServiceLike): void;
   registerReflectionOptimizer(svc: ReflectionOptimizerLike): void;
   registerWorkspaceEvolver(svc: WorkspaceEvolverLike): void;
+  /** Projects seam (src/modules/projects): createRun validates project_id through it. */
+  registerProjectGate(gate: ProjectGateLike): void;
 
   // ── Live accessors used by other stages (http routes, services) ──
   getWorkspaceService(): WorkspaceServiceLike | null;
@@ -211,6 +214,9 @@ export function createAgentsModule(): AgentsModule {
     },
 
     // ── Registration seam ──────────────────────────────────────
+    registerProjectGate(gate: ProjectGateLike) {
+      agentService?.setProjectGate(gate);
+    },
     registerAltExecutor(type: string, executor: AltExecutorLike) {
       altExecutors.set(type, executor);
       // Forward stashed sandbox registry now that we have an executor that

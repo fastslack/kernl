@@ -55,6 +55,8 @@ export function ircTools(deps: {
     }),
     defineTool({
       name: "kernel_irc_say",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description: "Post a message into an IRC channel as the kernel service user.",
       schema: z.object({
         channel: z.string().describe("Channel (#name)"),
@@ -71,6 +73,8 @@ export function ircTools(deps: {
     }),
     defineTool({
       name: "kernel_irc_broadcast",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description: "Broadcast a NOTICE to every IRC channel.",
       schema: z.object({ text: z.string() }),
       handler: async ({ text }) => {

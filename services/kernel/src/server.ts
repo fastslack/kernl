@@ -298,6 +298,9 @@ export function createMcpServer(
       return attachReceipt(name, args, errResult, []);
     }
 
+    // Outbound tools (projects) are already guarded: the registry hands out
+    // their wrapped copies (core/outbound-guard.ts, ModuleRegistry.getAllTools).
+
     // Pre-flight budget check. Refusing here costs nothing; refusing
     // post-execution would already have spent the dollars.
     let estimate: import("./core/llm/cost-router.js").CostEstimate | undefined;

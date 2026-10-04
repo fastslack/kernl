@@ -1,6 +1,7 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelConfig } from "../../core/config.js";
+import type { ProjectGateLike } from "./advanced-types.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
 import { agentModelChain } from "./agent-fields.js";
@@ -139,6 +140,11 @@ export class AgentService {
   private readonly ranks: AgentRanksService;
   private readonly runs: AgentRunsService;
   private readonly feedback: AgentFeedbackService;
+  /** Projects seam (src/modules/projects) — null until bootstrap registers it. */
+  private projectGate: ProjectGateLike | null = null;
+
+  setProjectGate(gate: ProjectGateLike | null): void { this.projectGate = gate; }
+  getProjectGate(): ProjectGateLike | null { return this.projectGate; }
 
   constructor(
     private db: SqliteDb,
@@ -178,6 +184,7 @@ export class AgentService {
       (id) => this.getAgent(id),
       (table, column, modelColumn, rowId, text) =>
         this.scheduleEmbed(table, column, modelColumn, rowId, text),
+      () => this.projectGate,
     );
     this.feedback = new AgentFeedbackService(
       db,
@@ -987,6 +994,8 @@ export class AgentService {
     role?: AgentMessageRole;
     in_reply_to_message_id?: string;
     conversation_id?: string;
+    /** Project the letter is about (src/modules/projects). null = none. */
+    project_id?: string | null;
   }): { message: AgentOfficeInboxMessage | null; conversation_message?: AgentMessage; conversation?: AgentConversation; error?: string } {
     const from = this.getAgent(input.from_agent_id);
     const to = this.getAgent(input.to_agent_id);
@@ -1011,17 +1020,18 @@ export class AgentService {
       related_run_id: input.related_run_id ?? "",
       created_at: isoNow(),
       read_at: null,
+      project_id: input.project_id ?? null,
     };
     this.db
       .prepare(
         `INSERT INTO agent_office_inbox
-          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         msg.id, msg.flow_id, msg.from_agent_id, msg.to_agent_id,
         msg.subject, msg.body, msg.status, msg.related_run_id,
-        msg.created_at, msg.read_at,
+        msg.created_at, msg.read_at, msg.project_id,
       );
 
     // Mirror the message into a chat conversation. If the caller supplied a
@@ -1071,21 +1081,28 @@ export class AgentService {
       conversation_id: conversation?.id,
       conversation_message_id: convoMsg?.id,
       cross_office: !!(from.flow_id && to.flow_id && from.flow_id !== to.flow_id),
+      project_id: msg.project_id,
     });
     return { message: msg, conversation_message: convoMsg, conversation };
   }
 
   /** Return unread inbox messages for an agent, oldest first; with `sinceIso`,
-   *  only letters created at or after that instant. */
-  getUnreadInbox(agentId: string, limit = 20, sinceIso = ""): AgentOfficeInboxMessage[] {
+   *  only letters created at or after that instant. `projectId`: undefined →
+   *  every letter (UI, waker); null → only letters without a project; a
+   *  project → letters without one plus that project's. */
+  getUnreadInbox(agentId: string, limit = 20, sinceIso = "", projectId?: string | null): AgentOfficeInboxMessage[] {
+    const scope = projectId === undefined ? ""
+      : projectId === null ? " AND project_id IS NULL"
+      : " AND (project_id IS NULL OR project_id = ?)";
+    const params: unknown[] = [agentId, sinceIso, ...(typeof projectId === "string" ? [projectId] : []), limit];
     return this.db
       .prepare(
         `SELECT * FROM agent_office_inbox
-         WHERE to_agent_id = ? AND status = 'unread' AND created_at >= ?
+         WHERE to_agent_id = ? AND status = 'unread' AND created_at >= ?${scope}
          ORDER BY created_at ASC
          LIMIT ?`,
       )
-      .all(agentId, sinceIso, limit) as AgentOfficeInboxMessage[];
+      .all(...params) as AgentOfficeInboxMessage[];
   }
 
   /** Mark inbox messages as read. No-op if the list is empty. */
@@ -1391,13 +1408,24 @@ export class AgentService {
 
   listInbox(
     agentId: string,
-    opts?: { status?: "unread" | "read" | "archived"; limit?: number },
+    opts?: {
+      status?: "unread" | "read" | "archived";
+      limit?: number;
+      /** Same scoping as getUnreadInbox: undefined = all, null = no project, id = none + that project. */
+      projectId?: string | null;
+    },
   ): AgentOfficeInboxMessage[] {
     let sql = "SELECT * FROM agent_office_inbox WHERE to_agent_id = ?";
     const params: unknown[] = [agentId];
     if (opts?.status) {
       sql += " AND status = ?";
       params.push(opts.status);
+    }
+    if (opts?.projectId === null) {
+      sql += " AND project_id IS NULL";
+    } else if (typeof opts?.projectId === "string") {
+      sql += " AND (project_id IS NULL OR project_id = ?)";
+      params.push(opts.projectId);
     }
     sql += " ORDER BY created_at DESC";
     if (opts?.limit) {

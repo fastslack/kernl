@@ -254,6 +254,8 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_twitter_create_post",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Create a draft or queued X/Twitter post. Posts can be tweets, replies, threads, or quotes. Use 'queued' status for posts awaiting approval. Campaign metadata fields (format, signal_target, phase, campaign_anchor) are used by the Algorithm Auditor and Engagement Tracker.",
       schema: z.object({
@@ -359,6 +361,8 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_twitter_approve",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Approve a queued or draft post, changing its status to 'approved'. Approved posts are ready for publishing.",
       schema: z.object({
@@ -471,6 +475,8 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_twitter_reply_mention",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Create a reply post for a mention. Links the reply to the mention and marks the mention as replied.",
       schema: z.object({

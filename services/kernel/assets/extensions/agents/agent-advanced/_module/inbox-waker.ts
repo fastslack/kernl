@@ -54,6 +54,7 @@ export class InboxWaker {
           from_agent_id: string;
           subject: string;
           conversation_id?: string;
+          project_id?: string | null;
         };
         if (!p?.to_agent_id) return;
         void this.onInboxPost(p);
@@ -70,6 +71,7 @@ export class InboxWaker {
     from_agent_id: string;
     subject: string;
     conversation_id?: string;
+    project_id?: string | null;
   }): Promise<void> {
     const agentId = p.to_agent_id;
     if (this.inFlight.has(agentId)) return; // already evaluating
@@ -106,6 +108,7 @@ export class InboxWaker {
         inbox_message_id: p.message_id,
         conversation_id: p.conversation_id ?? "",
         from_agent_id: p.from_agent_id,
+        project_id: p.project_id ?? null,
       });
     } catch (err) {
       log.warn(`InboxWaker.onInboxPost failed: ${String(err)}`);
@@ -123,16 +126,25 @@ export class InboxWaker {
 
   /** Create + fire a run that hands `goal`/`payload` to `agent`. Shared by the
    *  per-post wake-up (onInboxPost) and the periodic sweep. */
-  private wake(agent: Agent, goal: string, payload: Record<string, unknown>): void {
+  private wake(agent: Agent, goal: string, payload: Record<string, unknown>): boolean {
     const agentId = agent.id;
     this.lastWakeAt.set(agentId, Date.now());
 
-    const run = this.service.createRun({
-      agent_id: agentId,
-      trigger_type: "event",
-      trigger_payload: payload,
-      goal,
-    });
+    // A letter about a project wakes the agent for that project; the gate in
+    // createRun refuses it when the office no longer serves the project.
+    let run;
+    try {
+      run = this.service.createRun({
+        agent_id: agentId,
+        trigger_type: "event",
+        trigger_payload: payload,
+        goal,
+        project_id: typeof payload.project_id === "string" ? payload.project_id : null,
+      });
+    } catch (err) {
+      log.debug(`InboxWaker: not waking ${agent.name} — ${err instanceof Error ? err.message : String(err)}`);
+      return false;
+    }
     this.service.updateRun(run.id, { status: "running", started_at: isoNow() });
     this.events.emit("agent.run.started", {
       run_id: run.id, agent_id: agentId, agent_name: agent.name,
@@ -166,6 +178,7 @@ export class InboxWaker {
         });
         log.error(`InboxWaker: run ${run.id} failed`, err);
       });
+    return true;
   }
 
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -217,14 +230,19 @@ export class InboxWaker {
       if (this.scheduleFiresSoon(agentId)) continue;
       const agent = this.service.getAgent(agentId);
       if (!agent) continue;
-      const unread = this.service.getUnreadInbox(agentId, 20, since);
-      if (unread.length === 0) continue;
-      this.service.bumpInboxWakeAttempts(unread.map((m) => m.id));
+      // One project per wake: the oldest letter's. The run for that project
+      // also sees letters without a project; the rest wait for the next sweep.
+      const all = this.service.getUnreadInbox(agentId, 20, since);
+      if (all.length === 0) continue;
+      const projectId = all[0].project_id ?? null;
+      const unread = all.filter((m) => (m.project_id ?? null) === projectId || (m.project_id ?? null) === null);
       const goal =
         `You have ${unread.length} unacknowledged letter(s) in your office inbox. ` +
         `Read them with kernel_agents_inbox, handle each one, and acknowledge every letter you finished ` +
         `with kernel_agents_inbox_ack. Letters you do not acknowledge will be handed to you again.`;
-      this.wake(agent, goal, { via: "inbox_sweeper", inbox_message_ids: unread.map((m) => m.id) });
+      const ids = unread.map((m) => m.id);
+      if (!this.wake(agent, goal, { via: "inbox_sweeper", inbox_message_ids: ids, project_id: projectId })) continue;
+      this.service.bumpInboxWakeAttempts(ids);
       woke++;
     }
     return woke;

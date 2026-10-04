@@ -74,6 +74,8 @@ export function redditTools(service: RedditService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_reddit_submit",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Submit a post to a subreddit. Provide either 'body' for a text post OR 'url' for a link post — not both. Will fail if account lacks karma/age for that subreddit.",
       schema: z.object({

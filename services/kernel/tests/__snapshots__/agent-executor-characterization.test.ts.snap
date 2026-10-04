@@ -102,6 +102,9 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -182,6 +185,7 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
       15,
       0.7,
       0.2,
+      null,
     ],
   ],
   [
@@ -206,6 +210,7 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
       30,
       0.7,
       0.2,
+      null,
     ],
   ],
   [
@@ -223,6 +228,7 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
       100,
       0.7,
       0.2,
+      null,
     ],
   ],
   [
@@ -423,6 +429,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "after wait",
       "run-1",
+      null,
     ],
   ],
   [
@@ -521,6 +528,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "agent_id": "agent-1",
         "confidence": 0.74,
         "content": "[auto] keep it short",
+        "project_id": null,
         "source_runs": [
           "run-1",
         ],
@@ -686,6 +694,9 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -695,6 +706,7 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
       "agent-1",
       "Hacé {{algo}}",
       15,
+      null,
     ],
   ],
   [
@@ -711,6 +723,8 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
       "agent-1",
       "Hacé {{algo}}",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -720,6 +734,8 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
       "agent-1",
       "Hacé {{algo}}",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -961,6 +977,9 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -970,6 +989,7 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
       "agent-1",
       "go",
       15,
+      null,
     ],
   ],
   [
@@ -986,6 +1006,8 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
       "agent-1",
       "go",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -995,6 +1017,8 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
       "agent-1",
       "go",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -1320,6 +1344,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "[Error] API error 503: upstream",
       "run-1",
+      null,
     ],
   ],
 ]
@@ -1427,6 +1452,9 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -1436,6 +1464,7 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
       "agent-1",
       "go",
       15,
+      null,
     ],
   ],
   [
@@ -1452,6 +1481,8 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
       "agent-1",
       "go",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -1461,6 +1492,8 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
       "agent-1",
       "go",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -1565,6 +1598,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "fallback ok",
       "run-1",
+      null,
     ],
   ],
   [
@@ -1890,6 +1924,9 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -1899,6 +1936,7 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
       "agent-1",
       "go",
       15,
+      null,
     ],
   ],
   [
@@ -1915,6 +1953,8 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
       "agent-1",
       "go",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -1924,6 +1964,8 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
       "agent-1",
       "go",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -2337,6 +2379,9 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -2346,6 +2391,7 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
       "agent-1",
       "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
       15,
+      null,
     ],
   ],
   [
@@ -2362,6 +2408,8 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
       "agent-1",
       "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -2371,6 +2419,8 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
       "agent-1",
       "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -2500,6 +2550,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "local answer",
       "run-1",
+      null,
     ],
   ],
   [
@@ -2620,6 +2671,9 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -2629,6 +2683,7 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
       "agent-1",
       "go",
       15,
+      null,
     ],
   ],
   [
@@ -2645,6 +2700,8 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
       "agent-1",
       "go",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -2654,6 +2711,8 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
       "agent-1",
       "go",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -2798,6 +2857,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "[Error] invalid request body",
       "run-1",
+      null,
     ],
   ],
   [
@@ -2850,6 +2910,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
         "agent_id": "agent-1",
         "confidence": 0.41000000000000003,
         "content": "[auto] check input",
+        "project_id": null,
         "source_runs": [
           "run-1",
         ],
@@ -3011,6 +3072,9 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -3020,6 +3084,7 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
       "agent-1",
       "go",
       15,
+      null,
     ],
   ],
   [
@@ -3036,6 +3101,8 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
       "agent-1",
       "go",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -3045,6 +3112,8 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
       "agent-1",
       "go",
       50,
+      100,
+      null,
     ],
   ],
   [
@@ -3252,6 +3321,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "[To Bob] say hi",
       "run-1",
+      null,
     ],
   ],
   [
@@ -3262,6 +3332,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "user",
       "[From Nadia] say hi",
       "run-1",
+      null,
     ],
   ],
   [
@@ -3387,6 +3458,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "assistant",
       "[To Nadia] child says hi",
       "child-run",
+      null,
     ],
   ],
   [
@@ -3397,6 +3469,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
       "user",
       "[From Bob] child says hi",
       "child-run",
+      null,
     ],
   ],
   [
@@ -3597,6 +3670,7 @@ STYLE: ALWAYS respond in English, unless the user writes to you in another langu
 parent done"
 ,
       "run-1",
+      null,
     ],
   ],
   [
@@ -3952,6 +4026,9 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
     "getUnreadInbox",
     [
       "agent-1",
+      20,
+      "",
+      null,
     ],
   ],
   [
@@ -3961,6 +4038,7 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
       "agent-1",
       "go",
       15,
+      null,
     ],
   ],
   [
@@ -3977,6 +4055,8 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
       "agent-1",
       "go",
       3,
+      30,
+      null,
     ],
   ],
   [
@@ -3986,6 +4066,8 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
       "agent-1",
       "go",
       50,
+      100,
+      null,
     ],
   ],
   [

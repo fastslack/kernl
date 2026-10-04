@@ -17,6 +17,7 @@
 </script>
 
 <script lang="ts">
+	import OfficeProjects from './OfficeProjects.svelte';
 	import { createEventDispatcher, tick } from 'svelte';
 	import { extPages } from '$lib/ext-host.js';
 	import Drawer from '$lib/components/ui/Drawer.svelte';
@@ -625,6 +626,11 @@
 			{/if}
 			{#if fields.repo?.status === 'error'}<p class="k-error" role="alert">{statusText('repo')}</p>{/if}
 			{#if repoNote}<p class="k-help">{repoNote}</p>{/if}
+		</section>
+
+		<section class="op-section">
+			<h3 class="k-section-title">Proyectos</h3>
+			<OfficeProjects flowId={office.id} leadId={agents.find((a) => a.lead)?.id ?? null} />
 		</section>
 
 		<section class="op-section">

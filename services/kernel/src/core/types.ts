@@ -50,6 +50,12 @@ export interface ToolDefinition {
    */
   sideEffects?: string[];
   /**
+   * Publishes or sends something outside Kernl (post, email, message, upload).
+   * Runs that work for a project never get these — they draft through
+   * kernel_outbox_propose and a human approves. See src/modules/projects.
+   */
+  outbound?: boolean;
+  /**
    * Static cost metadata for this tool. Optional; when present, the MCP
    * server enforces it pre-flight against any `_meta.budget` the client
    * sent, and updates rolling p50 stats post-flight (see

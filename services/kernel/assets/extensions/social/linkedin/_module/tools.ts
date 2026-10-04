@@ -83,6 +83,8 @@ export function linkedinTools(service: LinkedInService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_linkedin_post_text",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Publish a text post (optionally with an article link card) to LinkedIn. The post is published immediately as PUBLIC by default — change 'visibility' to CONNECTIONS or LOGGED_IN for narrower reach.",
       schema: z.object({
@@ -103,6 +105,8 @@ export function linkedinTools(service: LinkedInService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_linkedin_post_image",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Publish a post with an image attachment. Image must exist locally — provide absolute path. JPEG/PNG up to ~5MB recommended.",
       schema: z.object({

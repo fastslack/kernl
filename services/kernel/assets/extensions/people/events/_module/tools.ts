@@ -242,6 +242,8 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
     // ============================================================
     defineTool({
       name: "kernel_events_invite",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Invite someone to an event. Can use contact_id (from CRM) or manual name/phone.",
       schema: z.object({
@@ -260,6 +262,8 @@ export function eventsTools(service: EventsService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_events_invite_contacts",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description: "Bulk invite multiple CRM contacts to an event.",
       schema: z.object({
         event_id: z.string().describe("Event ID"),

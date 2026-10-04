@@ -188,6 +188,8 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_comms_send",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Send an existing communication draft (by id). Supports email (Gmail/Resend) and WhatsApp channels. " +
         "For email: requires configured email provider. For WhatsApp: requires WHATSAPP_ENABLED and QR pairing. " +
@@ -315,6 +317,8 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_comms_reply",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Create a reply draft from an existing communication. Automatically sets up: " +
         "Re: subject, correct recipients (sender for inbound, same recipients for outbound), " +
@@ -722,6 +726,8 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_comms_send_campaign",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Send a campaign to all pending recipients. " +
         "Each recipient gets a personalized email via the campaign's template. " +
@@ -748,6 +754,8 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_comms_request_missing_info",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Send the ONE automatic mail the office is allowed to send: ask the sender of an inbound client/gig mail " +
         "for the details a proposal needs. Fixed template, no free text, one per thread. The kernel refuses and " +

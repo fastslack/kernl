@@ -95,6 +95,8 @@ const EmailSendOutput = z.object({
 function buildEmailSend(service: CommsService): ToolDefinition {
   return defineTool({
     name: "kernel_email_send",
+    // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+    outbound: true,
     description:
       "Compose and send an email in ONE call. Replaces the legacy create→send 2-step. " +
       "Pass `to` + `subject` + `body` for a fresh email, or `reply_to_id` to reply within an existing thread. " +

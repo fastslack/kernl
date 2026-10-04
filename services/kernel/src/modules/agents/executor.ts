@@ -1,4 +1,6 @@
 import { log } from "../../core/logger.js";
+import { runWithContext } from "../../core/request-context.js";
+import { isOutboundTool } from "../../core/outbound-guard.js";
 import { isoNow } from "../../core/helpers.js";
 import { zodToJsonSchema } from "../../core/zod-to-json.js";
 import type { ToolDefinition, ToolResult } from "../../core/types.js";
@@ -84,6 +86,8 @@ const SOCIAL_TOOL_BASELINE = [
   "kernel_agents_inbox",
   "kernel_agents_inbox_ack",
   "kernel_agents_post_to_colleague",
+  // Projects: the only way a project run can get something out (as a draft).
+  "kernel_outbox_propose",
   "kernel_agents_call_meeting",
   "kernel_agents_invoke",
   "kernel_agents_subscribe_conversation",
@@ -118,6 +122,13 @@ function isProviderQuotaError(msg: string): boolean {
 /** Run-level quota check that triggers the cycle-through-all-providers retry. */
 function isQuotaErrorMessage(errorMsg: string): boolean {
   return errorMsg.includes("insufficient_quota") || errorMsg.includes("exceeded your current quota") || errorMsg.includes("credit balance") || errorMsg.includes("API error 429") || errorMsg.includes("API error 402");
+}
+
+export { OUTBOUND_NAME_RE } from "../../core/outbound-guard.js";
+
+/** A project run never sees tools that publish or send (they go through the outbox). */
+export function filterOutboundTools<T extends { name: string; outbound?: boolean }>(tools: T[], projectId: string | null): T[] {
+  return projectId ? tools.filter((t) => !isOutboundTool(t)) : tools;
 }
 
 export class AgentExecutor {
@@ -279,6 +290,7 @@ export class AgentExecutor {
         todayStr: localDate(),
         goalVector: null,
         memoryGoalSuffix: "",
+        projectId: run.project_id ?? null,
       });
       const { systemText, memoryGoalSuffix } =
         assembling instanceof Promise ? await assembling : assembling;
@@ -409,7 +421,9 @@ export class AgentExecutor {
     events: EventBus | undefined,
     depth: number,
   ): { llmTools: LlmToolDef[]; toolExecutor: ToolExecutorMap } {
-    const { llmTools, toolExecutor } = this.resolveTools(agent, service.getEmbeddingsClient());
+    const { llmTools, toolExecutor } = this.resolveTools(agent, service.getEmbeddingsClient(), {
+      projectId: run.project_id ?? null,
+    });
 
     const deniedSet = new Set(agentDeniedTools(agent));
     const invokeAllowed = !deniedSet.has("kernel_agents_invoke");
@@ -541,7 +555,7 @@ export class AgentExecutor {
 
       // Save agent response to conversational memory (only for manual/chat runs)
       if (run.trigger_type === "manual") {
-        service.addMemory(agent.id, "assistant", finalContent.slice(0, 2000), run.id);
+        service.addMemory(agent.id, "assistant", finalContent.slice(0, 2000), run.id, run.project_id ?? null);
       }
 
       // Emit flow event: run completed
@@ -593,7 +607,7 @@ export class AgentExecutor {
       recorder.recordRunFailed(errorMsg, finalContent, totalTokens);
 
       // Save error to conversational memory
-      service.addMemory(agent.id, "assistant", `[Error] ${errorMsg.slice(0, 500)}`, run.id);
+      service.addMemory(agent.id, "assistant", `[Error] ${errorMsg.slice(0, 500)}`, run.id, run.project_id ?? null);
 
       const failedResult: ExecutionResult = {
         status: "failed",
@@ -621,9 +635,16 @@ export class AgentExecutor {
     };
   }
 
-  private toolRunner(toolExecutor: ToolExecutorMap, agent: Agent) {
+  /**
+   * Every native tool call runs inside the caller's request context, exactly
+   * like an MCP call from a Claude Code agent (X-Caller-* headers). Run-scoped
+   * tools read it: kernel_outbox_propose, post_to_colleague, kernel_agents_run,
+   * call_meeting, inbox, add_learning — and the outbound guard.
+   */
+  private toolRunner(toolExecutor: ToolExecutorMap, agent: Agent, run: AgentRun, depth: number) {
+    const ctx = { callerAgentId: agent.id, callerRunId: run.id, callerDepth: depth };
     return (name: string, input: Record<string, unknown>) =>
-      this.executeTool(toolExecutor, name, { ...input, __caller_agent_id: agent.id });
+      runWithContext(ctx, () => this.executeTool(toolExecutor, name, { ...input, __caller_agent_id: agent.id }));
   }
 
   /**
@@ -683,7 +704,7 @@ export class AgentExecutor {
           model: entry.model || undefined,
           messages: llmMessages,
           tools: r.llmTools,
-          executeTool: this.toolRunner(r.toolExecutor, agent),
+          executeTool: this.toolRunner(r.toolExecutor, r.agent, r.run, r.depth),
           caller: `agent:${agent.name}`,
           budgets: this.loopBudgets(agent),
           isCancelled: () => r.runState.cancelled,
@@ -773,7 +794,7 @@ export class AgentExecutor {
           model: undefined,
           messages: [{ role: "user", content: retryGoal }],
           tools: retryTools,
-          executeTool: this.toolRunner(r.toolExecutor, agent),
+          executeTool: this.toolRunner(r.toolExecutor, r.agent, r.run, r.depth),
           caller: `agent:${agent.name}/retry`,
           budgets: this.loopBudgets(agent),
           isCancelled: () => r.runState.cancelled,
@@ -785,7 +806,7 @@ export class AgentExecutor {
           steps_count: recorder.stepNumber + retryResult.iterations,
           tokens_used: totalTokens + retryResult.totalTokens,
         };
-        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, 2000), run.id);
+        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, 2000), run.id, run.project_id ?? null);
         recorder.emit("agent:flow:run_completed", {
           status: retryExecResult.status, steps_count: retryExecResult.steps_count,
           tokens_used: retryExecResult.tokens_used,
@@ -906,6 +927,9 @@ export class AgentExecutor {
           content: `[auto] ${evalResult.lesson}`,
           confidence: finalConfidence,
           source_runs: [run.id],
+          // A lesson from a project run is that project's until proven
+          // general (spec: when in doubt, scope to the project).
+          project_id: run.project_id ?? null,
         });
         learningCreated = { id: l.id, type: l.type, content: evalResult.lesson, confidence: l.confidence };
 
@@ -1042,8 +1066,8 @@ export class AgentExecutor {
       // (pretty log emitted via writeAgentEvent from service.logEvent)
 
       // Save inter-agent conversation to both agents' memories
-      service.addMemory(sourceAgent.id, "assistant", `[To ${targetAgent.name}] ${sourceResult.result.slice(0, 1000)}`, sourceRun.id);
-      service.addMemory(targetAgent.id, "user", `[From ${sourceAgent.name}] ${sourceResult.result.slice(0, 1000)}`, sourceRun.id);
+      service.addMemory(sourceAgent.id, "assistant", `[To ${targetAgent.name}] ${sourceResult.result.slice(0, 1000)}`, sourceRun.id, sourceRun.project_id ?? null);
+      service.addMemory(targetAgent.id, "user", `[From ${sourceAgent.name}] ${sourceResult.result.slice(0, 1000)}`, sourceRun.id, sourceRun.project_id ?? null);
 
       // Fire-and-forget with optional delay
       const trigger = () => {
@@ -1125,7 +1149,11 @@ export class AgentExecutor {
 
   // ── Private helpers ─────────────────────────────────
 
-  private resolveTools(agent: Agent, embeddings: EmbeddingsClient | null = null): {
+  private resolveTools(
+    agent: Agent,
+    embeddings: EmbeddingsClient | null = null,
+    opts: { projectId: string | null } = { projectId: null },
+  ): {
     llmTools: LlmToolDef[];
     toolExecutor: Map<string, (args: unknown) => Promise<ToolResult>>;
   } {
@@ -1147,6 +1175,11 @@ export class AgentExecutor {
     if (deniedSet.size > 0) {
       filtered = filtered.filter((t) => !deniedSet.has(t.name));
     }
+
+    // A run for a project never sees tools that publish or send: it drafts
+    // through kernel_outbox_propose. Filtering here also scopes tool_search,
+    // describe, code_run and activate, which are all built from `filtered`.
+    filtered = filterOutboundTools(filtered, opts.projectId);
 
     // Convert every filtered tool to its LLM-shaped schema once. We need this
     // catalog *fully* even when progressive_discovery is on — kernel_tool_search

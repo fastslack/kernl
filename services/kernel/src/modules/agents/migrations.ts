@@ -873,6 +873,26 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE agent_flows ADD COLUMN lot_id TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    // Projects (src/modules/projects): an office can serve N projects, and a
+    // run, its memory, learnings, inbox letters and schedules belong to at
+    // most one. NULL = no project = behaviour before this migration.
+    // per_project=1 with project_id NULL marks a schedule TEMPLATE that the
+    // projects module clones once per project assigned to the office.
+    version: 51,
+    sql: `
+      ALTER TABLE agent_runs         ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_memory       ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_learnings    ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_office_inbox ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_schedules    ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_schedules    ADD COLUMN per_project INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_project      ON agent_runs(project_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_memory_project    ON agent_memory(agent_id, project_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_learnings_project ON agent_learnings(agent_id, project_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_inbox_project     ON agent_office_inbox(to_agent_id, project_id, status);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

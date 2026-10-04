@@ -52,6 +52,8 @@ export interface SystemPromptContext {
   effectiveGoal: string;
   /** YYYY-MM-DD, captured when assembly starts. */
   todayStr: string;
+  /** Project the run works for (src/modules/projects); scopes memory, learnings, inbox. */
+  projectId: string | null;
 
   // ── State filled in by earlier steps for later ones ──
   /** Goal embedding for the semantic rankers; null → lexical ranking. */
@@ -110,7 +112,7 @@ const hierarchy: SystemPromptStep = (ctx) => ctx.service.buildHierarchyBlock(ctx
 // re-inject them.
 const officeInbox: SystemPromptStep = (ctx) => {
   const { service, agent, lang, recorder } = ctx;
-  const inbox = service.getUnreadInbox(agent.id);
+  const inbox = service.getUnreadInbox(agent.id, 20, "", ctx.projectId);
   if (inbox.length === 0) return null;
   const inboxEntries = inbox.map((m) => ({
     senderName: service.getAgent(m.from_agent_id)?.name ?? m.from_agent_id,
@@ -129,6 +131,13 @@ const officeInbox: SystemPromptStep = (ctx) => {
     raw_data: { count: inbox.length, message_ids: inbox.map(m => m.id) },
   });
   return block;
+};
+
+// Project block — what project this run works for, its brief, the office's
+// settings for it, its files and accounts. Absent when the run has none.
+const projectContext: SystemPromptStep = (ctx) => {
+  if (!ctx.projectId) return null;
+  return ctx.service.getProjectGate()?.context?.(ctx.agent.flow_id ?? "", ctx.projectId)?.block ?? null;
 };
 
 // Semantic ranking gate — ONE embed of the goal serves all three rankers
@@ -160,8 +169,8 @@ const semanticRankingGate: SystemPromptStep = (ctx) => {
 const learnings: SystemPromptStep = (ctx) => {
   const { service, agent, effectiveGoal, goalVector, cosW, minS } = ctx;
   const items = goalVector
-    ? service.getRelevantLearningsByEmbedding(agent.id, effectiveGoal, goalVector, 15, cosW, minS)
-    : service.getRelevantLearnings(agent.id, effectiveGoal, 15);
+    ? service.getRelevantLearningsByEmbedding(agent.id, effectiveGoal, goalVector, 15, cosW, minS, ctx.projectId)
+    : service.getRelevantLearnings(agent.id, effectiveGoal, 15, ctx.projectId);
   return promptLearningsBlock(ctx.lang, items) || null;
 };
 
@@ -174,8 +183,8 @@ const performanceStats: SystemPromptStep = (ctx) =>
 const similarRuns: SystemPromptStep = (ctx) => {
   const { service, agent, effectiveGoal, goalVector, cosW, minS } = ctx;
   const runs = goalVector
-    ? service.findSimilarPastRunsByEmbedding(agent.id, effectiveGoal, goalVector, 3, 30, cosW, minS)
-    : service.findSimilarPastRuns(agent.id, effectiveGoal, 3);
+    ? service.findSimilarPastRunsByEmbedding(agent.id, effectiveGoal, goalVector, 3, 30, cosW, minS, ctx.projectId)
+    : service.findSimilarPastRuns(agent.id, effectiveGoal, 3, 30, ctx.projectId);
   if (runs.length === 0) return null;
   return promptSimilarRunsBlock(
     ctx.lang,
@@ -191,8 +200,8 @@ const similarRuns: SystemPromptStep = (ctx) => {
 const conversationalMemory: SystemPromptStep = (ctx) => {
   const { service, agent, effectiveGoal, goalVector, cosW, minS, lang } = ctx;
   const memory = goalVector
-    ? service.getRelevantMemoryByEmbedding(agent.id, effectiveGoal, goalVector, 50, 100, cosW, minS)
-    : service.getRelevantMemory(agent.id, effectiveGoal, 50);
+    ? service.getRelevantMemoryByEmbedding(agent.id, effectiveGoal, goalVector, 50, 100, cosW, minS, ctx.projectId)
+    : service.getRelevantMemory(agent.id, effectiveGoal, 50, 100, ctx.projectId);
   if (memory.length === 0) return null;
   // System prompt: compact summary of relevance-ranked memory (chronological).
   const summaryEntries = [...memory].reverse().map((m) => ({
@@ -236,6 +245,7 @@ export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   progressiveDiscovery,
   fleetDirectory,
   hierarchy,
+  projectContext,
   officeInbox,
   semanticRankingGate,
   learnings,
