@@ -35,6 +35,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **An empty or malformed request body is a 400** (413 when over 10 MB) on
   the HTTP API, where most routes used to answer 500. Some 500 messages now
   read `Error: …`.
+- **Issues is gone.** The Issues page, its Work menu tab, its extension and
+  the `kernel_issues_*` tools are removed from the core. Agents or scripts
+  that called those tools stop finding them. Synced issues stay in the
+  database, untouched, but nothing reads them any more.
+- **The Docker stack now starts the realtime engine (`mtw-request`) and the
+  WhatsApp bridge by default.** They no longer need `--profile torrents`, and
+  `BRIDGE_ENABLED` and `RUST_BRIDGE_ENABLED` default to `true`. A plain
+  `docker compose up` pulls two more images and creates the volumes
+  `mtw-torrents`, `mtw-whatsapp-sock` and `mtw-whatsapp-data`. Torrent
+  downloads now live in a volume, so recreating the container keeps them.
+  Set both variables to `false` to keep the old, kernel-only stack.
+- **Host folders moved to an opt-in overlay, `docker-compose.host.yml`.**
+  The default `docker-compose.yml` no longer mounts host folders into the
+  kernel (it used to mount one fixed path). If you browse a host folder with the Filesystem
+  Commander, or run `claude_code` agents on your Claude Code login (now
+  mounted read-write so the CLI can refresh its session), set
+  `KERNL_FS_ROOT` in `.env` and add `-f docker-compose.host.yml` to every
+  `docker compose` command for the stack. `HOST_HOME` now defaults to your
+  `$HOME`.
+- **Voice is on unless `VOICE_ENABLED=false`.** The default engines are local
+  and free (whisper.cpp to listen, Piper to speak). The old variables still
+  work: `VOICE_STT_PROVIDER=local-whisper` means whisper.cpp, and
+  `VOICE_TTS_PROVIDER=system` becomes `auto`. The Spanish Piper voice
+  (about 110 MB) downloads into the data volume the first time it is used.
+- **A model picked for a Claude Code agent that is not a Claude model moves
+  the agent to the kernel's own executor.** Before, the choice was saved but
+  never used, and every run failed on its first turn.
 
 ### Added
 
@@ -50,6 +77,106 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Job hunting is an extension** (`automation/job-hunter`), installed and
   active by default; its handlers keep their names, so existing agents keep
   working.
+- **The dashboard opens on the 3D world**, which is listed before Offices.
+  A new Offices tab beside it lists every office with its status. Switching
+  between the two does not reload the world.
+- **Extensions can add their own buildings to the 3D world.** An extension
+  that declares a world plugin (paid extensions included) gets a lot on the
+  floor and draws its building there.
+- **New offices are built on fixed lots.** Creating, growing or deleting an
+  office never moves another one. Free lots show a "Lot available" sign, and
+  clicking one opens the new-office wizard. An office created while the
+  world is open is built on screen: a crew raises the walls, then the agents
+  arrive at their desks. You can skip the animation.
+- **Projects.** An office can serve several products or businesses. Runs,
+  memory, learnings, letters and schedules belong to a project. In a project
+  run, tools that publish or send something write a draft to an outbox
+  instead, and nothing goes out until you approve it. Approved drafts go out
+  by email, newsletter, WhatsApp or LinkedIn. Do-not-contact flags and
+  unsubscribe links are respected. A project can connect its own data
+  through a snapshot pull and signed webhooks (`docs/project-connector-v1.md`).
+  Pending approvals show on the Work overview.
+- **Agents can search businesses on Google Maps** once a Google Places API
+  key is saved under Settings → Integrations.
+- **Talk to the Chief.** A microphone button in the chat and the Chief's
+  channel, with spoken replies you can switch on, plus voice notes on
+  Telegram. Speech recognition and voice are set up under Settings → AI →
+  Voice, with a microphone check. Speech recognition can use whisper.cpp,
+  Groq or OpenAI; the voice can be Piper, OpenAI or ElevenLabs.
+- **Connect a mailbox from Settings or the setup wizard.** The provider is
+  detected from the address, IMAP and SMTP are tested before saving, and the
+  card walks you through app passwords where the provider needs one.
+  Connected accounts are listed with sync health and unread counts, and
+  each one links to its mailbox.
+- **IMAP mail in the mail view.** Messages are decoded, HTML bodies are
+  shown with remote images blocked, and each account shows its sync status.
+  Gmail accounts are split into Primary, Updates, Promotions, Social and
+  Forums tabs.
+- **Mail triage and analysis can run on a chosen provider**
+  (`comms.llm.provider`, optional `comms.llm.model`). If that provider fails
+  or is disconnected, the default chain takes over.
+- **Link WhatsApp from Settings or the setup wizard** with a QR code or a
+  phone code. The session survives updates, so you won't be asked to scan
+  the QR again.
+- **The native packages bundle the realtime engine and the WhatsApp bridge.**
+  Linux, macOS and Windows installs (MSI and zip) supervise them as sidecars;
+  on Windows they talk over named pipes.
+- **Token usage per model, caller and day** under Settings → AI → Token
+  usage. Every model call is counted, including Claude Code subscription
+  calls and agent runs, which were not counted before. Models whose provider
+  reports no cost are priced from the LiteLLM price table.
+- **Interrupted agent runs resume.** A run that was cut off by a restart
+  picks up where it stopped. Tool calls whose result was lost are never
+  repeated; the agent is told their outcome is unknown. Older runs can be
+  resumed by hand (`kernel_agents_resume`). Automatic resumes are capped
+  (`KERNEL_AGENT_RESUME_WINDOW_MS`, `KERNEL_AGENT_MAX_AUTO_RESUMES`), so a
+  run that crashes the kernel cannot crash it on every boot. Runs also
+  record conditions (model ready, interrupted, resumed, aborted) with a
+  reason.
+- **Declarative office workspaces.** An office can declare what its home
+  folder must hold: git repos to clone, files to seed, and the MCP servers
+  and skills its Claude Code agents share (`kernel_agents_workspace_apply`).
+  The folder is brought up to that spec before each run. Existing checkouts
+  are never reset, and a run whose folder can't be prepared fails with the
+  reason.
+- **Office agents can ask the Chief.** The Chief answers what it can and
+  passes the rest to you in My Office. Agents that are not answered when a
+  colleague writes to them are woken again until they acknowledge the
+  letter.
+- **The Chief's office shows what needs you.** Failures are grouped and
+  explained, and solved ones are marked. Each one can be fixed in one click
+  or handed to the Chief. Dismissals are remembered.
+- **The Chief can file Kernl's own bugs.** Bugs show in a tab of My Office
+  with the run's context redacted. A bug becomes a GitHub issue only after
+  you approve it.
+- **Tool-permission requests show inline** in the Chief's channel and in
+  chat, with "Allow all" for the rest of the session.
+- **A reworked agent drawer.** Overview and Settings tabs sit under a
+  one-line header. The model can be switched from a chip in the header.
+  Run and stop use the same button, and the schedule is an on/off switch.
+  The mandate opens by default, rendered as markdown. Hovering a skill
+  explains it, translated by the cheapest external model.
+- **Readable LIVE and HISTORY tabs.** Each step shows the call next to its
+  result, and every row opens to its full detail. Repeated identical calls
+  fold into one "×N" entry, and failed calls are marked. When an agent acts
+  on another agent, the step shows as a card naming the recipient and the
+  outcome.
+- **The 3D world comes alive.** Letters between colleagues fly from desk to
+  desk. The Chief's commands name the agent they target. Clicking a meeting
+  table shows what the two agents there are working on.
+- **Visual changes to the 3D world.** There is an optional photographic
+  realism layer. The reception, the headquarters and the DevOps office were
+  redesigned, the lobby has matte carpet, and agents walk in through the
+  door. DevOps rack nameplates open the repo.
+- **The Social overview shows what needs attention** across mail, contacts
+  and IRC. Its menu keeps only Overview, Mail, Contacts and IRC.
+- **Extension settings can offer Kernl's mail accounts** as choices.
+- **A pending store purchase can be resumed or cancelled.** Before, closing
+  the Stripe tab left the card on "Waiting for payment" for up to 24 hours.
+- **License comes first in Settings.** A pasted license is saved in one
+  step, and a license copied from an email whose line breaks became spaces
+  is accepted.
+- **New chats start on the model you last picked in a chat.**
 
 ### Fixed
 
@@ -115,6 +242,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   usable provider): it is now always removed from the active runs.
 - **A provider's rate-limit reset of `750ms` was read as 750 minutes**, and
   so waited the 15-second cap. Milliseconds and hours are now understood.
+- **Google credentials saved from the dashboard were never read**, so
+  linking Gmail always said "credentials not configured". Saved settings
+  now apply at boot, before any module starts, and saving takes effect
+  without a restart. Real environment variables still win.
+- **Email triage failed on every batch with reasoning models.** They ran out
+  of tokens mid-thought, or a bracket in their reasoning broke parsing.
+- **The mail inbox stuck on "Loading"** after you picked an account. An
+  action the live connection doesn't know now falls back to HTTP.
+- **A rejected license replaced the one that worked.** The current license
+  now stays active when a pasted one is refused.
+- **A tool result could be labelled with the wrong tool** when one turn made
+  two calls (for example, an agent update shown as ToolSearch output).
+- **The portable Linux launcher failed when started through a symlink on
+  `PATH`.**
+- **An agent opened on the History tab from a link showed no runs.**
+- **The Chief reported to itself**, walking into My Office to deliver its
+  own report.
+- **Live agent events were shown twice**, and two parcels could be set down
+  in the same spot in the 3D world.
 
 ### Security
 
@@ -138,6 +284,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   way.
 - **comms updates wrote any column a caller named.** The service now enforces
   its own column allow-list.
+- **The Docker sandbox fails closed.** An egress allowlist or an invalid
+  network name is refused; before, it silently left the network open.
+  Sandboxed agent processes no longer inherit the kernel's environment and
+  secrets.
+- **Workspace specs reject unsafe input.** Paths outside the workspace, and
+  repo URLs or branches that git could read as options, are refused.
+- **`/api/comms/unsubscribe/` is reachable without the API token**, because
+  the people clicking unsubscribe links don't have it.
 
 ### Changed
 
@@ -148,6 +302,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in the LLM layer, one frontend library shared by the dashboard and extension
   pages, calendar sources contributed by the modules that own them, and
   generated extension entry points.
+
+### Removed
+
+- **Issues** (page, extension, tools) and the unused contacts analytics page.
+  See Upgrading.
 
 ## [0.3.2] - 2026-09-18
 
