@@ -17,7 +17,7 @@
         "label": "AI",
         "icon": "🤖",
         "order": 500,
-        "defaultView": "offices"
+        "defaultView": "agents-flow"
       }
     ],
     "navItems": [
@@ -40,7 +40,7 @@
         "group": "ai",
         "label": "Offices",
         "icon": "🏢",
-        "order": 4,
+        "order": 5,
         "path": "/agents-flow?view=offices"
       },
       {
@@ -48,7 +48,7 @@
         "group": "ai",
         "label": "3D",
         "icon": "🧊",
-        "order": 5
+        "order": 4
       },
       {
         "id": "autogenesis",
