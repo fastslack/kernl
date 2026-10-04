@@ -8,7 +8,8 @@
  * Stage order:
  *   startSidecars    → binary installs only: mtw-server + whatsapp-bridge as
  *                      supervised children (before loadConfig, which reads
- *                      RUST_BRIDGE_SOCKET; the mtw stage reads KERNEL_URL)
+ *                      RUST_BRIDGE_SOCKET; the mtw stage reads KERNEL_URL);
+ *                      mtw-server itself starts once initDatabases is done
  *   loadConfig + log level
  *   initDatabases    → sqlite, neo4j, events (+ security gates)
  *   initRegistries   → registries + ctx
@@ -59,8 +60,12 @@ export async function bootstrap(): Promise<void> {
   // ── Bundled sidecars (binary installs) ─────────────
   // Before loadConfig, not just before the mtw stage: the config object reads
   // RUST_BRIDGE_SOCKET when it is built, and the rust bridge connects in the
-  // bridges stage, ahead of mtw. No-op outside a Linux/macOS binary install.
-  const sidecars = await startSidecars(resolveSidecarDirs());
+  // bridges stage, ahead of mtw. No-op outside a binary install. mtw-server
+  // itself waits for the gate below: it reads kernel.db, which must already
+  // be open in WAL by the time it arrives (see serverGate in sidecars.ts).
+  let databaseReady!: () => void;
+  const serverGate = new Promise<void>(resolve => { databaseReady = resolve; });
+  const sidecars = await startSidecars({ ...resolveSidecarDirs(), serverGate });
 
   // ── Config + log level ─────────────────────────────
   const config = loadConfig();
@@ -74,6 +79,7 @@ export async function bootstrap(): Promise<void> {
 
   // ── 1. Databases + security gates ─────────────────
   const { sqlite, neo4j, events } = await initDatabases(config);
+  databaseReady();
 
   // ── 2. Registries + ctx ───────────────────────────
   const registries = initRegistries({ config, sqlite, neo4j, events });
