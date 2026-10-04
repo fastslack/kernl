@@ -63,7 +63,8 @@
   }
   .sidenav-item:hover { background: var(--surface-2); }
   .sidenav-item.active { background: var(--surface-3); color: var(--text-1); }
-  .sidenav-icon { font-size: 13px; flex-shrink: 0; }
+  /* Fixed width so labels line up whatever the emoji's own width. */
+  .sidenav-icon { font-size: 13px; flex-shrink: 0; width: 18px; text-align: center; }
   .sidenav-badge {
     margin-left: auto; font: 700 9px var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em;
     padding: 2px 6px; border-radius: 999px; border: 1px solid currentColor;
