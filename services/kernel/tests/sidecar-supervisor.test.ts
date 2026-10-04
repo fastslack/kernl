@@ -122,6 +122,22 @@ describe("startSidecars", () => {
     expect(existsSync(path.join(full.dataDir, "mtw/mtw.toml"))).toBe(false);
   });
 
+  it("holds mtw-server back until the kernel's database is ready", async () => {
+    const { appDir, dataDir } = fakeApp();
+    let dbReady!: () => void;
+    const serverGate = new Promise<void>(resolve => { dbReady = resolve; });
+    const sups = await startSidecars({ appDir, dataDir, env: { KERNL_BINARY_INSTALL: "1" }, platform: "linux", serverGate });
+    cleanup.push(async () => { await Promise.all(sups.map(s => s.stop())); });
+    expect(sups.length).toBe(2);
+
+    // The bridge does not touch kernel.db, so it starts right away.
+    expect(await waitFor(() => existsSync(path.join(dataDir, "bridge.env")))).toBe(true);
+    expect(await waitFor(() => existsSync(path.join(dataDir, "server.env")), 800)).toBe(false);
+
+    dbReady();
+    expect(await waitFor(() => existsSync(path.join(dataDir, "server.env")))).toBe(true);
+  });
+
   it("startSidecars renders mtw.toml and starts both", async () => {
     const { appDir, dataDir } = fakeApp();
     const env: NodeJS.ProcessEnv = { KERNL_BINARY_INSTALL: "1" };

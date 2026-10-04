@@ -77,6 +77,16 @@ export async function startSidecars(opts: {
   matchScriptArgv?: boolean;
   /** Test seam: how both children are spawned. Defaults to Bun.spawn. */
   spawnFn?: typeof Bun.spawn;
+  /**
+   * mtw-server starts once this settles. It opens kernel.db read-only and
+   * still runs `journal_mode = WAL` on it: against the empty file the kernel
+   * has just created (not WAL yet) that is a write, it fails, and on Windows
+   * the lock it held meanwhile made the kernel's migrations die with
+   * "database is locked". The bootstrap resolves it once the kernel has the
+   * database open in WAL; by then the pragma is a no-op and readers never
+   * block the writer. Omitted, the server starts right away.
+   */
+  serverGate?: Promise<unknown>;
 }): Promise<SidecarSupervisor[]> {
   const env = opts.env ?? process.env;
   const platform = opts.platform ?? process.platform;
@@ -163,14 +173,22 @@ export async function startSidecars(opts: {
   }, spawnFn);
 
   bridge.start();
-  server.start();
+  let exited = false;
+  if (opts.serverGate) {
+    void opts.serverGate.then(() => { if (!exited) server.start(); }, () => {});
+  } else {
+    server.start();
+  }
   // A clean shutdown stops both through the shutdown stage; this covers the
   // exits that skip it (a crash in a later bootstrap stage, process.exit).
   process.once("exit", () => {
+    exited = true;
     server.killNow();
     bridge.killNow();
   });
-  log.info("sidecars: whatsapp-bridge and mtw-server started");
+  log.info(opts.serverGate
+    ? "sidecars: whatsapp-bridge started; mtw-server waits for the kernel's database"
+    : "sidecars: whatsapp-bridge and mtw-server started");
   return [bridge, server];
 }
 
