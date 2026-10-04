@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-04
+
 ### Upgrading from 0.3.2
 
 - **Without `TIMEZONE`, the kernel now uses this machine's timezone**, not
@@ -180,6 +182,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A provider out of quota could stop the fallback to the next one.** When
+  the table that remembers exhausted providers could not be written, the
+  error escaped and the run failed instead of moving on; the write is now
+  best effort and the fallback continues.
+- **Claude Code could not be connected from the macOS app.** The .dmg did not
+  ship the `claude` CLI, so the sign-in step printed a bare `claude` that
+  answered "command not found", and a Pro or Max subscription could not be
+  used at all. The CLI now ships inside the app, as it already did on Windows,
+  and the sign-in command, the chat provider and the agents all run the same
+  binary.
 - **Long replies on Discord and Telegram were lost.** The platforms reject a
   message over 2000 / 4096 characters and nothing split it; replies are now
   split at paragraph, line or word boundaries, keeping code blocks intact.
