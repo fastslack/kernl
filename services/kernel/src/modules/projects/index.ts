@@ -7,6 +7,7 @@ import { ProjectsService } from "./projects-service.js";
 import { OutboxService } from "./outbox-service.js";
 import { ConnectorService } from "./connector-service.js";
 import { DraftNotifier } from "./draft-notifier.js";
+import { placesTool } from "./places.js";
 import { outboxTools, projectTools, type RunLookup, type FlowOfAgent } from "./tools.js";
 import { registerProjectsRoutes } from "./api-routes.js";
 
@@ -99,6 +100,12 @@ export function createProjectsModule(): ProjectsModule {
       }, CONNECTOR_CHECK_MS);
       connectorTimer.unref?.();
       tools.push(...projectTools(service, outbox, connector));
+      const db = ctx.sqlite;
+      tools.push(placesTool({
+        // Read live: Ajustes writes process.env and app_settings.
+        apiKey: () => process.env.GOOGLE_PLACES_API_KEY
+          ?? ((db.prepare("SELECT value FROM app_settings WHERE key = 'GOOGLE_PLACES_API_KEY'").get() as { value?: string } | undefined)?.value ?? ""),
+      }));
       const svc = service;
       const ob = outbox;
       const cn = connector;

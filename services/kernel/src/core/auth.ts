@@ -15,7 +15,7 @@ export const AUTH_EXEMPT_PATHS = ["/api/health", "/api/metrics", "/api/auth/veri
  * put the static token into a dozen image URLs per page, and so into history
  * and logs, to guard a picture of a logo.
  */
-export const AUTH_EXEMPT_PREFIXES = ["/api/extensions/brand/"];
+export const AUTH_EXEMPT_PREFIXES = ["/api/extensions/brand/", "/api/comms/unsubscribe/"];
 
 export function isAuthExemptPath(pathname: string): boolean {
   return AUTH_EXEMPT_PATHS.includes(pathname) || AUTH_EXEMPT_PREFIXES.some((p) => pathname.startsWith(p));

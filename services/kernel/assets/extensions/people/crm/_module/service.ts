@@ -16,6 +16,7 @@ const CONTACT_PATCH: Record<string, PatchColumn> = {
   linkedin_url: "text",
   x_handle: "text",
   website: "text",
+  project_id: "text",
 };
 
 const LEAD_STATUSES: ReadonlyArray<LeadStatus> = ["", "new", "drafted", "contacted", "qualified", "won", "lost"];
@@ -76,6 +77,8 @@ export class CrmService {
     linkedin_url?: string;
     x_handle?: string;
     website?: string;
+    /** Project the contact belongs to (kernel projects module). */
+    project_id?: string | null;
     /** When true (default), check phone/email and merge into the existing
      *  row instead of creating a duplicate. Exact-string matching of e.g.
      *  "+1 415 555-0142" vs "+14155550142" produces two contacts otherwise
@@ -127,6 +130,8 @@ export class CrmService {
       linkedin_url: input.linkedin_url ?? "",
       x_handle: input.x_handle ?? "",
       website: input.website ?? "",
+      project_id: input.project_id ?? null,
+      do_not_contact: 0,
       created_at: now,
       updated_at: now,
     };
@@ -134,8 +139,8 @@ export class CrmService {
     this.db
       .prepare(
         `INSERT INTO contacts (id, name, email, phone, company, relationship, notes, last_interaction,
-          lead_status, lead_source, instagram_handle, linkedin_url, x_handle, website, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          lead_status, lead_source, instagram_handle, linkedin_url, x_handle, website, project_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         contact.id, contact.name, contact.email, contact.phone,
@@ -143,7 +148,7 @@ export class CrmService {
         contact.last_interaction,
         contact.lead_status, contact.lead_source,
         contact.instagram_handle, contact.linkedin_url, contact.x_handle, contact.website,
-        contact.created_at, contact.updated_at,
+        contact.project_id, contact.created_at, contact.updated_at,
       );
 
     const graph = this.getGraph();
@@ -371,6 +376,12 @@ export class CrmService {
       .prepare(`${quiet} ORDER BY interactions DESC, last_interaction DESC LIMIT ?`)
       .all(cutoff, limit) as Array<{ id: string; name: string; company: string; relationship: string; last_interaction: string; interactions: number }>;
     return { count, items };
+  }
+
+  /** Ask (or stop asking) for a contact never to be contacted again. */
+  setDoNotContact(id: string, value: boolean): boolean {
+    const r = this.db.prepare("UPDATE contacts SET do_not_contact = ?, updated_at = ? WHERE id = ?").run(value ? 1 : 0, isoNow(), id);
+    return Number(r.changes) > 0;
   }
 
   async addRelationship(

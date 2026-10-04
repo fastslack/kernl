@@ -238,6 +238,23 @@ export function crmTools(service: CrmService): ToolDefinition[] {
       },
     }),
 
+    // ── kernel_crm_set_do_not_contact ────────────────
+    defineTool({
+      name: "kernel_crm_set_do_not_contact",
+      description:
+        "Mark a contact as 'do not contact' (they asked not to be written to again), or clear it. " +
+        "Every outbox channel (email, campaign, WhatsApp) refuses marked contacts.",
+      schema: z.object({
+        id: z.string().describe("Contact id."),
+        value: z.boolean().optional().describe("true (default) marks, false clears"),
+      }),
+      tags: ["crm", "leads", "consent"],
+      handler: async ({ id, value }) => {
+        if (!service.setDoNotContact(id, value !== false)) return errorResult(`Contact not found: ${id}`);
+        return textResult(value === false ? `Contact ${id} can be contacted again.` : `Contact ${id} will not be contacted again.`);
+      },
+    }),
+
     // ── kernel_crm_set_lead_status ───────────────────
     defineTool({
       name: "kernel_crm_set_lead_status",

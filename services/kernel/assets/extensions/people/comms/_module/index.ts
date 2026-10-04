@@ -13,6 +13,8 @@ import {
   gateToolList,
   getProviderConfig,
 } from "@kernl/extension-sdk";
+import { registerCommsChannels } from "./outbox-channels.js";
+import { applyUnsubscribe } from "./unsubscribe.js";
 import { commsMigrations } from "./migrations.js";
 import { CommsService } from "./service.js";
 import { EmailService } from "./email-service.js";
@@ -226,6 +228,14 @@ export function createCommsModule(): CommsModule {
           label: `contact: ${p?.contactName ?? ""}`,
         }).catch(() => {});
       });
+
+      // Outbox channels (projects): drafts approved in /outbox leave through here.
+      registerCommsChannels({
+        db: ctx.sqlite,
+        service: () => serviceRef,
+        notifier: ctx.notifier,
+        secret: () => ctx.config.encryption.key,
+      });
     },
 
     getTools() {
@@ -328,6 +338,16 @@ export function createCommsModule(): CommsModule {
           { url: "/api/dashboard/comms", store: "comms" },
         ],
         registerRoutes: (server) => {
+          // Unsubscribe link from outbox mails/campaigns. Public (auth.ts
+          // AUTH_EXEMPT_PREFIXES): the HMAC-signed token is the credential.
+          server.get("/api/comms/unsubscribe/:token", (req, res) => {
+            const token = (req as unknown as { params?: Record<string, string> }).params?.token ?? "";
+            const ok = !!dbRef && !!configRef && applyUnsubscribe(dbRef, token, configRef.encryption.key);
+            res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+            res.end(ok
+              ? "<!doctype html><meta charset=utf-8><p style='font-family:sans-serif'>Listo, no te vamos a escribir más.</p>"
+              : "<!doctype html><meta charset=utf-8><p style='font-family:sans-serif'>El link no es válido.</p>");
+          });
           if (dbRef && serviceRef && eventsRef) {
             registerCommsDashboardRoutes(server, dbRef, serviceRef, eventsRef);
           }
