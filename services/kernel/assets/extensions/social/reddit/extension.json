@@ -3,7 +3,7 @@
   "id": "com.kernl.reddit",
   "slug": "reddit",
   "name": "Reddit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Reddit account management + post submission + feed reading via OAuth2 (script app).",
   "author": "Kernl",

@@ -157,12 +157,28 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       // the goal_template resolve to empty strings (not left as literals).
       const resolvedTemplate = agent.goal_template ? resolveGoal(agent.goal_template, {}).trim() : "";
       const goal = str(input, "goal") || resolvedTemplate || `Execute the agent: ${agent.name}`;
-      const run = service.createRun({
-        agent_id: agent.id,
-        trigger_type: "manual",
-        goal,
-        trigger_payload: workspace ? { workspace } : undefined,
-      });
+
+      // Project the run works for (id or slug) — the office must serve it.
+      const projectRef = str(input, "project");
+      let projectId: string | null = null;
+      if (projectRef) {
+        projectId = service.getProjectGate()?.resolve(projectRef) ?? null;
+        if (!projectId) throw new HttpError(400, `Unknown project "${projectRef}"`);
+      }
+      let run;
+      try {
+        run = service.createRun({
+          agent_id: agent.id,
+          trigger_type: "manual",
+          goal,
+          trigger_payload: workspace ? { workspace } : undefined,
+          project_id: projectId,
+        });
+      } catch (err) {
+        // A project refusal is the caller's input; anything else keeps its status.
+        if (projectId) throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        throw err;
+      }
       service.updateRun(run.id, { status: "running", started_at: now() });
 
       // Run async — don't await. Both branches feed the circuit breaker: a

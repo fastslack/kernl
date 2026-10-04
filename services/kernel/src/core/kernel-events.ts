@@ -346,6 +346,25 @@ export interface KernelEvents {
 
   // Architecture 3D beams (generic, emitted by any module)
   "arch.cross_module": ArchCrossModulePayload;
+
+  // Projects (src/modules/projects): outbox drafts awaiting human approval
+  "outbox:changed": OutboxChangedPayload;
+  "outbox:rejected": OutboxRejectedPayload;
+}
+
+/** An outbox item changed state (proposed, edited, approved, sent, failed…). */
+export interface OutboxChangedPayload {
+  id: string;
+  project_id: string;
+  status: string;
+}
+
+/** The user rejected a draft with a note — becomes a project learning. */
+export interface OutboxRejectedPayload {
+  item_id: string;
+  agent_id: string;
+  project_id: string;
+  note: string;
 }
 
 /**

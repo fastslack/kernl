@@ -394,6 +394,42 @@ export async function prepareOfficeWorkspace(
   vars.__skills__ = [...new Set([...(vars.__skills__ ?? []), ...spec.skills])];
 }
 
+/**
+ * The project block for a run's prompt and the project's home dir to expose
+ * to the agent (src/modules/projects). null when the run has no project or
+ * the projects module is not wired.
+ */
+/**
+ * Which escape hatches a run gets. A run for a project must not reach the
+ * outside except through the outbox, so it drops the agent's own MCP servers
+ * and inherited user settings, and gets Bash only when the agent lists it
+ * explicitly in allowed_tools (the operator's deliberate choice). WebFetch
+ * only reads.
+ */
+export function toolPolicy(input: {
+  usingSandbox: boolean;
+  allowUnsandboxedBash: boolean;
+  allowed: ReadonlySet<string>;
+  projectRun: boolean;
+}): { includeBash: boolean; includeWebFetch: boolean; userMcpServers: boolean; inheritSettings: boolean } {
+  const { usingSandbox, allowUnsandboxedBash, allowed, projectRun } = input;
+  return {
+    includeBash: projectRun ? allowed.has("Bash") : usingSandbox || allowUnsandboxedBash || allowed.has("Bash"),
+    includeWebFetch: usingSandbox || allowed.has("WebFetch"),
+    userMcpServers: !projectRun,
+    inheritSettings: !projectRun,
+  };
+}
+
+export function projectRunContext(
+  service: AgentService,
+  agent: Agent,
+  run: { project_id: string | null },
+): { block: string; homeDir: string } | null {
+  if (!run.project_id) return null;
+  return service.getProjectGate()?.context?.(agent.flow_id ?? "", run.project_id) ?? null;
+}
+
 export class ClaudeCodeExecutor {
   private configRef: KernelConfig | null = null;
   private wsService: WorkspaceService | null = null;
@@ -501,7 +537,7 @@ export class ClaudeCodeExecutor {
       cwdResolved = cwd;
       const vars = this.parseVariables(agent);
       if (officeHomeFlow) await prepareOfficeWorkspace(service, run.id, officeHomeFlow.id, vars);
-      let systemPrompt = this.buildSystemPrompt(agent, goal, service);
+      let systemPrompt = this.buildSystemPrompt(agent, goal, service, run.project_id ?? null);
       // When the agent inherited its office home (no per-agent cwd override),
       // tell it where it is and where to persist office knowledge.
       if (officeHomeFlow) {
@@ -513,6 +549,10 @@ export class ClaudeCodeExecutor {
         const homeForAgent = this.resolveDriverSlug(vars) ? SANDBOX_WORKSPACE_PATH : cwd;
         systemPrompt += "\n\n" + officeHomeGuidance(officeHomeFlow, homeForAgent, resolveAgentLanguage(agent, this.configRef));
       }
+      // Working for a project: its block goes in the prompt and its home dir
+      // is exposed next to the cwd (additionalDirectories below).
+      const projectCtx = projectRunContext(service, agent, run);
+      if (projectCtx) systemPrompt += "\n\n" + projectCtx.block;
 
       // Default auth: if the `claude` CLI is logged in we use OAuth (the
       // user's Max/Pro subscription), so they aren't billed per token while
@@ -605,6 +645,7 @@ export class ClaudeCodeExecutor {
         mcpSocketDir,
         bridgeDir,
         ...(vars.__additional_directories__ ?? []),
+        ...(projectCtx ? [projectCtx.homeDir] : []),
       ];
       const extraAllows: string[] = [];
       for (const d of extraDirs) {
@@ -638,8 +679,8 @@ export class ClaudeCodeExecutor {
       // created agent from inheriting Bash(*) by accident.
       const allowedSet = new Set(rawAllowed);
       const allowUnsandboxedBash = process.env.KERNEL_ALLOW_UNSANDBOXED_BASH === "1";
-      const includeBash = usingSandbox || allowUnsandboxedBash || allowedSet.has("Bash");
-      const includeWebFetch = usingSandbox || allowedSet.has("WebFetch");
+      const policy = toolPolicy({ usingSandbox, allowUnsandboxedBash, allowed: allowedSet, projectRun: !!run.project_id });
+      const { includeBash, includeWebFetch } = policy;
       // The SDK's OS sandbox is bubblewrap/Seatbelt, which Windows does not
       // have; with failIfUnavailable:false the run used to carry on unsandboxed
       // without a word. It is still allowed (same Bash policy as any run with
@@ -812,7 +853,7 @@ export class ClaudeCodeExecutor {
             usingDockerSandbox: usingSandbox,
             kernelPort: this.configRef?.dashboard?.port,
           }),
-          ...sanitizeUserMcpServers(vars.__mcp_servers__),
+          ...(policy.userMcpServers ? sanitizeUserMcpServers(vars.__mcp_servers__) : {}),
         },
         additionalDirectories: extraDirs,
         // Control de herencia del user-scope (~/.claude.json + settings.json).
@@ -822,7 +863,7 @@ export class ClaudeCodeExecutor {
         // guard "Uncaught exception loop detected" del CLI → exit 1 mudo.
         // We only inherit when the agent asks for it explicitly via
         // __settings_mode__: 'inherit'.
-        settingSources: vars.__settings_mode__ === "inherit" ? ["user"] : [],
+        settingSources: policy.inheritSettings && vars.__settings_mode__ === "inherit" ? ["user"] : [],
         persistSession: false,
         pathToClaudeCodeExecutable: executableToUse,
         env: childEnv,
@@ -1010,7 +1051,7 @@ export class ClaudeCodeExecutor {
 
       if (run.trigger_type === "manual") {
         if (execResult.result) {
-          service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id);
+          service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id, run.project_id ?? null);
         } else if (execResult.status === "failed") {
           // A failed run used to write NOTHING here, and the chat panel only
           // falls back to the run row when the thread has no agent message at
@@ -1019,7 +1060,7 @@ export class ClaudeCodeExecutor {
           // had simply stopped answering. Persisting the failure like the
           // native executor does puts it in the thread, permanently, for every
           // client rather than only the tab that happened to be watching.
-          service.addMemory(agent.id, "assistant", failureNote(execResult.error), run.id);
+          service.addMemory(agent.id, "assistant", failureNote(execResult.error), run.id, run.project_id ?? null);
         }
       }
 
@@ -1108,7 +1149,7 @@ export class ClaudeCodeExecutor {
       // Same reasoning as the non-throwing failure above: without this the
       // thread stays silent and the operator has no way to learn the run died.
       if (run.trigger_type === "manual") {
-        service.addMemory(agent.id, "assistant", failureNote(msg), run.id);
+        service.addMemory(agent.id, "assistant", failureNote(msg), run.id, run.project_id ?? null);
       }
 
       const failedExecResult: ExecutionResult = {
@@ -1500,7 +1541,7 @@ export class ClaudeCodeExecutor {
     }
   }
 
-  private buildSystemPrompt(agent: Agent, goal: string, service?: AgentService): string {
+  private buildSystemPrompt(agent: Agent, goal: string, service?: AgentService, projectId: string | null = null): string {
     const lang = resolveAgentLanguage(agent, this.configRef);
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
@@ -1524,7 +1565,7 @@ export class ClaudeCodeExecutor {
     // accumulated lessons on the next run.
     if (service) {
       try {
-        const learnings = service.getRelevantLearnings(agent.id, goal, 15);
+        const learnings = service.getRelevantLearnings(agent.id, goal, 15, projectId);
         const block = promptLearningsBlock(lang, learnings);
         if (block) parts.push(block);
       } catch { /* learnings table missing in tests / fresh DB — non-fatal */ }

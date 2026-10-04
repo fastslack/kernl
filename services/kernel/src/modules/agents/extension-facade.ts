@@ -30,6 +30,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import { log } from "../../core/logger.js";
 import type { AgentsFacadeLike } from "../extensions/installer.js";
 import { computeNextCronRun } from "./cron-utils.js";
+import { kernelTimezone } from "../../sdk/clock.js";
 import { sanitizeAgentPayload } from "../../core/prompt-sanitizer.js";
 import { isFlowKind } from "./types.js";
 
@@ -62,9 +63,11 @@ interface AgentPayload {
   goal_template_i18n?: Record<string, string>;
   description_i18n?: Record<string, string>;
   /** Cron schedule(s). On reinstall all existing schedules are replaced to match. */
-  schedules?: Array<{ cron_expression: string; goal_override?: string }>;
+  /** `per_project: true` → a template the projects module clones once per
+   *  project the agent's office serves (src/modules/projects). */
+  schedules?: Array<{ cron_expression: string; goal_override?: string; per_project?: boolean }>;
   /** Convenience: single schedule (merged with `schedules`). */
-  schedule?: { cron_expression: string; goal_override?: string };
+  schedule?: { cron_expression: string; goal_override?: string; per_project?: boolean };
   __extension_id?: string;
 }
 
@@ -80,6 +83,8 @@ interface OfficePayload extends FlowPayload {
   /** Auto-debate flag for the office (maps to agent_flows.auto_debate). */
   auto_debate?: boolean;
   kind?: string;
+  /** JSON schema of the settings this office keeps per project (src/modules/projects). */
+  project_settings_schema?: Record<string, unknown>;
 }
 
 interface ChainPayload {
@@ -122,6 +127,16 @@ function resolveRankId(db: SqliteDb, slug: string): string {
     .prepare("SELECT id FROM agent_ranks WHERE LOWER(name) = ? AND active = 1")
     .get(slug.toLowerCase()) as { id: string } | undefined;
   return row?.id ?? "";
+}
+
+/**
+ * Called after a bundle replaced an office agent's schedules, so the projects
+ * module can re-clone per_project templates. Bootstrap installs it; the
+ * agents module never imports the projects module.
+ */
+let officeSchedulesChanged: ((flowId: string) => void) | null = null;
+export function setOfficeSchedulesChangedHook(fn: ((flowId: string) => void) | null): void {
+  officeSchedulesChanged = fn;
 }
 
 export class AgentsFacade implements AgentsFacadeLike {
@@ -279,12 +294,14 @@ export class AgentsFacade implements AgentsFacadeLike {
       this.db.prepare("DELETE FROM agent_schedules WHERE agent_id = ?").run(id);
       const schedNow = new Date().toISOString();
       for (const s of allSchedules) {
-        const nextRun = computeNextCronRun(s.cron_expression, "UTC");
+        // Same zone the scheduler advances in, or the first fire lands at the
+        // UTC hour ("0 7 * * *" → 04:00 in Buenos Aires) and only later ones are right.
+        const nextRun = computeNextCronRun(s.cron_expression, kernelTimezone());
         this.db
           .prepare(
             `INSERT INTO agent_schedules (id, agent_id, interval_ms, cron_expression,
-             goal_override, next_run_at, last_run_at, active, created_at)
-             VALUES (?, ?, 0, ?, ?, ?, NULL, 1, ?)`,
+             goal_override, next_run_at, last_run_at, active, created_at, per_project)
+             VALUES (?, ?, 0, ?, ?, ?, NULL, 1, ?, ?)`,
           )
           .run(
             randomUUID(),
@@ -293,8 +310,11 @@ export class AgentsFacade implements AgentsFacadeLike {
             s.goal_override ?? "",
             nextRun,
             schedNow,
+            s.per_project === true ? 1 : 0,
           );
       }
+      // The DELETE above also dropped this agent's per-project clones.
+      if (flow_id) officeSchedulesChanged?.(flow_id);
     }
 
     return id;
@@ -356,6 +376,17 @@ export class AgentsFacade implements AgentsFacadeLike {
            VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?)`,
         )
         .run(p.slug, p.name, p.description ?? "", p.color ?? "#6366f1", auto_debate, kind, sourceExtensionId, now, now);
+    }
+    if (p.project_settings_schema && typeof p.project_settings_schema === "object") {
+      // Owned by the projects module; absent in a bare agents-only DB.
+      try {
+        this.db.prepare(
+          `INSERT INTO office_project_schemas (flow_id, schema) VALUES (?, ?)
+           ON CONFLICT(flow_id) DO UPDATE SET schema = excluded.schema`,
+        ).run(p.slug, JSON.stringify(p.project_settings_schema));
+      } catch (err) {
+        log.warn(`agents: office ${p.slug} project_settings_schema not stored: ${String(err)}`);
+      }
     }
     log.info(`agents: office upserted from bundle → ${p.slug}`);
     return p.slug;

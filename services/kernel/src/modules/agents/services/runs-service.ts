@@ -4,6 +4,7 @@ import { newId, isoNow } from "../../../core/helpers.js";
 import { log } from "../../../core/logger.js";
 import { buildPatch, type PatchColumn } from "../../../sdk/query-helpers.js";
 import type { Agent, AgentRun, AgentStep, RunCondition } from "../types.js";
+import type { ProjectGateLike } from "../advanced-types.js";
 
 /** Terminal statuses: a run in one of these no longer needs its checkpoint. */
 const FINISHED: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
@@ -51,6 +52,7 @@ export class AgentRunsService {
     private events: EventBus,
     private getAgent: (id: string) => Agent | undefined,
     private scheduleEmbed: ScheduleEmbed,
+    private getProjectGate: () => ProjectGateLike | null = () => null,
   ) {}
 
   createRun(input: {
@@ -64,6 +66,8 @@ export class AgentRunsService {
     parent_agent_id?: string;
     /** 0 for top-level, parent.depth + 1 otherwise. */
     depth?: number;
+    /** Project this run works for. undefined → inherit from parent_run_id; null → none. */
+    project_id?: string | null;
   }): AgentRun {
     const now = isoNow();
 
@@ -125,6 +129,22 @@ export class AgentRunsService {
       );
     }
 
+    // 5. Project. Inherit from the parent run when not given, then require
+    //    the agent's office to serve that project. No silent fallback.
+    let projectId: string | null = input.project_id ?? null;
+    if (input.project_id === undefined && parentRunId) {
+      const parent = this.db.prepare("SELECT project_id FROM agent_runs WHERE id = ?").get(parentRunId) as
+        { project_id: string | null } | undefined;
+      projectId = parent?.project_id ?? null;
+    }
+    if (projectId) {
+      const gate = this.getProjectGate();
+      if (!gate) throw new Error(`createRun: project ${projectId} requested but the projects module is not available`);
+      const agent = this.getAgent(input.agent_id);
+      const verdict = gate.check(agent?.flow_id ?? "", projectId);
+      if (!verdict.ok) throw new Error(`createRun: ${verdict.error}`);
+    }
+
     // For chain-triggered runs, enrich payload with chain metadata and use
     // 'event' as the SQL trigger_type (CHECK constraint compatibility).
     // The TypeScript type preserves 'chain' for application-level logic.
@@ -152,20 +172,21 @@ export class AgentRunsService {
       parent_agent_id: parentAgentId,
       depth,
       conditions: "[]",
+      project_id: projectId,
     };
 
     this.db
       .prepare(
         `INSERT INTO agent_runs (id, agent_id, trigger_type, trigger_payload, goal,
          status, result, error, steps_count, tokens_used, started_at, completed_at, created_at,
-         parent_run_id, parent_agent_id, depth)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         parent_run_id, parent_agent_id, depth, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         run.id, run.agent_id, sqlTriggerType, run.trigger_payload,
         run.goal, run.status, run.result, run.error, run.steps_count,
         run.tokens_used, run.started_at, run.completed_at, run.created_at,
-        run.parent_run_id, run.parent_agent_id, run.depth,
+        run.parent_run_id, run.parent_agent_id, run.depth, run.project_id,
       );
 
     if (run.goal && run.goal.length >= 5) {

@@ -8,6 +8,7 @@
  */
 
 import { SDK_MAJOR, installedHost, setHost, type KernlHost } from "../sdk/host.js";
+import type { ProjectsHost } from "../sdk/projects.js";
 import { log } from "./logger.js";
 import { llm, createPinnedLlmClient } from "./llm/client.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./llm/logger.js";
@@ -25,6 +26,14 @@ let timezoneSource: () => string = () => "UTC";
 /** Let every copy of the SDK read the kernel's TIMEZONE setting, live. */
 export function useTimezone(get: () => string): void {
   timezoneSource = get;
+}
+
+// Bootstrap points this at the projects module once it is up; until then, none.
+let projectsSource: () => ProjectsHost | null = () => null;
+
+/** Let every copy of the SDK reach the live projects module. */
+export function useProjects(get: () => ProjectsHost | null): void {
+  projectsSource = get;
 }
 
 const kernelHost: KernlHost = Object.freeze({
@@ -46,6 +55,7 @@ const kernelHost: KernlHost = Object.freeze({
   peering: () => PeeringService.current,
   verifyPeerRequest: verifyRequest,
   timezone: () => timezoneSource(),
+  projects: () => projectsSource(),
 });
 
 /** Install the kernel host. Idempotent; warns if it displaces another host. */

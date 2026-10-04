@@ -77,6 +77,12 @@ export interface KernlHost {
    * SDK's clock then answers in UTC, as it always did.
    */
   timezone?(): string;
+  /**
+   * The projects module (projects, per-office settings, outbox). Optional so
+   * a bundle built now still runs on a kernel whose host predates it; null
+   * while the module is not running.
+   */
+  projects?(): import("./projects.js").ProjectsHost | null;
 }
 
 const HOST_KEY = Symbol.for("kernl.host");

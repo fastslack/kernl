@@ -7,7 +7,7 @@ import { promisify } from "node:util";
 import { log } from "./logger.js";
 import type { KernelConfig } from "./config.js";
 import { resolveSecureBind } from "./config.js";
-import { isAuthenticated, isAuthExemptPath, isPeerAuthenticatedPath } from "./auth.js";
+import { isAuthenticated, isAuthExemptPath, isPeerAuthenticatedPath, isWebhookPath } from "./auth.js";
 import { HttpError, isHttpError } from "../sdk/http-error.js";
 import type { Operation } from "../sdk/args.js";
 
@@ -475,7 +475,9 @@ export class KernelHttpServer {
       !isAuthExemptPath(pathname) &&
       // Peering endpoints authenticate the caller by signature instead; the
       // token gate would reject a friend before its credential is ever read.
-      !isPeerAuthenticatedPath(pathname)
+      !isPeerAuthenticatedPath(pathname) &&
+      // Project webhooks authenticate by HMAC signature (projects module).
+      !isWebhookPath(req.method ?? "", pathname)
     ) {
       if (!isAuthenticated(req, this.authToken)) {
         this.json(res, 401, { error: "Unauthorized" }, req);

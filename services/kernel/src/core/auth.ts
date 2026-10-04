@@ -100,3 +100,15 @@ export function isAuthenticated(req: IncomingMessage, token: string): boolean {
   }
   return false;
 }
+
+/**
+ * Project connector webhooks (src/modules/projects). Exempt from the token,
+ * never from authentication: the route verifies the HMAC signature itself.
+ */
+export const WEBHOOK_PREFIXES = ["/api/projects/webhook/"];
+
+/** Only `POST <prefix><slug>` — one segment, nothing below it, no other method. */
+export function isWebhookPath(method: string, pathname: string): boolean {
+  if (method !== "POST") return false;
+  return WEBHOOK_PREFIXES.some((p) => pathname.startsWith(p) && /^[^/]+$/.test(pathname.slice(p.length)));
+}

@@ -103,6 +103,8 @@ export class AgentMemoryService {
     content: string;
     confidence?: number;
     source_runs?: string[];
+    /** null/omitted = craft learning (every project); set = only for that project. */
+    project_id?: string | null;
   }): AgentLearning {
     const now = isoNow();
     const learning: AgentLearning = {
@@ -115,45 +117,58 @@ export class AgentMemoryService {
       active: 1,
       created_at: now,
       updated_at: now,
+      project_id: input.project_id ?? null,
     };
 
     this.db
       .prepare(
-        `INSERT INTO agent_learnings (id, agent_id, type, content, confidence, source_runs, active, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO agent_learnings (id, agent_id, type, content, confidence, source_runs, active, created_at, updated_at, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         learning.id, learning.agent_id, learning.type, learning.content,
         learning.confidence, learning.source_runs, learning.active,
-        learning.created_at, learning.updated_at,
+        learning.created_at, learning.updated_at, learning.project_id,
       );
 
     this.scheduleEmbed("agent_learnings", "embedding", "embedding_model", learning.id, learning.content);
     return learning;
   }
 
-  getLearnings(agentId: string): AgentLearning[] {
+  /**
+   * Which learnings a run sees: without a project only craft learnings
+   * (project_id NULL); with one, craft learnings plus that project's.
+   */
+  private learningScope(projectId: string | null): { sql: string; params: unknown[] } {
+    return projectId
+      ? { sql: "(project_id IS NULL OR project_id = ?)", params: [projectId] }
+      : { sql: "project_id IS NULL", params: [] };
+  }
+
+  getLearnings(agentId: string, projectId: string | null = null): AgentLearning[] {
+    const sc = this.learningScope(projectId);
     return this.db
-      .prepare("SELECT * FROM agent_learnings WHERE agent_id = ? AND active = 1 ORDER BY confidence DESC")
-      .all(agentId) as AgentLearning[];
+      .prepare(`SELECT * FROM agent_learnings WHERE agent_id = ? AND active = 1 AND ${sc.sql} ORDER BY confidence DESC`)
+      .all(agentId, ...sc.params) as AgentLearning[];
   }
 
   // ── Conversational Memory ─────────────────────────
 
   /** Save a message to agent's conversational memory */
-  addMemory(agentId: string, role: "user" | "assistant", content: string, runId = ""): void {
+  addMemory(agentId: string, role: "user" | "assistant", content: string, runId = "", projectId: string | null = null): void {
     const id = newId();
     this.db.prepare(
-      "INSERT INTO agent_memory (id, agent_id, role, content, run_id, created_at) VALUES (?, ?, ?, ?, ?, ?)"
-    ).run(id, agentId, role, content, runId, isoNow());
+      "INSERT INTO agent_memory (id, agent_id, role, content, run_id, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, agentId, role, content, runId, projectId, isoNow());
     this.scheduleEmbed("agent_memory", "embedding", "embedding_model", id, content);
   }
 
-  /** Get recent conversational memory for an agent (last N exchanges) */
-  getMemory(agentId: string, limit = 20): Array<{ role: string; content: string; created_at: string }> {
+  /** Get recent conversational memory for an agent (last N exchanges).
+   *  Strictly per project: null reads only memory written without one. */
+  getMemory(agentId: string, limit = 20, projectId: string | null = null): Array<{ role: string; content: string; created_at: string }> {
     return this.db
-      .prepare("SELECT role, content, created_at FROM agent_memory WHERE agent_id = ? ORDER BY created_at DESC LIMIT ?")
-      .all(agentId, limit) as Array<{ role: string; content: string; created_at: string }>;
+      .prepare("SELECT role, content, created_at FROM agent_memory WHERE agent_id = ? AND project_id IS ? ORDER BY created_at DESC LIMIT ?")
+      .all(agentId, projectId, limit) as Array<{ role: string; content: string; created_at: string }>;
   }
 
   /** Clear all memory for an agent */
@@ -168,8 +183,9 @@ export class AgentMemoryService {
     goal: string,
     limit = 20,
     pool = 100,
+    projectId: string | null = null,
   ): Array<{ role: string; content: string; created_at: string }> {
-    const recent = this.getMemory(agentId, pool);
+    const recent = this.getMemory(agentId, pool, projectId);
     return rankByRelevance(recent, goal, m => m.content, limit);
   }
 
@@ -187,14 +203,15 @@ export class AgentMemoryService {
     pool = 100,
     cosineWeight?: number,
     minScore?: number,
+    projectId: string | null = null,
   ): Array<{ role: string; content: string; created_at: string }> {
     const rows = this.db
       .prepare(
         `SELECT role, content, created_at, embedding
-         FROM agent_memory WHERE agent_id = ?
+         FROM agent_memory WHERE agent_id = ? AND project_id IS ?
          ORDER BY created_at DESC LIMIT ?`,
       )
-      .all(agentId, pool) as Array<{
+      .all(agentId, projectId, pool) as Array<{
         role: string;
         content: string;
         created_at: string;
@@ -219,14 +236,15 @@ export class AgentMemoryService {
     goal: string,
     limit = 3,
     pool = 30,
+    projectId: string | null = null,
   ): AgentRun[] {
     const recent = this.db
       .prepare(
         `SELECT * FROM agent_runs
-         WHERE agent_id = ? AND status IN ('completed', 'failed')
+         WHERE agent_id = ? AND status IN ('completed', 'failed') AND project_id IS ?
          ORDER BY created_at DESC LIMIT ?`,
       )
-      .all(agentId, pool) as AgentRun[];
+      .all(agentId, projectId, pool) as AgentRun[];
     // Match against goal text; skip runs with empty goals.
     const filtered = recent.filter(r => r.goal && r.goal.length > 0);
     return rankByRelevance(filtered, goal, r => r.goal, limit, 0.1);
@@ -241,14 +259,15 @@ export class AgentMemoryService {
     pool = 30,
     cosineWeight?: number,
     minScore?: number,
+    projectId: string | null = null,
   ): AgentRun[] {
     const rows = this.db
       .prepare(
         `SELECT *, goal_embedding FROM agent_runs
-         WHERE agent_id = ? AND status IN ('completed', 'failed')
+         WHERE agent_id = ? AND status IN ('completed', 'failed') AND project_id IS ?
          ORDER BY created_at DESC LIMIT ?`,
       )
-      .all(agentId, pool) as Array<AgentRun & { goal_embedding: Buffer | Uint8Array | null }>;
+      .all(agentId, projectId, pool) as Array<AgentRun & { goal_embedding: Buffer | Uint8Array | null }>;
     const filtered = rows
       .filter(r => r.goal && r.goal.length > 0)
       .map(r => ({ ...r, embedding: blobToVector(r.goal_embedding) }));
@@ -269,8 +288,9 @@ export class AgentMemoryService {
     agentId: string,
     goal: string,
     limit = 15,
+    projectId: string | null = null,
   ): AgentLearning[] {
-    const all = this.getLearnings(agentId);
+    const all = this.getLearnings(agentId, projectId);
     if (all.length <= limit) return all;
     // Rank by relevance; ties broken by confidence (already sorted desc by getLearnings)
     return rankByRelevance(all, goal, l => l.content, limit);
@@ -288,14 +308,16 @@ export class AgentMemoryService {
     limit = 15,
     cosineWeight?: number,
     minScore?: number,
+    projectId: string | null = null,
   ): AgentLearning[] {
+    const sc = this.learningScope(projectId);
     const rows = this.db
       .prepare(
         `SELECT *, embedding FROM agent_learnings
-         WHERE agent_id = ? AND active = 1
+         WHERE agent_id = ? AND active = 1 AND ${sc.sql}
          ORDER BY confidence DESC`,
       )
-      .all(agentId) as Array<AgentLearning & { embedding: Buffer | Uint8Array | null }>;
+      .all(agentId, ...sc.params) as Array<AgentLearning & { embedding: Buffer | Uint8Array | null }>;
     if (rows.length <= limit) return rows.map(({ embedding: _, ...rest }) => rest as AgentLearning);
     const items = rows.map(r => ({ ...r, embedding: blobToVector(r.embedding) }));
     return rankByEmbedding(items, goalVector, goal, l => l.content, limit, cosineWeight, minScore ?? 0.45)

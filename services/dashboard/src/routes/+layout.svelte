@@ -14,13 +14,14 @@
   import CommandPalette from '$lib/components/CommandPalette.svelte';
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
+  import OutboxBadge from '$lib/components/OutboxBadge.svelte';
   import ThemeSwitcher from '$lib/components/ThemeSwitcher.svelte';
   import MusicPlayer from '$lib/components/MusicPlayer.svelte';
   import MusicNavIndicator from '$lib/components/MusicNavIndicator.svelte';
   import LlmChainPill from '$lib/components/LlmChainPill.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import { initMusicBridge } from '$lib/music-bridge.js';
-  import { initLocale, t } from '$lib/i18n/index.js';
+  import { initLocale, t, locale } from '$lib/i18n/index.js';
   import { get } from 'svelte/store';
   import {
     updateInfo, updating, updateError, updateHint, updateNotice, showUpdateBanner,
@@ -120,9 +121,14 @@
   //
   // Groups and views live in separate key spaces on purpose: the id sets
   // overlap (`work` is a group AND a view inside it).
-  function labelFor(key: string, fallback: string): string {
+  function labelFor(key: string, fallback: string | Record<string, string>): string {
     const out = $t(key);
-    return out === key ? fallback : out;
+    if (out !== key) return out;
+    // A module may still hand a { locale: text } map; never print "[object Object]".
+    if (fallback && typeof fallback === 'object') {
+      return fallback[get(locale)] ?? fallback.es ?? fallback.en ?? Object.values(fallback)[0] ?? key;
+    }
+    return fallback;
   }
   $: groupLabel = (g: { id: string; label: string }) => labelFor(`nav.group.${g.id}`, g.label);
   $: viewLabel = (v: { id: string; label: string }) =>
@@ -321,7 +327,7 @@
     'notifications', 'marketplace', 'setup', 'welcome', 'login', 'chat',
     'commander', 'agents', 'agents-flow', 'workspace', 'files', 'models',
     'providers', 'memory', 'skills',
-    'autogenesis', 'issues',
+    'autogenesis',
     // Instance peering. Core, not an extension: it is how this kernel knows
     // who it is and which other instances it trusts.
     'friends',
@@ -663,6 +669,7 @@
             <span class="header-icon-badge hb-visible hb-gold">{commDrafts}</span>
           {/if}
         </button>
+        <OutboxBadge onOpen={() => navigate('outbox')} />
         <NotificationDropdown
           open={notifOpen}
           notifications={$notifications}

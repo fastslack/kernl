@@ -385,11 +385,19 @@ export function agentsTools(
         agent_id: z.string().describe("Agent ID to run"),
         goal: z.string().optional().describe("Goal override (uses agent's goal_template if not provided)"),
         variables: z.string().optional().describe("JSON object of template variables for {{var}} substitution"),
+        project: z.string().optional().describe("Project id or slug this run works for. The agent's office must serve it. Omit to inherit the caller's project."),
       }),
       handler: async (input) => {
         const agent = service.getAgent(input.agent_id);
         if (!agent) return errorResult("Agent not found");
         if (!agent.active) return errorResult("Agent is inactive");
+
+        // undefined → inherit the caller's project via parent_run_id.
+        let projectId: string | null | undefined = undefined;
+        if (input.project) {
+          projectId = service.getProjectGate()?.resolve(input.project) ?? null;
+          if (!projectId) return errorResult(`Unknown project "${input.project}".`);
+        }
 
         // Caller context propagated by the MCP HTTP server. If the caller is
         // a subprocess agent (Claude Code SDK), these are populated from
@@ -414,14 +422,20 @@ export function agentsTools(
 
         // Create run — propagate lineage so depth caps and self-recursion
         // checks at deeper layers (and observability) all work.
-        const run = service.createRun({
-          agent_id: agent.id,
-          trigger_type: "manual",
-          goal,
-          parent_run_id: callerCtx.callerRunId,
-          parent_agent_id: callerCtx.callerAgentId,
-          depth: callerCtx.callerAgentId ? callerCtx.callerDepth + 1 : 0,
-        });
+        let run;
+        try {
+          run = service.createRun({
+            agent_id: agent.id,
+            trigger_type: "manual",
+            goal,
+            parent_run_id: callerCtx.callerRunId,
+            parent_agent_id: callerCtx.callerAgentId,
+            depth: callerCtx.callerAgentId ? callerCtx.callerDepth + 1 : 0,
+            project_id: projectId,
+          });
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
 
         service.updateRun(run.id, { status: "running", started_at: isoNow() });
 
@@ -763,16 +777,20 @@ export function agentsTools(
         type: z.enum(["pattern", "avoid", "prefer", "insight"]).describe("Learning type: pattern (observed), avoid (don't do), prefer (do this), insight (general)"),
         content: z.string().describe("The learning content"),
         confidence: z.number().min(0).max(1).optional().describe("Confidence 0-1 (default: 0.7)"),
+        scope: z.enum(["general", "project"]).optional().describe("general = applies to every project; project (default when your run has a project) = only this project"),
       }),
       handler: async (input) => {
         const agent = service.getAgent(input.agent_id);
         if (!agent) return errorResult("Agent not found");
 
+        const callerRunId = getRequestContext().callerRunId;
+        const callerProject = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : null;
         const learning = service.addLearning({
           agent_id: input.agent_id,
           type: input.type,
           content: input.content,
           confidence: input.confidence ?? 0.7,
+          project_id: input.scope === "general" ? null : callerProject,
         });
 
         return textResult(`Learning added (${learning.id}): [${input.type}] ${input.content.slice(0, 100)}`);
@@ -1386,7 +1404,11 @@ export function agentsTools(
         const conversationId = input.conversation_id;
         const inReplyTo = input.in_reply_to_message_id;
 
+        // The letter belongs to the project the caller is working for.
+        const callerRunId = getRequestContext().callerRunId;
+        const callerProject = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : null;
         const result = service.postToColleague({
+          project_id: callerProject,
           from_agent_id: callerId,
           to_agent_id: toId,
           subject,
@@ -1451,7 +1473,11 @@ export function agentsTools(
 
         const status = input.status ?? "unread";
         const limit = input.limit ?? 20;
-        const messages = service.listInbox(targetId, { status, limit });
+        // Read from inside a run → only that run's project letters (and those
+        // without one). Read from outside (dashboard) → everything.
+        const callerRunId = getRequestContext().callerRunId;
+        const projectId = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : undefined;
+        const messages = service.listInbox(targetId, { status, limit, projectId });
         if (messages.length === 0) return textResult(`No ${status} messages.`);
 
         const target = service.getAgent(targetId);
@@ -1529,6 +1555,10 @@ export function agentsTools(
             context: input.context,
             rounds: input.rounds,
             urgency: input.urgency,
+            project_id: (() => {
+              const rid = getRequestContext().callerRunId;
+              return rid ? service.getRun(rid)?.project_id ?? null : null;
+            })(),
           },
           service,
           events,

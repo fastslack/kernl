@@ -89,6 +89,8 @@ export function coerceCommonZodIssues(args: unknown, issues: Array<{
 interface ToolMeta {
   tags?: string[];
   sideEffects?: string[];
+  /** Publishes/sends outside Kernl — hidden from project runs (see ToolDefinition.outbound). */
+  outbound?: boolean;
   cost?: ToolCost;
   inverse?: ToolInverse;
   outputSchema?: z.ZodType<unknown>;
@@ -164,6 +166,7 @@ export function defineTool<T extends z.ZodType>(config: ToolMeta & {
     ...(config.outputSchema ? { outputSchema: config.outputSchema } : {}),
     ...(config.tags ? { tags: config.tags } : {}),
     ...(config.sideEffects ? { sideEffects: config.sideEffects } : {}),
+    ...(config.outbound ? { outbound: true } : {}),
     ...(config.cost ? { cost: config.cost } : {}),
     ...(config.inverse ? { inverse: config.inverse } : {}),
     handler: async (args: unknown) => {

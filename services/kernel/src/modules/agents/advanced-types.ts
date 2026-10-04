@@ -64,6 +64,8 @@ export interface MeetingRequestLike {
   context?: string;
   rounds?: number;
   urgency?: string;
+  /** Project of the run that called the meeting; the meeting's run inherits it. */
+  project_id?: string | null;
 }
 
 export interface MeetingResultLike {
@@ -124,4 +126,17 @@ export interface WorkspaceEvolverLike {
   rejectCandidate(opts: Record<string, unknown>): Promise<unknown>;
   runCycle(opts: Record<string, unknown>): Promise<unknown>;
   revertTo(workspaceId: string, ref: string): Promise<unknown>;
+}
+
+/**
+ * Project gate (src/modules/projects). The agents module never imports the
+ * projects module — bootstrap registers this after both initialise.
+ */
+export interface ProjectGateLike {
+  /** Project id for an id or slug; null when unknown. */
+  resolve(idOrSlug: string): string | null;
+  /** May an agent of `flowId` run for `projectId` right now? */
+  check(flowId: string, projectId: string): { ok: true } | { ok: false; error: string };
+  /** The project block for a run's prompt plus the project's home dir. */
+  context?(flowId: string, projectId: string): { block: string; homeDir: string } | null;
 }

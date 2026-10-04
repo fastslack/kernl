@@ -170,6 +170,21 @@ export class AgentScheduler {
           // already skipped it. The schedule row stays active on purpose, so
           // reactivating the agent resumes it on the next slot.
 
+          // A project schedule only runs while its project is active and still
+          // served by the agent's office; otherwise skip this slot quietly.
+          if (schedule.project_id) {
+            const gate = this.service.getProjectGate();
+            const verdict = gate
+              ? gate.check(agent.flow_id ?? "", schedule.project_id)
+              : { ok: false as const, error: "projects module unavailable" };
+            if (!verdict.ok) {
+              log.debug(`Agent scheduler: skipping schedule ${schedule.id} — ${verdict.error}`);
+              const nextRun = this.computeNextRun(schedule.cron_expression, schedule.interval_ms);
+              this.service.updateScheduleNextRun(schedule.id, nextRun, isoNow());
+              continue;
+            }
+          }
+
           // Check if this agent has a builtin handler
           if (agent.builtin_handler && this.builtinHandlers.has(agent.builtin_handler)) {
             await this.executeBuiltin(agent, schedule);
@@ -214,6 +229,7 @@ export class AgentScheduler {
       agent_id: agent.id,
       trigger_type: "schedule",
       goal: runGoal,
+      project_id: schedule.project_id ?? null,
     });
 
     this.service.updateRun(run.id, { status: "running", started_at: startedAt });
@@ -286,6 +302,7 @@ export class AgentScheduler {
       agent_id: agent.id,
       trigger_type: "schedule",
       goal,
+      project_id: schedule.project_id ?? null,
     });
 
     this.service.updateRun(run.id, { status: "running", started_at: isoNow() });

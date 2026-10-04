@@ -50,3 +50,4 @@ export * from "./license-gate.js";
 export * from "./ranking.js";
 export * from "./cosine.js";
 export * from "./embeddings.js";
+export * from "./projects.js";

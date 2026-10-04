@@ -67,6 +67,8 @@ export function youtubeTools(service: YouTubeService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_youtube_upload",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Upload a video file to YouTube. The file must exist locally — provide an absolute path. Uses resumable upload (single-shot). Privacy defaults to 'private' for safety; change to 'public' or 'unlisted' explicitly.",
       schema: z.object({
@@ -88,6 +90,8 @@ export function youtubeTools(service: YouTubeService): ToolDefinition[] {
 
     defineTool({
       name: "kernel_youtube_update_video",
+      // Publishes/sends outside Kernl — project runs draft through the outbox instead.
+      outbound: true,
       description:
         "Update title / description / tags / privacy of an already-uploaded video on YouTube.",
       schema: z.object({

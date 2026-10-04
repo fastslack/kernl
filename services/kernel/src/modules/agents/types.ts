@@ -1,5 +1,5 @@
 /** What an office is, for the room it gets in 3D and the buttons its agents show. */
-export const FLOW_KINDS = ["general", "devops", "communications", "creative"] as const;
+export const FLOW_KINDS = ["general", "devops", "communications", "creative", "warehouse"] as const;
 export type FlowKind = (typeof FLOW_KINDS)[number];
 
 export function isFlowKind(v: unknown): v is FlowKind {
@@ -150,6 +150,8 @@ export interface AgentRun {
   depth: number;
   /** JSON array of RunCondition — what happened to the run, beyond its status. */
   conditions: string;
+  /** Project this run works for (src/modules/projects). null = none. */
+  project_id: string | null;
 }
 
 /**
@@ -202,6 +204,10 @@ export interface AgentSchedule {
   last_run_at: string | null;
   active: number;          // 0/1
   created_at: string;
+  /** Project this schedule runs for. null = none (or a per_project template). */
+  project_id: string | null;
+  /** 1 = template cloned once per project assigned to the office. */
+  per_project: number;
 }
 
 /** User feedback on a completed agent run */
@@ -226,6 +232,8 @@ export interface AgentLearning {
   active: number;          // 0/1
   created_at: string;
   updated_at: string;
+  /** null = craft learning (all projects); set = only for that project. */
+  project_id: string | null;
 }
 
 /** Immutable snapshot of an agent's system_prompt + goal_template at a point in time. */
@@ -287,6 +295,8 @@ export interface AgentOfficeInboxMessage {
   related_run_id: string;
   created_at: string;
   read_at: string | null;
+  /** Project the letter belongs to. null = none. */
+  project_id: string | null;
 }
 
 /** Generic fleet-wide conversation. Subsumes 1-to-1 chats, meetings, debates. */
