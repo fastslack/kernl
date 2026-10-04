@@ -38,7 +38,7 @@ import {
   resolveDefaultSocketPath as resolveKernelMcpSocketPath,
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
-} from "../mcp-unix-socket.js";
+} from "../../sdk/mcp-transport.js";
 import { claudeAuthEnv } from "./claude-code-auth.js";
 // Through the host, not ./call-log.js — see chat-instrumentation.ts.
 import { recordLlmCall } from "../../sdk/facades.js";
