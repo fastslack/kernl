@@ -1,9 +1,12 @@
 import { rt } from '../runtime.js';
-import { esc } from '../esc.js';
 import type { RoomInfo } from '../types.js';
 import { WALL_H } from './_shared.js';
 import { applyPBR } from './_materials.js';
 import { RoundedBoxGeometry } from 'three/examples/jsm/geometries/RoundedBoxGeometry.js';
+import {
+  tagProp, glowOnHover, canvasPanel, fitText, listPartAt, listHeight,
+  type ListLayout, type PropHit,
+} from '../wall-screen.js';
 
 /** Minimal repo descriptor used by buildDataCenterOffice to label racks +
  *  the wall directory. Comes from /api/dashboard/repos (channel: repos). */
@@ -21,29 +24,30 @@ export interface RepoBookmark {
  * style server racks against the far wall (one rack per registered repo plus
  * spares), a CRT terminal cluster on a side wall, mainframe console + tape-reel
  * cabinet + UPS + KVM + patch panel + ops chair + printout pile in the corners,
- * and a backlit "DIRECTORY" panel on the wall listing every registered repo.
+ * and a backlit "DIRECTORY" screen on the wall listing every registered repo.
+ *
+ * Nothing here floats over the room: every piece of information lives on an
+ * object (rack nameplates, the directory screen, the NOC monitors) and every
+ * action is a prop (see wall-screen.ts) — hover shows what it does, click
+ * does it.
  *
  * Repos list arrives via the `repos` arg — left empty just renders empty/dark
  * racks. Caller is expected to call `buildDataCenterOffice` again whenever the
  * registry changes (the scene rebuild path already does this on flow refresh).
  */
 export interface DataCenterHandles {
-  /** Invisible hitboxes over each FREE rack. Tag with `userData.isFreeRepoRack`
-   *  + `userData.rackIndex`. Caller pushes these into the raycaster targets
-   *  so click opens the "register a repo here" modal. */
-  freeRackHitboxes: any[];
-  /** Invisible hitbox over the NOC desk. Tagged with `userData.isDevopsTerminal`
-   *  and carrying `userData.nocAction` (the same action as the desk's title:
-   *  /devops when the extension is active, the power grid otherwise). */
-  devopsTerminalHitbox: any;
+  /** Every interactive prop in the room (racks, directory screen, NOC desk,
+   *  UPS), each tagged with `userData.prop`. The caller adds them to the
+   *  raycaster targets; hover and click go through the prop itself. */
+  props: any[];
   /** Free floor spot for the master power console (infra-power.ts): against the
    *  patch-panel wall, door side, clear of the desk grid. `face` is the unit
    *  vector the console's front (and its operator) points to. */
   powerConsoleSpot: { x: number; z: number; face: { x: number; z: number } };
 }
 
-/** What the clickable in-world titles do. Every one is optional: a label whose
- *  action is missing renders as plain (non-interactive) text. */
+/** What the room's props do. Every one is optional: a prop whose action is
+ *  missing still shows its information, it just isn't clickable. */
 export interface DataCenterActions {
   /** Open one registered repo (rack nameplate, directory row). */
   openRepo?: (repo: RepoBookmark) => void;
@@ -73,37 +77,32 @@ export function updateDataCenter(timeSec: number): void {
   }
 }
 
-// Hover/focus styles for the clickable CSS2D titles. Inline styles can't carry
-// :hover, so one stylesheet is injected the first time an office is built.
-function ensureDcStyles(): void {
-  if (typeof document === 'undefined' || document.getElementById('dc-office-css')) return;
-  const st = document.createElement('style');
-  st.id = 'dc-office-css';
-  st.textContent = `
-    .dc-click{pointer-events:auto;cursor:pointer;transition:filter .12s,box-shadow .12s;}
-    .dc-click:hover,.dc-click:focus-visible{filter:brightness(1.35);box-shadow:0 0 0 1px #ffffff40,0 0 10px #ffffff26;outline:none;}
-    .dc-row{pointer-events:auto;cursor:pointer;display:flex;gap:6px;align-items:baseline;
-      padding:1px 4px;margin:0 -4px;border-radius:2px;white-space:nowrap;}
-    .dc-row:hover,.dc-row:focus-visible{background:#ffb84a22;outline:none;}
-    .dc-row:hover .dc-go,.dc-row:focus-visible .dc-go{opacity:1;}
-    .dc-go{margin-left:auto;color:#ffb84a;opacity:.35;}
-  `;
-  document.head.appendChild(st);
+/** An invisible box the raycaster can hit. Opacity 0 rather than
+ *  `visible: false`, which the raycaster skips. */
+function hitbox(wx: number, hy: number, wz: number): any {
+  const m = new rt.THREE.Mesh(
+    new rt.THREE.BoxGeometry(wx, hy, wz),
+    new rt.THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
+  );
+  m.renderOrder = -1;
+  return m;
 }
 
-/** Wire a CSS2D element as a button: click + Enter/Space, without letting the
- *  pointer reach the canvas underneath (orbit drag, desk picking). */
-function makeClickable(el: HTMLElement, label: string, fn: () => void): void {
-  el.classList.add('dc-click');
-  el.setAttribute('role', 'button');
-  el.setAttribute('tabindex', '0');
-  el.setAttribute('aria-label', label);
-  el.title = label;
-  el.addEventListener('pointerdown', (e) => e.stopPropagation());
-  el.addEventListener('click', (e) => { e.stopPropagation(); e.preventDefault(); fn(); });
-  el.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); fn(); }
-  });
+/** Nameplate canvas: repo name in amber, branch in green underneath. */
+function drawNameplate(g: CanvasRenderingContext2D, w: number, h: number, name: string, branch?: string): void {
+  g.fillStyle = '#0a0806'; g.fillRect(0, 0, w, h);
+  g.strokeStyle = '#ffb84a66'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, w - 3, h - 3);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillStyle = '#ffb84a';
+  g.shadowColor = '#ffb84a'; g.shadowBlur = 8;
+  g.font = `700 ${branch ? 30 : 36}px Syne, sans-serif`;
+  g.fillText(fitText(g, name.toUpperCase(), w - 20), w / 2, branch ? h * 0.36 : h / 2);
+  if (branch) {
+    g.shadowColor = '#4cff7a'; g.fillStyle = '#4cff7a';
+    g.font = `600 22px 'IBM Plex Mono', monospace`;
+    g.fillText(fitText(g, branch, w - 20), w / 2, h * 0.74);
+  }
+  g.shadowBlur = 0;
 }
 
 export function buildDataCenterOffice(
@@ -112,9 +111,8 @@ export function buildDataCenterOffice(
   repos: RepoBookmark[] = [],
   actions: DataCenterActions = {},
 ): DataCenterHandles {
-  const freeRackHitboxes: any[] = [];
+  const props: any[] = [];
   blinkMats = [];
-  ensureDcStyles();
   const { cx, cz, w, d, color } = room;
   const dd = room.doorDir || (room.side === 1 ? 'top' : 'bottom');
   const accent = new rt.THREE.Color(color);
@@ -174,8 +172,8 @@ export function buildDataCenterOffice(
   //  - vented black front insert
   //  - 6×3 LED grid (green / amber, sparse red) — DARK on empty racks
   //  - vertical brand stripe in the flow accent colour
-  //  - amber backlit nameplate at the top
-  //  - CSS2D floating label with the repo name (or "FREE" placeholder)
+  //  - amber backlit nameplate at the top, the repo's name + branch drawn on it
+  //  - a hitbox: occupied → open that repo, free → register one
   const isX = farWall.id === 'top' || farWall.id === 'bottom';
   const wallLen = isX ? w : d;
   const usableLen = Math.max(2, wallLen - 2.6);
@@ -295,46 +293,43 @@ export function buildDataCenterOffice(
       rz + (isX ? -farWall.nz * (rackD / 2 + 0.025) : 0),
     );
     scene.add(nameplate);
-    // Invisible hitbox over the whole rack — only for FREE racks so that
-    // click → register-repo modal. Occupied racks open a future repo-detail
-    // modal eventually (TODO); for now only FREE is wired.
-    if (!occupied) {
-      const hbGeo = isX
-        ? new rt.THREE.BoxGeometry(rackW + 0.05, rackH + 0.2, rackD + 0.2)
-        : new rt.THREE.BoxGeometry(rackD + 0.2, rackH + 0.2, rackW + 0.05);
-      const hb = new rt.THREE.Mesh(hbGeo, new rt.THREE.MeshBasicMaterial({ visible: false }));
-      hb.position.set(rx, rackBaseY + rackH / 2 + 0.05, rz);
-      hb.userData.isFreeRepoRack = true;
-      hb.userData.rackIndex = i;
-      scene.add(hb);
-      freeRackHitboxes.push(hb);
-    }
-    // Nameplate over each OCCUPIED rack: repo name + branch, click → that repo.
-    // Free racks carry no label of their own (a dozen "FREE" tags stacked into
-    // an unreadable staircase); one chip for the whole free run goes below.
-    if (occupied && rt.CSS2DObject) {
-      const labelDiv = document.createElement('div');
-      const nm = repo!.name.toUpperCase();
-      labelDiv.innerHTML = `${esc(nm.length > 14 ? nm.slice(0, 13) + '…' : nm)}`
-        + (repo!.default_branch ? `<span style="color:#4cff7a;font-weight:600;margin-left:5px">${esc(repo!.default_branch)}</span>` : '');
-      labelDiv.style.cssText = `font:700 9px 'Syne',sans-serif;color:#ffb84a;letter-spacing:1.5px;
-           text-shadow:0 0 6px #ffb84a80;background:rgba(0,0,8,0.82);
-           padding:2px 7px;border-radius:2px;border:1px solid #ffb84a55;
-           pointer-events:none;white-space:nowrap;`;
-      if (actions.openRepo) {
-        const r = repo!;
-        makeClickable(labelDiv, `Open repo ${r.name}${r.path ? ` · ${r.path}` : ''}`, () => actions.openRepo!(r));
-      } else {
-        labelDiv.title = `${repo!.name} · ${repo!.path ?? ''}`;
-      }
-      const lbl = new rt.CSS2DObject(labelDiv);
-      lbl.position.set(
-        rx + (isX ? 0 : -farWall.nx * 0.05),
-        rackBaseY + rackH + 0.18,
-        rz + (isX ? -farWall.nz * 0.05 : 0),
+    // The repo's name on the rack itself, where a floating tag used to be:
+    // it reads when you look at the rack and stays out of the way otherwise.
+    const glowMats: any[] = [nameplate.material];
+    if (occupied) {
+      const plate = canvasPanel(rackW - 0.16, 0.24, 256, 96);
+      if (plate.g) drawNameplate(plate.g, 256, 96, repo!.name, repo!.default_branch);
+      plate.refresh();
+      // Same face as the rack's front insert, LEDs and backing plate (offset
+      // along -farWall normal, like them), just proud of the backing plate.
+      plate.mesh.position.set(
+        rx - farWall.nx * (rackD / 2 + 0.04),
+        rackBaseY + rackH - 0.2,
+        rz - farWall.nz * (rackD / 2 + 0.04),
       );
-      scene.add(lbl);
+      plate.mesh.rotation.y = Math.atan2(-farWall.nx, -farWall.nz);
+      scene.add(plate.mesh);
+      glowMats.push(plate.mat);
     }
+    const hb = isX ? hitbox(rackW, rackH + 0.2, rackD + 0.2) : hitbox(rackD + 0.2, rackH + 0.2, rackW);
+    hb.position.set(rx, rackBaseY + rackH / 2 + 0.05, rz);
+    const glowPlate = glowOnHover(glowMats.slice(1));
+    const r = repo;
+    tagProp(hb, {
+      tip: () => r
+        ? `${r.name}${r.default_branch ? ` · ${r.default_branch}` : ''}${actions.openRepo ? ' — open repo' : ''}`
+        : (actions.registerRepo ? 'Free rack — register a repo' : 'Free rack'),
+      click: r
+        ? (actions.openRepo ? () => actions.openRepo!(r) : undefined)
+        : actions.registerRepo,
+      hover: (on) => {
+        // Free racks have only the dim backing plate; light it up instead.
+        nameplate.material.emissiveIntensity = on ? 0.6 : (occupied ? 0.35 : 0.12);
+        glowPlate(on);
+      },
+    });
+    scene.add(hb);
+    props.push(hb);
   }
 
   // Unit vector along the rack row, and the room-facing normal of the far wall.
@@ -343,23 +338,6 @@ export function buildDataCenterOffice(
   const rowPoint = (along: number, out: number, y: number) => new rt.THREE.Vector3(
     farWall.midX + rowAxis.x * along + farN.x * out, y, farWall.midZ + rowAxis.z * along + farN.z * out,
   );
-
-  // One chip for the whole run of free racks: "+N free racks · register".
-  const freeCount = rackCount - Math.min(repos.length, rackCount);
-  if (freeCount > 0 && rt.CSS2DObject) {
-    const firstFree = rackCount - freeCount;
-    const midOff = -rackTotalW / 2 + ((firstFree + rackCount) / 2) * rackW;
-    const chip = document.createElement('div');
-    chip.innerHTML = `<span style="color:#4cff7a">＋</span> ${freeCount} FREE RACK${freeCount === 1 ? '' : 'S'}`
-      + (actions.registerRepo ? ` <span style="color:#7a8396">· register a repo</span>` : '');
-    chip.style.cssText = `font:700 9px 'Syne',sans-serif;color:#c8ccd6;letter-spacing:1.5px;
-      background:rgba(0,0,8,0.78);padding:3px 9px;border-radius:2px;border:1px dashed #4cff7a55;
-      pointer-events:none;white-space:nowrap;`;
-    if (actions.registerRepo) makeClickable(chip, 'Register a repo in a free rack', actions.registerRepo);
-    const chipObj = new rt.CSS2DObject(chip);
-    chipObj.position.copy(rowPoint(midOff, rackD / 2, rackBaseY + rackH + 0.2));
-    scene.add(chipObj);
-  }
 
   // ── 1b. COLD AISLE — perforated raised-floor tiles + hazard line ──
   // Canvas textures, built once per office: a perforated tile grid in front of
@@ -685,17 +663,9 @@ export function buildDataCenterOffice(
   upsBtn.rotation.x = Math.PI / 2;
   upsBtn.position.set(upsX + 0.25, 0.7, upsZ + 0.31);
   scene.add(upsBtn);
-  // "UPS / BATTERY" label
-  if (rt.CSS2DObject) {
-    const lDiv = document.createElement('div');
-    lDiv.textContent = 'UPS';
-    lDiv.style.cssText = `font:700 9px 'Syne',sans-serif;color:#ffb84a;letter-spacing:2px;
-      text-shadow:0 0 4px #ffb84a80;background:rgba(0,0,0,0.6);padding:1px 4px;
-      pointer-events:none;`;
-    const lbl = new rt.CSS2DObject(lDiv);
-    lbl.position.set(upsX, 1.65, upsZ);
-    scene.add(lbl);
-  }
+  // Named on hover rather than by a floating "UPS" tag. Nothing to click.
+  tagProp(upsBody, { tip: () => 'UPS · battery backup' });
+  props.push(upsBody);
 
   // ── 6. PATCH PANEL on the wall next to the terminal desk ───────
   // A 3-row patch panel with little dotted ports + a tangle of patch
@@ -844,78 +814,111 @@ export function buildDataCenterOffice(
     scene.add(perf);
   }
 
-  // ── 9. WALL "DIRECTORY" PANEL — backlit list of all registered repos ──
-  // Anchored INSIDE the room on the side wall that holds the patch panel
-  // (sideWallIds[1]) at chest+head height so it reads as a wall-mounted
-  // print-out, NOT as a second title competing with the room's door sign.
-  // Header trimmed to "DIRECTORY" (no "REPOS" prefix) for the same reason —
-  // the door sign already shouts "REPOS OFFICE" loud enough.
-  if (rt.CSS2DObject) {
-    // Every line is a way in: header → the registry, a row → that repo,
-    // footer → register one more. Built as DOM nodes (not one innerHTML blob)
-    // so each row carries its own handler.
+  // ── 9. WALL "DIRECTORY" SCREEN — backlit list of all registered repos ──
+  // Mounted on the inside face of the terminal wall, above the CRT desk, at
+  // head height. Drawn on a canvas, so it's part of the wall rather than a
+  // floating title over it. Every line is a way in: header → the registry, a
+  // row → that repo, "…more" → the registry, footer → register one more. The
+  // raycast UV says which line was hit (listPartAt).
+  {
     const MAX_ROWS = 8;
-    const dirDiv = document.createElement('div');
-    dirDiv.style.cssText = `background:rgba(0,0,8,0.85);padding:6px 10px;border-radius:3px;
-      border:1px solid #ffb84a35;box-shadow:0 0 14px #ffb84a20, inset 0 0 5px #1a1410;
-      min-width:160px;max-width:240px;pointer-events:none;
-      font:600 9px 'IBM Plex Mono',monospace;color:#c8b48a;line-height:1.5;letter-spacing:0.5px;`;
-    const head = document.createElement('div');
-    head.innerHTML = `DIRECTORY <span style="color:#7a7a7a;letter-spacing:1px">· ${repos.length} repo${repos.length === 1 ? '' : 's'}</span>`
-      + (actions.openRepos ? ` <span class="dc-go" style="opacity:.7">›</span>` : '');
-    head.style.cssText = `font:700 9px 'Syne',sans-serif;color:#ffb84a;letter-spacing:2.5px;
-      text-shadow:0 0 6px #ffb84a80;border-bottom:1px solid #ffb84a30;
-      padding-bottom:2px;margin-bottom:4px;text-align:center;`;
-    if (actions.openRepos) makeClickable(head, 'Open the repo registry', actions.openRepos);
-    dirDiv.appendChild(head);
-    if (repos.length === 0) {
-      const empty = document.createElement('div');
-      empty.innerHTML = '<em style="color:#5a5a5a">(empty registry)</em>';
-      dirDiv.appendChild(empty);
-    }
-    for (const r of repos.slice(0, MAX_ROWS)) {
-      const row = document.createElement('div');
-      const br = r.default_branch ? `<span style="color:#4cff7a">[${esc(r.default_branch)}]</span>` : '';
-      const lang = r.language ? `<span style="color:#7a7a7a">${esc(r.language)}</span>` : '';
-      row.innerHTML = `<span style="color:#ffb84a">${esc(r.name)}</span>${br}${lang}`
-        + (actions.openRepo ? `<span class="dc-go">›</span>` : '');
-      if (actions.openRepo) {
-        row.className = 'dc-row';
-        row.setAttribute('role', 'button');
-        row.setAttribute('tabindex', '0');
-        row.title = `Open ${r.name}${r.path ? ` · ${r.path}` : ''}`;
-        const go = () => actions.openRepo!(r);
-        row.addEventListener('pointerdown', (e) => e.stopPropagation());
-        row.addEventListener('click', (e) => { e.stopPropagation(); go(); });
-        row.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); go(); } });
-      } else {
-        row.style.cssText = 'display:flex;gap:6px;white-space:nowrap;';
-      }
-      dirDiv.appendChild(row);
-    }
+    type Line = { text: string; branch?: string; lang?: string; dim?: boolean; go?: () => void; tip: string };
+    const lines: Line[] = repos.slice(0, MAX_ROWS).map((r) => ({
+      text: r.name, branch: r.default_branch, lang: r.language,
+      go: actions.openRepo ? () => actions.openRepo!(r) : undefined,
+      tip: `${r.name}${r.path ? ` · ${r.path}` : ''}${actions.openRepo ? ' — open repo' : ''}`,
+    }));
+    if (repos.length === 0) lines.push({ text: '(empty registry)', dim: true, tip: 'No repos registered yet' });
     if (repos.length > MAX_ROWS) {
-      const more = document.createElement('div');
-      more.innerHTML = `<span style="color:#7a7a7a">…+${repos.length - MAX_ROWS} more</span>`;
-      if (actions.openRepos) makeClickable(more, 'See every registered repo', actions.openRepos);
-      dirDiv.appendChild(more);
+      lines.push({ text: `…+${repos.length - MAX_ROWS} more`, dim: true, go: actions.openRepos, tip: 'See every registered repo' });
     }
-    if (actions.registerRepo) {
-      const add = document.createElement('div');
-      add.innerHTML = '<span style="color:#4cff7a">＋</span> register a repo';
-      add.style.cssText = 'margin-top:4px;padding-top:3px;border-top:1px dashed #ffb84a25;color:#9aa3b5;';
-      makeClickable(add, 'Register a repo', actions.registerRepo);
-      dirDiv.appendChild(add);
+    const W = 480;
+    const geom = { pad: 16, headerH: 52, rowH: 38, rows: lines.length, footerH: actions.registerRepo ? 44 : 0 };
+    const layout: ListLayout = { ...geom, height: listHeight(geom) };
+    const pxPerM = W / 1.5;
+    const screen = canvasPanel(1.5, layout.height / pxPerM, W, layout.height);
+    const g = screen.g;
+    if (g) {
+      g.fillStyle = '#05040a'; g.fillRect(0, 0, W, layout.height);
+      g.strokeStyle = '#ffb84a55'; g.lineWidth = 3; g.strokeRect(1.5, 1.5, W - 3, layout.height - 3);
+      g.textBaseline = 'middle';
+      // Header
+      const hy = layout.pad + layout.headerH / 2;
+      g.textAlign = 'center';
+      g.font = `700 26px Syne, sans-serif`;
+      g.fillStyle = '#ffb84a'; g.shadowColor = '#ffb84a'; g.shadowBlur = 10;
+      g.fillText(`DIRECTORY${actions.openRepos ? '  ›' : ''}`, W / 2, hy - 6);
+      g.shadowBlur = 0;
+      g.font = `500 15px 'IBM Plex Mono', monospace`;
+      g.fillStyle = '#8a8170';
+      g.fillText(`${repos.length} repo${repos.length === 1 ? '' : 's'}`, W / 2, hy + 16);
+      g.fillStyle = '#ffb84a40';
+      g.fillRect(layout.pad, layout.pad + layout.headerH - 2, W - layout.pad * 2, 2);
+      // Rows
+      g.textAlign = 'left';
+      lines.forEach((ln, i) => {
+        const y = layout.pad + layout.headerH + i * layout.rowH + layout.rowH / 2;
+        let x = layout.pad + 6;
+        g.font = `600 20px 'IBM Plex Mono', monospace`;
+        g.fillStyle = ln.dim ? '#7a7a7a' : '#ffb84a';
+        const name = fitText(g, ln.text, W * 0.5);
+        g.fillText(name, x, y);
+        x += g.measureText(name).width + 10;
+        if (ln.branch) {
+          g.fillStyle = '#4cff7a';
+          const br = fitText(g, `[${ln.branch}]`, W - x - 90);
+          g.fillText(br, x, y);
+          x += g.measureText(br).width + 10;
+        }
+        if (ln.lang && x < W - 90) {
+          g.font = `500 16px 'IBM Plex Mono', monospace`;
+          g.fillStyle = '#7a7a7a';
+          g.fillText(fitText(g, ln.lang, W - x - 40), x, y);
+        }
+        if (ln.go) {
+          g.textAlign = 'right'; g.fillStyle = '#ffb84a99'; g.font = `600 20px 'IBM Plex Mono', monospace`;
+          g.fillText('›', W - layout.pad - 6, y);
+          g.textAlign = 'left';
+        }
+      });
+      // Footer
+      if (layout.footerH > 0) {
+        const fy = layout.pad + layout.headerH + lines.length * layout.rowH;
+        g.setLineDash([6, 5]); g.strokeStyle = '#ffb84a40'; g.lineWidth = 1.5;
+        g.beginPath(); g.moveTo(layout.pad, fy + 3); g.lineTo(W - layout.pad, fy + 3); g.stroke();
+        g.setLineDash([]);
+        g.font = `600 18px 'IBM Plex Mono', monospace`;
+        g.fillStyle = '#4cff7a'; g.fillText('＋', layout.pad + 6, fy + layout.footerH / 2 + 2);
+        g.fillStyle = '#9aa3b5'; g.fillText('register a repo', layout.pad + 32, fy + layout.footerH / 2 + 2);
+      }
     }
-    const dirLbl = new rt.CSS2DObject(dirDiv);
-    // Head-height, pushed slightly INSIDE the room so it attaches to the
-    // inside wall face, above the CRT terminal desk: the patch-panel wall now holds the ops
-    // corner (NOC desk + power console) and its readout would sit on top.
-    dirLbl.position.set(
-      terminalWall.midX + terminalWall.nx * 0.15,
+    screen.refresh();
+    screen.mesh.position.set(
+      terminalWall.midX + terminalWall.nx * 0.04,
       WALL_H * 0.72,
-      terminalWall.midZ + terminalWall.nz * 0.15,
+      terminalWall.midZ + terminalWall.nz * 0.04,
     );
-    scene.add(dirLbl);
+    screen.mesh.rotation.y = Math.atan2(terminalWall.nx, terminalWall.nz);
+    const partOf = (hit: PropHit) => (hit.uv ? listPartAt(layout, hit.uv.y) : null);
+    tagProp(screen.mesh, {
+      tip: (hit) => {
+        const part = partOf(hit);
+        if (!part) return 'Repo directory';
+        if (part.kind === 'header') return actions.openRepos ? 'Open the repo registry' : 'Repo directory';
+        if (part.kind === 'footer') return 'Register a repo';
+        return lines[part.index]?.tip ?? null;
+      },
+      click: (hit) => {
+        const part = partOf(hit);
+        if (!part) return;
+        if (part.kind === 'header') actions.openRepos?.();
+        else if (part.kind === 'footer') actions.registerRepo?.();
+        else lines[part.index]?.go?.();
+      },
+      hover: glowOnHover([screen.mat], 1.2),
+    });
+    scene.add(screen.mesh);
+    props.push(screen.mesh);
   }
 
   // ── 11. SIGNAGE LIGHTBOX above the rack row ────────────────────
@@ -985,16 +988,27 @@ export function buildDataCenterOffice(
     side.position.set(lx, 0.37, 0);
     noc.add(side);
   }
-  // Monitor screens: a small dashboard drawn once on a canvas — status
-  // header, a latency sparkline and a row of build bars.
+  // What the desk is for — the DevOps panel when its extension is active, the
+  // power grid otherwise; something real either way, never a dead link. It
+  // is written on the monitors' title bar instead of floating over the desk.
+  const nocAction = actions.openDevops ?? actions.openPowerGrid;
+  const [nocTitle, nocTip] = actions.openDevops
+    ? ['DEVOPS CONSOLE', 'DevOps console — deploys · containers · logs']
+    : ['OPS CONSOLE', 'Ops console — power grid of every office'];
+  // Monitor screens: a small dashboard drawn once on a canvas — title bar,
+  // a latency sparkline and a row of build bars. Drawn at 2× for a legible title.
   const screenTex = (() => {
     const c = document.createElement('canvas');
-    c.width = 128; c.height = 72;
+    c.width = 256; c.height = 144;
     const g = c.getContext('2d');
     if (g) {
+      g.scale(2, 2);
       g.fillStyle = '#060a14'; g.fillRect(0, 0, 128, 72);
-      g.fillStyle = '#' + accent.getHexString(); g.fillRect(0, 0, 128, 9);
-      g.fillStyle = '#0b1222'; g.fillRect(4, 13, 120, 30);
+      g.fillStyle = '#' + accent.getHexString(); g.fillRect(0, 0, 128, 14);
+      g.fillStyle = '#ffffff'; g.font = `700 8px Syne, sans-serif`;
+      g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.fillText(nocTitle, 64, 7.5);
+      g.fillStyle = '#0b1222'; g.fillRect(4, 17, 120, 26);
       g.strokeStyle = '#4cff7a'; g.lineWidth = 1.5; g.beginPath();
       for (let k = 0; k <= 24; k++) {
         const yy = 32 - Math.sin(k * 0.7) * 7 - (hash(k, 3) % 6);
@@ -1010,7 +1024,7 @@ export function buildDataCenterOffice(
     return new rt.THREE.CanvasTexture(c);
   })();
   const bezelMat2 = new rt.THREE.MeshStandardMaterial({ color: 0x0a0d16, roughness: 0.5 });
-  const screenMat = new rt.THREE.MeshBasicMaterial({ map: screenTex });
+  const screenMat = new rt.THREE.MeshBasicMaterial({ map: screenTex, toneMapped: false });
   for (const [mx, rotY] of [[-0.68, 0.32], [0, 0], [0.68, -0.32]] as const) {
     const mon = new rt.THREE.Group();
     mon.position.set(mx, 1.2, -0.22 + Math.abs(mx) * 0.12);
@@ -1056,32 +1070,12 @@ export function buildDataCenterOffice(
   const dvGlow = new rt.THREE.PointLight(accent, 1.4, 3.5);
   dvGlow.position.set(dvx + opsN.x * 0.6, 1.4, dvz + opsN.z * 0.6);
   scene.add(dvGlow);
-  // Invisible hitbox over the whole workstation → click routes to /devops.
-  const dvTerm = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(2.2, 1.7, 1.0), new rt.THREE.MeshBasicMaterial({ visible: false }));
+  // Hitbox over the whole workstation: hover names it, click opens it.
+  const dvTerm = hitbox(2.2, 1.7, 1.0);
   dvTerm.position.set(0, 0.85, 0);
-  dvTerm.userData.isDevopsTerminal = true;
+  tagProp(dvTerm, { tip: () => nocTip, click: nocAction, hover: glowOnHover([screenMat], 1.3) });
   noc.add(dvTerm);
-  // Title + action depend on whether the DevOps panel exists: with the
-  // extension it's the way into /devops, without it the desk shows the
-  // power grid — something real either way, never a dead link.
-  const nocAction = actions.openDevops ?? actions.openPowerGrid;
-  dvTerm.userData.nocAction = nocAction;
-  if (rt.CSS2DObject) {
-    const dvEl = document.createElement('div');
-    const [nocTitle, nocSub, nocAria] = actions.openDevops
-      ? ['⌘ DEVOPS CONSOLE', 'deploys · containers · logs', 'Open the DevOps control panel']
-      : ['⌘ OPS CONSOLE', 'power grid of every office', 'Show / hide the power grid of every office'];
-    dvEl.innerHTML = `<div style="font:700 10px 'Syne',sans-serif;letter-spacing:2px;color:#fff">${nocTitle}</div>`
-      + `<div style="font:600 8px 'IBM Plex Mono',monospace;color:#aab4d4;letter-spacing:.5px;margin-top:1px">`
-      + `${nocSub}${nocAction ? ' <span style="color:#fff">›</span>' : ''}</div>`;
-    dvEl.style.cssText = `background:linear-gradient(180deg,#${accent.getHexString()}e6,rgba(10,13,24,.92));
-      padding:4px 10px 5px;border-radius:3px;border:1px solid #${accent.getHexString()};
-      box-shadow:0 0 12px #${accent.getHexString()}66;white-space:nowrap;text-align:center;pointer-events:none;`;
-    if (nocAction) makeClickable(dvEl, nocAria, nocAction);
-    const dvLbl = new rt.CSS2DObject(dvEl);
-    dvLbl.position.set(dvx, 1.95, dvz);
-    scene.add(dvLbl);
-  }
+  props.push(dvTerm);
 
   // Power console spot — same wall, toward the door, in front of the patch
   // panel's neighbour. Pulled 1.7 off the wall so its operator stands clear.
@@ -1111,5 +1105,5 @@ export function buildDataCenterOffice(
     scene.add(sign);
   }
 
-  return { freeRackHitboxes, devopsTerminalHitbox: dvTerm, powerConsoleSpot };
+  return { props, powerConsoleSpot };
 }
