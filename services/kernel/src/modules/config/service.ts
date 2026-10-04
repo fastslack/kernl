@@ -333,6 +333,17 @@ const SETTING_CATALOG: SettingDef[] = [
     sensitive: true,
     applyToConfig: (v, c) => { c.resend.apiKey = v; },
   },
+  {
+    key: "GOOGLE_PLACES_API_KEY",
+    label: { en: "Google Places API key", es: "Clave de Google Places" },
+    description: {
+      en: "Lets agents search businesses on Google Maps. Google Cloud console → enable Places API (New) → create an API key restricted to it.",
+      es: "Permite que los agentes busquen negocios en Google Maps. En la consola de Google Cloud activá Places API (New) y creá una clave de API restringida a esa API.",
+    },
+    category: "integrations",
+    type: "secret",
+    sensitive: true,
+  },
 
   // ── Life ──────────────────────────────────────────────────────────────────
   {

@@ -27,13 +27,43 @@
   interface OfficeRow { flow_id: string; name: string; active: boolean; settings: Record<string, unknown> }
   interface Flow { id: string; name: string; active?: number }
 
+  /** What can be linked. `pick` kinds offer the accounts that really exist. */
   const LINK_KINDS = [
-    { id: 'social_account', label: 'Red social', hint: 'Ej.: twitter:mi_cuenta o linkedin:empresa', help: 'Las cuentas desde las que Marketing publica para este proyecto.' },
-    { id: 'email_account', label: 'Correo', hint: 'Ej.: ventas@tu-producto.com', help: 'La casilla desde la que Ventas escribe a los leads.' },
-    { id: 'repo', label: 'Repositorio', hint: 'Nombre del repo registrado', help: 'Código del producto, para que los agentes lo consulten.' },
-    { id: 'task_project', label: 'Proyecto de tareas', hint: 'Nombre del proyecto de tareas', help: 'Dónde las oficinas anotan tareas de este proyecto.' },
-    { id: 'workspace', label: 'Workspace', hint: 'Nombre del workspace', help: 'Carpeta compartida con material del proyecto.' },
+    { id: 'email', kind: 'email_account', label: 'Correo', pick: true, hint: '', help: 'La casilla desde la que Ventas y Marketing escriben mails para este proyecto.', empty: 'No hay cuentas de correo. Agregá una desde Social → Comms.' },
+    { id: 'linkedin', kind: 'social_account', label: 'LinkedIn', pick: true, hint: '', help: 'La cuenta desde la que Marketing publica posts.', empty: 'No hay cuentas de LinkedIn conectadas. Conectá una desde Social → LinkedIn.' },
+    { id: 'whatsapp', kind: 'social_account', label: 'WhatsApp', pick: true, hint: '', help: 'Para escribirle a quien ya te dejó su número o te escribió. Nunca en frío.', empty: 'WhatsApp no está conectado. Vinculalo desde Ajustes → Canales.' },
+    { id: 'repo', kind: 'repo', label: 'Repositorio', pick: false, hint: 'Nombre del repo registrado', help: 'Código del producto, para que los agentes lo consulten.', empty: '' },
+    { id: 'task_project', kind: 'task_project', label: 'Proyecto de tareas', pick: false, hint: 'Nombre del proyecto de tareas', help: 'Dónde las oficinas anotan tareas de este proyecto.', empty: '' },
+    { id: 'workspace', kind: 'workspace', label: 'Workspace', pick: false, hint: 'Nombre del workspace', help: 'Carpeta compartida con material del proyecto.', empty: '' },
+    { id: 'other', kind: 'social_account', label: 'Otra cuenta (avanzado)', pick: false, hint: 'tipo:id, ej. twitter:mi_cuenta', help: 'Referencia manual para una integración sin selector.', empty: '' },
   ];
+
+  let accountOptions: Record<string, Array<{ ref: string; label: string }>> = { email: [], linkedin: [], whatsapp: [] };
+
+  async function loadAccountOptions() {
+    const [mail, li, wa] = await Promise.all([
+      call('/api/email-accounts').catch(() => []),
+      call('/api/linkedin/accounts').catch(() => ({ accounts: [] })),
+      call('/api/channels/whatsapp/status').catch(() => null),
+    ]);
+    accountOptions = {
+      email: (Array.isArray(mail) ? mail : []).map((a: { id: string; label: string; email: string }) => ({ ref: `comms:${a.id}`, label: `${a.label} · ${a.email}` })),
+      linkedin: (li?.accounts ?? []).filter((a: { status: string }) => a.status === 'active').map((a: { id: string; display_name: string }) => ({ ref: `linkedin:${a.id}`, label: a.display_name })),
+      whatsapp: wa?.bridge_connected && wa?.jid ? [{ ref: 'whatsapp:default', label: `Número vinculado (${String(wa.jid).split('@')[0]})` }] : [],
+    };
+  }
+
+  /** A linked ref as a person reads it. */
+  function linkLabel(l: Link, opts: Record<string, Array<{ ref: string; label: string }>>): { kind: string; text: string } {
+    for (const k of ['email', 'linkedin', 'whatsapp']) {
+      const hit = opts[k]?.find((o) => o.ref === l.ref_id);
+      if (hit) return { kind: LINK_KINDS.find((x) => x.id === k)!.label, text: hit.label };
+    }
+    if (l.ref_id.startsWith('comms:')) return { kind: 'Correo', text: 'Cuenta de correo (ya no existe)' };
+    if (l.ref_id.startsWith('linkedin:')) return { kind: 'LinkedIn', text: 'Cuenta de LinkedIn (ya no existe)' };
+    if (l.ref_id === 'whatsapp:default') return { kind: 'WhatsApp', text: 'Número vinculado (desconectado)' };
+    return { kind: LINK_KINDS.find((k) => k.kind === l.kind && !k.pick)?.label ?? l.kind, text: l.ref_id };
+  }
 
   let projects: Project[] = [];
   let flows: Flow[] = [];
@@ -60,7 +90,7 @@
   let nameTouched = false;
   let createError = '';
 
-  let linkKind = 'social_account';
+  let linkKind = 'email';
   let linkRef = '';
 
   let connUrl = '';
@@ -199,7 +229,7 @@
 
   const addLink = () => run(async () => {
     if (!detail || !linkRef.trim()) return;
-    await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: linkKind, ref_id: linkRef.trim() }) });
+    await call(`/api/projects/${detail.project.id}/links`, { method: 'POST', body: JSON.stringify({ kind: kind.kind, ref_id: linkRef.trim() }) });
     linkRef = '';
     await load();
   }, 'Vinculado');
@@ -262,6 +292,11 @@
 
   $: officeOn = new Set((detail?.offices ?? []).filter((o) => o.active).map((o) => o.flow_id));
   $: kind = LINK_KINDS.find((k) => k.id === linkKind) ?? LINK_KINDS[0];
+  $: options = kind.pick ? accountOptions[kind.id] ?? [] : [];
+  $: if (kind.pick && !options.some((o) => o.ref === linkRef)) linkRef = options[0]?.ref ?? '';
+  let lastKind = linkKind;
+  $: if (linkKind !== lastKind) { lastKind = linkKind; if (!kind.pick) linkRef = ''; }
+  $: if (tab === 'resources') void loadAccountOptions();
   $: steps = detail
     ? [
         { done: true, label: 'Ficha del proyecto', go: () => (tab = 'brief') },
@@ -408,15 +443,26 @@
             </select>
           </div>
           <div class="field grow">
-            <label for="link-ref">Cuenta o nombre</label>
-            <input id="link-ref" bind:value={linkRef} placeholder={kind.hint} />
+            <label for="link-ref">{kind.pick ? 'Cuenta' : 'Nombre o referencia'}</label>
+            {#if kind.pick}
+              {#if options.length}
+                <select id="link-ref" bind:value={linkRef}>
+                  {#each options as o}<option value={o.ref}>{o.label}</option>{/each}
+                </select>
+              {:else}
+                <p class="no-acc" id="link-ref">{kind.empty}</p>
+              {/if}
+            {:else}
+              <input id="link-ref" bind:value={linkRef} placeholder={kind.hint} />
+            {/if}
           </div>
           <button class="btn" disabled={saving || !linkRef.trim()}>Vincular</button>
         </form>
         <p class="help">{kind.help}</p>
         <ul class="links">
           {#each detail.links as l}
-            <li><span class="chip">{LINK_KINDS.find((k) => k.id === l.kind)?.label ?? l.kind}</span><span class="ref">{l.ref_id}</span>
+            {@const ll = linkLabel(l, accountOptions)}
+            <li><span class="chip">{ll.kind}</span><span class="ref" title={l.ref_id}>{ll.text}</span>
               <button class="x" aria-label="Desvincular {l.ref_id}" on:click={() => removeLink(l)}>×</button></li>
           {:else}
             <li class="no-links">Todavía no vinculaste nada. Empezá por la red social o el correo desde el que querés que trabajen los agentes.</li>
@@ -555,6 +601,7 @@
   .links .no-links { color: var(--text-3); font-size: 13.5px; border-bottom: 0; }
   .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
   .ref { flex: 1; font-size: 14px; color: var(--text-1); }
+  .no-acc { margin: 0; min-height: 40px; display: flex; align-items: center; font-size: 13px; color: var(--text-2); }
   .x { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 18px; width: 36px; height: 36px; border-radius: var(--radius-sm); }
   .x:hover { color: var(--red); background: var(--surface-2); }
   .pull { font-size: 13.5px; color: var(--text-1); }

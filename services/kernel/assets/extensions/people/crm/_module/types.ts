@@ -26,6 +26,10 @@ export interface Contact {
   linkedin_url: string;
   x_handle: string;
   website: string;
+  /** Project the contact belongs to (kernel projects module); null = personal. */
+  project_id: string | null;
+  /** 1 = asked not to be contacted (unsubscribe link or operator). */
+  do_not_contact: number;
   created_at: string;
   updated_at: string;
 }
