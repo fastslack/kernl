@@ -512,6 +512,43 @@ else
   rm -rf "$NATIVE_TMP"
 fi
 
+# The agent SDK's native CLI for the target platform.
+#
+# The SDK ships `claude` in a per-platform optional package, and the lockfile
+# records only the Linux ones. On the macOS runner `npm ci` therefore installs
+# no darwin package, the host-reuse branch above copies what is there, and the
+# .app carried the SDK without its CLI — the exact gap that left a .dmg user
+# unable to connect a Claude subscription. Fetched here by version instead,
+# from whichever branch staged the SDK, and the build stops if it is missing.
+SDK_PKG_JSON="$SRC_TREE/node_modules/@anthropic-ai/claude-agent-sdk/package.json"
+if [ -f "$SDK_PKG_JSON" ]; then
+  case "$PLATFORM" in
+    darwin-arm64) CLI_PKG="@anthropic-ai/claude-agent-sdk-darwin-arm64"; CLI_BIN="claude" ;;
+    darwin-x64)   CLI_PKG="@anthropic-ai/claude-agent-sdk-darwin-x64";   CLI_BIN="claude" ;;
+    win-x64)      CLI_PKG="@anthropic-ai/claude-agent-sdk-win32-x64";    CLI_BIN="claude.exe" ;;
+    linux-x64)    CLI_PKG="@anthropic-ai/claude-agent-sdk-linux-x64";    CLI_BIN="claude" ;;
+  esac
+  CLI_DIR="$SRC_TREE/node_modules/$CLI_PKG"
+  if [ ! -f "$CLI_DIR/$CLI_BIN" ]; then
+    SDK_VERSION="$(node -p "require(process.argv[1]).version" "$SDK_PKG_JSON")"
+    echo "▶ fetching $CLI_PKG@$SDK_VERSION (the claude CLI)"
+    CLI_TMP="$(mktemp -d)"
+    # npm pack ignores the package's os/cpu fields, which is the point: the
+    # host is not the target.
+    ( cd "$CLI_TMP" && npm pack "$CLI_PKG@$SDK_VERSION" --silent >/dev/null )
+    rm -rf "$CLI_DIR"
+    mkdir -p "$CLI_DIR"
+    tar -xzf "$CLI_TMP"/*.tgz -C "$CLI_DIR" --strip-components=1
+    rm -rf "$CLI_TMP"
+  fi
+  if [ ! -f "$CLI_DIR/$CLI_BIN" ]; then
+    echo "ERROR: $CLI_PKG/$CLI_BIN missing from the payload — Claude Code would not work" >&2
+    exit 1
+  fi
+  chmod +x "$CLI_DIR/$CLI_BIN"
+  echo "  claude CLI: $CLI_PKG/$CLI_BIN"
+fi
+
 # Prune onnxruntime: keep only the target platform's CPU bin (drop GPU
 # providers — CUDA/TensorRT — that pull massive driver dependencies).
 ORT_BIN="$SRC_TREE/node_modules/onnxruntime-node/bin/napi-v3"
