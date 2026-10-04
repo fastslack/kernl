@@ -3,7 +3,7 @@
   "id": "com.kernl.agent-advanced",
   "slug": "agent-advanced",
   "name": "Agent Advanced",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
   "description": "Heavy / optional agent features: Claude Code executor, meeting + debate orchestration, workspace tools + evolver, reflection optimizer, demo seeders. Imported by the agents core.",
   "author": "Kernl",
