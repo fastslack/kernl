@@ -351,6 +351,28 @@ export class CrmService {
       .all(contactId) as Interaction[];
   }
 
+  /**
+   * People worth getting back to: you have talked to them (at least one
+   * interaction) and the last one is older than `days`. A contact with no
+   * interaction at all is not "gone quiet" — most of those are addresses the
+   * mail sync created — so it never counts here.
+   */
+  followUps(days = 30, limit = 5): {
+    count: number;
+    items: Array<{ id: string; name: string; company: string; relationship: string; last_interaction: string; interactions: number }>;
+  } {
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    const quiet = `SELECT c.id, c.name, c.company, c.relationship, MAX(i.date) AS last_interaction, COUNT(*) AS interactions
+                     FROM interactions i JOIN contacts c ON c.id = i.contact_id
+                    GROUP BY c.id HAVING MAX(i.date) < ?`;
+    const count = (this.db.prepare(`SELECT COUNT(*) AS n FROM (${quiet})`).get(cutoff) as { n: number }).n;
+    // Most-talked-to first: the relationships you would most regret dropping.
+    const items = this.db
+      .prepare(`${quiet} ORDER BY interactions DESC, last_interaction DESC LIMIT ?`)
+      .all(cutoff, limit) as Array<{ id: string; name: string; company: string; relationship: string; last_interaction: string; interactions: number }>;
+    return { count, items };
+  }
+
   async addRelationship(
     fromId: string,
     toId: string,

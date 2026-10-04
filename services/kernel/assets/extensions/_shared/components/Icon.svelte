@@ -53,6 +53,10 @@
     calendar: 'M4 6.5h16v14H4zM4 10.5h16M8.5 3.5V7M15.5 3.5V7',
     sort: 'M7 20V5M7 5L3.5 8.5M7 5l3.5 3.5M17 4v15M17 19l3.5-3.5M17 19l-3.5-3.5',
     corner: 'M9 5.5l-4.5 4.5L9 14.5M4.5 10h10a4.5 4.5 0 0 1 4.5 4.5v4',
+    mail: 'M3.5 6h17v12h-17zM3.5 6.5l8.5 6.5 8.5-6.5',
+    users: 'M9 11a3.2 3.2 0 1 0 0-6.4A3.2 3.2 0 0 0 9 11M3.5 19.5a5.5 5.5 0 0 1 11 0M16 5a3 3 0 0 1 0 5.8M17.5 14.2a5 5 0 0 1 3 5.3',
+    hash: 'M9.5 4l-2 16M16.5 4l-2 16M4.5 9h15.5M4 15h15.5',
+    reply: 'M10 6.5L4.5 12l5.5 5.5M4.5 12H14a5.5 5.5 0 0 1 5.5 5.5V19',
   };
 
   // Icons whose shapes read as solid areas rather than outlines. Stroking a

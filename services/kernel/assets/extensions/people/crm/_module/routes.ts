@@ -19,4 +19,5 @@ export function registerContactsRoutes(
   server.operation("POST", "/api/contacts/update", op["contacts.update"]);
   server.operation("POST", "/api/contacts/delete", op["contacts.delete"]);
   server.operation("POST", "/api/contacts/log-interaction", op["contacts.logInteraction"]);
+  server.operation("GET", "/api/contacts/follow-up", op["contacts.followUp"]);
 }

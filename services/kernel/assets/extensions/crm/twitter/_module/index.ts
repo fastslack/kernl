@@ -32,9 +32,6 @@ export function createTwitterModule(): TwitterModule {
         twitterPublisher: s.publisher,
       }),
     dashboard: dashboardChannel("twitter", (db) => queryTwitter(db), {
-      nav: [
-        { id: "x-manager", label: "X Manager", icon: "𝕏", group: "people", order: 50 },
-      ],
       registerRoutes: (server) => {
         if (service && publisher) {
           registerTwitterRoutes(server, service, publisher);

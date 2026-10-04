@@ -317,9 +317,6 @@ export function createCommsModule(): CommsModule {
 
     getDashboardDescriptor(): DashboardDescriptor {
       return {
-        nav: [
-          { id: "comms", label: "Comms", icon: "✉", group: "people", order: 30 },
-        ],
         channels: [
           { name: "comms", query: (db) => queryComms(db) },
         ],

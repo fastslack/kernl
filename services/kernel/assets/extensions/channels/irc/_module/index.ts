@@ -5,6 +5,7 @@ import { IrcStore } from "./store.js";
 import { UpstreamStore } from "./upstream/store.js";
 import { UpstreamManager } from "./upstream/manager.js";
 import { registerUpstreamRoutes } from "./upstream/api-routes.js";
+import { registerOverviewRoute } from "./overview-route.js";
 import { SaslAuthenticator } from "./security/sasl.js";
 import { IrcServer } from "./server/ircd.js";
 import { IrcProvider, type IrcRuntimeConfig } from "./irc-provider.js";
@@ -150,13 +151,16 @@ export function createIrcModule() {
 
       const tools = ircTools({ server, store, channelBridge, officeBridge });
       log.info("IRC: module initialized (provider registered, awaiting activation)");
-      return { provider, upstream, upstreamStore, tools };
+      return { provider, upstream, upstreamStore, tools, db: ctx.sqlite };
     },
     tools: (s) => s.tools,
     // No nav entry: the IRC page is contributed through extension.json.
     dashboard: (s) => ({
       registerRoutes: (httpServer) => {
-        if (s) registerUpstreamRoutes(httpServer, s.upstream, s.upstreamStore);
+        if (s) {
+          registerUpstreamRoutes(httpServer, s.upstream, s.upstreamStore);
+          registerOverviewRoute(httpServer, s.db, s.upstream);
+        }
       },
     }),
     async shutdown(s) {

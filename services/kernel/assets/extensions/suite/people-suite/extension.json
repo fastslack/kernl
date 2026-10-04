@@ -3,7 +3,7 @@
   "id": "com.kernl.people-suite",
   "slug": "people-suite",
   "name": "People Suite",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "suite",
   "built_in": true,
   "description": "CRM, contacts, mail, comms, network graph, Twitter/X.",
@@ -20,32 +20,18 @@
         "order": 10
       },
       {
-        "id": "people",
-        "group": "people",
-        "label": "People",
-        "icon": "👤",
-        "order": 20
-      },
-      {
         "id": "mail",
         "group": "people",
         "label": "Mail",
         "icon": "📬",
+        "order": 20
+      },
+      {
+        "id": "people",
+        "group": "people",
+        "label": "People",
+        "icon": "👤",
         "order": 30
-      },
-      {
-        "id": "comms",
-        "group": "people",
-        "label": "Comms",
-        "icon": "✉️",
-        "order": 40
-      },
-      {
-        "id": "x-manager",
-        "group": "people",
-        "label": "X",
-        "icon": "🐦",
-        "order": 70
       }
     ]
   }
