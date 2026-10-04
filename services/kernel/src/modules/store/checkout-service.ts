@@ -92,6 +92,19 @@ export class CheckoutService {
   }
 
   /**
+   * Abandon a checkout that is still waiting for payment (the buyer closed the
+   * Stripe tab, or a promo code didn't apply). Only `pending` rows go: a paid
+   * one is mid-claim and dropping it would lose a purchase. Returns whether a
+   * row was removed.
+   */
+  cancel(sessionId: string): boolean {
+    const res = this.db
+      .prepare("DELETE FROM store_checkouts WHERE session_id = ? AND state = 'pending'")
+      .run(sessionId);
+    return (res.changes ?? 0) > 0;
+  }
+
+  /**
    * Drop rows past their claim window that never completed. Called
    * opportunistically from the poll route — no scheduler needed for a table
    * that only ever holds a handful of rows.

@@ -17,14 +17,21 @@
   import Field from '$lib/components/settings/Field.svelte';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import SelectField from '$lib/components/settings/SelectField.svelte';
-  import StatusPill from '$lib/components/settings/StatusPill.svelte';
+  import EmailAccountsPicker from '$lib/components/settings/EmailAccountsPicker.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
+  import VoiceStatusPanel from '$lib/components/settings/VoiceStatusPanel.svelte';
+  import VoicePicker from '$lib/components/settings/VoicePicker.svelte';
   import SetupChecklist from '$lib/components/settings/SetupChecklist.svelte';
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
+  import LlmUsage from '$lib/components/llm/LlmUsage.svelte';
+  import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
+  import WhatsAppCard from '$lib/components/whatsapp/WhatsAppCard.svelte';
+  import UpdateProgress from '$lib/components/UpdateProgress.svelte';
+  import LicensePanel from '$lib/components/LicensePanel.svelte';
   import {
-    updateInfo, checking, updating, updateError, updateHint, updateProgress,
+    updateInfo, checking, updating, updateError, updateHint,
     canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
   } from '$lib/update.js';
 
@@ -40,6 +47,8 @@
     value: string;
     configured: boolean;
     extension?: string;
+    /** Live option source declared by the extension (e.g. 'email_accounts'). */
+    source?: string;
     updated_at?: string;
   }
   interface ExtSection {
@@ -53,7 +62,6 @@
 
   // ── Load state ───────────────────────────────
   let loading = true;
-  let mounted = false;
   let loadErrors: Record<string, string> = {};
 
   let catalog: CatalogItem[] = [];
@@ -185,19 +193,42 @@
   }
 
   // ── Sections / routing ───────────────────────
-  const CORE_SECTIONS = ['general', 'ai', 'channels', 'integrations', 'security', 'advanced', 'about'];
-  $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`) }));
+  // License first: it is what unlocks everything paid, and it used to be a
+  // page nothing linked to.
+  const CORE_SECTIONS = ['license', 'general', 'ai', 'mail', 'channels', 'integrations', 'security', 'advanced', 'about'];
+  /** Rail icon per core section, so the eye finds a section before reading it. */
+  const SECTION_ICONS: Record<string, string> = {
+    license: '🔑', general: '⚙️', ai: '🧠', mail: '✉️', channels: '📡',
+    integrations: '🔌', security: '🛡️', advanced: '🛠️', about: 'ℹ️',
+  };
+  /** For an extension section that ships without an icon of its own. */
+  const EXT_SECTION_ICON = '🧩';
+  let licenseState: string | null = null;
+  async function loadLicenseState() {
+    try {
+      const res = await fetch(`${(globalThis as { __API_BASE?: string }).__API_BASE ?? ''}/api/license/status`);
+      if (res.ok) licenseState = ((await res.json()) as { status: string }).status;
+    } catch { /* the badge is a hint; the section still loads its own status */ }
+  }
+  onMount(loadLicenseState);
+  $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`), icon: SECTION_ICONS[id] }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
 
   // Un solo array para el rail. El divisor cuelga del primer item de
   // extensión en vez de ser un nodo aparte, que es lo que permite que el
   // rail sea una lista plana y no una estructura de grupos.
   $: sideNavItems = [
-    ...navSections.map((s): SideNavItem => ({ id: s.id, label: s.label })),
+    ...navSections.map((s): SideNavItem => (s.id === 'license' && licenseState
+      ? {
+        id: s.id, label: s.label, icon: s.icon,
+        badge: licenseState === 'valid' ? $t('license.badge.valid') : $t('license.badge.none'),
+        badgeTone: licenseState === 'valid' ? 'ok' : 'warn',
+      }
+      : { id: s.id, label: s.label, icon: s.icon })),
     ...extNav.map((s, i): SideNavItem => ({
       id: s.id,
       label: s.label,
-      icon: s.icon || undefined,
+      icon: s.icon || EXT_SECTION_ICON,
       divider: i === 0 ? $t('settings.nav.extensions') : undefined,
     })),
   ];
@@ -216,21 +247,15 @@
     goto(`/settings?section=${encodeURIComponent(id)}`, { noScroll: true, keepFocus: true });
   }
 
-  // Section side effects (WA polling, lazy AI tests)
-  $: if (mounted && !loading) sectionFx(activeSection);
-  function sectionFx(sec: string) {
-    if (sec === 'channels') {
-      loadWaStatus();
-      startWaPolling();
-      loadWaSchema();
-    } else {
-      stopWaPolling();
-    }
-  }
-
   // ── Category → section mapping ───────────────
   // Keys the AI connections card owns — hidden from the generic renderer.
   const AI_RICH_KEYS = /^(LMSTUDIO_(BASE_URL|API_KEY)|MINIMAX_)/;
+  // Voice settings get their own card, with the live engine status on top.
+  const VOICE_KEYS = /^(VOICE_|ELEVENLABS_API_KEY$)/;
+  const VOICE_SELECTS: Record<string, string[]> = {
+    VOICE_STT_ENGINE: ['auto', 'whispercpp', 'groq', 'openai'],
+    VOICE_TTS_ENGINE: ['auto', 'piper', 'openai', 'elevenlabs'],
+  };
 
   function sectionForItem(it: CatalogItem): string {
     if (it.extension) {
@@ -257,11 +282,13 @@
       { id: 'cat-life', title: tr('settings.life.title'), desc: tr('settings.life.desc'), items: by('life') },
     ].filter((c) => c.items.length);
 
-    const aiLeft = by('ai').filter((i) => !AI_RICH_KEYS.test(i.key));
+    const aiLeft = by('ai').filter((i) => !AI_RICH_KEYS.test(i.key) && !VOICE_KEYS.test(i.key));
+    const voiceItems = by('ai').filter((i) => VOICE_KEYS.test(i.key));
     const chatLeft = by('chat').filter((i) => !AI_RICH_KEYS.test(i.key));
     const agentsLeft = by('agents').filter((i) => !AI_RICH_KEYS.test(i.key));
     out.ai = [
       { id: 'ai-advanced', title: tr('settings.ai.advanced_title'), desc: tr('settings.ai.advanced_desc'), items: aiLeft },
+      { id: 'ai-voice', title: tr('settings.voice.title'), desc: tr('settings.voice.desc'), items: voiceItems },
       { id: 'ai-chat', title: tr('settings.ai.chat_title'), desc: tr('settings.ai.chat_desc'), items: chatLeft },
       { id: 'ai-agents', title: tr('settings.ai.agents_title'), desc: tr('settings.ai.agents_desc'), items: agentsLeft },
     ].filter((c) => c.items.length);
@@ -396,6 +423,10 @@
   $: richCards = {
     ai: [
       { id: 'providers', title: $t('llm.connections') },
+      { id: 'usage', title: $t('llm.usage.tab') },
+    ],
+    mail: [
+      { id: 'mail-connect', title: $t('settings.mail.card') },
     ],
     channels: [
       { id: 'channels-runtime', title: $t('settings.channels.runtime_title') },
@@ -470,6 +501,8 @@
   // ═══════════════════════════════════════════════
   let channelSchema: any = null;
   let channelConfig: Record<string, any> = {};
+  // Masked stored value per secret field — the SecretInput placeholder.
+  let channelMasked: Record<string, string> = {};
   let channelId = '';
   let channelSaving = false;
 
@@ -486,8 +519,18 @@
       const data = await rpcOrCall('channels.schema', { id }, () => jfetch(`/api/channels/schema?id=${id}`)) as any;
       channelSchema = data;
       channelConfig = {};
+      channelMasked = {};
+      // channels.schema answers `config`, with every password field masked.
+      // A secret field holds only what the user types (blank keeps the stored
+      // value on save); the mask is shown as its placeholder.
       for (const field of data.schema ?? []) {
-        channelConfig[field.key] = data.currentConfig?.[field.key] ?? '';
+        const current = data.config?.[field.key] ?? '';
+        if (field.type === 'password' || field.secret) {
+          channelConfig[field.key] = '';
+          channelMasked[field.key] = current;
+        } else {
+          channelConfig[field.key] = current;
+        }
       }
     } catch {
       channelSchema = null;
@@ -520,105 +563,6 @@
     } catch (e: any) { flash(e.message, 'err'); }
   }
 
-  // ── WhatsApp (ported) ────────────────────────
-  let waStatus: any = {};
-  let waQrString = '';
-  let waPolling = false;
-  let waTestPhone = '';
-  let waTestMsg = '';
-  let waSending = false;
-  let waConfig: Record<string, any> = {};
-  let waSchemaLoaded = false;
-  let waSaving = false;
-  let waQrInterval: ReturnType<typeof setInterval> | null = null;
-
-  async function loadWaSchema() {
-    if (waSchemaLoaded) return;
-    waSchemaLoaded = true;
-    try {
-      const data = await rpcOrCall('channels.schema', { id: 'whatsapp' }, () => jfetch('/api/channels/schema?id=whatsapp')) as any;
-      waConfig = {};
-      for (const field of data.schema ?? []) {
-        waConfig[field.key] = data.currentConfig?.[field.key] ?? '';
-      }
-    } catch { /* fields stay editable, empty */ }
-  }
-
-  async function saveWaConfig() {
-    waSaving = true;
-    try {
-      await rpcOrCall('channels.config.save', { id: 'whatsapp', config: waConfig }, () =>
-        jfetch('/api/channels/config', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ id: 'whatsapp', config: waConfig }) }));
-      flash(`WhatsApp: ${$t('settings.card.saved')}`);
-    } catch (e: any) { flash(e.message, 'err'); }
-    finally { waSaving = false; }
-  }
-
-  async function loadWaStatus() {
-    try {
-      const data = await rpcOrCall('channels.qr', {}, () => jfetch('/api/channels/qr')) as any;
-      waStatus = data;
-      waQrString = data.qr || '';
-    } catch { /* ignore */ }
-  }
-
-  function startWaPolling() {
-    if (waPolling) return;
-    waPolling = true;
-    loadWaStatus();
-    waQrInterval = setInterval(async () => {
-      await loadWaStatus();
-      if (waStatus.connected) stopWaPolling();
-    }, 3000);
-  }
-
-  function stopWaPolling() {
-    waPolling = false;
-    if (waQrInterval) { clearInterval(waQrInterval); waQrInterval = null; }
-  }
-
-  async function startWhatsApp() {
-    try {
-      const data = await rpcOrCall('channels.start', { id: 'whatsapp' }, async () => {
-        const r = await fetch('/api/channels/start', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ id: 'whatsapp' }) });
-        const json = await r.json() as any;
-        if (!r.ok) json.error = json.error || json.detail || 'Start failed';
-        return json;
-      }) as any;
-      if (data.error) {
-        flash(`WhatsApp error: ${data.detail || data.error}`, 'err');
-        return;
-      }
-      flash('WhatsApp starting...');
-      startWaPolling();
-      await reloadChannels();
-    } catch (e: any) { flash(e.message, 'err'); }
-  }
-
-  async function stopWhatsApp() {
-    try {
-      await rpcOrCall('channels.stop', { id: 'whatsapp' }, () =>
-        jfetch('/api/channels/stop', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ id: 'whatsapp' }) }));
-      stopWaPolling();
-      waStatus = {};
-      waQrString = '';
-      flash('WhatsApp stopped');
-      await reloadChannels();
-    } catch (e: any) { flash(e.message, 'err'); }
-  }
-
-  async function sendWaTest() {
-    if (!waTestPhone || !waTestMsg) return;
-    waSending = true;
-    try {
-      const data = await rpcOrCall('channels.whatsapp.send', { phone: waTestPhone, message: waTestMsg }, () =>
-        jfetch('/api/channels/whatsapp/send', { method: 'POST', headers: jsonHeaders, body: JSON.stringify({ phone: waTestPhone, message: waTestMsg }) })) as any;
-      if (data.success) { flash('WhatsApp message sent!'); waTestMsg = ''; }
-      else flash(data.error || 'Send failed', 'err');
-    } catch (e: any) { flash(e.message, 'err'); }
-    finally { waSending = false; }
-  }
-
   // ── Section error banner ─────────────────────
   $: sectionError = (() => {
     // A load that failed outright is reported verbatim, not folded into the
@@ -649,12 +593,9 @@
     } finally {
       loading = false;
     }
-    mounted = true;
-    sectionFx(activeSection);
   });
 
   onDestroy(() => {
-    stopWaPolling();
     if (highlightTimer) clearTimeout(highlightTimer);
   });
 </script>
@@ -721,7 +662,7 @@
       {/if}
 
       <!-- ═══ Content ═══ -->
-      <div class="st-content">
+      <div class="st-content" class:fill={activeSection === 'ai' && activeCard === 'usage'}>
         {#if $page.url.searchParams.get('welcome') === '1'}
           <SetupChecklist />
         {/if}
@@ -746,12 +687,25 @@
           </div>
         {/if}
 
+        <!-- ═══ License ═══ -->
+        {#if activeSection === 'license'}
+          <LicensePanel on:change={(e) => (licenseState = e.detail?.status ?? null)} />
+        {/if}
+
         <!-- ═══ AI ═══ -->
         {#if activeSection === 'ai' && activeCard === 'providers'}
           <AiConnections
             initialConnect={$page.url.searchParams.get('connect') ?? ''}
             on:advanced={() => revealCard('ai-advanced')}
           />
+        {/if}
+        {#if activeSection === 'ai' && activeCard === 'usage'}
+          <LlmUsage />
+        {/if}
+
+        <!-- ═══ Mail ═══ -->
+        {#if activeSection === 'mail' && activeCard === 'mail-connect'}
+          <MailConnectCard mode="card" />
         {/if}
 
         <!-- ═══ Channels (rich) ═══ -->
@@ -799,8 +753,8 @@
                     <span class="ch-flabel">{field.label || field.key}{field.required ? ' *' : ''}</span>
                     {#if field.type === 'boolean'}
                       <label class="ch-toggle"><input type="checkbox" bind:checked={channelConfig[field.key]} /> {field.label || field.key}</label>
-                    {:else if field.secret}
-                      <SecretInput bind:value={channelConfig[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
+                    {:else if field.type === 'password' || field.secret}
+                      <SecretInput bind:value={channelConfig[field.key]} masked={channelMasked[field.key] ?? ''} configured={!!channelMasked[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
                     {:else}
                       <input class="prov-in" type="text" bind:value={channelConfig[field.key]} placeholder={field.placeholder ?? field.description ?? ''} />
                     {/if}
@@ -817,93 +771,7 @@
         {/if}
 
         {#if activeSection === 'channels' && activeCard === 'whatsapp'}
-          <!-- WhatsApp rich panel -->
-          <SettingsCard
-            cardId="whatsapp"
-            title={$t('settings.wa.title')}
-            description={$t('settings.wa.desc')}
-            showFooter={false}
-          >
-            <div slot="header">
-              <StatusPill
-                status={waStatus.connected ? 'ok' : waQrString ? 'warn' : 'neutral'}
-                label={waStatus.connected ? $t('settings.wa.connected') : waQrString ? $t('settings.wa.waiting') : $t('settings.wa.not_connected')}
-              />
-            </div>
-
-            <div class="wa-body">
-              {#if waStatus.connected}
-                <div class="wa-connected-box">
-                  <span class="wa-check">&#10003;</span>
-                  <div>
-                    <div class="wa-connected-text">{$t('settings.wa.connected')}</div>
-                    <div class="wa-connected-phone">+{waStatus.phoneNumber || '?'}</div>
-                  </div>
-                  <div class="wa-conn-actions">
-                    <button class="btn-sm del" on:click={stopWhatsApp}>{$t('settings.wa.disconnect')}</button>
-                    <button class="btn-sm" on:click={() => testChannel('whatsapp')}>{$t('settings.wa.test_notification')}</button>
-                  </div>
-                </div>
-              {:else if waQrString}
-                <div class="wa-qr-box">
-                  <img
-                    src="https://api.qrserver.com/v1/create-qr-code/?size=280x280&data={encodeURIComponent(waQrString)}"
-                    alt="WhatsApp QR Code"
-                    class="wa-qr-img"
-                    width="280"
-                    height="280"
-                  />
-                  <div class="wa-qr-instructions">
-                    <p><strong>1.</strong> {$t('settings.wa.step1')}</p>
-                    <p><strong>2.</strong> {$t('settings.wa.step2')}</p>
-                    <p><strong>3.</strong> {$t('settings.wa.step3')}</p>
-                    <p><strong>4.</strong> {$t('settings.wa.step4')}</p>
-                    <div class="wa-qr-actions">
-                      <button class="btn-sm" on:click={loadWaStatus}>{$t('settings.wa.refresh_qr')}</button>
-                      <button class="btn-sm del" on:click={stopWhatsApp}>{$t('settings.channels.cancel')}</button>
-                    </div>
-                  </div>
-                </div>
-              {:else}
-                {#if waStatus.error}
-                  <div class="wa-error-box"><strong>Error:</strong> {waStatus.error}</div>
-                {/if}
-                <p class="wa-hint">{$t('settings.wa.start_hint')}</p>
-                <button class="btn-sm primary" on:click={startWhatsApp}>{$t('settings.wa.start')}</button>
-              {/if}
-
-              <div class="wa-config">
-                <div class="ch-field">
-                  <span class="ch-flabel">{$t('settings.wa.allowed')}</span>
-                  <textarea class="wa-textarea" bind:value={waConfig['allowedNumbers']} placeholder="31612345678,34698765432"></textarea>
-                  <span class="ch-fhint">{$t('settings.wa.allowed_hint')}</span>
-                </div>
-                <div class="ch-field">
-                  <span class="ch-flabel">{$t('settings.wa.default_chat')}</span>
-                  <input class="prov-in" type="text" bind:value={waConfig['defaultChat']} placeholder="31612345678@s.whatsapp.net" />
-                  <span class="ch-fhint">{$t('settings.wa.default_chat_hint')}</span>
-                </div>
-                <button class="btn-sm primary" disabled={waSaving} on:click={saveWaConfig}>{$t('settings.wa.save_config')}</button>
-              </div>
-
-              {#if waStatus.connected}
-                <div class="wa-config">
-                  <div class="ch-form-title">{$t('settings.wa.test_title')}</div>
-                  <div class="ch-field">
-                    <span class="ch-flabel">{$t('settings.wa.phone')}</span>
-                    <input class="prov-in" type="text" bind:value={waTestPhone} placeholder="31635311380" />
-                  </div>
-                  <div class="ch-field">
-                    <span class="ch-flabel">{$t('settings.wa.message')}</span>
-                    <textarea class="wa-textarea" bind:value={waTestMsg} placeholder="Hello from Kernl!"></textarea>
-                  </div>
-                  <button class="btn-sm primary" disabled={waSending || !waTestPhone || !waTestMsg} on:click={sendWaTest}>
-                    {waSending ? $t('settings.wa.sending') : $t('settings.wa.send')}
-                  </button>
-                </div>
-              {/if}
-            </div>
-          </SettingsCard>
+          <WhatsAppCard mode="card" />
         {/if}
 
         <!-- ═══ Integrations (rich) ═══ -->
@@ -980,27 +848,10 @@
                     <span class="about-update-msg about-dim">{$updateInfo.install?.reason ?? ''}</span>
                     {#if $updateInfo.install?.hint}<code>{$updateInfo.install.hint}</code>{/if}
                   {/if}
-                  {#if $updating && $updateProgress}
-                    <!-- Everything slow — the download, the checksum, the
-                         unpack — happens before the kernel exits, so this page
-                         is around to show it. Determinate when the server sent
-                         a content-length, indeterminate when it did not: a
-                         made-up percentage is worse than an honest spinner. -->
-                    {@const p = $updateProgress}
-                    {@const pct = p.total > 0 ? Math.round((p.received / p.total) * 100) : null}
-                    <div class="upd-progress">
-                      <div class="upd-bar" class:indeterminate={pct === null}>
-                        <span style={pct === null ? '' : `width:${pct}%`}></span>
-                      </div>
-                      <span class="upd-phase">
-                        {p.phase === 'downloading'
-                          ? (pct === null
-                              ? `${(p.received / 1048576).toFixed(1)} MB`
-                              : `${pct}% · ${(p.received / 1048576).toFixed(1)}/${(p.total / 1048576).toFixed(1)} MB`)
-                          : p.phase}
-                      </span>
-                    </div>
-                  {/if}
+                  <!-- Everything slow — the download, the checksum, the
+                       unpack — happens before the kernel exits, so this page
+                       is around to show it. -->
+                  <UpdateProgress variant="card" />
                 {:else if $updateInfo?.latest}
                   <span class="about-update-msg">
                     {$t('settings.about.current', { version: $updateInfo.current })}
@@ -1075,8 +926,33 @@
             savingLabel={$t('settings.card.saving')}
             on:save={() => saveGenericCard(card)}
           >
+            {#if card.id === 'ai-voice'}
+              <VoiceStatusPanel refreshKey={cardState[card.id]?.savedMsg ? Date.now() : 0} />
+            {/if}
             {#each card.items as it (it.key)}
-              {#if it.key === 'KERNEL_DEFAULT_LANGUAGE'}
+              {#if it.key === 'VOICE_TTS_VOICE'}
+                <div class="fld-voice" id={`field-${it.key}`}>
+                  <span class="fld-lang-label">{loc(it.label) || it.key}</span>
+                  <VoicePicker
+                    bind:value={values[it.key]}
+                    engine={values.VOICE_TTS_ENGINE}
+                    language={values.VOICE_LANGUAGE}
+                  />
+                </div>
+              {:else if VOICE_SELECTS[it.key]}
+                <div class="fld-lang" id={`field-${it.key}`}>
+                  <div class="fld-lang-meta">
+                    <span class="fld-lang-label">{loc(it.label) || it.key}</span>
+                    <span class="fld-lang-desc">{loc(it.description)}</span>
+                    <span class="fld-lang-key">{it.key}</span>
+                  </div>
+                  <SelectField
+                    bind:value={values[it.key]}
+                    options={VOICE_SELECTS[it.key].map((v) => ({ value: v, label: v }))}
+                    disabled={it.readonly}
+                  />
+                </div>
+              {:else if it.key === 'KERNEL_DEFAULT_LANGUAGE'}
                 <div class="fld-lang" id={`field-${it.key}`}>
                   <div class="fld-lang-meta">
                     <span class="fld-lang-label">{loc(it.label) || it.key}</span>
@@ -1088,6 +964,15 @@
                     options={[{ value: 'es', label: 'Español' }, { value: 'en', label: 'English' }]}
                     disabled={it.readonly}
                   />
+                </div>
+              {:else if it.source === 'email_accounts'}
+                <div class="fld-lang fld-top" id={`field-${it.key}`}>
+                  <div class="fld-lang-meta">
+                    <span class="fld-lang-label">{loc(it.label) || it.key}</span>
+                    <span class="fld-lang-desc">{loc(it.description)}</span>
+                    <span class="fld-lang-key">{it.key}</span>
+                  </div>
+                  <EmailAccountsPicker bind:value={values[it.key]} disabled={it.readonly} />
                 </div>
               {:else}
                 <Field
@@ -1159,6 +1044,9 @@
 
   /* Content */
   .st-content { overflow-y: auto; padding-right: 4px; scrollbar-width: thin; scrollbar-color: var(--surface-3) transparent; }
+  /* A card that fills the pane and scrolls its own table (token usage). */
+  .st-content.fill { display: flex; flex-direction: column; overflow: hidden; }
+  .st-content.fill > * { flex-shrink: 0; }
 
   /* Shared small buttons */
   .btn-sm {
@@ -1171,8 +1059,6 @@
   .btn-sm:disabled { opacity: 0.35; cursor: default; }
   .btn-sm.primary { background: var(--teal); border-color: var(--teal); color: var(--bg); }
   .btn-sm.primary:hover:not(:disabled) { opacity: 0.85; background: var(--teal); }
-  .btn-sm.del { color: #ef4444; }
-  .btn-sm.del:hover:not(:disabled) { border-color: #ef4444; background: rgba(239,68,68,0.06); }
 
   /* ── Card tabs ──
      Section-level. Same wrap rule as the provider strip: never scroll
@@ -1230,37 +1116,6 @@
   .ch-fhint { font-size: 9px; color: var(--text-3); }
   .ch-form-actions { display: flex; gap: 6px; margin-top: 4px; }
   .ch-toggle { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-2); cursor: pointer; }
-
-  /* WhatsApp */
-  .wa-body { padding: 6px; display: flex; flex-direction: column; gap: 12px; }
-  .wa-connected-box {
-    display: flex; align-items: center; gap: 12px;
-    background: rgba(37,211,102,0.08); border: 1px solid rgba(37,211,102,0.25);
-    border-radius: 8px; padding: 12px;
-  }
-  .wa-check { font-size: 22px; color: #25D366; font-weight: bold; }
-  .wa-connected-text { font-size: 13px; font-weight: 600; color: var(--text-1); }
-  .wa-connected-phone { font-size: 11px; color: var(--text-3); font-family: var(--font-mono); margin-top: 2px; }
-  .wa-conn-actions { margin-left: auto; display: flex; gap: 6px; }
-
-  .wa-qr-box { display: flex; gap: 20px; align-items: flex-start; }
-  .wa-qr-img { border-radius: 8px; border: 3px solid var(--border); background: #fff; flex-shrink: 0; }
-  .wa-qr-instructions { font-size: 12px; color: var(--text-2); line-height: 1.8; }
-  .wa-qr-instructions p { margin: 0; }
-  .wa-qr-actions { display: flex; gap: 6px; margin-top: 10px; }
-  .wa-error-box {
-    background: rgba(239,68,68,0.08); border: 1px solid rgba(239,68,68,0.25);
-    border-radius: 6px; padding: 8px 12px; font-size: 11px; color: #ef4444;
-  }
-  .wa-hint { font-size: 11px; color: var(--text-3); margin: 0; }
-  .wa-config { border-top: 1px solid var(--border); padding-top: 10px; }
-  .wa-textarea {
-    min-height: 52px; resize: vertical; font-family: var(--font-mono); font-size: 11px;
-    width: 100%; padding: 6px 10px; border-radius: 6px;
-    border: 1px solid var(--border); background: var(--surface-2); color: var(--text-1);
-    outline: none; box-sizing: border-box;
-  }
-  .wa-textarea:focus { border-color: var(--teal); }
 
   /* Integrations */
   .int-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-bottom: 12px; }
@@ -1341,27 +1196,11 @@
   .fld-lang-label { font-size: 12px; font-weight: 600; color: var(--text-1); }
   .fld-lang-desc { font-size: 10px; color: var(--text-2); }
   .fld-lang-key { font: 400 9px var(--font-mono); color: var(--text-3); }
+  /* A tall control (a list of accounts) reads better with its label on top of its first row. */
+  .fld-lang.fld-top { align-items: start; }
 
   @media (max-width: 700px) {
-    .wa-qr-box { flex-direction: column; align-items: center; }
     .fld-lang { grid-template-columns: 1fr; }
   }
-
-  /* Update progress. Indeterminate when the server sends no content-length —
-     a sliding band rather than a percentage nobody can stand behind. */
-  .upd-progress { display: flex; align-items: center; gap: .5rem; width: 100%; margin-top: .5rem; }
-  .upd-bar { position: relative; flex: 1; height: 6px; border-radius: 999px;
-             background: rgba(255, 255, 255, .12); overflow: hidden; }
-  .upd-bar > span { display: block; height: 100%; border-radius: 999px;
-                    background: #6366f1; transition: width 200ms ease; }
-  .upd-bar.indeterminate > span { width: 35%; animation: upd-slide 1.1s ease-in-out infinite; }
-  @keyframes upd-slide {
-    0% { transform: translateX(-100%); }
-    100% { transform: translateX(300%); }
-  }
-  .upd-phase { font-size: .75rem; opacity: .75; white-space: nowrap;
-               font-variant-numeric: tabular-nums; }
-  @media (prefers-reduced-motion: reduce) {
-    .upd-bar.indeterminate > span { animation: none; width: 100%; opacity: .5; }
-  }
+  .fld-voice { display: flex; flex-direction: column; gap: 8px; padding: 10px 0; }
 </style>

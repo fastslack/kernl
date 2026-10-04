@@ -8,10 +8,17 @@ import type {
 import { runMigrations } from "../../core/db/migrations.js";
 import { agentsMigrations } from "./migrations.js";
 import { AgentService } from "./service.js";
+import { agentAllowedTools } from "./agent-fields.js";
 import { AgentExecutor } from "./executor.js";
 import type { SandboxDriverRegistry } from "../../core/sandbox/registry.js";
 import { ReactiveEngine } from "./reactive-engine.js";
 import { AgentScheduler } from "./scheduler.js";
+import { autoResumePolicy } from "./run-resume.js";
+import { workspaceSpecTools } from "./workspace-spec-tools.js";
+import { QuestionTriager } from "./question-triager.js";
+import { KernlBugService } from "./kernl-bugs-service.js";
+import { kernlBugTools } from "./kernl-bugs-tools.js";
+import { commentOnRepeat } from "./kernl-bugs-github.js";
 import { agentsTools } from "./tools.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -25,6 +32,7 @@ import type {
   WorkspaceServiceLike,
   ReflectionOptimizerLike,
   WorkspaceEvolverLike,
+  ProjectGateLike,
 } from "./advanced-types.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 
@@ -50,10 +58,14 @@ export interface AgentsModule extends ExtensibleModule {
   registerWorkspaceService(svc: WorkspaceServiceLike): void;
   registerReflectionOptimizer(svc: ReflectionOptimizerLike): void;
   registerWorkspaceEvolver(svc: WorkspaceEvolverLike): void;
+  /** Projects seam (src/modules/projects): createRun validates project_id through it. */
+  registerProjectGate(gate: ProjectGateLike): void;
 
   // ── Live accessors used by other stages (http routes, services) ──
   getWorkspaceService(): WorkspaceServiceLike | null;
   getReflectionOptimizer(): ReflectionOptimizerLike | null;
+  /** Kernl's own bug reports (kernl-bugs-service.ts); null before initialize. */
+  getKernlBugs(): KernlBugService | null;
   getWorkspaceEvolver(): WorkspaceEvolverLike | null;
   getMeetingExecutor(): MeetingExecutorLike | null;
   getAltExecutor(type: string): AltExecutorLike | null;
@@ -78,6 +90,8 @@ export function createAgentsModule(): AgentsModule {
   let agentExecutor: AgentExecutor | null = null;
   let reactiveEngine: ReactiveEngine | null = null;
   let agentScheduler: AgentScheduler | null = null;
+  let questionTriager: QuestionTriager | null = null;
+  let kernlBugs: KernlBugService | null = null;
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -105,7 +119,16 @@ export function createAgentsModule(): AgentsModule {
       runMigrations(ctx.sqlite, "agents", agentsMigrations);
 
       agentService = new AgentService(ctx.sqlite, ctx.events, ctx.config);
-      agentService.cleanupStaleRuns();
+      // Offices that predate lots (migration 50) get theirs now, biggest first.
+      try {
+        agentService.syncLots();
+      } catch (err) {
+        log.warn(`Office lot backfill failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      // Runs the last process left in flight: the ones with a fresh
+      // checkpoint resume once the scheduler starts (every tool is wired by
+      // then); the rest are failed as before.
+      const recovered = agentService.recoverStaleRuns(autoResumePolicy());
       agentExecutor = new AgentExecutor();
       agentExecutor.setConfig(ctx.config);
 
@@ -136,10 +159,21 @@ export function createAgentsModule(): AgentsModule {
         ctx.config.agents?.learningCleanupIntervalMs ?? 3_600_000,
         ctx.config.agents?.learningMinConfidence ?? 0.15,
       );
+      agentScheduler.setPendingResumes(recovered.resume);
+
+      // Office agents' questions reach the chief in batches; see question-triager.ts.
+      questionTriager = new QuestionTriager(agentService, agentExecutor, ctx.events);
+      questionTriager.start();
+
+      // Kernl's own bugs, filed by the chief or the operator. The key seals the GitHub token.
+      kernlBugs = new KernlBugService(ctx.sqlite, ctx.config.encryption.key);
+      const bugs = kernlBugs;
 
       tools = [
         ...agentsTools(agentService, agentExecutor, ctx.events, () => meetingExecutor),
         ...auditTools(agentService),
+        ...workspaceSpecTools(agentService),
+        ...kernlBugTools({ bugs, service: agentService, onRepeatPublished: (bug) => { void commentOnRepeat(bugs, bug); } }),
       ];
 
       // Upgrade pass: any agent that already produces output worth sharing
@@ -180,6 +214,9 @@ export function createAgentsModule(): AgentsModule {
     },
 
     // ── Registration seam ──────────────────────────────────────
+    registerProjectGate(gate: ProjectGateLike) {
+      agentService?.setProjectGate(gate);
+    },
     registerAltExecutor(type: string, executor: AltExecutorLike) {
       altExecutors.set(type, executor);
       // Forward stashed sandbox registry now that we have an executor that
@@ -221,6 +258,10 @@ export function createAgentsModule(): AgentsModule {
 
     getReflectionOptimizer() {
       return reflectionOptimizer;
+    },
+
+    getKernlBugs() {
+      return kernlBugs;
     },
 
     getWorkspaceEvolver() {
@@ -284,6 +325,7 @@ export function createAgentsModule(): AgentsModule {
 
     async shutdown() {
       agentScheduler?.stop();
+      questionTriager?.stop();
       reactiveEngine?.stop();
       // Workspace compose / debate / inbox-waker / subscription teardown is
       // owned by the `ext:agent-advanced` extension's own shutdown().
@@ -353,10 +395,9 @@ function upgradeWorkspaceAccess(db: { prepare: (sql: string) => { all: () => unk
     const rows = db.prepare("SELECT id, name, allowed_tools FROM agents").all() as Array<{ id: string; name: string; allowed_tools: string }>;
     let patched = 0;
     for (const r of rows) {
-      let current: unknown;
-      try { current = JSON.parse(r.allowed_tools || "[]"); } catch { continue; }
-      if (!Array.isArray(current)) continue;
-      if (current.length === 0) continue; // empty = all tools allowed, nothing to patch
+      const current: unknown[] = agentAllowedTools(r);
+      // Empty (or unreadable) = all tools allowed, nothing to patch.
+      if (current.length === 0) continue;
       const strs = current.filter((t): t is string => typeof t === "string");
       const qualifies =
         strs.some(t => t.startsWith("kernel_workspace_")) ||

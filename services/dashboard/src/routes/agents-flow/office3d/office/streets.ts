@@ -450,7 +450,7 @@ export function buildStreets(
     const head = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.24, 14, 12), lampMat);
     head.position.set(cx, lampHeadY, cz);
     scene.add(head);
-    const pl = new rt.THREE.PointLight(0xffc98a, 0.9, 16, 1.4);
+    const pl = new rt.THREE.PointLight(0xffc98a, 1.8, 16, 1.4);
     pl.position.set(cx, lampLightY, cz);
     pl.matrixAutoUpdate = false; pl.updateMatrix();
     scene.add(pl);
@@ -572,7 +572,7 @@ export function buildStreets(
     );
     pendant.position.set(entryCX + s * (STAIR_W / 4), PORTAL_H + 0.12, portalZ + 0.3);
     scene.add(pendant);
-    const pl = new rt.THREE.PointLight(0xffb870, 0.6, 8, 1.5);
+    const pl = new rt.THREE.PointLight(0xffb870, 1.2, 8, 1.5);
     pl.position.set(entryCX + s * (STAIR_W / 4), PORTAL_H + 0.05, portalZ + 0.3);
     pl.matrixAutoUpdate = false; pl.updateMatrix();
     scene.add(pl);
@@ -582,6 +582,7 @@ export function buildStreets(
 
 export function buildCorridorGrid(scene: any, grid: CorridorGrid) {
   for (const seg of grid.segments) {
+    if (seg.outdoor) continue;
     const isH = Math.abs(seg.z1 - seg.z2) < 0.1;
     const len = isH ? Math.abs(seg.x2 - seg.x1) : Math.abs(seg.z2 - seg.z1);
     const cx = isH ? (seg.x1 + seg.x2) / 2 : seg.x1;

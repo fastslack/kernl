@@ -38,20 +38,23 @@ import {
   logLlmStart,
   logLlmEnd,
   logLlmFail,
+  recordLlmCall,
+  sdkResultUsage,
+  type SdkModelUsage,
   isoNow,
   getProviderConfig,
+  safeJson,
   type KernelConfig,
   type EventBus,
   type SandboxDriverRegistry,
   type SandboxHandle,
   type SandboxRunOptions,
-} from "@kernl/extension-sdk";
-import { failureNote } from "./failure-note.js";
-import {
+  localDate,
   resolveDefaultSocketPath as resolveKernelMcpSocketPath,
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
-} from "../../../../../src/core/mcp-unix-socket.js";
+} from "@kernl/extension-sdk";
+import { failureNote } from "./failure-note.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import { seedOfficeHome, officeHomeGuidance } from "../../../../../src/modules/agents/office-home.js";
@@ -123,6 +126,11 @@ interface AgentVariablesMcp {
   /** Bloquea toda salida a red del subprocess. Default: false. */
   __no_network__?: boolean;
   /**
+   * Docker network the sandboxed run joins, overriding
+   * $KERNEL_AGENT_DOCKER_NETWORK (default `kernl_default`).
+   */
+  __sandbox_network__?: string;
+  /**
    * Lista de skills de Claude Code a cargar dentro del sandbox. Se resuelven
    * from ~/.claude/skills/ and the host plugins. The CLI auto-discovers them
    * una vez montados en $HOME/.claude/skills/<name>/.
@@ -191,6 +199,9 @@ function isSafeIdentifier(value: unknown): value is string {
  * MCP channel into an SSRF + tool-poisoning vector.
  */
 const KERNEL_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "kernel"]);
+
+/** Where every sandbox driver mounts the agent's cwd (and sets its workdir). */
+const SANDBOX_WORKSPACE_PATH = "/workspace";
 
 function isLocalMcpUrl(raw: string): boolean {
   try {
@@ -347,12 +358,88 @@ function sanitizeUserMcpServers(
   return out;
 }
 
+/**
+ * Declarative workspace: the office home must match its spec before the agent
+ * starts — repos cloned, files seeded. A home that can't be prepared fails the
+ * run with the reason instead of letting the agent work in a half-built
+ * folder. The spec's MCP servers and skills join the agent's own (mutating
+ * `vars`); on a name clash the agent's wins.
+ */
+export async function prepareOfficeWorkspace(
+  service: AgentService,
+  runId: string,
+  flowId: string,
+  vars: Pick<AgentVariablesMcp, "__mcp_servers__" | "__skills__">,
+): Promise<void> {
+  const prepared = await service.prepareFlowWorkspace(flowId);
+  if (!prepared) return;
+  const { result, spec } = prepared;
+  if (!result.ready) {
+    service.setRunCondition(runId, {
+      type: "WorkspaceReady", status: "False", reason: "SetupFailed", message: result.errors.join("; "),
+    });
+    throw new Error(`Workspace not ready: ${result.errors.join("; ")}`);
+  }
+  const did = [...result.cloned.map((p) => `cloned ${p}`), ...result.written.map((p) => `wrote ${p}`)];
+  service.setRunCondition(runId, {
+    type: "WorkspaceReady", status: "True", reason: did.length > 0 ? "Prepared" : "AlreadyPrepared",
+    message: did.join(", "),
+  });
+  vars.__mcp_servers__ = {
+    ...(spec.mcp_servers as Record<string, McpServerConfig>),
+    ...(vars.__mcp_servers__ ?? {}),
+  };
+  vars.__skills__ = [...new Set([...(vars.__skills__ ?? []), ...spec.skills])];
+}
+
+/**
+ * The project block for a run's prompt and the project's home dir to expose
+ * to the agent (src/modules/projects). null when the run has no project or
+ * the projects module is not wired.
+ */
+/**
+ * Which escape hatches a run gets. A run for a project must not reach the
+ * outside except through the outbox, so it drops the agent's own MCP servers
+ * and inherited user settings, and gets Bash only when the agent lists it
+ * explicitly in allowed_tools (the operator's deliberate choice). WebFetch
+ * only reads.
+ */
+export function toolPolicy(input: {
+  usingSandbox: boolean;
+  allowUnsandboxedBash: boolean;
+  allowed: ReadonlySet<string>;
+  projectRun: boolean;
+}): { includeBash: boolean; includeWebFetch: boolean; userMcpServers: boolean; inheritSettings: boolean } {
+  const { usingSandbox, allowUnsandboxedBash, allowed, projectRun } = input;
+  return {
+    includeBash: projectRun ? allowed.has("Bash") : usingSandbox || allowUnsandboxedBash || allowed.has("Bash"),
+    includeWebFetch: usingSandbox || allowed.has("WebFetch"),
+    userMcpServers: !projectRun,
+    inheritSettings: !projectRun,
+  };
+}
+
+export function projectRunContext(
+  service: AgentService,
+  agent: Agent,
+  run: { project_id: string | null },
+): { block: string; homeDir: string } | null {
+  if (!run.project_id) return null;
+  return service.getProjectGate()?.context?.(agent.flow_id ?? "", run.project_id) ?? null;
+}
+
 export class ClaudeCodeExecutor {
   private configRef: KernelConfig | null = null;
   private wsService: WorkspaceService | null = null;
   private sandboxRegistry: SandboxDriverRegistry | null = null;
   /** runId → AbortController, for external cancellation. */
   private activeRuns = new Map<string, AbortController>();
+  /**
+   * `${runId}:${tool_use_id}` → tool name, from each tool_use block until its
+   * tool_result arrives (then dropped). The SDK pairs the two by that id; see
+   * resolveToolNameFromResult.
+   */
+  private toolUseNames = new Map<string, string>();
   /** Cached path to the Claude Code CLI — null = already searched, not found. */
   private cachedClaudeBin: string | null | undefined = undefined;
   /**
@@ -447,12 +534,23 @@ export class ClaudeCodeExecutor {
       const { cwd, officeHomeFlow } = this.resolveCwd(agent, run, service);
       cwdResolved = cwd;
       const vars = this.parseVariables(agent);
-      let systemPrompt = this.buildSystemPrompt(agent, goal, service);
+      if (officeHomeFlow) await prepareOfficeWorkspace(service, run.id, officeHomeFlow.id, vars);
+      let systemPrompt = this.buildSystemPrompt(agent, goal, service, run.project_id ?? null);
       // When the agent inherited its office home (no per-agent cwd override),
       // tell it where it is and where to persist office knowledge.
       if (officeHomeFlow) {
-        systemPrompt += "\n\n" + officeHomeGuidance(officeHomeFlow, cwd, resolveAgentLanguage(agent, this.configRef));
+        // Name the path the agent will actually see. In a sandbox the home is
+        // mounted at /workspace (docker-driver.ts, cube-driver.ts) and the
+        // kernel-side path does not exist in there: given `/app/data/...`,
+        // the agent spent its first turns on "No such file or directory" and
+        // then fell back to guessing.
+        const homeForAgent = this.resolveDriverSlug(vars) ? SANDBOX_WORKSPACE_PATH : cwd;
+        systemPrompt += "\n\n" + officeHomeGuidance(officeHomeFlow, homeForAgent, resolveAgentLanguage(agent, this.configRef));
       }
+      // Working for a project: its block goes in the prompt and its home dir
+      // is exposed next to the cwd (additionalDirectories below).
+      const projectCtx = projectRunContext(service, agent, run);
+      if (projectCtx) systemPrompt += "\n\n" + projectCtx.block;
 
       // Default auth: if the `claude` CLI is logged in we use OAuth (the
       // user's Max/Pro subscription), so they aren't billed per token while
@@ -497,6 +595,13 @@ export class ClaudeCodeExecutor {
       const allowed = rawAllowed.map(translateTool);
       const denied = rawDenied.map(translateTool);
 
+      // Every agent may ask the chief. An explicit allow-list would otherwise
+      // hide the tool from the agent (an empty list already means "all").
+      const ASK_SUPERVISOR = "mcp__kernel__kernel_agents_ask_supervisor";
+      if (allowed.length > 0 && !allowed.includes(ASK_SUPERVISOR) && !denied.includes(ASK_SUPERVISOR)) {
+        allowed.push(ASK_SUPERVISOR);
+      }
+
       // Env inherited by the subprocess. When going through OAuth we strip API
       // keys from the environment so the CLI falls back to ~/.claude.json creds.
       const childEnv: Record<string, string | undefined> = {
@@ -538,6 +643,7 @@ export class ClaudeCodeExecutor {
         mcpSocketDir,
         bridgeDir,
         ...(vars.__additional_directories__ ?? []),
+        ...(projectCtx ? [projectCtx.homeDir] : []),
       ];
       const extraAllows: string[] = [];
       for (const d of extraDirs) {
@@ -571,8 +677,8 @@ export class ClaudeCodeExecutor {
       // created agent from inheriting Bash(*) by accident.
       const allowedSet = new Set(rawAllowed);
       const allowUnsandboxedBash = process.env.KERNEL_ALLOW_UNSANDBOXED_BASH === "1";
-      const includeBash = usingSandbox || allowUnsandboxedBash || allowedSet.has("Bash");
-      const includeWebFetch = usingSandbox || allowedSet.has("WebFetch");
+      const policy = toolPolicy({ usingSandbox, allowUnsandboxedBash, allowed: allowedSet, projectRun: !!run.project_id });
+      const { includeBash, includeWebFetch } = policy;
       // The SDK's OS sandbox is bubblewrap/Seatbelt, which Windows does not
       // have; with failIfUnavailable:false the run used to carry on unsandboxed
       // without a word. It is still allowed (same Bash policy as any run with
@@ -745,7 +851,7 @@ export class ClaudeCodeExecutor {
             usingDockerSandbox: usingSandbox,
             kernelPort: this.configRef?.dashboard?.port,
           }),
-          ...sanitizeUserMcpServers(vars.__mcp_servers__),
+          ...(policy.userMcpServers ? sanitizeUserMcpServers(vars.__mcp_servers__) : {}),
         },
         additionalDirectories: extraDirs,
         // Control de herencia del user-scope (~/.claude.json + settings.json).
@@ -755,7 +861,7 @@ export class ClaudeCodeExecutor {
         // guard "Uncaught exception loop detected" del CLI → exit 1 mudo.
         // We only inherit when the agent asks for it explicitly via
         // __settings_mode__: 'inherit'.
-        settingSources: vars.__settings_mode__ === "inherit" ? ["user"] : [],
+        settingSources: policy.inheritSettings && vars.__settings_mode__ === "inherit" ? ["user"] : [],
         persistSession: false,
         pathToClaudeCodeExecutable: executableToUse,
         env: childEnv,
@@ -804,10 +910,12 @@ export class ClaudeCodeExecutor {
       });
 
       const q = query({ prompt: goal, options });
+      let usage: SdkModelUsage[] = [];
 
       try {
         for await (const msg of q) {
           if (abortController.signal.aborted) break;
+          if (msg.type === "result") usage = sdkResultUsage(msg, llmModel);
           // Each `assistant` message is one LLM turn — log it so the operator
           // can see the SDK loop progress at the same granularity as the
           // OpenAI-shaped providers' instrumentProvider wrapper.
@@ -840,7 +948,35 @@ export class ClaudeCodeExecutor {
           message: err instanceof Error ? err.message : String(err),
           caller: llmCaller,
         });
+        recordLlmCall({
+          slug: "claude-code",
+          model: llmModel,
+          ok: false,
+          latencyMs: Date.now() - llmStartedAt,
+          errorKind: "transient",
+          errorMsg: err instanceof Error ? err.message : String(err),
+          caller: `agent:${agent.name}`,
+          startedAt: llmStartedAt,
+        }, { silent: true });
         throw err;
+      }
+
+      // Token usage per model for the whole run, so agent spend shows up
+      // next to chat and pipelines instead of only in agent_runs.tokens_used.
+      for (const u of usage) {
+        recordLlmCall({
+          slug: "claude-code",
+          model: u.model,
+          ok: true,
+          latencyMs: Date.now() - llmStartedAt,
+          inputTokens: u.inputTokens,
+          outputTokens: u.outputTokens,
+          cacheReadTokens: u.cacheReadTokens,
+          cacheWriteTokens: u.cacheWriteTokens,
+          costUsd: u.costUsd,
+          caller: `agent:${agent.name}`,
+          startedAt: llmStartedAt,
+        }, { silent: true });
       }
 
       // Loop closed cleanly — emit one summary line covering the whole run.
@@ -904,13 +1040,16 @@ export class ClaudeCodeExecutor {
           steps_count: execResult.steps_count,
           tokens_used: execResult.tokens_used,
           engine: "claude_code",
+          // HISTORY opens this event into the same detail LIVE shows.
+          result_preview: execResult.result.slice(0, 500),
+          ...(execResult.error ? { error: execResult.error } : {}),
         },
         tokens_used: execResult.tokens_used,
       });
 
       if (run.trigger_type === "manual") {
         if (execResult.result) {
-          service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id);
+          service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id, run.project_id ?? null);
         } else if (execResult.status === "failed") {
           // A failed run used to write NOTHING here, and the chat panel only
           // falls back to the run row when the thread has no agent message at
@@ -919,7 +1058,7 @@ export class ClaudeCodeExecutor {
           // had simply stopped answering. Persisting the failure like the
           // native executor does puts it in the thread, permanently, for every
           // client rather than only the tab that happened to be watching.
-          service.addMemory(agent.id, "assistant", failureNote(execResult.error), run.id);
+          service.addMemory(agent.id, "assistant", failureNote(execResult.error), run.id, run.project_id ?? null);
         }
       }
 
@@ -998,14 +1137,17 @@ export class ClaudeCodeExecutor {
         event_type: "run",
         event_subtype: "completed",
         detail: `[claude-code] failed: ${msg.slice(0, 180)}`,
-        raw_data: { status: "failed", steps_count: stepNumber, tokens_used: totalTokens, engine: "claude_code" },
+        raw_data: {
+          status: "failed", steps_count: stepNumber, tokens_used: totalTokens, engine: "claude_code",
+          result_preview: finalText.slice(0, 500), error: msg,
+        },
         tokens_used: totalTokens,
       });
 
       // Same reasoning as the non-throwing failure above: without this the
       // thread stays silent and the operator has no way to learn the run died.
       if (run.trigger_type === "manual") {
-        service.addMemory(agent.id, "assistant", failureNote(msg), run.id);
+        service.addMemory(agent.id, "assistant", failureNote(msg), run.id, run.project_id ?? null);
       }
 
       const failedExecResult: ExecutionResult = {
@@ -1079,6 +1221,8 @@ export class ClaudeCodeExecutor {
         } else if (block.type === "tool_use") {
           const toolName = block.name ?? "";
           const toolInput = (block.input as Record<string, unknown>) ?? {};
+          const toolUseId = (block as { id?: string }).id;
+          if (toolUseId) this.toolUseNames.set(`${run.id}:${toolUseId}`, toolName);
           const stepNum = stepNumberRef();
           service.addStep({
             run_id: run.id,
@@ -1119,11 +1263,16 @@ export class ClaudeCodeExecutor {
           const isError = Boolean((block as { is_error?: boolean }).is_error);
           const toolName = this.resolveToolNameFromResult(block, ctx);
           const stepNum = stepNumberRef();
+          // The error flag rides in the result row's tool_input, as the
+          // native recorder does (run-recorder.ts). Without it the LIVE and
+          // HISTORY tabs fall back to guessing from the text, and a refusal
+          // like `No agent named "X" found in your office` reads as success.
           service.addStep({
             run_id: run.id,
             step_number: stepNum,
             type: "tool_result",
             tool_name: toolName,
+            tool_input: { is_error: isError },
             tool_output: toolResultText,
           });
           events?.emit("agent:flow:step", {
@@ -1134,6 +1283,7 @@ export class ClaudeCodeExecutor {
             type: "tool_result",
             tool_name: toolName,
             content_preview: toolResultText.slice(0, 2000),
+            is_error: isError,
           });
           service.logEvent({
             run_id: run.id,
@@ -1389,13 +1539,23 @@ export class ClaudeCodeExecutor {
     }
   }
 
-  private buildSystemPrompt(agent: Agent, goal: string, service?: AgentService): string {
+  private buildSystemPrompt(agent: Agent, goal: string, service?: AgentService, projectId: string | null = null): string {
     const lang = resolveAgentLanguage(agent, this.configRef);
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
     if (base) parts.push(base);
-    parts.push(promptTodayDate(lang, new Date().toISOString().slice(0, 10)));
+    parts.push(promptTodayDate(lang, localDate()));
     parts.push(promptClaudeCodeWorkInstructions(lang));
+
+    // Same nudge the native executor gets from the directory block
+    // (AgentService.buildDirectoryBlock), which this prompt leaves out.
+    const denied = this.parseJsonArray(agent.denied_tools);
+    if (!denied.includes("kernel_agents_ask_supervisor") && !denied.includes("mcp__kernel__kernel_agents_ask_supervisor")) {
+      parts.push(
+        "## Asking the chief\n" +
+          "- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.",
+      );
+    }
 
     // Inject learnings ranked by relevance to current goal — same closed-loop
     // the native executor uses (executor.ts:576). Without this, claude_code
@@ -1403,7 +1563,7 @@ export class ClaudeCodeExecutor {
     // accumulated lessons on the next run.
     if (service) {
       try {
-        const learnings = service.getRelevantLearnings(agent.id, goal, 15);
+        const learnings = service.getRelevantLearnings(agent.id, goal, 15, projectId);
         const block = promptLearningsBlock(lang, learnings);
         if (block) parts.push(block);
       } catch { /* learnings table missing in tests / fresh DB — non-fatal */ }
@@ -1429,9 +1589,8 @@ export class ClaudeCodeExecutor {
     const unpack = <T>(key: string): T | undefined => {
       const v = raw[key];
       if (v == null) return undefined;
-      if (typeof v === "string") {
-        try { return JSON.parse(v) as T; } catch { return undefined; }
-      }
+      // Malformed JSON reads as "not set".
+      if (typeof v === "string") return safeJson<T | undefined>(v, undefined);
       return v as T;
     };
     const boolVar = (key: string, defaultVal: boolean): boolean => {
@@ -1630,17 +1789,19 @@ export class ClaudeCodeExecutor {
     const id = typeof block === "object" && block !== null && "tool_use_id" in block
       ? String((block as { tool_use_id: unknown }).tool_use_id ?? "")
       : "";
+    // The id is the pairing. Labelling a result with the LAST tool called
+    // breaks as soon as a turn carries two calls: the chief's "Agent Scout
+    // updated." was recorded as ToolSearch's output.
+    const key = `${ctx.run.id}:${id}`;
+    const named = id ? this.toolUseNames.get(key) : undefined;
+    if (named !== undefined) {
+      this.toolUseNames.delete(key);
+      return named;
+    }
+    // An id we never saw (or none): the last call is the best guess left.
     const steps = ctx.service.getSteps(ctx.run.id);
     for (let i = steps.length - 1; i >= 0; i--) {
-      const s = steps[i];
-      if (s.type === "tool_call") {
-        try {
-          const inp = JSON.parse(s.tool_input || "{}");
-          // the SDK doesn't store the id in tool_input, so we return the last unmatched tool_call.
-          void inp;
-        } catch { /* ignore */ }
-        return s.tool_name;
-      }
+      if (steps[i].type === "tool_call") return steps[i].tool_name;
     }
     return id || "unknown";
   }

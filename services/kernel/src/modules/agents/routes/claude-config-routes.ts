@@ -7,7 +7,7 @@
  * beyond the HTTP server itself.
  */
 
-import type { KernelHttpServer } from "../../../core/http-server.js";
+import { HttpError, type KernelHttpServer } from "../../../core/http-server.js";
 
 export function registerClaudeConfigRoutes(server: KernelHttpServer): void {
 
@@ -18,87 +18,56 @@ export function registerClaudeConfigRoutes(server: KernelHttpServer): void {
   // plugin` would. Files are the source of truth; the CLI and the SDK read
   // from the same locations.
 
-  server.get("/api/claude-config", async (_req, res) => {
-    try {
-      const cfg = await import("../claude-host-config.js");
-      server.json(res, 200, {
-        hostHome: cfg.hostHome(),
-        mcpServers: cfg.readUserScopeMcps(),
-        enabledPlugins: cfg.readEnabledPlugins(),
-        extraKnownMarketplaces: cfg.readClaudeSettings().extraKnownMarketplaces ?? {},
-      });
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+  server.route("GET", "/api/claude-config", async () => {
+    const cfg = await import("../claude-host-config.js");
+    return {
+      hostHome: cfg.hostHome(),
+      mcpServers: cfg.readUserScopeMcps(),
+      enabledPlugins: cfg.readEnabledPlugins(),
+      extraKnownMarketplaces: cfg.readClaudeSettings().extraKnownMarketplaces ?? {},
+    };
+  });
+
+  server.route<{
+    name: string;
+    type?: "stdio" | "http" | "sse";
+    command?: string;
+    args?: string[];
+    url?: string;
+    env?: Record<string, string>;
+  }>("POST", "/api/claude-config/mcp", async ({ body }) => {
+    if (!body.name || !/^[a-z0-9][a-z0-9_-]*$/i.test(body.name)) {
+      throw new HttpError(400, "Invalid name (alphanumeric, dashes, underscores)");
     }
+    const type = body.type ?? (body.url ? "http" : "stdio");
+    if (type === "stdio" && !body.command) throw new HttpError(400, "stdio MCP requires 'command'");
+    if ((type === "http" || type === "sse") && !body.url) throw new HttpError(400, `${type} MCP requires 'url'`);
+
+    const cfg = await import("../claude-host-config.js");
+    const mcp: import("../claude-host-config.js").ClaudeMcpServer =
+      type === "stdio"
+        ? { type: "stdio", command: body.command!, args: body.args, env: body.env }
+        : { type, url: body.url!, env: body.env };
+    cfg.upsertUserScopeMcp(body.name, mcp);
+    return { ok: true, name: body.name, scope: "user" };
   });
 
-  server.post("/api/claude-config/mcp", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        name: string;
-        type?: "stdio" | "http" | "sse";
-        command?: string;
-        args?: string[];
-        url?: string;
-        env?: Record<string, string>;
-      }>(req);
-      if (!body.name || !/^[a-z0-9][a-z0-9_-]*$/i.test(body.name)) {
-        server.json(res, 400, { error: "Invalid name (alphanumeric, dashes, underscores)" });
-        return;
-      }
-      const type = body.type ?? (body.url ? "http" : "stdio");
-      if (type === "stdio" && !body.command) { server.json(res, 400, { error: "stdio MCP requires 'command'" }); return; }
-      if ((type === "http" || type === "sse") && !body.url) { server.json(res, 400, { error: `${type} MCP requires 'url'` }); return; }
-
-      const cfg = await import("../claude-host-config.js");
-      const mcp: import("../claude-host-config.js").ClaudeMcpServer =
-        type === "stdio"
-          ? { type: "stdio", command: body.command!, args: body.args, env: body.env }
-          : { type, url: body.url!, env: body.env };
-      cfg.upsertUserScopeMcp(body.name, mcp);
-      server.json(res, 200, { ok: true, name: body.name, scope: "user" });
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+  server.route("DELETE", "/api/claude-config/mcp/:name", async ({ params: { name } }) => {
+    const cfg = await import("../claude-host-config.js");
+    const result = cfg.removeUserScopeMcp(name);
+    if (!result.removedFromJson && !result.removedFromSettings) {
+      throw new HttpError(404, `MCP "${name}" not found in user scope`);
     }
+    return { ok: true, ...result };
   });
 
-  server.delete("/api/claude-config/mcp/:name", async (req, res) => {
-    try {
-      const name = (req as unknown as { params: Record<string, string> }).params?.name;
-      if (!name) { server.json(res, 400, { error: "name required" }); return; }
-      const cfg = await import("../claude-host-config.js");
-      const result = cfg.removeUserScopeMcp(name);
-      if (!result.removedFromJson && !result.removedFromSettings) {
-        server.json(res, 404, { error: `MCP "${name}" not found in user scope` });
-        return;
-      }
-      server.json(res, 200, { ok: true, ...result });
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
-    }
-  });
+  server.route("POST", "/api/claude-config/plugin/:ref/enable", ({ params: { ref } }) => togglePlugin(ref, true));
+  server.route("POST", "/api/claude-config/plugin/:ref/disable", ({ params: { ref } }) => togglePlugin(ref, false));
 
-  server.post("/api/claude-config/plugin/:ref/enable", async (req, res) => {
-    await togglePluginEndpoint(req, res, true);
-  });
-  server.post("/api/claude-config/plugin/:ref/disable", async (req, res) => {
-    await togglePluginEndpoint(req, res, false);
-  });
-
-  async function togglePluginEndpoint(
-    req: import("node:http").IncomingMessage,
-    res: import("node:http").ServerResponse,
-    enabled: boolean,
-  ): Promise<void> {
-    try {
-      const ref = (req as unknown as { params: Record<string, string> }).params?.ref;
-      if (!ref) { server.json(res, 400, { error: "plugin ref required" }); return; }
-      const decoded = decodeURIComponent(ref);
-      const cfg = await import("../claude-host-config.js");
-      cfg.setPluginEnabled(decoded, enabled);
-      server.json(res, 200, { ok: true, ref: decoded, enabled });
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
-    }
+  async function togglePlugin(ref: string, enabled: boolean) {
+    const decoded = decodeURIComponent(ref);
+    const cfg = await import("../claude-host-config.js");
+    cfg.setPluginEnabled(decoded, enabled);
+    return { ok: true, ref: decoded, enabled };
   }
 }

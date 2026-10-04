@@ -44,5 +44,13 @@ export interface EmailProvider {
     date: string;
     messageIdHeader: string;
     threadId: string;
+    /**
+     * Raw headers relevant to threading and auto-send safety checks
+     * (Message-ID, In-Reply-To, References, Auto-Submitted, Precedence,
+     * List-Id, List-Unsubscribe), lower-cased keys. Optional so a provider
+     * that doesn't expose them cheaply (or at all) keeps compiling —
+     * CommsService.fetchEmail treats a missing value as "no headers".
+     */
+    rawHeaders?: Record<string, string>;
   }>;
 }

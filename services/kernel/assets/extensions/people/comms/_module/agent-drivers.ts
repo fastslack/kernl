@@ -13,11 +13,19 @@ import {
   type EventBus,
   type Notifier,
   safeQueryOne,
+  localDate,
+  isoNow,
   log,
 } from "@kernl/extension-sdk";
 
 import type { CommsService } from "./service.js";
+import { FETCH_BATCH, FETCH_POLL_MINUTES, writeFetchStatus } from "./fetch-status.js";
 import type { EmailTriageService } from "./email-triage-service.js";
+import type { AgendaWriter, AgendaWriteResult } from "./agenda-writer.js";
+import type { MailOfficeDispatch } from "./mail-office-dispatch.js";
+
+const CAP_NOTIFIED_KEY = "comms.agent_runs.cap_notified";
+const EMPTY_AGENDA: AgendaWriteResult = { created: 0, updated: 0, skipped: 0, lines: [] };
 
 export interface CommsDriverDeps {
   db: () => SqliteDb | null;
@@ -25,6 +33,10 @@ export interface CommsDriverDeps {
   triage: () => EmailTriageService | null;
   events: () => EventBus | null;
   notifier: () => Notifier | null;
+  /** Writes the dated items a mail mentions to events/tasks/reminders. */
+  agenda: () => AgendaWriter | null;
+  /** Hands attention-needed mail to the office router as an inbox letter. */
+  office: () => MailOfficeDispatch | null;
 }
 
 export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
@@ -36,7 +48,7 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
       handler: "comms:inbox-fetch",
       name: "IMAP Fetcher",
       description: "Polls every IMAP/Gmail account, ingests new inbound emails into communications, fires the 3D delivery truck when new mail arrives.",
-      cron: "*/3 * * * *",
+      cron: `*/${FETCH_POLL_MINUTES} * * * *`,
       flow: "Communications",
       run: async () => {
         const comms = deps.service();
@@ -54,23 +66,34 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         const perAccount: Array<{ account_id: string; email: string; new: number; source: string }> = [];
 
         for (const acc of fetchable) {
+          const startedAt = isoNow();
+          const fail = (error: string) =>
+            writeFetchStatus(db, acc.id, { state: "error", started_at: startedAt, finished_at: isoNow(), error });
+          writeFetchStatus(db, acc.id, {
+            state: "fetching", started_at: startedAt,
+            finished_at: undefined, on_wire: undefined, done: 0, added: undefined, error: undefined,
+          });
+
           let provider = comms.getProvider(acc.id);
           if (!provider) {
             const reg = comms.registerAccountProvider(acc.id);
             if (!reg.ok) {
               lines.push(`${acc.email}: skipped — ${reg.reason ?? "no provider"}`);
+              fail(reg.reason ?? "no provider");
               continue;
             }
             provider = comms.getProvider(acc.id);
           }
           if (!provider?.capabilities.searchInbox || !provider?.capabilities.fetchEmail) {
             lines.push(`${acc.email}: provider cannot fetch inbound`);
+            fail("provider cannot fetch inbound");
             continue;
           }
 
           try {
-            // Pull the 20 most recent UIDs from the remote inbox.
-            const msgs = await comms.searchInbox("", 20, acc.id);
+            // Pull the FETCH_BATCH most recent UIDs from the remote inbox.
+            const msgs = await comms.searchInbox("", FETCH_BATCH, acc.id);
+            writeFetchStatus(db, acc.id, { on_wire: msgs.length });
             // fetchEmail() dedups by gmail_message_id internally — ask it to
             // ingest each UID; it returns the existing row if already imported.
             // We detect "new" by comparing counts against the boundary we
@@ -81,12 +104,14 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
               acc.id,
             )?.c ?? 0;
 
+            let done = 0;
             for (const m of msgs) {
               try {
                 await comms.fetchEmail(m.gmail_id, acc.id);
               } catch (err) {
                 log.warn(`comms:inbox-fetch — fetch failed ${acc.email}/${m.gmail_id}: ${err instanceof Error ? err.message : String(err)}`);
               }
+              writeFetchStatus(db, acc.id, { done: ++done });
             }
 
             const after = safeQueryOne<{ c: number }>(
@@ -99,8 +124,12 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
             totalNew += delta;
             if (delta > 0) perAccount.push({ account_id: acc.id, email: acc.email, new: delta, source: `imap:${acc.provider}` });
             lines.push(`${acc.email}: +${delta} new (${msgs.length} on wire)`);
+            const finishedAt = isoNow();
+            writeFetchStatus(db, acc.id, { state: "ok", finished_at: finishedAt, last_success_at: finishedAt, added: delta });
           } catch (err) {
-            lines.push(`${acc.email}: ERROR — ${err instanceof Error ? err.message : String(err)}`);
+            const msg = err instanceof Error ? err.message : String(err);
+            lines.push(`${acc.email}: ERROR — ${msg}`);
+            fail(msg);
           }
         }
 
@@ -220,7 +249,19 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
       run: async () => {
         const triageService = deps.triage();
         const notifier = deps.notifier();
-        if (!triageService) return "Email triage service not available.";
+
+        // Letters held back by yesterday's cap go out first, before any new
+        // mail competes for today's quota — even on a tick with nothing new.
+        const office = deps.office();
+        let drained = 0;
+        try {
+          drained = office?.drainQueued() ?? 0;
+        } catch (err) {
+          log.warn(`EmailTriage: draining queued office letters failed: ${String(err)}`);
+        }
+        const drainedNote = drained > 0 ? ` ${drained} carta(s) en cola enviadas a ${office?.routerName() ?? "la oficina"}.` : "";
+
+        if (!triageService) return `Email triage service not available.${drainedNote}`;
 
         // Two sources of unclassified mail:
         //  - Gmail rows in google_emails (synced via gsync:gmail).
@@ -229,16 +270,24 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         // Both are mapped to the GoogleEmailRow shape so classifyBatch reuses
         // the same LLM prompt; apply* routes the result back to the correct
         // table.
-        const gmailRows = triageService.getUnclassified(15);
-        const commsRows = triageService.getUnclassifiedComms(15);
+        // 8 + 8 per tick: every mail now carries up to 1 500 chars of body.
+        const gmailRows = triageService.getUnclassified(8);
+        const commsRows = triageService.getUnclassifiedComms(8);
 
         if (gmailRows.length === 0 && commsRows.length === 0) {
-          return "No new emails to classify (Gmail + IMAP).";
+          return `No new emails to classify (Gmail + IMAP).${drainedNote}`;
         }
 
         const allRows = [...gmailRows, ...commsRows];
-        const results = await triageService.classifyBatch(allRows);
-        if (results.length === 0) return "Classification failed — no results.";
+        // A model that repeats an idx would otherwise get the mail two agenda
+        // writes, two drafts and two letters: first result per mail wins.
+        const seen = new Set<string>();
+        const results = (await triageService.classifyBatch(allRows)).filter((r) => {
+          if (seen.has(r.gmail_id)) return false;
+          seen.add(r.gmail_id);
+          return true;
+        });
+        if (results.length === 0) return `Classification failed — no results.${drainedNote}`;
 
         // Split results by source so we update the right table.
         const gmailIds = new Set(gmailRows.map((r) => r.gmail_id));
@@ -249,10 +298,37 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
         triageService.applyClassification(gmailResults);
         triageService.applyClassificationComms(commsResults);
 
-        // Auto-draft for every attention_needed across both sources.
+        // Dated items (meetings, deliverables, expiries) go straight to the
+        // calendar, whether or not the mail needs a reply.
+        const agenda = deps.agenda();
+        const agendaBySource = new Map<string, AgendaWriteResult>();
+        let agendaCreated = 0;
+        for (const r of results) {
+          const row = allRows.find((e) => e.gmail_id === r.gmail_id);
+          if (!row || !agenda || r.agenda_items.length === 0) continue;
+          try {
+            const written = agenda.write({
+              source_table: gmailIds.has(r.gmail_id) ? "google_emails" : "communications",
+              source_id: r.gmail_id,
+              thread_key: row.thread_key,
+              subject: row.subject,
+              from: row.from_email,
+            }, r.agenda_items);
+            agendaBySource.set(r.gmail_id, written);
+            agendaCreated += written.created;
+          } catch (err) {
+            log.warn(`EmailTriage: agenda write failed for ${r.gmail_id}: ${String(err)}`);
+          }
+        }
+
+        // Auto-draft for every attention_needed across both sources, then
+        // hand the mail to the office router as a letter from this agent.
         const needAttention = results.filter((r) => r.attention_needed);
         let draftsCreated = 0;
         let draftErrors = 0;
+        let lettersSent = 0;
+        let capped = 0;
+        let retrying = 0;
 
         for (const r of needAttention) {
           const fromGmail = gmailRows.find((e) => e.gmail_id === r.gmail_id);
@@ -260,13 +336,57 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
           const source = fromGmail ?? fromComms;
           if (!source) continue;
 
+          let draftId: string | undefined;
           try {
-            if (fromGmail) await triageService.generateDraft(fromGmail);
-            else if (fromComms) await triageService.generateDraftForComm(fromComms);
+            if (fromGmail) draftId = await triageService.generateDraft(fromGmail);
+            else if (fromComms) draftId = await triageService.generateDraftForComm(fromComms);
             draftsCreated++;
           } catch (err) {
             draftErrors++;
             log.warn(`EmailTriage: draft failed for ${r.gmail_id}`, err);
+          }
+
+          if (!office) continue;
+          try {
+            const outcome = office.letterFor({
+              source_table: fromGmail ? "google_emails" : "communications",
+              source_id: r.gmail_id,
+              thread_key: source.thread_key,
+              comm_thread_id: source.comm_thread_id,
+              subject: source.subject,
+              from: source.from_email,
+              date: source.date,
+              // Gmail rows have no reader tool, so the letter carries the text.
+              body_excerpt: fromGmail ? source.body_excerpt : undefined,
+              urgency: r.urgency,
+              summary: r.summary,
+              draft_comm_id: draftId || undefined,
+              agenda: agendaBySource.get(r.gmail_id) ?? EMPTY_AGENDA,
+            });
+            if (outcome === "sent") lettersSent++;
+            if (outcome === "capped") capped++;
+            if (outcome === "queued-retry") retrying++;
+          } catch (err) {
+            log.warn(`EmailTriage: office letter failed for ${r.gmail_id}: ${String(err)}`);
+          }
+        }
+
+        // Tell the user once a day that mail is waiting behind the cap.
+        const db = deps.db();
+        if (capped > 0 && notifier && db) {
+          const today = localDate();
+          const marked = safeQueryOne<{ value: string }>(db, "SELECT value FROM app_settings WHERE key = ?", CAP_NOTIFIED_KEY)?.value;
+          if (marked !== today) {
+            try {
+              db.prepare("INSERT OR REPLACE INTO app_settings (key, value) VALUES (?, ?)").run(CAP_NOTIFIED_KEY, today);
+            } catch (err) {
+              log.warn(`EmailTriage: cap marker write failed: ${String(err)}`);
+            }
+            await notifier.send({
+              title: "Tope diario de la oficina de correo",
+              body: `Se alcanzó el tope diario de cartas a ${office?.routerName() ?? "la oficina"} (comms.agent_runs.daily_cap). ${capped} carta(s) quedaron en cola y salen mañana; los correos ya están clasificados y con borrador en /mail.`,
+              priority: "normal",
+            }).catch(() => {});
           }
         }
 
@@ -291,7 +411,8 @@ export function commsAgentDrivers(deps: CommsDriverDeps): AgentDriver[] {
           });
         }
 
-        return `Classified ${results.length} (${gmailResults.length} Gmail, ${commsResults.length} IMAP): ${critical.length} critical, ${high.length} high, ${needAttention.length} need attention. ${draftsCreated} drafts${draftErrors > 0 ? ` (${draftErrors} errors)` : ""}.`;
+        const router = office?.routerName() ?? "la oficina";
+        return `Classified ${results.length} (${gmailResults.length} Gmail, ${commsResults.length} IMAP): ${critical.length} critical, ${high.length} high, ${needAttention.length} need attention. ${draftsCreated} drafts${draftErrors > 0 ? ` (${draftErrors} errors)` : ""}. ${agendaCreated} al calendario, ${lettersSent} a ${router}${capped ? `, ${capped} en cola por tope` : ""}${retrying ? `, ${retrying} en cola hasta que ${router} esté disponible` : ""}.${drainedNote}`;
       },
     },
   ];

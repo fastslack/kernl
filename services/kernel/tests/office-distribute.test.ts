@@ -173,6 +173,7 @@ describe("agents.flows.set_distribute RPC", () => {
 
   it("requires a boolean", async () => {
     const { flow } = office();
-    await expect(action().handler({ flow_id: flow.id })).rejects.toThrow("flow_id and enabled required");
+    // Same operation, and so the same message, as PUT /api/agents/flows/:id/distribute.
+    await expect(action().handler({ flow_id: flow.id })).rejects.toThrow("enabled must be a boolean");
   });
 });

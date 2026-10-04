@@ -1,5 +1,7 @@
 /** Office team rules shared by AgentService, the HTTP routes and the RPC actions. */
 
+import { HttpError } from "../../sdk/http-error.js";
+
 /** Label of the lead → member chains the office panel's "El jefe reparte" toggle owns. */
 export const DISTRIBUTE_CHAIN_LABEL = "office:distribute";
 
@@ -11,9 +13,9 @@ export const DISTRIBUTE_CHAIN_LABEL = "office:distribute";
  */
 export const TOP_RANK_IDS_SQL = "SELECT id FROM agent_ranks WHERE level = (SELECT MAX(level) FROM agent_ranks)";
 
-export class OfficeTeamError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 409) {
-    super(message);
+export class OfficeTeamError extends HttpError {
+  constructor(message: string, status: 400 | 404 | 409) {
+    super(status, message);
     this.name = "OfficeTeamError";
   }
 }

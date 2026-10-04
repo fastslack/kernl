@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test';
-import en from '../i18n/en.js';
-import es from '../i18n/es.js';
+import enDict from '../i18n/en.js';
+import esDict from '../i18n/es.js';
 import {
 	PREVIEW_MAX,
 	SUMMARY_MAX,
@@ -12,6 +12,10 @@ import {
 	type MeetingInput,
 	type MgmtInput,
 } from './activity-model.js';
+
+// Looked up by computed keys below; the dictionaries' own types only admit known keys.
+const en: Record<string, string> = enDict;
+const es: Record<string, string> = esDict;
 
 const meeting = (over: Partial<MeetingInput> = {}): MeetingInput => ({
 	id: 'm1',

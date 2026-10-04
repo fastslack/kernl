@@ -17,7 +17,7 @@
  * when the local catalog hasn't ingested some items yet.
  */
 
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, jsonArray } from "@kernl/extension-sdk";
 
 /**
  * `friends` is the lane that never touches a public relay: those directories
@@ -114,12 +114,15 @@ interface SubscriptionRow {
   last_synced_at: string | null;
 }
 
-function parseJsonArray<T = unknown>(raw: string): T[] {
-  try {
-    const v = JSON.parse(raw);
-    return Array.isArray(v) ? (v as T[]) : [];
-  } catch { return []; }
-}
+/** The cinema_directories columns update() may write, and how each field is stored. */
+const DIRECTORY_PATCH: Record<string, PatchColumn> = {
+  title: "text",
+  description: "text",
+  category: "text",
+  cover_identifier: "text",
+  visibility: "text",
+  collaborators: { column: "collaborators_json", to: (c: string[]) => JSON.stringify(c) },
+};
 
 export class CinemaDirectoriesService {
   constructor(private db: SqliteDb) {}
@@ -157,14 +160,7 @@ export class CinemaDirectoriesService {
     const existing = this.getRow(id);
     if (!existing || existing.origin !== "local") return null;
     const now = isoNow();
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    if (patch.title !== undefined) { sets.push("title = ?"); params.push(patch.title); }
-    if (patch.description !== undefined) { sets.push("description = ?"); params.push(patch.description); }
-    if (patch.category !== undefined) { sets.push("category = ?"); params.push(patch.category); }
-    if (patch.cover_identifier !== undefined) { sets.push("cover_identifier = ?"); params.push(patch.cover_identifier); }
-    if (patch.visibility !== undefined) { sets.push("visibility = ?"); params.push(patch.visibility); }
-    if (patch.collaborators !== undefined) { sets.push("collaborators_json = ?"); params.push(JSON.stringify(patch.collaborators)); }
+    const { sets, params } = buildPatch(patch, DIRECTORY_PATCH);
     if (sets.length === 0) return this.shape(existing);
     sets.push("updated_at = ?");
     params.push(now);
@@ -425,7 +421,7 @@ export class CinemaDirectoriesService {
     } else {
       const allowed = new Set([
         existing!.owner_pubkey,
-        ...parseJsonArray<string>(existing!.collaborators_json),
+        ...jsonArray<string>(existing!.collaborators_json),
       ]);
       if (!allowed.has(input.signerPubkey)) {
         return "rejected:signer-not-authorised";
@@ -505,8 +501,8 @@ export class CinemaDirectoriesService {
       category: row.category,
       cover_identifier: row.cover_identifier,
       visibility: row.visibility,
-      items: parseJsonArray<DirectoryItem>(row.items_json),
-      collaborators: parseJsonArray<string>(row.collaborators_json),
+      items: jsonArray<DirectoryItem>(row.items_json),
+      collaborators: jsonArray<string>(row.collaborators_json),
       origin: row.origin,
       nostr_event_id: row.nostr_event_id,
       version: row.version,

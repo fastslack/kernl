@@ -27,6 +27,8 @@ describe("auth exempt paths", () => {
 
   it("exempts by prefix only, never by substring", () => {
     expect(isAuthExemptPath("/api/evil/api/extensions/brand/x.svg")).toBe(false);
-    expect(AUTH_EXEMPT_PREFIXES).toEqual(["/api/extensions/brand/"]);
+    expect(AUTH_EXEMPT_PREFIXES).toEqual(["/api/extensions/brand/", "/api/comms/unsubscribe/"]);
+    expect(isAuthExemptPath("/api/comms/unsubscribe/abc.def")).toBe(true);
+    expect(isAuthExemptPath("/api/comms/send")).toBe(false);
   });
 });

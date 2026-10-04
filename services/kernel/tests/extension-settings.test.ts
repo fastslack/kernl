@@ -84,6 +84,24 @@ describe("ExtensionSettingsRegistry", () => {
     expect(registry.getSections()).toHaveLength(0);
     expect(registry.defs.size).toBe(0);
   });
+
+  it("keeps a known source on string fields only", () => {
+    const registry = new ExtensionSettingsRegistry();
+    registry.sync(fakeExtensions([{
+      slug: "warehouse",
+      manifest: {
+        settings: {
+          fields: [
+            { key: "WAREHOUSE_REPORT_TO", type: "string", label: "To", source: "email_accounts" },
+            { key: "WAREHOUSE_FLAG", type: "boolean", label: "Flag", source: "email_accounts" },
+            { key: "WAREHOUSE_OTHER", type: "string", label: "Other", source: "contacts" },
+          ],
+        },
+      },
+    }]));
+    const bySource = Object.fromEntries(registry.getSections()[0].fields.map((f) => [f.key, f.source]));
+    expect(bySource).toEqual({ WAREHOUSE_REPORT_TO: "email_accounts", WAREHOUSE_FLAG: undefined, WAREHOUSE_OTHER: undefined });
+  });
 });
 
 describe("ConfigService + extension settings", () => {

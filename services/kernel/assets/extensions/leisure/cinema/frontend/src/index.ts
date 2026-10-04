@@ -7,18 +7,9 @@
  * navigates to /cinema.
  */
 import Root from "./Root.svelte";
-import type { ExtPageContext } from "./types.js";
+import { createMount } from "$shared/mount";
 
-export type { ExtPageContext };
-
-export function mount(target: HTMLElement, ctx: ExtPageContext): { destroy(): void } {
-  // Root switches between the catalog (Page) and Directories based on the
-  // pathname — /cinema/directories shares this view (host routes by first
-  // URL segment).
-  const page = new Root({ target, props: { ctx } });
-  return {
-    destroy() {
-      page.$destroy();
-    },
-  };
-}
+// Root switches between the catalog (Page) and Directories based on the
+// pathname — /cinema/directories shares this view (host routes by first
+// URL segment).
+export const mount = createMount(Root);

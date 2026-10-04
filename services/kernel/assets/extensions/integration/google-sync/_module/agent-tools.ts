@@ -22,6 +22,8 @@ import {
   type SqliteDb,
   type ImportResult,
   type SyncMeta,
+  defineTool,
+  defineToolNoInput,
   errorResult,
   structuredResult,
   textResult,
@@ -86,13 +88,12 @@ const GoogleStatusOutput = z.object({
 
 function buildGoogleStatus(deps: AgentGoogleToolsDeps): ToolDefinition {
   const { auth, db } = deps;
-  return {
+  return defineToolNoInput({
     name: "kernel_google_overview",
     description:
       "Typed status snapshot of every Google sync source: authenticated state, last_sync_at + " +
       "items per source, and full-sync storage counts (emails / threads / calendar events). " +
       "Use this before kicking off a sync to decide what's stale.",
-    inputSchema: z.object({}),
     outputSchema: GoogleStatusOutput,
     tags: ["google", "status", "sync", "snapshot"],
     async handler() {
@@ -135,7 +136,7 @@ function buildGoogleStatus(deps: AgentGoogleToolsDeps): ToolDefinition {
 
       return { ...textResult(lines.join("\n")), structuredContent: out };
     },
-  };
+  });
 }
 
 // ── kernel_google_sync_now ────────────────────────────────────
@@ -165,18 +166,17 @@ const GoogleSyncNowOutput = z.object({
 
 function buildGoogleSyncNow(deps: AgentGoogleToolsDeps): ToolDefinition {
   const { auth, client, db, crmService, reminderService, taskService, syncService } = deps;
-  return {
+  return defineTool({
     name: "kernel_google_sync_now",
     description:
       "Unified Google sync verb. `target` selects what to sync (all / contacts / other_contacts / " +
       "calendar / tasks / gmail / full / graph). Replaces 8 separate kernel_google_sync_* tools — " +
       "the meta tools / code_run flows can pick a target via one entry point. Returns structured " +
       "ImportResult[] with imported/skipped/errors per source.",
-    inputSchema: GoogleSyncNowInput,
+    schema: GoogleSyncNowInput,
     outputSchema: GoogleSyncNowOutput,
     tags: ["google", "sync", "import", "contacts", "calendar", "gmail", "tasks"],
-    async handler(args) {
-      const { target } = GoogleSyncNowInput.parse(args);
+    async handler({ target }) {
       if (!auth.isAuthenticated()) {
         return errorResult("Not authenticated. Run kernel_google_auth first.");
       }
@@ -226,7 +226,7 @@ function buildGoogleSyncNow(deps: AgentGoogleToolsDeps): ToolDefinition {
         return errorResult(`google_sync_now(${target}) failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }
 
 // ── kernel_google_email_search ────────────────────────────────
@@ -254,17 +254,16 @@ const GoogleEmailSearchOutput = z.object({
 
 function buildGoogleEmailSearch(deps: AgentGoogleToolsDeps): ToolDefinition {
   const { syncService } = deps;
-  return {
+  return defineTool({
     name: "kernel_google_email_search",
     description:
       "Search the LOCAL Google email store (populated by `kernel_google_sync_now({target:'full'})` or " +
       "the legacy full-sync tool). Filters: text query (subject/body/snippet), sender, date range. " +
       "For LIVE Gmail search use `kernel_email_search` instead — that one hits Gmail's API directly.",
-    inputSchema: GoogleEmailSearchInput,
+    schema: GoogleEmailSearchInput,
     outputSchema: GoogleEmailSearchOutput,
     tags: ["google", "email", "search", "inbox", "local"],
-    async handler(args) {
-      const { query, from, date_from, date_to, limit } = GoogleEmailSearchInput.parse(args);
+    async handler({ query, from, date_from, date_to, limit }) {
       if (!syncService) return errorResult("syncService not initialized — local email search unavailable.");
       try {
         const results = syncService.searchEmails({ query, from, dateFrom: date_from, dateTo: date_to, limit });
@@ -283,5 +282,5 @@ function buildGoogleEmailSearch(deps: AgentGoogleToolsDeps): ToolDefinition {
         return errorResult(`google_email_search failed: ${err instanceof Error ? err.message : String(err)}`);
       }
     },
-  };
+  });
 }

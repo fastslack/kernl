@@ -126,8 +126,10 @@ describe("fmtRelative", () => {
 
 describe("actionForCard", () => {
   it("reports an in-flight purchase before anything else", () => {
+    // A pending checkout is never a dead end: closing the Stripe tab must not
+    // leave the card stuck, so the button reopens the same checkout.
     expect(actionForCard(card({ status: "for_sale" }), { purchase: { state: "pending" } }))
-      .toEqual({ label: "Waiting for payment…", disabled: true, kind: "buy" });
+      .toEqual({ label: "Continue payment ↗", disabled: false, kind: "resume" });
     expect(actionForCard(card(), { purchase: { state: "paid" } }))
       .toEqual({ label: "Installing…", disabled: true, kind: "buy" });
   });

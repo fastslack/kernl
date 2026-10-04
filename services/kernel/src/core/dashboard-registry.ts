@@ -13,6 +13,7 @@ import type {
   KernelModule,
   ExtensibleModule,
   AgentPanelTab,
+  CalendarSource,
 } from "./types.js";
 import { log } from "./logger.js";
 
@@ -59,6 +60,17 @@ export interface DashboardManifest {
     /** Render the view full-bleed (no inner shell padding). */
     fullBleed?: boolean;
   }>;
+  /**
+   * 3D world plugins of active extensions (`frontend.worlds`): the dashboard
+   * imports `/ext-assets/<slug>/<entry>?v=<version>` when an office of one of
+   * `kinds` exists. Contract: assets/extensions/_shared/world-plugin.ts.
+   */
+  extWorlds: Array<{
+    slug: string;
+    entry: string;
+    version: string;
+    kinds: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
+  }>;
 }
 
 // ── Registry ─────────────────────────────────────────────
@@ -74,6 +86,7 @@ export class DashboardRegistry {
   private registeredModules: string[] = [];
   private pages: DashboardPage[] = [];
   private agentPanelTabs: AgentPanelTab[] = [];
+  private calendarSources = new Map<string, CalendarSource>();
 
   /**
    * Collect dashboard descriptor from a module.
@@ -161,6 +174,15 @@ export class DashboardRegistry {
       }
     }
 
+    if (desc.calendarSources) {
+      for (const src of desc.calendarSources) {
+        if (this.calendarSources.has(src.id)) {
+          log.warn(`DashboardRegistry: duplicate calendar source "${src.id}" from module "${mod.name}", overwriting`);
+        }
+        this.calendarSources.set(src.id, src);
+      }
+    }
+
     log.debug(
       `DashboardRegistry: registered module "${mod.name}" ` +
       `(${desc.channels?.length ?? 0} ch, ${desc.nav?.length ?? 0} nav, ${desc.pages?.length ?? 0} pages)`,
@@ -184,6 +206,14 @@ export class DashboardRegistry {
     return [...this.channels.keys()];
   }
 
+  /**
+   * Calendar sources contributed by registered modules, for `queryCalendar()`.
+   * Unordered: the calendar sorts all sources by `order`.
+   */
+  getCalendarSources(): CalendarSource[] {
+    return [...this.calendarSources.values()];
+  }
+
   /** Merged channel mappings from all modules (tool-prefix → channels) */
   getChannelMappings(): ModuleChannelMapping[] {
     return this.channelMappings;
@@ -197,19 +227,19 @@ export class DashboardRegistry {
     // Auto-register channel endpoints
     for (const [name, ch] of this.channels) {
       const path = `/api/dashboard/${name}`;
-      server.get(path, async (_req: IncomingMessage, res: ServerResponse) => {
+      server.route("GET", path, async () => {
         try {
           const data = await ch.query(db, neo4j);
-          server.json(res, 200, data ? { available: true, ...(data as Record<string, unknown>) } : { available: false });
+          return data ? { available: true, ...(data as Record<string, unknown>) } : { available: false };
         } catch (err) {
           log.error(`Dashboard channel "${name}" query failed`, err);
-          server.json(res, 200, { available: false });
+          return { available: false };
         }
       });
       log.debug(`DashboardRegistry: auto-registered route ${path}`);
     }
 
-    // Serve module-declared static HTML pages
+    // Serve module-declared static HTML pages (HTML, so not server.route)
     for (const page of this.pages) {
       server.get(page.path, (_req: IncomingMessage, res: ServerResponse) => {
         try {
@@ -249,6 +279,7 @@ export class DashboardRegistry {
     const navGroups = [...this.navGroups];
     const agentPanelTabs = [...this.agentPanelTabs];
     const extPages: DashboardManifest["extPages"] = [];
+    const extWorlds: DashboardManifest["extWorlds"] = [];
 
     if (extensionService) {
       try {
@@ -269,6 +300,10 @@ export class DashboardRegistry {
                   title?: string;
                   channels?: string[];
                   fullBleed?: boolean;
+                }>;
+                worlds?: Array<{
+                  entry?: string;
+                  kinds?: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
                 }>;
               };
             };
@@ -300,6 +335,17 @@ export class DashboardRegistry {
                   ? p.channels.filter((c): c is string => typeof c === "string")
                   : undefined,
                 fullBleed: p.fullBleed === true ? true : undefined,
+              });
+            }
+
+            // 3D world plugin bundles (entry relative to frontend/, like pages).
+            for (const w of frontend.worlds ?? []) {
+              if (!w?.entry || !Array.isArray(w.kinds) || w.kinds.length === 0) continue;
+              extWorlds.push({
+                slug: row.slug,
+                entry: w.entry.replace(/^frontend\//, ""),
+                version: manifest.version ?? "0.0.0",
+                kinds: w.kinds.filter((k: { id: string }) => typeof k?.id === "string"),
               });
             }
 
@@ -375,6 +421,7 @@ export class DashboardRegistry {
       })),
       agentPanelTabs,
       extPages,
+      extWorlds,
     };
   }
 

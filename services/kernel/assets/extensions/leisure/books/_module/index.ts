@@ -1,4 +1,4 @@
-import { type DashboardDescriptor, type ExtensibleModule, type ModuleContext, runMigrations } from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule } from "@kernl/extension-sdk";
 import { booksMigrations } from "./migrations/001_books.js";
 import { BooksService } from "./service.js";
 import { registerBooksRoutes } from "./api-routes.js";
@@ -9,24 +9,18 @@ export interface BooksModule extends ExtensibleModule {
 
 export function createBooksModule(): BooksModule {
   let service: BooksService | null = null;
-  return {
+
+  const mod = defineModule({
     name: "books",
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "books", booksMigrations);
-      service = new BooksService(ctx.sqlite);
-    },
-    getTools() { return []; },
-    async shutdown() {},
+    migrations: booksMigrations,
+    init: (ctx) => (service = new BooksService(ctx.sqlite)),
+    dashboard: (svc) => (svc ? { registerRoutes: (server) => registerBooksRoutes(server, svc) } : null),
+  });
+
+  return Object.assign(mod, {
     getService() {
       if (!service) throw new Error("BooksService not initialized");
       return service;
     },
-    getDashboardDescriptor(): DashboardDescriptor | null {
-      if (!service) return null;
-      const svc = service;
-      return {
-        registerRoutes: (server) => registerBooksRoutes(server, svc),
-      };
-    },
-  };
+  });
 }

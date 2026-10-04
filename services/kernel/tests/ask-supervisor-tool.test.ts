@@ -44,7 +44,7 @@ describe("kernel_agents_ask_supervisor", () => {
     const supervisor = tools.find((t) => t.name === "kernel_agents_ask_supervisor")!;
     const res = await supervisor.handler({
       question: "Deploy today or tomorrow?",
-      options: [{ label: "Today" }, { label: "Tomorrow" }],
+      options: [{ label: "Today" }, { label: "Tomorrow" }, { label: "Next week" }, { label: "Never" }],
     });
     expect(text(res)).toMatch(/Caller agent context missing/);
   });
@@ -56,11 +56,23 @@ describe("kernel_agents_ask_supervisor", () => {
     const res = await supervisor.handler({
       question: "Ship v2 now?",
       context: "Tests are green.",
-      options: [{ label: "Yes" }, { label: "No" }],
+      options: [{ label: "Yes" }, { label: "No" }, { label: "Later" }, { label: "Ask QA" }],
       __caller_agent_id: agent.id,
     });
 
     expect(text(res)).toMatch(/escalated to your supervisor/);
     expect(service.listQuestions({ status: "pending" }).length).toBe(1);
+  });
+
+  it("rejects anything but exactly 4 options", async () => {
+    const agent = service.createAgent({ name: "Worker" });
+    const supervisor = tools.find((t) => t.name === "kernel_agents_ask_supervisor")!;
+    const res = await supervisor.handler({
+      question: "Ship?",
+      options: [{ label: "Yes" }, { label: "No" }],
+      __caller_agent_id: agent.id,
+    });
+    expect(text(res)).toMatch(/exactly 4/i);
+    expect(service.listQuestions({ status: "pending" }).length).toBe(0);
   });
 });

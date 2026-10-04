@@ -9,7 +9,7 @@
  * because that whitelist is a `Set.has` with no wildcards.
  */
 
-import { type SqliteDb, type RpcAction, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type RpcAction, isoNow, pickArgs } from "@kernl/extension-sdk";
 import { discoverHttpServer } from "./discovery.js";
 import { buildAuthorizationUrl } from "./oauth-routes.js";
 import type { McpStore, McpServerRow } from "./store.js";
@@ -19,6 +19,9 @@ const str = (v: unknown): string => (typeof v === "string" ? v : "");
 const strOrNull = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
 const arr = (v: unknown): string[] | null =>
   Array.isArray(v) ? v.map(String) : null;
+/** A string map (env, headers) only when it is an object; a string or an array used to reach the store as is. */
+const map = (v: unknown): Record<string, string> | null =>
+  (pickArgs({ v }, { v: "object" }).v as Record<string, string> | undefined) ?? null;
 
 /** What the list view renders: the row plus its cached tool count. */
 function view(store: McpStore, row: McpServerRow) {
@@ -70,14 +73,14 @@ export function mcpRpcActions(
           url: strOrNull(a.url),
           command: strOrNull(a.command),
           args: arr(a.args),
-          env: (a.env as Record<string, string>) ?? null,
+          env: map(a.env),
           auth_mode:
             str(a.auth_mode) === "authorization_code" ||
             str(a.auth_mode) === "client_credentials" ||
             str(a.auth_mode) === "token"
               ? (str(a.auth_mode) as "authorization_code" | "client_credentials" | "token")
               : "none",
-          headers: (a.headers as Record<string, string>) ?? null,
+          headers: map(a.headers),
           allow_tools: arr(a.allow_tools),
           deny_tools: arr(a.deny_tools),
         });
@@ -115,7 +118,7 @@ export function mcpRpcActions(
           url: a.url === undefined ? undefined : strOrNull(a.url),
           allow_tools: a.allow_tools === undefined ? undefined : arr(a.allow_tools),
           deny_tools: a.deny_tools === undefined ? undefined : arr(a.deny_tools),
-          headers: a.headers === undefined ? undefined : ((a.headers as Record<string, string>) ?? null),
+          headers: a.headers === undefined ? undefined : map(a.headers),
         });
         return { server: view(store, store.get(id)!) };
       },
@@ -206,8 +209,7 @@ export function mcpRpcActions(
     {
       name: "mcp.grant",
       handler: async (a) => {
-        const agentId = str(a.agent_id);
-        const toolNames = arr(a.tools) ?? [];
+        const { agent_id: agentId = "", tools: toolNames = [] } = pickArgs(a, { agent_id: "string", tools: "string[]" });
         if (!agentId) throw new Error("agent_id required");
         if (toolNames.length === 0) throw new Error("No tools given");
 

@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 import { resolve } from "node:path";
 import type { SqliteDb } from "../../core/db/sqlite.js";
-import type { KernelConfig } from "../../core/config.js";
+import { defaultTimezone, type KernelConfig } from "../../core/config.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
@@ -9,6 +9,7 @@ import type { AppSetting, SettingCategory, SettingDef } from "./types.js";
 import type { LocalizedText } from "../../core/types.js";
 import { legacyCredentialTarget, legacyToStoredPatch } from "../../core/llm/credentials-legacy.js";
 import { saveProviderConfig } from "../../core/llm/credentials.js";
+import { parseSpeed, parseSttEngine, parseTtsEngine } from "../../voice/settings.js";
 
 // ── Setting catalog ────────────────────────────────────────────────────────
 // Each entry describes a known env-var. The `applyToConfig` function mutates
@@ -57,6 +58,68 @@ const SETTING_CATALOG: SettingDef[] = [
     type: "string",
     applyToConfig: (_v, _c) => { process.env.GROK_TRANSLATE_MODEL = _v; },
   },
+  // ── Voice (src/voice) — read live, so a change applies to the next utterance.
+  {
+    key: "VOICE_ENABLED",
+    seedDefault: "true",
+    label: { en: "Voice", es: "Voz" },
+    description: { en: "Talk to the Chief: mic button in the dashboard, voice notes on Telegram.", es: "Hablar con el Chief: botón de micrófono en el dashboard y notas de voz por Telegram." },
+    category: "ai",
+    type: "boolean",
+    applyToConfig: (v, c) => { c.voice.enabled = v !== "false"; },
+  },
+  {
+    key: "VOICE_STT_ENGINE",
+    seedDefault: "auto",
+    label: { en: "Voice — listening engine", es: "Voz — motor para escuchar" },
+    description: { en: "auto (whisper.cpp → Groq → OpenAI) | whispercpp | groq | openai. whisper.cpp runs locally and reuses Cinema's models.", es: "auto (whisper.cpp → Groq → OpenAI) | whispercpp | groq | openai. whisper.cpp corre local y usa los mismos modelos que Cinema." },
+    category: "ai",
+    type: "string",
+    applyToConfig: (v, c) => { c.voice.sttEngine = parseSttEngine(v); },
+  },
+  {
+    key: "VOICE_WHISPER_MODEL",
+    label: { en: "Voice — whisper model", es: "Voz — modelo de whisper" },
+    description: { en: "Empty = large-v3-turbo with a GPU, small without. Others: base, medium, large-v3.", es: "Vacío = large-v3-turbo con GPU, small sin GPU. Otros: base, medium, large-v3." },
+    category: "ai",
+    type: "string",
+    applyToConfig: (v, c) => { c.voice.whisperModel = v.trim(); },
+  },
+  {
+    key: "VOICE_LANGUAGE",
+    seedDefault: "es",
+    label: { en: "Voice — language", es: "Voz — idioma" },
+    description: { en: "Two-letter code (es, en, pt…), or auto to detect it each time (slower, and short phrases get misdetected).", es: "Código de dos letras (es, en, pt…), o auto para detectarlo cada vez (más lento, y en frases cortas se equivoca)." },
+    category: "ai",
+    type: "string",
+    applyToConfig: (v, c) => { c.voice.language = v.trim().toLowerCase() || "es"; },
+  },
+  {
+    key: "VOICE_TTS_ENGINE",
+    seedDefault: "auto",
+    label: { en: "Voice — speaking engine", es: "Voz — motor para hablar" },
+    description: { en: "auto (Piper → OpenAI → ElevenLabs) | piper | openai | elevenlabs. Piper is local and free.", es: "auto (Piper → OpenAI → ElevenLabs) | piper | openai | elevenlabs. Piper es local y gratis." },
+    category: "ai",
+    type: "string",
+    applyToConfig: (v, c) => { c.voice.ttsEngine = parseTtsEngine(v); },
+  },
+  {
+    key: "VOICE_TTS_VOICE",
+    label: { en: "Voice — voice", es: "Voz — voz" },
+    description: { en: "Female or male, from Argentina, Mexico, Spain… Pick it in the list and press ▶ to hear it first. Empty = the default for the language.", es: "Mujer u hombre, de Argentina, México, España… Elegila en la lista y tocá ▶ para escucharla antes. Vacío = la de cada idioma." },
+    category: "ai",
+    type: "string",
+    applyToConfig: (v, c) => { c.voice.ttsVoice = v.trim(); },
+  },
+  {
+    key: "VOICE_TTS_SPEED",
+    seedDefault: "1",
+    label: { en: "Voice — speed", es: "Voz — velocidad" },
+    description: { en: "0.5 to 2. Default 1.", es: "De 0,5 a 2. Por defecto 1." },
+    category: "ai",
+    type: "number",
+    applyToConfig: (v, c) => { c.voice.ttsSpeed = parseSpeed(v); },
+  },
   {
     key: "ELEVENLABS_API_KEY",
     label: { en: "ElevenLabs API Key", es: "Clave API de ElevenLabs" },
@@ -100,6 +163,28 @@ const SETTING_CATALOG: SettingDef[] = [
     category: "chat",
     type: "string",
     applyToConfig: (v, c) => { c.chat.defaultModel = v; },
+  },
+  {
+    key: "CHAT_PREFERRED_PROVIDER",
+    label: { en: "Chat Last-Picked Provider", es: "Proveedor elegido en el chat" },
+    description: {
+      en: "Provider last picked in a chat; new chats start on it. Saved automatically when you pick a model. Chat only — other LLM calls keep their own defaults.",
+      es: "Proveedor elegido por última vez en un chat; los chats nuevos arrancan con él. Se guarda solo al elegir un modelo. Solo afecta al chat: las demás llamadas LLM mantienen sus valores por defecto.",
+    },
+    category: "chat",
+    type: "string",
+    applyToConfig: (v, c) => { c.chat.preferredProvider = v; },
+  },
+  {
+    key: "CHAT_PREFERRED_MODEL",
+    label: { en: "Chat Last-Picked Model", es: "Modelo elegido en el chat" },
+    description: {
+      en: "Model last picked in a chat; empty means the provider's own default. Saved automatically when you pick a model.",
+      es: "Modelo elegido por última vez en un chat; vacío es el modelo por defecto del proveedor. Se guarda solo al elegir un modelo.",
+    },
+    category: "chat",
+    type: "string",
+    applyToConfig: (v, c) => { c.chat.preferredModel = v; },
   },
   {
     key: "CHAT_SYSTEM_PROMPT",
@@ -248,6 +333,17 @@ const SETTING_CATALOG: SettingDef[] = [
     sensitive: true,
     applyToConfig: (v, c) => { c.resend.apiKey = v; },
   },
+  {
+    key: "GOOGLE_PLACES_API_KEY",
+    label: { en: "Google Places API key", es: "Clave de Google Places" },
+    description: {
+      en: "Lets agents search businesses on Google Maps. Google Cloud console → enable Places API (New) → create an API key restricted to it.",
+      es: "Permite que los agentes busquen negocios en Google Maps. En la consola de Google Cloud activá Places API (New) y creá una clave de API restringida a esa API.",
+    },
+    category: "integrations",
+    type: "secret",
+    sensitive: true,
+  },
 
   // ── Life ──────────────────────────────────────────────────────────────────
   {
@@ -293,10 +389,13 @@ const SETTING_CATALOG: SettingDef[] = [
   {
     key: "TIMEZONE",
     label: { en: "Timezone", es: "Zona horaria" },
-    description: { en: "IANA timezone, e.g. UTC, Europe/London, America/New_York.", es: "Zona horaria IANA, por ejemplo UTC, Europe/London, America/New_York." },
+    description: {
+      en: "IANA timezone, e.g. UTC, Europe/London, America/New_York. Empty: this machine's zone. Sets what \"today\" means and when agent schedules run.",
+      es: "Zona horaria IANA, por ejemplo UTC, Europe/London, America/New_York. Vacío: la zona de esta máquina. Define qué es \"hoy\" y a qué hora corren los agentes programados.",
+    },
     category: "general",
     type: "string",
-    applyToConfig: (v, c) => { c.timezone = v; c.life.timezone = v; },
+    applyToConfig: (v, c) => { c.timezone = c.life.timezone = v || defaultTimezone(); },
   },
   {
     key: "KERNEL_DEFAULT_LANGUAGE",
@@ -491,7 +590,7 @@ export class ConfigService {
 
     for (const def of SETTING_CATALOG) {
       // Populate current value from the live config / process.env
-      const currentValue = process.env[def.key] ?? "";
+      const currentValue = process.env[def.key] ?? def.seedDefault ?? "";
       stmt.run(
         def.key,
         currentValue,

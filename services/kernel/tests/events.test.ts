@@ -385,7 +385,8 @@ describe("EventsService", () => {
       const duplicate = service.duplicate(event.id, "2025-03-13T20:00:00");
       expect(duplicate).toBeTruthy();
       expect(duplicate!.title).toBe("Fulbito");
-      expect(duplicate!.start_at).toBe("2025-03-13T20:00:00");
+      // A start without a zone is local time, stored as a UTC instant (the tests run in UTC).
+      expect(duplicate!.start_at).toBe("2025-03-13T20:00:00.000Z");
       expect(duplicate!.location).toBe("Cancha");
       expect(duplicate!.attendees).toHaveLength(2);
       // All attendees start as pending in new event

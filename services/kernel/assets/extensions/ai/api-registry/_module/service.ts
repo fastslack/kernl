@@ -5,6 +5,8 @@ import {
   encrypt,
   decrypt,
   log,
+  buildPatch,
+  type PatchColumn,
 } from "@kernl/extension-sdk";
 import type {
   ApiCategoryRow,
@@ -21,6 +23,26 @@ import type {
   ApiSeedData,
   ApiSeedEntry,
 } from "./types.js";
+
+/** The api_registry columns updateApi may write, and how each field is stored. */
+const API_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  category_id: "text",
+  base_url: "text",
+  docs_url: "text",
+  auth_type: "text",
+  auth_location: "text",
+  auth_key_name: "text",
+  rate_limit_requests: "text",
+  rate_limit_window_ms: "text",
+  capabilities: "json",
+  status: "text",
+  is_free: "bool",
+  requires_signup: "bool",
+  // Tags are stored comma-joined, not as JSON.
+  tags: { to: (tags: string[]) => tags.join(",") },
+};
 
 // ── Service ────────────────────────────────────────────
 
@@ -117,25 +139,7 @@ export class ApiRegistryService {
     const api = this.getApi(id);
     if (!api) return undefined;
 
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-
-    if (changes.name !== undefined) { sets.push("name = ?"); vals.push(changes.name); }
-    if (changes.description !== undefined) { sets.push("description = ?"); vals.push(changes.description); }
-    if (changes.category_id !== undefined) { sets.push("category_id = ?"); vals.push(changes.category_id); }
-    if (changes.base_url !== undefined) { sets.push("base_url = ?"); vals.push(changes.base_url); }
-    if (changes.docs_url !== undefined) { sets.push("docs_url = ?"); vals.push(changes.docs_url); }
-    if (changes.auth_type !== undefined) { sets.push("auth_type = ?"); vals.push(changes.auth_type); }
-    if (changes.auth_location !== undefined) { sets.push("auth_location = ?"); vals.push(changes.auth_location); }
-    if (changes.auth_key_name !== undefined) { sets.push("auth_key_name = ?"); vals.push(changes.auth_key_name); }
-    if (changes.rate_limit_requests !== undefined) { sets.push("rate_limit_requests = ?"); vals.push(changes.rate_limit_requests); }
-    if (changes.rate_limit_window_ms !== undefined) { sets.push("rate_limit_window_ms = ?"); vals.push(changes.rate_limit_window_ms); }
-    if (changes.capabilities !== undefined) { sets.push("capabilities = ?"); vals.push(JSON.stringify(changes.capabilities)); }
-    if (changes.status !== undefined) { sets.push("status = ?"); vals.push(changes.status); }
-    if (changes.is_free !== undefined) { sets.push("is_free = ?"); vals.push(changes.is_free ? 1 : 0); }
-    if (changes.requires_signup !== undefined) { sets.push("requires_signup = ?"); vals.push(changes.requires_signup ? 1 : 0); }
-    if (changes.tags !== undefined) { sets.push("tags = ?"); vals.push(changes.tags.join(",")); }
-
+    const { sets, params: vals } = buildPatch(changes, API_PATCH);
     if (sets.length === 0) return api;
 
     sets.push("updated_at = ?");

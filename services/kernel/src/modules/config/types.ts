@@ -41,6 +41,9 @@ export interface SettingDef {
   type: SettingType;
   sensitive?: boolean;
   readonly?: boolean;
+  /** First value stored when the env var is unset — so the form shows the
+   *  real default (a boolean that defaults on must not render as off). */
+  seedDefault?: string;
   /** Apply value to live KernelConfig after writing */
   applyToConfig?: (value: string, config: import("../../core/config.js").KernelConfig) => void;
 }

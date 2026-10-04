@@ -1,4 +1,4 @@
-import { type SqliteDb, toRecord, today, daysFromNow } from "@kernl/extension-sdk";
+import { type SqliteDb, toRecord, today, daysFromNow, dayStart } from "@kernl/extension-sdk";
 
 export interface DashboardReminders {
   upcoming24h: Array<{ id: string; title: string; trigger_at: string; repeat: string }>;
@@ -42,7 +42,7 @@ export function queryReminders(db: SqliteDb): DashboardReminders {
         `SELECT COUNT(*) as count FROM reminders
          WHERE last_fired_at >= ? AND last_fired_at < ?`,
       )
-      .get(`${todayStr}T00:00:00`, `${tomorrowStr}T00:00:00`) as { count: number }
+      .get(dayStart(todayStr), dayStart(tomorrowStr)) as { count: number }
   ).count;
 
   const recurringCount = (

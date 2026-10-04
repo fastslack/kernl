@@ -20,6 +20,7 @@ import type { ExtensionService } from "./service.js";
 import type { InstalledExtension } from "./types.js";
 import type { ExtensionManifest } from "./schema.js";
 import { sdkIncompatibility } from "./sdk-compat.js";
+import { registerExtensionFlowKinds } from "../agents/types.js";
 
 interface LoadResult {
   loaded: string[];
@@ -37,6 +38,9 @@ export async function loadActiveExtensions(
   // Resolve dependency-safe order: extensions with no deps first.
   const rows = service.list({ status: "active", type: "module" });
   const ordered = topoSort(rows, service);
+
+  // Office kinds declared by active extensions' world plugins (any type).
+  for (const r of service.list({ status: "active" })) registerWorldKinds(r);
 
   // Dependency enforcement needs to consider non-module extensions too (e.g. a
   // module may depend on a `channel` that provides an auth/connection service).
@@ -211,4 +215,12 @@ function topoSort(
 
   for (const row of rows) visit(row);
   return out;
+}
+
+/** Accept the office kinds an extension's 3D world plugins declare (frontend.worlds). */
+export function registerWorldKinds(row: Pick<InstalledExtension, "manifest_json"> | { frontend?: ExtensionManifest["frontend"] }): void {
+  try {
+    const manifest = "manifest_json" in row ? (JSON.parse(row.manifest_json) as ExtensionManifest) : row;
+    for (const w of manifest.frontend?.worlds ?? []) registerExtensionFlowKinds(w.kinds ?? []);
+  } catch { /* unreadable manifest: nothing to register */ }
 }

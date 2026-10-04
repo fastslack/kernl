@@ -1,6 +1,7 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { newId, isoNow } from "../../core/helpers.js";
+import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
 import { log } from "../../core/logger.js";
 import type { CatalogRegistry } from "./catalog/registry.js";
 import type { CatalogFilter, CatalogItem } from "./catalog/types.js";
@@ -15,6 +16,24 @@ import type {
   ItemType,
   ItemStatus,
 } from "./types.js";
+
+/** The marketplace_items columns updateItem may write, and how each field is stored. */
+const ITEM_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  long_description: "text",
+  version: "text",
+  author: "text",
+  author_url: "text",
+  icon: "text",
+  category: "text",
+  tags: "json",
+  license: "text",
+  price_cents: "text",
+  featured: "bool",
+  verified: "bool",
+  package_data: "json",
+};
 
 export class MarketplaceService {
   private catalog: CatalogRegistry | null = null;
@@ -239,23 +258,7 @@ export class MarketplaceService {
     const item = this.getItem(id);
     if (!item) return undefined;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (updates.name !== undefined) { sets.push("name = ?"); params.push(updates.name); }
-    if (updates.description !== undefined) { sets.push("description = ?"); params.push(updates.description); }
-    if (updates.long_description !== undefined) { sets.push("long_description = ?"); params.push(updates.long_description); }
-    if (updates.version !== undefined) { sets.push("version = ?"); params.push(updates.version); }
-    if (updates.author !== undefined) { sets.push("author = ?"); params.push(updates.author); }
-    if (updates.author_url !== undefined) { sets.push("author_url = ?"); params.push(updates.author_url); }
-    if (updates.icon !== undefined) { sets.push("icon = ?"); params.push(updates.icon); }
-    if (updates.category !== undefined) { sets.push("category = ?"); params.push(updates.category); }
-    if (updates.tags !== undefined) { sets.push("tags = ?"); params.push(JSON.stringify(updates.tags)); }
-    if (updates.license !== undefined) { sets.push("license = ?"); params.push(updates.license); }
-    if (updates.price_cents !== undefined) { sets.push("price_cents = ?"); params.push(updates.price_cents); }
-    if (updates.featured !== undefined) { sets.push("featured = ?"); params.push(updates.featured ? 1 : 0); }
-    if (updates.verified !== undefined) { sets.push("verified = ?"); params.push(updates.verified ? 1 : 0); }
-    if (updates.package_data !== undefined) { sets.push("package_data = ?"); params.push(JSON.stringify(updates.package_data)); }
+    const { sets, params } = buildPatch(updates, ITEM_PATCH);
 
     if (sets.length === 0) return item;
 

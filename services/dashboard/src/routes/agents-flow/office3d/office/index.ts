@@ -14,5 +14,5 @@ export { buildMyOffice } from './my-office.js';
 export { buildCentralHall, buildHallExtension } from './central-hall.js';
 export { buildReception, type ReceptionAnchors } from './reception.js';
 export { buildCommunicationsOffice } from './communications.js';
-export { buildDataCenterOffice, type DataCenterHandles, type RepoBookmark } from './data-center.js';
+export { buildDataCenterOffice, updateDataCenter, type DataCenterHandles, type DataCenterActions, type RepoBookmark } from './data-center.js';
 export { setupLighting } from './lighting.js';

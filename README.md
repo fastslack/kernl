@@ -98,6 +98,14 @@ your browser and reused for every request. To pin your own instead, set
 `KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`. The graph
 brain (Neo4j) and key-free web search come bundled in this path.
 
+To let the Filesystem Commander browse a folder of your machine, and to run
+`claude_code` agents on your Claude Code login, set `KERNL_FS_ROOT` in `.env` and
+add the host overlay — then name the same files on every later `compose` command:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+```
+
 </details>
 
 ## Your AI is brilliant — and amnesiac.
@@ -203,9 +211,9 @@ Full guide → [`docs/architecture/extension-points.md`](./docs/architecture/ext
 ## 📦 More install options
 
 <details>
-<summary><b>Full stack — real-time bridge + WhatsApp</b></summary>
+<summary><b>Full stack — host-coupled mounts</b></summary>
 
-Adds the [mtwRequest](https://github.com/fastslack/mtwRequest) Rust server, the WhatsApp bridge, and host-coupled mounts (so on-host `claude_code` agents can edit your sibling repos). Needs a few host paths in `.env`:
+WhatsApp no longer needs this: it is part of the standard `docker compose up -d`, which already runs the [mtwRequest](https://github.com/fastslack/mtwRequest) Rust server and the WhatsApp bridge, and the Linux, macOS and Windows packages bundle the same pair and run them as supervised children — no compose file needed there either. Either way, you link your phone from Settings → Channels → WhatsApp (QR or phone code) with nothing to configure. `docker-compose.full.yml` is only for building those two services from local source and for host-coupled mounts (so on-host `claude_code` agents can edit your sibling repos). Needs a few host paths in `.env`:
 
 ```bash
 git clone https://github.com/fastslack/kernl.git

@@ -9,7 +9,14 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { type KernelHttpServer, checkProtected, formatViolation, log } from "@kernl/extension-sdk";
+import {
+  HttpError,
+  isHttpError,
+  type KernelHttpServer,
+  checkProtected,
+  formatViolation,
+  log,
+} from "@kernl/extension-sdk";
 import type { FsCommanderService } from "./service.js";
 import { buildPreview, guessMime } from "./preview.js";
 
@@ -26,6 +33,21 @@ function requireStr(value: string | null, name: string): string {
   return value;
 }
 
+/**
+ * Nearly every failure on this surface is the caller's (bad path, unknown
+ * provider, sandbox violation, missing file), so these routes answer 400 with
+ * the error's message rather than the helper's default 500. An HttpError
+ * thrown inside keeps its own status.
+ */
+async function as400<T>(fn: () => T | Promise<T>): Promise<T> {
+  try {
+    return await fn();
+  } catch (err) {
+    if (isHttpError(err)) throw err;
+    throw new HttpError(400, errMessage(err));
+  }
+}
+
 export function registerFilesystemCommanderRoutes(
   server: KernelHttpServer,
   service: FsCommanderService,
@@ -36,84 +58,58 @@ export function registerFilesystemCommanderRoutes(
 ): void {
   // ── Providers ────────────────────────────────────────────────────────
 
-  server.get("/api/fs/providers", (req, res) => {
-    server.json(res, 200, { items: service.listProviders() });
-  });
+  server.route("GET", "/api/fs/providers", () => ({ items: service.listProviders() }));
 
   // ── List / stat ──────────────────────────────────────────────────────
 
-  server.get("/api/fs/list", async (req, res) => {
-    try {
-      const s = q(req);
-      const providerId = requireStr(s.get("provider"), "provider");
-      const path = requireStr(s.get("path"), "path");
-      const listing = await service.get(providerId).list(path);
-      server.json(res, 200, listing, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route("GET", "/api/fs/list", ({ query }) => as400(() => {
+    const providerId = requireStr(query.get("provider"), "provider");
+    const path = requireStr(query.get("path"), "path");
+    return service.get(providerId).list(path);
+  }));
 
-  server.get("/api/fs/stat", async (req, res) => {
-    try {
-      const s = q(req);
-      const providerId = requireStr(s.get("provider"), "provider");
-      const path = requireStr(s.get("path"), "path");
-      const stat = await service.get(providerId).stat(path);
-      server.json(res, 200, stat, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route("GET", "/api/fs/stat", ({ query }) => as400(() => {
+    const providerId = requireStr(query.get("provider"), "provider");
+    const path = requireStr(query.get("path"), "path");
+    return service.get(providerId).stat(path);
+  }));
 
   // ── Bookmarks ────────────────────────────────────────────────────────
 
-  server.get("/api/fs/bookmarks", (req, res) => {
-    server.json(res, 200, { items: service.bookmarksList() }, req);
-  });
+  server.route("GET", "/api/fs/bookmarks", () => ({ items: service.bookmarksList() }));
 
-  server.post("/api/fs/bookmarks", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        label?: string;
-        provider_id?: string;
-        path?: string;
-        sort_order?: number;
-      }>(req);
-      if (!body.label || !body.provider_id || !body.path) {
-        server.json(res, 400, { error: "label, provider_id, path required" });
-        return;
-      }
-      const row = service.bookmarkAdd({
-        label: body.label,
-        providerId: body.provider_id,
-        path: body.path,
-        sortOrder: body.sort_order,
-      });
-      server.json(res, 200, { item: row }, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
+  server.route<{
+    label?: string;
+    provider_id?: string;
+    path?: string;
+    sort_order?: number;
+  }>("POST", "/api/fs/bookmarks", ({ body }) => as400(() => {
+    if (!body.label || !body.provider_id || !body.path) {
+      throw new HttpError(400, "label, provider_id, path required");
     }
-  });
+    const row = service.bookmarkAdd({
+      label: body.label,
+      providerId: body.provider_id,
+      path: body.path,
+      sortOrder: body.sort_order,
+    });
+    return { item: row };
+  }));
 
-  server.delete("/api/fs/bookmarks/:id", (req, res) => {
-    const id = params(req).id;
-    if (!id) { server.json(res, 400, { error: "id required" }); return; }
+  server.route("DELETE", "/api/fs/bookmarks/:id", ({ params: { id } }) => {
     service.bookmarkRemove(id);
-    server.json(res, 200, { success: true });
+    return { success: true };
   });
 
   // ── Tabs ─────────────────────────────────────────────────────────────
 
-  server.get("/api/fs/tabs", (req, res) => {
-    try {
-      const pane = paneParam(q(req).get("pane"));
-      server.json(res, 200, { items: service.tabsGet(pane) }, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route("GET", "/api/fs/tabs", ({ query }) => as400(() => {
+    const pane = paneParam(query.get("pane"));
+    return { items: service.tabsGet(pane) };
+  }));
 
+  // Left raw: route() reads an empty body as {}, which would wipe the pane's
+  // tabs (tabs ?? []) where an empty body used to be rejected as invalid JSON.
   server.put("/api/fs/tabs", async (req, res) => {
     try {
       const pane = paneParam(q(req).get("pane"));
@@ -129,217 +125,151 @@ export function registerFilesystemCommanderRoutes(
 
   // ── History ──────────────────────────────────────────────────────────
 
-  server.get("/api/fs/history", (req, res) => {
-    try {
-      const s = q(req);
-      const pane = paneParam(s.get("pane"));
-      const limit = Math.min(parseInt(s.get("limit") ?? "100", 10) || 100, 500);
-      server.json(res, 200, { items: service.historyList(pane, limit) }, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route("GET", "/api/fs/history", ({ query }) => as400(() => {
+    const pane = paneParam(query.get("pane"));
+    const limit = Math.min(parseInt(query.get("limit") ?? "100", 10) || 100, 500);
+    return { items: service.historyList(pane, limit) };
+  }));
 
-  server.post("/api/fs/history", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        pane?: string;
-        provider_id?: string;
-        path?: string;
-      }>(req);
-      const pane = paneParam(body.pane ?? null);
-      if (!body.provider_id || !body.path) {
-        server.json(res, 400, { error: "provider_id, path required" });
-        return;
-      }
-      service.historyPush(pane, body.provider_id, body.path);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) });
+  server.route<{
+    pane?: string;
+    provider_id?: string;
+    path?: string;
+  }>("POST", "/api/fs/history", ({ body }) => as400(() => {
+    const pane = paneParam(body.pane ?? null);
+    if (!body.provider_id || !body.path) {
+      throw new HttpError(400, "provider_id, path required");
     }
-  });
+    service.historyPush(pane, body.provider_id, body.path);
+    return { success: true };
+  }));
 
   // ── Mutations ────────────────────────────────────────────────────────
 
-  server.post("/api/fs/mkdir", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        provider?: string;
-        path?: string;
-        recursive?: boolean;
-      }>(req);
-      if (!body.provider || !body.path) {
-        server.json(res, 400, { error: "provider, path required" });
-        return;
-      }
-      await service.get(body.provider).mkdir(body.path, {
-        recursive: body.recursive ?? false,
-      });
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) });
+  server.route<{
+    provider?: string;
+    path?: string;
+    recursive?: boolean;
+  }>("POST", "/api/fs/mkdir", ({ body }) => as400(async () => {
+    if (!body.provider || !body.path) {
+      throw new HttpError(400, "provider, path required");
     }
-  });
+    await service.get(body.provider).mkdir(body.path, {
+      recursive: body.recursive ?? false,
+    });
+    return { success: true };
+  }));
 
-  server.post("/api/fs/rename", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        provider?: string;
-        from?: string;
-        to?: string;
-      }>(req);
-      if (!body.provider || !body.from || !body.to) {
-        server.json(res, 400, { error: "provider, from, to required" });
-        return;
-      }
-      await service.get(body.provider).rename(body.from, body.to);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) });
+  server.route<{
+    provider?: string;
+    from?: string;
+    to?: string;
+  }>("POST", "/api/fs/rename", ({ body }) => as400(async () => {
+    if (!body.provider || !body.from || !body.to) {
+      throw new HttpError(400, "provider, from, to required");
     }
-  });
+    await service.get(body.provider).rename(body.from, body.to);
+    return { success: true };
+  }));
 
-  server.post("/api/fs/delete", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        provider?: string;
-        paths?: string[];
-        recursive?: boolean;
-      }>(req);
-      if (!body.provider || !Array.isArray(body.paths) || body.paths.length === 0) {
-        server.json(res, 400, { error: "provider, paths[] required" });
-        return;
-      }
-      const p = service.get(body.provider);
-      const errors: Array<{ path: string; error: string }> = [];
-      for (const path of body.paths) {
-        try {
-          await p.rm(path, { recursive: body.recursive ?? false });
-        } catch (err) {
-          errors.push({ path, error: errMessage(err) });
-        }
-      }
-      server.json(res, errors.length ? 207 : 200, {
-        success: errors.length === 0,
-        deleted: body.paths.length - errors.length,
-        errors,
-      });
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) });
+  server.route<{
+    provider?: string;
+    paths?: string[];
+    recursive?: boolean;
+  }>("POST", "/api/fs/delete", ({ req, res, body }) => as400(async () => {
+    if (!body.provider || !Array.isArray(body.paths) || body.paths.length === 0) {
+      throw new HttpError(400, "provider, paths[] required");
     }
+    const p = service.get(body.provider);
+    const errors: Array<{ path: string; error: string }> = [];
+    for (const path of body.paths) {
+      try {
+        await p.rm(path, { recursive: body.recursive ?? false });
+      } catch (err) {
+        errors.push({ path, error: errMessage(err) });
+      }
+    }
+    const result = {
+      success: errors.length === 0,
+      deleted: body.paths.length - errors.length,
+      errors,
+    };
+    // Partial failure: 207 with the per-path errors.
+    if (errors.length) { server.json(res, 207, result, req); return; }
+    return result;
+  }));
+
+  server.route<OpBody>("POST", "/api/fs/ops/copy", ({ body }) =>
+    as400(() => startOp(service, body, "copy")));
+
+  server.route<OpBody>("POST", "/api/fs/ops/move", ({ body }) =>
+    as400(() => startOp(service, body, "move")));
+
+  server.route("GET", "/api/fs/ops", () => ({ items: service.ops.list() }));
+
+  server.route("GET", "/api/fs/ops/:id", ({ params: { id } }) => {
+    const p = service.ops.get(id);
+    if (!p) throw new HttpError(404, "op not found");
+    return p;
   });
 
-  server.post("/api/fs/ops/copy", async (req, res) => {
-    await startOp(server, service, req, res, "copy");
-  });
-
-  server.post("/api/fs/ops/move", async (req, res) => {
-    await startOp(server, service, req, res, "move");
-  });
-
-  server.get("/api/fs/ops", (req, res) => {
-    server.json(res, 200, { items: service.ops.list() }, req);
-  });
-
-  server.get("/api/fs/ops/:id", (req, res) => {
-    const id = params(req).id;
-    const p = id ? service.ops.get(id) : null;
-    if (!p) { server.json(res, 404, { error: "op not found" }); return; }
-    server.json(res, 200, p, req);
-  });
-
-  server.delete("/api/fs/ops/:id", (req, res) => {
-    const id = params(req).id;
-    if (!id) { server.json(res, 400, { error: "id required" }); return; }
-    const ok = service.ops.cancel(id);
-    server.json(res, ok ? 200 : 409, { success: ok });
+  server.route("DELETE", "/api/fs/ops/:id", ({ params: { id } }) => {
+    if (!service.ops.cancel(id)) throw new HttpError(409, "op not cancellable", { success: false });
+    return { success: true };
   });
 
   // ── Remotes ──────────────────────────────────────────────────────
 
-  server.get("/api/fs/remotes", (req, res) => {
-    server.json(res, 200, { items: service.remotesList() }, req);
-  });
+  server.route("GET", "/api/fs/remotes", () => ({ items: service.remotesList() }));
 
-  server.post("/api/fs/remotes", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        kind?: "sftp" | "s3" | "webdav";
-        label?: string;
-        config?: Record<string, unknown>;
-      }>(req);
-      if (!body.kind || !body.label || !body.config) {
-        server.json(res, 400, { error: "kind, label, config required" });
-        return;
-      }
-      const info = await service.addRemote({
-        kind: body.kind,
-        label: body.label,
-        config: body.config as unknown as Parameters<typeof service.addRemote>[0]["config"],
-      });
-      server.json(res, 200, { item: info }, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
+  server.route<{
+    kind?: "sftp" | "s3" | "webdav";
+    label?: string;
+    config?: Record<string, unknown>;
+  }>("POST", "/api/fs/remotes", ({ body }) => as400(async () => {
+    if (!body.kind || !body.label || !body.config) {
+      throw new HttpError(400, "kind, label, config required");
     }
-  });
+    const info = await service.addRemote({
+      kind: body.kind,
+      label: body.label,
+      config: body.config as unknown as Parameters<typeof service.addRemote>[0]["config"],
+    });
+    return { item: info };
+  }));
 
-  server.post("/api/fs/remotes/:id/test", async (req, res) => {
-    try {
-      const id = params(req).id;
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      const r = await service.testRemote(id);
-      server.json(res, r.ok ? 200 : 502, r, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route("POST", "/api/fs/remotes/:id/test", ({ req, res, params: { id } }) => as400(async () => {
+    const r = await service.testRemote(id);
+    if (!r.ok) { server.json(res, 502, r, req); return; }
+    return r;
+  }));
 
-  server.delete("/api/fs/remotes/:id", async (req, res) => {
-    try {
-      const id = params(req).id;
-      if (!id) { server.json(res, 400, { error: "id required" }); return; }
-      await service.removeRemote(id);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route("DELETE", "/api/fs/remotes/:id", ({ params: { id } }) => as400(async () => {
+    await service.removeRemote(id);
+    return { success: true };
+  }));
 
   // ── Archives ─────────────────────────────────────────────────────
 
-  server.post("/api/fs/archive/open", async (req, res) => {
-    try {
-      const body = await server.parseBody<{
-        source_provider?: string;
-        path?: string;
-      }>(req);
-      if (!body.source_provider || !body.path) {
-        server.json(res, 400, { error: "source_provider, path required" });
-        return;
-      }
-      const info = await service.openArchive(body.source_provider, body.path);
-      server.json(res, 200, info, req);
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
+  server.route<{
+    source_provider?: string;
+    path?: string;
+  }>("POST", "/api/fs/archive/open", ({ body }) => as400(async () => {
+    if (!body.source_provider || !body.path) {
+      throw new HttpError(400, "source_provider, path required");
     }
-  });
+    return service.openArchive(body.source_provider, body.path);
+  }));
 
-  server.post("/api/fs/archive/close", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ provider?: string }>(req);
-      if (!body.provider) {
-        server.json(res, 400, { error: "provider required" });
-        return;
-      }
-      await service.closeArchive(body.provider);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
-    }
-  });
+  server.route<{ provider?: string }>("POST", "/api/fs/archive/close", ({ body }) => as400(async () => {
+    if (!body.provider) throw new HttpError(400, "provider required");
+    await service.closeArchive(body.provider);
+    return { success: true };
+  }));
 
   // ── Preview (F3) ─────────────────────────────────────────────────
 
+  // Left raw: with raw=1 it streams the file itself with its own MIME type.
   server.get("/api/fs/preview", async (req, res) => {
     try {
       const s = q(req);
@@ -377,46 +307,38 @@ export function registerFilesystemCommanderRoutes(
 
   // ── Read / Write (editor, F4) ────────────────────────────────────
 
-  server.get("/api/fs/read", async (req, res) => {
-    try {
-      const s = q(req);
-      const providerId = requireStr(s.get("provider"), "provider");
-      const path = requireStr(s.get("path"), "path");
-      const asText = s.get("text") === "1" || s.get("text") === "true";
-      const provider = service.get(providerId);
-      const stat = await provider.stat(path);
-      if (stat.size > opts.maxEditorBytes) {
-        server.json(res, 413, {
-          error: `File too large (${stat.size} > ${opts.maxEditorBytes})`,
-        });
-        return;
-      }
-      const stream = await provider.readStream(path);
-      const chunks: Buffer[] = [];
-      for await (const chunk of stream as AsyncIterable<Buffer>) chunks.push(chunk);
-      const buf = Buffer.concat(chunks);
-      if (asText) {
-        server.json(res, 200, {
-          content: buf.toString("utf-8"),
-          encoding: "utf-8",
-          mime: guessMime(path),
-          size: stat.size,
-          mtime: stat.mtime,
-        }, req);
-      } else {
-        server.json(res, 200, {
-          content: buf.toString("base64"),
-          encoding: "base64",
-          mime: guessMime(path),
-          size: stat.size,
-          mtime: stat.mtime,
-        }, req);
-      }
-    } catch (err) {
-      server.json(res, 400, { error: errMessage(err) }, req);
+  server.route("GET", "/api/fs/read", ({ query }) => as400(async () => {
+    const providerId = requireStr(query.get("provider"), "provider");
+    const path = requireStr(query.get("path"), "path");
+    const asText = query.get("text") === "1" || query.get("text") === "true";
+    const provider = service.get(providerId);
+    const stat = await provider.stat(path);
+    if (stat.size > opts.maxEditorBytes) {
+      throw new HttpError(413, `File too large (${stat.size} > ${opts.maxEditorBytes})`);
     }
-  });
+    const stream = await provider.readStream(path);
+    const chunks: Buffer[] = [];
+    for await (const chunk of stream as AsyncIterable<Buffer>) chunks.push(chunk);
+    const buf = Buffer.concat(chunks);
+    if (asText) {
+      return {
+        content: buf.toString("utf-8"),
+        encoding: "utf-8",
+        mime: guessMime(path),
+        size: stat.size,
+        mtime: stat.mtime,
+      };
+    }
+    return {
+      content: buf.toString("base64"),
+      encoding: "base64",
+      mime: guessMime(path),
+      size: stat.size,
+      mtime: stat.mtime,
+    };
+  }));
 
+  // Left raw: needs a 16 MB body cap (route() allows 10 MB).
   server.post("/api/fs/write", async (req, res) => {
     try {
       const body = await server.parseBody<{
@@ -474,7 +396,7 @@ export function registerFilesystemCommanderRoutes(
     }
   });
 
-  // Server-sent events: live progress stream for a single op.
+  // Server-sent events: live progress stream for a single op. Left raw (SSE).
   server.get("/api/fs/ops/:id/stream", (req, res) => {
     const id = params(req).id;
     const current = id ? service.ops.get(id) : null;
@@ -491,37 +413,29 @@ export function registerFilesystemCommanderRoutes(
   });
 }
 
-async function startOp(
-  server: KernelHttpServer,
+type OpBody = {
+  src_provider?: string;
+  dst_provider?: string;
+  items?: Array<{ from: string; to: string }>;
+  overwrite?: boolean;
+};
+
+function startOp(
   service: FsCommanderService,
-  req: IncomingMessage,
-  res: ServerResponse,
+  body: OpBody,
   kind: "copy" | "move",
-): Promise<void> {
-  try {
-    const body = await server.parseBody<{
-      src_provider?: string;
-      dst_provider?: string;
-      items?: Array<{ from: string; to: string }>;
-      overwrite?: boolean;
-    }>(req);
-    if (!body.src_provider || !body.dst_provider || !Array.isArray(body.items) || body.items.length === 0) {
-      server.json(res, 400, {
-        error: "src_provider, dst_provider, items[] required",
-      });
-      return;
-    }
-    const opId = service.ops.start({
-      kind,
-      src: service.get(body.src_provider),
-      dst: service.get(body.dst_provider),
-      items: body.items,
-      overwrite: body.overwrite ?? false,
-    });
-    server.json(res, 200, { op_id: opId });
-  } catch (err) {
-    server.json(res, 400, { error: errMessage(err) });
+): { op_id: string } {
+  if (!body.src_provider || !body.dst_provider || !Array.isArray(body.items) || body.items.length === 0) {
+    throw new HttpError(400, "src_provider, dst_provider, items[] required");
   }
+  const opId = service.ops.start({
+    kind,
+    src: service.get(body.src_provider),
+    dst: service.get(body.dst_provider),
+    items: body.items,
+    overwrite: body.overwrite ?? false,
+  });
+  return { op_id: opId };
 }
 
 function writeSseHead(res: ServerResponse): void {

@@ -1,10 +1,7 @@
 import {
   type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
   type EmbeddingsClient,
+  defineModule,
 } from "@kernl/extension-sdk";
 import { rssRegistryMigrations } from "./migrations.js";
 import { RssRegistryService } from "./service.js";
@@ -30,16 +27,15 @@ export interface RssRegistryModule extends ExtensibleModule {
 }
 
 export function createRssRegistryModule(): RssRegistryModule {
-  let tools: ToolDefinition[] = [];
   let service: RssRegistryService | null = null;
-  let scheduler: RssScheduler | null = null;
 
-  return {
+  const mod = defineModule({
     name: "rss-registry",
+    migrations: rssRegistryMigrations,
 
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "rss-registry", rssRegistryMigrations);
-      service = new RssRegistryService(ctx.sqlite, ctx.events);
+    init(ctx) {
+      const svc = new RssRegistryService(ctx.sqlite, ctx.events);
+      service = svc;
 
       // First-run seed: populate the catalog with curated feeds so users
       // don't stare at an empty registry.
@@ -48,65 +44,56 @@ export function createRssRegistryModule(): RssRegistryModule {
         .get() as { count: number };
       if (count.count === 0) {
         try {
-          service.seedBuiltins(false);
+          svc.seedBuiltins(false);
         } catch {
           // never block boot on seed failures
         }
       }
 
-      tools = rssRegistryTools(service);
-
-      scheduler = new RssScheduler(service);
+      const scheduler = new RssScheduler(svc);
       scheduler.start();
+      return { service: svc, scheduler };
     },
 
-    getTools() {
-      return tools;
+    tools: (s) => rssRegistryTools(s.service),
+    rpc: (s) => rssRegistryRpcActions(s.service),
+
+    dashboard: {
+      nav: [
+        {
+          id: "rss-registry",
+          label: "RSS Sources",
+          icon: "📡",
+          group: "system",
+          // Cuelga del rail lateral de /system en vez de ocupar un tab de la
+          // barra de grupo: un registro de feeds es una pantalla de ajuste,
+          // no una de las cuatro áreas de primer nivel.
+          parent: "system",
+          // After Extensions (90). A feed registry is a niche setting; it was
+          // heading the System group purely because 65 sorts before 90.
+          order: 120,
+        },
+      ],
+      stores: ["rssRegistry"],
+      fetchEndpoints: [
+        { url: "/api/registry/rss", store: "rssRegistry" },
+      ],
+      registerRoutes: (server) => {
+        if (service) registerRssRegistryRoutes(server, service);
+      },
     },
 
+    shutdown: (s) => s.scheduler.stop(),
+  });
+
+  return Object.assign(mod, {
     getService() {
       return service;
     },
-
     setEmbeddingsClient(client: EmbeddingsClient | null) {
       service?.setEmbeddingsClient(client);
     },
-
-    getRpcActions() {
-      return service ? rssRegistryRpcActions(service) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        nav: [
-          {
-            id: "rss-registry",
-            label: "RSS Sources",
-            icon: "📡",
-            group: "system",
-            // Cuelga del rail lateral de /system en vez de ocupar un tab de la
-            // barra de grupo: un registro de feeds es una pantalla de ajuste,
-            // no una de las cuatro áreas de primer nivel.
-            parent: "system",
-            // After Extensions (90). A feed registry is a niche setting; it was
-            // heading the System group purely because 65 sorts before 90.
-            order: 120,
-          },
-        ],
-        stores: ["rssRegistry"],
-        fetchEndpoints: [
-          { url: "/api/registry/rss", store: "rssRegistry" },
-        ],
-        registerRoutes: (server) => {
-          if (service) registerRssRegistryRoutes(server, service);
-        },
-      };
-    },
-
-    async shutdown() {
-      scheduler?.stop();
-    },
-  };
+  }) as RssRegistryModule;
 }
 
 export default createRssRegistryModule;

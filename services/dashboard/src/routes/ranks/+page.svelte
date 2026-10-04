@@ -1,9 +1,10 @@
 <script lang="ts">
+  import { readApiError } from '$lib/api.js';
   import { onMount } from 'svelte';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import Panel from '$lib/components/Panel.svelte';
-  import KpiCard from '$lib/components/KpiCard.svelte';
-  import Empty from '$lib/components/Empty.svelte';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import Empty from '$shared/components/Empty.svelte';
 
   interface Rank {
     id: string; name: string; level: number;
@@ -85,8 +86,7 @@
         }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? res.statusText);
+        throw new Error((await readApiError(res)) ?? res.statusText);
       }
       showCreate = false;
       newName = ''; newLevel = 1; newInsignia = '★'; newColor = '#eab308'; newDescription = '';
@@ -123,8 +123,7 @@
         }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? res.statusText);
+        throw new Error((await readApiError(res)) ?? res.statusText);
       }
       cancelEdit();
       await load();

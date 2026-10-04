@@ -142,7 +142,8 @@ const RATE_LIMIT_TTL_MS = 5 * 60 * 1000;
  * GitHub asks every client to identify itself, and an unauthenticated caller
  * gets 60 requests an hour per IP — shared by everyone behind the same NAT.
  * Saying who we are is what makes a 403 legible as "rate limited" instead of
- * arriving as an anonymous failure. Same convention as `job-scrapers.ts`.
+ * arriving as an anonymous failure. Same convention as the job-hunter
+ * extension's scrapers.
  */
 export const UPDATE_USER_AGENT = "Kernl-Updater (+https://github.com/fastslack/kernl)";
 

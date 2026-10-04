@@ -22,11 +22,14 @@ export interface OfficeDefinition {
 	name: string;
 	description?: string;
 	color?: string;
-	kind?: OfficeKind;
+	/** A core kind or one an installed extension declares (world plugins). */
+	kind?: OfficeKind | (string & {});
 	repo?: string;
 	repoIsolation?: Isolation;
 	agents: OfficeDefinitionAgent[];
 	cron?: { agent: string; every: string; goal?: string };
+	/** Lot of the 3D floor to build on ("col,row"), when the office was started from one. */
+	lot?: string;
 }
 
 export interface OfficeTemplate {
@@ -61,7 +64,8 @@ export interface OfficePatch {
 	name?: string;
 	description?: string;
 	color?: string;
-	kind?: OfficeKind;
+	/** A core kind or one an installed extension declares (world plugins). */
+	kind?: OfficeKind | (string & {});
 	repo_isolation?: Isolation;
 }
 

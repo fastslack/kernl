@@ -5,6 +5,7 @@ import {
   errorResult,
   type ToolDefinition,
   RankingService,
+  limitArg,
 } from "@kernl/extension-sdk";
 import type { RssRegistryService } from "./service.js";
 import type { RssItemWithFeed } from "./types.js";
@@ -108,7 +109,7 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
         language: z.string().optional(),
         country: z.string().optional(),
         min_quality: z.number().optional(),
-        limit: z.number().optional(),
+        limit: limitArg(200),
         offset: z.number().optional(),
       }),
       handler: async (query) => {
@@ -129,7 +130,7 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
         query: z.string(),
         category_id: z.string().optional(),
         language: z.string().optional(),
-        limit: z.number().optional(),
+        limit: limitArg(200),
       }),
       handler: async (input) => {
         const feeds = service.searchFeeds(input);
@@ -190,7 +191,7 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
         language: z.string().optional(),
         since: z.string().optional(),
         search: z.string().optional(),
-        limit: z.number().optional(),
+        limit: limitArg(200),
         query: z
           .string()
           .optional()

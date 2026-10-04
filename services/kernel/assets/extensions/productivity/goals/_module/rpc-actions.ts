@@ -1,113 +1,103 @@
 /**
  * Goals RPC Actions — OKR management via mtwRequest.
+ *
+ * These have no HTTP twin. They used to be raw SQL, which skipped the
+ * service's Neo4j mirror (Goal nodes, ACHIEVED_BY links to tasks), let a
+ * key result be added to a goal that does not exist, and answered ok for an
+ * update of an id that was not there. Now each one calls GoalsService.
  */
 
-import crypto from "node:crypto";
-import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import type { GoalsService } from "./service.js";
+import type { Goal, GoalStatus, GoalType, KeyResult } from "./types.js";
 
-export function goalsRpcActions(db: SqliteDb): RpcAction[] {
-  return [
-    {
-      name: "goals.list",
-      handler: async (args) => {
-        const status = typeof args.status === "string" ? args.status : "";
-        let where = "1=1";
-        const params: unknown[] = [];
-        if (status) { where += " AND g.status = ?"; params.push(status); }
+const TYPES: ReadonlyArray<GoalType> = ["goal", "objective"];
+const STATUSES: ReadonlyArray<GoalStatus> = ["active", "completed", "abandoned"];
 
-        const rows = db.prepare(
-          `SELECT g.id, g.title, g.description, g.type, g.status, g.parent_id, g.target_date,
-                  g.created_at, g.updated_at,
-                  (SELECT COUNT(*) FROM key_results kr WHERE kr.goal_id = g.id) as kr_count,
-                  (SELECT CASE WHEN COUNT(*) = 0 THEN 0
-                    ELSE ROUND(AVG(CASE WHEN kr2.target_value > 0 THEN MIN(kr2.current_value / kr2.target_value * 100, 100) ELSE 0 END))
-                   END FROM key_results kr2 WHERE kr2.goal_id = g.id) as progress
-           FROM goals g WHERE ${where}
-           ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END, g.updated_at DESC`,
-        ).all(...params);
-        return { goals: rows };
-      },
+/** A nullable reference: a string sets it, an explicit null clears it. */
+const nullable = (input: Record<string, unknown>, key: string): string | null | undefined =>
+  input[key] === null ? null : typeof input[key] === "string" ? input[key] as string : undefined;
+
+export function goalsRpcActions(service: GoalsService): RpcAction[] {
+  const requireId = (input: Record<string, unknown>): string => {
+    const { id } = pickArgs(input, { id: "string" });
+    if (!id) throw new HttpError(400, "Missing id");
+    return id;
+  };
+  const checkEnums = (fields: { type?: string; status?: string }) => {
+    if (fields.type !== undefined && !TYPES.includes(fields.type as GoalType)) {
+      throw new HttpError(400, `Invalid type. Allowed: ${TYPES.join(", ")}`);
+    }
+    if (fields.status !== undefined && !STATUSES.includes(fields.status as GoalStatus)) {
+      throw new HttpError(400, `Invalid status. Allowed: ${STATUSES.join(", ")}`);
+    }
+  };
+  /** Drop the keys left undefined: the service spreads changes over the row. */
+  const defined = <T extends Record<string, unknown>>(o: T): Partial<T> =>
+    Object.fromEntries(Object.entries(o).filter(([, v]) => v !== undefined)) as Partial<T>;
+
+  return rpcActionsFrom({
+    "goals.list": (input) => ({ goals: service.listWithProgress(pickArgs(input, { status: "string" }).status || undefined) }),
+
+    "goals.detail": (input) => {
+      const id = requireId(input);
+      const goal = service.getGoal(id);
+      if (!goal) throw new HttpError(404, "Not found");
+      const children = service.listGoals({ parent_id: id })
+        .sort((a, b) => a.created_at.localeCompare(b.created_at))
+        .map(({ id, title, status, type }) => ({ id, title, status, type }));
+      return { goal, keyResults: service.getKeyResults(id), children };
     },
-    {
-      name: "goals.detail",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const goal = db.prepare("SELECT * FROM goals WHERE id = ?").get(id);
-        if (!goal) throw new Error("Not found");
-        const keyResults = db.prepare(
-          "SELECT id, title, target_value, current_value, unit, task_id, created_at, updated_at FROM key_results WHERE goal_id = ? ORDER BY created_at",
-        ).all(id);
-        const children = db.prepare(
-          "SELECT id, title, status, type FROM goals WHERE parent_id = ? ORDER BY created_at",
-        ).all(id);
-        return { goal, keyResults, children };
-      },
+
+    "goals.create": (input) => {
+      const args = pickArgs(input, { title: "string", description: "string", type: "string", parent_id: "string", target_date: "string" });
+      const title = args.title?.trim() ?? "";
+      if (!title) throw new HttpError(400, "Title required");
+      checkEnums(args);
+      const goal = service.createGoal({
+        title,
+        description: args.description,
+        type: args.type as GoalType | undefined,
+        parent_id: args.parent_id || undefined,
+        target_date: args.target_date || undefined,
+      });
+      return { ok: true, id: goal.id };
     },
-    {
-      name: "goals.create",
-      handler: async (args) => {
-        const title = typeof args.title === "string" ? args.title.trim() : "";
-        if (!title) throw new Error("Title required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO goals (id, title, description, type, status, parent_id, target_date, created_at, updated_at)
-           VALUES (?, ?, ?, ?, 'active', ?, ?, ?, ?)`,
-        ).run(id, title, args.description ?? "", args.type ?? "goal", args.parent_id ?? null, args.target_date ?? null, now, now);
-        return { ok: true, id };
-      },
+
+    "goals.update": (input) => {
+      const id = requireId(input);
+      const fields = pickArgs(input, { title: "string", description: "string", type: "string", status: "string" });
+      checkEnums(fields);
+      const changes = defined({
+        ...fields,
+        parent_id: nullable(input, "parent_id"),
+        target_date: nullable(input, "target_date"),
+      }) as Partial<Pick<Goal, "title" | "description" | "type" | "status" | "parent_id" | "target_date">>;
+      if (Object.keys(changes).length === 0) throw new HttpError(400, "No fields");
+      if (!service.updateGoal(id, changes)) throw new HttpError(404, "Goal not found");
+      return { ok: true };
     },
-    {
-      name: "goals.update",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const fields: string[] = [];
-        const vals: unknown[] = [];
-        for (const f of ["title", "description", "type", "status", "parent_id", "target_date"]) {
-          if (args[f] !== undefined) { fields.push(`${f} = ?`); vals.push(args[f]); }
-        }
-        if (!fields.length) throw new Error("No fields");
-        const now = new Date().toISOString();
-        fields.push("updated_at = ?"); vals.push(now);
-        vals.push(id);
-        db.prepare(`UPDATE goals SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
-        return { ok: true };
-      },
+
+    "goals.addKeyResult": (input) => {
+      const args = pickArgs(input, {
+        goal_id: "string", title: "string", target_value: "number", current_value: "number", unit: "string", task_id: "string",
+      });
+      const title = args.title?.trim() ?? "";
+      if (!args.goal_id || !title) throw new HttpError(400, "goal_id and title required");
+      if (!service.getGoal(args.goal_id)) throw new HttpError(404, "Goal not found");
+      const kr = service.addKeyResult({ ...args, goal_id: args.goal_id, title, task_id: args.task_id || undefined });
+      return { ok: true, id: kr.id };
     },
-    {
-      name: "goals.addKeyResult",
-      handler: async (args) => {
-        const goalId = typeof args.goal_id === "string" ? args.goal_id : "";
-        const title = typeof args.title === "string" ? args.title.trim() : "";
-        if (!goalId || !title) throw new Error("goal_id and title required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO key_results (id, goal_id, title, target_value, current_value, unit, task_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(id, goalId, title, args.target_value ?? 100, args.current_value ?? 0, args.unit ?? "%", args.task_id ?? null, now, now);
-        return { ok: true, id };
-      },
+
+    "goals.updateKeyResult": (input) => {
+      const id = requireId(input);
+      const changes = defined({
+        ...pickArgs(input, { title: "string", target_value: "number", current_value: "number", unit: "string" }),
+        task_id: nullable(input, "task_id"),
+      }) as Partial<Pick<KeyResult, "title" | "target_value" | "current_value" | "unit" | "task_id">>;
+      if (Object.keys(changes).length === 0) throw new HttpError(400, "No fields");
+      if (!service.updateKeyResult(id, changes)) throw new HttpError(404, "Key result not found");
+      return { ok: true };
     },
-    {
-      name: "goals.updateKeyResult",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const fields: string[] = [];
-        const vals: unknown[] = [];
-        for (const f of ["title", "target_value", "current_value", "unit", "task_id"]) {
-          if (args[f] !== undefined) { fields.push(`${f} = ?`); vals.push(args[f]); }
-        }
-        if (!fields.length) throw new Error("No fields");
-        const now = new Date().toISOString();
-        fields.push("updated_at = ?"); vals.push(now);
-        vals.push(id);
-        db.prepare(`UPDATE key_results SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
-        return { ok: true };
-      },
-    },
-  ];
+  });
 }

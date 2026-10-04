@@ -3,7 +3,7 @@
   "id": "com.kernl.books",
   "slug": "books",
   "name": "Books",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "archive.org books search and library.",
   "author": "Kernl",

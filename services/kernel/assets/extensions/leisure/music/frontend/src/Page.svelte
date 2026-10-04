@@ -16,7 +16,7 @@
    * tag autocomplete, year-min/year-max inputs, and full-text query.
    */
   import { onMount, onDestroy } from 'svelte';
-  import type { ExtPageContext } from './types.js';
+  import type { ExtPageContext } from '$shared/types';
 
   /** Host-provided context — auth-aware fetch, events bus, navigation. */
   export let ctx: ExtPageContext;

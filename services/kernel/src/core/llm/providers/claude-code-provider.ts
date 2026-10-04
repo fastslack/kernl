@@ -197,8 +197,8 @@ class ClaudeCodeProviderImpl implements LlmProvider {
       model: result.model,
       stop_reason: result.stop_reason,
       usage: {
-        input_tokens: 0,
-        output_tokens: result.tokens_used,
+        input_tokens: result.input_tokens ?? 0,
+        output_tokens: result.output_tokens ?? result.tokens_used,
       },
     };
   }

@@ -12,10 +12,30 @@
  * reader rendered empty bullets and blank paragraphs, and every other
  * `{@html sanitizeHtml(...)}` surface (email bodies, agent output) lost its
  * text the same way.
+ *
+ * The sanitizer under test is `$shared/sanitize`, the one copy the dashboard
+ * and the extension pages both render through. It is built on plain
+ * `dompurify`, which needs a DOM — and from `_shared/` there is no
+ * node_modules to resolve it from anyway. So the test hands it a DOMPurify
+ * bound to jsdom (`isomorphic-dompurify`'s default export is exactly that):
+ * the allowlist being exercised is the real one, only the window is jsdom's.
  */
 
 import { describe, it, expect } from "bun:test";
-import { sanitizeHtml } from "./sanitize.js";
+import DOMPurify from "isomorphic-dompurify";
+
+// Serve `_shared/sanitize`'s bare `dompurify` import as a virtual module
+// holding the jsdom-backed instance. (`mock.module` cannot help: it only
+// replaces a specifier that already resolves, and from `_shared/` this one
+// does not.)
+Bun.plugin({
+  name: "dompurify-on-jsdom",
+  setup(build) {
+    build.module("dompurify", () => ({ exports: { default: DOMPurify }, loader: "object" }));
+  },
+});
+
+const { sanitizeHtml } = await import("../../../kernel/assets/extensions/_shared/sanitize.js");
 
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 

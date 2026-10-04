@@ -28,6 +28,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { log } from "../logger.js";
+import { jsonObject } from "../helpers.js";
 import { assetsRoot } from "../assets-root.js";
 
 import type { SqliteDb } from "../db/sqlite.js";
@@ -158,8 +159,7 @@ export async function loadExtensions(args: {
   try {
     const provRows = extensionsModule.service.list({ status: "active", type: "llm-provider" });
     for (const row of provRows) {
-      let m: { built_in?: boolean; backend?: { entry?: string } } = {};
-      try { m = JSON.parse(row.manifest_json) as typeof m; } catch { m = {}; }
+      const m = jsonObject<{ built_in?: boolean; backend?: { entry?: string } }>(row.manifest_json);
       if (m.built_in || !m.backend?.entry || llmRegistry.hasFactory(row.slug)) continue;
       try {
         const base = resolve(row.install_path);

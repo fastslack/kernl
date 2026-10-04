@@ -3,8 +3,7 @@
  * anything is saved, and wired into the chain in the same step.
  */
 
-import type { IncomingMessage } from "node:http";
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import { buildChatAdapter, type ChatLlmProvider } from "./chat-adapters.js";
 import type { ClaudeCodeProviderOptions } from "./claude-code-adapter.js";
 import {
@@ -62,8 +61,8 @@ export async function detectLocalServer(entry: ProviderCatalogEntry, fetchImpl: 
   return { found: false, baseUrl: candidates[0] ?? "", models: [] };
 }
 
-function slugParam(req: IncomingMessage): string {
-  const slug = (req as { params?: Record<string, string> }).params?.slug ?? "";
+function slugParam(params: Record<string, string>): string {
+  const slug = params.slug ?? "";
   return /^[a-z0-9][a-z0-9_-]{1,62}$/.test(slug) ? slug : "";
 }
 
@@ -90,9 +89,9 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     return true;
   };
 
-  const entryOr404 = (req: IncomingMessage, res: Parameters<KernelHttpServer["json"]>[0]) => {
-    const entry = getCatalogEntry(slugParam(req));
-    if (!entry) server.json(res, 404, { error: "unknown provider" });
+  const requireEntry = (params: Record<string, string>): ProviderCatalogEntry => {
+    const entry = getCatalogEntry(slugParam(params));
+    if (!entry) throw new HttpError(404, "unknown provider");
     return entry;
   };
 
@@ -116,34 +115,31 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     return probeAdapter(adapter, { model: input.model || undefined, timeoutMs: timeoutFor(entry.slug), local: entry.group === "local" });
   }
 
-  server.get("/api/llm/catalog", (_req, res) => {
-    server.json(res, 200, {
-      providers: PROVIDER_CATALOG.map((e) => {
-        const raw = getStoredConfig(e.slug);
-        const cfg = getProviderConfig(e.slug);
-        return {
-          slug: e.slug, name: e.name, group: e.group, recommended: !!e.recommended, kind: e.kind,
-          needsKey: e.needsKey, keyUrl: e.keyUrl ?? "", keyHint: e.keyHint ?? "", logo: e.logo,
-          blurb: e.blurb, tag: e.tag, pricing: e.pricing, steps: e.steps, models: e.models,
-          baseUrlEditable: !!e.baseUrlEditable, regions: e.regions ?? [], docsUrl: e.docsUrl ?? "",
-          connected: isConnected(e.slug), model: cfg.model,
-          keyMasked: cfg.apiKey ? maskSecret(cfg.apiKey) : "",
-          baseUrl: e.baseUrlEditable ? cfg.baseUrl : "", region: cfg.region,
-          lastTest: typeof raw.lastTestAt === "string"
-            ? { at: raw.lastTestAt, ok: raw.lastTestOk === true, latencyMs: Number(raw.lastLatencyMs ?? 0), code: typeof raw.lastErrorCode === "string" ? raw.lastErrorCode : undefined }
-            : null,
-        };
-      }),
-      chain: chainView(),
-      claudeCodeTransition: deps.claudeCodeTransition?.() ?? "none",
-      claudeCodeLoginCommand: deps.loginCommand?.() ?? "claude",
-    });
-  });
+  server.route("GET", "/api/llm/catalog", () => ({
+    providers: PROVIDER_CATALOG.map((e) => {
+      const raw = getStoredConfig(e.slug);
+      const cfg = getProviderConfig(e.slug);
+      return {
+        slug: e.slug, name: e.name, group: e.group, recommended: !!e.recommended, kind: e.kind,
+        needsKey: e.needsKey, keyUrl: e.keyUrl ?? "", keyHint: e.keyHint ?? "", logo: e.logo,
+        blurb: e.blurb, tag: e.tag, pricing: e.pricing, steps: e.steps, models: e.models,
+        baseUrlEditable: !!e.baseUrlEditable, regions: e.regions ?? [], docsUrl: e.docsUrl ?? "",
+        connected: isConnected(e.slug), model: cfg.model,
+        keyMasked: cfg.apiKey ? maskSecret(cfg.apiKey) : "",
+        baseUrl: e.baseUrlEditable ? cfg.baseUrl : "", region: cfg.region,
+        lastTest: typeof raw.lastTestAt === "string"
+          ? { at: raw.lastTestAt, ok: raw.lastTestOk === true, latencyMs: Number(raw.lastLatencyMs ?? 0), code: typeof raw.lastErrorCode === "string" ? raw.lastErrorCode : undefined }
+          : null,
+      };
+    }),
+    chain: chainView(),
+    claudeCodeTransition: deps.claudeCodeTransition?.() ?? "none",
+    claudeCodeLoginCommand: deps.loginCommand?.() ?? "claude",
+  }));
 
-  server.post("/api/llm-providers/:slug/test", async (req, res) => {
-    const entry = entryOr404(req, res);
-    if (!entry) return;
-    const input = readInput(await server.parseBody(req).catch(() => ({})));
+  server.route("POST", "/api/llm-providers/:slug/test", async ({ params, body }) => {
+    const entry = requireEntry(params);
+    const input = readInput(body);
     const result = await runProbe(entry, input);
     // A Test click on a saved connection is remembered for "tested 2 min ago".
     if (!hasOverride(input) && isConnected(entry.slug)) {
@@ -152,13 +148,12 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
         lastErrorCode: result.error?.code,
       });
     }
-    server.json(res, 200, result);
+    return result;
   });
 
-  server.post("/api/llm-providers/:slug/connect", async (req, res) => {
-    const entry = entryOr404(req, res);
-    if (!entry) return;
-    const input = readInput(await server.parseBody(req).catch(() => ({})));
+  server.route("POST", "/api/llm-providers/:slug/connect", async ({ params, body }) => {
+    const entry = requireEntry(params);
+    const input = readInput(body);
     let result = await runProbe(entry, input);
     let switchedModel: string | undefined;
 
@@ -175,10 +170,7 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
       }
     }
 
-    if (!result.ok) {
-      server.json(res, 200, { ...result, chain: chainView() });
-      return;
-    }
+    if (!result.ok) return { ...result, chain: chainView() };
 
     const model = switchedModel ?? input.model;
     saveProviderConfig(entry.slug, {
@@ -192,12 +184,11 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     await deps.registry.startProvider(entry.slug).catch(() => false);
     appendToChain(entry.slug);
     deps.onChanged(entry.slug, `provider "${entry.slug}" was connected`);
-    server.json(res, 200, { ...result, ...(switchedModel ? { switchedModel } : {}), chain: chainView() });
+    return { ...result, ...(switchedModel ? { switchedModel } : {}), chain: chainView() };
   });
 
-  server.post("/api/llm-providers/:slug/detect", async (req, res) => {
-    const entry = entryOr404(req, res);
-    if (!entry) return;
+  server.route("POST", "/api/llm-providers/:slug/detect", async ({ params }) => {
+    const entry = requireEntry(params);
     if (entry.kind === "claude-code") {
       const session = deps.detectClaudeSession?.() ?? false;
       if (session) {
@@ -209,42 +200,30 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
         const appended = appendToChain(entry.slug);
         if (!wasConnected || appended) deps.onChanged(entry.slug, "Claude Code session detected");
       }
-      server.json(res, 200, { session, found: session, baseUrl: "", models: [], chain: chainView() });
-      return;
+      return { session, found: session, baseUrl: "", models: [], chain: chainView() };
     }
-    if (entry.group !== "local") {
-      server.json(res, 400, { error: "detect only applies to local providers" });
-      return;
-    }
-    server.json(res, 200, await detectLocal(entry));
+    if (entry.group !== "local") throw new HttpError(400, "detect only applies to local providers");
+    return detectLocal(entry);
   });
 
-  server.delete("/api/llm-providers/:slug/connection", async (req, res) => {
-    const entry = entryOr404(req, res);
-    if (!entry) return;
+  server.route("DELETE", "/api/llm-providers/:slug/connection", async ({ params }) => {
+    const entry = requireEntry(params);
     clearProviderConfig(entry.slug);
     await deps.registry.stopProvider(entry.slug).catch(() => false);
     deps.setChain(deps.getChain().filter((l) => canonicalSlug(l.provider) !== entry.slug));
     deps.onChanged(entry.slug, `provider "${entry.slug}" was removed`);
-    server.json(res, 200, { chain: chainView() });
+    return { chain: chainView() };
   });
 
-  server.put("/api/llm/chain", async (req, res) => {
-    const body = (await server.parseBody<{ links?: unknown }>(req).catch(() => ({}))) as { links?: unknown };
-    if (!Array.isArray(body.links)) {
-      server.json(res, 400, { error: "links must be an array" });
-      return;
-    }
+  server.route<{ links?: unknown }>("PUT", "/api/llm/chain", ({ body }) => {
+    if (!Array.isArray(body.links)) throw new HttpError(400, "links must be an array");
     const links = body.links.map((l) => {
       const o = (l && typeof l === "object" ? l : {}) as Record<string, unknown>;
       return { provider: canonicalSlug(String(o.provider ?? "")), model: String(o.model ?? "") };
     });
-    if (links.some((l) => !getCatalogEntry(l.provider))) {
-      server.json(res, 400, { error: "unknown provider in chain" });
-      return;
-    }
+    if (links.some((l) => !getCatalogEntry(l.provider))) throw new HttpError(400, "unknown provider in chain");
     deps.setChain(links);
     deps.onChanged("chain", "the provider chain was reordered");
-    server.json(res, 200, { chain: chainView() });
+    return { chain: chainView() };
   });
 }

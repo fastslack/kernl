@@ -23,6 +23,20 @@ interface PendingCall {
   timer: ReturnType<typeof setTimeout>;
 }
 
+// ── Environment ───────────────────────────────────────────────────────────────
+
+/** Parent variables a sandboxed agent may see. Everything else stays behind. */
+const INHERITED_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "LOG_LEVEL", "NODE_ENV"];
+
+export function inheritedEnv(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const key of INHERITED_ENV_KEYS) {
+    const value = source[key];
+    if (value !== undefined) env[key] = value;
+  }
+  return env;
+}
+
 // ── AgentSandbox ──────────────────────────────────────────────────────────────
 
 /**
@@ -90,10 +104,13 @@ export class AgentSandbox {
     this._startedAt = isoNow();
     log.info(`[sandbox:${this.name}] Starting subprocess: ${this.descriptor.entryPath}`);
 
+    // Never leak parent secrets to the subprocess: the kernel's env carries
+    // KERNEL_AUTH_TOKEN and provider keys, and the agent reaches the kernel
+    // over stdio RPC anyway. Only the runtime basics cross, plus whatever the
+    // manifest declares on its own.
     const env: Record<string, string> = {
-      ...process.env as Record<string, string>,
+      ...inheritedEnv(),
       ...this.descriptor.manifest.env,
-      // Never leak parent secrets to subprocess — only pass safe vars
       AGENT_NAME: this.name,
       AGENT_VERSION: this.descriptor.manifest.version,
     };

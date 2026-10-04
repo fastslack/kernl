@@ -1,15 +1,15 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { ShoppingService } from "./service.js";
 
 export function shoppingTools(service: ShoppingService): ToolDefinition[] {
   return [
     // ── Products ───────────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_shopping_add_product",
       description: "Add a product to the catalog with optional category, tags, stock levels, and unit.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Product name"),
         description: z.string().optional().describe("Product description"),
         category_id: z.string().optional().describe("Category ID"),
@@ -19,12 +19,7 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         min_stock: z.number().optional().describe("Minimum stock threshold for alerts. Default: 0"),
         notes: z.string().optional().describe("Additional notes"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          name: string; description?: string; category_id?: string;
-          tags?: string; unit?: string; current_stock?: number;
-          min_stock?: number; notes?: string;
-        };
+      handler: async (input) => {
         const product = service.createProduct(input);
         return textResult(
           `Product created:\n` +
@@ -36,12 +31,12 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           (product.category_id ? `  Category: ${product.category_id}\n` : ""),
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_shopping_update_product",
       description: "Update a product's details: name, description, category, tags, stock, unit, or notes.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Product ID"),
         name: z.string().optional().describe("New name"),
         description: z.string().optional().describe("New description"),
@@ -52,12 +47,7 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         min_stock: z.number().optional().describe("Set minimum stock threshold"),
         notes: z.string().optional().describe("New notes"),
       }),
-      handler: async (args) => {
-        const { id, ...changes } = args as {
-          id: string; name?: string; description?: string; category_id?: string;
-          tags?: string; unit?: string; current_stock?: number;
-          min_stock?: number; notes?: string;
-        };
+      handler: async ({ id, ...changes }) => {
         const product = service.updateProduct(id, changes);
         if (!product) return errorResult(`Product not found: ${id}`);
         return textResult(
@@ -67,21 +57,18 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           (product.tags ? `  Tags: ${product.tags}\n` : ""),
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_shopping_list_products",
       description: "List or search products. Filter by category, tag, low stock, or free-text search.",
-      inputSchema: z.object({
+      schema: z.object({
         category_id: z.string().optional().describe("Filter by category ID"),
         tag: z.string().optional().describe("Filter by tag"),
         low_stock: z.boolean().optional().describe("Show only products below minimum stock"),
         search: z.string().optional().describe("Free-text search in name, description, tags"),
       }),
-      handler: async (args) => {
-        const filters = args as {
-          category_id?: string; tag?: string; low_stock?: boolean; search?: string;
-        };
+      handler: async (filters) => {
         const products = service.listProducts(filters);
         if (products.length === 0) return textResult("No products found.");
 
@@ -92,20 +79,19 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         });
         return textResult(`Products (${products.length}):\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Categories ─────────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_shopping_add_category",
       description: "Create a product category. Supports hierarchy via parent_id.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Category name"),
         parent_id: z.string().optional().describe("Parent category ID for hierarchy"),
         sort_order: z.number().optional().describe("Sort order (lower = first). Default: 0"),
       }),
-      handler: async (args) => {
-        const input = args as { name: string; parent_id?: string; sort_order?: number };
+      handler: async (input) => {
         const cat = service.createCategory(input);
         return textResult(
           `Category created:\n` +
@@ -114,12 +100,11 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           (cat.parent_id ? `  Parent: ${cat.parent_id}\n` : "  (root category)\n"),
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_shopping_list_categories",
       description: "List all categories as a tree structure.",
-      inputSchema: z.object({}),
       handler: async () => {
         const categories = service.listCategories();
         if (categories.length === 0) return textResult("No categories defined yet.");
@@ -147,21 +132,20 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
 
         return textResult(`Categories:\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Stores ─────────────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_shopping_add_store",
       description: "Add a store or supplier for price tracking.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Store name"),
         location: z.string().optional().describe("Address or location"),
         notes: z.string().optional().describe("Additional notes"),
         is_supplier: z.boolean().optional().describe("Mark as supplier (B2B). Default: false"),
       }),
-      handler: async (args) => {
-        const input = args as { name: string; location?: string; notes?: string; is_supplier?: boolean };
+      handler: async (input) => {
         const store = service.createStore(input);
         return textResult(
           `Store created:\n` +
@@ -171,19 +155,18 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           (store.is_supplier ? `  Type: Supplier\n` : ""),
         );
       },
-    },
+    }),
 
     // ── Shopping Lists ─────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_shopping_create_list",
       description: "Create a new shopping list.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("List name (e.g. 'Weekly groceries', 'Office supplies')"),
         notes: z.string().optional().describe("Notes about this list"),
       }),
-      handler: async (args) => {
-        const input = args as { name: string; notes?: string };
+      handler: async (input) => {
         const list = service.createList(input);
         return textResult(
           `Shopping list created:\n` +
@@ -192,16 +175,15 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           `  Status: ${list.status}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_shopping_get_list",
       description: "View a shopping list with all its items and check status.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Shopping list ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const result = service.getListWithItems(id);
         if (!result) return errorResult(`Shopping list not found: ${id}`);
 
@@ -226,13 +208,13 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
 
         return textResult(lines.filter(Boolean).join("\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_shopping_add_item",
       description:
         "Add an item to a shopping list. Can link to an existing product (auto-fills name/unit) or be ad-hoc.",
-      inputSchema: z.object({
+      schema: z.object({
         list_id: z.string().describe("Shopping list ID"),
         product_id: z.string().optional().describe("Link to existing product (auto-fills name/unit)"),
         name: z.string().optional().describe("Item name (required if no product_id)"),
@@ -240,12 +222,7 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         unit: z.string().optional().describe("Unit. Default: from product or 'pcs'"),
         notes: z.string().optional().describe("Notes"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          list_id: string; product_id?: string; name?: string;
-          quantity?: number; unit?: string; notes?: string;
-        };
-
+      handler: async (input) => {
         if (!input.product_id && !input.name) {
           return errorResult("Provide either product_id or name for the item.");
         }
@@ -260,30 +237,29 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           `  Quantity: ${item.quantity} ${item.unit}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_shopping_check_item",
       description: "Check or uncheck an item in a shopping list.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Shopping list item ID"),
         checked: z.boolean().describe("true to check, false to uncheck"),
       }),
-      handler: async (args) => {
-        const { id, checked } = args as { id: string; checked: boolean };
+      handler: async ({ id, checked }) => {
         const item = service.checkItem(id, checked);
         if (!item) return errorResult(`Item not found: ${id}`);
         return textResult(`${checked ? "Checked" : "Unchecked"}: ${item.name}`);
       },
-    },
+    }),
 
     // ── Purchases ──────────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_shopping_log_purchase",
       description:
         "Log a purchase. Automatically updates the product's stock level. Tracks store and price for comparison.",
-      inputSchema: z.object({
+      schema: z.object({
         product_id: z.string().describe("Product ID"),
         store_id: z.string().optional().describe("Store ID (for price tracking)"),
         quantity: z.number().describe("Quantity purchased"),
@@ -292,11 +268,7 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         purchased_at: z.string().optional().describe("Purchase date (YYYY-MM-DD). Default: today"),
         notes: z.string().optional().describe("Notes"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          product_id: string; store_id?: string; quantity: number;
-          unit_price: number; currency?: string; purchased_at?: string; notes?: string;
-        };
+      handler: async (input) => {
         const purchase = service.logPurchase(input);
         if (!purchase) return errorResult(`Product not found: ${input.product_id}`);
 
@@ -311,16 +283,15 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
           (product ? `  New stock: ${product.current_stock + purchase.quantity} ${product.unit}` : ""),
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_shopping_price_compare",
       description: "Compare prices for a product across different stores. Shows avg, min, max, and last price per store.",
-      inputSchema: z.object({
+      schema: z.object({
         product_id: z.string().describe("Product ID to compare prices for"),
       }),
-      handler: async (args) => {
-        const { product_id } = args as { product_id: string };
+      handler: async ({ product_id }) => {
         const product = service.getProduct(product_id);
         if (!product) return errorResult(`Product not found: ${product_id}`);
 
@@ -338,12 +309,11 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         ];
         return textResult(lines.join("\n"));
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_shopping_low_stock",
       description: "List all products below their minimum stock level.",
-      inputSchema: z.object({}),
       handler: async () => {
         const products = service.getLowStock();
         if (products.length === 0) return textResult("All products are above minimum stock levels.");
@@ -353,6 +323,6 @@ export function shoppingTools(service: ShoppingService): ToolDefinition[] {
         );
         return textResult(`Low Stock Alert (${products.length}):\n${lines.join("\n")}`);
       },
-    },
+    }),
   ];
 }

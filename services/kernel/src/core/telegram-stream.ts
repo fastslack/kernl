@@ -83,8 +83,11 @@ export interface TopAgentStreamOpts {
  * Run the commander agent for `goal` and stream its progress + final answer
  * into a single Telegram message. Fire-and-forget friendly: never throws —
  * any failure is surfaced to the chat as the final message.
+ *
+ * Resolves with the answer it landed (empty on failure), so a voice note can
+ * be answered out loud once the streamed text is in place.
  */
-export async function runTopAgentStreamed(opts: TopAgentStreamOpts): Promise<void> {
+export async function runTopAgentStreamed(opts: TopAgentStreamOpts): Promise<string> {
   const { transport, chatId, goal, agent, agentService, agentExecutor, events } = opts;
   const title = `🪖 ${agent.name} working…`;
 
@@ -151,7 +154,7 @@ export async function runTopAgentStreamed(opts: TopAgentStreamOpts): Promise<voi
     if (timer) clearTimeout(timer);
     done = true;
     await sendFinal(transport, chatId, messageId, `❌ Could not start the supervisor: ${errMsg(err)}`);
-    return;
+    return "";
   }
   runId.current = run.id;
   agentService.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
@@ -182,6 +185,7 @@ export async function runTopAgentStreamed(opts: TopAgentStreamOpts): Promise<voi
     if (timer) clearTimeout(timer);
     if (events) events.off(STEP_EVENT, onStep);
     await sendFinal(transport, chatId, messageId, clampTelegram(answer));
+    return result.status === "completed" ? answer : "";
   } catch (err) {
     done = true;
     if (timer) clearTimeout(timer);
@@ -192,6 +196,7 @@ export async function runTopAgentStreamed(opts: TopAgentStreamOpts): Promise<voi
       completed_at: new Date().toISOString(),
     });
     await sendFinal(transport, chatId, messageId, `❌ Error: ${errMsg(err)}`);
+    return "";
   }
 }
 

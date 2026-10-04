@@ -25,6 +25,16 @@ const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — user may step away
 
 export class PermissionBus {
   private pending = new Map<string, PendingRequest>();
+  /**
+   * Conversations where the user chose "Allow all": every later tool call in
+   * them goes through without a prompt. In memory on purpose — it lasts as
+   * long as the kernel process, and a restart asks again.
+   */
+  private allowAll = new Set<string>();
+
+  allowsAll(episodeId: string): boolean {
+    return this.allowAll.has(episodeId);
+  }
 
   /**
    * Park a permission request and return a promise the SDK awaits.
@@ -57,16 +67,31 @@ export class PermissionBus {
     });
   }
 
-  /** Called by the HTTP route when the user clicks allow/deny. */
+  /**
+   * Called by the HTTP route when the user clicks Deny / Allow / Allow all.
+   * "allow_all" allows this request, every other one already waiting in the
+   * same conversation, and every one after it.
+   */
   respond(
     request_id: string,
-    decision: { behavior: "allow" | "deny"; reason?: string },
+    decision: { behavior: "allow" | "deny" | "allow_all"; reason?: string },
   ): boolean {
     const pending = this.pending.get(request_id);
     if (!pending) return false;
     this.pending.delete(request_id);
     clearTimeout(pending.timer);
-    pending.resolve(decision);
+    if (decision.behavior !== "allow_all") {
+      pending.resolve({ behavior: decision.behavior, reason: decision.reason });
+      return true;
+    }
+    this.allowAll.add(pending.episodeId);
+    pending.resolve({ behavior: "allow" });
+    for (const [id, p] of this.pending) {
+      if (p.episodeId !== pending.episodeId) continue;
+      this.pending.delete(id);
+      clearTimeout(p.timer);
+      p.resolve({ behavior: "allow" });
+    }
     return true;
   }
 

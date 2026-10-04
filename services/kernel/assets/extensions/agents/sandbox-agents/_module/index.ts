@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { type KernelModule, type ModuleContext, type ToolDefinition, log } from "@kernl/extension-sdk";
+import { type KernelModule, type ToolDefinition, defineModule, log } from "@kernl/extension-sdk";
 import { SandboxAgentService } from "./service.js";
 import { sandboxAgentTools } from "./tools.js";
 
@@ -15,21 +15,23 @@ export interface SandboxAgentsModule extends KernelModule {
 }
 
 export function createSandboxAgentsModule(): SandboxAgentsModule {
-  let tools: ToolDefinition[] = [];
   let agentTools: ToolDefinition[] = [];
   let service: SandboxAgentService | null = null;
 
   return {
-    name: "sandbox-agents",
-
-    async initialize(ctx: ModuleContext) {
-      const agentsDir = join(process.cwd(), "assets", "agents");
-      service = new SandboxAgentService(agentsDir);
-      tools = sandboxAgentTools(service);
-      // Note: sandboxes are NOT started here — we wait for initializeSandboxes()
-      // which is called in bootstrap() after all tools are collected.
-      log.info(`[sandbox-agents] Module initialized. Agents dir: ${agentsDir}`);
-    },
+    ...defineModule({
+      name: "sandbox-agents",
+      init() {
+        const agentsDir = join(process.cwd(), "assets", "agents");
+        service = new SandboxAgentService(agentsDir);
+        // Note: sandboxes are NOT started here — we wait for initializeSandboxes()
+        // which is called in bootstrap() after all tools are collected.
+        log.info(`[sandbox-agents] Module initialized. Agents dir: ${agentsDir}`);
+        return service;
+      },
+      tools: sandboxAgentTools,
+      shutdown: (svc) => svc.stopAll(),
+    }),
 
     async initializeSandboxes(allKernelTools: ToolDefinition[]): Promise<void> {
       if (!service) return;
@@ -40,22 +42,12 @@ export function createSandboxAgentsModule(): SandboxAgentsModule {
       }
     },
 
-    getTools() {
-      return tools;
-    },
-
     getAgentTools() {
       return agentTools;
     },
 
     getService() {
       return service;
-    },
-
-    async shutdown() {
-      if (service) {
-        await service.stopAll();
-      }
     },
   };
 }

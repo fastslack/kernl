@@ -1,0 +1,157 @@
+# mtwRequest Server Configuration (binary installs: Linux tarball, macOS .app,
+# Windows)
+#
+# Template, not a config: the kernel renders it to <data dir>/mtw/mtw.toml on
+# every boot (src/core/bootstrap/sidecars.ts), replacing {{DATA_DIR}} with the
+# per-user data directory and {{WHATSAPP_SOCKET}} with the bridge endpoint (a
+# unix socket under the data dir, or a per-install named pipe on Windows),
+# both TOML-escaped, and starts mtw-server from that folder. Derived from
+# mtw.docker.toml; keep the channel list in step with it.
+
+[server]
+# Loopback only: a desktop install has no reason to expose the bus.
+host = "127.0.0.1"
+port = 7741
+max_connections = 10000
+
+[transport]
+default = "websocket"
+
+[transport.websocket]
+path = "/ws"
+ping_interval = 30
+max_message_size = "10MB"
+
+[codec]
+default = "json"
+
+# ── Data Store ──────────────────────────────────────────────
+# The kernel's own database, read-only from this side.
+[store]
+path = "{{DATA_DIR}}/data/kernel.db"
+readonly = true
+
+# Bridge — delegates writes to kernel via Unix socket (Rust→TS)
+[store.bridge]
+socket = "/tmp/kernl.sock"
+
+# ── Channels ────────────────────────────────────────────────
+[[channels]]
+name = "dashboard"
+history = 1
+
+[[channels]]
+name = "agenda"
+history = 1
+
+[[channels]]
+name = "calendar"
+history = 1
+
+[[channels]]
+name = "analytics"
+history = 1
+
+[[channels]]
+name = "agents"
+history = 10
+
+[[channels]]
+name = "agents.flow"
+history = 50
+
+[[channels]]
+name = "notifications"
+auth = false
+history = 20
+
+[[channels]]
+name = "chat.*"
+auth = false
+max_members = 100
+history = 50
+
+[[channels]]
+name = "system"
+auth = true
+history = 10
+
+# RPC channel — browser sends request, kernel responds via ref_id correlation
+[[channels]]
+name = "rpc"
+history = 0
+
+[[channels]]
+name = "trading"
+history = 5
+
+[[channels]]
+name = "trading-ticker"
+history = 1
+
+[[channels]]
+name = "crossIntel"
+history = 1
+
+[[channels]]
+name = "systemAgenda"
+history = 1
+
+[[channels]]
+name = "life"
+history = 1
+
+[[channels]]
+name = "finance"
+history = 1
+
+[[channels]]
+name = "health"
+history = 1
+
+[[channels]]
+name = "notes"
+history = 1
+
+[[channels]]
+name = "learning"
+history = 1
+
+# WhatsApp pub/sub channels (populated by the whatsapp-bridge sidecar).
+[[channels]]
+name = "whatsapp:qr"
+auth = false
+history = 1
+
+[[channels]]
+name = "whatsapp:status"
+auth = false
+history = 1
+
+# Acks, errors and ready/paired events: transient, never replayed.
+[[channels]]
+name = "whatsapp:events"
+auth = false
+history = 0
+
+[[channels]]
+name = "whatsapp:pairing"
+auth = false
+history = 1
+
+[[channels]]
+name = "whatsapp:inbound"
+auth = false
+history = 50
+
+# ── WhatsApp integration ────────────────────────────────────
+# Connects mtw-request to the whatsapp-bridge Go sidecar over a local
+# endpoint: a Unix socket under the data dir, or a per-install named pipe
+# (\\.\pipe\kernl-<id>-whatsapp) on Windows. The kernel renders the value
+# and starts the bridge with the same one in MTW_WHATSAPP_SOCKET.
+# Exposes whatsapp.* request actions and publishes events on the
+# whatsapp:* channels above.
+[whatsapp]
+enabled = true
+socket = "{{WHATSAPP_SOCKET}}"
+connect_timeout_secs = 60

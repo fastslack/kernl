@@ -1,6 +1,10 @@
 import { describe, it, expect } from 'bun:test';
-import en from './en.js';
-import es from './es.js';
+import enDict from './en.js';
+import esDict from './es.js';
+
+// Looked up by computed keys below; the dictionaries' own types only admit known keys.
+const en: Record<string, string> = enDict;
+const es: Record<string, string> = esDict;
 
 /** Namespaces whose keys must exist in both languages. Later plans append their prefixes here. */
 const PREFIXES = ['office.', 'meeting.'];

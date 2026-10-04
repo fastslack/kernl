@@ -19,7 +19,11 @@ import {
   isoNow,
   log,
   stripReasoning,
+  localDateTime,
+  kernelTimezone,
 } from "@kernl/extension-sdk";
+import { type AgendaItem, AGENDA_PROMPT_RULES, parseAgendaItems } from "./agenda-extract.js";
+import { mailLlmChat } from "./mail-llm.js";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -30,6 +34,7 @@ export interface ClassificationResult {
   urgency: Urgency;
   attention_needed: boolean;
   summary: string;
+  agenda_items: AgendaItem[];
 }
 
 export interface GoogleEmailRow {
@@ -43,6 +48,12 @@ export interface GoogleEmailRow {
   body_text: string;
   date: string;
   labels: string;
+  /** Conversation key the agenda writer dedups on (thread id, else the row id). */
+  thread_key: string;
+  /** What the classifier reads: the body, capped at 1 500 characters. */
+  body_excerpt: string;
+  /** communications rows only: their own thread_id (what kernel_comms_thread takes). */
+  comm_thread_id?: string;
 }
 
 export interface AttentionItem {
@@ -60,6 +71,55 @@ export interface AttentionItem {
   draft_status: string;
 }
 
+/** How far back getUnclassifiedComms looks for inbound mail to classify. */
+export const TRIAGE_WINDOW_DAYS = 14;
+
+// ── Answer parsing ───────────────────────────────────────────────────────────
+
+/** Index just past the `]` closing the array that opens at `start`, or -1. */
+function matchingBracket(text: string, start: number): number {
+  let depth = 0;
+  let inString = false;
+  for (let i = start; i < text.length; i++) {
+    const c = text[i];
+    if (inString) {
+      if (c === "\\") i++;
+      else if (c === '"') inString = false;
+    } else if (c === '"') inString = true;
+    else if (c === "[") depth++;
+    else if (c === "]" && --depth === 0) return i + 1;
+  }
+  return -1;
+}
+
+/**
+ * The model's JSON answer, from a response that may wrap it in reasoning
+ * prose, code fences or a draft. Reasoning text mentions brackets too
+ * ("output a JSON array with [idx]"), so slicing from the first `[` to the
+ * last `]` broke on exactly those models. Instead every array of objects that
+ * parses is a candidate, and the answer is the one that ends last — the final
+ * answer comes after the thinking and any draft — taking the outermost when
+ * arrays nest (an item may carry an array of its own). Null when no
+ * complete array is there (the response was cut off, or never answered).
+ */
+export function extractJsonArray(raw: string): unknown[] | null {
+  const text = raw.replace(/```(?:json)?/gi, "");
+  let best: { start: number; end: number; value: unknown[] } | null = null;
+  for (const m of text.matchAll(/\[\s*(?=\{|\])/g)) {
+    const start = m.index ?? 0;
+    const end = matchingBracket(text, start);
+    if (end === -1 || (best && end < best.end)) continue;
+    if (best && end === best.end) continue; // same close, later start: nested inside best
+    try {
+      const value = JSON.parse(text.slice(start, end));
+      if (Array.isArray(value)) best = { start, end, value };
+    } catch {
+      // a draft or an example in the reasoning — not the answer
+    }
+  }
+  return best?.value ?? null;
+}
+
 // ── Service ──────────────────────────────────────────────────────────────────
 
 export class EmailTriageService {
@@ -68,29 +128,40 @@ export class EmailTriageService {
     private config: KernelConfig,
   ) {}
 
-  /** LLM call via global singleton (routes through mtwRequest) */
+  /** LLM call on the mail model (see mail-llm.ts), else the default chain. */
   private async llmChat(system: string, user: string): Promise<string> {
-    const { llm } = await import("@kernl/extension-sdk");
-    const result = await llm().chat({ system, user, caller: "email-triage" });
-    return result.text;
+    // Reasoning models think out loud before the JSON; with the default 2048
+    // tokens a batch of 20 mails ran out mid-thought and returned no answer.
+    return mailLlmChat(this.db, this.config, { system, user, caller: "email-triage", maxTokens: 8192 });
   }
 
-  /** Get unclassified emails (attention_needed = -1), limited to inbox */
+  /** Get unclassified emails (attention_needed = -1), limited to inbox and
+   *  to the last TRIAGE_WINDOW_DAYS days, so the first Gmail sync does not
+   *  push months of old mail through the LLM (older rows stay unclassified).
+   *  google_emails.date is stored as an ISO UTC instant (toISOString in the
+   *  Gmail importer), so an ISO cutoff compares like with like. */
   getUnclassified(limit = 20): GoogleEmailRow[] {
+    const cutoff = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 86_400_000).toISOString();
     try {
-      return this.db.prepare(`
+      const rows = this.db.prepare(`
         SELECT gmail_id, thread_id, from_email, from_name, to_emails,
                subject, snippet, body_text, date, labels
         FROM google_emails
         WHERE attention_needed = -1
           AND labels LIKE '%"INBOX"%'
+          AND date >= ?
           AND from_email NOT LIKE '%noreply%'
           AND from_email NOT LIKE '%no-reply%'
           AND from_email NOT LIKE '%notifications%'
           AND from_email NOT LIKE '%mailer-daemon%'
         ORDER BY date DESC
         LIMIT ?
-      `).all(limit) as GoogleEmailRow[];
+      `).all(cutoff, limit) as Array<Omit<GoogleEmailRow, "thread_key" | "body_excerpt">>;
+      return rows.map((r) => ({
+        ...r,
+        thread_key: r.thread_id || r.gmail_id,
+        body_excerpt: (r.body_text || r.snippet || "").slice(0, 1500),
+      }));
     } catch {
       return [];
     }
@@ -106,21 +177,20 @@ export class EmailTriageService {
       gmail_id: e.gmail_id,
       from: e.from_name ? `${e.from_name} <${e.from_email}>` : e.from_email,
       subject: e.subject,
-      snippet: e.snippet.slice(0, 200),
+      body: e.body_excerpt,
       date: e.date,
     }));
 
-    const today = new Date().toISOString().slice(0, 10);
-
     const systemPrompt = `You are an email triage assistant. Classify each email by urgency and whether it needs the user's attention/response.
-Today is ${today}.
+NOW is ${localDateTime()} (${kernelTimezone()}).
 
 Output ONLY valid JSON array. Each element:
 {
   "idx": number,
   "urgency": "critical" | "high" | "normal" | "low",
   "attention_needed": boolean,
-  "summary": "string — one sentence summary"
+  "summary": "string — one sentence summary",
+  "agenda_items": [ ... ]
 }
 
 Classification rules:
@@ -142,6 +212,10 @@ attention_needed = false when:
 - FYI emails that don't require action
 
 Be conservative: only mark attention_needed=true when a response is clearly expected.
+
+${AGENDA_PROMPT_RULES}
+Use an empty array for agenda_items when the email has no dated item.
+
 Respond ONLY with the JSON array.`;
 
     const userMessage = JSON.stringify(emailSummaries, null, 2);
@@ -158,29 +232,30 @@ Respond ONLY with the JSON array.`;
     try {
       // Reasoning models (minimax/MiniMax-M2.x, DeepSeek-R1, Kimi…) prepend a
       // <think>…</think> block that breaks JSON.parse ("Unrecognized token '<'").
-      // Strip it first, then drop code fences, then slice to the JSON array in
-      // case the model wrapped it in prose ("Here is the result: [...]").
-      let cleaned = stripReasoning(rawText).replace(/```(?:json)?/gi, "").trim();
-      const lb = cleaned.indexOf("[");
-      const rb = cleaned.lastIndexOf("]");
-      if (lb !== -1 && rb > lb) cleaned = cleaned.slice(lb, rb + 1);
-      if (!cleaned) {
-        log.warn(`EmailTriage: LLM returned empty/answerless response (${emails.length} emails in batch)`);
-        return [];
-      }
-
-      const parsed = JSON.parse(cleaned) as Array<{
+      // Strip it first; extractJsonArray then finds the answer among the prose,
+      // code fences and drafts a model may wrap it in.
+      const parsed = extractJsonArray(stripReasoning(rawText)) as Array<{
         idx: number;
         urgency: Urgency;
         attention_needed: boolean;
         summary: string;
-      }>;
+        agenda_items?: unknown;
+      }> | null;
+      if (!parsed) {
+        log.warn(
+          `EmailTriage: no JSON answer in the response (${emails.length} emails in batch) — ` +
+            `raw response (first 500 chars): ${rawText.slice(0, 500)}`,
+        );
+        return [];
+      }
 
+      const nowLocal = localDateTime();
       return parsed.map((r) => ({
         gmail_id: emailSummaries[r.idx]?.gmail_id ?? "",
         urgency: r.urgency,
         attention_needed: r.attention_needed,
         summary: r.summary,
+        agenda_items: parseAgendaItems(r.agenda_items, nowLocal),
       })).filter((r) => r.gmail_id);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -212,27 +287,43 @@ Respond ONLY with the JSON array.`;
   // the result inside `metadata.triage` instead of adding columns.
 
   /** Pull inbound IMAP/email rows from `communications` that haven't been
-   *  classified yet (no `metadata.triage` key). */
+   *  classified yet (no `metadata.triage` key), received in the last
+   *  TRIAGE_WINDOW_DAYS days.
+   *
+   *  No status filter: CommsService stores every inbound row with
+   *  status='archived' (for inbound it just means "received"), so filtering
+   *  archived out left IMAP mail never classified. The age window keeps the
+   *  first run after an upgrade from pushing months of old mail through the
+   *  LLM. sent_at/created_at are ISO UTC instants ("…Z", from toISOString /
+   *  isoNow), so an ISO cutoff compares like with like; an empty sent_at
+   *  (provider without a Date header) falls back to created_at.
+   *
+   *  Rows the auto labeller has not tagged yet (no or empty
+   *  metadata.auto_label) are left for a later tick, so the newsletter
+   *  exclusion always has a label to act on. */
   getUnclassifiedComms(limit = 20): GoogleEmailRow[] {
+    const cutoff = new Date(Date.now() - TRIAGE_WINDOW_DAYS * 86_400_000).toISOString();
     try {
       const rows = this.db.prepare(`
         SELECT id,
                COALESCE(NULLIF(json_extract(metadata, '$.from'), ''), '') as from_full,
-               subject, body, recipients_to, gmail_thread_id, thread_id, sent_at, created_at
+               subject, body, recipients_to, gmail_thread_id, thread_id, sent_at, created_at,
+               COALESCE(NULLIF(gmail_thread_id, ''), NULLIF(thread_id, ''), id) AS thread_key
         FROM communications
         WHERE channel = 'email'
           AND direction = 'inbound'
-          AND status NOT IN ('archived')
+          AND COALESCE(NULLIF(sent_at, ''), created_at) >= ?
+          AND COALESCE(json_extract(metadata, '$.auto_label'), '') NOT IN ('', 'newsletter')
           AND (
             json_extract(metadata, '$.triage') IS NULL
             OR json_extract(metadata, '$.triage') = ''
           )
-        ORDER BY COALESCE(sent_at, created_at) DESC
+        ORDER BY COALESCE(NULLIF(sent_at, ''), created_at) DESC
         LIMIT ?
-      `).all(limit) as Array<{
+      `).all(cutoff, limit) as Array<{
         id: string; from_full: string; subject: string; body: string;
         recipients_to: string; gmail_thread_id: string; thread_id: string;
-        sent_at: string | null; created_at: string;
+        sent_at: string | null; created_at: string; thread_key: string;
       }>;
 
       // Map to GoogleEmailRow shape so classifyBatch() can consume both sources.
@@ -253,6 +344,9 @@ Respond ONLY with the JSON array.`;
           body_text: r.body ?? "",
           date: r.sent_at ?? r.created_at,
           labels: '["INBOX"]',
+          thread_key: r.thread_key,
+          body_excerpt: (r.body ?? "").slice(0, 1500),
+          comm_thread_id: r.thread_id || undefined,
         };
       });
     } catch {

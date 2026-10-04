@@ -1,36 +1,12 @@
-import { createHash } from "node:crypto";
+import {
+  ForgeRepoProvider,
+  forgeRequest,
+  snapshotHash,
+  upsertMarked,
+  type CommentRef,
+  type RepoItem,
+} from "../../_lib/forge/index.js";
 import type { GiteaConnectionsService, GiteaConnection } from "./connections-service.js";
-
-const USER_AGENT = "Kernl-triage/0.1";
-
-interface RepoItem {
-  number: number;
-  kind: "issue" | "pull_request";
-  title: string;
-  body: string;
-  state: "open" | "closed";
-  author: string;
-  authorAssociation: string;
-  labels: string[];
-  createdAt: string;
-  updatedAt: string;
-  commentCount: number;
-  snapshotHash: string;
-  url: string;
-}
-
-interface CommentRef {
-  id: string;
-  url: string;
-}
-
-interface ConnectionSummary {
-  id: string;
-  name: string;
-  details: Record<string, string>;
-  lastTestAt: string | null;
-  lastTestOk: boolean | null;
-}
 
 interface GiteaIssueRaw {
   number: number;
@@ -52,27 +28,21 @@ interface CommentRaw {
   html_url: string;
 }
 
-export class GiteaRepoProvider {
+export class GiteaRepoProvider extends ForgeRepoProvider<GiteaConnection> {
   readonly name = "gitea";
+  protected readonly label = "Gitea";
 
-  constructor(private connections: GiteaConnectionsService) {}
-
-  // ── RepoProvider surface ────────────────────────────────────────────
-
-  listConnections(): ConnectionSummary[] {
-    return this.connections.list().map((c) => ({
-      id: c.id,
-      name: c.name,
-      details: { host: c.host },
-      lastTestAt: c.last_test_at,
-      lastTestOk: c.last_test_ok == null ? null : c.last_test_ok === 1,
-    }));
+  constructor(connections: GiteaConnectionsService) {
+    super(connections);
   }
 
-  assertConnection(connectionId: string): void {
-    if (!this.connections.get(connectionId)) {
-      throw new Error(`Gitea connection not found: ${connectionId}`);
-    }
+  protected details(c: GiteaConnection): Record<string, string> {
+    return { host: c.host };
+  }
+
+  protected async whoami(conn: GiteaConnection): Promise<string> {
+    const data = await this.get<{ id: number; login: string }>(conn, `/user`);
+    return `OK — user id=${data.id} (${data.login}) at ${conn.host}`;
   }
 
   async fetchOpenItems(repo: string, connectionId: string, maxPages = 50): Promise<RepoItem[]> {
@@ -99,8 +69,7 @@ export class GiteaRepoProvider {
   async fetchItem(repo: string, number: number, connectionId: string): Promise<RepoItem> {
     const conn = this.requireConnection(connectionId);
     const it = await this.get<GiteaIssueRaw>(conn, `/repos/${repo}/issues/${number}`);
-    const kind = it.pull_request != null ? "pull_request" : "issue";
-    return toRepoItem(it, kind);
+    return toRepoItem(it, it.pull_request != null ? "pull_request" : "issue");
   }
 
   async upsertMarkedComment(
@@ -112,106 +81,39 @@ export class GiteaRepoProvider {
   ): Promise<CommentRef> {
     const conn = this.requireConnection(connectionId);
     const fullBody = body.includes(marker) ? body : `${marker}\n${body}`;
-
-    for (let page = 1; page <= 20; page++) {
-      const comments = await this.get<CommentRaw[]>(
-        conn,
-        `/repos/${repo}/issues/${number}/comments?page=${page}&limit=50`,
-      );
-      if (comments.length === 0) break;
-      const existing = comments.find((c) => c.body.includes(marker));
-      if (existing) {
-        const updated = await this.patch<CommentRaw>(
-          conn,
-          `/repos/${repo}/issues/comments/${existing.id}`,
-          { body: fullBody },
-        );
-        return { id: String(updated.id), url: updated.html_url };
-      }
-      if (comments.length < 50) break;
-    }
-
-    const created = await this.post<CommentRaw>(
-      conn,
-      `/repos/${repo}/issues/${number}/comments`,
-      { body: fullBody },
-    );
-    return { id: String(created.id), url: created.html_url };
+    const ref = (c: CommentRaw): CommentRef => ({ id: String(c.id), url: c.html_url });
+    return upsertMarked({
+      marker,
+      pageSize: 50,
+      listPage: (page) => this.get<CommentRaw[]>(conn, `/repos/${repo}/issues/${number}/comments?page=${page}&limit=50`),
+      update: async (existing) =>
+        ref(await this.request<CommentRaw>(conn, "PATCH", `/repos/${repo}/issues/comments/${existing.id}`, { body: fullBody })),
+      create: async () =>
+        ref(await this.request<CommentRaw>(conn, "POST", `/repos/${repo}/issues/${number}/comments`, { body: fullBody })),
+    });
   }
 
   async closeItem(repo: string, number: number, connectionId: string): Promise<void> {
     const conn = this.requireConnection(connectionId);
-    await this.patch<unknown>(conn, `/repos/${repo}/issues/${number}`, { state: "closed" });
+    await this.request<unknown>(conn, "PATCH", `/repos/${repo}/issues/${number}`, { state: "closed" });
   }
 
-  async testConnection(connectionId: string): Promise<{ ok: boolean; detail: string }> {
-    const conn = this.connections.get(connectionId);
-    if (!conn) return { ok: false, detail: "connection not found" };
-    try {
-      const data = await this.get<{ id: number; login: string }>(conn, `/user`);
-      const detail = `OK — user id=${data.id} (${data.login}) at ${conn.host}`;
-      this.connections.recordTest(connectionId, true, "");
-      return { ok: true, detail };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      this.connections.recordTest(connectionId, false, msg);
-      return { ok: false, detail: msg };
-    }
-  }
-
-  // ── HTTP layer ──────────────────────────────────────────────────────
-
-  private requireConnection(id: string): GiteaConnection {
-    const conn = this.connections.get(id);
-    if (!conn) throw new Error(`Gitea connection not found: ${id}`);
-    return conn;
-  }
-
-  private async request<T>(
-    conn: GiteaConnection,
-    method: "GET" | "POST" | "PATCH",
-    path: string,
-    body?: unknown,
-    attempt = 1,
-  ): Promise<T> {
-    const url = `${conn.host}/api/v1${path}`;
-    const res = await fetch(url, {
+  private request<T>(conn: GiteaConnection, method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {
+    return forgeRequest<T>({
+      label: "Gitea",
       method,
-      headers: {
-        Authorization: `token ${conn.token}`,
-        Accept: "application/json",
-        "User-Agent": USER_AGENT,
-        ...(body !== undefined ? { "Content-Type": "application/json" } : {}),
-      },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
+      path,
+      url: `${conn.host}/api/v1${path}`,
+      headers: { Authorization: `token ${conn.token}`, Accept: "application/json" },
+      body,
+      retryOn: [429, 503],
     });
-    if (res.ok) {
-      if (res.status === 204) return undefined as T;
-      return (await res.json()) as T;
-    }
-    if ((res.status === 429 || res.status === 503) && attempt <= 3) {
-      const waitMs = retryAfterMs(res);
-      if (waitMs > 0 && waitMs <= 60_000) {
-        await sleep(waitMs);
-        return this.request<T>(conn, method, path, body, attempt + 1);
-      }
-    }
-    const text = await res.text().catch(() => "");
-    throw new Error(`Gitea ${method} ${path} ${res.status}: ${text.slice(0, 300)}`);
   }
 
   private get<T>(conn: GiteaConnection, path: string): Promise<T> {
     return this.request<T>(conn, "GET", path);
   }
-  private post<T>(conn: GiteaConnection, path: string, body: unknown): Promise<T> {
-    return this.request<T>(conn, "POST", path, body);
-  }
-  private patch<T>(conn: GiteaConnection, path: string, body: unknown): Promise<T> {
-    return this.request<T>(conn, "PATCH", path, body);
-  }
 }
-
-// ── Helpers ────────────────────────────────────────────────────────────
 
 function toRepoItem(raw: GiteaIssueRaw, kind: "issue" | "pull_request"): RepoItem {
   const labels = (raw.labels ?? []).map((l) => l.name);
@@ -229,31 +131,13 @@ function toRepoItem(raw: GiteaIssueRaw, kind: "issue" | "pull_request"): RepoIte
     createdAt: raw.created_at,
     updatedAt: raw.updated_at,
     commentCount: raw.comments,
-    snapshotHash: snapshotHash(raw, labels),
+    snapshotHash: snapshotHash({
+      title: raw.title,
+      state: raw.state,
+      labels: [...labels].sort().join(","),
+      comments: raw.comments,
+      updated_at: raw.updated_at,
+    }),
     url: raw.html_url,
   };
-}
-
-function snapshotHash(raw: GiteaIssueRaw, labels: string[]): string {
-  const payload = JSON.stringify({
-    title: raw.title,
-    state: raw.state,
-    labels: [...labels].sort().join(","),
-    comments: raw.comments,
-    updated_at: raw.updated_at,
-  });
-  return createHash("sha256").update(payload).digest("hex");
-}
-
-function retryAfterMs(res: Response): number {
-  const retryAfter = res.headers.get("retry-after");
-  if (retryAfter) {
-    const n = Number(retryAfter);
-    if (Number.isFinite(n)) return n * 1000;
-  }
-  return 0;
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms));
 }

@@ -26,6 +26,7 @@ import type { RustBridge } from "../rust/bridge.js";
 import type { MtwPublisher } from "../mtw/publisher.js";
 import type { CameraStreamHub } from "./types.js";
 import type { SkillRegistry } from "../../skills/registry.js";
+import type { SidecarSupervisor } from "../sidecars/supervisor.js";
 
 export function installShutdownHandlers(args: {
   sqlite: SqliteDb;
@@ -44,6 +45,8 @@ export function installShutdownHandlers(args: {
   mcpRouter: McpHttpRouter | null;
   mcpUnixSocket: { close(): Promise<void> } | null;
   httpServer: KernelHttpServer | null;
+  /** Bundled mtw-server + whatsapp-bridge on binary installs; empty elsewhere. */
+  sidecars?: SidecarSupervisor[];
 }): void {
   const {
     sqlite, neo4j,
@@ -53,6 +56,7 @@ export function installShutdownHandlers(args: {
     bridgeServer, rustBridge,
     mtwPublisher, mtwConn,
     cameraStreamHub, mcpRouter, mcpUnixSocket, httpServer,
+    sidecars = [],
   } = args;
 
   // Idempotent: on Windows closing the console can deliver SIGHUP and
@@ -66,6 +70,9 @@ export function installShutdownHandlers(args: {
     mtwConn?.close().catch(() => {});
     bridgeServer?.shutdown();
     await rustBridge?.disconnect();
+    // After the kernel has hung up on them, so neither side logs the other
+    // vanishing mid-request as an error.
+    await Promise.all(sidecars.map(s => s.stop().catch(() => {})));
     await notificationRegistry.stopAll();
     await sandboxRegistry.stopAll();
     await llmRegistry.stopAll();

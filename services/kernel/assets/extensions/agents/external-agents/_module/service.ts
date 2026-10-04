@@ -5,6 +5,8 @@ import {
   newId,
   isoNow,
   log,
+  buildPatch,
+  type PatchColumn,
 } from "@kernl/extension-sdk";
 import { randomBytes } from "node:crypto";
 import type {
@@ -16,6 +18,16 @@ import type {
   AgentPlatform,
   AgentStatus,
 } from "./types.js";
+
+/** The external_agents columns updateAgent may write, and how each field is stored. */
+const AGENT_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  platform_id: "text",
+  capabilities: "json",
+  status: "text",
+  config: "json",
+};
 
 export class ExternalAgentService {
   constructor(
@@ -120,16 +132,7 @@ export class ExternalAgentService {
     const agent = this.getAgent(id);
     if (!agent) return undefined;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (changes.name !== undefined) { sets.push("name = ?"); params.push(changes.name); }
-    if (changes.description !== undefined) { sets.push("description = ?"); params.push(changes.description); }
-    if (changes.platform_id !== undefined) { sets.push("platform_id = ?"); params.push(changes.platform_id); }
-    if (changes.capabilities !== undefined) { sets.push("capabilities = ?"); params.push(JSON.stringify(changes.capabilities)); }
-    if (changes.status !== undefined) { sets.push("status = ?"); params.push(changes.status); }
-    if (changes.config !== undefined) { sets.push("config = ?"); params.push(JSON.stringify(changes.config)); }
-
+    const { sets, params } = buildPatch(changes, AGENT_PATCH);
     if (sets.length === 0) return agent;
 
     sets.push("updated_at = ?");

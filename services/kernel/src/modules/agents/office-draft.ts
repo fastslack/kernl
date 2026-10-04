@@ -74,29 +74,41 @@ export async function draftOfficeDefinition(
     throw new DraftError("input", `description is longer than ${MAX_DRAFT_DESCRIPTION} characters`, "");
   }
 
-  let raw: unknown;
-  try {
-    raw = await chatJson({
-      system: draftSystemPrompt(input.language),
-      user: description,
-      json: true,
-      maxTokens: 2048,
-      caller: "offices:draft",
-    });
-  } catch (err) {
-    throw new DraftError("draft", "invalid_draft", err instanceof Error ? err.message : String(err));
-  }
-
+  // One ask, then one repair. A model that misses the shape usually misses it
+  // narrowly — a field named wrong, a manager missing from a two-agent team —
+  // and telling it exactly what failed fixes that far more often than asking
+  // the operator to rewrite a description that was never the problem. Two
+  // attempts and no more: a model that cannot follow the schema twice will not
+  // follow it on the fifth try, and the operator is waiting.
+  //
   // officeDefinitionFromJson both validates the model's reply (defineOffice)
-  // and — as of the chainTo/cron.agent NAME resolution it now does — accepts
-  // the model's raw output as-is: it already names chain targets and the
+  // and accepts its raw output as-is: it already names chain targets and the
   // cron agent by NAME, exactly as the system prompt asks for.
-  let def: OfficeDefinition;
-  try {
-    def = officeDefinitionFromJson(raw);
-  } catch (err) {
-    throw new DraftError("draft", "invalid_draft", err instanceof Error ? err.message : String(err));
+  let def: OfficeDefinition | null = null;
+  let lastDetail = "";
+  for (let attempt = 0; attempt < 2 && !def; attempt++) {
+    const user = attempt === 0
+      ? description
+      : [
+          description,
+          "",
+          `Your previous reply was rejected: ${lastDetail}`,
+          "Reply again with ONE JSON object that fixes exactly that. No prose, no code fence.",
+        ].join("\n");
+    try {
+      const raw = await chatJson({
+        system: draftSystemPrompt(input.language),
+        user,
+        json: true,
+        maxTokens: 2048,
+        caller: attempt === 0 ? "offices:draft" : "offices:draft:repair",
+      });
+      def = officeDefinitionFromJson(raw);
+    } catch (err) {
+      lastDetail = err instanceof Error ? err.message : String(err);
+    }
   }
+  if (!def) throw new DraftError("draft", "invalid_draft", lastDetail);
   if (def.agents.length > MAX_DRAFT_AGENTS) {
     throw new DraftError("draft", "invalid_draft", `the draft has ${def.agents.length} agents; the limit is ${MAX_DRAFT_AGENTS}`);
   }

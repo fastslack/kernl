@@ -13,7 +13,22 @@ const config = {
 			strict: false
 		}),
 		alias: {
-			$lib: './src/lib'
+			$lib: './src/lib',
+			// The frontend library extension pages build against (components,
+			// utils, sanitize). The dashboard renders the same widgets, so it
+			// imports them from the one copy instead of keeping its own.
+			$shared: '../kernel/assets/extensions/_shared'
+		},
+		typescript: {
+			// $shared sits outside this package, where TypeScript finds no
+			// node_modules for its bare imports. Point them at ours (types only;
+			// vite.config.ts `resolve.dedupe` does the same for the bundle).
+			config(tsconfig) {
+				tsconfig.compilerOptions.paths = {
+					...tsconfig.compilerOptions.paths,
+					dompurify: ['../node_modules/dompurify']
+				};
+			}
 		}
 	}
 };

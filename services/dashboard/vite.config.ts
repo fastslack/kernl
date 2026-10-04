@@ -23,6 +23,8 @@ export default defineConfig({
 		// as well. Set VITE_DEV_HOST to override for anything else (a VM, a phone
 		// on the same wifi), so opening it up is a decision someone makes on purpose.
 		host: process.env.VITE_DEV_HOST ?? '127.0.0.1',
+		// Let the dev server read $shared, which sits outside this package.
+		fs: { allow: ['.', '../kernel/assets/extensions/_shared'] },
 		proxy: {
 			'/api': API_TARGET,
 			'/ext-assets': API_TARGET,
@@ -30,6 +32,11 @@ export default defineConfig({
 			// WebSocket via mtwRequest (Rust)
 			'/mtw': { target: KERNEL_TARGET, ws: true, rewrite: (path) => path.replace(/^\/mtw/, '/ws') }
 		}
+	},
+	resolve: {
+		// $shared lives outside this package (services/kernel/assets/extensions/_shared),
+		// where there is no node_modules: its bare imports resolve from here.
+		dedupe: ['svelte', 'dompurify']
 	},
 	ssr: {
 		noExternal: ['three']

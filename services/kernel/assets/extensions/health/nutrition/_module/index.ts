@@ -1,57 +1,21 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-} from "@kernl/extension-sdk";
+import { defineModule, dashboardChannel } from "@kernl/extension-sdk";
 import { nutritionMigrations } from "./migrations/001_nutrition.js";
 import { NutritionService } from "./service.js";
 import { nutritionTools } from "./tools.js";
 import { queryNutrition } from "./dashboard-queries.js";
 import { nutritionRpcActions } from "./rpc-actions.js";
 
-export function createNutritionModule(): ExtensibleModule {
-  let tools: ToolDefinition[] = [];
-  let dbRef: SqliteDb | null = null;
-
-  return {
+export function createNutritionModule() {
+  return defineModule({
     name: "nutrition",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "nutrition", nutritionMigrations);
-      dbRef = ctx.sqlite;
-      const service = new NutritionService(ctx.sqlite);
-      tools = nutritionTools(service);
-    },
-
-    getTools() {
-      return tools;
-    },
-
-    getRpcActions() {
-      return dbRef ? nutritionRpcActions(dbRef) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        nav: [
-          { id: "nutrition", label: "Food", icon: "\uD83E\uDD57", group: "wellness", order: 40 },
-        ],
-        channels: [
-          { name: "nutrition", query: (db) => queryNutrition(db) },
-        ],
-        channelMappings: [
-          { moduleKey: "nutrition", channels: ["nutrition"] },
-        ],
-        stores: ["nutrition"],
-        fetchEndpoints: [
-          { url: "/api/dashboard/nutrition", store: "nutrition" },
-        ],
-      };
-    },
-
-    async shutdown() {},
-  };
+    migrations: nutritionMigrations,
+    init: (ctx) => new NutritionService(ctx.sqlite),
+    tools: nutritionTools,
+    rpc: nutritionRpcActions,
+    dashboard: dashboardChannel("nutrition", (db) => queryNutrition(db), {
+      nav: [
+        { id: "nutrition", label: "Food", icon: "🥗", group: "wellness", order: 40 },
+      ],
+    }),
+  });
 }

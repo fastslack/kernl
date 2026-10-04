@@ -17,7 +17,7 @@ import { textResult, errorResult } from "../../core/helpers.js";
 import { isPathInside, toPosixPath } from "../../core/fs-paths.js";
 import type { ToolDefinition } from "../../core/types.js";
 import type { AgentService } from "./service.js";
-import { defineTool } from "../../core/tool-builder.js";
+import { defineTool, limitArg } from "../../core/tool-builder.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -108,7 +108,7 @@ export function auditTools(service: AgentService): ToolDefinition[] {
       schema: z.object({
         path: z.string().describe("Relative path from project root (e.g. 'src/core/logger.ts')"),
         offset: z.number().optional().describe("Start line (1-based, default: 1)"),
-        limit: z.number().optional().describe("Max lines to return (default: 200)"),
+        limit: limitArg(1000, "Max lines to return (default: 200)"),
       }),
       handler: async ({ path, offset, limit }) => {
         if (!isPathAllowed(path)) {
@@ -204,7 +204,7 @@ export function auditTools(service: AgentService): ToolDefinition[] {
         event_type: z.string().optional().describe("Filter by event type (e.g. 'run', 'step')"),
         event_subtype: z.string().optional().describe("Filter by subtype (e.g. 'error', 'tool_call', 'completed')"),
         since: z.string().optional().describe("Only events after this ISO timestamp (default: last 6 hours)"),
-        limit: z.number().optional().describe("Max results (default: 50, max: 200)"),
+        limit: limitArg(200, "Max results (default: 50, max: 200)"),
       }),
       handler: async (input) => {
         const events = service.getEventLog({

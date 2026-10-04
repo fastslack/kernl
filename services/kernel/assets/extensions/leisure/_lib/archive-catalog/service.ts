@@ -14,7 +14,7 @@
  *   - light catalog stats (countAll)
  */
 
-import { type SqliteDb, isoNow, newId } from "@kernl/extension-sdk";
+import { type SqliteDb, type PatchColumn, isoNow, newId, buildPatch, jsonArray } from "@kernl/extension-sdk";
 import type {
   ArchiveScrapeRow,
   CatalogListFilter,
@@ -23,6 +23,14 @@ import type {
   IngestRun,
   IngestRunUpdate,
 } from "./types.js";
+
+/** The plain run columns updateRun overwrites (counters are added separately). */
+const RUN_PATCH: Record<string, PatchColumn> = {
+  cursor: "text",
+  status: "text",
+  error: "text",
+  finished_at: "text",
+};
 
 interface RawRunRow {
   id: string;
@@ -251,14 +259,10 @@ export class ArchiveCatalog {
   }
 
   updateRun(id: string, patch: IngestRunUpdate): void {
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    if (patch.cursor !== undefined)      { sets.push("cursor = ?");                params.push(patch.cursor); }
-    if (patch.fetched !== undefined)     { sets.push("fetched = fetched + ?");      params.push(patch.fetched); }
-    if (patch.upserted !== undefined)    { sets.push("upserted = upserted + ?");    params.push(patch.upserted); }
-    if (patch.status !== undefined)      { sets.push("status = ?");                 params.push(patch.status); }
-    if (patch.error !== undefined)       { sets.push("error = ?");                  params.push(patch.error); }
-    if (patch.finished_at !== undefined) { sets.push("finished_at = ?");            params.push(patch.finished_at); }
+    const { sets, params } = buildPatch(patch, RUN_PATCH);
+    // Counters are deltas: they add to the stored value instead of replacing it.
+    if (patch.fetched !== undefined)  { sets.push("fetched = fetched + ?");   params.push(patch.fetched); }
+    if (patch.upserted !== undefined) { sets.push("upserted = upserted + ?"); params.push(patch.upserted); }
     if (sets.length === 0) return;
     params.push(id);
     this.db
@@ -324,10 +328,8 @@ export class ArchiveCatalog {
 
     for (const r of rows) {
       titlesScanned++;
-      let parsed: unknown;
-      try { parsed = JSON.parse(r.subject_json); } catch { continue; }
-      if (!Array.isArray(parsed)) continue;
-      for (const raw of parsed) {
+      // Malformed or non-array subjects contribute nothing.
+      for (const raw of jsonArray(r.subject_json)) {
         if (typeof raw !== "string") continue;
         const trimmed = raw.trim();
         if (trimmed.length < 2) continue;
@@ -457,11 +459,9 @@ function asArray(v: string | string[] | undefined): string[] {
   return [];
 }
 
+/** The string entries of a stored JSON array; malformed or non-array → []. */
 function safeArray(json: string): string[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
-  } catch { return []; }
+  return jsonArray(json).filter((x): x is string => typeof x === "string");
 }
 
 function parseYear(date: string): number {

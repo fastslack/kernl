@@ -262,11 +262,6 @@ export async function probeComputeBackend(
   return caps;
 }
 
-/** Clear the probe cache. Tests, and the doctor's --fresh path. */
-export function resetComputeBackendCache(): void {
-  cached = null;
-}
-
 // ── Policy (pure) ──────────────────────────────────────────────────────────
 
 export type Quant = "f16" | "q8_0" | "q5_0";
@@ -365,7 +360,3 @@ export function chooseTranscribePlan(caps: ComputeCapabilities): TranscribePlan 
   };
 }
 
-/** One line for the startup log and the doctor output. */
-export function describePlan(caps: ComputeCapabilities, plan: TranscribePlan): string {
-  return `transcribe: ${plan.quant}${plan.useGpu ? " on GPU" : ""} — ${plan.rationale}`;
-}

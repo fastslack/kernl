@@ -1,11 +1,9 @@
 import {
   type KernelModule,
-  type ModuleContext,
-  type ToolDefinition,
   type DashboardDescriptor,
-  runMigrations,
-  log,
   type EventBus,
+  defineModule,
+  log,
 } from "@kernl/extension-sdk";
 import { newsMigrations, seedDefaultFeeds } from "./news-migrations.js";
 import { NewsService } from "./news-service.js";
@@ -21,46 +19,34 @@ export interface NewsModule extends KernelModule {
 }
 
 export function createNewsModule(): NewsModule {
+  // Kept outside the module state: shutdown() drops it, and getService(),
+  // the dashboard RPC actions and the routes go empty afterwards.
   let service: NewsService | null = null;
-  let eventsRef: EventBus | null = null;
+  let events: EventBus | null = null;
 
-  return {
+  const mod = defineModule({
     name: "news",
-
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "news", newsMigrations);
+    migrations: newsMigrations,
+    init(ctx) {
       seedDefaultFeeds(ctx.sqlite);
       service = new NewsService(ctx.sqlite, () => ctx.graph);
-      eventsRef = ctx.events;
+      events = ctx.events;
       log.info("news module initialized");
     },
-
-    getTools(): ToolDefinition[] {
-      return [];
+    dashboardRpc: () => (service ? newsDashboardRpcActions({ newsService: service }) : []),
+    dashboard: {
+      registerRoutes: (server) => {
+        if (service) {
+          registerNewsRoutes(server, service, events ?? undefined);
+        }
+      },
     },
-
-    getService() {
-      return service;
-    },
-
-    getDashboardRpcActions() {
-      return service ? newsDashboardRpcActions({ newsService: service }) : [];
-    },
-
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        registerRoutes: (server) => {
-          if (service) {
-            registerNewsRoutes(server, service, eventsRef ?? undefined);
-          }
-        },
-      };
-    },
-
-    async shutdown() {
+    shutdown() {
       service = null;
     },
-  };
+  });
+  // The descriptor is static, so getDashboardDescriptor never answers null.
+  return Object.assign(mod, { getService: () => service }) as NewsModule;
 }
 
 export default createNewsModule;

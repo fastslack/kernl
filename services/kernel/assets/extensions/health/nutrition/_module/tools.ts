@@ -1,14 +1,14 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
 import type { NutritionService } from "./service.js";
 
 export function nutritionTools(service: NutritionService): ToolDefinition[] {
   return [
     // ── Food Database ──────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_nutrition_add_food",
       description: "Add a food to the local database with nutritional info per 100g. Use this to create reusable food entries.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Food name (e.g. 'Chicken Breast', 'Brown Rice')"),
         brand: z.string().optional().describe("Brand name if applicable"),
         barcode: z.string().optional().describe("EAN/UPC barcode for scanning"),
@@ -24,8 +24,8 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         source: z.enum(["custom", "openfoodfacts", "usda"]).optional(),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const food = service.addFood(args as any);
+      handler: async (input) => {
+        const food = service.addFood(input);
         return textResult(
           `Food added: **${food.name}**${food.brand ? ` (${food.brand})` : ""}\n` +
           `  Calories: ${food.calories_per_100g} kcal/100g\n` +
@@ -33,16 +33,15 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
           `  ID: ${food.id}`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_nutrition_search_foods",
       description: "Search the food database by name or brand for logging meals.",
-      inputSchema: z.object({
+      schema: z.object({
         query: z.string().describe("Search term (food name or brand)"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
       }),
-      handler: async (args) => {
-        const { query, limit } = args as { query: string; limit?: number };
+      handler: async ({ query, limit }) => {
         const foods = service.searchFoods(query, limit);
         if (foods.length === 0) return textResult("No foods found. Try adding it with kernel_nutrition_add_food.");
         const lines = foods.map(f =>
@@ -50,13 +49,13 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         );
         return textResult(`${foods.length} food(s) found:\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Log Entries ────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_nutrition_log",
       description: "Log a food entry for a meal. Can reference a food_id from the database or specify macros directly. Auto-calculates macros from food database if food_id is provided.",
-      inputSchema: z.object({
+      schema: z.object({
         food_id: z.string().optional().describe("Food ID from database (auto-calculates macros)"),
         food_name: z.string().optional().describe("Food name (required if no food_id)"),
         meal_type: z.enum(["breakfast", "lunch", "dinner", "snack", "other"]).optional().describe("Meal type (default: other)"),
@@ -69,22 +68,21 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         date: z.string().optional().describe("Date (YYYY-MM-DD, default: today)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const entry = service.logEntry(args as any);
+      handler: async (input) => {
+        const entry = service.logEntry(input);
         return textResult(
           `Logged: **${entry.food_name}** (${entry.meal_type}) — ${entry.quantity_g}g\n` +
           `  Calories: ${Math.round(entry.calories)} kcal | Protein: ${Math.round(entry.protein_g)}g | Carbs: ${Math.round(entry.carbs_g)}g | Fat: ${Math.round(entry.fat_g)}g`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_nutrition_daily",
       description: "Get full daily nutrition summary: all meals logged, macros totals vs goals, water intake, and active fasting window.",
-      inputSchema: z.object({
+      schema: z.object({
         date: z.string().optional().describe("Date (YYYY-MM-DD, default: today)"),
       }),
-      handler: async (args) => {
-        const { date } = args as { date?: string };
+      handler: async ({ date }) => {
         const s = service.getDailySummary(date);
         const g = s.goal;
         const gp = s.goal_progress;
@@ -123,28 +121,27 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
 
         return textResult(out);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_nutrition_weekly_trend",
       description: "Get 7-day calorie, protein, and weight trend.",
-      inputSchema: z.object({
+      schema: z.object({
         days: z.number().optional().describe("Number of days (default: 7)"),
       }),
-      handler: async (args) => {
-        const { days } = args as { days?: number };
+      handler: async ({ days }) => {
         const trend = service.getWeeklyTrend(days);
         const lines = trend.map(d =>
           `${d.date}: ${Math.round(d.calories)} kcal | P: ${Math.round(d.protein_g)}g${d.weight_kg ? ` | ${d.weight_kg}kg` : ""}`
         );
         return textResult(`**${trend.length}-Day Nutrition Trend:**\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ── Goals ──────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_nutrition_set_goal",
       description: "Set daily nutrition goals (calories, macros, water). Replaces the current active goal.",
-      inputSchema: z.object({
+      schema: z.object({
         calories: z.number().optional().describe("Daily calorie goal (default: 2000)"),
         protein_g: z.number().optional().describe("Daily protein goal in grams (default: 150)"),
         carbs_g: z.number().optional().describe("Daily carbs goal in grams (default: 250)"),
@@ -153,39 +150,38 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         water_ml: z.number().optional().describe("Daily water goal in ml (default: 2500)"),
         notes: z.string().optional().describe("Notes about this goal (e.g. 'cutting phase', 'maintenance')"),
       }),
-      handler: async (args) => {
-        const goal = service.setGoal(args as any);
+      handler: async (input) => {
+        const goal = service.setGoal(input);
         return textResult(
           `Nutrition goal set:\n  Calories: ${goal.calories} kcal\n  Protein: ${goal.protein_g}g | Carbs: ${goal.carbs_g}g | Fat: ${goal.fat_g}g\n  Fiber: ${goal.fiber_g}g | Water: ${goal.water_ml}ml`
         );
       },
-    },
+    }),
 
     // ── Fasting ────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_nutrition_start_fast",
       description: "Start an intermittent fasting window. Supports 16:8, 18:6, 20:4, 24h, 5:2, OMAD protocols.",
-      inputSchema: z.object({
+      schema: z.object({
         protocol: z.enum(["16:8", "18:6", "20:4", "24h", "5:2", "omad", "custom"]).optional().describe("Fasting protocol (default: 16:8)"),
         target_hours: z.number().optional().describe("Custom target hours (for 'custom' protocol)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const fast = service.startFast(args as any);
+      handler: async (input) => {
+        const fast = service.startFast(input);
         return textResult(
           `Fasting started!\n  Protocol: ${fast.protocol}\n  Started: ${fast.start_time}\n  Target: ${fast.target_hours}h\n  ID: ${fast.id}`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_nutrition_break_fast",
       description: "End the current fasting window (complete or mark as broken).",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().optional().describe("Fast ID (omit to break the currently active fast)"),
         status: z.enum(["completed", "broken"]).optional().describe("How the fast ended (default: completed)"),
       }),
-      handler: async (args) => {
-        const { id, status } = args as { id?: string; status?: "completed" | "broken" };
+      handler: async ({ id, status }) => {
         let fastId = id;
         if (!fastId) {
           const active = service.getActiveFast();
@@ -198,15 +194,14 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
           `Fast ended (${fast.status})!\n  Protocol: ${fast.protocol}\n  Duration: ${fast.actual_hours}h / ${fast.target_hours}h target\n  Started: ${fast.start_time}\n  Ended: ${fast.end_time}`
         );
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_nutrition_fasting_status",
       description: "Check active fasting window status and recent fasting history.",
-      inputSchema: z.object({
+      schema: z.object({
         history: z.number().optional().describe("Number of recent fasts to show (default: 7)"),
       }),
-      handler: async (args) => {
-        const { history = 7 } = args as { history?: number };
+      handler: async ({ history = 7 }) => {
         const active = service.getActiveFast();
         let out = "";
         if (active) {
@@ -223,31 +218,30 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         out += `**Recent history (${fasts.length} fasts):** ${success} completed, avg ${avgHours}h`;
         return textResult(out);
       },
-    },
+    }),
 
     // ── Water ──────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_nutrition_log_water",
       description: "Log water intake in ml.",
-      inputSchema: z.object({
+      schema: z.object({
         amount_ml: z.number().describe("Amount in ml (e.g. 250 for a glass, 500 for a bottle)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const { amount_ml, notes } = args as { amount_ml: number; notes?: string };
+      handler: async ({ amount_ml, notes }) => {
         service.logWater(amount_ml, notes);
         const status = service.getWaterToday();
         return textResult(
           `Water logged: ${amount_ml}ml\nToday total: ${status.total_ml}ml / ${status.goal_ml}ml (${status.pct}%)`
         );
       },
-    },
+    }),
 
     // ── Body Stats ─────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_nutrition_log_body_stats",
       description: "Log body measurements (weight, body fat %, muscle mass, measurements). Auto-calculates BMI from weight.",
-      inputSchema: z.object({
+      schema: z.object({
         weight_kg: z.number().optional().describe("Body weight in kg"),
         body_fat_pct: z.number().optional().describe("Body fat percentage"),
         muscle_mass_kg: z.number().optional().describe("Muscle mass in kg"),
@@ -258,8 +252,8 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         date: z.string().optional().describe("Date (YYYY-MM-DD, default: today)"),
         notes: z.string().optional(),
       }),
-      handler: async (args) => {
-        const stats = service.logBodyStats(args as any);
+      handler: async (input) => {
+        const stats = service.logBodyStats(input);
         const lines: string[] = [];
         if (stats.weight_kg != null) lines.push(`Weight: ${stats.weight_kg}kg${stats.bmi ? ` (BMI: ${stats.bmi})` : ""}`);
         if (stats.body_fat_pct != null) lines.push(`Body fat: ${stats.body_fat_pct}%`);
@@ -267,15 +261,14 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         if (stats.waist_cm != null) lines.push(`Waist: ${stats.waist_cm}cm`);
         return textResult(`Body stats logged (${stats.date}):\n  ${lines.join("\n  ")}`);
       },
-    },
-    {
+    }),
+    defineTool({
       name: "kernel_nutrition_body_trend",
       description: "Get body composition trend (weight, body fat) over recent weeks.",
-      inputSchema: z.object({
-        limit: z.number().optional().describe("Number of entries (default: 30)"),
+      schema: z.object({
+        limit: limitArg(200, "Number of entries (default: 30)"),
       }),
-      handler: async (args) => {
-        const { limit } = args as { limit?: number };
+      handler: async ({ limit }) => {
         const stats = service.listBodyStats(limit);
         if (stats.length === 0) return textResult("No body stats logged yet. Use kernel_nutrition_log_body_stats.");
         const lines = stats.map(s => {
@@ -288,6 +281,6 @@ export function nutritionTools(service: NutritionService): ToolDefinition[] {
         });
         return textResult(`**Body Composition (${stats.length} entries):**\n\n${lines.join("\n")}`);
       },
-    },
+    }),
   ];
 }

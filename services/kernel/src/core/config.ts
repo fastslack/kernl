@@ -1,6 +1,8 @@
 import dotenv from "dotenv";
 import { resolve } from "node:path";
 import type { ChannelConfig } from "../channels/types.js";
+import type { VoiceSettings } from "../voice/types.js";
+import { voiceSettingsFromEnv } from "../voice/settings.js";
 
 export type KernelLanguage = "es" | "en";
 
@@ -65,6 +67,14 @@ export interface KernelConfig {
   chat: {
     defaultProvider: string;
     defaultModel: string;
+    /**
+     * The model last picked in a chat (CHAT_PREFERRED_*). New chats that do
+     * not name a model start on it. Chat only: unlike CHAT_DEFAULT_*, the LLM
+     * driver never reads these, so a pick in the chat does not move every
+     * other LLM call in the kernel.
+     */
+    preferredProvider: string;
+    preferredModel: string;
     extractionModel: string;
     contextBudget: number;
     maxEpisodeMessages: number;
@@ -143,16 +153,8 @@ export interface KernelConfig {
   };
   // Multi-channel support
   channels: ChannelConfig;
-  // Voice (STT/TTS)
-  voice: {
-    enabled: boolean;
-    sttProvider: "openai" | "local-whisper";
-    ttsProvider: "elevenlabs" | "openai" | "system";
-    elevenLabsApiKey: string;
-    localWhisperPath: string;
-    defaultVoiceId: string;
-    respondWithVoice: boolean;
-  };
+  // Voice (STT/TTS) — read live by src/voice; Settings → AI → Voice.
+  voice: VoiceSettings;
   // PII (Personal Data) protection
   pii: {
     enabled: boolean;
@@ -321,6 +323,14 @@ export function resolveSecureBind(
   return configuredBind;
 }
 
+/**
+ * TIMEZONE when set, else the host's zone: on a Mac that is the user's own,
+ * in a container it is UTC. It used to be UTC whenever TIMEZONE was unset.
+ */
+export function defaultTimezone(): string {
+  return process.env.TIMEZONE || Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
+}
+
 export function loadConfig(): KernelConfig {
   dotenv.config();
 
@@ -334,7 +344,7 @@ export function loadConfig(): KernelConfig {
       password: process.env.NEO4J_PASSWORD ?? "",
     },
     logLevel: process.env.LOG_LEVEL ?? "info",
-    timezone: process.env.TIMEZONE ?? "UTC",
+    timezone: defaultTimezone(),
     browserlessUrl: process.env.BROWSERLESS_URL ?? "http://host.docker.internal:3333",
     language: parseLanguage(process.env.KERNEL_DEFAULT_LANGUAGE),
     mattermost: {
@@ -371,7 +381,7 @@ export function loadConfig(): KernelConfig {
       lat: parseFloat(process.env.LIFE_LAT ?? "51.4769"),
       lon: parseFloat(process.env.LIFE_LON ?? "0.0005"),
       city: process.env.LIFE_CITY ?? "Greenwich",
-      timezone: process.env.TIMEZONE ?? "UTC",
+      timezone: defaultTimezone(),
       currencies: process.env.LIFE_CURRENCIES ?? "USD,EUR",
       clocks: (process.env.LIFE_CLOCKS ?? "America/New_York,Europe/London,Asia/Tokyo").split(","),
       waterGoal: parseInt(process.env.LIFE_WATER_GOAL ?? "8", 10),
@@ -396,6 +406,8 @@ export function loadConfig(): KernelConfig {
     chat: {
       defaultProvider: process.env.CHAT_DEFAULT_PROVIDER ?? "",
       defaultModel: process.env.CHAT_DEFAULT_MODEL ?? "",
+      preferredProvider: process.env.CHAT_PREFERRED_PROVIDER ?? "",
+      preferredModel: process.env.CHAT_PREFERRED_MODEL ?? "",
       extractionModel: process.env.CHAT_EXTRACTION_MODEL ?? "",
       contextBudget: parseInt(process.env.CHAT_CONTEXT_BUDGET ?? "2000", 10),
       maxEpisodeMessages: parseInt(process.env.CHAT_MAX_EPISODE_MESSAGES ?? "100", 10),
@@ -482,15 +494,7 @@ export function loadConfig(): KernelConfig {
         apiKey: process.env.WEBCHAT_API_KEY || undefined,
       },
     },
-    voice: {
-      enabled: process.env.VOICE_ENABLED === "true",
-      sttProvider: (process.env.VOICE_STT_PROVIDER ?? "openai") as "openai" | "local-whisper",
-      ttsProvider: (process.env.VOICE_TTS_PROVIDER ?? "system") as "elevenlabs" | "openai" | "system",
-      elevenLabsApiKey: process.env.ELEVENLABS_API_KEY ?? "",
-      localWhisperPath: process.env.LOCAL_WHISPER_PATH ?? "",
-      defaultVoiceId: process.env.VOICE_DEFAULT_ID ?? "alloy",
-      respondWithVoice: process.env.VOICE_RESPOND_WITH_VOICE === "true",
-    },
+    voice: voiceSettingsFromEnv(process.env),
     pii: {
       enabled: process.env.PII_FILTER_ENABLED !== "false", // Default: enabled
       redactEmails: process.env.PII_REDACT_EMAILS !== "false",

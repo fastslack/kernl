@@ -92,6 +92,27 @@ export class NotificationRegistry {
   }
 
   /**
+   * Fill only the keys of `patch` that are empty (missing or blank string) in
+   * the STORED config, and return the stored config as it ends up. Used for
+   * auto-config (WhatsApp's first link): whatever the user saved wins over
+   * the patch. Throws when the channel row is missing or the save fails.
+   */
+  fillEmptyConfig(providerId: string, patch: Record<string, unknown>): Record<string, unknown> {
+    const stored = this.loadConfig(providerId);
+    if (!stored) throw new Error(`channel "${providerId}" has no stored config`);
+    const empty = (v: unknown) => v === undefined || v === null || (typeof v === "string" && v.trim() === "");
+    const next: Record<string, unknown> = { ...stored };
+    let changed = false;
+    for (const [key, value] of Object.entries(patch)) {
+      if (empty(stored[key])) { next[key] = value; changed = true; }
+    }
+    if (changed && !this.saveConfig(providerId, next)) {
+      throw new Error(`saving config for "${providerId}" failed`);
+    }
+    return next;
+  }
+
+  /**
    * Discover and start all active channel providers.
    * Scans marketplace_items WHERE type='channel' AND status='active',
    * instantiates the matching factory, configures, and starts.

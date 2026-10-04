@@ -3,7 +3,7 @@
  */
 
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { LightsService } from "./service.js";
 import { PRESET_COLORS } from "./types.js";
 
@@ -12,11 +12,11 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
     // ─────────────────────────────────────────────────────────────────
     // Device Management
     // ─────────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_lights_add_device",
       description:
         "Register a new LED controller device (ESP32 with WLED, Tasmota, etc.)",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Friendly name for the device (e.g., 'Living Room Strip')"),
         ip_address: z.string().describe("IP address of the device (e.g., '192.168.1.50')"),
         type: z
@@ -27,16 +27,7 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
         room: z.string().optional().describe("Room location (e.g., 'living_room')"),
         num_leds: z.number().optional().describe("Number of LEDs in the strip"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          name: string;
-          ip_address: string;
-          type?: "wled" | "tasmota" | "custom" | "hue";
-          port?: number;
-          room?: string;
-          num_leds?: number;
-        };
-
+      handler: async (input) => {
         const device = service.addDevice(input);
         return textResult(
           `Device registered:\n` +
@@ -48,16 +39,15 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
             `  LEDs: ${device.num_leds}`,
         );
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_list_devices",
       description: "List all registered LED devices",
-      inputSchema: z.object({
+      schema: z.object({
         room: z.string().optional().describe("Filter by room"),
       }),
-      handler: async (args) => {
-        const filters = args as { room?: string };
+      handler: async (filters) => {
         const devices = service.listDevices(filters);
 
         if (devices.length === 0) {
@@ -74,12 +64,12 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`## LED Devices (${devices.length})\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_update_device",
       description: "Update a device's configuration",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().describe("Device ID or name"),
         name: z.string().optional().describe("New name"),
         ip_address: z.string().optional().describe("New IP address"),
@@ -87,16 +77,7 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
         room: z.string().optional().describe("New room"),
         num_leds: z.number().optional().describe("New LED count"),
       }),
-      handler: async (args) => {
-        const { device: deviceIdOrName, ...changes } = args as {
-          device: string;
-          name?: string;
-          ip_address?: string;
-          port?: number;
-          room?: string;
-          num_leds?: number;
-        };
-
+      handler: async ({ device: deviceIdOrName, ...changes }) => {
         const resolved = service.resolveDevice(deviceIdOrName);
         if (!resolved) {
           return errorResult(`Device not found: ${deviceIdOrName}`);
@@ -109,17 +90,15 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`Device updated: ${updated.name} (${updated.id})`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_delete_device",
       description: "Remove a device from the system",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().describe("Device ID or name"),
       }),
-      handler: async (args) => {
-        const { device: deviceIdOrName } = args as { device: string };
-
+      handler: async ({ device: deviceIdOrName }) => {
         const resolved = service.resolveDevice(deviceIdOrName);
         if (!resolved) {
           return errorResult(`Device not found: ${deviceIdOrName}`);
@@ -130,26 +109,20 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
           ? textResult(`Device deleted: ${resolved.name}`)
           : errorResult("Failed to delete device");
       },
-    },
+    }),
 
     // ─────────────────────────────────────────────────────────────────
     // Light Control
     // ─────────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_lights_on",
       description: "Turn on lights. Can target a specific device, zone, or all lights.",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().optional().describe("Device ID or name"),
         zone: z.string().optional().describe("Zone ID or name"),
         all: z.boolean().optional().describe("Turn on all lights"),
       }),
-      handler: async (args) => {
-        const { device, zone, all } = args as {
-          device?: string;
-          zone?: string;
-          all?: boolean;
-        };
-
+      handler: async ({ device, zone, all }) => {
         if (all) {
           const result = await service.turnOnAll();
           return textResult(
@@ -179,23 +152,17 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return errorResult("Specify device, zone, or use all:true");
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_off",
       description: "Turn off lights. Can target a specific device, zone, or all lights.",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().optional().describe("Device ID or name"),
         zone: z.string().optional().describe("Zone ID or name"),
         all: z.boolean().optional().describe("Turn off all lights"),
       }),
-      handler: async (args) => {
-        const { device, zone, all } = args as {
-          device?: string;
-          zone?: string;
-          all?: boolean;
-        };
-
+      handler: async ({ device, zone, all }) => {
         if (all) {
           const result = await service.turnOffAll();
           return textResult(
@@ -225,17 +192,15 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return errorResult("Specify device, zone, or use all:true");
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_toggle",
       description: "Toggle a light on/off",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().describe("Device ID or name"),
       }),
-      handler: async (args) => {
-        const { device } = args as { device: string };
-
+      handler: async ({ device }) => {
         const resolved = service.resolveDevice(device);
         if (!resolved) return errorResult(`Device not found: ${device}`);
 
@@ -244,23 +209,17 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
           ? textResult(`${resolved.name} toggled`)
           : errorResult(`Failed to toggle ${resolved.name}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_brightness",
       description: "Set brightness level (0-100%)",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().optional().describe("Device ID or name"),
         zone: z.string().optional().describe("Zone ID or name"),
         brightness: z.number().min(0).max(100).describe("Brightness percentage (0-100)"),
       }),
-      handler: async (args) => {
-        const { device, zone, brightness } = args as {
-          device?: string;
-          zone?: string;
-          brightness: number;
-        };
-
+      handler: async ({ device, zone, brightness }) => {
         const bri255 = Math.round((brightness / 100) * 255);
 
         if (zone) {
@@ -285,25 +244,19 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return errorResult("Specify device or zone");
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_color",
       description: `Set light color. Accepts RGB values, hex codes, or preset names: ${Object.keys(PRESET_COLORS).join(", ")}`,
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().optional().describe("Device ID or name"),
         zone: z.string().optional().describe("Zone ID or name"),
         color: z
           .string()
           .describe("Color: preset name, RGB (255,0,0), or hex (#FF0000)"),
       }),
-      handler: async (args) => {
-        const { device, zone, color } = args as {
-          device?: string;
-          zone?: string;
-          color: string;
-        };
-
+      handler: async ({ device, zone, color }) => {
         const rgb = service.parseColor(color);
         if (!rgb) {
           return errorResult(
@@ -333,23 +286,17 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return errorResult("Specify device or zone");
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_effect",
       description: "Set a WLED effect on a device",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().describe("Device ID or name"),
         effect: z.number().describe("Effect ID (0-117, depends on WLED version)"),
         speed: z.number().min(0).max(255).optional().describe("Effect speed (0-255)"),
       }),
-      handler: async (args) => {
-        const { device, effect, speed } = args as {
-          device: string;
-          effect: number;
-          speed?: number;
-        };
-
+      handler: async ({ device, effect, speed }) => {
         const resolved = service.resolveDevice(device);
         if (!resolved) return errorResult(`Device not found: ${device}`);
 
@@ -358,17 +305,15 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
           ? textResult(`${resolved.name} effect: ${effect}`)
           : errorResult(`Failed to set effect on ${resolved.name}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_status",
       description: "Get current status of all lights or a specific device",
-      inputSchema: z.object({
+      schema: z.object({
         device: z.string().optional().describe("Device ID or name (omit for all)"),
       }),
-      handler: async (args) => {
-        const { device } = args as { device?: string };
-
+      handler: async ({ device }) => {
         if (device) {
           const resolved = service.resolveDevice(device);
           if (!resolved) return errorResult(`Device not found: ${device}`);
@@ -402,21 +347,19 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`## Light Status\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
     // ─────────────────────────────────────────────────────────────────
     // Zones
     // ─────────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_lights_add_zone",
       description: "Create a zone (group of devices)",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Zone name (e.g., 'Downstairs')"),
         devices: z.array(z.string()).describe("List of device IDs or names"),
       }),
-      handler: async (args) => {
-        const { name, devices } = args as { name: string; devices: string[] };
-
+      handler: async ({ name, devices }) => {
         // Resolve all device IDs
         const deviceIds: string[] = [];
         for (const d of devices) {
@@ -435,12 +378,11 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
             `  Devices: ${deviceIds.length}`,
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_lights_list_zones",
       description: "List all zones",
-      inputSchema: z.object({}),
       handler: async () => {
         const zones = service.listZones();
 
@@ -457,17 +399,15 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`## Zones\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_delete_zone",
       description: "Delete a zone",
-      inputSchema: z.object({
+      schema: z.object({
         zone: z.string().describe("Zone ID or name"),
       }),
-      handler: async (args) => {
-        const { zone } = args as { zone: string };
-
+      handler: async ({ zone }) => {
         const resolved = service.resolveZone(zone);
         if (!resolved) return errorResult(`Zone not found: ${zone}`);
 
@@ -476,20 +416,18 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
           ? textResult(`Zone deleted: ${resolved.name}`)
           : errorResult("Failed to delete zone");
       },
-    },
+    }),
 
     // ─────────────────────────────────────────────────────────────────
     // Scenes
     // ─────────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_lights_scene",
       description: "Apply a predefined scene to all lights",
-      inputSchema: z.object({
+      schema: z.object({
         scene: z.string().describe("Scene ID or name (e.g., 'relax', 'movie', 'focus')"),
       }),
-      handler: async (args) => {
-        const { scene } = args as { scene: string };
-
+      handler: async ({ scene }) => {
         const resolved = service.resolveScene(scene);
         if (!resolved) {
           const scenes = service.listScenes();
@@ -502,12 +440,11 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
           `Scene "${resolved.name}" applied: ${result.success} devices, ${result.failed} failed`,
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_lights_list_scenes",
       description: "List all available scenes",
-      inputSchema: z.object({}),
       handler: async () => {
         const scenes = service.listScenes();
 
@@ -515,27 +452,19 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`## Scenes\n\n${lines.join("\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_add_scene",
       description: "Create a custom scene",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Scene name"),
         description: z.string().optional().describe("Scene description"),
         brightness: z.number().min(0).max(100).optional().describe("Default brightness %"),
         color: z.string().optional().describe("Default color"),
         on: z.boolean().optional().describe("Lights on/off"),
       }),
-      handler: async (args) => {
-        const { name, description, brightness, color, on } = args as {
-          name: string;
-          description?: string;
-          brightness?: number;
-          color?: string;
-          on?: boolean;
-        };
-
+      handler: async ({ name, description, brightness, color, on }) => {
         const state: Record<string, unknown> = {};
         if (on !== undefined) state.on = on;
         if (brightness !== undefined) state.brightness = Math.round((brightness / 100) * 255);
@@ -552,15 +481,15 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`Scene created: ${scene.name} (${scene.id})`);
       },
-    },
+    }),
 
     // ─────────────────────────────────────────────────────────────────
     // Schedules
     // ─────────────────────────────────────────────────────────────────
-    {
+    defineTool({
       name: "kernel_lights_add_schedule",
       description: "Create an automated schedule",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Schedule name"),
         device: z.string().optional().describe("Device ID or name"),
         zone: z.string().optional().describe("Zone ID or name"),
@@ -573,19 +502,7 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
         brightness: z.number().optional().describe("Brightness % (for action=on)"),
         color: z.string().optional().describe("Color (for action=on)"),
       }),
-      handler: async (args) => {
-        const input = args as {
-          name: string;
-          device?: string;
-          zone?: string;
-          scene?: string;
-          action: "on" | "off" | "scene";
-          time: string;
-          days: Array<"mon" | "tue" | "wed" | "thu" | "fri" | "sat" | "sun">;
-          brightness?: number;
-          color?: string;
-        };
-
+      handler: async (input) => {
         let deviceId: string | undefined;
         let zoneId: string | undefined;
         let sceneId: string | undefined;
@@ -628,12 +545,11 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
             `  Days: ${schedule.days.join(", ")}`,
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_lights_list_schedules",
       description: "List all schedules",
-      inputSchema: z.object({}),
       handler: async () => {
         const schedules = service.listSchedules();
 
@@ -657,37 +573,33 @@ export function lightsTools(service: LightsService): ToolDefinition[] {
 
         return textResult(`## Schedules\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_toggle_schedule",
       description: "Enable or disable a schedule",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Schedule ID"),
         enabled: z.boolean().describe("Enable (true) or disable (false)"),
       }),
-      handler: async (args) => {
-        const { id, enabled } = args as { id: string; enabled: boolean };
-
+      handler: async ({ id, enabled }) => {
         const success = service.toggleSchedule(id, enabled);
         return success
           ? textResult(`Schedule ${enabled ? "enabled" : "disabled"}`)
           : errorResult("Schedule not found");
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_lights_delete_schedule",
       description: "Delete a schedule",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Schedule ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
-
+      handler: async ({ id }) => {
         const success = service.deleteSchedule(id);
         return success ? textResult("Schedule deleted") : errorResult("Schedule not found");
       },
-    },
+    }),
   ];
 }

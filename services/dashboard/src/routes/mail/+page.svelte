@@ -2,8 +2,11 @@
   import { onMount, onDestroy } from 'svelte';
   import { goto } from '$app/navigation';
   import { rpcOrCall } from '$lib/ws.js';
-  import { listEmailSuggestions, fetchGoogleSyncStatus } from '$lib/api';
+  import { listEmailSuggestions, fetchGoogleSyncStatus, apiFetchRaw } from '$lib/api';
   import AccountSwitcher from '$lib/components/AccountSwitcher.svelte';
+  import MailSyncBanner from '$lib/components/MailSyncBanner.svelte';
+  import EmailBody from '$lib/components/EmailBody.svelte';
+  import { bannerFor, nextPollMs, type SyncReport } from '$lib/mail-sync.js';
 
   // ── Types ────────────────────────────────────────
   interface EmailListItem {
@@ -14,7 +17,7 @@
     urgency?: string; attention_needed?: number; ai_summary?: string; draft_comm_id?: string;
   }
   interface EmailDetail extends EmailListItem {
-    cc_emails: string; body_text: string; size_bytes: number;
+    cc_emails: string; body_text: string; body_html: string | null; size_bytes: number;
     actions: Array<{ id: string; gmail_id: string; action_type: string; value: string; created_at: string }>;
     email_labels: Array<{ id: string; name: string; color: string }>;
     linked_tasks: Array<{ id: string; title: string; status: string }>;
@@ -26,13 +29,24 @@
     ai_summary: string; draft_comm_id: string; draft_body: string; draft_status: string;
   }
   interface TriageStats { unclassified: number; attention_needed: number; critical: number; high: number; drafts_pending: number }
-  interface Counts { inbox: number; unread: number; starred: number; sent: number; drafts: number; trash: number; archived: number; snoozed: number; important: number; attention: number }
+  interface Counts { inbox: number; unread: number; starred: number; sent: number; drafts: number; trash: number; archived: number; snoozed: number; important: number; attention: number; categories?: Record<Category, { total: number; unread: number }> }
   interface EmailLabel { id: string; name: string; color: string; created_at: string }
+
+  /** Gmail's inbox tabs; Primary is the mail that carries none of the other four. */
+  type Category = 'primary' | 'updates' | 'promotions' | 'social' | 'forums';
+  const CATEGORY_TABS: { id: Category; label: string; icon: string }[] = [
+    { id: 'primary', label: 'Principal', icon: '📥' },
+    { id: 'updates', label: 'Notificaciones', icon: '🔔' },
+    { id: 'promotions', label: 'Promociones', icon: '🏷️' },
+    { id: 'social', label: 'Social', icon: '👥' },
+    { id: 'forums', label: 'Foros', icon: '💬' },
+  ];
 
   type Folder = 'inbox' | 'sent' | 'starred' | 'important' | 'drafts' | 'trash' | 'archived' | 'snoozed' | 'all' | 'attention';
 
   // ── State ────────────────────────────────────────
   let folder: Folder = 'inbox';
+  let category: Category = 'primary';
   let selectedAccountId = '';
   let emails: EmailListItem[] = [];
   let total = 0;
@@ -63,6 +77,39 @@
     try { googleSync = await fetchGoogleSyncStatus() as typeof googleSync; }
     catch { googleSync = null; }
   }
+  // Per-account download status — drives the banner that explains an empty
+  // or half-downloaded mailbox. Polled fast while a download is moving; when
+  // Kernl gains mail, the list reloads so messages appear as they land.
+  let syncReport: SyncReport | null = null;
+  let syncTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastStored = -1;
+  async function loadSyncStatus() {
+    if (syncTimer) clearTimeout(syncTimer);
+    try {
+      const r = await apiFetchRaw('/api/emails/sync-status');
+      if (r.ok) syncReport = await r.json();
+    } catch {
+      // keep the last report; the next poll retries
+    }
+    // The remembered account was deleted: fall back to all accounts rather
+    // than filter by an id that matches nothing.
+    if (syncReport && selectedAccountId && !syncReport.accounts.some((a) => a.account_id === selectedAccountId)) {
+      try { localStorage.removeItem('mail.selected_account'); } catch {}
+      onAccountChange('');
+      return;
+    }
+    if (syncReport) {
+      const stored = syncReport.accounts
+        .filter((a) => !selectedAccountId || a.account_id === selectedAccountId)
+        .reduce((n, a) => n + a.stored, 0);
+      if (lastStored >= 0 && stored !== lastStored && !loading) { loadFolder(); loadCounts(); }
+      lastStored = stored;
+    }
+    syncTimer = setTimeout(loadSyncStatus, syncReport ? nextPollMs(syncReport.accounts) : 60000);
+  }
+  $: selectedSync = syncReport?.accounts.find((a) => a.account_id === selectedAccountId) ?? null;
+  $: syncExplainsEmpty = !!selectedSync && !!bannerFor(selectedSync);
+
   async function loadSuggestionsCount() {
     try {
       const r = await listEmailSuggestions(100) as { total?: number };
@@ -106,11 +153,11 @@
     const args = urlArgs(url, opts);
     if (action) {
       return rpcOrCall(action, args, async () => {
-        const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+        const r = await apiFetchRaw(url, opts);
         return r.ok ? r.json() : null;
       });
     }
-    const r = await fetch(url, { headers: { 'Content-Type': 'application/json' }, ...opts });
+    const r = await apiFetchRaw(url, opts);
     return r.ok ? r.json() : null;
   }
   function post(url: string, body: unknown) { return api(url, { method: 'POST', body: JSON.stringify(body) }); }
@@ -118,11 +165,18 @@
   async function loadFolder() {
     loading = true;
     let qs = `folder=${folder}&page=${page}&pageSize=${pageSize}`;
+    // Primary with no categorized mail is the whole inbox, so the filter is
+    // safe to send even when the tabs are hidden (IMAP, Gmail without tabs).
+    if (folder === 'inbox') qs += `&category=${category}`;
     if (query) qs += `&q=${encodeURIComponent(query)}`;
     if (selectedAccountId) qs += `&account_id=${encodeURIComponent(selectedAccountId)}`;
-    const d = await api('/api/emails?' + qs);
-    if (d) { emails = d.emails; total = d.total; page = d.page; }
-    loading = false;
+    // finally: a failed request must not leave the list stuck on "Loading…".
+    try {
+      const d = await api('/api/emails?' + qs);
+      if (d) { emails = d.emails; total = d.total; page = d.page; }
+    } finally {
+      loading = false;
+    }
   }
   async function loadCounts() {
     const qs = selectedAccountId ? `?account_id=${encodeURIComponent(selectedAccountId)}` : '';
@@ -132,11 +186,14 @@
   function onAccountChange(accountId: string) {
     selectedAccountId = accountId;
     page = 1;
+    category = 'primary';
     selectedId = null;
     selectedEmail = null;
     thread = null;
+    lastStored = -1;
     loadFolder();
     loadCounts();
+    loadSyncStatus();
   }
   async function loadLabels() {
     const d = await api('/api/emails/labels');
@@ -216,6 +273,14 @@
     folder = f; page = 1; selectedId = null; selectedEmail = null; thread = null;
     if (f === 'attention') { loadAttention(); } else { loadFolder(); }
   }
+  function selectCategory(c: Category) {
+    category = c; page = 1; selectedId = null; selectedEmail = null; thread = null;
+    loadFolder();
+  }
+  // Primary always; the rest only when they hold mail. With nothing but Primary
+  // there is nothing to tell apart, and the row stays hidden.
+  $: visibleTabs = CATEGORY_TABS.filter((t) => t.id === 'primary' || (counts.categories?.[t.id]?.total ?? 0) > 0);
+  $: showTabs = folder === 'inbox' && visibleTabs.length > 1;
   function selectEmail(gmailId: string) { selectedId = gmailId; loadDetail(gmailId); }
   function doSearch() { page = 1; loadFolder(); }
 
@@ -268,11 +333,20 @@
     }
   }
 
+  const FOLDER_IDS: Folder[] = ['inbox', 'sent', 'starred', 'important', 'drafts', 'trash', 'archived', 'snoozed', 'all', 'attention'];
+
   onMount(() => {
-    loadFolder(); loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync();
+    // `/mail?folder=attention` opens straight on that folder (the Social
+    // overview links here); anything else falls back to the inbox.
+    const wanted = new URLSearchParams(window.location.search).get('folder') as Folder | null;
+    if (wanted && FOLDER_IDS.includes(wanted)) folder = wanted;
+    loadFolder(); loadCounts(); loadLabels(); loadAttention(); loadSuggestionsCount(); loadGoogleSync(); loadSyncStatus();
     document.addEventListener('keydown', handleKey);
   });
-  onDestroy(() => { document.removeEventListener('keydown', handleKey); });
+  onDestroy(() => {
+    document.removeEventListener('keydown', handleKey);
+    if (syncTimer) clearTimeout(syncTimer);
+  });
 
   // Folders config
   const FOLDERS: Array<{ id: Folder; label: string; icon: string; countKey?: keyof Counts }> = [
@@ -355,6 +429,26 @@
       <button on:click={doSearch}>Search</button>
     </div>
 
+    {#if showTabs}
+      <div class="category-tabs" role="tablist">
+        {#each visibleTabs as t (t.id)}
+          {@const unreadInTab = counts.categories?.[t.id]?.unread ?? 0}
+          <button
+            class="category-tab"
+            class:active={category === t.id}
+            role="tab"
+            aria-selected={category === t.id}
+            title="{t.label}: {counts.categories?.[t.id]?.total ?? 0} mensajes, {unreadInTab} sin leer"
+            on:click={() => selectCategory(t.id)}
+          >
+            <span class="category-icon">{t.icon}</span>
+            <span class="category-label">{t.label}</span>
+            {#if unreadInTab > 0}<span class="category-unread">{unreadInTab}</span>{/if}
+          </button>
+        {/each}
+      </div>
+    {/if}
+
     <div class="mail-list-header">
       <span class="folder-title">{folder.charAt(0).toUpperCase() + folder.slice(1)} ({total})</span>
       <span class="pagination">
@@ -363,6 +457,10 @@
         {#if end < total}<button on:click={() => { page++; loadFolder(); }}>▶</button>{/if}
       </span>
     </div>
+
+    {#if folder !== 'attention'}
+      <MailSyncBanner report={syncReport} accountId={selectedAccountId} on:select={(e) => onAccountChange(e.detail)} />
+    {/if}
 
     <div class="mail-rows">
       {#if folder === 'attention'}
@@ -415,7 +513,7 @@
       {:else if loading}
         <div class="mail-empty">Loading...</div>
       {:else if !emails.length}
-        <div class="mail-empty">No emails in this folder</div>
+        {#if !syncExplainsEmpty}<div class="mail-empty">No emails in this folder</div>{/if}
       {:else}
         {#each emails as em (em.gmail_id)}
           <button
@@ -553,7 +651,9 @@
       {/if}
 
       <!-- Body -->
-      <div class="detail-body">{selectedEmail.body_text || selectedEmail.snippet || '(empty)'}</div>
+      <div class="detail-body">
+        <EmailBody html={selectedEmail.body_html} text={selectedEmail.body_text || selectedEmail.snippet || ''} />
+      </div>
 
       <!-- Thread -->
       {#if selectedEmail.thread_id}
@@ -726,6 +826,34 @@
     color: var(--text-2);
   }
   .folder-title { font-weight: 600; }
+  .category-tabs { display: flex; border-bottom: 1px solid var(--border); overflow-x: auto; scrollbar-width: none; }
+  .category-tab {
+    flex: 1 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    padding: 7px 7px 5px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-2);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .category-tab:hover { background: var(--surface-hover, var(--surface)); color: var(--text); }
+  .category-tab.active { color: var(--text); border-bottom-color: var(--primary); font-weight: 600; }
+  .category-icon { font-size: 12px; flex-shrink: 0; }
+  .category-unread {
+    font-size: 10px;
+    font-weight: 600;
+    padding: 0 5px;
+    border-radius: 8px;
+    background: var(--primary);
+    color: #fff;
+    flex-shrink: 0;
+  }
   .pagination { display: flex; gap: 4px; align-items: center; }
   .pagination button { background: none; border: none; color: var(--text-2); cursor: pointer; font-size: 13px; padding: 2px 4px; }
   .pagination button:hover { color: var(--text); }
@@ -839,8 +967,6 @@
     font-size: 13px;
     line-height: 1.6;
     color: var(--text);
-    white-space: pre-wrap;
-    word-break: break-word;
   }
 
   .thread-btn {

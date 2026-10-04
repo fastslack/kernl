@@ -6,6 +6,8 @@ import {
   isoNow,
   log,
   guardedFetch,
+  buildPatch,
+  type PatchColumn,
 } from "@kernl/extension-sdk";
 import { parseFeed, itemHash, type ParsedItem } from "./parser.js";
 import { SEED_CATEGORIES, SEED_FEEDS } from "./seed.js";
@@ -28,6 +30,31 @@ import type {
 
 const FETCH_TIMEOUT_MS = 15_000;
 const USER_AGENT = "Kernl/1.0 (+rss-registry)";
+
+/** The rss_categories columns updateCategory may write. */
+const CATEGORY_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  icon: "text",
+  sort_order: "text",
+};
+
+/** The rss_registry columns updateFeed may write, and how each field is stored. */
+const FEED_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  category_id: "text",
+  feed_url: "text",
+  website_url: "text",
+  language: "text",
+  country: "text",
+  update_frequency: "text",
+  status: "text",
+  quality_score: "text",
+  sort_order: "text",
+  // Tags are stored comma-joined, not as JSON.
+  tags: { to: (tags: string[]) => tags.join(",") },
+};
 
 export class RssRegistryService {
   constructor(
@@ -94,12 +121,7 @@ export class RssRegistryService {
   ): RssCategory | null {
     const cat = this.getCategory(id);
     if (!cat) return null;
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-    if (changes.name !== undefined)        { sets.push("name = ?");        vals.push(changes.name); }
-    if (changes.description !== undefined) { sets.push("description = ?"); vals.push(changes.description); }
-    if (changes.icon !== undefined)        { sets.push("icon = ?");        vals.push(changes.icon); }
-    if (changes.sort_order !== undefined)  { sets.push("sort_order = ?");  vals.push(changes.sort_order); }
+    const { sets, params: vals } = buildPatch(changes, CATEGORY_PATCH);
     if (sets.length === 0) return cat;
     vals.push(id);
     this.db.prepare(`UPDATE rss_categories SET ${sets.join(", ")} WHERE id = ?`).run(...(vals as never[]));
@@ -167,31 +189,7 @@ export class RssRegistryService {
     const feed = this.getFeed(id);
     if (!feed) return null;
 
-    const sets: string[] = [];
-    const vals: unknown[] = [];
-    const map: Record<string, unknown> = {
-      name: changes.name,
-      description: changes.description,
-      category_id: changes.category_id,
-      feed_url: changes.feed_url,
-      website_url: changes.website_url,
-      language: changes.language,
-      country: changes.country,
-      update_frequency: changes.update_frequency,
-      status: changes.status,
-      quality_score: changes.quality_score,
-      sort_order: changes.sort_order,
-    };
-    for (const [col, val] of Object.entries(map)) {
-      if (val !== undefined) {
-        sets.push(`${col} = ?`);
-        vals.push(val);
-      }
-    }
-    if (changes.tags !== undefined) {
-      sets.push("tags = ?");
-      vals.push(changes.tags.join(","));
-    }
+    const { sets, params: vals } = buildPatch(changes, FEED_PATCH);
     if (sets.length === 0) return feed;
 
     sets.push("updated_at = ?");

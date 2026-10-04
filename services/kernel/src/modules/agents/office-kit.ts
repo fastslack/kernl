@@ -26,7 +26,9 @@ import type { AgentService } from "./service.js";
 import type { ModelChainEntry } from "./types.js";
 import { isFlowKind, type FlowKind, type RepoIsolation } from "./types.js";
 import { applyRepoIsolation } from "./repo-isolation.js";
+import { agentVariables } from "./agent-fields.js";
 import { isoNow, slugify } from "../../core/helpers.js";
+import { HttpError } from "../../sdk/http-error.js";
 
 // Canonical slugify now lives in core/helpers. Re-export it here so existing
 // importers of `office-kit`'s slugify (tests, agents tools/rpc/store) keep
@@ -71,6 +73,9 @@ export interface OfficeCronSpec {
   every: string | number;
   /** goal_override for scheduled runs. Default "resume". */
   goal?: string;
+  /** true → a template the projects module clones once per project the
+   *  office serves (each clone runs for its project). */
+  per_project?: boolean;
 }
 
 export interface OfficeDefinition {
@@ -94,10 +99,15 @@ export interface OfficeDefinition {
   defaults?: Partial<Omit<OfficeAgentSpec, "slug" | "name" | "prompt">>;
   agents: OfficeAgentSpec[];
   cron?: OfficeCronSpec;
+  /** JSON schema of the settings this office keeps per project it serves
+   *  (src/modules/projects office_project_schemas). */
+  projectSettingsSchema?: Record<string, unknown>;
   /** Room theme and agent buttons. Default 'general'. */
   kind?: FlowKind;
   /** How repo agents run when `repo` is set. Default 'host', the historical posture. */
   repoIsolation?: RepoIsolation;
+  /** Lot of the 3D floor to build on ("col,row"), when the operator picked one. New offices only. */
+  lot?: string;
 }
 
 export interface MaterializeOpts {
@@ -129,9 +139,10 @@ export interface OfficeReport {
   warnings: string[];
 }
 
-export class OfficeExistsError extends Error {
+export class OfficeExistsError extends HttpError {
   constructor(readonly officeId: string, name: string) {
-    super(`An office named "${name}" already exists`);
+    const message = `An office named "${name}" already exists`;
+    super(409, message, { error: "office_exists", message, office_id: officeId });
     this.name = "OfficeExistsError";
   }
 }
@@ -315,9 +326,19 @@ export function officeDefinitionFromJson(raw: unknown): OfficeDefinition {
     modelChain: Array.isArray(o.modelChain) ? (o.modelChain as ModelChainEntry[]) : undefined,
     kind: typeof o.kind === "string" ? (o.kind as FlowKind) : undefined,
     repoIsolation: typeof o.repoIsolation === "string" ? (o.repoIsolation as RepoIsolation) : undefined,
+    lot: str(o.lot),
+    projectSettingsSchema:
+      o.project_settings_schema && typeof o.project_settings_schema === "object" && !Array.isArray(o.project_settings_schema)
+        ? (o.project_settings_schema as Record<string, unknown>)
+        : undefined,
     agents,
     cron: cronValid
-      ? { agent: resolvedCronAgent!, every: cronRaw!.every as string | number, goal: str(cronRaw!.goal) }
+      ? {
+          agent: resolvedCronAgent!,
+          every: cronRaw!.every as string | number,
+          goal: str(cronRaw!.goal),
+          per_project: cronRaw!.per_project === true ? true : undefined,
+        }
       : undefined,
   };
   return defineOffice(def);
@@ -462,6 +483,7 @@ export function materializeOffice(
       description: def.description,
       color: def.color ?? defaultOfficeColor(def.name),
       kind: def.kind,
+      lot_id: def.lot,
     });
     flow = { id: created.id };
   } else if (def.color || def.description || def.kind) {
@@ -474,6 +496,17 @@ export function materializeOffice(
       .run(def.repoIsolation ?? "host", isoNow(), flow.id);
   }
   report.flowId = flow.id;
+  if (def.projectSettingsSchema) {
+    // Owned by the projects module; absent in a bare agents-only DB.
+    try {
+      db.prepare(
+        `INSERT INTO office_project_schemas (flow_id, schema) VALUES (?, ?)
+         ON CONFLICT(flow_id) DO UPDATE SET schema = excluded.schema`,
+      ).run(flow.id, JSON.stringify(def.projectSettingsSchema));
+    } catch (err) {
+      report.warnings.push(`project_settings_schema not stored: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
 
   // 2) Agents upsert ───────────────────────────────────────────
   const idBySlug = new Map<string, string>();
@@ -482,8 +515,7 @@ export function materializeOffice(
     const existing = service.getAgentBySlug(spec.slug);
     if (existing) {
       // Operator-added variables survive; manifest keys win only where set.
-      let exVars: Record<string, unknown> = {};
-      try { exVars = JSON.parse((existing as unknown as { variables?: string }).variables || "{}"); } catch { /* defaults */ }
+      const exVars = agentVariables(existing);
       // Clear the previous posture before the manifest's variables win, so
       // switching an office to 'sandbox' actually removes __sandbox__: false.
       const base = repoPath ? applyRepoIsolation(exVars, def.repoIsolation ?? "host") : exVars;
@@ -557,11 +589,14 @@ export function materializeOffice(
         report.warnings.push(`cron: "${cronAgent}" already has an active schedule — left as-is`);
       } else {
         const intervalMs = Math.max(parseEvery(def.cron.every), scheduleFloorMs(opts.minScheduleSeconds));
-        service.addSchedule({
+        const schedule = service.addSchedule({
           agent_id: bySlugOrName,
           interval_ms: intervalMs,
           goal_override: def.cron.goal ?? "resume",
         });
+        if (def.cron.per_project) {
+          db.prepare("UPDATE agent_schedules SET per_project = 1 WHERE id = ?").run(schedule.id);
+        }
         report.scheduled = { agent: cronAgent!, intervalMs };
       }
     }

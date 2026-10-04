@@ -3,10 +3,10 @@
   "id": "com.kernl.work-suite",
   "slug": "work-suite",
   "name": "Work Suite",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "type": "suite",
   "built_in": true,
-  "description": "Tasks, planner, issues, reminders — productivity tabs.",
+  "description": "Tasks, planner, reminders — productivity tabs.",
   "author": "Kernl",
   "license": "Apache-2.0",
   "category": "productivity",
@@ -42,18 +42,11 @@
         "order": 30
       },
       {
-        "id": "issues",
-        "group": "work",
-        "label": "Issues",
-        "icon": "🐛",
-        "order": 40
-      },
-      {
         "id": "reminders",
         "group": "work",
         "label": "Remind",
         "icon": "🔔",
-        "order": 50
+        "order": 60
       }
     ]
   }

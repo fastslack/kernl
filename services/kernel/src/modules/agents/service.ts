@@ -1,36 +1,31 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
-import type { EmbeddingsClient } from "../../core/embeddings/client.js";
 import type { KernelConfig } from "../../core/config.js";
+import type { ProjectGateLike } from "./advanced-types.js";
 import { newId, isoNow } from "../../core/helpers.js";
+import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
+import { agentModelChain } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import type {
   Agent,
   AgentFlow,
-  FlowKind,
   AgentRank,
   AgentRun,
-  AgentStep,
   EventTrigger,
   AgentSchedule,
-  AgentFeedback,
-  AgentLearning,
   AgentChain,
   AgentOfficeInboxMessage,
   AgentPromptVersion,
-  AgentEvolutionRun,
   ModelChainEntry,
   AgentConversation,
-  AgentConversationSubscription,
   AgentMessage,
   AgentMessageRole,
-  AgentDebateCooldown,
 } from "./types.js";
 import { AgentChainsService } from "./services/chains-service.js";
 import { AgentEventLogService } from "./services/event-log-service.js";
 import { AgentEvolutionService } from "./services/evolution-service.js";
 import { AgentTriggersService } from "./services/triggers-service.js";
-import { AgentSchedulesService, type SchedulePatch } from "./services/schedules-service.js";
+import { AgentSchedulesService } from "./services/schedules-service.js";
 import { AgentPromptVersionsService } from "./services/prompt-versions-service.js";
 import { AgentSubscriptionsService } from "./services/subscriptions-service.js";
 import { AgentConversationsService } from "./services/conversations-service.js";
@@ -41,11 +36,90 @@ import { AgentRunsService } from "./services/runs-service.js";
 import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 
+export type QuestionStatus = "triage" | "pending" | "answered" | "dismissed";
+export interface AgentQuestion {
+  id: string; from_agent_id: string; flow_id: string; meeting_id: string; run_id: string;
+  question: string; context: string; options: Array<{ label: string; value?: string; url?: string }>;
+  status: QuestionStatus; selected_option: string; selected_index: number;
+  answered_note: string; answered_at: string | null;
+  answered_by: "" | "chief" | "human"; chief_note: string; triage_started_at: string | null;
+  created_at: string;
+}
+
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
 const DEFAULT_AUTO_PAUSE_THRESHOLD = 3;
 
 /** Stable topic so every auto-pause alert for the same pair lands in one thread. */
 const AUTO_PAUSE_ALERT_TOPIC = "Agent auto-pause alerts";
+
+/** The agent columns updateAgent may write, and how each field is stored. */
+const AGENT_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  description: "text",
+  system_prompt: "text",
+  goal_template: "text",
+  allowed_tools: "json",
+  denied_tools: "json",
+  provider: "text",
+  model: "text",
+  max_iterations: "text",
+  timeout_ms: "text",
+  active: "bool",
+  max_tokens: "text",
+  max_errors: "text",
+  variables: "json",
+  show_on_dashboard: "bool",
+  builtin_handler: "text",
+  rank_id: "text",
+  // An empty chain is stored as "" (not "[]"): "no chain, use the defaults".
+  model_chain: { to: (chain: ModelChainEntry[]) => (chain.length > 0 ? JSON.stringify(chain) : "") },
+  wake_on_inbox: "bool",
+  progressive_discovery: "bool",
+  skin_id: "text",
+  under_revision: "bool",
+  executor_type: "text",
+  skills: { column: "skills_json", to: (slugs: string[]) => JSON.stringify(slugs) },
+};
+
+/**
+ * Methods AgentService serves straight from one of its sub-services: same
+ * name, same signature, no logic of its own. They used to be written out one
+ * by one (96 of them, each repeating its full parameter types); now the
+ * table below binds them in the constructor, and the interface merged into
+ * the class gives them their types from the sub-service itself. Every
+ * existing `agentService.*` call site keeps working unchanged. A method with
+ * logic of its own stays written out in the class.
+ */
+const DELEGATED = {
+  memory: ["setEmbeddingsClient", "getEmbeddingsClient", "addLearning", "getLearnings", "addMemory", "getMemory", "clearMemory", "getRelevantMemory", "getRelevantMemoryByEmbedding", "findSimilarPastRuns", "findSimilarPastRunsByEmbedding", "getRelevantLearnings", "getRelevantLearningsByEmbedding", "updateLearningConfidence", "deactivateLearning", "getLearningsActiveAt", "reinforceLearningsForRun", "cleanupLowConfidenceLearnings"],
+  flows: ["createFlow", "ensureOfficeHome", "resolveFlowHome", "getFlowWorkspace", "setFlowWorkspaceSpec", "prepareFlowWorkspace", "setFlowRepo", "listFlows", "getFlow", "updateFlow", "deleteFlow", "assignAgentToFlow", "syncLots"],
+  ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
+  runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
+  triggers: ["addEventTrigger", "listEventTriggers", "getActiveEventTriggers", "removeEventTrigger", "updateTriggerLastFired"],
+  schedules: ["addSchedule", "listSchedules", "getDueSchedules", "removeSchedule", "getSchedule", "updateSchedule", "updateScheduleNextRun"],
+  feedback: ["addFeedback", "getFeedback"],
+  conversations: ["createConversation", "getConversation", "findOrCreateChatConversation", "listConversations", "closeConversation", "archiveConversation", "archiveClosedConversations", "parseParticipants", "addParticipant", "postMessage", "getMessage", "listMessages", "getDebateCooldown", "recordDebateCooldown", "countRecentAutoDebates"],
+  chains: ["addChain", "listChains", "getChainsBySource", "removeChain"],
+  eventLog: ["logEvent", "getEventLog", "getEventLogCount", "clearEventLog"],
+  promptVersions: ["activatePromptVersion", "listPromptVersions", "getPromptVersion", "getActivePromptVersion", "restorePromptVersion", "diffPromptVersions"],
+  evolution: ["createEvolutionRun", "updateEvolutionRun", "listEvolutionRuns", "listEvolutionRunsByWorkspace", "getEvolutionRun"],
+  subscriptions: ["subscribeAgentToConversation", "unsubscribeAgentFromConversation", "getSubscription", "listSubscriptionsForConversation", "listSubscriptionsForAgent", "markSubscriptionFired"],
+} as const;
+
+export interface AgentService extends
+  Pick<AgentMemoryService, (typeof DELEGATED)["memory"][number]>,
+  Pick<AgentFlowsService, (typeof DELEGATED)["flows"][number]>,
+  Pick<AgentRanksService, (typeof DELEGATED)["ranks"][number]>,
+  Pick<AgentRunsService, (typeof DELEGATED)["runs"][number]>,
+  Pick<AgentTriggersService, (typeof DELEGATED)["triggers"][number]>,
+  Pick<AgentSchedulesService, (typeof DELEGATED)["schedules"][number]>,
+  Pick<AgentFeedbackService, (typeof DELEGATED)["feedback"][number]>,
+  Pick<AgentConversationsService, (typeof DELEGATED)["conversations"][number]>,
+  Pick<AgentChainsService, (typeof DELEGATED)["chains"][number]>,
+  Pick<AgentEventLogService, (typeof DELEGATED)["eventLog"][number]>,
+  Pick<AgentPromptVersionsService, (typeof DELEGATED)["promptVersions"][number]>,
+  Pick<AgentEvolutionService, (typeof DELEGATED)["evolution"][number]>,
+  Pick<AgentSubscriptionsService, (typeof DELEGATED)["subscriptions"][number]> {}
 
 export class AgentService {
   /**
@@ -66,6 +140,11 @@ export class AgentService {
   private readonly ranks: AgentRanksService;
   private readonly runs: AgentRunsService;
   private readonly feedback: AgentFeedbackService;
+  /** Projects seam (src/modules/projects) — null until bootstrap registers it. */
+  private projectGate: ProjectGateLike | null = null;
+
+  setProjectGate(gate: ProjectGateLike | null): void { this.projectGate = gate; }
+  getProjectGate(): ProjectGateLike | null { return this.projectGate; }
 
   constructor(
     private db: SqliteDb,
@@ -105,6 +184,7 @@ export class AgentService {
       (id) => this.getAgent(id),
       (table, column, modelColumn, rowId, text) =>
         this.scheduleEmbed(table, column, modelColumn, rowId, text),
+      () => this.projectGate,
     );
     this.feedback = new AgentFeedbackService(
       db,
@@ -113,15 +193,26 @@ export class AgentService {
       (agentId, runCreatedAt, outcome) =>
         this.reinforceLearningsForRun(agentId, runCreatedAt, outcome),
     );
-  }
 
-  /** Inject the embeddings client. Idempotent — last writer wins. */
-  setEmbeddingsClient(client: EmbeddingsClient | null): void {
-    this.memory.setEmbeddingsClient(client);
-  }
+    // Bind the pass-through methods listed in DELEGATED (see above).
+    for (const [sub, names] of Object.entries(DELEGATED)) {
+      const target = this[sub as keyof typeof DELEGATED] as unknown as Record<string, (...args: unknown[]) => unknown>;
+      for (const name of names) {
+        (this as unknown as Record<string, unknown>)[name] = target[name].bind(target);
+      }
+    }
 
-  getEmbeddingsClient(): EmbeddingsClient | null {
-    return this.memory.getEmbeddingsClient();
+    // Keep every office on a lot of the 3D floor whichever path wrote its
+    // agents (create, edit, office kit, MCP): each one announces itself here.
+    events.on("data.changed", (payload) => {
+      const p = payload as { module?: string; action?: string } | undefined;
+      if (p?.module !== "agents" || p.action === "lots_synced") return;
+      try {
+        this.flows.syncLots();
+      } catch (err) {
+        log.warn(`syncLots failed: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    });
   }
 
   /** @see AgentMemoryService.scheduleEmbed — `createRun` embeds its goal through here. */
@@ -137,46 +228,6 @@ export class AgentService {
 
 
   // ── Flows (offices) → AgentFlowsService ────────────
-
-  createFlow(input: { name: string; description?: string; color?: string; kind?: FlowKind; source_extension_id?: string }): AgentFlow {
-    return this.flows.createFlow(input);
-  }
-
-  /** Public entrypoint for the backfill script. Returns the workspace id or null. */
-  ensureOfficeHome(flowId: string): string | null {
-    return this.flows.ensureOfficeHome(flowId);
-  }
-
-  resolveFlowHome(flowId: string): { path: string; kind: "git" | "workspace"; flow: AgentFlow } | null {
-    return this.flows.resolveFlowHome(flowId);
-  }
-
-  setFlowRepo(flowId: string, repoPath: string): AgentFlow | undefined {
-    return this.flows.setFlowRepo(flowId, repoPath);
-  }
-
-  listFlows(): AgentFlow[] {
-    return this.flows.listFlows();
-  }
-
-  getFlow(id: string): AgentFlow | undefined {
-    return this.flows.getFlow(id);
-  }
-
-  updateFlow(
-    id: string,
-    updates: Partial<Pick<AgentFlow, "name" | "description" | "color" | "kind" | "repo_isolation">>,
-  ): AgentFlow | undefined {
-    return this.flows.updateFlow(id, updates);
-  }
-
-  deleteFlow(id: string): { unassigned: number } | null {
-    return this.flows.deleteFlow(id);
-  }
-
-  assignAgentToFlow(agentId: string, flowId: string): boolean {
-    return this.flows.assignAgentToFlow(agentId, flowId);
-  }
 
   /**
    * Make `agentId` the one lead of its office: it becomes `manager` and every
@@ -316,43 +367,6 @@ export class AgentService {
 
   // ── Ranks → AgentRanksService ───────────────────────
 
-  createRank(input: {
-    name: string;
-    level: number;
-    insignia?: string;
-    color?: string;
-    description?: string;
-  }): AgentRank {
-    return this.ranks.createRank(input);
-  }
-
-  listRanks(): AgentRank[] {
-    return this.ranks.listRanks();
-  }
-
-  getRank(id: string): AgentRank | undefined {
-    return this.ranks.getRank(id);
-  }
-
-  getTopAgent(): Agent | undefined {
-    return this.ranks.getTopAgent();
-  }
-
-  updateRank(
-    id: string,
-    updates: Partial<Pick<AgentRank, "name" | "level" | "insignia" | "color" | "description">>,
-  ): AgentRank | undefined {
-    return this.ranks.updateRank(id, updates);
-  }
-
-  deleteRank(id: string): boolean {
-    return this.ranks.deleteRank(id);
-  }
-
-  assignRankToAgent(agentId: string, rankId: string): boolean {
-    return this.ranks.assignRankToAgent(agentId, rankId);
-  }
-
 
   // ── Model fallback chain ────────────────────────────
 
@@ -363,22 +377,9 @@ export class AgentService {
    * Entries with blank provider AND blank model are filtered out.
    */
   resolveModelChain(agent: Agent): ModelChainEntry[] {
-    if (agent.model_chain) {
-      try {
-        const parsed = JSON.parse(agent.model_chain) as unknown;
-        if (Array.isArray(parsed)) {
-          const chain: ModelChainEntry[] = [];
-          for (const raw of parsed) {
-            if (!raw || typeof raw !== "object") continue;
-            const p = String((raw as Record<string, unknown>).provider ?? "");
-            const m = String((raw as Record<string, unknown>).model ?? "");
-            if (p || m) chain.push({ provider: p, model: m });
-          }
-          if (chain.length > 0) return chain;
-        }
-      } catch { /* fall through to single */ }
-    }
-    return [{ provider: agent.provider, model: agent.model }];
+    const chain = agentModelChain(agent);
+    // No usable chain (empty, malformed, or every entry blank) → the single pair.
+    return chain.length > 0 ? chain : [{ provider: agent.provider, model: agent.model }];
   }
 
   setModelChain(agentId: string, chain: ModelChainEntry[]): boolean {
@@ -462,7 +463,8 @@ export class AgentService {
     }
 
     lines.push("## How to reach anyone above");
-    lines.push("- `kernel_agents_post_to_colleague({ to_agent_id, subject, body })` — async, non-blocking. They read it on their next run and reply through their own outbox. Use for clarifications, escalations, and back-and-forth threads. Works ACROSS offices.");
+    lines.push("- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.");
+    lines.push("- `kernel_agents_post_to_colleague({ to_agent_id, subject, body })` — async, non-blocking. They read it on their next run and reply through their own outbox. Use for clarifications and back-and-forth threads between agents. Works ACROSS offices.");
     lines.push("- `kernel_agents_invoke({ agent_id, goal })` — blocking. You wait for their result. Use for single pointed questions that must be resolved before you continue.");
     lines.push("- `kernel_agents_call_meeting({ topic, attendee_ids })` — group deliberation. Use when 2+ other agents need to converge on an answer and you want their input recorded. You become moderator (or the highest-ranked attendee takes over).");
     lines.push("- When replying to another agent, wrap your output like `<msg role=\"answer\" replies_to=\"<their-message-id>\">...</msg>`. Valid roles: `answer` (agreeing/informing), `counter` (disagreeing — triggers debate if 2+ of you disagree), `question`, `stmt`, `summary`, `vote`. If you skip the wrapper your reply defaults to `answer`.");
@@ -702,48 +704,17 @@ export class AgentService {
     const agent = this.getAgent(id);
     if (!agent) return undefined;
 
-    const sets: string[] = [];
-    const params: unknown[] = [];
-
-    if (input.name !== undefined) { sets.push("name = ?"); params.push(input.name); }
-    if (input.description !== undefined) { sets.push("description = ?"); params.push(input.description); }
-    if (input.system_prompt !== undefined) { sets.push("system_prompt = ?"); params.push(input.system_prompt); }
-    if (input.goal_template !== undefined) { sets.push("goal_template = ?"); params.push(input.goal_template); }
-    if (input.allowed_tools !== undefined) { sets.push("allowed_tools = ?"); params.push(JSON.stringify(input.allowed_tools)); }
-    if (input.denied_tools !== undefined) { sets.push("denied_tools = ?"); params.push(JSON.stringify(input.denied_tools)); }
-    if (input.provider !== undefined) { sets.push("provider = ?"); params.push(input.provider); }
-    if (input.model !== undefined) { sets.push("model = ?"); params.push(input.model); }
-    if (input.max_iterations !== undefined) { sets.push("max_iterations = ?"); params.push(input.max_iterations); }
-    if (input.timeout_ms !== undefined) { sets.push("timeout_ms = ?"); params.push(input.timeout_ms); }
-    if (input.active !== undefined) {
-      sets.push("active = ?");
-      params.push(input.active ? 1 : 0);
-      // Reactivating clears the breaker: the user un-pausing an agent is
-      // telling us the underlying problem is handled, so it gets the full
-      // failure budget again instead of tripping on its next stumble.
-      if (input.active) {
-        sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
-      }
+    const { sets, params } = buildPatch(
+      // Only a known engine is written; anything else leaves the column alone.
+      { ...input, executor_type: input.executor_type === "native" || input.executor_type === "claude_code" ? input.executor_type : undefined },
+      AGENT_PATCH,
+    );
+    // Reactivating clears the breaker: the user un-pausing an agent is
+    // telling us the underlying problem is handled, so it gets the full
+    // failure budget again instead of tripping on its next stumble.
+    if (input.active) {
+      sets.push("consecutive_failures = 0", "auto_paused_at = ''", "auto_pause_reason = ''");
     }
-    if (input.max_tokens !== undefined) { sets.push("max_tokens = ?"); params.push(input.max_tokens); }
-    if (input.max_errors !== undefined) { sets.push("max_errors = ?"); params.push(input.max_errors); }
-    if (input.variables !== undefined) { sets.push("variables = ?"); params.push(JSON.stringify(input.variables)); }
-    if (input.show_on_dashboard !== undefined) { sets.push("show_on_dashboard = ?"); params.push(input.show_on_dashboard ? 1 : 0); }
-    if (input.builtin_handler !== undefined) { sets.push("builtin_handler = ?"); params.push(input.builtin_handler); }
-    if (input.rank_id !== undefined) { sets.push("rank_id = ?"); params.push(input.rank_id); }
-    if (input.model_chain !== undefined) {
-      sets.push("model_chain = ?");
-      params.push(input.model_chain.length > 0 ? JSON.stringify(input.model_chain) : "");
-    }
-    if (input.wake_on_inbox !== undefined) { sets.push("wake_on_inbox = ?"); params.push(input.wake_on_inbox ? 1 : 0); }
-    if (input.progressive_discovery !== undefined) { sets.push("progressive_discovery = ?"); params.push(input.progressive_discovery ? 1 : 0); }
-    if (input.skin_id !== undefined) { sets.push("skin_id = ?"); params.push(input.skin_id); }
-    if (input.under_revision !== undefined) { sets.push("under_revision = ?"); params.push(input.under_revision ? 1 : 0); }
-    if (input.executor_type === "native" || input.executor_type === "claude_code") {
-      sets.push("executor_type = ?");
-      params.push(input.executor_type);
-    }
-    if (input.skills !== undefined) { sets.push("skills_json = ?"); params.push(JSON.stringify(input.skills)); }
 
     if (sets.length === 0) return agent;
 
@@ -940,30 +911,6 @@ export class AgentService {
 
   // ── Runs & steps → AgentRunsService ─────────────────
 
-  createRun(input: {
-    agent_id: string;
-    trigger_type?: "manual" | "event" | "schedule" | "chain";
-    trigger_payload?: Record<string, unknown>;
-    goal: string;
-    parent_run_id?: string;
-    parent_agent_id?: string;
-    depth?: number;
-  }): AgentRun {
-    return this.runs.createRun(input);
-  }
-
-  getRun(id: string): AgentRun | undefined {
-    return this.runs.getRun(id);
-  }
-
-  listRuns(filters?: {
-    agent_id?: string;
-    status?: string;
-    limit?: number;
-  }): AgentRun[] {
-    return this.runs.listRuns(filters);
-  }
-
   updateRun(
     id: string,
     updates: Partial<{
@@ -979,37 +926,7 @@ export class AgentService {
     this.runs.updateRun(id, updates);
   }
 
-  cancelRun(id: string): boolean {
-    return this.runs.cancelRun(id);
-  }
-
-  /** Mark stale "running"/"pending" runs as failed (e.g. after crash/restart) */
-  cleanupStaleRuns(): number {
-    return this.runs.cleanupStaleRuns();
-  }
-
   // ── Steps → AgentRunsService ────────────────────────
-
-  addStep(input: {
-    run_id: string;
-    step_number: number;
-    type: AgentStep["type"];
-    content?: string;
-    tool_name?: string;
-    tool_input?: Record<string, unknown>;
-    tool_output?: string;
-    tokens?: number;
-  }): AgentStep {
-    return this.runs.addStep(input);
-  }
-
-  getSteps(runId: string): AgentStep[] {
-    return this.runs.getSteps(runId);
-  }
-
-  getRunEvents(runId: string): Array<{ id: string; event_type: string; event_subtype: string; detail: string; raw_data: string; tokens_used: number; duration_ms: number; created_at: string }> {
-    return this.runs.getRunEvents(runId);
-  }
 
   getAdHocConnections(agentId: string): {
     invokedBy: Array<{ agent_id: string; agent_name: string; count: number; last_at: string }>;
@@ -1021,65 +938,7 @@ export class AgentService {
 
   // ── Event triggers → AgentTriggersService ───────────
 
-  addEventTrigger(input: {
-    agent_id: string;
-    event_name: string;
-    filter?: Record<string, unknown>;
-    cooldown_ms?: number;
-  }): EventTrigger {
-    return this.triggers.addEventTrigger(input);
-  }
-
-  listEventTriggers(agentId?: string): EventTrigger[] {
-    return this.triggers.listEventTriggers(agentId);
-  }
-
-  getActiveEventTriggers(): EventTrigger[] {
-    return this.triggers.getActiveEventTriggers();
-  }
-
-  removeEventTrigger(id: string): boolean {
-    return this.triggers.removeEventTrigger(id);
-  }
-
-  updateTriggerLastFired(id: string): void {
-    this.triggers.updateTriggerLastFired(id);
-  }
-
   // ── Schedules → AgentSchedulesService ───────────────
-
-  addSchedule(input: {
-    agent_id: string;
-    interval_ms?: number;
-    cron_expression?: string;
-    goal_override?: string;
-  }): AgentSchedule {
-    return this.schedules.addSchedule(input);
-  }
-
-  listSchedules(agentId?: string): AgentSchedule[] {
-    return this.schedules.listSchedules(agentId);
-  }
-
-  getDueSchedules(): Array<AgentSchedule & { agent_name: string }> {
-    return this.schedules.getDueSchedules();
-  }
-
-  removeSchedule(id: string): boolean {
-    return this.schedules.removeSchedule(id);
-  }
-
-  getSchedule(id: string): AgentSchedule | undefined {
-    return this.schedules.getSchedule(id);
-  }
-
-  updateSchedule(id: string, patch: SchedulePatch): AgentSchedule | undefined {
-    return this.schedules.updateSchedule(id, patch);
-  }
-
-  updateScheduleNextRun(id: string, nextRunAt: string, lastRunAt: string): void {
-    this.schedules.updateScheduleNextRun(id, nextRunAt, lastRunAt);
-  }
 
   // NOTE: `deactivateSchedule()` lived here for the old in-memory circuit
   // breaker, its only caller. The breaker now pauses the AGENT
@@ -1087,20 +946,6 @@ export class AgentService {
   // reactivating an agent resumes it without having to repair its cron too.
 
   // ── Feedback & stats → AgentFeedbackService ───────
-
-  addFeedback(input: {
-    agent_id: string;
-    run_id: string;
-    rating: number;
-    outcome?: AgentFeedback["outcome"];
-    lesson?: string;
-  }): AgentFeedback {
-    return this.feedback.addFeedback(input);
-  }
-
-  getFeedback(agentId: string, limit = 20): AgentFeedback[] {
-    return this.feedback.getFeedback(agentId, limit);
-  }
 
   getAgentStats(agentId: string): {
     total_runs: number;
@@ -1119,33 +964,7 @@ export class AgentService {
 
   // ── Learnings → AgentMemoryService ────────────────
 
-  addLearning(input: {
-    agent_id: string;
-    type: AgentLearning["type"];
-    content: string;
-    confidence?: number;
-    source_runs?: string[];
-  }): AgentLearning {
-    return this.memory.addLearning(input);
-  }
-
-  getLearnings(agentId: string): AgentLearning[] {
-    return this.memory.getLearnings(agentId);
-  }
-
   // ── Conversational memory → AgentMemoryService ────
-
-  addMemory(agentId: string, role: "user" | "assistant", content: string, runId = ""): void {
-    this.memory.addMemory(agentId, role, content, runId);
-  }
-
-  getMemory(agentId: string, limit = 20): Array<{ role: string; content: string; created_at: string }> {
-    return this.memory.getMemory(agentId, limit);
-  }
-
-  clearMemory(agentId: string): void {
-    this.memory.clearMemory(agentId);
-  }
 
 
   // ── Office inbox (async colleague-to-colleague mail within a flow) ────
@@ -1161,6 +980,11 @@ export class AgentService {
    * a unified conversation stream. The inbox row is kept for the legacy
    * "mark read on delivery" flow used by the executor.
    */
+  /** One office message, whole — the 3D's coordination card shows it. */
+  getInboxMessage(id: string): AgentOfficeInboxMessage | null {
+    return (this.db.prepare("SELECT * FROM agent_office_inbox WHERE id = ?").get(id) as AgentOfficeInboxMessage | undefined) ?? null;
+  }
+
   postToColleague(input: {
     from_agent_id: string;
     to_agent_id: string;
@@ -1170,6 +994,8 @@ export class AgentService {
     role?: AgentMessageRole;
     in_reply_to_message_id?: string;
     conversation_id?: string;
+    /** Project the letter is about (src/modules/projects). null = none. */
+    project_id?: string | null;
   }): { message: AgentOfficeInboxMessage | null; conversation_message?: AgentMessage; conversation?: AgentConversation; error?: string } {
     const from = this.getAgent(input.from_agent_id);
     const to = this.getAgent(input.to_agent_id);
@@ -1194,17 +1020,18 @@ export class AgentService {
       related_run_id: input.related_run_id ?? "",
       created_at: isoNow(),
       read_at: null,
+      project_id: input.project_id ?? null,
     };
     this.db
       .prepare(
         `INSERT INTO agent_office_inbox
-          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         msg.id, msg.flow_id, msg.from_agent_id, msg.to_agent_id,
         msg.subject, msg.body, msg.status, msg.related_run_id,
-        msg.created_at, msg.read_at,
+        msg.created_at, msg.read_at, msg.project_id,
       );
 
     // Mirror the message into a chat conversation. If the caller supplied a
@@ -1254,20 +1081,28 @@ export class AgentService {
       conversation_id: conversation?.id,
       conversation_message_id: convoMsg?.id,
       cross_office: !!(from.flow_id && to.flow_id && from.flow_id !== to.flow_id),
+      project_id: msg.project_id,
     });
     return { message: msg, conversation_message: convoMsg, conversation };
   }
 
-  /** Return unread inbox messages for an agent, oldest first. */
-  getUnreadInbox(agentId: string, limit = 20): AgentOfficeInboxMessage[] {
+  /** Return unread inbox messages for an agent, oldest first; with `sinceIso`,
+   *  only letters created at or after that instant. `projectId`: undefined →
+   *  every letter (UI, waker); null → only letters without a project; a
+   *  project → letters without one plus that project's. */
+  getUnreadInbox(agentId: string, limit = 20, sinceIso = "", projectId?: string | null): AgentOfficeInboxMessage[] {
+    const scope = projectId === undefined ? ""
+      : projectId === null ? " AND project_id IS NULL"
+      : " AND (project_id IS NULL OR project_id = ?)";
+    const params: unknown[] = [agentId, sinceIso, ...(typeof projectId === "string" ? [projectId] : []), limit];
     return this.db
       .prepare(
         `SELECT * FROM agent_office_inbox
-         WHERE to_agent_id = ? AND status = 'unread'
+         WHERE to_agent_id = ? AND status = 'unread' AND created_at >= ?${scope}
          ORDER BY created_at ASC
          LIMIT ?`,
       )
-      .all(agentId, limit) as AgentOfficeInboxMessage[];
+      .all(...params) as AgentOfficeInboxMessage[];
   }
 
   /** Mark inbox messages as read. No-op if the list is empty. */
@@ -1283,12 +1118,79 @@ export class AgentService {
       .run(isoNow(), ...messageIds);
   }
 
+  /** Mark read exactly those of `messageIds` that are unread letters addressed
+   *  to `agentId`. Returns how many were acknowledged. */
+  ackInboxFor(agentId: string, messageIds: string[]): number {
+    if (!agentId || messageIds.length === 0) return 0;
+    const placeholders = messageIds.map(() => "?").join(",");
+    const res = this.db
+      .prepare(
+        `UPDATE agent_office_inbox
+         SET status = 'read', read_at = ?
+         WHERE id IN (${placeholders}) AND to_agent_id = ? AND status = 'unread'`,
+      )
+      .run(isoNow(), ...messageIds, agentId);
+    return Number(res.changes ?? 0);
+  }
+
+  /** Agents (active, wake_on_inbox, no builtin handler) holding unread letters
+   *  created before `olderThanIso` and — when given — at or after `newerThanIso`.
+   *  Builtin-handler agents never run an LLM, so they can never ack a letter. */
+  listAgentsWithUnackedInbox(olderThanIso: string, newerThanIso = ""): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT i.to_agent_id AS id
+         FROM agent_office_inbox i JOIN agents a ON a.id = i.to_agent_id
+         WHERE i.status = 'unread' AND i.created_at < ? AND i.created_at >= ?
+           AND a.active = 1 AND COALESCE(a.wake_on_inbox, 1) = 1
+           AND COALESCE(a.builtin_handler, '') = ''`,
+      )
+      .all(olderThanIso, newerThanIso) as Array<{ id: string }>;
+    return rows.map((r) => r.id);
+  }
+
+  /** Count one more wake attempt on exactly these unread letters (the ones actually
+   *  surfaced in the wake goal — not every unread letter the agent holds). */
+  bumpInboxWakeAttempts(messageIds: string[]): void {
+    if (messageIds.length === 0) return;
+    const ph = messageIds.map(() => "?").join(",");
+    this.db
+      .prepare(
+        `UPDATE agent_office_inbox SET wake_attempts = wake_attempts + 1
+         WHERE id IN (${ph}) AND status = 'unread'`,
+      )
+      .run(...messageIds);
+  }
+
+  /** Archive (unread → archived, read_at stays NULL) letters that exhausted their wakes.
+   *  Skips letters whose recipient agent has a run still 'running' or 'pending' — that
+   *  run is the one processing the exhausting wake, so its letters must survive until
+   *  it finishes (or fails) rather than being archived out from under it mid-run. */
+  archiveExhaustedInbox(maxAttempts: number): AgentOfficeInboxMessage[] {
+    const rows = this.db
+      .prepare(
+        `SELECT * FROM agent_office_inbox
+         WHERE status = 'unread' AND wake_attempts >= ?
+           AND to_agent_id NOT IN (
+             SELECT agent_id FROM agent_runs WHERE status IN ('running', 'pending')
+           )`,
+      )
+      .all(maxAttempts) as AgentOfficeInboxMessage[];
+    if (rows.length === 0) return rows;
+    const ph = rows.map(() => "?").join(",");
+    this.db
+      .prepare(`UPDATE agent_office_inbox SET status = 'archived' WHERE id IN (${ph})`)
+      .run(...rows.map((r) => r.id));
+    return rows;
+  }
+
   /** Full inbox listing for dashboard/debug views. */
-  // ── Escalated questions (human-in-the-loop) ────────────
-  // An agent stuck on an open question escalates to the user via
-  // kernel_agents_ask_supervisor, supplying canned answer options. The user
-  // picks one from the My Office panel; the answer is posted back to the
-  // asking agent's inbox so the next run sees it.
+  // ── Escalated questions (human-in-the-loop, via the chief's triage) ────
+  // An agent stuck on an open question escalates via kernel_agents_ask_supervisor.
+  // The chief triages everyone else's questions first (status 'triage') and
+  // either answers them itself or escalates to the human (status 'pending'),
+  // who picks an option from the My Office panel. The chief's own questions —
+  // and anyone's when there is no active chief — go straight to 'pending'.
   createQuestion(input: {
     from_agent_id: string;
     flow_id?: string;
@@ -1296,63 +1198,64 @@ export class AgentService {
     run_id?: string;
     question: string;
     context?: string;
-    options: Array<{ label: string; value?: string }>;
-  }): { id: string } {
+    options: Array<{ label: string; value?: string; url?: string }>;
+    /** Skip the chief: the question goes straight to the human. */
+    direct_to_human?: boolean;
+  }): { id: string; status: "triage" | "pending" } {
     const id = newId();
     const askedAt = isoNow();
+    // The chief triages everyone else's questions; its own (or any question
+    // when there is no active chief, or one the caller addresses to the human
+    // explicitly) goes straight to the human.
+    const chief = input.direct_to_human ? undefined : this.getTopAgent();
+    const status: "triage" | "pending" = chief && chief.id !== input.from_agent_id ? "triage" : "pending";
     this.db
       .prepare(
         `INSERT INTO agent_questions
           (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
-        id,
-        input.from_agent_id,
-        input.flow_id ?? "",
-        input.meeting_id ?? "",
-        input.run_id ?? "",
-        input.question,
-        input.context ?? "",
-        JSON.stringify(input.options),
-        askedAt,
+        id, input.from_agent_id, input.flow_id ?? "", input.meeting_id ?? "", input.run_id ?? "",
+        input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt,
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });
-
-    // A question blocks the agent until someone answers it, and the only place
-    // it showed up was a panel you had to already be looking at — so an agent
-    // could sit waiting on the operator indefinitely with nothing said. Unlike
-    // agent-to-agent chatter, a question is addressed to a human by
-    // construction, which is what makes it safe to ring the bell for.
-    this.events.emit("agent:question_asked", {
-      question_id: id,
-      agent_id: input.from_agent_id,
-      agent_name: this.getAgent(input.from_agent_id)?.name ?? "An agent",
-      question: input.question,
-      context: input.context ?? "",
-      options: input.options.map((o) => o.label),
-      run_id: input.run_id ?? "",
-      asked_at: askedAt,
-    });
-    return { id };
+    if (status === "pending") this.emitQuestionForHuman(id);
+    else this.events.emit("agent:question_triage", { question_id: id, agent_id: input.from_agent_id });
+    return { id, status };
   }
 
-  listQuestions(opts?: { status?: "pending" | "answered" | "dismissed"; limit?: number }): Array<{
-    id: string; from_agent_id: string; flow_id: string; meeting_id: string; run_id: string;
-    question: string; context: string; options: Array<{ label: string; value?: string }>;
-    status: string; selected_option: string; selected_index: number;
-    answered_note: string; answered_at: string | null; created_at: string;
-  }> {
-    let sql = "SELECT * FROM agent_questions";
-    const params: unknown[] = [];
-    if (opts?.status) {
-      sql += " WHERE status = ?";
-      params.push(opts.status);
-    }
-    sql += " ORDER BY created_at DESC LIMIT ?";
-    params.push(opts?.limit ?? 50);
-    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
-    return rows.map((r) => ({
+  /** Ring the operator's bell and send the asker's walker to My Office. Only
+   *  for questions addressed to the human (status 'pending'): agent-to-chief
+   *  traffic would drown both. */
+  private emitQuestionForHuman(id: string): void {
+    const q = this.getQuestion(id);
+    if (!q) return;
+    const agentName = this.getAgent(q.from_agent_id)?.name ?? "An agent";
+    const options = q.options.map((o) => o.label);
+    this.events.emit("agent:question_asked", {
+      question_id: q.id,
+      agent_id: q.from_agent_id,
+      agent_name: agentName,
+      question: q.question,
+      context: q.context,
+      options,
+      run_id: q.run_id,
+      asked_at: q.created_at,
+    });
+    this.events.emit("agent:flow:question_asked", {
+      question_id: q.id,
+      from_agent_id: q.from_agent_id,
+      from_agent_name: agentName,
+      flow_id: q.flow_id,
+      question: q.question,
+      options,
+      ts: isoNow(),
+    });
+  }
+
+  private mapQuestionRow(r: Record<string, unknown>): AgentQuestion {
+    return {
       id: String(r.id),
       from_agent_id: String(r.from_agent_id),
       flow_id: String(r.flow_id ?? ""),
@@ -1363,53 +1266,138 @@ export class AgentService {
       options: (() => {
         try { return JSON.parse(String(r.options || "[]")); } catch { return []; }
       })(),
-      status: String(r.status ?? "pending"),
+      status: String(r.status ?? "pending") as QuestionStatus,
       selected_option: String(r.selected_option ?? ""),
       selected_index: Number(r.selected_index ?? -1),
       answered_note: String(r.answered_note ?? ""),
       answered_at: r.answered_at == null ? null : String(r.answered_at),
+      answered_by: String(r.answered_by ?? "") as AgentQuestion["answered_by"],
+      chief_note: String(r.chief_note ?? ""),
+      triage_started_at: r.triage_started_at == null ? null : String(r.triage_started_at),
       created_at: String(r.created_at ?? ""),
-    }));
+    };
   }
 
-  answerQuestion(id: string, input: { selected_index: number; selected_option: string; note?: string }): { from_agent_id: string; question: string } | null {
-    const q = this.db.prepare("SELECT from_agent_id, question, options, status FROM agent_questions WHERE id = ?").get(id) as
-      | { from_agent_id: string; question: string; options: string; status: string }
-      | undefined;
-    if (!q || q.status !== "pending") return null;
+  getQuestion(id: string): AgentQuestion | undefined {
+    const r = this.db.prepare("SELECT * FROM agent_questions WHERE id = ?").get(id) as Record<string, unknown> | undefined;
+    return r ? this.mapQuestionRow(r) : undefined;
+  }
+
+  // ── Chief's office: dismissed reports ─────────────────────────────
+  /** Record runs the operator dismissed from the office. Returns how many were new. */
+  dismissOfficeRuns(runIds: string[]): number {
+    const now = new Date().toISOString();
+    const ins = this.db.prepare("INSERT OR IGNORE INTO agent_office_dismissed (run_id, dismissed_at) VALUES (?, ?)");
+    let added = 0;
+    this.db.transaction(() => {
+      for (const id of runIds) if (id) added += ins.run(id, now).changes;
+    })();
+    return added;
+  }
+
+  /** Bring dismissed runs back into the office. Returns how many were removed. */
+  restoreOfficeRuns(runIds: string[]): number {
+    const del = this.db.prepare("DELETE FROM agent_office_dismissed WHERE run_id = ?");
+    let removed = 0;
+    this.db.transaction(() => {
+      for (const id of runIds) if (id) removed += del.run(id).changes;
+    })();
+    return removed;
+  }
+
+  listOfficeDismissed(): string[] {
+    return (this.db.prepare("SELECT run_id FROM agent_office_dismissed ORDER BY dismissed_at").all() as Array<{ run_id: string }>)
+      .map((r) => r.run_id);
+  }
+
+  listQuestions(opts?: { status?: QuestionStatus; answered_by?: "chief" | "human"; limit?: number }): AgentQuestion[] {
+    let sql = "SELECT * FROM agent_questions WHERE 1=1";
+    const params: unknown[] = [];
+    if (opts?.status) { sql += " AND status = ?"; params.push(opts.status); }
+    if (opts?.answered_by) { sql += " AND answered_by = ?"; params.push(opts.answered_by); }
+    sql += " ORDER BY created_at DESC LIMIT ?";
+    params.push(opts?.limit ?? 50);
+    const rows = this.db.prepare(sql).all(...params) as Array<Record<string, unknown>>;
+    return rows.map((r) => this.mapQuestionRow(r));
+  }
+
+  /** Record an answer. The chief answers questions in triage, the human the
+   *  pending ones. Getting the answer to the asker is `answerAndDeliver`'s job. */
+  answerQuestion(
+    id: string,
+    input: { selected_index: number; selected_option: string; note?: string; answered_by: "chief" | "human" },
+  ): { from_agent_id: string; question: string } | null {
+    const expected = input.answered_by === "chief" ? "triage" : "pending";
+    const q = this.getQuestion(id);
+    if (!q || q.status !== expected) return null;
     this.db
       .prepare(
         `UPDATE agent_questions
-         SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?
-         WHERE id=?`,
+         SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?, answered_by=?
+         WHERE id=? AND status=?`,
       )
-      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), id);
-
-    // Post the answer back to the asking agent so they pick it up on next run.
-    // Find the user's identity: the human is represented as "__top_agent__
-    // General" in the inbox (sender). We reuse postToColleague only if such
-    // an agent exists; otherwise insert directly into the inbox as a note.
-    const asker = this.getAgent(q.from_agent_id);
-    if (asker) {
-      const inboxId = newId();
-      this.db
-        .prepare(
-          `INSERT INTO agent_office_inbox
-            (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
-           VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
-        )
-        .run(
-          inboxId,
-          asker.flow_id ?? "",
-          q.from_agent_id,
-          `ANSWER: ${q.question.slice(0, 160)}`,
-          `Your supervisor answered your question.\n\n**Question:** ${q.question}\n\n**Answer:** ${input.selected_option}${input.note ? `\n\n**Note:** ${input.note}` : ""}`,
-          isoNow(),
-        );
-    }
-
+      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.answered_by, id, expected);
     this.events.emit("data.changed", { module: "agents", action: "question_answered" });
     return { from_agent_id: q.from_agent_id, question: q.question };
+  }
+
+  /** Leave an answered question's answer in the asker's inbox, for when it
+   *  cannot be relaunched right away. The sender is the headquarters. */
+  postAnswerToInbox(id: string): boolean {
+    const q = this.getQuestion(id);
+    if (!q || q.status !== "answered") return false;
+    const asker = this.getAgent(q.from_agent_id);
+    if (!asker) return false;
+    const who = q.answered_by === "chief" ? "The chief" : "Your supervisor";
+    this.db
+      .prepare(
+        `INSERT INTO agent_office_inbox
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
+         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+      )
+      .run(
+        newId(),
+        asker.flow_id ?? "",
+        q.from_agent_id,
+        `ANSWER: ${q.question.slice(0, 160)}`,
+        `${who} answered your question.\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
+          (q.answered_note && q.answered_note !== q.selected_option ? `\n\n**Note:** ${q.answered_note}` : ""),
+        isoNow(),
+      );
+    return true;
+  }
+
+  /** Chief hands a question to the human. */
+  escalateQuestion(id: string, reason: string): boolean {
+    const r = this.db
+      .prepare("UPDATE agent_questions SET status='pending', chief_note=? WHERE id=? AND status='triage'")
+      .run(reason, id);
+    if (r.changes === 0) return false;
+    this.events.emit("data.changed", { module: "agents", action: "question_escalated" });
+    this.emitQuestionForHuman(id);
+    return true;
+  }
+
+  markTriageStarted(ids: string[]): void {
+    if (ids.length === 0) return;
+    const ph = ids.map(() => "?").join(",");
+    this.db.prepare(`UPDATE agent_questions SET triage_started_at=? WHERE status='triage' AND id IN (${ph})`).run(isoNow(), ...ids);
+  }
+
+  /** Questions stuck in triage since before `olderThanIso` go to the human. */
+  expireTriage(olderThanIso: string): number {
+    const rows = this.db
+      .prepare("SELECT id FROM agent_questions WHERE status='triage' AND created_at < ?")
+      .all(olderThanIso) as Array<{ id: string }>;
+    let n = 0;
+    for (const { id } of rows) {
+      if (this.escalateQuestion(id, "auto-escalated: the chief did not triage this question in time")) n++;
+    }
+    return n;
+  }
+
+  hasRunningRun(agentId: string): boolean {
+    return this.listRuns({ agent_id: agentId, status: "running", limit: 1 }).length > 0;
   }
 
   dismissQuestion(id: string): boolean {
@@ -1420,13 +1408,24 @@ export class AgentService {
 
   listInbox(
     agentId: string,
-    opts?: { status?: "unread" | "read" | "archived"; limit?: number },
+    opts?: {
+      status?: "unread" | "read" | "archived";
+      limit?: number;
+      /** Same scoping as getUnreadInbox: undefined = all, null = no project, id = none + that project. */
+      projectId?: string | null;
+    },
   ): AgentOfficeInboxMessage[] {
     let sql = "SELECT * FROM agent_office_inbox WHERE to_agent_id = ?";
     const params: unknown[] = [agentId];
     if (opts?.status) {
       sql += " AND status = ?";
       params.push(opts.status);
+    }
+    if (opts?.projectId === null) {
+      sql += " AND project_id IS NULL";
+    } else if (typeof opts?.projectId === "string") {
+      sql += " AND (project_id IS NULL OR project_id = ?)";
+      params.push(opts.projectId);
     }
     sql += " ORDER BY created_at DESC";
     if (opts?.limit) {
@@ -1446,175 +1445,12 @@ export class AgentService {
 
   // ── Relevance ranking → AgentMemoryService ────────
 
-  getRelevantMemory(
-    agentId: string,
-    goal: string,
-    limit = 20,
-    pool = 100,
-  ): Array<{ role: string; content: string; created_at: string }> {
-    return this.memory.getRelevantMemory(agentId, goal, limit, pool);
-  }
-
-  getRelevantMemoryByEmbedding(
-    agentId: string,
-    goal: string,
-    goalVector: number[],
-    limit = 20,
-    pool = 100,
-    cosineWeight?: number,
-    minScore?: number,
-  ): Array<{ role: string; content: string; created_at: string }> {
-    return this.memory.getRelevantMemoryByEmbedding(agentId, goal, goalVector, limit, pool, cosineWeight, minScore);
-  }
-
-  findSimilarPastRuns(
-    agentId: string,
-    goal: string,
-    limit = 3,
-    pool = 30,
-  ): AgentRun[] {
-    return this.memory.findSimilarPastRuns(agentId, goal, limit, pool);
-  }
-
-  findSimilarPastRunsByEmbedding(
-    agentId: string,
-    goal: string,
-    goalVector: number[],
-    limit = 3,
-    pool = 30,
-    cosineWeight?: number,
-    minScore?: number,
-  ): AgentRun[] {
-    return this.memory.findSimilarPastRunsByEmbedding(agentId, goal, goalVector, limit, pool, cosineWeight, minScore);
-  }
-
-  getRelevantLearnings(
-    agentId: string,
-    goal: string,
-    limit = 15,
-  ): AgentLearning[] {
-    return this.memory.getRelevantLearnings(agentId, goal, limit);
-  }
-
-  getRelevantLearningsByEmbedding(
-    agentId: string,
-    goal: string,
-    goalVector: number[],
-    limit = 15,
-    cosineWeight?: number,
-    minScore?: number,
-  ): AgentLearning[] {
-    return this.memory.getRelevantLearningsByEmbedding(agentId, goal, goalVector, limit, cosineWeight, minScore);
-  }
-
-  updateLearningConfidence(id: string, delta: number): void {
-    this.memory.updateLearningConfidence(id, delta);
-  }
-
-  deactivateLearning(id: string): void {
-    this.memory.deactivateLearning(id);
-  }
-
-  getLearningsActiveAt(agentId: string, referenceTime: string): AgentLearning[] {
-    return this.memory.getLearningsActiveAt(agentId, referenceTime);
-  }
-
-  reinforceLearningsForRun(
-    agentId: string,
-    runCreatedAt: string,
-    outcome: "success" | "partial" | "failure" | "neutral",
-  ): { updated: number; deactivated: number } {
-    return this.memory.reinforceLearningsForRun(agentId, runCreatedAt, outcome);
-  }
-
-  cleanupLowConfidenceLearnings(agentId: string, minConfidence = 0.15): number {
-    return this.memory.cleanupLowConfidenceLearnings(agentId, minConfidence);
-  }
-
 
   // ── Conversations & messages → AgentConversationsService ────────────
 
   /** @see AgentConversationsService.computeTopicHash */
   static computeTopicHash(topic: string): string {
     return AgentConversationsService.computeTopicHash(topic);
-  }
-
-  createConversation(input: {
-    kind: "chat" | "meeting" | "debate";
-    topic: string;
-    participants: string[];
-    initiator_agent_id: string;
-    parent_conversation_id?: string;
-    meta?: Record<string, unknown>;
-  }): AgentConversation {
-    return this.conversations.createConversation(input);
-  }
-
-  getConversation(id: string): AgentConversation | undefined {
-    return this.conversations.getConversation(id);
-  }
-
-  findOrCreateChatConversation(input: {
-    topic: string;
-    participants: string[];
-    initiator_agent_id: string;
-  }): AgentConversation {
-    return this.conversations.findOrCreateChatConversation(input);
-  }
-
-  listConversations(opts?: {
-    agent_id?: string;
-    kind?: "chat" | "meeting" | "debate";
-    status?: "open" | "closed";
-    excludeArchived?: boolean;
-    limit?: number;
-  }): AgentConversation[] {
-    return this.conversations.listConversations(opts);
-  }
-
-  closeConversation(id: string): void {
-    this.conversations.closeConversation(id);
-  }
-
-  archiveConversation(id: string): boolean {
-    return this.conversations.archiveConversation(id);
-  }
-
-  archiveClosedConversations(opts?: { kind?: "chat" | "meeting" | "debate" }): number {
-    return this.conversations.archiveClosedConversations(opts);
-  }
-
-  parseParticipants(convo: AgentConversation): string[] {
-    return this.conversations.parseParticipants(convo);
-  }
-
-  addParticipant(conversationId: string, agentId: string): void {
-    this.conversations.addParticipant(conversationId, agentId);
-  }
-
-  postMessage(input: {
-    conversation_id: string;
-    from_agent_id: string;
-    to_agent_id?: string;
-    role?: AgentMessageRole;
-    in_reply_to?: string;
-    body: string;
-    tokens?: number;
-    run_id?: string;
-    meta?: Record<string, unknown>;
-  }): AgentMessage {
-    return this.conversations.postMessage(input);
-  }
-
-  getMessage(id: string): AgentMessage | undefined {
-    return this.conversations.getMessage(id);
-  }
-
-  listMessages(conversationId: string, opts?: {
-    limit?: number;
-    role?: AgentMessageRole;
-  }): AgentMessage[] {
-    return this.conversations.listMessages(conversationId, opts);
   }
 
   getCounterStats(conversationId: string): {
@@ -1626,83 +1462,10 @@ export class AgentService {
 
   // ── Debate cooldown register → AgentConversationsService ──
 
-  getDebateCooldown(topicHash: string): AgentDebateCooldown | undefined {
-    return this.conversations.getDebateCooldown(topicHash);
-  }
-
-  recordDebateCooldown(topicHash: string, debateConvId: string): void {
-    this.conversations.recordDebateCooldown(topicHash, debateConvId);
-  }
-
-  countRecentAutoDebates(sinceIsoTimestamp: string): number {
-    return this.conversations.countRecentAutoDebates(sinceIsoTimestamp);
-  }
-
 
   // ── Chains → AgentChainsService ─────────────────
 
-  addChain(input: {
-    source_agent_id: string;
-    target_agent_id: string;
-    label?: string;
-    condition?: Record<string, unknown>;
-    pass_result?: boolean;
-    delay_ms?: number;
-  }): AgentChain {
-    return this.chains.addChain(input);
-  }
-
-  listChains(agentId?: string): AgentChain[] {
-    return this.chains.listChains(agentId);
-  }
-
-  getChainsBySource(sourceId: string): AgentChain[] {
-    return this.chains.getChainsBySource(sourceId);
-  }
-
-  removeChain(id: string): boolean {
-    return this.chains.removeChain(id);
-  }
-
   // ── Event log → AgentEventLogService ──────────────
-
-  logEvent(data: {
-    run_id?: string;
-    agent_id?: string;
-    agent_name?: string;
-    event_type: string;
-    event_subtype?: string;
-    detail?: string;
-    raw_data?: Record<string, unknown>;
-    tokens_used?: number;
-    duration_ms?: number;
-  }): void {
-    this.eventLog.logEvent(data);
-  }
-
-  getEventLog(opts?: {
-    run_id?: string;
-    agent_id?: string;
-    event_type?: string;
-    limit?: number;
-    offset?: number;
-    since?: string;
-  }): unknown[] {
-    return this.eventLog.getEventLog(opts);
-  }
-
-  getEventLogCount(opts?: {
-    run_id?: string;
-    agent_id?: string;
-    event_type?: string;
-    since?: string;
-  }): number {
-    return this.eventLog.getEventLogCount(opts);
-  }
-
-  clearEventLog(opts?: { before?: string; agent_id?: string }): number {
-    return this.eventLog.clearEventLog(opts);
-  }
 
   // ── Dashboard Widgets ────────────────────────────
 
@@ -1817,97 +1580,8 @@ export class AgentService {
     return this.promptVersions.snapshotPrompt(agentId, input);
   }
 
-  activatePromptVersion(agentId: string, version: number): AgentPromptVersion | null {
-    return this.promptVersions.activatePromptVersion(agentId, version);
-  }
-
-  listPromptVersions(agentId: string, limit = 50): AgentPromptVersion[] {
-    return this.promptVersions.listPromptVersions(agentId, limit);
-  }
-
-  getPromptVersion(agentId: string, version: number): AgentPromptVersion | undefined {
-    return this.promptVersions.getPromptVersion(agentId, version);
-  }
-
-  getActivePromptVersion(agentId: string): AgentPromptVersion | undefined {
-    return this.promptVersions.getActivePromptVersion(agentId);
-  }
-
-  restorePromptVersion(agentId: string, version: number, note = ""): AgentPromptVersion | null {
-    return this.promptVersions.restorePromptVersion(agentId, version, note);
-  }
-
-  diffPromptVersions(
-    agentId: string,
-    fromVersion: number,
-    toVersion: number,
-  ): { from: AgentPromptVersion; to: AgentPromptVersion; lines: Array<{ kind: "same" | "added" | "removed"; text: string }> } | null {
-    return this.promptVersions.diffPromptVersions(agentId, fromVersion, toVersion);
-  }
-
   // ── Evolution runs (Autogenesis SEPL) → AgentEvolutionService ──
-
-  createEvolutionRun(input: {
-    agent_id: string;
-    base_version: number;
-    hypothesis: string;
-    proposal: string;
-    trigger_run_ids?: string[];
-    target?: AgentEvolutionRun["target"];
-    workspace_id?: string;
-    artifact_ref?: string;
-  }): AgentEvolutionRun {
-    return this.evolution.createEvolutionRun(input);
-  }
-
-  updateEvolutionRun(
-    id: string,
-    patch: Partial<Pick<AgentEvolutionRun,
-      "candidate_version" | "status" | "baseline_score" | "candidate_score" | "evaluation" | "error" | "committed_at" | "artifact_ref">>,
-  ): AgentEvolutionRun | undefined {
-    return this.evolution.updateEvolutionRun(id, patch);
-  }
-
-  listEvolutionRuns(agentId: string, limit = 20): AgentEvolutionRun[] {
-    return this.evolution.listEvolutionRuns(agentId, limit);
-  }
-
-  listEvolutionRunsByWorkspace(workspaceId: string, limit = 50): AgentEvolutionRun[] {
-    return this.evolution.listEvolutionRunsByWorkspace(workspaceId, limit);
-  }
-
-  getEvolutionRun(id: string): AgentEvolutionRun | undefined {
-    return this.evolution.getEvolutionRun(id);
-  }
 
   // ── Conversation subscriptions → AgentSubscriptionsService ───────────────
 
-  subscribeAgentToConversation(input: {
-    agent_id: string;
-    conversation_id: string;
-    mode?: "responder" | "observer";
-    filter_role?: string;
-  }): AgentConversationSubscription | null {
-    return this.subscriptions.subscribeAgentToConversation(input);
-  }
-
-  unsubscribeAgentFromConversation(agentId: string, conversationId: string): boolean {
-    return this.subscriptions.unsubscribeAgentFromConversation(agentId, conversationId);
-  }
-
-  getSubscription(id: string): AgentConversationSubscription | undefined {
-    return this.subscriptions.getSubscription(id);
-  }
-
-  listSubscriptionsForConversation(conversationId: string): AgentConversationSubscription[] {
-    return this.subscriptions.listSubscriptionsForConversation(conversationId);
-  }
-
-  listSubscriptionsForAgent(agentId: string): AgentConversationSubscription[] {
-    return this.subscriptions.listSubscriptionsForAgent(agentId);
-  }
-
-  markSubscriptionFired(id: string): void {
-    this.subscriptions.markSubscriptionFired(id);
-  }
 }

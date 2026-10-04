@@ -8,9 +8,9 @@
     it stays quiet until it matters.
   */
   import { onMount } from 'svelte';
-  import { getAuthToken } from '$lib/api.js';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import Panel from '$lib/components/Panel.svelte';
+  import { apiFetchRaw, readApiError } from '$lib/api.js';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Panel from '$shared/components/Panel.svelte';
 
   interface Friend {
     npub: string;
@@ -40,11 +40,8 @@
   let probes: Record<string, { busy: boolean; via?: string; reachable?: boolean; error?: string }> = {};
 
   async function call(path: string, init: RequestInit = {}): Promise<any> {
-    const token = getAuthToken();
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-    if (token) headers['Authorization'] = `Bearer ${token}`;
-    const r = await fetch(path, { ...init, headers });
-    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error ?? `HTTP ${r.status}`);
+    const r = await apiFetchRaw(path, init);
+    if (!r.ok) throw new Error((await readApiError(r)) ?? `HTTP ${r.status}`);
     return r.json();
   }
 

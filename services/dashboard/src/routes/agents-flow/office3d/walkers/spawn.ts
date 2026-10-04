@@ -17,10 +17,12 @@ import {
   nearestVCorrX,
   nearestVCorrXBetween,
   exitViaDoor,
-  enterViaDoor,
-  rectAsRoom,
-  meetingTableAabb,
+  planPointWalk,
+  zoneObstacles,
 } from './pathfinding.js';
+
+/** Size of every standing humanoid on the floor — walkers, and anyone who must read as one of them. */
+export const WALKER_SCALE = 1.3;
 
 // Local helper — resolve the agent's skin from the shared registry, then
 // build the per-mesh humanoid in the right outfit.
@@ -28,7 +30,7 @@ function buildWalkerHumanoid(srcId: string, agents: Array<{ id: string; skin_id?
   const agent = agents.find(a => a.id === srcId);
   const skin = resolveSkin(agent?.skin_id);
   const palette = skin.pickPalette(srcId);
-  return skin.createHumanoid({ flowColor: color, palette, scale: 1.3, walker: true });
+  return skin.createHumanoid({ flowColor: color, palette, scale: WALKER_SCALE, walker: true });
 }
 
 const BASE_MAX_WALKERS = 6;
@@ -86,6 +88,7 @@ export function sendWalker(
     ...deskObstacles,
     ...roomAabbs(rooms, new Set([srcRoom, tgtRoom])),
     ...(meetingRoomObstacles ? meetingRoomAabbs(meetingRoomObstacles) : []),
+    ...zoneObstacles(), // headquarters office + reception
   ];
 
   // The seated worker is at z = 0.55 from desk center (see furniture.ts).
@@ -256,125 +259,13 @@ export function sendWalkerToPoint(
   const srcAgent = agents.find(a => a.id === srcId);
   const srcRoom = srcAgent ? rooms.get(srcAgent.flow_id || '_none') : undefined;
 
-  // Find which room contains the destination point — if the walker is
-  // walking into a room (My Office, a meeting room, …), that room must be
-  // exempt from the avoidance pass. Otherwise its walls count as
-  // obstacles and the L-shaped detour ends up cutting a diagonal back
-  // across an adjacent room's wall (the user-reported bug: "el monigote
-  // mete diagonales y atraviesa paredes").
-  const targetRoom = (() => {
-    for (const r of rooms.values()) {
-      if (
-        targetPoint.x >= r.cx - r.w / 2 && targetPoint.x <= r.cx + r.w / 2 &&
-        targetPoint.z >= r.cz - r.d / 2 && targetPoint.z <= r.cz + r.d / 2
-      ) return r;
-    }
-    return undefined;
-  })();
-
-  // Obstacles: every desk except the walker's own source desk + every room
-  // except the source office AND the destination room. Combined into one
-  // list so the avoidance pass routes around both walls and other desks.
-  const deskObstacles: Aabb2D[] = deskAabbs
-    ? Array.from(deskAabbs.values()).filter(b => b.agentId !== srcId)
-    : [];
-  // The table inside the room we are walking INTO is solid. Every other
-  // meeting room is already excluded wholesale by meetingRoomAabbs, so only
-  // the exempt one needs its furniture spelled out.
-  const exemptSlot =
-    meetingRoomObstacles && meetingRoomObstacleExempt !== undefined && meetingRoomObstacleExempt >= 0
-      ? meetingRoomObstacles[meetingRoomObstacleExempt]
-      : undefined;
-  const obstacles: Aabb2D[] = [
-    ...deskObstacles,
-    ...roomAabbs(rooms, new Set([srcRoom, targetRoom])),
-    ...(meetingRoomObstacles
-      ? meetingRoomAabbs(meetingRoomObstacles, meetingRoomObstacleExempt ?? -1)
-      : []),
-    ...(exemptSlot ? [meetingTableAabb(exemptSlot)] : []),
-  ];
-
-  // Build path: desk → door → corridor → target point (using real corridor positions)
-  const pts: Vec3[] = [];
-  pts.push({ ...from });
-
-  if (srcRoom && corridorGrid.segments.length > 0) {
-    // Use exact door position (respects doorDir: left/right/top/bottom)
-    const srcDoorX = (srcRoom as any).doorX ?? srcRoom.cx;
-    const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
-
-    // Inside room → line up on the opening → out through the door. This used
-    // to be a hardcoded X-first L-shape, which is only correct for a door on
-    // a ±Z wall. Six of the nine offices on the live floor have side doors,
-    // and their desks sit further off-centre than the opening is wide, so
-    // every walker leaving one of them stepped through solid wall.
-    pts.push(...exitViaDoor(from, srcRoom));
-
-    // Step into nearest corridor
-    const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, corridorGrid);
-    pts.push({ ...srcCorrNode });
-
-    // Walk corridors to target. Aim at the DOORWAY, not at the destination
-    // itself: picking the corridor node nearest the seat can land the walker
-    // on the far side of the room from its only door, and the leg from there
-    // to the doorway then cuts back across the room. buildPath has always
-    // aimed at the door; this one aimed at the target.
-    const approach = viaPoint ?? targetPoint;
-    const tgtCorrNode = nearestCorridorNode(approach, corridorGrid);
-    if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1 || Math.abs(srcCorrNode.z - tgtCorrNode.z) > 1) {
-      const srcHZ = nearestHCorrZ(srcCorrNode.z, corridorGrid);
-      const tgtHZ = nearestHCorrZ(tgtCorrNode.z, corridorGrid);
-      if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1) {
-        const vCorrX = nearestVCorrXBetween(srcCorrNode.x, tgtCorrNode.x, corridorGrid);
-        pts.push({ x: vCorrX, y: 0, z: srcHZ });
-        if (Math.abs(srcHZ - tgtHZ) > 1) {
-          pts.push({ x: vCorrX, y: 0, z: tgtHZ });
-        }
-        pts.push({ x: tgtCorrNode.x, y: 0, z: tgtHZ });
-      } else if (Math.abs(srcHZ - tgtHZ) > 1) {
-        const vCorrX = nearestVCorrX(srcCorrNode.x, corridorGrid);
-        pts.push({ x: vCorrX, y: 0, z: srcHZ });
-        pts.push({ x: vCorrX, y: 0, z: tgtHZ });
-      }
-    }
-    pts.push({ ...tgtCorrNode });
-  }
-  // Getting IN is the same problem as getting out, and it was never solved
-  // here at all: the path went corridor → destination in one straight shot.
-  // For anything sitting inside an office — the power console in the data
-  // centre, a visitor's chair — that shot crosses the office wall wherever it
-  // happens to land. Route through that room's own door instead.
-  if (targetRoom) {
-    pts.push(...enterViaDoor(targetPoint, targetRoom));
-  } else if (viaPoint) {
-    // Meeting rooms aren't in the `rooms` map — they hand us their door
-    // midpoint instead. Wrap the slot so the walker gets the same treatment
-    // an office gets: square up on the doorway, step through, and only then
-    // turn toward the seat. Dropping the raw door point in and heading
-    // straight for the chair leaves on a diagonal that scrapes the wall.
-    const slot =
-      meetingRoomObstacles && meetingRoomObstacleExempt !== undefined && meetingRoomObstacleExempt >= 0
-        ? meetingRoomObstacles[meetingRoomObstacleExempt]
-        : undefined;
-    if (slot) {
-      // stopInsideDoor: the table sits on the room's centreline, so the
-      // generic slide waypoint would land on it. Stop at the doorway and
-      // let the avoidance pass walk around the table to the chair.
-      pts.push(...enterViaDoor(targetPoint, rectAsRoom(slot, viaPoint), { stopInsideDoor: true }));
-    } else {
-      pts.push({ ...viaPoint });
-    }
-  }
-  pts.push({ ...targetPoint });
-
-  // Clean duplicates
-  const dedup: Vec3[] = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const prev = dedup[dedup.length - 1];
-    if (Math.abs(pts[i].x - prev.x) > 0.3 || Math.abs(pts[i].z - prev.z) > 0.3) dedup.push(pts[i]);
-  }
-  // Route around desk AABBs
-  const clean = avoidDesks(dedup, obstacles);
+  // Desk → office door → corridors → the destination's own door → target,
+  // around desks, walls and the special rooms (pathfinding.ts:planPointWalk).
+  const clean = planPointWalk({
+    from, targetPoint, srcRoom, rooms, corridorGrid,
+    deskObstacles: deskAabbs ? Array.from(deskAabbs.values()).filter(b => b.agentId !== srcId) : [],
+    viaPoint, meetingRoomObstacles, meetingRoomObstacleExempt,
+  });
 
   const dist = pathLength(clean);
   const fwdCumDist = buildCumDist(clean);
@@ -497,6 +388,7 @@ export function sendCommuteWalker(opts: CommuteWalkerOpts): void {
     ...deskObstacles,
     ...roomAabbs(opts.rooms, new Set([srcRoom])),
     ...(opts.meetingRoomObstacles ? meetingRoomAabbs(opts.meetingRoomObstacles) : []),
+    ...zoneObstacles(), // the lobby path runs past the reception counter
   ];
 
   const pts: Vec3[] = [];

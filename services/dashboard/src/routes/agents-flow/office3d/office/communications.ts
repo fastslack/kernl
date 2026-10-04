@@ -284,7 +284,7 @@ export function buildCommunicationsOffice(scene: any, room: RoomInfo): void {
 
   // ── 5. Accent ceiling tint — a low-power coloured wash so the room glows
   //     in the flow colour from outside the door. ──
-  const accentLight = new rt.THREE.PointLight(accent.getHex(), 0.35, Math.max(w, d) * 0.9);
+  const accentLight = new rt.THREE.PointLight(accent.getHex(), 0.7, Math.max(w, d) * 0.9);
   accentLight.position.set(cx, WALL_H - 0.4, cz);
   accentLight.decay = 2;
   accentLight.matrixAutoUpdate = false; accentLight.updateMatrix();

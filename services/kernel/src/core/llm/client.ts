@@ -17,9 +17,12 @@ import type { FailureKind } from "./provider-health.js";
 import * as callLog from "./call-log.js";
 import * as limiter from "./limiter.js";
 import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
-import { chatCompletionsUrl, fallbackOrder, getCatalogEntry, quirksFor } from "./provider-catalog.js";
+import { applyModelQuirks, chatCompletionsUrl, fallbackOrder, getCatalogEntry } from "./provider-catalog.js";
+import { parseRetryAfterMs, sleep, withJitter, type RetryableError } from "./retry.js";
+import { orderLinksByHealth, runWithFallbackChain } from "./fallback-chain.js";
 import { getProviderConfig, isConnected } from "./credentials.js";
 import { stripReasoning } from "./strip-reasoning.js";
+import { parseJsonCompletion } from "./parse-json-completion.js";
 
 /** Hard ceiling for an in-place backoff sleep on a rate-limited LAST link.
  *  We never block longer than this even if the provider's Retry-After is huge —
@@ -28,67 +31,6 @@ const RATE_LIMIT_MAX_WAIT_MS = (() => {
   const v = Number(process.env.LLM_RATE_LIMIT_MAX_WAIT_MS);
   return Number.isFinite(v) && v > 0 ? v : 15_000;
 })();
-
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
-
-/** ±15% jitter so retries from concurrent callers don't re-converge into a
- *  fresh thundering herd against the same provider. */
-function withJitter(ms: number): number {
-  return Math.round(ms * (0.85 + Math.random() * 0.3));
-}
-
-/** Errors carry an optional `retryAfterMs` hint parsed from the provider's
- *  rate-limit headers — see `parseRetryAfterMs`. */
-interface RetryableError extends Error {
-  retryAfterMs?: number;
-}
-
-/**
- * Pull a concrete "wait this long" hint out of a rate-limited HTTP response.
- * Honors, in priority order:
- *   - `Retry-After` (delta-seconds OR an HTTP date) — standard, used by most
- *   - `anthropic-ratelimit-{requests,tokens}-reset` (ISO 8601 timestamp)
- *   - `x-ratelimit-reset-{requests,tokens}` (OpenAI; secs or `1m30s`-style)
- * Returns undefined when no usable hint is present.
- */
-function parseRetryAfterMs(headers: Headers): number | undefined {
-  const ra = headers.get("retry-after");
-  if (ra) {
-    const secs = Number(ra);
-    if (Number.isFinite(secs)) return Math.max(0, secs * 1000);
-    const date = Date.parse(ra);
-    if (!Number.isNaN(date)) return Math.max(0, date - Date.now());
-  }
-  for (const h of ["anthropic-ratelimit-requests-reset", "anthropic-ratelimit-tokens-reset"]) {
-    const v = headers.get(h);
-    if (v) {
-      const d = Date.parse(v);
-      if (!Number.isNaN(d)) return Math.max(0, d - Date.now());
-    }
-  }
-  for (const h of ["x-ratelimit-reset-requests", "x-ratelimit-reset-tokens"]) {
-    const v = headers.get(h);
-    if (v) {
-      const ms = parseDurationish(v);
-      if (ms !== undefined) return ms;
-    }
-  }
-  return undefined;
-}
-
-/** Parse OpenAI-style reset values: a bare number of seconds, or compound
- *  durations like "1m30s" / "6m0s" / "750ms". Returns ms or undefined. */
-function parseDurationish(v: string): number | undefined {
-  const n = Number(v);
-  if (Number.isFinite(n)) return Math.max(0, n * 1000);
-  const m = v.match(/(?:(\d+)m)?(?:(\d+(?:\.\d+)?)s)?(?:(\d+)ms)?/);
-  if (!m) return undefined;
-  const mins = Number(m[1] ?? 0);
-  const secs = Number(m[2] ?? 0);
-  const ms = Number(m[3] ?? 0);
-  const total = mins * 60_000 + secs * 1000 + ms;
-  return total > 0 ? total : undefined;
-}
 
 export type LlmProvider = "openai" | "anthropic" | "custom";
 
@@ -185,6 +127,9 @@ export interface LlmChatResult {
   provider: LlmProvider;
   inputTokens?: number;
   outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheWriteTokens?: number;
+  costUsd?: number;
 }
 
 const OPENAI_URL = "https://api.openai.com/v1/chat/completions";
@@ -358,25 +303,26 @@ export class LlmClient {
       l => l.apiKey || l.provider === "custom" || (l.provider === "anthropic" && sdkReady),
     );
     const primarySlug = slugOf(this.config);
-    const links = sortLinksByHealth(usable, primarySlug);
+    const links = orderLinksByHealth(usable, slugOf, primarySlug);
 
-    let lastErr: unknown;
-    for (let i = 0; i < links.length; i++) {
-      const link = links[i];
-      try {
-        return await this.chatOnce(link, opts, { isLast: i === links.length - 1 });
-      } catch (err) {
-        lastErr = err;
-        const msg = err instanceof Error ? err.message : String(err);
-        if (i < links.length - 1) {
-          log.warn(`LLM chain ${i + 1}/${links.length} (${slugOf(link)}) failed: ${msg.slice(0, 140)} — trying next`);
-        }
+    return runWithFallbackChain(
+      links,
+      (link, { isLast }) => this.chatOnce(link, opts, { isLast }),
+      {
         // Non-retryable errors for a bad request (400 malformed) shouldn't
         // waste fallback budget. Errors like 429/5xx/quota/timeout get fallback.
-        if (!isChainableError(err)) throw err;
-      }
-    }
-    throw lastErr instanceof Error ? lastErr : new Error("LLM: all chain links exhausted");
+        isFatal: (err) => !isChainableError(err),
+        onLinkFailed: ({ link, index, error }, { isLast, total }) => {
+          if (isLast) return;
+          const msg = error instanceof Error ? error.message : String(error);
+          log.warn(`LLM chain ${index + 1}/${total} (${slugOf(link)}) failed: ${msg.slice(0, 140)} — trying next`);
+        },
+        exhausted: (failures) => {
+          const lastErr = failures[failures.length - 1]?.error;
+          return lastErr instanceof Error ? lastErr : new Error("LLM: all chain links exhausted");
+        },
+      },
+    );
   }
 
   /**
@@ -437,6 +383,9 @@ export class LlmClient {
           latencyMs: latency,
           inputTokens: result.inputTokens,
           outputTokens: result.outputTokens,
+          cacheReadTokens: result.cacheReadTokens,
+          cacheWriteTokens: result.cacheWriteTokens,
+          costUsd: result.costUsd,
           caller: opts.caller,
           startedAt: t0,
         });
@@ -475,11 +424,15 @@ export class LlmClient {
     throw new Error(`LLM: ${link.provider} retries exhausted`);
   }
 
-  /** Convenience: chat and parse JSON response */
+  /** Convenience: chat and parse JSON response.
+   *
+   *  Parsing is tolerant of a model that ignored `response_format` and wrapped
+   *  the object in prose — see parse-json-completion.ts. A direct parse is
+   *  still tried first and unchanged, so this only ever recovers replies that
+   *  used to throw. */
   async chatJson<T = unknown>(opts: LlmChatOptions): Promise<T> {
     const result = await this.chat({ ...opts, json: true });
-    const cleaned = result.text.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
-    return JSON.parse(cleaned) as T;
+    return parseJsonCompletion<T>(result.text);
   }
 
   private getDefaultModelFor(provider: LlmProvider): string {
@@ -498,6 +451,32 @@ export class LlmClient {
       default: return OPENAI_URL;
     }
   }
+
+  // ── HTTP calls ──
+  //
+  // These two methods look like `ChatOpenAiProvider` / `ChatClaudeProvider`
+  // (chat-openai.ts / chat-claude.ts) but are deliberately NOT routed through
+  // them. What they already share lives in one place: model quirks
+  // (`applyModelQuirks`), Retry-After parsing (`parseRetryAfterMs`), reasoning
+  // stripping. What differs is part of the driver's contract, and routing
+  // through the adapters would change it:
+  //   - URL: a link's `baseUrl` is the full endpoint (materializeLink already
+  //     appended /chat/completions); the adapters append the path themselves,
+  //     and the Claude adapter ignores a base URL entirely.
+  //   - 429: the driver fails a rate-limited link over to the next one at once
+  //     (retrying in place only on the last link, see chatOnce); the adapters
+  //     wait out a 429 in place up to three times.
+  //   - Timeout: per-link `timeoutMs` (15 s on the chain probe, 60 s default)
+  //     with its own error text, vs a fixed 300 s in the adapters.
+  //   - Errors: "LLM OpenAI <status>: …" / "LLM Anthropic <status>: …" with a
+  //     `retryAfterMs` hint feeding provider-health, vs "<name> API error …";
+  //     the adapters also mark the provider quota-exhausted on 429/402, which
+  //     the driver never did.
+  //   - Body: `max_tokens` default 2048 and `response_format` for json mode;
+  //     key order differs. Usage: the driver keeps input/output tokens apart
+  //     for the call log; the Claude adapter only returns their sum.
+  //   - Anthropic reply: the driver returns the first text block, the adapter
+  //     joins them all.
 
   // ── OpenAI / OpenAI-compatible ──
 
@@ -521,12 +500,7 @@ export class LlmClient {
     const body: Record<string, unknown> = { model, messages, max_tokens: maxTokens };
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
     if (opts.json) body.response_format = { type: "json_object" };
-    const quirks = quirksFor(slugOf(link), model);
-    if (quirks) {
-      if (body.temperature === undefined && quirks.temperature !== undefined) body.temperature = quirks.temperature;
-      if (quirks.topP !== undefined) body.top_p = quirks.topP;
-      if (quirks.extraBody) Object.assign(body, quirks.extraBody);
-    }
+    applyModelQuirks(body, slugOf(link), model);
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), link.timeoutMs ?? 60_000);
@@ -620,7 +594,11 @@ export class LlmClient {
           text: result.content,
           model: result.model,
           provider: "anthropic",
-          outputTokens: result.tokens_used,
+          inputTokens: result.input_tokens,
+          outputTokens: result.output_tokens ?? result.tokens_used,
+          cacheReadTokens: result.cache_read_tokens,
+          cacheWriteTokens: result.cache_write_tokens,
+          costUsd: result.cost_usd,
         };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -683,7 +661,12 @@ export class LlmClient {
 
     const data = await response.json() as {
       content: Array<{ type: string; text: string }>;
-      usage?: { input_tokens: number; output_tokens: number };
+      usage?: {
+        input_tokens: number;
+        output_tokens: number;
+        cache_read_input_tokens?: number;
+        cache_creation_input_tokens?: number;
+      };
       model: string;
     };
 
@@ -693,6 +676,8 @@ export class LlmClient {
       provider: "anthropic",
       inputTokens: data.usage?.input_tokens,
       outputTokens: data.usage?.output_tokens,
+      cacheReadTokens: data.usage?.cache_read_input_tokens,
+      cacheWriteTokens: data.usage?.cache_creation_input_tokens,
     };
   }
 }
@@ -711,37 +696,6 @@ function slugOf(link: LlmConfig): string {
   if (/nvidia/i.test(url)) return "nvidia";
   if (/localhost|127\.0\.0\.1|host\.docker\.internal/.test(url)) return "lmstudio";
   return "custom";
-}
-
-/**
- * Sort chain links by the shared health tracker's score. The configured
- * primary keeps a boost while it's healthy; once it accumulates enough
- * consecutive failures, the boost is dropped (soft auto-unpin) and the
- * fastest healthy alternative becomes the head of the chain for this call.
- *
- * Blocked-but-not-dead links land at the tail so we still try them as a
- * last resort instead of returning "all chain links exhausted".
- */
-function sortLinksByHealth(links: LlmConfig[], primarySlug: string): LlmConfig[] {
-  const ranked = providerHealth.rankCandidates(
-    links.map(l => slugOf(l)),
-    { primary: primarySlug },
-  );
-  // Map ranked slugs back to links, preserving duplicates by consuming
-  // each link once (a chain may legitimately have two links of the same
-  // slug — e.g. two different Claude models on the same provider).
-  const remaining = [...links];
-  const out: LlmConfig[] = [];
-  for (const slug of ranked) {
-    const idx = remaining.findIndex(l => slugOf(l) === slug);
-    if (idx >= 0) {
-      out.push(remaining[idx]);
-      remaining.splice(idx, 1);
-    }
-  }
-  // Anything not matched (defensive) goes to the tail in original order
-  out.push(...remaining);
-  return out;
 }
 
 /**
@@ -878,6 +832,25 @@ export function createPinnedLlmClient(
   return new LlmClient({ ...link, fallbackChain: [], maxRetries: 0 });
 }
 
+/**
+ * A client over an explicit, ordered list of (provider, model) links — the
+ * first usable one is the primary, the rest its fallbacks. Links whose
+ * provider cannot be used right now are skipped, exactly as in the global
+ * chain. Returns null when none is usable.
+ *
+ * This is how "the cheapest model" runs: ModelPriceStore orders the links by
+ * price and this keeps everything else the driver does — retries, the 429
+ * limiter, health ordering, the call log.
+ */
+export function createChainLlmClient(links: Array<{ provider: string; model: string }>): LlmClient | null {
+  const materialized = links
+    .map((l) => materializeLink(l.provider, l.model))
+    .filter((l): l is LlmConfig => l !== null);
+  if (materialized.length === 0) return null;
+  const [primary, ...fallbackChain] = materialized;
+  return new LlmClient({ ...primary, fallbackChain });
+}
+
 /** Create LLM client from kernel config, wired up with primary + fallback chain. */
 export function createLlmClient(config: KernelConfig): LlmClient {
   return new LlmClient(buildLlmConfig(config));
@@ -897,16 +870,3 @@ export function llm(): LlmClient {
   return client;
 }
 
-/** Create a lightweight LLM client for a specific purpose (triage, analysis, etc.) */
-export function createLlmClientFromKeys(
-  openaiKey: string,
-  anthropicKey: string,
-  preferredProvider?: string,
-): LlmClient {
-  const provider = (preferredProvider === "anthropic" && anthropicKey) ? "anthropic" : "openai";
-  return new LlmClient({
-    provider: provider as LlmProvider,
-    apiKey: provider === "anthropic" ? anthropicKey : openaiKey,
-    defaultModel: provider === "anthropic" ? "claude-haiku-4-5-20251001" : "gpt-4o-mini",
-  });
-}

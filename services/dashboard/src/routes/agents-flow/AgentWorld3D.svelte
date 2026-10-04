@@ -1,19 +1,22 @@
 <script lang="ts">
-  import { onMount, onDestroy, createEventDispatcher, tick } from 'svelte';
-  import { slide, scale } from 'svelte/transition';
+  import { onMount, onDestroy, createEventDispatcher } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { get } from 'svelte/store';
+  import { extPages } from '$lib/ext-host.js';
+  import { slide } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import PerfOverlay from './PerfOverlay.svelte';
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall, rpc } from '$lib/ws.js';
-  import { escapeHtml } from '$lib/sanitize.js';
-  import { traitsOf, mailOffice } from '$lib/office/office-kinds.js';
+  import { escapeHtml } from '$shared/sanitize';
+  import { traitsOf } from '$lib/office/office-kinds.js';
   import {
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
     initAllSkins, resolveSkin, listSkins, type SkinDefinition,
-    buildFloor, buildStreets, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, buildDesks, buildHallways,
-    setupLighting, applyRendererGrading, applySceneGrading, GRADING,
-    buildAmbiance, buildWallClock, buildActivityBoard, updateActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
+    buildFloor, buildStreets, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, buildDesks, buildHallways,
+    setupLighting,
+    buildAmbiance, buildWallClock, buildActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
     initRedAlertDecor, buildSandbagBarrier, buildCrates,
     buildNameplate,
     paintMeetingScreen, clearMeetingScreen, type MeetingScreenHandle,
@@ -21,110 +24,67 @@
     flipInfraLever, updateInfraConsole, getInfraOperatorPos, getInfraFacePos,
     resetInfraConsole, toggleInfraBoard, INFRA_VIS, type InfraState,
     sendWalker, sendWalkerToPoint, sendCommuteWalker, updateWalkers, removeArrivedWalkers, syncSeatedVisibility, animateSitting,
+    setWalkZones, receptionObstacles,
     initDelivery, initDeliveryScene, enqueueDelivery, resetDelivery, markPackagePickedUp, updateDelivery,
     initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis,
     createAnimationRegistry, initAnimEffects,
     cameraTween, haloPulse, risingParticles, bubbleFade, materialPulse,
-    floatingGlyph, shake, convergingParticles, fallingGlyph,
-    curvedArrow, paperPlane, pillarOfLight, coinTrail, chyronLabel,
+    floatingGlyph, shake, convergingParticles,
+    curvedArrow, pillarOfLight, coinTrail, chyronLabel,
     createNoteStack, type NoteStack,
-    runTradeExecution,
     type AnimationRegistry,
     type DeliveryInfo,
-    resolveFlowColor, agentType, CLAUDE_CODE_DEFAULT_MODEL,
+    resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
-  import { setTextureAnisotropy } from './office3d/textures.js';
-  import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
+  import { propOf, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
+  import {
+    createRenderer, configureRenderer, createLabelRenderer, applyEnvironment,
+    initialCameraDistance, createPostProcessing,
+  } from './office3d/scene.js';
+  import { processLiveEvents, type LiveEventContext } from './office3d/events.js';
+  import { buildLotMarkers, lotAtPoint } from './office3d/office/lots.js';
+  import { setGroundHeight } from './office3d/walkers/ground.js';
+  import { rpcPost } from '$lib/api';
+  import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+  import { applyPBR } from './office3d/office/_materials.js';
+  import { applyWorldTexture, scaleUV } from './office3d/textures.js';
+  import { extWorlds, loadWorldPlugin, worldForKind } from '$lib/world-plugins.js';
+  import { takesNoLot } from '$shared/office-lots.js';
+  import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldViewItem } from '$shared/world-plugin.js';
+  import { createConstructionDirector } from './office3d/construction/director.js';
+  import { createConstructionStage, type ConstructionStage } from './office3d/construction/stage.js';
+  import type { Lot } from '$shared/office-lots.js';
   import OfficeCreatorChat from '$lib/components/OfficeCreatorChat.svelte';
   import RegisterRepoModal from './RegisterRepoModal.svelte';
   import EmailModal from './EmailModal.svelte';
   import DraftModal from './DraftModal.svelte';
-  import WorkspaceTab from './WorkspaceTab.svelte';
-  import ChatTab from './ChatTab.svelte';
-  import HistoryTab from './HistoryTab.svelte';
-  import LiveTab from './LiveTab.svelte';
-  import ChatComposer from '$lib/components/ChatComposer.svelte';
-  import Icon from '$lib/components/ui/Icon.svelte';
+  import BootLoader from './BootLoader.svelte';
+  import MeetingPanels from './MeetingPanels.svelte';
+  import MyOfficePanel from './MyOfficePanel.svelte';
+  import AgentPanel from './AgentPanel.svelte';
   // Aliased: `t` is a local name all over this file, including `{#each … as t}` in markup.
-  import { t as translate } from '$lib/i18n/index.js';
-  import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
-  import SkillsTab from '$lib/components/agent/tabs/SkillsTab.svelte';
-  import OverviewTab from '$lib/components/agent/tabs/OverviewTab.svelte';
-  // Type only: OverviewTab mounts it now, but `runtimeSectionRef` — the handle
-  // the run-failure remedies steer — is still typed and held here.
-  import type RuntimeSection from '$lib/components/agent/sections/RuntimeSection.svelte';
-  import RunFailureCard from '$lib/components/agent/RunFailureCard.svelte';
-  import type { RemedyKind } from '$lib/run-failure.js';
-  import { goto } from '$app/navigation';
-  import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
-  import { panelTabComponents, tabMatches } from '$lib/panelTabRegistry';
-  import { fmtRelTime, fmtTokens, triggerColor } from '$lib/display-format.js';
-  import { formatInline, formatRunOutput } from '$lib/run-format.js';
-  import { isWorkspacePathHidden } from '$lib/workspace-tree.js';
+  import { t as translate, locale } from '$lib/i18n/index.js';
   import {
     meetingRoomDoorPoint, getMeetingSeatPositions, pickFreeChair,
     sameOffice as sameOfficeOf, type SeatedWalker,
   } from '$lib/office-geometry.js';
-  import {
-    hexToNum, toolGlyph, escapeBannerText, firstUrlIn, urlForOption,
-    buildFixerGoal,
-    resolveAgentWorkspace, dependsOnGoogleAuth,
-    parseMeetingTopics,
-  } from '$lib/agent-helpers.js';
+  import { hexToNum, escapeBannerText, parseMeetingTopics } from '$lib/agent-helpers.js';
+  import { fetchRecentRunSummaries } from './recent-runs.js';
+  import type {
+    WorldAgent, WorldChain, WorldFlow, WorldRank, WorldStats,
+    OfficeReport, PendingQuestion, LiveMeeting, MgmtEntry, AnimatedTagAnim,
+    CoordInfo, ActiveCoord,
+  } from './world-types.js';
+  import CoordinationCard from './CoordinationCard.svelte';
 
-  // Tabs contribuidos por extensiones (declarados en su manifest, expuestos por
-  // /api/manifest). They are filtered by the selected office/agent and the
-  // component bound in the registry is rendered. NOTHING is hardcoded by office name.
-  let contributedTabs: Array<{ id: string; label: string; match?: { office?: string }; order?: number }> = [];
-  async function loadContributedTabs() {
-    try {
-      const r = await fetch('/api/manifest');
-      if (!r.ok) return;
-      const m = await r.json();
-      contributedTabs = Array.isArray(m?.agentPanelTabs) ? m.agentPanelTabs : [];
-    } catch {}
-  }
-  $: myPanelTabs = contributedTabs
-    .filter((t) => panelTabComponents[t.id] && tabMatches(t, selFlow))
-    .sort((a, b) => (a.order ?? 100) - (b.order ?? 100));
-
-  export let agents: Array<{
-    id: string; name: string; description: string;
-    provider: string; model: string; active: number;
-    builtin_handler: string; flow_id: string;
-    role?: string;
-    rank_id?: string;
-    executor_type?: 'native' | 'claude_code' | string;
-    model_chain?: string;
-    // Both ride along in the graph payload, so Overview can lead with the
-    // mandate and gate the office environment without a second fetch.
-    system_prompt?: string;
-    allowed_tools?: string;
-    /** JSON array of attached skill slugs — the SKILLS tab reads and writes it. */
-    skills_json?: string;
-    // How long the kernel lets a run go. The chat waits on the agent's own
-    // budget instead of a hardcoded one.
-    timeout_ms?: number;
-    // Circuit-breaker state, written by AgentService.recordRunOutcome() when
-    // the kernel stops an agent that keeps failing. `active: 0` alone reads the
-    // same as a pause the operator asked for; the stamp is what separates them.
-    consecutive_failures?: number;
-    auto_paused_at?: string;
-    auto_pause_reason?: string;
-  }> = [];
-  export let chains: Array<{
-    id: string; source_agent_id: string; target_agent_id: string;
-    label: string; active: number;
-  }> = [];
-  export let flows: Array<{ id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string; kind?: string | null }> = [];
-  export let ranks: Array<{
-    id: string; name: string; level: number;
-    insignia: string; color: string; description: string; active: number;
-  }> = [];
+  export let agents: WorldAgent[] = [];
+  export let chains: WorldChain[] = [];
+  export let flows: WorldFlow[] = [];
+  export let ranks: WorldRank[] = [];
   export let flowEvents: AgentFlowEvent[] = [];
   export let runningAgentIds: Set<string> = new Set();
-  export let stats: Record<string, { total_runs: number; completed: number; failed: number; success_rate: number }> = {};
+  export let stats: WorldStats = {};
   // Parent's first-fetch lifecycle (graphData). The boot loader stays up until
   // `dataLoaded` is true so the offices are never revealed empty mid-fetch.
   export let dataLoaded: boolean = false;
@@ -235,7 +195,6 @@
   // each office's own door sign. Live-updated from `office:infra:changed`.
   let infraState = new Map<string, InfraState>();      // flowId → current state
   let reposOperatorPos: { x: number; y: number; z: number } | null = null;
-  let infraConsoleHitbox: any = null;                  // click → toggle power-grid board
   // ── Top agent (holder of the highest rank, seated in My Office) ──
   // Populated by placeTopAgent() after buildSpecialRooms. The hitbox sits
   // around the torso so the raycaster can route clicks on the figure
@@ -279,6 +238,10 @@
   // coordination (NOT a real LLM meeting). Tracked separately so we don't
   // double-book a room that's already hosting a real meeting and vice-versa.
   const activeCoordRooms = new Set<number>();
+  /** What each room's coordination is about — what a click on its table shows. */
+  let activeCoords: Record<number, ActiveCoord> = {};
+  /** The coordination card open over the world, if any. */
+  let openCoord: ActiveCoord | null = null;
   // Per-meeting visual decor: a glowing halo above the table + a CSS banner
   // showing topic and current turn. Created on meeting_requested, updated on
   // meeting_turn, disposed on meeting_ended. The banner uses CSS2DObject so
@@ -294,6 +257,44 @@
     entryCX: number; pedOuterZ1: number; streetDrop: number; southLaneZ: number;
     plinthOuterZ1: number; plinthDrop: number;
   } | null = null;
+  // ── New offices: a construction crew builds them on their lot ──
+  // The director decides when (hidden while the team is still being created,
+  // then one build at a time); the stage draws it. See office3d/construction/.
+  const construction = createConstructionDirector();
+  let constructionStage: ConstructionStage | null = null;
+  /** Bumped whenever the set of offices on the floor changes, to recompute the plan. */
+  let constructionVersion = 0;
+  construction.onChange(() => { constructionVersion++; });
+  /** The build in progress — drives the Skip chip. */
+  let constructionFlowId: string | null = null;
+  /** Offices under construction whose desks are not in yet. */
+  const desksPendingFlows = new Set<string>();
+  /** Offices whose seated agents stay hidden until their arrival walkers take over. */
+  const seatedHiddenFlows = new Set<string>();
+  let freeLots: Lot[] = [];
+  // ── World plugins: buildings extensions add (see $shared/world-plugin.ts) ──
+  /** Loaded plugins by office kind. */
+  const worldPlugins = new Map<string, WorldPlugin>();
+  /** Kinds whose plugin bundle is being imported. */
+  const worldPluginsLoading = new Set<string>();
+  /** Sites of the off-grid buildings in the current plan, by kind. */
+  let offGridSites = new Map<string, OffGridSite>();
+  /** Mounted plugin instances, by kind (re-mounted on every scene rebuild). */
+  const worldInstances = new Map<string, WorldPluginInstance>();
+  /** One overlay layer per kind for the plugin's own UI. */
+  const worldOverlays = new Map<string, HTMLElement>();
+  let worldOverlayRoot: HTMLElement;
+  /** Window commands a plugin registered, to remove them when it unmounts. */
+  const worldCommands = new Map<string, string[]>();
+  /** Tooltip a plugin asked for under the pointer. */
+  let worldTip: { x: number; y: number; text: string } | null = null;
+  /** Bumped when a plugin arrives or the manifest's plugin list changes: re-plan and rebuild. */
+  let worldVersion = 0;
+  const unsubExtWorlds = extWorlds.subscribe(() => { worldVersion++; });
+  /** The free lots' merged ground mesh — raycast to tell which lot is under the pointer. */
+  let lotGround: any = null;
+  /** Console-only: slow a build down to look at it (`__constructionSpeed(0.2)`). */
+  let constructionTimeScale = 1;
   // Dedupe deliveries: at most one active truck per flow, and throttle re-triggers
   const DELIVERY_COOLDOWN_SEC = 12;
   const lastDeliveryAtByFlow = new Map<string, number>();
@@ -464,7 +465,6 @@
     });
   }
 
-
   /** (#F3) Fly a glowing data packet from desk A to desk B: a curved arrow +
    *  coin stream along the arc, then a converging ripple + monitor pulse at B.
    *  Self-contained ephemeral effects (curvedArrow/coinTrail/convergingParticles
@@ -509,7 +509,6 @@
       }, 900);
     });
   }
-
 
   /** Diff agents' active flag against the cached map; spawn a LEAVE walker
    *  when 1→0 and an ARRIVE walker when 0→1. The first observation just primes
@@ -616,9 +615,13 @@
     for (const id of [...seenAgentIds]) {
       if (!currentIds.has(id)) seenAgentIds.delete(id);
     }
+    // A new office's team arrives in the construction crew's car, not by taxi.
+    const underConstruction = construction.hiddenFlowIds();
+    if (constructionFlowId) underConstruction.add(constructionFlowId);
     for (const a of agents) {
       if (seenAgentIds.has(a.id)) continue;
       seenAgentIds.add(a.id);
+      if (a.flow_id && underConstruction.has(a.flow_id)) continue;
       const agentId = a.id;
       const agentColor = flowColor(agentId);
       const dp = deskPos.get(agentId);
@@ -671,6 +674,269 @@
       }
     }
     seenAgentIds = seenAgentIds; // trigger Svelte reactivity on the Set mutation
+  }
+
+  // ── Office construction (office3d/construction/) ──────────────────
+
+  /** An office's team — the top agent sits in the headquarters office, not in it. */
+  function officeAgents(flowId: string): WorldAgent[] {
+    const topId = topAgent()?.id;
+    return agents.filter(a => a.flow_id === flowId && a.id !== topId);
+  }
+
+  /** Tell the director what offices exist right now. */
+  function observeOffices(): void {
+    if (!construction.primed) return;
+    construction.observe(
+      flows.map(f => ({ id: f.id, agentCount: officeAgents(f.id).length, hasLot: !!f.lot_id })),
+      Date.now(),
+    );
+  }
+
+  /** Lay the floor out, leaving off the offices still waiting for their crew. */
+  function applyPlan(a: WorldAgent[], c: WorldChain[], f: WorldFlow[], r: WorldRank[]): void {
+    ensureWorldPlugins(f);
+    const plan = computeFloorPlan(a, c, f, r, {
+      hiddenFlowIds: construction.hiddenFlowIds(),
+      offGridSites: (kind) => {
+        const plugin = worldPlugins.get(kind);
+        return plugin?.site ? (b, zs) => plugin.site!(b, zs) : null;
+      },
+    });
+    deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid;
+    meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
+    freeLots = plan.freeLots ?? [];
+    offGridSites = plan.offGridSites ?? new Map();
+    // Plugin buildings with stairs or streets lift and drop the walkers on the way.
+    const grounds = [...offGridSites.values()].map(st => st.groundHeight).filter((g): g is (x: number, z: number) => number => !!g);
+    setGroundHeight(grounds.length ? (x, z) => {
+      for (const g of grounds) { const y = g(x, z); if (y !== 0) return y; }
+      return 0;
+    } : null);
+  }
+
+  /** Import the world plugins the offices need; the scene rebuilds once one arrives. */
+  function ensureWorldPlugins(list: WorldFlow[]): void {
+    for (const fl of list) {
+      const kind = fl.kind ?? '';
+      if (!kind || worldPlugins.has(kind) || worldPluginsLoading.has(kind)) continue;
+      const info = worldForKind(kind);
+      if (!info) continue;
+      worldPluginsLoading.add(kind);
+      loadWorldPlugin(info)
+        .then(plugin => {
+          for (const k of plugin.kinds) worldPlugins.set(k, plugin);
+          worldPlugins.set(kind, plugin);
+          worldVersion++;
+        })
+        .catch(err => console.error(`[world] ${info.slug}: plugin failed to load`, err))
+        .finally(() => worldPluginsLoading.delete(kind));
+    }
+  }
+
+  /** Offices drawn on the grid: off-grid ones are drawn by their plugin. */
+  function gridRooms(): Map<string, RoomInfo> {
+    if (offGridSites.size === 0) return roomMap;
+    const out = new Map(roomMap);
+    for (const [fid] of roomMap) {
+      if (takesNoLot(flows.find(f => f.id === fid)?.kind)) out.delete(fid);
+    }
+    return out;
+  }
+
+  /** Main building plus plugin buildings, for the camera and the key light's shadow frustum. */
+  function worldBounds(): { minX: number; maxX: number; minZ: number; maxZ: number } {
+    const b = { ...corGrid.buildingBounds };
+    for (const st of offGridSites.values()) {
+      const e = st.extent;
+      b.minX = Math.min(b.minX, e.minX); b.maxX = Math.max(b.maxX, e.maxX);
+      b.minZ = Math.min(b.minZ, e.minZ); b.maxZ = Math.max(b.maxZ, e.maxZ);
+    }
+    return b;
+  }
+
+  /** What the core lends world plugins. */
+  function worldHost(): WorldHost {
+    return {
+      THREE, CSS2DObject,
+      mergeGeometries: (geos, useGroups = false) => mergeGeometries(geos, useGroups),
+      applyPBR: (mat, role) => { applyPBR(mat, role as any); },
+      applyWorldTexture: (mat, kind) => applyWorldTexture(mat, kind as any),
+      scaleUV,
+      rpc: (action, args = {}) => rpcPost(action, args),
+      navigate: (path) => goto(path),
+      focus: (rect) => focusOffice(rect),
+      locale: get(locale),
+      hasPage: (view) => get(extPages).some((p) => p.view === view),
+      invalidate: () => rebuildScene(),
+    };
+  }
+
+  /** Mount every loaded plugin whose offices are in the plan, under `target`. */
+  function mountWorldPlugins(target: any): void {
+    unmountWorldPlugins();
+    const byKind = new Map<string, WorldFlow[]>();
+    for (const fl of flows) {
+      const kind = fl.kind ?? '';
+      if (!worldPlugins.has(kind) || !roomMap.has(fl.id)) continue;
+      if (!byKind.has(kind)) byKind.set(kind, []);
+      byKind.get(kind)!.push(fl);
+    }
+    for (const [kind, offices] of byKind) {
+      const plugin = worldPlugins.get(kind)!;
+      let overlay = worldOverlays.get(kind);
+      if (!overlay && worldOverlayRoot) {
+        overlay = document.createElement('div');
+        overlay.className = 'world-plugin-layer';
+        worldOverlayRoot.appendChild(overlay);
+        worldOverlays.set(kind, overlay);
+      }
+      const group = new THREE.Group();
+      group.userData.part = 'decor';
+      group.userData.worldPlugin = kind;
+      target.add(group);
+      try {
+        const inst = plugin.mount({
+          host: worldHost(), target: group, site: offGridSites.get(kind) ?? null, overlay: overlay!,
+          offices: offices.map(o => ({ id: o.id, name: o.name, color: o.color, kind })),
+          camera, canvasRect: () => renderer.domElement.getBoundingClientRect(),
+        });
+        worldInstances.set(kind, inst);
+        const cmds = inst.consoleCommands?.() ?? {};
+        for (const [name, fn] of Object.entries(cmds)) (window as any)[name] = fn;
+        worldCommands.set(kind, Object.keys(cmds));
+      } catch (err) {
+        console.error(`[world] ${kind}: mount failed`, err);
+      }
+    }
+    rayTargetsCache = null;
+    // The shell lists the plugins' View-menu entries.
+    if (worldInstances.size) dispatch('worldchange');
+  }
+
+  function unmountWorldPlugins(): void {
+    for (const [kind, inst] of worldInstances) {
+      try { inst.dispose(); } catch (err) { console.error(`[world] ${kind}: dispose failed`, err); }
+      for (const name of worldCommands.get(kind) ?? []) delete (window as any)[name];
+    }
+    worldInstances.clear();
+    worldCommands.clear();
+    worldTip = null;
+  }
+
+  /** The world plugin kind a scene object belongs to (its group is tagged by mountWorldPlugins). */
+  function worldOwner(obj: any): string | null {
+    for (let o = obj; o; o = o.parent) if (o.userData?.worldPlugin) return o.userData.worldPlugin as string;
+    return null;
+  }
+
+  /** View-menu entries the mounted plugins offer (the shell lists them under Vista). */
+  export function pluginViewItems(): WorldViewItem[] {
+    return [...worldInstances.values()].flatMap(inst => inst.viewItems?.() ?? []);
+  }
+
+  function lotLabels() {
+    return {
+      title: $translate('office.construction.lot_free'),
+      capacity: (n: number) => $translate('office.construction.lot_capacity', { n }),
+      action: $translate('office.construction.lot_action'),
+    };
+  }
+
+  /** A free lot was clicked: open the new-office wizard to build there. */
+  function pickFreeLot(lot: Lot): void {
+    dispatch('newoffice', { lotId: lot.id });
+  }
+
+  /** The wizard finished creating an office: build it as soon as it shows up. */
+  export function officeCreated(flowId: string): void {
+    construction.markReady(flowId);
+  }
+
+  construction.onPhase((flowId, phase) => {
+    if (phase === 'truck-in') {
+      constructionFlowId = flowId;
+      desksPendingFlows.add(flowId);
+      return;
+    }
+    if (phase !== 'done') return;
+    if (constructionFlowId === flowId) constructionFlowId = null;
+    constructionStage?.finished(flowId);
+    // Skipped before the desks or the agents came in: put everyone in place now.
+    const deskless = desksPendingFlows.delete(flowId);
+    const hidden = seatedHiddenFlows.delete(flowId);
+    if (deskless || hidden) rebuildScene();
+  });
+
+  /** Nobody is watching: offices appear finished rather than being built in a hidden tab. */
+  function skipConstructionWhenHidden(): void {
+    if (document.hidden) construction.skip();
+  }
+
+  function makeConstructionStage(): ConstructionStage {
+    return createConstructionStage({
+      scene,
+      room: (id) => roomMap.get(id),
+      roomGroups: (id) => staticGroup ? staticGroup.children.filter((c: any) => c.userData?.flowId === id) : [],
+      street: () => taxiContext,
+      routing: () => corGrid.segments.length ? { rooms: roomMap, grid: corGrid, coreRooms: meetingRooms } : null,
+      color: (id) => flows.find(f => f.id === id)?.color || '#6366f1',
+      agentCount: (id) => officeAgents(id).length,
+      setDurations: (id, d) => construction.setDurations(id, d),
+      showDesks: (id) => {
+        desksPendingFlows.delete(id);
+        seatedHiddenFlows.add(id);
+        rebuildScene();
+      },
+      sendAgents: sendConstructionAgents,
+      frame: (x, z, span) => {
+        if (!camera || !controls) return;
+        if (performance.now() - lastUserSteerAt < 4000) return; // the user is steering
+        tweenCameraTo(x, 0, z, x + span * 0.25, span * 0.9, z + span * 0.7);
+      },
+    });
+  }
+
+  /** The office's team steps out of the car and walks in to their desks. */
+  function sendConstructionAgents(flowId: string, outdoor: Array<{ x: number; y: number; z: number }>): void {
+    const team = officeAgents(flowId);
+    const room = roomMap.get(flowId);
+    team.forEach((a, i) => {
+      setTimeout(() => {
+        if (scene && receptionFrontPos) {
+          const drop = { ...outdoor[0], x: outdoor[0].x + ((i % 3) - 1) * 0.6 };
+          sendCommuteWalker({
+            scene, walkers, agentId: a.id, mode: 'arrive',
+            exitPoint: receptionFrontPos,
+            deskPos, rooms: roomMap, corridorGrid: corGrid,
+            agents, color: flowColor(a.id),
+            deskAabbs, sittingWorkers,
+            outdoorWaypoints: [drop, outdoor[1], outdoor[2]],
+            meetingRoomObstacles: meetingRoomSlots,
+          });
+        }
+        if (i === team.length - 1) releaseSeated(flowId);
+      }, i * 450);
+    });
+    if (team.length === 0) releaseSeated(flowId);
+    if (room && scene) {
+      animRegistry.add(chyronLabel(scene, {
+        position: { x: room.cx, y: 5.5, z: room.cz },
+        html: `🏗️ <b>${escapeBannerText($translate('office.construction.banner'))}</b><br><span style="font-size:10px;opacity:.85">${escapeBannerText(room.name.slice(0, 28))}</span>`,
+        color: room.color,
+        durationSec: 4,
+        tag: `construction:${flowId}`,
+      }));
+    }
+  }
+
+  /** Every walker is out: seated agents without one (walker cap) just appear. */
+  function releaseSeated(flowId: string): void {
+    seatedHiddenFlows.delete(flowId);
+    for (const a of officeAgents(flowId)) {
+      if (walkers.some(w => w.sourceId === a.id)) continue;
+      sittingWorkers.get(a.id)?.setVisible(true);
+    }
   }
 
   /** Diff agents' rank_id against the cached map; fire a pillar-of-light over
@@ -736,226 +1002,42 @@
   }
 
   // ── My Office report log ──────────────────────
-  interface OfficeReport { agentName: string; agentId: string; text: string; color: string; ts: number; status: string; runId?: string }
+  // Live events append here; MyOfficePanel.svelte renders and trims it.
   let officeReports: OfficeReport[] = [];
 
   // ── Pending questions from agents (top-agent inbox) ──────────────
-  interface PendingQuestion {
-    id: string;
-    from_agent_id: string;
-    flow_id: string;
-    question: string;
-    context: string;
-    options: Array<{ label: string; value?: string; url?: string }>;
-    created_at: string;
-  }
   let pendingQuestions: PendingQuestion[] = [];
-  let questionSubmitting: Record<string, boolean> = {};
+  // Questions the chief hasn't resolved yet (count only) and the ones it
+  // resolved on its own — read-only audit trail for MyOfficePanel.
+  let triageCount = 0;
+  let chiefAnswered: PendingQuestion[] = [];
+  /** First answer in: until then the office cannot say "nothing pending". */
+  let questionsLoaded = false;
   async function loadPendingQuestions() {
     try {
-      const res = await fetch('/api/agents/questions?status=pending&limit=50');
-      if (!res.ok) return;
-      const data = await res.json();
-      pendingQuestions = (data.questions ?? []) as PendingQuestion[];
+      const [pending, triage, chief] = await Promise.all([
+        fetch('/api/agents/questions?status=pending&limit=50'),
+        fetch('/api/agents/questions?status=triage&limit=50'),
+        fetch('/api/agents/questions?status=answered&answered_by=chief&limit=10'),
+      ]);
+      if (pending.ok) pendingQuestions = ((await pending.json()).questions ?? []) as PendingQuestion[];
+      if (triage.ok) triageCount = ((await triage.json()).questions ?? []).length;
+      if (chief.ok) chiefAnswered = ((await chief.json()).questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
-  }
-  async function answerQuestion(q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) {
-    if (questionSubmitting[q.id]) return;
-    // Open the linked URL FIRST (synchronously, inside the user's click event)
-    // — popup blockers reject window.open() when it's behind an async await.
-    const target = urlForOption(q, opt);
-    if (target) {
-      window.open(target, '_blank', 'noopener,noreferrer');
-    }
-    questionSubmitting = { ...questionSubmitting, [q.id]: true };
-    try {
-      await fetch(`/api/agents/questions/${q.id}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selected_index: idx, selected_option: opt.label }),
-      });
-      pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
-    } finally {
-      questionSubmitting = { ...questionSubmitting, [q.id]: false };
-    }
-  }
-  async function dismissQuestion(q: PendingQuestion) {
-    if (questionSubmitting[q.id]) return;
-    questionSubmitting = { ...questionSubmitting, [q.id]: true };
-    try {
-      await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
-      pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
-    } finally {
-      questionSubmitting = { ...questionSubmitting, [q.id]: false };
-    }
-  }
-
-  // Bulk actions for the My Office panel.
-  let bulkBusy = false;
-  async function dismissAllQuestions() {
-    if (bulkBusy || pendingQuestions.length === 0) return;
-    if (!confirm(`Dismiss all ${pendingQuestions.length} pending questions?`)) return;
-    bulkBusy = true;
-    const snapshot = [...pendingQuestions];
-    try {
-      // Fire all dismissals in parallel — server-side they're independent.
-      await Promise.all(snapshot.map(q =>
-        fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' }).catch(() => null)
-      ));
-      pendingQuestions = [];
-    } finally {
-      bulkBusy = false;
-    }
-  }
-  function clearErrors() {
-    if (officeReports.filter(r => r.status === 'failed').length === 0) return;
-    officeReports = officeReports.filter(r => r.status !== 'failed');
-  }
-  function clearActivity() {
-    if (officeReports.filter(r => r.status !== 'failed').length === 0) return;
-    officeReports = officeReports.filter(r => r.status === 'failed');
-  }
-  function clearAllOfficeData() {
-    if (!confirm('Clear ALL reports and dismiss ALL pending questions?')) return;
-    void dismissAllQuestions();
-    officeReports = [];
-    officeReportsLoaded = false;
+    finally { questionsLoaded = true; }
   }
   let showMyOfficePanel = false;
-  let myOfficeTab: 'overview' | 'questions' | 'errors' = 'overview';
+  let myOfficeTab: 'overview' | 'questions' | 'errors' | 'activity' | 'kernl' = 'overview';
   let officeReportsLoaded = false;
-  let openReport: OfficeReport | null = null;
 
-  // ── "Send to fixer" — dispatch the open report to a fixing agent ──
-  // The list below is a name-matched whitelist of active claude_code agents
-  // that can reasonably act on a bug/error/infra report. Order = priority;
-  // the first one that exists is the default. The user can override via the
-  // ▾ dropdown next to the button.
-  interface FixerCandidate { id: string; name: string; hint: string; }
-  const FIXER_WHITELIST: Array<{ match: RegExp; hint: string }> = [
-    { match: /^director de desarrollo$/i, hint: 'dev manager — fixes code + infra' },
-    { match: /^project builder$/i, hint: 'generic dev fixer' },
-    { match: /^cloudops$/i, hint: 'infra / MCP / deploy' },
-    { match: /^repo coordinator$/i, hint: 'routes work into registered repos' },
-    { match: /^security auditor$/i, hint: 'security findings only' },
-    { match: /^error auditor$/i, hint: 'triages — does NOT fix' },
-  ];
-  $: fixerCandidates = (() => {
-    const out: FixerCandidate[] = [];
-    for (const w of FIXER_WHITELIST) {
-      const a = agents.find(x => x.active === 1 && w.match.test(x.name));
-      if (a) out.push({ id: a.id, name: a.name, hint: w.hint });
-    }
-    // Whoever holds the top rank is always a valid last-resort target — looked
-    // up by rank, never by name, so renaming the agent or the rank can't
-    // silently drop it from the list.
-    const top = topAgent();
-    if (top && !out.some(c => c.id === top.id)) {
-      out.push({ id: top.id, name: top.name, hint: 'top-level coordinator / router' });
-    }
-    return out;
-  })();
-  let selectedFixerId: string | null = null;
-  let fixerPickerOpen = false;
-  let sendingToFixer = false;
+  // "Send to fixer" lives in MyOfficePanel.svelte with the report modal. Its
+  // toast stays here (see markup) so it survives that modal closing on
+  // dispatch; the panel writes the status back through bind:.
   let fixerStatus = '';
-  // Resolve which agent will receive the report — explicit pick wins, else
-  // first candidate, else null (button stays disabled).
-  $: activeFixer = (() => {
-    if (selectedFixerId) return fixerCandidates.find(c => c.id === selectedFixerId) ?? null;
-    return fixerCandidates[0] ?? null;
-  })();
 
-
-  async function sendReportToFixer(): Promise<void> {
-    if (!openReport || sendingToFixer) return;
-    const fixer = activeFixer;
-    if (!fixer) { fixerStatus = '✗ no fixer agent available'; return; }
-    sendingToFixer = true;
-    fixerStatus = '';
-    try {
-      const body = (fullReportText ?? openReport.text ?? '').slice(0, 16000);
-      const goal = buildFixerGoal(openReport, body);
-      const res: any = await rpcOrCall('agents.run', { agent_id: fixer.id, goal }, async () => {
-        const r = await fetch('/api/agents/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_id: fixer.id, goal }),
-        });
-        return r.json();
-      });
-      if (res?.success || res?.run_id) {
-        // Drop the dispatched report from the visible list. Same-shape filter
-        // also touches the errorReports view (computed from officeReports).
-        // The {#each (key)} + out:slide on the cards animates the removal.
-        const target = openReport;
-        const targetKey = target.runId ?? `${target.agentId}-${target.ts}`;
-        // Close the report modal first so its closing animation doesn't fight
-        // the list-card slide-out — keeps both transitions clean.
-        openReport = null;
-        // Force a reactive remove. Filter handles the case where the same
-        // report object lives in officeReports under a different reference.
-        officeReports = officeReports.filter(r => (r.runId ?? `${r.agentId}-${r.ts}`) !== targetKey);
-        fixerStatus = `✓ sent to ${fixer.name} · run ${String(res.run_id || '').slice(0, 8)}`;
-      } else {
-        fixerStatus = `✗ ${res?.error || 'failed to dispatch'}`;
-      }
-    } catch (e: any) {
-      fixerStatus = `✗ ${e?.message ?? String(e)}`;
-    } finally {
-      sendingToFixer = false;
-      setTimeout(() => { fixerStatus = ''; }, 6000);
-    }
-  }
-
-  // Fire-and-forget POST to /api/agents/flow-diag so diagnostic context from
-  // the 3D view lands in the kernel log (keeps browser console clean).
-  function reportWalkerDiag(payload: Record<string, unknown>): void {
-    try {
-      fetch('/api/agents/flow-diag', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload),
-      }).catch(() => { /* best effort */ });
-    } catch { /* best effort */ }
-  }
-
-  // ── Live meeting transcripts ──────────────────
-  // Keyed by meeting_id. Updated by meeting_requested / _started / _turn / _ended
-  // events arriving on the agents.flow WS. The modal at the bottom of the
-  // markup renders this Map reactively so each turn appears as soon as the
-  // backend emits it.
-  interface LiveTurn { agentId: string; agentName: string; role: string; round: number; body: string; ts: number; tokens: number }
-  interface LiveMeeting {
-    id: string;
-    topic: string;
-    status: 'requested' | 'started' | 'completed' | 'failed';
-    moderatorId: string;
-    moderatorName: string;
-    participants: Array<{ id: string; name: string }>;
-    turns: LiveTurn[];
-    started_at: number;
-    ended_at?: number;
-    summary?: string;
-    decisions?: string[];
-    action_items?: string[];
-    /** Agent id of whoever is talking right now — drives the speaker
-     *  spotlight + listener dim in the 3D scene. Cleared on meeting_ended. */
-    currentSpeakerId?: string;
-  }
-  // ── Management log (prompt edits + escalations) ─────────
-  // Visible record of every time a manager reshapes the fleet or escalates
-  // across offices. Rendered in a small floating panel bottom-left so the
-  // user sees the org-level activity at a glance.
-  interface MgmtEntry {
-    kind: 'edit' | 'directive' | 'escalation';
-    from: string; to: string;
-    detail: string;
-    preview: string;
-    ts: number;
-    crossOffice?: boolean;
-    role?: string;
-  }
+  // ── Live meeting transcripts + management log ──────────
+  // Shapes in world-types.ts. The transcript renders in MeetingPanels.svelte;
+  // the management log in the shell's ActivityPanel (the `mgmtlog` event).
   let mgmtLog: MgmtEntry[] = [];
   // ── Visualization toggles ───────────────────────
   // The command bar's View menu drives these through the imperative API;
@@ -1020,26 +1102,6 @@
   $: liveMeetingsList = Object.values(liveMeetings).sort((a, b) => b.started_at - a.started_at);
   $: hasActiveMeeting = liveMeetingsList.some(m => m.status === 'requested' || m.status === 'started');
   $: anyMeetingPresent = liveMeetingsList.length > 0;
-  // Full-text cache keyed by runId — events only carry a 200-char preview, so
-  // when the modal opens we fetch the full agent_runs.result from the API.
-  let fullReportText: string | null = null;
-  let fullReportLoading = false;
-
-  async function loadFullReport(runId: string) {
-    fullReportText = null;
-    if (!runId) return;
-    fullReportLoading = true;
-    try {
-      const res = await fetch(`/api/agents/runs/${runId}`);
-      const data: any = await res.json();
-      const full = String(data?.run?.result ?? data?.run?.error ?? '');
-      if (full) fullReportText = full;
-    } catch { /* keep preview */ }
-    fullReportLoading = false;
-  }
-
-  $: if (openReport?.runId) { loadFullReport(openReport.runId); } else { fullReportText = null; }
-  $: displayReportText = (fullReportText ?? openReport?.text ?? '');
   // Run IDs that the Error Auditor has already triaged — used to show a badge
   // on failed reports so we know the audit loop closed. Populated live from
   // Error Auditor run_started events (it's the one agent that quotes the
@@ -1054,9 +1116,12 @@
   }
 
   /** Load recent completed runs from ALL agents on first open — fills the report backlog. */
+  /** The backlog fetch is in flight — the office shows a skeleton, not "all clear". */
+  let officeLoading = false;
   async function loadOfficeReportsFromApi() {
     if (officeReportsLoaded) return;
     officeReportsLoaded = true;
+    officeLoading = true;
     try {
       const historical: OfficeReport[] = [];
       // Fetch last 5 runs per MANAGER (completed + failed) and last 3 FAILURES
@@ -1099,12 +1164,20 @@
           } catch { /* skip agent */ }
         }),
       ];
+      // What the operator already dismissed in the chief's office stays out —
+      // this list is rebuilt from agent_runs on every load.
+      const dismissedReq = fetch('/api/agents/office/dismissed')
+        .then(r => (r.ok ? r.json() : { run_ids: [] }))
+        .then((b: { run_ids?: string[] }) => new Set(b.run_ids ?? []))
+        .catch(() => new Set<string>());
       await Promise.all(fetches);
+      const dismissed = await dismissedReq;
       // Merge: keep live reports on top, add historical below (deduped by timestamp proximity)
       const liveTs = new Set(officeReports.map(r => r.ts));
-      const deduped = historical.filter(h => !liveTs.has(h.ts));
+      const deduped = historical.filter(h => !liveTs.has(h.ts) && !(h.runId && dismissed.has(h.runId)));
       const merged = [...officeReports, ...deduped].sort((a, b) => b.ts - a.ts).slice(0, 100);
       officeReports = merged;
+      officeLoading = false;
 
       // Backfill audited run IDs by fetching the Error Auditor's recent runs
       // and parsing each run's goal for the original `Run ID: <id>` marker.
@@ -1123,6 +1196,7 @@
         } catch { /* best effort */ }
       }
     } catch { /* best effort */ }
+    finally { officeLoading = false; }
   }
 
   function flowColor(aid: string) { return resolveFlowColor(aid, agents, flows); }
@@ -1319,10 +1393,15 @@
 
   // Hitboxes over FREE racks in the Repos Office — populated on every scene
   // rebuild and fed into the raycaster so click → open the register modal.
-  let freeRepoRackHitboxes: any[] = [];
-  // Hitbox over the DevOps workstation (desk + monitor) in the Repos/DevOps
-  // office — click navigates to the DevOps control panel (/devops).
-  let devopsTerminalHitbox: any = null;
+  // Interactive props of the themed offices (racks, wall screens, consoles —
+  // see office3d/wall-screen.ts). Rebuilt with the offices; each carries its
+  // own tooltip and click in `userData.prop`.
+  let officeProps: any[] = [];
+  // /devops is a paid extension's page; without it active the route is the
+  // "extension not available" screen, so the 3D world never links there.
+  function hasDevopsPanel(): boolean {
+    return get(extPages).some((p) => p.view === 'devops');
+  }
 
   // The register-repo modal owns its own state, form, focus trap and
   // styles. The world keeps only the handle, so a click on a FREE rack
@@ -1330,32 +1409,45 @@
   let registerRepoModal: RegisterRepoModal | null = null;
 
   function buildThemedOffices(target: any) {
-    freeRepoRackHitboxes = [];
-    devopsTerminalHitbox = null;
+    officeProps = [];
     reposOperatorPos = null;
-    infraConsoleHitbox = null;
     resetInfraConsole();
     // Every flow office that can carry infrastructure (a Docker container).
     const infraOffices = [...roomMap.keys()]
       .map(fid => ({ flowId: fid, name: flows.find(f => f.id === fid)?.name || '?', color: flows.find(f => f.id === fid)?.color || '#4a4f6a' }));
+    // Buildings of world plugins (extensions) — they draw their offices themselves.
+    mountWorldPlugins(target);
     for (const [flowId, room] of roomMap) {
       const flow = flows.find(f => f.id === flowId);
       const theme = traitsOf(flow).theme;
+      if (theme === 'standard') continue;
+      // Tagged like the room's own furniture, so a construction crew can pop it in.
+      const officeGroup = new THREE.Group();
+      officeGroup.userData.flowId = flowId;
+      officeGroup.userData.part = 'decor';
+      target.add(officeGroup);
       if (theme === 'communications') {
-        buildCommunicationsOffice(target, room);
+        buildCommunicationsOffice(officeGroup, room);
       } else if (theme === 'data-center') {
         // Vintage data center theme — server racks, CRT terminals, tape reels,
         // mainframe console + UPS + patch panel + KVM + ops chair + printout
         // stack + DIRECTORY wall panel. Racks light up per registered repo.
         // See office.ts:buildDataCenterOffice.
-        const handles = buildDataCenterOffice(target, room, reposBookmarks);
-        if (handles?.freeRackHitboxes?.length) freeRepoRackHitboxes.push(...handles.freeRackHitboxes);
-        if (handles?.devopsTerminalHitbox) devopsTerminalHitbox = handles.devopsTerminalHitbox;
+        // Its props are clickable: a rack or a directory row opens that repo,
+        // a free rack registers one, the NOC desk opens the DevOps panel.
+        const handles = buildDataCenterOffice(officeGroup, room, reposBookmarks, {
+          openRepo: (r) => goto(`/repos#repo-${encodeURIComponent(r.id)}`),
+          openRepos: () => goto('/repos'),
+          registerRepo: () => registerRepoModal?.open(),
+          openDevops: hasDevopsPanel() ? () => goto('/devops') : undefined,
+          openPowerGrid: () => { toggleInfraBoard(); },
+        });
+        if (handles?.props?.length) officeProps.push(...handles.props);
         // Master POWER console — where managers come to switch their office's
         // infrastructure on/off. Holds a breaker LED per office + a clickable
         // hitbox that toggles the full power-grid board.
-        const pc = buildPowerConsole(target, room, infraOffices);
-        if (pc) { reposOperatorPos = pc.operatorPos; infraConsoleHitbox = pc.hitbox; }
+        const pc = buildPowerConsole(officeGroup, room, infraOffices, handles?.powerConsoleSpot);
+        if (pc) { reposOperatorPos = pc.operatorPos; officeProps.push(pc.hitbox); }
       }
     }
     // Paint whatever infra state we already know onto the fresh console. The
@@ -1368,7 +1460,7 @@
   /** Build special rooms in fixed order from layout:
    *  [0]=Meeting A, [1]=Central Hall, [2]=Meeting B, [3]=My Office, [4+]=extra meeting rooms */
   function buildSpecialRooms(target: any) {
-    if (meetingRooms.length === 0) { myOfficePos = null; myOfficeHitbox = null; return; }
+    if (meetingRooms.length === 0) { myOfficePos = null; myOfficeHitbox = null; setWalkZones({}); return; }
 
     // Fixed slot assignments matching SPECIAL_CELLS order in layout.ts
     const hallSlot = meetingRooms[1] ?? meetingRooms[0]; // Central Hall = index 1
@@ -1398,6 +1490,14 @@
     myOfficeNoteDropPos = myOfficeResult.noteDropPos;
     myOfficeSeats = myOfficeResult.visitorChairs;
     myOfficeDeskFacing = myOfficeResult.deskFacingPos;
+    // Neither room is in the flow-room map, so tell the walker router about
+    // them: walkers enter the headquarters office only through its door and
+    // walk around the reception counter, columns and back wall.
+    setWalkZones({
+      myOffice: { rect: officeSlot, door: myOfficeResult.doorPos },
+      reception: receptionObstacles(receptionCX, hallSlot.cz),
+      plugins: [...offGridSites.values()].flatMap(st => st.obstacles),
+    });
     // Seat the top agent at the executive desk. The seeder
     // guarantees one agent with rank.level === 11; if multiple are
     // present we honor the first one and ignore the rest (seeder also
@@ -1720,7 +1820,6 @@
   // Replaces both the old text-only `showBubble` AND the separate floating
   // glyphs for step/run/edit events — one self-contained visual per event,
   // readable from any camera distance, no per-frame JS work on the icon.
-  type AnimatedTagAnim = 'pulse' | 'spin' | 'shake' | 'wobble' | 'bounce' | 'sparkle' | 'pop';
   function showAnimatedTag(aid: string, opts: {
     icon: string;
     anim?: AnimatedTagAnim;
@@ -1885,47 +1984,6 @@
     }));
   }
 
-  // Drive the tail-follow from the turn count of whichever meeting the panel
-  // is showing. Switching meetings (or reopening the panel) resets the
-  // baseline so the first paint jumps to the bottom instead of animating
-  // through the whole backlog.
-  $: if (activeMeetingId) { lmLastTurnCount = -1; }
-  $: if (showLiveMeeting && showTranscriptBody && activeMeetingId && liveMeetings[activeMeetingId]) {
-    lmFollowTail(liveMeetings[activeMeetingId].turns.length);
-  }
-
-  // ── Transcript auto-scroll ────────────────────────────────────────
-  // A turn lands every ~25s and the panel does not move, so a reader watching
-  // the meeting has to scroll by hand to see who just spoke. Follow the tail
-  // automatically — but only while the reader is already AT the tail. Yanking
-  // someone who scrolled up to re-read an earlier turn is worse than not
-  // scrolling at all, so a manual scroll away from the bottom opts out until
-  // they come back down.
-  let lmTranscriptEl: HTMLElement | null = null;
-  let lmLastTurnCount = -1;
-
-  function lmNearBottom(el: HTMLElement): boolean {
-    return el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-  }
-
-  function lmFollowTail(turnCount: number): void {
-    const el = lmTranscriptEl;
-    if (!el) return;
-    if (turnCount === lmLastTurnCount) return;
-    const wasFirstPaint = lmLastTurnCount < 0;
-    const stick = wasFirstPaint || lmNearBottom(el);
-    lmLastTurnCount = turnCount;
-    if (!stick) return;
-    // Wait for the new turn's DOM to exist before measuring.
-    requestAnimationFrame(() => {
-      if (!lmTranscriptEl) return;
-      lmTranscriptEl.scrollTo({
-        top: lmTranscriptEl.scrollHeight,
-        behavior: wasFirstPaint ? 'auto' : 'smooth',
-      });
-    });
-  }
-
   function updateMeetingDecorTurn(meetingId: string, turnText: string): void {
     const d = meetingDecor.get(meetingId);
     if (!d) return;
@@ -1954,7 +2012,6 @@
     if (screen) { clearMeetingScreen(screen); meetingScreenByMeeting.delete(meetingId); }
     meetingDecor.delete(meetingId);
   }
-
 
   // O(1) agent lookup for per-frame loops — rebuilt only when the agents
   // array is reassigned (parent polls ~1/min). Avoids agents.find() scans
@@ -2105,7 +2162,6 @@
   //    lives here so the HQ menu can toggle it open.
   let showOfficeModal = false;
 
-
   // ── Build Scene ────────────────────────────────
   // Idempotent: dissolve the boot loader exactly once, after the next painted
   // frame. Called when the office is first populated with agents (or by the
@@ -2159,56 +2215,34 @@
     initTaxi(THREE);
     initRedAlertDecor(THREE);
 
-    const opts = [
-      { antialias: true, alpha: false, failIfMajorPerformanceCaveat: false, powerPreference: 'high-performance' as const, preserveDrawingBuffer: false },
-      { antialias: false, alpha: false, failIfMajorPerformanceCaveat: false, powerPreference: 'default' as const },
-      { antialias: false, alpha: false, failIfMajorPerformanceCaveat: false },
-    ];
-    for (const o of opts) {
-      try {
-        renderer = new THREE.WebGLRenderer(o);
-        // Verify the context is actually usable
-        const gl = renderer.getContext();
-        if (!gl || gl.isContextLost?.()) { renderer = null; continue; }
-        break;
-      } catch (e) {
-        console.warn('[WebGL] renderer init failed:', e);
-        renderer = null;
-      }
-    }
+    renderer = createRenderer(THREE);
     if (!renderer) { webglError = 'WebGL not available. Check GPU settings.'; return; }
 
-    renderer.setSize(canvasEl.clientWidth, canvasEl.clientHeight);
-    // Cap pixel ratio at 1.5 — HiDPI displays (dpr=2/3) quadruple shading cost
-    // for marginal visual gain on a dense 3D scene. 1.5 still looks crisp.
-    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
-    // Accumulate render stats across all passes (composer / post-process /
-    // labelRenderer) within a single frame so the perf overlay sees the real
-    // total — auto-reset would zero between sub-renders and only the last
-    // pass (e.g. a fullscreen quad) would survive.
-    renderer.info.autoReset = false;
-    renderer.shadowMap.enabled = true;
-    // PCFSoft is noticeably cheaper than VSM on dense scenes and visually
-    // indistinguishable for our top-down office view.
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
-    // Shadow pass at half frame rate: the key light and the architecture are
-    // static — only walkers/taxis move shadows, and 30Hz on those is
-    // imperceptible. Saves a full 2048² depth render every other frame.
-    // (needsUpdate=true is set on even frames in animate(); true here so the
-    // very first frame bakes shadows.)
-    renderer.shadowMap.autoUpdate = false;
-    renderer.shadowMap.needsUpdate = true;
-    // ── Color grading global — ver office3d/grading.ts ──
-    applyRendererGrading(renderer);
-    // Procedural world textures sample at grazing angles on floors/streets —
-    // real HW anisotropy keeps them sharp without supersampling.
-    setTextureAnisotropy(renderer.capabilities?.getMaxAnisotropy?.() ?? 4);
-    canvasEl.appendChild(renderer.domElement);
+    // Size, pixel ratio, shadow map, grading — see office3d/scene.ts.
+    configureRenderer(THREE, renderer, canvasEl);
 
-    labelRenderer = new css2d.CSS2DRenderer();
-    labelRenderer.setSize(canvasEl.clientWidth, canvasEl.clientHeight);
-    labelRenderer.domElement.style.cssText = 'position:absolute;top:0;left:0;pointer-events:none;z-index:5;';
-    canvasEl.appendChild(labelRenderer.domElement);
+    labelRenderer = createLabelRenderer(css2d, canvasEl);
+    // The right button pans the camera. OrbitControls swallows the browser's
+    // context menu on the canvas only, so the titles, signs and nameplates in
+    // this layer (pointer-events:auto) still popped it up mid-navigation.
+    labelRenderer.domElement.addEventListener('contextmenu', (ev: MouseEvent) => ev.preventDefault());
+    // A pan (right/middle drag) or a zoom (wheel) that starts on a label never
+    // reached the camera. Hand it to the canvas; OrbitControls then follows the
+    // pointer on the document. The left button stays with the label (clicks on titles).
+    labelRenderer.domElement.addEventListener('pointerdown', (ev: PointerEvent) => {
+      if (ev.button === 0 || ev.target === renderer.domElement) return;
+      renderer.domElement.dispatchEvent(new PointerEvent('pointerdown', ev));
+    });
+    labelRenderer.domElement.addEventListener('wheel', (ev: WheelEvent) => {
+      if (ev.target === renderer.domElement) return;
+      // A label with its own scrolling list keeps the wheel.
+      for (let el = ev.target as HTMLElement | null; el && el !== labelRenderer.domElement; el = el.parentElement) {
+        const oy = getComputedStyle(el).overflowY;
+        if ((oy === 'auto' || oy === 'scroll') && el.scrollHeight > el.clientHeight) return;
+      }
+      ev.preventDefault();
+      renderer.domElement.dispatchEvent(new WheelEvent('wheel', ev));
+    }, { passive: false });
 
     // Delegated click handler for the ⏻ power chips embedded in the CSS2D
     // nameplates (furniture.ts). The chip carries pointer-events:auto so it
@@ -2229,74 +2263,15 @@
 
     scene = new THREE.Scene();
 
-    // ── Environment map for realistic reflections on glass/metal ──
-    try {
-      const pmrem = new THREE.PMREMGenerator(renderer);
-      pmrem.compileEquirectangularShader();
-      // Richer studio-style environment → more believable reflections on metal
-      // and glass. All meshes live in this throwaway scene and are baked once
-      // by PMREM into a cubemap; zero per-frame cost.
-      const envScene = new THREE.Scene();
-      envScene.add(new THREE.Mesh(
-        new THREE.SphereGeometry(50, 24, 16),
-        new THREE.MeshBasicMaterial({ color: 0x0a1020, side: 1 }),
-      ));
-      // Warm ceiling glow (brighter so highlights on metal/glass read).
-      const ceilGlow = new THREE.Mesh(
-        new THREE.PlaneGeometry(90, 90),
-        new THREE.MeshBasicMaterial({ color: 0x24304e }),
-      );
-      ceilGlow.position.y = 40; ceilGlow.rotation.x = Math.PI / 2;
-      envScene.add(ceilGlow);
-      // Cool floor reflection
-      const floorGlow = new THREE.Mesh(
-        new THREE.PlaneGeometry(90, 90),
-        new THREE.MeshBasicMaterial({ color: 0x070c1a }),
-      );
-      floorGlow.position.y = -10; floorGlow.rotation.x = -Math.PI / 2;
-      envScene.add(floorGlow);
-      // Horizon haze band → soft gradient at eye level, the bit reflections
-      // actually catch on near-vertical surfaces.
-      const horizon = new THREE.Mesh(
-        new THREE.CylinderGeometry(48, 48, 22, 24, 1, true),
-        new THREE.MeshBasicMaterial({ color: 0x12203c, side: 1 }),
-      );
-      envScene.add(horizon);
-      // Warm key bounce (upper-right, matching the sun) + cool fill (opposite)
-      // → directional shine on metals instead of a flat ambient sheen.
-      const keyPanel = new THREE.Mesh(
-        new THREE.PlaneGeometry(38, 26),
-        new THREE.MeshBasicMaterial({ color: 0x4a4030, side: 2 }),
-      );
-      keyPanel.position.set(26, 16, 18); keyPanel.lookAt(0, 0, 0);
-      envScene.add(keyPanel);
-      const fillPanel = new THREE.Mesh(
-        new THREE.PlaneGeometry(34, 22),
-        new THREE.MeshBasicMaterial({ color: 0x1c3258, side: 2 }),
-      );
-      fillPanel.position.set(-30, 12, -22); fillPanel.lookAt(0, 0, 0);
-      envScene.add(fillPanel);
-      // Higher blur sigma (0.035→0.18): the env is a few flat colored panels;
-      // sharp, they reflected as hard ugly blotches on any glossy floor. Blurred
-      // they read as a soft gradient, so reflections look like ambient sheen.
-      const envMap = pmrem.fromScene(envScene, 0.18).texture;
-      scene.environment = envMap;
-      pmrem.dispose();
-    } catch (e) { console.warn('[EnvMap] Failed:', e); }
-    // Fog + environment intensity — unconditional (must apply even if PMREM
-    // env generation above threw; environmentIntensity is `in`-guarded).
-    applySceneGrading(scene);
+    // ── Environment map for realistic reflections on glass/metal, plus the
+    // fog / environment-intensity grading — see office3d/scene.ts ──
+    applyEnvironment(THREE, renderer, scene);
 
     // Isometric-style camera (high angle, looking down). Factor in the
     // streetscape added by buildStreets — sidewalk + street extends ~15u past
     // the building bounds, and with FOV 35° the default cd based only on the
     // desks was clipping the entire block outside the frame.
-    let ext = 0;
-    for (const [, p] of deskPos) ext = Math.max(ext, Math.sqrt(p.x ** 2 + p.z ** 2));
-    const b = corGrid.buildingBounds;
-    const buildingRadius = Math.max(Math.abs(b.maxX), Math.abs(b.minX), Math.abs(b.maxZ), Math.abs(b.minZ));
-    const STREET_MARGIN = 23; // ≈ PLINTH_W (5) + PED_W (3.5) + STREET_W (12) + portal in office.ts
-    const cd = Math.max(60, Math.max(ext, buildingRadius + STREET_MARGIN) * 1.15);
+    const cd = initialCameraDistance(deskPos, worldBounds());
     camera = new THREE.PerspectiveCamera(35, canvasEl.clientWidth / canvasEl.clientHeight, 0.5, 600);
     // Isometric angle: 45° from high above, looking down at the office
     camera.position.set(cd * 0.7, cd * 0.8, cd * 0.7);
@@ -2312,6 +2287,9 @@
     // which clamped the zoom too aggressively.
     controls.minDistance = 2;
     controls.maxDistance = 300;
+    // Wheel zoom goes toward the point under the cursor, not the screen centre:
+    // with plugin buildings beside the main one the world is too wide to zoom on a fixed target.
+    controls.zoomToCursor = true;
 
     // ── Rotation with the reception as the axis (see setRotationMode / turntableRotate) ──
     // The turntable's elevation range is the complement of the polar limits.
@@ -2340,108 +2318,46 @@
     // Stamp camera motion (fires during damping too) — drives the full-rate
     // CSS2D label rendering while orbiting/panning/zooming.
     controls.addEventListener('change', () => { lastControlChangeAt = performance.now(); });
+    // 'start' fires only for the user's own drag/zoom — never for a scripted tween.
+    controls.addEventListener('start', () => { lastUserSteerAt = performance.now(); });
 
     // ── Global lighting (key/fill/rim) — see office3d/office/lighting.ts ──
     // World bounds → tightened shadow frustum (shadow texels 2–4× denser).
-    setupLighting(scene, corGrid.buildingBounds);
+    setupLighting(scene, worldBounds());
 
-    // ── Post-processing: selective bloom for emissive surfaces (monitors, envelopes) ──
-    // Bloom adds 3 fullscreen passes per frame. On HiDPI displays that's very
-    // expensive; skip it entirely on retina / >1.5x dpr and fall back to direct
-    // render. Loss of bloom is barely noticeable with tonemapping active.
-    if (window.devicePixelRatio <= 1.5) {
-      try {
-        const { EffectComposer } = await import('three/examples/jsm/postprocessing/EffectComposer.js');
-        const { RenderPass } = await import('three/examples/jsm/postprocessing/RenderPass.js');
-        const { UnrealBloomPass } = await import('three/examples/jsm/postprocessing/UnrealBloomPass.js');
-        const { OutputPass } = await import('three/examples/jsm/postprocessing/OutputPass.js');
-        composer = new EffectComposer(renderer);
-        // ── Anti-aliasing through the composer (fixes the "pixelado") ──
-        // The renderer's `antialias:true` ONLY anti-aliases the default
-        // framebuffer — which the EffectComposer bypasses entirely. So every
-        // edge in the post-processed scene (i.e. always, on dpr≤1.5 monitors)
-        // was rendered with zero MSAA → jagged/aliased = the pixelation the
-        // user saw. Enable 4× MSAA on the composer's ping-pong render targets.
-        // We let the default constructor size them correctly (CSS px × dpr) and
-        // only flip `samples` + dispose so the GL framebuffers reinit as
-        // multisampled (setSize alone ignores a samples change). samples is
-        // preserved across resize, so this survives the ResizeObserver path.
-        const AA_SAMPLES = 4;
-        for (const rt of [composer.renderTarget1, composer.renderTarget2]) {
-          rt.samples = AA_SAMPLES;
-          rt.dispose();
-        }
-        composer.addPass(new RenderPass(scene, camera));
+    // ── Post-processing: MSAA composer + bloom (GTAO off) on dpr ≤ 1.5, direct
+    // render otherwise — see office3d/scene.ts ──
+    ({ composer, gtaoPass, bloomPass } = await createPostProcessing(THREE, renderer, scene, camera, canvasEl));
 
-        // GTAO — screen-space ambient occlusion. DISABLED by default: at our
-        // sample budget it produced view-dependent noise/blotches on flat
-        // surfaces (desks, carpet) that read as "manchas". The scene already
-        // has zero-cost baked vertex AO (bakeVertexAO) + real shadow maps for
-        // depth, so dropping GTAO removes the artifact AND saves the most
-        // expensive post pass. Flip GTAO_ENABLED back to true to restore it.
-        const GTAO_ENABLED = false;
-        const aoCores = navigator.hardwareConcurrency ?? 8;
-        if (GTAO_ENABLED && aoCores >= 4) {
-          try {
-            const { GTAOPass } = await import('three/examples/jsm/postprocessing/GTAOPass.js');
-            const gtao = new GTAOPass(scene, camera, canvasEl.clientWidth, canvasEl.clientHeight);
-            gtao.output = (GTAOPass as any).OUTPUT.Default;
-            // AO tuned to stop the blotchy "reflejo feo" on flat surfaces
-            // (keyboards, carpet): smaller radius keeps it as tight contact
-            // shadows instead of large smears; distanceExponent 1→2 makes AO
-            // fall off faster so it stops bleeding across flat planes; samples
-            // back up to 16 to kill the noise the 8-sample pass introduced. The
-            // adaptive controller still disables the whole pass under load.
-            gtao.updateGtaoMaterial({
-              radius: 0.5, distanceExponent: 2, thickness: 1,
-              scale: 1.0, samples: 16, screenSpaceRadius: false,
-            });
-            composer.addPass(gtao);
-            gtaoPass = gtao;
-          } catch (e) { console.warn('[GTAO] unavailable, skipping AO pass:', e); }
-        }
-
-        // Bloom — subtle glow on emissive surfaces. Strength + radius dialed
-        // down (0.3→0.15, 0.5→0.3) to roughly halve the post-process cost.
-        // Visually still picks up on monitor glow / running emissives.
-        const bloom = new UnrealBloomPass(
-          new THREE.Vector2(canvasEl.clientWidth, canvasEl.clientHeight),
-          GRADING.bloom.strength,
-          GRADING.bloom.radius,
-          GRADING.bloom.threshold,
-        );
-        composer.addPass(bloom);
-        bloomPass = bloom;
-        composer.addPass(new OutputPass());
-      } catch (e) {
-        console.warn('[PostProcess] Not available, falling back to direct render:', e);
-        composer = null;
+    // Build static structure in a group (reused by rebuildScene diff logic).
+    // Skipped when it already exists: `scene` and THREE are set before the
+    // awaits above, so the reactive rebuildScene() can run in between and
+    // build (and add) the whole world first. Building again here left that
+    // copy orphaned in the scene — every office, light and street drawn
+    // twice, which doubled the draw calls and the frame time.
+    if (!staticGroup) {
+      staticGroup = new THREE.Group();
+      staticGroup.userData._static = true;
+      buildFloor(staticGroup, corGrid.buildingBounds);
+      // Central Hall (meetingRooms[1]) anchors the staircase so the entrance
+      // lines up visually with the main indoor axis.
+      const hallHint = meetingRooms[1] ?? meetingRooms[0];
+      const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
+      buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
+      buildCorridorGrid(staticGroup, corGrid);
+      buildRooms(staticGroup, gridRooms(), computeRoomCounts());
+      lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
+      buildThemedOffices(staticGroup);
+      buildSpecialRooms(staticGroup);
+      buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
+      if (hallCenterPos) {
+        const hSlot = meetingRooms[1] ?? meetingRooms[0];
+        buildActivityBoard(staticGroup, hallCenterPos.x, hallCenterPos.z, hSlot?.d ?? 8);
       }
-    } else {
-      composer = null;
+      buildDoorLeds(staticGroup, roomMap);
+      // buildElevator(staticGroup, corGrid.buildingBounds); // hidden for now
+      scene.add(staticGroup);
     }
-
-    // Build static structure in a group (reused by rebuildScene diff logic)
-    staticGroup = new THREE.Group();
-    staticGroup.userData._static = true;
-    buildFloor(staticGroup, corGrid.buildingBounds);
-    // Central Hall (meetingRooms[1]) anchors the staircase so the entrance
-    // lines up visually with the main indoor axis.
-    const hallHint = meetingRooms[1] ?? meetingRooms[0];
-    const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
-    buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
-    buildCorridorGrid(staticGroup, corGrid);
-    buildRooms(staticGroup, roomMap, computeRoomCounts());
-    buildThemedOffices(staticGroup);
-    buildSpecialRooms(staticGroup);
-    buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
-    if (hallCenterPos) {
-      const hSlot = meetingRooms[1] ?? meetingRooms[0];
-      buildActivityBoard(staticGroup, hallCenterPos.x, hallCenterPos.z, hSlot?.d ?? 8);
-    }
-    buildDoorLeds(staticGroup, roomMap);
-    // buildElevator(staticGroup, corGrid.buildingBounds); // hidden for now
-    scene.add(staticGroup);
     // Office shell is now in the scene — the loader can show "waiting for staff".
     staticBuilt = true;
     bootStatus = dataLoaded ? 'deploying staff…' : 'waiting for agent data…';
@@ -2468,14 +2384,41 @@
       spawnTradeCelebration('DEMO', isBuy ? 'buy' : 'sell', 0, isBuy);
       return true;
     };
+    // Office construction: replays the build of an existing office (cosmetic — the
+    // office is hidden for the replay and comes back as it was).
+    (window as any).__constructionDemo = (flowId?: string) => {
+      const id = flowId ?? [...roomMap.keys()][0];
+      if (!id || !roomMap.has(id)) { console.warn('[constructionDemo] no office to build'); return false; }
+      construction.replay(id, officeAgents(id).length);
+      return id;
+    };
+    // Jump a build to a phase and progress, e.g. __constructionSeek('build', 0.5) — pair with __constructionSpeed(0).
+    (window as any).__constructionSeek = (phase: string, progress = 0) => {
+      for (let i = 0; i < 2000; i++) {
+        const a = construction.active();
+        if (!a || (a.phase === phase && a.progress >= progress)) return a;
+        construction.tick(0.05, performance.now());
+      }
+      return construction.active();
+    };
+    (window as any).__constructionSpeed = (x: number = 1) => { constructionTimeScale = Math.max(0, x); return constructionTimeScale; };
+    (window as any).__constructionState = () => ({
+      active: construction.active(),
+      hidden: [...construction.hiddenFlowIds()],
+      stage: constructionStage?.debug() ?? null,
+    });
     (window as any).__animDemos = () => {
       const list = [
+        '__constructionDemo()    — a crew builds an office (replays an existing one)',
+        '__constructionSpeed(0.2) / __constructionSeek("build", 0.5) — slow down / jump a build',
         '__deliveryDemo()        — camión de correo/paquete (mail)',
         '__taxiDemo()            — a car/taxi drives up to the front and leaves',
         '__taxiDemo("#4ddbff")   — taxi with a custom body colour',
         '__tradeDemo()           — trade celebration (buy, green)',
         '__tradeDemo(false)      — trade celebration (sell, red)',
       ];
+      // …and whatever the mounted world plugins offer.
+      for (const inst of worldInstances.values()) list.push(...(inst.consoleHelp?.() ?? []));
       console.log('Test animations:\n  ' + list.join('\n  '));
       return ['__deliveryDemo', '__taxiDemo', '__tradeDemo'];
     };
@@ -2513,9 +2456,8 @@
     let rayTargetsHitbox: any = null;
     let rayTargetsMRCount = -1;
     let rayTargetsTopAgent: any = null;
-    let rayTargetsFreeRackCount = -1;
-    let rayTargetsInfraConsole: any = null;
-    let rayTargetsDevopsTerminal: any = null;
+    let rayTargetsProps: any[] | null = null;
+    let rayTargetsPropCount = -1;
     function getRayTargets(): any[] {
       const invalidateHint = rayTargetsCache === null; // module-level reset (e.g. top-agent rebuild)
       if (
@@ -2525,9 +2467,8 @@
         rayTargetsHitbox !== myOfficeHitbox ||
         rayTargetsMRCount !== meetingRoomHitboxes.length ||
         rayTargetsTopAgent !== topAgentHitbox ||
-        rayTargetsFreeRackCount !== freeRepoRackHitboxes.length ||
-        rayTargetsInfraConsole !== infraConsoleHitbox ||
-        rayTargetsDevopsTerminal !== devopsTerminalHitbox
+        rayTargetsProps !== officeProps ||
+        rayTargetsPropCount !== officeProps.length
       ) {
         rayTargetsCacheLocal = Array.from(deskGroups.values());
         // The top agent's hitbox sits INSIDE the My Office hitbox in world
@@ -2537,35 +2478,43 @@
         if (topAgentHitbox) rayTargetsCacheLocal.push(topAgentHitbox);
         if (myOfficeHitbox) rayTargetsCacheLocal.push(myOfficeHitbox);
         for (const hb of meetingRoomHitboxes) rayTargetsCacheLocal.push(hb);
-        // FREE racks in the Repos Office — click = open register modal.
-        for (const hb of freeRepoRackHitboxes) rayTargetsCacheLocal.push(hb);
-        // Power console in the Repos Office — click = toggle the power-grid board.
-        if (infraConsoleHitbox) rayTargetsCacheLocal.push(infraConsoleHitbox);
-        // DevOps workstation — click = open the DevOps control panel (/devops).
-        if (devopsTerminalHitbox) rayTargetsCacheLocal.push(devopsTerminalHitbox);
+        // Office props (racks, wall screens, consoles) — hover/click via userData.prop.
+        for (const p of officeProps) rayTargetsCacheLocal.push(p);
         rayTargetsDeskSize = deskGroups.size;
         rayTargetsHitbox = myOfficeHitbox;
         rayTargetsMRCount = meetingRoomHitboxes.length;
         rayTargetsTopAgent = topAgentHitbox;
-        rayTargetsFreeRackCount = freeRepoRackHitboxes.length;
-        rayTargetsInfraConsole = infraConsoleHitbox;
-        rayTargetsDevopsTerminal = devopsTerminalHitbox;
+        rayTargetsProps = officeProps;
+        rayTargetsPropCount = officeProps.length;
         rayTargetsCache = rayTargetsCacheLocal; // sync the module-level handle
       }
       // Active walkers (walking the floor or seated in a meeting) come and go
       // every frame, so they can't live in the cached static set. Append their
       // groups fresh each call — the list is tiny (≤20) and this is the only
       // way a moving/seated agent becomes hoverable + clickable wherever it is.
-      if (walkers.length === 0) return rayTargetsCacheLocal;
+      // World plugins' click targets (their meshes may be replaced as data changes).
+      const picks = [...worldInstances.values()].flatMap(inst => inst.pickTargets());
+      if (walkers.length === 0 && picks.length === 0) return rayTargetsCacheLocal;
       const out = rayTargetsCacheLocal.slice();
       for (const w of walkers) out.push(w.group);
+      out.push(...picks);
       return out;
     }
 
     let hoveredTopAgent = false;
-    let hoveredFreeRack = false;
-    let hoveredInfraConsole = false;
-    let hoveredDevopsTerminal = false;
+    let hoveredProp: { prop: InteractiveProp; hit: PropHit } | null = null;
+    /** Move the hover to `next`, telling the old and new prop so they can glow. */
+    const setHoveredProp = (next: { prop: InteractiveProp; hit: PropHit } | null) => {
+      if (hoveredProp?.prop !== next?.prop) {
+        hoveredProp?.prop.hover?.(false);
+        next?.prop.hover?.(true);
+      }
+      hoveredProp = next;
+    };
+    // Leaving the canvas must drop the glow, or the last prop stays lit.
+    renderer.domElement.addEventListener('mouseleave', () => { setHoveredProp(null); worldTip = null; });
+    let hoveredWorld: { kind: string; hit: WorldHit } | null = null;
+    let hoveredLot: Lot | null = null;
     let lastHoverRayAt = 0;
     renderer.domElement.addEventListener('mousemove', (e: MouseEvent) => {
       // While a camera drag is in progress (orbit/pan: any button held) hover
@@ -2584,35 +2533,39 @@
       hoveredMyOffice = false;
       hoveredMeetingRoomIdx = -1;
       hoveredTopAgent = false;
-      hoveredFreeRack = false;
-      hoveredInfraConsole = false;
-      hoveredDevopsTerminal = false;
+      let nextProp: { prop: InteractiveProp; hit: PropHit } | null = null;
+      hoveredWorld = null;
+      worldTip = null;
+      hoveredLot = null;
       if (hits.length) {
         // The top agent's hitbox sits inside My Office's hitbox so the
         // raycaster might list both. Prefer the top-agent hit (smaller,
-        // more specific) over the room hit when both are present. The infra
-        // console sits inside the Repos Office — prefer it the same way.
+        // more specific) over the room hit when both are present. Office props
+        // sit inside their room the same way — prefer them too.
+        const propHit = hits.find(h => propOf(h.object));
         let o = hits.find(h => h.object.userData.isTopAgent)?.object
-          ?? hits.find(h => h.object.userData.isInfraConsole)?.object
-          ?? hits.find(h => h.object.userData.isDevopsTerminal)?.object
-          ?? hits.find(h => h.object.userData.isFreeRepoRack)?.object
+          ?? propHit?.object
           ?? hits[0].object;
+        // The nearest hit belongs to a world plugin: it says whether it is interactive.
+        const worldKind = hits[0].object === o ? worldOwner(o) : null;
+        const worldTipText = worldKind ? worldInstances.get(worldKind)?.hover?.(hits[0], { x: e.clientX, y: e.clientY }) ?? null : null;
         if (o.userData.isTopAgent) {
           hoveredTopAgent = true;
           hoveredAgent = null;
           renderer.domElement.style.cursor = 'pointer';
-        } else if (o.userData.isInfraConsole) {
-          hoveredInfraConsole = true;
+        } else if (propHit && o === propHit.object) {
+          const prop = propOf(o)!;
+          const hit: PropHit = { uv: propHit.uv ?? null };
+          nextProp = { prop, hit };
+          hoveredAgent = null;
+          renderer.domElement.style.cursor = prop.click ? 'pointer' : 'grab';
+          const tip = prop.tip(hit);
+          worldTip = tip ? { x: e.clientX - r.left, y: e.clientY - r.top, text: tip } : null;
+        } else if (worldKind && worldTipText !== null) {
+          hoveredWorld = { kind: worldKind, hit: hits[0] };
           hoveredAgent = null;
           renderer.domElement.style.cursor = 'pointer';
-        } else if (o.userData.isDevopsTerminal) {
-          hoveredDevopsTerminal = true;
-          hoveredAgent = null;
-          renderer.domElement.style.cursor = 'pointer';
-        } else if (o.userData.isFreeRepoRack) {
-          hoveredFreeRack = true;
-          hoveredAgent = null;
-          renderer.domElement.style.cursor = 'pointer';
+          worldTip = worldTipText ? { x: e.clientX - r.left, y: e.clientY - r.top, text: worldTipText } : null;
         } else if (o.userData.isMeetingRoom) {
           hoveredMeetingRoomIdx = o.userData.meetingRoomIndex ?? -1;
           hoveredAgent = null;
@@ -2626,38 +2579,45 @@
           hoveredAgent = o.userData.agentId || null;
           renderer.domElement.style.cursor = hoveredAgent ? 'pointer' : 'grab';
         }
-      } else { hoveredAgent = null; renderer.domElement.style.cursor = 'grab'; }
+      } else {
+        hoveredAgent = null;
+        // Nothing else under the pointer: a free lot? (click = start an office there)
+        const lotHit = lotGround ? ray.intersectObject(lotGround, false)[0] : null;
+        hoveredLot = lotHit ? lotAtPoint(freeLots, lotHit.point.x, lotHit.point.z) : null;
+        renderer.domElement.style.cursor = hoveredLot ? 'pointer' : 'grab';
+      }
+      setHoveredProp(nextProp);
     });
-    renderer.domElement.addEventListener('click', () => {
+    // A drag that orbits the camera ends in a click too; only a still click picks a lot.
+    let pressAt = { x: 0, y: 0 };
+    renderer.domElement.addEventListener('pointerdown', (e: PointerEvent) => { pressAt = { x: e.clientX, y: e.clientY }; });
+    renderer.domElement.addEventListener('click', (e: MouseEvent) => {
+      if (hoveredLot) {
+        if (Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5) pickFreeLot(hoveredLot);
+        return;
+      }
       if (hoveredTopAgent) {
-        // Click on the figure → open the office-architect chat. The HQ
-        // menu's 'New Office' button is still wired to the same flag for
-        // discoverability, but this gesture is the canonical one.
+        // Questions waiting for the human win: the chief's figure is where
+        // the operator looks when its halo turns red. With none pending the
+        // gesture keeps opening the office-architect chat.
+        if (pendingQuestions.length > 0) {
+          openTopAgentMessages();
+          return;
+        }
         showOfficeModal = true;
         selectedAgent = null;
         showMyOfficePanel = false;
         return;
       }
-      if (hoveredInfraConsole) {
-        // Click on the power console → show/hide the full power-grid board
-        // (which is hidden by default to keep the office clean).
-        toggleInfraBoard();
+      if (hoveredProp?.prop.click) {
+        // An office prop (rack, wall screen, console): it knows what it does.
+        // Only a still click — an orbit drag that ends on a rack must not
+        // open that repo.
+        if (Math.hypot(e.clientX - pressAt.x, e.clientY - pressAt.y) < 5) hoveredProp.prop.click(hoveredProp.hit);
         return;
       }
-      if (hoveredDevopsTerminal) {
-        // Click on the DevOps workstation → open the full DevOps control panel.
-        // Replaces the old floating quick-console button with an in-world,
-        // discoverable entry point sitting on the office floor.
-        window.location.href = '/devops';
-        return;
-      }
-      if (hoveredFreeRack) {
-        // Click on a FREE server rack → open the register-repo modal. Goes
-        // through the shared opener rather than flipping the flag and clearing
-        // fields by hand: doing it by hand skipped loading the checkouts the
-        // kernel can see, the focus handoff, and every field added since.
-        registerRepoModal?.open();
-        return;
+      if (hoveredWorld) {
+        if (worldInstances.get(hoveredWorld.kind)?.click?.(hoveredWorld.hit)) return;
       }
       if (hoveredMeetingRoomIdx >= 0) {
         // Find a meeting currently placed in this room; if none, pick any
@@ -2666,8 +2626,19 @@
         for (const [id, idx] of meetingIdToRoom.entries()) {
           if (idx === hoveredMeetingRoomIdx) { mid = id; break; }
         }
+        // No meeting here, but two agents are "coordinating" at this table:
+        // that is a cross-office message drawn as a meeting — show it.
+        const coord = !mid ? activeCoords[hoveredMeetingRoomIdx] : undefined;
+        if (coord) {
+          openCoord = coord;
+          showLiveMeeting = false;
+          showMyOfficePanel = false;
+          selectedAgent = null;
+          return;
+        }
         if (!mid) mid = liveMeetingsList[0]?.id ?? null;
         if (mid) {
+          openCoord = null;
           activeMeetingId = mid;
           showLiveMeeting = true;
           showMyOfficePanel = false;
@@ -2712,794 +2683,65 @@
   }
 
   // ── Process live events ────────────────────────
+  // The dispatcher itself is office3d/events.ts. It reads and writes this
+  // component's state through `eventCtx`, whose getters/setters are live —
+  // including from the setTimeout callbacks it schedules.
+  const eventCtx: LiveEventContext = {
+    get flowEvents() { return flowEvents; },
+    get lastProcessedFlowEvent() { return lastProcessedFlowEvent; },
+    set lastProcessedFlowEvent(v: AgentFlowEvent | null) { lastProcessedFlowEvent = v; },
+    get flows() { return flows; },
+    get agents() { return agents; },
+    get selectedAgent() { return selectedAgent; },
+    get scene() { return scene; },
+    get THREE() { return THREE; },
+    get sceneTimeSec() { return sceneTimeSec; },
+    get deskGroups() { return deskGroups; },
+    get deskPos() { return deskPos; },
+    get roomMap() { return roomMap; },
+    get corGrid() { return corGrid; },
+    get deskAabbs() { return deskAabbs; },
+    get sittingWorkers() { return sittingWorkers; },
+    get walkers() { return walkers; },
+    set walkers(v: Walker[]) { walkers = v; },
+    get myOfficePos() { return myOfficePos; },
+    get myOfficeSeats() { return myOfficeSeats; },
+    get myOfficeDeskFacing() { return myOfficeDeskFacing; },
+    get myOfficeNoteStack() { return myOfficeNoteStack; },
+    get hallCenterPos() { return hallCenterPos; },
+    get topAgentId() { return topAgentId; },
+    get topAgentSeatPos() { return topAgentSeatPos; },
+    get meetingRoomSlots() { return meetingRoomSlots; },
+    get meetingIdToRoom() { return meetingIdToRoom; },
+    get speechBubbles() { return speechBubbles; },
+    get liveMeetings() { return liveMeetings; },
+    set liveMeetings(v: Record<string, LiveMeeting>) { liveMeetings = v; },
+    get activeMeetingId() { return activeMeetingId; },
+    set activeMeetingId(v: string | null) { activeMeetingId = v; },
+    get showTranscriptBody() { return showTranscriptBody; },
+    set showTranscriptBody(v: boolean) { showTranscriptBody = v; },
+    get showMyOfficePanel() { return showMyOfficePanel; },
+    set showMyOfficePanel(v: boolean) { showMyOfficePanel = v; },
+    get showLiveMeeting() { return showLiveMeeting; },
+    set showLiveMeeting(v: boolean) { showLiveMeeting = v; },
+    get auditedRunIds() { return auditedRunIds; },
+    set auditedRunIds(v: Set<string>) { auditedRunIds = v; },
+    get meetingActive() { return meetingActive; },
+    get meetingSelectedIds() { return meetingSelectedIds; },
+    animRegistry,
+    lastDeliveryAtByFlow,
+    markActivity, showAnimatedTag, showThinkingTag, pulseThinkingMonitor,
+    triggerDeliveryForAgent, tryFireAnim, spawnErrorFx, spawnHandoffPacketFx,
+    spawnTradeCelebration,
+    refreshSelectedAgentRuns: () => agentPanel?.refreshRuns(),
+    isOfficeLeader, isSeniorRank, addOfficeReport, pickFreeMyOfficeChair,
+    flowColor, sameOffice, coordinateInMeetingRoom,
+    spawnMeetingDecor, updateMeetingDecorTurn, disposeMeetingDecor,
+    pushMgmtLog, playTopAgentChime, loadPendingQuestions,
+    topAgent, highestRank, handleInfraToggle,
+  };
   function processEvents() {
-    if (flowEvents.length === 0) return;
-    if (flowEvents[0] === lastProcessedFlowEvent) return;
-    // Newest-first store → walk down until we hit the previous head (or the
-    // end if it got evicted by the cap).
-    let cutoff = flowEvents.length;
-    if (lastProcessedFlowEvent) {
-      const idx = flowEvents.indexOf(lastProcessedFlowEvent);
-      if (idx >= 0) cutoff = idx;
-    }
-    const news = flowEvents.slice(0, cutoff);
-    lastProcessedFlowEvent = flowEvents[0];
-    // Process oldest-first so state-machine sequences land in the right
-    // order — e.g. meeting_requested → meeting_started → meeting_turn(s)
-    // → meeting_ended. Reverse order would let a newer meeting_ended run
-    // before the older meeting_turn re-stamped status='started', leaving
-    // the LIVE indicator stuck.
-    for (let __i = news.length - 1; __i >= 0; __i--) {
-      const e = news[__i];
-      const aid = String(e.data.agent_id ?? '');
-      const t = e.event.split(':').pop() ?? '';
-      // Any event involving an agent resets that agent's idle timer (so the
-      // stretch animation only triggers when the agent is genuinely idle).
-      if (aid) markActivity(aid);
-      const fromIdAny = String((e.data as any).from_agent_id ?? (e.data as any).source_agent_id ?? '');
-      const toIdAny   = String((e.data as any).to_agent_id   ?? (e.data as any).target_agent_id ?? '');
-      if (fromIdAny) markActivity(fromIdAny);
-      if (toIdAny)   markActivity(toIdAny);
-
-      // Inbound email arrived (IMAP fetcher or webhook) → dispatch a truck
-      // at the Communications office directly, bypassing the per-flow
-      // cooldown so a burst of real emails reads on screen. The label on the
-      // package shows how many emails came in this batch.
-      if (e.event === 'comms:mail:received') {
-        const commsFlow = mailOffice(flows);
-        if (commsFlow) {
-          const count = Number((e.data as any)?.count ?? 1) || 1;
-          enqueueDelivery({
-            flowId: commsFlow.id,
-            flowColor: commsFlow.color || '#0ea5a4',
-            label: count > 1 ? `${count} MAIL` : 'MAIL',
-          });
-          // Reset the per-flow cooldown so subsequent agent-started events
-          // for Communications don't pile up extra trucks on the same mail.
-          lastDeliveryAtByFlow.set(commsFlow.id, sceneTimeSec);
-        }
-        continue;
-      }
-
-      // Infrastructure toggled (Docker container up/stop/pause/resume/restart):
-      // walk the office's manager to the Repos Office power console and flip it.
-      if (e.event === 'office:infra:changed') {
-        handleInfraToggle(e.data as any);
-        continue;
-      }
-
-      if (t === 'run_started') {
-        showAnimatedTag(aid, { icon: '▶️', anim: 'pulse', label: 'RUN', durationFrames: 300 });
-        // (#F1) "Thinking" — dots in the agent's tag + a monitor flicker, so a
-        // run that has produced no step yet still looks alive.
-        showThinkingTag(aid);
-        pulseThinkingMonitor(aid);
-        // External message arriving → dispatch a delivery truck that drops a
-        // package at reception, then the recipient agent picks it up.
-        triggerDeliveryForAgent(aid, sceneTimeSec);
-        // Error Auditor closes the loop on failed runs. Parse its goal to
-        // extract the original run_id it's triaging and mark that report
-        // as "audited" in the My Office panel.
-        const startedName = String(e.data.agent_name ?? agents.find(a => a.id === aid)?.name ?? '');
-        if (startedName === 'Error Auditor') {
-          const goalTxt = String(e.data.goal ?? '');
-          const m = goalTxt.match(/Run ID:\s*([A-Za-z0-9-]+)/);
-          if (m && m[1]) {
-            auditedRunIds = new Set([...auditedRunIds, m[1]]);
-          }
-        }
-      }
-      else if (t === 'run_completed') {
-        const failed = e.data.status !== 'completed';
-        // (#3) Tag carries the result icon (✅ pop / ❌ shake). Failed runs
-        // also rattle the desk briefly for emphasis.
-        if (failed) {
-          showAnimatedTag(aid, { icon: '❌', anim: 'shake', color: '#ff3030', label: 'FAILED', durationFrames: 220 });
-          const dg = deskGroups.get(aid);
-          if (dg) tryFireAnim(`failed-shake:${aid}`, 2.0, () => {
-            animRegistry.add(shake(dg, {
-              property: 'rotation.z', amplitude: 0.045,
-              frequencyHz: 16, durationSec: 0.55,
-              tag: `failed-shake:${aid}`,
-            }));
-          });
-          // (#F2) Error burst — red rising particles + a red halo flash over the
-          // desk. Errors are rare so no FX-cap gating; debounced to avoid double
-          // bursts when a failure event repeats. Effects are ephemeral and
-          // self-dispose their geometry.
-          spawnErrorFx(aid);
-        } else {
-          showAnimatedTag(aid, { icon: '✅', anim: 'pop', color: '#3DD68C', label: 'DONE', durationFrames: 180 });
-        }
-        if (aid === selectedAgent) {
-          loadLatestRun();
-          if (panelTab === 'history') loadAgentRuns();
-        }
-        // Determine urgency: failures and safety aborts warrant staying at
-        // My Office (request urgent meeting). Normal completions just drop
-        // a note on the desk and walk back.
-        const isUrgent = failed
-          || String(e.data.error ?? '').includes('Safety abort')
-          || String(e.data.error ?? '').includes('Token budget');
-
-        // If a chain follows, the chain_triggered handler manages the office visit.
-        const hasChain = news.some(ev =>
-          (ev.event.split(':').pop() ?? '') === 'chain_triggered' &&
-          String(ev.data.source_agent_id ?? '') === aid
-        );
-        // Office LEADERS walk to the top agent's office to file their
-        // report in person. "Leader" = any senior officer (rank.level >=
-        // MY_OFFICE_MIN_RANK_LEVEL) OR the manager of any flow (role=manager).
-        // Plain workers below the lead never make this trip — they just log to
-        // My Office and let their manager pick it up via the audit chain.
-        const agentObj = agents.find(a => a.id === aid);
-        const shouldReport = isOfficeLeader(aid);
-
-        if (!hasChain && myOfficePos && scene && aid && shouldReport) {
-          const agentName = agentObj?.name ?? 'Agent';
-          const fullResult = String(e.data.result_preview ?? e.data.result ?? '') || 'Task done';
-          const fullError = String(e.data.error ?? '');
-          const msg = isUrgent
-            ? `⚠ ${agentName}: URGENT — ${fullError.slice(0, 50)}`
-            : `${agentName}: ${fullResult.slice(0, 60)}`;
-          addOfficeReport(aid, isUrgent ? fullError : fullResult, String(e.data.status ?? 'completed'), String(e.data.run_id ?? ''));
-          // Urgent → "meeting" path (running, no return until meeting ends).
-          // Normal completion → "myoffice" path (walks in, drops a paper note
-          // on the top agent's desk, walks back to own desk).
-          const walkerTargetId = isUrgent ? 'meeting' : 'myoffice';
-          const reportColor = flowColor(aid);
-          // Only normal (non-urgent) reports carry & drop a physical note.
-          // Urgent walkers join a meeting instead — the top agent deals with
-          // those face to face, not via the inbox pile.
-          const carryNote = !isUrgent;
-          const onArrive = (!isUrgent && myOfficeNoteStack)
-            ? () => { myOfficeNoteStack?.dropNote({ color: reportColor }); }
-            : undefined;
-          setTimeout(() => {
-            // Pass undefined for the in-walker bubble — the animated tag at
-            // the source desk (now following the walker) carries the meaning.
-            // Seat the visitor in a free chair across the desk (not a single
-            // floor point) and have them face the top agent while seated.
-            const seatPt = pickFreeMyOfficeChair() ?? myOfficePos!;
-            sendWalkerToPoint(
-              scene, walkers, aid, seatPt, deskPos, roomMap, corGrid,
-              agents, reportColor, undefined, deskAabbs,
-              walkerTargetId, sittingWorkers, isUrgent,
-              undefined,             // no viaPoint for myoffice/meeting walks
-              onArrive,              // drop note on arrival
-              carryNote,             // visible paper in the right hand
-              undefined, undefined,  // meetingRoomObstacles / exempt
-              undefined,             // stay (auto-return after the sit)
-              myOfficeDeskFacing ?? undefined, // face the desk while seated
-            );
-          }, isUrgent ? 500 : 2000); // urgent: less delay before running
-        }
-        // Workers: only log FAILURES to My Office (routine completions stay in their office)
-        if (!hasChain && !shouldReport && isUrgent && aid) {
-          const workerError = String(e.data.error ?? e.data.result ?? '') || 'Failed';
-          addOfficeReport(aid, workerError, 'failed', String(e.data.run_id ?? ''));
-        }
-      }
-      else if (t === 'chain_triggered') {
-        const sid = String(e.data.source_agent_id ?? ''), tid = String(e.data.target_agent_id ?? '');
-        const tname = String(e.data.target_agent_name ?? '');
-        if (sid && tid) {
-          const agentName = agents.find(a => a.id === sid)?.name ?? 'Agent';
-          const label = e.data.chain_label ? String(e.data.chain_label) : `${agentName} → ${tname}`;
-          addOfficeReport(sid, `Handing off to ${tname}: ${label}`, 'handoff');
-          // Cross-office handoffs read more naturally as a meeting room
-          // coordination than as a single walker crossing the whole floor —
-          // try the meeting visual first and only fall back to desk-to-desk
-          // if no room is available (or the agents are in the same office).
-          const color = flowColor(sid);
-          const wentToMeeting = !sameOffice(sid, tid) && coordinateInMeetingRoom(sid, tid, color);
-          if (!wentToMeeting) {
-            sendWalker(scene, walkers, sid, tid, deskPos, roomMap, corGrid, agents, color, undefined, sittingWorkers, deskAabbs);
-          }
-          // (#F3) Data-packet handoff — a glowing arc + coin stream fly from
-          // desk A to desk B, with a converging ripple + monitor pulse landing
-          // at B. Runs for BOTH the meeting and same-office paths so the data
-          // hand-off is always visible alongside the walker/meeting logic.
-          spawnHandoffPacketFx(sid, tid, color);
-          showAnimatedTag(sid, { icon: '🔗', anim: 'bounce', label: `→ ${tname.slice(0,12)}`, durationFrames: 220 });
-          if (wentToMeeting) {
-            showAnimatedTag(tid, { icon: '🤝', anim: 'bounce', color, label: `← ${agentName.slice(0,12)}`, durationFrames: 220 });
-          }
-        }
-      } else if (t === 'step') {
-        const st = String(e.data.type ?? '');
-        if (st === 'tool_call') {
-          // (#2) Category icon breathing inside the tag. It used to spin: an
-          // emoji rotating about its own centre at this size reads as a
-          // wobbling blob, and the glyph is the point — you should be able to
-          // tell 📧 from 🔍 at a glance, which a spin actively prevents.
-          const toolName = String(e.data.tool_name ?? 'tool');
-          tryFireAnim(`tool:${aid}`, 1.0, () => {
-            showAnimatedTag(aid, {
-              icon: toolGlyph(toolName), anim: 'pulse',
-              label: toolName.slice(0, 16),
-              durationFrames: 130,
-            });
-          });
-          // (#F1) The desk flickers along with it. No tag here — the tool tag
-          // above already owns the chip, and an agent only ever shows one.
-          pulseThinkingMonitor(aid);
-          // ── Top-agent-only command effects ────────────────────────
-          // When the top agent fires an agent/flow CRUD tool, mark
-          // it visually so the user can see the order being issued. A
-          // paper-plane shoots from his desk toward the central hall —
-          // the destination office may not exist yet (creation case) or
-          // is being torn down (deletion case), so the hall is the
-          // safest neutral target.
-          if (topAgentId && aid === topAgentId && topAgentSeatPos && hallCenterPos) {
-            let cmd: { label: string; color: number; hex: string } | null = null;
-            if (toolName.endsWith('kernel_agents_create')) cmd = { label: 'NEW AGENT',  color: 0x3DD68C, hex: '#3DD68C' };
-            else if (toolName.endsWith('kernel_agents_flows_create')) cmd = { label: 'NEW OFFICE', color: 0x5B8DEF, hex: '#5B8DEF' };
-            else if (toolName.endsWith('kernel_agents_delete')) cmd = { label: 'DESPIDO',    color: 0xF04770, hex: '#F04770' };
-            else if (toolName.endsWith('kernel_agents_flows_delete')) cmd = { label: 'CIERRE',     color: 0xF04770, hex: '#F04770' };
-            else if (toolName.endsWith('kernel_agents_update') || toolName.endsWith('kernel_agents_flows_update')) cmd = { label: 'ORDEN',      color: 0xC9A84C, hex: '#C9A84C' };
-            if (cmd && scene) {
-              showAnimatedTag(topAgentId, {
-                icon: '✪', anim: 'pulse', color: cmd.hex,
-                label: cmd.label, durationFrames: 220,
-              });
-              tryFireAnim(`top-agent-cmd:${topAgentId}`, 2.0, () => {
-                animRegistry.add(paperPlane(scene, {
-                  from: { x: topAgentSeatPos!.x, z: topAgentSeatPos!.z },
-                  to:   { x: hallCenterPos!.x,   z: hallCenterPos!.z   },
-                  archHeight: 4, durationSec: 1.4,
-                  color: cmd!.color,
-                  tag: `top-agent-cmd:${topAgentId}`,
-                }));
-              });
-            }
-          }
-        } else if (st === 'thought') {
-          // (#1) The thinking dots. They replace a pulsing 💭: at office
-          // distance the emoji was a grey smudge, and a thought is the one
-          // event with nothing concrete to name — so show rhythm, not a noun.
-          tryFireAnim(`thought:${aid}`, 1.0, () => {
-            showThinkingTag(aid, 110);
-          });
-          pulseThinkingMonitor(aid);
-        }
-      }
-      // ── Autonomy loop animations (auto-eval + learning lifecycle) ──
-      else if (t === 'auto_eval_started') {
-        showAnimatedTag(aid, { icon: '📝', anim: 'wobble', color: '#D4A84B', label: 'GRADING', durationFrames: 150 });
-      }
-      else if (t === 'auto_eval') {
-        const score = Number(e.data.score ?? 0);
-        const outcome = String(e.data.outcome ?? 'neutral');
-        const tone =
-          outcome === 'success' ? '#3DD68C'
-          : outcome === 'failure' ? '#F04770'
-          : outcome === 'partial' ? '#F0883E'
-          : '#8A8FA8';
-        const stars = '★'.repeat(score) + '☆'.repeat(Math.max(0, 5 - score));
-        showAnimatedTag(aid, {
-          icon: score >= 4 ? '🏆' : score >= 3 ? '⭐' : score >= 2 ? '⚠️' : '💢',
-          anim: 'pop', color: tone,
-          label: stars, durationFrames: 280,
-        });
-        // Bad self-eval (score<=2) → senior ranks rush to the top agent's office.
-        // Low-rank agents escalate through the chain of command (their manager
-        // will pick up the signal via the audit flow), not in person.
-        if (score <= 2 && myOfficePos && scene && aid && isSeniorRank(aid)) {
-          const agentName = agents.find(a => a.id === aid)?.name ?? 'Agent';
-          setTimeout(() => {
-            const seatPt = pickFreeMyOfficeChair() ?? myOfficePos!;
-            sendWalkerToPoint(
-              scene, walkers, aid, seatPt, deskPos, roomMap, corGrid, agents,
-              '#F04770', undefined, deskAabbs, 'meeting', sittingWorkers, true,
-              undefined, undefined, undefined, undefined, undefined, undefined,
-              myOfficeDeskFacing ?? undefined, // face the desk while seated
-            );
-          }, 500);
-        }
-      }
-      else if (t === 'learning_created') {
-        const ltype = String(e.data.learning_type ?? 'insight');
-        // (#4) Particles converge into the head (spatial visual) + a tag with
-        // a sparkling 💡 / 🚫 / ⭐ explains what KIND of lesson was added.
-        const lessonHex =
-          ltype === 'avoid'  ? 0xff5050 :
-          ltype === 'prefer' ? 0x50ff88 :
-                               0xffd166;
-        const lessonCss =
-          ltype === 'avoid'  ? '#ff5050' :
-          ltype === 'prefer' ? '#50ff88' :
-                               '#ffd166';
-        const icon = ltype === 'avoid' ? '🚫' : ltype === 'prefer' ? '⭐' : '💡';
-        showAnimatedTag(aid, { icon, anim: 'sparkle', color: lessonCss, label: 'LESSON', durationFrames: 280 });
-        const dp = deskPos.get(aid);
-        if (dp && scene) tryFireAnim(`lesson:${aid}`, 1.5, () => {
-          animRegistry.add(convergingParticles(scene, {
-            target: { x: dp.x, y: 1.8, z: dp.z + 0.55 },
-            spawnRadius: 1.6, count: 10,
-            color: lessonHex, durationSec: 1.2,
-            tag: `lesson:${aid}`,
-          }));
-        });
-      }
-      else if (t === 'learning_deactivated') {
-        const count = Number(e.data.count ?? 1);
-        // (#5) Tag carries the trash icon shaking; scrolls fall for spatial cue.
-        showAnimatedTag(aid, {
-          icon: '🗑️', anim: 'shake', color: '#9a9a9a',
-          label: count > 1 ? `−${count}` : 'DROPPED',
-          durationFrames: 180,
-        });
-        const dg = deskGroups.get(aid);
-        if (dg) tryFireAnim(`lesson-drop:${aid}`, 2.0, () => {
-          const drops = Math.min(count, 3);
-          for (let k = 0; k < drops; k++) {
-            animRegistry.add(fallingGlyph(dg, {
-              glyph: '📜', fontSize: 28,
-              startY: 4.2 + k * 0.3,
-              floorY: 0.05, gravity: 11, spinSpeed: 5 + Math.random() * 2,
-              color: '#cc9',
-              lingerSec: 0.4, fadeSec: 0.5,
-              tag: `lesson-drop:${aid}`,
-            }));
-          }
-        });
-      }
-      else if (t === 'meeting_requested') {
-        const mid = String(e.data.meeting_id ?? '');
-        const modId = String(e.data.moderator_id ?? '');
-        const modName = String(e.data.moderator_name ?? agents.find(a => a.id === modId)?.name ?? 'Moderator');
-        const attIds: string[] = (e.data.attendee_ids as string[]) ?? [];
-        const attNames: string[] = (e.data.attendee_names as string[]) ?? [];
-        const topic = String(e.data.topic ?? '');
-        const mClr = e.data.urgency === 'urgent' ? '#F04770' : '#5B8DEF';
-        // Pick a real meeting room. Round-robin across available rooms by
-        // distributing concurrent meetings into different slots; fallback to
-        // My Office if the current layout has zero meeting rooms.
-        let roomIdx = -1;
-        if (meetingRoomSlots.length > 0) {
-          const inUse = new Set(meetingIdToRoom.values());
-          roomIdx = meetingRoomSlots.findIndex((_, i) => !inUse.has(i));
-          if (roomIdx < 0) roomIdx = meetingIdToRoom.size % meetingRoomSlots.length;
-          if (mid) meetingIdToRoom.set(mid, roomIdx);
-        }
-        const room = roomIdx >= 0 ? meetingRoomSlots[roomIdx] : null;
-        // One unique seat per participant around the conference table — without
-        // this everyone walks to the room center and overlaps. Fall back to the
-        // The top agent's 4 visitor chairs (then a single point) when no meeting
-        // room is free, so a meeting held in My Office seats everyone properly.
-        const seats = room
-          ? getMeetingSeatPositions(room)
-          : (myOfficeSeats.length ? myOfficeSeats : (myOfficePos ? [myOfficePos] : []));
-        // Door midpoint: pick the wall closest to the central hall — that's
-        // where the door was placed in office.ts:buildMeetingRooms. Without
-        // routing via the door the walker cuts diagonally through walls.
-        const doorPoint = (room && hallCenterPos) ? meetingRoomDoorPoint(room, hallCenterPos) : undefined;
-        if (seats.length > 0 && scene) {
-          const allParticipants = [modId, ...attIds].filter(Boolean);
-          allParticipants.forEach((pid, i) => {
-            const pName = agents.find(a => a.id === pid)?.name ?? 'Agent';
-            const meetingUrgent = e.data.urgency === 'urgent';
-            const seat = seats[i % seats.length];
-            // If an old walker is blocking, drop it so the meeting takes
-            // precedence (e.g. the moderator may have a stale chain walker).
-            const stale = walkers.find(w => w.sourceId === pid);
-            if (stale) {
-              if ((stale as any).group) scene.remove((stale as any).group);
-              if ((stale as any).bubble?.parent) (stale as any).bubble.parent.remove((stale as any).bubble);
-              walkers = walkers.filter(w => w !== stale);
-            }
-            // stay=true: seated until meeting_ended dismisses them — the old
-            // 60s maxAge default evicted attendees mid-conversation.
-            sendWalkerToPoint(
-              scene, walkers, pid, seat, deskPos, roomMap, corGrid, agents,
-              mClr, undefined, deskAabbs, 'meeting', sittingWorkers,
-              meetingUrgent, doorPoint, undefined, false, meetingRoomSlots, roomIdx, true,
-              // Face the table. Without this the walker keeps whatever heading
-              // it happened to arrive on, so half the room sits with its back
-              // to the meeting. `talkFacingPos` was built for exactly this —
-              // its own comment says "the table centroid" — but no meeting
-              // call site ever passed one.
-              room
-                ? { x: room.cx, y: 0, z: room.cz }
-                : (myOfficeDeskFacing ?? undefined),
-            );
-          });
-        }
-        if (modId) showAnimatedTag(modId, { icon: '📋', anim: 'bounce', color: '#5B8DEF', label: 'CALL MEETING', durationFrames: 480 });
-        if (mid) {
-          const parts = [{ id: modId, name: modName }, ...attIds.map((id, i) => ({ id, name: attNames[i] ?? agents.find(a => a.id === id)?.name ?? 'Agent' }))];
-          liveMeetings = {
-            ...liveMeetings,
-            [mid]: {
-              id: mid, topic, status: 'requested',
-              moderatorId: modId, moderatorName: modName,
-              participants: parts, turns: [], started_at: Date.now(),
-            },
-          };
-          activeMeetingId = mid;
-          // Transcript modal stays HIDDEN by default at meeting_requested.
-          // The user opens it on demand via the meeting-room click or the
-          // shell's ActivityPanel.
-          showTranscriptBody = true;
-          showMyOfficePanel = false;
-          // Drop the gold halo + topic banner above the meeting table so
-          // the user spots the active room from anywhere in the floor plan.
-          if (room) spawnMeetingDecor(mid, room, topic);
-        }
-      }
-      else if (t === 'meeting_started') {
-        const mid = String(e.data.meeting_id ?? '');
-        const mTopic = String(e.data.topic ?? '');
-        const mParts = (e.data.participants as Array<{id: string; name: string}>) ?? [];
-        for (const p of mParts) showAnimatedTag(p.id, { icon: '🤝', anim: 'bounce', color: '#5B8DEF', label: 'MEETING', durationFrames: 480 });
-        if (mid && liveMeetings[mid]) {
-          liveMeetings = { ...liveMeetings, [mid]: { ...liveMeetings[mid], status: 'started', participants: mParts, topic: mTopic || liveMeetings[mid].topic } };
-          // Pin the active meeting id, but DON'T auto-open the transcript.
-          // User opens via clicking the meeting room / the shell's
-          // ActivityPanel — keeps the 3D view clean by default.
-          activeMeetingId = mid;
-          showMyOfficePanel = false;
-        }
-      }
-      // ── An agent is composing its turn ──────────────────────────
-      // Fired by the executor BEFORE the provider call. Median turn is ~25s
-      // (measured on this floor: 13s / 24s / 29s / 24s / 41s / 23s / 60s, plus
-      // one 5m20s outlier), and until now nothing on screen moved during that
-      // wait — a thinking room and a hung room looked identical.
-      else if (t === 'meeting_thinking') {
-        const thinkerId = String(e.data.agent_id ?? '');
-        const isMod = String(e.data.role ?? '') === 'moderator';
-        if (thinkerId) {
-          showAnimatedTag(thinkerId, {
-            icon: '💭',
-            anim: 'pulse',
-            color: isMod ? '#F0C674' : '#5B8DEF',
-            label: '···',
-            // Long enough to outlast a slow turn; `meeting_turn` replaces it
-            // as soon as the text lands, so it rarely runs to expiry.
-            durationFrames: 3600,
-          });
-        }
-        const mid = String(e.data.meeting_id ?? '');
-        if (mid && liveMeetings[mid]) {
-          const who = String(e.data.agent_name ?? '');
-          updateMeetingDecorTurn(mid, who ? `${who} está pensando…` : 'pensando…');
-        }
-      }
-      else if (t === 'meeting_turn') {
-        const mid = String(e.data.meeting_id ?? '');
-        const spkId = String(e.data.agent_id ?? '');
-        const spkName = String(e.data.agent_name ?? agents.find(a => a.id === spkId)?.name ?? 'Agent');
-        const role = String(e.data.role ?? 'attendee');
-        const round = Number(e.data.round ?? 0);
-        const body = String(e.data.body ?? e.data.content_preview ?? '');
-        const tokens = Number(e.data.tokens ?? 0);
-        const mIco = role === 'moderator' ? '🎙️' : '💬';
-        const mPrev = String(e.data.content_preview ?? '').slice(0, 60);
-        if (mid && liveMeetings[mid]) {
-          const turn: LiveTurn = { agentId: spkId, agentName: spkName, role, round, body, ts: Date.now(), tokens };
-          // Promote the speaker so the floor pose + spotlight code below
-          // can light them up. Stamp it on the meeting record before
-          // appending the turn so any reactive reads have the latest value.
-          liveMeetings = {
-            ...liveMeetings,
-            [mid]: {
-              ...liveMeetings[mid],
-              turns: [...liveMeetings[mid].turns, turn],
-              currentSpeakerId: spkId,
-            },
-          };
-          activeMeetingId = mid;
-          // Numbered speech bubble — "[3/8] VP: ...". Only the speaker
-          // gets a visible bubble; listeners stay quiet so the room reads
-          // as a single conversation. The bubble persists for ~25s, long
-          // enough to span the slowest LLM turn before the next one
-          // overrides it on the speaker's desk anyway.
-          const totalTurns = liveMeetings[mid].turns.length;
-          if (spkId) showAnimatedTag(spkId, { icon: '🗣️', anim: 'pulse', label: `TURN ${totalTurns}`, durationFrames: 1200 });
-          // Refresh the floating banner above the meeting table.
-          updateMeetingDecorTurn(mid, `Turn ${totalTurns} · ${spkName} (round ${round})`);
-          // Wipe stale "🤝 Meeting:" greeting bubbles off everyone else
-          // the moment the first turn lands so the speaker is the only
-          // one with text above them.
-          for (const p of liveMeetings[mid].participants ?? []) {
-            if (p.id && p.id !== spkId) {
-              const old = speechBubbles.get(p.id);
-              if (old) {
-                if (old.label?.parent) old.label.parent.remove(old.label);
-                old.div.remove();
-                animRegistry.cancelByTag(`bubble:${p.id}`);
-                speechBubbles.delete(p.id);
-              }
-            }
-          }
-        }
-      }
-      else if (t === 'meeting_ended') {
-        const mid = String(e.data.meeting_id ?? '');
-        const mPids: string[] = (e.data.participants as string[]) ?? [];
-        const mStat = String(e.data.status ?? '');
-        const mSum = String(e.data.summary ?? '');
-        // Dismiss only THIS meeting's attendees — other concurrent meetings
-        // (including a human-led one) keep their walkers seated. The "failed"
-        // event carries no participants; in that case dismiss every meeting
-        // walker EXCEPT the active human meeting's attendees.
-        if (scene) {
-          const pidSet = new Set(mPids);
-          const humanAttendees = meetingActive ? meetingSelectedIds : new Set<string>();
-          removeArrivedWalkers(scene, walkers, 'meeting', pidSet.size > 0
-            ? (w) => pidSet.has(w.sourceId)
-            : (w) => !humanAttendees.has(w.sourceId));
-        }
-        for (const pid of mPids) showAnimatedTag(pid, mStat === 'completed'
-          ? { icon: '✅', anim: 'pop', color: '#3DD68C', label: 'MEETING OK', durationFrames: 600 }
-          : { icon: '❌', anim: 'shake', color: '#F04770', label: 'MEETING FAIL', durationFrames: 600 });
-        if (mid && liveMeetings[mid]) {
-          liveMeetings = {
-            ...liveMeetings,
-            [mid]: {
-              ...liveMeetings[mid],
-              status: mStat === 'completed' ? 'completed' : 'failed',
-              ended_at: Date.now(),
-              summary: mSum,
-              decisions: (e.data.decisions as string[]) ?? [],
-              action_items: (e.data.action_items as string[]) ?? [],
-              currentSpeakerId: '',
-            },
-          };
-          meetingIdToRoom.delete(mid);
-          // Halo + banner come down with the meeting. Listeners can still
-          // re-open the transcript from the history panel afterwards.
-          disposeMeetingDecor(mid);
-          // Keep the modal up for a beat so the user reads the wrap-up,
-          // then close it automatically. The meeting stays in the
-          // history panel for later review.
-          if (activeMeetingId === mid) {
-            setTimeout(() => {
-              if (activeMeetingId === mid && liveMeetings[mid]?.status !== 'started') {
-                showLiveMeeting = false;
-              }
-            }, 30_000);
-          }
-        }
-      }
-      // ── Management visibility: prompt/tool edits by a manager ──
-      else if (t === 'agent_edited') {
-        const mgrId = String(e.data.manager_id ?? '');
-        const mgrName = String(e.data.manager_name ?? '');
-        const tgtId = String(e.data.target_id ?? '');
-        const tgtName = String(e.data.target_name ?? '');
-        const changed: string[] = [];
-        if (e.data.prompt_changed) changed.push('prompt');
-        if (e.data.tools_changed) changed.push('tools');
-        const what = changed.join(' + ') || 'config';
-        // Gold/purple beam desk→desk so the user sees "A is editing B's brain".
-        // For cross-office edits, route through a meeting room instead — the
-        // manager and the edited agent "coordinate" face-to-face.
-        if (scene && mgrId && tgtId) {
-          const wentToMeeting = !sameOffice(mgrId, tgtId) && coordinateInMeetingRoom(mgrId, tgtId, '#C67FE8');
-          if (!wentToMeeting) {
-            sendWalker(scene, walkers, mgrId, tgtId, deskPos, roomMap, corGrid, agents, '#C67FE8', undefined, sittingWorkers, deskAabbs);
-          }
-        }
-        // (#6) A pencil tilting inside the target's tag. It was a spinning ⚙️:
-        // the gear is what an agent's config looks like in a settings menu, not
-        // what "someone just rewrote your brain" looks like over a desk.
-        if (tgtId) tryFireAnim(`edit:${tgtId}`, 2.0, () => {
-          showAnimatedTag(tgtId, { icon: '✎', anim: 'wobble', color: '#C67FE8', label: 'EDITED', durationFrames: 260 });
-        });
-        pushMgmtLog({
-          kind: 'edit',
-          from: mgrName, to: tgtName,
-          detail: what,
-          ts: Date.now(),
-          preview: String(e.data.system_prompt_preview ?? ''),
-        });
-      }
-      // ── Management visibility: explicit escalations (manager → X, or cross-office) ──
-      else if (t === 'escalation') {
-        const fromId = String(e.data.from_agent_id ?? '');
-        const fromName = String(e.data.from_agent_name ?? '');
-        const fromRole = String(e.data.from_role ?? 'worker');
-        const toId = String(e.data.to_agent_id ?? '');
-        const toName = String(e.data.to_agent_name ?? '');
-        const subject = String(e.data.subject ?? '').slice(0, 80);
-        const crossOffice = !!e.data.cross_office;
-        const isDirective = !!e.data.is_manager_directive;
-        const color = isDirective
-          ? '#F0883E'                    // orange — directive from manager
-          : crossOffice ? '#5B8DEF' : '#3DD6C8';  // blue cross-team / teal peer
-        // Cross-office escalations + directives: route through a meeting room
-        // (both sit and "coordinate"). Same-office stays as desk-to-desk so
-        // small adjustments don't look as ceremonious as they really are.
-        if (scene && fromId && toId) {
-          const wentToMeeting = !sameOffice(fromId, toId) && coordinateInMeetingRoom(fromId, toId, color);
-          if (!wentToMeeting) {
-            sendWalker(scene, walkers, fromId, toId, deskPos, roomMap, corGrid, agents, color, undefined, sittingWorkers, deskAabbs);
-          }
-        }
-        // No bubbles: the walker (+ for directives the curved arrow below)
-        // are the whole visual. Subject text lives in the management log panel.
-        // (#7) Directives also get an arched arrow above the walker.
-        if (isDirective && scene && fromId && toId) {
-          const fp = deskPos.get(fromId);
-          const tp = deskPos.get(toId);
-          if (fp && tp) tryFireAnim(`directive:${fromId}->${toId}`, 2.0, () => {
-            animRegistry.add(curvedArrow(scene, {
-              from: { x: fp.x, y: 3.2, z: fp.z + 0.55 },
-              to:   { x: tp.x, y: 3.2, z: tp.z + 0.55 },
-              archHeight: 5, color: 0xf0883e,
-              drawSec: 0.5, holdSec: 0.8, fadeSec: 0.5,
-              tag: `directive:${fromId}->${toId}`,
-            }));
-          });
-        }
-        pushMgmtLog({
-          kind: isDirective ? 'directive' : 'escalation',
-          from: fromName, to: toName,
-          detail: subject,
-          ts: Date.now(),
-          preview: String(e.data.body_preview ?? ''),
-          crossOffice, role: fromRole,
-        });
-      }
-      // ── Question asked: the agent literally walks to My Office ──
-      // Two layered visuals:
-      //   (1) A fast paper-plane arc (instant signal — easy to spot from afar).
-      //   (2) A walker dispatched from the asker's desk to My Office carrying
-      //       the question as a CSS2D bubble. The walker plays the "talking"
-      //       pose on arrival, then returns to the desk. This is THE feature
-      //       the user wanted — the agent physically standing up to ask.
-      // The "one walker per agent" guard in sendWalkerToPoint prevents pile-up
-      // if the same agent fires several questions in a row.
-      else if (t === 'question_asked') {
-        const fromId = String(e.data.from_agent_id ?? '');
-        const fromName = String(e.data.from_agent_name ?? '');
-        const qTxt = String(e.data.question ?? '').slice(0, 60);
-        // Audible "new message for the top agent" ping — pairs with the red
-        // halo + alert pill so the escalation is hard to miss even off-screen.
-        playTopAgentChime();
-        if (scene && fromId && myOfficePos) {
-          const fp = deskPos.get(fromId);
-          if (fp) {
-            tryFireAnim(`plane:${fromId}`, 2.5, () => {
-              animRegistry.add(paperPlane(scene, {
-                from: { x: fp.x, z: fp.z },
-                to:   { x: myOfficePos!.x, z: myOfficePos!.z },
-                archHeight: 5, durationSec: 2.0,
-                color: 0xffd166, // golden = escalation
-                tag: `plane:${fromId}`,
-              }));
-            });
-            // The walker itself — stands up, walks the corridors to My Office,
-            // says hello with the question text, returns to the desk.
-            tryFireAnim(`ask-walk:${fromId}`, 25, () => {
-              sendWalkerToPoint(
-                scene, walkers, fromId, myOfficePos!,
-                deskPos, roomMap, corGrid, agents,
-                '#ffd166',                 // gold = "asking the boss"
-                `❓ ${qTxt || 'question'}`, // bubble shows truncated question
-                deskAabbs, 'myoffice',     // customTargetId — same tag used by report completions
-                sittingWorkers,
-                true,                       // urgent = run instead of walk, 1.6× speed
-              );
-            });
-          }
-        }
-        loadPendingQuestions();
-        pushMgmtLog({
-          kind: 'escalation',
-          from: fromName, to: topAgent()?.name ?? highestRank()?.name ?? 'Chief',
-          detail: `❓ ${qTxt}`,
-          ts: Date.now(),
-          preview: String(e.data.question ?? ''),
-          crossOffice: false, role: 'manager',
-        });
-      }
-      // ── Top agent answered: ping the asker's desk with a green "answer
-      // delivered" pulse + reverse paper plane. The asker will see this on
-      // their next run (the answer also lands in their inbox); the visual is
-      // just to close the loop for whoever is watching the 3D office. ─
-      else if (t === 'question_answered') {
-        const toId = String(e.data.from_agent_id ?? ''); // recipient = original asker
-        const chosen = String(e.data.selected_option ?? '').slice(0, 40);
-        if (scene && toId && myOfficePos) {
-          const tp = deskPos.get(toId);
-          if (tp) {
-            tryFireAnim(`ans-plane:${toId}`, 2.5, () => {
-              animRegistry.add(paperPlane(scene, {
-                from: { x: myOfficePos!.x, z: myOfficePos!.z },
-                to:   { x: tp.x, z: tp.z },
-                archHeight: 4.5, durationSec: 1.8,
-                color: 0x78dc8c, // green = answer delivered
-                tag: `ans-plane:${toId}`,
-              }));
-            });
-            const dg = deskGroups.get(toId);
-            if (dg) tryFireAnim(`ans-halo:${toId}`, 2.0, () => {
-              animRegistry.add(floatingGlyph(dg, {
-                glyph: '✓',
-                color: '#78dc8c',
-                fontSize: 28,
-                startY: 1.6,
-                durationSec: 2.0,
-                tag: `ans-halo:${toId}`,
-              }));
-            });
-          }
-        }
-        loadPendingQuestions();
-        if (toId) {
-          const a = agents.find(x => x.id === toId);
-          pushMgmtLog({
-            kind: 'escalation',
-            from: topAgent()?.name ?? highestRank()?.name ?? 'Chief',
-            to: a?.name ?? toId.slice(0, 8),
-            detail: `✓ ${chosen}`,
-            ts: Date.now(),
-            preview: chosen,
-            crossOffice: false, role: 'manager',
-          });
-        }
-      }
-      // ── Trade execution celebration in Central Hall + ritual in trading office ──
-      if (e.event === 'archEvent' && (e.data as any)?.event === 'trade_executed') {
-        const td = (e.data as any)?.data;
-        if (td && hallCenterPos && scene && THREE) {
-          const symbol = String(td.symbol ?? '').replace(/\/.*/, '');
-          const sideStr = String(td.side ?? 'BUY').toUpperCase();
-          const side: 'BUY' | 'SELL' = sideStr === 'SELL' ? 'SELL' : 'BUY';
-          const price = Number(td.price ?? 0);
-          const isBuy = side === 'BUY';
-
-          // Local ritual — runs inside the trading office for EVERY order.
-          // Resolve the trader: prefer agent_id on the event; fall back to the
-          // first active agent of the trading flow (name-matched).
-          let traderId = String(td.agent_id ?? '');
-          const tradingFlow = flows.find(f => /trad/i.test(f.name || ''));
-          if (!traderId && tradingFlow) {
-            const ag = agents.find(a => a.flow_id === tradingFlow.id && a.active === 1);
-            if (ag) traderId = ag.id;
-          }
-          const traderDesk = traderId ? deskPos.get(traderId) : undefined;
-          const tradingRoom = tradingFlow ? roomMap.get(tradingFlow.id) : undefined;
-          if (traderDesk && tradingRoom) {
-            const monitorMat = deskGroups.get(traderId)?.userData?._monitor?.material;
-            const pnlRaw = Number(td.pnl ?? td.realized_pnl ?? td.profit ?? NaN);
-            runTradeExecution({
-              scene, registry: animRegistry,
-              trader: { x: traderDesk.x, y: 0, z: traderDesk.z },
-              marketHub: { x: tradingRoom.cx, y: 2.5, z: tradingRoom.cz },
-              symbol, side,
-              quantity: Number(td.qty ?? td.quantity ?? td.size ?? 1),
-              price,
-              pnl: Number.isFinite(pnlRaw) ? pnlRaw : undefined,
-              monitorMaterial: monitorMat,
-            });
-          }
-
-          // Office-wide celebration (existing) — keeps the news visible from
-          // anywhere in the floor plan on top of the local ritual.
-          spawnTradeCelebration(symbol, sideStr, price, isBuy);
-        }
-      }
-    }
-
-    // Update activity board with latest events
-    const boardEvents = flowEvents.slice(0, 6).map(ev => {
-      const t = ev.event.split(':').pop() ?? '';
-      const agentName = agents.find(a => a.id === String(ev.data.agent_id ?? ''))?.name ?? '';
-      let text = t;
-      if (t === 'run_started') text = 'started';
-      else if (t === 'run_completed') text = ev.data.status === 'completed' ? 'done' : 'failed';
-      else if (t === 'chain_triggered') text = `→ ${String(ev.data.target_agent_name ?? '').slice(0, 15)}`;
-      else if (t === 'step') text = String(ev.data.type === 'tool_call' ? ev.data.tool_name : ev.data.type ?? '').slice(0, 20);
-      const ts = ev.data.ts ?? ev.ts;
-      const time = ts ? new Date(ts as string).toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit' }) : '';
-      return { agent: agentName.slice(0, 12), text, color: agentName ? flowColor(String(ev.data.agent_id ?? '')) : '#8a8fa8', time };
-    });
-    updateActivityBoard(boardEvents);
+    processLiveEvents(eventCtx);
   }
 
   // ── Trade celebration: particles + glow ring + sound in Central Hall ──
@@ -3657,10 +2899,13 @@
   // Reusable temporaries (no per-frame allocation). Initialised once THREE
   // has loaded (initScene → initTurntableTemps).
   let _ttUP: any = null, _ttC: any = null, _ttQ: any = null, _ttQ2: any = null,
-      _ttView: any = null, _ttRight: any = null, _ttTest: any = null, _ttE: any = null;
+      _ttView: any = null, _ttRight: any = null, _ttTest: any = null, _ttE: any = null,
+      _ttRay: any = null, _ttNdc: any = null, _ttFloor: any = null, _ttHit: any = null;
   function initTurntableTemps() {
     if (_ttUP || !THREE) return;
     _ttUP = new THREE.Vector3(0, 1, 0);
+    _ttRay = new THREE.Raycaster(); _ttNdc = new THREE.Vector2();
+    _ttFloor = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0); _ttHit = new THREE.Vector3();
     _ttC = new THREE.Vector3(); _ttQ = new THREE.Quaternion(); _ttQ2 = new THREE.Quaternion();
     _ttView = new THREE.Vector3(); _ttRight = new THREE.Vector3();
     _ttTest = new THREE.Vector3(); _ttE = new THREE.Vector3();
@@ -3678,6 +2923,24 @@
     }
     if (hallCenterPos) return { x: hallCenterPos.x, y: RECEPTION_PIVOT_Y, z: hallCenterPos.z };
     return { x: 0, y: RECEPTION_PIVOT_Y, z: 0 };
+  }
+
+  /** Orbit pivot for a drag starting at (clientX, clientY): the floor point under
+   *  the cursor, so that point stays put on screen while the view turns around it
+   *  (the "orbit around cursor" of Blender / Google Earth / Sketchfab). Rays that
+   *  miss the floor or hit it absurdly far away (near the horizon) fall back to
+   *  the point the camera looks at. */
+  function pivotUnderCursor(clientX: number, clientY: number): { x: number; y: number; z: number } {
+    initTurntableTemps();
+    const fallback = { x: controls.target.x, y: 0, z: controls.target.z };
+    if (!camera || !renderer || !_ttRay) return fallback;
+    const r = renderer.domElement.getBoundingClientRect();
+    if (!r.width || !r.height) return fallback;
+    _ttNdc.set(((clientX - r.left) / r.width) * 2 - 1, -((clientY - r.top) / r.height) * 2 + 1);
+    _ttRay.setFromCamera(_ttNdc, camera);
+    const hit = _ttRay.ray.intersectPlane(_ttFloor, _ttHit);
+    if (!hit || hit.distanceTo(camera.position) > camera.position.distanceTo(controls.target) * 4) return fallback;
+    return { x: hit.x, y: 0, z: hit.z };
   }
 
   function _rotAround(P: any, C: any, q: any) { P.sub(C).applyQuaternion(q).add(C); }
@@ -3700,13 +2963,15 @@
       if (_ttRight.lengthSq() > 1e-6) {
         _ttRight.normalize();
         const qp = _ttQ2.setFromAxisAngle(_ttRight, dPolar);
-        // Try the pitch on a copy of the camera: only apply it if the resulting
-        // elevation stays inside the allowed range.
+        // Try the pitch on a copy of the camera: only apply it if the view's
+        // elevation (camera seen from its target — a rigid rotation turns that
+        // vector by qp whatever the pivot) stays in range and the camera stays
+        // above the floor.
         _ttTest.copy(camera.position);
         _rotAround(_ttTest, C, qp);
-        const e = _ttE.subVectors(_ttTest, C);
+        const e = _ttE.subVectors(camera.position, controls.target).applyQuaternion(qp);
         const el = Math.atan2(e.y, Math.hypot(e.x, e.z));
-        if (el >= TURNTABLE_MIN_EL && el <= TURNTABLE_MAX_EL) {
+        if (el >= TURNTABLE_MIN_EL && el <= TURNTABLE_MAX_EL && _ttTest.y > 1) {
           camera.position.copy(_ttTest);
           _rotAround(controls.target, C, qp);
         }
@@ -3717,6 +2982,7 @@
 
   // Custom drag state (only active in 'turntable' mode).
   let _ttDragging = false, _ttLastX = 0, _ttLastY = 0;
+  let _ttPivot: { x: number; y: number; z: number } | null = null;
   function onWorldPointerDown(ev: PointerEvent) {
     if (ev.button !== 0 || !camera || !controls) return;
     if (rotationMode === 'recenter') {
@@ -3726,19 +2992,21 @@
       controls.update();
       return; // OrbitControls (enableRotate ON) hace el giro
     }
-    // turntable: we handle the rotation ourselves
+    // turntable: we handle the rotation ourselves, around the floor point under the cursor
     _ttDragging = true;
     _ttLastX = ev.clientX; _ttLastY = ev.clientY;
+    _ttPivot = pivotUnderCursor(ev.clientX, ev.clientY);
   }
   function onWorldPointerMove(ev: PointerEvent) {
     if (!_ttDragging || rotationMode !== 'turntable') return;
     const dx = ev.clientX - _ttLastX, dy = ev.clientY - _ttLastY;
     _ttLastX = ev.clientX; _ttLastY = ev.clientY;
     if (dx === 0 && dy === 0) return;
-    turntableRotate(orbitPivot(), -dx * TURNTABLE_ROT_SPEED, -dy * TURNTABLE_ROT_SPEED);
+    turntableRotate(_ttPivot ?? orbitPivot(), -dx * TURNTABLE_ROT_SPEED, -dy * TURNTABLE_ROT_SPEED);
   }
   function onWorldPointerUp() {
     _ttDragging = false;
+    _ttPivot = null;
   }
 
   /** Aplica el modo a OrbitControls (enableRotate) y persiste la preferencia. */
@@ -3992,7 +3260,9 @@
   export function focusOfficeById(flowId: string): boolean {
     const room = roomMap.get(flowId);
     if (!room) return false;
-    focusOffice(room);
+    // A plugin building is framed whole: its room may be only an office inside it.
+    const site = offGridSites.get(flows.find(f => f.id === flowId)?.kind ?? '');
+    focusOffice(site ? site.focus : room);
     return true;
   }
 
@@ -4001,6 +3271,7 @@
     if (!camera || !controls || roomMap.size === 0) return;
     let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity;
     const boxes: Array<{ cx: number; cz: number; w: number; d: number }> = [...roomMap.values(), ...meetingRooms];
+    for (const st of offGridSites.values()) boxes.push(st.focus);
     for (const b of boxes) {
       minX = Math.min(minX, b.cx - b.w / 2);
       maxX = Math.max(maxX, b.cx + b.w / 2);
@@ -4115,6 +3386,8 @@
   // motion (including damping) the CSS2D labels render at FULL frame rate so
   // they stay glued to the scene instead of trailing at half rate.
   let lastControlChangeAt = 0;
+  /** Last time the user grabbed the camera themselves (OrbitControls 'start'). */
+  let lastUserSteerAt = -Infinity;
 
   // Perf stats (computed inside animate loop and fed to PerfOverlay)
   const perfFrameTimes: number[] = [];
@@ -4154,6 +3427,29 @@
     if (bloomPass) bloomPass.enabled = qualityTier >= 1;
   }
 
+  /**
+   * Zoom-to-cursor (controls.zoomToCursor) parks the orbit target straight in
+   * front of the camera at the old radius — off the floor. Pan speed is scaled
+   * by the camera→target distance, so with the target hanging above the floor
+   * a right-drag slid the floor slower than the pointer: it felt like dragging
+   * through mud, worse the more you had zoomed. Slide the target back down the
+   * same line of sight onto the floor: the view is unchanged, the pan is 1:1 again.
+   */
+  const _floorFwd = { x: 0, y: 0, z: 0 };
+  function keepOrbitTargetOnFloor(): void {
+    if (!camera || !controls || Math.abs(controls.target.y) < 0.25) return;
+    // After update() the camera looks exactly at the target: that is the line of sight.
+    _floorFwd.x = controls.target.x - camera.position.x;
+    _floorFwd.y = controls.target.y - camera.position.y;
+    _floorFwd.z = controls.target.z - camera.position.z;
+    const len = Math.hypot(_floorFwd.x, _floorFwd.y, _floorFwd.z) || 1;
+    _floorFwd.x /= len; _floorFwd.y /= len; _floorFwd.z /= len;
+    if (_floorFwd.y > -0.05) return; // looking at the horizon: no floor point to anchor to
+    const t = -camera.position.y / _floorFwd.y;
+    if (!(t > 0) || t > 2000) return;
+    controls.target.set(camera.position.x + _floorFwd.x * t, 0, camera.position.z + _floorFwd.z * t);
+  }
+
   function animate(now: number = performance.now()) {
     animId = requestAnimationFrame(animate);
     fc++;
@@ -4162,10 +3458,27 @@
     lastFrameTime = now;
     sceneTimeSec += deltaSec;
     controls.update();
+    keepOrbitTargetOnFloor();
 
     // Drive every registered Ticker — camera tweens, halo pulses, trade
     // particles, bubble fades. Finished tickers self-dispose and drop out.
     animRegistry.tick(deltaSec, sceneTimeSec);
+    for (const [kind, inst] of worldInstances) {
+      try { inst.tick(deltaSec); } catch (err) { console.error(`[world] ${kind}: tick failed`, err); }
+    }
+
+    // Office construction — a failure here must never break the world: finish the build instead.
+    if (staticGroup) {
+      try {
+        const cdt = deltaSec * constructionTimeScale;
+        construction.tick(cdt, now);
+        constructionStage ??= makeConstructionStage();
+        constructionStage.update(cdt, sceneTimeSec, construction.active());
+      } catch (err) {
+        console.error('[construction] failed — finishing the build:', err);
+        construction.skip();
+      }
+    }
 
     // Build set of agents currently being spoken to (a walker arrived at their desk)
     const beingSpokenTo = new Set<string>();
@@ -4412,6 +3725,8 @@
     updateAmbiance(sceneTimeSec);
     // Infra power console: ease the master lever + pulse booting/error LEDs.
     updateInfraConsole(deltaSec, sceneTimeSec);
+    // Data center: flicker the activity LEDs on occupied racks.
+    updateDataCenter(sceneTimeSec);
     // Door LEDs: green=running, grey=idle
     updateDoorLeds(runningAgentIds, agents);
 
@@ -4657,7 +3972,7 @@
   function sceneFingerprint(): string {
     const a = agents.map(x => `${x.id}:${x.flow_id}:${x.active}:${x.rank_id ?? ''}:${x.skin_id ?? ''}:${x.name}`).sort().join('|');
     const c = chains.map(x => `${x.source_agent_id}>${x.target_agent_id}:${x.active}`).sort().join('|');
-    const f = flows.map(x => `${x.id}:${x.kind ?? ''}:${x.name}:${x.color}:${x.active}`).sort().join('|');
+    const f = flows.map(x => `${x.id}:${x.kind ?? ''}:${x.name}:${x.color}:${x.active}:${x.lot_id ?? ''}`).sort().join('|');
     const r = ranks.map(x => `${x.id}:${x.color}:${x.insignia}:${x.level}`).sort().join('|');
     return `${a}#${c}#${f}#${r}`;
   }
@@ -4671,11 +3986,13 @@
   }
 
   $: if (agents.length > 0 && THREE) {
-    const key = sceneFingerprint();
+    // A new office goes pending (hidden) here, before the plan is laid out,
+    // so it never flashes on the floor ahead of its construction crew.
+    observeOffices();
+    const key = sceneFingerprint() + `#c${constructionVersion}#w${worldVersion}`;
     if (key !== lastReactiveKey) {
       lastReactiveKey = key;
-      const plan = computeFloorPlan(agents, chains, flows, ranks);
-      deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid; meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
+      applyPlan(agents, chains, flows, ranks);
       rebuildScene();
       // Active toggles reach here without a static rebuild — refresh the
       // "N AGENTS · M ON" sublines on the room signs in place.
@@ -4690,6 +4007,8 @@
         seenAgentIds = new Set(agents.map(a => a.id));
         onboardingPrimed = true;
       }
+      // Same for construction: the offices already here never get built again.
+      if (!construction.primed && flows.length > 0) construction.prime(flows.map(f => f.id));
     }
   }
 
@@ -4732,15 +4051,21 @@
 
     // Fingerprint: agent IDs + flow assignments + flow count + each flow's kind/name/color
     // (kind picks the room theme, name the door sign, color the floor/sign). If unchanged, only desks need refreshing.
-    const flowLayoutKey = flows.map(f => `${f.id}:${f.kind ?? ''}:${f.name}:${f.color}`).sort().join('|');
-    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}`;
+    const flowLayoutKey = flows.map(f => `${f.id}:${f.kind ?? ''}:${f.name}:${f.color}:${f.lot_id ?? ''}`).sort().join('|');
+    // Offices waiting for their crew are off the floor; when one gets built the static scene changes.
+    const hiddenKey = [...construction.hiddenFlowIds()].sort().join(',');
+    const layoutKey = agents.map(a => `${a.id}:${a.flow_id}`).sort().join('|') + `|${flows.length}|${meetingRooms.length}|${flowLayoutKey}|h:${hiddenKey}|w:${worldVersion}`;
     const layoutChanged = layoutKey !== lastLayoutKey;
     lastLayoutKey = layoutKey;
 
     if (layoutChanged) {
       // Full rebuild — remove static geometry group and recreate
       if (staticGroup) {
-        staticGroup.traverse((c: any) => { c.geometry?.dispose(); if (c.material) { if (Array.isArray(c.material)) c.material.forEach((m: any) => m.dispose()); else c.material.dispose(); } });
+        staticGroup.traverse((c: any) => {
+          c.geometry?.dispose(); if (c.material) { if (Array.isArray(c.material)) c.material.forEach((m: any) => m.dispose()); else c.material.dispose(); }
+          // CSS2D labels keep their DOM node when an ancestor leaves the scene.
+          if (c.isCSS2DObject) c.element?.remove();
+        });
         scene.remove(staticGroup);
       }
       staticGroup = new THREE.Group();
@@ -4751,7 +4076,8 @@
       const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
-      buildRooms(staticGroup, roomMap, computeRoomCounts());
+      buildRooms(staticGroup, gridRooms(), computeRoomCounts());
+      lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
       buildAmbiance(staticGroup, corGrid.buildingBounds, corGrid.nodes, entranceHint);
@@ -4805,8 +4131,13 @@
       humanoidPool = null;
     }
 
-    const r = buildDesks(scene, agents, flows, deskPos, runningAgentIds, ranks, humanoidPool);
+    // An office under construction gets its desks only once its walls are up.
+    const deskAgents = desksPendingFlows.size ? agents.filter(a => !desksPendingFlows.has(a.flow_id ?? '')) : agents;
+    const r = buildDesks(scene, deskAgents, flows, deskPos, runningAgentIds, ranks, humanoidPool);
     deskGroups = r.deskGroups; deskLabels = r.deskLabels; sittingWorkers = r.sittingWorkers; deskAabbs = r.deskAabbs;
+    for (const fid of seatedHiddenFlows) {
+      for (const a of officeAgents(fid)) sittingWorkers.get(a.id)?.setVisible(false);
+    }
     // The top agent is filtered out of buildDesks (no flow grid slot for
     // him). His seated entry was wiped by sittingWorkers.clear() above, so
     // re-add it now that the new map is in place.
@@ -4827,9 +4158,8 @@
   let questionsRefreshTimer: ReturnType<typeof setInterval> | null = null;
 
   onMount(() => {
-    loadContributedTabs();
-    const plan = computeFloorPlan(agents, chains, flows, ranks);
-    deskPos = plan.deskPositions; roomMap = plan.rooms; corGrid = plan.corridorGrid; meetingRooms = plan.meetingRooms ?? []; hallExtensions = plan.hallExtensions ?? [];
+    // (The drawer's extension-contributed tabs load in AgentPanel's onMount.)
+    applyPlan(agents, chains, flows, ranks);
     // Build the scene; surface any fatal error on the loader instead of leaving
     // it spinning forever (the old behavior on a mid-build throw).
     buildScene()
@@ -4850,6 +4180,7 @@
         bootError = 'No se pudo construir la escena 3D: ' + (e?.message ?? String(e));
       });
     restoreUiState();
+    document.addEventListener('visibilitychange', skipConstructionWhenHidden);
     // Pull the repo registry now so the first scene build paints the rack
     // tags + directory panel; if the fetch resolves after buildScene we
     // trigger a one-shot rebuild so the racks light up without a full reload.
@@ -4881,12 +4212,17 @@
     resizeObserver = null;
     if (animId) cancelAnimationFrame(animId);
     if (reposRefreshTimer) { clearInterval(reposRefreshTimer); reposRefreshTimer = null; }
+    unmountWorldPlugins();
+    unsubExtWorlds();
     if (infraRefreshTimer) { clearInterval(infraRefreshTimer); infraRefreshTimer = null; }
     if (questionsRefreshTimer) { clearInterval(questionsRefreshTimer); questionsRefreshTimer = null; }
     if (sceneReadyFallbackTimer) { clearTimeout(sceneReadyFallbackTimer); sceneReadyFallbackTimer = null; }
     // Dispose every pending Ticker — fires onDispose callbacks (scene/material
     // cleanup for trade celebrations) so we don't leak ahead of the renderer.
     animRegistry.clear();
+    constructionStage?.dispose();
+    constructionStage = null;
+    document.removeEventListener('visibilitychange', skipConstructionWhenHidden);
     if (composer) { composer.dispose(); composer = null; }
     if (renderer) { renderer.dispose(); renderer.domElement?.parentNode?.removeChild(renderer.domElement); }
     if (labelRenderer?.domElement?.parentNode) labelRenderer.domElement.parentNode.removeChild(labelRenderer.domElement);
@@ -4905,26 +4241,11 @@
     }
   });
 
-  $: selData = selectedAgent ? agents.find(a => a.id === selectedAgent) : null;
-
-  $: selStats = selectedAgent ? stats[selectedAgent] : null;
-  $: selChains = selectedAgent ? chains.filter(c => c.source_agent_id === selectedAgent || c.target_agent_id === selectedAgent) : [];
-  $: selFlow = selData ? flows.find(f => f.id === selData.flow_id) : null;
-  /** Declared chains, with the other end already named — TriggeringSection
-   *  prints them and has no agent list of its own to resolve an id with. */
-  $: selChainRows = selChains.map((c) => {
-    const isOut = c.source_agent_id === selectedAgent;
-    const otherId = isOut ? c.target_agent_id : c.source_agent_id;
-    return { out: isOut, name: agents.find((a) => a.id === otherId)?.name ?? '?', label: c.label };
-  });
-
-  // ── What defines the selected agent ────────────────────────────────────
-  // The system prompt for an LLM agent, the builtin handler for a scripted
-  // one. Either way it is the answer to "what is this thing", so Overview
-  // leads with it instead of burying it under a collapsed section at the end.
-  // The graph payload already carries both, so the block renders with the
-  // selection instead of flashing a loading line until the detail fetch lands.
-  $: selPrompt = String(agentDetail?.agent?.system_prompt ?? selData?.system_prompt ?? '');
+  // The selected agent's drawer — its detail fetch, tabs, chat and actions —
+  // lives in AgentPanel.svelte. The world keeps the selection itself.
+  let agentPanel: AgentPanel | null = null;
+  // Installed skins for the drawer's picker, snapshotted in buildScene().
+  let availableSkins: SkinDefinition[] = [];
 
   // Show/hide hallway lines based on selected agent
   $: {
@@ -4936,92 +4257,6 @@
       }
     }
   }
-
-  // ── Full agent detail (fetched on demand) ──────────
-  let agentDetail: {
-    agent?: any;
-    runs?: any[];
-    triggers?: Array<{ event_name: string; filter?: string; cooldown_ms?: number; active?: number }>;
-    schedules?: Array<{ cron_expression: string; interval_ms: number; goal_override?: string; next_run_at?: string; last_run_at?: string; active?: number }>;
-    adhocConnections?: {
-      invokedBy: Array<{ agent_id: string; agent_name: string; count: number; last_at: string }>;
-      invoked: Array<{ agent_id: string; agent_name: string; count: number; last_at: string }>;
-    };
-  } | null = null;
-  let detailLoading = false;
-
-  async function loadAgentDetail(id: string) {
-    detailLoading = true;
-    try {
-      const r = await fetch(`/api/agents/${id}`);
-      agentDetail = await r.json();
-    } catch { agentDetail = null; }
-    detailLoading = false;
-  }
-
-  // Fire whenever a new agent is selected
-  $: if (selectedAgent) loadAgentDetail(selectedAgent); else agentDetail = null;
-
-  // The row the drawer's store is seeded with.
-  //
-  // `selData` is the world's list row and it is the one that refreshes — a
-  // Pause writes into it optimistically — so it wins every key it has. What it
-  // does not carry are the three limits that only GET /api/agents/:id returns
-  // (max_iterations, max_tokens, max_errors), and RuntimeSection edits those.
-  // Layering the detail underneath fills them in without letting a stale
-  // detail row overwrite anything the list already knows.
-  $: selRow = selData
-    ? (agentDetail?.agent?.id === selData.id
-        ? { ...agentDetail.agent, ...selData }
-        : selData)
-    : null;
-
-  /**
-   * A write from inside the drawer, reflected in the world's own list.
-   *
-   * Without this the node keeps its old colour and the header its old model
-   * chip until the parent's next refetch pushes `agents` back down. Only the
-   * keys the world's rows actually carry are copied — the drawer's agent is a
-   * superset and the extra columns have no meaning out here.
-   */
-  function patchWorldAgent(next: Record<string, any> | null | undefined) {
-    if (!next?.id) return;
-    const keys = [
-      'name', 'description', 'provider', 'model', 'model_chain', 'executor_type',
-      'active', 'timeout_ms', 'role', 'rank_id', 'flow_id', 'system_prompt',
-      'allowed_tools', 'consecutive_failures', 'auto_paused_at', 'auto_pause_reason',
-      // Sin esta clave el attach del tab Skills se descartaba acá en silencio:
-      // la escritura llegaba a la base, pero la fila del mundo (y con ella el
-      // badge del tab) seguía mostrando la lista vieja hasta el próximo fetch.
-      'skills_json',
-    ];
-    agents = agents.map((a) => {
-      if (a.id !== next.id) return a;
-      const merged: Record<string, any> = { ...a };
-      for (const k of keys) if (next[k] !== undefined) merged[k] = next[k];
-      return merged as typeof a;
-    });
-    // Keep the panel's own detail row in step too, so the limits it owns do
-    // not snap back to their pre-edit values on the next reactive pass.
-    const detail = agentDetail;
-    if (detail && detail.agent && detail.agent.id === next.id) {
-      agentDetail = { ...detail, agent: { ...detail.agent, ...next } };
-    }
-    // And ask the parent for server truth, exactly as the rename does.
-    //
-    // The optimistic update above only lives until the parent's 60s poll
-    // re-pushes `graphData.agents` — and that poll compares `id + active`
-    // only, so a changed model chain is "no structural diff" and it hands
-    // back the very array this function just edited around. Observed: a
-    // removed fallback reappeared about five seconds after it was removed,
-    // with the database already correct. Debounced because autosave on the
-    // numeric fields would otherwise refetch the whole graph per edit.
-    clearTimeout(worldRefreshTimer);
-    worldRefreshTimer = setTimeout(() => dispatch('refresh'), 1200);
-  }
-  let worldRefreshTimer: ReturnType<typeof setTimeout>;
-
-  // Parse helpers tolerant of JSON string columns
 
   // Clipboard — shows a brief "copied" flash on the triggering button
   let copiedKey: string | null = null;
@@ -5036,11 +4271,6 @@
     }
   }
 
-  // Collapsible section state. It lives here and not inside each section so
-  // that closing and reopening the drawer does not forget it.
-  let collapsed = { tools: true, variables: false, mandate: true };
-
-  // ── Talk to agent ──────────────────────────────
   const dispatch = createEventDispatcher();
 
   let lastInboxCount = -1;
@@ -5049,446 +4279,11 @@
     dispatch('inbox', { count: lastInboxCount });
   }
 
-  let chatInput = '';
-  let chatSending = false;
-  let starting = false;
-  let startMsg = '';
-  let togglingPause = false;
-  let revisionBusy = false;
-  let editingName = false;
-  let editNameValue = '';
-  let savingName = false;
-  let chatHistory: Array<{ role: 'you' | 'agent'; text: string; ts: number }> = [];
-  let chatHistoryLoading = false;
-  let chatError = '';
-  /** The run was accepted and the agent is working. Replaces the old trick of
-   *  pushing a literal "Working on it..." bubble and later deleting whatever
-   *  message happened to carry that exact text. */
-  let chatPending = false;
-  let chatScrollEl: HTMLDivElement | null = null;
-
-  /** Can this agent read what you write?
-   *
-   *  No, if it is backed by a builtin handler. `AgentExecutor.execute` (see
-   *  services/kernel/src/modules/agents/executor.ts) short-circuits on
-   *  `agent.builtin_handler` and calls `await handler()` — no arguments. The
-   *  whole conversational goal this panel builds is discarded, the script runs
-   *  as if you had pressed Run now, and its output comes back looking like a
-   *  reply to a message nothing ever read. 31 of the agents on this floor are
-   *  in that shape, so the tab says so instead of pretending. */
-  $: chatCanConverse = !!selData && !selData.builtin_handler;
-
-  /** Openers built from this agent, not from whatever product the placeholder
-   *  was copied out of. The old one advertised a prospecting syntax
-   *  ("Prospect city=Valencia…") on every agent in the office. */
-  $: chatSuggestions = (() => {
-    if (!selData || !chatCanConverse) return [] as string[];
-    const out: string[] = [];
-    const goal = String(agentDetail?.agent?.goal_template ?? '').trim();
-    if (goal) out.push(goal.length > 90 ? goal.slice(0, 88) + '…' : goal);
-    if (selData.description) out.push(`What did you do about ${selData.description.toLowerCase()} this week?`);
-    out.push('What are you working on right now?');
-    if (selStats?.failed) out.push('Why did your last runs fail?');
-    return out.slice(0, 3);
-  })();
-
-  function beginEditName() {
-    if (!selData) return;
-    editNameValue = selData.name;
-    editingName = true;
-  }
-  function cancelEditName() {
-    editingName = false;
-    editNameValue = '';
-  }
-  // Skin picker — list of installed skins for the dropdown. Computed once at
-  // mount when the skin registry has been initialised.
-  let availableSkins: SkinDefinition[] = [];
-  let savingSkin = false;
-
-  /** Persist a new skin choice for the currently-selected agent. The kernel
-   *  saves it; the dashboard's reactive scene rebuild renders the new look on
-   *  the next fingerprint diff. */
-  async function changeSkin(skinId: string): Promise<void> {
-    if (!selectedAgent || savingSkin) return;
-    savingSkin = true;
-    try {
-      const r = await fetch(`/api/agents/${selectedAgent}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ skin_id: skinId }),
-      });
-      const data = await r.json();
-      if (data?.success) {
-        agents = agents.map(a => a.id === selectedAgent ? { ...a, skin_id: skinId } : a);
-        dispatch('refresh');
-      }
-    } catch (e: any) {
-      // Best-effort — fall through, will retry on next interaction.
-      // eslint-disable-next-line no-console
-      console.error('changeSkin failed', e);
-    } finally {
-      savingSkin = false;
-    }
-  }
-
-  async function saveEditName() {
-    if (!selectedAgent || !selData || savingName) return;
-    const next = editNameValue.trim();
-    if (!next || next === selData.name) { cancelEditName(); return; }
-    savingName = true;
-    try {
-      const r = await fetch(`/api/agents/${selectedAgent}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: next }),
-      });
-      const data = await r.json();
-      if (data?.success) {
-        agents = agents.map(a => a.id === selectedAgent ? { ...a, name: next } : a);
-        loadAgentDetail(selectedAgent);
-        editingName = false;
-        // Ask the parent to re-fetch so its own `agents` (the source of truth
-        // that gets re-pushed back as our prop) reflects the new name. Without
-        // this, the next prop update overwrites our optimistic rename.
-        dispatch('refresh');
-      } else {
-        startMsg = `✗ ${data?.error || 'could not rename'}`;
-      }
-    } catch (e: any) {
-      startMsg = `✗ ${e?.message || 'network error'}`;
-    } finally {
-      savingName = false;
-      setTimeout(() => { if (startMsg.startsWith('✗')) startMsg = ''; }, 4000);
-    }
-  }
-
-  // ── Agent panel tabs ───────────────────────────
-  // Core ids are literals; extension-contributed tabs use dynamic ids.
-  let panelTab: 'info' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
-  let agentRuns: Array<{ id: string; status: string; steps_count: number; tokens_used: number; trigger_type: string; created_at: string; result?: string; error?: string }> = [];
-  let agentMemory: Array<{ role: string; content: string; created_at: string }> = [];
-  let workspaceFiles: Array<{ path: string; type: string; size: number }> = [];
-  let workspaceFileContent: { path: string; content: string } | null = null;
-  let workspaceLoading = false;
-  let workspacePreviewUrl: string | null = null;
-
-  $: visibleWorkspaceFiles = workspaceFiles.filter(f => !isWorkspacePathHidden(f.path));
-
-  // ── Workspace tree ─────────────────────────────────────────────────
-  // Row building moved to WorkspaceTab.svelte with the markup. Only the
-  // collapse set stays, because loadWorkspaceFiles() resets it on reload.
-  let wsCollapsed: Set<string> = new Set();
-
-  let runsLoading = false;
-  let memoryLoading = false;
-  let expandedRunId: string | null = null;
-  let runSteps: Array<{ step_number: number; type: string; content: string; tool_name: string; tool_output?: string; is_event?: boolean }> = [];
-
   // ── Sent-email viewer ──────────────────────────────────────────────
   // An email-send activity row shows a "Ver email" link; it calls open()
   // on EmailModal.svelte, which fetches and renders the real sent message.
   // Only the handle stays here — the link sits next to its own row.
   let emailModal: EmailModal | null = null;
-
-  // Track loading + error separately from `runSteps`. Without these, an empty
-  // result (e.g. a meeting event, or a run that errored before producing any
-  // steps) leaves the UI stuck on "Loading steps…" forever because
-  // `runSteps.length === 0` is also the initial state.
-  let runStepsLoading = false;
-  let runStepsError: string | null = null;
-
-  async function loadAgentRuns() {
-    if (!selectedAgent || runsLoading) return;
-    runsLoading = true;
-    try {
-      const data: any = await rpcOrCall('agents.runs.list', { agent_id: selectedAgent, limit: 20 }, async () => {
-        const r = await fetch(`/api/agents/${selectedAgent}/runs?limit=20`);
-        return r.json();
-      });
-      agentRuns = data?.runs ?? [];
-    } catch { agentRuns = []; }
-    runsLoading = false;
-  }
-
-  async function loadAgentMemory() {
-    if (!selectedAgent || memoryLoading) return;
-    memoryLoading = true;
-    try {
-      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=50`);
-      const data: any = await res.json();
-      agentMemory = (data?.memory ?? []) as Array<{ role: string; content: string; created_at: string }>;
-    } catch { agentMemory = []; }
-    memoryLoading = false;
-  }
-
-  async function loadChatFromMemory() {
-    if (!selectedAgent) return;
-    chatHistoryLoading = true;
-    chatError = '';
-    try {
-      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30`);
-      const data: any = await res.json();
-      const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string }>)
-        .filter(m => m.role === 'user' || m.role === 'assistant')
-        .reverse(); // chronological
-      chatHistory = items.map(m => ({
-        role: m.role === 'user' ? 'you' as const : 'agent' as const,
-        text: m.content,
-        ts: new Date(m.created_at).getTime(),
-      }));
-    } catch (e: any) {
-      // Was swallowed silently, which made a failed fetch and a genuinely empty
-      // thread look identical — and the empty one invites you to write.
-      chatError = e?.message ?? String(e);
-    } finally {
-      chatHistoryLoading = false;
-      scrollChatToEnd();
-    }
-  }
-
-  /** Keep the newest message in view after loads, sends and replies. */
-  async function scrollChatToEnd() {
-    await tick();
-    if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
-  }
-
-
-  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData, flows) : null;
-
-  async function loadWorkspaceFiles() {
-    if (!selectedAgent || workspaceLoading) return;
-    const agent = agents.find(a => a.id === selectedAgent);
-    if (!agent) return;
-    const info = resolveAgentWorkspace(agent, flows);
-    workspaceLoading = true;
-    workspaceFileContent = null;
-    workspacePreviewUrl = null;
-    wsCollapsed = new Set();
-    try {
-      if (info.cwdPath) {
-        // External __cwd_path__ repo — listed via the agent-scoped cwd endpoint.
-        const res = await fetch(`/api/agents/${agent.id}/cwd-files`);
-        const data: any = await res.json();
-        workspaceFiles = data?.files ?? [];
-        workspacePreviewUrl = typeof data?.preview_url === 'string' ? data.preview_url : null;
-      } else if (info.wsId) {
-        const res = await fetch(`/api/agents/workspace/${info.wsId}`);
-        const data: any = await res.json();
-        workspaceFiles = data?.files ?? [];
-      } else {
-        workspaceFiles = [];
-      }
-    } catch { workspaceFiles = []; }
-    workspaceLoading = false;
-  }
-
-  async function loadWorkspaceFile(path: string) {
-    const agent = agents.find(a => a.id === selectedAgent);
-    if (!agent) return;
-    const info = resolveAgentWorkspace(agent, flows);
-    try {
-      const url = info.cwdPath
-        ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`
-        : `/api/agents/workspace/${info.wsId}/file?path=${encodeURIComponent(path)}`;
-      const res = await fetch(url);
-      const data: any = await res.json();
-      workspaceFileContent = { path, content: data?.content ?? '' };
-    } catch { workspaceFileContent = { path, content: 'Error loading file' }; }
-  }
-
-  async function loadRunSteps(runId: string) {
-    if (expandedRunId === runId) {
-      expandedRunId = null;
-      runSteps = [];
-      runStepsLoading = false;
-      runStepsError = null;
-      return;
-    }
-    expandedRunId = runId;
-    runSteps = [];
-    runStepsError = null;
-    runStepsLoading = true;
-    try {
-      const data: any = await rpcOrCall('agents.runs.detail', { id: runId }, async () => {
-        const r = await fetch(`/api/agents/runs/${runId}`);
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        return r.json();
-      });
-      // The user may have collapsed or switched runs while we awaited.
-      if (expandedRunId !== runId) return;
-      if (data?.error) throw new Error(String(data.error));
-      const steps: any[] = data?.steps ?? [];
-      const events: any[] = data?.events ?? [];
-      // Merge event_log entries (auto_eval, learning, etc.) that aren't already
-      // represented by a step into the timeline. We filter out "step" event_types
-      // since those are duplicates of agent_run_steps.
-      const eventSteps = events
-        .filter((ev: any) => ev.event_subtype && ev.event_subtype !== 'step' && ev.event_type !== 'step')
-        .map((ev: any, i: number) => {
-          const sub = String(ev.event_subtype || ev.event_type || 'event');
-          let rawData: Record<string, unknown> = {};
-          try { rawData = JSON.parse(ev.raw_data || '{}'); } catch {}
-          let detail = String(ev.detail || '');
-          if (sub === 'auto_eval') {
-            const score = Number(rawData.score ?? 0);
-            const outcome = String(rawData.outcome ?? '');
-            const stars = '★'.repeat(score) + '☆'.repeat(Math.max(0, 5 - score));
-            const lesson = rawData.lesson ? `\n**Lesson**: ${rawData.lesson}` : '';
-            detail = `${stars}  **${outcome.toUpperCase()}** — confidence ${Number(rawData.confidence ?? 0).toFixed(2)}${lesson}`;
-          } else if (sub === 'learning_created' || sub === 'learning_deactivated') {
-            const icon = sub === 'learning_created'
-              ? (rawData.learning_type === 'avoid' ? '🚫' : rawData.learning_type === 'prefer' ? '⭐' : '💡')
-              : '🗑️';
-            detail = `${icon} ${detail}`;
-          }
-          return {
-            step_number: 9000 + i,
-            type: sub,
-            content: detail,
-            tool_name: '',
-            is_event: true,
-            _ts: ev.created_at || '',
-          };
-        });
-      // Assign step_numbers that interleave with real steps by timestamp
-      const merged = [...steps.map((s: any) => ({ ...s, is_event: false, _ts: '' })), ...eventSteps];
-      // Real steps already ordered by step_number; events go at the end
-      // (they happen post-run during auto-eval). Renumber for display.
-      let num = 0;
-      for (const m of merged) {
-        num++;
-        m.step_number = num;
-      }
-      runSteps = merged;
-    } catch (err) {
-      if (expandedRunId === runId) {
-        runSteps = [];
-        runStepsError = err instanceof Error ? err.message : String(err);
-      }
-    } finally {
-      if (expandedRunId === runId) runStepsLoading = false;
-    }
-  }
-
-  function selectPanelTab(tab: typeof panelTab) {
-    panelTab = tab;
-    if (tab === 'history') loadAgentRuns();
-    if (tab === 'info') loadLatestRun();
-    if (tab === 'workspace') loadWorkspaceFiles();
-    // Re-read the thread from the server every time the tab is opened, not
-    // only when the selected agent changes. The reply is persisted by the
-    // executor the moment the run ends, so this is what makes an answer
-    // recoverable after the page-side poll is interrupted — switching tabs,
-    // closing the panel, a re-render — instead of lost with it.
-    if (tab === 'chat' && !chatSending) loadChatFromMemory();
-  }
-
-  // ── Latest run result (shown prominently in Overview) ──
-  let latestRun: { id: string; status: string; result?: string; error?: string; tokens_used: number; steps_count: number; trigger_type: string; created_at: string; duration_ms?: number } | null = null;
-  let latestRunLoading = false;
-
-  async function loadLatestRun() {
-    if (!selectedAgent || latestRunLoading) return;
-    latestRunLoading = true;
-    try {
-      const data: any = await rpcOrCall('agents.runs.list', { agent_id: selectedAgent, limit: 5 }, async () => {
-        const r = await fetch(`/api/agents/${selectedAgent}/runs?limit=5`);
-        return r.json();
-      });
-      const runs: any[] = data?.runs ?? [];
-      // prefer most recent completed/failed run with a result or error
-      latestRun = runs.find((r: any) => r.status === 'completed' || r.status === 'failed') ?? runs[0] ?? null;
-    } catch { latestRun = null; }
-    latestRunLoading = false;
-  }
-
-  // Agents whose builtin_handler starts with `gsync:` (contacts/gmail/calendar/
-  // graph-enrich) speak to Google APIs. Surface a permanent inline Re-login
-  // button in their description so the user can fix expired auth proactively —
-  // without waiting for the next failed run to surface the LAST RESULT button.
-
-  // ── RunFailureCard wiring (Task 10) ─────────────────────
-  // The card only renders and dispatches a `kind`; it does not know how to
-  // fix anything. This is where each of the five remedies actually lands —
-  // `runtimeSectionRef` and `startAgent`/`startReauth` only exist in this
-  // component's scope, so the mapping has to live here rather than inside
-  // the card.
-  let runtimeSectionRef: RuntimeSection | null = null;
-  function handleRunFailureRemedy(kind: RemedyKind): void {
-    switch (kind) {
-      case 'pick-tool-capable-provider':
-        void runtimeSectionRef?.focusPrimaryPicker({ requireTools: true });
-        break;
-      case 'switch-executor-claude-code':
-        // Routed through RuntimeSection's own `setExecutor`, not
-        // `store.patch()` directly. Both send the same write, but only
-        // RuntimeSection's wrapper reads the reconciled result back into the
-        // field that shows it (`.rt-err` under Executor) — a direct
-        // `store.patch()` here would set the store's `error` and nothing
-        // would ever render it, silently losing exactly the drift this
-        // remedy exists to report.
-        void runtimeSectionRef?.setExecutor('claude_code');
-        break;
-      case 'configure-provider':
-        void goto(LLM_SETTINGS_HREF);
-        break;
-      case 'reauth-google':
-        void startReauth('google');
-        break;
-      case 'retry':
-        void startAgent();
-        break;
-    }
-  }
-
-  let reauthLoading = false;
-  async function startReauth(provider: 'google'): Promise<void> {
-    if (reauthLoading) return;
-    reauthLoading = true;
-    try {
-      if (provider === 'google') {
-        // Direct authenticated HTTP — skip the WS race. Re-login is a one-shot
-        // user action; predictability beats latency. `?force=1` bypasses the
-        // backend's "already authenticated" shortcut, which would otherwise
-        // trip on a stale-but-revoked token row in google_tokens.
-        const token = localStorage.getItem('kernel_auth_token') ?? '';
-        const r = await fetch('/api/google/auth/start?force=1', {
-          method: 'POST',
-          headers: token ? { 'Authorization': `Bearer ${token}` } : {},
-        });
-        const d: any = await r.json().catch(() => ({ error: `HTTP ${r.status} ${r.statusText}` }));
-        if (!r.ok) { alert(d?.error ?? `HTTP ${r.status}`); return; }
-        if (d?.error) { alert(d.error); return; }
-        if (d?.authUrl) { window.location.href = d.authUrl; return; }
-        alert('No auth URL returned by /api/google/auth/start (response: ' + JSON.stringify(d).slice(0, 200) + ')');
-      }
-    } catch (e: any) {
-      alert(e?.message ?? String(e));
-    } finally {
-      reauthLoading = false;
-    }
-  }
-
-  // ── LIVE stream for the selected agent ────────
-  $: liveIsRunning = !!selectedAgent && runningAgentIds.has(selectedAgent);
-  $: liveEvents = selectedAgent
-    ? flowEvents.filter(e => e.data.agent_id === selectedAgent).slice(0, 60)
-    : [];
-  // derive current run id (from most recent event)
-  $: liveRunId = (liveEvents.find(e => e.data.run_id) as any)?.data?.run_id ?? null;
-  // only show events from the current run (so we don't leak prior runs' noise)
-  $: liveCurrentRunEvents = liveRunId
-    ? liveEvents.filter(e => e.data.run_id === liveRunId)
-    : liveEvents;
-
-  // Auto-switch to LIVE tab when an agent starts working (but don't hijack if user navigated)
-  let lastRunningFor: string | null = null;
-  $: if (liveIsRunning && selectedAgent && selectedAgent !== lastRunningFor) {
-    lastRunningFor = selectedAgent;
-    if (panelTab === 'info') panelTab = 'live';
-  }
-  $: if (!liveIsRunning) lastRunningFor = null;
 
   // ── Draft (communication) modal ────────────────
   // The preview behind every UUID chip in a run output. Resolving the id
@@ -5496,7 +4291,6 @@
   // in DraftModal.svelte now. handleOutputClick below stays here — it is
   // wired to six different output panes.
   let draftModal: DraftModal | null = null;
-
 
   function handleOutputClick(e: MouseEvent) {
     const t = e.target as HTMLElement | null;
@@ -5507,266 +4301,6 @@
       e.stopPropagation();
       const id = btn.getAttribute('data-comm-id');
       if (id) draftModal?.open(id);
-    }
-  }
-
-  // Reset tab when agent changes. Default to LIVE if the agent is currently
-  // running (anything streaming is more interesting than stats), otherwise
-  // fall back to OVERVIEW.
-  let lastSelectedAgent: string | null = null;
-  // ?tab=<panelTab> deep-link — consumed once, on the first agent selection.
-  let _deepLinkTab: typeof panelTab | null = (() => {
-    try {
-      const t = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('tab') : null;
-      return t && ['info', 'live', 'history', 'memory', 'chat', 'workspace', 'skills'].includes(t) ? (t as typeof panelTab) : null;
-    } catch { return null; }
-  })();
-  $: if (selectedAgent && selectedAgent !== lastSelectedAgent) {
-    lastSelectedAgent = selectedAgent;
-    if (_deepLinkTab) {
-      panelTab = _deepLinkTab;
-      if (_deepLinkTab === 'workspace') loadWorkspaceFiles();
-      _deepLinkTab = null;
-    } else {
-      panelTab = runningAgentIds.has(selectedAgent) ? 'live' : 'info';
-    }
-    agentRuns = []; agentMemory = []; expandedRunId = null; chatHistory = []; latestRun = null;
-    loadLatestRun(); loadChatFromMemory();
-  }
-  $: if (!selectedAgent) lastSelectedAgent = null;
-
-  async function togglePause() {
-    if (!selectedAgent || !selData || togglingPause) return;
-    togglingPause = true;
-    const wasActive = selData.active === 1;
-    const nextActive = !wasActive;
-    try {
-      const r = await fetch(`/api/agents/${selectedAgent}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ active: nextActive }),
-      });
-      const data = await r.json();
-      if (data?.success) {
-        // Optimistically reflect in the local list; parent will push truth soon.
-        agents = agents.map(a => a.id === selectedAgent ? { ...a, active: nextActive ? 1 : 0 } : a);
-        // Refresh full detail so schedule next_run / etc. update too.
-        loadAgentDetail(selectedAgent);
-        startMsg = nextActive ? '✓ resumed — scheduler re-enabled' : '⏸ paused — scheduler + triggers off';
-      } else {
-        startMsg = `✗ ${data?.error || 'could not toggle'}`;
-      }
-    } catch (e: any) {
-      startMsg = `✗ ${e?.message || 'network error'}`;
-    } finally {
-      togglingPause = false;
-      setTimeout(() => { if (startMsg.includes('paused') || startMsg.includes('resumed') || startMsg.startsWith('✗')) startMsg = ''; }, 4000);
-    }
-  }
-
-  // REVISION resolution from the 3D detail panel.
-  //   accept = clear under_revision, keep agent running
-  //   reject = clear under_revision AND deactivate (active=0)
-  async function resolveRevision(mode: 'accept' | 'reject') {
-    if (!selectedAgent || !selData || revisionBusy) return;
-    const name = selData.name || 'this agent';
-    const msg = mode === 'accept'
-      ? `Keep "${name}"? Clears the REVISION flag and leaves the agent running.`
-      : `Reject "${name}"? It will be DEACTIVATED. Row stays in the DB — re-enable any time.`;
-    if (!confirm(msg)) return;
-    revisionBusy = true;
-    const body = mode === 'accept'
-      ? { under_revision: false }
-      : { under_revision: false, active: false };
-    try {
-      const r = await fetch(`/api/agents/${selectedAgent}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-      const data = await r.json();
-      if (data?.success) {
-        agents = agents.map(a => a.id === selectedAgent
-          ? { ...a, under_revision: 0, ...(mode === 'reject' ? { active: 0 } : {}) }
-          : a);
-        loadAgentDetail(selectedAgent);
-        startMsg = mode === 'accept' ? '✓ accepted — flag cleared' : '✗ rejected — agent deactivated';
-      } else {
-        startMsg = `✗ ${data?.error || 'could not update'}`;
-      }
-    } catch (e: any) {
-      startMsg = `✗ ${e?.message || 'network error'}`;
-    } finally {
-      revisionBusy = false;
-      setTimeout(() => { if (startMsg.includes('accepted') || startMsg.includes('rejected') || startMsg.startsWith('✗')) startMsg = ''; }, 4000);
-    }
-  }
-
-  async function startAgent() {
-    if (!selectedAgent || starting) return;
-    starting = true;
-    startMsg = '';
-    showBubble(selectedAgent, '▶ starting…', 1200);
-    try {
-      const res: any = await rpcOrCall('agents.run', { agent_id: selectedAgent }, async () => {
-        const r = await fetch('/api/agents/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_id: selectedAgent }),
-        });
-        return r.json();
-      });
-      if (res?.success || res?.run_id) {
-        startMsg = `✓ started · run ${String(res.run_id || '').slice(0, 8)}`;
-        if (panelTab === 'history') loadAgentRuns();
-      } else {
-        startMsg = `✗ ${res?.error || 'failed to start'}`;
-      }
-    } catch (e: any) {
-      startMsg = `✗ ${e?.message || 'network error'}`;
-    } finally {
-      starting = false;
-      setTimeout(() => { startMsg = ''; }, 5000);
-    }
-  }
-
-  async function talkToAgent(text?: string) {
-    const msg = (text ?? chatInput).trim();
-    if (!selectedAgent || !msg || chatSending) return;
-    chatInput = '';
-    chatSending = true;
-    chatError = '';
-
-    chatHistory = [...chatHistory, { role: 'you', text: msg, ts: Date.now() }];
-    scrollChatToEnd();
-    showBubble(selectedAgent, msg, 400);
-
-    // Persist user message to agent memory
-    fetch(`/api/agents/${selectedAgent}/memory`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', content: msg }),
-    }).catch(() => {});
-
-    try {
-      const recentWork = await fetchRecentRunSummaries(selectedAgent, 5);
-      const agentName = selData?.name ?? 'Agent';
-      const agentDesc = selData?.description ?? '';
-
-      // Build conversation context from recent chat history
-      const recentChat = chatHistory.slice(-10).map(m =>
-        m.role === 'you' ? `Boss: ${m.text}` : `${agentName}: ${m.text}`
-      ).join('\n');
-
-      const conversationalGoal = `The boss is talking to you directly. You are ${agentName}: ${agentDesc}.
-
-## CONVERSATION HISTORY (this is your ongoing conversation with the boss)
-${recentChat || '(first message)'}
-
-## YOUR RECENT WORK (what you actually did — cite it when relevant)
-${recentWork}
-
-## RULES
-1. This is a CONVERSATION. Read the history above and respond in context.
-2. If the boss asked something before and you answered, don't repeat — build on it.
-3. If asked about data, USE YOUR TOOLS to get real numbers. Never answer from memory.
-4. If asked to do something, DO IT with tools. Don't promise — execute.
-5. Write detailed, structured responses with markdown formatting.
-6. FORBIDDEN: "I will work on it", "the team is focused", "strategic initiatives". Use tools instead.
-7. If you genuinely don't know, say "I don't know" — do not invent.
-
-Boss says: "${msg}"`;
-      const res: any = await rpcOrCall('agents.run', { agent_id: selectedAgent, goal: conversationalGoal }, async () => {
-        const r = await fetch('/api/agents/run', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_id: selectedAgent, goal: conversationalGoal }),
-        });
-        return r.json();
-      });
-
-      if (res?.run_id) {
-        // The run is queued; the agent is now working. A typing indicator in the
-        // thread carries that, so no fake message has to be pushed and later
-        // matched by its text to be removed.
-        chatPending = true;
-        scrollChatToEnd();
-
-        // Poll until the agent's own timeout, plus a grace period. The old
-        // budget was a hardcoded 60 × 3s = 3 min while agents are configured
-        // for 5 (timeout_ms defaults to 300000), so a slow-but-successful run
-        // reported "Timed out waiting for response" and its real answer was
-        // never shown.
-        const askedAgent = selectedAgent;
-        // How many replies the thread held before this run. The check below
-        // used to ask whether the thread had ANY agent message, which is true
-        // the moment an agent has ever answered — so from the second exchange
-        // onward a failed run fell through it and vanished, leaving the
-        // operator with their own message and silence.
-        const repliesBefore = chatHistory.filter((m) => m.role === 'agent').length;
-        const budgetMs = Number(agentDetail?.agent?.timeout_ms ?? selData?.timeout_ms ?? 300000) + 30000;
-        const attempts = Math.ceil(budgetMs / 3000);
-        let answered = false;
-
-        for (let i = 0; i < attempts && !answered; i++) {
-          await new Promise(r => setTimeout(r, 3000));
-          // The panel moved on. The run keeps going and the executor still
-          // persists the reply, so it is waiting in memory the next time this
-          // agent's thread is opened — but writing it into whatever thread is
-          // on screen now would put one agent's answer under another's name.
-          if (selectedAgent !== askedAgent) return;
-          try {
-            const detail: any = await rpcOrCall('agents.runs.detail', { id: res.run_id }, async () => {
-              const r2 = await fetch(`/api/agents/runs/${res.run_id}`);
-              return r2.json();
-            });
-            if (detail?.run?.status === 'completed' || detail?.run?.status === 'failed') {
-              const ok = detail.run.status === 'completed';
-              showBubble(askedAgent, ok ? 'Done!' : 'Failed', 200);
-              answered = true;
-              // Re-read the thread instead of appending the run result.
-              // The executor writes the reply to the agent's memory, which is
-              // the same source the tab loads from — building the thread by
-              // hand here meant the two could disagree, and the reply existed
-              // on the server while the pane showed a spinner.
-              chatPending = false;
-              await loadChatFromMemory();
-              const gotReply = chatHistory.filter((m) => m.role === 'agent').length > repliesBefore;
-              if (!gotReply) {
-                // Memory gained nothing for THIS run — an executor that does
-                // not persist, or a failure that wrote no answer. Fall back to
-                // what the run itself reported, so the exchange never ends in
-                // silence.
-                const result = detail.run.result || detail.run.error || detail.run.status;
-                const fullText = typeof result === 'string' ? result : JSON.stringify(result);
-                chatHistory = [...chatHistory, {
-                  role: 'agent',
-                  text: ok ? fullText : `Failed: ${fullText}`,
-                  ts: Date.now(),
-                }];
-              }
-            }
-          } catch { /* keep polling — a blip shouldn't end the wait */ }
-        }
-
-        if (!answered) {
-          chatError =
-            `No reply after ${Math.round(budgetMs / 60000)} min. The run may still be going — ` +
-            `check History, and reopen this tab afterwards: the answer is saved with the agent ` +
-            `whether or not this window was watching.`;
-        }
-      } else {
-        chatError = 'The kernel did not start a run for this message.';
-      }
-    } catch (e: any) {
-      chatError = e?.message ?? String(e);
-    } finally {
-      // Both flags clear only now. `chatSending` used to be reset here while the
-      // polling ran unawaited in the background, so the field re-enabled and the
-      // send button dropped its progress state seconds into a minutes-long run.
-      chatPending = false;
-      chatSending = false;
-      scrollChatToEnd();
     }
   }
 
@@ -5895,7 +4429,7 @@ Boss says: "${msg}"`;
    *
    *  Returns true if the coordination was kicked off, false if no room is
    *  available (caller should fall back to a desk-to-desk visual). */
-  function coordinateInMeetingRoom(srcId: string, tgtId: string, color: string): boolean {
+  function coordinateInMeetingRoom(srcId: string, tgtId: string, color: string, info?: CoordInfo): boolean {
     if (!scene || meetingRoomSlots.length === 0) return false;
     // One walker per agent — if either is already in flight (real meeting,
     // commute, etc.) the coordination would silently no-op partway through.
@@ -5919,6 +4453,11 @@ Boss says: "${msg}"`;
       ? meetingRoomDoorPoint(room, hallCenterPos)
       : undefined;
     activeCoordRooms.add(roomIdx);
+    const coord: ActiveCoord = {
+      roomIdx, fromId: srcId, toId: tgtId, startedAt: Date.now(),
+      info: info ?? { kind: 'escalation', title: '', body: '' },
+    };
+    activeCoords = { ...activeCoords, [roomIdx]: coord };
 
     // Source sits at seat[0] (front side), target at seat[1] (back side) — the
     // two seats face each other across the table, perfect for a 1-on-1 coord.
@@ -5935,6 +4474,11 @@ Boss says: "${msg}"`;
           (w) => w.sourceId === srcId || w.sourceId === tgtId);
       }
       activeCoordRooms.delete(roomIdx);
+      // Only this coordination's entry: a newer one may already hold the room.
+      if (activeCoords[roomIdx] === coord) {
+        const { [roomIdx]: _gone, ...rest } = activeCoords;
+        activeCoords = rest;
+      }
     }
     const onArrive = (): void => {
       arrivedCount++;
@@ -5976,25 +4520,6 @@ Boss says: "${msg}"`;
   /** Free visitor chair in My Office; seats and walkers live in this component. */
   function pickFreeMyOfficeChair(): { x: number; y: number; z: number } | null {
     return pickFreeChair(myOfficeSeats, walkers as unknown as SeatedWalker[]);
-  }
-
-  // Fetch recent completed runs for an agent — used to build meeting/chat context
-  async function fetchRecentRunSummaries(agentId: string, limit = 5): Promise<string> {
-    try {
-      const data: any = await rpcOrCall('agents.runs.list', { agent_id: agentId, limit }, async () => {
-        const r = await fetch(`/api/agents/${agentId}/runs?limit=${limit}`);
-        return r.json();
-      });
-      const runs: any[] = (data?.runs ?? []).filter((r: any) => r.status === 'completed' || r.status === 'failed');
-      if (runs.length === 0) return '(no completed runs yet)';
-      return runs.map((r: any) => {
-        const goal = String(r.goal ?? r.trigger_type ?? '').slice(0, 200);
-        const result = String(r.result ?? r.error ?? '(empty)').slice(0, 400);
-        const status = r.status === 'completed' ? '✓' : '✗';
-        const when = r.created_at ? r.created_at.slice(0, 16).replace('T', ' ') : '?';
-        return `${status} [${when}] Goal: "${goal}"\n  → Result: "${result}"`;
-      }).join('\n\n');
-    } catch { return '(could not fetch runs)'; }
   }
 
   async function sendMeetingMessage(text?: string) {
@@ -6145,49 +4670,22 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 
   <div class="scene-vignette" aria-hidden="true"></div>
 
-  {#if !sceneReady && !webglError}
-    <div class="boot" out:scale={{ duration: 700, start: 1.05, opacity: 0, easing: quintOut }} aria-hidden="true">
-      <div class="boot-grid"></div>
-      <div class="boot-vignette"></div>
-      <div class="boot-core">
-        <div class="boot-radar">
-          <span class="boot-ring boot-ring-1"></span>
-          <span class="boot-ring boot-ring-2"></span>
-          <span class="boot-ring boot-ring-3"></span>
-          <span class="boot-cross boot-cross-h"></span>
-          <span class="boot-cross boot-cross-v"></span>
-          <span class="boot-sweep"></span>
-          <span class="boot-blip boot-blip-1"></span>
-          <span class="boot-blip boot-blip-2"></span>
-          <span class="boot-blip boot-blip-3"></span>
-        </div>
-        <div class="boot-info">
-          <div class="boot-title"><span>Kernl</span></div>
-          <div class="boot-sub">H&middot;Q&nbsp;&nbsp;T A C T I C A L&nbsp;&nbsp;U P L I N K</div>
-          {#if bootError || dataError}
-            <div class="boot-err">
-              <span class="boot-err-icon">&#9888;</span>
-              <span class="boot-err-msg">{bootError ?? 'Could not load agent data.'}</span>
-              <button class="boot-retry" on:click={retryBoot}>Reintentar</button>
-            </div>
-          {:else}
-            <ul class="boot-log boot-log-live">
-              {#each bootSteps as s (s.label)}
-                <li class:done={s.done} class:active={!s.done}>
-                  <span class="boot-check">{s.done ? '✓' : '›'}</span>
-                  {s.label}{#if !s.done}<i class="boot-dots"></i>{/if}
-                </li>
-              {/each}
-            </ul>
-            <div class="boot-status">{bootStatus}</div>
-            <div class="boot-bar"><span></span></div>
-          {/if}
-        </div>
-      </div>
-    </div>
-  {/if}
+  <BootLoader
+    show={!sceneReady && !webglError}
+    {bootError}
+    {dataError}
+    steps={bootSteps}
+    status={bootStatus}
+    onRetry={retryBoot}
+  />
 
   <PerfOverlay bind:visible={showPerfHud} stats={perfStats} extra={perfExtra} label="baseline" />
+
+  <!-- World plugins' own UI (each plugin gets a layer) and the tooltip a plugin asks for. -->
+  <div class="world-plugin-overlay" bind:this={worldOverlayRoot}></div>
+  {#if worldTip}
+    <div class="wp-tip" style="left:{worldTip.x + 14}px;top:{worldTip.y + 12}px">{worldTip.text}</div>
+  {/if}
 
 
   <!-- Send-to-fixer toast — page-level so it survives the report modal
@@ -6205,6 +4703,12 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   <!-- New Office chat — replaces the legacy form. Talks directly to the AI
        architect, which uses the kernel_agents_* tools to spin up the flow +
        CEO + team based on the conversation. -->
+  {#if constructionFlowId}
+    <button type="button" class="construction-skip" on:click={() => construction.skip()}>
+      🏗️ {$translate('office.construction.skip')} ▸
+    </button>
+  {/if}
+
   {#if showOfficeModal}
     <OfficeCreatorChat
       topAgentName={topAgent()?.name ?? highestRank()?.name ?? 'Chief'}
@@ -6226,694 +4730,83 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     onRegistered={async () => { await fetchReposBookmarks(); rebuildScene(); }}
   />
 
-  <!-- Live Agent-to-Agent Meeting Transcript — side panel so the 3D stays visible -->
-  {#if showLiveMeeting && activeMeetingId && liveMeetings[activeMeetingId]}
-    {@const lm = liveMeetings[activeMeetingId]}
-    <div class="lm-side-panel" role="dialog" tabindex="-1" aria-label={lm.topic || $translate('meeting.activity.no_topic')}>
-      <div class="modal live-meeting-modal" role="presentation">
-        <div class="lm-head">
-          <div class="lm-titles">
-            <div class="lm-title">
-              {#if lm.status === 'requested'}<span class="lm-dot lm-dot-pulse"></span> {$translate('meeting.live.walking')}
-              {:else if lm.status === 'started'}<span class="lm-dot lm-dot-pulse"></span> {$translate('meeting.live.live')}
-              {:else if lm.status === 'completed'}<span class="lm-dot lm-dot-done"></span> {$translate('meeting.live.completed')}
-              {:else}<span class="lm-dot lm-dot-fail"></span> {$translate('meeting.live.failed')}{/if}
-              <span class="lm-topic">{lm.topic || $translate('meeting.activity.no_topic')}</span>
-            </div>
-            <div class="lm-sub">
-              <span class="lm-mod">{$translate('meeting.live.moderator', { name: lm.moderatorName })}</span>
-              <span class="lm-parts">·</span>
-              {#each lm.participants.filter(p => p.id !== lm.moderatorId) as p}
-                <span class="lm-attendee" style="background:{flowColor(p.id)}22;border-color:{flowColor(p.id)}">{p.name}</span>
-              {/each}
-              <span class="lm-parts">·</span>
-              <span class="lm-stat">{$translate('meeting.live.turns', { n: lm.turns.length })}</span>
-              <span class="lm-parts">·</span>
-              <span class="lm-stat">{$translate('meeting.live.tokens', { n: lm.turns.reduce((s, turn) => s + (turn.tokens || 0), 0).toLocaleString() })}</span>
-            </div>
-          </div>
-          {#if liveMeetingsList.length > 1}
-            <select class="lm-switcher" bind:value={activeMeetingId} aria-label={$translate('meeting.live.switch')}>
-              {#each liveMeetingsList as m}
-                <option value={m.id}>{m.status === 'started' || m.status === 'requested' ? '● ' : '○ '}{(m.topic || m.id).slice(0, 50)}</option>
-              {/each}
-            </select>
-          {/if}
-          <button class="lm-close" on:click={() => { showLiveMeeting = false; }} title={$translate('meeting.live.close')} aria-label={$translate('meeting.live.close')}>
-            <Icon name="x" size={14} />
-          </button>
-        </div>
+  <!-- Live agent-to-agent meeting transcript (side panel, so the 3D stays
+       visible) and the operator-moderated meeting — see MeetingPanels.svelte. -->
+  <MeetingPanels
+    {liveMeetings}
+    {liveMeetingsList}
+    bind:activeMeetingId
+    bind:showLiveMeeting
+    {showTranscriptBody}
+    {meetingActive}
+    bind:meetingPanelOpen
+    {meetingTopic}
+    {meetingSelectedIds}
+    {meetingChat}
+    {meetingSending}
+    bind:meetingInput
+    {endMeeting}
+    {sendMeetingMessage}
+    {agents}
+    {flowColor}
+  />
 
-        <div class="lm-transcript" bind:this={lmTranscriptEl}>
-          {#if lm.turns.length === 0}
-            <div class="lm-empty">
-              {#if lm.status === 'requested'}{$translate('meeting.live.waiting_room')}{:else}{$translate('meeting.live.waiting_turn')}{/if}
-            </div>
-          {/if}
-          {#each lm.turns as turn, i (`${turn.ts}-${turn.agentId}-${turn.round}-${i}`)}
-            <div class="lm-turn lm-turn-{turn.role}">
-              <div class="lm-turn-head">
-                <span class="lm-turn-ico"><Icon name={turn.role === 'moderator' ? 'users' : 'chev-r'} size={13} /></span>
-                <span class="lm-turn-name" style="color:{flowColor(turn.agentId)}">{turn.agentName}</span>
-                <span class="lm-turn-meta">{turn.role === 'moderator' ? `${$translate('meeting.live.moderator_role')} · ` : ''}{$translate('meeting.live.round', { n: turn.round })}{turn.tokens > 0 ? ` · ${turn.tokens} tk` : ''}</span>
-              </div>
-              <div class="copy-wrap lm-turn-body-wrap">
-                <CopyTextBtn text={turn.body} title={$translate('meeting.live.copy')} />
-                <div class="lm-turn-body ip-out-md">{@html formatRunOutput(turn.body.length > 6000 ? turn.body.slice(0, 6000) + '\n\n…' + $translate('meeting.live.truncated') : turn.body)}</div>
-              </div>
-            </div>
-          {/each}
-        </div>
-
-        {#if lm.status === 'completed' && (lm.decisions?.length || lm.action_items?.length)}
-          <div class="lm-summary">
-            {#if lm.decisions && lm.decisions.length > 0}
-              <div class="lm-summary-h"><Icon name="check" size={13} />{$translate('meeting.live.decisions')}</div>
-              <ul class="lm-summary-list">
-                {#each lm.decisions as d}<li>{@html formatInline(d)}</li>{/each}
-              </ul>
-            {/if}
-            {#if lm.action_items && lm.action_items.length > 0}
-              <div class="lm-summary-h"><Icon name="play" size={13} />{$translate('meeting.live.actions')}</div>
-              <ul class="lm-summary-list">
-                {#each lm.action_items as a}<li>{@html formatInline(a)}</li>{/each}
-              </ul>
-            {/if}
-          </div>
-        {/if}
-      </div>
-    </div>
+  <!-- My Office reports panel + report detail modal — see MyOfficePanel.svelte. -->
+  {#if openCoord}
+    <CoordinationCard
+      coord={openCoord}
+      {agents}
+      {flowColor}
+      officeOf={(id) => flows.find((f) => f.id === agents.find((x) => x.id === id)?.flow_id)?.name ?? ''}
+      live={activeCoords[openCoord.roomIdx] === openCoord}
+      onClose={() => (openCoord = null)}
+      onGoto={(id) => { openCoord = null; selectedAgent = id; focusAgent(); }}
+      onOutputClick={handleOutputClick}
+    />
   {/if}
 
+  <MyOfficePanel
+    bind:showMyOfficePanel
+    bind:myOfficeTab
+    bind:officeReports
+    bind:pendingQuestions
+    {triageCount}
+    {chiefAnswered}
+    bind:fixerStatus
+    {auditedRunIds}
+    {agents}
+    {flowColor}
+    {topAgent}
+    {copiedKey}
+    {copy}
+    onOutputClick={handleOutputClick}
+    selectAgent={(id) => { selectedAgent = id; }}
+    {focusAgent}
+    loading={officeLoading || !questionsLoaded}
+    openAgentSettings={(id) => { showMyOfficePanel = false; agentPanel?.showAgentTab(id, 'config'); focusAgent(); }}
+    chiefRunning={!!topAgent() && runningAgentIds.has(topAgent()?.id ?? '')}
+    openChiefChat={() => { showMyOfficePanel = false; selectedAgent = null; showOfficeModal = true; }}
+  />
 
-  <!-- Active Meeting Panel (the operator moderates) -->
-  {#if meetingActive && meetingPanelOpen}
-    <div class="meeting-panel">
-      <div class="meeting-header">
-        <div class="meeting-title">{$translate('meeting.human.title', { topic: meetingTopic })}</div>
-        <div class="meeting-attendees">
-          {#each [...meetingSelectedIds] as aid}
-            {@const a = agents.find(x => x.id === aid)}
-            {#if a}<span class="meeting-att-dot" style="background:{flowColor(aid)}" title={a.name}></span>{/if}
-          {/each}
-          <span class="meeting-att-count">{$translate('meeting.human.attendees', { n: meetingSelectedIds.size })}</span>
-        </div>
-        <button class="meeting-min" title={$translate('meeting.human.minimize')} aria-label={$translate('meeting.human.minimize')}
-          on:click={() => meetingPanelOpen = false}><Icon name="minus" size={12} /></button>
-        <button class="meeting-end" on:click={endMeeting}>{$translate('meeting.human.end')}</button>
-      </div>
-      <div class="meeting-messages">
-        {#each meetingChat as msg}
-          <div class="meeting-msg copy-wrap">
-            <CopyTextBtn text={msg.text} title={$translate('meeting.live.copy')} />
-            <span class="meeting-msg-name" style="color:{msg.color}">{msg.name}</span>
-            {#if msg.role !== 'you'}
-              <div class="meeting-msg-text ip-out-md">{@html formatRunOutput(msg.text)}</div>
-            {:else}
-              <span class="meeting-msg-text">{msg.text}</span>
-            {/if}
-          </div>
-        {/each}
-        {#if meetingSending}
-          <div class="meeting-msg meeting-typing">
-            <span class="meeting-msg-name" style="color:var(--text-3)">{$translate('meeting.human.agent')}</span>
-            <span class="meeting-msg-text">{$translate('meeting.human.typing')}</span>
-          </div>
-        {/if}
-      </div>
-      <div class="meeting-composer">
-        <ChatComposer
-          bind:value={meetingInput}
-          sending={meetingSending}
-          placeholder={$translate('meeting.human.placeholder')}
-          hint={$translate('meeting.human.hint')}
-          sendLabel={$translate('meeting.human.send')}
-          maxRows={4}
-          on:send={(e) => sendMeetingMessage(e.detail)}
-        />
-      </div>
-    </div>
-  {/if}
-
-  <!-- My Office Reports Panel -->
-  {#if showMyOfficePanel}
-    {@const errorReports = officeReports.filter(r => r.status === 'failed')}
-    {@const activityReports = officeReports.filter(r => r.status !== 'failed')}
-    <div class="info-panel office-reports-panel">
-      <div class="ip-head">
-        <div class="ip-head-left">
-          <div class="ip-glyph" style="color:#c9a84c">&#9733;</div>
-          <div class="ip-head-txt">
-            <div class="ip-name">My Office</div>
-            <div class="ip-sub">
-              <span style="color:#f0b874">{pendingQuestions.length} questions</span>
-              <span class="ip-dot"></span>
-              <span style="color:#ef5d6e">{errorReports.length} errors</span>
-              <span class="ip-dot"></span>
-              <span style="color:#8a8fa8">{activityReports.length} activity</span>
-            </div>
-          </div>
-        </div>
-        <button class="ip-close" on:click={() => showMyOfficePanel = false} aria-label="close">×</button>
-      </div>
-
-      <!-- Tabs: Overview · Questions · Errors -->
-      <div class="ip-tabs mo-tabs">
-        <button class="ip-tab" class:active={myOfficeTab === 'overview'}
-                on:click={() => myOfficeTab = 'overview'}>Overview</button>
-        <button class="ip-tab" class:active={myOfficeTab === 'questions'}
-                on:click={() => myOfficeTab = 'questions'}>
-          Questions
-          {#if pendingQuestions.length > 0}<span class="mo-tab-badge mo-tab-badge-q">{pendingQuestions.length}</span>{/if}
-        </button>
-        <button class="ip-tab" class:active={myOfficeTab === 'errors'}
-                on:click={() => myOfficeTab = 'errors'}>
-          Errors
-          {#if errorReports.length > 0}<span class="mo-tab-badge mo-tab-badge-err">{errorReports.length}</span>{/if}
-        </button>
-      </div>
-
-      <div class="or-scroll">
-        {#if myOfficeTab === 'overview'}
-          <!-- ═══ OVERVIEW ═══ at-a-glance summary -->
-          {#if officeReports.length === 0 && pendingQuestions.length === 0}
-            <div class="or-empty">No reports yet. Agents will come here when they finish tasks.</div>
-          {:else}
-            <div class="mo-overview">
-              <!-- KPI strip -->
-              <div class="mo-kpis">
-                <button class="mo-kpi mo-kpi-q" disabled={pendingQuestions.length === 0}
-                        on:click={() => myOfficeTab = 'questions'}>
-                  <span class="mo-kpi-num">{pendingQuestions.length}</span>
-                  <span class="mo-kpi-lbl">Pending Q</span>
-                </button>
-                <button class="mo-kpi mo-kpi-err" disabled={errorReports.length === 0}
-                        on:click={() => myOfficeTab = 'errors'}>
-                  <span class="mo-kpi-num">{errorReports.length}</span>
-                  <span class="mo-kpi-lbl">Errors</span>
-                </button>
-                <div class="mo-kpi mo-kpi-act">
-                  <span class="mo-kpi-num">{activityReports.length}</span>
-                  <span class="mo-kpi-lbl">Activity</span>
-                </div>
-              </div>
-
-              <!-- Latest question (1) -->
-              {#if pendingQuestions.length > 0}
-                {@const q = pendingQuestions[0]}
-                {@const agent = agents.find(a => a.id === q.from_agent_id)}
-                <div class="or-section">
-                  <span class="or-section-title or-section-q">❓ Latest question</span>
-                  {#if pendingQuestions.length > 1}
-                    <button class="or-section-more" on:click={() => myOfficeTab = 'questions'}>
-                      +{pendingQuestions.length - 1} more →
-                    </button>
-                  {/if}
-                </div>
-                <div class="bq-card mo-overview-q" on:click={() => myOfficeTab = 'questions'} role="button" tabindex="0"
-                     on:keydown={e => e.key === 'Enter' && (myOfficeTab = 'questions')}>
-                  <div class="bq-head">
-                    <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
-                    <span class="bq-from">{agent?.name ?? q.from_agent_id.slice(0, 8)}</span>
-                    <span class="bq-time">{fmtRelTime(q.created_at)}</span>
-                  </div>
-                  <div class="bq-question">{q.question}</div>
-                </div>
-              {/if}
-
-              <!-- Latest error (1) -->
-              {#if errorReports.length > 0}
-                {@const r = errorReports[0]}
-                <div class="or-section">
-                  <span class="or-section-title or-section-fail">⚠ Latest error</span>
-                  {#if errorReports.length > 1}
-                    <button class="or-section-more" on:click={() => myOfficeTab = 'errors'}>
-                      +{errorReports.length - 1} more →
-                    </button>
-                  {/if}
-                </div>
-                <button class="or-card or-fail" on:click={() => openReport = r}>
-                  <div class="or-card-header">
-                    <span class="or-dot" style="background:{r.color}"></span>
-                    <span class="or-status status-fail">!</span>
-                    <span class="or-name" style="color:{r.color}">{r.agentName}</span>
-                    <span class="or-time">{fmtRelTime(new Date(r.ts).toISOString())}</span>
-                  </div>
-                  <div class="or-card-body">{r.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{r.text.length > 140 ? '...' : ''}</div>
-                </button>
-                <!-- The 140-char preview cuts exactly where the kernel says how
-                     to fix it, so the fix travels as a chip instead of prose.
-                     Outside the card: an <a> inside a <button> is invalid. -->
-                {#if isLlmConfigError(r.text)}
-                  <a class="llm-fix llm-fix-row" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-                {/if}
-              {/if}
-
-              <!-- Recent activity (handoff + completed, last 5) -->
-              {#if activityReports.length > 0}
-                <div class="or-section">
-                  <span class="or-section-title">Recent activity</span>
-                  {#if activityReports.length > 5}
-                    <span class="or-section-hint">showing 5 of {activityReports.length}</span>
-                  {/if}
-                </div>
-                <div class="office-reports-list">
-                  {#each activityReports.slice(0, 5) as report (report.runId ?? `${report.agentId}-${report.ts}`)}
-                    <button class="or-card" class:or-handoff={report.status === 'handoff'}
-                            out:slide|local={{ duration: 320, easing: quintOut }}
-                            on:click={() => openReport = report}>
-                      <div class="or-card-header">
-                        <span class="or-dot" style="background:{report.color}"></span>
-                        <span class="or-status"
-                              class:status-ok={report.status === 'completed'}
-                              class:status-handoff={report.status === 'handoff'}>
-                          {report.status === 'completed' ? '✓' : '→'}
-                        </span>
-                        <span class="or-name" style="color:{report.color}">{report.agentName}</span>
-                        <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
-                      </div>
-                      <div class="or-card-body">{report.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{report.text.length > 140 ? '...' : ''}</div>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
-        {:else if myOfficeTab === 'questions'}
-          <!-- ═══ QUESTIONS ═══ -->
-          {#if pendingQuestions.length === 0}
-            <div class="or-empty">No pending questions. Agents will pin them here when stuck.</div>
-          {:else}
-            <div class="or-section">
-              <span class="or-section-title or-section-q">❓ Pending questions · {pendingQuestions.length}</span>
-              <span class="or-section-hint">agents waiting for your call</span>
-              <button class="mo-bulk-btn mo-bulk-dismiss" on:click={dismissAllQuestions} disabled={bulkBusy}>
-                {bulkBusy ? '…' : `Dismiss all (${pendingQuestions.length})`}
-              </button>
-            </div>
-            <div class="bq-list">
-              {#each pendingQuestions as q (q.id)}
-                {@const agent = agents.find(a => a.id === q.from_agent_id)}
-                {@const ctxUrl = firstUrlIn(q.context)}
-                <div class="bq-card">
-                  <div class="bq-head">
-                    <span class="bq-from-dot" style="background:{flowColor(q.from_agent_id)}"></span>
-                    <span class="bq-from">{agent?.name ?? q.from_agent_id.slice(0, 8)}</span>
-                    <span class="bq-time">{fmtRelTime(q.created_at)}</span>
-                    <button class="bq-dismiss" title="Dismiss without answering"
-                            on:click={() => dismissQuestion(q)}
-                            disabled={!!questionSubmitting[q.id]}>×</button>
-                  </div>
-                  <div class="bq-question">{q.question}</div>
-                  {#if q.context}
-                    <details class="bq-context">
-                      <summary>ver contexto</summary>
-                      <div class="bq-context-body">{q.context}</div>
-                    </details>
-                  {/if}
-                  {#if ctxUrl}
-                    <a class="bq-direct-link" href={ctxUrl} target="_blank" rel="noopener noreferrer" title={ctxUrl}>
-                      🔗 {new URL(ctxUrl).host}
-                    </a>
-                  {/if}
-                  <div class="bq-options">
-                    {#each q.options as opt, i}
-                      {@const optUrl = urlForOption(q, opt)}
-                      <button class="bq-option" class:bq-option-link={!!optUrl}
-                              on:click={() => answerQuestion(q, i, opt)}
-                              disabled={!!questionSubmitting[q.id]}
-                              title={optUrl ? `Opens ${optUrl}` : opt.label}>
-                        <span class="bq-option-idx">{i + 1}</span>
-                        <span class="bq-option-lbl">{opt.label}</span>
-                        {#if optUrl}<span class="bq-option-linkico" aria-hidden="true">↗</span>{/if}
-                      </button>
-                    {/each}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        {:else if myOfficeTab === 'errors'}
-          <!-- ═══ ERRORS ═══ -->
-          {#if errorReports.length === 0}
-            <div class="or-empty">No errors. Failed runs will appear here for triage.</div>
-          {:else}
-            <div class="or-section">
-              <span class="or-section-title or-section-fail">⚠ Errors · {errorReports.length}</span>
-              <span class="or-section-hint">routed to Error Auditor for triage</span>
-              <button class="mo-bulk-btn mo-bulk-clear" on:click={clearErrors}>
-                Mark all as read ({errorReports.length})
-              </button>
-            </div>
-            <div class="office-reports-list">
-              {#each errorReports as report (report.runId ?? `${report.agentId}-${report.ts}`)}
-                <button class="or-card or-fail"
-                        out:slide|local={{ duration: 320, easing: quintOut }}
-                        on:click={() => openReport = report}>
-                  <div class="or-card-header">
-                    <span class="or-dot" style="background:{report.color}"></span>
-                    <span class="or-status status-fail">!</span>
-                    <span class="or-name" style="color:{report.color}">{report.agentName}</span>
-                    {#if report.runId && auditedRunIds.has(report.runId)}
-                      <span class="or-audited" title="Error Auditor triaged this failure">✓ audited</span>
-                    {:else if report.runId}
-                      <span class="or-audit-pending" title="Waiting for the Error Auditor to pick this up">● pending</span>
-                    {/if}
-                    <span class="or-time">{fmtRelTime(new Date(report.ts).toISOString())}</span>
-                  </div>
-                  <div class="or-card-body">{report.text.replace(/[#*`]/g, '').replace(/\|/g, ' ').replace(/\{[^}]*\}/g, '').replace(/\s{2,}/g, ' ').trim().slice(0, 140)}{report.text.length > 140 ? '...' : ''}</div>
-                </button>
-                {#if isLlmConfigError(report.text)}
-                  <a class="llm-fix llm-fix-row" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-                {/if}
-              {/each}
-            </div>
-          {/if}
-        {/if}
-      </div>  <!-- /or-scroll -->
-
-      {#if myOfficeTab === 'overview' && (officeReports.length > 0 || pendingQuestions.length > 0)}
-        <div class="or-footer">
-          {#if officeReports.filter(r => r.status !== 'failed').length > 0}
-            <button class="office-clear-btn office-clear-btn-soft" on:click={clearActivity}
-                    title="Remove handoff + completed cards from this view">
-              Mark activity read
-            </button>
-          {/if}
-          <button class="office-clear-btn office-clear-btn-danger" on:click={clearAllOfficeData}
-                  title="Dismiss every pending question AND clear all reports">
-            Clear everything
-          </button>
-        </div>
-      {:else if myOfficeTab === 'errors' && officeReports.length > 0}
-        <div class="or-footer">
-          <button class="office-clear-btn" on:click={() => { officeReports = []; officeReportsLoaded = false; }}>Clear all reports</button>
-        </div>
-      {/if}
-    </div>
-  {/if}
-
-  <!-- Report Detail Modal -->
-  {#if openReport}
-    <div class="modal-overlay" on:click={() => openReport = null} role="button" tabindex="-1" on:keydown={e => e.key === 'Escape' && (openReport = null)}>
-      <div class="report-modal" on:click|stopPropagation role="presentation">
-        <div class="rm-head">
-          <div class="rm-head-left">
-            <span class="rm-dot" style="background:{openReport.color}"></span>
-            <span class="rm-status"
-              class:status-ok={openReport.status === 'completed'}
-              class:status-fail={openReport.status === 'failed'}
-              class:status-handoff={openReport.status === 'handoff'}>
-              {openReport.status === 'completed' ? 'Completed' : openReport.status === 'failed' ? 'Failed' : 'Handoff'}
-            </span>
-            <span class="rm-name" style="color:{openReport.color}">{openReport.agentName}</span>
-          </div>
-          <div class="rm-head-right">
-            <span class="rm-time">{new Date(openReport.ts).toLocaleString()}</span>
-            <button class="rm-close" on:click={() => openReport = null}>×</button>
-          </div>
-        </div>
-        <div class="rm-body ip-out-md" on:click={handleOutputClick} role="presentation">
-          {#if fullReportLoading && !fullReportText}
-            <div style="color:#6a6f82;font:500 11px 'JetBrains Mono',monospace">Loading full report…</div>
-          {/if}
-          {@html formatRunOutput(displayReportText)}
-        </div>
-        <div class="rm-actions">
-          <button class="rm-action" on:click={() => openReport && copy(displayReportText, 'report-' + openReport.ts)}>
-            {copiedKey === 'report-' + openReport?.ts ? '✓ copied' : '⧉ Copy full text'}
-          </button>
-          {#if isLlmConfigError(displayReportText)}
-            <a class="rm-action rm-action-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
-          {/if}
-          <button class="rm-action" on:click={() => {
-            if (openReport) {
-              selectedAgent = openReport.agentId;
-              showMyOfficePanel = false;
-              openReport = null;
-              focusAgent();
-            }
-          }}>
-            Go to agent desk →
-          </button>
-
-          <!-- Send-to-fixer: primary dispatches to the resolved fixer; the ▾
-               sibling opens a small picker so the user can override the
-               default. Only rendered when at least one fixer agent exists. -->
-          {#if activeFixer}
-            <div class="rm-fixer-wrap">
-              <button class="rm-action rm-fixer-primary" on:click={sendReportToFixer} disabled={sendingToFixer}
-                      title="Dispatch the report body to {activeFixer.name} so they can diagnose + fix it">
-                {sendingToFixer ? '⏳ sending…' : `🛠 Send to ${activeFixer.name}`}
-              </button>
-              {#if fixerCandidates.length > 1}
-                <button class="rm-fixer-dropdown" on:click|stopPropagation={() => fixerPickerOpen = !fixerPickerOpen}
-                        disabled={sendingToFixer} title="Pick a different fixer" aria-haspopup="true" aria-expanded={fixerPickerOpen}>▾</button>
-              {/if}
-              {#if fixerPickerOpen}
-                <div class="rm-fixer-menu" role="menu" on:click|stopPropagation>
-                  {#each fixerCandidates as cand}
-                    <button class="rm-fixer-menu-item" class:rm-fixer-menu-active={cand.id === activeFixer.id}
-                            on:click={() => { selectedFixerId = cand.id; fixerPickerOpen = false; }}>
-                      <span class="rm-fixer-menu-name">{cand.name}</span>
-                      <span class="rm-fixer-menu-hint">{cand.hint}</span>
-                    </button>
-                  {/each}
-                </div>
-              {/if}
-            </div>
-          {/if}
-
-          {#if fixerStatus}
-            <span class="rm-fixer-status">{fixerStatus}</span>
-          {/if}
-        </div>
-      </div>
-    </div>
-  {/if}
-
-  {#if selData}
-    <AgentDrawer
-      agentId={selData.id}
-      listRow={selRow}
-      flow={selFlow ?? null}
-      offices={flows}
-      on:move={(e) => dispatch('moveagent', { agentId: selData.id, flowId: e.detail.flowId })}
-      extraTabs={myPanelTabs}
-      running={liveIsRunning}
-      historyCount={agentRuns.length}
-      workspaceCount={visibleWorkspaceFiles.length}
-      {starting}
-      {startMsg}
-      {togglingPause}
-      {revisionBusy}
-      {savingName}
-      bind:editingName
-      bind:editNameValue
-      bind:panelTab
-      on:close={() => { selectedAgent = null; }}
-      on:tab={(e) => selectPanelTab(e.detail.tab)}
-      on:run={startAgent}
-      on:resume={togglePause}
-      on:revision={(e) => resolveRevision(e.detail.mode)}
-      on:rename-begin={beginEditName}
-      on:rename-cancel={cancelEditName}
-      on:rename-save={saveEditName}
-      on:changed={(e) => patchWorldAgent(e.detail.agent)}
-    >
-
-      <!-- ──────────────── OVERVIEW TAB ────────────────
-           `let:store` is the read-only handle AgentDrawer publishes over the
-           store it owns. Every section below reads the agent from it; what
-           this component still passes down is what only it has — its own
-           detail fetch, the chain rows resolved against the world's agent
-           list, the skin registry, and the three blocks that call back into
-           this scope, which go in as slots so they keep their place in the
-           order instead of being pushed to the end. -->
-      <svelte:fragment slot="overview" let:store>
-        <OverviewTab
-          {store}
-          stats={selStats}
-          lastRun={latestRun}
-          prompt={selPrompt}
-          loading={detailLoading}
-          chains={selChainRows}
-          triggers={agentDetail?.triggers ?? null}
-          schedules={agentDetail?.schedules ?? null}
-          connections={agentDetail?.adhocConnections ?? null}
-          running={liveIsRunning}
-          skins={availableSkins}
-          {savingSkin}
-          ready={!!agentDetail?.agent}
-          bind:collapsed
-          bind:runtimeSection={runtimeSectionRef}
-          on:skin={(e) => changeSkin(e.detail.skinId)}
-        >
-          <!-- ─── Latest result hero card ───
-               The failure card lives in here, so it only appears when the last
-               run failed — and the same card carries the output when it did
-               not. Everything it calls (`formatRunOutput`, the remedy handler,
-               the jump to HISTORY) is this component's. -->
-          <svelte:fragment slot="result">
-            {#if latestRun && (latestRun.result || latestRun.error)}
-              <div class="result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'}>
-                <div class="result-hero-top">
-                  <div class="result-hero-badge">
-                    <span class="result-hero-icon">{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
-                    <span class="result-hero-lbl">Last result</span>
-                  </div>
-                  <div class="result-hero-date">
-                    {fmtRelTime(latestRun.created_at)}
-                    {#if latestRun.created_at}
-                      <span class="result-hero-date-full">{String(latestRun.created_at).slice(0,16).replace('T',' ')}</span>
-                    {/if}
-                  </div>
-                  <div class="result-hero-meta">
-                    <span class="result-hero-trigger" style="--c:{triggerColor(latestRun.trigger_type)}">{latestRun.trigger_type}</span>
-                    <span class="result-hero-dot">·</span>
-                    <span>{latestRun.steps_count} steps</span>
-                    <span class="result-hero-dot">·</span>
-                    <span>{fmtTokens(latestRun.tokens_used)} tok</span>
-                  </div>
-                </div>
-                {#if latestRun.error}
-                  <div class="result-hero-body result-hero-err copy-wrap">
-                    <CopyTextBtn text={latestRun.error} title="Copy error" />
-                    <RunFailureCard
-                      error={latestRun.error}
-                      agentType={agentType(selData)}
-                      on:remedy={(e) => handleRunFailureRemedy(e.detail.kind)}
-                    />
-                  </div>
-                {:else if latestRun.result}
-                  <div class="result-hero-body ip-out-md copy-wrap" on:click={handleOutputClick} role="presentation">
-                    <CopyTextBtn text={latestRun.result} title="Copy result" />
-                    {@html formatRunOutput(latestRun.result)}
-                  </div>
-                {/if}
-                <div class="result-hero-actions">
-                  <button class="result-hero-action" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
-                    {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
-                  </button>
-                  <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
-                </div>
-              </div>
-            {:else if latestRunLoading}
-              <div class="result-hero result-hero-loading">Loading last result…</div>
-            {/if}
-          </svelte:fragment>
-
-          <svelte:fragment slot="auth">
-            {#if dependsOnGoogleAuth(selData)}
-              <div class="ip-auth-cta" title="This agent talks to Google — re-login any time tokens expire.">
-                <span class="ip-auth-hint">Depends on Google auth</span>
-                <button
-                  class="ip-auth-btn"
-                  disabled={reauthLoading}
-                  on:click={() => startReauth('google')}
-                >
-                  <span class="ip-auth-ico">🔑</span>
-                  <span>{reauthLoading ? '… opening Google' : 'Re-login Google'}</span>
-                </button>
-              </div>
-            {/if}
-          </svelte:fragment>
-
-          <svelte:fragment slot="footer">
-            {#if detailLoading && !agentDetail}
-              <div class="ip-loading">Loading full details…</div>
-            {/if}
-          </svelte:fragment>
-        </OverviewTab>
-      </svelte:fragment>
-
-      <!-- ──────────────── SKILLS TAB ────────────────
-           `selRow` and not `selData`: the drawer's own store is seeded from
-           the same row, so both read one `skills_json`. The change event goes
-           through patchWorldAgent like every other write in here, which is
-           what keeps the tab's badge and the world's list in step without a
-           refetch. -->
-      <svelte:fragment slot="skills">
-        <div class="ip-body">
-          <SkillsTab
-            agent={selRow}
-            on:change={(e) => patchWorldAgent({ id: selData.id, skills_json: JSON.stringify(e.detail.skills) })}
-          />
-        </div>
-      </svelte:fragment>
-
-      <!-- ──────────────── LIVE TAB ──────────────── -->
-      <svelte:fragment slot="live">
-        <LiveTab
-          agentName={selData.name}
-          events={liveCurrentRunEvents}
-          onOutputClick={handleOutputClick}
-          onOpenEmail={(id) => emailModal?.open(id)}
-        />
-      </svelte:fragment>
-
-      <!-- ──────────────── HISTORY TAB ──────────────── -->
-      <svelte:fragment slot="history">
-        <HistoryTab
-          stats={selStats}
-          runs={agentRuns}
-          {runsLoading}
-          {expandedRunId}
-          steps={runSteps}
-          stepsLoading={runStepsLoading}
-          stepsError={runStepsError}
-          {copiedKey}
-          onToggleRun={loadRunSteps}
-          onRetryRun={(id) => { expandedRunId = null; loadRunSteps(id); }}
-          onCopy={copy}
-          onOutputClick={handleOutputClick}
-          onOpenEmail={(id) => emailModal?.open(id)}
-        />
-      </svelte:fragment>
-
-      <!-- ──────────────── TABS CONTRIBUIDOS POR EXTENSIONES ──────────────── -->
-      <svelte:fragment slot="extra" let:tabId>
-        <div class="ip-body ip-ext-body">
-          <svelte:component this={panelTabComponents[tabId]} />
-        </div>
-      </svelte:fragment>
-
-      <!-- ──────────────── CHAT TAB ──────────────── -->
-      <svelte:fragment slot="chat">
-        <ChatTab
-          agent={selData}
-          canConverse={chatCanConverse}
-          history={chatHistory}
-          historyLoading={chatHistoryLoading}
-          error={chatError}
-          pending={chatPending}
-          bind:input={chatInput}
-          sending={chatSending}
-          suggestions={chatSuggestions}
-          bind:scrollEl={chatScrollEl}
-          {starting}
-          onSend={(text) => talkToAgent(text)}
-          onStart={startAgent}
-          onSeeHistory={() => selectPanelTab('history')}
-          onOutputClick={handleOutputClick}
-        />
-      </svelte:fragment>
-
-      <!-- ──────────────── WORKSPACE TAB ──────────────── -->
-      <svelte:fragment slot="workspace">
-        <WorkspaceTab
-          info={selWorkspaceInfo}
-          variables={selData?.variables}
-          previewUrl={workspacePreviewUrl}
-          loading={workspaceLoading}
-          files={visibleWorkspaceFiles}
-          bind:collapsed={wsCollapsed}
-          bind:fileContent={workspaceFileContent}
-          onOpenFile={loadWorkspaceFile}
-        />
-      </svelte:fragment>
-    </AgentDrawer>
-  {/if}
+  <!-- Selected agent's drawer — see AgentPanel.svelte. -->
+  <AgentPanel
+    bind:this={agentPanel}
+    bind:selectedAgent
+    bind:agents
+    {chains}
+    {flows}
+    {stats}
+    {runningAgentIds}
+    {flowEvents}
+    {availableSkins}
+    {copiedKey}
+    {copy}
+    {handleOutputClick}
+    openEmail={(id) => emailModal?.open(id)}
+    {showBubble}
+    on:refresh
+    on:moveagent
+  />
 
   {#if runningAgentIds.size > 0}
     <div class="hud">
@@ -6935,7 +4828,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
 <EmailModal bind:this={emailModal} />
 
 <style>
-  .world3d-container{position:relative;width:100%;height:100%;overflow:hidden;background:#020206}
+  .world3d-container{position:relative;width:100%;height:100%;overflow:hidden;overflow:clip;background:#020206}
   .world3d-canvas{width:100%;height:100%;position:relative}
   .scene-vignette{position:absolute;inset:0;z-index:2;pointer-events:none;
     background:radial-gradient(125% 115% at 50% 42%, transparent 55%, rgba(2,4,10,.42) 100%);
@@ -6943,207 +4836,18 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .fb{position:absolute;inset:0;z-index:30;display:flex;align-items:center;justify-content:center;gap:8px;background:#0d0f18;font:400 12px 'Manrope',sans-serif;color:#8a8fa8}
   .fb-icon{font-size:20px;color:#d4a84b}
 
-  /* ── Boot loader — "HQ tactical uplink" radar console ─────────── */
-  .boot{position:absolute;inset:0;z-index:var(--z-hud);display:flex;align-items:center;justify-content:center;
-    background:radial-gradient(125% 120% at 50% 38%, #0c1525 0%, #070b16 52%, #04060d 100%);
-    overflow:hidden;font-family:'Manrope',-apple-system,sans-serif;will-change:transform,opacity}
-  .boot-grid{position:absolute;inset:-2px;opacity:.55;pointer-events:none;
-    background-image:linear-gradient(rgba(40,70,130,.55) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(40,70,130,.55) 1px,transparent 1px);
-    background-size:46px 46px;
-    -webkit-mask-image:radial-gradient(circle at 50% 44%, #000 0%, transparent 68%);
-    mask-image:radial-gradient(circle at 50% 44%, #000 0%, transparent 68%);
-    animation:bootGridDrift 16s linear infinite}
-  @keyframes bootGridDrift{to{background-position:46px 46px}}
-  .boot-vignette{position:absolute;inset:0;pointer-events:none;
-    background:radial-gradient(circle at 50% 42%, transparent 40%, rgba(2,4,10,.55) 100%)}
-
-  .boot-core{position:relative;display:flex;flex-direction:column;align-items:center;gap:30px}
-
-  .boot-radar{position:relative;width:190px;height:190px;border-radius:50%;
-    background:radial-gradient(circle, rgba(46,92,168,.20) 0%, rgba(10,20,40,.04) 72%);
-    box-shadow:inset 0 0 44px rgba(64,116,210,.22),0 0 0 1px rgba(96,140,220,.40),
-      0 0 70px rgba(60,110,200,.14)}
-  .boot-ring{position:absolute;border-radius:50%;border:1px solid rgba(96,140,220,.28)}
-  .boot-ring-1{inset:24px}.boot-ring-2{inset:55px}.boot-ring-3{inset:86px;border-color:rgba(120,165,240,.5)}
-  .boot-cross{position:absolute;background:rgba(96,140,220,.20)}
-  .boot-cross-h{left:0;right:0;top:50%;height:1px}
-  .boot-cross-v{top:0;bottom:0;left:50%;width:1px}
-  .boot-sweep{position:absolute;inset:0;border-radius:50%;
-    background:conic-gradient(from 0deg,rgba(130,195,255,.58) 0deg,rgba(130,195,255,.10) 24deg,transparent 58deg,transparent 360deg);
-    -webkit-mask:radial-gradient(circle,#000 99%,transparent 100%);
-    mask:radial-gradient(circle,#000 99%,transparent 100%);
-    animation:bootSweep 2.4s linear infinite}
-  @keyframes bootSweep{to{transform:rotate(360deg)}}
-  .boot-radar::after{content:'';position:absolute;top:50%;left:50%;width:5px;height:5px;border-radius:50%;
-    transform:translate(-50%,-50%);background:#a8caff;box-shadow:0 0 11px 2px rgba(130,195,255,.75)}
-  .boot-blip{position:absolute;width:7px;height:7px;border-radius:50%;background:#cfa94e;
-    box-shadow:0 0 9px 2px rgba(207,169,78,.65);opacity:0}
-  .boot-blip-1{top:33%;left:61%;animation:bootBlip 2.4s linear infinite .35s}
-  .boot-blip-2{top:63%;left:39%;animation:bootBlip 2.4s linear infinite 1.05s}
-  .boot-blip-3{top:49%;left:71%;animation:bootBlip 2.4s linear infinite 1.75s}
-  @keyframes bootBlip{0%{opacity:0;transform:scale(.4)}7%{opacity:1;transform:scale(1)}50%{opacity:0}100%{opacity:0}}
-
-  .boot-info{text-align:center}
-  .boot-title{font-weight:800;font-size:27px;letter-spacing:.3px;color:#e4ebf8;
-    text-shadow:0 0 22px rgba(109,168,255,.30)}
-  .boot-title span{color:#6da8ff}
-  .boot-sub{margin-top:5px;font-size:9.5px;font-weight:700;color:#5f7299;letter-spacing:1px}
-  .boot-log{list-style:none;margin:22px 0 0;padding:0;display:inline-block;min-width:216px;text-align:left;
-    font:500 11px/1.95 ui-monospace,'SFMono-Regular',Menlo,monospace;color:#8298bd}
-  .boot-log li{opacity:0;transform:translateX(-7px);display:flex;align-items:center;gap:7px;
-    animation:bootLine .42s ease forwards;animation-delay:var(--d)}
-  .boot-log li::before{content:'\203A';color:#6da8ff;font-weight:800}
-  @keyframes bootLine{to{opacity:1;transform:none}}
-  .boot-dots::after{content:'';animation:bootDots 1.5s steps(1,end) infinite}
-  @keyframes bootDots{0%{content:''}25%{content:'.'}50%{content:'..'}75%{content:'...'}100%{content:''}}
-  /* Live checklist — driven by real boot state (no entrance animation). */
-  .boot-log-live li{opacity:1;transform:none;animation:none;color:#6f86ab;transition:color .3s}
-  .boot-log-live li::before{content:none}
-  .boot-log-live li.done{color:#8fe3b3}
-  .boot-check{display:inline-block;width:12px;text-align:center;font-weight:800;color:#6da8ff}
-  .boot-log-live li.done .boot-check{color:#33d27e}
-  .boot-status{margin-top:12px;font:600 10px/1 ui-monospace,monospace;color:#5f7299;letter-spacing:.5px;min-height:11px}
-  .boot-err{margin:20px auto 0;max-width:300px;display:flex;flex-direction:column;align-items:center;gap:10px;
-    color:#ffb3b3;font:600 12px/1.5 ui-monospace,monospace}
-  .boot-err-icon{font-size:22px;color:#ff6b6b}
-  .boot-err-msg{color:#d9a7a7;text-align:center}
-  .boot-retry{margin-top:4px;background:#1a1018;border:1px solid #5a2030;color:#ff8a8a;
-    padding:5px 16px;border-radius:4px;cursor:pointer;font:700 11px ui-monospace,monospace;letter-spacing:.5px}
-  .boot-retry:hover{border-color:#ff6b6b;color:#ffb3b3}
-
-  .boot-bar{margin:24px auto 0;width:236px;height:2px;border-radius:2px;
-    background:rgba(96,140,220,.16);overflow:hidden}
-  .boot-bar span{display:block;height:100%;width:38%;border-radius:2px;
-    background:linear-gradient(90deg,transparent,#6da8ff,#a8caff,transparent);
-    animation:bootScan 1.5s ease-in-out infinite}
-  @keyframes bootScan{0%{transform:translateX(-130%)}100%{transform:translateX(360%)}}
-
-  @media (prefers-reduced-motion:reduce){
-    .boot-sweep,.boot-blip,.boot-bar span,.boot-grid,.boot-dots::after{animation:none}
-    .boot-log li{opacity:1;transform:none;animation:none}
-  }
-
-  /* ═══════════════════════════════════════════════════════════════
-     INFO PANEL — editorial/technical console, refined & data-dense
-     ═══════════════════════════════════════════════════════════════ */
-  .info-panel{
-    position:absolute;top:12px;right:12px;bottom:12px;
-    width:min(720px, 55vw); min-width:560px;
-    overflow:hidden;
-    background:linear-gradient(180deg, rgba(16,18,28,.96) 0%, rgba(11,13,20,.97) 100%);
-    backdrop-filter:blur(16px) saturate(1.1);
-    border:1px solid rgba(120,130,160,.15);
-    border-radius:14px;
-    box-shadow:0 20px 60px -20px rgba(0,0,0,.6), 0 0 0 1px rgba(255,255,255,.02) inset;
-    z-index:10;
-    animation:slide .25s cubic-bezier(.2,.9,.25,1);
-    display:flex;flex-direction:column;
-    color:#d8dae3;
-    --flow-color:#3dd6c8;
-  }
-  .info-panel::before{
-    content:'';position:absolute;top:0;left:0;bottom:0;width:2px;
-    background:linear-gradient(180deg, var(--flow-color) 0%, transparent 70%);
-    opacity:.75;pointer-events:none;
-  }
-  @keyframes slide{from{transform:translateX(20px);opacity:0}}
-
-  /* ── Header ───────────────────── */
-  .ip-head{
-    display:flex;justify-content:space-between;align-items:flex-start;gap:12px;
-    padding:18px 18px 12px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
-  }
-  .ip-head-left{display:flex;gap:12px;align-items:flex-start;min-width:0;flex:1}
-  .ip-glyph{
-    width:32px;height:32px;border-radius:8px;
-    display:grid;place-items:center;
-    font:500 15px 'JetBrains Mono',monospace;
-    color:var(--flow-color);
-    background:color-mix(in srgb, var(--flow-color) 8%, transparent);
-    border:1px solid color-mix(in srgb, var(--flow-color) 30%, transparent);
-    flex-shrink:0;
-  }
-  /* One rhythm for the whole header. The name, the identity row and the tag
-     row used ad-hoc 4px/5px margins, so nothing lined up with anything. */
-  .ip-head-txt{min-width:0;flex:1;display:flex;flex-direction:column;gap:7px}
-  .ip-name{
-    font:600 17px/1.1 'Syne',sans-serif;
-    color:#f0f2f7;
-    letter-spacing:-.01em;
-    word-break:break-word;
-    display:inline-flex;align-items:center;gap:8px;
-  }
-  /* Wraps instead of overflowing: a long flow name plus an id used to push the
-     row past the panel edge. */
-  .ip-sub{
-    display:flex;align-items:center;gap:8px;flex-wrap:wrap;row-gap:7px;
-    font:500 10px 'JetBrains Mono',monospace;
-    color:#7a7f92;
-  }
-  .ip-dot{width:3px;height:3px;border-radius:50%;background:#4a4f66}
   /* Containers that host a <CopyTextBtn /> overlay. The component positions
      itself absolutely in the top-right corner and fades in on hover. */
   :global(.copy-wrap){position:relative}
-  .ip-close{
-    background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.12);
-    color:#8a8fa8;
-    width:28px;height:28px;
-    border-radius:8px;
-    font:400 18px/1 'Syne',sans-serif;
-    cursor:pointer;transition:all .15s;
-    display:grid;place-items:center;
-    flex-shrink:0;
-  }
-  .ip-close:hover{background:rgba(239,93,110,.12);border-color:rgba(239,93,110,.3);color:#ef5d6e}
 
-  /* ── Tabs ─────────────────────── */
-  .ip-tabs{
-    display:flex;gap:2px;
-    padding:0 18px;
-    border-bottom:1px solid rgba(120,130,160,.08);
-    flex-shrink:0;
-  }
-  .ip-tab{
-    position:relative;
-    padding:12px 16px;
-    font:600 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    background:none;border:none;
-    color:#6a6f82;cursor:pointer;transition:color .15s;
-    display:inline-flex;align-items:center;gap:6px;
-  }
-  .ip-tab:hover{color:#b0b5c8}
-  .ip-tab.active{color:#f0f2f7}
-  .ip-tab.active::after{
-    content:'';position:absolute;bottom:-1px;left:12px;right:12px;height:2px;
-    background:var(--flow-color);border-radius:2px 2px 0 0;
-  }
-
-  /* ── Body (scrollable) ────────── */
-  .ip-body{
-    flex:1;overflow-y:auto;overflow-x:hidden;
-    padding:16px 18px 24px;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
-  .ip-body::-webkit-scrollbar{width:6px}
-  .ip-body::-webkit-scrollbar-thumb{background:rgba(120,130,160,.2);border-radius:3px}
-  .ip-body::-webkit-scrollbar-thumb:hover{background:rgba(120,130,160,.35)}
-
-
-  /* ── Mandate ─── moved to components/agent/sections/MandateSection.svelte */
-
-  /* Skin picker ─── moved to sections/AppearanceSection.svelte */
-
-  /* ── Chains, Schedule, Triggers ─── moved to sections/TriggeringSection.svelte */
-
-  /* ── Pre blocks ─── moved to sections/MandateSection + GoalSection */
-
-  /* ── Tool chips ─── moved to sections/ToolsSection.svelte */
-
-  /* ── Variables ─── moved to sections/VariablesSection.svelte */
-
+  /* Skip chip while a construction crew builds a new office. */
+  .construction-skip{position:absolute;bottom:18px;left:50%;transform:translateX(-50%);z-index:12;
+    padding:7px 16px;border-radius:999px;cursor:pointer;
+    font:700 11px 'Manrope',sans-serif;letter-spacing:.2px;color:#f2d38a;
+    background:rgba(14,16,24,.88);backdrop-filter:blur(8px);border:1px solid #f2b70566;
+    box-shadow:0 6px 18px rgba(0,0,0,.45);transition:border-color .15s,color .15s}
+  .construction-skip:hover{color:#ffe7a8;border-color:#f2b705}
+  .construction-skip:focus-visible{outline:2px solid #f2b705;outline-offset:2px}
   .hud{position:absolute;bottom:12px;left:12px;background:rgba(14,16,24,.9);backdrop-filter:blur(12px);border:1px solid rgba(16,185,129,.2);border-radius:10px;padding:10px 14px;z-index:10}
   .hud-t{display:flex;align-items:center;gap:6px;font:700 8px 'Syne',sans-serif;color:var(--green,#3dd68c);letter-spacing:1.5px;margin-bottom:6px}
   .hud-p{width:6px;height:6px;border-radius:50%;background:var(--green,#3dd68c);animation:p 1.5s ease-in-out infinite}
@@ -7152,72 +4856,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   .hud-i:hover{color:var(--text-1)}
   .hud-d{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 
-  .ip-out-txt{
-    margin:0;padding:12px;
-    font:400 11px/1.55 'JetBrains Mono',monospace;
-    color:#d8dae3;white-space:pre-wrap;word-break:break-word;
-    max-height:280px;overflow-y:auto;
-  }
-
-  /* Misc */
-  .ip-loading{
-    font:500 11px 'Manrope',sans-serif;color:#6a6f82;
-    text-align:center;padding:24px 12px;
-  }
-
-  /* ── "Configure LLM" chip ──
-     A run that dies with no provider configured is not a report, it is a task.
-     The kernel already names the screen in prose ("Settings → AI"); this is
-     that sentence as something you can click, wherever the failure surfaces:
-     the chat error banner, the failed reply, and the office error card. */
-  .llm-fix{
-    flex-shrink:0;align-self:center;
-    padding:3px 9px;border-radius:999px;text-decoration:none;white-space:nowrap;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(201,168,76,.10);
-    border:1px solid rgba(201,168,76,.45);
-    color:#d4a84b;transition:background .12s,border-color .12s;
-  }
-  .llm-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b}
-  /* Under a card rather than beside a message: own line, indented to the card. */
-  .llm-fix-row{display:inline-block;align-self:flex-start;margin:6px 0 2px 12px}
-
-  /* ── Active meeting panel ──── */
-  .meeting-panel{position:absolute;bottom:12px;right:12px;width:380px;max-height:60vh;
-    background:rgba(14,16,24,.95);backdrop-filter:blur(12px);border:1px solid rgba(99,102,241,.3);
-    border-radius:12px;z-index:15;display:flex;flex-direction:column;animation:slide .2s ease-out}
-  .meeting-header{padding:10px 14px;border-bottom:1px solid rgba(74,79,106,.2)}
-  .meeting-title{font:700 11px 'Syne',sans-serif;color:#8b8cf6;letter-spacing:1px;margin-bottom:4px}
-  .meeting-attendees{display:flex;align-items:center;gap:4px;margin-bottom:6px}
-  .meeting-att-dot{width:8px;height:8px;border-radius:50%}
-  .meeting-att-count{font:500 9px 'Manrope',sans-serif;color:var(--text-3);margin-left:4px}
-  .meeting-end{padding:4px 12px;border-radius:5px;font:600 9px 'Syne',sans-serif;
-    background:rgba(239,68,68,.12);border:1px solid rgba(239,68,68,.3);color:#ef4444;cursor:pointer;transition:all .15s}
-  .meeting-end:hover{background:rgba(239,68,68,.22)}
-  .meeting-min{padding:4px 10px;border-radius:5px;font:700 11px 'Syne',sans-serif;margin-right:6px;
-    background:rgba(99,102,241,.10);border:1px solid rgba(99,102,241,.3);color:#8b8cf6;cursor:pointer;transition:all .15s}
-  .meeting-min:hover{background:rgba(99,102,241,.22)}
-  .meeting-messages{flex:1;overflow-y:auto;padding:8px 14px;max-height:300px;scrollbar-width:thin}
-  .meeting-msg{margin-bottom:8px}
-  .meeting-msg-name{display:block;font:700 8px 'Syne',sans-serif;letter-spacing:.5px;text-transform:uppercase;margin-bottom:2px}
-  .meeting-msg-text{font:400 11px 'Manrope',sans-serif;color:var(--text-2);line-height:1.4;word-break:break-word}
-  .meeting-typing{opacity:.5}
-  /* The room's own input row is gone — ChatComposer supplies it. Only the
-     surrounding padding and the accent it focuses to stay local. */
-  .meeting-composer{padding:0 14px 10px;--flow-color:#8b8cf6}
-
-  /* ── Modal ──────────────────── */
-  .modal-overlay{position:fixed;inset:0;z-index:var(--z-modal);background:rgba(0,0,0,.6);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center}
-  .modal{background:#0e1018;border:1px solid rgba(74,79,106,.4);border-radius:16px;padding:24px;width:420px;max-width:90vw;box-shadow:0 20px 60px rgba(0,0,0,.6);animation:mslide .2s ease-out}
-  @keyframes mslide{from{transform:translateY(12px);opacity:0}}
-
-  /* ── Markdown output (run.result / step.content) ── */
-  .ip-out-md{
-    font:400 12.5px/1.6 'Manrope',sans-serif;color:#d0d4e0;
-    padding:14px 18px;border-radius:6px;background:rgba(0,0,0,.22);
-    word-break:break-word;overflow-wrap:anywhere;max-height:380px;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
+  /* ── Markdown output (run.result / step.content) ──
+     Global, so it styles every `.ip-out-md` pane — the drawer's, My Office's
+     and the meeting panels' — from here. Each of those components carries its
+     own scoped `.ip-out-md` box rule. */
   :global(.ip-out-md .md-h){font:700 13px 'Syne',sans-serif;color:#e5e8f0;margin:12px 0 5px;letter-spacing:.3px}
   :global(.ip-out-md h3.md-h){font-size:14.5px;color:#fff}
   :global(.ip-out-md h4.md-h){font-size:13px;color:#e5e8f0}
@@ -7275,453 +4917,6 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   }
   :global(.ip-out-md .ip-uuid-link::before){content:'📄';font-size:9px;filter:saturate(.7)}
   :global(.ip-out-md .ip-uuid-link:hover){background:rgba(99,102,241,.32);border-color:#8b8cf6;color:#d8daff}
-
-  /* ── Latest result hero card (Overview) ── */
-  .result-hero{
-    position:relative;margin:0 0 14px;padding:14px 16px 10px;
-    border-radius:12px;
-    background:
-      linear-gradient(180deg, rgba(120,220,140,.08) 0%, rgba(120,220,140,.02) 60%, rgba(0,0,0,0) 100%),
-      #0f121c;
-    border:1px solid rgba(120,220,140,.28);
-    box-shadow:0 4px 18px rgba(0,0,0,.25), inset 0 0 0 1px rgba(255,255,255,.02);
-    overflow:hidden;
-  }
-  .result-hero::before{
-    content:'';position:absolute;top:0;left:0;right:0;height:2px;
-    background:linear-gradient(90deg, transparent, #78dc8c, transparent);
-    opacity:.6;
-  }
-  .result-hero.result-fail{
-    background:linear-gradient(180deg, rgba(239,93,110,.08) 0%, rgba(239,93,110,.02) 60%, rgba(0,0,0,0) 100%), #0f121c;
-    border-color:rgba(239,93,110,.32);
-  }
-  .result-hero.result-fail::before{background:linear-gradient(90deg, transparent, #ef5d6e, transparent)}
-  .result-hero-loading{padding:14px;color:#6a6f82;font:500 11px 'Manrope',sans-serif;text-align:center}
-  .result-hero-top{
-    display:flex;justify-content:space-between;align-items:center;gap:10px;
-    margin-bottom:10px;flex-wrap:wrap;
-  }
-  .result-hero-badge{display:flex;align-items:center;gap:8px}
-  .result-hero-icon{
-    width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
-    border-radius:50%;font:700 12px 'JetBrains Mono',monospace;
-    background:rgba(120,220,140,.18);color:#78dc8c;border:1px solid rgba(120,220,140,.4);
-  }
-  .result-hero.result-fail .result-hero-icon{background:rgba(239,93,110,.18);color:#ef5d6e;border-color:rgba(239,93,110,.4)}
-  .result-hero-lbl{
-    font:700 10px 'Syne',sans-serif;color:#d0d4e0;
-    letter-spacing:1.2px;text-transform:uppercase;
-  }
-  .result-hero-date{
-    font:700 13px 'Manrope',sans-serif;color:#e0e2ea;margin-bottom:2px;
-  }
-  .result-hero-date-full{
-    font:400 10px 'JetBrains Mono',monospace;color:#6a6f82;margin-left:8px;
-  }
-  .result-hero-meta{
-    display:flex;align-items:center;gap:5px;flex-wrap:wrap;
-    font:500 9px 'JetBrains Mono',monospace;color:#8a8fa8;
-  }
-  .result-hero-dot{color:#4a4f6a}
-  .result-hero-trigger{
-    padding:2px 7px;border-radius:4px;
-    background:color-mix(in srgb, var(--c, #6366f1) 15%, transparent);
-    border:1px solid color-mix(in srgb, var(--c, #6366f1) 35%, transparent);
-    color:var(--c, #6366f1);
-    font:600 9px 'JetBrains Mono',monospace;letter-spacing:.4px;
-  }
-  .result-hero-body{
-    padding:2px 0;max-height:260px;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
-  }
-  .result-hero-err{padding:10px 12px;border-radius:8px;background:rgba(239,93,110,.08);border:1px solid rgba(239,93,110,.22)}
-  .result-hero-actions{
-    display:flex;justify-content:flex-end;gap:8px;margin-top:10px;
-    padding-top:8px;border-top:1px dashed rgba(120,130,160,.12);
-  }
-  .result-hero-action{
-    padding:5px 10px;border-radius:6px;
-    font:600 9px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(120,130,160,.08);border:1px solid rgba(120,130,160,.22);
-    color:#c0c5d8;cursor:pointer;transition:all .12s;
-  }
-  .result-hero-action:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.38);color:#fff}
-
-  /* ── Inline "Re-login Google" CTA in the description area ── */
-  /* Always visible for gsync:* agents, regardless of last-run status. */
-  .ip-auth-cta{
-    display:flex;align-items:center;gap:10px;
-    padding:8px 12px;margin:0 0 14px;
-    background:linear-gradient(180deg, rgba(245,158,11,.10), rgba(245,158,11,.03));
-    border:1px solid rgba(245,158,11,.30);border-radius:10px;
-  }
-  .ip-auth-hint{
-    flex:1;min-width:0;
-    font:600 10.5px 'JetBrains Mono',monospace;letter-spacing:.4px;text-transform:uppercase;
-    color:#ffd175;
-  }
-  .ip-auth-btn{
-    display:inline-flex;align-items:center;gap:6px;
-    padding:6px 12px;border-radius:7px;
-    font:700 11px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:linear-gradient(180deg, rgba(245,158,11,.28), rgba(245,158,11,.10));
-    border:1px solid rgba(245,158,11,.65);color:#fff;cursor:pointer;
-    transition:all .12s;
-  }
-  .ip-auth-btn:hover:not(:disabled){
-    background:linear-gradient(180deg, rgba(245,158,11,.42), rgba(245,158,11,.16));
-    border-color:rgba(245,158,11,.95);
-  }
-  .ip-auth-btn:disabled{opacity:.55;cursor:wait}
-  .ip-auth-ico{font-size:13px;line-height:1}
-
-  /* ── My Office reports panel ── */
-  .office-reports-panel{
-    border-color:rgba(201,168,76,.35);
-    background:linear-gradient(180deg, rgba(201,168,76,.06) 0%, #0d1020 40%);
-  }
-  .or-empty{padding:24px 16px;text-align:center;color:#6a6f82;font:500 12px 'Manrope',sans-serif}
-  /* Single scrollable body for the My Office panel — wraps the pending
-   * question cards AND the report list so they share one scrollbar instead
-   * of each fighting for height inside the flex column. */
-  .or-scroll{
-    flex:1;min-height:0;overflow-y:auto;
-    scrollbar-width:thin;scrollbar-color:rgba(201,168,76,.25) transparent;
-  }
-  .office-reports-list{
-    padding:8px 10px;
-    display:flex;flex-direction:column;gap:6px;
-  }
-
-  /* ── My Office tabs ────────────────────────────── */
-  .mo-tabs{
-    padding:0 14px;
-    border-bottom:1px solid rgba(120,130,160,.1);
-    flex-shrink:0;
-  }
-  .mo-tab-badge{
-    display:inline-flex;align-items:center;justify-content:center;
-    min-width:18px;height:16px;padding:0 5px;margin-left:6px;
-    border-radius:8px;
-    font:700 9px 'JetBrains Mono',monospace;
-    background:rgba(120,130,160,.18);color:#cbd0e8;
-  }
-  .mo-tab-badge-q{background:rgba(240,184,116,.22);color:#f0b874}
-  .mo-tab-badge-err{background:rgba(239,93,110,.22);color:#ef5d6e}
-
-  /* ── My Office overview (KPIs + previews) ──────── */
-  .mo-overview{padding:8px 4px}
-  .mo-kpis{
-    display:grid;grid-template-columns:repeat(3,1fr);gap:8px;
-    padding:8px 10px 4px;
-  }
-  .mo-kpi{
-    display:flex;flex-direction:column;gap:2px;align-items:flex-start;
-    padding:10px 12px;border:1px solid rgba(120,130,160,.18);border-radius:8px;
-    background:rgba(120,130,160,.04);
-    color:#cbd0e8;cursor:pointer;text-align:left;
-    transition:background .12s, border-color .12s;
-  }
-  .mo-kpi:hover:not(:disabled){background:rgba(120,130,160,.1);border-color:rgba(120,130,160,.35)}
-  .mo-kpi:disabled{cursor:default;opacity:.55}
-  .mo-kpi-num{font:800 22px 'Syne',sans-serif;line-height:1}
-  .mo-kpi-lbl{font:600 9px 'JetBrains Mono',monospace;letter-spacing:.6px;text-transform:uppercase;color:#8a8fa8}
-  .mo-kpi-q .mo-kpi-num{color:#f0b874}
-  .mo-kpi-q{border-color:rgba(240,184,116,.25)}
-  .mo-kpi-err .mo-kpi-num{color:#ef5d6e}
-  .mo-kpi-err{border-color:rgba(239,93,110,.25)}
-  .mo-kpi-act .mo-kpi-num{color:#7a9aff}
-  .mo-kpi-act{border-color:rgba(122,154,255,.25)}
-
-  /* Compact overview question preview — clickable card hint */
-  .mo-overview-q{cursor:pointer;transition:background .12s}
-  .mo-overview-q:hover{background:linear-gradient(180deg, rgba(240,184,116,.16) 0%, rgba(240,184,116,.04) 100%)}
-  .or-section-more{
-    margin-left:auto;background:none;border:none;cursor:pointer;
-    font:600 10px 'JetBrains Mono',monospace;color:#7a9aff;padding:2px 4px;
-  }
-  .or-section-more:hover{color:#a0b7ff;text-decoration:underline}
-
-  /* ── Bulk action buttons (tab toolbars) ────────── */
-  .mo-bulk-btn{
-    margin-left:auto;
-    padding:3px 10px;border-radius:6px;cursor:pointer;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    border:1px solid transparent;transition:all .12s;
-  }
-  .mo-bulk-btn:disabled{opacity:.5;cursor:wait}
-  .mo-bulk-dismiss{
-    background:rgba(240,184,116,.08);border-color:rgba(240,184,116,.3);color:#f0b874;
-  }
-  .mo-bulk-dismiss:hover:not(:disabled){background:rgba(240,184,116,.18);border-color:rgba(240,184,116,.5)}
-  .mo-bulk-clear{
-    background:rgba(239,93,110,.08);border-color:rgba(239,93,110,.3);color:#ef5d6e;
-  }
-  .mo-bulk-clear:hover:not(:disabled){background:rgba(239,93,110,.18);border-color:rgba(239,93,110,.5)}
-
-  /* Footer bulk action variants */
-  .office-clear-btn-soft{
-    background:rgba(120,130,160,.08);border-color:rgba(120,130,160,.3);color:#8a8fa8;
-  }
-  .office-clear-btn-soft:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.5);color:#cbd0e8}
-  .office-clear-btn-danger{
-    background:rgba(239,93,110,.08);border-color:rgba(239,93,110,.3);color:#ef5d6e;
-    margin-left:auto;
-  }
-  .office-clear-btn-danger:hover{background:rgba(239,93,110,.18);border-color:rgba(239,93,110,.5)}
-  .or-card{
-    display:flex;flex-direction:column;gap:4px;width:100%;
-    padding:10px 12px;border:none;border-radius:8px;
-    background:rgba(120,130,160,.04);color:#c0c5d8;cursor:pointer;
-    text-align:left;transition:background .12s;
-    border-left:3px solid transparent;
-  }
-  .or-card:hover{background:rgba(201,168,76,.08)}
-  .or-card.or-fail{border-left-color:rgba(239,93,110,.5);background:rgba(239,93,110,.04)}
-  .or-card.or-handoff{border-left-color:rgba(61,214,200,.4);background:rgba(61,214,200,.03)}
-  .or-section{
-    display:flex;align-items:baseline;gap:8px;
-    padding:6px 4px 2px 4px;margin-top:4px;
-  }
-  .or-section:first-child{margin-top:0}
-  .or-section-title{
-    font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    color:#8a8fa8;
-  }
-  .or-section-title.or-section-fail{color:#ef5d6e}
-  .or-section-title.or-section-q{color:#f0b874}
-  .or-section-hint{font:500 9px 'JetBrains Mono',monospace;color:#5a5f7a}
-
-  /* ── Top-agent question cards ─────────────────────── */
-  .bq-list{ display:flex; flex-direction:column; gap:10px; padding:0 14px 12px; }
-  .bq-card{
-    background:linear-gradient(180deg, rgba(240,184,116,.08) 0%, rgba(240,184,116,.02) 100%);
-    border:1px solid rgba(240,184,116,.25); border-left:3px solid #f0b874;
-    border-radius:8px; padding:10px 12px;
-  }
-  .bq-head{ display:flex; align-items:center; gap:8px; margin-bottom:6px; font:600 10px 'JetBrains Mono',monospace; color:#cbd0e8; }
-  .bq-from-dot{ width:7px; height:7px; border-radius:50%; }
-  .bq-from{ color:#e7e9f4; }
-  .bq-time{ margin-left:auto; color:#6b7090; font-size:9px; }
-  .bq-dismiss{
-    background:transparent; border:none; color:#6b7090; font-size:16px;
-    cursor:pointer; padding:0 3px; line-height:1;
-  }
-  .bq-dismiss:hover{ color:#ef5d6e; }
-  .bq-question{
-    font:600 13px/1.45 'Manrope',sans-serif; color:#e7e9f4;
-    margin:0 0 8px; word-break:break-word;
-  }
-  .bq-context{ margin:0 0 8px; }
-  .bq-context summary{
-    cursor:pointer; color:#8b90af; font:500 10px 'JetBrains Mono',monospace;
-    list-style:none;
-  }
-  .bq-context summary::-webkit-details-marker{ display:none; }
-  .bq-context summary::before{ content:'▸ '; color:#6b7090; }
-  .bq-context[open] summary::before{ content:'▾ '; }
-  .bq-context-body{
-    margin-top:6px; padding:8px 10px; background:#0a0b14; border:1px solid #1f2236;
-    border-radius:4px; font:500 11px/1.5 'JetBrains Mono',monospace; color:#8b90af;
-    white-space:pre-wrap; word-break:break-word; max-height:160px; overflow-y:auto;
-  }
-  .bq-options{ display:flex; flex-direction:column; gap:5px; }
-  .bq-option{
-    display:flex; align-items:center; gap:8px;
-    padding:8px 10px; background:#161827; color:#cbd0e8;
-    border:1px solid #2a2f4a; border-radius:5px;
-    font:600 11px 'Manrope',sans-serif;
-    cursor:pointer; transition:all .12s; text-align:left;
-  }
-  .bq-option:hover:not(:disabled){
-    background:#252840; border-color:#f0b874; color:#f4e1a3;
-    transform:translateY(-1px);
-  }
-  .bq-option:disabled{ opacity:.5; cursor:not-allowed; }
-  .bq-option-idx{
-    flex-shrink:0; width:20px; height:20px; border-radius:3px;
-    background:#0a0b14; display:inline-flex; align-items:center; justify-content:center;
-    font:700 10px 'JetBrains Mono',monospace; color:#f0b874;
-  }
-  .bq-option-lbl{ flex:1; word-break:break-word; }
-  /* Options that open a URL — make them visually distinct (subtle teal tint
-     + arrow chevron). */
-  .bq-option-link{
-    border-color:rgba(61,214,200,.35);
-    background:linear-gradient(180deg, #161827 0%, #15212a 100%);
-  }
-  .bq-option-link:hover:not(:disabled){
-    border-color:#3dd6c8;
-    background:linear-gradient(180deg, #1a2f33 0%, #142329 100%);
-    color:#a8e4dc;
-  }
-  .bq-option-link .bq-option-idx{ color:#3dd6c8; }
-  .bq-option-linkico{
-    flex-shrink:0; color:#3dd6c8; font:700 11px 'JetBrains Mono',monospace;
-    opacity:.7; transition:opacity .12s, transform .12s;
-  }
-  .bq-option-link:hover:not(:disabled) .bq-option-linkico{
-    opacity:1; transform:translate(2px,-2px);
-  }
-  /* Direct link chip — surfaces the URL from `context` above the options
-     so the user can preview the link without having to commit to an answer. */
-  .bq-direct-link{
-    display:inline-flex; align-items:center; gap:5px;
-    margin:6px 0 2px;
-    padding:4px 9px;
-    border:1px solid rgba(61,214,200,.3);
-    background:rgba(61,214,200,.08);
-    border-radius:14px;
-    color:#88e0d6; text-decoration:none;
-    font:600 10.5px 'JetBrains Mono',monospace;
-    letter-spacing:.2px;
-    transition:all .12s;
-    max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
-  .bq-direct-link:hover{
-    background:rgba(61,214,200,.16);
-    border-color:rgba(61,214,200,.5);
-    color:#c8f0ea;
-  }
-  .or-audited{
-    font:700 8px 'JetBrains Mono',monospace;letter-spacing:.4px;
-    padding:2px 6px;border-radius:4px;
-    background:rgba(120,220,140,.13);color:#78dc8c;
-    border:1px solid rgba(120,220,140,.3);
-  }
-  .or-audit-pending{
-    font:700 8px 'JetBrains Mono',monospace;letter-spacing:.4px;
-    padding:2px 6px;border-radius:4px;
-    background:rgba(201,168,76,.08);color:#c9a84c;
-    border:1px dashed rgba(201,168,76,.3);
-  }
-  .or-card-header{
-    display:flex;align-items:center;gap:6px;
-  }
-  .or-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-  .or-status{
-    font:700 9px 'JetBrains Mono',monospace;
-    width:16px;height:16px;display:inline-flex;align-items:center;justify-content:center;
-    border-radius:4px;flex-shrink:0;
-  }
-  .status-ok{background:rgba(120,220,140,.15);color:#78dc8c}
-  .status-fail{background:rgba(239,93,110,.15);color:#ef5d6e}
-  .status-handoff{background:rgba(61,214,200,.15);color:#3dd6c8}
-  .or-name{font:600 11px 'Manrope',sans-serif;flex-shrink:0;max-width:140px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-  .or-time{margin-left:auto;flex-shrink:0;font:500 9px 'JetBrains Mono',monospace;color:#4a4f6a}
-  .or-card-body{
-    font:400 11px/1.4 'Manrope',sans-serif;color:#8a8fa8;
-    display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;
-    overflow:hidden;word-break:break-word;padding-left:29px;
-  }
-  .or-card.or-fail .or-card-body{color:#cf7080}
-  .or-footer{
-    padding:8px 12px;border-top:1px solid rgba(120,130,160,.1);
-    display:flex;justify-content:flex-end;gap:6px;flex-wrap:wrap;
-  }
-  .office-clear-btn{
-    padding:5px 12px;border-radius:6px;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(120,130,160,.06);border:1px solid rgba(120,130,160,.18);
-    color:#8a8fa8;cursor:pointer;transition:all .12s;
-  }
-  .office-clear-btn:hover{background:rgba(120,130,160,.16);color:#fff}
-
-  /* ── Report detail modal ── */
-  .report-modal{
-    width:min(700px, 90vw);max-height:85vh;
-    background:#0d1020;border:1px solid rgba(201,168,76,.35);border-radius:14px;
-    display:flex;flex-direction:column;overflow:hidden;
-    box-shadow:0 20px 60px rgba(0,0,0,.7), 0 0 40px rgba(201,168,76,.08);
-  }
-  .rm-head{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:16px 20px;border-bottom:1px solid rgba(120,130,160,.12);
-    gap:12px;flex-wrap:wrap;
-  }
-  .rm-head-left{display:flex;align-items:center;gap:10px}
-  .rm-head-right{display:flex;align-items:center;gap:12px}
-  .rm-dot{width:10px;height:10px;border-radius:50%;flex-shrink:0}
-  .rm-status{
-    font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;
-    padding:3px 10px;border-radius:5px;
-  }
-  .rm-status.status-ok{background:rgba(120,220,140,.15);color:#78dc8c;border:1px solid rgba(120,220,140,.35)}
-  .rm-status.status-fail{background:rgba(239,93,110,.15);color:#ef5d6e;border:1px solid rgba(239,93,110,.35)}
-  .rm-status.status-handoff{background:rgba(61,214,200,.15);color:#3dd6c8;border:1px solid rgba(61,214,200,.35)}
-  .rm-name{font:600 14px 'Manrope',sans-serif}
-  .rm-time{font:500 10px 'JetBrains Mono',monospace;color:#6a6f82}
-  .rm-close{
-    background:transparent;border:none;color:#8a8fa8;font:400 22px/1 'Manrope',sans-serif;
-    cursor:pointer;padding:0 4px;transition:color .12s;
-  }
-  .rm-close:hover{color:#fff}
-  .rm-body{
-    flex:1;min-height:0;overflow-y:auto;padding:20px 24px;
-    scrollbar-width:thin;scrollbar-color:rgba(201,168,76,.2) transparent;
-    word-break:break-word;white-space:pre-wrap;
-    font:400 12px/1.6 'Manrope',sans-serif;color:#c0c5d8;
-  }
-  .rm-actions{
-    display:flex;justify-content:flex-end;gap:8px;align-items:center;flex-wrap:wrap;
-    padding:12px 20px;border-top:1px solid rgba(120,130,160,.12);
-  }
-  .rm-action{
-    padding:7px 14px;border-radius:7px;
-    font:600 10px 'JetBrains Mono',monospace;letter-spacing:.3px;
-    background:rgba(120,130,160,.08);border:1px solid rgba(120,130,160,.22);
-    color:#c0c5d8;cursor:pointer;transition:all .12s;
-  }
-  .rm-action:hover{background:rgba(120,130,160,.16);border-color:rgba(120,130,160,.4);color:#fff}
-  /* Same row, same shape — but it is a link, and it is the one action that
-     fixes the cause rather than routing the symptom somewhere. */
-  .rm-action-fix{
-    display:inline-flex;align-items:center;text-decoration:none;
-    background:rgba(201,168,76,.10);border-color:rgba(201,168,76,.45);color:#d4a84b;
-  }
-  .rm-action-fix:hover{background:rgba(201,168,76,.20);border-color:#d4a84b;color:#f0d9a0}
-  .rm-action:disabled{opacity:.5;cursor:not-allowed}
-
-  /* Send-to-fixer split button + dropdown */
-  .rm-fixer-wrap{position:relative;display:inline-flex;align-items:stretch}
-  .rm-fixer-primary{
-    border-color:#ffb84a55;background:rgba(255,184,74,.08);color:#ffb84a;
-    border-top-right-radius:0;border-bottom-right-radius:0;
-  }
-  .rm-fixer-primary:hover{background:rgba(255,184,74,.18);border-color:#ffb84a;color:#ffd28a}
-  .rm-fixer-primary:disabled{color:#7a6a3a}
-  .rm-fixer-dropdown{
-    padding:7px 9px;border-radius:7px;
-    border-top-left-radius:0;border-bottom-left-radius:0;border-left:none;
-    font:600 11px 'JetBrains Mono',monospace;line-height:1;
-    background:rgba(255,184,74,.08);border:1px solid #ffb84a55;color:#ffb84a;cursor:pointer;
-  }
-  .rm-fixer-dropdown:hover{background:rgba(255,184,74,.18);color:#ffd28a}
-  .rm-fixer-dropdown:disabled{opacity:.5;cursor:not-allowed}
-  .rm-fixer-menu{
-    position:absolute;right:0;bottom:calc(100% + 4px);z-index:var(--z-toast);
-    min-width:240px;max-width:340px;
-    background:rgba(8,6,2,.96);border:1px solid #ffb84a55;border-radius:8px;
-    box-shadow:0 8px 28px rgba(0,0,0,.55),0 0 18px rgba(255,184,74,.15);
-    overflow:hidden;
-  }
-  .rm-fixer-menu-item{
-    display:flex;flex-direction:column;align-items:flex-start;gap:2px;
-    width:100%;padding:8px 12px;border:none;background:transparent;cursor:pointer;
-    border-bottom:1px solid rgba(255,184,74,.08);text-align:left;
-    transition:background .1s;
-  }
-  .rm-fixer-menu-item:last-child{border-bottom:none}
-  .rm-fixer-menu-item:hover{background:rgba(255,184,74,.1)}
-  .rm-fixer-menu-active{background:rgba(255,184,74,.16)}
-  .rm-fixer-menu-name{font:700 11px 'Syne',sans-serif;color:#ffb84a;letter-spacing:.5px}
-  .rm-fixer-menu-hint{font:400 10px 'Manrope',sans-serif;color:#8a7a5a;letter-spacing:.2px}
-  .rm-fixer-status{
-    font:600 10px 'JetBrains Mono',monospace;color:#9aa5b8;
-    margin-right:auto;padding-left:4px;
-  }
-
   /* Floating toast that confirms a "send to fixer" dispatch after the
      report modal closes. Anchored top-center to stay clear of the HQ bar. */
   .fixer-toast{
@@ -7814,206 +5009,13 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     :global(.atag-think-dot) { animation: none; opacity: .85; }
     :global(.atag-icon) { animation: none; }
   }
-
-  /* ── Live agent meeting side panel — does NOT cover the 3D ────── */
-  .lm-side-panel{
-    /* Flush with the top of the 3D viewport, matching the 14px side margin.
-       It used to sit at top:64px, which cleared nothing on this side — the
-       stats pills and the 2D/3D toggle live at the far LEFT — and just left a
-       band of empty floor between the nav and the modal. */
-    position:absolute; top:14px; right:14px; z-index:var(--z-drawer);
-    width:min(640px, 52vw);
-    min-width:420px;
-    /* Fit the content, don't always span to the bottom of the viewport. The
-       panel was pinned top AND bottom, so a meeting with one short turn drew
-       a full-height box that was mostly dead space. It still cannot grow past
-       the viewport — beyond that the transcript scrolls. */
-    max-height:calc(100% - 28px);
-    pointer-events:auto;
-    animation:lm-side-in .25s ease-out;
-    /* Establish a real flex parent so .live-meeting-modal can size its
-       children correctly when the panel itself sits in absolute position. */
-    display:flex;
+  /* World plugins draw their panels in here; only their own elements take clicks. */
+  .world-plugin-overlay { position: absolute; inset: 0; z-index: 6; pointer-events: none; }
+  .world-plugin-overlay :global(.world-plugin-layer) { position: absolute; inset: 0; }
+  .world-plugin-overlay :global(.world-plugin-layer > *) { pointer-events: auto; }
+  .wp-tip {
+    position: absolute; z-index: 7; pointer-events: none; white-space: nowrap;
+    background: rgba(17, 19, 24, 0.92); color: #e6e8ee; border: 1px solid rgba(255, 194, 61, 0.5); border-radius: 6px;
+    padding: 3px 7px; font: 500 11px 'IBM Plex Mono', monospace;
   }
-  @keyframes lm-side-in {
-    from { opacity:0; transform:translateX(20px); }
-    to   { opacity:1; transform:translateX(0); }
-  }
-  .live-meeting-modal{
-    width:100%;
-    height:auto;        /* was 100% — that is what forced the empty space */
-    max-height:100%;
-    min-height:0; /* allow flex children below to overflow:auto correctly */
-    display:flex; flex-direction:column; padding:0;
-    border:1px solid #2a2f4a; background:#0f1018;
-    border-radius:8px;
-    box-shadow:-8px 18px 60px rgba(0,0,0,.55);
-    overflow:hidden; /* clip rounded corners */
-  }
-  .lm-head{
-    flex-shrink:0;
-    display:flex; align-items:flex-start; gap:10px;
-    padding:14px 16px 10px; border-bottom:1px solid #1f2236;
-  }
-  .lm-titles{ flex:1; min-width:0; }
-  .lm-title{
-    font:700 14px 'Manrope',sans-serif; color:#e7e9f4;
-    display:flex; align-items:center; gap:8px;
-  }
-  .lm-topic{
-    overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  }
-  .lm-sub{
-    margin-top:6px; display:flex; flex-wrap:wrap; gap:6px; align-items:center;
-    font:500 11px 'JetBrains Mono',monospace; color:#8b90af;
-  }
-  .lm-mod{ color:#c9a84c; }
-  .lm-attendee{
-    padding:1px 6px; border-radius:9px; border:1px solid #444; color:#cbd0e8;
-    font-size:10px;
-  }
-  .lm-stat{ color:#6b7090; }
-  .lm-parts{ color:#3a3f5a; }
-  .lm-dot{ width:8px; height:8px; border-radius:50%; display:inline-block; }
-  .lm-dot-pulse{ background:#5b8def; box-shadow:0 0 0 0 rgba(91,141,239,.6); animation:lm-pulse 1.6s infinite; }
-  .lm-dot-done{ background:#78dc8c; }
-  .lm-dot-fail{ background:#ef5d6e; }
-  @keyframes lm-pulse {
-    0%   { box-shadow:0 0 0 0 rgba(91,141,239,.55); }
-    70%  { box-shadow:0 0 0 10px rgba(91,141,239,0); }
-    100% { box-shadow:0 0 0 0 rgba(91,141,239,0); }
-  }
-  .lm-switcher{
-    background:#161827; color:#cbd0e8; border:1px solid #2a2f4a;
-    border-radius:6px; padding:4px 8px; font:500 11px 'JetBrains Mono',monospace;
-    max-width:240px;
-  }
-  .lm-close{
-    background:transparent; color:#6b7090; border:none; font-size:18px;
-    cursor:pointer; padding:0 4px; line-height:1;
-  }
-  .lm-close:hover{ color:#e7e9f4; }
-
-  .lm-transcript{
-    /* `0` basis forced it to eat all remaining height; `auto` lets it size to
-       its turns and only start scrolling once the panel hits its ceiling. */
-    flex:0 1 auto; min-height:0; /* min-height:0 so overflow-y actually scrolls */
-    overflow-y:auto;
-    /* Reserve the scrollbar on both sides so the turn cards stay centred.
-       Without this the bar eats 8px on the right only, and the column of
-       cards sits visibly off-centre with a dead strip down the right edge. */
-    scrollbar-gutter:stable both-edges;
-    padding:12px 10px;
-    display:flex; flex-direction:column; gap:12px;
-    scroll-behavior:smooth;
-  }
-  .lm-transcript::-webkit-scrollbar{ width:8px; }
-  .lm-transcript::-webkit-scrollbar-thumb{ background:#2a2f4a; border-radius:4px; }
-  .lm-transcript::-webkit-scrollbar-thumb:hover{ background:#3a3f5a; }
-  /* Meeting banner mounted on the room's wall display. Bigger than the old
-     floating badge — it is far from the camera now, and it no longer sits
-     between the viewer and the table, so it can afford the size. */
-  .mtg-banner-wall{
-    transform: scale(1.75);
-    transform-origin: center center;
-  }
-  /* A new turn slides in instead of appearing, so a glance at the panel tells
-     you something just arrived even if you were reading further up. */
-  @keyframes lm-turn-in{
-    from{ opacity:0; transform:translateY(8px); }
-    to  { opacity:1; transform:none; }
-  }
-  .lm-turn{ animation: lm-turn-in .28s ease-out both; }
-  @media (prefers-reduced-motion: reduce){
-    .lm-turn{ animation:none; }
-  }
-  .lm-empty{
-    text-align:center; color:#6b7090; padding:24px 0;
-    font:500 12px 'JetBrains Mono',monospace;
-  }
-  .lm-turn{
-    /* Grow to the content and let the PANEL scroll. As a plain flex child the
-       card was shrinking to whatever was left over and scrolling internally,
-       so a long turn got a cramped box with its own scrollbar while the rest
-       of the panel sat empty underneath it. */
-    flex:0 0 auto;
-    border:1px solid #1f2236; border-left:3px solid #2a2f4a;
-    border-radius:6px; padding:10px 12px; background:#13152099;
-    animation:lm-turn-in .25s ease-out;
-  }
-  .lm-turn-moderator{ border-left-color:#c9a84c; background:#1a160e80; }
-  @keyframes lm-turn-in {
-    from { opacity:0; transform:translateY(6px); }
-    to   { opacity:1; transform:translateY(0); }
-  }
-  .lm-turn-head{
-    display:flex; align-items:center; gap:8px; margin-bottom:6px;
-    font:600 11px 'JetBrains Mono',monospace;
-  }
-  .lm-turn-name{ font-weight:700; }
-  .lm-turn-meta{ margin-left:auto; color:#5a5f7a; font-size:10px; }
-  .lm-turn-body{
-    font:400 13px/1.55 'Manrope',sans-serif; color:#cbd0e8;
-    word-break:break-word;
-    /* No inner scroll: the transcript is the only scroller in this panel. */
-    max-height:none; overflow:visible;
-  }
-  .lm-turn-body :global(p.md-p){ margin:.4em 0; }
-  .lm-turn-body :global(h3.md-h){ margin:.7em 0 .25em; font:700 13px 'Manrope',sans-serif; color:#e7e9f4; }
-  .lm-turn-body :global(h4.md-h){ margin:.6em 0 .2em; font:700 12px 'Manrope',sans-serif; color:#cbd0e8; }
-  .lm-turn-body :global(h5.md-h){ margin:.5em 0 .15em; font:700 11px 'Manrope',sans-serif; color:#a8aec8; }
-  .lm-turn-body :global(strong){ color:#e7e9f4; }
-  .lm-turn-body :global(em){ color:#cbe0ff; }
-  .lm-turn-body :global(code.md-code){ background:#161827; padding:1px 5px; border-radius:3px; font:500 11px 'JetBrains Mono',monospace; color:#cbe0ff; }
-  .lm-turn-body :global(pre.md-codeblock){ background:#0a0b14; border:1px solid #1f2236; border-radius:4px; padding:8px 10px; margin:.4em 0; font:500 11px/1.45 'JetBrains Mono',monospace; color:#cbd0e8; overflow-x:auto; white-space:pre-wrap; }
-  .lm-turn-body :global(ul.md-ul), .lm-turn-body :global(ol.md-ol){ margin:.3em 0 .3em 18px; padding:0; }
-  .lm-turn-body :global(ul.md-ul li), .lm-turn-body :global(ol.md-ol li){ margin:.15em 0; }
-  .lm-turn-body :global(a){ color:#5b8def; text-decoration:underline; }
-  /* Plain-text variant (avoids markdown rendering CPU spike that froze 3D) */
-  .lm-turn-body-pre{
-    font:400 12px/1.5 'JetBrains Mono',monospace; color:#cbd0e8;
-    margin:0; white-space:pre-wrap; word-break:break-word;
-    background:transparent; padding:0; max-height:none;
-  }
-  /* Icon.svelte renders a block svg: line the icons up with their text. */
-  .lm-close{ display:inline-grid; place-items:center; }
-  .lm-turn-ico{ display:inline-flex; align-items:center; }
-  .lm-summary-h{ display:flex; align-items:center; gap:6px; }
-
-  .lm-summary{
-    flex-shrink:0;
-    /* Cap so a long action_items list doesn't push the panel beyond the
-       viewport — when it does grow past max-height it scrolls internally. */
-    max-height:45%;
-    overflow-y:auto;
-    border-top:1px solid #1f2236; padding:10px 16px 14px;
-    background:#0c0d14;
-  }
-  .lm-summary::-webkit-scrollbar{ width:8px; }
-  .lm-summary::-webkit-scrollbar-thumb{ background:#2a2f4a; border-radius:4px; }
-  .lm-summary::-webkit-scrollbar-thumb:hover{ background:#3a3f5a; }
-  .lm-summary-h{
-    font:700 11px 'JetBrains Mono',monospace; color:#78dc8c;
-    margin:6px 0 4px; letter-spacing:.5px;
-  }
-  .lm-summary-list{
-    margin:0 0 4px; padding-left:18px; color:#cbd0e8;
-    font:400 12px/1.5 'Manrope',sans-serif;
-    word-break:break-word;
-  }
-  .lm-summary-list li{ margin:2px 0; }
-
-
-  .lm-toast{
-    position:absolute; bottom:18px; right:18px; z-index:10;
-    background:#161827; color:#e7e9f4;
-    padding:10px 16px; border-radius:22px; cursor:pointer;
-    font:700 12px 'JetBrains Mono',monospace;
-    display:flex; align-items:center; gap:10px;
-    animation:lm-turn-in .3s ease-out;
-  }
-  .lm-toast-live{ border:1.5px solid #5b8def; box-shadow:0 6px 22px rgba(91,141,239,.4); }
-  .lm-toast-done{ border:1.5px solid #78dc8c; box-shadow:0 4px 14px rgba(120,220,140,.25); }
-  .lm-toast:hover{ background:#1a1d2c; transform:translateY(-1px); }
-
 </style>

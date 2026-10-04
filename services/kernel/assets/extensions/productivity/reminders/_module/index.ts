@@ -1,12 +1,4 @@
-import {
-  type ExtensibleModule,
-  type DashboardDescriptor,
-  type ModuleContext,
-  type ToolDefinition,
-  runMigrations,
-  type SqliteDb,
-  type EventBus,
-} from "@kernl/extension-sdk";
+import { type ExtensibleModule, defineModule, normalizeInstants } from "@kernl/extension-sdk";
 import { remindersMigrations } from "./migrations/001_reminders.js";
 import { ReminderService } from "./service.js";
 import { ReminderScheduler } from "./scheduler.js";
@@ -14,38 +6,34 @@ import { reminderTools } from "./tools.js";
 import { registerRemindersRoutes } from "./api-routes.js";
 import { remindersRpcActions } from "./rpc-actions.js";
 import { queryReminders } from "./dashboard-queries.js";
+import { remindersCalendarSource } from "./calendar.js";
 
 export interface RemindersModule extends ExtensibleModule {
   getService(): ReminderService | null;
 }
 
 export function createRemindersModule(): RemindersModule {
-  let tools: ToolDefinition[] = [];
-  let scheduler: ReminderScheduler | null = null;
   let serviceRef: ReminderService | null = null;
-  let dbRef: SqliteDb | null = null;
-  let eventsRef: EventBus | null = null;
 
-  return {
+  const mod = defineModule({
     name: "reminders",
+    migrations: remindersMigrations,
 
-    async initialize(ctx: ModuleContext) {
-      runMigrations(ctx.sqlite, "reminders", remindersMigrations);
-
+    async init(ctx) {
       if (ctx.graph?.capabilities.cypher) {
         await ctx.graph.run(
           "CREATE CONSTRAINT reminder_id IF NOT EXISTS FOR (r:Reminder) REQUIRE r.id IS UNIQUE",
         );
       }
 
+      // Triggers stored without a zone predate the "UTC instant" rule; the
+      // scheduler compares them as instants, so rewrite them first.
+      normalizeInstants(ctx.sqlite, "reminders", ["trigger_at", "snoozed_until"]);
+
       const service = new ReminderService(ctx.sqlite, () => ctx.graph);
       serviceRef = service;
-      dbRef = ctx.sqlite;
-      eventsRef = ctx.events;
 
-      tools = reminderTools(service, ctx.notifier);
-
-      scheduler = new ReminderScheduler(
+      const scheduler = new ReminderScheduler(
         service,
         ctx.notifier,
         ctx.events,
@@ -64,26 +52,27 @@ export function createRemindersModule(): RemindersModule {
           label: "reminder fired",
         }).catch(() => {});
       });
+
+      return { service, events: ctx.events, scheduler };
     },
 
-    getTools() { return tools; },
-    getService() { return serviceRef; },
+    tools: (s, ctx) => reminderTools(s.service, ctx.notifier),
+    rpc: (s) => remindersRpcActions(s.service, s.events),
 
-    getRpcActions() {
-      return serviceRef ? remindersRpcActions(serviceRef) : [];
-    },
+    dashboard: (s) => ({
+      channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
+      calendarSources: [remindersCalendarSource],
+      registerRoutes: (server) => {
+        if (s && s.events) registerRemindersRoutes(server, s.service, s.events);
+      },
+    }),
 
-    getDashboardDescriptor(): DashboardDescriptor {
-      return {
-        channels: [{ name: "reminders", query: (db) => queryReminders(db) }],
-        registerRoutes: (server) => {
-          if (dbRef && eventsRef) registerRemindersRoutes(server, dbRef, eventsRef);
-        },
-      };
-    },
+    shutdown: (s) => s.scheduler.stop(),
+  });
 
-    async shutdown() {
-      scheduler?.stop();
+  return Object.assign(mod, {
+    getService() {
+      return serviceRef;
     },
-  };
+  });
 }

@@ -150,6 +150,19 @@ const frontendPageSchema = z.object({
   fullBleed: z.boolean().optional(),
 });
 
+/** A 3D world plugin bundle (see assets/extensions/_shared/world-plugin.ts). */
+const frontendWorldSchema = z.object({
+  /** Bundle path relative to the extension dir, e.g. "frontend/world.js". */
+  entry: safeRelPathSchema,
+  /** Office kinds the plugin draws; `offGrid` ones stand in a building of their own. */
+  kinds: z.array(z.object({
+    id: z.string().regex(/^[a-z][a-z0-9-]{0,39}$/, "kind must be a lowercase slug"),
+    offGrid: z.boolean().optional(),
+    /** Display name per locale, e.g. { "en": "Warehouse", "es": "Depósito" }. */
+    labels: z.record(z.string().min(1).max(64)).optional(),
+  })).min(1).max(8),
+});
+
 const frontendSchema = z.object({
   /** Single item form (legacy). Use `navItems` below for several items. */
   nav: navItemSchema.optional(),
@@ -162,6 +175,8 @@ const frontendSchema = z.object({
   assets: z.string().min(1).optional(),
   /** Compiled frontend page bundles (full Svelte pages inside extensions). */
   pages: z.array(frontendPageSchema).optional(),
+  /** 3D world plugins: buildings this extension adds to the office world. */
+  worlds: z.array(frontendWorldSchema).max(4).optional(),
 });
 
 
@@ -182,6 +197,8 @@ const settingsFieldSchema = z.object({
   label: localizedTextSchema,
   description: localizedTextSchema.optional(),
   default: z.string().max(2000).optional(),
+  /** Mirrors ExtensionSettingSource — an unknown source fails here instead of being stripped. */
+  source: z.enum(["email_accounts"]).optional(),
 });
 
 /**

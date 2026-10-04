@@ -23,6 +23,23 @@ export interface LlmLoopHooks {
   onToolCall?(payload: { tool_name: string; tool_input: Record<string, unknown>; preview: string }): void;
   onToolResult?(payload: { tool_name: string; text: string; isError: boolean }): void;
   onRateLimitWait?(payload: { waitMs: number; attempt: number }): void;
+  /**
+   * Durable-state snapshot, emitted at every point a crash could lose work:
+   * once the assistant turn is in (before any of its tools run) and after each
+   * tool result. Persisting it lets a run continue after a kernel restart.
+   * Called synchronously — serialize inside the hook, the arrays are live.
+   */
+  onCheckpoint?(checkpoint: LoopCheckpoint): void;
+}
+
+/** What a run needs to pick up where it stopped. */
+export interface LoopCheckpoint {
+  /** Conversation so far, ending in a (possibly partial) tool-result turn or an assistant turn. */
+  messages: ChatMessage[];
+  iterations: number;
+  totalTokens: number;
+  /** Wall-clock time the loop had already spent, counted against `timeoutMs`. */
+  elapsedMs: number;
 }
 
 export interface LlmLoopConfig {
@@ -41,6 +58,11 @@ export interface LlmLoopConfig {
   hooks?: LlmLoopHooks;
   /** Diagnostic tag forwarded to the LLM call logger (e.g. agent name). */
   caller?: string;
+  /**
+   * Continue an interrupted loop: budgets keep counting from these values.
+   * Pass the checkpoint's messages through `prepareResumeMessages` first.
+   */
+  resumeFrom?: Pick<LoopCheckpoint, "iterations" | "totalTokens" | "elapsedMs">;
 }
 
 export interface LlmLoopResult {
@@ -102,6 +124,56 @@ function stableArgsKey(input: unknown): string {
   return parts.join("|");
 }
 
+const UNKNOWN_OUTCOME =
+  "[INTERRUPTED — the kernel restarted while this tool was running, so its outcome is unknown. " +
+  "It may or may not have taken effect. Check the current state before calling it again.]";
+
+/**
+ * Make a checkpointed conversation valid to send again.
+ *
+ * A crash can land between an assistant turn and the results of its tool
+ * calls. Every tool_use needs a matching tool_result, but re-executing the
+ * tool is not safe — it may have sent the email or written the file before the
+ * process died. So each missing result is filled with a note saying the
+ * outcome is unknown, and the model decides whether to check and retry.
+ */
+export function prepareResumeMessages(input: ChatMessage[]): {
+  messages: ChatMessage[];
+  unknownToolCalls: string[];
+} {
+  const messages = input.slice();
+  const lastAssistantIdx = messages.map((m) => m.role).lastIndexOf("assistant");
+  if (lastAssistantIdx < 0) return { messages, unknownToolCalls: [] };
+
+  const assistant = messages[lastAssistantIdx];
+  const toolUses = Array.isArray(assistant.content)
+    ? (assistant.content as ContentBlock[]).filter((b): b is Extract<ContentBlock, { type: "tool_use" }> => b.type === "tool_use")
+    : [];
+  if (toolUses.length === 0) return { messages, unknownToolCalls: [] };
+
+  const following = messages[lastAssistantIdx + 1];
+  const existing: ContentBlock[] =
+    following?.role === "user" && Array.isArray(following.content) ? (following.content as ContentBlock[]) : [];
+  const answered = new Set(
+    existing.filter((b) => b.type === "tool_result").map((b) => (b as { tool_use_id: string }).tool_use_id),
+  );
+
+  const unknownToolCalls = toolUses.filter((t) => !answered.has(t.id)).map((t) => t.id);
+  if (unknownToolCalls.length === 0) return { messages, unknownToolCalls };
+
+  const filled: ContentBlock[] = [
+    ...existing,
+    ...unknownToolCalls.map((id) => ({
+      type: "tool_result" as const,
+      tool_use_id: id,
+      content: UNKNOWN_OUTCOME,
+      is_error: false,
+    })),
+  ];
+  messages.splice(lastAssistantIdx + 1, existing.length > 0 ? 1 : 0, { role: "user", content: filled });
+  return { messages, unknownToolCalls };
+}
+
 /**
  * Provider-agnostic LLM tool-use loop with safety controls.
  *
@@ -116,12 +188,12 @@ function stableArgsKey(input: unknown): string {
  *   - invoking `hooks` for step-level observability (persistence/events live upstream)
  */
 export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult> {
-  const { provider, systemText, model, messages, tools, executeTool, budgets, isCancelled, hooks, caller } = config;
+  const { provider, systemText, model, messages, tools, executeTool, budgets, isCancelled, hooks, caller, resumeFrom } = config;
   const { maxIterations, maxTokens, maxErrors, timeoutMs } = budgets;
   const loopThreshold = budgets.toolLoopThreshold ?? 3;
 
-  let iterations = 0;
-  let totalTokens = 0;
+  let iterations = resumeFrom?.iterations ?? 0;
+  let totalTokens = resumeFrom?.totalTokens ?? 0;
   let finalContent = "";
   const toolsUsed = new Set<string>();
   let consecutiveErrors = 0;
@@ -130,10 +202,22 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
   const toolCallCounts = new Map<string, number>();
   const toolResultCache = new Map<string, string>();
 
-  let timedOut = false;
+  const priorElapsedMs = resumeFrom?.elapsedMs ?? 0;
+  const startedAt = Date.now();
+  const checkpoint = (pendingResults?: ContentBlock[]) => {
+    hooks?.onCheckpoint?.({
+      messages: pendingResults ? [...messages, { role: "user", content: pendingResults }] : messages,
+      iterations,
+      totalTokens,
+      elapsedMs: priorElapsedMs + (Date.now() - startedAt),
+    });
+  };
+
+  const remainingMs = timeoutMs - priorElapsedMs;
+  let timedOut = remainingMs <= 0;
   const timeoutTimer = setTimeout(() => {
     timedOut = true;
-  }, timeoutMs);
+  }, Math.max(0, remainingMs));
 
   try {
     while (iterations < maxIterations) {
@@ -181,6 +265,7 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
       if (completion.content) assistantBlocks.push({ type: "text", text: completion.content });
       for (const tc of completion.tool_calls) assistantBlocks.push(tc);
       messages.push({ role: "assistant", content: assistantBlocks });
+      checkpoint();
 
       // Execute each tool call
       const toolResultBlocks: ContentBlock[] = [];
@@ -234,6 +319,7 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
           content: result.text,
           is_error: result.isError,
         });
+        checkpoint(toolResultBlocks);
       }
 
       consecutiveErrors = batchHadError ? consecutiveErrors + 1 : 0;

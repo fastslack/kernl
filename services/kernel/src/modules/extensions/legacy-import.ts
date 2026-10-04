@@ -20,7 +20,7 @@ import { existsSync } from "node:fs";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { tableExists } from "../../core/db/query-helpers.js";
 import { log } from "../../core/logger.js";
-import { isoNow } from "../../core/helpers.js";
+import { isoNow, jsonArray } from "../../core/helpers.js";
 import type {
   ExtensionSource,
   ExtensionStatus,
@@ -176,9 +176,9 @@ function marketplaceToExtension(m: MarketplaceItem): InstalledExtension {
     author: m.author,
     license: m.license || "Unknown",
     category: m.category || "utility",
-    tags: safeJsonArr(m.tags),
+    tags: jsonArray(m.tags).map(String),
     kernel_min: m.min_kernel_version || undefined,
-    dependencies: safeJsonArr(m.dependencies),
+    dependencies: jsonArray(m.dependencies).map(String),
   };
 
   const source: ExtensionSource = { type: "bundled" };
@@ -193,7 +193,7 @@ function marketplaceToExtension(m: MarketplaceItem): InstalledExtension {
     source_json: JSON.stringify(source),
     install_path: "",
     granted_permissions_json: "[]",
-    settings_json: safeJson(m.package_data, "{}"),
+    settings_json: validJsonOr(m.package_data, "{}"),
     error: "",
     installed_at: m.installed_at ?? m.created_at,
     updated_at: m.updated_at,
@@ -317,23 +317,18 @@ function skillToExtension(
 
 // ── Helpers ───────────────────────────────────────────────────────────
 
-function safeJson(raw: string | null | undefined, fallback: string): string {
+/**
+ * `raw` itself when it is valid JSON, `fallback` otherwise. Not the SDK's
+ * safeJson: this passes the TEXT through unparsed, for copying a column
+ * into another one.
+ */
+function validJsonOr(raw: string | null | undefined, fallback: string): string {
   if (!raw) return fallback;
   try {
     JSON.parse(raw);
     return raw;
   } catch {
     return fallback;
-  }
-}
-
-function safeJsonArr(raw: string | null | undefined): string[] {
-  if (!raw) return [];
-  try {
-    const v = JSON.parse(raw);
-    return Array.isArray(v) ? v.map(String) : [];
-  } catch {
-    return [];
   }
 }
 

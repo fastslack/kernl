@@ -11,7 +11,7 @@
  * to connect, retry or re-auth belongs to the registry.
  */
 
-import { type SqliteDb, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, safeJson } from "@kernl/extension-sdk";
 import type { McpServerConfig } from "./types.js";
 
 export type McpTransport = "http" | "stdio";
@@ -79,19 +79,26 @@ export interface McpServerInput {
   enabled?: boolean;
 }
 
-function parseJson<T>(raw: unknown): T | null {
-  if (typeof raw !== "string" || raw === "") return null;
-  try {
-    return JSON.parse(raw) as T;
-  } catch {
-    return null;
-  }
-}
-
 function toJson(value: unknown): string | null {
   if (value === undefined || value === null) return null;
   return JSON.stringify(value);
 }
+
+/** The mcp_servers columns update() may write, and how each input field is stored. */
+const SERVER_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  transport: "text",
+  url: "text",
+  command: "text",
+  args: { column: "args_json", to: toJson },
+  env: { column: "env_json", to: toJson },
+  auth_mode: "text",
+  headers: { column: "headers_json", to: toJson },
+  allow_tools: { column: "allow_tools_json", to: toJson },
+  deny_tools: { column: "deny_tools_json", to: toJson },
+  // Anything but an explicit false enables (matches create()).
+  enabled: { to: (v: boolean | null) => (v === false ? 0 : 1) },
+};
 
 interface RawServer {
   id: string;
@@ -120,12 +127,13 @@ function hydrate(row: RawServer): McpServerRow {
     transport: row.transport as McpTransport,
     url: row.url,
     command: row.command,
-    args: parseJson<string[]>(row.args_json),
-    env: parseJson<Record<string, string>>(row.env_json),
+    // NULL, empty or malformed JSON reads as null ("not set").
+    args: safeJson<string[] | null>(row.args_json, null),
+    env: safeJson<Record<string, string> | null>(row.env_json, null),
     auth_mode: row.auth_mode as McpAuthMode,
-    headers: parseJson<Record<string, string>>(row.headers_json),
-    allow_tools: parseJson<string[]>(row.allow_tools_json),
-    deny_tools: parseJson<string[]>(row.deny_tools_json),
+    headers: safeJson<Record<string, string> | null>(row.headers_json, null),
+    allow_tools: safeJson<string[] | null>(row.allow_tools_json, null),
+    deny_tools: safeJson<string[] | null>(row.deny_tools_json, null),
     enabled: row.enabled === 1,
     status: row.status as McpStatus,
     last_error: row.last_error,
@@ -196,29 +204,12 @@ export class McpStore {
     const current = this.get(id);
     if (!current) return null;
 
-    const columns: Array<[string, unknown]> = [];
-    const set = <K extends keyof McpServerInput>(col: string, key: K, map?: (v: McpServerInput[K]) => unknown) => {
-      if (patch[key] === undefined) return;
-      columns.push([col, map ? map(patch[key]) : patch[key]]);
-    };
+    const { sets, params } = buildPatch(patch, SERVER_PATCH);
+    if (sets.length === 0) return current;
 
-    set("name", "name");
-    set("transport", "transport");
-    set("url", "url");
-    set("command", "command");
-    set("args_json", "args", toJson);
-    set("env_json", "env", toJson);
-    set("auth_mode", "auth_mode");
-    set("headers_json", "headers", toJson);
-    set("allow_tools_json", "allow_tools", toJson);
-    set("deny_tools_json", "deny_tools", toJson);
-    set("enabled", "enabled", (v) => (v === false ? 0 : 1));
-
-    if (columns.length === 0) return current;
-
-    columns.push(["updated_at", isoNow()]);
-    const sql = `UPDATE mcp_servers SET ${columns.map(([c]) => `${c} = ?`).join(", ")} WHERE id = ?`;
-    this.db.prepare(sql).run(...columns.map(([, v]) => v), id);
+    sets.push("updated_at = ?");
+    params.push(isoNow(), id);
+    this.db.prepare(`UPDATE mcp_servers SET ${sets.join(", ")} WHERE id = ?`).run(...params);
     return this.get(id);
   }
 

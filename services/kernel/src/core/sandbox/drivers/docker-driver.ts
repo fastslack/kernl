@@ -288,17 +288,27 @@ export function createDriver(): SandboxDriver {
 
 // ── Helpers ──────────────────────────────────────────────────────────
 
-function resolveNetwork(n: SandboxRunOptions["network"]): string {
+export function resolveNetwork(n: SandboxRunOptions["network"]): string {
   if (n === "none") return "none";
   if (!n || n === "bridge") return "bridge";
-  // Egress-policy isn't natively supported by docker — collapse to bridge.
-  if (typeof n === "object") return "bridge";
+  // Docker can't enforce an egress allowlist. Widening it to bridge would hand
+  // the run the whole internet while the caller believes it is restricted, so
+  // refuse instead: the caller picks a driver that can (cube) or a plain mode.
+  if (typeof n === "object") {
+    throw new Error(
+      `docker driver cannot enforce an egress allowlist (${n.allowHosts.join(", ") || "empty"}); ` +
+        `use the cube driver, or network "none"/"bridge"`,
+    );
+  }
   // Plain string → named docker network (e.g. "kernl_default" so the
   // agent container joins the kernel's compose net and `kernel:3087/mcp`
   // resolves). Operator is responsible for ensuring the network exists.
   // Reject anything outside docker's legal network-name charset so an
-  // agent-controlled `__sandbox_network__` can't inject extra docker flags.
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(n)) return "bridge";
+  // agent-controlled `__sandbox_network__` can't inject extra docker flags —
+  // and reject it loudly, since falling back to bridge would open the network.
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9_.-]*$/.test(n)) {
+    throw new Error(`invalid docker network name: ${JSON.stringify(n)}`);
+  }
   return n;
 }
 

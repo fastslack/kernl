@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { textResult, errorResult, isoNow } from "../../core/helpers.js";
+import { textResult, errorResult, isoNow, safeJson } from "../../core/helpers.js";
+import { agentAllowedTools, agentSkills } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
 import { setOfficeRepo, OfficeRepoError, type SetOfficeRepoResult } from "./office-repo.js";
 import type { ToolDefinition } from "../../core/types.js";
@@ -9,7 +10,10 @@ import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
-import { defineTool, defineToolNoInput } from "../../core/tool-builder.js";
+import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
+import { answerAndDeliver } from "./question-delivery.js";
+import { resumeRun } from "./run-resume.js";
+import { formatTriageQuestion } from "./question-format.js";
 
 // ─────────────────────────────────────────────────────────────────────────
 // Agent-management policy
@@ -43,25 +47,32 @@ const PRIVILEGED_AGENT_NAMES = new Set<string>([
 type PolicyOk = { ok: true; caller: ReturnType<AgentService["getAgent"]> | null };
 type PolicyErr = { ok: false; error: string };
 
+/**
+ * The calling agent's id, from whichever channel carried it: the in-process
+ * executor injects `__caller_agent_id` into the args; the MCP path (claude_code
+ * agents: stdio bridge → unix socket → server.ts) strips every `__*` arg and
+ * carries the caller only in the request context. "" when neither has one
+ * (a human call from the dashboard or API).
+ */
+export function resolveCallerAgentId(input: { __caller_agent_id?: unknown } | null | undefined): string {
+  const injected = typeof input?.__caller_agent_id === "string" ? input.__caller_agent_id : "";
+  return injected || getRequestContext().callerAgentId || "";
+}
+
 function resolveCaller(
   args: Record<string, unknown>,
   service: AgentService,
 ): ReturnType<AgentService["getAgent"]> | null {
-  const id = typeof args.__caller_agent_id === "string" ? args.__caller_agent_id : null;
+  const id = resolveCallerAgentId(args);
   if (!id) return null;
   return service.getAgent(id) ?? null;
 }
 
 function parseAllowedTools(raw: string | undefined): string[] | null {
-  // Returns null to mean "all tools" (empty JSON array or blank).
-  if (!raw) return null;
-  try {
-    const arr = JSON.parse(raw);
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    return arr.filter((t): t is string => typeof t === "string");
-  } catch {
-    return null;
-  }
+  // Returns null to mean "all tools" (empty JSON array, blank or unreadable).
+  const arr = agentAllowedTools({ allowed_tools: raw });
+  if (arr.length === 0) return null;
+  return arr.filter((t): t is string => typeof t === "string");
 }
 
 function enforceAgentMgmtPolicy(
@@ -131,6 +142,8 @@ function enforceAgentMgmtPolicy(
 // declare it explicitly (as an optional field) so it survives the
 // defineTool() schema.parse() step; without that, agent-to-agent policy
 // enforcement and messaging would silently stop working once wrapped.
+// Agents that call tools over MCP (claude_code) carry the caller in the
+// request context instead — always read it through resolveCallerAgentId().
 const CALLER_AGENT_ID_FIELD = {
   __caller_agent_id: z.string().optional().describe(
     "[internal] injected by the agent executor when this tool is invoked from an agent run. Not meant to be set by external callers.",
@@ -372,11 +385,19 @@ export function agentsTools(
         agent_id: z.string().describe("Agent ID to run"),
         goal: z.string().optional().describe("Goal override (uses agent's goal_template if not provided)"),
         variables: z.string().optional().describe("JSON object of template variables for {{var}} substitution"),
+        project: z.string().optional().describe("Project id or slug this run works for. The agent's office must serve it. Omit to inherit the caller's project."),
       }),
       handler: async (input) => {
         const agent = service.getAgent(input.agent_id);
         if (!agent) return errorResult("Agent not found");
         if (!agent.active) return errorResult("Agent is inactive");
+
+        // undefined → inherit the caller's project via parent_run_id.
+        let projectId: string | null | undefined = undefined;
+        if (input.project) {
+          projectId = service.getProjectGate()?.resolve(input.project) ?? null;
+          if (!projectId) return errorResult(`Unknown project "${input.project}".`);
+        }
 
         // Caller context propagated by the MCP HTTP server. If the caller is
         // a subprocess agent (Claude Code SDK), these are populated from
@@ -396,22 +417,25 @@ export function agentsTools(
         }
 
         // Resolve goal
-        let vars: Record<string, unknown> = {};
-        if (input.variables) {
-          try { vars = JSON.parse(input.variables); } catch { /* ignore */ }
-        }
+        const vars = safeJson<Record<string, unknown>>(input.variables, {});
         const goal = input.goal || resolveGoal(agent.goal_template, vars) || `Execute agent "${agent.name}"`;
 
         // Create run — propagate lineage so depth caps and self-recursion
         // checks at deeper layers (and observability) all work.
-        const run = service.createRun({
-          agent_id: agent.id,
-          trigger_type: "manual",
-          goal,
-          parent_run_id: callerCtx.callerRunId,
-          parent_agent_id: callerCtx.callerAgentId,
-          depth: callerCtx.callerAgentId ? callerCtx.callerDepth + 1 : 0,
-        });
+        let run;
+        try {
+          run = service.createRun({
+            agent_id: agent.id,
+            trigger_type: "manual",
+            goal,
+            parent_run_id: callerCtx.callerRunId,
+            parent_agent_id: callerCtx.callerAgentId,
+            depth: callerCtx.callerAgentId ? callerCtx.callerDepth + 1 : 0,
+            project_id: projectId,
+          });
+        } catch (err) {
+          return errorResult(err instanceof Error ? err.message : String(err));
+        }
 
         service.updateRun(run.id, { status: "running", started_at: isoNow() });
 
@@ -465,6 +489,26 @@ export function agentsTools(
       },
     }),
 
+    // ── kernel_agents_resume ─────────────────────────
+    defineTool({
+      name: "kernel_agents_resume",
+      description:
+        "Resume an interrupted agent run from its last checkpoint (native agents only). " +
+        "Use it on a run the kernel failed with 'resumable with kernel_agents_resume'. " +
+        "Tool calls whose outcome was lost are not repeated — the agent is told their result is unknown.",
+      schema: z.object({
+        run_id: z.string().describe("Run ID to resume"),
+      }),
+      handler: async (input) => {
+        const outcome = resumeRun({ service, executor, events }, input.run_id, "manual");
+        if (!outcome.ok) return errorResult(outcome.error);
+        return textResult(
+          `Resuming run ${input.run_id} from turn ${outcome.fromTurn}. ` +
+          `Follow it with kernel_agents_status.`,
+        );
+      },
+    }),
+
     // ── kernel_agents_status ─────────────────────────
     defineTool({
       name: "kernel_agents_status",
@@ -489,6 +533,13 @@ export function agentsTools(
         if (run.started_at) md += `- Started: ${run.started_at}\n`;
         if (run.completed_at) md += `- Completed: ${run.completed_at}\n`;
         if (run.error) md += `- Error: ${run.error}\n`;
+        const conditions = service.getRunConditions(run_id);
+        if (conditions.length > 0) {
+          md += `\n**Conditions:**\n`;
+          for (const c of conditions) {
+            md += `- ${c.type}=${c.status} (${c.reason}) since ${c.last_transition_time}${c.message ? ` — ${c.message}` : ""}\n`;
+          }
+        }
         if (run.result) md += `\n**Result:**\n${run.result}\n`;
 
         if (steps.length > 0) {
@@ -524,7 +575,7 @@ export function agentsTools(
       description: "List past runs for an agent",
       schema: z.object({
         agent_id: z.string().describe("Agent ID"),
-        limit: z.number().optional().describe("Max results (default: 20)"),
+        limit: limitArg(200, "Max results (default: 20)"),
         status: z.string().optional().describe("Filter by status: pending, running, completed, failed, cancelled"),
       }),
       handler: async (input) => {
@@ -726,16 +777,20 @@ export function agentsTools(
         type: z.enum(["pattern", "avoid", "prefer", "insight"]).describe("Learning type: pattern (observed), avoid (don't do), prefer (do this), insight (general)"),
         content: z.string().describe("The learning content"),
         confidence: z.number().min(0).max(1).optional().describe("Confidence 0-1 (default: 0.7)"),
+        scope: z.enum(["general", "project"]).optional().describe("general = applies to every project; project (default when your run has a project) = only this project"),
       }),
       handler: async (input) => {
         const agent = service.getAgent(input.agent_id);
         if (!agent) return errorResult("Agent not found");
 
+        const callerRunId = getRequestContext().callerRunId;
+        const callerProject = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : null;
         const learning = service.addLearning({
           agent_id: input.agent_id,
           type: input.type,
           content: input.content,
           confidence: input.confidence ?? 0.7,
+          project_id: input.scope === "general" ? null : callerProject,
         });
 
         return textResult(`Learning added (${learning.id}): [${input.type}] ${input.content.slice(0, 100)}`);
@@ -1113,7 +1168,7 @@ export function agentsTools(
       description: "Read an agent's conversational memory — recent interactions with humans and other agents. Use this to check what another agent has been working on or said recently.",
       schema: z.object({
         agent_id: z.string().describe("Agent ID to read memory from"),
-        limit: z.number().optional().describe("Max messages to return (default: 10)"),
+        limit: limitArg(100, "Max messages to return (default: 10)"),
       }),
       handler: async (input) => {
         const memory = service.getMemory(input.agent_id, input.limit ?? 10);
@@ -1131,11 +1186,11 @@ export function agentsTools(
     }),
 
     // ── kernel_agents_ask_supervisor ──────────────────────
-    // Human-in-the-loop. When an agent (especially a manager after a meeting)
-    // has an open question it cannot resolve itself, it sends the question
-    // here with a small set of canned answers. The question shows up in the
-    // user's My Office panel with clickable buttons. When the user picks one,
-    // the answer gets posted back to the asking agent's inbox.
+    // The question goes to the chief first (status 'triage'), who answers it
+    // or hands it to the human (status 'pending') with a reason. Only what
+    // the chief escalates reaches the user's My Office panel with clickable
+    // buttons. When the human picks one, the answer gets posted back to the
+    // asking agent's inbox.
     ...(() => {
       const askSupervisorSchema = z.object({
         question: z.string().describe("The question, in one sentence."),
@@ -1144,12 +1199,12 @@ export function agentsTools(
           label: z.string().describe("Short option label the user sees as a button."),
           value: z.string().optional().describe("Optional internal value; defaults to label."),
           url: z.string().optional().describe("If set, picking this option opens the URL in a new browser tab (e.g. 'Yes — open the link' style options). Must be http(s)://."),
-        })).min(2).max(6).describe("2–6 multiple-choice options."),
+        })).length(4).describe("Exactly 4 multiple-choice options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
         ...CALLER_AGENT_ID_FIELD,
       });
       const askSupervisorHandler = async (input: z.infer<typeof askSupervisorSchema>) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         if (!callerId) return errorResult("Caller agent context missing — ask_supervisor is only usable from an agent run.");
         const caller = service.getAgent(callerId);
         if (!caller) return errorResult(`Caller agent not found: ${callerId}`);
@@ -1170,7 +1225,7 @@ export function agentsTools(
             return label ? { label, value, ...(url ? { url } : {}) } : null;
           })
           .filter((x): x is { label: string; value: string; url?: string } => x !== null);
-        if (options.length < 2) return errorResult("Need at least 2 options");
+        if (options.length !== 4) return errorResult("Provide exactly 4 non-empty options.");
 
         const res = service.createQuestion({
           from_agent_id: caller.id,
@@ -1186,17 +1241,10 @@ export function agentsTools(
           context: input.context ?? "",
           options,
         });
-        events.emit("agent:flow:question_asked" as any, {
-          question_id: res.id,
-          from_agent_id: caller.id,
-          from_agent_name: caller.name,
-          flow_id: caller.flow_id ?? "",
-          question,
-          options: options.map(o => o.label),
-          ts: new Date().toISOString(),
-        });
         return textResult(
-          `Question ${res.id} escalated to your supervisor. The answer will land in your inbox.`,
+          res.status === "triage"
+            ? `Question ${res.id} sent to the chief. The answer will come back to you; keep working on what doesn't depend on it.`
+            : `Question ${res.id} escalated to your supervisor. The answer will come back to you; keep working on what doesn't depend on it.`,
         );
       };
 
@@ -1204,11 +1252,89 @@ export function agentsTools(
         defineTool({
           name: "kernel_agents_ask_supervisor",
           description:
-            "Escalate an open question to your supervisor (the human user, at the top of the org) with multiple-choice answers. " +
-            "Use this after a meeting or when a decision requires human input. Provide 2-5 concrete options. " +
-            "The answer comes back as an inbox message on your next run.",
+            "Ask the chief about a doubt you can't resolve alone: unclear requirements, priorities, or a decision you are not authorized to make. " +
+            "Give exactly 4 concrete options, your preferred one first. The chief answers or escalates it to the human. " +
+            "Don't wait idle: keep working on what doesn't depend on it. The answer comes back as a new run or an inbox message. " +
+            "Never re-ask a question that was already answered.",
           schema: askSupervisorSchema,
           handler: askSupervisorHandler,
+        }),
+      ];
+    })(),
+
+    // ── Chief triage of agent questions ─────────────────
+    // Questions from office agents land in 'triage'. The chief is woken in
+    // batches (QuestionTriager) and resolves each one here: answer it, or
+    // hand it to the human with a reason.
+    ...(() => {
+      const chiefOnly = (input: { __caller_agent_id?: string }) => {
+        const callerId = resolveCallerAgentId(input);
+        const chief = service.getTopAgent();
+        return chief && callerId === chief.id ? chief : null;
+      };
+      const NOT_CHIEF = "Only the chief can triage questions.";
+      return [
+        defineTool({
+          name: "kernel_agents_questions_triage_list",
+          description: "Chief only. List the office agents' questions waiting for your triage, with their 4 options.",
+          schema: z.object({ ...CALLER_AGENT_ID_FIELD }),
+          handler: async (input) => {
+            if (!chiefOnly(input)) return errorResult(NOT_CHIEF);
+            const qs = service.listQuestions({ status: "triage", limit: 50 });
+            if (qs.length === 0) return textResult("No questions waiting for triage.");
+            return textResult(qs.map((q) => formatTriageQuestion(q, service)).join("\n\n"));
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_questions_answer",
+          description:
+            "Chief only. Answer a question in triage: pick one of its options by 0-based `selected_index`, or write `text` when none fits. " +
+            "The asking agent gets the answer and resumes.",
+          schema: z.object({
+            question_id: z.string(),
+            selected_index: z.number().int().optional().describe("0-based index of the chosen option (0-3)."),
+            text: z.string().optional().describe("Free-text answer, when no option fits."),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            if (!chiefOnly(input)) return errorResult(NOT_CHIEF);
+            const q = service.getQuestion(input.question_id);
+            if (!q || q.status !== "triage") return errorResult(`Question ${input.question_id} is not waiting for triage.`);
+            const text = input.text?.trim() ?? "";
+            let selected_index = -1;
+            let selected_option = text;
+            if (!text) {
+              const i = input.selected_index;
+              if (i === undefined || i < 0 || i >= q.options.length) {
+                return errorResult(`Give a selected_index between 0 and ${q.options.length - 1}, or a text answer.`);
+              }
+              selected_index = i;
+              selected_option = q.options[i].label;
+            }
+            const res = answerAndDeliver(service, executor, events, q.id, {
+              selected_index, selected_option, note: text || undefined, answered_by: "chief",
+            });
+            if (!res) return errorResult(`Could not answer ${q.id}.`);
+            return textResult(`Answered ${q.id}: ${selected_option}`);
+          },
+        }),
+        defineTool({
+          name: "kernel_agents_questions_escalate",
+          description:
+            "Chief only. Hand a question in triage to the human, with a one-line reason they will read. " +
+            "Use for product or business decisions, money, irreversible actions, or anything you are not sure about.",
+          schema: z.object({
+            question_id: z.string(),
+            reason: z.string().describe("Why the human has to decide this. One line."),
+            ...CALLER_AGENT_ID_FIELD,
+          }),
+          handler: async (input) => {
+            if (!chiefOnly(input)) return errorResult(NOT_CHIEF);
+            if (!service.escalateQuestion(input.question_id, input.reason.trim())) {
+              return errorResult(`Question ${input.question_id} is not waiting for triage.`);
+            }
+            return textResult(`Escalated ${input.question_id} to the human.`);
+          },
         }),
       ];
     })(),
@@ -1220,7 +1346,8 @@ export function agentsTools(
         "Leave an async message in another agent's inbox. Works ACROSS offices — every agent can reach every other agent. " +
         "The recipient does NOT run immediately — the message appears as a 'PENDING REQUESTS FROM COLLEAGUES' block " +
         "in their system prompt the next time they run, then is marked read. " +
-        "Use this for blockers, clarifications, escalations, and hand-backs. For blocking one-shot questions use " +
+        "Use this for blockers, clarifications and hand-backs between agents. For a doubt that needs a decision from above use " +
+        "kernel_agents_ask_supervisor. For blocking one-shot questions use " +
         "kernel_agents_invoke; for group deliberation use kernel_agents_call_meeting. " +
         "To continue a thread, pass `in_reply_to_message_id` (the conversation-message id of the turn you are replying to) " +
         "or an explicit `conversation_id`. To signal disagreement with something the recipient (or a peer) said, set " +
@@ -1236,7 +1363,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         if (!callerId) {
           return errorResult("Caller agent context missing — kernel_agents_post_to_colleague is only usable from an agent run.");
         }
@@ -1277,7 +1404,11 @@ export function agentsTools(
         const conversationId = input.conversation_id;
         const inReplyTo = input.in_reply_to_message_id;
 
+        // The letter belongs to the project the caller is working for.
+        const callerRunId = getRequestContext().callerRunId;
+        const callerProject = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : null;
         const result = service.postToColleague({
+          project_id: callerProject,
           from_agent_id: callerId,
           to_agent_id: toId,
           subject,
@@ -1304,6 +1435,8 @@ export function agentsTools(
             to_agent_name: recipient?.name ?? toId,
             subject,
             body_preview: body.slice(0, 200),
+            // The whole message is in the inbox; this lets a viewer fetch it.
+            message_id: result.message.id,
             role,
             cross_office: crossOffice,
             is_manager_directive: isManager,
@@ -1330,17 +1463,21 @@ export function agentsTools(
       schema: z.object({
         agent_id: z.string().optional().describe("Agent whose inbox to read. Defaults to the caller."),
         status: z.enum(["unread", "read", "archived"]).optional().describe("Filter by status (default: unread)"),
-        limit: z.number().optional().describe("Max messages (default: 20)"),
+        limit: limitArg(200, "Max messages (default: 20)"),
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("No agent_id provided and no caller context available.");
 
         const status = input.status ?? "unread";
         const limit = input.limit ?? 20;
-        const messages = service.listInbox(targetId, { status, limit });
+        // Read from inside a run → only that run's project letters (and those
+        // without one). Read from outside (dashboard) → everything.
+        const callerRunId = getRequestContext().callerRunId;
+        const projectId = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : undefined;
+        const messages = service.listInbox(targetId, { status, limit, projectId });
         if (messages.length === 0) return textResult(`No ${status} messages.`);
 
         const target = service.getAgent(targetId);
@@ -1353,6 +1490,25 @@ export function agentsTools(
           lines.push(m.body);
         }
         return textResult(lines.join("\n"));
+      },
+    }),
+
+    // ── kernel_agents_inbox_ack ───────────────────────
+    defineTool({
+      name: "kernel_agents_inbox_ack",
+      description:
+        "Acknowledge office-inbox letters you have finished handling. Unacknowledged letters are " +
+        "handed to you again by the inbox sweeper (up to 3 times), so ack every letter you completed.",
+      schema: z.object({
+        message_ids: z.array(z.string()).min(1).describe("Inbox message ids (from kernel_agents_inbox)"),
+        ...CALLER_AGENT_ID_FIELD,
+      }),
+      handler: async (input) => {
+        const callerId = resolveCallerAgentId(input);
+        if (!callerId) return errorResult("Caller agent context missing — kernel_agents_inbox_ack is only usable from an agent run.");
+        const acked = service.ackInboxFor(callerId, input.message_ids);
+        if (acked === 0) return errorResult("None of those ids are unread letters addressed to you.");
+        return textResult(`Acknowledged ${acked} letter(s).`);
       },
     }),
 
@@ -1380,11 +1536,11 @@ export function agentsTools(
         if (!input.attendee_ids || input.attendee_ids.length === 0) {
           return errorResult("Need at least one attendee");
         }
-        // The calling agent's ID is injected by the executor via __caller_agent_id
-        // (set in the tool args when invoked from the LLM loop).
+        // The calling agent's ID comes from the executor's injected arg or,
+        // over MCP, from the request context (resolveCallerAgentId).
         // If missing, the first attendee becomes moderator.
-        const callerId = input.__caller_agent_id;
-        const moderatorId = callerId ?? input.attendee_ids[0];
+        const callerId = resolveCallerAgentId(input);
+        const moderatorId = callerId || input.attendee_ids[0];
         const attendeeIds = input.attendee_ids.filter(id => id !== moderatorId);
 
         if (attendeeIds.length === 0) {
@@ -1399,6 +1555,10 @@ export function agentsTools(
             context: input.context,
             rounds: input.rounds,
             urgency: input.urgency,
+            project_id: (() => {
+              const rid = getRequestContext().callerRunId;
+              return rid ? service.getRun(rid)?.project_id ?? null : null;
+            })(),
           },
           service,
           events,
@@ -1441,7 +1601,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("agent_id is required (no caller context).");
         const conversationId = input.conversation_id;
@@ -1477,7 +1637,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("agent_id is required (no caller context).");
         const conversationId = input.conversation_id;
@@ -1501,7 +1661,7 @@ export function agentsTools(
         ...CALLER_AGENT_ID_FIELD,
       }),
       handler: async (input) => {
-        const callerId = input.__caller_agent_id ?? "";
+        const callerId = resolveCallerAgentId(input);
         const targetId = input.agent_id || callerId;
         if (!targetId) return errorResult("agent_id is required (no caller context).");
 
@@ -1582,8 +1742,7 @@ export function agentsTools(
         const { agent_id } = input;
         const agent = service.getAgent(agent_id);
         if (!agent) return errorResult(`Agent not found: ${agent_id}`);
-        let slugs: string[] = [];
-        try { slugs = JSON.parse(agent.skills_json ?? "[]") as string[]; } catch { /* ignore */ }
+        const slugs = agentSkills(agent);
         if (slugs.length === 0) return textResult(`Agent ${agent.name} has no skills attached.`);
         const resolver = executor.getSkillResolver();
         if (!resolver) return textResult(`Slugs (resolver offline): ${slugs.join(", ")}`);

@@ -7,6 +7,7 @@
   import CardioPanel from './CardioPanel.svelte';
   import PRsGrid from './PRsGrid.svelte';
   import type { ExtPageContext } from '$shared/types';
+  import { createApi } from './api';
 
   export let ctx: ExtPageContext;
 
@@ -73,30 +74,7 @@
   let showDeleteConfirm: string | null = null; // workout id to delete
 
   // ── Helpers ────────────────────────────────────────────
-  const BASE = '';
-
-  async function api(path: string, opts?: RequestInit): Promise<any> {
-    // Convert path to RPC action name: /api/training/log-set → training.logSet
-    const action = path.replace(/^\/api\//, '').replace(/\//g, '.').replace(/-([a-z])/g, (_: string, c: string) => c.toUpperCase());
-    const body = opts?.body ? JSON.parse(opts.body as string) : {};
-    try {
-      return await ctx.rpc(action, body, async () => {
-        const res = await ctx.fetchRaw(`${BASE}${path}`, {
-          headers: { 'Content-Type': 'application/json' },
-          ...opts,
-        });
-        if (!res.ok) {
-          const err = await res.json().catch(() => ({ error: `HTTP ${res.status}` }));
-          showError(err.error || `Request failed: ${res.status}`);
-          return { _error: true };
-        }
-        return await res.json();
-      });
-    } catch (e) {
-      showError(e instanceof Error ? e.message : 'Network error');
-      return { _error: true };
-    }
-  }
+  const api = createApi(ctx, showError);
 
   async function refreshTraining() {
     try {

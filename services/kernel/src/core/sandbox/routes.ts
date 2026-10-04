@@ -10,7 +10,7 @@
  *   POST /api/sandbox-drivers/:slug/stop      → stop the driver
  */
 
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
 import type { SandboxDriverRegistry } from "./registry.js";
 
 function slugOf(req: unknown): string | null {
@@ -20,36 +20,39 @@ function slugOf(req: unknown): string | null {
   return slug;
 }
 
+/** The validated `:slug`, or a 400. */
+function requireSlug(params: Record<string, string>): string {
+  const slug = slugOf({ params });
+  if (!slug) throw new HttpError(400, "invalid slug");
+  return slug;
+}
+
 export function registerSandboxDriverRoutes(
   server: KernelHttpServer,
   registry: SandboxDriverRegistry,
 ): void {
-  server.get("/api/sandbox-drivers", (_req, res) => {
-    server.json(res, 200, { drivers: registry.getStatuses() });
-  });
+  server.route("GET", "/api/sandbox-drivers", () => ({ drivers: registry.getStatuses() }));
 
-  server.get("/api/sandbox-drivers/:slug", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
+  server.route("GET", "/api/sandbox-drivers/:slug", ({ params }) => {
+    const slug = requireSlug(params);
     const status = registry.getStatuses().find((s) => s.slug === slug);
-    if (!status) { server.json(res, 404, { error: "driver not found" }); return; }
-    server.json(res, 200, { status });
+    if (!status) throw new HttpError(404, "driver not found");
+    return { status };
   });
 
-  server.get("/api/sandbox-drivers/:slug/schema", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    const schema = registry.getConfigSchema(slug);
-    if (!schema) { server.json(res, 404, { error: "driver not found" }); return; }
-    server.json(res, 200, { schema });
+  server.route("GET", "/api/sandbox-drivers/:slug/schema", ({ params }) => {
+    const schema = registry.getConfigSchema(requireSlug(params));
+    if (!schema) throw new HttpError(404, "driver not found");
+    return { schema };
   });
 
-  server.get("/api/sandbox-drivers/:slug/config", (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    server.json(res, 200, { config: registry.loadConfig(slug) });
-  });
+  server.route("GET", "/api/sandbox-drivers/:slug/config", ({ params }) => ({
+    config: registry.loadConfig(requireSlug(params)),
+  }));
 
+  // Left on the raw handler: an empty or malformed body must stay a 400.
+  // The helper reads an empty body as `{}`, which would pass the object
+  // check below and save an empty config over the stored one.
   server.put("/api/sandbox-drivers/:slug/config", async (req, res) => {
     const slug = slugOf(req);
     if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
@@ -97,21 +100,18 @@ export function registerSandboxDriverRoutes(
     server.json(res, 200, { saved: true, running: !!registry.getDriver(slug) });
   });
 
-  server.post("/api/sandbox-drivers/:slug/start", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    const ok = await registry.startDriver(slug);
+  server.route("POST", "/api/sandbox-drivers/:slug/start", async ({ params }) => {
+    const ok = await registry.startDriver(requireSlug(params));
     if (!ok) {
-      server.json(res, 500, { ok: false, error: registry.lastStartError ?? "start failed" });
-      return;
+      const error = registry.lastStartError ?? "start failed";
+      throw new HttpError(500, error, { ok: false, error });
     }
-    server.json(res, 200, { ok: true });
+    return { ok: true };
   });
 
-  server.post("/api/sandbox-drivers/:slug/stop", async (req, res) => {
-    const slug = slugOf(req);
-    if (!slug) { server.json(res, 400, { error: "invalid slug" }); return; }
-    const ok = await registry.stopDriver(slug);
-    server.json(res, ok ? 200 : 404, { ok });
+  server.route("POST", "/api/sandbox-drivers/:slug/stop", async ({ params }) => {
+    const ok = await registry.stopDriver(requireSlug(params));
+    if (!ok) throw new HttpError(404, "driver not running", { ok });
+    return { ok };
   });
 }

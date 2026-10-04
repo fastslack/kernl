@@ -1,47 +1,28 @@
 /**
  * HTTP routes for email-analysis suggestions surfaced on the dashboard.
- * Read-only listing + dismiss; approval is handled via the MCP tool
- * `kernel_email_approve` to keep all side effects in one path.
+ * Listing + dismiss are the fallback of the `emailSuggestions.*` RPC actions
+ * (same function on both roads; see dashboard-operations.ts). Approval stays
+ * out of HTTP: it needs the WS path with the sibling services wired in, or
+ * the MCP tool `kernel_email_approve`.
  */
-import type { KernelHttpServer } from "@kernl/extension-sdk";
+import { HttpError, type KernelHttpServer } from "@kernl/extension-sdk";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
+import { emailSuggestionOperations } from "./dashboard-operations.js";
 
 export function registerEmailSuggestionsRoutes(
   server: KernelHttpServer,
   emailAnalysisService: EmailAnalysisService | null,
 ): void {
-  server.get("/api/email-suggestions", (_req, res) => {
-    if (!emailAnalysisService) {
-      server.json(res, 200, { available: false, suggestions: [] });
-      return;
-    }
-    const suggestions = emailAnalysisService.getPendingSuggestions(50);
-    server.json(res, 200, {
-      available: true,
-      suggestions,
-      count: suggestions.length,
-    });
+  const op = emailSuggestionOperations(emailAnalysisService);
+  server.operation("GET", "/api/email-suggestions", op["emailSuggestions.list"]);
+
+  server.route("POST", "/api/email-suggestions/approve", () => {
+    throw new HttpError(
+      400,
+      "Use the MCP tool kernel_email_approve to approve suggestions. " +
+      "This endpoint is read-only.",
+    );
   });
 
-  server.post("/api/email-suggestions/approve", async (_req, res) => {
-    server.json(res, 400, {
-      error:
-        "Use the MCP tool kernel_email_approve to approve suggestions. " +
-        "This endpoint is read-only.",
-    });
-  });
-
-  server.post("/api/email-suggestions/dismiss", async (req, res) => {
-    if (!emailAnalysisService) {
-      server.json(res, 404, { error: "Email analysis not available" });
-      return;
-    }
-    try {
-      const body = await server.parseBody<{ suggestion_id: string }>(req);
-      emailAnalysisService.dismissSuggestion(body.suggestion_id);
-      server.json(res, 200, { success: true });
-    } catch (err) {
-      server.json(res, 500, { error: String(err) });
-    }
-  });
+  server.operation("POST", "/api/email-suggestions/dismiss", op["emailSuggestions.dismiss"]);
 }

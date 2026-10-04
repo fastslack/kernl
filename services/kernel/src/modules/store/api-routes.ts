@@ -6,8 +6,11 @@
  *
  *   GET  /api/store/status              → store reachability, All-Access prices,
  *                                         license summary, open checkouts
- *   POST /api/store/checkout            → { slug } → { session_id, url }
+ *   POST /api/store/checkout            → { slug } or { plan: "all-access",
+ *                                         period: "monthly"|"yearly" }
+ *                                         → { session_id, url }
  *   GET  /api/store/checkout/:sessionId → poll a purchase to completion
+ *   POST /api/store/checkout/:sessionId/cancel → abandon a still-unpaid purchase
  *   POST /api/store/install             → { slug } — install something the
  *                                         license already covers
  *
@@ -25,7 +28,7 @@
  * ourselves in step 1.
  */
 
-import type { KernelHttpServer } from "../../core/http-server.js";
+import { HttpError, type KernelHttpServer } from "../../core/http-server.js";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { LicenseService } from "../../core/license/types.js";
 import type { ExtensionService } from "../extensions/service.js";
@@ -33,7 +36,7 @@ import type { AgentService } from "../agents/service.js";
 import { log } from "../../core/logger.js";
 import { createStoreCheckout, fetchStoreCatalogFull } from "./client.js";
 import { installFromStore } from "./install.js";
-import { advanceCheckout } from "./purchase-flow.js";
+import { advanceCheckout, ALL_ACCESS_SLUG } from "./purchase-flow.js";
 import { CheckoutService, type CheckoutRow } from "./checkout-service.js";
 
 export interface StoreRoutesDeps {
@@ -56,202 +59,215 @@ export function registerStoreRoutes(server: KernelHttpServer, deps: StoreRoutesD
 
   // ── GET /api/store/status ────────────────────────────────────────────
 
-  server.get("/api/store/status", async (_req, res) => {
+  server.route("GET", "/api/store/status", async () => {
+    const report = deps.license.status();
+    let items: Awaited<ReturnType<typeof fetchStoreCatalogFull>>["items"] = [];
+    let allAccess: Awaited<ReturnType<typeof fetchStoreCatalogFull>>["allAccess"] = null;
+    let storeError: string | null = null;
     try {
-      const report = deps.license.status();
-      let items: Awaited<ReturnType<typeof fetchStoreCatalogFull>>["items"] = [];
-      let allAccess: Awaited<ReturnType<typeof fetchStoreCatalogFull>>["allAccess"] = null;
-      let storeError: string | null = null;
-      try {
-        const catalog = await fetchStoreCatalogFull(deps.storeUrl, fetchImpl);
-        items = catalog.items;
-        allAccess = catalog.allAccess;
-      } catch (err) {
-        storeError = err instanceof Error ? err.message : String(err);
-      }
-
-      server.json(res, 200, {
-        store_url: deps.storeUrl,
-        reachable: storeError === null,
-        error: storeError,
-        all_access: allAccess,
-        license: {
-          status: report.status,
-          is_pro: deps.license.isPro(),
-          sku: report.claim?.sku ?? null,
-          email: report.claim?.email ?? null,
-          features: report.claim?.features ?? [],
-          expires_at: report.claim?.exp ?? null,
-        },
-        items: items.map((it) => ({
-          ...it,
-          owned: deps.license.has(it.feature),
-        })),
-        open_checkouts: deps.checkouts.listOpen(),
-      });
+      const catalog = await fetchStoreCatalogFull(deps.storeUrl, fetchImpl);
+      items = catalog.items;
+      allAccess = catalog.allAccess;
     } catch (err) {
-      server.json(res, 500, { error: String(err) });
+      storeError = err instanceof Error ? err.message : String(err);
     }
+
+    return {
+      store_url: deps.storeUrl,
+      reachable: storeError === null,
+      error: storeError,
+      all_access: allAccess,
+      license: {
+        status: report.status,
+        is_pro: deps.license.isPro(),
+        sku: report.claim?.sku ?? null,
+        email: report.claim?.email ?? null,
+        features: report.claim?.features ?? [],
+        expires_at: report.claim?.exp ?? null,
+      },
+      items: items.map((it) => ({
+        ...it,
+        owned: deps.license.has(it.feature),
+      })),
+      open_checkouts: deps.checkouts.listOpen(),
+    };
   });
 
   // ── POST /api/store/checkout ─────────────────────────────────────────
-  // Body: { slug }. Opens (or resumes) a Stripe Checkout for that item.
+  // Body: { slug } for one extension, or { plan: "all-access", period } for
+  // the subscription. Opens (or resumes) a Stripe Checkout for it.
 
-  server.post("/api/store/checkout", async (req, res) => {
-    try {
-      const body = await server.parseBody<{ slug?: string }>(req);
-      const slug = body.slug?.trim();
-      if (!slug) {
-        server.json(res, 400, { error: "slug required" });
-        return;
-      }
+  server.route<{ slug?: string; plan?: string; period?: string }>("POST", "/api/store/checkout", async ({ body }) => {
+    const catalog = await fetchStoreCatalogFull(deps.storeUrl, fetchImpl).catch((err) => {
+      throw new HttpError(500, `Could not reach the store: ${err instanceof Error ? err.message : String(err)}`);
+    });
 
-      const catalog = await fetchStoreCatalogFull(deps.storeUrl, fetchImpl).catch((err) => {
-        throw new Error(`Could not reach the store: ${err instanceof Error ? err.message : String(err)}`);
-      });
-      const item = catalog.items.find((i) => i.slug === slug);
-      if (!item) {
-        server.json(res, 404, { error: `Unknown store item "${slug}"` });
-        return;
-      }
-
-      // Already entitled → buying again would be a double charge. Tell the
-      // client to install instead.
-      if (deps.license.has(item.feature)) {
-        server.json(res, 409, {
-          error: `Your license already includes ${item.name}. Install it instead of buying it again.`,
-          already_owned: true,
-        });
-        return;
-      }
-
-      if (!item.price_id) {
-        server.json(res, 503, {
-          error: `${item.name} has no price configured yet. See https://lifekernl.com/pricing.`,
-        });
-        return;
-      }
-
-      // Resume an in-flight purchase rather than opening a second checkout for
-      // the same thing — double-clicking Buy must not double-charge.
-      const existing = deps.checkouts.pendingForSlug(slug);
-      if (existing && existing.checkout_url) {
-        server.json(res, 200, {
-          session_id: existing.session_id,
-          url: existing.checkout_url,
-          state: existing.state,
-          resumed: true,
-        });
-        return;
-      }
-
-      const email = deps.license.status().claim?.email;
-      const session = await createStoreCheckout({
-        storeUrl: deps.storeUrl,
-        priceId: item.price_id,
-        email,
-        fetchImpl,
-      });
-
-      deps.checkouts.create({
-        sessionId: session.id,
-        slug,
-        priceId: item.price_id,
-        checkoutUrl: session.url,
-      });
-      log.info(`store: checkout ${session.id} opened for ${slug}`);
-
-      server.json(res, 200, { session_id: session.id, url: session.url, state: "pending" });
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+    if (body.plan === ALL_ACCESS_SLUG) {
+      const period = body.period === "monthly" || body.period === "yearly" ? body.period : null;
+      if (!period) throw new HttpError(400, 'period must be "monthly" or "yearly"');
+      return openAllAccessCheckout(period, catalog.allAccess);
     }
+
+    const slug = body.slug?.trim();
+    if (!slug) throw new HttpError(400, "slug required");
+
+    const item = catalog.items.find((i) => i.slug === slug);
+    if (!item) throw new HttpError(404, `Unknown store item "${slug}"`);
+
+    // Already entitled → buying again would be a double charge. Tell the
+    // client to install instead.
+    if (deps.license.has(item.feature)) {
+      const error = `Your license already includes ${item.name}. Install it instead of buying it again.`;
+      throw new HttpError(409, error, { error, already_owned: true });
+    }
+
+    if (!item.price_id) {
+      throw new HttpError(503, `${item.name} has no price configured yet. See https://lifekernl.com/pricing.`);
+    }
+
+    // Resume an in-flight purchase rather than opening a second checkout for
+    // the same thing — double-clicking Buy must not double-charge.
+    const existing = deps.checkouts.pendingForSlug(slug);
+    if (existing && existing.checkout_url) {
+      return {
+        session_id: existing.session_id,
+        url: existing.checkout_url,
+        state: existing.state,
+        resumed: true,
+      };
+    }
+
+    const email = deps.license.status().claim?.email;
+    const session = await createStoreCheckout({
+      storeUrl: deps.storeUrl,
+      priceId: item.price_id,
+      email,
+      fetchImpl,
+    });
+
+    deps.checkouts.create({
+      sessionId: session.id,
+      slug,
+      priceId: item.price_id,
+      checkoutUrl: session.url,
+    });
+    log.info(`store: checkout ${session.id} opened for ${slug}`);
+
+    return { session_id: session.id, url: session.url, state: "pending" };
+  });
+
+  async function openAllAccessCheckout(
+    period: "monthly" | "yearly",
+    allAccess: Awaited<ReturnType<typeof fetchStoreCatalogFull>>["allAccess"],
+  ): Promise<Record<string, unknown>> {
+    // A subscription license is the only kind that expires within a couple of
+    // years — extensions bought outright carry ~100. So a valid one means the
+    // subscription is already running, and a second checkout would bill twice.
+    const report = deps.license.status();
+    const exp = report.claim?.exp ?? 0;
+    if (report.status === "valid" && exp - Date.now() / 1000 < 2 * 365 * 24 * 60 * 60) {
+      const error = "This kernel already has an active All-Access subscription.";
+      throw new HttpError(409, error, { error, already_owned: true });
+    }
+
+    const priceId = allAccess?.[period]?.price_id;
+    if (!priceId) {
+      throw new HttpError(503, `All-Access ${period} has no price configured yet. See https://lifekernl.com/pricing.`);
+    }
+
+    // Same double-click guard as an extension — but only for the same period:
+    // someone who opened monthly and changed their mind gets the yearly page.
+    const existing = deps.checkouts.pendingForSlug(ALL_ACCESS_SLUG);
+    if (existing && existing.checkout_url && existing.price_id === priceId) {
+      return { session_id: existing.session_id, url: existing.checkout_url, state: existing.state, resumed: true };
+    }
+
+    const session = await createStoreCheckout({
+      storeUrl: deps.storeUrl,
+      priceId,
+      email: report.claim?.email,
+      fetchImpl,
+    });
+    deps.checkouts.create({ sessionId: session.id, slug: ALL_ACCESS_SLUG, priceId, checkoutUrl: session.url });
+    log.info(`store: checkout ${session.id} opened for All-Access (${period})`);
+    return { session_id: session.id, url: session.url, state: "pending" };
+  }
+
+  // ── POST /api/store/checkout/:sessionId/cancel ───────────────────────
+  // The way out of "waiting for payment": the buyer closed the Stripe tab or
+  // the promo code didn't apply. Paid rows are refused — that money already
+  // moved, and the poll is what turns it into a license.
+
+  server.route("POST", "/api/store/checkout/:sessionId/cancel", async ({ params: { sessionId } }) => {
+    const row = deps.checkouts.get(sessionId);
+    if (!row) return { cancelled: false };
+    if (row.state !== "pending") {
+      throw new HttpError(409, "This checkout was already paid — it can't be cancelled from here.");
+    }
+    deps.checkouts.cancel(sessionId);
+    log.info(`store: checkout ${sessionId} for ${row.slug} cancelled by the user`);
+    return { cancelled: true };
   });
 
   // ── GET /api/store/checkout/:sessionId ───────────────────────────────
   // The poll. Advances the state machine at most one step per call.
 
-  server.get("/api/store/checkout/:sessionId", async (req, res) => {
+  server.route("GET", "/api/store/checkout/:sessionId", async ({ params: { sessionId } }) => {
+    // Only sessions this kernel opened. A caller can't make us claim a
+    // license for someone else's checkout.
+    const row = deps.checkouts.get(sessionId);
+    if (!row) throw new HttpError(404, "Unknown checkout session");
+
+    if (row.state === "done" || row.state === "failed") return checkoutView(row);
+
+    if (CheckoutService.isExpired(row)) {
+      deps.checkouts.setState(sessionId, "failed", "Checkout expired without payment.");
+      deps.checkouts.pruneExpired();
+      return checkoutView(deps.checkouts.get(sessionId)!);
+    }
+
+    // Another poll is mid-install. Report the last known state.
+    if (advancing.has(sessionId)) return checkoutView(row);
+
+    advancing.add(sessionId);
     try {
-      const sessionId = (req as unknown as { params?: Record<string, string> }).params?.sessionId;
-      if (!sessionId) {
-        server.json(res, 400, { error: "session_id required" });
-        return;
-      }
-
-      // Only sessions this kernel opened. A caller can't make us claim a
-      // license for someone else's checkout.
-      const row = deps.checkouts.get(sessionId);
-      if (!row) {
-        server.json(res, 404, { error: "Unknown checkout session" });
-        return;
-      }
-
-      if (row.state === "done" || row.state === "failed") {
-        server.json(res, 200, checkoutView(row));
-        return;
-      }
-
-      if (CheckoutService.isExpired(row)) {
-        deps.checkouts.setState(sessionId, "failed", "Checkout expired without payment.");
-        deps.checkouts.pruneExpired();
-        server.json(res, 200, checkoutView(deps.checkouts.get(sessionId)!));
-        return;
-      }
-
-      if (advancing.has(sessionId)) {
-        // Another poll is mid-install. Report the last known state.
-        server.json(res, 200, checkoutView(row));
-        return;
-      }
-
-      advancing.add(sessionId);
-      try {
-        const advanced = await advanceCheckout(row, {
-          storeUrl: deps.storeUrl,
-          license: deps.license,
-          checkouts: deps.checkouts,
-          install: (slug) =>
-            installFromStore({
-              storeUrl: deps.storeUrl,
-              slug,
-              licenseJwt: deps.license.jwt() ?? "",
-              getExtensionService: deps.getExtensionService,
-              getAgentService: deps.getAgentService,
-              sqlite: deps.sqlite,
-              fetchImpl,
-            }),
-          fetchImpl,
-        });
-        server.json(res, 200, checkoutView(advanced));
-      } finally {
-        advancing.delete(sessionId);
-      }
-    } catch (err) {
-      server.json(res, 500, { error: err instanceof Error ? err.message : String(err) });
+      const advanced = await advanceCheckout(row, {
+        storeUrl: deps.storeUrl,
+        license: deps.license,
+        checkouts: deps.checkouts,
+        install: (slug) =>
+          installFromStore({
+            storeUrl: deps.storeUrl,
+            slug,
+            licenseJwt: deps.license.jwt() ?? "",
+            getExtensionService: deps.getExtensionService,
+            getAgentService: deps.getAgentService,
+            sqlite: deps.sqlite,
+            fetchImpl,
+          }),
+        fetchImpl,
+      });
+      return checkoutView(advanced);
+    } finally {
+      advancing.delete(sessionId);
     }
   });
 
   // ── POST /api/store/install ──────────────────────────────────────────
   // For items the license already covers (bought earlier, or All-Access).
 
-  server.post("/api/store/install", async (req, res) => {
+  server.route<{ slug?: string }>("POST", "/api/store/install", async ({ body }) => {
+    const slug = body.slug?.trim();
+    if (!slug) throw new HttpError(400, "slug required");
+
+    const jwt = deps.license.jwt();
+    if (!jwt) {
+      throw new HttpError(402, "No license on this kernel. Buy the extension, or paste your license under Settings → License.");
+    }
+
+    let result: Awaited<ReturnType<typeof installFromStore>>;
     try {
-      const body = await server.parseBody<{ slug?: string }>(req);
-      const slug = body.slug?.trim();
-      if (!slug) {
-        server.json(res, 400, { error: "slug required" });
-        return;
-      }
-
-      const jwt = deps.license.jwt();
-      if (!jwt) {
-        server.json(res, 402, {
-          error: "No license on this kernel. Buy the extension, or paste your license under Settings → License.",
-        });
-        return;
-      }
-
-      const result = await installFromStore({
+      result = await installFromStore({
         storeUrl: deps.storeUrl,
         slug,
         licenseJwt: jwt,
@@ -260,19 +276,19 @@ export function registerStoreRoutes(server: KernelHttpServer, deps: StoreRoutesD
         sqlite: deps.sqlite,
         fetchImpl,
       });
-
-      server.json(res, 200, {
-        success: true,
-        kind: result.kind,
-        item: result.kind === "extension" ? result.installed : { office: result.officeName, agents: result.agents },
-      });
     } catch (err) {
       // 402 for "you don't own this" so the dashboard can flip to a Buy button;
       // 500 for anything genuinely broken.
       const message = err instanceof Error ? err.message : String(err);
       const notEntitled = /does not include|license/i.test(message);
-      server.json(res, notEntitled ? 402 : 500, { error: message });
+      throw new HttpError(notEntitled ? 402 : 500, message);
     }
+
+    return {
+      success: true,
+      kind: result.kind,
+      item: result.kind === "extension" ? result.installed : { office: result.officeName, agents: result.agents },
+    };
   });
 
 }

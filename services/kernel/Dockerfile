@@ -232,6 +232,21 @@ COPY --from=whisper /opt/whisper /opt/whisper
 # point at their own CUDA build without touching the image.
 ENV WHISPERCPP_BIN=/opt/whisper/whisper-cli
 
+# Piper, the voice Kernl answers with (src/voice/tts.ts). The upstream release
+# carries its own espeak-ng data and onnxruntime beside the binary, so it is
+# self-contained. Voices are NOT baked in (the Spanish one is 110 MB): they
+# download into the data volume on first use and survive a recreate.
+ARG PIPER_REF=2023.11.14-2
+RUN case "$(uname -m)" in \
+      x86_64) a=x86_64 ;; aarch64) a=aarch64 ;; *) a="" ;; \
+    esac \
+    && if [ -n "$a" ]; then \
+         curl -fsSL "https://github.com/rhasspy/piper/releases/download/${PIPER_REF}/piper_linux_${a}.tar.gz" \
+           | tar -xz -C /opt \
+         && /opt/piper/piper --version; \
+       fi
+ENV PIPER_BIN=/opt/piper/piper
+
 # Use --chown in COPY instead of slow `chown -R` (saves ~150s)
 COPY --chown=bun:bun --from=build /build/dist/ ./dist/
 COPY --chown=bun:bun --from=build /build/node_modules/ ./node_modules/

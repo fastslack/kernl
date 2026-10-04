@@ -120,3 +120,54 @@ describe("draftOfficeDefinition", () => {
     await expect(draftOfficeDefinition({ description: "algo", language: "en" }, chatJson)).rejects.toMatchObject({ kind: "draft" });
   });
 });
+
+describe("draftOfficeDefinition repair attempt", () => {
+  /** Replies with each value in turn, one per call. */
+  const replies = (...values: unknown[]) => {
+    const calls: LlmChatOptions[] = [];
+    const chatJson = async (opts: LlmChatOptions) => {
+      calls.push(opts);
+      const v = values[calls.length - 1];
+      if (v instanceof Error) throw v;
+      return v;
+    };
+    return { chatJson, calls };
+  };
+
+  it("retries once, telling the model what was rejected", async () => {
+    const { chatJson, calls } = replies({ name: "No agents" }, goodDraft);
+    const def = await draftOfficeDefinition({ description: "Un equipo", language: "es" }, chatJson);
+
+    expect(def.name).toBe("Code Review");
+    expect(calls).toHaveLength(2);
+    // The repair turn has to carry the original ask AND the reason, or the
+    // model is just being asked the same thing twice.
+    expect(calls[1].user).toContain("Un equipo");
+    expect(calls[1].user).toContain("Your previous reply was rejected");
+    expect(calls[1].caller).toBe("offices:draft:repair");
+  });
+
+  it("does not retry when the first reply is already valid", async () => {
+    const { chatJson, calls } = replies(goodDraft, goodDraft);
+    await draftOfficeDefinition({ description: "Un equipo", language: "es" }, chatJson);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("stops after the repair and reports the LAST failure", async () => {
+    const { chatJson, calls } = replies({ name: "bad" }, new Error("still wrong"));
+    const err = await draftOfficeDefinition({ description: "Un equipo", language: "es" }, chatJson)
+      .then(() => null, (e) => e as DraftError);
+
+    expect(calls).toHaveLength(2);
+    expect(err).toBeInstanceOf(DraftError);
+    expect(err!.message).toBe("invalid_draft");
+    expect(err!.detail).toBe("still wrong");
+  });
+
+  it("recovers when the model only fails to REACH the LLM the first time", async () => {
+    const { chatJson, calls } = replies(new Error("connection reset"), goodDraft);
+    const def = await draftOfficeDefinition({ description: "Un equipo", language: "es" }, chatJson);
+    expect(def.name).toBe("Code Review");
+    expect(calls).toHaveLength(2);
+  });
+});

@@ -15,7 +15,7 @@ export const AUTH_EXEMPT_PATHS = ["/api/health", "/api/metrics", "/api/auth/veri
  * put the static token into a dozen image URLs per page, and so into history
  * and logs, to guard a picture of a logo.
  */
-export const AUTH_EXEMPT_PREFIXES = ["/api/extensions/brand/"];
+export const AUTH_EXEMPT_PREFIXES = ["/api/extensions/brand/", "/api/comms/unsubscribe/"];
 
 export function isAuthExemptPath(pathname: string): boolean {
   return AUTH_EXEMPT_PATHS.includes(pathname) || AUTH_EXEMPT_PREFIXES.some((p) => pathname.startsWith(p));
@@ -99,4 +99,16 @@ export function isAuthenticated(req: IncomingMessage, token: string): boolean {
     }
   }
   return false;
+}
+
+/**
+ * Project connector webhooks (src/modules/projects). Exempt from the token,
+ * never from authentication: the route verifies the HMAC signature itself.
+ */
+export const WEBHOOK_PREFIXES = ["/api/projects/webhook/"];
+
+/** Only `POST <prefix><slug>` — one segment, nothing below it, no other method. */
+export function isWebhookPath(method: string, pathname: string): boolean {
+  if (method !== "POST") return false;
+  return WEBHOOK_PREFIXES.some((p) => pathname.startsWith(p) && /^[^/]+$/.test(pathname.slice(p.length)));
 }

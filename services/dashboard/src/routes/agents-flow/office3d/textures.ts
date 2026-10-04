@@ -6,8 +6,9 @@
 // under the key light. All patterns are seamless (wrapped lattice noise +
 // wrapped pixel plotting) so they tile without visible borders.
 import { rt } from './runtime.js';
+import { realismPart, setRealismAnisotropy, upgradeMaterial } from './realism.js';
 
-export type WorldTexKind = 'carpet' | 'asphalt' | 'concrete' | 'wall' | 'wood' | 'marble';
+export type WorldTexKind = 'carpet' | 'asphalt' | 'concrete' | 'wall' | 'wood' | 'marble' | 'grass';
 
 const SIZE = 256;
 
@@ -151,6 +152,14 @@ function buildHeight(kind: WorldTexKind): HeightField {
       }
       break;
     }
+    case 'grass': {
+      // Lawn: dense fine blades + faint clumping. Like carpet, only high
+      // frequencies — the ground slab tiles hundreds of times.
+      addNoise(f, makeValueNoise(701, 128, 128), 0.34); // blades
+      addNoise(f, makeValueNoise(702, 40, 40), 0.14);   // clumps
+      addSpeckles(f, 703, 900, -0.35);                  // dark gaps between blades
+      break;
+    }
     case 'wood': {
       const warp = makeValueNoise(501, 8, 8);
       const streak = makeValueNoise(502, 6, 120);
@@ -176,10 +185,11 @@ const LUM: Record<WorldTexKind, { base: number; contrast: number }> = {
   wall:     { base: 0.93, contrast: 0.28 },
   wood:     { base: 0.86, contrast: 0.40 },
   marble:   { base: 0.90, contrast: 0.55 },
+  grass:    { base: 0.80, contrast: 0.60 },
 };
 
 const NORMAL_SCALE: Record<WorldTexKind, number> = {
-  carpet: 0.28, asphalt: 0.50, concrete: 0.35, wall: 0.18, wood: 0.30, marble: 0.12,
+  carpet: 0.28, asphalt: 0.50, concrete: 0.35, wall: 0.18, wood: 0.30, marble: 0.12, grass: 0.45,
 };
 
 function heightToMapCanvas(field: HeightField, kind: WorldTexKind): HTMLCanvasElement {
@@ -228,6 +238,7 @@ let maxAnisotropy = 4;
 /** Call once after renderer init so textures use real HW anisotropy. */
 export function setTextureAnisotropy(value: number): void {
   maxAnisotropy = Math.max(1, Math.min(8, value || 1));
+  setRealismAnisotropy(maxAnisotropy);
   for (const pair of cache.values()) {
     pair.map.anisotropy = maxAnisotropy;
     pair.normalMap.anisotropy = maxAnisotropy;
@@ -275,6 +286,7 @@ export function applyWorldTexture(
 ): void {
   if (!material || !rt.THREE) return;
   const { map, normalMap, avgLin } = getWorldTexture(kind);
+  const orig = material.__texCompensated ? null : material.color?.clone?.();
   material.map = map;
   material.normalMap = normalMap;
   // Brightness compensation: the grayscale map would darken the surface by its
@@ -287,6 +299,8 @@ export function applyWorldTexture(
   const s = opts.normalScale ?? NORMAL_SCALE[kind];
   if (material.normalScale?.set) material.normalScale.set(s, s);
   material.needsUpdate = true;
+  // Photographic layer (office3d/realism.ts) — swaps in scanned PBR sets once loaded.
+  if (orig && realismPart('tex')) upgradeMaterial(material, kind, orig);
 }
 
 /**

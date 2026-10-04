@@ -20,7 +20,14 @@
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
+    liveDisplayRows, summarizeToolResult, type LiveRow, type LiveStepRow,
   } from '$lib/live-steps.js';
+  import { agentActionOf, type AgentAction } from '$lib/agent-actions.js';
+  import { t } from '$lib/i18n/index.js';
+  import AgentActionBody from './AgentActionBody.svelte';
+  import { shortToolName, resultFailed } from '$lib/history-steps.js';
+  import { liveEventDetail } from '$lib/live-event-detail.js';
+  import LiveEventDetail from './LiveEventDetail.svelte';
 
   /** Name of the selected agent, for the hero header. */
   export let agentName = '';
@@ -32,6 +39,26 @@
   export let onOutputClick: (e: MouseEvent) => void = () => {};
   /** A tool_result carrying an email id offers a link to the real message. */
   export let onOpenEmail: (commId: string) => void = () => {};
+  /** Agent id → name, so an action on another agent names it instead of a short id. */
+  export let nameOf: (id: string) => string | undefined = () => undefined;
+
+  // ── Acting on another agent ───────────────────────────────────────
+  // A message to a colleague, an edit, a learning, a run, a meeting, an
+  // escalation: the steps the 3D world animates. They render as a card that
+  // says to whom, what, and whether it landed — not as one more tool row.
+  function actionOf(row: { e: AgentFlowEvent; result?: { e: AgentFlowEvent } }): AgentAction | null {
+    if (liveEventType(row.e) !== 'tool_call') return null;
+    const res = row.result;
+    return agentActionOf(
+      String(row.e.data.tool_name ?? ''),
+      String(row.e.data.content_preview ?? ''),
+      res ? {
+        preview: String(res.e.data.content_preview ?? ''),
+        failed: resultFailed(res.e.data.is_error, String(res.e.data.content_preview ?? '')),
+      } : undefined,
+      nameOf,
+    );
+  }
 
   $: liveHeadEvent = events[0] ?? null;
 
@@ -53,6 +80,35 @@
   function liveStepTokensTotal(i: number): number {
     return liveStepTokensTotalOf(events, i);
   }
+  // Consecutive calls to one tool fold into a single "tool ×N" row; opening it
+  // lists each call and result as ordinary rows right below it. Keyed by the
+  // run's oldest event, so a run keeps its open state while calls stream in.
+  let openRuns = new Set<string>();
+  function toggleRun(key: string): void {
+    if (openRuns.has(key)) openRuns.delete(key); else openRuns.add(key);
+    openRuns = new Set(openRuns);
+  }
+  type DisplayRow = LiveStepRow | { kind: 'event'; e: AgentFlowEvent; i: number; inRun: true; result?: undefined; quiet?: undefined };
+  $: displayRows = liveDisplayRows(events).flatMap((r): DisplayRow[] =>
+    r.kind === 'tools' && openRuns.has(r.key)
+      ? [r, ...r.items.map((x) => ({ kind: 'event' as const, ...x, inRun: true as const }))]
+      : [r]);
+  function runTitle(r: Extract<LiveRow, { kind: 'tools' }>): string {
+    const parts = [`${r.calls} calls`];
+    if (r.failed > 0) parts.push(`${r.failed} failed`);
+    if (r.pending > 0) parts.push(`${r.pending} running`);
+    return `${r.tool} — ${parts.join(', ')}`;
+  }
+
+  // The hero names the action when the newest event is one (its call, or the
+  // result that just came back for it).
+  $: heroAction = (() => {
+    const first = displayRows[0];
+    if (!first || first.kind !== 'event') return null;
+    if (first.i !== 0 && first.result?.i !== 0) return null;
+    return actionOf(first);
+  })();
+
   $: liveRunElapsedMs = runElapsedMs(events);
   $: liveRunTokensTotal = runTokensTotal(events);
 </script>
@@ -73,11 +129,16 @@
         </div>
         <div class="live-now-body copy-wrap">
           <CopyTextBtn text={String(liveHeadEvent.data.content_preview ?? '') || liveEventSummary(liveHeadEvent)} title="Copy event content" />
-          <div class="live-now-lbl">{liveStepLabel(hType)}</div>
-          {#if hType === 'tool_call' && liveHeadEvent.data.tool_name}
-            <code class="live-tool">{liveHeadEvent.data.tool_name}</code>
+          {#if heroAction}
+            <div class="live-now-lbl live-now-action">{heroAction.icon} {$t('agent.action.kind_label')}</div>
+            <div class="live-now-action-body"><AgentActionBody action={heroAction} compact /></div>
+          {:else}
+            <div class="live-now-lbl">{liveStepLabel(hType)}</div>
+            {#if hType === 'tool_call' && liveHeadEvent.data.tool_name}
+              <code class="live-tool">{liveHeadEvent.data.tool_name}</code>
+            {/if}
+            <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
           {/if}
-          <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
         </div>
         <div class="live-now-clock">{fmtClock(liveHeadEvent.ts)}</div>
       </div>
@@ -110,28 +171,63 @@
     <div class="ip-empty">No events yet — stay tuned.</div>
   {:else}
     <ol class="live-timeline">
-      {#each events as e, i (e.ts + '-' + i)}
+      {#each displayRows as row (row.kind === 'tools' ? row.key : row.e.ts + '-' + row.i)}
+        {#if row.kind === 'tools'}
+        {@const newest = row.items[0].e}
+        {@const runOpen = openRuns.has(row.key)}
+        <li class="live-step live-step-tool_call live-step-run live-cat-{liveStepCategory(newest)}"
+            class:live-step-head={row.items[0].i === 0} class:live-step-open={runOpen}>
+          <span class="live-step-dot"></span>
+          <button type="button" class="live-step-summary" aria-expanded={runOpen}
+                  title={runTitle(row)} on:click={() => toggleRun(row.key)}>
+            <span class="live-step-icon">{liveStepIcon('tool_call')}</span>
+            <span class="live-step-type">{liveStepLabel(row.pending > 0 ? 'tool_call' : 'tool_result')}</span>
+            <code class="live-step-tool">{row.tool}</code>
+            <span class="live-run-count" class:bad={row.failed > 0} class:pending={row.pending > 0}>
+              {row.pending > 0 ? '…' : row.failed > 0 ? '✗' : '✓'} ×{row.calls}{#if row.failed > 0} · {row.failed} ✗{/if}
+            </span>
+            <span class="live-step-text">{liveStepSummary(newest)}</span>
+            <span class="live-step-clock">{fmtClock(newest.ts)}</span>
+            <span class="live-step-chev" aria-hidden="true">{runOpen ? '▾' : '▸'}</span>
+          </button>
+        </li>
+        {:else}
+        {@const e = row.e}
+        {@const i = row.i}
         {@const etype = liveEventType(e)}
         {@const ecat = liveStepCategory(e)}
         {@const stepKey = e.ts + '-' + i}
         {@const isOpen = expandedLiveSteps.has(stepKey)}
-        {@const hasDetail = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
+        {@const hasPayload = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
+        {@const detail = hasPayload ? null : liveEventDetail(e)}
+        {@const hasDetail = hasPayload || detail !== null}
         {@const dt = liveStepDeltaMs(i)}
         {@const stepTok = liveStepTokens(e)}
         {@const cumTok = liveStepTokensTotal(i)}
-        <li class="live-step live-step-{etype} live-cat-{ecat}" class:live-step-head={i === 0} class:live-step-open={isOpen}>
+        {@const res = 'result' in row ? row.result : undefined}
+        {@const resBad = !!res && resultFailed(res.e.data.is_error, String(res.e.data.content_preview ?? ''))}
+        {@const act = actionOf(row)}
+        <li class="live-step live-step-{etype} live-cat-{ecat}{act ? ` live-action live-action-${act.kind} live-action-${act.outcome}` : ''}" class:live-step-head={i === 0} class:live-step-open={isOpen} class:live-step-in-run={'inRun' in row} class:live-step-quiet={'quiet' in row && row.quiet}>
           <span class="live-step-dot"></span>
           <button
             type="button"
             class="live-step-summary"
             disabled={!hasDetail}
+            aria-expanded={hasDetail ? isOpen : undefined}
             on:click={() => hasDetail && toggleLiveStep(stepKey)}
             title={hasDetail ? (isOpen ? 'Hide details' : 'Show details') : ''}
           >
+            {#if act}
+              <AgentActionBody action={act} />
+            {:else}
             <span class="live-step-icon">{liveStepIcon(etype)}</span>
             <span class="live-step-type">{liveStepLabel(etype)}</span>
-            {#if e.data.tool_name}<code class="live-step-tool">{e.data.tool_name}</code>{/if}
-            <span class="live-step-text">{liveStepSummary(e)}</span>
+            {#if e.data.tool_name}<code class="live-step-tool" title={String(e.data.tool_name)}>{shortToolName(String(e.data.tool_name))}</code>{/if}
+            <!-- A call reads with its outcome: what it asked → what came back. -->
+            <span class="live-step-text">
+              {liveStepSummary(e)}{#if res}<span class="live-step-res" class:bad={resBad}> → {resBad ? '✗ ' : ''}{summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))}</span>{/if}
+            </span>
+            {/if}
             <span class="live-step-clock">{fmtClock(e.ts)}</span>
             {#if hasDetail}
               <span class="live-step-chev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>
@@ -156,15 +252,24 @@
               {/if}
             </div>
           {/if}
-          {#if hasDetail && isOpen}
+          {#if detail && isOpen}
+            <LiveEventDetail {detail} {onOutputClick} />
+          {:else if hasPayload && isOpen}
             <div class="live-step-detail copy-wrap">
               <CopyTextBtn text={String(e.data.content_preview ?? '') || liveEventSummary(e)} title="Copy event content" />
               <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
                 {@html formatRunOutput(liveEventSummary(e))}
               </div>
+              {#if res}
+                <div class="live-step-res-h" class:bad={resBad}>{resBad ? '✗ Error' : '← Result'}</div>
+                <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
+                  {@html formatRunOutput(liveEventSummary(res.e))}
+                </div>
+              {/if}
             </div>
           {/if}
         </li>
+        {/if}
       {/each}
     </ol>
   {/if}
@@ -352,7 +457,7 @@
   /* ── Summary row — one line of plain-language action description.
      Whole row is a button: click to expand the JSON payload below. */
   .live-step-summary{
-    width:100%;display:flex;align-items:center;gap:8px;flex-wrap:nowrap;
+    width:100%;display:flex;align-items:flex-start;gap:8px;flex-wrap:nowrap;
     padding:6px 10px;border-radius:7px;border:1px solid transparent;
     background:transparent;color:inherit;text-align:left;cursor:pointer;
     font:500 10.5px 'JetBrains Mono',monospace;
@@ -360,6 +465,7 @@
     min-width:0;
   }
   .live-step-summary:disabled{cursor:default}
+  .live-step-summary:focus-visible{outline:2px solid rgba(106,160,255,.7);outline-offset:1px}
   .live-step-summary:hover:not(:disabled){
     background:rgba(255,255,255,.025);
     border-color:rgba(120,130,160,.15);
@@ -398,16 +504,38 @@
      gracefully when the description is long. */
   .live-step-text{
     flex:1;min-width:0;
-    color:#d6dae8;font:400 11.5px/1.4 'Manrope',sans-serif;
-    white-space:nowrap;overflow:hidden;text-overflow:ellipsis;
+    color:#d6dae8;font:400 11.5px/1.45 'Manrope',sans-serif;
+    /* Two lines, then an ellipsis: one line cut the sentence that said what
+       the step was for. The full text is one click away. */
+    display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;line-clamp:2;
+    overflow:hidden;word-break:break-word;
   }
-  .live-step-open .live-step-text{white-space:normal}
+  .live-step-res{color:#8fd6a8}
+  .live-step-res.bad{color:#ef8090}
+  .live-step-res-h{margin:8px 0 4px;font:600 9.5px 'JetBrains Mono',monospace;letter-spacing:.6px;color:#8fd6a8;text-transform:uppercase}
+  .live-step-res-h.bad{color:#ef8090}
+  /* Housekeeping (loading tools): present, but not competing with real work. */
+  .live-step-quiet{opacity:.55}
+  .live-step-quiet:hover{opacity:1}
+  .live-step-open .live-step-text{-webkit-line-clamp:unset;line-clamp:none;display:block}
   .live-step-clock{color:#4a4f6a;font-size:9px;flex-shrink:0}
   .live-step-chev{
     color:#6a6f82;font-size:11px;width:14px;text-align:center;flex-shrink:0;
     transition:transform .14s;
   }
   .live-step-open .live-step-chev{color:#a0a5b8}
+
+  /* Folded run of calls to one tool: "✓ ×25", or "✗ ×25 · 2 ✗" when some failed. */
+  .live-run-count{
+    flex-shrink:0;padding:1px 6px;border-radius:999px;
+    font:700 9.5px 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;
+    color:#5fdba0;background:rgba(95,219,160,.12);
+  }
+  .live-run-count.bad{color:#ef8090;background:rgba(239,93,110,.14)}
+  .live-run-count.pending{color:#a8b0c8;background:rgba(120,130,160,.14)}
+  /* The calls of an opened run, indented under it on the same timeline. */
+  .live-step-in-run{padding-left:22px}
+  .live-step-in-run .live-step-dot{width:5px;height:5px;left:-16px;top:14px;border-width:1px}
 
   /* Expanded detail panel — the full JSON payload that used to live
      inline. Renders inside a card connected to the summary row above. */
@@ -478,4 +606,31 @@
   }
   .live-totals-time{color:#9ec0ef;background:rgba(106,160,255,.10);border-color:rgba(106,160,255,.22)}
   .live-totals-tok {color:#bee2a3;background:rgba(120,220,140,.10);border-color:rgba(120,220,140,.22)}
+
+  /* ── Acting on another agent ─────────────
+     The steps the 3D world animates (the desk-to-desk shot of a message, an
+     edit's walk-over…) get a card of their own: an accent bar, the icon the
+     world pops over the desk, who it went to in plain words, what was said,
+     and whether it landed. Everything else in the timeline stays a quiet
+     one-liner, so these are what the eye finds first. */
+  .live-action{--act:#f0b44c}
+  .live-action-failed{--act:#ef5d6e}
+  .live-action .live-step-dot{
+    width:11px;height:11px;margin-left:-1.5px;
+    background:var(--act);box-shadow:0 0 0 3px color-mix(in srgb, var(--act) 22%, transparent);
+  }
+  .live-action .live-step-summary{
+    margin:3px 0;padding:9px 11px 10px;gap:10px;
+    font-family:'Manrope',sans-serif;
+    background:color-mix(in srgb, var(--act) 7%, transparent);
+    border:1px solid color-mix(in srgb, var(--act) 30%, transparent);
+    border-left:3px solid var(--act);
+  }
+  .live-action .live-step-summary:hover:not(:disabled){
+    background:color-mix(in srgb, var(--act) 11%, transparent);
+    border-color:color-mix(in srgb, var(--act) 45%, transparent);
+    border-left-color:var(--act);
+  }
+  .live-now-action{color:#f0b44c}
+  .live-now-action-body{display:flex;gap:10px;margin-top:4px}
 </style>

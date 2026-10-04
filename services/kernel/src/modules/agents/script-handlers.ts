@@ -11,6 +11,7 @@
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { BuiltinHandler, BuiltinHandlerContext } from "./builtin-handlers.js";
 import { today, daysFromNow, safeQuery, safeQueryOne as safeOne } from "../../core/db/query-helpers.js";
+import { kernelTimezone } from "../../sdk/clock.js";
 
 function fmtBytes(b: number): string {
   if (b < 1024) return `${b}B`;
@@ -211,13 +212,13 @@ export function scriptToday(ctx: BuiltinHandlerContext): BuiltinHandler {
     // Upcoming reminders (next 24h)
     const reminders = safeQuery<{ title: string; trigger_at: string }>(ctx.db,
       `SELECT title, trigger_at FROM reminders
-       WHERE status = 'active' AND trigger_at > datetime('now') AND trigger_at < datetime('now', '+24 hours')
+       WHERE status = 'active' AND datetime(trigger_at) > datetime('now') AND datetime(trigger_at) < datetime('now', '+24 hours')
        ORDER BY trigger_at LIMIT 10`,
     );
     if (reminders.length > 0) {
       lines.push(`\n## Reminders (next 24h: ${reminders.length})\n`);
       for (const r of reminders) {
-        const time = new Date(r.trigger_at).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+        const time = new Date(r.trigger_at).toLocaleTimeString("es-AR", { timeZone: kernelTimezone(), hour: "2-digit", minute: "2-digit" });
         lines.push(`- ${time} — ${r.title}`);
       }
     }
@@ -231,7 +232,7 @@ export function scriptToday(ctx: BuiltinHandlerContext): BuiltinHandler {
     if (events.length > 0) {
       lines.push(`\n## Events Today (${events.length})\n`);
       for (const e of events) {
-        const time = new Date(e.start_at).toLocaleTimeString("es-AR", { hour: "2-digit", minute: "2-digit" });
+        const time = new Date(e.start_at).toLocaleTimeString("es-AR", { timeZone: kernelTimezone(), hour: "2-digit", minute: "2-digit" });
         lines.push(`- ${time} — **${e.title}**${e.location ? ` @ ${e.location}` : ""}`);
       }
     }

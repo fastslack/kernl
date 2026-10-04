@@ -1,176 +1,77 @@
 /**
  * Shopping RPC Actions — lists, items, products, purchases via mtwRequest.
+ *
+ * The list/item mutations are operations shared with their HTTP routes
+ * (operations.ts). The rest have no HTTP twin and call ShoppingService.
  */
 
-import crypto from "node:crypto";
-import type { SqliteDb, RpcAction } from "@kernl/extension-sdk";
+import { HttpError, pickArgs, rpcActionsFrom, type RpcAction } from "@kernl/extension-sdk";
+import { shoppingOperations, type ShoppingOperationDeps } from "./operations.js";
+import type { ShoppingList } from "./types.js";
 
-export function shoppingRpcActions(db: SqliteDb): RpcAction[] {
-  return [
-    {
-      name: "shopping.lists.list",
-      handler: async (args) => {
-        const status = typeof args.status === "string" ? args.status : "active";
-        const rows = db.prepare(
-          `SELECT l.id, l.name, l.status, l.notes, l.created_at, l.updated_at,
-                  (SELECT COUNT(*) FROM shopping_list_items i WHERE i.list_id = l.id) as item_count,
-                  (SELECT COUNT(*) FROM shopping_list_items i WHERE i.list_id = l.id AND i.checked = 1) as checked_count
-           FROM shopping_lists l WHERE l.status = ? ORDER BY l.updated_at DESC`,
-        ).all(status);
-        return { lists: rows };
-      },
-    },
-    {
-      name: "shopping.lists.detail",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const list = db.prepare("SELECT * FROM shopping_lists WHERE id = ?").get(id);
-        if (!list) throw new Error("Not found");
-        const items = db.prepare(
-          `SELECT i.id, i.product_id, i.name, i.quantity, i.unit, i.checked, i.notes, i.created_at
-           FROM shopping_list_items i WHERE i.list_id = ? ORDER BY i.checked ASC, i.created_at`,
-        ).all(id);
-        return { list, items };
-      },
-    },
-    {
-      name: "shopping.lists.create",
-      handler: async (args) => {
-        const name = typeof args.name === "string" ? args.name.trim() : "";
-        if (!name) throw new Error("Name required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          "INSERT INTO shopping_lists (id, name, status, notes, created_at, updated_at) VALUES (?, ?, 'active', ?, ?, ?)",
-        ).run(id, name, args.notes ?? "", now, now);
-        return { ok: true, id };
-      },
-    },
-    {
-      name: "shopping.lists.update",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const fields: string[] = [];
-        const vals: unknown[] = [];
-        for (const f of ["name", "status", "notes"]) {
-          if (args[f] !== undefined) { fields.push(`${f} = ?`); vals.push(args[f]); }
-        }
-        if (!fields.length) throw new Error("No fields");
-        const now = new Date().toISOString();
-        fields.push("updated_at = ?"); vals.push(now);
-        vals.push(id);
-        db.prepare(`UPDATE shopping_lists SET ${fields.join(", ")} WHERE id = ?`).run(...vals);
-        return { ok: true };
-      },
-    },
-    {
-      name: "shopping.items.add",
-      handler: async (args) => {
-        const listId = typeof args.list_id === "string" ? args.list_id : "";
-        const name = typeof args.name === "string" ? args.name.trim() : "";
-        if (!listId || !name) throw new Error("list_id and name required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO shopping_list_items (id, list_id, product_id, name, quantity, unit, checked, notes, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?)`,
-        ).run(id, listId, args.product_id ?? null, name, args.quantity ?? 1, args.unit ?? "pcs", args.notes ?? "", now, now);
-        // Touch list
-        db.prepare("UPDATE shopping_lists SET updated_at = ? WHERE id = ?").run(now, listId);
-        return { ok: true, id };
-      },
-    },
-    {
-      name: "shopping.items.check",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        const checked = args.checked === false ? 0 : 1;
-        const now = new Date().toISOString();
-        db.prepare("UPDATE shopping_list_items SET checked = ?, updated_at = ? WHERE id = ?").run(checked, now, id);
-        return { ok: true };
-      },
-    },
-    {
-      name: "shopping.items.remove",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        db.prepare("DELETE FROM shopping_list_items WHERE id = ?").run(id);
-        return { ok: true };
-      },
-    },
-    {
-      name: "shopping.products.list",
-      handler: async (args) => {
-        const categoryId = typeof args.category_id === "string" ? args.category_id : "";
-        const limit = Math.min(200, typeof args.limit === "number" ? args.limit : 50);
-        let where = "1=1";
-        const params: unknown[] = [];
-        if (categoryId) { where += " AND category_id = ?"; params.push(categoryId); }
+export function shoppingRpcActions(deps: ShoppingOperationDeps): RpcAction[] {
+  const svc = () => {
+    if (!deps.service) throw new HttpError(503, "Shopping service not available");
+    return deps.service;
+  };
+  const requireId = (input: Record<string, unknown>): string => {
+    const id = pickArgs(input, { id: "string" }).id;
+    if (!id) throw new HttpError(400, "Missing id");
+    return id;
+  };
 
-        const rows = db.prepare(
-          `SELECT id, name, description, category_id, tags, unit, current_stock, min_stock, notes, created_at, updated_at
-           FROM products WHERE ${where} ORDER BY name COLLATE NOCASE LIMIT ?`,
-        ).all(...params, limit);
-        return { products: rows };
-      },
+  return rpcActionsFrom({
+    ...shoppingOperations(deps),
+
+    "shopping.lists.list": (input) => {
+      const status = (pickArgs(input, { status: "string" }).status ?? "active") as ShoppingList["status"];
+      return { lists: svc().getListsWithCounts(status) };
     },
-    {
-      name: "shopping.products.lowStock",
-      handler: async () => {
-        const rows = db.prepare(
-          "SELECT id, name, unit, current_stock, min_stock FROM products WHERE current_stock <= min_stock AND min_stock > 0 ORDER BY name",
-        ).all();
-        return { products: rows };
-      },
+
+    "shopping.lists.detail": (input) => {
+      const found = svc().getListWithItems(requireId(input));
+      if (!found) throw new HttpError(404, "Not found");
+      return found;
     },
-    {
-      name: "shopping.purchases.log",
-      handler: async (args) => {
-        const productId = typeof args.product_id === "string" ? args.product_id : "";
-        if (!productId) throw new Error("product_id required");
-        const id = crypto.randomUUID();
-        const now = new Date().toISOString();
-        db.prepare(
-          `INSERT INTO purchases (id, product_id, store_id, quantity, unit_price, total_price, currency, purchased_at, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(
-          id, productId, args.store_id ?? null,
-          args.quantity ?? 1, args.unit_price ?? 0, args.total_price ?? 0,
-          args.currency ?? "EUR",
-          typeof args.purchased_at === "string" ? args.purchased_at : now.split("T")[0],
-          args.notes ?? "", now,
-        );
-        // Update stock
-        if (typeof args.quantity === "number" && args.quantity > 0) {
-          db.prepare("UPDATE products SET current_stock = current_stock + ?, updated_at = ? WHERE id = ?")
-            .run(args.quantity, now, productId);
-        }
-        return { ok: true, id };
-      },
+
+    "shopping.lists.update": (input) => {
+      const id = requireId(input);
+      // Only the keys that were sent: the service spreads these over the row.
+      const changes = pickArgs(input, { name: "string", status: "string", notes: "string" }) as Partial<Pick<ShoppingList, "name" | "status" | "notes">>;
+      if (Object.keys(changes).length === 0) throw new HttpError(400, "No fields");
+      if (!svc().updateList(id, changes)) {
+        throw new HttpError(404, "Not found");
+      }
+      return { ok: true };
     },
-    {
-      name: "shopping.lists.complete",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        db.prepare("UPDATE shopping_lists SET status = 'completed', updated_at = ? WHERE id = ?")
-          .run(new Date().toISOString(), id);
-        return { ok: true };
-      },
+
+    "shopping.products.list": (input) => {
+      const args = pickArgs(input, { category_id: "string", limit: "number" });
+      const limit = Math.min(200, args.limit ?? 50);
+      return { products: svc().listProducts({ category_id: args.category_id || undefined }).slice(0, limit) };
     },
-    {
-      name: "shopping.lists.reopen",
-      handler: async (args) => {
-        const id = typeof args.id === "string" ? args.id : "";
-        if (!id) throw new Error("Missing id");
-        db.prepare("UPDATE shopping_lists SET status = 'active', updated_at = ? WHERE id = ?")
-          .run(new Date().toISOString(), id);
-        return { ok: true };
-      },
+
+    "shopping.products.lowStock": () => ({ products: svc().getLowStock() }),
+
+    "shopping.purchases.log": (input) => {
+      const args = pickArgs(input, {
+        product_id: "string", store_id: "string", quantity: "number", unit_price: "number",
+        currency: "string", purchased_at: "string", notes: "string", total_price: "number",
+      });
+      if (!args.product_id) throw new HttpError(400, "product_id required");
+      const { total_price, ...fields } = args;
+      const quantity = args.quantity ?? 1;
+      // The service derives total_price from quantity × unit_price and bumps the
+      // product's stock by the quantity; a caller that only knows the total
+      // gets the unit price worked back from it.
+      const purchase = svc().logPurchase({
+        ...fields,
+        product_id: args.product_id,
+        quantity,
+        unit_price: args.unit_price ?? (total_price !== undefined && quantity ? total_price / quantity : 0),
+      });
+      if (!purchase) throw new HttpError(404, "Product not found");
+      return { ok: true, id: purchase.id };
     },
-  ];
+  });
 }

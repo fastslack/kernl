@@ -1,4 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "@kernl/extension-sdk";
+import { notificationChannelModule } from "@kernl/extension-sdk";
 import { MattermostProvider } from "./mattermost-provider.js";
 
 /**
@@ -8,19 +8,8 @@ import { MattermostProvider } from "./mattermost-provider.js";
  * `NotificationRegistry.startAll()` (run during late-services bootstrap)
  * once the user activates the channel through the marketplace.
  */
-export function createMattermostModule(): KernelModule {
-  return {
-    name: "ext:mattermost",
-    async initialize(ctx: ModuleContext) {
-      ctx.notifier
-        .getRegistry()
-        .registerFactory("mattermost", () => new MattermostProvider());
-    },
-    getTools(): ToolDefinition[] {
-      return [];
-    },
-    async shutdown() {},
-  };
+export function createMattermostModule() {
+  return notificationChannelModule("ext:mattermost", "mattermost", () => new MattermostProvider());
 }
 
 export { MattermostProvider };

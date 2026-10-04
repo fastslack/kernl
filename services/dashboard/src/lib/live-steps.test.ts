@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { AgentFlowEvent } from "./stores.js";
+import { liveToolRows, liveDisplayRows, plainStepText } from "./live-steps.js";
 import {
   liveStepIcon,
   liveStepLabel,
@@ -58,6 +59,13 @@ describe("liveEventType", () => {
 });
 
 describe("liveEventSummary", () => {
+  it("says which lesson was retired instead of the raw event name", () => {
+    expect(liveEventSummary(ev({ count: 1, learnings: [{ content: "Do not retry on 4xx" }] }, "agent:flow:learning_deactivated")))
+      .toBe("Retired 1 lesson: Do not retry on 4xx");
+    expect(liveEventSummary(ev({ count: 3 }, "agent:flow:learning_deactivated")))
+      .toBe("Retired 3 lessons below the confidence floor");
+  });
+
   it("distinguishes a builtin run from a prompted one", () => {
     expect(liveEventSummary(ev({ builtin: true }, "agent:run_started")))
       .toBe("Builtin run (native code, no prompt)");
@@ -125,6 +133,16 @@ describe("tryParseJson / basenameOf", () => {
 });
 
 describe("summarizeToolCall", () => {
+  it("says which agent the chief changed and what, instead of a raw id=…", () => {
+    expect(summarizeToolCall(
+      "mcp__kernel__kernel_agents_update",
+      '{"id":"d22f8c60-cfaf-4230-b0e7-3bb1def7f9c9","max_iterations":40}',
+    )).toBe("Change agent d22f8c60 settings · max_iterations → 40");
+    expect(summarizeToolCall(
+      "kernel_agents_flows_update",
+      '{"id":"4dbe35a9-0b32","name":"Career Office","description":"x"}',
+    )).toBe("Change office 4dbe35a9 settings · name → Career Office · description → x");
+  });
   it("prefers a Bash description over the command", () => {
     expect(summarizeToolCall("Bash", '{"description":"List files","command":"ls -la"}')).toBe("List files");
     expect(summarizeToolCall("Bash", '{"command":"ls -la"}')).toBe("$ ls -la");
@@ -240,5 +258,135 @@ describe("buffer maths", () => {
     expect(runElapsedMs(events)).toBe(10_000);
     expect(runTokensTotal(events)).toBe(300);
     expect(runElapsedMs([events[0]])).toBe(0);
+  });
+});
+
+describe("liveToolRows", () => {
+  let t = 0;
+  const ev = (type: string, tool = "", preview = ""): AgentFlowEvent => ({
+    event: "agent:flow:step",
+    data: { type, tool_name: tool, content_preview: preview },
+    ts: `2026-10-02T18:00:${String(t++).padStart(2, "0")}.000Z`,
+  });
+  // The buffer is newest first, so build it oldest-first and reverse.
+  const buffer = (...xs: AgentFlowEvent[]) => xs.reverse();
+  const polls = (n: number, tool = "kernel_career_liveness", out = (_i: number) => "ok") =>
+    Array.from({ length: n }, (_, i) => [ev("tool_call", tool, "{}"), ev("tool_result", tool, out(i))]).flat();
+
+  it("folds repeated calls with their results into one row", () => {
+    const rows = liveToolRows(buffer(ev("thought", "", "hm"), ...polls(25), ev("final", "", "done")));
+    expect(rows.map((r) => r.kind)).toEqual(["event", "tools", "event"]);
+    const g = rows[1] as Extract<ReturnType<typeof liveToolRows>[number], { kind: "tools" }>;
+    expect(g).toMatchObject({ tool: "kernel_career_liveness", calls: 25, failed: 0, pending: 0 });
+    expect(g.items).toHaveLength(50);
+    expect(g.items.map((x) => x.i)).toEqual(Array.from({ length: 50 }, (_, k) => k + 1));
+  });
+
+  it("leaves a single call and its result as two rows", () => {
+    expect(liveToolRows(buffer(...polls(1))).map((r) => r.kind)).toEqual(["event", "event"]);
+  });
+
+  it("counts failures and a call still waiting for its result", () => {
+    const xs = buffer(...polls(3, "A", (i) => (i === 0 ? "Error: nope" : "ok")), ev("tool_call", "A", "{}"));
+    const g = liveToolRows(xs)[0] as Extract<ReturnType<typeof liveToolRows>[number], { kind: "tools" }>;
+    expect(g).toMatchObject({ calls: 4, failed: 1, pending: 1 });
+  });
+
+  it("keeps its key while the run grows at the front", () => {
+    const base = polls(2, "A");
+    const k1 = (liveToolRows(buffer(...base))[0] as { key: string }).key;
+    const k2 = (liveToolRows(buffer(...base, ...polls(1, "A")))[0] as { key: string }).key;
+    expect(k2).toBe(k1);
+  });
+
+  it("a result's is_error flag wins over its text, both ways", () => {
+    const res = (preview: string, is_error?: boolean): AgentFlowEvent => {
+      const e = ev("tool_result", "A", preview);
+      if (is_error !== undefined) e.data.is_error = is_error;
+      return e;
+    };
+    const xs = buffer(
+      ev("tool_call", "A", "{}"), res("ok", true),
+      ev("tool_call", "A", "{}"), res("Error: nope", false),
+      ev("tool_call", "A", "{}"), res('[{"code":"invalid_type","expected":"string","received":"undefined","path":["text"],"message":"Required"}]'),
+    );
+    const g = liveToolRows(xs)[0] as Extract<ReturnType<typeof liveToolRows>[number], { kind: "tools" }>;
+    expect(g).toMatchObject({ calls: 3, failed: 2, pending: 0 });
+  });
+
+  it("does not merge calls to the same tool across another tool", () => {
+    const rows = liveToolRows(buffer(...polls(2, "A"), ...polls(1, "B"), ...polls(2, "A")));
+    expect(rows.map((r) => (r.kind === "tools" ? `${r.tool}×${r.calls}` : "ev"))).toEqual(["A×2", "ev", "ev", "A×2"]);
+  });
+});
+
+describe("liveDisplayRows", () => {
+  let t = 0;
+  const ev = (type: string, tool = "", preview = ""): AgentFlowEvent => ({
+    event: "agent:flow:step",
+    data: { type, tool_name: tool, content_preview: preview },
+    ts: `2026-10-03T05:00:${String(t++).padStart(2, "0")}.000Z`,
+  });
+  const buffer = (...xs: AgentFlowEvent[]) => xs.reverse();
+  const shape = (rows: ReturnType<typeof liveDisplayRows>) =>
+    rows.map((r) => r.kind === "event"
+      ? `${liveEventType(r.e)}${r.result ? "+result" : ""}${r.quiet ? ":quiet" : ""}`
+      : `tools:${r.tool}`);
+
+  it("puts each tool result on its call's row", () => {
+    const rows = liveDisplayRows(buffer(
+      ev("tool_call", "mcp__kernel__kernel_agents_update", '{"id":"x","max_iterations":40}'),
+      ev("tool_result", "mcp__kernel__kernel_agents_update", "Agent **Scout** updated."),
+    ));
+    expect(shape(rows)).toEqual(["tool_call+result"]);
+    const call = rows[0] as Extract<typeof rows[number], { kind: "event" }>;
+    expect(call.result?.e.data.content_preview).toBe("Agent **Scout** updated.");
+  });
+
+  it("marks ToolSearch quiet and drops its empty result", () => {
+    const rows = liveDisplayRows(buffer(
+      ev("tool_call", "ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_add_learning"}'),
+      ev("tool_result", "ToolSearch", ""),
+      ev("tool_call", "Read", '{"file_path":"/a.ts"}'),
+    ));
+    expect(shape(rows)).toEqual(["tool_call", "tool_call+result:quiet"]);
+  });
+
+  it("pairs parallel calls of different tools with their own results", () => {
+    const rows = liveDisplayRows(buffer(
+      ev("tool_call", "A", "{}"), ev("tool_call", "B", "{}"),
+      ev("tool_result", "B", "b-out"), ev("tool_result", "A", "a-out"),
+    ));
+    expect(shape(rows)).toEqual(["tool_call+result", "tool_call+result"]);
+    const [b, a] = rows as Extract<typeof rows[number], { kind: "event" }>[];
+    expect(a.result?.e.data.content_preview).toBe("a-out");
+    expect(b.result?.e.data.content_preview).toBe("b-out");
+  });
+
+  it("drops a THINKING row that FINALIZING repeats word for word", () => {
+    const same = "Listo. **ROOT_CAUSE:** el Scout tenía max_iterations bajo";
+    expect(shape(liveDisplayRows(buffer(ev("thought", "", same), ev("final", "", same))))).toEqual(["final"]);
+    expect(shape(liveDisplayRows(buffer(ev("thought", "", "otra cosa"), ev("final", "", same))))).toEqual(["final", "thought"]);
+  });
+
+  it("leaves a call still waiting for its result on its own", () => {
+    expect(shape(liveDisplayRows(buffer(ev("tool_call", "Bash", '{"command":"ls"}'))))).toEqual(["tool_call"]);
+  });
+});
+
+describe("plainStepText", () => {
+  it("drops markdown marks so a line reads as prose", () => {
+    expect(plainStepText("Listo. Resumen: -- **ROOT_CAUSE:** El Scout tenía `max_iterations`\n# Fix\n- subirlo")).toBe(
+      "Listo. Resumen: — ROOT_CAUSE: El Scout tenía max_iterations Fix subirlo");
+  });
+});
+
+describe("summarizeToolCall · ToolSearch", () => {
+  it("names the tools being loaded", () => {
+    expect(summarizeToolCall("ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_list,mcp__kernel__kernel_agents_flows_list"}'))
+      .toBe("Loads tools: kernel_agents_list, kernel_agents_flows_list");
+    expect(summarizeToolCall("ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_add_learning"}'))
+      .toBe("Loads tool: kernel_agents_add_learning");
+    expect(summarizeToolCall("ToolSearch", '{"query":"slack messages"}')).toBe("Looks for tools matching “slack messages”");
   });
 });

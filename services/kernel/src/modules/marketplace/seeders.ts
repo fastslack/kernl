@@ -349,6 +349,11 @@ interface BundledChannel {
   category: string;
   tags: string[];
   autoActivate?: boolean;
+  /**
+   * Insert the row as `active` on a fresh install, but never touch an existing
+   * row: unlike `autoActivate`, a user who stopped the channel keeps it stopped.
+   */
+  activateOnInsert?: boolean;
 }
 
 const BUNDLED_CHANNELS: BundledChannel[] = [
@@ -384,6 +389,7 @@ const BUNDLED_CHANNELS: BundledChannel[] = [
     icon: "📱",
     category: "messaging",
     tags: ["whatsapp", "messaging", "media"],
+    activateOnInsert: true,
   },
   {
     slug: "slack",
@@ -448,7 +454,7 @@ export function seedBundledChannels(db: SqliteDb): void {
                'bundled', ?, 1, 0, ?, ?)`,
     ).run(
       newId(), ch.slug, ch.name, ch.description, ch.icon,
-      ch.category, JSON.stringify(ch.tags), ch.autoActivate ? "active" : "available", now, now,
+      ch.category, JSON.stringify(ch.tags), ch.autoActivate || ch.activateOnInsert ? "active" : "available", now, now,
     );
   }
   log.info(`Marketplace: seeded ${BUNDLED_CHANNELS.length} bundled channels`);

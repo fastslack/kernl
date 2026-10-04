@@ -15,8 +15,9 @@
  *     notes the scrapers leave, scores them against the same profile, and
  *     pushes the top hits to the dashboard/notifier.
  *
- * The scrapers themselves live in `./job-scrapers.ts`; the builtin-handlers
- * registry wires them in already. This seeder just creates the rows so the
+ * The scrapers themselves live in the job-hunter extension
+ * (`assets/extensions/automation/job-hunter/`), which contributes their
+ * handlers as agent drivers. This seeder just creates the rows so the
  * scheduler actually fires them.
  */
 
@@ -24,7 +25,7 @@ import type { SqliteDb } from "../../src/core/db/sqlite.js";
 import type { AgentService } from "../../src/modules/agents/service.js";
 import { isoNow } from "../../src/core/helpers.js";
 import { log } from "../../src/core/logger.js";
-import { JOB_SCRAPER_DEFS } from "../../src/modules/agents/job-scrapers.js";
+import { JOB_SCRAPER_DEFS } from "../../assets/extensions/automation/job-hunter/_module/defs.js";
 import type { WorkspaceServiceLike } from "../../src/modules/agents/advanced-types.js";
 
 const FLOW = {
@@ -144,7 +145,7 @@ DEFAULT_VARS.dispatch = {
 // ── Curator agent (legacy LLM curator — kept off by default) ──
 // Earlier iteration was an LLM agent that hallucinated URLs and burned 488k
 // tokens per run. The active curator is the deterministic script handler
-// `scraper:jobs:curate` in job-scrapers.ts. We still create the LLM curator
+// `scraper:jobs:curate` in the job-hunter extension. We still create the LLM curator
 // row so the operator can opt back in (e.g. for richer semantic dedupe) by
 // flipping `active = 1`, but it's seeded paused.
 

@@ -50,6 +50,19 @@ if [ "${1:-}" = "token" ]; then
   exit 1
 fi
 
+# Bundled mtw-server + whatsapp-bridge (stage-payload.sh, section 2d), shipped
+# in /opt/kernl/bin by both the rpm and the deb. The kernel supervises them
+# (src/core/bootstrap/sidecars.ts); these exports turn on its side of both
+# bridges and point it at the sockets under the data dir. Absent from a
+# package built before the binaries were published, in which case nothing
+# changes.
+if [ -x "$APP_DIR/bin/mtw-server/mtw-server" ]; then
+  export KERNL_BINARY_INSTALL=1 BRIDGE_ENABLED=true RUST_BRIDGE_ENABLED=true
+  export KERNEL_URL=ws://127.0.0.1:7741/ws
+  export RUST_BRIDGE_SOCKET="$DATA_DIR/run/mtw-rust.sock"
+  export KERNL_APP_DIR="$APP_DIR" KERNL_DATA_DIR="$DATA_DIR"
+fi
+
 # The kernel resolves data/* relative to its working directory (see
 # config.ts: `sqlite.path = ./data/kernel.db`). Anchor it to the per-user
 # data dir so each Linux account gets its own isolated DB.

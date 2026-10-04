@@ -62,4 +62,17 @@ describe("migrations", () => {
       .all() as Array<{ version: number }>;
     expect(applied.map((r) => r.version)).toEqual([1, 2, 3]);
   });
+
+  it("rolls back a migration that fails partway, so a fixed retry applies cleanly", () => {
+    const broken: Migration[] = [
+      { version: 1, sql: "CREATE TABLE a (id TEXT); CREATE TABLE a (id TEXT);" },
+    ];
+    expect(() => runMigrations(db, "mod", broken)).toThrow();
+    // Neither the first statement nor the bookkeeping survived.
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'a'").get()).toBeNull();
+    expect(db.prepare("SELECT COUNT(*) AS c FROM _migrations").get()).toEqual({ c: 0 });
+
+    runMigrations(db, "mod", [{ version: 1, sql: "CREATE TABLE a (id TEXT);" }]);
+    expect(db.prepare("SELECT name FROM sqlite_master WHERE name = 'a'").get()).toEqual({ name: "a" });
+  });
 });

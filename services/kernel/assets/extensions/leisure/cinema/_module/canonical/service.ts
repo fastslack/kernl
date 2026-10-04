@@ -12,7 +12,7 @@
  * "work still owed", already understood by anyone reading this module.
  */
 
-import type { SqliteDb } from "@kernl/extension-sdk";
+import { type SqliteDb, jsonArray } from "@kernl/extension-sdk";
 import { MATCHER_VERSION, type Candidate, type MatchOutcome, type MatchState } from "./matcher.js";
 
 export interface MatchRow {
@@ -149,7 +149,8 @@ export class CanonicalService {
       .get(identifier) as (Omit<MatchRow, "candidates"> & { candidates_json: string }) | undefined;
     if (!r) return null;
     const { candidates_json, ...rest } = r;
-    return { ...rest, candidates: safeParse(candidates_json) };
+    // jsonArray: a malformed candidates blob must not take down the review queue.
+    return { ...rest, candidates: jsonArray<Candidate>(candidates_json) };
   }
 
   /** The grey zone, worst-scoring last so the most likely wins get decided first. */
@@ -166,7 +167,7 @@ export class CanonicalService {
       identifier: string; score: number; candidates_json: string;
       title: string; year: number; creator: string; poster_url: string;
     }>;
-    return rows.map(({ candidates_json, ...r }) => ({ ...r, candidates: safeParse(candidates_json) }));
+    return rows.map(({ candidates_json, ...r }) => ({ ...r, candidates: jsonArray<Candidate>(candidates_json) }));
   }
 
   countReview(): number {
@@ -229,15 +230,5 @@ export class CanonicalService {
       WHERE imdb_id <> '' AND ext_fetched_at IS NULL
     `).get() as { n: number };
     return r?.n ?? 0;
-  }
-}
-
-/** A malformed candidates blob must not take down the review queue. */
-function safeParse(json: string): Candidate[] {
-  try {
-    const v = JSON.parse(json);
-    return Array.isArray(v) ? (v as Candidate[]) : [];
-  } catch {
-    return [];
   }
 }

@@ -1,4 +1,5 @@
 import type { GmailMessagePart } from "@kernl/extension-sdk";
+import { sanitizeUserHtml } from "@kernl/extension-sdk/html";
 import type { CommMetadata } from "./types.js";
 
 /**
@@ -52,21 +53,65 @@ export function extractGmailBody(part: GmailMessagePart): { text: string; html: 
   return { text, html };
 }
 
+/** Past this, a message's HTML is dropped and the view falls back to its text. */
+const MAX_STORED_HTML = 512 * 1024;
+
 /**
- * Strip HTML tags and decode common entities to produce plain text.
+ * A message's HTML part as it may be stored and shown: sanitized (no scripts,
+ * styles, frames or handlers) and capped — a truncated document would render
+ * broken, so an oversized one is dropped whole.
+ */
+export function storableHtml(html: string): string {
+  if (!html) return "";
+  const clean = sanitizeUserHtml(html);
+  return clean.length > MAX_STORED_HTML ? "" : clean;
+}
+
+const NAMED_ENTITIES: Record<string, string> = {
+  nbsp: " ", amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", copy: "©", reg: "®", trade: "™",
+  euro: "€", pound: "£", yen: "¥", cent: "¢", hellip: "…", mdash: "—", ndash: "–", laquo: "«", raquo: "»",
+  lsquo: "‘", rsquo: "’", ldquo: "“", rdquo: "”", bull: "•", middot: "·", deg: "°", times: "×",
+  aacute: "á", eacute: "é", iacute: "í", oacute: "ó", uacute: "ú", Aacute: "Á", Eacute: "É", Iacute: "Í",
+  Oacute: "Ó", Uacute: "Ú", ntilde: "ñ", Ntilde: "Ñ", uuml: "ü", Uuml: "Ü", ouml: "ö", auml: "ä", iquest: "¿", iexcl: "¡",
+  zwnj: "", zwj: "", shy: "",
+};
+
+function decodeEntities(s: string): string {
+  return s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e: string) => {
+    if (e[0] === "#") {
+      const code = e[1] === "x" || e[1] === "X" ? parseInt(e.slice(2), 16) : parseInt(e.slice(1), 10);
+      return Number.isFinite(code) && code > 0 && code < 0x110000 ? String.fromCodePoint(code) : m;
+    }
+    return NAMED_ENTITIES[e] ?? m;
+  });
+}
+
+const BLOCK_END = /<\/(p|div|tr|li|h[1-6]|table|thead|tbody|ul|ol|section|article|header|footer|blockquote|pre|center)\s*>/gi;
+
+/**
+ * Plain text from an HTML body — what an HTML-only message shows as its text.
+ * Drops what is not content (head, style, script, comments: stripping only the
+ * tags put the stylesheet on screen), keeps block and row boundaries as line
+ * breaks, and collapses the layout whitespace HTML is full of.
  */
 export function stripHtml(html: string): string {
-  return html
-    .replace(/<br\s*\/?>/gi, "\n")
-    .replace(/<\/p>/gi, "\n\n")
-    .replace(/<\/div>/gi, "\n")
-    .replace(/<[^>]+>/g, "")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
+  if (!/<[a-z!/]/i.test(html)) return decodeEntities(html).trim();
+  return decodeEntities(
+    html
+      .replace(/<!--[\s\S]*?-->/g, "")
+      .replace(/<(head|style|script|noscript|title|template)\b[\s\S]*?<\/\1\s*>/gi, "")
+      .replace(/\s+/g, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/t[dh]\s*>/gi, " ")
+      .replace(BLOCK_END, "\n")
+      .replace(/<[^>]+>/g, ""),
+  )
+    // Zero-width joiners, soft hyphens and the like: invisible padding that
+    // newsletters put after the preview line.
+    .replace(/[\u200b-\u200f\u00ad\u034f\u2060\ufeff]/g, "")
+    .split("\n")
+    .map((l) => l.replace(/[ \t\u00a0]+/g, " ").trim())
+    .join("\n")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }

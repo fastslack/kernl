@@ -1,5 +1,23 @@
-import { type SqliteDb, type GraphDriver, newId, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, type GraphDriver, type PatchColumn, newId, isoNow, buildPatch } from "@kernl/extension-sdk";
 import type { Contact, Interaction, LeadStatus } from "./types.js";
+
+/** The contacts columns updateContact may write; anything else in the patch is ignored. */
+const CONTACT_PATCH: Record<string, PatchColumn> = {
+  name: "text",
+  email: "text",
+  phone: "text",
+  company: "text",
+  relationship: "text",
+  notes: "text",
+  last_interaction: "text",
+  lead_status: "text",
+  lead_source: "text",
+  instagram_handle: "text",
+  linkedin_url: "text",
+  x_handle: "text",
+  website: "text",
+  project_id: "text",
+};
 
 const LEAD_STATUSES: ReadonlyArray<LeadStatus> = ["", "new", "drafted", "contacted", "qualified", "won", "lost"];
 
@@ -59,6 +77,8 @@ export class CrmService {
     linkedin_url?: string;
     x_handle?: string;
     website?: string;
+    /** Project the contact belongs to (kernel projects module). */
+    project_id?: string | null;
     /** When true (default), check phone/email and merge into the existing
      *  row instead of creating a duplicate. Exact-string matching of e.g.
      *  "+1 415 555-0142" vs "+14155550142" produces two contacts otherwise
@@ -110,6 +130,8 @@ export class CrmService {
       linkedin_url: input.linkedin_url ?? "",
       x_handle: input.x_handle ?? "",
       website: input.website ?? "",
+      project_id: input.project_id ?? null,
+      do_not_contact: 0,
       created_at: now,
       updated_at: now,
     };
@@ -117,8 +139,8 @@ export class CrmService {
     this.db
       .prepare(
         `INSERT INTO contacts (id, name, email, phone, company, relationship, notes, last_interaction,
-          lead_status, lead_source, instagram_handle, linkedin_url, x_handle, website, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          lead_status, lead_source, instagram_handle, linkedin_url, x_handle, website, project_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         contact.id, contact.name, contact.email, contact.phone,
@@ -126,7 +148,7 @@ export class CrmService {
         contact.last_interaction,
         contact.lead_status, contact.lead_source,
         contact.instagram_handle, contact.linkedin_url, contact.x_handle, contact.website,
-        contact.created_at, contact.updated_at,
+        contact.project_id, contact.created_at, contact.updated_at,
       );
 
     const graph = this.getGraph();
@@ -178,20 +200,51 @@ export class CrmService {
     return this.db.prepare(sql).all(...params) as Contact[];
   }
 
+  /** One page of the dashboard's contact list: a name/email/company search,
+   *  an optional relationship filter, most recently touched first. */
+  searchContacts(filters: { q?: string; relationship?: string; page?: number; limit?: number }): {
+    contacts: Contact[]; total: number; page: number; limit: number;
+  } {
+    const page = Math.max(1, filters.page ?? 1);
+    const limit = Math.min(100, Math.max(10, filters.limit ?? 50));
+    let where = "1=1";
+    const params: unknown[] = [];
+    if (filters.q) {
+      where += " AND (name LIKE ? OR email LIKE ? OR company LIKE ?)";
+      const p = `%${filters.q}%`;
+      params.push(p, p, p);
+    }
+    if (filters.relationship) { where += " AND relationship = ?"; params.push(filters.relationship); }
+
+    const total = (this.db.prepare(`SELECT COUNT(*) as c FROM contacts WHERE ${where}`).get(...params) as { c: number }).c;
+    const contacts = this.db.prepare(
+      `SELECT id, name, email, phone, company, relationship, notes, last_interaction, created_at, updated_at
+       FROM contacts WHERE ${where}
+       ORDER BY last_interaction DESC NULLS LAST, name COLLATE NOCASE
+       LIMIT ? OFFSET ?`,
+    ).all(...params, limit, (page - 1) * limit) as Contact[];
+    return { contacts, total, page, limit };
+  }
+
+  /** Delete a contact and its interaction log (interactions reference the
+   *  contact without ON DELETE CASCADE, so they go first). */
+  deleteContact(id: string): boolean {
+    if (!this.getById(id)) return false;
+    this.db.transaction(() => {
+      this.db.prepare("DELETE FROM interactions WHERE contact_id = ?").run(id);
+      this.db.prepare("DELETE FROM contacts WHERE id = ?").run(id);
+    })();
+
+    const graph = this.getGraph();
+    if (graph?.capabilities.cypher) {
+      graph.run("MATCH (p:Person {id: $id}) DETACH DELETE p", { id }).catch(() => {});
+    }
+    return true;
+  }
+
   /** Patch a contact in place. Only writes the fields actually supplied. */
   updateContact(id: string, patch: Partial<Omit<Contact, "id" | "created_at">>): boolean {
-    const allowed: Array<keyof typeof patch> = [
-      "name", "email", "phone", "company", "relationship", "notes",
-      "last_interaction", "lead_status", "lead_source",
-      "instagram_handle", "linkedin_url", "x_handle", "website",
-    ];
-    const sets: string[] = [];
-    const params: unknown[] = [];
-    for (const k of allowed) {
-      if (patch[k] === undefined) continue;
-      sets.push(`${k} = ?`);
-      params.push(patch[k]);
-    }
+    const { sets, params } = buildPatch(patch, CONTACT_PATCH);
     if (sets.length === 0) return false;
     sets.push("updated_at = ?");
     params.push(isoNow());
@@ -301,6 +354,34 @@ export class CrmService {
         "SELECT * FROM interactions WHERE contact_id = ? ORDER BY date DESC LIMIT 20",
       )
       .all(contactId) as Interaction[];
+  }
+
+  /**
+   * People worth getting back to: you have talked to them (at least one
+   * interaction) and the last one is older than `days`. A contact with no
+   * interaction at all is not "gone quiet" — most of those are addresses the
+   * mail sync created — so it never counts here.
+   */
+  followUps(days = 30, limit = 5): {
+    count: number;
+    items: Array<{ id: string; name: string; company: string; relationship: string; last_interaction: string; interactions: number }>;
+  } {
+    const cutoff = new Date(Date.now() - days * 86_400_000).toISOString().slice(0, 10);
+    const quiet = `SELECT c.id, c.name, c.company, c.relationship, MAX(i.date) AS last_interaction, COUNT(*) AS interactions
+                     FROM interactions i JOIN contacts c ON c.id = i.contact_id
+                    GROUP BY c.id HAVING MAX(i.date) < ?`;
+    const count = (this.db.prepare(`SELECT COUNT(*) AS n FROM (${quiet})`).get(cutoff) as { n: number }).n;
+    // Most-talked-to first: the relationships you would most regret dropping.
+    const items = this.db
+      .prepare(`${quiet} ORDER BY interactions DESC, last_interaction DESC LIMIT ?`)
+      .all(cutoff, limit) as Array<{ id: string; name: string; company: string; relationship: string; last_interaction: string; interactions: number }>;
+    return { count, items };
+  }
+
+  /** Ask (or stop asking) for a contact never to be contacted again. */
+  setDoNotContact(id: string, value: boolean): boolean {
+    const r = this.db.prepare("UPDATE contacts SET do_not_contact = ?, updated_at = ? WHERE id = ?").run(value ? 1 : 0, isoNow(), id);
+    return Number(r.changes) > 0;
   }
 
   async addRelationship(

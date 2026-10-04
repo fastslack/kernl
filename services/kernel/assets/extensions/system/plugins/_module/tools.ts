@@ -1,34 +1,32 @@
 import { z } from "zod";
-import { type ToolDefinition, textResult, errorResult } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult } from "@kernl/extension-sdk";
 import type { PluginManagerService } from "./service.js";
 
 export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
   return [
     // ── Repository Management ──────────────────────────
 
-    {
+    defineTool({
       name: "kernel_plugins_add_repo",
       description:
         "Add a plugin repository (GitLab group, GitHub org, or single repo URL). Plugins from this repo become available for installation after syncing.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Friendly name for the repo (e.g. 'My Plugins')"),
         url: z.string().describe("Repository URL (e.g. 'https://gitlab.com/mygroup/kernel-plugins' or 'https://github.com/user')"),
         type: z.enum(["gitlab", "github", "gitea"]).optional().describe("Platform type (default: gitlab)"),
         token: z.string().optional().describe("Access token for private repos (optional)"),
       }),
-      handler: async (args) => {
-        const input = args as { name: string; url: string; type?: string; token?: string };
+      handler: async (input) => {
         const repo = service.addRepo(input);
         return textResult(
           `Repository added:\n  ID: ${repo.id}\n  Name: ${repo.name}\n  URL: ${repo.url}\n  Type: ${repo.type}\n\nUse kernel_plugins_sync to fetch available plugins.`,
         );
       },
-    },
+    }),
 
-    {
+    defineToolNoInput({
       name: "kernel_plugins_list_repos",
       description: "List all configured plugin repositories.",
-      inputSchema: z.object({}),
       handler: async () => {
         const repos = service.listRepos();
         if (repos.length === 0) return textResult("No repositories configured. Use kernel_plugins_add_repo to add one.");
@@ -38,33 +36,31 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
         );
         return textResult(lines.join("\n\n"));
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_remove_repo",
       description: "Remove a plugin repository and its cached index.",
-      inputSchema: z.object({
+      schema: z.object({
         id: z.string().describe("Repository ID"),
       }),
-      handler: async (args) => {
-        const { id } = args as { id: string };
+      handler: async ({ id }) => {
         const ok = service.removeRepo(id);
         if (!ok) return errorResult(`Repository not found: ${id}`);
         return textResult("Repository removed.");
       },
-    },
+    }),
 
     // ── Sync & Browse ──────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_plugins_sync",
       description:
         "Sync plugin repositories to discover available plugins. Fetches project lists from GitLab/GitHub/Gitea APIs.",
-      inputSchema: z.object({
+      schema: z.object({
         repo_id: z.string().optional().describe("Sync a specific repo (omit to sync all)"),
       }),
-      handler: async (args) => {
-        const { repo_id } = args as { repo_id?: string };
+      handler: async ({ repo_id }) => {
         try {
           if (repo_id) {
             const result = await service.syncRepo(repo_id);
@@ -76,16 +72,15 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
           return errorResult(`Sync failed: ${err}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_browse",
       description: "Browse available plugins from synced repositories.",
-      inputSchema: z.object({
+      schema: z.object({
         repo_id: z.string().optional().describe("Filter by repository (omit for all)"),
       }),
-      handler: async (args) => {
-        const { repo_id } = args as { repo_id?: string };
+      handler: async ({ repo_id }) => {
         const plugins = service.browsePlugins(repo_id);
         if (plugins.length === 0) return textResult("No plugins found. Use kernel_plugins_sync first.");
 
@@ -97,20 +92,19 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
         });
         return textResult(`${plugins.length} plugin(s) available:\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
     // ── Install / Uninstall ────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_plugins_install",
       description:
         "Install a plugin from a repository. Provide either a registry_id (from browse) or a direct clone_url. Downloads the repo, validates plugin.json, and activates the plugin.",
-      inputSchema: z.object({
+      schema: z.object({
         registry_id: z.string().optional().describe("Plugin registry ID (from kernel_plugins_browse)"),
         clone_url: z.string().optional().describe("Direct git clone URL (alternative to registry_id)"),
       }),
-      handler: async (args) => {
-        const input = args as { registry_id?: string; clone_url?: string };
+      handler: async (input) => {
         if (!input.registry_id && !input.clone_url) {
           return errorResult("Provide either registry_id or clone_url");
         }
@@ -123,17 +117,16 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
           return errorResult(`Install failed: ${err}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_install_file",
       description:
         "Install a plugin from a local archive file (.zip, .tar.gz, .tar). The archive must contain a plugin.json at the root (or inside a single top-level directory).",
-      inputSchema: z.object({
+      schema: z.object({
         file_path: z.string().describe("Absolute path to the archive file"),
       }),
-      handler: async (args) => {
-        const { file_path } = args as { file_path: string };
+      handler: async ({ file_path }) => {
         try {
           const plugin = await service.installFromFile(file_path);
           return textResult(
@@ -143,18 +136,17 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
           return errorResult(`Install from file failed: ${err}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_install_url",
       description:
         "Install a plugin by downloading an archive from a URL (.zip, .tar.gz). Useful for installing from GitLab/GitHub release assets or direct download links.",
-      inputSchema: z.object({
+      schema: z.object({
         url: z.string().describe("URL to the archive file (e.g. https://gitlab.com/user/plugin/-/archive/main/plugin-main.zip)"),
         token: z.string().optional().describe("Auth token for private downloads"),
       }),
-      handler: async (args) => {
-        const { url, token } = args as { url: string; token?: string };
+      handler: async ({ url, token }) => {
         try {
           const plugin = await service.installFromUrl(url, token);
           return textResult(
@@ -164,16 +156,15 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
           return errorResult(`Install from URL failed: ${err}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_uninstall",
       description: "Uninstall a plugin by name. Removes all files and database entries.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Plugin name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         try {
           const ok = await service.uninstall(name);
           if (!ok) return errorResult(`Plugin not found: ${name}`);
@@ -182,16 +173,15 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
           return errorResult(`Uninstall failed: ${err}`);
         }
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_update",
       description: "Update an installed plugin to the latest version from its repository.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Plugin name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         try {
           const plugin = await service.update(name);
           return textResult(
@@ -201,14 +191,13 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
           return errorResult(`Update failed: ${err}`);
         }
       },
-    },
+    }),
 
     // ── Status Management ──────────────────────────────
 
-    {
+    defineToolNoInput({
       name: "kernel_plugins_list",
       description: "List all installed plugins with their status.",
-      inputSchema: z.object({}),
       handler: async () => {
         const plugins = service.listInstalled();
         if (plugins.length === 0) return textResult("No plugins installed.");
@@ -219,46 +208,43 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
         });
         return textResult(`${plugins.length} plugin(s) installed:\n\n${lines.join("\n\n")}`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_enable",
       description: "Enable a disabled plugin.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Plugin name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         const ok = service.setStatus(name, "active");
         if (!ok) return errorResult(`Plugin not found: ${name}`);
         return textResult(`Plugin "${name}" enabled. Restart Kernl to activate.`);
       },
-    },
+    }),
 
-    {
+    defineTool({
       name: "kernel_plugins_disable",
       description: "Disable an active plugin without uninstalling it.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Plugin name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         const ok = service.setStatus(name, "disabled");
         if (!ok) return errorResult(`Plugin not found: ${name}`);
         return textResult(`Plugin "${name}" disabled.`);
       },
-    },
+    }),
 
     // ── Plugin Info ────────────────────────────────────
 
-    {
+    defineTool({
       name: "kernel_plugins_info",
       description: "Get detailed information about an installed plugin including its manifest.",
-      inputSchema: z.object({
+      schema: z.object({
         name: z.string().describe("Plugin name"),
       }),
-      handler: async (args) => {
-        const { name } = args as { name: string };
+      handler: async ({ name }) => {
         const plugin = service.getInstalledByName(name);
         if (!plugin) return errorResult(`Plugin not found: ${name}`);
 
@@ -283,6 +269,6 @@ export function pluginsTools(service: PluginManagerService): ToolDefinition[] {
 
         return textResult(sections.join("\n"));
       },
-    },
+    }),
   ];
 }

@@ -318,6 +318,18 @@ export class ShoppingService {
       .all() as ShoppingList[];
   }
 
+  /** Lists with how many items each has and how many of those are checked. */
+  getListsWithCounts(status: ShoppingList["status"]): Array<ShoppingList & { item_count: number; checked_count: number }> {
+    return this.db
+      .prepare(
+        `SELECT l.*,
+                (SELECT COUNT(*) FROM shopping_list_items i WHERE i.list_id = l.id) as item_count,
+                (SELECT COUNT(*) FROM shopping_list_items i WHERE i.list_id = l.id AND i.checked = 1) as checked_count
+         FROM shopping_lists l WHERE l.status = ? ORDER BY l.updated_at DESC`,
+      )
+      .all(status) as Array<ShoppingList & { item_count: number; checked_count: number }>;
+  }
+
   getListWithItems(id: string): { list: ShoppingList; items: ShoppingListItem[] } | undefined {
     const list = this.db
       .prepare("SELECT * FROM shopping_lists WHERE id = ?")
@@ -382,8 +394,24 @@ export class ShoppingService {
         item.quantity, item.unit, item.checked, item.notes,
         item.created_at, item.updated_at,
       );
+    // Lists sort by updated_at, so a list that just grew moves to the top.
+    this.db.prepare("UPDATE shopping_lists SET updated_at = ? WHERE id = ?").run(now, input.list_id);
 
     return item;
+  }
+
+  /**
+   * Complete an active list once every one of its items is checked. True when
+   * this call completed it.
+   */
+  completeListIfAllChecked(listId: string): boolean {
+    const counts = this.db.prepare(
+      "SELECT COUNT(*) as total, SUM(CASE WHEN checked = 1 THEN 1 ELSE 0 END) as done FROM shopping_list_items WHERE list_id = ?",
+    ).get(listId) as { total: number; done: number | null };
+    if (counts.total === 0 || counts.total !== counts.done) return false;
+    return this.db
+      .prepare("UPDATE shopping_lists SET status = 'completed', updated_at = ? WHERE id = ? AND status = 'active'")
+      .run(isoNow(), listId).changes > 0;
   }
 
   checkItem(id: string, checked: boolean): ShoppingListItem | undefined {

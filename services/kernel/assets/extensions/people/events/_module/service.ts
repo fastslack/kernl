@@ -1,4 +1,8 @@
-import { type SqliteDb as Database, newId, isoNow, type EventBus } from "@kernl/extension-sdk";
+import {
+  type SqliteDb as Database, type PatchColumn, type EventBus,
+  newId, isoNow, buildPatch, safeJson, toInstant, dayStart, addDays, localParts,
+  formatCents,
+} from "@kernl/extension-sdk";
 import type {
   Event,
   EventAttendee,
@@ -16,6 +20,24 @@ import type {
   ContactEventHistory,
   EventReminderData,
 } from "./types.js";
+
+/** The events columns update() may write; anything else in the input is ignored. */
+const EVENT_PATCH: Record<string, PatchColumn> = {
+  title: "text",
+  description: "text",
+  type: "text",
+  status: "text",
+  start_at: { to: (v: unknown) => toInstant(String(v)) ?? String(v) },
+  end_at: { to: (v: unknown) => (v ? toInstant(String(v)) ?? String(v) : v) },
+  duration_minutes: "text",
+  location: "text",
+  location_url: "text",
+  min_attendees: "text",
+  max_attendees: "text",
+  cost_per_person_cents: "text",
+  cost_currency: "text",
+  notes: "text",
+};
 
 // Event bus event types for external listeners
 export interface EventsModuleEvents {
@@ -60,8 +82,9 @@ export class EventsService {
       description: input.description ?? "",
       type: input.type ?? "social",
       status: "draft",
-      start_at: input.start_at,
-      end_at: input.end_at ?? null,
+      // Stored as UTC instants, whatever form they came in (see toInstant).
+      start_at: toInstant(input.start_at) ?? input.start_at,
+      end_at: input.end_at ? (toInstant(input.end_at) ?? input.end_at) : null,
       duration_minutes: input.duration_minutes ?? 90,
       location: input.location ?? "",
       location_url: input.location_url ?? "",
@@ -145,32 +168,7 @@ export class EventsService {
 
     if (!existing) return null;
 
-    const sets: string[] = [];
-    const values: unknown[] = [];
-
-    const fields: (keyof UpdateEventInput)[] = [
-      "title",
-      "description",
-      "type",
-      "status",
-      "start_at",
-      "end_at",
-      "duration_minutes",
-      "location",
-      "location_url",
-      "min_attendees",
-      "max_attendees",
-      "cost_per_person_cents",
-      "cost_currency",
-      "notes",
-    ];
-
-    for (const field of fields) {
-      if (input[field] !== undefined) {
-        sets.push(`${field} = ?`);
-        values.push(input[field]);
-      }
-    }
+    const { sets, params: values } = buildPatch(input, EVENT_PATCH);
 
     if (sets.length === 0) {
       return this.get(id);
@@ -190,6 +188,20 @@ export class EventsService {
     }
 
     return this.get(id);
+  }
+
+  /**
+   * Move an event to a new start, keeping its duration: end_at shifts by the
+   * same delta. An event without an end keeps none.
+   */
+  reschedule(id: string, startAt: string): EventWithSummary | null {
+    const row = this.sqlite
+      .prepare("SELECT start_at, end_at FROM events WHERE id = ?")
+      .get(id) as { start_at: string | null; end_at: string | null } | undefined;
+    if (!row) return null;
+    const changes: UpdateEventInput = { start_at: startAt };
+    if (row.start_at && row.end_at) changes.end_at = this.shiftDateTime(row.start_at, row.end_at, startAt);
+    return this.update(id, changes);
   }
 
   list(filter: ListEventsFilter = {}): EventWithSummary[] {
@@ -213,14 +225,22 @@ export class EventsService {
       values.push(filter.type);
     }
 
+    // start_at is a UTC instant; the bounds are read the same way (toInstant).
     if (filter.from_date) {
       conditions.push("start_at >= ?");
-      values.push(filter.from_date);
+      values.push(toInstant(filter.from_date) ?? filter.from_date);
     }
 
     if (filter.to_date) {
-      conditions.push("start_at <= ?");
-      values.push(filter.to_date);
+      // A bare date means through the end of that local day; compared as a
+      // string it used to leave that day's events out.
+      if (/^\d{4}-\d{2}-\d{2}$/.test(filter.to_date)) {
+        conditions.push("start_at < ?");
+        values.push(dayStart(addDays(filter.to_date, 1)));
+      } else {
+        conditions.push("start_at <= ?");
+        values.push(toInstant(filter.to_date) ?? filter.to_date);
+      }
     }
 
     const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
@@ -869,7 +889,7 @@ export class EventsService {
     }
 
     if (event.cost_per_person_cents > 0) {
-      fullText += `\n\n💰 Cost: ${(event.cost_per_person_cents / 100).toFixed(2)} ${event.cost_currency} per person`;
+      fullText += `\n\n💰 Cost: ${formatCents(event.cost_per_person_cents)} ${event.cost_currency} per person`;
     }
 
     // Attendee list for WhatsApp/Telegram
@@ -1020,10 +1040,12 @@ export class EventsService {
   }
 
   private formatDateTime(isoString: string): string {
-    const date = new Date(isoString);
+    // In the kernel's timezone, not the process's (a container runs in UTC).
+    const { date, time } = localParts(isoString);
+    const day = new Date(`${date}T00:00:00Z`);
     const days = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"];
     const months = ["Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct", "Nov", "Dic"];
-    return `${days[date.getDay()]} ${date.getDate()} ${months[date.getMonth()]} ${date.getHours().toString().padStart(2, "0")}:${date.getMinutes().toString().padStart(2, "0")}`;
+    return `${days[day.getUTCDay()]} ${day.getUTCDate()} ${months[day.getUTCMonth()]} ${time ?? "00:00"}`;
   }
 
   private rowToEvent(row: EventRow): Event {
@@ -1043,7 +1065,7 @@ export class EventsService {
       cost_per_person_cents: row.cost_per_person_cents,
       cost_currency: row.cost_currency,
       organizer_contact_id: row.organizer_contact_id,
-      recurrence: row.recurrence ? (() => { try { return JSON.parse(row.recurrence); } catch { return null; } })() : null,
+      recurrence: safeJson<RecurrenceRule | null>(row.recurrence, null),
       parent_event_id: row.parent_event_id,
       notes: row.notes,
       created_at: row.created_at,

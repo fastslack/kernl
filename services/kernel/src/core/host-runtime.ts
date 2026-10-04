@@ -8,15 +8,33 @@
  */
 
 import { SDK_MAJOR, installedHost, setHost, type KernlHost } from "../sdk/host.js";
+import type { ProjectsHost } from "../sdk/projects.js";
 import { log } from "./logger.js";
 import { llm, createPinnedLlmClient } from "./llm/client.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./llm/logger.js";
+import { record as recordLlmCall } from "./llm/call-log.js";
 import { getProviderConfig, isConnected } from "./llm/credentials.js";
 import { getRequestContext } from "./request-context.js";
 import { loadTransformers } from "./transformers-cache.js";
 import { mediaToolBin, probeMediaTool, mediaToolError } from "./media-tools.js";
 import { PeeringService } from "./peering/service.js";
 import { verifyRequest } from "./peering/auth.js";
+
+// Bootstrap points this at the live config (useTimezone); until then, UTC.
+let timezoneSource: () => string = () => "UTC";
+
+/** Let every copy of the SDK read the kernel's TIMEZONE setting, live. */
+export function useTimezone(get: () => string): void {
+  timezoneSource = get;
+}
+
+// Bootstrap points this at the projects module once it is up; until then, none.
+let projectsSource: () => ProjectsHost | null = () => null;
+
+/** Let every copy of the SDK reach the live projects module. */
+export function useProjects(get: () => ProjectsHost | null): void {
+  projectsSource = get;
+}
 
 const kernelHost: KernlHost = Object.freeze({
   sdk: SDK_MAJOR,
@@ -28,6 +46,7 @@ const kernelHost: KernlHost = Object.freeze({
   logLlmStart,
   logLlmEnd,
   logLlmFail,
+  recordLlmCall,
   getRequestContext,
   loadTransformers,
   mediaToolBin,
@@ -35,6 +54,8 @@ const kernelHost: KernlHost = Object.freeze({
   mediaToolError,
   peering: () => PeeringService.current,
   verifyPeerRequest: verifyRequest,
+  timezone: () => timezoneSource(),
+  projects: () => projectsSource(),
 });
 
 /** Install the kernel host. Idempotent; warns if it displaces another host. */

@@ -14,7 +14,7 @@
  * grep across the two modules.
  */
 
-import { type SqliteDb, isoNow } from "@kernl/extension-sdk";
+import { type SqliteDb, isoNow, safeJson } from "@kernl/extension-sdk";
 import type {
   MusicItem,
   MusicListFilter,
@@ -566,7 +566,7 @@ export class MusicService {
     ).get(key) as { payload_json: string; cached_at: string } | undefined;
     if (!row) return null;
     if (Date.now() - new Date(row.cached_at).getTime() > TAGS_CACHE_TTL_MS) return null;
-    try { return JSON.parse(row.payload_json) as MusicTag[]; } catch { return null; }
+    return safeJson<MusicTag[] | null>(row.payload_json, null);
   }
   private writeTagsCache(key: string, tags: MusicTag[]): void {
     this.db.prepare(
@@ -601,7 +601,7 @@ export class MusicService {
     ).get(key) as { payload_json: string; cached_at: string } | undefined;
     if (!row) return null;
     if (Date.now() - new Date(row.cached_at).getTime() > SEARCH_CACHE_TTL_MS) return null;
-    try { return JSON.parse(row.payload_json); } catch { return null; }
+    return safeJson<{ items: MusicItem[]; total: number } | null>(row.payload_json, null);
   }
 
   private writeCache(key: string, payload: { items: MusicItem[]; total: number }): void {

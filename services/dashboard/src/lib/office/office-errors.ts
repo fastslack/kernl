@@ -4,7 +4,13 @@
  * outcomes the wizard can act on.
  */
 export type CreateError = { reason: 'exists'; officeId: string } | { reason: 'error'; message: string };
-export type DraftError = { reason: 'invalid' } | { reason: 'input'; message: string } | { reason: 'error'; message: string };
+export type DraftError =
+	/** The model answered, but not with a usable office. `detail` is the
+	 *  validation failure and `model` the chain link that produced it — both
+	 *  optional, since an older kernel sends neither. */
+	| { reason: 'invalid'; detail?: string; model?: string }
+	| { reason: 'input'; message: string }
+	| { reason: 'error'; message: string };
 
 export function errorMessage(err: unknown): string {
 	return err instanceof Error ? err.message : String(err);
@@ -19,7 +25,10 @@ export function parseCreateError(err: unknown): CreateError {
 
 export function parseDraftError(err: unknown): DraftError {
 	const message = errorMessage(err);
-	if (message === 'invalid_draft') return { reason: 'invalid' };
+	if (message === 'invalid_draft') {
+		const body = (err as { body?: { detail?: string; model?: string } } | null)?.body;
+		return { reason: 'invalid', detail: body?.detail, model: body?.model };
+	}
 	if (message === 'description is required' || message.startsWith('description is longer than')) {
 		return { reason: 'input', message };
 	}

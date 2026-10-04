@@ -104,19 +104,20 @@
 
 <style>
 	.k-scrim {
-		position: fixed; inset: 0; z-index: var(--z-modal);
+		/* Starts below the app header, which stacks above the scrim and would otherwise cover the modal's own header. */
+		position: fixed; inset: var(--header-h, 0px) 0 0 0; z-index: var(--z-modal);
 		display: grid; place-items: center; padding: 24px;
 		background: rgba(4, 5, 8, 0.62); backdrop-filter: blur(3px);
 	}
 	.k-modal {
-		width: min(var(--k-modal-w), 100%); max-height: calc(100vh - 48px);
-		display: grid; grid-template-rows: auto 1fr auto; overflow: hidden; outline: none;
+		width: min(var(--k-modal-w), 100%); max-height: calc(100dvh - var(--header-h, 0px) - 48px);
+		display: flex; flex-direction: column; overflow: hidden; outline: none;
 		background: var(--surface-1); border: 1px solid var(--border-h); border-radius: 14px;
 		box-shadow: 0 32px 80px rgba(0, 0, 0, 0.6);
 	}
-	.k-modal-head { display: flex; align-items: center; gap: 16px; padding: 16px 16px 16px 24px; border-bottom: 1px solid var(--border); }
+	.k-modal-head { flex: none; display: flex; align-items: center; gap: 16px; padding: 16px 16px 16px 24px; border-bottom: 1px solid var(--border); }
 	.k-modal-head h2 { margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); white-space: nowrap; }
 	.k-modal-extra { flex: 1; display: flex; justify-content: flex-end; min-width: 0; }
-	.k-modal-body { overflow-y: auto; padding: 20px 24px; min-height: 0; }
-	.k-modal-foot { display: flex; align-items: center; gap: 8px; padding: 12px 16px 12px 24px; border-top: 1px solid var(--border); }
+	.k-modal-body { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px; min-height: 0; }
+	.k-modal-foot { flex: none; display: flex; align-items: center; gap: 8px; padding: 12px 16px 12px 24px; border-top: 1px solid var(--border); }
 </style>

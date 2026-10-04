@@ -55,4 +55,20 @@ export const crmMigrations: Migration[] = [
         ON contacts(lead_source) WHERE lead_source <> '';
     `,
   },
+  {
+    // Projects (kernel src/modules/projects): a lead/contact can belong to a
+    // project. NULL = personal contact, as before.
+    version: 3,
+    sql: `
+      ALTER TABLE contacts ADD COLUMN project_id TEXT;
+      CREATE INDEX IF NOT EXISTS idx_contacts_project ON contacts(project_id, lead_status);
+    `,
+  },
+  {
+    // Outbox channels: a contact can ask not to be contacted again (the
+    // unsubscribe link, the operator's button). Every outbox channel checks
+    // it when validating a draft and again right before sending.
+    version: 4,
+    sql: `ALTER TABLE contacts ADD COLUMN do_not_contact INTEGER NOT NULL DEFAULT 0;`,
+  },
 ];

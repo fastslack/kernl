@@ -21,6 +21,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import { tableExists } from "../../core/db/query-helpers.js";
 import { errorResult, uiResult } from "../../core/helpers.js";
 import { defineTool } from "../../core/tool-builder.js";
+import { localDate, localParts, localDayRange } from "../../sdk/clock.js";
 
 interface TaskRow {
   id: string;
@@ -106,7 +107,7 @@ export function buildTodayCard(db: SqliteDb): ToolDefinition {
     tags: ["dashboard", "today", "summary", "ui", "applications"],
     async handler({ accent }): Promise<ToolResult> {
       try {
-        const today = new Date().toISOString().slice(0, 10);
+        const today = localDate();
 
         const data = collect(db, today);
         const text = renderText(data);
@@ -187,11 +188,11 @@ function collect(db: SqliteDb, today: string): CardData {
     const rows = db
       .prepare(
         `SELECT id, title, start_at, end_at, location, status FROM events
-         WHERE substr(start_at, 1, 10) = ?
+         WHERE start_at >= ? AND start_at < ?
            AND (status IS NULL OR status NOT IN ('cancelled'))
          ORDER BY start_at ASC LIMIT 20`,
       )
-      .all(today) as EventRow[];
+      .all(...localDayRange(today)) as EventRow[];
     for (const e of rows) {
       events.push({ id: e.id, title: e.title, start_at: e.start_at, end_at: e.end_at, location: e.location });
     }
@@ -241,7 +242,7 @@ function renderText(d: CardData): string {
   if (d.events.length > 0) {
     lines.push("\n## Events");
     for (const e of d.events) {
-      const t = e.start_at.slice(11, 16);
+      const t = localParts(e.start_at).time ?? "";
       lines.push(`- **${t}** ${e.title}${e.location ? ` _(${e.location})_` : ""}`);
     }
   }
@@ -303,7 +304,7 @@ function renderHtml(d: CardData, accent: keyof typeof ACCENT_HEX): string {
          <h3>Events <span class="kt-count">${d.events.length}</span></h3>
          <ul class="kt-list">${d.events.map((e) => `
            <li>
-             <span class="kt-time">${escapeHtml(e.start_at.slice(11, 16))}</span>
+             <span class="kt-time">${escapeHtml(localParts(e.start_at).time ?? "")}</span>
              <span class="kt-title">${escapeHtml(e.title)}</span>
              ${e.location ? `<span class="kt-meta">${escapeHtml(e.location)}</span>` : ""}
            </li>`).join("")}</ul>

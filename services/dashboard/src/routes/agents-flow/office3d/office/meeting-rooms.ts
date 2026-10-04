@@ -178,7 +178,7 @@ export function buildMeetingRooms(
     scene.add(lbl);
 
     // Ceiling light — single moderate PointLight per meeting room (needed for table/chair shadowing)
-    const roomLight = new rt.THREE.PointLight(0xffeedd, 0.6, Math.max(w, d) * 1.2);
+    const roomLight = new rt.THREE.PointLight(0xffeedd, 1.2, Math.max(w, d) * 1.2);
     roomLight.position.set(cx, WALL_H - 0.3, cz);
     roomLight.decay = 2;
     roomLight.matrixAutoUpdate = false; roomLight.updateMatrix();

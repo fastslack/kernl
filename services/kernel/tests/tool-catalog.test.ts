@@ -12,6 +12,7 @@ import { createConfigModule } from "../src/modules/config/index.js";
 import { createDashboardModule } from "../src/modules/dashboard/index.js";
 import { createChatModule } from "../src/modules/chat/index.js";
 import { createAgentsModule } from "../src/modules/agents/index.js";
+import { createProjectsModule } from "../src/modules/projects/index.js";
 import { createMarketplaceModule } from "../src/modules/marketplace/index.js";
 import { createBrainModule } from "../src/modules/brain/index.js";
 import { createToolMemoryModule } from "../src/modules/tool-memory/index.js";
@@ -81,7 +82,7 @@ function stubConfig(): KernelConfig {
       discord: { enabled: false, botToken: "", allowedUsers: [], allowedGuilds: [], allowedChannels: [] },
       webchat: { enabled: false, requireAuth: false },
     },
-    voice: { enabled: false, sttProvider: "openai" as const, ttsProvider: "system" as const, elevenLabsApiKey: "", localWhisperPath: "", defaultVoiceId: "alloy", respondWithVoice: false },
+    voice: { enabled: false, sttEngine: "auto" as const, whisperModel: "", language: "es", ttsEngine: "auto" as const, ttsVoice: "", ttsSpeed: 1, elevenLabsApiKey: "" },
     pii: { enabled: false, redactEmails: false, redactPhones: false, redactCreditCards: false, redactIbans: false, redactNames: false, warnOnSend: false, placeholder: "[REDACTED]" },
     ibkr: { gatewayUrl: "https://localhost:5000", accountId: "", enabled: false },
     saxo: { baseUrl: "", appKey: "", appSecret: "", certPath: "", certKeyPath: "", enabled: false },
@@ -96,7 +97,7 @@ function stubConfig(): KernelConfig {
       braveApiKey: "", googleCseKey: "", googleCseCx: "", searxngBaseUrl: "",
     },
     chat: {
-      defaultProvider: "stub", defaultModel: "stub-model", extractionModel: "", contextBudget: 2000,
+      defaultProvider: "stub", defaultModel: "stub-model", preferredProvider: "", preferredModel: "", extractionModel: "", contextBudget: 2000,
       maxEpisodeMessages: 100, decayIntervalMs: 3600000, patternDetectionIntervalMs: 86400000,
       systemPrompt: "You are a test assistant.",
     },
@@ -153,6 +154,7 @@ describe("tool catalog", () => {
       { name: "dashboard", make: () => createDashboardModule() },
       { name: "chat", make: () => createChatModule() },
       { name: "agents", make: () => createAgentsModule() },
+      { name: "projects", make: () => createProjectsModule() },
       // office-infra moved to the paid DevOps extension; its catalogue is
       // covered by the paid suite (overlay-build.sh --test).
       { name: "marketplace", make: () => createMarketplaceModule(null, null) },

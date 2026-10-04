@@ -4,6 +4,7 @@ import {
   toRecord,
   today,
   daysFromNow,
+  dayStart,
 } from "@kernl/extension-sdk";
 
 export interface DashboardTasks {
@@ -251,7 +252,7 @@ export function queryTasks(db: SqliteDb): DashboardTasks {
            AND deleted_at IS NULL
          ORDER BY completed_at DESC LIMIT 10`,
       )
-      .all(`${sevenDaysAgo}T00:00:00`) as Array<{
+      .all(dayStart(sevenDaysAgo)) as Array<{
         id: string; title: string; completed_at: string; started_at: string | null;
       }>
   ).map((t) => ({

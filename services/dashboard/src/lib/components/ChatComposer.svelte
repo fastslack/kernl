@@ -1,5 +1,8 @@
 <script lang="ts">
   import { createEventDispatcher, tick } from 'svelte';
+  import MicButton from '$lib/components/voice/MicButton.svelte';
+  import SpeakToggle from '$lib/components/voice/SpeakToggle.svelte';
+  import { confirmBeforeSend } from '$lib/voice/prefs.js';
 
   /**
    * The one composer every bot conversation in the dashboard uses.
@@ -13,6 +16,11 @@
    *
    * Emits `send` with the trimmed text. The parent owns the sending, clears
    * `value` when it accepts, and flips `sending` for the duration.
+   *
+   * With `voice`, a push-to-talk mic and a speaker toggle join the row. A
+   * transcript is sent straight away (or loaded into the box, if the browser
+   * is set to review first), and `spoken` fires just before its `send` so
+   * the parent can answer a spoken message out loud.
    */
 
   export let value = '';
@@ -32,8 +40,10 @@
   /** Grows to this many rows before it starts scrolling. */
   export let maxRows = 6;
   export let autofocus = false;
+  /** Show the mic and the speaker toggle. */
+  export let voice = false;
 
-  const dispatch = createEventDispatcher<{ send: string }>();
+  const dispatch = createEventDispatcher<{ send: string; spoken: string }>();
 
   let inputEl: HTMLTextAreaElement;
   $: locked = sending || disabled;
@@ -70,6 +80,18 @@
     autoResize();
   }
 
+  async function onTranscript(text: string) {
+    if ($confirmBeforeSend || locked) {
+      value = value.trim() ? `${value.trim()} ${text}` : text;
+      await tick();
+      inputEl?.focus();
+      autoResize();
+      return;
+    }
+    dispatch('spoken', text);
+    dispatch('send', text);
+  }
+
   export function focus() { inputEl?.focus(); }
   $: if (value === '') { tick().then(autoResize); }
 </script>
@@ -99,6 +121,10 @@
       on:keydown={onKeydown}
       on:input={autoResize}
     ></textarea>
+    {#if voice}
+      <SpeakToggle />
+      <MicButton disabled={disabled} on:transcript={(e) => onTranscript(e.detail)} />
+    {/if}
     <button
       type="button"
       class="cc-send"

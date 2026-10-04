@@ -11,7 +11,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { storeMigrations } from "../src/modules/store/migrations.js";
 import { CheckoutService } from "../src/modules/store/checkout-service.js";
-import { advanceCheckout } from "../src/modules/store/purchase-flow.js";
+import { advanceCheckout, ALL_ACCESS_SLUG } from "../src/modules/store/purchase-flow.js";
 
 const STORE = "https://store.example";
 
@@ -119,6 +119,21 @@ describe("advanceCheckout", () => {
     expect(installed).toEqual(["tv-station"]);
   });
 
+  test("All-Access finishes once the license is applied — there is no bundle to install", async () => {
+    const row = open(ALL_ACCESS_SLUG);
+    const license = licenseStub();
+    const out = await advanceCheckout(row, {
+      storeUrl: STORE,
+      license,
+      checkouts,
+      install: async () => { throw new Error("must not install"); },
+      fetchImpl: sessionStore({ ready: true }),
+    });
+    expect(out.state).toBe("done");
+    expect(out.error).toBe("");
+    expect(license.applied).toEqual(["JWT-FROM-STORE"]);
+  });
+
   test("a failed install reports the purchase as completed, not lost", async () => {
     const row = open();
     const out = await advanceCheckout(row, {
@@ -213,6 +228,21 @@ describe("CheckoutService", () => {
     checkouts.create({ sessionId: "cs_b", slug: "sleep", priceId: "p", checkoutUrl: "u" });
     checkouts.setState("cs_b", "paid");
     expect(checkouts.listOpen().map((r) => r.session_id).sort()).toEqual(["cs_a", "cs_b"]);
+  });
+
+  test("cancel drops a pending checkout so the card stops waiting on it", () => {
+    checkouts.create({ sessionId: "cs_a", slug: "devops", priceId: "p", checkoutUrl: "u" });
+    expect(checkouts.cancel("cs_a")).toBe(true);
+    expect(checkouts.get("cs_a")).toBeNull();
+    expect(checkouts.pendingForSlug("devops")).toBeNull();
+    expect(checkouts.listOpen()).toHaveLength(0);
+  });
+
+  test("cancel never touches a checkout that was already paid", () => {
+    checkouts.create({ sessionId: "cs_paid", slug: "devops", priceId: "p", checkoutUrl: "u" });
+    checkouts.setState("cs_paid", "paid");
+    expect(checkouts.cancel("cs_paid")).toBe(false);
+    expect(checkouts.get("cs_paid")?.state).toBe("paid");
   });
 
   test("pruneExpired only drops unpaid rows past their window", () => {

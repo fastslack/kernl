@@ -1,6 +1,6 @@
 import type { SqliteDb } from "../../../core/db/sqlite.js";
 import type { EventBus } from "../../../core/event-bus.js";
-import { newId, isoNow } from "../../../core/helpers.js";
+import { newId, isoNow, jsonObject } from "../../../core/helpers.js";
 import type {
   AgentConversation,
   AgentMessage,
@@ -182,8 +182,7 @@ export class AgentConversationsService {
   archiveConversation(id: string): boolean {
     const convo = this.getConversation(id);
     if (!convo) return false;
-    let meta: Record<string, unknown> = {};
-    try { meta = JSON.parse(convo.meta || "{}"); } catch { meta = {}; }
+    const meta = jsonObject(convo.meta);
     meta.archived = true;
     meta.archived_at = isoNow();
     this.db

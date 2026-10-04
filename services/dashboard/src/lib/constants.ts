@@ -1,17 +1,5 @@
 // Colors and constants from app.html
 
-export const COL: Record<string, string> = {
-	KNOWS: 'var(--teal)',
-	SAME_DOMAIN: 'var(--blue)',
-	SAME_COMPANY: 'var(--purple)',
-	DEPENDS_ON: 'var(--gold)'
-};
-
-export const CC: string[] = [
-	'var(--teal)', 'var(--blue)', 'var(--purple)', 'var(--gold)',
-	'var(--green)', 'var(--orange)', 'var(--red)'
-];
-
 export const COMM_STATUS_COL: Record<string, string> = {
 	draft: 'var(--gold)',
 	ready: 'var(--green)',
@@ -47,7 +35,6 @@ export const FREQ_COLORS: Record<string, string> = {
 export const FREQ_ORDER = ['real-time', 'hourly', '6h', '12h', 'daily', 'weekly'];
 
 export const TL_MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-export const TL_DOWS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 
 export interface NavView {
 	id: string;
@@ -94,7 +81,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		views: [
 			// Explicit order — items without one sort to 999 and land after
 			// every manifest-contributed tab regardless of intent.
-			{ id: 'irc', label: 'IRC', icon: '📡', order: 60 }
+			{ id: 'irc', label: 'IRC', icon: '📡', order: 40 }
 		]
 	},
 	{
@@ -124,13 +111,13 @@ export const NAV_GROUPS: NavGroup[] = [
 // Short labels for sub-tabs (matching vanilla app)
 export const SUB_TAB_LABELS: Record<string, string> = {
 	home: 'Overview', news: 'News', life: 'Life', shopping: 'Shop', house: 'House',
-	work: 'Overview', tasks: 'Tasks', planner: 'Planner', issues: 'Issues', reminders: 'Alerts',
+	work: 'Overview', tasks: 'Tasks', planner: 'Planner', reminders: 'Alerts',
 	crm: 'Overview', people: 'Contacts', mail: 'Mail', comms: 'Comms', chat: 'Chat', 'x-manager': 'X', irc: 'IRC',
 	finance: 'Overview', subscriptions: 'Subscriptions',
 	wellness: 'Overview', health: 'Health', training: 'Training', nutrition: 'Nutrition',
 	// `skills` has no tab any more — it redirects into /extensions?tab=skills.
 	// The label stays so the breadcrumb reads sanely during the redirect.
-	'ai-overview': 'Overview', agents: 'Agents', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
+	'ai-overview': 'Overview', agents: 'Agents', offices: 'Offices', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
 	cinema: 'Cinema',
 	books: 'Books',
 	music: 'Music',
@@ -159,7 +146,6 @@ export const WS_CHANNEL_MAP: Record<string, string> = {
 	dashboard: 'data',
 	analytics: 'analytics',
 	agenda: 'automations',
-	crossIntel: 'crossIntel',
 	life: 'life',
 	calendar: 'planner',
 	systemAgenda: 'systemAgenda',

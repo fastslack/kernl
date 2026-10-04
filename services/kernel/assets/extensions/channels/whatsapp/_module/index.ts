@@ -1,4 +1,4 @@
-import type { KernelModule, ModuleContext, ToolDefinition } from "@kernl/extension-sdk";
+import { notificationChannelModule } from "@kernl/extension-sdk";
 import { WhatsAppProvider } from "./whatsapp-provider.js";
 
 /**
@@ -7,19 +7,8 @@ import { WhatsAppProvider } from "./whatsapp-provider.js";
  * The MtwConnection injection (via `setMtwConnection()`) is done by the
  * kernel bootstrap once mtwRequest is wired up.
  */
-export function createWhatsAppModule(): KernelModule {
-  return {
-    name: "ext:whatsapp",
-    async initialize(ctx: ModuleContext) {
-      ctx.notifier
-        .getRegistry()
-        .registerFactory("whatsapp", () => new WhatsAppProvider());
-    },
-    getTools(): ToolDefinition[] {
-      return [];
-    },
-    async shutdown() {},
-  };
+export function createWhatsAppModule() {
+  return notificationChannelModule("ext:whatsapp", "whatsapp", () => new WhatsAppProvider());
 }
 
 export { WhatsAppProvider, setMtwConnection } from "./whatsapp-provider.js";

@@ -9,7 +9,8 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { presentTool, summarizeInput, resultLinks, kernlLink, formatToolInput } from "./tool-presentation.js";
+import { presentTool, summarizeInput, resultLinks, kernlLink, formatToolInput, toolCardKey } from "./tool-presentation.js";
+import { collapseRepeats } from "./collapse-repeats.js";
 
 describe("presentTool", () => {
   it("reads the module and the action out of a kernel MCP tool name", () => {
@@ -116,5 +117,24 @@ describe("kernlLink", () => {
 
   it("stays quiet for tools that are not the kernel's", () => {
     expect(kernlLink("Bash")).toBeNull();
+  });
+});
+
+describe("toolCardKey", () => {
+  const tool = (name: string, input: Record<string, unknown> = {}) => ({ type: "tool_use", name, input });
+  const text = (t: string) => ({ type: "text", text: t });
+  const fold = (blocks: Array<Record<string, unknown>>) => collapseRepeats(blocks, toolCardKey).map((r) => r.count);
+
+  it("folds repeated calls that print the same card", () => {
+    const polls = Array.from({ length: 25 }, () => tool("mcp__kernel__kernel_career_liveness"));
+    expect(fold([text("checking"), ...polls, text("done")])).toEqual([1, 25, 1]);
+  });
+
+  it("keeps calls apart when their argument summary differs", () => {
+    expect(fold([tool("WebFetch", { url: "https://a.dev" }), tool("WebFetch", { url: "https://b.dev" })])).toEqual([1, 1]);
+  });
+
+  it("never folds text blocks, even identical ones", () => {
+    expect(fold([text("x"), text("x")])).toEqual([1, 1]);
   });
 });

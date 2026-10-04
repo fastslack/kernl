@@ -1,6 +1,7 @@
 <script lang="ts">
-  // Copy of $lib/components/OverviewCard.svelte adapted for extension pages:
-  // no $app/navigation — pass ctx.navigate via the `navigate` prop.
+  // Shared by the dashboard and extension pages. No $app/navigation here (an
+  // extension bundle has no SvelteKit): extension pages pass ctx.navigate and
+  // dashboard pages pass goto via `navigate`; the default is a full page load.
   export let title: string;
   export let icon: string; // SVG path d attribute
   export let iconColor: string = 'var(--gold)';

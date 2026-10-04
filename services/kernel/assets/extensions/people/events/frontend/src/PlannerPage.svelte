@@ -7,7 +7,7 @@
   import TodayPanel from './TodayPanel.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import Empty from '$shared/components/Empty.svelte';
-  import DayModal from './DayModal.svelte';
+  import DayModal from '$shared/components/DayModal.svelte';
   import { TL_COLORS, TL_MONTHS } from './constants';
   import type { ExtPageContext } from '$shared/types';
 

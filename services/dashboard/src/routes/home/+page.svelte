@@ -1,11 +1,11 @@
 <script lang="ts">
   import { data, life, comms, house, finance, subscriptions, healthData, analytics, ensureStore } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
-  import Panel from '$lib/components/Panel.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Empty from '$lib/components/Empty.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import Badge from '$shared/components/Badge.svelte';
+  import Empty from '$shared/components/Empty.svelte';
   import FlowWidget from '$lib/components/FlowWidget.svelte';
-  import { fmtTime, fmtDate, timeAgo, formatCents, weatherEmoji, aqLabel, uvLabel } from '$lib/utils.js';
+  import { fmtTime, fmtDate, timeAgo, formatCents, weatherEmoji, aqLabel, uvLabel } from '$shared/utils';
   import { updateTaskStatus, dismissReminder, snoozeReminder, checkShoppingItem, completeShoppingList,
     listEmailSuggestions, approveEmailSuggestion, dismissEmailSuggestion } from '$lib/api.js';
   import { goto } from '$app/navigation';

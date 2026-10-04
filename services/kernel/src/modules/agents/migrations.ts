@@ -731,6 +731,168 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_agent_runs_trigger        ON agent_runs(trigger_type);
     `,
   },
+  {
+    // Agents run by the claude_code executor never mark their inbox read, and
+    // InboxWaker fires once per post: a letter that lands while its recipient
+    // is busy was never looked at again. The sweeper re-wakes on unacked
+    // letters and gives up after a few attempts; this counts them.
+    version: 44,
+    sql: `
+      ALTER TABLE agent_office_inbox ADD COLUMN wake_attempts INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // Questions go to the chief first: a new 'triage' state sits in front of
+    // 'pending' (= waiting for the human). SQLite cannot alter a CHECK, so the
+    // table is rebuilt.
+    version: 45,
+    sql: `
+      CREATE TABLE agent_questions_new (
+        id                TEXT PRIMARY KEY,
+        from_agent_id     TEXT NOT NULL,
+        flow_id           TEXT NOT NULL DEFAULT '',
+        meeting_id        TEXT NOT NULL DEFAULT '',
+        run_id            TEXT NOT NULL DEFAULT '',
+        question          TEXT NOT NULL,
+        context           TEXT NOT NULL DEFAULT '',
+        options           TEXT NOT NULL DEFAULT '[]',
+        status            TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(status IN ('triage','pending','answered','dismissed')),
+        selected_option   TEXT NOT NULL DEFAULT '',
+        selected_index    INTEGER NOT NULL DEFAULT -1,
+        answered_note     TEXT NOT NULL DEFAULT '',
+        answered_at       TEXT,
+        answered_by       TEXT NOT NULL DEFAULT '',
+        chief_note        TEXT NOT NULL DEFAULT '',
+        triage_started_at TEXT,
+        created_at        TEXT NOT NULL
+      );
+      INSERT INTO agent_questions_new
+        (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status,
+         selected_option, selected_index, answered_note, answered_at, answered_by, created_at)
+      SELECT id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status,
+             selected_option, selected_index, answered_note, answered_at,
+             CASE WHEN status = 'answered' THEN 'human' ELSE '' END, created_at
+      FROM agent_questions;
+      DROP TABLE agent_questions;
+      ALTER TABLE agent_questions_new RENAME TO agent_questions;
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_status ON agent_questions(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_from   ON agent_questions(from_agent_id, created_at);
+    `,
+  },
+  {
+    // Runs that survive a restart. A checkpoint is the native loop's
+    // conversation and counters, rewritten after every tool result; it lives
+    // in its own table because agent_runs is read with SELECT * by every
+    // listing and a conversation can run to hundreds of KB.
+    //
+    // conditions: why a run is in the state it is in, as a JSON array of
+    // { type, status, reason, message, last_transition_time }. `status` says
+    // where the run is; a condition says what happened to get it there
+    // (which model it settled on, that it was interrupted, why it aborted).
+    version: 46,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_run_checkpoints (
+        run_id     TEXT PRIMARY KEY REFERENCES agent_runs(id) ON DELETE CASCADE,
+        data       TEXT NOT NULL,
+        resumes    INTEGER NOT NULL DEFAULT 0,
+        saved_at   TEXT NOT NULL
+      );
+      ALTER TABLE agent_runs ADD COLUMN conditions TEXT NOT NULL DEFAULT '[]';
+    `,
+  },
+  {
+    // Declarative workspaces. spec is a WorkspaceSpec (workspace-spec.ts):
+    // repos to clone, files to seed, MCP servers and skills for every agent
+    // that works in this workspace. The disk is the source of truth for what
+    // is prepared; setup_* only records the last attempt, for display.
+    version: 47,
+    sql: `
+      ALTER TABLE workspaces ADD COLUMN spec         TEXT NOT NULL DEFAULT '{}';
+      ALTER TABLE workspaces ADD COLUMN setup_status TEXT NOT NULL DEFAULT '';
+      ALTER TABLE workspaces ADD COLUMN setup_error  TEXT NOT NULL DEFAULT '';
+      ALTER TABLE workspaces ADD COLUMN setup_at     TEXT;
+    `,
+  },
+  {
+    // What the operator dismissed in the chief's office. The office rebuilds
+    // its report list from agent_runs on every load, so without this a
+    // dismissed failure came straight back. Keyed by run id; the run itself
+    // is untouched.
+    version: 48,
+    sql: `
+      CREATE TABLE IF NOT EXISTS agent_office_dismissed (
+        run_id       TEXT PRIMARY KEY,
+        dismissed_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    // Kernl's own bugs, filed by the chief or the operator from a failed run,
+    // published to GitHub only with the operator's OK. See kernl-bugs-service.ts.
+    version: 49,
+    sql: `
+      CREATE TABLE IF NOT EXISTS kernl_bug_reports (
+        id            TEXT PRIMARY KEY,
+        fingerprint   TEXT NOT NULL UNIQUE,
+        title         TEXT NOT NULL,
+        area          TEXT NOT NULL DEFAULT '',
+        diagnosis     TEXT NOT NULL DEFAULT '',
+        repro         TEXT NOT NULL DEFAULT '',
+        context_json  TEXT NOT NULL DEFAULT '{}',
+        source        TEXT NOT NULL DEFAULT 'operator' CHECK(source IN ('chief','operator')),
+        run_id        TEXT NOT NULL DEFAULT '',
+        agent_id      TEXT NOT NULL DEFAULT '',
+        occurrences   INTEGER NOT NULL DEFAULT 1,
+        status        TEXT NOT NULL DEFAULT 'new' CHECK(status IN ('new','published','fixed','dismissed')),
+        issue_url     TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL,
+        last_seen_at  TEXT NOT NULL,
+        published_at  TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_kernl_bugs_status ON kernl_bug_reports(status, last_seen_at);
+      CREATE INDEX IF NOT EXISTS idx_kernl_bugs_run    ON kernl_bug_reports(run_id);
+      -- Every run folded into a report, so a later diagnosis of any of them
+      -- (the chief, after the operator reported it) lands on the same report.
+      CREATE TABLE IF NOT EXISTS kernl_bug_runs (
+        run_id TEXT PRIMARY KEY,
+        bug_id TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS kernl_bug_settings (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    // The fixed plot each office is built on in the 3D world ("col,row", see
+    // assets/extensions/_shared/office-lots.ts). '' = no lot yet; the flows
+    // service assigns and backfills it (syncLots).
+    version: 50,
+    sql: `
+      ALTER TABLE agent_flows ADD COLUMN lot_id TEXT NOT NULL DEFAULT '';
+    `,
+  },
+  {
+    // Projects (src/modules/projects): an office can serve N projects, and a
+    // run, its memory, learnings, inbox letters and schedules belong to at
+    // most one. NULL = no project = behaviour before this migration.
+    // per_project=1 with project_id NULL marks a schedule TEMPLATE that the
+    // projects module clones once per project assigned to the office.
+    version: 51,
+    sql: `
+      ALTER TABLE agent_runs         ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_memory       ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_learnings    ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_office_inbox ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_schedules    ADD COLUMN project_id TEXT;
+      ALTER TABLE agent_schedules    ADD COLUMN per_project INTEGER NOT NULL DEFAULT 0;
+      CREATE INDEX IF NOT EXISTS idx_agent_runs_project      ON agent_runs(project_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_memory_project    ON agent_memory(agent_id, project_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_learnings_project ON agent_learnings(agent_id, project_id);
+      CREATE INDEX IF NOT EXISTS idx_agent_inbox_project     ON agent_office_inbox(to_agent_id, project_id, status);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

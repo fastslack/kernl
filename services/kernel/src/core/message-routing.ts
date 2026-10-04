@@ -11,6 +11,7 @@ import type {
 import type { AgentService } from "../modules/agents/service.js";
 import type { AgentExecutor } from "../modules/agents/executor.js";
 import type { EventBus } from "./event-bus.js";
+import type { VoiceService } from "../voice/service.js";
 import { WHATSAPP_CC_AGENT_NAME } from "../modules/agents/agent-name-conventions.js";
 import { runTopAgentStreamed } from "./telegram-stream.js";
 import { log } from "./logger.js";
@@ -26,8 +27,9 @@ export function wireMessageRouting(opts: {
   agentService?: AgentService | null;
   agentExecutor?: AgentExecutor | null;
   events?: EventBus | null;
+  voiceService?: VoiceService | null;
 }): void {
-  const { notificationRegistry, orchestrator, rateLimiter, pairingManager, agentService, agentExecutor, events } = opts;
+  const { notificationRegistry, orchestrator, rateLimiter, pairingManager, agentService, agentExecutor, events, voiceService } = opts;
 
   // Wire Telegram message routing to Orchestrator (if active in marketplace)
   const telegramProvider = notificationRegistry.getProvider("telegram") as unknown as TelegramProviderLike | undefined;
@@ -71,6 +73,45 @@ export function wireMessageRouting(opts: {
         inlineKeyboard: response.inlineKeyboard,
       };
     });
+
+    // Voice notes go to the same place as text, and the answer comes back as
+    // a voice note too: talk to it and it talks back. The transport runs this
+    // outside grammy's update handler, so awaiting the whole agent run here
+    // does not stall polling the way it would for text.
+    if (voiceService && telegramTransport.setVoiceService && telegramTransport.onVoice) {
+      telegramTransport.setVoiceService(voiceService, true);
+      telegramTransport.onVoice(async (text, msgCtx) => {
+        log.debug(`Telegram voice from ${msgCtx.userId}: ${text}`);
+        const topAgent =
+          !text.trim().startsWith("/") && agentService && agentExecutor
+            ? agentService.getTopAgent()
+            : undefined;
+        if (topAgent && agentService && agentExecutor) {
+          const answer = await runTopAgentStreamed({
+            transport: telegramTransport,
+            chatId: Number(msgCtx.chatId),
+            goal: text,
+            agent: topAgent,
+            agentService,
+            agentExecutor,
+            events: events ?? null,
+          });
+          return { text: "", speak: answer };
+        }
+        const response = await orchestrator.handleMessage(text, {
+          userId: msgCtx.userId,
+          chatId: msgCtx.chatId,
+          platform: "telegram",
+          username: msgCtx.username,
+        });
+        return {
+          text: response.text,
+          parseMode: response.parseMode,
+          inlineKeyboard: response.inlineKeyboard,
+          speak: response.text,
+        };
+      });
+    }
 
     telegramTransport.onCallback(async (data, msgCtx) => {
       log.debug(`Telegram callback from ${msgCtx.userId}: ${data}`);

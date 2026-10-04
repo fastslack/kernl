@@ -5,21 +5,25 @@
 
 // Types
 export type {
-  SttProvider,
-  TtsProvider,
+  SttEngine,
+  TtsEngine,
+  SttEngineSetting,
+  TtsEngineSetting,
   AudioFormat,
   TranscriptionResult,
   SynthesisResult,
   VoiceConfig,
   TranscribeOptions,
   SynthesizeOptions,
-  VoiceServiceConfig,
-  VadResult,
-  WakeWordResult,
+  VoiceSettings,
+  VoiceStatus,
+  EngineStatus,
   IVoiceService,
 } from "./types.js";
 
 // Services
 export { SttService } from "./stt.js";
 export { TtsService } from "./tts.js";
-export { VoiceService, createVoiceServiceFromEnv } from "./service.js";
+export { VoiceService } from "./service.js";
+export { registerVoiceRoutes } from "./routes.js";
+export { toSpeakable, cleanTranscript } from "./text.js";

@@ -1,11 +1,11 @@
 <script lang="ts">
   import { house } from '$lib/stores.js';
-  import ViewHeader from '$lib/components/ViewHeader.svelte';
-  import Panel from '$lib/components/Panel.svelte';
-  import KpiCard from '$lib/components/KpiCard.svelte';
-  import Badge from '$lib/components/Badge.svelte';
-  import Empty from '$lib/components/Empty.svelte';
-  import { fmtTime, formatCents } from '$lib/utils.js';
+  import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Panel from '$shared/components/Panel.svelte';
+  import KpiCard from '$shared/components/KpiCard.svelte';
+  import Badge from '$shared/components/Badge.svelte';
+  import Empty from '$shared/components/Empty.svelte';
+  import { fmtTime, formatCents } from '$shared/utils';
 
   $: hd = ($house as any);
   // API shape: { available, overdueMaintenance:[], upcomingMaintenance:[], activeProjects:[],
