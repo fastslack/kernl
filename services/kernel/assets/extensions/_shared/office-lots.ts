@@ -8,9 +8,13 @@
  * moves another one. The kernel stores each office's cell as `lot_id` and the
  * dashboard draws the office on that rectangle.
  *
- * Shared by the kernel (lot assignment, agents/services/flows-service.ts) and
+ * Used by the kernel (lot assignment, agents/services/flows-service.ts) and
  * the dashboard (floor plan, office3d/floor-plan.ts), so both compute the same
- * geometry from the same code.
+ * geometry. It lives twice, byte-identical: src/modules/agents/office-lots.ts
+ * for the kernel (which may not import extension code) and
+ * assets/extensions/_shared/office-lots.ts for the dashboard (whose image only
+ * receives _shared). tests/office-lots-twin.test.ts fails if they drift: edit
+ * one, copy it over the other.
  *
  * Coordinates: cell (0,0) is the reception hall, centred on x=0, z=0. Column
  * indices grow east (+x), row indices grow south (+z), toward the entrance.

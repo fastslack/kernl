@@ -5,12 +5,12 @@ import { newId, isoNow } from "../../../core/helpers.js";
 import { log } from "../../../core/logger.js";
 import { WORKSPACE_ROOT } from "../workspace-constants.js";
 import { OFFICE_HOME_WORKSPACE_NAME } from "../office-home.js";
-import { FLOW_KINDS, isFlowKind, type Agent, type AgentFlow, type FlowKind, type RepoIsolation } from "../types.js";
+import { FLOW_KINDS, isFlowKind, isOffGridKind, type Agent, type AgentFlow, type FlowKind, type RepoIsolation } from "../types.js";
 import { applyRepoIsolation } from "../repo-isolation.js";
 import { agentVariables } from "../agent-fields.js";
 import { parseWorkspaceSpec, isEmptySpec, type WorkspaceSpec } from "../workspace-spec.js";
 import { prepareWorkspace, type WorkspaceSetupResult } from "../workspace-setup.js";
-import { lotFits, parseLotId, pickLot, takesNoLot } from "../../../../assets/extensions/_shared/office-lots.js";
+import { lotFits, parseLotId, pickLot } from "../office-lots.js";
 
 /** How long a new office may still move to a bigger lot while its agents arrive. */
 const LOT_SETTLE_MS = 10 * 60_000;
@@ -326,7 +326,7 @@ export class AgentFlowsService {
   /** `lotId` if it is a lot no active office stands on (and the office takes lots at all), else ''. */
   private freeLotOrEmpty(lotId: string | undefined, kind: string): string {
     const lot = parseLotId(lotId);
-    if (!lot || takesNoLot(kind)) return "";
+    if (!lot || isOffGridKind(kind)) return "";
     const taken = this.db.prepare("SELECT 1 FROM agent_flows WHERE active = 1 AND lot_id = ?").get(lot.id);
     return taken ? "" : lot.id;
   }
@@ -351,12 +351,12 @@ export class AgentFlowsService {
 
     // An off-grid office stands in an extension's own building: it holds no lot,
     // and gives back the one it had before it became off-grid.
-    const offGrid = rows.filter((r) => takesNoLot(r.kind) && r.lot_id !== "");
+    const offGrid = rows.filter((r) => isOffGridKind(r.kind) && r.lot_id !== "");
     if (offGrid.length > 0) {
       const clear = this.db.prepare("UPDATE agent_flows SET lot_id = '' WHERE id = ?");
       for (const r of offGrid) { clear.run(r.id); r.lot_id = ""; }
     }
-    const gridRows = rows.filter((r) => !takesNoLot(r.kind));
+    const gridRows = rows.filter((r) => !isOffGridKind(r.kind));
 
     const taken = new Set(gridRows.filter((r) => parseLotId(r.lot_id)).map((r) => r.lot_id));
     const now = Date.now();
