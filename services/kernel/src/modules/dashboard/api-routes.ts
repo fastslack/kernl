@@ -22,7 +22,7 @@ import { log } from "../../core/logger.js";
 import { getGlobalPiiFilter } from "../../core/pii-filter.js";
 import {
   type DashboardChannelReader,
-  // Cross-module aggregators (KPIs, agenda, cross-intel, calendar, timeline)
+  // Cross-module aggregators (KPIs, agenda, calendar, timeline)
   // are operations shared with the WS RPC: see operations.ts.
   // Dashboard-internal query kept under its legacy kebab-case URL
   // (`/web-intel`). See the comment below where it is registered.
@@ -159,7 +159,7 @@ export function registerDashboardRoutes(
 
 
 
-  // Cross-module aggregators (/api/dashboard, kpis, agenda, cross-intel) are
+  // Cross-module aggregators (/api/dashboard, kpis, agenda) are
   // operations shared with the WS RPC — bound at the end of this function.
 
   // Migrados a self-registering modules (DashboardRegistry auto-genera
@@ -225,7 +225,6 @@ export function registerDashboardRoutes(
     ["GET", "/api/dashboard", "dashboard.full"],
     ["GET", "/api/dashboard/kpis", "dashboard.kpis"],
     ["GET", "/api/dashboard/agenda", "dashboard.agenda"],
-    ["GET", "/api/dashboard/cross-intel", "dashboard.crossIntel"],
     // `?start=` (defaults to today) and `?days=` clamped to 365, 150 when absent.
     ["GET", "/api/dashboard/calendar", "dashboard.calendar"],
     ["GET", "/api/dashboard/system-timeline", "dashboard.systemTimeline"],

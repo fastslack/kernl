@@ -242,44 +242,6 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
           sections.push("No active shopping lists.");
         }
 
-        // Issues summary
-        try {
-          const issueStats = db
-            .prepare(
-              `SELECT
-                 SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) AS open,
-                 SUM(CASE WHEN state IN ('closed','merged') AND closed_at >= ? THEN 1 ELSE 0 END) AS closedToday
-               FROM issues`,
-            )
-            .get(today) as { open: number; closedToday: number };
-          const staleCount = (
-            db
-              .prepare(
-                `SELECT COUNT(*) AS c FROM issues
-                 WHERE state = 'open' AND julianday(?) - julianday(updated_at) >= 14`,
-              )
-              .get(today) as { c: number }
-          ).c;
-          const timeStats = db
-            .prepare(
-              `SELECT COALESCE(SUM(time_estimate), 0) AS est, COALESCE(SUM(time_spent), 0) AS spt
-               FROM issues WHERE state = 'open'`,
-            )
-            .get() as { est: number; spt: number };
-          const pct = timeStats.est > 0 ? Math.round((timeStats.spt / timeStats.est) * 100) : 0;
-
-          sections.push("");
-          sections.push(`## Issues`);
-          sections.push(`- Open: ${issueStats.open ?? 0}`);
-          sections.push(`- Closed today: ${issueStats.closedToday ?? 0}`);
-          sections.push(`- Stale (14d+): ${staleCount}`);
-          if (timeStats.est > 0) {
-            sections.push(`- Time: ${Math.round(timeStats.spt / 3600)}h / ${Math.round(timeStats.est / 3600)}h (${pct}%)`);
-          }
-        } catch {
-          // issues table may not exist
-        }
-
         return textResult(sections.join("\n"));
       },
     }),
@@ -438,40 +400,6 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
           sections.push(`Total spent: ${totalSpent.toFixed(2)} EUR`);
         } else {
           sections.push("No purchases today.");
-        }
-
-        // Issues daily review
-        try {
-          const closedToday = db
-            .prepare(
-              `SELECT title, repo FROM issues
-               WHERE state IN ('closed','merged') AND closed_at >= ? AND closed_at < ?
-               ORDER BY closed_at DESC LIMIT 10`,
-            )
-            .all(dayStart(today), dayStart(tomorrow)) as Array<{ title: string; repo: string }>;
-          const openedToday = (
-            db
-              .prepare(
-                `SELECT COUNT(*) AS c FROM issues
-                 WHERE created_at >= ? AND created_at < ?`,
-              )
-              .get(dayStart(today), dayStart(tomorrow)) as { c: number }
-          ).c;
-          const netBalance = closedToday.length - openedToday;
-          const sym = netBalance > 0 ? "+" : "";
-
-          sections.push("");
-          sections.push(`## Issues Today`);
-          sections.push(`- Closed: ${closedToday.length}`);
-          if (closedToday.length > 0) {
-            for (const c of closedToday) {
-              sections.push(`  - ${c.title} (${c.repo.split("/").pop()})`);
-            }
-          }
-          sections.push(`- Opened: ${openedToday}`);
-          sections.push(`- Net: ${sym}${netBalance}`);
-        } catch {
-          // issues table may not exist
         }
 
         return textResult(sections.join("\n"));
@@ -656,45 +584,6 @@ export function dashboardTools(db: SqliteDb): ToolDefinition[] {
           sections.push("- Spent: 0");
         }
         sections.push(`- Low stock items: ${lowStockCount}`);
-
-        // Issues weekly summary
-        try {
-          const openedThisWeek = (
-            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE created_at >= ?`).get(dayStart(weekAgo)) as { c: number }
-          ).c;
-          const closedThisWeek = (
-            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state IN ('closed','merged') AND closed_at >= ?`).get(weekAgo) as { c: number }
-          ).c;
-          const totalOpen = (
-            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state = 'open'`).get() as { c: number }
-          ).c;
-          const prsOpen = (
-            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state = 'open' AND is_pull_request = 1`).get() as { c: number }
-          ).c;
-          const prsMerged = (
-            db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state = 'merged' AND closed_at >= ?`).get(weekAgo) as { c: number }
-          ).c;
-          const timeLogged = (
-            db.prepare(`SELECT COALESCE(SUM(time_spent), 0) AS spt FROM issues WHERE updated_at >= ?`).get(dayStart(weekAgo)) as { spt: number }
-          ).spt;
-          const netBalance = closedThisWeek - openedThisWeek;
-          const sym = netBalance > 0 ? "+" : "";
-          const issueVelocity = (closedThisWeek / 7).toFixed(1);
-
-          sections.push("");
-          sections.push("## Issues");
-          sections.push(`- Opened this week: ${openedThisWeek}`);
-          sections.push(`- Closed this week: ${closedThisWeek}`);
-          sections.push(`- Net: ${sym}${netBalance}`);
-          sections.push(`- Total open: ${totalOpen}`);
-          sections.push(`- PRs open/merged: ${prsOpen}/${prsMerged}`);
-          sections.push(`- Velocity: ${issueVelocity} issues/day`);
-          if (timeLogged > 0) {
-            sections.push(`- Time logged: ${Math.round(timeLogged / 3600)}h`);
-          }
-        } catch {
-          // issues table may not exist
-        }
 
         return textResult(sections.join("\n"));
       },

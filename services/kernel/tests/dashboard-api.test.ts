@@ -5,7 +5,6 @@ import { tasksMigrations } from "../assets/extensions/productivity/tasks/_module
 import { crmMigrations } from "../assets/extensions/people/crm/_module/migrations/001_crm.js";
 import { remindersMigrations } from "../assets/extensions/productivity/reminders/_module/migrations/001_reminders.js";
 import { shoppingMigrations } from "../assets/extensions/home/shopping/_module/migrations/001_shopping.js";
-import { issuesMigrations } from "../assets/extensions/productivity/issues/_module/migrations.js";
 import { commsMigrations } from "../assets/extensions/people/comms/_module/migrations.js";
 import { lifeMigrations } from "../assets/extensions/home/life/_module/life-migrations.js";
 import {
@@ -25,7 +24,6 @@ import {
   queryKpis,
   queryFullDashboard,
   queryAgenda,
-  queryCrossModuleIntel,
   CORE_KPI_CHANNELS,
 } from "../src/modules/dashboard/api.js";
 import { DashboardRegistry } from "../src/core/dashboard-registry.js";
@@ -38,7 +36,6 @@ import { createTasksModule } from "../assets/extensions/productivity/tasks/_modu
 import { createCrmModule } from "../assets/extensions/people/crm/_module/index.js";
 import { createRemindersModule } from "../assets/extensions/productivity/reminders/_module/index.js";
 import { createShoppingModule } from "../assets/extensions/home/shopping/_module/index.js";
-import { queryIssues, parseScopedLabels } from "../assets/extensions/productivity/issues/_module/dashboard-queries.js";
 import { queryComms } from "../assets/extensions/people/comms/_module/dashboard-queries.js";
 
 function setupDb(): Database {
@@ -48,12 +45,6 @@ function setupDb(): Database {
   runMigrations(db, "crm", crmMigrations);
   runMigrations(db, "reminders", remindersMigrations);
   runMigrations(db, "shopping", shoppingMigrations);
-  return db;
-}
-
-function setupDbWithIssues(): Database {
-  const db = setupDb();
-  runMigrations(db, "issues", issuesMigrations);
   return db;
 }
 
@@ -91,7 +82,6 @@ describe("Dashboard API queries", () => {
       expect(kpis.reminders.active).toBe(0);
       expect(kpis.shopping.products).toBe(0);
       expect(kpis.shopping.lowStock).toBe(0);
-      expect(kpis.issues).toBeNull();
     });
 
     it("counts tasks correctly", () => {
@@ -346,478 +336,62 @@ describe("Dashboard API queries", () => {
   });
 });
 
-// ── Enhanced Issues queries ──────────────────────────
+// ── queryAgenda ──────────────────────────────────
 
-describe("Enhanced Issues queries", () => {
+describe("queryAgenda", () => {
   let db: Database;
 
   beforeEach(() => {
-    db = setupDbWithIssues();
+    db = setupDb();
   });
 
   afterEach(() => {
     db.close();
   });
 
-  describe("queryIssues enhanced", () => {
-    it("returns null without issues table", () => {
-      const plainDb = setupDb();
-      expect(queryIssues(plainDb)).toBeNull();
-      plainDb.close();
-    });
-
-    it("returns all fields on empty issues table", () => {
-      const iss = queryIssues(db)!;
-      expect(iss).not.toBeNull();
-      expect(iss.kpis.total).toBe(0);
-      expect(iss.velocity).toHaveLength(8);
-      expect(iss.velocity.every((v: { opened: number; closed: number }) => v.opened === 0 && v.closed === 0)).toBe(true);
-      expect(iss.milestones).toEqual([]);
-      expect(iss.assigneeWorkload).toEqual([]);
-      expect(iss.ageAnalysis.avgCloseTimeDays).toBe(0);
-      expect(iss.ageAnalysis.buckets).toEqual([]);
-      expect(iss.staleIssues).toEqual([]);
-      expect(iss.activityHeatmap).toHaveLength(7);
-      expect(iss.overBudget).toEqual([]);
-      expect(iss.labelTrends).toEqual([]);
-    });
-
-    it("computes velocity with created and closed issues", () => {
-      const thisWeek = today;
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','ext1',1,'org/repo','Issue 1','open','[]',?,?,?)`,
-      ).run(thisWeek, thisWeek, now);
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, closed_at, synced_at)
-         VALUES ('i2','github','ext2',2,'org/repo','Issue 2','closed','[]',?,?,?,?)`,
-      ).run(thisWeek, thisWeek, thisWeek, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.velocity.length).toBeGreaterThan(0);
-      // The last week should have at least 1 opened and 1 closed
-      const lastWeek = iss.velocity[iss.velocity.length - 1];
-      expect(lastWeek.opened).toBeGreaterThanOrEqual(1);
-      expect(lastWeek.closed).toBeGreaterThanOrEqual(1);
-    });
-
-    it("computes milestones", () => {
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, milestone, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','A','open','v1.0','[]',?,?,?),
-                ('i2','github','e2',2,'r','B','closed','v1.0','[]',?,?,?),
-                ('i3','github','e3',3,'r','C','open','v2.0','[]',?,?,?)`,
-      ).run(now, now, now, now, now, now, now, now, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.milestones).toHaveLength(2);
-      const v1 = iss.milestones.find((m) => m.milestone === "v1.0")!;
-      expect(v1.total).toBe(2);
-      expect(v1.open).toBe(1);
-      expect(v1.closed).toBe(1);
-      expect(v1.progressPct).toBe(50);
-    });
-
-    it("computes assignee workload from JSON assignees", () => {
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, time_estimate, time_spent, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','A','open','["alice","bob"]',3600,1800,?,?,?),
-                ('i2','github','e2',2,'r','B','open','["alice"]',7200,3600,?,?,?)`,
-      ).run(now, now, now, now, now, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.assigneeWorkload.length).toBeGreaterThanOrEqual(1);
-      const alice = iss.assigneeWorkload.find((a) => a.assignee === "alice")!;
-      expect(alice.openCount).toBe(2);
-    });
-
-    it("detects stale issues", () => {
-      const staleDate = new Date(Date.now() - 20 * 86_400_000).toISOString();
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Stale issue','open','[]',?,?,?)`,
-      ).run(staleDate, staleDate, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.staleIssues).toHaveLength(1);
-      expect(iss.staleIssues[0].title).toBe("Stale issue");
-      expect(iss.staleIssues[0].daysSinceUpdate).toBeGreaterThanOrEqual(14);
-      expect(iss.staleCount).toBe(1);
-    });
-
-    it("computes age analysis with buckets", () => {
-      // Insert open issues of different ages
-      const daysAgo = (n: number) => new Date(Date.now() - n * 86_400_000).toISOString();
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Young','open','[]',?,?,?),
-                ('i2','github','e2',2,'r','Old','open','[]',?,?,?)`,
-      ).run(daysAgo(3), now, now, daysAgo(45), now, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.ageAnalysis.buckets.length).toBeGreaterThan(0);
-    });
-
-    it("computes activity heatmap", () => {
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','A','open','[]',?,?,?)`,
-      ).run(now, now, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.activityHeatmap).toHaveLength(7);
-      const totalCreated = iss.activityHeatmap.reduce((s, d) => s + d.created, 0);
-      expect(totalCreated).toBe(1);
-    });
-
-    it("detects over-budget issues", () => {
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, time_estimate, time_spent, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Over','open','[]',3600,7200,?,?,?)`,
-      ).run(now, now, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.overBudget).toHaveLength(1);
-      expect(iss.overBudget[0].title).toBe("Over");
-      expect(iss.overBudget[0].overBy).toBe(3600);
-    });
-
-    it("computes avgCloseTimeDays", () => {
-      const twoDaysAgo = new Date(Date.now() - 2 * 86_400_000).toISOString();
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, closed_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Done','closed','[]',?,?,?,?)`,
-      ).run(twoDaysAgo, now, now, now);
-
-      const iss = queryIssues(db)!;
-      expect(iss.avgCloseTimeDays).toBeGreaterThan(0);
-    });
+describe("queryAgenda", () => {
+  it("returns 14-day structure", () => {
+    const agenda = queryAgenda(db);
+    expect(agenda.days).toHaveLength(14);
+    expect(agenda.overdue).toBeDefined();
+    expect(agenda.workloadForecast).toHaveLength(14);
   });
 
-  describe("queryKpis with issues", () => {
-    it("includes issues stats when table exists", () => {
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, is_pull_request, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','A','open','[]',0,?,?,?),
-                ('i2','github','e2',2,'r','B','closed','[]',0,?,?,?),
-                ('i3','github','e3',3,'r','C','open','[]',1,?,?,?)`,
-      ).run(now, now, now, now, now, now, now, now, now);
+  it("includes tasks due today", () => {
+    db.prepare(
+      `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
+       VALUES ('t1','Due today','todo','high',?,?,?)`,
+    ).run(today, now, now);
 
-      const kpis = queryKpis(db);
-      expect(kpis.issues).not.toBeNull();
-      expect(kpis.issues!.total).toBe(3);
-      expect(kpis.issues!.open).toBe(2);
-      expect(kpis.issues!.closed).toBe(1);
-      expect(kpis.issues!.prs).toBe(1);
-    });
+    const agenda = queryAgenda(db);
+    const todayDay = agenda.days.find((d) => d.isToday);
+    expect(todayDay).toBeDefined();
+    expect(todayDay!.items.some((i) => i.title === "Due today")).toBe(true);
   });
 
-  describe("queryAgenda", () => {
-    it("returns 14-day structure", () => {
-      const agenda = queryAgenda(db);
-      expect(agenda.days).toHaveLength(14);
-      expect(agenda.overdue).toBeDefined();
-      expect(agenda.workloadForecast).toHaveLength(14);
-    });
+  it("includes overdue tasks", () => {
+    const yesterday = new Date(Date.now() - 86_400_000).toISOString().split("T")[0];
+    db.prepare(
+      `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
+       VALUES ('t1','Overdue','todo','high',?,?,?)`,
+    ).run(yesterday, now, now);
 
-    it("includes tasks due today", () => {
-      db.prepare(
-        `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
-         VALUES ('t1','Due today','todo','high',?,?,?)`,
-      ).run(today, now, now);
-
-      const agenda = queryAgenda(db);
-      const todayDay = agenda.days.find((d) => d.isToday);
-      expect(todayDay).toBeDefined();
-      expect(todayDay!.items.some((i) => i.title === "Due today")).toBe(true);
-    });
-
-    it("includes overdue tasks", () => {
-      const yesterday = new Date(Date.now() - 86_400_000).toISOString().split("T")[0];
-      db.prepare(
-        `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
-         VALUES ('t1','Overdue','todo','high',?,?,?)`,
-      ).run(yesterday, now, now);
-
-      const agenda = queryAgenda(db);
-      expect(agenda.overdue.length).toBeGreaterThanOrEqual(1);
-      expect(agenda.overdue[0].title).toBe("Overdue");
-    });
-
-    it("includes issues when table exists", () => {
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'org/repo','New issue','open','[]',?,?,?)`,
-      ).run(now, now, now);
-
-      const agenda = queryAgenda(db);
-      const todayDay = agenda.days.find((d) => d.isToday);
-      expect(todayDay).toBeDefined();
-      expect(todayDay!.items.some((i) => i.type === "issue")).toBe(true);
-    });
-
-    it("degrades without issues table", () => {
-      const plainDb = setupDb();
-      const agenda = queryAgenda(plainDb);
-      expect(agenda.days).toHaveLength(14);
-      expect(agenda.workloadForecast).toHaveLength(14);
-      plainDb.close();
-    });
-
-    it("populates workload forecast", () => {
-      db.prepare(
-        `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
-         VALUES ('t1','A','todo','high',?,?,?)`,
-      ).run(today, now, now);
-
-      const agenda = queryAgenda(db);
-      expect(agenda.workloadForecast[0].taskCount).toBe(1);
-      expect(agenda.workloadForecast[0].total).toBeGreaterThanOrEqual(1);
-    });
+    const agenda = queryAgenda(db);
+    expect(agenda.overdue.length).toBeGreaterThanOrEqual(1);
+    expect(agenda.overdue[0].title).toBe("Overdue");
   });
 
-  describe("queryCrossModuleIntel", () => {
-    it("returns null without issues table", () => {
-      const plainDb = setupDb();
-      expect(queryCrossModuleIntel(plainDb)).toBeNull();
-      plainDb.close();
-    });
+  it("populates workload forecast", () => {
+    db.prepare(
+      `INSERT INTO tasks (id, title, status, priority, due_date, created_at, updated_at)
+       VALUES ('t1','A','todo','high',?,?,?)`,
+    ).run(today, now, now);
 
-    it("returns workload forecast", () => {
-      db.prepare(
-        `INSERT INTO tasks (id, title, status, priority, created_at, updated_at)
-         VALUES ('t1','Open task','todo','high',?,?)`,
-      ).run(now, now);
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, time_estimate, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Open issue','open','[]',7200,?,?,?)`,
-      ).run(now, now, now);
-
-      const intel = queryCrossModuleIntel(db)!;
-      expect(intel).not.toBeNull();
-      expect(intel.workloadForecast.openTasks).toBe(1);
-      expect(intel.workloadForecast.openIssues).toBe(1);
-      expect(intel.workloadForecast.estimatedHoursRemaining).toBeGreaterThan(0);
-    });
-
-    it("matches authors to contacts", () => {
-      db.prepare(
-        `INSERT INTO contacts (id, name, relationship, created_at, updated_at)
-         VALUES ('c1','Alice Developer','professional',?,?)`,
-      ).run(now, now);
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, author, assignees, created_at, updated_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Fix bug','open','Alice Developer','[]',?,?,?)`,
-      ).run(now, now, now);
-
-      const intel = queryCrossModuleIntel(db)!;
-      expect(intel.authorContactMatches.length).toBeGreaterThanOrEqual(1);
-      expect(intel.authorContactMatches[0].author).toBe("Alice Developer");
-    });
-
-    it("computes velocity comparison", () => {
-      // Complete a task this week
-      db.prepare(
-        `INSERT INTO tasks (id, title, status, priority, created_at, updated_at)
-         VALUES ('t1','Done','done','medium',?,?)`,
-      ).run(now, now);
-      // Close an issue this week
-      db.prepare(
-        `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, closed_at, synced_at)
-         VALUES ('i1','github','e1',1,'r','Fixed','closed','[]',?,?,?,?)`,
-      ).run(now, now, today, now);
-
-      const intel = queryCrossModuleIntel(db)!;
-      expect(intel.velocityComparison.tasksPerWeek).toBe(1);
-      expect(intel.velocityComparison.issuesPerWeek).toBe(1);
-    });
+    const agenda = queryAgenda(db);
+    expect(agenda.workloadForecast[0].taskCount).toBe(1);
+    expect(agenda.workloadForecast[0].total).toBeGreaterThanOrEqual(1);
   });
 });
-
-// ── Scoped Labels Intelligence ────────────────────
-
-describe("Scoped Labels Intelligence", () => {
-  let db: Database;
-
-  function insertIssue(
-    id: string,
-    state: string,
-    opts: {
-      labels?: string[];
-      repo?: string;
-      updated_at?: string;
-      created_at?: string;
-      closed_at?: string | null;
-      assignees?: string;
-    } = {},
-  ) {
-    const repo = opts.repo ?? "org/app";
-    const updatedAt = opts.updated_at ?? now;
-    const createdAt = opts.created_at ?? now;
-    const closedAt = opts.closed_at ?? (state !== "open" ? now : null);
-    const assignees = opts.assignees ?? "[]";
-    db.prepare(
-      `INSERT INTO issues (id, provider, external_id, external_number, repo, title, state, assignees, created_at, updated_at, closed_at, synced_at)
-       VALUES (?, 'gitlab', ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(id, id, repo, `Issue ${id}`, state, assignees, createdAt, updatedAt, closedAt, now);
-    if (opts.labels) {
-      const stmt = db.prepare(`INSERT INTO issue_labels (issue_id, label) VALUES (?, ?)`);
-      for (const label of opts.labels) stmt.run(id, label);
-    }
-  }
-
-  beforeEach(() => {
-    db = setupDbWithIssues();
-  });
-
-  afterEach(() => {
-    db.close();
-  });
-
-  it("parses scoped labels PRI::CRITICAL correctly", () => {
-    insertIssue("i1", "open", { labels: ["PRI::CRITICAL", "Type::BUG"] });
-    insertIssue("i2", "closed", { labels: ["PRI::1", "Type::FIX"] });
-
-    const dims = parseScopedLabels(db);
-    expect(dims.length).toBeGreaterThanOrEqual(2);
-    const pri = dims.find((d) => d.scope === "PRI");
-    expect(pri).toBeDefined();
-    expect(pri!.values.find((v) => v.value === "CRITICAL")).toBeDefined();
-    expect(pri!.values.find((v) => v.value === "CRITICAL")!.open).toBe(1);
-  });
-
-  it("generates workflow funnel from Status:: labels", () => {
-    insertIssue("i1", "open", { labels: ["Status::Ready to start"] });
-    insertIssue("i2", "open", { labels: ["Status::Working on it"] });
-    insertIssue("i3", "open", { labels: ["Status::Working on it"] });
-    insertIssue("i4", "closed", { labels: ["Status::Done"] });
-
-    const iss = queryIssues(db)!;
-    expect(iss.workflowFunnel.stages.length).toBeGreaterThanOrEqual(3);
-    const working = iss.workflowFunnel.stages.find((s) => s.name === "Working on it");
-    expect(working).toBeDefined();
-    expect(working!.count).toBe(2);
-    expect(iss.workflowFunnel.bottleneck).toBe("Working on it");
-  });
-
-  it("calculates priority matrix with avgAgeDays", () => {
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 86_400_000).toISOString();
-    insertIssue("i1", "open", { labels: ["PRI::CRITICAL"], created_at: thirtyDaysAgo });
-    insertIssue("i2", "open", { labels: ["PRI::1"] });
-    insertIssue("i3", "closed", { labels: ["PRI::2"] });
-
-    const iss = queryIssues(db)!;
-    expect(iss.priorityMatrix.criticalOpen).toBe(1);
-    const crit = iss.priorityMatrix.byPriority.find((p) => p.priority === "CRITICAL");
-    expect(crit).toBeDefined();
-    expect(crit!.open).toBe(1);
-    expect(crit!.avgAgeDays).toBeGreaterThan(25);
-  });
-
-  it("calculates repo health score", () => {
-    const staleDate = new Date(Date.now() - 20 * 86_400_000).toISOString();
-    insertIssue("i1", "open", { repo: "org/bad-repo", labels: ["PRI::CRITICAL"], updated_at: staleDate });
-    insertIssue("i2", "open", { repo: "org/bad-repo", updated_at: staleDate });
-    insertIssue("i3", "open", { repo: "org/good-repo" });
-
-    const iss = queryIssues(db)!;
-    expect(iss.repoHealth.length).toBeGreaterThanOrEqual(2);
-    const badRepo = iss.repoHealth.find((r) => r.repo === "org/bad-repo");
-    expect(badRepo).toBeDefined();
-    expect(badRepo!.stalePct).toBe(100);
-    expect(badRepo!.criticalOpen).toBe(1);
-    expect(badRepo!.healthScore).toBeLessThan(50);
-    const goodRepo = iss.repoHealth.find((r) => r.repo === "org/good-repo");
-    expect(goodRepo).toBeDefined();
-    expect(goodRepo!.healthScore).toBeGreaterThan(badRepo!.healthScore);
-  });
-
-  it("generates backlog health score and grade", () => {
-    const staleDate = new Date(Date.now() - 20 * 86_400_000).toISOString();
-    insertIssue("i1", "open", { labels: ["PRI::CRITICAL"], updated_at: staleDate });
-    insertIssue("i2", "open", { updated_at: staleDate });
-    insertIssue("i3", "open");
-
-    const iss = queryIssues(db)!;
-    expect(iss.backlogHealth.score).toBeGreaterThanOrEqual(0);
-    expect(iss.backlogHealth.score).toBeLessThanOrEqual(100);
-    expect(["A", "B", "C", "D", "F"]).toContain(iss.backlogHealth.grade);
-    expect(iss.backlogHealth.factors.length).toBeGreaterThanOrEqual(3);
-  });
-
-  it("generates insights for stale > 50%", () => {
-    const staleDate = new Date(Date.now() - 20 * 86_400_000).toISOString();
-    // 3 out of 4 open issues are stale (75%)
-    insertIssue("i1", "open", { updated_at: staleDate });
-    insertIssue("i2", "open", { updated_at: staleDate });
-    insertIssue("i3", "open", { updated_at: staleDate });
-    insertIssue("i4", "open");
-
-    const iss = queryIssues(db)!;
-    const staleInsight = iss.insights.find((i) => i.includes("stale"));
-    expect(staleInsight).toBeDefined();
-    expect(staleInsight).toContain("75%");
-  });
-
-  it("generates insights for critical open issues", () => {
-    insertIssue("i1", "open", { labels: ["PRI::CRITICAL"] });
-
-    const iss = queryIssues(db)!;
-    const critInsight = iss.insights.find((i) => i.includes("critical"));
-    expect(critInsight).toBeDefined();
-  });
-
-  it("generates type breakdown from Type:: labels", () => {
-    insertIssue("i1", "open", { labels: ["Type::BUG"] });
-    insertIssue("i2", "open", { labels: ["Type::FIX"] });
-    insertIssue("i3", "closed", { labels: ["Type::BUG"] });
-
-    const iss = queryIssues(db)!;
-    expect(iss.typeBreakdown.length).toBeGreaterThanOrEqual(2);
-    const bug = iss.typeBreakdown.find((t) => t.type === "BUG");
-    expect(bug).toBeDefined();
-    expect(bug!.open).toBe(1);
-    expect(bug!.closed).toBe(1);
-  });
-
-  it("generates env breakdown from ENV:: labels", () => {
-    insertIssue("i1", "open", { labels: ["ENV::PROD"] });
-    insertIssue("i2", "open", { labels: ["ENV::DEV"] });
-
-    const iss = queryIssues(db)!;
-    expect(iss.envBreakdown.length).toBe(2);
-    const prod = iss.envBreakdown.find((e) => e.env === "PROD");
-    expect(prod).toBeDefined();
-    expect(prod!.open).toBe(1);
-  });
-
-  it("handles labels without scope (no ::) in parseScopedLabels", () => {
-    insertIssue("i1", "open", { labels: ["bug", "urgent", "PRI::1"] });
-
-    const dims = parseScopedLabels(db);
-    // Only PRI should appear, non-scoped labels are excluded
-    expect(dims.length).toBe(1);
-    expect(dims[0].scope).toBe("PRI");
-  });
-
-  it("returns empty scoped data without labels", () => {
-    insertIssue("i1", "open");
-
-    const iss = queryIssues(db)!;
-    expect(iss.scopedDimensions).toEqual([]);
-    expect(iss.workflowFunnel.stages).toEqual([]);
-    expect(iss.workflowFunnel.bottleneck).toBeNull();
-    expect(iss.priorityMatrix.byPriority).toEqual([]);
-    expect(iss.priorityMatrix.criticalOpen).toBe(0);
-    expect(iss.typeBreakdown).toEqual([]);
-    expect(iss.envBreakdown).toEqual([]);
-  });
-
-  it("returns null without issues table", () => {
-    const plainDb = setupDb();
-    expect(queryIssues(plainDb)).toBeNull();
-    plainDb.close();
-  });
 });
 
 // ── Life Queries ────────────────────────────
@@ -847,7 +421,6 @@ describe("Life queries", () => {
       expect(summary.interactions).toBe(0);
       expect(summary.remindersFired).toBe(0);
       expect(summary.purchases).toBe(0);
-      expect(summary.issuesClosed).toBe(0);
     });
 
     it("crosses module tables for today", () => {
@@ -871,12 +444,6 @@ describe("Life queries", () => {
       expect(summary.tasksDone).toBe(1);
       expect(summary.tasksCreated).toBe(1);
       expect(summary.interactions).toBe(1);
-    });
-
-    it("gracefully handles missing issues table", () => {
-      // setupDbWithLife doesn't include issues — should not throw
-      const summary = queryDailySummary(db);
-      expect(summary.issuesClosed).toBe(0);
     });
   });
 

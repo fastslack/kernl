@@ -38,7 +38,6 @@ export interface DashboardKpis {
   contacts: { total: number };
   reminders: { total: number; active: number };
   shopping: { products: number; lowStock: number };
-  issues: { total: number; open: number; closed: number; prs: number } | null;
 }
 
 export interface FullDashboard {
@@ -53,7 +52,7 @@ export interface FullDashboard {
 }
 
 export interface AgendaItem {
-  type: "task" | "reminder" | "event" | "issue" | "interaction" | "purchase";
+  type: "task" | "reminder" | "event" | "interaction" | "purchase";
   id: string;
   title: string;
   date: string;
@@ -73,7 +72,6 @@ export interface AgendaDay {
 export interface WorkloadDay {
   date: string;
   taskCount: number;
-  issueCount: number;
   reminderCount: number;
   total: number;
 }
@@ -82,17 +80,6 @@ export interface DashboardAgenda {
   overdue: AgendaItem[];
   days: AgendaDay[];
   workloadForecast: WorkloadDay[];
-}
-
-export interface CrossModuleIntel {
-  authorContactMatches: Array<{ author: string; contactName: string; contactId: string }>;
-  velocityComparison: { tasksPerWeek: number; issuesPerWeek: number };
-  workloadForecast: {
-    openTasks: number;
-    openIssues: number;
-    estimatedHoursRemaining: number;
-    estimatedDaysToClear: number;
-  };
 }
 
 export interface PipelineStatus {
@@ -187,19 +174,6 @@ export function queryKpis(db: SqliteDb): DashboardKpis {
       .get() as { count: number }
   ).count;
 
-  const issueStats = safeGet(db,
-    `SELECT
-       COUNT(*) as total,
-       SUM(CASE WHEN state = 'open' THEN 1 ELSE 0 END) as open,
-       SUM(CASE WHEN state IN ('closed','merged') THEN 1 ELSE 0 END) as closed,
-       SUM(CASE WHEN is_pull_request = 1 THEN 1 ELSE 0 END) as prs
-     FROM issues`, [],
-    null as { total: number; open: number; closed: number; prs: number } | null,
-  );
-  const issues: DashboardKpis["issues"] = issueStats
-    ? { total: issueStats.total ?? 0, open: issueStats.open ?? 0, closed: issueStats.closed ?? 0, prs: issueStats.prs ?? 0 }
-    : null;
-
   return {
     tasks: {
       total: taskStats.total ?? 0,
@@ -210,7 +184,6 @@ export function queryKpis(db: SqliteDb): DashboardKpis {
     contacts: { total: contactTotal },
     reminders: { total: reminderStats.total ?? 0, active: reminderStats.active ?? 0 },
     shopping: { products: productCount, lowStock: lowStockCount },
-    issues,
   };
 }
 
@@ -353,24 +326,6 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     if (items) items.push({ type: "purchase", id: p.id, title: p.product_name ?? "Purchase", date: p.purchased_at, time: null, priority: null, meta: `${p.total_price.toFixed(2)} ${p.currency}` });
   }
 
-  // Issues (created/closed in last 3 days + forward)
-  const issueEvents = safeAll<{ id: string; title: string; repo: string; created_at: string; closed_at: string | null; state: string }>(db,
-    `SELECT id, title, repo, created_at, closed_at, state FROM issues
-     WHERE (created_at >= ? OR (closed_at IS NOT NULL AND closed_at >= ?))
-     ORDER BY created_at DESC LIMIT 30`,
-    [dayStart(threeDaysAgo), dayStart(threeDaysAgo)],
-  );
-  for (const iss of issueEvents) {
-    const createdDate = localDateOf(iss.created_at);
-    const items = dayMap.get(createdDate);
-    if (items) items.push({ type: "issue", id: iss.id, title: iss.title, date: createdDate, time: null, priority: null, meta: `opened · ${iss.repo.split("/").pop()}` });
-    if (iss.closed_at) {
-      const closedDate = localDateOf(iss.closed_at);
-      const closedItems = dayMap.get(closedDate);
-      if (closedItems) closedItems.push({ type: "issue", id: iss.id + "-closed", title: iss.title, date: closedDate, time: null, priority: null, meta: `closed · ${iss.repo.split("/").pop()}` });
-    }
-  }
-
   // Build days array
   const days: AgendaDay[] = [];
   for (const [date, items] of dayMap) {
@@ -390,71 +345,10 @@ export function queryAgenda(db: SqliteDb): DashboardAgenda {
     const d = daysFromNow(i);
     const taskCount = (db.prepare(`SELECT COUNT(*) AS c FROM tasks WHERE status NOT IN ('done') AND due_date = ? AND deleted_at IS NULL`).get(d) as { c: number }).c;
     const reminderCount = (db.prepare(`SELECT COUNT(*) AS c FROM reminders WHERE status IN ('active','snoozed') AND trigger_at >= ? AND trigger_at < ?`).get(dayStart(d), dayStart(daysFromNow(i + 1))) as { c: number }).c;
-    const issueCount = safeGet(db, `SELECT COUNT(*) AS c FROM issues WHERE state = 'open' AND created_at < ? AND (closed_at IS NULL OR closed_at > ?)`, [dayStart(daysFromNow(i + 1)), dayStart(d)], { c: 0 }).c;
-    workloadForecast.push({ date: d, taskCount, issueCount, reminderCount, total: taskCount + issueCount + reminderCount });
+    workloadForecast.push({ date: d, taskCount, reminderCount, total: taskCount + reminderCount });
   }
 
   return { overdue, days, workloadForecast };
-}
-
-export function queryCrossModuleIntel(db: SqliteDb): CrossModuleIntel | null {
-  if (!tableExists(db, "issues")) return null;
-
-  const weekAgo = daysFromNow(-7);
-
-  // ── Author <-> Contact matching ──────────────────
-  const authorContactMatches = db
-    .prepare(
-      `SELECT DISTINCT i.author, c.name AS contactName, c.id AS contactId
-       FROM issues i
-       JOIN contacts c ON LOWER(c.name) LIKE '%' || LOWER(i.author) || '%'
-       WHERE i.author <> ''
-       LIMIT 20`,
-    )
-    .all() as Array<{ author: string; contactName: string; contactId: string }>;
-
-  // ── Velocity comparison ────────────────────────
-  const tasksCompleted = (
-    db.prepare(
-      `SELECT COUNT(*) AS c FROM tasks WHERE status = 'done' AND updated_at >= ? AND deleted_at IS NULL`,
-    ).get(dayStart(weekAgo)) as { c: number }
-  ).c;
-
-  const issuesClosed = (
-    db.prepare(
-      `SELECT COUNT(*) AS c FROM issues WHERE state IN ('closed','merged') AND closed_at >= ?`,
-    ).get(weekAgo) as { c: number }
-  ).c;
-
-  // ── Workload forecast ──────────────────────────
-  const openTasks = (
-    db.prepare(`SELECT COUNT(*) AS c FROM tasks WHERE status NOT IN ('done') AND deleted_at IS NULL`).get() as { c: number }
-  ).c;
-
-  const openIssues = (
-    db.prepare(`SELECT COUNT(*) AS c FROM issues WHERE state = 'open'`).get() as { c: number }
-  ).c;
-
-  const estimatedHoursRaw = (
-    db.prepare(
-      `SELECT COALESCE(SUM(time_estimate - time_spent), 0) AS remaining
-       FROM issues WHERE state = 'open' AND time_estimate > 0`,
-    ).get() as { remaining: number }
-  ).remaining;
-  const estimatedHoursRemaining = Math.max(0, Math.round(estimatedHoursRaw / 3600 * 10) / 10);
-
-  // Estimate days to clear based on weekly velocity
-  const weeklyVelocity = tasksCompleted + issuesClosed;
-  const totalOpen = openTasks + openIssues;
-  const estimatedDaysToClear = weeklyVelocity > 0
-    ? Math.round((totalOpen / weeklyVelocity) * 7)
-    : totalOpen > 0 ? 999 : 0;
-
-  return {
-    authorContactMatches,
-    velocityComparison: { tasksPerWeek: tasksCompleted, issuesPerWeek: issuesClosed },
-    workloadForecast: { openTasks, openIssues, estimatedHoursRemaining, estimatedDaysToClear },
-  };
 }
 
 // Cache analytics for 5 minutes — graph queries are expensive and data changes

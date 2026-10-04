@@ -32,7 +32,7 @@
   const HOOD_DESCRIPTIONS: Record<string, string> = {
     core: 'Central nervous system: MCP server, EventBus, databases, mtwRequest',
     data: 'Data layer: SQLite, Neo4j, persistent storage engines',
-    work: 'Task management, planning, issues, reminders, time tracking',
+    work: 'Task management, planning, reminders, time tracking',
     people: 'CRM, communications, Google sync, chat, events, social',
     finance: 'Finance, subscriptions, shopping, trading, markets',
     wellness: 'Health tracking, training, nutrition, wearables, meals',
@@ -42,7 +42,7 @@
   };
 
   const MOD_NEIGHBORHOOD: Record<string, string> = {
-    tasks: 'work', issues: 'work', reminders: 'work', 'time-tracking': 'work', calendar: 'work', planner: 'work',
+    tasks: 'work', reminders: 'work', 'time-tracking': 'work', calendar: 'work', planner: 'work',
     crm: 'people', comms: 'people', 'google-sync': 'people', chat: 'people', events: 'people', prospecting: 'people', twitter: 'people',
     finance: 'finance', subscriptions: 'finance', shopping: 'finance', trading: 'finance',
     health: 'wellness', training: 'wellness', nutrition: 'wellness', wearables: 'wellness', meals: 'wellness',

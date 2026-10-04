@@ -45,7 +45,7 @@ const ESSENTIAL_CHANNELS = [
 const ALL_CHANNELS = [
   "dashboard", "analytics", "agenda", "calendar",
   "life", "agents", "agents.flow", "notifications",
-  "system", "crossIntel", "systemAgenda", "trading", "trading-ticker",
+  "system", "systemAgenda", "trading", "trading-ticker",
   "finance", "health", "notes", "learning",
 ];
 
@@ -141,7 +141,7 @@ export class MtwPublisher {
   }
 
   /** Slow channels that block — pushed after fast ones */
-  private static readonly SLOW_CHANNELS = new Set(["analytics", "crossIntel"]);
+  private static readonly SLOW_CHANNELS = new Set(["analytics"]);
 
   /** Called on every (re)connection — subscribe + initial publish */
   private onConnected(): void {

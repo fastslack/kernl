@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { data, issues, planner } from '$lib/stores.js';
+  import { data, planner } from '$lib/stores.js';
+  import { apiFetchRaw } from '$lib/api.js';
   import KpiCard from '$shared/components/KpiCard.svelte';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import QuickAction from '$shared/components/QuickAction.svelte';
@@ -12,7 +14,6 @@
 
   // Data from stores
   $: d = ($data as any);
-  $: iss = ($issues as any);
   $: pl = ($planner as any);
 
   // Tasks breakdown
@@ -32,10 +33,29 @@
   $: remOverdue = (reminders.overdue ?? []) as any[];
   $: remUpcoming = (reminders.upcoming24h ?? []) as any[];
 
-  // Issues breakdown
-  $: issuesAvailable = iss?.available ?? false;
-  $: issuesOpen = iss?.open ?? 0;
-  $: issuesClosed = iss?.closed ?? 0;
+  // Approvals: drafts the agents are waiting on you to approve (/outbox).
+  // Null until loaded, and stays null on a kernel without the projects module,
+  // so the card and the KPI only show where approvals exist.
+  interface Approval { id: string; channel: string; created_at: string; preview?: { title?: string; body?: string } }
+  let approvals: Approval[] | null = null;
+  let approvalsPending = 0;
+
+  async function loadApprovals() {
+    try {
+      const [list, count] = await Promise.all([
+        apiFetchRaw('/api/outbox?status=draft&limit=5'),
+        apiFetchRaw('/api/outbox/count'),
+      ]);
+      if (!list.ok || !count.ok) return;
+      approvals = (((await list.json()) as { items?: Approval[] }).items ?? []);
+      approvalsPending = ((await count.json()) as { pending?: number }).pending ?? approvals.length;
+    } catch { /* offline or no projects module: keep the section hidden */ }
+  }
+
+  const approvalTitle = (a: Approval) =>
+    (a.preview?.title || a.preview?.body || a.channel || '').split('\n')[0].slice(0, 90);
+
+  onMount(loadApprovals);
 
   // Color map for priorities
   const COL: Record<string, string> = {
@@ -70,7 +90,7 @@
     newTask: 'M12 4v16m8-8H4',
     reminder: 'M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6 6 0 00-5-5.917V4a1 1 0 10-2 0v1.083A6 6 0 006 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9',
     planner: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z',
-    issues: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
+    approvals: 'M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z',
     urgent: 'M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z',
     context: 'M7 7h.01M7 3h5c.512 0 1.024.195 1.414.586l7 7a2 2 0 010 2.828l-7 7a2 2 0 01-2.828 0l-7-7A1.994 1.994 0 013 12V7a4 4 0 014-4z',
     status: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
@@ -87,7 +107,7 @@
     <QuickAction label="New Task" icon={ICONS.newTask} variant="primary" navigate={goto} href="/tasks" />
     <QuickAction label="Add Reminder" icon={ICONS.reminder} variant="purple" navigate={goto} href="/reminders" />
     <QuickAction label="View Planner" icon={ICONS.planner} variant="blue" navigate={goto} href="/planner" />
-    <QuickAction label="Open Issues" icon={ICONS.issues} variant="orange" navigate={goto} href="/issues" />
+    <QuickAction label="Review Approvals" icon={ICONS.approvals} variant="orange" navigate={goto} href="/outbox" />
   </div>
 
   <!-- KPI Row -->
@@ -96,8 +116,8 @@
     <KpiCard label="Done Today" value={taskDoneToday} sub="tasks completed" accent="--teal" color="var(--teal)" />
     <KpiCard label="Overdue" value={taskOverdue.length} sub="need attention" accent="--red" color={taskOverdue.length > 0 ? 'var(--red)' : 'var(--text-3)'} />
     <KpiCard label="Reminders" value={remActive} sub="active" accent="--purple" color="var(--purple)" />
-    {#if issuesAvailable}
-      <KpiCard label="Issues" value={issuesOpen} sub="{issuesClosed} closed" accent="--orange" color="var(--orange)" />
+    {#if approvals}
+      <KpiCard label="Approvals" value={approvalsPending} sub="waiting for you" accent="--orange" color={approvalsPending > 0 ? 'var(--orange)' : 'var(--text-3)'} />
     {/if}
   </div>
 
@@ -118,6 +138,24 @@
         <Empty message="No urgent tasks!" />
       {/if}
     </OverviewCard>
+
+    <!-- Pending Approvals -->
+    {#if approvals}
+      <OverviewCard title="Pending Approvals" icon={ICONS.approvals} iconColor="var(--orange)" navigate={goto} actions={[{ label: 'Review All', href: '/outbox' }]}>
+        {#if approvals.length > 0}
+          <ul class="card-list">
+            {#each approvals as a (a.id)}
+              <li>
+                <span class="card-list-title">{approvalTitle(a)}</span>
+                <span class="card-list-meta">{a.channel}</span>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <Empty message="Nothing waiting for approval." />
+        {/if}
+      </OverviewCard>
+    {/if}
 
     <!-- Upcoming Reminders -->
     <OverviewCard title="Upcoming Reminders" icon={ICONS.reminder} iconColor="var(--purple)" navigate={goto} actions={[{ label: 'View Alerts', href: '/reminders' }]}>

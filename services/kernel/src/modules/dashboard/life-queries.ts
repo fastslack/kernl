@@ -7,7 +7,6 @@ export interface DailySummary {
   interactions: number;
   remindersFired: number;
   purchases: number;
-  issuesClosed: number;
 }
 
 export interface HabitEntry {
@@ -63,19 +62,7 @@ export function queryDailySummary(db: SqliteDb): DailySummary {
     ).get(today) as { c: number }
   ).c;
 
-  let issuesClosed = 0;
-  try {
-    issuesClosed = (
-      db.prepare(
-        `SELECT COUNT(*) AS c FROM issues
-         WHERE state IN ('closed','merged') AND closed_at >= ? AND closed_at < ?`,
-      ).get(dayStart(today), dayStart(tomorrow)) as { c: number }
-    ).c;
-  } catch {
-    // issues table may not exist
-  }
-
-  return { tasksDone, tasksCreated, interactions, remindersFired, purchases, issuesClosed };
+  return { tasksDone, tasksCreated, interactions, remindersFired, purchases };
 }
 
 export function queryHabits(db: SqliteDb, date: string): HabitEntry[] {
