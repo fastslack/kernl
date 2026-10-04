@@ -29,6 +29,7 @@
   import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
   import WhatsAppCard from '$lib/components/whatsapp/WhatsAppCard.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
+  import LicensePanel from '$lib/components/LicensePanel.svelte';
   import {
     updateInfo, checking, updating, updateError, updateHint,
     canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
@@ -192,7 +193,17 @@
   }
 
   // ── Sections / routing ───────────────────────
-  const CORE_SECTIONS = ['general', 'ai', 'mail', 'channels', 'integrations', 'security', 'advanced', 'about'];
+  // License first: it is what unlocks everything paid, and it used to be a
+  // page nothing linked to.
+  const CORE_SECTIONS = ['license', 'general', 'ai', 'mail', 'channels', 'integrations', 'security', 'advanced', 'about'];
+  let licenseState: string | null = null;
+  async function loadLicenseState() {
+    try {
+      const res = await fetch(`${(globalThis as { __API_BASE?: string }).__API_BASE ?? ''}/api/license/status`);
+      if (res.ok) licenseState = ((await res.json()) as { status: string }).status;
+    } catch { /* the badge is a hint; the section still loads its own status */ }
+  }
+  onMount(loadLicenseState);
   $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`) }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
 
@@ -200,7 +211,13 @@
   // extensión en vez de ser un nodo aparte, que es lo que permite que el
   // rail sea una lista plana y no una estructura de grupos.
   $: sideNavItems = [
-    ...navSections.map((s): SideNavItem => ({ id: s.id, label: s.label })),
+    ...navSections.map((s): SideNavItem => (s.id === 'license' && licenseState
+      ? {
+        id: s.id, label: s.label, icon: '🔑',
+        badge: licenseState === 'valid' ? $t('license.badge.valid') : $t('license.badge.none'),
+        badgeTone: licenseState === 'valid' ? 'ok' : 'warn',
+      }
+      : s.id === 'license' ? { id: s.id, label: s.label, icon: '🔑' } : { id: s.id, label: s.label })),
     ...extNav.map((s, i): SideNavItem => ({
       id: s.id,
       label: s.label,
@@ -661,6 +678,11 @@
               >{tab.title}</button>
             {/each}
           </div>
+        {/if}
+
+        <!-- ═══ License ═══ -->
+        {#if activeSection === 'license'}
+          <LicensePanel on:change={(e) => (licenseState = e.detail?.status ?? null)} />
         {/if}
 
         <!-- ═══ AI ═══ -->

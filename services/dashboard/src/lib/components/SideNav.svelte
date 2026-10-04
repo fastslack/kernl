@@ -5,6 +5,9 @@
     icon?: string;
     /** Etiqueta de separador a dibujar ENCIMA de este item. */
     divider?: string;
+    /** Estado corto a la derecha del label (p. ej. la licencia: "Activa"). */
+    badge?: string;
+    badgeTone?: 'ok' | 'warn';
   }
 </script>
 
@@ -40,6 +43,7 @@
     >
       {#if item.icon}<span class="sidenav-icon">{item.icon}</span>{/if}
       {item.label}
+      {#if item.badge}<span class="sidenav-badge tone-{item.badgeTone ?? 'ok'}">{item.badge}</span>{/if}
     </button>
   {/each}
 </nav>
@@ -60,6 +64,12 @@
   .sidenav-item:hover { background: var(--surface-2); }
   .sidenav-item.active { background: var(--surface-3); color: var(--text-1); }
   .sidenav-icon { font-size: 13px; flex-shrink: 0; }
+  .sidenav-badge {
+    margin-left: auto; font: 700 9px var(--font-mono); text-transform: uppercase; letter-spacing: 0.06em;
+    padding: 2px 6px; border-radius: 999px; border: 1px solid currentColor;
+  }
+  .sidenav-badge.tone-ok { color: var(--green); }
+  .sidenav-badge.tone-warn { color: var(--gold); }
   .sidenav-divider {
     font: 700 8px var(--font-mono); text-transform: uppercase; letter-spacing: 1px;
     color: var(--text-3); margin: 8px 4px 4px; padding-top: 8px; border-top: 1px solid var(--border);
