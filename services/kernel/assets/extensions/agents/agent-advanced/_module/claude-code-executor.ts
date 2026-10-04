@@ -50,13 +50,11 @@ import {
   type SandboxHandle,
   type SandboxRunOptions,
   localDate,
-} from "@kernl/extension-sdk";
-import { failureNote } from "./failure-note.js";
-import {
   resolveDefaultSocketPath as resolveKernelMcpSocketPath,
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
-} from "../../../../../src/core/mcp-unix-socket.js";
+} from "@kernl/extension-sdk";
+import { failureNote } from "./failure-note.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import { seedOfficeHome, officeHomeGuidance } from "../../../../../src/modules/agents/office-home.js";

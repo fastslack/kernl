@@ -3,7 +3,6 @@
     "source": [
       "src/core/i18n/prompts.js",
       "src/core/llm/provider-health.js",
-      "src/core/mcp-unix-socket.js",
       "src/modules/agents/agent-name-conventions.js",
       "src/modules/agents/builtin-handlers.js",
       "src/modules/agents/executor.js",
@@ -17,10 +16,6 @@
       "src/modules/chat/types.js"
     ],
     "bundle": [
-      "src/core/attestation.ts",
-      "src/core/auth.ts",
-      "src/core/canonical-json.ts",
-      "src/core/elicit.ts",
       "src/core/i18n/prompts.ts",
       "src/core/llm/chat-claude.ts",
       "src/core/llm/chat-factory.ts",
@@ -40,14 +35,9 @@
       "src/core/llm/provider-resolution.ts",
       "src/core/llm/retry.ts",
       "src/core/logger.ts",
-      "src/core/mcp-unix-socket.ts",
-      "src/core/request-context.ts",
-      "src/core/task-registry.ts",
-      "src/core/zod-to-json.ts",
       "src/modules/agents/i18n.ts",
       "src/modules/agents/office-home.ts",
-      "src/modules/agents/workspace-constants.ts",
-      "src/server.ts"
+      "src/modules/agents/workspace-constants.ts"
     ]
   },
   "home/life": {
