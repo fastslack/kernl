@@ -196,6 +196,13 @@
   // License first: it is what unlocks everything paid, and it used to be a
   // page nothing linked to.
   const CORE_SECTIONS = ['license', 'general', 'ai', 'mail', 'channels', 'integrations', 'security', 'advanced', 'about'];
+  /** Rail icon per core section, so the eye finds a section before reading it. */
+  const SECTION_ICONS: Record<string, string> = {
+    license: '🔑', general: '⚙️', ai: '🧠', mail: '✉️', channels: '📡',
+    integrations: '🔌', security: '🛡️', advanced: '🛠️', about: 'ℹ️',
+  };
+  /** For an extension section that ships without an icon of its own. */
+  const EXT_SECTION_ICON = '🧩';
   let licenseState: string | null = null;
   async function loadLicenseState() {
     try {
@@ -204,7 +211,7 @@
     } catch { /* the badge is a hint; the section still loads its own status */ }
   }
   onMount(loadLicenseState);
-  $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`) }));
+  $: navSections = CORE_SECTIONS.map((id) => ({ id, label: $t(`settings.nav.${id}`), icon: SECTION_ICONS[id] }));
   $: extNav = extSections.map((s) => ({ id: `ext-${s.id}`, label: loc(s.label), icon: s.icon ?? '' }));
 
   // Un solo array para el rail. El divisor cuelga del primer item de
@@ -213,15 +220,15 @@
   $: sideNavItems = [
     ...navSections.map((s): SideNavItem => (s.id === 'license' && licenseState
       ? {
-        id: s.id, label: s.label, icon: '🔑',
+        id: s.id, label: s.label, icon: s.icon,
         badge: licenseState === 'valid' ? $t('license.badge.valid') : $t('license.badge.none'),
         badgeTone: licenseState === 'valid' ? 'ok' : 'warn',
       }
-      : s.id === 'license' ? { id: s.id, label: s.label, icon: '🔑' } : { id: s.id, label: s.label })),
+      : { id: s.id, label: s.label, icon: s.icon })),
     ...extNav.map((s, i): SideNavItem => ({
       id: s.id,
       label: s.label,
-      icon: s.icon || undefined,
+      icon: s.icon || EXT_SECTION_ICON,
       divider: i === 0 ? $t('settings.nav.extensions') : undefined,
     })),
   ];
