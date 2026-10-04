@@ -98,6 +98,14 @@ your browser and reused for every request. To pin your own instead, set
 `KERNEL_AUTH_TOKEN` (`openssl rand -hex 32`) in `.env` before the first `up`. The graph
 brain (Neo4j) and key-free web search come bundled in this path.
 
+To let the Filesystem Commander browse a folder of your machine, and to run
+`claude_code` agents on your Claude Code login, set `KERNL_FS_ROOT` in `.env` and
+add the host overlay — then name the same files on every later `compose` command:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.host.yml up -d
+```
+
 </details>
 
 ## Your AI is brilliant — and amnesiac.
