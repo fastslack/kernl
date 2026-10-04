@@ -109,7 +109,12 @@ export function buildMyOffice(
 
   // ── Floor: polished dark marble (lifted a touch so the luxury reads under
   // the single warm light instead of going pure black) ──
-  const marbleMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a2236, roughness: 0.22, metalness: 0.32 });
+  // Bottom of the floor stack: the rugs lie on it, each layer biased in depth
+  // (see floorRug) so they never z-fight with it when the camera pulls back.
+  const marbleMat = new rt.THREE.MeshStandardMaterial({
+    color: 0x2a2236, roughness: 0.22, metalness: 0.32,
+    polygonOffset: true, polygonOffsetFactor: 0, polygonOffsetUnits: 0,
+  });
   applyWorldTexture(marbleMat, 'marble');
   const marbleGeo = new rt.THREE.PlaneGeometry(w, d);
   scaleUV(marbleGeo, w / 11, d / 11);
@@ -460,8 +465,7 @@ export function buildMyOffice(
     const loungeW = Math.min(2.6, xR - visitorRugEdge - 0.35);
     if (loungeW > 1.5) {
       const lx = xR - loungeW / 2 - 0.05;
-      tinted.add(new T.PlaneGeometry(loungeW, 3.0), lx, 0.031, sofaZ, { rx: -Math.PI / 2, color: 0x1c2442 });
-      gold.add(new T.PlaneGeometry(loungeW + 0.16, 3.16), lx, 0.029, sofaZ, { rx: -Math.PI / 2 });
+      floorRug(scene, lx, sofaZ, loungeW, 3.0, 0x1c2442, 0x8a6a32, 0.08);
     }
     const tx = xR - 1.55;
     wood.add(new RoundedBoxGeometry(0.72, 0.06, 1.25, 2, 0.02), tx, 0.42, sofaZ);
@@ -522,22 +526,11 @@ export function buildMyOffice(
   tinted.flush(scene, new T.MeshStandardMaterial({ roughness: 0.6, metalness: 0.05, vertexColors: true }), true);
   glow.flush(scene, new T.MeshBasicMaterial({ color: 0xffd890, transparent: true, opacity: 0.7 }));
 
-  // ── Large rug under the visitor seating zone (gold-bordered burgundy) ──
+  // ── Large rug under the visitor seating zone (burgundy, gold binding) ──
   const rugCZ = (deskFrontZ + backRowZ) / 2;
   const rugD = Math.min(backRowZ - deskFrontZ + 1.6, d - 2);
   const rugW = Math.min(deskW + 1.2, w - 1.4);
-  const rug = new rt.THREE.Mesh(
-    new rt.THREE.PlaneGeometry(rugW, rugD),
-    new rt.THREE.MeshStandardMaterial({ color: 0x6a1a2a, roughness: 0.7, metalness: 0 }),
-  );
-  rug.rotation.x = -Math.PI / 2; rug.position.set(cx, 0.03, rugCZ); rug.receiveShadow = true;
-  scene.add(rug);
-  const rugBorder = new rt.THREE.Mesh(
-    new rt.THREE.PlaneGeometry(rugW + 0.3, rugD + 0.3),
-    new rt.THREE.MeshStandardMaterial({ color: 0xc9a84c, roughness: 0.5, metalness: 0.3 }),
-  );
-  rugBorder.rotation.x = -Math.PI / 2; rugBorder.position.set(cx, 0.028, rugCZ);
-  scene.add(rugBorder);
+  floorRug(scene, cx, rugCZ, rugW, rugD, 0x6a1a2a, 0x8a6a32, 0.15);
 
   // ── Warm ambient lighting — single PointLight (kept to one for perf) ──
   // Brighter + pulled toward the desk/visitor zone so the executive furniture
@@ -590,4 +583,33 @@ export function buildMyOffice(
 
   const doorPos = { x: cx, z: zDoor };
   return { visitorPos, hitbox, noteDropPos, seatPos, seatFacingY, headPos, visitorChairs, deskFacingPos, doorPos };
+}
+
+/**
+ * A rug lying on the office floor: a woven, matte field inside a binding of
+ * `border` width. Rug and floor are a few millimetres apart, which the depth
+ * buffer cannot tell apart once the camera pulls back — the layers z-fought
+ * into stripes. polygonOffset biases each layer in depth space instead, so the
+ * floor < binding < field order holds at any zoom.
+ */
+function floorRug(
+  scene: any, x: number, z: number, w: number, d: number,
+  field: number, binding: number, border: number,
+): void {
+  const layer = (color: number, lw: number, ld: number, y: number, units: number) => {
+    const mat = new rt.THREE.MeshStandardMaterial({
+      color, polygonOffset: true, polygonOffsetFactor: units / 2, polygonOffsetUnits: units,
+    });
+    applyPBR(mat, 'carpet');
+    applyWorldTexture(mat, 'carpet');
+    const geo = new rt.THREE.PlaneGeometry(lw, ld);
+    scaleUV(geo, lw / 1.5, ld / 1.5);
+    const mesh = new rt.THREE.Mesh(geo, mat);
+    mesh.rotation.x = -Math.PI / 2;
+    mesh.position.set(x, y, z);
+    mesh.receiveShadow = true;
+    scene.add(mesh);
+  };
+  layer(binding, w + border * 2, d + border * 2, 0.028, -2);
+  layer(field, w, d, 0.03, -4);
 }

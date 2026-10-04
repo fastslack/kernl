@@ -13,6 +13,9 @@ export function buildFloor(scene: any, _bounds: { minX: number; maxX: number; mi
   // Lawn around the block: everything outside the streets reads as grass.
   const slabMat = new rt.THREE.MeshStandardMaterial({ color: 0x1f3a1c, roughness: 1, metalness: 0 });
   applyPBR(slabMat, 'cloth');
+  // A lawn reflects next to nothing. At the grazing angles of a low camera the
+  // environment map showed up on it as a grey-white sheen across the horizon.
+  slabMat.envMapIntensity = 0.12;
   // Fine blades keep the giant slab from reading as one flat poly; fog
   // hides any far-field tiling.
   applyWorldTexture(slabMat, 'grass');

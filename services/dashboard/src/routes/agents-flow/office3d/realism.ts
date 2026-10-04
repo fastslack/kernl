@@ -109,17 +109,21 @@ if (typeof window !== 'undefined') {
  *  repeat:    extra tiling on top of the UVs the call site already set.
  *  roughness / metalness: replace the material's values (the roughness map
  *             multiplies `roughness`); undefined keeps what the site set.
+ *  roughnessMap: false = ignore the photo's roughness map. A map averaging ~0.5
+ *             halves the roughness, and a surface that should be dead matte
+ *             (a lawn) then throws a sheen back at every light.
  */
 const SETS: Record<WorldTexKind, {
   realColor: number; lift: number; repeat: number;
-  normalScale: number; roughness?: number; metalness?: number;
+  normalScale: number; roughness?: number; metalness?: number; roughnessMap?: boolean;
 }> = {
-  marble:   { realColor: 0.8,  lift: 2.6, repeat: 3,   normalScale: 0.8, roughness: 0.9, metalness: 0 },
+  // Honed, not polished: lifted 2.6× with the photo's roughness map it read as a white glare.
+  marble:   { realColor: 0.8,  lift: 1.7, repeat: 3,   normalScale: 0.8, roughness: 0.85, metalness: 0, roughnessMap: false },
   wood:     { realColor: 0.7,  lift: 1.3, repeat: 1,   normalScale: 0.6, roughness: 0.85, metalness: 0 },
   carpet:   { realColor: 0.0,  lift: 1.1, repeat: 3,   normalScale: 1.0, roughness: 1.0, metalness: 0 },
   wall:     { realColor: 0.15, lift: 1.1, repeat: 1.5, normalScale: 0.7, roughness: 1.0, metalness: 0 },
   concrete: { realColor: 0.2,  lift: 1.0, repeat: 1,   normalScale: 0.8, roughness: 1.0 },
-  grass:    { realColor: 0.9,  lift: 1.25, repeat: 2.5, normalScale: 1.6, roughness: 1.0, metalness: 0 },
+  grass:    { realColor: 0.9,  lift: 1.25, repeat: 2.5, normalScale: 1.6, roughness: 1.0, metalness: 0, roughnessMap: false },
   asphalt:  { realColor: 0.35, lift: 1.0, repeat: 1,   normalScale: 0.8, roughness: 1.0 },
 };
 
@@ -218,13 +222,13 @@ export function upgradeMaterial(material: any, kind: WorldTexKind, orig: any): v
     );
     material.map = set.map;
     material.normalMap = set.normalMap;
-    material.roughnessMap = set.roughnessMap;
+    material.roughnessMap = cfg.roughnessMap === false ? null : set.roughnessMap;
     if (material.normalScale?.set) material.normalScale.set(cfg.normalScale, cfg.normalScale);
     if (cfg.roughness !== undefined) material.roughness = cfg.roughness;
     if (cfg.metalness !== undefined) material.metalness = cfg.metalness;
     material.needsUpdate = true;
     const after = {
-      color: material.color.clone(), map: set.map, normalMap: set.normalMap, roughnessMap: set.roughnessMap,
+      color: material.color.clone(), map: set.map, normalMap: set.normalMap, roughnessMap: material.roughnessMap,
       normalScale: cfg.normalScale, roughness: material.roughness, metalness: material.metalness,
     };
     registerRealismSwitch('tex', material, { before, after }, applyTexState);
