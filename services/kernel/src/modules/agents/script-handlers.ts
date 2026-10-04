@@ -329,122 +329,8 @@ export function scriptMaintenanceDue(ctx: BuiltinHandlerContext): BuiltinHandler
 }
 
 // ── 5. Cleanup ─────────────────────────────────
-
-export function scriptCleanup(ctx: BuiltinHandlerContext): BuiltinHandler {
-  return async () => {
-    const lines: string[] = ["# Cleanup Report\n"];
-    let totalCleaned = 0;
-
-    // Clean stale agent runs (failed/cancelled older than 30 days)
-    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-
-    const staleSteps = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM agent_run_steps WHERE run_id IN (
-         SELECT id FROM agent_runs WHERE status IN ('failed','cancelled') AND created_at < ?
-       )`, thirtyDaysAgo,
-    )?.c ?? 0;
-
-    if (staleSteps > 0) {
-      ctx.db.prepare(
-        `DELETE FROM agent_run_steps WHERE run_id IN (
-           SELECT id FROM agent_runs WHERE status IN ('failed','cancelled') AND created_at < ?
-         )`,
-      ).run(thirtyDaysAgo);
-      lines.push(`- Removed ${staleSteps} stale run steps (>30d failed/cancelled)`);
-      totalCleaned += staleSteps;
-    }
-
-    const staleRuns = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM agent_runs WHERE status IN ('failed','cancelled') AND created_at < ?`, thirtyDaysAgo,
-    )?.c ?? 0;
-
-    if (staleRuns > 0) {
-      ctx.db.prepare(
-        `DELETE FROM agent_runs WHERE status IN ('failed','cancelled') AND created_at < ?`,
-      ).run(thirtyDaysAgo);
-      lines.push(`- Removed ${staleRuns} stale agent runs (>30d failed/cancelled)`);
-      totalCleaned += staleRuns;
-    }
-
-    // Completed runs of BUILTIN agents (no LLM, zero tokens) older than 30
-    // days. These are the high-frequency polls — the offline monitor alone
-    // writes a row every 5 minutes, forever — and nothing pruned them, so they
-    // came to dominate both the table and the dashboard's "Recent Runs" panel.
-    // LLM runs are left alone: they cost money and are worth keeping.
-    const BUILTIN_COMPLETED = `FROM agent_runs WHERE status = 'completed' AND created_at < ?
-         AND agent_id IN (SELECT id FROM agents WHERE builtin_handler IS NOT NULL AND builtin_handler <> '')`;
-
-    const staleBuiltinSteps = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM agent_run_steps WHERE run_id IN (SELECT id ${BUILTIN_COMPLETED})`, thirtyDaysAgo,
-    )?.c ?? 0;
-
-    if (staleBuiltinSteps > 0) {
-      ctx.db.prepare(
-        `DELETE FROM agent_run_steps WHERE run_id IN (SELECT id ${BUILTIN_COMPLETED})`,
-      ).run(thirtyDaysAgo);
-      totalCleaned += staleBuiltinSteps;
-    }
-
-    const staleBuiltinRuns = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c ${BUILTIN_COMPLETED}`, thirtyDaysAgo,
-    )?.c ?? 0;
-
-    if (staleBuiltinRuns > 0) {
-      ctx.db.prepare(`DELETE ${BUILTIN_COMPLETED}`).run(thirtyDaysAgo);
-      lines.push(`- Removed ${staleBuiltinRuns} completed builtin runs (>30d, no-LLM polls)`);
-      totalCleaned += staleBuiltinRuns;
-    }
-
-    // Clean old event log entries (>30 days)
-    const oldEventLogs = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM agent_event_log WHERE created_at < ?`, thirtyDaysAgo,
-    )?.c ?? 0;
-
-    if (oldEventLogs > 0) {
-      ctx.db.prepare(`DELETE FROM agent_event_log WHERE created_at < ?`).run(thirtyDaysAgo);
-      lines.push(`- Removed ${oldEventLogs} old event log entries (>30d)`);
-      totalCleaned += oldEventLogs;
-    }
-
-    // Clean read notifications (>7 days)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    const oldNotifs = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM notifications WHERE read = 1 AND created_at < ?`, sevenDaysAgo,
-    )?.c ?? 0;
-
-    if (oldNotifs > 0) {
-      ctx.db.prepare(`DELETE FROM notifications WHERE read = 1 AND created_at < ?`).run(sevenDaysAgo);
-      lines.push(`- Removed ${oldNotifs} read notifications (>7d)`);
-      totalCleaned += oldNotifs;
-    }
-
-    // Clean dismissed reminders (>30 days)
-    const oldDismissed = safeOne<{ c: number }>(ctx.db,
-      `SELECT COUNT(*) as c FROM reminders WHERE status = 'dismissed' AND updated_at < ?`, thirtyDaysAgo,
-    )?.c ?? 0;
-
-    if (oldDismissed > 0) {
-      ctx.db.prepare(`DELETE FROM reminders WHERE status = 'dismissed' AND updated_at < ?`).run(thirtyDaysAgo);
-      lines.push(`- Removed ${oldDismissed} dismissed reminders (>30d)`);
-      totalCleaned += oldDismissed;
-    }
-
-    // Summary
-    if (totalCleaned === 0) {
-      lines.push("Nothing to clean up — database is tidy.");
-    } else {
-      lines.push(`\n**Total cleaned: ${totalCleaned} records**`);
-    }
-
-    // SQLite vacuum suggestion
-    const fragCheck = safeOne<{ freelist_count: number }>(ctx.db, `PRAGMA freelist_count`);
-    if (fragCheck && fragCheck.freelist_count > 100) {
-      lines.push(`\nHint: ${fragCheck.freelist_count} free pages — run VACUUM to reclaim space.`);
-    }
-
-    return lines.join("\n");
-  };
-}
+// Moved to the storage module (src/modules/storage): configurable retention
+// policies applied nightly by storage:retention.
 
 // ── 6. Export Module ───────────────────────────
 
@@ -567,7 +453,6 @@ export const SCRIPT_AGENT_DEFS: Array<{
   { handler: "script:contacts-dedup",  name: "Contact Dedup",         description: "Find duplicate contacts by email, phone, name",       cron: "0 4 * * 1",     flow: "Scripts" },
   { handler: "script:today",           name: "Today's Agenda",        description: "Tasks, reminders, events, appointments for today",    cron: "0 6 * * *",     flow: "Scripts" },
   { handler: "script:maintenance-due", name: "Maintenance Due",       description: "Home, vehicle, document, warranty maintenance due",   cron: "0 8 * * 1",     flow: "Scripts" },
-  { handler: "script:cleanup",         name: "Data Cleanup",          description: "Clean stale runs, old logs, dismissed reminders",     cron: "0 4 * * 0",     flow: "Scripts" },
   { handler: "script:export-summary",  name: "Data Export Summary",   description: "Record counts across all modules",                   cron: "0 5 1 * *",     flow: "Scripts" },
   { handler: "script:auto-trader",    name: "Auto-Trader (Script)",  description: "Mechanical trading: run formulas, track paper trades, report performance", cron: "*/5 * * * *", flow: "Trading" },
 ];
@@ -578,7 +463,6 @@ export function createScriptHandlers(ctx: BuiltinHandlerContext): Map<string, Bu
   map.set("script:contacts-dedup",  scriptContactsDedup(ctx));
   map.set("script:today",           scriptToday(ctx));
   map.set("script:maintenance-due", scriptMaintenanceDue(ctx));
-  map.set("script:cleanup",         scriptCleanup(ctx));
   map.set("script:export-summary",  scriptExport(ctx));
   map.set("script:auto-trader",    scriptAutoTrader(ctx));
   return map;

@@ -33,6 +33,7 @@ import { createMetaModule } from "../../modules/meta/index.js";
 import { createMcpPlansModule } from "../../modules/mcp-plans/index.js";
 import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/tool-memory/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
+import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
 import { createChatModule } from "../../modules/chat/index.js";
@@ -145,6 +146,9 @@ export async function initCoreModules(args: {
   }));
   const toolMemoryModule = createToolMemoryModule(() => embeddingsPromise) as ToolMemoryModule;
   registry.register(toolMemoryModule);
+
+  // ── Storage (DB size + retention policies collected from every module) ──
+  registry.register(createStorageModule(() => registry.allModules()));
 
   // ── Brain (unified semantic memory across modules) ──
   // Same late-bound embeddings promise as tool-memory. Auto-indexing is

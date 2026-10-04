@@ -7,6 +7,7 @@ import {
 import { musicMigrations } from "./migrations/001_music.js";
 import { MusicService } from "./service.js";
 import { registerMusicRoutes } from "./api-routes.js";
+import { musicRetentionPolicies } from "./retention.js";
 import { archiveCatalogMigrations, derivedIndexIsDue, ingestNextChunk } from "../../_lib/archive-catalog/index.js";
 
 export interface MusicModule extends ExtensibleModule {
@@ -104,6 +105,9 @@ export function createMusicModule(): MusicModule {
       }, INGEST_TICK_MS);
       return svc;
     },
+
+    // Catalogue retention (opt-in): untouched archive.org titles.
+    retentionPolicies: () => musicRetentionPolicies(),
 
     dashboard: (svc) => (svc ? { registerRoutes: (server) => registerMusicRoutes(server, svc) } : null),
 
