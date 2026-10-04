@@ -182,6 +182,8 @@ const settingsFieldSchema = z.object({
   label: localizedTextSchema,
   description: localizedTextSchema.optional(),
   default: z.string().max(2000).optional(),
+  /** Mirrors ExtensionSettingSource — an unknown source fails here instead of being stripped. */
+  source: z.enum(["email_accounts"]).optional(),
 });
 
 /**

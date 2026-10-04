@@ -106,4 +106,13 @@ describe("extension manifest validator", () => {
     });
     expect(r.ok).toBe(true);
   });
+
+  it("keeps a settings field's source and rejects an unknown one", () => {
+    const field = { key: "WAREHOUSE_REPORT_TO", type: "string", label: "To" };
+    const ok = validateManifest({ ...baseValid, settings: { fields: [{ ...field, source: "email_accounts" }] } });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ok.manifest.settings?.fields[0].source).toBe("email_accounts");
+    const bad = validateManifest({ ...baseValid, settings: { fields: [{ ...field, source: "contacts" }] } });
+    expect(bad.ok).toBe(false);
+  });
 });

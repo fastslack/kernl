@@ -17,6 +17,7 @@
   import Field from '$lib/components/settings/Field.svelte';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import SelectField from '$lib/components/settings/SelectField.svelte';
+  import EmailAccountsPicker from '$lib/components/settings/EmailAccountsPicker.svelte';
   import SettingsCard from '$lib/components/settings/SettingsCard.svelte';
   import VoiceStatusPanel from '$lib/components/settings/VoiceStatusPanel.svelte';
   import VoicePicker from '$lib/components/settings/VoicePicker.svelte';
@@ -45,6 +46,8 @@
     value: string;
     configured: boolean;
     extension?: string;
+    /** Live option source declared by the extension (e.g. 'email_accounts'). */
+    source?: string;
     updated_at?: string;
   }
   interface ExtSection {
@@ -933,6 +936,15 @@
                     disabled={it.readonly}
                   />
                 </div>
+              {:else if it.source === 'email_accounts'}
+                <div class="fld-lang fld-top" id={`field-${it.key}`}>
+                  <div class="fld-lang-meta">
+                    <span class="fld-lang-label">{loc(it.label) || it.key}</span>
+                    <span class="fld-lang-desc">{loc(it.description)}</span>
+                    <span class="fld-lang-key">{it.key}</span>
+                  </div>
+                  <EmailAccountsPicker bind:value={values[it.key]} disabled={it.readonly} />
+                </div>
               {:else}
                 <Field
                   fieldKey={it.key}
@@ -1155,6 +1167,8 @@
   .fld-lang-label { font-size: 12px; font-weight: 600; color: var(--text-1); }
   .fld-lang-desc { font-size: 10px; color: var(--text-2); }
   .fld-lang-key { font: 400 9px var(--font-mono); color: var(--text-3); }
+  /* A tall control (a list of accounts) reads better with its label on top of its first row. */
+  .fld-lang.fld-top { align-items: start; }
 
   @media (max-width: 700px) {
     .fld-lang { grid-template-columns: 1fr; }
