@@ -6,7 +6,9 @@
  *
  *   GET  /api/store/status              → store reachability, All-Access prices,
  *                                         license summary, open checkouts
- *   POST /api/store/checkout            → { slug } → { session_id, url }
+ *   POST /api/store/checkout            → { slug } or { plan: "all-access",
+ *                                         period: "monthly"|"yearly" }
+ *                                         → { session_id, url }
  *   GET  /api/store/checkout/:sessionId → poll a purchase to completion
  *   POST /api/store/checkout/:sessionId/cancel → abandon a still-unpaid purchase
  *   POST /api/store/install             → { slug } — install something the
@@ -34,7 +36,7 @@ import type { AgentService } from "../agents/service.js";
 import { log } from "../../core/logger.js";
 import { createStoreCheckout, fetchStoreCatalogFull } from "./client.js";
 import { installFromStore } from "./install.js";
-import { advanceCheckout } from "./purchase-flow.js";
+import { advanceCheckout, ALL_ACCESS_SLUG } from "./purchase-flow.js";
 import { CheckoutService, type CheckoutRow } from "./checkout-service.js";
 
 export interface StoreRoutesDeps {
@@ -92,15 +94,23 @@ export function registerStoreRoutes(server: KernelHttpServer, deps: StoreRoutesD
   });
 
   // ── POST /api/store/checkout ─────────────────────────────────────────
-  // Body: { slug }. Opens (or resumes) a Stripe Checkout for that item.
+  // Body: { slug } for one extension, or { plan: "all-access", period } for
+  // the subscription. Opens (or resumes) a Stripe Checkout for it.
 
-  server.route<{ slug?: string }>("POST", "/api/store/checkout", async ({ body }) => {
-    const slug = body.slug?.trim();
-    if (!slug) throw new HttpError(400, "slug required");
-
+  server.route<{ slug?: string; plan?: string; period?: string }>("POST", "/api/store/checkout", async ({ body }) => {
     const catalog = await fetchStoreCatalogFull(deps.storeUrl, fetchImpl).catch((err) => {
       throw new HttpError(500, `Could not reach the store: ${err instanceof Error ? err.message : String(err)}`);
     });
+
+    if (body.plan === ALL_ACCESS_SLUG) {
+      const period = body.period === "monthly" || body.period === "yearly" ? body.period : null;
+      if (!period) throw new HttpError(400, 'period must be "monthly" or "yearly"');
+      return openAllAccessCheckout(period, catalog.allAccess);
+    }
+
+    const slug = body.slug?.trim();
+    if (!slug) throw new HttpError(400, "slug required");
+
     const item = catalog.items.find((i) => i.slug === slug);
     if (!item) throw new HttpError(404, `Unknown store item "${slug}"`);
 
@@ -145,6 +155,43 @@ export function registerStoreRoutes(server: KernelHttpServer, deps: StoreRoutesD
 
     return { session_id: session.id, url: session.url, state: "pending" };
   });
+
+  async function openAllAccessCheckout(
+    period: "monthly" | "yearly",
+    allAccess: Awaited<ReturnType<typeof fetchStoreCatalogFull>>["allAccess"],
+  ): Promise<Record<string, unknown>> {
+    // A subscription license is the only kind that expires within a couple of
+    // years — extensions bought outright carry ~100. So a valid one means the
+    // subscription is already running, and a second checkout would bill twice.
+    const report = deps.license.status();
+    const exp = report.claim?.exp ?? 0;
+    if (report.status === "valid" && exp - Date.now() / 1000 < 2 * 365 * 24 * 60 * 60) {
+      const error = "This kernel already has an active All-Access subscription.";
+      throw new HttpError(409, error, { error, already_owned: true });
+    }
+
+    const priceId = allAccess?.[period]?.price_id;
+    if (!priceId) {
+      throw new HttpError(503, `All-Access ${period} has no price configured yet. See https://lifekernl.com/pricing.`);
+    }
+
+    // Same double-click guard as an extension — but only for the same period:
+    // someone who opened monthly and changed their mind gets the yearly page.
+    const existing = deps.checkouts.pendingForSlug(ALL_ACCESS_SLUG);
+    if (existing && existing.checkout_url && existing.price_id === priceId) {
+      return { session_id: existing.session_id, url: existing.checkout_url, state: existing.state, resumed: true };
+    }
+
+    const session = await createStoreCheckout({
+      storeUrl: deps.storeUrl,
+      priceId,
+      email: report.claim?.email,
+      fetchImpl,
+    });
+    deps.checkouts.create({ sessionId: session.id, slug: ALL_ACCESS_SLUG, priceId, checkoutUrl: session.url });
+    log.info(`store: checkout ${session.id} opened for All-Access (${period})`);
+    return { session_id: session.id, url: session.url, state: "pending" };
+  }
 
   // ── POST /api/store/checkout/:sessionId/cancel ───────────────────────
   // The way out of "waiting for payment": the buyer closed the Stripe tab or
