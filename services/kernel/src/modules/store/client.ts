@@ -7,6 +7,7 @@
  *                                       JWT sent as `Authorization: Bearer …`
  *   • POST /api/checkout/create       — open a Stripe Checkout for a price
  *   • GET  /api/license/by-session    — claim the license a checkout minted
+ *   • POST /api/license/refresh       — swap the license for a renewed one
  *
  * Pure over an injectable `fetch` so it's unit-testable without a network.
  */
@@ -125,6 +126,36 @@ export async function fetchLicenseBySession(args: {
   if (!res.ok) throw new Error(body.error ?? `license lookup failed: HTTP ${res.status}`);
   if (!body.jwt) throw new Error("store returned no license");
   return body as SessionLicense;
+}
+
+/**
+ * Ask the issuer whether a newer license exists for the customer this one
+ * names — how an All-Access renewal reaches the kernel. Returns the renewed
+ * JWT, or null when the one presented is still the newest. Throws on a
+ * transport failure or a refusal, which callers treat as "try again later".
+ */
+export async function refreshLicenseAtStore(args: {
+  storeUrl: string;
+  licenseJwt: string;
+  fetchImpl?: FetchLike;
+}): Promise<{ jwt: string; expires_at: number } | null> {
+  const fetchImpl = args.fetchImpl ?? fetch;
+  const res = await fetchImpl(`${base(args.storeUrl)}/api/license/refresh`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ license: args.licenseJwt }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  const body = (await res.json().catch(() => ({}))) as {
+    state?: string;
+    jwt?: string;
+    expires_at?: number;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(body.error ?? `license refresh failed: HTTP ${res.status}`);
+  if (body.state !== "renewed") return null;
+  if (!body.jwt) throw new Error("store returned no license");
+  return { jwt: body.jwt, expires_at: body.expires_at ?? 0 };
 }
 
 /** Authenticated GET against the store's download endpoint. Throws the store's

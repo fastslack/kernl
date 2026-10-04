@@ -11,7 +11,7 @@ import { Database } from "bun:sqlite";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { storeMigrations } from "../src/modules/store/migrations.js";
 import { CheckoutService } from "../src/modules/store/checkout-service.js";
-import { advanceCheckout } from "../src/modules/store/purchase-flow.js";
+import { advanceCheckout, ALL_ACCESS_SLUG } from "../src/modules/store/purchase-flow.js";
 
 const STORE = "https://store.example";
 
@@ -117,6 +117,21 @@ describe("advanceCheckout", () => {
     expect(paid.state).toBe("done");
     expect(license.applied).toEqual(["JWT-FROM-STORE"]);
     expect(installed).toEqual(["tv-station"]);
+  });
+
+  test("All-Access finishes once the license is applied — there is no bundle to install", async () => {
+    const row = open(ALL_ACCESS_SLUG);
+    const license = licenseStub();
+    const out = await advanceCheckout(row, {
+      storeUrl: STORE,
+      license,
+      checkouts,
+      install: async () => { throw new Error("must not install"); },
+      fetchImpl: sessionStore({ ready: true }),
+    });
+    expect(out.state).toBe("done");
+    expect(out.error).toBe("");
+    expect(license.applied).toEqual(["JWT-FROM-STORE"]);
   });
 
   test("a failed install reports the purchase as completed, not lost", async () => {
