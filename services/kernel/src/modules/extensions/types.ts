@@ -104,6 +104,15 @@ export interface FrontendBlock {
     /** Optional page title. */
     title?: string;
   }>;
+  /**
+   * 3D world plugins: buildings this extension adds to the office world for
+   * offices of its kinds (contract in assets/extensions/_shared/world-plugin.ts).
+   */
+  worlds?: Array<{
+    /** Bundle path relative to the extension dir, e.g. "frontend/world.js". */
+    entry: string;
+    kinds: Array<{ id: string; offGrid?: boolean; labels?: Record<string, string> }>;
+  }>;
 }
 
 export interface ThemeBlock {

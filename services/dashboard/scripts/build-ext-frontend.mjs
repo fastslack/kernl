@@ -9,6 +9,10 @@
  * a fully self-contained ES module at `<extensionDir>/frontend/entry.js`
  * (Svelte runtime bundled in, no import maps, no externals).
  *
+ * When `<extensionDir>/frontend/src/world.ts` exists it is built too, into
+ * `frontend/world.js`: a 3D world plugin (assets/extensions/_shared/world-plugin.ts).
+ * It must not import three.js — the dashboard lends it through WorldHost.
+ *
  * Runs from services/dashboard so vite + @sveltejs/vite-plugin-svelte + svelte
  * resolve from THIS package's node_modules — the kernel has none of them.
  */
@@ -98,7 +102,12 @@ const resolveSvelteFromDashboard = {
   },
 };
 
-await build({
+/** Page bundle (frontend/entry.js) and, when present, the 3D world plugin (frontend/world.js). */
+const bundles = [{ entry, out: "entry.js" }];
+const worldEntry = resolve(extDir, "frontend/src/world.ts");
+if (existsSync(worldEntry)) bundles.push({ entry: worldEntry, out: "world.js" });
+
+for (const b of bundles) await build({
   configFile: false,
   // Root is the extension dir (frontend/'s parent) so outDir sits INSIDE
   // root — vite refuses outDir === root / parent-of-root combinations.
@@ -115,9 +124,9 @@ await build({
   ],
   build: {
     lib: {
-      entry,
+      entry: b.entry,
       formats: ["es"],
-      fileName: () => "entry.js",
+      fileName: () => b.out,
     },
     outDir: resolve(extDir, "frontend"),
     emptyOutDir: false,
@@ -129,4 +138,4 @@ await build({
   },
 });
 
-console.log(`[build-ext-frontend] built ${resolve(extDir, "frontend/entry.js")}`);
+for (const b of bundles) console.log(`[build-ext-frontend] built ${resolve(extDir, "frontend", b.out)}`);

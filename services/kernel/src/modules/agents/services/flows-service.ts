@@ -10,7 +10,7 @@ import { applyRepoIsolation } from "../repo-isolation.js";
 import { agentVariables } from "../agent-fields.js";
 import { parseWorkspaceSpec, isEmptySpec, type WorkspaceSpec } from "../workspace-spec.js";
 import { prepareWorkspace, type WorkspaceSetupResult } from "../workspace-setup.js";
-import { lotFits, parseLotId, pickLot } from "../../../../assets/extensions/_shared/office-lots.js";
+import { lotFits, parseLotId, pickLot, takesNoLot } from "../../../../assets/extensions/_shared/office-lots.js";
 
 /** How long a new office may still move to a bigger lot while its agents arrive. */
 const LOT_SETTLE_MS = 10 * 60_000;
@@ -323,10 +323,10 @@ export class AgentFlowsService {
   // An office still being set up (younger than LOT_SETTLE_MS) may move to a
   // bigger lot while its agents arrive one by one.
 
-  /** `lotId` if it is a lot no active office stands on, else ''. */
-  private freeLotOrEmpty(lotId: string | undefined, _kind: string): string {
+  /** `lotId` if it is a lot no active office stands on (and the office takes lots at all), else ''. */
+  private freeLotOrEmpty(lotId: string | undefined, kind: string): string {
     const lot = parseLotId(lotId);
-    if (!lot) return "";
+    if (!lot || takesNoLot(kind)) return "";
     const taken = this.db.prepare("SELECT 1 FROM agent_flows WHERE active = 1 AND lot_id = ?").get(lot.id);
     return taken ? "" : lot.id;
   }
@@ -349,9 +349,18 @@ export class AgentFlowsService {
       )
       .all() as Array<{ id: string; kind: string | null; lot_id: string; created_at: string; agents: number }>;
 
-    const taken = new Set(rows.filter((r) => parseLotId(r.lot_id)).map((r) => r.lot_id));
+    // An off-grid office stands in an extension's own building: it holds no lot,
+    // and gives back the one it had before it became off-grid.
+    const offGrid = rows.filter((r) => takesNoLot(r.kind) && r.lot_id !== "");
+    if (offGrid.length > 0) {
+      const clear = this.db.prepare("UPDATE agent_flows SET lot_id = '' WHERE id = ?");
+      for (const r of offGrid) { clear.run(r.id); r.lot_id = ""; }
+    }
+    const gridRows = rows.filter((r) => !takesNoLot(r.kind));
+
+    const taken = new Set(gridRows.filter((r) => parseLotId(r.lot_id)).map((r) => r.lot_id));
     const now = Date.now();
-    const pending = rows
+    const pending = gridRows
       .filter((r) => r.agents > 0)
       .filter((r) => {
         const lot = parseLotId(r.lot_id);
@@ -361,7 +370,10 @@ export class AgentFlowsService {
       })
       // Biggest first, so a backfill puts the big teams nearest the hall.
       .sort((a, b) => b.agents - a.agents || a.created_at.localeCompare(b.created_at));
-    if (pending.length === 0) return 0;
+    if (pending.length === 0) {
+      if (offGrid.length > 0) this.events.emit("data.changed", { module: "agents", action: "lots_synced" });
+      return offGrid.length;
+    }
 
     const update = this.db.prepare("UPDATE agent_flows SET lot_id = ? WHERE id = ?");
     const trx = this.db.transaction(() => {
@@ -374,7 +386,7 @@ export class AgentFlowsService {
     });
     trx();
     this.events.emit("data.changed", { module: "agents", action: "lots_synced" });
-    return pending.length;
+    return pending.length + offGrid.length;
   }
 
   assignAgentToFlow(agentId: string, flowId: string): boolean {

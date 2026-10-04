@@ -5,6 +5,7 @@ import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
 import { parseLotId } from "../assets/extensions/_shared/office-lots.js";
+import { registerExtensionFlowKinds } from "../src/modules/agents/types.js";
 
 function setup() {
   const db = new Database(":memory:");
@@ -26,6 +27,29 @@ describe("office lot assignment", () => {
     const flow = service.createFlow({ name: "Empty" });
     service.syncLots();
     expect(lotOf(db, flow.id)).toBe("");
+  });
+
+  it("gives an off-grid office no lot: an extension draws it in its own building", () => {
+    registerExtensionFlowKinds([{ id: "test-yard", offGrid: true }]);
+    const flow = service.createFlow({ name: "Yard", kind: "test-yard" });
+    for (let i = 0; i < 6; i++) service.createAgent({ name: `W${i}`, flow_id: flow.id });
+    service.syncLots();
+    expect(lotOf(db, flow.id)).toBe("");
+  });
+
+  it("frees the lot of an office that becomes off-grid", () => {
+    registerExtensionFlowKinds([{ id: "test-yard", offGrid: true }]);
+    const flow = service.createFlow({ name: "Stock" });
+    service.createAgent({ name: "S", flow_id: flow.id });
+    service.syncLots();
+    expect(parseLotId(lotOf(db, flow.id))).not.toBeNull();
+    service.updateFlow(flow.id, { kind: "test-yard" });
+    service.syncLots();
+    expect(lotOf(db, flow.id)).toBe("");
+  });
+
+  it("refuses a kind no core list or extension declares", () => {
+    expect(() => service.createFlow({ name: "X", kind: "nope-kind" })).toThrow(/Invalid office kind/);
   });
 
   it("gives an office a lot that fits once it has agents", () => {

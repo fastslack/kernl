@@ -484,6 +484,8 @@ export interface WalkZones {
   myOffice?: { rect: WalkRect; door: { x: number; z: number } };
   /** Solid pieces of the reception (counter, columns, back wall). */
   reception?: Aabb2D[];
+  /** Walls of buildings world plugins add (split around their doors). */
+  plugins?: Aabb2D[];
 }
 
 let walkZones: WalkZones = {};
@@ -501,7 +503,7 @@ function insideRect(p: { x: number; z: number }, r: WalkRect): boolean {
  *  ends inside the headquarters office — its walls are then crossed through
  *  the door instead of avoided whole. */
 export function zoneObstacles(enteringMyOffice = false): Aabb2D[] {
-  const out: Aabb2D[] = [...(walkZones.reception ?? [])];
+  const out: Aabb2D[] = [...(walkZones.reception ?? []), ...(walkZones.plugins ?? [])];
   const mo = walkZones.myOffice;
   if (mo && !enteringMyOffice) {
     const r = mo.rect;

@@ -116,3 +116,21 @@ describe("extension manifest validator", () => {
     expect(bad.ok).toBe(false);
   });
 });
+
+describe("frontend.worlds (3D world plugins)", () => {
+  const withWorlds = (worlds: unknown) => ({ ...baseValid, frontend: { worlds } });
+
+  it("accepts a world bundle with off-grid kinds and labels", () => {
+    const r = validateManifest(withWorlds([{ entry: "frontend/world.js", kinds: [{ id: "yard", offGrid: true, labels: { en: "Yard", es: "Patio" } }] }]));
+    expect(r.ok).toBe(true);
+  });
+
+  it("rejects a kind that is not a lowercase slug, and an empty kind list", () => {
+    expect(validateManifest(withWorlds([{ entry: "frontend/world.js", kinds: [{ id: "Bad Kind" }] }])).ok).toBe(false);
+    expect(validateManifest(withWorlds([{ entry: "frontend/world.js", kinds: [] }])).ok).toBe(false);
+  });
+
+  it("rejects an entry that escapes the extension dir", () => {
+    expect(validateManifest(withWorlds([{ entry: "../evil.js", kinds: [{ id: "yard" }] }])).ok).toBe(false);
+  });
+});

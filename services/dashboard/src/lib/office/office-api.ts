@@ -22,7 +22,8 @@ export interface OfficeDefinition {
 	name: string;
 	description?: string;
 	color?: string;
-	kind?: OfficeKind;
+	/** A core kind or one an installed extension declares (world plugins). */
+	kind?: OfficeKind | (string & {});
 	repo?: string;
 	repoIsolation?: Isolation;
 	agents: OfficeDefinitionAgent[];
@@ -63,7 +64,8 @@ export interface OfficePatch {
 	name?: string;
 	description?: string;
 	color?: string;
-	kind?: OfficeKind;
+	/** A core kind or one an installed extension declares (world plugins). */
+	kind?: OfficeKind | (string & {});
 	repo_isolation?: Isolation;
 }
 

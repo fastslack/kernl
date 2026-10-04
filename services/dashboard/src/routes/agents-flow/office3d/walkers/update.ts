@@ -5,6 +5,7 @@ import type { Vec3, Walker } from '../types.js';
 import { animateWalk, animateRun, animateTalking } from '../humanoid.js';
 import { interpolatePath, pathDirection } from '../anim/path.js';
 import type { SittingWorkers } from './types.js';
+import { groundHeightAt } from './ground.js';
 
 /** Update all walkers each frame.
  *  deltaSec is the real time elapsed since last frame (for constant world-space speed).
@@ -67,7 +68,10 @@ export function updateWalkers(
       // outdoor prefix rise from street level (-streetDrop) up to the plinth
       // (Y=0) as they climb the staircase. For all-indoor paths this is a
       // no-op since every waypoint has y=0.
-      w.group.position.set(px, pos.y ?? 0, pz);
+      // Indoor waypoints are all y=0; the ground profile lifts or drops them
+      // where the floor is not flat (a plugin building's stairs and street).
+      const py = pos.y ?? 0;
+      w.group.position.set(px, py !== 0 ? py : groundHeightAt(px, pz), pz);
       w.group.rotation.y = angle;
 
       // Urgent = running animation, normal = walking

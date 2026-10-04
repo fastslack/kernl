@@ -138,6 +138,19 @@ export function lotsInRing(ring: number): Lot[] {
   return out.sort((a, b) => (a.col ** 2 + a.row ** 2) - (b.col ** 2 + b.row ** 2) || a.row - b.row || a.col - b.col);
 }
 
+/** Office kinds an extension draws in a building of its own (world plugins, `offGrid`). */
+const offGridKinds = new Set<string>();
+
+/** Register kinds that take no lot (kernel: from extension manifests; dashboard: from /api/manifest). */
+export function registerOffGridKinds(kinds: Iterable<string>): void {
+  for (const k of kinds) offGridKinds.add(k);
+}
+
+/** Offices that never take a lot: an extension stands them in their own building. */
+export function takesNoLot(kind: string | null | undefined): boolean {
+  return !!kind && offGridKinds.has(kind);
+}
+
 /** Offices whose themed interior (racks, studio) needs more than the smallest lot. */
 export function needsRoomyLot(kind: string | null | undefined): boolean {
   return kind === 'devops' || kind === 'communications';
