@@ -13,7 +13,8 @@
  * (`kernel_agents_post_to_colleague` for same-flow messages or
  * `kernel_agents_invoke` for cross-flow calls). The block is wrapped in
  * explicit start/end markers so future runs replace-in-place instead of
- * appending duplicates.
+ * appending duplicates. Its wording follows each agent's `allowed_tools`, so
+ * it never points an agent at a tool it cannot call.
  *
  * Idempotent: skips agents already on the current version of the block.
  */
@@ -23,8 +24,18 @@ import { type SqliteDb, log, isoNow } from "@kernl/extension-sdk";
 export const DEBATE_RULE_START = "<!-- debate-rule:start -->";
 export const DEBATE_RULE_END = "<!-- debate-rule:end -->";
 
-function debateRuleBody(): string {
-  return [
+/**
+ * The block, written for one agent's toolset.
+ *
+ * Every step names a tool, and an agent told to call a tool it does not hold
+ * either fails the call or improvises. So each step is phrased with what the
+ * agent can actually do: a missing directory/inbox tool falls back to the
+ * chained goal and the run history, and the cross-office and meeting routes
+ * only appear when the agent holds `invoke` / `call_meeting`.
+ */
+function debateRuleBody(tools: Set<string>): string {
+  const has = (t: string) => tools.has(t);
+  const lines = [
     "## Resolving doubts — ask the source FIRST",
     "",
     "When another agent's output is empty, unclear, contradicts your",
@@ -39,27 +50,52 @@ function debateRuleBody(): string {
     "   `Chained from agent \"<Name>\". Previous result: …`. That Name is",
     "   your counterparty. If the suspect artefact is a note, look at the",
     "   note's author field. If the artefact is a workspace analysis, the",
-    "   author is in the `meta.author` line. In doubt, call",
-    "   `kernel_agents_directory` once to map the name to an `agent_id`.",
-    "",
-    "2. **Open the clarification — one pointed question, not an interview.**",
-    "   - Same office (you share a `flow_id` with the source): call",
-    "     `kernel_agents_post_to_colleague({ to_agent_name: \"<source>\",",
-    "     subject: \"Clarification — <one-line>\", body: \"<what you read,",
-    "     what is ambiguous or missing, what you need to proceed>\" })` and",
-    "     stop. The source picks it up on their next run and replies via",
-    "     their own inbox. Your next scheduled run resumes with the answer.",
-    "   - Different office: call",
-    "     `kernel_agents_invoke({ agent_id: \"<source uuid>\", goal:",
-    "     \"<pointed question with quoted fragment + what you need>\" })`.",
-    "     One shot, wait for the return, then act on it.",
-    "   - Three or more parties appear to contradict each other: call",
-    "     `kernel_agents_call_meeting` with 2–3 peers. Two rounds max.",
+    "   author is in the `meta.author` line.",
+  ];
+  if (has("kernel_agents_directory")) {
+    lines.push(
+      "   In doubt, call `kernel_agents_directory` once to map the name to an",
+      "   `agent_id`.",
+    );
+  }
+  lines.push("", "2. **Open the clarification — one pointed question, not an interview.**");
+  if (has("kernel_agents_post_to_colleague")) {
+    lines.push(
+      "   - Same office (you share a `flow_id` with the source): call",
+      "     `kernel_agents_post_to_colleague({ to_agent_name: \"<source>\",",
+      "     subject: \"Clarification — <one-line>\", body: \"<what you read,",
+      "     what is ambiguous or missing, what you need to proceed>\" })` and",
+      "     stop. The source picks it up on their next run and replies via",
+      "     their own inbox. Your next scheduled run resumes with the answer.",
+    );
+  }
+  if (has("kernel_agents_invoke")) {
+    lines.push(
+      "   - Different office: call",
+      "     `kernel_agents_invoke({ agent_id: \"<source uuid>\", goal:",
+      "     \"<pointed question with quoted fragment + what you need>\" })`.",
+      "     One shot, wait for the return, then act on it.",
+    );
+  } else {
+    lines.push(
+      "   - The source is in another office: you cannot reach it directly —",
+      "     tell the Manager what you need from it.",
+    );
+  }
+  if (has("kernel_agents_call_meeting")) {
+    lines.push(
+      "   - Three or more parties appear to contradict each other: call",
+      "     `kernel_agents_call_meeting` with 2–3 peers. Two rounds max.",
+    );
+  }
+  lines.push(
     "",
     "3. **Only escalate to the Manager AFTER step 2 has failed.** If the",
     "   source bounced you back without a resolution, or if you already",
     "   asked this same question to this same source in the last hour",
-    "   (check `kernel_agents_inbox` and your own run history), THEN post",
+    has("kernel_agents_inbox")
+      ? "   (check `kernel_agents_inbox` and your own run history), THEN post"
+      : "   (check your own run history), THEN post",
     "   to the Manager with the full paper trail: your question, the",
     "   source's reply, why it didn't resolve.",
     "",
@@ -78,12 +114,20 @@ function debateRuleBody(): string {
     "Developer silently escalates every time the Architect ships something",
     "imperfect, the Manager becomes a bottleneck and the Architect never",
     "improves.",
-  ].join("\n");
+  );
+  return lines.join("\n");
+}
+
+function parseTools(raw: string | null): Set<string> {
+  try {
+    const v = JSON.parse(raw ?? "[]");
+    return new Set(Array.isArray(v) ? v.map(String) : []);
+  } catch {
+    return new Set();
+  }
 }
 
 export function seedDebateRule(db: SqliteDb): void {
-  const block = `${DEBATE_RULE_START}\n${debateRuleBody()}\n${DEBATE_RULE_END}`;
-
   // Match any agent that has the wiring to actually follow the rule.
   // The tools are stored as JSON arrays in `allowed_tools`, so we match on
   // the tool name as a substring — good enough because the tool ids are
@@ -104,6 +148,8 @@ export function seedDebateRule(db: SqliteDb): void {
   const now = isoNow();
   let patched = 0;
   for (const row of rows) {
+    const block =
+      `${DEBATE_RULE_START}\n${debateRuleBody(parseTools(row.allowed_tools))}\n${DEBATE_RULE_END}`;
     const prompt = row.system_prompt ?? "";
     let next: string;
     if (startRe.test(prompt)) {
