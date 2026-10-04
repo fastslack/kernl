@@ -13,6 +13,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the table that remembers exhausted providers could not be written, the
   error escaped and the run failed instead of moving on; the write is now
   best effort and the fallback continues.
+- **Claude Code could not be connected from the macOS app.** The .dmg did not
+  ship the `claude` CLI, so the sign-in step printed a bare `claude` that
+  answered "command not found", and a Pro or Max subscription could not be
+  used at all. The CLI now ships inside the app, as it already did on Windows,
+  and the sign-in command, the chat provider and the agents all run the same
+  binary.
 
 ## [0.4.0] - 2026-10-04
 

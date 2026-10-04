@@ -33,7 +33,7 @@ import {
 
 import {
   log,
-  findOnPath,
+  findClaudeCli,
   toPermissionRulePath,
   logLlmStart,
   logLlmEnd,
@@ -1340,71 +1340,16 @@ export class ClaudeCodeExecutor {
   // ── Helpers ─────────────────────────────────────────
 
   /**
-   * Detect a locally installed `claude` CLI (gnu-compatible). Cached
-   * because the scan runs on every run. Order:
-   *   $CLAUDE_CODE_PATH → `which claude` → $HOST_CLAUDE_CLI (bind-mount desde
-   *   the host when the kernel runs in a container) → typical locations.
-   * Returns undefined when there is none.
+   * The `claude` CLI to run, cached because the scan runs on every run. Same
+   * resolution as the chat provider and the sign-in command (findClaudeCli in
+   * the SDK): $CLAUDE_CODE_PATH → PATH → $HOST_CLAUDE_CLI (the host CLI
+   * bind-mounted into a container) → the installers' locations → the CLI
+   * bundled with Kernl. Returns undefined when there is none.
    */
   private findClaudeCodeBinary(): string | undefined {
     if (this.cachedClaudeBin !== undefined) return this.cachedClaudeBin ?? undefined;
-
-    const override = process.env.CLAUDE_CODE_PATH;
-    if (override && existsSync(override)) {
-      this.cachedClaudeBin = override;
-      return override;
-    }
-
-    const isWindows = process.platform === "win32";
-    // PATH lookup in-process: `which` is not a Windows command, so spawning it
-    // there always failed and a logged-in CLI was never found. On Windows only
-    // claude.exe qualifies — the SDK spawns the path directly, and an npm
-    // `claude.cmd` shim cannot be spawned without a shell (see candidates).
-    const onPath = findOnPath(isWindows ? "claude.exe" : "claude");
-    if (onPath) {
-      this.cachedClaudeBin = onPath;
-      return onPath;
-    }
-
-    // When the kernel runs in a container (docker-compose sets HOST_CLAUDE_CLI),
-    // the host CLI is bind-mounted but not on PATH. Preferring it over the
-    // SDK's embedded binary guarantees OAuth finds the same creds the user
-    // logged in with via `claude login` on the host.
-    const hostCli = process.env.HOST_CLAUDE_CLI;
-    if (hostCli && existsSync(hostCli)) {
-      this.cachedClaudeBin = hostCli;
-      return hostCli;
-    }
-
-    // homedir(), not $HOME: Windows has no HOME, and "" + "/.local/bin/claude"
-    // pointed at the root of the current drive.
-    const home = homedir();
-    const candidates = isWindows
-      ? [
-          // Where the native Windows installer puts the CLI.
-          resolve(home, ".local", "bin", "claude.exe"),
-          // npm global install. Its claude.cmd shim only wraps this script,
-          // which the SDK can run directly with the kernel's own runtime.
-          resolve(process.env.APPDATA ?? resolve(home, "AppData", "Roaming"), "npm", "node_modules", "@anthropic-ai", "claude-code", "cli.js"),
-        ]
-      : [
-          resolve(home, ".local/bin/claude"),
-          "/usr/local/bin/claude",
-          "/usr/bin/claude",
-          // Fall back to the gnu binary the SDK embeds — useful when Bun runs on
-          // glibc but detects musl and points at the wrong package by default.
-          resolve(process.cwd(), "node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude"),
-          "/app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude",
-        ];
-    for (const c of candidates) {
-      if (existsSync(c)) {
-        this.cachedClaudeBin = c;
-        return c;
-      }
-    }
-
-    this.cachedClaudeBin = null;
-    return undefined;
+    this.cachedClaudeBin = findClaudeCli();
+    return this.cachedClaudeBin ?? undefined;
   }
 
   private resolveCwd(
