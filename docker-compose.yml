@@ -100,7 +100,7 @@ services:
       # HOME inside this container is /home/bun, which does not exist on the
       # host. KERNEL_DATA_VOLUME lets it mount agent workspaces by volume name
       # instead of by a host path that a named volume simply does not have.
-      HOST_HOME: ${HOST_HOME:-/home/fastslack}
+      HOST_HOME: ${HOST_HOME:-${HOME}}
       KERNEL_DATA_VOLUME: ${KERNEL_DATA_VOLUME:-kernl-public_kernel-data}
       KERNEL_AGENT_DOCKER_NETWORK: ${KERNEL_AGENT_DOCKER_NETWORK:-kernl-public_default}
       NEO4J_URI: bolt://neo4j:7687
@@ -191,15 +191,9 @@ services:
       # extraction). Falls back to the chain default when unset.
       CHAT_EXTRACTION_MODEL: ${CHAT_EXTRACTION_MODEL:-}
       # ── Filesystem Commander scope ──────────────────────────────
-      # Without this the local provider falls back to homedir(), which inside
-      # this image is /home/bun — the base image's home, holding three dotfiles
-      # and nothing the user cares about. Every real path then fails with
-      # "Path out of allowed scope".
-      #
-      # Must match a path that is actually mounted below: declaring a root the
-      # container cannot see just moves the failure from "out of scope" to
-      # "no such directory".
-      FS_COMMANDER_ALLOWED_ROOTS: /home/fastslack/mtwProjects/LABS
+      # Unset here: the commander then browses this container's own home. To
+      # browse a folder of the host, apply docker-compose.host.yml, which
+      # mounts KERNL_FS_ROOT and points FS_COMMANDER_ALLOWED_ROOTS at it.
     # Lets Kernl find Ollama or LM Studio running on this machine:
     # host.docker.internal is not defined on Linux unless mapped here.
     extra_hosts:
@@ -209,18 +203,8 @@ services:
       # The Unix socket mtw-request listens on. Harmless when the engine is
       # not running: the bridge just finds nothing there and stays disabled.
       - bridge-sock:/run/mtw
-      # Mounted at its host path so the commander's breadcrumbs match what the
-      # user sees in a terminal. Read-only: this API exposes delete and move
-      # over HTTP, so write access is a deliberate later step, not a default.
-      - /home/fastslack/mtwProjects/LABS:/home/fastslack/mtwProjects/LABS:ro
-      # The operator's Claude Code login. claude_code agents run the CLI with
-      # HOME=$HOST_HOME and read their OAuth session from here; without these
-      # two mounts every claude_code run fails "OAuth session expired and could
-      # not be refreshed". Read-write, and shared with the host on purpose: the
-      # CLI rotates the refresh token, so host and container must write back to
-      # the same file or each refresh invalidates the other's session.
-      - ${HOST_HOME:-/home/fastslack}/.claude:${HOST_HOME:-/home/fastslack}/.claude
-      - ${HOST_HOME:-/home/fastslack}/.claude.json:${HOST_HOME:-/home/fastslack}/.claude.json
+      # Host folders (the commander's root, the Claude Code login for
+      # claude_code agents) are opt-in: docker-compose.host.yml.
       # Host identity for the sandbox driver. Every -v it emits is resolved by
       # the daemon on the HOST, so it needs the operator's real home to find
       # the Claude CLI and credentials; inside the container HOME is /home/bun,
