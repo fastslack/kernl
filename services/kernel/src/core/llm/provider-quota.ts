@@ -13,6 +13,22 @@ const _quotaExhausted = new Set<string>();
 let _dbRef: SqliteDb | null = null;
 
 /**
+ * Write through to provider_status, best effort. The in-memory set is what
+ * routes requests; the table only carries it across a restart. A write that
+ * fails — the database closed on shutdown, or closed by whoever opened it —
+ * must not throw out of markProviderExhausted, which runs in the middle of
+ * the executor falling back to the next provider.
+ */
+function persist(sql: string, ...params: Array<string | number>): void {
+  if (!_dbRef) return;
+  try {
+    _dbRef.prepare(sql).run(...params);
+  } catch (err) {
+    log.warn(`provider_status not updated: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+/**
  * Schema for the `provider_status` quota-tracking table. Run via the shared
  * migration runner under module "llm" (previously a raw `CREATE TABLE IF NOT
  * EXISTS` exec inside initProviderStatus). `IF NOT EXISTS` is kept so
@@ -63,12 +79,11 @@ export function markProviderExhausted(providerName: string): void {
   if (_quotaExhausted.has(providerName)) return;
   _quotaExhausted.add(providerName);
   log.warn(`Provider "${providerName}" marked as quota-exhausted — falling back to alternatives`);
-  if (_dbRef) {
-    const today = new Date().toISOString().slice(0, 10);
-    _dbRef.prepare(
-      "INSERT INTO provider_status (name, exhausted, exhausted_at, budget_date) VALUES (?, 1, datetime('now'), ?) ON CONFLICT(name) DO UPDATE SET exhausted = 1, exhausted_at = datetime('now'), budget_date = ?"
-    ).run(providerName, today, today);
-  }
+  const today = new Date().toISOString().slice(0, 10);
+  persist(
+    "INSERT INTO provider_status (name, exhausted, exhausted_at, budget_date) VALUES (?, 1, datetime('now'), ?) ON CONFLICT(name) DO UPDATE SET exhausted = 1, exhausted_at = datetime('now'), budget_date = ?",
+    providerName, today, today,
+  );
 }
 
 /** Check if a provider has been marked as quota-exhausted. */
@@ -87,11 +102,10 @@ export function clearProviderExhausted(providerName?: string): number {
   if (!providerName) {
     cleared = _quotaExhausted.size;
     _quotaExhausted.clear();
-    if (_dbRef) {
-      _dbRef.prepare(
-        "UPDATE provider_status SET exhausted = 0, tokens_used_today = 0, budget_date = ? WHERE exhausted = 1",
-      ).run(today);
-    }
+    persist(
+      "UPDATE provider_status SET exhausted = 0, tokens_used_today = 0, budget_date = ? WHERE exhausted = 1",
+      today,
+    );
     // Also clear the in-memory LlmHealth backoff window — otherwise an
     // operator who just topped up their account would still have to wait
     // for MAX_EXHAUSTED_BACKOFF_MS (1 h default) before the provider goes
@@ -101,11 +115,10 @@ export function clearProviderExhausted(providerName?: string): number {
     return cleared;
   }
   if (_quotaExhausted.delete(providerName)) cleared = 1;
-  if (_dbRef) {
-    _dbRef.prepare(
-      "UPDATE provider_status SET exhausted = 0, tokens_used_today = 0, budget_date = ? WHERE name = ?",
-    ).run(today, providerName);
-  }
+  persist(
+    "UPDATE provider_status SET exhausted = 0, tokens_used_today = 0, budget_date = ? WHERE name = ?",
+    today, providerName,
+  );
   providerHealth.clearBlock(providerName);
   if (cleared > 0) log.info(`Provider "${providerName}" exhaustion cleared`);
   return cleared;
