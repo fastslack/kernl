@@ -72,6 +72,40 @@ function updateIfChanged(store: { set: (v: unknown) => void }, key: string, newD
 // ── mtwRequest connection (Rust) ────────────────────────────
 
 let mtwWs: WebSocket | null = null;
+
+/**
+ * Recently seen agentFlow events, keyed by what makes one unique: the kernel
+ * stamps `ts` when it publishes, so two copies of one event share it exactly.
+ * Kept on globalThis so a reloaded copy of this module still sees what the
+ * old one already let through.
+ */
+const FLOW_SEEN_MAX = 500;
+const flowSeen: Set<string> =
+	((globalThis as any).__kernlFlowSeen ??= new Set<string>());
+
+function seenFlowEvent(inner: Record<string, unknown>): boolean {
+	const d = (inner.data ?? {}) as Record<string, unknown>;
+	const key = [
+		inner.event, inner.ts, d.run_id ?? '', d.type ?? '', d.message_id ?? '', d.comm_id ?? '', d.tool_name ?? '',
+	].join('|');
+	if (flowSeen.has(key)) return true;
+	flowSeen.add(key);
+	if (flowSeen.size > FLOW_SEEN_MAX) {
+		const oldest = flowSeen.values().next().value;
+		if (oldest !== undefined) flowSeen.delete(oldest);
+	}
+	return false;
+}
+
+// A dev reload re-runs this module and opens a new socket; close the old one
+// so it stops feeding the shared stores.
+let disposed = false;
+if (import.meta.hot) {
+	import.meta.hot.dispose(() => {
+		disposed = true;
+		try { mtwWs?.close(); } catch { /* already closed */ }
+	});
+}
 let mtwConnected = false;
 let subscribedChannels = new Set<string>();
 
@@ -233,6 +267,11 @@ function handleMtwMessage(msg: any, onMessage?: () => void) {
 	if (typeof msgData === 'object' && msgData !== null && 'type' in (msgData as any)) {
 		const inner = msgData as Record<string, unknown>;
 		if (inner.type === 'agentFlow') {
+			// The broker delivers each event once, but a page can hold more
+			// than one live socket (a dev reload re-runs this module while the
+			// old socket keeps writing into the same store). Every copy used to
+			// spawn its own truck, packet and LIVE row, all on the same spot.
+			if (seenFlowEvent(inner)) return;
 			agentFlowEvents.update(events => {
 				const updated = [{ event: inner.event, data: inner.data, ts: inner.ts }, ...events];
 				// 100 was too tight: a rounds=10/15/20 meeting plus background
@@ -346,6 +385,7 @@ function connectMtwRequest(onMessage?: () => void) {
 		console.log('[WS] closed:', ev.code, ev.reason);
 		mtwConnected = false;
 		subscribedChannels.clear();
+		if (disposed) return; // replaced by a reloaded copy of this module
 		disconnected(onMessage);
 	};
 
