@@ -335,7 +335,8 @@ function recordBackendPackages(): void {
     // These bundles embed SQL, and `FROM communications` matches an import
     // regex just as well as a real one — hence the name validation and the
     // EXTERNALS membership test rather than trusting the match.
-    for (const m of src.matchAll(/(?:\bfrom|\brequire\()\s*["']([^"'\n]+)["']/g)) {
+    // `import(` too: a package loaded only with `await import()` is still needed.
+    for (const m of src.matchAll(/(?:\bfrom|\brequire\(|\bimport\()\s*["']([^"'\n]+)["']/g)) {
       const spec = m[1];
       if (spec.startsWith(".") || spec.startsWith("/") || spec.startsWith("node:")) continue;
       const name = spec.startsWith("@") ? spec.split("/").slice(0, 2).join("/") : spec.split("/")[0];
