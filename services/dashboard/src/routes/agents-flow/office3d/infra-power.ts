@@ -54,21 +54,25 @@ export function buildPowerConsole(
   scene: any,
   room: { cx: number; cz: number; w: number; d: number; doorDir?: string },
   offices: InfraOffice[],
+  /** Explicit floor spot (the data center's ops corner). `face` is where the
+   *  console's front and its operator point. Without it the console falls
+   *  back to the room centre, which collides with the desk grid. */
+  placement?: { x: number; z: number; face: { x: number; z: number } },
 ): { operatorPos: { x: number; y: number; z: number }; facePos: { x: number; y: number; z: number }; hitbox: any } | null {
   if (!rt.THREE) return null;
   const THREE = rt.THREE;
   const { cx, cz, w, d } = room;
   const dd = (room as any).doorDir || 'bottom';
   // Unit vector pointing toward the door (where the operator approaches from).
-  const toDoor = dd === 'top' ? { x: 0, z: 1 }
+  const toDoor = placement?.face ?? (dd === 'top' ? { x: 0, z: 1 }
     : dd === 'bottom' ? { x: 0, z: -1 }
     : dd === 'left' ? { x: -1, z: 0 }
-    : { x: 1, z: 0 };
+    : { x: 1, z: 0 });
 
   // Console sits a bit off-center, operator stands on the door side facing it.
   const inset = Math.min(w, d) * 0.16;
-  const consoleX = cx - toDoor.x * inset;
-  const consoleZ = cz - toDoor.z * inset;
+  const consoleX = placement ? placement.x : cx - toDoor.x * inset;
+  const consoleZ = placement ? placement.z : cz - toDoor.z * inset;
   const operatorPos = { x: consoleX + toDoor.x * 1.5, y: 0, z: consoleZ + toDoor.z * 1.5 };
   const facePos = { x: consoleX, y: 1.0, z: consoleZ };
 
@@ -178,6 +182,18 @@ export function buildPowerConsole(
       background:linear-gradient(#0a1410,#08120d);border:1px solid #1d4a36;border-radius:3px;
       padding:3px 10px;text-shadow:0 0 6px #2fae74;white-space:nowrap;min-width:150px;text-align:center;`;
     readoutEl.textContent = 'POWER CONTROL · IDLE';
+    // The readout is the console's title: clicking it does what clicking the
+    // cabinet does (show/hide the power-grid board), and says so.
+    readoutEl.style.pointerEvents = 'auto';
+    readoutEl.style.cursor = 'pointer';
+    readoutEl.title = 'Show / hide the power grid of every office';
+    readoutEl.setAttribute('role', 'button');
+    readoutEl.setAttribute('tabindex', '0');
+    readoutEl.addEventListener('pointerdown', (e) => e.stopPropagation());
+    readoutEl.addEventListener('click', (e) => { e.stopPropagation(); toggleInfraBoard(); });
+    readoutEl.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleInfraBoard(); }
+    });
     const ro = new rt.CSS2DObject(readoutEl);
     ro.position.set(consoleX, 1.95, consoleZ);
     scene.add(ro);

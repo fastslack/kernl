@@ -18,6 +18,7 @@
 
 <script lang="ts">
 	import { createEventDispatcher, tick } from 'svelte';
+	import { extPages } from '$lib/ext-host.js';
 	import Drawer from '$lib/components/ui/Drawer.svelte';
 	import Icon from '$lib/components/ui/Icon.svelte';
 	import LockedFeature from '$lib/components/ui/LockedFeature.svelte';
@@ -640,7 +641,7 @@
 		{#if office}
 			<div class="op-foot-left">
 				<button class="k-btn k-btn--ghost" type="button" on:click={exportOffice}><Icon name="download" />{$t('office.panel.export')}</button>
-				{#if traits.devopsLink}
+				{#if traits.devopsLink && $extPages.some((p) => p.view === 'devops')}
 					<a class="k-btn k-btn--ghost" href="/devops">{$t('office.panel.devops')}</a>
 				{/if}
 			</div>

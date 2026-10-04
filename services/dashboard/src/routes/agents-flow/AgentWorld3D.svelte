@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount, onDestroy, createEventDispatcher } from 'svelte';
+  import { goto } from '$app/navigation';
+  import { get } from 'svelte/store';
+  import { extPages } from '$lib/ext-host.js';
   import { slide } from 'svelte/transition';
   import { quintOut } from 'svelte/easing';
   import PerfOverlay from './PerfOverlay.svelte';
@@ -11,7 +14,7 @@
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
     initAllSkins, resolveSkin, listSkins, type SkinDefinition,
-    buildFloor, buildStreets, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, buildDesks, buildHallways,
+    buildFloor, buildStreets, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, buildDesks, buildHallways,
     setupLighting,
     buildAmbiance, buildWallClock, buildActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
     initRedAlertDecor, buildSandbagBarrier, buildCrates,
@@ -1077,6 +1080,11 @@
   // Hitbox over the DevOps workstation (desk + monitor) in the Repos/DevOps
   // office — click navigates to the DevOps control panel (/devops).
   let devopsTerminalHitbox: any = null;
+  // /devops is a paid extension's page; without it active the route is the
+  // "extension not available" screen, so the 3D world never links there.
+  function hasDevopsPanel(): boolean {
+    return get(extPages).some((p) => p.view === 'devops');
+  }
 
   // The register-repo modal owns its own state, form, focus trap and
   // styles. The world keeps only the handle, so a click on a FREE rack
@@ -1102,13 +1110,22 @@
         // mainframe console + UPS + patch panel + KVM + ops chair + printout
         // stack + DIRECTORY wall panel. Racks light up per registered repo.
         // See office.ts:buildDataCenterOffice.
-        const handles = buildDataCenterOffice(target, room, reposBookmarks);
+        // The in-world titles are clickable: rack nameplates and directory
+        // rows open that repo, the free-racks chip registers one, the NOC
+        // desk title opens the DevOps panel.
+        const handles = buildDataCenterOffice(target, room, reposBookmarks, {
+          openRepo: (r) => goto(`/repos#repo-${encodeURIComponent(r.id)}`),
+          openRepos: () => goto('/repos'),
+          registerRepo: () => registerRepoModal?.open(),
+          openDevops: hasDevopsPanel() ? () => goto('/devops') : undefined,
+          openPowerGrid: () => { toggleInfraBoard(); },
+        });
         if (handles?.freeRackHitboxes?.length) freeRepoRackHitboxes.push(...handles.freeRackHitboxes);
         if (handles?.devopsTerminalHitbox) devopsTerminalHitbox = handles.devopsTerminalHitbox;
         // Master POWER console — where managers come to switch their office's
         // infrastructure on/off. Holds a breaker LED per office + a clickable
         // hitbox that toggles the full power-grid board.
-        const pc = buildPowerConsole(target, room, infraOffices);
+        const pc = buildPowerConsole(target, room, infraOffices, handles?.powerConsoleSpot);
         if (pc) { reposOperatorPos = pc.operatorPos; infraConsoleHitbox = pc.hitbox; }
       }
     }
@@ -2202,7 +2219,9 @@
         // Click on the DevOps workstation → open the full DevOps control panel.
         // Replaces the old floating quick-console button with an in-world,
         // discoverable entry point sitting on the office floor.
-        window.location.href = '/devops';
+        // Same action as the desk's title (see buildDataCenterOffice): the
+        // DevOps panel when its extension is active, the power grid otherwise.
+        devopsTerminalHitbox?.userData?.nocAction?.();
         return;
       }
       if (hoveredFreeRack) {
@@ -3248,6 +3267,8 @@
     updateAmbiance(sceneTimeSec);
     // Infra power console: ease the master lever + pulse booting/error LEDs.
     updateInfraConsole(deltaSec, sceneTimeSec);
+    // Data center: flicker the activity LEDs on occupied racks.
+    updateDataCenter(sceneTimeSec);
     // Door LEDs: green=running, grey=idle
     updateDoorLeds(runningAgentIds, agents);
 
