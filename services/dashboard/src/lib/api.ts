@@ -470,6 +470,9 @@ export async function* sendChatMessageStream(
 		disallowed_tools?: string[];
 		/** Ignore host user settings (plugins / user MCPs) — built-ins + kernel MCP only. */
 		isolate_settings?: boolean;
+		/** Ids from POST /api/attachments. Bound before the stream opens, so a
+		 *  bad id throws here (plain 400) rather than arriving as an event. */
+		attachment_ids?: string[];
 	},
 	signal?: AbortSignal,
 ): AsyncGenerator<ChatStreamEvent, void, unknown> {

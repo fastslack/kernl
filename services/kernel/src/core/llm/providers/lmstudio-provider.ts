@@ -28,6 +28,8 @@ const CAPS: LlmProviderCapabilities = {
   streaming: false,
   thinking: false,
   vision: false,
+  pdf: false,
+  video: false,
   promptCaching: false,
   contextWindow: 32_000, // depende del modelo cargado, 32k es conservador
 };

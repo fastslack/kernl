@@ -71,10 +71,12 @@
   } from '$lib/office-geometry.js';
   import { hexToNum, escapeBannerText, parseMeetingTopics } from '$lib/agent-helpers.js';
   import { fetchRecentRunSummaries } from './recent-runs.js';
+  import { attachmentMarkers } from '$lib/chat-view.js';
+  import type { AttachmentMeta } from '$lib/attachments/types.js';
   import type {
     WorldAgent, WorldChain, WorldFlow, WorldRank, WorldStats,
     OfficeReport, PendingQuestion, LiveMeeting, MgmtEntry, AnimatedTagAnim,
-    CoordInfo, ActiveCoord,
+    CoordInfo, ActiveCoord, MeetingChatLine,
   } from './world-types.js';
   import CoordinationCard from './CoordinationCard.svelte';
 
@@ -4319,7 +4321,7 @@
   // Synthetic id claiming a room slot in meetingIdToRoom while a human-led
   // meeting runs, so autonomous meetings can't double-book the same room.
   let humanMeetingId = '';
-  let meetingChat: Array<{ role: 'you' | string; name: string; text: string; color: string; ts: number }> = [];
+  let meetingChat: MeetingChatLine[] = [];
   let meetingInput = '';
   let meetingSending = false;
 
@@ -4522,18 +4524,26 @@
     return pickFreeChair(myOfficeSeats, walkers as unknown as SeatedWalker[]);
   }
 
-  async function sendMeetingMessage(text?: string) {
+  async function sendMeetingMessage(text?: string, attachments: AttachmentMeta[] = []) {
     const msg = (text ?? meetingInput).trim();
-    if (!msg || meetingSending) return;
+    const attachmentIds = attachments.map((a) => a.id);
+    if ((!msg && !attachmentIds.length) || meetingSending) return;
     meetingInput = '';
     meetingSending = true;
 
     meetingChat = [...meetingChat, {
       role: 'you', name: 'You', text: msg, color: '#3dd6c8', ts: Date.now(),
+      ...(attachments.length ? { attachments } : {}),
     }];
 
-    // Build shared context from meeting history
-    const contextLines = meetingChat.map(m => `${m.name}: ${m.text}`).join('\n');
+    // Build shared context from meeting history. Earlier lines' files are
+    // named inline; this message's go to every participant as content.
+    const contextLines = meetingChat.map((m, i) => {
+      const last = i === meetingChat.length - 1;
+      const body = m.text || (last && attachmentIds.length ? '(see the attached files)' : '');
+      const marks = last ? '' : attachmentMarkers(m.attachments);
+      return `${m.name}: ${[body, marks].filter(Boolean).join(' ')}`;
+    }).join('\n');
 
     // Run each invited agent sequentially with the shared context
     for (const aid of meetingSelectedIds) {
@@ -4571,11 +4581,13 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
       showBubble(aid, 'Thinking...', 150);
 
       try {
-        const res: any = await rpcOrCall('agents.run', { agent_id: aid, goal }, async () => {
+        // The same ids for every participant: each run reads the files itself.
+        const runArgs = { agent_id: aid, goal, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) };
+        const res: any = await rpcOrCall('agents.run', runArgs, async () => {
           const r = await fetch('/api/agents/run', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ agent_id: aid, goal }),
+            body: JSON.stringify(runArgs),
           });
           return r.json();
         });

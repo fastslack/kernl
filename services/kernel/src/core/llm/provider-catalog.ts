@@ -50,8 +50,9 @@ export interface ProviderCatalogEntry {
   toolCap: number;
   localProbe?: { hosts: string[]; port: number; path: string };
   docsUrl?: string;
-  /** Overrides for the generic provider's defaults. */
-  capabilities?: { thinking?: boolean; vision?: boolean; contextWindow?: number };
+  /** Overrides for the generic provider's defaults. `vision` / `pdf` / `video`
+   *  also decide which attachments go to the model natively (input-caps.ts). */
+  capabilities?: { thinking?: boolean; vision?: boolean; pdf?: boolean; video?: boolean; contextWindow?: number };
 }
 
 const NEMOTRON_SAMPLING: ModelQuirks = { temperature: 1, topP: 0.95 };
@@ -217,6 +218,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     },
     models: { recommended: "claude-sonnet-5", fast: "claude-haiku-4-5" },
     toolCap: 128,
+    capabilities: { vision: true, pdf: true },
     docsUrl: "https://platform.claude.com/docs/en/get-started",
   },
   {
@@ -319,6 +321,7 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     },
     models: { recommended: "sonnet" },
     toolCap: 64,
+    capabilities: { vision: true, pdf: true },
     docsUrl: "https://code.claude.com/docs/en/authentication",
   },
 ];

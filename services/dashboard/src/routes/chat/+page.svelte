@@ -4,13 +4,15 @@
   import { collapseRepeats } from '$lib/collapse-repeats.js';
   import { toolCardKey } from '$lib/tool-presentation.js';
   import {
-    msgAuthError, streamAuthError, parseContentBlocks, parseStoredMessage,
+    msgAuthError, streamAuthError, parseContentBlocks, parseStoredMessage, storedAttachments,
     imageSrc, providerIcon, providerColor, isDateBreak, formatDateBreak,
   } from '$lib/chat-view.js';
   import { formatMd } from '$lib/chat-md.js';
   import EpisodeSidebar from './EpisodeSidebar.svelte';
   import ChatModelPicker, { type ProviderWithModels } from './ChatModelPicker.svelte';
-  import ChatInputArea, { type PendingAttach } from './ChatInputArea.svelte';
+  import ChatInputArea from './ChatInputArea.svelte';
+  import AttachmentStrip from '$lib/components/AttachmentStrip.svelte';
+  import type { ComposerSendDetail } from '$lib/attachments/types.js';
   import { speakReplies } from '$lib/voice/prefs.js';
   import { SentenceSplitter, speech, speakText } from '$lib/voice/speech.js';
   import PermissionModal, { type PendingPermission } from './PermissionModal.svelte';
@@ -58,11 +60,10 @@
   let loading = false;
   let piiStatus: any = null;
   let msgArea: HTMLDivElement;
-  let inputEl: HTMLTextAreaElement;
+  let inputArea: ChatInputArea;
+  /** The chat panel — files dropped anywhere on it join the draft. */
+  let mainEl: HTMLElement | null = null;
   let sidebarCollapsed = false;
-
-  // Attachments pending for the next send
-  let pendingAttachments: PendingAttach[] = [];
 
   $: selectedEp = episodes.find(e => e.id === selectedEpisodeId);
 
@@ -71,7 +72,7 @@
     piiStatus = await getPiiStatus().catch(() => null);
     void modelPicker?.loadAvailableProviders();
     // Focus input on load
-    setTimeout(() => inputEl?.focus(), 100);
+    setTimeout(() => inputArea?.focus(), 100);
   });
 
   // Auto-scroll when messages change
@@ -95,7 +96,7 @@
     } finally { loading = false; }
     await tick();
     scrollBottom();
-    inputEl?.focus();
+    inputArea?.focus();
   }
 
   async function newEpisode() {
@@ -132,67 +133,46 @@
   let nextSendSpoken = false;
   let splitter: SentenceSplitter | null = null;
 
-  function onVoice(text: string) {
-    input = text;
+  /** The composer is about to send a push-to-talk transcript. */
+  function onSpoken() {
     nextSendSpoken = true;
-    void doSend();
   }
 
   function speakPieces(pieces: string[]) {
     for (const p of pieces) speech.push(p);
   }
 
-  async function doSend() {
+  async function doSend(detail: ComposerSendDetail) {
     const spoken = nextSendSpoken;
     nextSendSpoken = false;
     if (sending || !selectedEpisodeId) return;
     speech.stop();
     splitter = spoken || $speakReplies ? new SentenceSplitter() : null;
-    const msg = input.trim();
-    if (!msg && pendingAttachments.length === 0) return;
-
-    const images = pendingAttachments
-      .filter(a => a.kind === 'image')
-      .map(a => ({ data: a.data, media_type: a.media_type }));
-    const documents = pendingAttachments
-      .filter(a => a.kind === 'document')
-      .map(a => ({ data: a.data, media_type: a.media_type, filename: a.filename }));
-
-    // Build optimistic user content (text + inline attachments for local echo)
-    const optimisticContent = images.length || documents.length
-      ? JSON.stringify({
-          text: msg,
-          images: pendingAttachments.filter(a => a.kind === 'image').map(a => a.preview),
-          documents: pendingAttachments.filter(a => a.kind === 'document').map(a => ({ filename: a.filename })),
-          _local: true,
-        })
-      : msg;
+    const msg = detail.text.trim();
+    const attachmentIds = detail.attachmentIds;
+    if (!msg && attachmentIds.length === 0) return;
 
     input = '';
-    if (inputEl) inputEl.style.height = 'auto';
-    const sentAttachments = pendingAttachments;
-    pendingAttachments = [];
-
-    messages = [...messages, { role: 'user', content: optimisticContent, created_at: new Date().toISOString() }];
+    // The local echo draws its strip from the metas the composer handed over;
+    // a reload brings the same ones back from the server.
+    messages = [...messages, {
+      role: 'user', content: msg, attachments: detail.attachments, created_at: new Date().toISOString(),
+    }];
     sending = true;
     await tick();
     scrollBottom();
 
-    // The streaming SDK path only handles plain text — when the episode is
-    // claude_code AND there are no attachments, we get the rich live tool
-    // trace. Otherwise (other provider, or images/docs) fall back to the
-    // synchronous POST so attachments still work.
+    // claude_code episodes stream (live tool trace), attachments included;
+    // every other provider answers through the synchronous POST.
     const providerSlug = (selectedEp?.llm_provider || '').toLowerCase();
-    const canStream = (providerSlug === 'claude_code' || providerSlug === 'claude-code')
-      && images.length === 0 && documents.length === 0;
+    const canStream = providerSlug === 'claude_code' || providerSlug === 'claude-code';
 
     try {
       if (canStream) {
-        await runStreamingSend(selectedEpisodeId, msg);
+        await runStreamingSend(selectedEpisodeId, msg, attachmentIds);
       } else {
         const body: Record<string, unknown> = { episode_id: selectedEpisodeId, message: msg };
-        if (images.length) body.images = images;
-        if (documents.length) body.documents = documents;
+        if (attachmentIds.length) body.attachment_ids = attachmentIds;
         const data = await sendChatMessage(body) as any;
         if (data.message) {
           messages = [...messages, { role: 'assistant', content: data.message.content, created_at: new Date().toISOString() }];
@@ -202,9 +182,10 @@
         }
       }
     } catch (e: any) {
-      messages = [...messages, { role: 'assistant', content: 'Connection error: ' + e.message, created_at: new Date().toISOString() }];
-      // restore attachments so user can retry
-      pendingAttachments = sentAttachments;
+      // The composer already let go of the files; say so, so a retry
+      // re-attaches them instead of silently going without.
+      const lost = attachmentIds.length ? ' — the attachments were not sent; attach them again to retry.' : '';
+      appendError('Connection error: ' + e.message + lost);
     } finally {
       splitter = null;
       sending = false;
@@ -217,13 +198,13 @@
     }
   }
 
-  async function runStreamingSend(episodeId: string, msg: string) {
+  async function runStreamingSend(episodeId: string, msg: string, attachmentIds: string[]) {
     streamingActive = true;
     streamingBlocks = [];
     streamAbort = new AbortController();
     try {
       const stream = sendChatMessageStream(
-        { episode_id: episodeId, message: msg },
+        { episode_id: episodeId, message: msg, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) },
         streamAbort.signal,
       );
       for await (const ev of stream) {
@@ -362,7 +343,7 @@
   />
 
   <!-- Main chat area -->
-  <main class="cx-main">
+  <main class="cx-main" bind:this={mainEl}>
     <!-- Header bar -->
     <header class="cx-head">
       <div class="cx-head-left">
@@ -496,6 +477,10 @@
               </div>
               {#if m.role === 'user'}
                 {@const parsed = parseStoredMessage(m.content)}
+                {@const atts = storedAttachments(m)}
+                {#if atts.length}
+                  <div class="cx-msg-atts"><AttachmentStrip attachments={atts} /></div>
+                {/if}
                 {#if parsed.images.length || parsed.documents.length}
                   <div class="cx-attachments">
                     {#each parsed.images as ref}
@@ -600,12 +585,12 @@
     <!-- Input area -->
     {#if selectedEpisodeId}
       <ChatInputArea
+        bind:this={inputArea}
         bind:input
-        bind:pendingAttachments
-        bind:inputEl
         {sending}
+        dropTarget={mainEl}
         onSend={doSend}
-        {onVoice}
+        {onSpoken}
       />
     {/if}
   </main>
@@ -1314,6 +1299,7 @@
     margin-bottom: 6px;
   }
   .cx-msg-user .cx-attachments { justify-content: flex-end; }
+  .cx-msg-user .cx-msg-atts :global(.as) { justify-content: flex-end; }
 
   .cx-attach {
     display: inline-flex;

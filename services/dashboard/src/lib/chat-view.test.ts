@@ -14,6 +14,8 @@ import {
   streamAuthError,
   parseContentBlocks,
   parseStoredMessage,
+  storedAttachments,
+  attachmentMarkers,
   imageSrc,
   providerIcon,
   providerColor,
@@ -86,6 +88,35 @@ describe("parseStoredMessage", () => {
     expect(parseStoredMessage('{"images":"nope"}')).toEqual({
       text: "", images: [], documents: [], local: false,
     });
+  });
+});
+
+describe("storedAttachments", () => {
+  const meta = { id: "m1", filename: "a.pdf" } as any;
+
+  it("prefers the metas the server joined onto the row", () => {
+    const content = JSON.stringify({ text: "x", attachments: ["other"] });
+    expect(storedAttachments({ content, attachments: [meta] })).toEqual([meta]);
+  });
+
+  it("falls back to the ids in the envelope", () => {
+    const content = JSON.stringify({ text: "x", attachments: ["a", 3, "b"] });
+    expect(storedAttachments({ content, attachments: [] })).toEqual(["a", "b"]);
+  });
+
+  it("gives nothing for prose, legacy envelopes and junk", () => {
+    expect(storedAttachments({ content: "hello" })).toEqual([]);
+    expect(storedAttachments({ content: JSON.stringify({ text: "x", images: ["a.png"] }) })).toEqual([]);
+    expect(storedAttachments({ content: "{not json" })).toEqual([]);
+    expect(storedAttachments(null)).toEqual([]);
+  });
+});
+
+describe("attachmentMarkers", () => {
+  it("names each loaded attachment and skips bare ids", () => {
+    expect(attachmentMarkers([{ filename: "a.pdf" } as any, "id-only", { filename: "b.png" } as any]))
+      .toBe("[Adjunto: a.pdf] [Adjunto: b.png]");
+    expect(attachmentMarkers(undefined)).toBe("");
   });
 });
 

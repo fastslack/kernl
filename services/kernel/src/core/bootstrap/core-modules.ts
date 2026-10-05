@@ -37,6 +37,7 @@ import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
 import { createStoreModule } from "../../modules/store/index.js";
 import { createChatModule } from "../../modules/chat/index.js";
+import { createAttachmentsModule } from "../../modules/attachments/index.js";
 import { createAgentsModule } from "../../modules/agents/index.js";
 import { createProjectsModule } from "../../modules/projects/index.js";
 import { setProjectRunLookup } from "../outbound-guard.js";
@@ -260,6 +261,9 @@ export async function initCoreModules(args: {
     dataPath: extensionsDataPath,
   }) as ExtensionsModuleHandle;
   registry.register(extensionsModule);
+
+  // ── Attachments (before chat + agents, which bind and read them) ──
+  registry.register(createAttachmentsModule());
 
   // ── Chat + Agents ──────────────────────────────────
   const chatModule = createChatModule();

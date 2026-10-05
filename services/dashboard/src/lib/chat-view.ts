@@ -9,6 +9,7 @@
  */
 
 import { isClaudeCodeAuthError } from './claude-code-auth.js';
+import type { AttachmentMeta } from './attachments/types.js';
 
 /**
  * Does a stored message carry a Claude Code auth error? Checks the plain
@@ -66,6 +67,40 @@ export function parseStoredMessage(raw: string): StoredMessage {
   } catch {
     return { text: raw, images: [], documents: [], local: false };
   }
+}
+
+/**
+ * The attachments a stored message carries, for `AttachmentStrip`: the metas
+ * the server joined onto the row (`attachments`) when it sent them, else the
+ * bare ids in the `{text, attachments}` envelope, which the strip fetches.
+ * Legacy `images`/`documents` envelopes are not attachments and give [].
+ */
+export function storedAttachments(m: { content?: unknown; attachments?: unknown } | null | undefined): Array<AttachmentMeta | string> {
+  if (Array.isArray(m?.attachments) && m.attachments.length) {
+    return (m.attachments as unknown[]).filter(
+      (a): a is AttachmentMeta | string => typeof a === 'string' || (typeof a === 'object' && a !== null && typeof (a as AttachmentMeta).id === 'string'),
+    );
+  }
+  const raw = typeof m?.content === 'string' ? m.content : '';
+  if (!raw.startsWith('{')) return [];
+  try {
+    const p = JSON.parse(raw);
+    return Array.isArray(p?.attachments) ? p.attachments.filter((a: unknown): a is string => typeof a === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * "[Adjunto: a.pdf] [Adjunto: b.png]" — how a past turn's attachments show up
+ * in a transcript that is pasted into an agent's goal as plain text. Only the
+ * current message's files reach the model as content; older ones are named so
+ * the history still reads right. Bare ids (meta not loaded) are skipped.
+ */
+export function attachmentMarkers(list: Array<AttachmentMeta | string> | undefined): string {
+  return (list ?? [])
+    .flatMap((a) => (typeof a === 'string' ? [] : [`[Adjunto: ${a.filename}]`]))
+    .join(' ');
 }
 
 /** Where an image in the transcript is served from. */

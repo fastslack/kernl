@@ -11,6 +11,8 @@
    */
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
+  import AttachmentStrip from '$lib/components/AttachmentStrip.svelte';
+  import type { AttachmentMeta, ComposerSendDetail } from '$lib/attachments/types.js';
   import { fmtClock } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
@@ -26,7 +28,7 @@
    */
   export let canConverse = false;
 
-  export let history: Array<{ role: 'you' | 'agent'; text: string; ts: number }> = [];
+  export let history: Array<{ role: 'you' | 'agent'; text: string; ts: number; attachments?: AttachmentMeta[] }> = [];
   export let historyLoading = false;
   export let error = '';
   /** The run was accepted and the agent is working. */
@@ -43,7 +45,7 @@
   /** A run started from the script-agent branch is in flight. */
   export let starting = false;
 
-  export let onSend: (text: string) => void = () => {};
+  export let onSend: (detail: ComposerSendDetail) => void = () => {};
   export let onStart: () => void = () => {};
   export let onSeeHistory: () => void = () => {};
   /** UUID chips inside a reply open the entity preview; the world owns it. */
@@ -73,14 +75,17 @@
   }
 
   let lastWasSpoken = false;
-  function send(text: string) {
+  function send(detail: ComposerSendDetail) {
     noteSend(lastWasSpoken);
     lastWasSpoken = false;
-    onSend(text);
+    onSend(detail);
   }
+
+  /** The tab — files dropped anywhere on it join the draft. */
+  let sectionEl: HTMLDivElement | null = null;
 </script>
 
-<div class="chat-section">
+<div class="chat-section" bind:this={sectionEl}>
   {#if !canConverse}
     <!-- A builtin agent never sees what you type: the executor calls
          `handler()` with no arguments and throws the goal away. Rather
@@ -140,7 +145,10 @@
                 <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
               {/if}
             {:else}
-              <span class="chat-text">{msg.text}</span>
+              {#if msg.attachments?.length}
+                <AttachmentStrip attachments={msg.attachments} />
+              {/if}
+              {#if msg.text}<span class="chat-text">{msg.text}</span>{/if}
             {/if}
           </div>
         {/each}
@@ -177,6 +185,8 @@
       {suggestions}
       sendLabel={`Send to ${agent?.name}`}
       voice
+      attachments
+      dropTarget={sectionEl}
       on:spoken={() => { lastWasSpoken = true; }}
       on:send={(e) => send(e.detail)}
     />
