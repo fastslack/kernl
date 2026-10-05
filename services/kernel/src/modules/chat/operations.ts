@@ -69,10 +69,17 @@ export function chatOperations(deps: ChatOperationDeps): Record<string, Operatio
     // was silently dropped — the agent ran with no Kernl context and answered
     // as if "office" meant a physical office. A failure of the service call is
     // a 400 carrying its message.
+    // `resume` continues the latest matching episode of a fixed surface (the
+    // 3D panel) instead of opening one more row per visit.
     "chat.episode.start": (input) => {
-      const args = pickArgs(input, { title: "string", provider: "string", model: "string", instructions: "string" });
+      const { resume, ...args } = pickArgs(input, {
+        title: "string", provider: "string", model: "string", instructions: "string",
+        source: "string", source_label: "string", resume: "boolean",
+      });
       try {
-        const episode = chat.createEpisode(args);
+        const episode = resume && args.source
+          ? chat.resumeOrCreateEpisode({ ...args, source: args.source })
+          : chat.createEpisode(args);
         changed("start");
         return episode;
       } catch (err) {

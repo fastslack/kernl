@@ -121,7 +121,7 @@ export function providerIcon(p: string | undefined): string {
 export function providerColor(p: string | undefined): string {
   if (!p) return 'var(--gold)';
   const map: Record<string, string> = {
-    anthropic: '#D4A84B', claude: '#D4A84B', 'claude-code': '#D4A84B',
+    anthropic: '#D4A84B', claude: '#D4A84B', 'claude-code': '#D4A84B', claude_code: '#D4A84B',
     openai: '#3DD68C', lmstudio: '#8B7CF6', ollama: '#5B9BF7',
     grok: '#E0E0E0', nvidia: '#76B900',
   };

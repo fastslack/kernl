@@ -246,10 +246,10 @@ describe("agents.run and memory", () => {
     const a = service.createAgent({ name: "A" });
     const b = service.createAgent({ name: "B" });
     const img = addImage();
-    const first = (await ops()["agents.run"]({ agent_id: a.id, goal: "g", attachment_ids: [img] })) as { run_id: string };
+    const first = (await ops()["agents.run"]({ agent_id: a.id, goal: "g", attachment_ids: [img], chat: true })) as { run_id: string };
     const second = (await ops()["agents.run"]({ agent_id: b.id, goal: "g", attachment_ids: [img] })) as { run_id: string };
     expect(runAttachmentIds(service.getRun(first.run_id)!)).toEqual([img]);
-    expect(JSON.parse(service.getRun(first.run_id)!.trigger_payload)).toMatchObject({ attachment_ids: [img] });
+    expect(JSON.parse(service.getRun(first.run_id)!.trigger_payload)).toMatchObject({ chat: true, attachment_ids: [img] });
     expect(runAttachmentIds(service.getRun(second.run_id)!)).toEqual([img]);
     expect(attachments.get(img)!.bound_at).not.toBeNull();
   });

@@ -2,7 +2,8 @@
   /**
    * Streaming chat modal that replaces the legacy "New Office" form.
    *
-   * Creates a fresh chat episode pinned to the claude_code provider, primed
+   * Continues this agent's last 3D episode for the chosen model (or opens one),
+   * pinned to the claude_code provider by default, primed
    * with a system instruction that turns Claude into an "office architect"
    * with access to the kernel_agents_* MCP tools. The user describes what
    * they want; Claude asks clarifying questions, then actually creates the
@@ -17,11 +18,13 @@
   import { foldThinking } from '$lib/chat-md';
   import { collapseRepeats } from '$lib/collapse-repeats.js';
   import OfficeToolRun, { toolKeys, type OfficeToolCall } from './OfficeToolRun.svelte';
+  import { storedToDisplay } from '$lib/office-chat-history.js';
   import ChatComposer from './ChatComposer.svelte';
   import AttachmentStrip from './AttachmentStrip.svelte';
   import type { AttachmentMeta, ComposerSendDetail } from '$lib/attachments/types.js';
   import {
     startChatEpisode,
+    getChatMessages,
     sendChatMessageStream,
     respondChatPermission,
     type ChatStreamEvent,
@@ -134,7 +137,6 @@ Kernel tools you have (use ONE per turn):
   }
   $: avatarText = avatarInitials(topAgentName);
   $: chatTitle = topAgentName;
-  $: episodeTitle = `${topAgentName} (chat)`;
   $: chatPlaceholder = `Message ${topAgentName}…`;
   $: showRankLabel =
     !!topAgentRankLabel.trim() &&
@@ -330,20 +332,26 @@ Kernel tools you have (use ONE per turn):
   });
 
   /**
-   * Create the episode and warm it up. Also the path taken when the user picks
-   * a different model: a switch starts a FRESH episode rather than repointing
-   * the current one, because `instructions` are set at creation and the tool
-   * policy has to change with the provider. Repointing would leave a Claude
-   * Code prompt in front of a model that has none of those tools.
+   * Open the episode and warm it up. By default this CONTINUES the agent's
+   * latest 3D episode for the current model (its transcript is replayed), so
+   * reopening the panel does not add a row to /chat every time; `fresh` opens
+   * a new one. A model switch lands on that model's own episode rather than
+   * repointing the current one, because the tool policy in `instructions`
+   * has to match the provider — a Claude Code prompt in front of a model with
+   * none of those tools would invite calls that cannot land.
    */
-  async function openChannel(): Promise<void> {
+  async function openChannel(fresh = false): Promise<void> {
     const startedAt = performance.now();
     startError = '';
     phase = 'connecting';
-    // 1) Create the chat episode (fast — DB row + handshake).
+    // 1) Resume or create the chat episode (fast — DB row + handshake).
     try {
       const ep = (await startChatEpisode({
-        title: episodeTitle,
+        // No title: the first real message names it, as on /chat. The agent
+        // is carried by source_label.
+        source: 'office3d',
+        source_label: topAgentName,
+        resume: !fresh,
         provider,
         ...(model ? { model } : {}),
         // A user-authored prompt is honoured whatever the provider; only the
@@ -351,9 +359,10 @@ Kernel tools you have (use ONE per turn):
         instructions: (topAgentSystemPrompt && topAgentSystemPrompt.trim().length > 0)
           ? topAgentSystemPrompt
           : defaultInstructions(topAgentName, provider),
-      })) as { id: string };
+      })) as { id: string; resumed?: boolean; message_count?: number };
       episodeId = ep?.id ?? null;
       if (!episodeId) throw new Error('episode id missing in response');
+      messages = ep.resumed && ep.message_count ? storedToDisplay(await getChatMessages(episodeId)) : [];
     } catch (e: any) {
       startError = e?.message || 'Failed to start chat';
       phase = 'error';
@@ -375,25 +384,39 @@ Kernel tools you have (use ONE per turn):
     }
     phase = 'ready';
     await tick();
+    scrollToBottom();
     composer?.focus();
   }
 
-  /**
-   * Switch the channel to another model. The transcript goes with the old
-   * episode, so this is destructive to the conversation — the confirm only
-   * appears once there is something to lose.
-   */
-  async function pickModel(slug: string, id: string): Promise<void> {
-    modelMenuOpen = false;
-    if (slug === provider && id === model) return;
-    if (messages.length > 0 && !confirm('Switching model starts a new conversation. Continue?')) return;
+  /** Leaves the current conversation where it is (still listed in /chat) and
+   *  starts a blank one with the same agent and model. */
+  async function newConversation(): Promise<void> {
+    if (sending || switching) return;
     switching = true;
+    resetTransient();
+    await openChannel(true);
+    switching = false;
+  }
+
+  function resetTransient() {
     streamAbort?.abort();
     warmupAbort?.abort();
     messages = [];
     streamingBlocks = [];
     pendingPermission = null;
     allowAllSession = false;
+  }
+
+  /**
+   * Switch the channel to another model. Nothing is lost: the current
+   * transcript stays in its episode and comes back when this model is picked
+   * again, and the new model resumes its own last conversation.
+   */
+  async function pickModel(slug: string, id: string): Promise<void> {
+    modelMenuOpen = false;
+    if (slug === provider && id === model) return;
+    switching = true;
+    resetTransient();
     provider = slug;
     model = id;
     rememberChoice(slug, id);
@@ -411,13 +434,12 @@ Kernel tools you have (use ONE per turn):
     if (!episodeId) return;
     warmupAbort = new AbortController();
     try {
-      // The warmup is persisted to the episode (the streaming endpoint
-      // doesn't accept a skip-persistence flag) but stays hidden from the
-      // UI — each modal open creates a throwaway episode so the user
-      // never browses to it.
+      // `warmup` keeps the turn out of the episode: not stored, and on a
+      // throwaway SDK session so the resumed conversation never sees it.
       const stream = sendChatMessageStream(
         {
           episode_id: episodeId,
+          warmup: true,
           message: 'Ping. Respond with exactly the word "ready" and nothing else.',
           allowed_tools: TOP_AGENT_ALLOWED_TOOLS,
           disallowed_tools: TOP_AGENT_DISALLOWED_TOOLS,
@@ -761,6 +783,13 @@ Kernel tools you have (use ONE per turn):
             </div>
           {/if}
         </div>
+        <button
+          class="oc-close oc-new"
+          on:click={newConversation}
+          disabled={sending || switching}
+          title="New conversation"
+          aria-label="New conversation"
+        >+</button>
         <button class="oc-close" on:click={handleClose} title="Close (Esc)">×</button>
       </div>
     </header>
@@ -1128,6 +1157,8 @@ Kernel tools you have (use ONE per turn):
     border-radius: 6px;
   }
   .oc-close:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-1, #f0f0f0); }
+  .oc-new { font-size: 18px; }
+  .oc-new:disabled { opacity: 0.4; cursor: default; }
 
   /* ── Model selector ──────────────────────────────────────────────
      Sits left of the close button, deliberately quiet: the model matters
