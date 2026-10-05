@@ -7,9 +7,15 @@
 import { describe, it, expect } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { createClaudeLogin, loginUrlFrom } from "../src/core/llm/claude-code-login.js";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  callbackTarget, createClaudeLogin, parsePastedRedirect,
+} from "../src/core/llm/claude-code-login.js";
 
-const URL = "https://claude.com/cai/oauth/authorize?code=true&client_id=x&state=abc";
+const AUTHORIZE = "https://claude.com/cai/oauth/authorize?code=true&client_id=x"
+  + "&redirect_uri=http%3A%2F%2Flocalhost%3A38997%2Fcallback&state=abc123";
 
 function fakeChild() {
   const proc = new EventEmitter() as EventEmitter & { stdout: EventEmitter; stderr: EventEmitter; killed: boolean; kill(): void };
@@ -20,7 +26,8 @@ function fakeChild() {
   return proc;
 }
 
-function setup(opts: { cli?: string | null; timeoutMs?: number } = {}) {
+function setup(opts: { cli?: string | null; timeoutMs?: number; captureBrowser?: boolean; fetchImpl?: typeof fetch } = {}) {
+  const shimDir = mkdtempSync(join(tmpdir(), "kernl-login-test-"));
   const spawned: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv; proc: ReturnType<typeof fakeChild> }> = [];
   let signedIn = 0;
   const login = createClaudeLogin({
@@ -32,17 +39,37 @@ function setup(opts: { cli?: string | null; timeoutMs?: number } = {}) {
     },
     onSignedIn: () => { signedIn++; },
     timeoutMs: opts.timeoutMs,
+    captureBrowser: opts.captureBrowser,
+    shimDir: () => shimDir,
+    fetchImpl: opts.fetchImpl,
   });
-  return { login, spawned, signedIn: () => signedIn };
+  return { login, spawned, signedIn: () => signedIn, shimDir };
 }
 
-describe("loginUrlFrom", () => {
-  it("pulls the approval link out of the CLI's output", () => {
-    expect(loginUrlFrom(`Opening browser to sign in…\nIf the browser didn't open, visit: ${URL}\n`)).toBe(URL);
+describe("callbackTarget", () => {
+  it("reads the CLI's own port and state from its approval link", () => {
+    expect(callbackTarget(AUTHORIZE)).toEqual({ port: 38997, state: "abc123" });
   });
 
-  it("returns nothing before the link is printed", () => {
-    expect(loginUrlFrom("Opening browser to sign in…")).toBeUndefined();
+  it("refuses a link that does not call back to localhost", () => {
+    const manual = "https://claude.com/cai/oauth/authorize?redirect_uri=https%3A%2F%2Fplatform.claude.com%2Foauth%2Fcode%2Fcallback&state=s";
+    expect(callbackTarget(manual)).toBeNull();
+  });
+});
+
+describe("parsePastedRedirect", () => {
+  it("takes the whole address from the tab that did not load", () => {
+    expect(parsePastedRedirect("  http://localhost:38997/callback?code=C0de&state=abc123 \n"))
+      .toEqual({ code: "C0de", state: "abc123" });
+  });
+
+  it("takes just the query too", () => {
+    expect(parsePastedRedirect("code=C0de&state=abc123")).toEqual({ code: "C0de", state: "abc123" });
+  });
+
+  it("refuses anything without both code and state", () => {
+    expect(parsePastedRedirect("http://localhost:38997/callback?code=C0de")).toBeNull();
+    expect(parsePastedRedirect("hola")).toBeNull();
   });
 });
 
@@ -55,11 +82,22 @@ describe("createClaudeLogin", () => {
     expect(spawned[0].env.CLAUDE_CONFIG_DIR).toMatch(/kernl[\\/]claude$/);
   });
 
-  it("exposes the link once the CLI prints it", () => {
+  it("opens the user's own browser natively", () => {
     const { login, spawned } = setup();
     login.start();
-    spawned[0].proc.stdout.emit("data", `If the browser didn't open, visit: ${URL}\n`);
-    expect(login.status()).toEqual({ state: "waiting", url: URL });
+    expect(spawned[0].env.BROWSER).toBe(process.env.BROWSER);
+  });
+
+  it("in Docker, records the approval link instead of opening a browser", () => {
+    const { login, spawned } = setup({ captureBrowser: true });
+    login.start();
+    const shim = spawned[0].env.BROWSER!;
+    expect(readFileSync(shim, "utf-8")).toStartWith("#!/bin/sh");
+    expect(login.status().authorizeUrl).toBeUndefined();
+    // What the CLI does with $BROWSER: run it with the link.
+    const file = /> "([^"]+)"/.exec(readFileSync(shim, "utf-8"))![1];
+    writeFileSync(file, AUTHORIZE + "\n");
+    expect(login.status().authorizeUrl).toBe(AUTHORIZE);
   });
 
   it("is done when the CLI exits cleanly, and says so once", () => {
@@ -117,5 +155,47 @@ describe("createClaudeLogin", () => {
     spawned[0].proc.emit("exit", 0);
     expect(login.start().state).toBe("waiting");
     expect(spawned).toHaveLength(2);
+  });
+
+  describe("deliver", () => {
+    function inFlight(fetchImpl?: typeof fetch) {
+      const calls: string[] = [];
+      const ctx = setup({
+        captureBrowser: true,
+        fetchImpl: fetchImpl ?? (async (u: string | URL | Request) => { calls.push(String(u)); return new Response(null, { status: 302 }); }) as typeof fetch,
+      });
+      ctx.login.start();
+      const file = /> "([^"]+)"/.exec(readFileSync(ctx.spawned[0].env.BROWSER!, "utf-8"))![1];
+      writeFileSync(file, AUTHORIZE);
+      return { ...ctx, calls };
+    }
+
+    it("hands the code to the CLI's callback on its own port", async () => {
+      const { login, calls } = inFlight();
+      expect(await login.deliver("http://localhost:1/callback?code=C0de&state=abc123")).toEqual({ ok: true });
+      // The port comes from the CLI's link, never from the paste.
+      expect(calls).toEqual(["http://localhost:38997/callback?code=C0de&state=abc123"]);
+    });
+
+    it("refuses an address from another sign-in", async () => {
+      const { login, calls } = inFlight();
+      expect(await login.deliver("http://localhost:38997/callback?code=C0de&state=other")).toEqual({ ok: false, error: "wrong_login" });
+      expect(calls).toHaveLength(0);
+    });
+
+    it("refuses a paste it cannot read", async () => {
+      const { login } = inFlight();
+      expect(await login.deliver("no sé qué copiar")).toEqual({ ok: false, error: "bad_paste" });
+    });
+
+    it("says so when nothing is waiting", async () => {
+      const { login } = setup({ captureBrowser: true });
+      expect(await login.deliver("code=C0de&state=abc123")).toEqual({ ok: false, error: "not_waiting" });
+    });
+
+    it("reports a CLI that is not listening", async () => {
+      const { login } = inFlight((async () => { throw new Error("ECONNREFUSED"); }) as unknown as typeof fetch);
+      expect(await login.deliver("code=C0de&state=abc123")).toEqual({ ok: false, error: "unreachable" });
+    });
   });
 });

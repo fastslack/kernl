@@ -12,9 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Connect Claude Code with one button.** "Connect with my subscription"
   opens Claude's approval page in your browser; approve it and Kernl picks up
   the session on its own — no terminal, no command to paste. It runs the
-  official CLI's own sign-in, so Kernl still never sees the token. Available
-  where the browser runs on the same machine as Kernl (the desktop apps); in
-  Docker the terminal command is still there.
+  official CLI's own sign-in, so Kernl still never sees the token. In Docker,
+  where the approval cannot find its way back to the container on its own,
+  Kernl opens the page and you paste back the address your browser is left on
+  — still no terminal.
 
 ## [0.4.0] - 2026-10-04
 

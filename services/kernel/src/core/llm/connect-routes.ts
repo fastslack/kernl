@@ -141,10 +141,14 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
     claudeCodeTransition: deps.claudeCodeTransition?.() ?? "none",
     claudeCodeLoginCommand: deps.loginCommand?.() ?? "claude",
     claudeCodeBrowserLogin: !!deps.claudeLogin && (deps.browserLogin?.() ?? false),
+    // Docker: the dashboard opens the approval page and the user pastes back
+    // the address the browser could not load.
+    claudeCodePasteLogin: !!deps.claudeLogin && !(deps.browserLogin?.() ?? false),
   }));
 
-  // "Connect with my subscription": the CLI opens the approval page itself;
-  // the dashboard polls until it exits, then runs Detect to wire it in.
+  // "Connect with my subscription": the CLI opens the approval page itself (in
+  // Docker the dashboard opens it, and the redirect comes back through
+  // /callback); the dashboard polls until the CLI exits, then runs Detect.
   const login = (): ClaudeLogin => {
     if (!deps.claudeLogin) throw new HttpError(404, "sign-in from the dashboard is not available here");
     return deps.claudeLogin;
@@ -152,6 +156,11 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
   server.route("POST", "/api/llm/claude-code/login", () => login().start());
   server.route("GET", "/api/llm/claude-code/login", () => login().status());
   server.route("DELETE", "/api/llm/claude-code/login", () => login().cancel());
+  server.route<{ url?: unknown }>("POST", "/api/llm/claude-code/login/callback", async ({ body }) => {
+    if (typeof body.url !== "string" || !body.url.trim()) throw new HttpError(400, "url is required");
+    const r = await login().deliver(body.url);
+    return { ...login().status(), delivered: r.ok, ...(r.ok ? {} : { deliverError: r.error }) };
+  });
 
   server.route("POST", "/api/llm-providers/:slug/test", async ({ params, body }) => {
     const entry = requireEntry(params);

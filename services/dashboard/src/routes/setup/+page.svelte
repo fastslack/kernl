@@ -265,6 +265,7 @@
               provider={chosenProvider}
               loginCommand={catalog?.claudeCodeLoginCommand ?? 'claude'}
               browserLogin={catalog?.claudeCodeBrowserLogin ?? false}
+              pasteLogin={catalog?.claudeCodePasteLogin ?? false}
               on:back={() => (chosenSlug = '')}
               on:connected={onConnected}
             />
