@@ -136,9 +136,11 @@ const officeInbox: SystemPromptStep = (ctx) => {
 };
 
 // Project block — what project this run works for, its brief, the office's
-// settings for it, its files and accounts. Absent when the run has none.
+// settings for it, its files and accounts. A run without one, in an office
+// that could work for several (or for any caller's), is told to pin the
+// project down first instead of mixing them.
 const projectContext: SystemPromptStep = (ctx) => {
-  if (!ctx.projectId) return null;
+  if (!ctx.projectId) return ctx.service.getProjectGate()?.unscoped?.(ctx.agent.flow_id ?? "") ?? null;
   return ctx.service.getProjectGate()?.context?.(ctx.agent.flow_id ?? "", ctx.projectId)?.block ?? null;
 };
 

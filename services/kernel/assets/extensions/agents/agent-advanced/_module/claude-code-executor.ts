@@ -546,6 +546,13 @@ export class ClaudeCodeExecutor {
         // then fell back to guessing.
         const homeForAgent = this.resolveDriverSlug(vars) ? SANDBOX_WORKSPACE_PATH : cwd;
         systemPrompt += "\n\n" + officeHomeGuidance(officeHomeFlow, homeForAgent, resolveAgentLanguage(agent, this.configRef));
+        if (officeHomeFlow.id !== agent.flow_id) {
+          const own = service.getFlow(agent.flow_id ?? "")?.name ?? "your";
+          systemPrompt +=
+            `\nYou belong to the ${own} office, a team shared by several projects. This run works for a project whose own office is ` +
+            `**${officeHomeFlow.name}**, so you work in ITS home: save every document, note and decision here, ` +
+            `never in your own office's home, and keep them about this project only.`;
+        }
       }
       // Working for a project: its block goes in the prompt and its home dir
       // is exposed next to the cwd (additionalDirectories below).
@@ -1361,7 +1368,8 @@ export class ClaudeCodeExecutor {
     //   1. __cwd_path__ in the agent's variables (absolute path outside the kernel)
     //   2. workspace in the run's trigger_payload (per-run override)
     //   3. __workspace__ in the agent's variables (agent default)
-    //   4. the office home (inherited) — service.resolveFlowHome(flow_id)
+    //   4. the office home (inherited) — service.resolveFlowHome(flow_id); for a
+    //      shared office working for a project, the project's own office home
     //   5. fallback: data/workspaces/agent-<id>/
     const vars = this.parseVariables(agent);
     if (vars.__cwd_path__) {
@@ -1395,7 +1403,10 @@ export class ClaudeCodeExecutor {
     // disk at real run-time, never during flow creation or tests.
     if (!isCustom && service && agent.flow_id) {
       try {
-        const home = service.resolveFlowHome(agent.flow_id);
+        // A shared office (Ventas…) working for a project writes into that
+        // project's office, so each project's documents stay with it.
+        const homeFlowId = (run.project_id && service.getProjectGate()?.homeOffice?.(agent.flow_id, run.project_id)) || agent.flow_id;
+        const home = service.resolveFlowHome(homeFlowId);
         if (home && (home.kind !== "git" || existsSync(home.path))) {
           mkdirSync(home.path, { recursive: true });
           try { seedOfficeHome(home.path, home.flow); } catch { /* non-fatal */ }

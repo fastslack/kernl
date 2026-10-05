@@ -24,6 +24,8 @@ export interface Project {
   last_pull_at: string | null;
   last_webhook_at: string | null;
   connector_error: string;
+  /** The project's own office ('' = not set); see ProjectsService.homeOfficeFor. */
+  home_flow_id: string;
   created_at: string;
   updated_at: string;
 }
