@@ -593,3 +593,42 @@ export function liveDisplayRows(events: AgentFlowEvent[]): LiveStepRow[] {
   }
   return rows.filter((r) => !drop.has(r));
 }
+
+// ── Dense LIVE rows: tags instead of sentences ──────────────────────
+
+/**
+ * A tool call split for a row that already shows the tool as a tag. The
+ * generic summary opens with the tool's full name ("mcp__kernel__kernel_crm_leads
+ * · status=new"), which the tag right before it already says — so the name is
+ * dropped and the arguments come back as key/value pairs to draw as chips.
+ * Calls with a sentence of their own ("Read CHARTER.md") keep it as `text`.
+ */
+export function liveCallParts(toolName: string, inputPreview: string): { text: string; args: Array<{ k: string; v: string }> } {
+  const summary = summarizeToolCall(toolName, inputPreview);
+  const short = toolName.replace(/^mcp__.+?__/, '');
+  const echoes = [toolName, short].some((n) => n && (summary === n || summary.startsWith(`${n} · `)));
+  if (!echoes) return { text: summary, args: [] };
+  const parsed = tryParseJson(inputPreview);
+  const args = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? Object.entries(parsed as Record<string, unknown>)
+      .filter(([k, v]) => !k.startsWith('__') && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+      .slice(0, 3)
+      .map(([k, v]) => ({ k, v: ellipsize(String(v), 32) }))
+    : [];
+  return { text: '', args };
+}
+
+/**
+ * A result summary as a short tag plus the rest: "5 lines · Error: result…"
+ * becomes the tag "5 lines" and the text "Error: result…". `bad` is set when
+ * the text itself opens with an error, which the tool didn't flag.
+ */
+export function liveResultParts(summary: string): { tag: string; text: string; bad: boolean } {
+  if (summary === 'no output' || summary === 'empty output') return { tag: 'empty', text: '', bad: false };
+  const err = /^error · (.*)$/s.exec(summary);
+  if (err) return { tag: 'error', text: err[1], bad: true };
+  const m = /^(\d[\d,]* (?:lines|items|matches|paths|fields))(?: · (.*))?$/s.exec(summary);
+  const tag = m ? m[1] : '';
+  const text = m ? (m[2] ?? '') : summary;
+  return { tag, text, bad: /^\s*(error|failed)\b/i.test(text) };
+}
