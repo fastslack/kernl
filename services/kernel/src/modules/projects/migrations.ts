@@ -112,4 +112,25 @@ export const projectsMigrations: Migration[] = [
     version: 5,
     sql: `ALTER TABLE projects ADD COLUMN pull_since TEXT;`,
   },
+  {
+    // A shared office (Ventas, Marketing…) works for whichever project the
+    // caller brings: serves_any lets a run for ANY active project through the
+    // gate. Schedules still fan out only over office_projects — being callable
+    // by a project is not the same as working for it on a cron.
+    version: 6,
+    sql: `
+      CREATE TABLE IF NOT EXISTS office_scopes (
+        flow_id    TEXT PRIMARY KEY,
+        serves_any INTEGER NOT NULL DEFAULT 0,
+        updated_at TEXT NOT NULL
+      );
+    `,
+  },
+  {
+    // The project's own office. A shared office working for the project keeps
+    // its documents in THIS office's home instead of its own, so each
+    // project's files stay with the project ('' = not set).
+    version: 7,
+    sql: `ALTER TABLE projects ADD COLUMN home_flow_id TEXT NOT NULL DEFAULT '';`,
+  },
 ];

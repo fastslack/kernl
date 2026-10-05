@@ -18,6 +18,7 @@
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { speakReplies } from '$lib/voice/prefs.js';
   import { speakText, speech } from '$lib/voice/speech.js';
+  import { extractChoices, choicesAsText } from '$lib/chat-choices.js';
 
   /** The selected agent — only the fields this tab renders. */
   export let agent: { name: string; description?: string; builtin_handler: string } | null = null;
@@ -45,6 +46,11 @@
   /** A run started from the script-agent branch is in flight. */
   export let starting = false;
 
+  /** Projects this chat can be about, and the one it is about ('' = none). */
+  export let projects: Array<{ slug: string; name: string }> = [];
+  export let project = '';
+  export let onPickProject: (slug: string) => void = () => {};
+
   export let onSend: (detail: ComposerSendDetail) => void = () => {};
   export let onStart: () => void = () => {};
   export let onSeeHistory: () => void = () => {};
@@ -70,7 +76,7 @@
   }
   $: if (awaiting && replies.length > awaiting.repliesBefore) {
     const reply = replies[replies.length - 1];
-    if (awaiting.spoken || $speakReplies) speakText(reply.text);
+    if (awaiting.spoken || $speakReplies) speakText(choicesAsText(reply.text));
     awaiting = null;
   }
 
@@ -79,6 +85,12 @@
     noteSend(lastWasSpoken);
     lastWasSpoken = false;
     onSend(detail);
+  }
+
+  /** A clicked option goes out as an ordinary message, same as typing it. */
+  function pick(label: string) {
+    if (sending || pending) return;
+    send({ text: label, attachmentIds: [], attachments: [] });
   }
 
   /** The tab — files dropped anywhere on it join the draft. */
@@ -119,6 +131,23 @@
       </div>
     </div>
   {:else}
+    {#if projects.length > 0}
+      <!-- Each project has its own thread; the agent only sees this one's. -->
+      <div class="chat-project" role="group" aria-label="Project">
+        <span class="chat-project-lbl">project</span>
+        {#if projects.length === 1}
+          <span class="chat-project-chip on">{projects[0].name}</span>
+        {:else}
+          {#each projects as p (p.slug)}
+            <button class="chat-project-chip" class:on={project === p.slug}
+                    on:click={() => onPickProject(p.slug)} disabled={sending || pending}>{p.name}</button>
+          {/each}
+          <button class="chat-project-chip none" class:on={project === ''}
+                  on:click={() => onPickProject('')} disabled={sending || pending}
+                  title="A thread tied to no project — the agent will ask which one when it matters">none</button>
+        {/if}
+      </div>
+    {/if}
     <div class="chat-messages" bind:this={scrollEl}>
       {#if historyLoading && history.length === 0}
         <div class="ip-loading">Loading the conversation…</div>
@@ -134,13 +163,37 @@
       {:else}
         {#each history as msg, i (msg.ts + '-' + msg.role + '-' + i)}
           <div class="chat-msg copy-wrap" class:chat-you={msg.role === 'you'} class:chat-agent={msg.role === 'agent'}>
-            <CopyTextBtn text={msg.text} title="Copy message" />
+            <CopyTextBtn text={msg.role === 'agent' ? choicesAsText(msg.text) : msg.text} title="Copy message" />
             <div class="chat-meta">
               <span class="chat-role">{msg.role === 'you' ? 'You' : agent?.name}</span>
               <span class="chat-time">{fmtClock(new Date(msg.ts).toISOString())}</span>
             </div>
             {#if msg.role === 'agent'}
-              <div class="chat-text ip-out-md" on:click={onOutputClick} role="presentation">{@html formatRunOutput(msg.text)}</div>
+              {@const parts = extractChoices(msg.text)}
+              {#if parts.body}
+                <div class="chat-text ip-out-md" on:click={onOutputClick} role="presentation">{@html formatRunOutput(parts.body)}</div>
+              {/if}
+              {#if parts.choices}
+                <!-- Only the latest question takes clicks; an answered one
+                     keeps its options visible with the pick marked. -->
+                {@const next = history[i + 1]}
+                {@const chosen = next?.role === 'you' ? next.text.trim() : ''}
+                {@const live = i === history.length - 1}
+                <div class="chat-choices" class:chat-choices-done={!live}>
+                  {#if parts.choices.question}<div class="chat-choices-q">{parts.choices.question}</div>{/if}
+                  <div class="chat-choices-opts">
+                    {#each parts.choices.options as opt, j (j)}
+                      <button class="chat-choice" class:chat-choice-picked={chosen === opt}
+                              on:click={() => pick(opt)} disabled={!live || sending || pending}
+                              title={opt}>
+                        <span class="chat-choice-idx">{j + 1}</span>
+                        <span class="chat-choice-lbl">{opt}</span>
+                      </button>
+                    {/each}
+                  </div>
+                  {#if live}<div class="chat-choices-hint">or type your own answer below</div>{/if}
+                </div>
+              {/if}
               {#if isLlmConfigError(msg.text)}
                 <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
               {/if}
@@ -309,6 +362,61 @@
   @media (prefers-reduced-motion: reduce){
     .chat-typing-dots span{animation:none;opacity:.7}
   }
+
+  /* ── Project of the thread ── */
+  .chat-project{display:flex;align-items:center;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+  .chat-project-lbl{
+    font:600 9px 'JetBrains Mono',monospace;color:#6a6f82;
+    text-transform:uppercase;letter-spacing:.5px;margin-right:2px;
+  }
+  .chat-project-chip{
+    padding:2px 9px;border-radius:999px;cursor:pointer;
+    font:600 10px 'JetBrains Mono',monospace;color:#a0a5b8;
+    background:rgba(120,130,160,.06);border:1px solid rgba(120,130,160,.18);
+    transition:background .12s,border-color .12s,color .12s;
+  }
+  span.chat-project-chip{cursor:default}
+  .chat-project-chip:hover:not(:disabled):not(.on){border-color:rgba(120,130,160,.4);color:#d8dae3}
+  .chat-project-chip.on{
+    color:var(--flow-color);
+    background:color-mix(in srgb, var(--flow-color) 14%, transparent);
+    border-color:color-mix(in srgb, var(--flow-color) 45%, transparent);
+  }
+  .chat-project-chip.none{font-style:italic}
+  .chat-project-chip:disabled{cursor:wait;opacity:.6}
+
+  /* ── Options the agent offers ──
+     Same shape as the chief's pinned questions (OfficeQuestionCard): numbered
+     buttons in a two-column grid, warm accent on hover. */
+  .chat-choices{
+    margin-top:8px;padding:10px 12px;border-radius:8px;
+    background:linear-gradient(180deg, rgba(240,184,116,.08) 0%, rgba(240,184,116,.02) 100%);
+    border:1px solid rgba(240,184,116,.25);border-left:3px solid #f0b874;
+  }
+  .chat-choices-done{opacity:.6;border-left-color:rgba(240,184,116,.4)}
+  .chat-choices-q{font:600 13px/1.45 'Manrope',sans-serif;color:#e7e9f4;margin:0 0 8px}
+  .chat-choices-opts{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .chat-choice{
+    display:flex;align-items:center;gap:8px;
+    padding:8px 10px;background:#161827;color:#cbd0e8;
+    border:1px solid #2a2f4a;border-radius:5px;
+    font:600 11px/1.35 'Manrope',sans-serif;
+    cursor:pointer;transition:all .12s;text-align:left;
+  }
+  .chat-choice:hover:not(:disabled){
+    background:#252840;border-color:#f0b874;color:#f4e1a3;transform:translateY(-1px);
+  }
+  .chat-choice:disabled{cursor:default}
+  .chat-choices:not(.chat-choices-done) .chat-choice:disabled{opacity:.5;cursor:wait}
+  .chat-choice-picked{border-color:#f0b874;color:#f4e1a3;background:#252840}
+  .chat-choice-idx{
+    flex-shrink:0;width:20px;height:20px;border-radius:3px;
+    background:#0a0b14;display:inline-flex;align-items:center;justify-content:center;
+    font:700 10px 'JetBrains Mono',monospace;color:#f0b874;
+  }
+  .chat-choice-lbl{flex:1;word-break:break-word}
+  .chat-choices-hint{margin-top:6px;font:400 10px 'Manrope',sans-serif;color:#6b7090}
+  @media (max-width:520px){.chat-choices-opts{grid-template-columns:1fr}}
 
   .chat-err{
     display:flex;align-items:flex-start;gap:8px;

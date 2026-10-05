@@ -36,6 +36,7 @@
   import { resolveAgentWorkspace, dependsOnGoogleAuth } from '$lib/agent-helpers.js';
   import { fetchRecentRunSummaries } from './recent-runs.js';
   import { attachmentMarkers } from '$lib/chat-view.js';
+  import { chatProjectChoices, defaultChatProject, chatProjectKey, type ChatProject } from '$lib/chat-project.js';
   import type { AttachmentMeta } from '$lib/attachments/types.js';
   import { eventLogToFlowEvents, type HistoryStep } from '$lib/history-steps.js';
   import { liveEventType } from '$lib/live-steps.js';
@@ -223,6 +224,34 @@
    *  pushing a literal "Working on it..." bubble and later deleting whatever
    *  message happened to carry that exact text. */
   let chatPending = false;
+  /** Projects this chat can be about, and the one it is about ('' = none).
+   *  The kernel keeps runs and memory apart per project; see $lib/chat-project. */
+  let chatProjects: ChatProject[] = [];
+  let chatProject = '';
+
+  async function loadChatProjects(agentId: string, flowId: string | undefined) {
+    chatProjects = []; chatProject = '';
+    if (!flowId) return;
+    try {
+      const office: any = await fetch(`/api/offices/${encodeURIComponent(flowId)}/projects`).then((r) => r.ok ? r.json() : null);
+      const all: any = office?.serves_any ? await fetch('/api/projects').then((r) => r.ok ? r.json() : null) : null;
+      if (selectedAgent !== agentId) return;
+      chatProjects = chatProjectChoices(office, all);
+      let saved: string | null = null;
+      try { saved = localStorage.getItem(chatProjectKey(agentId)); } catch { /* private mode */ }
+      chatProject = defaultChatProject(chatProjects, saved);
+    } catch { /* no projects module: chat without project, as before */ }
+  }
+
+  function pickChatProject(slug: string) {
+    if (slug === chatProject || chatSending) return;
+    chatProject = slug;
+    if (selectedAgent) {
+      try { localStorage.setItem(chatProjectKey(selectedAgent), slug); } catch { /* private mode */ }
+    }
+    chatHistory = [];
+    loadChatFromMemory();
+  }
   let chatScrollEl: HTMLDivElement | null = null;
 
   /** Can this agent read what you write?
@@ -352,7 +381,8 @@
     chatHistoryLoading = true;
     chatError = '';
     try {
-      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30`);
+      const projectQ = chatProject ? `&project=${encodeURIComponent(chatProject)}` : '';
+      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30${projectQ}`);
       const data: any = await res.json();
       const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string; attachments?: AttachmentMeta[] }>)
         .filter(m => m.role === 'user' || m.role === 'assistant')
@@ -633,7 +663,9 @@
       panelTab = runningAgentIds.has(selectedAgent) ? 'live' : 'info';
     }
     agentRuns = []; expandedRunId = null; chatHistory = []; latestRun = null;
-    loadLatestRun(); loadChatFromMemory();
+    loadLatestRun();
+    const agentId = selectedAgent;
+    loadChatProjects(agentId, selData?.flow_id).then(() => { if (selectedAgent === agentId) loadChatFromMemory(); });
   }
   $: if (!selectedAgent) lastSelectedAgent = null;
 
@@ -772,7 +804,11 @@
     fetch(`/api/agents/${selectedAgent}/memory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', content: msg, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) }),
+      body: JSON.stringify({
+        role: 'user', content: msg,
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+        ...(chatProject ? { project: chatProject } : {}),
+      }),
     }).catch(() => {});
 
     try {
@@ -805,11 +841,18 @@ ${recentWork}
 5. Write detailed, structured responses with markdown formatting.
 6. FORBIDDEN: "I will work on it", "the team is focused", "strategic initiatives". Use tools instead.
 7. If you genuinely don't know, say "I don't know" — do not invent.
+8. When you need the boss to choose between paths, do NOT list the options as a table or bullets. End your reply with ONE block like this (2-4 short options, written in the boss's language) — the dashboard turns it into buttons they click:
+\`\`\`choices
+{"question": "What do you want to do?", "options": ["First option", "Second option", "Third option"]}
+\`\`\`
 
 Boss says: "${msg || '(see the attached files)'}"`;
       // chat: true — the reply is for the operator, not handed down the agent's chains.
       const runArgs = {
         agent_id: selectedAgent, goal: conversationalGoal, chat: true,
+        // The project this conversation is about: the run, its memory and any
+        // letter it sends to another office carry it.
+        ...(chatProject ? { project: chatProject } : {}),
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
       };
       const res: any = await rpcOrCall('agents.run', runArgs, async () => {
@@ -1124,6 +1167,9 @@ Boss says: "${msg || '(see the attached files)'}"`;
         sending={chatSending}
         bind:scrollEl={chatScrollEl}
         {starting}
+        projects={chatProjects}
+        project={chatProject}
+        onPickProject={pickChatProject}
         onSend={(d) => talkToAgent(d.text, d.attachments)}
         onStart={startAgent}
         onSeeHistory={() => selectPanelTab('history')}

@@ -524,10 +524,19 @@ export function registerAgentRoutes(
   // GET /api/agents/:id/memory — get conversation memory for an agent.
   // Each entry: { role, content, created_at, attachments: AttachmentMeta[] }
   // (attachments that no longer exist are left out).
+  // `project` (id or slug) reads that project's thread; omitted, the thread
+  // that belongs to no project — memory is kept apart per project.
+  const memoryProject = (ref: unknown): string | null => {
+    if (typeof ref !== "string" || !ref) return null;
+    const id = service.getProjectGate()?.resolve(ref) ?? null;
+    if (!id) throw new HttpError(400, `Unknown project "${ref}"`);
+    return id;
+  };
   server.route("GET", "/api/agents/:id/memory", ({ params: { id }, query }) => {
     const attachments = getAttachmentService();
+    const projectId = memoryProject(query.get("project"));
     return {
-      memory: service.getMemory(id, Math.min(parseInt(query.get("limit") ?? "50", 10), 200)).map((m) => ({
+      memory: service.getMemory(id, Math.min(parseInt(query.get("limit") ?? "50", 10), 200), projectId).map((m) => ({
         ...m,
         attachments: m.attachments.length && attachments
           ? attachments.getRecords(m.attachments).map((r) => attachments.toMeta(r))
@@ -538,10 +547,11 @@ export function registerAgentRoutes(
 
   // POST /api/agents/:id/memory — add a manual memory entry (for chat persistence).
   // `attachment_ids` are bound (400 on a bad one) and kept with the entry.
-  server.route<{ role: string; content: string; attachment_ids?: unknown }>("POST", "/api/agents/:id/memory", ({ params: { id }, body }) => {
+  server.route<{ role: string; content: string; attachment_ids?: unknown; project?: unknown }>("POST", "/api/agents/:id/memory", ({ params: { id }, body }) => {
     const attachmentIds = bindAttachmentIdsArg(body.attachment_ids).map((r) => r.id);
     if (!body.content && attachmentIds.length === 0) throw new HttpError(400, "content required");
-    service.addMemory(id, (body.role as "user" | "assistant") ?? "user", body.content ?? "", "", null, attachmentIds);
+    const projectId = memoryProject(body.project);
+    service.addMemory(id, (body.role as "user" | "assistant") ?? "user", body.content ?? "", "", projectId, attachmentIds);
     return { ok: true };
   });
 

@@ -49,3 +49,46 @@ describe("Claude Code executor and projects", () => {
       .toEqual({ includeBash: false, includeWebFetch: false, userMcpServers: true, inheritSettings: true });
   });
 });
+
+describe("shared office working for a project", () => {
+  it("works in the project's own office home, and in its own otherwise", async () => {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const { tmpdir } = await import("node:os");
+    const { projectsMigrations } = await import("../src/modules/projects/migrations.js");
+    const { ProjectsService } = await import("../src/modules/projects/projects-service.js");
+    const db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    runMigrations(db, "projects", projectsMigrations);
+    const events = new EventBus();
+    const root = mkdtempSync(join(tmpdir(), "home-"));
+    const s = new AgentService(db, events);
+    const projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: join(root, "projects") });
+    s.setProjectGate(projects.gate());
+    const ventas = s.createFlow({ name: "Ventas" }).id;
+    const acmeOffice = s.createFlow({ name: "Acme" }).id;
+    for (const [id, dir] of [[ventas, "ventas"], [acmeOffice, "acme"]]) {
+      db.prepare("UPDATE agent_flows SET home_repo_path = ? WHERE id = ?").run(join(root, dir), id);
+      (await import("node:fs")).mkdirSync(join(root, dir));
+    }
+    const closer = s.createAgent({ name: "Closer", flow_id: ventas });
+    const acme = projects.create({ slug: "acme", name: "Acme", brief: { value_prop: "v", audience: "a" } }).id;
+    const ex = new ClaudeCodeExecutor() as unknown as {
+      resolveCwd(agent: unknown, run: unknown, service: AgentService): { cwd: string; officeHomeFlow: { id: string } | null };
+    };
+    const cwdFor = (projectId: string | null) => ex.resolveCwd(closer, { project_id: projectId, trigger_payload: "{}" }, s).cwd;
+
+    // Not shared, or no home office set → its own home.
+    projects.update(acme, { home_flow_id: acmeOffice });
+    expect(cwdFor(acme)).toBe(join(root, "ventas"));
+    projects.setOfficeServesAny(ventas, true);
+    expect(cwdFor(null)).toBe(join(root, "ventas"));
+    // Shared office working for Acme → the Acme office's home.
+    expect(cwdFor(acme)).toBe(join(root, "acme"));
+    projects.update(acme, { home_flow_id: "" });
+    expect(cwdFor(acme)).toBe(join(root, "ventas"));
+    expect(() => projects.update(acme, { home_flow_id: "nope" })).toThrow(/Office not found/);
+
+    db.close(); rmSync(root, { recursive: true, force: true });
+  });
+});

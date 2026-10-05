@@ -27,12 +27,14 @@ const UpdateBody = z.object({
   name: z.string().min(1).optional(),
   status: z.enum(["active", "paused", "archived"]).optional(),
   brief: ProjectBriefSchema.optional(),
+  home_flow_id: z.string().optional(),
 });
 const ConnectorBody = z.object({ url: z.string(), token: z.string().optional() });
 const LinkBody = z.object({
   kind: z.enum(["repo", "social_account", "email_account", "task_project", "workspace"]),
   ref_id: z.string().min(1),
 });
+const ScopeBody = z.object({ serves_any: z.boolean() });
 const OfficeBody = z.object({ active: z.boolean().optional(), settings: z.record(z.unknown()).optional() });
 const EditBody = z.object({ payload: z.record(z.unknown()) });
 const ApproveBody = z.object({ scheduled_for: z.string().nullable().optional() });
@@ -107,7 +109,7 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     const p = mustProject(params.id);
     const b = parse(UpdateBody, body);
     try {
-      return { project: projects.update(p.id, b as { name?: string; status?: ProjectStatus; brief?: typeof b.brief }) };
+      return { project: projects.update(p.id, b as { name?: string; status?: ProjectStatus; brief?: typeof b.brief; home_flow_id?: string }) };
     } catch (err) { return asHttp(err); }
   });
 
@@ -160,7 +162,14 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
   server.route("GET", "/api/offices/:flowId/projects", ({ params }) => ({
     projects: projects.officeProjects(params.flowId),
     settings_schema: projects.getOfficeSettingsSchema(params.flowId),
+    serves_any: projects.officeServesAny(params.flowId),
   }));
+
+  // Shared office: works for whichever project the caller brings.
+  server.route("PUT", "/api/offices/:flowId/scope", ({ params, body }) => {
+    projects.setOfficeServesAny(params.flowId, parse(ScopeBody, body).serves_any);
+    return { serves_any: projects.officeServesAny(params.flowId) };
+  });
 
   // ── Outbox ─────────────────────────────────────────────
   server.route("GET", "/api/outbox", ({ query }) => {

@@ -31,6 +31,9 @@ export interface OutboxProposal {
 /** The projects surface the kernel hands extensions (KernlHost.projects). */
 export interface ProjectsHost {
   get(idOrSlug: string): ProjectInfo | undefined;
+  /** The project of the agent run making the current tool call; undefined
+   *  outside a run or for a run without one. Optional: older kernels lack it. */
+  current?(): ProjectInfo | undefined;
   list(filter?: { flowId?: string }): ProjectInfo[];
   records(projectId: string, kind: string): Array<{ external_id: string; data: unknown; updated_at: string }>;
   officeSettings(flowId: string, projectId: string): Record<string, unknown>;
@@ -46,6 +49,7 @@ function host(): ProjectsHost {
 
 export const projects = {
   get: (idOrSlug: string): ProjectInfo | undefined => host().get(idOrSlug),
+  current: (): ProjectInfo | undefined => host().current?.(),
   list: (filter?: { flowId?: string }): ProjectInfo[] => host().list(filter),
   records: (projectId: string, kind: string) => host().records(projectId, kind),
   officeSettings: (flowId: string, projectId: string): Record<string, unknown> => host().officeSettings(flowId, projectId),

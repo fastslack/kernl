@@ -20,7 +20,7 @@
   interface Project {
     id: string; slug: string; name: string; status: Status; brief: Brief;
     connector_url: string; has_connector_token: boolean; last_pull_at: string | null;
-    last_webhook_at: string | null; connector_error: string;
+    last_webhook_at: string | null; connector_error: string; home_flow_id?: string;
     pending_drafts?: number; leads?: number; offices?: Array<{ flow_id: string; name: string; active: boolean }>;
   }
   interface Link { kind: string; ref_id: string }
@@ -248,6 +248,13 @@
     else if (has) await call(`/api/projects/${pid}/offices/${flowId}`, { method: 'DELETE' });
     await load();
   }, on ? 'Oficina asignada' : 'Oficina quitada');
+
+  /** The project's own office: shared offices (Ventas…) keep this project's documents in its workspace. */
+  const setHomeOffice = (flowId: string) => run(async () => {
+    if (!detail) return;
+    await call(`/api/projects/${detail.project.id}`, { method: 'PUT', body: JSON.stringify({ home_flow_id: flowId }) });
+    await load();
+  }, flowId ? 'Oficina principal guardada' : 'Sin oficina principal');
 
   const saveConnector = () => run(async () => {
     if (!detail) return;
@@ -479,6 +486,18 @@
             <span class="muted">No tenés oficinas todavía. Creá una desde <a href="/agents-flow?view=offices">Oficinas</a>.</span>
           {/each}
         </div>
+        {#if officeOn.size > 0}
+          <label class="home-office">
+            <span>Oficina principal</span>
+            <select value={detail.project.home_flow_id ?? ''} on:change={(e) => setHomeOffice(e.currentTarget.value)}>
+              <option value="">Sin definir</option>
+              {#each flows.filter((f) => officeOn.has(f.id)) as f (f.id)}
+                <option value={f.id}>{f.name}</option>
+              {/each}
+            </select>
+          </label>
+          <p class="help">Las oficinas compartidas, como Ventas, guardan los documentos que hacen para {detail.project.name} en el workspace de esta oficina, no en el suyo.</p>
+        {/if}
       </div>
       {:else}
         <p class="help">Si tu producto tiene un sistema propio (registros, clientes, lista de espera), podés conectarlo para que Ventas sepa quién se registró y quién usa más el producto. <b>No es necesario para empezar.</b> Lo configura quien desarrolla el producto, siguiendo la guía del conector.</p>
@@ -613,6 +632,8 @@
   .copyline code { flex: 1; background: none; color: var(--teal); word-break: break-all; padding: 0; }
   .copyline em { font-style: normal; font-size: 12px; color: var(--text-3); }
   .offices-box { max-width: 760px; }
+  .home-office { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 14px; color: var(--text-1); }
+  .home-office select { min-width: 220px; }
   .step-done { display: flex; align-items: center; gap: 8px; color: var(--text-3); font-size: 13.5px; padding: 6px 10px; }
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .offices-box h3 { margin: 0 0 4px; font-size: 15px; color: var(--text-1); font-weight: 600; }

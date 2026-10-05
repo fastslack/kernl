@@ -139,4 +139,11 @@ export interface ProjectGateLike {
   check(flowId: string, projectId: string): { ok: true } | { ok: false; error: string };
   /** The project block for a run's prompt plus the project's home dir. */
   context?(flowId: string, projectId: string): { block: string; homeDir: string } | null;
+  /** For a run WITHOUT project: the notice telling the agent to establish it,
+   *  when its office serves several projects or any caller's. Null otherwise. */
+  unscoped?(flowId: string): string | null;
+  /** The office whose home a run of `flowId` for `projectId` works in, when
+   *  not its own (a shared office working for a project with an office of
+   *  its own). Null = the office's own home. */
+  homeOffice?(flowId: string, projectId: string): string | null;
 }

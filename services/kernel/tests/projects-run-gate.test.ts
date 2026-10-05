@@ -68,3 +68,53 @@ describe("createRun project gate", () => {
     expect(() => agents.createRun({ agent_id: agentId, goal: "x", project_id: acme })).toThrow(/projects module/);
   });
 });
+
+describe("shared offices (serves_any)", () => {
+  let db: InstanceType<typeof Database>; let agents: AgentService; let projects: ProjectsService; let root: string;
+  let ventas: string; let closer: string; let acme: string; let miniatura: string;
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    runMigrations(db, "projects", projectsMigrations);
+    const events = new EventBus();
+    root = mkdtempSync(join(tmpdir(), "gate-"));
+    projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: root });
+    agents = new AgentService(db, events);
+    agents.setProjectGate(projects.gate());
+    ventas = agents.createFlow({ name: "Ventas" }).id;
+    closer = agents.createAgent({ name: "Closer", flow_id: ventas }).id;
+    const brief = { value_prop: "v", audience: "a" };
+    acme = projects.create({ slug: "acme", name: "Acme", brief }).id;
+    miniatura = projects.create({ slug: "miniatura", name: "Miniatura", brief }).id;
+    projects.assignOffice(ventas, miniatura);
+  });
+  afterEach(() => { db.close(); rmSync(root, { recursive: true, force: true }); });
+
+  it("lets a shared office run for a project it is not assigned to", () => {
+    expect(() => agents.createRun({ agent_id: closer, goal: "x", project_id: acme })).toThrow(/not assigned/);
+    projects.setOfficeServesAny(ventas, true);
+    expect(agents.createRun({ agent_id: closer, goal: "x", project_id: acme }).project_id).toBe(acme);
+  });
+
+  it("still refuses a paused assignment and a paused project", () => {
+    projects.setOfficeServesAny(ventas, true);
+    projects.assignOffice(ventas, miniatura, { active: false });
+    expect(() => agents.createRun({ agent_id: closer, goal: "x", project_id: miniatura })).toThrow(/not assigned/);
+    projects.update(acme, { status: "paused" });
+    expect(() => agents.createRun({ agent_id: closer, goal: "x", project_id: acme })).toThrow(/paused/);
+  });
+
+  it("tells an unscoped run to pin the project down only when there is a choice", () => {
+    const gate = projects.gate();
+    expect(gate.unscoped(ventas)).toBeNull();
+    projects.setOfficeServesAny(ventas, true);
+    const notice = gate.unscoped(ventas)!;
+    expect(notice).toContain("Acme (`acme`)");
+    expect(notice).toContain("Miniatura (`miniatura`)");
+    expect(notice).toMatch(/ask the sender which project/);
+    projects.setOfficeServesAny(ventas, false);
+    projects.assignOffice(ventas, acme);
+    expect(gate.unscoped(ventas)).toMatch(/several projects/);
+  });
+});
