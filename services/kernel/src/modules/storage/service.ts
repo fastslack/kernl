@@ -55,7 +55,24 @@ export interface PolicyView {
   bytes: number | null;
   eligibleRows: number | null;
   eligibleBytes: number | null;
+  /** Present for policies whose data a collector keeps adding (catalogs). */
+  capacity: CapacityView | null;
 }
+
+export interface CapacityView {
+  unit: string;
+  count: number;
+  /** Effective ceiling; null = no limit. */
+  cap: number | null;
+  defaultCap: number | null;
+  capOptions: number[];
+  /** "capped" once count reached cap — the collector is parked. */
+  status: "collecting" | "capped";
+  /** Bytes one unit costs on disk, from the last measurement (0 before one). */
+  bytesPerUnit: number;
+}
+
+type Setting = { enabled: boolean; days: number | null; cap: number | null };
 
 export interface PolicyRunDetail {
   id: string;
@@ -69,6 +86,10 @@ export interface RunProgress {
   trigger: "cron" | "manual";
   phase: "purge" | "vacuum";
   policy: string | null;
+  /** Id of the policy being purged, so the page can highlight its row. */
+  policyId: string | null;
+  /** Rows deleted by the current policy so far. */
+  policyDeleted: number;
   deleted: number;
   startedAt: string;
 }
@@ -116,17 +137,40 @@ export class StorageService {
     return out;
   }
 
-  private settings(): Map<string, { enabled: boolean; days: number | null }> {
+  private settings(): Map<string, Setting> {
     const rows = this.db
-      .prepare("SELECT policy_id, enabled, days FROM retention_settings")
-      .all() as Array<{ policy_id: string; enabled: number; days: number | null }>;
-    return new Map(rows.map((r) => [r.policy_id, { enabled: r.enabled === 1, days: r.days }]));
+      .prepare("SELECT policy_id, enabled, days, cap FROM retention_settings")
+      .all() as Array<{ policy_id: string; enabled: number; days: number | null; cap: number | null }>;
+    return new Map(rows.map((r) => [r.policy_id, { enabled: r.enabled === 1, days: r.days, cap: r.cap }]));
   }
 
-  private effective(p: RetentionPolicy, s?: { enabled: boolean; days: number | null }) {
+  private effective(p: RetentionPolicy, s?: Setting) {
+    // cap: a stored 0 is "no limit" chosen by the user; NULL falls back to the default.
+    const storedCap = s?.cap ?? null;
+    const cap = storedCap === null ? (p.capacity?.defaultCap ?? null) : storedCap > 0 ? storedCap : null;
     return {
       enabled: s ? s.enabled : p.defaultEnabled,
       days: s && s.days !== null ? s.days : p.defaultDays,
+      cap,
+    };
+  }
+
+  private capacityView(p: RetentionPolicy, cap: number | null, m?: PolicySnapshot): CapacityView | null {
+    if (!p.capacity) return null;
+    let count = 0;
+    try {
+      count = p.capacity.count(this.db);
+    } catch {
+      /* table not created yet */
+    }
+    return {
+      unit: p.capacity.unit,
+      count,
+      cap,
+      defaultCap: p.capacity.defaultCap,
+      capOptions: p.capacity.capOptions,
+      status: cap !== null && count >= cap ? "capped" : "collecting",
+      bytesPerUnit: m && m.rows > 0 ? m.bytes / m.rows : 0,
     };
   }
 
@@ -164,14 +208,24 @@ export class StorageService {
         bytes: m?.bytes ?? null,
         eligibleRows: m?.eligibleRows ?? null,
         eligibleBytes: m?.eligibleBytes ?? null,
+        capacity: this.capacityView(policy, eff.cap, m),
       };
     });
   }
 
-  setPolicy(id: string, patch: { enabled?: boolean; days?: number | null }): PolicyView {
+  setPolicy(id: string, patch: { enabled?: boolean; days?: number | null; cap?: number | null }): PolicyView {
     const found = this.collect().find((o) => o.policy.id === id);
     if (!found) throw new Error(`Unknown retention policy: ${id}`);
-    const current = this.effective(found.policy, this.settings().get(id));
+    const stored = this.settings().get(id);
+    const current = this.effective(found.policy, stored);
+    // Stored form: 0 = no limit, positive = ceiling, NULL = policy default.
+    let cap: number | null = stored?.cap ?? null;
+    if (patch.cap !== undefined) {
+      if (!found.policy.capacity) throw new Error(`${id} has no capacity to limit`);
+      if (patch.cap === null || patch.cap === 0) cap = 0;
+      else if (!Number.isInteger(patch.cap) || patch.cap < 1) throw new Error("cap must be a positive integer or null");
+      else cap = patch.cap;
+    }
     const enabled = patch.enabled ?? current.enabled;
     let days = patch.days === undefined ? current.days : patch.days;
     if (found.policy.defaultDays === null) days = null;
@@ -180,10 +234,11 @@ export class StorageService {
     }
     this.db
       .prepare(
-        `INSERT INTO retention_settings (policy_id, enabled, days, updated_at) VALUES (?, ?, ?, ?)
-         ON CONFLICT(policy_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days, updated_at = excluded.updated_at`,
+        `INSERT INTO retention_settings (policy_id, enabled, days, cap, updated_at) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(policy_id) DO UPDATE SET enabled = excluded.enabled, days = excluded.days,
+           cap = excluded.cap, updated_at = excluded.updated_at`,
       )
-      .run(id, enabled ? 1 : 0, days, isoNow());
+      .run(id, enabled ? 1 : 0, days, cap, isoNow());
     this.refreshPolicyEstimate(id);
     return this.listPolicies().find((p) => p.id === id)!;
   }
@@ -318,7 +373,7 @@ export class StorageService {
   async run(trigger: "cron" | "manual", opts: { only?: string } = {}): Promise<RetentionRunSummary> {
     if (this.progress) throw new Error("A cleanup or compaction is already running");
     const startedAt = isoNow();
-    this.progress = { trigger, phase: "purge", policy: null, deleted: 0, startedAt };
+    this.progress = { trigger, phase: "purge", policy: null, policyId: null, policyDeleted: 0, deleted: 0, startedAt };
     const id = newId();
     const dbBefore = fileSize(this.dbPath);
     const details: PolicyRunDetail[] = [];
@@ -337,12 +392,15 @@ export class StorageService {
         const rc = this.runContext(eff.days);
         const perRow = this.avgRowBytes(policy.id);
         this.progress.policy = policy.label;
+        this.progress.policyId = policy.id;
+        this.progress.policyDeleted = 0;
         let deleted = 0;
         try {
           for (let i = 0; i < MAX_BATCHES; i++) {
             const n = this.db.transaction(() => policy.purge(rc))();
             deleted += n;
             this.progress.deleted += n;
+            this.progress.policyDeleted = deleted;
             if (n < rc.batchSize) break;
             await new Promise((r) => setTimeout(r, BATCH_PAUSE_MS));
           }
@@ -366,6 +424,7 @@ export class StorageService {
         if (check.recommended && check.ok) {
           this.progress.phase = "vacuum";
           this.progress.policy = null;
+          this.progress.policyId = null;
           await this.vacuumNow();
           vacuumed = true;
         }
@@ -454,7 +513,7 @@ export class StorageService {
     if (this.progress) throw new Error("A cleanup or compaction is already running");
     const check = this.compactCheck();
     if (!check.ok) throw new Error(compactRefusal(check.reason));
-    this.progress = { trigger: "manual", phase: "vacuum", policy: null, deleted: 0, startedAt: isoNow() };
+    this.progress = { trigger: "manual", phase: "vacuum", policy: null, policyId: null, policyDeleted: 0, deleted: 0, startedAt: isoNow() };
     const before = fileSize(this.dbPath);
     try {
       await this.vacuumNow();

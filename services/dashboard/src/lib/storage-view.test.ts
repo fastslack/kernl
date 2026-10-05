@@ -1,5 +1,5 @@
 import { describe, it, expect } from "bun:test";
-import { fmtBytes, sparkPoints, kindShares } from "./storage-view.js";
+import { fmtBytes, sparkPoints, kindShares, fmtCap, capPct, capChoices } from "./storage-view.js";
 
 describe("storage view helpers", () => {
   it("formats bytes the way the page shows them", () => {
@@ -22,5 +22,24 @@ describe("storage view helpers", () => {
     expect(shares.map((s) => s.kind)).toEqual(["reference", "operational"]);
     expect(shares[0].pct).toBeCloseTo(70);
     expect(kindShares({})).toEqual([]);
+  });
+});
+
+describe("catalog ceiling helpers", () => {
+  it("labels ceilings compactly", () => {
+    expect(fmtCap(100_000)).toBe("100k");
+    expect(fmtCap(1_000_000)).toBe("1M");
+    expect(fmtCap(1_500_000)).toBe("1.5M");
+  });
+
+  it("fills the bar up to 100 and has none without a ceiling", () => {
+    expect(capPct(50, 200)).toBe(25);
+    expect(capPct(500, 200)).toBe(100);
+    expect(capPct(500, null)).toBeNull();
+  });
+
+  it("offers the current custom ceiling among the options", () => {
+    expect(capChoices([100, 1000], 300)).toEqual([100, 300, 1000]);
+    expect(capChoices([100, 1000], null)).toEqual([100, 1000]);
   });
 });

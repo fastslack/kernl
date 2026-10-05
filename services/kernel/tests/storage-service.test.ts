@@ -8,7 +8,7 @@ import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { storageMigrations } from "../src/modules/storage/migrations.js";
 import { StorageService } from "../src/modules/storage/service.js";
 import { corePolicies } from "../src/modules/storage/core-policies.js";
-import { agePolicy } from "../src/sdk/retention.js";
+import { agePolicy, retentionCap } from "../src/sdk/retention.js";
 import type { KernelModule, RetentionPolicy } from "../src/core/types.js";
 
 const DAY_MS = 86_400_000;
@@ -141,6 +141,61 @@ describe("StorageService", () => {
     expect(svc.listPolicies()).toEqual([]);
     modules = [fakeModule("ext:test", () => [logPolicy()])];
     expect(svc.listPolicies()[0].days).toBe(30);
+  });
+});
+
+describe("catalog capacity", () => {
+  let db: InstanceType<typeof Database>;
+  let svc: StorageService;
+  const catalog = () => ({
+    ...logPolicy({ id: "ext.catalog", kind: "reference", defaultEnabled: false }),
+    capacity: {
+      unit: "titles",
+      count: (d: InstanceType<typeof Database>) => (d.prepare("SELECT COUNT(*) n FROM ext_log").get() as { n: number }).n,
+      defaultCap: null,
+      capOptions: [100, 1000],
+    },
+  });
+
+  beforeEach(() => {
+    db = new Database(":memory:");
+    runMigrations(db, "storage", storageMigrations);
+    db.run("CREATE TABLE ext_log (id INTEGER PRIMARY KEY, msg TEXT NOT NULL, created_at TEXT NOT NULL)");
+    const ins = db.prepare("INSERT INTO ext_log (msg, created_at) VALUES ('x', ?)");
+    for (let i = 0; i < 120; i++) ins.run(ago(1));
+    svc = new StorageService(db, ":memory:", () => [fakeModule("ext:media", () => [catalog()])]);
+  });
+
+  afterEach(() => db.close());
+
+  it("shows count, ceiling and whether the collector is parked", () => {
+    expect(svc.listPolicies()[0].capacity).toMatchObject({ unit: "titles", count: 120, cap: null, status: "collecting" });
+    svc.setPolicy("ext.catalog", { cap: 100 });
+    expect(svc.listPolicies()[0].capacity).toMatchObject({ cap: 100, status: "capped" });
+    svc.setPolicy("ext.catalog", { cap: null });
+    expect(svc.listPolicies()[0].capacity).toMatchObject({ cap: null, status: "collecting" });
+  });
+
+  it("keeps the ceiling when other settings change, and lets the collector read it", () => {
+    expect(retentionCap(db, "ext.catalog", 7)).toBe(7); // untouched → fallback
+    svc.setPolicy("ext.catalog", { cap: 1000 });
+    svc.setPolicy("ext.catalog", { days: 30, enabled: true });
+    expect(svc.listPolicies()[0].capacity?.cap).toBe(1000);
+    expect(retentionCap(db, "ext.catalog", 7)).toBe(1000);
+    svc.setPolicy("ext.catalog", { cap: null });
+    expect(retentionCap(db, "ext.catalog", 7)).toBe(0); // explicit "no limit" beats the fallback
+  });
+
+  it("rejects a ceiling on a policy without capacity, and bad values", () => {
+    const plain = new StorageService(db, ":memory:", () => [fakeModule("ext:test", () => [logPolicy()])]);
+    expect(() => plain.setPolicy("ext.log", { cap: 10 })).toThrow(/no capacity/);
+    expect(() => svc.setPolicy("ext.catalog", { cap: -5 })).toThrow(/positive/);
+  });
+
+  it("reads a missing settings table as the fallback", () => {
+    const bare = new Database(":memory:");
+    expect(retentionCap(bare, "ext.catalog", 3)).toBe(3);
+    bare.close();
   });
 });
 

@@ -387,6 +387,23 @@ export interface RetentionPolicy {
   purge(rc: RetentionRunContext): number;
   /** Optional work after the last batch (e.g. rebuilding an FTS index). */
   afterPurge?(rc: RetentionRunContext, deleted: number): void;
+  /**
+   * For data that a background collector keeps adding (catalog ingesters):
+   * a ceiling the user sets on the storage page. The collector reads it with
+   * `retentionCap()` from the SDK and parks itself once the count reaches it.
+   */
+  capacity?: RetentionCapacity;
+}
+
+export interface RetentionCapacity {
+  /** What `count` counts, as a key the dashboard words ("titles"). */
+  unit: string;
+  /** Current amount, e.g. live titles in the catalog. */
+  count(db: SqliteDb): number;
+  /** Ceiling before the user picks one; null = no limit. */
+  defaultCap: number | null;
+  /** Choices offered in the UI (null, "no limit", is always offered too). */
+  capOptions: number[];
 }
 
 // ── Extension System (self-registering modules) ──────────

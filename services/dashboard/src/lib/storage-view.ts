@@ -58,3 +58,23 @@ export function kindShares(byKind: Partial<Record<StorageKind, number>>): Array<
     pct: ((byKind[k] ?? 0) / total) * 100,
   }));
 }
+
+/** Compact ceiling label: 100k, 250k, 1M, 1.5M. */
+export function fmtCap(n: number): string {
+  if (n >= 1_000_000) return `${+(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${+(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
+/** Fill of the count-vs-ceiling bar, 0–100; null when there is no ceiling. */
+export function capPct(count: number, cap: number | null): number | null {
+  if (cap === null || cap <= 0) return null;
+  return Math.min(100, (count / cap) * 100);
+}
+
+/** Ceiling choices for the select: the policy's options plus the current custom value, sorted. */
+export function capChoices(options: number[], cap: number | null): number[] {
+  const set = new Set(options);
+  if (cap !== null) set.add(cap);
+  return [...set].sort((a, b) => a - b);
+}
