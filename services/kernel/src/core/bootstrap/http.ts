@@ -332,9 +332,14 @@ export async function initHttpAndMcp(args: {
         hasClaudeCredential: () => claudeCodeTransition.hasClaudeCodeCredential(),
         claudeCodeTransition: () => claudeCodeTransition.applyClaudeCodeTransition(),
         loginCommand: () => claudeCodeTransition.claudeCodeLoginCommand(),
-        claudeLogin: createClaudeLogin({ cli: () => findClaudeCli(), onSignedIn: resetClaudeCodeSdkCache }),
         // In a container the CLI has no browser to open, and the host's browser
-        // cannot reach the callback port it listens on.
+        // cannot reach the callback port it listens on: capture the approval
+        // link for the dashboard instead, and take the redirect back by paste.
+        claudeLogin: createClaudeLogin({
+          cli: () => findClaudeCli(),
+          onSignedIn: resetClaudeCodeSdkCache,
+          captureBrowser: existsSync("/.dockerenv"),
+        }),
         browserLogin: () => !existsSync("/.dockerenv"),
       });
 

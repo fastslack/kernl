@@ -46,6 +46,8 @@ export interface CatalogResponse {
   claudeCodeLoginCommand: string;
   /** The kernel can sign Claude Code in by opening the approval page itself. */
   claudeCodeBrowserLogin?: boolean;
+  /** Docker: the dashboard opens the approval page and takes the redirect back by paste. */
+  claudeCodePasteLogin?: boolean;
 }
 
 export interface ProbeResult {
@@ -169,12 +171,17 @@ export const detectProvider = (slug: string) => call<DetectResult>(providerUrl(s
 export const disconnectProvider = (slug: string) => call<{ chain: ChainLink[] }>(providerUrl(slug, "connection"), { method: "DELETE" });
 export interface ClaudeLoginStatus {
   state: "idle" | "waiting" | "done" | "failed";
-  url?: string;
+  /** Docker mode: the approval page to open. */
+  authorizeUrl?: string;
   error?: string;
   detail?: string;
+  /** Answer to a pasted address. */
+  delivered?: boolean;
+  deliverError?: "not_waiting" | "bad_paste" | "wrong_login" | "unreachable";
 }
 export const startClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", send("POST", {}));
 export const claudeLoginStatus = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login");
+export const deliverClaudeLogin = (url: string) => call<ClaudeLoginStatus>("/api/llm/claude-code/login/callback", send("POST", { url }));
 export const cancelClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", { method: "DELETE" });
 export const saveChain = (links: ChainLink[]) => call<{ chain: ChainLink[] }>("/api/llm/chain", send("PUT", { links }));
 
