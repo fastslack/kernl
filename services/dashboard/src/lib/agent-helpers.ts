@@ -38,6 +38,41 @@ export function toolGlyph(name: string): string {
 }
 
 /**
+ * Split a tool name into the MCP server it comes from and a name a person can
+ * read.
+ *
+ * Claude Code names MCP tools `mcp__<server>__<tool>`, and the kernel's own
+ * tools carry a `kernel_` prefix on top, so the raw name reads
+ * "mcp__kernel__kernel_sales_deal_list". The server goes to its own tag; the
+ * rest reads "<module> · <action>" for kernel tools ("sales · deal list") and
+ * spaced words for others ("create issue"). A bare `kernel_*` tool (the
+ * native executor) still belongs to the kernel server. Plain tools (`Read`,
+ * `Bash`) have no server and keep their name.
+ */
+export function parseToolName(name: string): { server: string | null; label: string } {
+  let n = String(name ?? '').trim();
+  if (!n) return { server: null, label: 'tool' };
+  let server: string | null = null;
+  const mcp = /^mcp__([^_]+(?:_[^_]+)*?)__(.+)$/.exec(n);
+  if (mcp) { server = mcp[1]; n = mcp[2]; }
+  if (/^kernel_/.test(n)) {
+    const parts = n.replace(/^kernel_/, '').split('_').filter(Boolean);
+    return { server: server ?? 'kernel', label: parts.length > 1 ? `${parts[0]} · ${parts.slice(1).join(' ')}` : parts.join(' ') };
+  }
+  return { server, label: server ? n.replace(/_/g, ' ') : n };
+}
+
+/**
+ * A tool name on one line, for a 3D nameplate: "sales · deal list",
+ * "github · create issue". Cut at `max` with "…".
+ */
+export function toolLabel(name: string, max = 22): string {
+  const { server, label: core } = parseToolName(name);
+  const label = server && server !== 'kernel' && server !== 'mtw-kernel' ? `${server} · ${core}` : core;
+  return label.length > max ? label.slice(0, max - 1).trimEnd() + '…' : label;
+}
+
+/**
  * Escape text going into a banner's HTML string. Identical to `escapeHtml` —
  * the component carried its own fifth copy of the same five replacements.
  */

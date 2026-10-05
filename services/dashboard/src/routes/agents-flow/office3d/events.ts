@@ -13,7 +13,7 @@
 // arrived.
 import type { AgentFlowEvent } from '$lib/stores.js';
 import { mailOffice } from '$lib/office/office-kinds.js';
-import { toolGlyph } from '$lib/agent-helpers.js';
+import { toolGlyph, toolLabel } from '$lib/agent-helpers.js';
 import { meetingRoomDoorPoint, getMeetingSeatPositions } from '$lib/office-geometry.js';
 import {
   enqueueDelivery, updateActivityBoard,
@@ -346,7 +346,7 @@ export function processLiveEvents(ctx: LiveEventContext): void {
         tryFireAnim(`tool:${aid}`, 1.0, () => {
           showAnimatedTag(aid, {
             icon: toolGlyph(toolName), anim: 'pulse',
-            label: toolName.slice(0, 16),
+            label: toolLabel(toolName),
             durationFrames: 130,
           });
         });
@@ -937,7 +937,7 @@ export function processLiveEvents(ctx: LiveEventContext): void {
     if (t === 'run_started') text = 'started';
     else if (t === 'run_completed') text = ev.data.status === 'completed' ? 'done' : ev.data.status === 'cancelled' ? 'stopped' : 'failed';
     else if (t === 'chain_triggered') text = `→ ${String(ev.data.target_agent_name ?? '').slice(0, 15)}`;
-    else if (t === 'step') text = String(ev.data.type === 'tool_call' ? ev.data.tool_name : ev.data.type ?? '').slice(0, 20);
+    else if (t === 'step') text = ev.data.type === 'tool_call' ? toolLabel(String(ev.data.tool_name ?? ''), 20) : String(ev.data.type ?? '').slice(0, 20);
     const ts = ev.data.ts ?? ev.ts;
     const time = ts ? new Date(ts as string).toLocaleTimeString(undefined, { hour12: false, hour: '2-digit', minute: '2-digit' }) : '';
     return { agent: agentName.slice(0, 12), text, color: agentName ? flowColor(String(ev.data.agent_id ?? '')) : '#8a8fa8', time };
