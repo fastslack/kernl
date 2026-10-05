@@ -131,6 +131,10 @@ export function definitionFromWizard(s: WizardState): OfficeDefinition {
 			};
 		}),
 	};
+	// Rows with no hand-written prompt carry the one-line fallback above; the
+	// kernel replaces it with a full mandate written from the agent's title.
+	const auto = agents.filter((a) => !a.prompt.trim()).map((a) => a.name.trim());
+	if (auto.length) def.auto_prompts = auto;
 	if (s.purpose.trim()) def.description = s.purpose.trim();
 	if (s.useRepo && s.repoPath.trim()) {
 		def.repo = s.repoPath.trim();

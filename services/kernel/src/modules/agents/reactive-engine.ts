@@ -77,7 +77,7 @@ export class ReactiveEngine {
 
       // Get agent
       const agent = this.service.getAgent(trigger.agent_id);
-      if (!agent || !agent.active) continue;
+      if (!agent || !agent.active || this.service.isAgentOfficePaused(agent.id)) continue;
 
       // Resolve goal
       const variables = { event: payload as Record<string, unknown> };

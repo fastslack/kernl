@@ -36,7 +36,7 @@ export type WorldChain = {
   label: string; active: number;
 };
 
-export type WorldFlow = { id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string; kind?: string | null; lot_id?: string };
+export type WorldFlow = { id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string; kind?: string | null; lot_id?: string; paused?: number };
 
 export type WorldRank = {
   id: string; name: string; level: number;

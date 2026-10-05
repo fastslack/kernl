@@ -197,6 +197,14 @@
   // Collapsible section state. It lives here and not inside each section so
   // that closing and reopening the drawer does not forget it.
   let collapsed = { mandate: false };
+  // Last result folds to its header line (remembered per browser), so the
+  // mandate below gets the room when you read or edit it.
+  const RESULT_KEY = 'kernl.agentPanel.resultCollapsed';
+  let resultCollapsed = (() => { try { return localStorage.getItem(RESULT_KEY) === '1'; } catch { return false; } })();
+  function toggleResult() {
+    resultCollapsed = !resultCollapsed;
+    try { localStorage.setItem(RESULT_KEY, resultCollapsed ? '1' : '0'); } catch { /* private mode */ }
+  }
 
   // ── Talk to agent ──────────────────────────────
   let chatInput = '';
@@ -227,20 +235,6 @@
    *  reply to a message nothing ever read. 31 of the agents on this floor are
    *  in that shape, so the tab says so instead of pretending. */
   $: chatCanConverse = !!selData && !selData.builtin_handler;
-
-  /** Openers built from this agent, not from whatever product the placeholder
-   *  was copied out of. The old one advertised a prospecting syntax
-   *  ("Prospect city=Valencia…") on every agent in the office. */
-  $: chatSuggestions = (() => {
-    if (!selData || !chatCanConverse) return [] as string[];
-    const out: string[] = [];
-    const goal = String(agentDetail?.agent?.goal_template ?? '').trim();
-    if (goal) out.push(goal.length > 90 ? goal.slice(0, 88) + '…' : goal);
-    if (selData.description) out.push(`What did you do about ${selData.description.toLowerCase()} this week?`);
-    out.push('What are you working on right now?');
-    if (selStats?.failed) out.push('Why did your last runs fail?');
-    return out.slice(0, 3);
-  })();
 
   function beginEditName() {
     if (!selData) return;
@@ -362,6 +356,9 @@
       const data: any = await res.json();
       const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string; attachments?: AttachmentMeta[] }>)
         .filter(m => m.role === 'user' || m.role === 'assistant')
+        // "[To X]" / "[From X]" are what the executor stores when a chain hands
+        // a result between agents — the agents' traffic, not this conversation.
+        .filter(m => !/^\[(To|From) [^\]]+\] /.test(m.content))
         .reverse(); // chronological
       chatHistory = items.map(m => ({
         role: m.role === 'user' ? 'you' as const : 'agent' as const,
@@ -810,8 +807,9 @@ ${recentWork}
 7. If you genuinely don't know, say "I don't know" — do not invent.
 
 Boss says: "${msg || '(see the attached files)'}"`;
+      // chat: true — the reply is for the operator, not handed down the agent's chains.
       const runArgs = {
-        agent_id: selectedAgent, goal: conversationalGoal,
+        agent_id: selectedAgent, goal: conversationalGoal, chat: true,
         ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
       };
       const res: any = await rpcOrCall('agents.run', runArgs, async () => {
@@ -970,10 +968,11 @@ Boss says: "${msg || '(see the attached files)'}"`;
           {#if latestRun && (latestRun.result || latestRun.error)}
             <div class="result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'}>
               <div class="result-hero-top">
-                <div class="result-hero-badge">
+                <button class="result-hero-badge result-hero-toggle" type="button" aria-expanded={!resultCollapsed} on:click={toggleResult}>
+                  <span class="result-hero-caret" class:open={!resultCollapsed} aria-hidden="true">▸</span>
                   <span class="result-hero-icon">{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
                   <span class="result-hero-lbl">Last result</span>
-                </div>
+                </button>
                 <div class="result-hero-date">
                   {fmtRelTime(latestRun.created_at)}
                   {#if latestRun.created_at}
@@ -988,7 +987,9 @@ Boss says: "${msg || '(see the attached files)'}"`;
                   <span>{fmtTokens(latestRun.tokens_used)} tok</span>
                 </div>
               </div>
-              {#if latestRun.error}
+              {#if resultCollapsed}
+                <!-- Folded: the header line above carries status, age and size. -->
+              {:else if latestRun.error}
                 <div class="result-hero-body result-hero-err copy-wrap">
                   <CopyTextBtn text={latestRun.error} title="Copy error" />
                   <RunFailureCard
@@ -1003,12 +1004,14 @@ Boss says: "${msg || '(see the attached files)'}"`;
                   {@html formatRunOutput(latestRun.result)}
                 </div>
               {/if}
+              {#if !resultCollapsed}
               <div class="result-hero-actions">
                 <button class="result-hero-action" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
                   {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
                 </button>
                 <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
               </div>
+              {/if}
             </div>
           {:else if latestRunLoading}
             <div class="result-hero result-hero-loading">Loading last result…</div>
@@ -1119,7 +1122,6 @@ Boss says: "${msg || '(see the attached files)'}"`;
         pending={chatPending}
         bind:input={chatInput}
         sending={chatSending}
-        suggestions={chatSuggestions}
         bind:scrollEl={chatScrollEl}
         {starting}
         onSend={(d) => talkToAgent(d.text, d.attachments)}
@@ -1197,6 +1199,12 @@ Boss says: "${msg || '(see the attached files)'}"`;
     margin-bottom:10px;flex-wrap:wrap;
   }
   .result-hero-badge{display:flex;align-items:center;gap:8px}
+  /* The badge is the fold toggle: a button that keeps the badge's look. */
+  .result-hero-toggle{background:none;border:none;padding:0;cursor:pointer;font:inherit;color:inherit}
+  .result-hero-toggle:hover .result-hero-lbl{color:#f0f2f7}
+  .result-hero-toggle:focus-visible{outline:2px solid rgba(159,232,192,.5);outline-offset:2px;border-radius:4px}
+  .result-hero-caret{display:inline-block;font:400 9px monospace;color:#6a6f82;transition:transform .2s}
+  .result-hero-caret.open{transform:rotate(90deg)}
   .result-hero-icon{
     width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
     border-radius:50%;font:700 12px 'JetBrains Mono',monospace;

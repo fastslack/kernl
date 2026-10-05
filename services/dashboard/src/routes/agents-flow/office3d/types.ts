@@ -42,6 +42,8 @@ export interface FlowData {
   source_extension_id?: string;
   /** Fixed plot of the 3D floor, "col,row" (see $shared/office-lots.ts); '' = none yet. */
   lot_id?: string;
+  /** 1 = office switched off: its agents never run. */
+  paused?: number;
 }
 
 export interface StatsData {

@@ -5,6 +5,7 @@ import { log } from "../../../core/logger.js";
 import { buildPatch, type PatchColumn } from "../../../sdk/query-helpers.js";
 import type { Agent, AgentRun, AgentStep, RunCondition } from "../types.js";
 import type { ProjectGateLike } from "../advanced-types.js";
+import { agentOfficePaused } from "./flows-service.js";
 
 /** Terminal statuses: a run in one of these no longer needs its checkpoint. */
 const FINISHED: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
@@ -84,6 +85,11 @@ export class AgentRunsService {
     }
     if (agentRow.active === 0) {
       throw new Error(`createRun: agent ${input.agent_id} is inactive (active=0)`);
+    }
+    // Its office is switched off (agent_flows.paused): no path runs its
+    // members — the top agent excepted (agentOfficePaused).
+    if (agentOfficePaused(this.db, input.agent_id)) {
+      throw new Error(`createRun: agent ${input.agent_id} belongs to a paused office`);
     }
 
     // 2. Self-invocation guard. If a parent context is supplied and the parent

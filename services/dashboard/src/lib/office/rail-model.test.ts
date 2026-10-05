@@ -92,6 +92,16 @@ describe('buildRailModel', () => {
 	});
 });
 
+describe('buildRailModel paused offices', () => {
+	it('marks only switched-off offices as paused', () => {
+		const base = input();
+		const flows = base.flows.map((f) => (f.id === 'f-cr' ? { ...f, paused: 1 } : f));
+		const offices = buildRailModel({ ...base, flows }).offices;
+		expect(offices.find((o) => o.id === 'f-cr')?.paused).toBe(true);
+		expect(offices.filter((o) => o.paused).map((o) => o.id)).toEqual(['f-cr']);
+	});
+});
+
 describe('filterRail', () => {
 	const model = buildRailModel(input());
 

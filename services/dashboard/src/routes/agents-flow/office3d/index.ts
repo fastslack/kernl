@@ -3,7 +3,7 @@ export { buildNameplate, NAMEPLATE_HEIGHT, type NameplateOpts, type NameplateRan
 export { computeFloorPlan, nearestCorridorNode, type CorridorGrid, type CorridorSegment } from './floor-plan.js';
 export { initHumanoid, createHumanoid, animateWalk, animateRun, animateSitting } from './humanoid.js';
 export { initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool } from './humanoid-pool.js';
-export { initOffice, buildFloor, buildStreets, buildCorridor, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, setupLighting, type ReceptionAnchors, type DataCenterHandles, type DataCenterActions, type RepoBookmark } from './office/index.js';
+export { initOffice, buildFloor, buildStreets, buildCorridor, buildCorridorGrid, buildRooms, paintOfficePower, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, setupLighting, type ReceptionAnchors, type DataCenterHandles, type DataCenterActions, type RepoBookmark } from './office/index.js';
 export { applyRendererGrading, applySceneGrading, GRADING } from './grading.js';
 export { initDelivery, initDeliveryScene, enqueueDelivery, resetDelivery, markPackagePickedUp, updateDelivery, type DeliveryInfo, type DeliveryContext } from './delivery.js';
 export { initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis, type TaxiContext, type TaxiArrivalOpts } from './taxi.js';
