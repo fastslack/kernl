@@ -65,6 +65,8 @@ export function registerChatRoutes(
         /** When true, the SDK session ignores host user settings (plugins,
          *  user-scope MCP servers) — built-ins + kernel MCP only. */
         isolate_settings?: boolean;
+        /** Warm the subprocess and prompt cache without storing the turn. */
+        warmup?: boolean;
         /** Ids from POST /api/attachments; bound before the stream opens. */
         attachment_ids?: string[];
       }>(req);
@@ -82,7 +84,7 @@ export function registerChatRoutes(
       }
       // Bind before the stream opens, so a bad id is a plain 400 rather than
       // an error event (binding again inside chatStream is a no-op).
-      if (attachmentIds.length > 0) {
+      if (attachmentIds.length > 0 && body.warmup !== true) {
         try {
           const svc = getAttachmentService();
           if (!svc) throw new HttpError(400, "Attachments are not available in this kernel");
@@ -147,6 +149,7 @@ export function registerChatRoutes(
           allowedTools: Array.isArray(body.allowed_tools) ? body.allowed_tools : undefined,
           disallowedTools: Array.isArray(body.disallowed_tools) ? body.disallowed_tools : undefined,
           isolateSettings: body.isolate_settings === true,
+          warmup: body.warmup === true,
           attachmentIds,
         });
       } catch (err) {

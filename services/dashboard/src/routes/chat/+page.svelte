@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onMount, tick, afterUpdate } from 'svelte';
+  import { onMount, onDestroy, tick, afterUpdate } from 'svelte';
   import ToolCardGroup from '$lib/components/ToolCardGroup.svelte';
   import { collapseRepeats } from '$lib/collapse-repeats.js';
   import { toolCardKey } from '$lib/tool-presentation.js';
@@ -79,6 +79,9 @@
   afterUpdate(() => {
     scrollBottom();
   });
+
+  let retitleTimer: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(() => clearTimeout(retitleTimer));
 
   async function loadEpisodes() {
     episodes = await getChatEpisodes().catch(() => []);
@@ -195,6 +198,10 @@
       await tick();
       scrollBottom();
       loadEpisodes();
+      // The kernel names the chat by subject a moment after the turn (at the
+      // 2nd and 6th message); look once more so the new title shows up.
+      clearTimeout(retitleTimer);
+      retitleTimer = setTimeout(loadEpisodes, 5000);
     }
   }
 

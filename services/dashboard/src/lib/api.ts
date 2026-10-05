@@ -417,6 +417,12 @@ export async function startChatEpisode(input: {
 	provider?: string;
 	model?: string;
 	instructions?: string;
+	/** Where the chat is started: office3d | dashboard | mcp | platform | setup. */
+	source?: string;
+	/** The agent / platform / team inside that source. */
+	source_label?: string;
+	/** Continue the latest matching episode of this source instead of opening a new one. */
+	resume?: boolean;
 } = {}) {
 	const res: any = await rpcOrCall(
 		'chat.episode.start',
@@ -470,6 +476,8 @@ export async function* sendChatMessageStream(
 		disallowed_tools?: string[];
 		/** Ignore host user settings (plugins / user MCPs) — built-ins + kernel MCP only. */
 		isolate_settings?: boolean;
+		/** Warm the subprocess + prompt cache; the turn is not stored. */
+		warmup?: boolean;
 		/** Ids from POST /api/attachments. Bound before the stream opens, so a
 		 *  bad id throws here (plain 400) rather than arriving as an event. */
 		attachment_ids?: string[];
