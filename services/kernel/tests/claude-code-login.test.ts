@@ -174,7 +174,18 @@ describe("createClaudeLogin", () => {
       const { login, calls } = inFlight();
       expect(await login.deliver("http://localhost:1/callback?code=C0de&state=abc123")).toEqual({ ok: true });
       // The port comes from the CLI's link, never from the paste.
-      expect(calls).toEqual(["http://localhost:38997/callback?code=C0de&state=abc123"]);
+      expect(calls).toEqual(["http://127.0.0.1:38997/callback?code=C0de&state=abc123"]);
+    });
+
+    it("falls back to the IPv6 loopback the CLI may be listening on", async () => {
+      const calls: string[] = [];
+      const { login } = inFlight((async (u: string | URL | Request) => {
+        calls.push(String(u));
+        if (String(u).includes("127.0.0.1")) throw new Error("ConnectionRefused");
+        return new Response(null, { status: 302 });
+      }) as typeof fetch);
+      expect(await login.deliver("code=C0de&state=abc123")).toEqual({ ok: true });
+      expect(calls[1]).toBe("http://[::1]:38997/callback?code=C0de&state=abc123");
     });
 
     it("refuses an address from another sign-in", async () => {
