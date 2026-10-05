@@ -198,14 +198,18 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
     if (!target || !got) return { ok: false, error: "bad_paste" };
     if (got.state !== target.state) return { ok: false, error: "wrong_login" };
     const q = new URLSearchParams({ code: got.code, state: got.state });
-    try {
-      // The CLI answers with a redirect to Claude's success page; we only need
-      // it to have received the code. It exits once the exchange finishes.
-      await fetchImpl(`http://localhost:${target.port}/callback?${q}`, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
-      return { ok: true };
-    } catch {
-      return { ok: false, error: "unreachable" };
+    // Both loopbacks, because "localhost" is not one address. In the kernel
+    // image the CLI listened on ::1 only, while Bun's fetch resolved localhost
+    // to 127.0.0.1 alone — every delivery was refused with the CLI right there.
+    for (const host of ["127.0.0.1", "[::1]"]) {
+      try {
+        // The CLI answers with a redirect to Claude's success page; we only
+        // need it to have received the code. It exits once the exchange ends.
+        await fetchImpl(`http://${host}:${target.port}/callback?${q}`, { redirect: "manual", signal: AbortSignal.timeout(10_000) });
+        return { ok: true };
+      } catch { /* not listening on this loopback — try the other */ }
     }
+    return { ok: false, error: "unreachable" };
   }
 
   function cancel(): ClaudeLoginStatus {
