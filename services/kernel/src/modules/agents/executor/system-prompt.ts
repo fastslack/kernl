@@ -21,6 +21,8 @@ import type { AgentService } from "../service.js";
 import type { SkillBodyResolver } from "../skill-resolver.js";
 import { agentAllowedTools, agentSkills } from "../agent-fields.js";
 import type { RunRecorder } from "./run-recorder.js";
+import { getAttachmentService } from "../../attachments/index.js";
+import { attachmentNote } from "../../attachments/blocks.js";
 import {
   promptTodayDate,
   promptInvokedBy,
@@ -203,18 +205,26 @@ const conversationalMemory: SystemPromptStep = (ctx) => {
     ? service.getRelevantMemoryByEmbedding(agent.id, effectiveGoal, goalVector, 50, 100, cosW, minS, ctx.projectId)
     : service.getRelevantMemory(agent.id, effectiveGoal, 50, 100, ctx.projectId);
   if (memory.length === 0) return null;
+  // Past turns are flat text here: an entry's attachments are named, not sent
+  // (`[Adjunto: informe.pdf · documento · 12 págs]`). Only the current run's
+  // own attachments go to the model as blocks (executor.ts).
+  const withAttachments = (content: string, ids: readonly string[] | undefined) => {
+    if (!ids?.length) return content;
+    const note = attachmentNote(getAttachmentService()?.getRecords(ids) ?? []);
+    return note ? (content ? `${content} ${note}` : note) : content;
+  };
   // System prompt: compact summary of relevance-ranked memory (chronological).
   const summaryEntries = [...memory].reverse().map((m) => ({
     role: m.role,
     timestamp: m.created_at.slice(5, 16).replace("T", " "),
-    content: m.content.slice(0, 200),
+    content: withAttachments(m.content.slice(0, 200), m.attachments),
   }));
 
   // Short memory block injected directly into the goal (top 10 most relevant)
   const suffixEntries = memory.slice(0, 10).map((m) => ({
     role: m.role,
     timestamp: m.created_at.slice(5, 16).replace("T", " "),
-    content: m.content.slice(0, 300),
+    content: withAttachments(m.content.slice(0, 300), m.attachments),
   }));
   ctx.memoryGoalSuffix = promptMemoryGoalSuffix(lang, suffixEntries);
   return promptMemorySummaryBlock(lang, summaryEntries);

@@ -25,6 +25,8 @@ const CAPS: LlmProviderCapabilities = {
   streaming: false,
   thinking: false,
   vision: false,
+  pdf: false,
+  video: false,
   promptCaching: false,
   contextWindow: 128_000,
 };

@@ -86,6 +86,10 @@ export interface LlmProviderCapabilities {
   thinking: boolean;
   /** Supports vision (image input). */
   vision: boolean;
+  /** Accepts a native PDF `document` block. Absent = no (attachments then go as extracted text). */
+  pdf?: boolean;
+  /** Accepts native video input. No provider does yet; attachments send frames + transcript. */
+  video?: boolean;
   /** Soporta prompt caching. */
   promptCaching: boolean;
   /** Approximate max context size (tokens) — for UI defaults. */

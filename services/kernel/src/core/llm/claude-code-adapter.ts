@@ -349,7 +349,9 @@ export class ChatClaudeCodeProvider {
    * permissions via the `permission` callback.
    */
   async chatCompletionStream(
-    userText: string,
+    /** The user turn: plain text, or content blocks (attachments: image /
+     *  document blocks followed by the text) — the SDK takes either. */
+    userText: string | ContentBlock[],
     sink: ChatStreamSink,
     opts: ChatStreamCallOptions,
   ): Promise<{
@@ -623,6 +625,9 @@ export class ChatClaudeCodeProvider {
     return parts.filter(Boolean).join("\n\n");
   }
 
+  /** Past turns ride in the system prompt, which takes no blocks. Callers
+   *  send attachments of past turns already as text (attachments/blocks.ts);
+   *  the placeholders are for anything that still arrives as a block. */
   private renderForTranscript(content: string | ContentBlock[]): string {
     if (typeof content === "string") return content;
     const out: string[] = [];

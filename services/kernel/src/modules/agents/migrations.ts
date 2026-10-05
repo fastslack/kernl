@@ -904,6 +904,15 @@ export const agentsMigrations: Migration[] = [
          AND agent_id IN (SELECT id FROM agents WHERE builtin_handler IS NOT NULL AND builtin_handler <> '');
     `,
   },
+  {
+    // Chat attachments on a conversational memory entry: a JSON array of
+    // attachment ids ('' = none), so the agent panel can show them and later
+    // prompts can name them.
+    version: 54,
+    sql: `
+      ALTER TABLE agent_memory ADD COLUMN attachments TEXT NOT NULL DEFAULT '';
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

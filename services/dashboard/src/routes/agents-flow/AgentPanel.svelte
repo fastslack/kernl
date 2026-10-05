@@ -35,6 +35,8 @@
   import { isWorkspacePathHidden } from '$lib/workspace-tree.js';
   import { resolveAgentWorkspace, dependsOnGoogleAuth } from '$lib/agent-helpers.js';
   import { fetchRecentRunSummaries } from './recent-runs.js';
+  import { attachmentMarkers } from '$lib/chat-view.js';
+  import type { AttachmentMeta } from '$lib/attachments/types.js';
   import { eventLogToFlowEvents, type HistoryStep } from '$lib/history-steps.js';
   import { liveEventType } from '$lib/live-steps.js';
   import type { WorldAgent, WorldChain, WorldFlow, WorldStats } from './world-types.js';
@@ -206,7 +208,7 @@
   let editingName = false;
   let editNameValue = '';
   let savingName = false;
-  let chatHistory: Array<{ role: 'you' | 'agent'; text: string; ts: number }> = [];
+  let chatHistory: Array<{ role: 'you' | 'agent'; text: string; ts: number; attachments?: AttachmentMeta[] }> = [];
   let chatHistoryLoading = false;
   let chatError = '';
   /** The run was accepted and the agent is working. Replaces the old trick of
@@ -358,13 +360,14 @@
     try {
       const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30`);
       const data: any = await res.json();
-      const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string }>)
+      const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string; attachments?: AttachmentMeta[] }>)
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .reverse(); // chronological
       chatHistory = items.map(m => ({
         role: m.role === 'user' ? 'you' as const : 'agent' as const,
         text: m.content,
         ts: new Date(m.created_at).getTime(),
+        ...(m.attachments?.length ? { attachments: m.attachments } : {}),
       }));
     } catch (e: any) {
       // Was swallowed silently, which made a failed fetch and a genuinely empty
@@ -752,22 +755,27 @@
     }
   }
 
-  async function talkToAgent(text?: string) {
+  async function talkToAgent(text?: string, attachments: AttachmentMeta[] = []) {
     const msg = (text ?? chatInput).trim();
-    if (!selectedAgent || !msg || chatSending) return;
+    const attachmentIds = attachments.map((a) => a.id);
+    if (!selectedAgent || (!msg && !attachmentIds.length) || chatSending) return;
     chatInput = '';
     chatSending = true;
     chatError = '';
 
-    chatHistory = [...chatHistory, { role: 'you', text: msg, ts: Date.now() }];
+    chatHistory = [...chatHistory, {
+      role: 'you', text: msg, ts: Date.now(),
+      ...(attachments.length ? { attachments } : {}),
+    }];
     scrollChatToEnd();
-    showBubble(selectedAgent, msg, 400);
+    showBubble(selectedAgent, msg || attachmentMarkers(attachments), 400);
 
-    // Persist user message to agent memory
+    // Persist user message to agent memory (the ids are kept with the entry,
+    // so the strip comes back when the thread is reloaded).
     fetch(`/api/agents/${selectedAgent}/memory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', content: msg }),
+      body: JSON.stringify({ role: 'user', content: msg, ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) }),
     }).catch(() => {});
 
     try {
@@ -775,10 +783,14 @@
       const agentName = selData?.name ?? 'Agent';
       const agentDesc = selData?.description ?? '';
 
-      // Build conversation context from recent chat history
-      const recentChat = chatHistory.slice(-10).map(m =>
-        m.role === 'you' ? `Boss: ${m.text}` : `${agentName}: ${m.text}`
-      ).join('\n');
+      // Build conversation context from recent chat history. Past turns'
+      // files are named inline; only this message's reach the model as content.
+      const recent = chatHistory.slice(-10);
+      const recentChat = recent.map((m, i) => {
+        const marks = i < recent.length - 1 ? attachmentMarkers(m.attachments) : '';
+        const line = [m.text, marks].filter(Boolean).join(' ');
+        return m.role === 'you' ? `Boss: ${line}` : `${agentName}: ${line}`;
+      }).join('\n');
 
       const conversationalGoal = `The boss is talking to you directly. You are ${agentName}: ${agentDesc}.
 
@@ -797,12 +809,16 @@ ${recentWork}
 6. FORBIDDEN: "I will work on it", "the team is focused", "strategic initiatives". Use tools instead.
 7. If you genuinely don't know, say "I don't know" — do not invent.
 
-Boss says: "${msg}"`;
-      const res: any = await rpcOrCall('agents.run', { agent_id: selectedAgent, goal: conversationalGoal }, async () => {
+Boss says: "${msg || '(see the attached files)'}"`;
+      const runArgs = {
+        agent_id: selectedAgent, goal: conversationalGoal,
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+      };
+      const res: any = await rpcOrCall('agents.run', runArgs, async () => {
         const r = await fetch('/api/agents/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_id: selectedAgent, goal: conversationalGoal }),
+          body: JSON.stringify(runArgs),
         });
         return r.json();
       });
@@ -1106,7 +1122,7 @@ Boss says: "${msg}"`;
         suggestions={chatSuggestions}
         bind:scrollEl={chatScrollEl}
         {starting}
-        onSend={(text) => talkToAgent(text)}
+        onSend={(d) => talkToAgent(d.text, d.attachments)}
         onStart={startAgent}
         onSeeHistory={() => selectPanelTab('history')}
         onOutputClick={handleOutputClick}

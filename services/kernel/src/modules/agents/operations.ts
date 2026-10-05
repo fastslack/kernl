@@ -27,6 +27,7 @@ import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { parseSchedulePatch } from "./services/schedules-service.js";
 import { setOfficeRepo } from "./office-repo.js";
+import { bindAttachmentIdsArg } from "../attachments/bind-arg.js";
 
 export interface AgentOperationDeps {
   service: AgentService | null;
@@ -166,12 +167,21 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
         if (!projectId) throw new HttpError(400, `Unknown project "${projectRef}"`);
       }
       let run;
+      // Attachments for the run's opening turn. Bound here (400 on a bad id);
+      // the executor reads them back from the payload and builds blocks per
+      // model. A meeting passes the same ids to every participant: binding
+      // an already-bound id is fine.
+      const attachmentIds = bindAttachmentIdsArg(input.attachment_ids).map((r) => r.id);
+      const payload = {
+        ...(workspace ? { workspace } : {}),
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+      };
       try {
         run = service.createRun({
           agent_id: agent.id,
           trigger_type: "manual",
           goal,
-          trigger_payload: workspace ? { workspace } : undefined,
+          trigger_payload: Object.keys(payload).length ? payload : undefined,
           project_id: projectId,
         });
       } catch (err) {

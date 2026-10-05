@@ -17,6 +17,9 @@
   import { foldThinking } from '$lib/chat-md';
   import { collapseRepeats } from '$lib/collapse-repeats.js';
   import OfficeToolRun, { toolKeys, type OfficeToolCall } from './OfficeToolRun.svelte';
+  import ChatComposer from './ChatComposer.svelte';
+  import AttachmentStrip from './AttachmentStrip.svelte';
+  import type { AttachmentMeta, ComposerSendDetail } from '$lib/attachments/types.js';
   import {
     startChatEpisode,
     sendChatMessageStream,
@@ -186,6 +189,8 @@ Kernel tools you have (use ONE per turn):
   type DisplayMessage = {
     role: 'user' | 'assistant';
     blocks: StreamBlock[];
+    /** A user turn's attachments — metas, or bare ids from history. */
+    attachments?: Array<AttachmentMeta | string>;
   };
 
   let episodeId: string | null = null;
@@ -284,7 +289,9 @@ Kernel tools you have (use ONE per turn):
     } catch { /* keep silent — selector just won't populate */ }
   }
   let input = '';
-  let inputEl: HTMLTextAreaElement;
+  let composer: ChatComposer;
+  /** The whole panel takes dropped files, not just the composer. */
+  let modalEl: HTMLDivElement | null = null;
   let scrollEl: HTMLDivElement;
   /** Boot phase — drives the loader. Once 'ready', the loader fades out
    *  and the chat slides in. Failure surfaces inside the loader. */
@@ -368,7 +375,7 @@ Kernel tools you have (use ONE per turn):
     }
     phase = 'ready';
     await tick();
-    inputEl?.focus({ preventScroll: true });
+    composer?.focus();
   }
 
   /**
@@ -433,20 +440,24 @@ Kernel tools you have (use ONE per turn):
     }
   }
 
-  async function doSend() {
+  async function doSend(detail: ComposerSendDetail) {
     if (sending || phase !== 'ready' || !episodeId) return;
-    const msg = input.trim();
-    if (!msg) return;
+    const msg = detail.text.trim();
+    if (!msg && detail.attachmentIds.length === 0) return;
     input = '';
-    if (inputEl) inputEl.style.height = 'auto';
-    await runStreamingTurn(msg);
+    await runStreamingTurn(msg, detail.attachments);
   }
 
-  async function runStreamingTurn(msg: string) {
+  async function runStreamingTurn(msg: string, attachments: AttachmentMeta[] = []) {
     if (!episodeId) return;
+    const attachmentIds = attachments.map((a) => a.id);
     messages = [
       ...messages,
-      { role: 'user', blocks: [{ type: 'text', text: msg }] },
+      {
+        role: 'user',
+        blocks: msg ? [{ type: 'text', text: msg }] : [],
+        ...(attachments.length ? { attachments } : {}),
+      },
     ];
     sending = true;
     streamingBlocks = [];
@@ -457,7 +468,8 @@ Kernel tools you have (use ONE per turn):
     try {
       const stream = sendChatMessageStream(
         { episode_id: episodeId, message: msg, allowed_tools: TOP_AGENT_ALLOWED_TOOLS,
-          disallowed_tools: TOP_AGENT_DISALLOWED_TOOLS, isolate_settings: true },
+          disallowed_tools: TOP_AGENT_DISALLOWED_TOOLS, isolate_settings: true,
+          ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) },
         streamAbort.signal,
       );
       for await (const ev of stream) {
@@ -465,9 +477,11 @@ Kernel tools you have (use ONE per turn):
       }
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
+        // The composer let go of the files on send; a retry has to re-attach.
+        const lost = attachmentIds.length ? ' — the attachments were not sent; attach them again to retry.' : '';
         messages = [
           ...messages,
-          { role: 'assistant', blocks: [{ type: 'text', text: 'Error: ' + (e?.message ?? e) }] },
+          { role: 'assistant', blocks: [{ type: 'text', text: 'Error: ' + (e?.message ?? e) + lost }] },
         ];
       }
     } finally {
@@ -592,21 +606,6 @@ Kernel tools you have (use ONE per turn):
     scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      doSend();
-    } else if (e.key === 'Escape') {
-      handleClose();
-    }
-  }
-
-  function autoResize(e: Event) {
-    const ta = e.target as HTMLTextAreaElement;
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
-  }
-
   function handleClose() {
     if (streamAbort) {
       try { streamAbort.abort(); } catch { /* ignore */ }
@@ -643,6 +642,7 @@ Kernel tools you have (use ONE per turn):
      stays visible and interactive while the channel is open. -->
 <div class="oc-overlay" role="presentation">
   <div
+    bind:this={modalEl}
     class="oc-modal"
     style="--cmd-color:{topAgentColor};"
     on:click|stopPropagation
@@ -782,6 +782,9 @@ Kernel tools you have (use ONE per turn):
               {m.role === 'user' ? 'You' : avatarText}
             </div>
             <div class="oc-body-inner">
+              {#if m.attachments?.length}
+                <div class="oc-atts"><AttachmentStrip attachments={m.attachments} /></div>
+              {/if}
               {#each collapseRepeats(m.blocks, foldKey) as r}
                 {#if r.item.type === 'text'}
                   <div class="oc-text">{@html formatMd(r.item.text)}</div>
@@ -838,23 +841,16 @@ Kernel tools you have (use ONE per turn):
     </div>
 
     <footer class="oc-foot">
-      <textarea
-        bind:this={inputEl}
-        class="oc-input"
+      <ChatComposer
+        bind:this={composer}
         bind:value={input}
-        on:keydown={onKeydown}
-        on:input={autoResize}
+        {sending}
+        attachments
+        dropTarget={modalEl}
         placeholder={chatPlaceholder}
-        rows="1"
-        disabled={sending}
-      ></textarea>
-      <button
-        class="oc-send"
-        on:click={doSend}
-        disabled={sending || !input.trim()}
-      >
-        {sending ? '…' : 'Send'}
-      </button>
+        sendLabel={`Send to ${topAgentName}`}
+        on:send={(e) => doSend(e.detail)}
+      />
     </footer>
     </div>
     {/if}
@@ -1372,44 +1368,14 @@ Kernel tools you have (use ONE per turn):
     40% { opacity: 1; transform: translateY(-3px); }
   }
 
+  /* The shared composer draws its own top rule; this band only pads it and
+     hands it the top agent's colour as its accent. */
   .oc-foot {
-    display: flex;
-    gap: 8px;
-    align-items: flex-end;
-    padding: 10px 12px;
-    border-top: 1px solid var(--border, #2a2a2a);
+    padding: 0 12px 10px;
     background: rgba(255, 255, 255, 0.02);
+    --flow-color: var(--cmd-color, #d4a84b);
   }
-  .oc-input {
-    flex: 1;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 8px;
-    padding: 8px 12px;
-    color: var(--text-1, #f0f0f0);
-    font-family: inherit;
-    font-size: 13px;
-    resize: none;
-    max-height: 160px;
-    overflow-y: auto;
-    line-height: 1.45;
-  }
-  .oc-input:focus { outline: none; border-color: var(--cmd-color, #d4a84b); }
-  .oc-input:disabled { opacity: 0.5; cursor: not-allowed; }
-  .oc-send {
-    background: var(--cmd-color, #d4a84b);
-    color: #1a1a1a;
-    border: none;
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 700;
-    cursor: pointer;
-    font-size: 12px;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
-  }
-  .oc-send:disabled { opacity: 0.4; cursor: not-allowed; }
-  .oc-send:not(:disabled):hover { filter: brightness(1.08); }
+  .oc-msg-user .oc-atts :global(.as) { justify-content: flex-end; }
 
   /* Inline tool-permission card (was a modal over the whole page). */
   .oc-perm {
