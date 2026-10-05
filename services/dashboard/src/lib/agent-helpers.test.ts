@@ -6,6 +6,8 @@
 
 import { describe, it, expect } from "bun:test";
 import {
+  toolLabel,
+  parseToolName,
   hexToNum,
   toolGlyph,
   escapeBannerText,
@@ -53,6 +55,40 @@ describe("toolGlyph", () => {
     // Worth pinning: the brain tools do NOT match — the rule looks for
     // "memory" or "graph", and `kernel_brain_recall` contains neither.
     expect(toolGlyph("kernel_brain_recall")).toBe("🔧");
+  });
+});
+
+describe("parseToolName", () => {
+  it("puts the MCP server in its own field", () => {
+    expect(parseToolName("mcp__kernel__kernel_crm_add_contact")).toEqual({ server: "kernel", label: "crm · add contact" });
+    expect(parseToolName("mcp__github__create_issue")).toEqual({ server: "github", label: "create issue" });
+    expect(parseToolName("mcp__claude_ai_Gmail__search_threads")).toEqual({ server: "claude_ai_Gmail", label: "search threads" });
+  });
+  it("gives the native executor's kernel_ tools the kernel server", () => {
+    expect(parseToolName("kernel_sales_deal_update")).toEqual({ server: "kernel", label: "sales · deal update" });
+  });
+  it("leaves plain tools without a server", () => {
+    expect(parseToolName("ToolSearch")).toEqual({ server: null, label: "ToolSearch" });
+    expect(parseToolName("")).toEqual({ server: null, label: "tool" });
+  });
+});
+
+describe("toolLabel", () => {
+  it("drops the MCP server and the kernel_ prefix from kernel tools", () => {
+    expect(toolLabel("mcp__kernel__kernel_sales_deal_list")).toBe("sales · deal list");
+    expect(toolLabel("mcp__mtw-kernel__kernel_agents_run")).toBe("agents · run");
+    expect(toolLabel("kernel_tasks_create")).toBe("tasks · create");
+  });
+  it("names other MCP servers, underscores in the server name included", () => {
+    expect(toolLabel("mcp__github__create_issue")).toBe("github · create issue");
+    expect(toolLabel("mcp__claude_ai_Gmail__search_threads", 60)).toBe("claude_ai_Gmail · search threads");
+  });
+  it("passes plain tools through and cuts long labels with an ellipsis", () => {
+    expect(toolLabel("Read")).toBe("Read");
+    expect(toolLabel("")).toBe("tool");
+    const long = toolLabel("mcp__kernel__kernel_career_document_gate_and_more");
+    expect(long.length).toBe(22);
+    expect(long.endsWith("…")).toBe(true);
   });
 });
 

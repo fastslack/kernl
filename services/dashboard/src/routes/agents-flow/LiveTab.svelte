@@ -25,7 +25,8 @@
   import { agentActionOf, type AgentAction } from '$lib/agent-actions.js';
   import { t } from '$lib/i18n/index.js';
   import AgentActionBody from './AgentActionBody.svelte';
-  import { shortToolName, resultFailed } from '$lib/history-steps.js';
+  import { resultFailed } from '$lib/history-steps.js';
+  import ToolName from '$lib/components/agent/ToolName.svelte';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
 
@@ -182,7 +183,7 @@
                   title={runTitle(row)} on:click={() => toggleRun(row.key)}>
             <span class="live-step-icon">{liveStepIcon('tool_call')}</span>
             <span class="live-step-type">{liveStepLabel(row.pending > 0 ? 'tool_call' : 'tool_result')}</span>
-            <code class="live-step-tool">{row.tool}</code>
+            <ToolName name={row.tool} chipClass="live-step-tool" />
             <span class="live-run-count" class:bad={row.failed > 0} class:pending={row.pending > 0}>
               {row.pending > 0 ? '…' : row.failed > 0 ? '✗' : '✓'} ×{row.calls}{#if row.failed > 0} · {row.failed} ✗{/if}
             </span>
@@ -222,7 +223,7 @@
             {:else}
             <span class="live-step-icon">{liveStepIcon(etype)}</span>
             <span class="live-step-type">{liveStepLabel(etype)}</span>
-            {#if e.data.tool_name}<code class="live-step-tool" title={String(e.data.tool_name)}>{shortToolName(String(e.data.tool_name))}</code>{/if}
+            {#if e.data.tool_name}<ToolName name={String(e.data.tool_name)} chipClass="live-step-tool" />{/if}
             <!-- A call reads with its outcome: what it asked → what came back. -->
             <span class="live-step-text">
               {liveStepSummary(e)}{#if res}<span class="live-step-res" class:bad={resBad}> → {resBad ? '✗ ' : ''}{summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))}</span>{/if}
