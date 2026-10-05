@@ -103,9 +103,11 @@ export function buildMyOffice(
   const deskW = Math.min(4.4, w - 2.2);   // big, imposing — clamped to the room
   const deskDepth = 1.5;
   const deskTopY = 0.92;                   // taller than a worker desk → authority
-  const deskCZ = zBack + 1.9;              // desk near the back wall
+  // Desk pulled off the back wall so the occupant has room behind the chair
+  // instead of sitting pressed against the window and the flags.
+  const deskCZ = zBack + 2.6;
   const deskFrontZ = deskCZ + deskDepth / 2;
-  const cmdCZ = deskCZ - 1.15;             // occupant seat, behind the desk
+  const cmdCZ = deskCZ - 1.3;              // occupant seat, behind the desk
 
   // ── Floor: polished dark marble (lifted a touch so the luxury reads under
   // the single warm light instead of going pure black) ──
