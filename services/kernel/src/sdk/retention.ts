@@ -46,6 +46,24 @@ export function countWhere(
   }
 }
 
+/**
+ * The ceiling the user set for a policy's `capacity` on the storage page, or
+ * `fallback` when they never touched it. 0 means no limit. Reads the storage
+ * module's table directly so a collector needs no handle on that module; a
+ * missing table (storage not initialised yet) reads as the fallback.
+ */
+export function retentionCap(db: SqliteDb, policyId: string, fallback = 0): number {
+  try {
+    const row = db.prepare("SELECT cap FROM retention_settings WHERE policy_id = ?").get(policyId) as
+      | { cap: number | null }
+      | undefined;
+    if (!row || row.cap === null) return fallback;
+    return row.cap > 0 ? row.cap : 0;
+  } catch {
+    return fallback;
+  }
+}
+
 export interface AgePolicySpec {
   id: string;
   label: string;

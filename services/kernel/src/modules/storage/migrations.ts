@@ -43,4 +43,10 @@ export const storageMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Ceiling for policies with a `capacity` (catalog ingesters). NULL = the
+    // policy's default; 0 = explicitly no limit.
+    version: 2,
+    sql: `ALTER TABLE retention_settings ADD COLUMN cap INTEGER;`,
+  },
 ];

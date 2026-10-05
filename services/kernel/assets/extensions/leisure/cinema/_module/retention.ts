@@ -29,6 +29,7 @@
 
 import type { RetentionPolicy, RetentionRunContext, SqliteDb } from "@kernl/extension-sdk";
 import { CinemaService } from "./service.js";
+import { CINEMA_CATALOG_POLICY, CATALOG_CAP_OPTIONS } from "./catalog-cap.js";
 import { rebuildWorks } from "./works.js";
 
 /** Identifier embedded in an archive.org download URL (`/download/<id>/file`). */
@@ -132,7 +133,7 @@ export function purgeUntouchedCatalog(db: SqliteDb, cutoff: string, limit: numbe
 export function cinemaRetentionPolicies(): RetentionPolicy[] {
   return [
     {
-      id: "cinema.catalog-untouched",
+      id: CINEMA_CATALOG_POLICY,
       label: "Cinema catalogue: untouched titles",
       description:
         "Deletes archive.org titles neither added nor refreshed in the window. " +
@@ -140,6 +141,12 @@ export function cinemaRetentionPolicies(): RetentionPolicy[] {
         "and every other copy of those works.",
       kind: "reference",
       tables: ["cinema_titles", "cinema_titles_fts", ...DEPENDENT_TABLES],
+      capacity: {
+        unit: "titles",
+        count: (db) => (db.prepare("SELECT COUNT(*) AS n FROM cinema_titles WHERE deleted_at IS NULL").get() as { n: number }).n,
+        defaultCap: null,
+        capOptions: CATALOG_CAP_OPTIONS,
+      },
       defaultDays: 180,
       dayOptions: [90, 180, 365],
       defaultEnabled: false,

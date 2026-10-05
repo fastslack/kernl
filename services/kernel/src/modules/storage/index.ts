@@ -144,9 +144,10 @@ export function createStorageModule(listModules: () => KernelModule[]): StorageM
           name: "storage.policy.set",
           handler: async (args) => {
             const id = String(args.id ?? "");
-            const patch: { enabled?: boolean; days?: number | null } = {};
+            const patch: { enabled?: boolean; days?: number | null; cap?: number | null } = {};
             if (typeof args.enabled === "boolean") patch.enabled = args.enabled;
             if (args.days !== undefined) patch.days = args.days === null ? null : Number(args.days);
+            if (args.cap !== undefined) patch.cap = args.cap === null ? null : Number(args.cap);
             return need().setPolicy(id, patch);
           },
         },

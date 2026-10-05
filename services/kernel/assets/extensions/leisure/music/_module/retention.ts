@@ -13,6 +13,7 @@
  * tag table is rebuilt once after the last batch.
  */
 
+import { MUSIC_CATALOG_POLICY, CATALOG_CAP_OPTIONS } from "./catalog-cap.js";
 import type { RetentionPolicy, RetentionRunContext, SqliteDb } from "@kernl/extension-sdk";
 import { ArchiveCatalog } from "../../_lib/archive-catalog/index.js";
 
@@ -56,13 +57,19 @@ export function purgeUntouchedMusic(db: SqliteDb, cutoff: string, limit: number)
 export function musicRetentionPolicies(): RetentionPolicy[] {
   return [
     {
-      id: "music.catalog-untouched",
+      id: MUSIC_CATALOG_POLICY,
       label: "Music catalogue: untouched titles",
       description:
         "Deletes archive.org music titles neither added nor refreshed in the window. " +
         "Always keeps anything in your library or that you ever played.",
       kind: "reference",
       tables: ["music_titles", "music_titles_fts"],
+      capacity: {
+        unit: "titles",
+        count: (db) => (db.prepare("SELECT COUNT(*) AS n FROM music_titles WHERE deleted_at IS NULL").get() as { n: number }).n,
+        defaultCap: null,
+        capOptions: CATALOG_CAP_OPTIONS,
+      },
       defaultDays: 180,
       dayOptions: [90, 180, 365],
       defaultEnabled: false,
