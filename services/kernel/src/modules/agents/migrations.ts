@@ -905,6 +905,15 @@ export const agentsMigrations: Migration[] = [
     `,
   },
   {
+    // Office on/off switch. Separate from `active`, which deleteFlow and the
+    // extension reinstall own and which means "deleted". A paused office keeps
+    // its agents, schedules and lot; createRun refuses runs for its members.
+    version: 53,
+    sql: `
+      ALTER TABLE agent_flows ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
     // Chat attachments on a conversational memory entry: a JSON array of
     // attachment ids ('' = none), so the agent panel can show them and later
     // prompts can name them.

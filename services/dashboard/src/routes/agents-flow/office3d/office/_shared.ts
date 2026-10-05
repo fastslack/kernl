@@ -26,6 +26,25 @@ export function makeSignClickable(
   });
 }
 
+/** Paint an office sign as on or off: dimmed with an "OFF" line when the
+ *  office is switched off. Shared by the first build (rooms.ts) and
+ *  AgentWorld3D's live repaint. The switch itself lives in the office panel. */
+export function paintOfficePower(sign: HTMLElement, paused: boolean): void {
+  sign.style.opacity = paused ? '0.55' : '1';
+  sign.style.filter = paused ? 'grayscale(0.8)' : '';
+  const off = sign.querySelector('[data-office-off]') as HTMLElement | null;
+  if (off) off.style.display = paused ? 'block' : 'none';
+}
+
+/** The sign's "OFF" line, hidden until paintOfficePower shows it. */
+export function addOfficeOffLine(sign: HTMLDivElement, flowId: string, offLabel: string): void {
+  const off = document.createElement('div');
+  off.setAttribute('data-office-off', flowId);
+  off.textContent = offLabel;
+  off.style.cssText = `display:none;font:700 8px 'Fira Code',monospace;letter-spacing:1px;margin-top:2px;color:#8a93ad;text-shadow:none;`;
+  sign.appendChild(off);
+}
+
 /** Makes the wall's top trim emit a subtle glow in its own colour, boosted by
  *  the existing bloom → the rooms read as outlined (HQ look).
  *  Idempotent on the shared top material (creates no new materials). */

@@ -86,6 +86,7 @@ export function registerAgentRoutes(
     ["PUT", "/api/agents/flows/:flow_id/repo", "agents.flows.set_repo"],
     ["POST", "/api/agents/flows/:flow_id/lead", "agents.flows.set_lead"],
     ["PUT", "/api/agents/flows/:flow_id/distribute", "agents.flows.set_distribute"],
+    ["PUT", "/api/agents/flows/:flow_id/paused", "agents.flows.set_paused"],
     ["POST", "/api/agents/chain", "agents.chain.create"],
     ["DELETE", "/api/agents/chain/:id", "agents.chain.delete"],
     ["PUT", "/api/agents/schedules/:id", "agents.schedule.update"],

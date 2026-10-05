@@ -47,6 +47,7 @@ export interface AgentFlow {
   source_extension_id?: string;           // '' = created by the operator
   auto_debate?: number;                   // 0/1
   lot_id?: string;                        // "col,row" plot in the 3D world; '' = none yet
+  paused?: number;                        // 0/1 — office switched off: its agents never run (v53)
   created_at: string;
   updated_at: string;
 }

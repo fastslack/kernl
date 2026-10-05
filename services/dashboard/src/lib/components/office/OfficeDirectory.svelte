@@ -6,11 +6,14 @@
   export let loading = false;
   export let error = false;
   export let inbox = 0;
-  const dispatch = createEventDispatcher<{ select: { id: string }; headquarters: void; retry: void; agent: { id: string } }>();
+  /** Office whose on/off switch is waiting on the kernel. */
+  export let powerBusy: string | null = null;
+  const dispatch = createEventDispatcher<{ select: { id: string }; headquarters: void; retry: void; agent: { id: string }; power: { id: string; paused: boolean } }>();
   let query = '';
   const fold = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
   $: matches = model.offices.filter(o => fold(o.name + ' ' + o.agents.map(a => a.name).join(' ')).includes(fold(query.trim())));
   function status(office: RailOffice) {
+    if (office.paused) return 'off';
     if (office.agents.some(a => a.state === 'error')) return 'review';
     if (office.working) return 'working';
     if (office.agents.length && office.agents.every(a => a.state === 'paused')) return 'paused';
@@ -41,6 +44,7 @@
     <div class="office-grid">
       {#each matches as office (office.id)}
         {@const state = status(office)}
+        <div class="card-wrap" class:off={office.paused}>
         <button class="office-card" style:--office-color={office.color} on:click={() => dispatch('select', { id: office.id })}>
           <span class="card-top"><span class="office-mark" aria-hidden="true">{office.name.slice(0, 2).toUpperCase()}</span><span class="status" class:working={state === 'working'} class:review={state === 'review'}><span aria-hidden="true">●</span> {$t('office.directory.' + state)}</span></span>
           <strong class="office-name">{office.name}</strong>
@@ -48,6 +52,13 @@
           <span class="agent-names">{office.agents.slice(0, 3).map(a => a.name).join(' · ')}{office.agents.length > 3 ? ' …' : ''}</span>
           <span class="card-bottom">{$t('office.directory.open')} <span aria-hidden="true">↗</span></span>
         </button>
+        <!-- Sibling of the card, not inside it: a button can't nest another. -->
+        <button class="power" class:on={!office.paused} type="button" aria-pressed={!office.paused}
+          disabled={powerBusy === office.id}
+          title={$t(office.paused ? 'office.power.turn_on' : 'office.power.turn_off')}
+          aria-label={$t(office.paused ? 'office.power.turn_on_named' : 'office.power.turn_off_named', { name: office.name })}
+          on:click={() => dispatch('power', { id: office.id, paused: !office.paused })}>⏻</button>
+        </div>
       {/each}
     </div>
     {#if !matches.length}<p class="empty">{$t(query ? 'office.rail.no_match' : 'office.rail.empty', { q: query })}</p>{/if}
@@ -73,6 +84,13 @@
   .office-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr)); gap: 16px; }
   .office-card { display: flex; flex-direction: column; min-width: 0; text-align: left; padding: 22px; background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px; color: var(--text-1); cursor: pointer; transition: background .15s, border-color .15s; }
   .office-card:hover { background: var(--surface-2); border-color: var(--office-color); }
+  .card-wrap { position: relative; display: flex; min-width: 0; } .card-wrap .office-card { flex: 1; }
+  .card-wrap .card-top { padding-right: 44px; }
+  .card-wrap.off .office-card { opacity: .55; filter: grayscale(.8); }
+  .power { position: absolute; top: 22px; right: 22px; display: grid; place-items: center; width: 32px; height: 32px; border-radius: 50%; border: 1px solid var(--border-h); background: var(--surface-2); color: var(--text-3); font-size: 15px; cursor: pointer; }
+  .power.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+  .power:hover:not(:disabled) { border-color: var(--text-2); } .power:disabled { opacity: .5; cursor: wait; }
+  .power:focus-visible { outline: 2px solid var(--gold); outline-offset: 2px; }
   .card-top { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 20px; }
   .office-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 12px; font: 700 14px var(--font-display); background: color-mix(in srgb, var(--office-color) 18%, var(--surface-2)); color: var(--text-1); border-left: 3px solid var(--office-color); }
   .status { color: var(--text-2); font-size: 12px; } .status span { font-size: 8px; margin-right: 4px; } .working { color: var(--green); } .review { color: var(--gold); }

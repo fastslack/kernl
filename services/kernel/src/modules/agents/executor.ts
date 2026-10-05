@@ -45,6 +45,14 @@ import {
   withoutNativeBlocks,
 } from "../attachments/blocks.js";
 
+/**
+ * Cap on a reply saved to the agent's memory. The agent panel's chat reads its
+ * thread from that memory, so a lower cap cut answers mid-sentence (it was
+ * 2000). The prompt side trims each entry itself (system-prompt.ts), so a long
+ * entry doesn't grow later prompts; this only guards against runaway output.
+ */
+const MEMORY_REPLY_MAX = 20_000;
+
 // Public surface kept on this module — callers import these from executor.js.
 export type { ExecutionResult } from "./executor/shared.js";
 export { selectToolCapable } from "./executor/model-chain.js";
@@ -574,7 +582,7 @@ export class AgentExecutor {
 
       // Save agent response to conversational memory (only for manual/chat runs)
       if (run.trigger_type === "manual") {
-        service.addMemory(agent.id, "assistant", finalContent.slice(0, 2000), run.id, run.project_id ?? null);
+        service.addMemory(agent.id, "assistant", finalContent.slice(0, MEMORY_REPLY_MAX), run.id, run.project_id ?? null);
       }
 
       // Emit flow event: run completed
@@ -851,7 +859,7 @@ export class AgentExecutor {
           steps_count: recorder.stepNumber + retryResult.iterations,
           tokens_used: totalTokens + retryResult.totalTokens,
         };
-        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, 2000), run.id, run.project_id ?? null);
+        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, MEMORY_REPLY_MAX), run.id, run.project_id ?? null);
         recorder.emit("agent:flow:run_completed", {
           status: retryExecResult.status, steps_count: retryExecResult.steps_count,
           tokens_used: retryExecResult.tokens_used,
@@ -1060,6 +1068,9 @@ export class AgentExecutor {
   ): void {
     const declarativeCap = this.configRef?.agents?.maxInvokeDepth ?? DEFAULT_MAX_CHAIN_DEPTH;
     if (depth >= declarativeCap) return;
+
+    // A chat turn answers the operator; it is not work to pass down the chain.
+    if (isChatRun(sourceRun)) return;
 
     const chains = service.getChainsBySource(sourceAgent.id);
     if (chains.length === 0) return;
@@ -1465,6 +1476,15 @@ function evaluateChainCondition(conditionJson: string, result: ExecutionResult):
     return true;
   } catch {
     return true;
+  }
+}
+
+/** True for a run started from the agent panel's chat (agents.run with chat: true). */
+export function isChatRun(run: Pick<AgentRun, "trigger_payload">): boolean {
+  try {
+    return (JSON.parse(run.trigger_payload || "{}") as { chat?: unknown }).chat === true;
+  } catch {
+    return false;
   }
 }
 

@@ -158,8 +158,9 @@ export class AgentScheduler {
       for (const schedule of due) {
         try {
           const agent = this.service.getAgent(schedule.agent_id);
-          if (!agent || !agent.active) {
-            // Advance next_run_at even if agent is inactive
+          if (!agent || !agent.active || this.service.isAgentOfficePaused(agent.id)) {
+            // Advance next_run_at even if agent is inactive or its office is
+            // paused, so resuming doesn't fire a backlog of missed slots.
             const nextRun = this.computeNextRun(schedule.cron_expression, schedule.interval_ms);
             this.service.updateScheduleNextRun(schedule.id, nextRun, isoNow());
             continue;

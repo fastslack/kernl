@@ -14,7 +14,7 @@
     computeFloorPlan, initHumanoid, initOffice, initFurniture, initWalkers, initAmbiance,
     initHumanoidPool, createSittingHumanoidPool, type SittingHumanoidPool,
     initAllSkins, resolveSkin, listSkins, type SkinDefinition,
-    buildFloor, buildStreets, buildCorridorGrid, buildRooms, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, buildDesks, buildHallways,
+    buildFloor, buildStreets, buildCorridorGrid, buildRooms, paintOfficePower, buildMeetingRooms, buildMyOffice, buildCentralHall, buildHallExtension, buildReception, buildCommunicationsOffice, buildDataCenterOffice, updateDataCenter, buildDesks, buildHallways,
     setupLighting,
     buildAmbiance, buildWallClock, buildActivityBoard, buildDoorLeds, updateDoorLeds, buildElevator, updateAmbiance,
     initRedAlertDecor, buildSandbagBarrier, buildCrates,
@@ -54,6 +54,8 @@
   import type { OffGridSite, WorldHit, WorldHost, WorldPlugin, WorldPluginInstance, WorldViewItem } from '$shared/world-plugin.js';
   import { createConstructionDirector } from './office3d/construction/director.js';
   import { createConstructionStage, type ConstructionStage } from './office3d/construction/stage.js';
+  import { createDemolitionDirector } from './office3d/construction/demolition.js';
+  import { createDemolitionStage, type DemolitionStage } from './office3d/construction/demolition-stage.js';
   import type { Lot } from '$shared/office-lots.js';
   import OfficeCreatorChat from '$lib/components/OfficeCreatorChat.svelte';
   import RegisterRepoModal from './RegisterRepoModal.svelte';
@@ -297,6 +299,12 @@
   let lotGround: any = null;
   /** Console-only: slow a build down to look at it (`__constructionSpeed(0.2)`). */
   let constructionTimeScale = 1;
+  // ── Deleted offices: the same crew blows them up (office3d/construction/demolition*.ts) ──
+  // The page keeps a ghost of the office on our floor until 'demolished' fires.
+  const demolition = createDemolitionDirector();
+  let demolitionStage: DemolitionStage | null = null;
+  /** The demolition in progress — drives the Skip chip. */
+  let demolitionFlowId: string | null = null;
   // Dedupe deliveries: at most one active truck per flow, and throttle re-triggers
   const DELIVERY_COOLDOWN_SEC = 12;
   const lastDeliveryAtByFlow = new Map<string, number>();
@@ -872,7 +880,71 @@
 
   /** Nobody is watching: offices appear finished rather than being built in a hidden tab. */
   function skipConstructionWhenHidden(): void {
-    if (document.hidden) construction.skip();
+    if (document.hidden) { construction.skip(); demolition.skip(); }
+  }
+
+  /** The office was deleted: the crew comes and blows it up. The page keeps its ghost until 'demolished'. */
+  export function demolishOffice(flowId: string): void {
+    demolition.request(flowId);
+  }
+
+  demolition.onPhase((flowId, phase) => {
+    if (phase === 'truck-in') {
+      demolitionFlowId = flowId;
+      // Evacuated: the team is gone before the crew walks in.
+      seatedHiddenFlows.add(flowId);
+      for (const a of officeAgents(flowId)) sittingWorkers.get(a.id)?.setVisible(false);
+      return;
+    }
+    if (phase === 'boom') {
+      const room = roomMap.get(flowId);
+      if (room && scene) {
+        animRegistry.add(chyronLabel(scene, {
+          position: { x: room.cx, y: 6, z: room.cz },
+          html: `💥 <b>${escapeBannerText($translate('office.demolition.banner'))}</b><br><span style="font-size:10px;opacity:.85">${escapeBannerText(room.name.slice(0, 28))}</span>`,
+          color: '#ff6a2a',
+          durationSec: 4,
+          tag: `demolition:${flowId}`,
+        }));
+      }
+      return;
+    }
+    if (phase !== 'done') return;
+    if (demolitionFlowId === flowId) demolitionFlowId = null;
+    demolitionStage?.finished(flowId);
+    seatedHiddenFlows.delete(flowId);
+    desksPendingFlows.delete(flowId);
+    dispatch('demolished', { flowId });
+    // The page drops the ghost now and the plan rebuilds with a free lot. Still
+    // in the data after that (the console demo): put the office back as it was.
+    setTimeout(() => { if (flows.some(f => f.id === flowId)) rebuildScene(); }, 0);
+  });
+
+  function makeDemolitionStage(): DemolitionStage {
+    return createDemolitionStage({
+      scene,
+      room: (id) => roomMap.get(id),
+      roomGroups: (id) => staticGroup ? staticGroup.children.filter((c: any) => c.userData?.flowId === id) : [],
+      street: () => taxiContext,
+      routing: () => corGrid.segments.length ? { rooms: roomMap, grid: corGrid, coreRooms: meetingRooms } : null,
+      setDurations: (id, d) => demolition.setDurations(id, d),
+      hideInterior: (id) => {
+        // Desks are instanced across every office, so hiding a group can't take
+        // them out: rebuild the desks without this office (the same filter a
+        // construction uses before its walls are up). Layout is unchanged, so
+        // rebuildScene only redoes the desks.
+        if (!desksPendingFlows.has(id)) {
+          desksPendingFlows.add(id);
+          rebuildScene();
+        }
+        for (const a of officeAgents(id)) sittingWorkers.get(a.id)?.setVisible(false);
+      },
+      frame: (x, z, span) => {
+        if (!camera || !controls) return;
+        if (performance.now() - lastUserSteerAt < 4000) return; // the user is steering
+        tweenCameraTo(x, 0, z, x + span * 0.25, span * 0.9, z + span * 0.7);
+      },
+    });
   }
 
   function makeConstructionStage(): ConstructionStage {
@@ -2347,7 +2419,7 @@
       const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
-      buildRooms(staticGroup, gridRooms(), computeRoomCounts());
+      buildRooms(staticGroup, gridRooms(), computeRoomCounts(), officePower());
       lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
@@ -2403,6 +2475,14 @@
       }
       return construction.active();
     };
+    // Office demolition: blows up an existing office (cosmetic — nothing is deleted,
+    // it comes back as it was when the dust settles). Speed via __constructionSpeed.
+    (window as any).__demolitionDemo = (flowId?: string) => {
+      const id = flowId ?? [...roomMap.keys()][0];
+      if (!id || !roomMap.has(id)) { console.warn('[demolitionDemo] no office to blow up'); return false; }
+      demolition.request(id);
+      return id;
+    };
     (window as any).__constructionSpeed = (x: number = 1) => { constructionTimeScale = Math.max(0, x); return constructionTimeScale; };
     (window as any).__constructionState = () => ({
       active: construction.active(),
@@ -2413,6 +2493,7 @@
       const list = [
         '__constructionDemo()    — a crew builds an office (replays an existing one)',
         '__constructionSpeed(0.2) / __constructionSeek("build", 0.5) — slow down / jump a build',
+        '__demolitionDemo()      — the crew blows an office up (cosmetic, it comes back)',
         '__deliveryDemo()        — camión de correo/paquete (mail)',
         '__taxiDemo()            — a car/taxi drives up to the front and leaves',
         '__taxiDemo("#4ddbff")   — taxi with a custom body colour',
@@ -3480,6 +3561,16 @@
         console.error('[construction] failed — finishing the build:', err);
         construction.skip();
       }
+      // Demolition — same rule: a failure ends it (the office just goes) rather than breaking the world.
+      try {
+        const ddt = deltaSec * constructionTimeScale;
+        demolition.tick(ddt, (id) => roomMap.has(id) && !!taxiContext && corGrid.segments.length > 0);
+        demolitionStage ??= makeDemolitionStage();
+        demolitionStage.update(ddt, sceneTimeSec, demolition.active());
+      } catch (err) {
+        console.error('[demolition] failed — ending it:', err);
+        demolition.skip();
+      }
     }
 
     // Build set of agents currently being spoken to (a walker arrived at their desk)
@@ -3835,6 +3926,22 @@
     });
   }
 
+  /** Which offices are switched off, to dim their door signs. */
+  function officePower(): { paused: Set<string>; offLabel: string } {
+    return { paused: new Set(flows.filter(f => f.paused === 1).map(f => f.id)), offLabel: $translate('office.power.sign_off') };
+  }
+  /** Live-repaint every door sign's on/off state (no scene rebuild). */
+  function updateOfficePowerSigns(): void {
+    const { paused } = officePower();
+    document.querySelectorAll('[data-office-sign]').forEach((el) => {
+      paintOfficePower(el as HTMLElement, paused.has((el as HTMLElement).getAttribute('data-office-sign') ?? ''));
+    });
+  }
+  // flows.paused isn't in sceneFingerprint on purpose: switching an office
+  // off repaints its sign, it doesn't rebuild the world.
+  $: pausedKey = flows.map(f => `${f.id}:${f.paused ?? 0}`).join('|');
+  $: if (pausedKey !== undefined && scene) updateOfficePowerSigns();
+
   /** Repaint one office's door-sign infra line from infraState (live, no
    *  rebuild). Hidden until a state is known so unconfigured offices stay clean. */
   function updateInfraSign(flowId: string): void {
@@ -4078,7 +4185,7 @@
       const entranceHint = hallHint ? { cx: hallHint.cx, width: hallHint.w } : undefined;
       buildStreets(staticGroup, corGrid.buildingBounds, entranceHint);
       buildCorridorGrid(staticGroup, corGrid);
-      buildRooms(staticGroup, gridRooms(), computeRoomCounts());
+      buildRooms(staticGroup, gridRooms(), computeRoomCounts(), officePower());
       lotGround = buildLotMarkers(staticGroup, freeLots, lotLabels(), pickFreeLot);
       buildThemedOffices(staticGroup);
       buildSpecialRooms(staticGroup);
@@ -4224,6 +4331,8 @@
     animRegistry.clear();
     constructionStage?.dispose();
     constructionStage = null;
+    demolitionStage?.dispose();
+    demolitionStage = null;
     document.removeEventListener('visibilitychange', skipConstructionWhenHidden);
     if (composer) { composer.dispose(); composer = null; }
     if (renderer) { renderer.dispose(); renderer.domElement?.parentNode?.removeChild(renderer.domElement); }
@@ -4718,6 +4827,10 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
   {#if constructionFlowId}
     <button type="button" class="construction-skip" on:click={() => construction.skip()}>
       🏗️ {$translate('office.construction.skip')} ▸
+    </button>
+  {:else if demolitionFlowId}
+    <button type="button" class="construction-skip" on:click={() => demolition.skip()}>
+      💥 {$translate('office.demolition.skip')} ▸
     </button>
   {/if}
 
