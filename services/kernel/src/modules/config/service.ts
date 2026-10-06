@@ -405,6 +405,15 @@ const SETTING_CATALOG: SettingDef[] = [
     type: "string",
     applyToConfig: (v, c) => { c.language = v === "en" ? "en" : "es"; },
   },
+  {
+    // Read by the dashboard shell only; the kernel does nothing with it.
+    key: "DASHBOARD_SHOW_TOOLS_MENU",
+    seedDefault: "false",
+    label: { en: "Show the Tools menu", es: "Mostrar el menú Herramientas" },
+    description: { en: "Adds Tools to the main sidebar. Hidden by default.", es: "Agrega Herramientas a la barra lateral principal. Viene oculto por defecto." },
+    category: "general",
+    type: "boolean",
+  },
 
   // ── Agent sandboxing ──────────────────────────────────────────────────────
   {
