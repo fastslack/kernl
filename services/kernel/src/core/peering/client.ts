@@ -29,6 +29,11 @@ export interface PeerClientDeps {
 }
 
 export const REQUEST_TIMEOUT_MS = 15_000;
+/**
+ * A file part over Tor: the onion transport gives an 8 MiB body ~10 minutes
+ * (see MIN_ONION_UPLOAD_BYTES_PER_SEC), so the caller must not abort sooner.
+ */
+export const ONION_PUT_TIMEOUT_MS = 11 * 60_000;
 
 export class PeerClient {
   constructor(private deps: PeerClientDeps) {}
@@ -43,6 +48,37 @@ export class PeerClient {
 
   async post<T = unknown>(npub: string, path: string, body: unknown): Promise<PeerResponse<T>> {
     return this.request<T>(npub, path, "POST", body);
+  }
+
+  /**
+   * PUT raw bytes to a friend. The signature covers URL and method only — a
+   * file part is not JSON — so callers put the part's hash in the query,
+   * where the signed URL protects it.
+   */
+  async putBinary(npub: string, path: string, data: Uint8Array, timeoutMs = 120_000): Promise<PeerResponse<unknown>> {
+    const friend = this.deps.friends.get(npub);
+    if (!friend || friend.trust !== "trusted") return { ok: false, status: 0, error: "not a trusted friend" };
+    const peer = await this.deps.resolver.resolve(npub);
+    if (!peer) return { ok: false, status: 0, error: "unreachable" };
+    const url = peer.origin.replace(/\/+$/, "") + (path.startsWith("/") ? path : "/" + path);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), isOnionUrl(url) ? Math.max(timeoutMs, ONION_PUT_TIMEOUT_MS) : timeoutMs);
+    try {
+      const auth = await buildAuthHeader(this.deps.identity, url, "PUT");
+      const res = await this.deps.fetchImpl(url, {
+        method: "PUT",
+        headers: { authorization: auth, "content-type": "application/octet-stream" },
+        body: data as unknown as BodyInit,
+        signal: controller.signal,
+      });
+      const body = await res.json().catch(() => undefined);
+      if (res.ok) this.deps.friends.markSeen(npub, peer.origin);
+      return { ok: res.ok, status: res.status, data: body, via: peer.kind, error: res.ok ? undefined : `HTTP ${res.status}` };
+    } catch (err) {
+      return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err), via: peer.kind };
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -98,7 +134,7 @@ export class PeerClient {
   private async request<T>(
     npub: string,
     path: string,
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT",
     body?: unknown,
   ): Promise<PeerResponse<T>> {
     const friend = this.deps.friends.get(npub);
@@ -128,7 +164,9 @@ export class PeerClient {
       });
       if (!res.ok) {
         this.deps.friends.markError(npub, `HTTP ${res.status} from ${peer.kind}`);
-        return { ok: false, status: res.status, error: `HTTP ${res.status}`, via: peer.kind };
+        const errBody = (await res.json().catch(() => undefined)) as (T & { error?: string }) | undefined;
+        const detail = errBody && typeof errBody === "object" && typeof errBody.error === "string" ? errBody.error : undefined;
+        return { ok: false, status: res.status, data: errBody, error: detail ?? `HTTP ${res.status}`, via: peer.kind };
       }
       const data = (await res.json()) as T;
       this.deps.friends.markSeen(npub, peer.origin);
@@ -142,4 +180,8 @@ export class PeerClient {
       clearTimeout(timer);
     }
   }
+}
+
+function isOnionUrl(url: string): boolean {
+  try { return new URL(url).hostname.endsWith(".onion"); } catch { return false; }
 }

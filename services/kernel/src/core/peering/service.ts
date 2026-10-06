@@ -16,6 +16,7 @@ import { detectTor, makeTorAwareFetch, isTorListening, DEFAULT_HTTP_TUNNEL_PORT 
 import { PresenceAnnouncer } from "./announce.js";
 import type { NostrRelayPool } from "../nostr/nostr-relay-pool.js";
 import { buildDescriptor, signDescriptor, DEFAULT_PRIORITY, type InstanceDescriptor } from "./descriptor.js";
+import { currentLanEnv, lanReachUrls } from "./lan.js";
 
 export interface PeeringOptions {
   sqlite: SqliteDb;
@@ -168,7 +169,7 @@ export class PeeringService {
       name,
       version: this.opts.version,
       reach: buildReach({
-        lanUrl: host ? `http://${host}.local:${this.opts.port}` : undefined,
+        lanUrls: lanReachUrls(currentLanEnv(this.opts.port)),
         directUrl: this.opts.directUrl || process.env.KERNEL_PUBLIC_URL || undefined,
         onionUrl: onionUrl || undefined,
         priorities: DEFAULT_PRIORITY,

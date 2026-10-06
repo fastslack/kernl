@@ -93,7 +93,7 @@
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
-  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander'];
+  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander', 'notifications', 'share'];
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
@@ -344,6 +344,8 @@
     // Instance peering. Core, not an extension: it is how this kernel knows
     // who it is and which other instances it trusts.
     'friends',
+    // Friend-to-friend text and files (file-lane). Core, like peering.
+    'share',
   ]);
 
   // Views granted by nav (hardcoded NAV_GROUPS base + manifest navItems),
