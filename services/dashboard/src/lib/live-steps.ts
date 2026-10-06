@@ -491,6 +491,24 @@ export type LiveRow =
       items: LiveIndexed[];
     };
 
+/**
+ * A key for one event that holds for as long as the event is on screen. The
+ * buffer is newest first, so an event's index moves every time another one
+ * arrives: a row keyed by it was torn down and rebuilt on every event, and the
+ * row the operator had just opened closed again. The store keeps each event
+ * object and only prepends, so the object itself is the identity.
+ */
+const eventKeys = new WeakMap<AgentFlowEvent, string>();
+let nextEventKey = 0;
+export function liveEventKey(e: AgentFlowEvent): string {
+  let k = eventKeys.get(e);
+  if (!k) {
+    k = `ev${++nextEventKey}`;
+    eventKeys.set(e, k);
+  }
+  return k;
+}
+
 function isToolEvent(e: AgentFlowEvent): boolean {
   const t = liveEventType(e);
   return (t === 'tool_call' || t === 'tool_result') && Boolean(e.data.tool_name);
@@ -519,7 +537,7 @@ export function liveToolRows(events: AgentFlowEvent[]): LiveRow[] {
     const oldest = r.items[r.items.length - 1];
     rows.push({
       kind: 'tools',
-      key: `tools:${oldest.e.ts}:${tool}`,
+      key: `tools:${liveEventKey(oldest.e)}`,
       tool,
       calls,
       failed: results.filter((x) => resultFailed(x.e.data.is_error, String(x.e.data.content_preview ?? ''))).length,

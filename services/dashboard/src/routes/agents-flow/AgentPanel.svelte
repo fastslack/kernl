@@ -616,8 +616,10 @@
 
   // ── LIVE stream for the selected agent ────────
   $: liveIsRunning = !!selectedAgent && runningAgentIds.has(selectedAgent);
+  // 60 cut a long run's first steps off the timeline while it was still
+  // running; the world's buffer (1000 events, all agents) is the real bound.
   $: liveEvents = selectedAgent
-    ? flowEvents.filter(e => e.data.agent_id === selectedAgent).slice(0, 60)
+    ? flowEvents.filter(e => e.data.agent_id === selectedAgent).slice(0, 400)
     : [];
   // derive current run id (from most recent event)
   $: liveRunId = (liveEvents.find(e => e.data.run_id) as any)?.data?.run_id ?? null;
