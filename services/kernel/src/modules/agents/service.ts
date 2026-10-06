@@ -1118,16 +1118,18 @@ export class AgentService {
       .run(isoNow(), ...messageIds);
   }
 
-  /** Mark read exactly those of `messageIds` that are unread letters addressed
-   *  to `agentId`. Returns how many were acknowledged. */
+  /** Acknowledge those of `messageIds` that are letters addressed to `agentId`
+   *  and not archived. A letter the run's prompt already delivered is `read`
+   *  and acknowledges too — refusing it told the agent its own letter was not
+   *  its own. Returns how many were acknowledged. */
   ackInboxFor(agentId: string, messageIds: string[]): number {
     if (!agentId || messageIds.length === 0) return 0;
     const placeholders = messageIds.map(() => "?").join(",");
     const res = this.db
       .prepare(
         `UPDATE agent_office_inbox
-         SET status = 'read', read_at = ?
-         WHERE id IN (${placeholders}) AND to_agent_id = ? AND status = 'unread'`,
+         SET status = 'read', read_at = COALESCE(read_at, ?)
+         WHERE id IN (${placeholders}) AND to_agent_id = ? AND status IN ('unread', 'read')`,
       )
       .run(isoNow(), ...messageIds, agentId);
     return Number(res.changes ?? 0);
@@ -1413,11 +1415,21 @@ export class AgentService {
       limit?: number;
       /** Same scoping as getUnreadInbox: undefined = all, null = no project, id = none + that project. */
       projectId?: string | null;
+      /**
+       * With status "unread": also the letters marked read at or after this
+       * instant. A run's system prompt delivers its unread letters and marks
+       * them read before the first turn, so from inside that run "unread"
+       * alone came back empty while the wake-up goal said there were letters.
+       */
+      alsoReadSince?: string;
     },
   ): AgentOfficeInboxMessage[] {
     let sql = "SELECT * FROM agent_office_inbox WHERE to_agent_id = ?";
     const params: unknown[] = [agentId];
-    if (opts?.status) {
+    if (opts?.status === "unread" && opts.alsoReadSince) {
+      sql += " AND (status = 'unread' OR (status = 'read' AND read_at >= ?))";
+      params.push(opts.alsoReadSince);
+    } else if (opts?.status) {
       sql += " AND status = ?";
       params.push(opts.status);
     }
