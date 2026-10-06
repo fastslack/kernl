@@ -36,9 +36,17 @@ export interface Episode {
   sdk_session_id?: string;
   /** Per-episode system instructions appended to SOUL. Empty for default chats. */
   instructions?: string;
+  /** Where the conversation was started — see EpisodeSource. */
+  source?: EpisodeSource;
+  /** The thing inside that source: the agent for office3d, the platform for
+   *  platform, the team for setup. Empty when the source has no sub-group. */
+  source_label?: string;
   created_at: string;
   updated_at: string;
 }
+
+export type EpisodeSource = "office3d" | "dashboard" | "mcp" | "platform" | "setup";
+export const EPISODE_SOURCES: readonly EpisodeSource[] = ["office3d", "dashboard", "mcp", "platform", "setup"];
 
 /** A single message within an episode */
 export interface Message {

@@ -9,11 +9,12 @@
   episode lock and quota status), here it is a component the runtime panel
   mounts once per chain row.
 
-  A provider that cannot run a tool loop is rendered DISABLED WITH ITS REASON
-  rather than filtered out. Hiding it would hide the exact provider named in
-  "No LLM provider in the chain can run tool calls. Dropped: claude_code" —
-  the user would go looking for the thing the error told them about and find
-  an empty space.
+  Only providers that work are listed: one that is not configured, or that
+  discovered no models, has nothing to pick and is left out. Claude Code (SDK)
+  comes first. A working provider that cannot run a tool loop is still shown,
+  DISABLED WITH ITS REASON, where the pick cannot move the engine (a fallback
+  row) — except on the primary row (`engineFollows`), where picking a Claude
+  Code model moves the agent to the claude_code executor (model-chain.ts).
 
   The menu is `position: fixed` off the trigger's rect because the drawer sets
   `overflow: hidden`; an absolutely-positioned dropdown gets clipped at the
@@ -21,6 +22,7 @@
 -->
 <script lang="ts">
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
+  import { isClaudeCodeProvider } from '$lib/model-chain.js';
   import { buildCatalog, commonModels, rankModels, type ModelEntry } from '$lib/model-catalog.js';
   import { toolCapable, findProvider, type ProviderStatus } from '$lib/provider-health.js';
   import { bindListeners } from '$lib/outside-listeners.js';
@@ -39,6 +41,12 @@
    * the claude_code executor, whose SDK runs tools inside itself.
    */
   export let requiresTools = true;
+  /**
+   * This pick sets the agent's engine (the primary model): a Claude Code model
+   * is never blocked, because choosing it moves the agent onto the executor
+   * that runs it.
+   */
+  export let engineFollows = false;
   export let disabled = false;
   /** Shown on the trigger when the write for this row is in flight. */
   export let busy = false;
@@ -199,12 +207,16 @@
   }
 
   /**
-   * Providers to render, and why each one is offered or blocked. Never
-   * filtered by capability — only annotated.
+   * Providers to render, and why each one is offered or blocked: working
+   * ones only, Claude Code first. Never filtered by capability — only
+   * annotated.
    */
-  $: shown = providers.map((p) => {
+  $: shown = providers
+    .filter((p) => p.ready && totalFor(p) > 0)
+    .sort((a, b) => Number(isClaudeCodeProvider(b.slug)) - Number(isClaudeCodeProvider(a.slug)))
+    .map((p) => {
     const capable = toolCapable(p);
-    const blockedTools = requiresTools && capable === false;
+    const blockedTools = requiresTools && capable === false && !(engineFollows && isClaudeCodeProvider(p.slug));
     const rows = rowsFor(p, query, expanded.has(p.slug));
     return {
       p,

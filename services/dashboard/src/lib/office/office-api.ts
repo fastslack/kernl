@@ -3,6 +3,8 @@ import { apiFetch, post, put, del } from '../api.js';
 import { rpcOrCall } from '../ws.js';
 import type { OfficeKind } from './office-kinds.js';
 import { parseCreateError, parseDraftError, type CreateError, type DraftError } from './office-errors.js';
+import { get } from 'svelte/store';
+import { locale } from '$lib/i18n/index.js';
 
 export type Isolation = 'sandbox' | 'host';
 
@@ -30,6 +32,8 @@ export interface OfficeDefinition {
 	cron?: { agent: string; every: string; goal?: string };
 	/** Lot of the 3D floor to build on ("col,row"), when the office was started from one. */
 	lot?: string;
+	/** Agents the operator left without a prompt: the kernel writes them a full mandate. */
+	auto_prompts?: string[];
 }
 
 export interface OfficeTemplate {
@@ -83,7 +87,8 @@ export async function draftOffice(description: string, language: 'es' | 'en'): P
 }
 
 export async function createOfficeFromWizard(def: OfficeDefinition): Promise<CreateResult> {
-	const body: Record<string, unknown> = { ...def, mode: 'create' };
+	// language: the generated mandates (auto_prompts) are written in the operator's language.
+	const body: Record<string, unknown> = { ...def, mode: 'create', language: get(locale) };
 	try {
 		const res = (await rpcOrCall('offices.create', body, () => post('/api/offices/create', body))) as {
 			success?: boolean;
@@ -139,6 +144,13 @@ export async function setLeadDistributes(flowId: string, enabled: boolean): Prom
 		put(`/api/agents/flows/${encodeURIComponent(flowId)}/distribute`, { enabled }),
 	)) as { created?: number; removed?: number };
 	return { created: Number(res?.created ?? 0), removed: Number(res?.removed ?? 0) };
+}
+
+/** Switch an office off (its agents stop running) or back on. */
+export async function setOfficePaused(flowId: string, paused: boolean): Promise<void> {
+	await rpcOrCall('agents.flows.set_paused', { flow_id: flowId, paused }, () =>
+		put(`/api/agents/flows/${encodeURIComponent(flowId)}/paused`, { paused }),
+	);
 }
 
 /** Point the office at a host repo, or back to its kernel workspace with `null`. */

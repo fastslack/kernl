@@ -118,6 +118,8 @@ describe('definitionFromWizard', () => {
 				{ name: 'QA', role: 'worker', description: 'Prueba', prompt: 'You are QA. Prueba' },
 			],
 			cron: { agent: 'Lead', every: '1h', goal: 'resume' },
+			// Neither row has a hand-written prompt: the kernel writes both a full mandate.
+			auto_prompts: ['Lead', 'QA'],
 		});
 	});
 
@@ -128,6 +130,8 @@ describe('definitionFromWizard', () => {
 		const def = definitionFromWizard(s);
 		expect(def.agents).toHaveLength(2);
 		expect(def.agents[0].prompt).toBe('Custom');
+		// Only the row without its own prompt asks for a generated mandate.
+		expect(def.auto_prompts).toEqual(['QA']);
 		expect(def.agents[0].chainTo).toBeUndefined();
 		expect(def.agents[0].tools).toBeUndefined();
 		expect(def.cron).toBeUndefined();

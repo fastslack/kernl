@@ -14,6 +14,7 @@
  *     re-ingesting an existing identifier.
  */
 
+import { cinemaCatalogCap } from "./catalog-cap.js";
 import { type SqliteDb, type PatchColumn, newId, isoNow, buildPatch, jsonArray } from "@kernl/extension-sdk";
 import { rebuildWorks, type RebuildWorksResult } from "./works.js";
 import type {
@@ -554,6 +555,19 @@ function posterUrlFor(identifier: string): string {
 
 export class CinemaService {
   constructor(private db: SqliteDb) {}
+
+  /** Titles the ingester may hold before it parks itself; 0 = no limit. */
+  catalogCap(): number {
+    return cinemaCatalogCap(this.db);
+  }
+
+  /**
+   * Live titles, with none of the listing's display filters (hidden, TV…).
+   * What the ceiling is compared against, and what the storage page counts.
+   */
+  catalogSize(): number {
+    return (this.db.prepare("SELECT COUNT(*) AS n FROM cinema_titles WHERE deleted_at IS NULL").get() as { n: number }).n;
+  }
 
   // ── Titles: read ──────────────────────────────────────────────
 

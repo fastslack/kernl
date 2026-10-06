@@ -2,7 +2,7 @@ import type { RoomInfo } from '../types.js';
 import { rt } from '../runtime.js';
 import {
   WALL, WALL_BRIGHT, WALL_DARK, FLOOR_CARPET, WALL_H, WALL_T,
-  makeSignClickable, addWall, addWallWithDoor,
+  makeSignClickable, addOfficeOffLine, paintOfficePower, addWall, addWallWithDoor,
 } from './_shared.js';
 import { applyPBR } from './_materials.js';
 import { applyWorldTexture, scaleUV, getWhiteboardTexture } from '../textures.js';
@@ -14,6 +14,8 @@ export function buildRooms(
   scene: any,
   rooms: Map<string, RoomInfo>,
   counts?: Map<string, { total: number; active: number }>,
+  /** Offices switched off (agent_flows.paused) and the sign's "OFF" label. */
+  power?: { paused: ReadonlySet<string>; offLabel: string },
 ): void {
   const doorW = 2.5;
   // Whiteboard materials — shared across every room (textures are cached).
@@ -170,6 +172,11 @@ export function buildRooms(
     infra.style.cssText = `font:700 8px 'Fira Code',monospace;letter-spacing:1px;margin-top:2px;
       display:none;color:#667;text-shadow:none;`;
     signDiv.appendChild(infra);
+    signDiv.setAttribute('data-office-sign', roomKey);
+    if (power) {
+      addOfficeOffLine(signDiv, roomKey, power.offLabel);
+      paintOfficePower(signDiv, power.paused.has(roomKey));
+    }
     makeSignClickable(signDiv, { cx, cz, w, d, name: name.toUpperCase() });
     tag(mark, 'decor'); mark = g.children.length;
     const lbl = new rt.CSS2DObject(signDiv);

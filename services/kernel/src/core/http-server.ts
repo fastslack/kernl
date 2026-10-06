@@ -363,6 +363,9 @@ export class KernelHttpServer {
   async start(): Promise<boolean> {
     return new Promise((ok) => {
       this.server = createServer((req, res) => this.handleRequest(req, res));
+      // Node's default (300 s for the whole request body) kills a 100 MB chat
+      // attachment uploaded over a slow tunnel halfway through.
+      this.server.requestTimeout = 15 * 60 * 1000;
       this.server.on("error", (err: NodeJS.ErrnoException) => {
         if (err.code === "EADDRINUSE") {
           log.warn(`Dashboard port ${this.port} already in use — skipping (another instance is serving the dashboard)`);

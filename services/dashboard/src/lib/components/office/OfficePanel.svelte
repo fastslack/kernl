@@ -7,6 +7,8 @@
 		description?: string;
 		repo_isolation?: string;
 		home_repo_path?: string;
+		/** 1 = switched off: its agents never run. */
+		paused?: number;
 	}
 
 	export interface PanelMoveTarget {
@@ -38,6 +40,7 @@
 		moveAgentToOffice,
 		setOfficeLead,
 		setLeadDistributes,
+		setOfficePaused,
 		setAgentActive,
 		addLeadSchedule,
 		updateSchedule,
@@ -83,7 +86,7 @@
 	export let otherOfficeNames: string[] = [];
 	export let top = '52px';
 
-	const dispatch = createEventDispatcher<{ close: void; changed: void; agentopen: { id: string }; deleted: { unassigned: number } }>();
+	const dispatch = createEventDispatcher<{ close: void; changed: void; agentopen: { id: string }; deleted: { unassigned: number; flowId: string } }>();
 
 	type FieldStatus = { status: 'idle' | 'saving' | 'saved' | 'error'; error?: string };
 	const MENU_SIZE = { width: 232, height: 200 };
@@ -317,6 +320,13 @@
 		void teamAction(`pause:${agentId}`, () => setAgentActive(agentId, paused));
 	}
 
+	function togglePower() {
+		if (!office) return;
+		const flowId = office.id;
+		const paused = office.paused !== 1;
+		void teamAction('power', () => setOfficePaused(flowId, paused));
+	}
+
 	function toggleDistribute(e: Event) {
 		// Show the real state until the refreshed graph arrives; a failure then leaves it right.
 		(e.currentTarget as HTMLInputElement).checked = distribute === 'on';
@@ -417,11 +427,16 @@
 			<div class="op-top">
 				<span class="op-dot" style="background:{office.color}"></span>
 				<h2 class="op-title">{office.name}</h2>
+				<button class="op-power" class:on={office.paused !== 1} type="button" aria-pressed={office.paused !== 1}
+					disabled={busy === 'power'}
+					title={$t(office.paused === 1 ? 'office.power.turn_on' : 'office.power.turn_off')}
+					on:click={togglePower}>⏻ {$t(office.paused === 1 ? 'office.power.off' : 'office.power.on')}</button>
 				<button class="k-icon-btn" type="button" aria-label={$t('office.common.close')} on:click={() => dispatch('close')}><Icon name="x" /></button>
 			</div>
 			<div class="op-chips">
 				<span class="k-chip op-kind">{kindLabel(kind)}</span>
 				<span class="k-chip">{$t('office.panel.agents', { n: agents.length })}</span>
+				{#if office.paused === 1}<span class="k-chip op-off">{$t('office.power.off_help')}</span>{/if}
 				{#if working > 0}
 					<span class="k-chip op-working"><span class="k-led k-led--working" aria-hidden="true"></span>{$t('office.panel.working', { n: working })}</span>
 				{/if}
@@ -655,7 +670,7 @@
 					<a class="k-btn k-btn--ghost" href="/devops">{$t('office.panel.devops')}</a>
 				{/if}
 			</div>
-			<button class="k-btn k-btn--danger" type="button" on:click={() => (deleteOpen = true)}><Icon name="trash" />{$t('office.panel.delete')}</button>
+			<button class="k-btn k-btn--danger" type="button" on:click={() => (deleteOpen = true)}><span aria-hidden="true">💥</span>{$t('office.panel.delete')}</button>
 		{/if}
 	</svelte:fragment>
 </Drawer>
@@ -675,6 +690,11 @@
 	.op-top { display: flex; align-items: center; gap: 10px; }
 	.op-dot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
 	.op-title { flex: 1; min-width: 0; margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.op-power { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border-h); background: var(--surface-2); color: var(--text-3); font: 600 12px var(--font-body); cursor: pointer; }
+	.op-power.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
+	.op-power:disabled { opacity: 0.5; cursor: wait; }
+	.op-power:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+	.op-off { color: var(--text-2); }
 	.op-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
 	.op-kind { font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; }
 	.op-working { color: var(--green); }

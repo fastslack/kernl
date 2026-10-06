@@ -2,6 +2,7 @@ import type { ProjectsHost, ProjectInfo } from "../../sdk/projects.js";
 import type { ProjectsService } from "./projects-service.js";
 import type { OutboxService } from "./outbox-service.js";
 import type { Project } from "./types.js";
+import { getRequestContext } from "../../core/request-context.js";
 
 type RecordsFn = (projectId: string, kind: string) => Array<{ external_id: string; data: unknown; updated_at: string }>;
 
@@ -13,6 +14,11 @@ const info = (p: Project): ProjectInfo => ({
 export function projectsHostFor(svc: ProjectsService, outbox: OutboxService, records: RecordsFn): ProjectsHost {
   return {
     get: (idOrSlug) => { const p = svc.get(idOrSlug); return p ? info(p) : undefined; },
+    current: () => {
+      const id = svc.runProjectId(getRequestContext().callerRunId);
+      const p = id ? svc.get(id) : undefined;
+      return p ? info(p) : undefined;
+    },
     list: (filter) => svc.list({ flowId: filter?.flowId }).map(info),
     records: (projectId, kind) => records(projectId, kind),
     officeSettings: (flowId, projectId) => svc.officeSettings(flowId, projectId),

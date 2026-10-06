@@ -17,6 +17,7 @@ import type {
   ExtensibleModule,
   ModuleContext,
   ResourceProvider,
+  RetentionPolicy,
   RpcAction,
   ToolDefinition,
 } from "./types.js";
@@ -41,6 +42,7 @@ export interface ModuleSpec<S> {
   queryChannels?: (state: S) => Record<string, () => Promise<unknown> | unknown> | undefined;
   agentHandlers?: (state: S) => Record<string, () => Promise<unknown>>;
   agentDrivers?: (state: S) => AgentDriver[];
+  retentionPolicies?: (state: S) => RetentionPolicy[];
   shutdown?: (state: S) => void | Promise<void>;
 }
 
@@ -83,6 +85,7 @@ export function defineModule<S = void>(spec: ModuleSpec<S>): ExtensibleModule {
   if (spec.queryChannels) mod.getQueryChannels = () => withState(spec.queryChannels, undefined);
   if (spec.agentHandlers) mod.getAgentHandlers = () => withState(spec.agentHandlers, {});
   if (spec.agentDrivers) mod.getAgentDrivers = () => withState(spec.agentDrivers, []);
+  if (spec.retentionPolicies) mod.getRetentionPolicies = () => withState(spec.retentionPolicies, []);
   return mod;
 }
 

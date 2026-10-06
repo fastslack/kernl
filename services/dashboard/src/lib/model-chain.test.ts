@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect } from "bun:test";
-import { readChain, writeChain, MAX_CHAIN_LINKS, runsOnClaudeCode, primaryModelPatch } from "./model-chain.js";
+import { readChain, writeChain, MAX_CHAIN_LINKS, runsOnClaudeCode, primaryModelPatch, engineFor } from "./model-chain.js";
 
 describe("readChain", () => {
   it("reads the loose pair when there is no chain", () => {
@@ -173,7 +173,25 @@ describe("primaryModelPatch", () => {
       { provider: "claude-code", model: "claude-opus-5" }, { provider: "openai", model: "gpt-5" },
     ]);
   });
-  it("never touches a native agent's executor", () => {
+  it("leaves a native agent on the kernel for a non-Claude-Code model", () => {
     expect(primaryModelPatch({ executor_type: "native" }, [], { provider: "minimax", model: "MiniMax-M3" }).executor_type).toBeUndefined();
+    expect(primaryModelPatch({}, [], { provider: "openai", model: "gpt-5" }).executor_type).toBeUndefined();
+  });
+  it("moves a native agent to the claude_code executor when a Claude Code model is picked", () => {
+    expect(primaryModelPatch({ executor_type: "native" }, [], { provider: "claude-code", model: "claude-opus-5" }).executor_type).toBe("claude_code");
+    expect(primaryModelPatch({}, [], { provider: "claude_code", model: "" }).executor_type).toBe("claude_code");
+  });
+  it("moves a claude_code agent to the kernel when a Claude model comes from the API provider", () => {
+    expect(primaryModelPatch({ executor_type: "claude_code" }, [], { provider: "claude", model: "claude-sonnet-5" }).executor_type).toBe("native");
+  });
+});
+
+describe("engineFor", () => {
+  it("is claude_code only for the Claude Code SDK provider, however it is spelled", () => {
+    expect(engineFor({ provider: "claude-code", model: "claude-opus-5" })).toBe("claude_code");
+    expect(engineFor({ provider: "claude_code", model: "" })).toBe("claude_code");
+    expect(engineFor({ provider: "Claude Code", model: "" })).toBe("claude_code");
+    expect(engineFor({ provider: "claude", model: "claude-opus-5" })).toBe("native");
+    expect(engineFor({ provider: "", model: "" })).toBe("native");
   });
 });

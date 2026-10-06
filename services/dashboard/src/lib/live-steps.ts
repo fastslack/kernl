@@ -491,6 +491,24 @@ export type LiveRow =
       items: LiveIndexed[];
     };
 
+/**
+ * A key for one event that holds for as long as the event is on screen. The
+ * buffer is newest first, so an event's index moves every time another one
+ * arrives: a row keyed by it was torn down and rebuilt on every event, and the
+ * row the operator had just opened closed again. The store keeps each event
+ * object and only prepends, so the object itself is the identity.
+ */
+const eventKeys = new WeakMap<AgentFlowEvent, string>();
+let nextEventKey = 0;
+export function liveEventKey(e: AgentFlowEvent): string {
+  let k = eventKeys.get(e);
+  if (!k) {
+    k = `ev${++nextEventKey}`;
+    eventKeys.set(e, k);
+  }
+  return k;
+}
+
 function isToolEvent(e: AgentFlowEvent): boolean {
   const t = liveEventType(e);
   return (t === 'tool_call' || t === 'tool_result') && Boolean(e.data.tool_name);
@@ -519,7 +537,7 @@ export function liveToolRows(events: AgentFlowEvent[]): LiveRow[] {
     const oldest = r.items[r.items.length - 1];
     rows.push({
       kind: 'tools',
-      key: `tools:${oldest.e.ts}:${tool}`,
+      key: `tools:${liveEventKey(oldest.e)}`,
       tool,
       calls,
       failed: results.filter((x) => resultFailed(x.e.data.is_error, String(x.e.data.content_preview ?? ''))).length,
@@ -592,4 +610,43 @@ export function liveDisplayRows(events: AgentFlowEvent[]): LiveStepRow[] {
     }
   }
   return rows.filter((r) => !drop.has(r));
+}
+
+// ── Dense LIVE rows: tags instead of sentences ──────────────────────
+
+/**
+ * A tool call split for a row that already shows the tool as a tag. The
+ * generic summary opens with the tool's full name ("mcp__kernel__kernel_crm_leads
+ * · status=new"), which the tag right before it already says — so the name is
+ * dropped and the arguments come back as key/value pairs to draw as chips.
+ * Calls with a sentence of their own ("Read CHARTER.md") keep it as `text`.
+ */
+export function liveCallParts(toolName: string, inputPreview: string): { text: string; args: Array<{ k: string; v: string }> } {
+  const summary = summarizeToolCall(toolName, inputPreview);
+  const short = toolName.replace(/^mcp__.+?__/, '');
+  const echoes = [toolName, short].some((n) => n && (summary === n || summary.startsWith(`${n} · `)));
+  if (!echoes) return { text: summary, args: [] };
+  const parsed = tryParseJson(inputPreview);
+  const args = parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+    ? Object.entries(parsed as Record<string, unknown>)
+      .filter(([k, v]) => !k.startsWith('__') && (typeof v === 'string' || typeof v === 'number' || typeof v === 'boolean'))
+      .slice(0, 3)
+      .map(([k, v]) => ({ k, v: ellipsize(String(v), 32) }))
+    : [];
+  return { text: '', args };
+}
+
+/**
+ * A result summary as a short tag plus the rest: "5 lines · Error: result…"
+ * becomes the tag "5 lines" and the text "Error: result…". `bad` is set when
+ * the text itself opens with an error, which the tool didn't flag.
+ */
+export function liveResultParts(summary: string): { tag: string; text: string; bad: boolean } {
+  if (summary === 'no output' || summary === 'empty output') return { tag: 'empty', text: '', bad: false };
+  const err = /^error · (.*)$/s.exec(summary);
+  if (err) return { tag: 'error', text: err[1], bad: true };
+  const m = /^(\d[\d,]* (?:lines|items|matches|paths|fields))(?: · (.*))?$/s.exec(summary);
+  const tag = m ? m[1] : '';
+  const text = m ? (m[2] ?? '') : summary;
+  return { tag, text, bad: /^\s*(error|failed)\b/i.test(text) };
 }

@@ -18,13 +18,14 @@
   } from '$lib/live-steps.js';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import {
-    stepAsFlowEvent, historyStepDetail, groupHistoryRows, shortToolName, toolChips,
+    stepAsFlowEvent, historyStepDetail, groupHistoryRows, toolChips,
     type HistoryStep, type HistoryRow, type ToolChip,
   } from '$lib/history-steps.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
   import AgentActionBody from './AgentActionBody.svelte';
   import { agentActionOf } from '$lib/agent-actions.js';
   import StepPayload from './StepPayload.svelte';
+  import ToolName from '$lib/components/agent/ToolName.svelte';
 
   /** Lifetime counters for the selected agent, or null while unknown. */
   export let stats: {
@@ -219,7 +220,7 @@
                             <span class="hs-chip" class:bad={c.failed > 0 && c.pending === 0} class:pending={c.pending > 0}
                                   title={chipTitle(c)}>
                               <span class="hs-chip-st" aria-label={c.pending > 0 ? 'no result' : c.failed > 0 ? 'failed' : 'succeeded'}>{c.pending > 0 ? '…' : c.failed > 0 ? '✗' : '✓'}</span>
-                              <span class="hs-chip-name">{c.name}</span>
+                              <ToolName name={c.fullName} chipClass="hs-chip-name" />
                               {#if c.count > 1}
                                 <span class="hs-chip-count">×{c.count}{#if c.failed > 0}<span class="hs-chip-count-bad"> · {c.failed} ✗</span>{/if}</span>
                               {/if}
@@ -308,7 +309,7 @@
                         <span class="hs-num">{step.step_number}</span>
                         <span class="hs-icon" aria-hidden="true">{liveStepIcon(etype)}</span>
                         <span class="hs-type">{liveStepLabel(etype)}</span>
-                        {#if step.tool_name}<code class="hs-tool" title={step.tool_name}>{shortToolName(step.tool_name)}</code>{/if}
+                        {#if step.tool_name}<ToolName name={step.tool_name} chipClass="hs-tool" />{/if}
                         <span class="hs-text">{liveStepSummary(fe)}</span>
                         {#if hasDetail}<span class="hs-chev" aria-hidden="true">{isOpen ? '▾' : '▸'}</span>{/if}
                       </button>

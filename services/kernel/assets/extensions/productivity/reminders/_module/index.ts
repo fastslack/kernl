@@ -1,4 +1,4 @@
-import { type ExtensibleModule, defineModule, normalizeInstants } from "@kernl/extension-sdk";
+import { type ExtensibleModule, agePolicy, defineModule, normalizeInstants } from "@kernl/extension-sdk";
 import { remindersMigrations } from "./migrations/001_reminders.js";
 import { ReminderService } from "./service.js";
 import { ReminderScheduler } from "./scheduler.js";
@@ -18,6 +18,19 @@ export function createRemindersModule(): RemindersModule {
   const mod = defineModule({
     name: "reminders",
     migrations: remindersMigrations,
+    retentionPolicies: () => [
+      agePolicy({
+        id: "reminders.dismissed",
+        label: "Dismissed reminders",
+        description: "Reminders you dismissed. Active, snoozed and fired ones are never touched.",
+        kind: "operational",
+        table: "reminders",
+        dateColumn: "updated_at",
+        where: "status = 'dismissed'",
+        defaultDays: 30,
+        defaultEnabled: true,
+      }),
+    ],
 
     async init(ctx) {
       if (ctx.graph?.capabilities.cypher) {

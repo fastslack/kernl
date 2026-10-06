@@ -18,6 +18,13 @@
 #                what you see in a terminal.
 # HOST_HOME      optional, defaults to your $HOME. Where ~/.claude and
 #                ~/.claude.json are; both must exist (run `claude` once).
+# KERNL_PROJECTS_ROOT
+#                optional. The host folder holding the repos your offices work
+#                on, mounted READ-WRITE at the same path. An office or agent
+#                pointed at a repo outside every mount runs somewhere else and
+#                its writes never reach the repo; the kernel refuses such paths
+#                and notifies about existing ones. It may contain KERNL_FS_ROOT:
+#                that folder stays read-only (the more specific mount wins).
 
 services:
   kernel:
@@ -27,6 +34,10 @@ services:
       # Read-only: the commander exposes delete and move over HTTP, so write
       # access is a deliberate later step, not a default.
       - ${KERNL_FS_ROOT}:${KERNL_FS_ROOT}:ro
+      # Read-write: offices edit, build and run code here. Unset, it binds
+      # /dev/null onto itself — compose has no optional volumes, and that is
+      # the one bind that exists everywhere and changes nothing.
+      - ${KERNL_PROJECTS_ROOT:-/dev/null}:${KERNL_PROJECTS_ROOT:-/dev/null}
       # The operator's Claude Code login. claude_code agents run the CLI with
       # HOME=$HOST_HOME and read their OAuth session from here; without these
       # two mounts every claude_code run fails "OAuth session expired and could

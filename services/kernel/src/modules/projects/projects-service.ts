@@ -12,7 +12,7 @@ interface ProjectRow {
   id: string; slug: string; name: string; status: ProjectStatus; brief: string;
   connector_url: string; connector_token: string; webhook_secret: string;
   last_pull_at: string | null; last_webhook_at: string | null; connector_error: string;
-  pull_since: string | null;
+  pull_since: string | null; home_flow_id: string;
   created_at: string; updated_at: string;
 }
 
@@ -26,7 +26,7 @@ function toProject(r: ProjectRow): Project {
     brief: JSON.parse(r.brief || "{}") as ProjectBrief,
     connector_url: r.connector_url, has_connector_token: r.connector_token !== "",
     last_pull_at: r.last_pull_at, last_webhook_at: r.last_webhook_at,
-    connector_error: r.connector_error, created_at: r.created_at, updated_at: r.updated_at,
+    connector_error: r.connector_error, home_flow_id: r.home_flow_id ?? "", created_at: r.created_at, updated_at: r.updated_at,
   };
 }
 
@@ -76,12 +76,15 @@ export class ProjectsService {
     return (this.db.prepare(sql).all(...params) as ProjectRow[]).map(toProject);
   }
 
-  update(id: string, patch: { name?: string; status?: ProjectStatus; brief?: ProjectBrief }): Project {
+  update(id: string, patch: { name?: string; status?: ProjectStatus; brief?: ProjectBrief; home_flow_id?: string }): Project {
     const cur = this.row(id);
     if (!cur) throw new Error(`Project not found: ${id}`);
     const brief = patch.brief ? JSON.stringify(parseBrief(patch.brief)) : cur.brief;
-    this.db.prepare("UPDATE projects SET name = ?, status = ?, brief = ?, updated_at = ? WHERE id = ?")
-      .run(patch.name?.trim() || cur.name, patch.status ?? cur.status, brief, isoNow(), cur.id);
+    if (patch.home_flow_id && !this.db.prepare("SELECT 1 FROM agent_flows WHERE id = ? AND active = 1").get(patch.home_flow_id)) {
+      throw new Error(`Office not found: ${patch.home_flow_id}`);
+    }
+    this.db.prepare("UPDATE projects SET name = ?, status = ?, brief = ?, home_flow_id = ?, updated_at = ? WHERE id = ?")
+      .run(patch.name?.trim() || cur.name, patch.status ?? cur.status, brief, patch.home_flow_id ?? cur.home_flow_id ?? "", isoNow(), cur.id);
     if (patch.status && patch.status !== cur.status) {
       const flows = this.db.prepare("SELECT flow_id FROM office_projects WHERE project_id = ?").all(cur.id) as Array<{ flow_id: string }>;
       for (const f of flows) this.syncOfficeSchedules(f.flow_id);
@@ -176,6 +179,64 @@ export class ProjectsService {
     });
   }
 
+  /** The project an agent run works for (agent_runs.project_id), or null. */
+  runProjectId(runId: string): string | null {
+    if (!runId) return null;
+    const r = this.db.prepare("SELECT project_id FROM agent_runs WHERE id = ?").get(runId) as { project_id: string | null } | null;
+    return r?.project_id ?? null;
+  }
+
+  /**
+   * Whose home a run of `flowId` for `projectId` works in, when it isn't the
+   * office's own: a shared office (serves_any) working for a project that has
+   * an office of its own uses THAT office's home, so the documents it writes
+   * stay with the project. Null = the office's own home, as always.
+   */
+  homeOfficeFor(flowId: string, projectId: string): string | null {
+    if (!flowId || !this.officeServesAny(flowId)) return null;
+    const home = this.row(projectId)?.home_flow_id ?? "";
+    if (!home || home === flowId) return null;
+    const live = this.db.prepare("SELECT 1 FROM agent_flows WHERE id = ? AND active = 1").get(home);
+    return live ? home : null;
+  }
+
+  /** True when the office works for any project its caller brings (office_scopes). */
+  officeServesAny(flowId: string): boolean {
+    const r = this.db.prepare("SELECT serves_any FROM office_scopes WHERE flow_id = ?").get(flowId) as { serves_any: number } | undefined;
+    return r?.serves_any === 1;
+  }
+
+  setOfficeServesAny(flowId: string, servesAny: boolean): void {
+    this.db.prepare(
+      `INSERT INTO office_scopes (flow_id, serves_any, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT(flow_id) DO UPDATE SET serves_any = excluded.serves_any, updated_at = excluded.updated_at`,
+    ).run(flowId, servesAny ? 1 : 0, isoNow());
+    this.events.emit("data.changed", { module: "projects", action: "office_scope" });
+  }
+
+  /**
+   * What an office's member is told when a run has no project but the office
+   * could work for several: find out which one before touching any project's
+   * data. Null when the office serves one project or none — nothing to mix.
+   */
+  unscopedNotice(flowId: string): string | null {
+    const assigned = this.officeProjects(flowId).filter((o) => o.active && o.project.status === "active");
+    const any = this.officeServesAny(flowId);
+    if (!any && assigned.length < 2) return null;
+    const names = (any ? this.list().filter((p) => p.status === "active") : assigned.map((o) => o.project))
+      .map((p) => `${p.name} (\`${p.slug}\`)`);
+    return [
+      "## Proyecto: sin definir",
+      any
+        ? "Your office is a shared service: it works for whichever project the request comes from."
+        : "Your office works for several projects.",
+      `This run is not tied to any of them. Projects: ${names.join(", ")}.`,
+      "Before reading or writing any project's data (pipeline, deals, contacts, files), establish which project this request is about.",
+      "If the message or the conversation does not say it unambiguously, ask the sender which project and stop there.",
+      "Never combine figures, leads or plans of different projects in one answer.",
+    ].join("\n");
+  }
+
   officeSettings(flowId: string, projectId: string): Record<string, unknown> {
     const r = this.db.prepare("SELECT settings FROM office_projects WHERE flow_id = ? AND project_id = ?")
       .get(flowId, projectId) as { settings: string } | undefined;
@@ -266,12 +327,16 @@ export class ProjectsService {
     resolve(idOrSlug: string): string | null;
     check(flowId: string, projectId: string): { ok: true } | { ok: false; error: string };
     context(flowId: string, projectId: string): { block: string; homeDir: string } | null;
+    unscoped(flowId: string): string | null;
+    homeOffice(flowId: string, projectId: string): string | null;
   } {
     return {
       resolve: (idOrSlug) => this.row(idOrSlug)?.id ?? null,
       context: (flowId, projectId) => {
         try { return buildProjectContext(this, flowId, projectId); } catch { return null; }
       },
+      unscoped: (flowId) => this.unscopedNotice(flowId),
+      homeOffice: (flowId, projectId) => this.homeOfficeFor(flowId, projectId),
       check: (flowId, projectId) => {
         const p = this.row(projectId);
         if (!p) return { ok: false, error: `project ${projectId} does not exist` };
@@ -279,7 +344,7 @@ export class ProjectsService {
         const flow = this.db.prepare("SELECT name FROM agent_flows WHERE id = ?").get(flowId) as { name: string } | undefined;
         const a = this.db.prepare("SELECT active FROM office_projects WHERE flow_id = ? AND project_id = ?")
           .get(flowId, p.id) as { active: number } | undefined;
-        if (!a || a.active !== 1) {
+        if ((!a || a.active !== 1) && !(!a && this.officeServesAny(flowId))) {
           return { ok: false, error: `project ${p.slug} is not assigned to office ${flow?.name ?? (flowId || "(none)")}` };
         }
         return { ok: true };

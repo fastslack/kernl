@@ -50,7 +50,7 @@ const officeWalls: Array<Aabb2D & { name: string }> = (() => {
  *  the far side of the room from the door. */
 const officeSeats: Vec3[] = (() => {
   const zBack = office.cz - office.d / 2, zDoor = office.cz + office.d / 2;
-  const deskFrontZ = zBack + 1.9 + 1.5 / 2;
+  const deskFrontZ = zBack + 2.6 + 1.5 / 2;
   const rowSpace = Math.max(0.95, Math.min(1.3, (zDoor - deskFrontZ - 1.5) / 2));
   const gapX = Math.min(1.1, Math.min(4.4, office.w - 2.2) * 0.28);
   const rows = [deskFrontZ + rowSpace, deskFrontZ + 2 * rowSpace + 0.1];

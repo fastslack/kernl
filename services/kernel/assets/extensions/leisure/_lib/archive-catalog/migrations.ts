@@ -12,10 +12,9 @@ import type { Migration } from "@kernl/extension-sdk";
  * Embedding bookkeeping (`embedded_at`, model, dim) IS kept here so the
  * embed runner stays generic across mediatypes.
  *
- * Single migration covers titles + ingest_runs + FTS5 + tags. We don't
- * version-split because there's no production data yet for non-cinema
- * consumers — cinema keeps its own per-version migrations and is
- * unaffected by this lib until Phase 2.
+ * Version 1 covers titles + ingest_runs + FTS5 + tags; version 2 turns the
+ * FTS index contentless. Cinema keeps its own per-version migrations and is
+ * unaffected by this lib.
  */
 export function archiveCatalogMigrations(prefix: string): Migration[] {
   // Identifier safety — table prefixes flow into raw SQL. Restrict to a
@@ -121,6 +120,79 @@ export function archiveCatalogMigrations(prefix: string): Migration[] {
         );
         CREATE INDEX IF NOT EXISTS idx_${p}_tags_count ON ${p}_tags(count DESC);
         CREATE INDEX IF NOT EXISTS idx_${p}_tags_rank  ON ${p}_tags(rank);
+      `,
+    },
+    {
+      // Rebuild the FTS index as contentless (`content=''` +
+      // `contentless_delete=1`) so it no longer stores a second copy of
+      // every title's text — on music that copy was ~320 MB of `_content`.
+      //
+      // Contentless rather than external content: the indexed `subject` is
+      // derived from subject_json, so external content would need a view and
+      // its 'delete' command must be fed the exact old values; contentless
+      // with contentless_delete (SQLite >= 3.43) accepts a plain DELETE by
+      // rowid, which is what migration 1's comment says contentless forbade.
+      // Searches only need MATCH + bm25() + a rowid join to <prefix>_titles; none
+      // reads columns back from the FTS table (no snippet/highlight). Column
+      // layout is kept as-is because bm25() weights are positional.
+      //
+      // The UPDATE trigger now fires only when an indexed input actually
+      // changes, so embedding bookkeeping and ingest refreshes that rewrite
+      // the same text stop churning the index. The triggers are the only writers of the FTS table.
+      version: 2,
+      sql: `
+        DROP TRIGGER IF EXISTS ${p}_titles_fts_ai;
+        DROP TRIGGER IF EXISTS ${p}_titles_fts_ad;
+        DROP TRIGGER IF EXISTS ${p}_titles_fts_au;
+        DROP TABLE IF EXISTS ${p}_titles_fts;
+
+        CREATE VIRTUAL TABLE ${p}_titles_fts USING fts5(
+          identifier UNINDEXED,
+          title,
+          creator,
+          subject,
+          description,
+          content='',
+          contentless_delete=1,
+          tokenize='unicode61 remove_diacritics 2'
+        );
+
+        CREATE TRIGGER ${p}_titles_fts_ai AFTER INSERT ON ${p}_titles
+        BEGIN
+          INSERT INTO ${p}_titles_fts(rowid, identifier, title, creator, subject, description)
+          SELECT NEW.rowid, NEW.identifier, NEW.title, NEW.creator,
+                 COALESCE((SELECT group_concat(value, ' ') FROM json_each(NEW.subject_json)), ''),
+                 NEW.description
+          WHERE NEW.deleted_at IS NULL;
+        END;
+
+        CREATE TRIGGER ${p}_titles_fts_ad AFTER DELETE ON ${p}_titles
+        BEGIN
+          DELETE FROM ${p}_titles_fts WHERE rowid = OLD.rowid;
+        END;
+
+        CREATE TRIGGER ${p}_titles_fts_au
+        AFTER UPDATE OF title, creator, subject_json, description, deleted_at ON ${p}_titles
+        WHEN OLD.title IS NOT NEW.title OR OLD.creator IS NOT NEW.creator
+          OR OLD.subject_json IS NOT NEW.subject_json OR OLD.description IS NOT NEW.description
+          OR OLD.deleted_at IS NOT NEW.deleted_at
+        BEGIN
+          DELETE FROM ${p}_titles_fts WHERE rowid = OLD.rowid;
+          INSERT INTO ${p}_titles_fts(rowid, identifier, title, creator, subject, description)
+          SELECT NEW.rowid, NEW.identifier, NEW.title, NEW.creator,
+                 COALESCE((SELECT group_concat(value, ' ') FROM json_each(NEW.subject_json)), ''),
+                 NEW.description
+          WHERE NEW.deleted_at IS NULL;
+        END;
+
+        INSERT INTO ${p}_titles_fts(rowid, identifier, title, creator, subject, description)
+        SELECT rowid, identifier, title, creator,
+               COALESCE((SELECT group_concat(value, ' ') FROM json_each(subject_json)), ''),
+               description
+        FROM ${p}_titles
+        WHERE deleted_at IS NULL;
+
+        INSERT INTO ${p}_titles_fts(${p}_titles_fts) VALUES('optimize');
       `,
     },
   ];

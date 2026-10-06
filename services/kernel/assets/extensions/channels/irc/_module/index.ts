@@ -1,5 +1,5 @@
 import { resolve } from "node:path";
-import { type ModuleContext, defineModule, log } from "@kernl/extension-sdk";
+import { type ModuleContext, agePolicy, defineModule, log } from "@kernl/extension-sdk";
 import { allIrcMigrations } from "./migrations/index.js";
 import { IrcStore } from "./store.js";
 import { UpstreamStore } from "./upstream/store.js";
@@ -108,6 +108,18 @@ export function createIrcModule() {
     name: "ext:irc",
     migrations: allIrcMigrations,
     migrationsKey: "irc",
+    retentionPolicies: () => [
+      agePolicy({
+        id: "irc.messages",
+        label: "IRC history",
+        description: "Channel and private messages kept for history (chathistory).",
+        kind: "operational",
+        table: "irc_messages",
+        dateColumn: "ts",
+        defaultDays: 30,
+        defaultEnabled: true,
+      }),
+    ],
     async init(ctx) {
       const store = new IrcStore(ctx.sqlite);
       const sasl = new SaslAuthenticator(store, {});

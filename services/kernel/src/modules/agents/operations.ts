@@ -27,6 +27,8 @@ import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { parseSchedulePatch } from "./services/schedules-service.js";
 import { setOfficeRepo } from "./office-repo.js";
+import { vetAgentCwdPath } from "./host-path-audit.js";
+import { bindAttachmentIdsArg } from "../attachments/bind-arg.js";
 
 export interface AgentOperationDeps {
   service: AgentService | null;
@@ -79,11 +81,13 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
     return value;
   };
 
-  return {
+  const ops: Record<string, Operation> = {
     "agents.create": (input) => {
       const name = str(input, "name").trim();
       if (!name) throw new HttpError(400, "name is required");
       const fields = pickArgs(input, { ...AGENT_FIELDS, flow_id: "string" });
+      // A __cwd_path__ the kernel cannot see is refused (400) before the row exists.
+      const warnings = vetAgentCwdPath(fields.variables);
       const agent = svc().createAgent({ ...fields, name, variables: fields.variables as Record<string, string> | undefined });
 
       // Optional inline schedule (agent-create with cron). Non-fatal on error.
@@ -100,12 +104,16 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
           log.warn(`Could not add schedule for ${agent.id}: ${String(err)}`);
         }
       }
-      return { success: true, agent_id: agent.id, agent };
+      return { success: true, agent_id: agent.id, agent, ...(warnings.length ? { warnings } : {}) };
     },
 
     "agents.update": (input) => {
       const id = required(input, "id");
       const fields = pickArgs(input, { ...AGENT_FIELDS, name: "string", active: "boolean", under_revision: "boolean" });
+      // A new or changed __cwd_path__ the kernel cannot see is refused (400);
+      // the one the agent already had is kept and comes back as a warning.
+      const current = fields.variables !== undefined ? svc().getAgent(id) : undefined;
+      const warnings = current ? vetAgentCwdPath(fields.variables, current.variables ?? "") : [];
       // The chain, the engine and the loose pair are one edit for the person
       // making it, so they have to be one write — otherwise `provider` and the
       // chain head can end up disagreeing between two requests. Skills are
@@ -118,7 +126,7 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
         skills: normalizeSkillsInput(input.skills),
       });
       if (!updated) throw new HttpError(404, "Agent not found");
-      return { success: true, agent: updated };
+      return { success: true, agent: updated, ...(warnings.length ? { warnings } : {}) };
     },
 
     "agents.delete": (input) => {
@@ -165,13 +173,28 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
         projectId = service.getProjectGate()?.resolve(projectRef) ?? null;
         if (!projectId) throw new HttpError(400, `Unknown project "${projectRef}"`);
       }
+      // A chat turn from the agent panel: the reply is for the operator, so
+      // the executor doesn't hand it down the agent's chains (see
+      // executeDeclarativeChains). Without this, chatting with an office lead
+      // started a run for every member and filled the thread with copies.
+      const chat = input.chat === true;
+      // Attachments for the run's opening turn. Bound here (400 on a bad id);
+      // the executor reads them back from the payload and builds blocks per
+      // model. A meeting passes the same ids to every participant: binding
+      // an already-bound id is fine.
+      const attachmentIds = bindAttachmentIdsArg(input.attachment_ids).map((r) => r.id);
+      const payload = {
+        ...(workspace ? { workspace } : {}),
+        ...(chat ? { chat: true } : {}),
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+      };
       let run;
       try {
         run = service.createRun({
           agent_id: agent.id,
           trigger_type: "manual",
           goal,
-          trigger_payload: workspace ? { workspace } : undefined,
+          trigger_payload: Object.keys(payload).length ? payload : undefined,
           project_id: projectId,
         });
       } catch (err) {
@@ -327,6 +350,21 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
         const { officeDefinitionFromJson, materializeOffice, loadRepoServiceBestEffort, OfficeExistsError } =
           await import("./office-kit.js");
         const def = officeDefinitionFromJson(input);
+        // Agents founded without a hand-written prompt (the wizard names them in
+        // auto_prompts) get a full mandate from the model. Best effort: on any
+        // failure they keep the wizard's one-line fallback.
+        const autoPrompts = pickArgs(input, { auto_prompts: "string[]" }).auto_prompts ?? [];
+        if (autoPrompts.length) {
+          try {
+            const { expandMandates } = await import("./office-mandates.js");
+            const { llm } = await import("../../core/llm/client.js");
+            const language = input.language === "es" ? "es" : "en";
+            const n = await expandMandates(def, autoPrompts, language, (opts) => llm().chatJson(opts));
+            log.info(`offices.create: generated ${n}/${autoPrompts.length} mandates for "${def.name}"`);
+          } catch (err) {
+            log.warn(`offices.create: mandates not generated, keeping the short prompts: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         const db = service.getDb();
         const repoService = def.repo ? await loadRepoServiceBestEffort(db) : null;
         try {
@@ -400,6 +438,25 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       return { success: true, ...svc().setOfficeLead(flow_id, required(input, "agent_id")) };
     },
 
+    // Office on/off. Pausing also cancels its members' running runs, so the
+    // switch stops spending tokens now, not after the current run finishes.
+    "agents.flows.set_paused": (input) => {
+      const flow_id = required(input, "flow_id");
+      if (typeof input.paused !== "boolean") throw new HttpError(400, "paused must be a boolean");
+      const service = svc();
+      const flow = service.setFlowPaused(flow_id, input.paused);
+      if (!flow) throw new HttpError(404, `Office not found: ${flow_id}`);
+      let cancelled = 0;
+      if (input.paused && executor) {
+        const stop = ops["agents.stop"];
+        for (const agent of service.listAgents().filter((a) => a.flow_id === flow_id)) {
+          const out = stop({ agent_id: agent.id }) as { cancelled?: number };
+          cancelled += out.cancelled ?? 0;
+        }
+      }
+      return { success: true, flow, cancelled };
+    },
+
     "agents.flows.set_distribute": (input) => {
       const flow_id = required(input, "flow_id");
       if (typeof input.enabled !== "boolean") throw new HttpError(400, "enabled must be a boolean");
@@ -420,4 +477,5 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       };
     },
   };
+  return ops;
 }

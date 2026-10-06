@@ -208,7 +208,11 @@ export class Orchestrator {
       const episode = this.chatService?.getEpisode(episodeId);
       if (episode && episode.status === "active") return episodeId;
     }
-    const episode = this.chatService!.createEpisode({ title: `${ctx.platform} ${ctx.userId}` });
+    const episode = this.chatService!.createEpisode({
+      title: `${ctx.platform} ${ctx.userId}`,
+      source: "platform",
+      source_label: ctx.platform,
+    });
     this.userEpisodes.set(userKey, episode.id);
     return episode.id;
   }

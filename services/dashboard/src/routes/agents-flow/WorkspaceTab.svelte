@@ -43,6 +43,18 @@
   /** Bound: the parent fills it on open and clears it on reload. */
   export let fileContent: { path: string; content: string } | null = null;
 
+  /**
+   * The tree arrives one folder at a time: the parent fetches a folder when it
+   * is opened (a real repo is hundreds of thousands of files). "Expand all"
+   * would fetch every folder, so it is not offered, and the total file count
+   * is unknown.
+   */
+  export let lazy = false;
+  /** Folders the server cut short: entries not listed, per folder ('' = root). */
+  export let more: Map<string, number> = new Map();
+  /** Folders being fetched right now. */
+  export let loadingDirs: Set<string> = new Set();
+
   /** Ask the world to fetch one file — it knows which endpoint applies. */
   export let onOpenFile: (path: string) => void = () => {};
 
@@ -51,7 +63,7 @@
     collapsed = collapsed;
   }
 
-  $: wsRows = buildWsRows(files, collapsed);
+  $: wsRows = buildWsRows(files, collapsed, more);
   $: wsAllDirs = [...new Set(buildWsRows(files, new Set()).filter(r => r.isDir).map(r => r.path))];
   $: wsFileCount = files.filter(f => f.type !== 'dir').length;
 </script>
@@ -121,9 +133,9 @@
     <div class="ws-empty">No files yet. This agent hasn't created anything in its workspace.</div>
   {:else}
     <div class="ws-toolbar">
-      <span class="ws-count">{wsFileCount} {wsFileCount === 1 ? 'file' : 'files'}</span>
+      {#if !lazy}<span class="ws-count">{wsFileCount} {wsFileCount === 1 ? 'file' : 'files'}</span>{/if}
       <button class="ws-tb-btn" on:click={() => { collapsed = new Set(wsAllDirs); }} disabled={collapsed.size >= wsAllDirs.length}>⊟ Collapse all</button>
-      <button class="ws-tb-btn" on:click={() => { collapsed = new Set(); }} disabled={collapsed.size === 0}>⊞ Expand all</button>
+      {#if !lazy}<button class="ws-tb-btn" on:click={() => { collapsed = new Set(); }} disabled={collapsed.size === 0}>⊞ Expand all</button>{/if}
     </div>
     <div class="ws-tree">
       {#each wsRows as r (r.path)}
@@ -133,8 +145,14 @@
             <span class="ws-chev" class:open={!collapsed.has(r.path)}>▸</span>
             <span class="ws-icon">{collapsed.has(r.path) ? '📁' : '📂'}</span>
             <span class="ws-name ws-dirname">{r.name}</span>
-            <span class="ws-badge">{r.fileCount}</span>
+            <span class="ws-badge">{loadingDirs.has(r.path) ? '…' : r.fileCount}</span>
           </button>
+        {:else if r.more}
+          <div class="ws-row ws-more" title="Folder too big to list whole">
+            {#each { length: r.depth } as _}<span class="ws-guide"></span>{/each}
+            <span class="ws-chev-spacer"></span>
+            <span class="ws-name">{r.name}</span>
+          </div>
         {:else}
           <button class="ws-row ws-file" on:click={() => onOpenFile(r.path)} title={r.path}>
             {#each { length: r.depth } as _}<span class="ws-guide"></span>{/each}
@@ -213,6 +231,8 @@
     cursor:pointer;text-align:left;transition:background .1s,color .1s;
   }
   .ws-row:hover{background:rgba(120,130,160,.1)}
+  .ws-more{cursor:default;color:#6a6f82;font:italic 500 11px 'Manrope',sans-serif}
+  .ws-more:hover{background:transparent}
   .ws-guide{
     flex-shrink:0;width:9px;margin:-5px 5px -5px 6px;align-self:stretch;
     border-left:1px solid rgba(120,130,160,.16);

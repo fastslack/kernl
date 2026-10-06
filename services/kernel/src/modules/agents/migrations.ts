@@ -893,6 +893,35 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_agent_inbox_project     ON agent_office_inbox(to_agent_id, project_id, status);
     `,
   },
+  {
+    // Builtin agents stopped embedding their run goals (runs-service.ts): the
+    // goal is a fixed string per agent and no similarity lookup reads them.
+    // Drop the vectors already stored; the next VACUUM returns the space.
+    version: 52,
+    sql: `
+      UPDATE agent_runs SET goal_embedding = NULL, goal_embedding_model = ''
+       WHERE goal_embedding IS NOT NULL
+         AND agent_id IN (SELECT id FROM agents WHERE builtin_handler IS NOT NULL AND builtin_handler <> '');
+    `,
+  },
+  {
+    // Office on/off switch. Separate from `active`, which deleteFlow and the
+    // extension reinstall own and which means "deleted". A paused office keeps
+    // its agents, schedules and lot; createRun refuses runs for its members.
+    version: 53,
+    sql: `
+      ALTER TABLE agent_flows ADD COLUMN paused INTEGER NOT NULL DEFAULT 0;
+    `,
+  },
+  {
+    // Chat attachments on a conversational memory entry: a JSON array of
+    // attachment ids ('' = none), so the agent panel can show them and later
+    // prompts can name them.
+    version: 54,
+    sql: `
+      ALTER TABLE agent_memory ADD COLUMN attachments TEXT NOT NULL DEFAULT '';
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

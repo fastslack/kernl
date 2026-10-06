@@ -21,7 +21,7 @@
   import { t, locale } from '$lib/i18n/index.js';
   import { buildRailModel, latestRunStatus } from '$lib/office/rail-model.js';
   import { shortcutFor } from '$lib/office/shortcuts.js';
-  import { fetchOfficeTemplates, fetchLicenseFeatures, moveAgentToOffice, runAgentWithGoal, type OfficeReport, type OfficeTemplatesResponse } from '$lib/office/office-api.js';
+  import { fetchOfficeTemplates, fetchLicenseFeatures, moveAgentToOffice, runAgentWithGoal, setOfficePaused, type OfficeReport, type OfficeTemplatesResponse } from '$lib/office/office-api.js';
   import { environmentLicensed, officeRepoPath } from '$lib/office/team-model.js';
   import { errorMessage } from '$lib/office/office-errors.js';
 
@@ -57,6 +57,7 @@
     color: string; active: number;
     created_at: string; updated_at: string;
     kind?: string | null; repo_isolation?: string; home_repo_path?: string;
+    paused?: number;
   }
   interface RankData {
     id: string; name: string; level: number;
@@ -143,7 +144,10 @@
   $: flowEvents = $agentFlowEvents;
 
   // ── Stream filtering & metrics ───────────────
-  $: streamAgentNames = (() => {
+  // Only the Message Stream bar reads these: while it's hidden (View menu) they
+  // aren't computed at all, so a busy event feed costs nothing but the 3D's
+  // own needs (liveRunningAgents below stays — the world animates from it).
+  $: streamAgentNames = !streamVisible ? [] : (() => {
     const names = new Set<string>();
     for (const e of flowEvents) {
       const n = String(e.data.agent_name ?? e.data.source_agent_name ?? '');
@@ -152,7 +156,7 @@
     return Array.from(names).sort();
   })();
 
-  $: filteredFlowEvents = (() => {
+  $: filteredFlowEvents = !streamVisible ? [] : (() => {
     let evts = flowEvents;
     if (streamTypeFilter !== 'all') {
       evts = evts.filter(e => {
@@ -178,9 +182,9 @@
     return evts;
   })();
 
-  $: streamTokenTotal = flowEvents.reduce((sum, e) => sum + (Number(e.data.tokens_used) || 0), 0);
+  $: streamTokenTotal = !streamVisible ? 0 : flowEvents.reduce((sum, e) => sum + (Number(e.data.tokens_used) || 0), 0);
 
-  $: streamRunDurations = (() => {
+  $: streamRunDurations = !streamVisible ? {} : (() => {
     const starts: Record<string, string> = {};
     const durations: Record<string, number> = {};
     for (const e of flowEvents) {
@@ -274,6 +278,13 @@
   let deepLinksApplied = false;
   let toast: ToastState = NO_TOAST;
   let railCollapsed = readRailCollapsed();
+  // Message Stream bar at the bottom: hidden until turned on from the View menu (remembered per browser).
+  const STREAM_KEY = 'kernl.offices.streamVisible';
+  let streamVisible = (() => { try { return localStorage.getItem(STREAM_KEY) === '1'; } catch { return false; } })();
+  function toggleStreamVisible() {
+    streamVisible = !streamVisible;
+    try { localStorage.setItem(STREAM_KEY, streamVisible ? '1' : '0'); } catch { /* private mode */ }
+  }
 
   // ── Meetings and activity ─────────────────────────────────────
   type AgentMeetingRequest = Extract<MeetingStart, { moderator: 'agent' }>;
@@ -429,6 +440,20 @@
   }
 
   $: activeFlows = flows.filter((f) => f.active === 1);
+
+  // ── Destroyed offices stay standing in the 3D world until the crew blows them up ──
+  // The kernel already deleted them; only the world sees these ghosts, so the
+  // rail, the directory and the panel move on at once. Dropped on 'demolished'.
+  let ghosts: Array<{ flow: FlowData; agentIds: Set<string> }> = [];
+  $: worldFlows = ghosts.length
+    ? [...flows, ...ghosts.filter((g) => !flows.some((f) => f.id === g.flow.id && f.active === 1)).map((g) => g.flow)]
+    : flows;
+  $: worldAgents = ghosts.length
+    ? agents.map((a) => {
+        const g = ghosts.find((x) => x.agentIds.has(a.id));
+        return g ? { ...a, flow_id: g.flow.id } : a;
+      })
+    : agents;
   $: railModel = buildRailModel({
     agents,
     flows,
@@ -466,6 +491,21 @@
       dataError = true;
     }
     dataLoaded = true;
+  }
+
+  // One-click office on/off from a directory card.
+  let powerBusy: string | null = null;
+  async function setOfficePower(flowId: string, paused: boolean) {
+    if (powerBusy) return;
+    powerBusy = flowId;
+    try {
+      await setOfficePaused(flowId, paused);
+      await refresh();
+    } catch (err) {
+      toast = { ...NO_TOAST, kind: 'error', message: $t('office.power.failed', { error: errorMessage(err) }) };
+    } finally {
+      powerBusy = null;
+    }
   }
 
   function openPanel(flowId: string) {
@@ -542,8 +582,14 @@
     setTimeout(() => world?.focusOfficeById(report.flowId), 300);
   }
 
-  async function onOfficeDeleted(e: CustomEvent<{ unassigned: number }>) {
+  async function onOfficeDeleted(e: CustomEvent<{ unassigned: number; flowId: string }>) {
     panelOfficeId = null;
+    // Snapshot the office before the refresh drops it, then send the crew.
+    const flow = flows.find((f) => f.id === e.detail.flowId);
+    if (flow) {
+      ghosts = [...ghosts, { flow: { ...flow }, agentIds: new Set(agents.filter((a) => a.flow_id === flow.id).map((a) => a.id)) }];
+      void enterWorld(() => world?.demolishOffice(flow.id));
+    }
     await refresh();
     rail?.expandUnassigned();
     toast = { ...NO_TOAST, kind: 'info', message: $t('office.shell.deleted', { n: e.detail.unassigned }) };
@@ -722,6 +768,8 @@
         on:fit={() => enterWorld(() => world?.fitAll())}
         on:turntable={() => enterWorld(() => world?.toggleRotationMode())}
         on:perf={() => enterWorld(() => world?.togglePerfHud())}
+        on:stream={toggleStreamVisible}
+        {streamVisible}
         on:extra={(e) => enterWorld(() => { worldViewItems.find((i) => i.id === e.detail.id)?.run(); worldViewItems = world?.pluginViewItems() ?? []; })}
         on:inbox={() => enterWorld(() => world?.openHeadquartersInbox())}
         on:registerrepo={() => enterWorld(() => world?.openRegisterRepo())}
@@ -731,9 +779,9 @@
         <div class="world-layer">
         <AgentWorld3D
           bind:this={world}
-          {agents}
+          agents={worldAgents}
           {chains}
-          {flows}
+          flows={worldFlows}
           {ranks}
           {dataLoaded}
           {dataError}
@@ -742,6 +790,7 @@
           {stats}
           on:refresh={refresh}
           on:officeclick={(e) => openPanel(e.detail.flowId)}
+          on:demolished={(e) => (ghosts = ghosts.filter((g) => g.flow.id !== e.detail.flowId))}
           on:inbox={(e) => (inboxCount = e.detail.count)}
           on:moveagent={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
           on:newoffice={(e) => openWizard(e.detail?.lotId ?? '')}
@@ -756,8 +805,9 @@
         </div>
         {/if}
         {#if directoryView}
-          <OfficeDirectory model={railModel} loading={!dataLoaded} error={dataError} inbox={inboxCount}
+          <OfficeDirectory model={railModel} loading={!dataLoaded} error={dataError} inbox={inboxCount} {powerBusy}
             on:select={(e) => openPanel(e.detail.id)}
+            on:power={(e) => setOfficePower(e.detail.id, e.detail.paused)}
             on:headquarters={() => enterWorld(() => world?.openHeadquartersInbox())}
             on:agent={(e) => enterWorld(() => world?.focusAgentById(e.detail.id))}
             on:retry={refresh} />
@@ -832,6 +882,7 @@
   />
 
   <!-- Message Stream Panel -->
+  {#if streamVisible}
   <MessageStream
     bind:open={streamOpen}
     bind:height={streamHeight}
@@ -855,6 +906,7 @@
     on:clearPersisted={clearPersistedEvents}
     on:selectAgent={e => { selectedAgentId = e.detail; }}
   />
+  {/if}
 </div>
 
 

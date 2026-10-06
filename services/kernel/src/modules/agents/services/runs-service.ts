@@ -5,6 +5,7 @@ import { log } from "../../../core/logger.js";
 import { buildPatch, type PatchColumn } from "../../../sdk/query-helpers.js";
 import type { Agent, AgentRun, AgentStep, RunCondition } from "../types.js";
 import type { ProjectGateLike } from "../advanced-types.js";
+import { agentOfficePaused } from "./flows-service.js";
 
 /** Terminal statuses: a run in one of these no longer needs its checkpoint. */
 const FINISHED: ReadonlySet<string> = new Set(["completed", "failed", "cancelled"]);
@@ -77,13 +78,18 @@ export class AgentRunsService {
     //    between that check and here, OR another path could call createRun
     //    directly without the check (e.g. extension-facade, chain-runner).
     const agentRow = this.db
-      .prepare("SELECT active FROM agents WHERE id = ?")
-      .get(input.agent_id) as { active: number } | undefined;
+      .prepare("SELECT active, builtin_handler FROM agents WHERE id = ?")
+      .get(input.agent_id) as { active: number; builtin_handler: string | null } | undefined;
     if (!agentRow) {
       throw new Error(`createRun: agent ${input.agent_id} not found`);
     }
     if (agentRow.active === 0) {
       throw new Error(`createRun: agent ${input.agent_id} is inactive (active=0)`);
+    }
+    // Its office is switched off (agent_flows.paused): no path runs its
+    // members — the top agent excepted (agentOfficePaused).
+    if (agentOfficePaused(this.db, input.agent_id)) {
+      throw new Error(`createRun: agent ${input.agent_id} belongs to a paused office`);
     }
 
     // 2. Self-invocation guard. If a parent context is supplied and the parent
@@ -189,7 +195,11 @@ export class AgentRunsService {
         run.parent_run_id, run.parent_agent_id, run.depth, run.project_id,
       );
 
-    if (run.goal && run.goal.length >= 5) {
+    // Builtin agents never reach the LLM executor, so nothing ever ranks their
+    // runs by similarity — and their goal is the same fixed string every poll.
+    // Embedding them stored one identical 6 KB vector per run (hundreds of MB).
+    const isBuiltin = !!agentRow.builtin_handler;
+    if (!isBuiltin && run.goal && run.goal.length >= 5) {
       this.scheduleEmbed("agent_runs", "goal_embedding", "goal_embedding_model", run.id, run.goal);
     }
     return run;

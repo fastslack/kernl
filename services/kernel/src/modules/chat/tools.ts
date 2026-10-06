@@ -23,7 +23,7 @@ export function chatTools(service: ChatService): ToolDefinition[] {
           .describe("Specific model override (e.g. claude-sonnet-4-20250514)"),
       }),
       handler: async (input) => {
-        const episode = service.createEpisode(input);
+        const episode = service.createEpisode({ ...input, source: "mcp" });
         return textResult(
           [
             `Episode started:`,

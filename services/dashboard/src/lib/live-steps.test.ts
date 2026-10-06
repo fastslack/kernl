@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { AgentFlowEvent } from "./stores.js";
-import { liveToolRows, liveDisplayRows, plainStepText } from "./live-steps.js";
+import { liveToolRows, liveDisplayRows, plainStepText, liveCallParts, liveResultParts, liveEventKey } from "./live-steps.js";
 import {
   liveStepIcon,
   liveStepLabel,
@@ -388,5 +388,44 @@ describe("summarizeToolCall · ToolSearch", () => {
     expect(summarizeToolCall("ToolSearch", '{"query":"select:mcp__kernel__kernel_agents_add_learning"}'))
       .toBe("Loads tool: kernel_agents_add_learning");
     expect(summarizeToolCall("ToolSearch", '{"query":"slack messages"}')).toBe("Looks for tools matching “slack messages”");
+  });
+});
+
+describe("liveCallParts", () => {
+  it("drops the tool name the tag already shows and returns the args as chips", () => {
+    expect(liveCallParts("mcp__kernel__kernel_crm_leads", '{"status":"new","limit":20,"opts":{}}'))
+      .toEqual({ text: "", args: [{ k: "status", v: "new" }, { k: "limit", v: "20" }] });
+    expect(liveCallParts("mcp__kernel__kernel_sales_pipeline_summary", "{}")).toEqual({ text: "", args: [] });
+  });
+
+  it("keeps a sentence of its own", () => {
+    expect(liveCallParts("Read", '{"file_path":"/a/CHARTER.md"}')).toEqual({ text: "Read CHARTER.md", args: [] });
+  });
+});
+
+describe("liveResultParts", () => {
+  it("splits the count off as a tag", () => {
+    expect(liveResultParts("5 lines · Error: result too big")).toEqual({ tag: "5 lines", text: "Error: result too big", bad: true });
+    expect(liveResultParts("1 items")).toEqual({ tag: "1 items", text: "", bad: false });
+    expect(liveResultParts("no output")).toEqual({ tag: "empty", text: "", bad: false });
+    expect(liveResultParts("error · boom")).toEqual({ tag: "error", text: "boom", bad: true });
+    expect(liveResultParts('{"total":20}')).toEqual({ tag: "", text: '{"total":20}', bad: false });
+  });
+});
+
+describe("liveEventKey", () => {
+  const ev = (ts: number, event = "agent:tool_call"): AgentFlowEvent =>
+    ({ event, ts, data: { agent_id: "a", tool_name: "Read" } }) as unknown as AgentFlowEvent;
+
+  it("keeps an event's key while newer events are prepended to the buffer", () => {
+    const first = ev(1000);
+    const before = liveEventKey(first);
+    // The store prepends: the same object moves from index 0 to index 2.
+    const buffer = [ev(1002), ev(1001), first];
+    expect(liveEventKey(buffer[2])).toBe(before);
+  });
+
+  it("tells apart two events with the same timestamp", () => {
+    expect(liveEventKey(ev(5000))).not.toBe(liveEventKey(ev(5000)));
   });
 });

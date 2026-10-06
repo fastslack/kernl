@@ -24,6 +24,8 @@ const CAPS: LlmProviderCapabilities = {
   streaming: false, // the current adapter exposes no streaming, even though the SDK supports it
   thinking: true,
   vision: true,
+  pdf: true,
+  video: false,
   promptCaching: true,
   contextWindow: 200_000,
 };

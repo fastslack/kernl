@@ -12,6 +12,7 @@ import { queryChat } from "./dashboard-queries.js";
 import { registerChatRoutes } from "./api-routes.js";
 import { chatDashboardRpcActions } from "./dashboard-rpc-actions.js";
 import { MemoryDistiller } from "./memory-distiller.js";
+import { ChatTitler } from "./titler.js";
 import { llm as getLlmClient } from "../../core/llm/client.js";
 import { log } from "../../core/logger.js";
 import type { EventBus } from "../../core/event-bus.js";
@@ -35,6 +36,7 @@ export function createChatModule(): ChatModule {
   let distiller: MemoryDistiller | null = null;
   let eventsRef: EventBus | null = null;
   let sqliteRef: SqliteDb | null = null;
+  let titleModel = "";
 
   return {
     name: "chat",
@@ -49,6 +51,7 @@ export function createChatModule(): ChatModule {
         ctx.config,
       );
       eventsRef = ctx.events;
+      titleModel = ctx.config.chat.titleModel ?? "";
       sqliteRef = ctx.sqlite;
 
       // Create Neo4j constraints and vector indexes
@@ -90,6 +93,10 @@ export function createChatModule(): ChatModule {
         // the system prompt via service.systemParts.
         chatService.setDistiller(distiller);
         log.info("Chat: memory distiller wired (session-end recall enabled)");
+        // Same moment for the titler: it needs the LLM client too.
+        const titler = new ChatTitler(sqliteRef, eventsRef, getLlmClient, titleModel);
+        chatService.setTitler(titler);
+        titler.backfill().catch((err) => log.warn(`chat.titler backfill: ${err instanceof Error ? err.message : String(err)}`));
         return true;
       } catch (err) {
         log.warn(`chat.wireDistiller: ${err instanceof Error ? err.message : String(err)}`);

@@ -20,12 +20,13 @@
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
-    liveDisplayRows, summarizeToolResult, type LiveRow, type LiveStepRow,
+    liveDisplayRows, liveEventKey, summarizeToolResult, liveCallParts, liveResultParts, type LiveRow, type LiveStepRow,
   } from '$lib/live-steps.js';
   import { agentActionOf, type AgentAction } from '$lib/agent-actions.js';
   import { t } from '$lib/i18n/index.js';
   import AgentActionBody from './AgentActionBody.svelte';
-  import { shortToolName, resultFailed } from '$lib/history-steps.js';
+  import { resultFailed } from '$lib/history-steps.js';
+  import ToolName from '$lib/components/agent/ToolName.svelte';
   import { liveEventDetail } from '$lib/live-event-detail.js';
   import LiveEventDetail from './LiveEventDetail.svelte';
 
@@ -62,7 +63,7 @@
 
   $: liveHeadEvent = events[0] ?? null;
 
-  // Set of step keys (`${ts}-${idx}`) that the user has expanded — controls
+  // Set of step keys (liveEventKey) that the user has expanded — controls
   // whether the detail panel renders below the summary line. Defaults to
   // collapsed for everything so the timeline stays scannable.
   let expandedLiveSteps = new Set<string>();
@@ -135,9 +136,14 @@
           {:else}
             <div class="live-now-lbl">{liveStepLabel(hType)}</div>
             {#if hType === 'tool_call' && liveHeadEvent.data.tool_name}
-              <code class="live-tool">{liveHeadEvent.data.tool_name}</code>
+              {@const hc = liveCallParts(String(liveHeadEvent.data.tool_name), String(liveHeadEvent.data.content_preview ?? ''))}
+              <ToolName name={String(liveHeadEvent.data.tool_name)} chipClass="live-tool" />
+              {#if hc.text || hc.args.length}
+                <div class="live-now-summary">{#each hc.args as a (a.k)}<span class="live-arg"><span class="live-arg-k">{a.k}</span>{a.v}</span>{/each}{hc.text}</div>
+              {/if}
+            {:else}
+              <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
             {/if}
-            <div class="live-now-summary">{liveStepSummary(liveHeadEvent)}</div>
           {/if}
         </div>
         <div class="live-now-clock">{fmtClock(liveHeadEvent.ts)}</div>
@@ -171,7 +177,7 @@
     <div class="ip-empty">No events yet — stay tuned.</div>
   {:else}
     <ol class="live-timeline">
-      {#each displayRows as row (row.kind === 'tools' ? row.key : row.e.ts + '-' + row.i)}
+      {#each displayRows as row (row.kind === 'tools' ? row.key : liveEventKey(row.e))}
         {#if row.kind === 'tools'}
         {@const newest = row.items[0].e}
         {@const runOpen = openRuns.has(row.key)}
@@ -182,7 +188,7 @@
                   title={runTitle(row)} on:click={() => toggleRun(row.key)}>
             <span class="live-step-icon">{liveStepIcon('tool_call')}</span>
             <span class="live-step-type">{liveStepLabel(row.pending > 0 ? 'tool_call' : 'tool_result')}</span>
-            <code class="live-step-tool">{row.tool}</code>
+            <ToolName name={row.tool} chipClass="live-step-tool" />
             <span class="live-run-count" class:bad={row.failed > 0} class:pending={row.pending > 0}>
               {row.pending > 0 ? '…' : row.failed > 0 ? '✗' : '✓'} ×{row.calls}{#if row.failed > 0} · {row.failed} ✗{/if}
             </span>
@@ -196,7 +202,7 @@
         {@const i = row.i}
         {@const etype = liveEventType(e)}
         {@const ecat = liveStepCategory(e)}
-        {@const stepKey = e.ts + '-' + i}
+        {@const stepKey = liveEventKey(e)}
         {@const isOpen = expandedLiveSteps.has(stepKey)}
         {@const hasPayload = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
         {@const detail = hasPayload ? null : liveEventDetail(e)}
@@ -220,13 +226,37 @@
             {#if act}
               <AgentActionBody action={act} />
             {:else}
+            {@const isCall = etype === 'tool_call' && !!e.data.tool_name}
+            {@const call = isCall ? liveCallParts(String(e.data.tool_name), String(e.data.content_preview ?? '')) : null}
+            {@const rp = res ? liveResultParts(summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))) : null}
+            {@const bad = resBad || !!rp?.bad}
             <span class="live-step-icon">{liveStepIcon(etype)}</span>
-            <span class="live-step-type">{liveStepLabel(etype)}</span>
-            {#if e.data.tool_name}<code class="live-step-tool" title={String(e.data.tool_name)}>{shortToolName(String(e.data.tool_name))}</code>{/if}
-            <!-- A call reads with its outcome: what it asked → what came back. -->
+            <!-- A call is said by its tool tag; the "CALLING TOOL" pill would
+                 only repeat it. Every other step keeps its type. -->
+            {#if !isCall}<span class="live-step-type">{liveStepLabel(etype)}</span>{/if}
+            {#if e.data.tool_name}<ToolName name={String(e.data.tool_name)} chipClass="live-step-tool" />{/if}
+            {#if isCall}
+              {#if rp}
+                <span class="live-res-tag" class:bad title={bad ? 'Failed' : 'Returned'}>{bad ? '✗' : '✓'}{rp.tag ? ' ' + rp.tag : ''}</span>
+              {:else}
+                <span class="live-res-tag pending" title="Waiting for the result">…</span>
+              {/if}
+            {/if}
+            <!-- What it asked → what came back, in as little room as it takes. -->
             <span class="live-step-text">
-              {liveStepSummary(e)}{#if res}<span class="live-step-res" class:bad={resBad}> → {resBad ? '✗ ' : ''}{summarizeToolResult(String(res.e.data.tool_name ?? ''), String(res.e.data.content_preview ?? ''))}</span>{/if}
+              {#if call}
+                {#each call.args as a (a.k)}<span class="live-arg"><span class="live-arg-k">{a.k}</span>{a.v}</span>{/each}{call.text}{#if rp?.text}<span class="live-step-res" class:bad>{call.text || call.args.length ? ' → ' : ''}{rp.text}</span>{/if}
+              {:else}
+                {liveStepSummary(e)}
+              {/if}
             </span>
+            {/if}
+            {#if dt !== null && dt > 50}
+              <span class="live-meta-chip live-meta-time" title="Time since the previous event">+{liveFmtDelta(dt)}</span>
+            {/if}
+            {#if stepTok > 0}
+              <span class="live-meta-chip live-meta-tok"
+                    title={`Tokens for this step${cumTok > stepTok ? ` · Σ ${liveFmtTokens(cumTok)} so far in this run` : ''}`}>◉ {liveFmtTokens(stepTok)}</span>
             {/if}
             <span class="live-step-clock">{fmtClock(e.ts)}</span>
             {#if hasDetail}
@@ -238,19 +268,6 @@
             {#if _cid}
               <button class="email-view-link" on:click|stopPropagation={() => onOpenEmail(_cid)} title="Ver el email enviado (de/para/asunto/cuerpo)">📧 Ver email</button>
             {/if}
-          {/if}
-          {#if dt !== null || stepTok > 0 || cumTok > 0}
-            <div class="live-step-meta">
-              {#if dt !== null && dt > 50}
-                <span class="live-meta-chip live-meta-time" title="Time since the previous event">+{liveFmtDelta(dt)}</span>
-              {/if}
-              {#if stepTok > 0}
-                <span class="live-meta-chip live-meta-tok" title="Tokens reported by the model for this step">◉ {liveFmtTokens(stepTok)} tok</span>
-              {/if}
-              {#if cumTok > 0 && cumTok !== stepTok}
-                <span class="live-meta-chip live-meta-cum" title="Cumulative tokens for this run up to this step">Σ {liveFmtTokens(cumTok)}</span>
-              {/if}
-            </div>
           {/if}
           {#if detail && isOpen}
             <LiveEventDetail {detail} {onOutputClick} />
@@ -525,6 +542,24 @@
   }
   .live-step-open .live-step-chev{color:#a0a5b8}
 
+  /* Result of a call as a tag right after the tool: "✓ 5 lines", "✗", "…". */
+  .live-res-tag{
+    flex-shrink:0;padding:1px 6px;border-radius:999px;margin-top:1px;
+    font:700 9px 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;
+    color:#5fdba0;background:rgba(95,219,160,.12);white-space:nowrap;
+  }
+  .live-res-tag.bad{color:#ef8090;background:rgba(239,93,110,.14)}
+  .live-res-tag.pending{color:#a8b0c8;background:rgba(120,130,160,.14)}
+  /* Scalar arguments of a generic tool, key dimmed: "status new". */
+  .live-arg{
+    display:inline-block;margin:0 4px 1px 0;padding:0 5px;border-radius:3px;
+    font:500 9.5px/1.6 'JetBrains Mono',monospace;color:#c0c5d8;
+    background:rgba(120,130,160,.10);border:1px solid rgba(120,130,160,.12);
+    max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;vertical-align:baseline;
+  }
+  .live-arg-k{color:#6f7590;margin-right:4px}
+  .live-step-summary .live-meta-chip{flex-shrink:0;font:500 9px 'JetBrains Mono',monospace;margin-top:1px}
+
   /* Folded run of calls to one tool: "✓ ×25", or "✗ ×25 · 2 ✗" when some failed. */
   .live-run-count{
     flex-shrink:0;padding:1px 6px;border-radius:999px;
@@ -576,14 +611,9 @@
     word-break:break-word;
   }
 
-  /* ── Per-step meta chips (Δt + tokens). Sit just under the summary row,
-     small enough not to compete with the description but always visible
-     so the user gets a feel for cost without opening the step. */
-  .live-step-meta{
-    display:flex;flex-wrap:wrap;gap:5px;
-    padding:1px 0 3px 30px;
-    font:500 9px 'JetBrains Mono',monospace;
-  }
+  /* ── Per-step meta chips (Δt + tokens). Inline at the end of the summary
+     row: a line of their own under every step doubled the timeline's height
+     for two numbers. The run's running Σ lives in the token chip's title. */
   .live-meta-chip{
     display:inline-flex;align-items:center;gap:3px;
     padding:1px 5px;border-radius:3px;
@@ -593,8 +623,7 @@
   }
   .live-meta-time{color:#9ec0ef;background:rgba(106,160,255,.07);border-color:rgba(106,160,255,.15)}
   .live-meta-tok {color:#c4e8a8;background:rgba(120,220,140,.07);border-color:rgba(120,220,140,.18)}
-  .live-meta-cum {color:#8e8fa8;background:rgba(120,130,160,.05);border-color:rgba(120,130,160,.10)}
-
+  
   /* ── Totals row inside the timeline header — current run elapsed + tok */
   .live-totals{display:inline-flex;gap:6px;margin-left:auto}
   .live-totals-chip{

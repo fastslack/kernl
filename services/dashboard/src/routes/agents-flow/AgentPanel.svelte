@@ -35,6 +35,9 @@
   import { isWorkspacePathHidden } from '$lib/workspace-tree.js';
   import { resolveAgentWorkspace, dependsOnGoogleAuth } from '$lib/agent-helpers.js';
   import { fetchRecentRunSummaries } from './recent-runs.js';
+  import { attachmentMarkers } from '$lib/chat-view.js';
+  import { chatProjectChoices, defaultChatProject, chatProjectKey, type ChatProject } from '$lib/chat-project.js';
+  import type { AttachmentMeta } from '$lib/attachments/types.js';
   import { eventLogToFlowEvents, type HistoryStep } from '$lib/history-steps.js';
   import { liveEventType } from '$lib/live-steps.js';
   import type { WorldAgent, WorldChain, WorldFlow, WorldStats } from './world-types.js';
@@ -195,6 +198,14 @@
   // Collapsible section state. It lives here and not inside each section so
   // that closing and reopening the drawer does not forget it.
   let collapsed = { mandate: false };
+  // Last result folds to its header line (remembered per browser), so the
+  // mandate below gets the room when you read or edit it.
+  const RESULT_KEY = 'kernl.agentPanel.resultCollapsed';
+  let resultCollapsed = (() => { try { return localStorage.getItem(RESULT_KEY) === '1'; } catch { return false; } })();
+  function toggleResult() {
+    resultCollapsed = !resultCollapsed;
+    try { localStorage.setItem(RESULT_KEY, resultCollapsed ? '1' : '0'); } catch { /* private mode */ }
+  }
 
   // ── Talk to agent ──────────────────────────────
   let chatInput = '';
@@ -206,13 +217,41 @@
   let editingName = false;
   let editNameValue = '';
   let savingName = false;
-  let chatHistory: Array<{ role: 'you' | 'agent'; text: string; ts: number }> = [];
+  let chatHistory: Array<{ role: 'you' | 'agent'; text: string; ts: number; attachments?: AttachmentMeta[] }> = [];
   let chatHistoryLoading = false;
   let chatError = '';
   /** The run was accepted and the agent is working. Replaces the old trick of
    *  pushing a literal "Working on it..." bubble and later deleting whatever
    *  message happened to carry that exact text. */
   let chatPending = false;
+  /** Projects this chat can be about, and the one it is about ('' = none).
+   *  The kernel keeps runs and memory apart per project; see $lib/chat-project. */
+  let chatProjects: ChatProject[] = [];
+  let chatProject = '';
+
+  async function loadChatProjects(agentId: string, flowId: string | undefined) {
+    chatProjects = []; chatProject = '';
+    if (!flowId) return;
+    try {
+      const office: any = await fetch(`/api/offices/${encodeURIComponent(flowId)}/projects`).then((r) => r.ok ? r.json() : null);
+      const all: any = office?.serves_any ? await fetch('/api/projects').then((r) => r.ok ? r.json() : null) : null;
+      if (selectedAgent !== agentId) return;
+      chatProjects = chatProjectChoices(office, all);
+      let saved: string | null = null;
+      try { saved = localStorage.getItem(chatProjectKey(agentId)); } catch { /* private mode */ }
+      chatProject = defaultChatProject(chatProjects, saved);
+    } catch { /* no projects module: chat without project, as before */ }
+  }
+
+  function pickChatProject(slug: string) {
+    if (slug === chatProject || chatSending) return;
+    chatProject = slug;
+    if (selectedAgent) {
+      try { localStorage.setItem(chatProjectKey(selectedAgent), slug); } catch { /* private mode */ }
+    }
+    chatHistory = [];
+    loadChatFromMemory();
+  }
   let chatScrollEl: HTMLDivElement | null = null;
 
   /** Can this agent read what you write?
@@ -225,20 +264,6 @@
    *  reply to a message nothing ever read. 31 of the agents on this floor are
    *  in that shape, so the tab says so instead of pretending. */
   $: chatCanConverse = !!selData && !selData.builtin_handler;
-
-  /** Openers built from this agent, not from whatever product the placeholder
-   *  was copied out of. The old one advertised a prospecting syntax
-   *  ("Prospect city=Valencia…") on every agent in the office. */
-  $: chatSuggestions = (() => {
-    if (!selData || !chatCanConverse) return [] as string[];
-    const out: string[] = [];
-    const goal = String(agentDetail?.agent?.goal_template ?? '').trim();
-    if (goal) out.push(goal.length > 90 ? goal.slice(0, 88) + '…' : goal);
-    if (selData.description) out.push(`What did you do about ${selData.description.toLowerCase()} this week?`);
-    out.push('What are you working on right now?');
-    if (selStats?.failed) out.push('Why did your last runs fail?');
-    return out.slice(0, 3);
-  })();
 
   function beginEditName() {
     if (!selData) return;
@@ -327,6 +352,60 @@
   // collapse set stays, because loadWorkspaceFiles() resets it on reload.
   let wsCollapsed: Set<string> = new Set();
 
+  // A __cwd_path__ repo is listed one folder at a time: the root on load, then
+  // each folder the first time it is opened. A real repo mounted from the host
+  // is hundreds of thousands of files; the whole tree in one answer was 35 MB.
+  let wsLazy = false;
+  /** Folders already fetched ('' = root), and the ones in flight. */
+  let wsLoadedDirs: Set<string> = new Set();
+  let wsLoadingDirs: Set<string> = new Set();
+  /** Folders the server cut short: entries not listed. */
+  let wsMore: Map<string, number> = new Map();
+  /** Bumped on every reload, so a folder fetched for the previous agent is dropped. */
+  let wsGeneration = 0;
+  /** The agent whose tree is loaded — folders are only ever fetched for it. */
+  let wsAgentId: string | null = null;
+
+  /** Merge one listed level in; its subfolders start closed. */
+  function addWsLevel(data: any): void {
+    const entries: Array<{ path: string; type: string; size: number; count?: number }> = data?.files ?? [];
+    const dir = String(data?.dir ?? '');
+    for (const e of entries) if (e.type === 'dir') wsCollapsed.add(e.path);
+    wsCollapsed = wsCollapsed;
+    workspaceFiles = [...workspaceFiles, ...entries];
+    wsLoadedDirs = new Set(wsLoadedDirs).add(dir);
+    const hidden = Number(data?.total ?? 0) - entries.length;
+    if (data?.truncated && hidden > 0) wsMore = new Map(wsMore).set(dir, hidden);
+  }
+
+  async function loadWsDir(agentId: string, dir: string): Promise<void> {
+    const gen = wsGeneration;
+    wsLoadingDirs = new Set(wsLoadingDirs).add(dir);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/cwd-files?dir=${encodeURIComponent(dir)}`);
+      const data: any = res.ok ? await res.json() : null;
+      if (gen !== wsGeneration) return;
+      if (data) addWsLevel(data);
+      else wsLoadedDirs = new Set(wsLoadedDirs).add(dir); // don't retry a folder that failed
+    } catch { /* stays unloaded; reopening retries */ }
+    finally {
+      if (gen === wsGeneration) {
+        const next = new Set(wsLoadingDirs);
+        next.delete(dir);
+        wsLoadingDirs = next;
+      }
+    }
+  }
+
+  // Opening a folder (taking it out of `wsCollapsed`) fetches it the first time.
+  $: if (wsLazy && wsAgentId && wsAgentId === selectedAgent) {
+    for (const f of workspaceFiles) {
+      if (f.type === 'dir' && !wsCollapsed.has(f.path) && !wsLoadedDirs.has(f.path) && !wsLoadingDirs.has(f.path)) {
+        void loadWsDir(wsAgentId, f.path);
+      }
+    }
+  }
+
   let runsLoading = false;
   let expandedRunId: string | null = null;
   let runSteps: HistoryStep[] = [];
@@ -356,15 +435,20 @@
     chatHistoryLoading = true;
     chatError = '';
     try {
-      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30`);
+      const projectQ = chatProject ? `&project=${encodeURIComponent(chatProject)}` : '';
+      const res = await fetch(`/api/agents/${selectedAgent}/memory?limit=30${projectQ}`);
       const data: any = await res.json();
-      const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string }>)
+      const items = ((data?.memory ?? []) as Array<{ role: string; content: string; created_at: string; attachments?: AttachmentMeta[] }>)
         .filter(m => m.role === 'user' || m.role === 'assistant')
+        // "[To X]" / "[From X]" are what the executor stores when a chain hands
+        // a result between agents — the agents' traffic, not this conversation.
+        .filter(m => !/^\[(To|From) [^\]]+\] /.test(m.content))
         .reverse(); // chronological
       chatHistory = items.map(m => ({
         role: m.role === 'user' ? 'you' as const : 'agent' as const,
         text: m.content,
         ts: new Date(m.created_at).getTime(),
+        ...(m.attachments?.length ? { attachments: m.attachments } : {}),
       }));
     } catch (e: any) {
       // Was swallowed silently, which made a failed fetch and a genuinely empty
@@ -382,29 +466,58 @@
     if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
   }
 
-  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData, flows) : null;
+  // Set when the kernel says the agent's __cwd_path__ doesn't exist on its side
+  // (a host repo that isn't mounted): the executor runs in the office home
+  // then, and the tab follows it instead of listing an empty path.
+  let cwdMissingFor: string | null = null;
+  $: cwdMissing = !!selectedAgent && cwdMissingFor === selectedAgent;
+  $: selWorkspaceInfo = selData ? withMissingCwdHint(resolveAgentWorkspace(selData, flows, { cwdMissing }), selData) : null;
+
+  function withMissingCwdHint<T extends { cwdHint: string }>(info: T, agent: any): T {
+    if (!cwdMissing) return info;
+    let cwd = '';
+    try { cwd = String((typeof agent?.variables === 'string' ? JSON.parse(agent.variables) : agent?.variables)?.__cwd_path__ ?? ''); } catch { /* no vars */ }
+    return { ...info, cwdHint: `${cwd} no está montado en el contenedor de Kernl: el agente trabaja acá` };
+  }
 
   async function loadWorkspaceFiles() {
     if (!selectedAgent || workspaceLoading) return;
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent, flows);
+    let info = resolveAgentWorkspace(agent, flows, { cwdMissing });
     workspaceLoading = true;
     workspaceFileContent = null;
     workspacePreviewUrl = null;
     wsCollapsed = new Set();
+    wsGeneration++;
+    wsAgentId = agent.id;
+    wsLazy = false;
+    wsLoadedDirs = new Set();
+    wsLoadingDirs = new Set();
+    wsMore = new Map();
     try {
       if (info.cwdPath) {
-        // External __cwd_path__ repo — listed via the agent-scoped cwd endpoint.
+        // External __cwd_path__ repo — listed via the agent-scoped cwd endpoint,
+        // its root only; folders load as they are opened.
         const res = await fetch(`/api/agents/${agent.id}/cwd-files`);
         const data: any = await res.json();
-        workspaceFiles = data?.files ?? [];
+        workspaceFiles = [];
+        addWsLevel(data);
+        wsLazy = true;
         workspacePreviewUrl = typeof data?.preview_url === 'string' ? data.preview_url : null;
-      } else if (info.wsId) {
+        // A kernel older than the `exists` flag lists a missing path as empty.
+        if (data?.exists === false || (data?.exists === undefined && workspaceFiles.length === 0)) {
+          cwdMissingFor = agent.id;
+          wsLazy = false;
+          info = resolveAgentWorkspace(agent, flows, { cwdMissing: true });
+          workspacePreviewUrl = null;
+        }
+      }
+      if (!info.cwdPath && info.wsId) {
         const res = await fetch(`/api/agents/workspace/${info.wsId}`);
         const data: any = await res.json();
         workspaceFiles = data?.files ?? [];
-      } else {
+      } else if (!info.cwdPath) {
         workspaceFiles = [];
       }
     } catch { workspaceFiles = []; }
@@ -414,7 +527,7 @@
   async function loadWorkspaceFile(path: string) {
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent, flows);
+    const info = resolveAgentWorkspace(agent, flows, { cwdMissing });
     try {
       const url = info.cwdPath
         ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`
@@ -586,8 +699,10 @@
 
   // ── LIVE stream for the selected agent ────────
   $: liveIsRunning = !!selectedAgent && runningAgentIds.has(selectedAgent);
+  // 60 cut a long run's first steps off the timeline while it was still
+  // running; the world's buffer (1000 events, all agents) is the real bound.
   $: liveEvents = selectedAgent
-    ? flowEvents.filter(e => e.data.agent_id === selectedAgent).slice(0, 60)
+    ? flowEvents.filter(e => e.data.agent_id === selectedAgent).slice(0, 400)
     : [];
   // derive current run id (from most recent event)
   $: liveRunId = (liveEvents.find(e => e.data.run_id) as any)?.data?.run_id ?? null;
@@ -633,7 +748,9 @@
       panelTab = runningAgentIds.has(selectedAgent) ? 'live' : 'info';
     }
     agentRuns = []; expandedRunId = null; chatHistory = []; latestRun = null;
-    loadLatestRun(); loadChatFromMemory();
+    loadLatestRun();
+    const agentId = selectedAgent;
+    loadChatProjects(agentId, selData?.flow_id).then(() => { if (selectedAgent === agentId) loadChatFromMemory(); });
   }
   $: if (!selectedAgent) lastSelectedAgent = null;
 
@@ -752,22 +869,31 @@
     }
   }
 
-  async function talkToAgent(text?: string) {
+  async function talkToAgent(text?: string, attachments: AttachmentMeta[] = []) {
     const msg = (text ?? chatInput).trim();
-    if (!selectedAgent || !msg || chatSending) return;
+    const attachmentIds = attachments.map((a) => a.id);
+    if (!selectedAgent || (!msg && !attachmentIds.length) || chatSending) return;
     chatInput = '';
     chatSending = true;
     chatError = '';
 
-    chatHistory = [...chatHistory, { role: 'you', text: msg, ts: Date.now() }];
+    chatHistory = [...chatHistory, {
+      role: 'you', text: msg, ts: Date.now(),
+      ...(attachments.length ? { attachments } : {}),
+    }];
     scrollChatToEnd();
-    showBubble(selectedAgent, msg, 400);
+    showBubble(selectedAgent, msg || attachmentMarkers(attachments), 400);
 
-    // Persist user message to agent memory
+    // Persist user message to agent memory (the ids are kept with the entry,
+    // so the strip comes back when the thread is reloaded).
     fetch(`/api/agents/${selectedAgent}/memory`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ role: 'user', content: msg }),
+      body: JSON.stringify({
+        role: 'user', content: msg,
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+        ...(chatProject ? { project: chatProject } : {}),
+      }),
     }).catch(() => {});
 
     try {
@@ -775,10 +901,14 @@
       const agentName = selData?.name ?? 'Agent';
       const agentDesc = selData?.description ?? '';
 
-      // Build conversation context from recent chat history
-      const recentChat = chatHistory.slice(-10).map(m =>
-        m.role === 'you' ? `Boss: ${m.text}` : `${agentName}: ${m.text}`
-      ).join('\n');
+      // Build conversation context from recent chat history. Past turns'
+      // files are named inline; only this message's reach the model as content.
+      const recent = chatHistory.slice(-10);
+      const recentChat = recent.map((m, i) => {
+        const marks = i < recent.length - 1 ? attachmentMarkers(m.attachments) : '';
+        const line = [m.text, marks].filter(Boolean).join(' ');
+        return m.role === 'you' ? `Boss: ${line}` : `${agentName}: ${line}`;
+      }).join('\n');
 
       const conversationalGoal = `The boss is talking to you directly. You are ${agentName}: ${agentDesc}.
 
@@ -796,13 +926,25 @@ ${recentWork}
 5. Write detailed, structured responses with markdown formatting.
 6. FORBIDDEN: "I will work on it", "the team is focused", "strategic initiatives". Use tools instead.
 7. If you genuinely don't know, say "I don't know" — do not invent.
+8. When you need the boss to choose between paths, do NOT list the options as a table or bullets. End your reply with ONE block like this (2-4 short options, written in the boss's language) — the dashboard turns it into buttons they click:
+\`\`\`choices
+{"question": "What do you want to do?", "options": ["First option", "Second option", "Third option"]}
+\`\`\`
 
-Boss says: "${msg}"`;
-      const res: any = await rpcOrCall('agents.run', { agent_id: selectedAgent, goal: conversationalGoal }, async () => {
+Boss says: "${msg || '(see the attached files)'}"`;
+      // chat: true — the reply is for the operator, not handed down the agent's chains.
+      const runArgs = {
+        agent_id: selectedAgent, goal: conversationalGoal, chat: true,
+        // The project this conversation is about: the run, its memory and any
+        // letter it sends to another office carry it.
+        ...(chatProject ? { project: chatProject } : {}),
+        ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}),
+      };
+      const res: any = await rpcOrCall('agents.run', runArgs, async () => {
         const r = await fetch('/api/agents/run', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ agent_id: selectedAgent, goal: conversationalGoal }),
+          body: JSON.stringify(runArgs),
         });
         return r.json();
       });
@@ -903,7 +1045,7 @@ Boss says: "${msg}"`;
     extraTabs={myPanelTabs}
     running={liveIsRunning}
     historyCount={agentRuns.length}
-    workspaceCount={visibleWorkspaceFiles.length}
+    workspaceCount={wsLazy ? 0 : visibleWorkspaceFiles.length}
     {starting}
     {startMsg}
     {togglingPause}
@@ -954,10 +1096,11 @@ Boss says: "${msg}"`;
           {#if latestRun && (latestRun.result || latestRun.error)}
             <div class="result-hero" class:result-ok={latestRun.status === 'completed'} class:result-fail={latestRun.status === 'failed'}>
               <div class="result-hero-top">
-                <div class="result-hero-badge">
+                <button class="result-hero-badge result-hero-toggle" type="button" aria-expanded={!resultCollapsed} on:click={toggleResult}>
+                  <span class="result-hero-caret" class:open={!resultCollapsed} aria-hidden="true">▸</span>
                   <span class="result-hero-icon">{latestRun.status === 'completed' ? '✓' : latestRun.status === 'failed' ? '✗' : '●'}</span>
                   <span class="result-hero-lbl">Last result</span>
-                </div>
+                </button>
                 <div class="result-hero-date">
                   {fmtRelTime(latestRun.created_at)}
                   {#if latestRun.created_at}
@@ -972,7 +1115,9 @@ Boss says: "${msg}"`;
                   <span>{fmtTokens(latestRun.tokens_used)} tok</span>
                 </div>
               </div>
-              {#if latestRun.error}
+              {#if resultCollapsed}
+                <!-- Folded: the header line above carries status, age and size. -->
+              {:else if latestRun.error}
                 <div class="result-hero-body result-hero-err copy-wrap">
                   <CopyTextBtn text={latestRun.error} title="Copy error" />
                   <RunFailureCard
@@ -987,12 +1132,14 @@ Boss says: "${msg}"`;
                   {@html formatRunOutput(latestRun.result)}
                 </div>
               {/if}
+              {#if !resultCollapsed}
               <div class="result-hero-actions">
                 <button class="result-hero-action" on:click={() => latestRun && copy(latestRun.result ?? latestRun.error ?? '', 'hero-' + latestRun.id)}>
                   {copiedKey === 'hero-' + latestRun.id ? '✓ copied' : '⧉ copy'}
                 </button>
                 <button class="result-hero-action" on:click={() => { selectPanelTab('history'); }}>See all runs →</button>
               </div>
+              {/if}
             </div>
           {:else if latestRunLoading}
             <div class="result-hero result-hero-loading">Loading last result…</div>
@@ -1103,10 +1250,12 @@ Boss says: "${msg}"`;
         pending={chatPending}
         bind:input={chatInput}
         sending={chatSending}
-        suggestions={chatSuggestions}
         bind:scrollEl={chatScrollEl}
         {starting}
-        onSend={(text) => talkToAgent(text)}
+        projects={chatProjects}
+        project={chatProject}
+        onPickProject={pickChatProject}
+        onSend={(d) => talkToAgent(d.text, d.attachments)}
         onStart={startAgent}
         onSeeHistory={() => selectPanelTab('history')}
         onOutputClick={handleOutputClick}
@@ -1121,6 +1270,9 @@ Boss says: "${msg}"`;
         previewUrl={workspacePreviewUrl}
         loading={workspaceLoading}
         files={visibleWorkspaceFiles}
+        lazy={wsLazy}
+        more={wsMore}
+        loadingDirs={wsLoadingDirs}
         bind:collapsed={wsCollapsed}
         bind:fileContent={workspaceFileContent}
         onOpenFile={loadWorkspaceFile}
@@ -1181,6 +1333,12 @@ Boss says: "${msg}"`;
     margin-bottom:10px;flex-wrap:wrap;
   }
   .result-hero-badge{display:flex;align-items:center;gap:8px}
+  /* The badge is the fold toggle: a button that keeps the badge's look. */
+  .result-hero-toggle{background:none;border:none;padding:0;cursor:pointer;font:inherit;color:inherit}
+  .result-hero-toggle:hover .result-hero-lbl{color:#f0f2f7}
+  .result-hero-toggle:focus-visible{outline:2px solid rgba(159,232,192,.5);outline-offset:2px;border-radius:4px}
+  .result-hero-caret{display:inline-block;font:400 9px monospace;color:#6a6f82;transition:transform .2s}
+  .result-hero-caret.open{transform:rotate(90deg)}
   .result-hero-icon{
     width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;
     border-radius:50%;font:700 12px 'JetBrains Mono',monospace;

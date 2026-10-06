@@ -9,6 +9,7 @@ export function initOffice(three: any, css2d: any) {
 export { buildFloor } from './floor.js';
 export { buildStreets, buildCorridorGrid, buildCorridor } from './streets.js';
 export { buildRooms } from './rooms.js';
+export { paintOfficePower } from './_shared.js';
 export { buildMeetingRooms } from './meeting-rooms.js';
 export { buildMyOffice } from './my-office.js';
 export { buildCentralHall, buildHallExtension } from './central-hall.js';

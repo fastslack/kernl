@@ -5,16 +5,21 @@
    * Nothing is saved until the kernel has proved the provider answers with a
    * tool call.
    */
-  import { createEventDispatcher } from 'svelte';
+  import { createEventDispatcher, onDestroy } from 'svelte';
   import { t, locale } from '$lib/i18n/index.js';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import {
-    canConnect, connectInputFor, connectProvider, detectProvider, errorView, fetchLiveModels,
-    hostOf, keyLooksWrong, modelOptions, pick, type CatalogProvider, type ProbeResult,
+    canConnect, cancelClaudeLogin, claudeLoginStatus, connectInputFor, connectProvider, deliverClaudeLogin, detectProvider, errorView,
+    fetchLiveModels, hostOf, keyLooksWrong, modelOptions, pick, startClaudeLogin,
+    type CatalogProvider, type ClaudeLoginStatus, type ProbeResult,
   } from '$lib/llm-connect.js';
 
   export let provider: CatalogProvider;
   export let loginCommand = 'claude';
+  /** The kernel can open Claude's approval page itself (a native install). */
+  export let browserLogin = false;
+  /** Docker: open the approval page here and take the redirect back by paste. */
+  export let pasteLogin = false;
 
   const dispatch = createEventDispatcher<{ back: void; connected: ProbeResult }>();
 
@@ -30,6 +35,13 @@
   let switched = '';
   let showDetail = false;
   let copied = false;
+  let login: ClaudeLoginStatus = { state: 'idle' };
+  let loginTimer: ReturnType<typeof setTimeout> | null = null;
+  let showTerminal = false;
+  let pasted = '';
+  let delivering = false;
+  let deliverError = '';
+  let tabBlocked = false;
 
   $: isLocal = provider.group === 'local';
   $: isCli = provider.kind === 'claude-code';
@@ -85,6 +97,74 @@
     }
   }
 
+  // "Connect with my subscription": the kernel runs the official CLI's sign-in,
+  // which opens the approval page in the browser; poll until it exits, then
+  // Detect wires the new session in exactly as the terminal route did.
+  async function signIn(): Promise<void> {
+    result = null; showDetail = false; pasted = ''; deliverError = ''; tabBlocked = false;
+    // Docker: the tab has to be opened inside the click, or the browser blocks
+    // it as a popup; it is pointed at the approval page once the kernel has it.
+    const tab = pasteLogin ? window.open('about:blank', '_blank') : null;
+    try {
+      login = await startClaudeLogin();
+      if (pasteLogin) {
+        for (let i = 0; i < 20 && login.state === 'waiting' && !login.authorizeUrl; i++) {
+          await new Promise((r) => setTimeout(r, 300));
+          login = await claudeLoginStatus();
+        }
+        if (tab && login.authorizeUrl) {
+          tab.opener = null;
+          tab.location.href = login.authorizeUrl;
+        } else {
+          tab?.close();
+          tabBlocked = true;
+        }
+      }
+    } catch (e) {
+      tab?.close();
+      login = { state: 'failed', error: 'exit', detail: e instanceof Error ? e.message : String(e) };
+    }
+    pollLogin();
+  }
+
+  async function deliverPaste(): Promise<void> {
+    delivering = true; deliverError = '';
+    try {
+      const r = await deliverClaudeLogin(pasted);
+      if (r.deliverError) deliverError = r.deliverError;
+      else login = r;
+    } catch {
+      deliverError = 'unreachable';
+    }
+    delivering = false;
+  }
+
+  function pollLogin(): void {
+    if (loginTimer) clearTimeout(loginTimer);
+    loginTimer = null;
+    if (login.state === 'done') { login = { state: 'idle' }; void detect(); return; }
+    if (login.state !== 'waiting') return;
+    loginTimer = setTimeout(async () => {
+      try { login = await claudeLoginStatus(); } catch { /* keep waiting; the next poll retries */ }
+      pollLogin();
+    }, 1500);
+  }
+
+  async function cancelSignIn(): Promise<void> {
+    if (loginTimer) clearTimeout(loginTimer);
+    loginTimer = null;
+    try { login = await cancelClaudeLogin(); } catch { login = { state: 'idle' }; }
+  }
+
+  onDestroy(() => {
+    if (loginTimer) clearTimeout(loginTimer);
+    // Closing the dialog mid-flow must not leave the CLI waiting for ten minutes.
+    if (login.state === 'waiting') void cancelClaudeLogin().catch(() => {});
+  });
+
+  $: loginErrorKey = login.error === 'timeout' ? 'llm.cc_login_timeout'
+    : login.error === 'no_cli' ? 'llm.cc_login_no_cli' : 'llm.cc_login_failed';
+
   async function loadLive(): Promise<void> {
     try { liveModels = await fetchLiveModels(provider.slug); } catch { /* the typed field still works */ }
   }
@@ -139,11 +219,46 @@
       </ol>
 
       {#if isCli}
-        <p class="pc-muted">{$t('llm.cc_command_intro')}</p>
-        <div class="pc-cmd">
-          <code>{loginCommand}</code>
-          <button type="button" class="pc-btn ghost" on:click={copyCommand}>{copied ? $t('llm.copied') : $t('llm.copy_command')}</button>
-        </div>
+        {#if browserLogin || pasteLogin}
+          <div class="pc-row">
+            {#if login.state === 'waiting'}
+              <span class="pc-state pc-grow" role="status" aria-live="polite"><span class="pc-spin" aria-hidden="true"></span>{$t(pasteLogin ? 'llm.cc_paste_waiting' : 'llm.cc_login_waiting')}</span>
+              <button type="button" class="pc-btn ghost" on:click={cancelSignIn}>{$t('llm.cc_login_cancel')}</button>
+            {:else}
+              <button type="button" class="pc-btn primary" on:click={signIn} disabled={phase === 'busy'}>{$t('llm.cc_login')}</button>
+            {/if}
+          </div>
+          <!-- Native: no "didn't open?" link while waiting. The URL the CLI
+               prints redirects to a page with a code to paste back, and
+               `auth login` never reads one; the terminal route covers that. -->
+          {#if login.state === 'waiting' && pasteLogin}
+            {#if login.authorizeUrl}
+              <a class="pc-open" href={login.authorizeUrl} target="_blank" rel="noopener noreferrer">
+                {$t(tabBlocked ? 'llm.cc_paste_open' : 'llm.cc_paste_reopen')} ↗
+              </a>
+            {/if}
+            <p class="pc-muted">{$t('llm.cc_paste_steps')}</p>
+            <label class="pc-label" for="pc-paste">{$t('llm.cc_paste_label')}</label>
+            <div class="pc-cmd">
+              <input id="pc-paste" class="pc-input pc-grow" bind:value={pasted} placeholder="http://localhost:…/callback?code=…" spellcheck="false" autocomplete="off" />
+              <button type="button" class="pc-btn primary" on:click={deliverPaste} disabled={!pasted.trim() || delivering}>{$t('llm.cc_paste_submit')}</button>
+            </div>
+            {#if deliverError}<p class="pc-warn" role="alert">{$t(`llm.cc_paste_err_${deliverError}`)}</p>{/if}
+          {:else if login.state === 'failed'}
+            <p class="pc-warn" role="alert">{$t(loginErrorKey)}</p>
+            {#if login.detail}<pre class="pc-detail">{login.detail}</pre>{/if}
+          {:else if login.state !== 'waiting'}
+            <p class="pc-muted">{$t(pasteLogin ? 'llm.cc_paste_hint' : 'llm.cc_login_hint')}</p>
+          {/if}
+          <button type="button" class="pc-link" aria-expanded={showTerminal} on:click={() => (showTerminal = !showTerminal)}>{$t('llm.cc_terminal')}</button>
+        {/if}
+        {#if !(browserLogin || pasteLogin) || showTerminal}
+          <p class="pc-muted">{$t('llm.cc_command_intro')}</p>
+          <div class="pc-cmd">
+            <code>{loginCommand}</code>
+            <button type="button" class="pc-btn ghost" on:click={copyCommand}>{copied ? $t('llm.copied') : $t('llm.copy_command')}</button>
+          </div>
+        {/if}
       {:else if provider.needsKey}
         <label class="pc-label" for="pc-key">{$t('llm.key_label')}</label>
         <SecretInput id="pc-key" bind:value={apiKey} masked={provider.keyMasked} configured={!!provider.keyMasked} />
@@ -281,6 +396,7 @@
   .pc-foot-note { margin-top: auto; }
   .pc-foot { display: flex; align-items: center; gap: 8px; }
   .pc-spacer { flex: 1; }
+  .pc-grow { flex: 1; min-width: 0; }
   .pc-btn {
     min-height: 40px; padding: 8px 16px; border-radius: var(--radius-sm); font-size: 14px; font-weight: 600;
     cursor: pointer; text-decoration: none; display: inline-flex; align-items: center;

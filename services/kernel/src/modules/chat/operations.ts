@@ -34,6 +34,19 @@ type Attachment = { data: string; media_type: string; filename?: string };
 const attachments = (v: unknown): Attachment[] | undefined =>
   Array.isArray(v) && v.every((x) => typeof x === "object" && x !== null) ? (v as Attachment[]) : undefined;
 
+/**
+ * `attachment_ids`: ids from POST /api/attachments. Absent → none; anything
+ * but an array of strings is a 400. Whether each id is usable is the bind's
+ * call (also a 400).
+ */
+export function attachmentIdsArg(v: unknown): string[] {
+  if (v === undefined || v === null) return [];
+  if (!Array.isArray(v) || !v.every((x) => typeof x === "string")) {
+    throw new HttpError(400, "attachment_ids must be an array of attachment ids");
+  }
+  return v as string[];
+}
+
 export function chatOperations(deps: ChatOperationDeps): Record<string, Operation> {
   const { chatService: chat, events } = deps;
   const changed = (action: string) => { events?.emit("data.changed", { module: "chat", action }); };
@@ -48,7 +61,7 @@ export function chatOperations(deps: ChatOperationDeps): Record<string, Operatio
     "chat.messages.list": (input) => {
       const { episode_id, limit, offset } = pickArgs(input, { episode_id: "string", limit: "number", offset: "number" });
       if (!episode_id) throw new HttpError(400, "episode_id required");
-      return chat.getMessages(episode_id, limit, offset);
+      return chat.withAttachmentMetas(chat.getMessages(episode_id, limit, offset));
     },
 
     // `instructions` matters: without it the dashboard's per-episode system
@@ -56,10 +69,17 @@ export function chatOperations(deps: ChatOperationDeps): Record<string, Operatio
     // was silently dropped — the agent ran with no Kernl context and answered
     // as if "office" meant a physical office. A failure of the service call is
     // a 400 carrying its message.
+    // `resume` continues the latest matching episode of a fixed surface (the
+    // 3D panel) instead of opening one more row per visit.
     "chat.episode.start": (input) => {
-      const args = pickArgs(input, { title: "string", provider: "string", model: "string", instructions: "string" });
+      const { resume, ...args } = pickArgs(input, {
+        title: "string", provider: "string", model: "string", instructions: "string",
+        source: "string", source_label: "string", resume: "boolean",
+      });
       try {
-        const episode = chat.createEpisode(args);
+        const episode = resume && args.source
+          ? chat.resumeOrCreateEpisode({ ...args, source: args.source })
+          : chat.createEpisode(args);
         changed("start");
         return episode;
       } catch (err) {
@@ -74,12 +94,14 @@ export function chatOperations(deps: ChatOperationDeps): Record<string, Operatio
       });
       const images = attachments(input.images);
       const documents = attachments(input.documents);
-      if (!episode_id || (!message && !images?.length && !documents?.length)) {
+      const attachmentIds = attachmentIdsArg(input.attachment_ids);
+      if (!episode_id || (!message && !images?.length && !documents?.length && !attachmentIds.length)) {
         throw new HttpError(400, "episode_id and message (or attachment) required");
       }
       const response = await chat.chat(episode_id, message ?? "", {
         images,
         documents,
+        attachmentIds,
         skipExtraction: skip_extraction === true,
       });
       changed("message");

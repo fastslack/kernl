@@ -10,6 +10,7 @@ import { spawnSync } from "node:child_process";
 import { isoNow } from "../../core/helpers.js";
 import { log } from "../../core/logger.js";
 import { HttpError } from "../../sdk/http-error.js";
+import { hostPathReachable } from "../../core/host-paths.js";
 import { seedOfficeHome } from "./office-home.js";
 import type { AgentService } from "./service.js";
 import type { AgentFlow } from "./types.js";
@@ -81,6 +82,14 @@ export function setOfficeRepo(service: AgentService, input: SetOfficeRepoInput):
   const raw = input.path?.trim() ?? "";
   if (raw && !isAbsolute(raw)) {
     throw new OfficeRepoError("path must be absolute (e.g. /home/you/office or C:\\Users\\you\\office)", 400);
+  }
+  if (raw) {
+    // Checked before anything touches the disk: in Docker a mkdir on a folder
+    // that is not mounted from the host succeeds inside the container and the
+    // office's work is lost on the next recreate. We git-init and seed it, so
+    // it must be writable too.
+    const reach = hostPathReachable(raw, { requireWritable: true });
+    if (!reach.ok) throw new OfficeRepoError(reach.reason, 400);
   }
 
   const members = service.listAgents().filter((a) => a.flow_id === flowId);
