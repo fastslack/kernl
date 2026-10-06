@@ -7,7 +7,7 @@
 
 import { describe, it, expect } from "bun:test";
 import type { AgentFlowEvent } from "./stores.js";
-import { liveToolRows, liveDisplayRows, plainStepText, liveCallParts, liveResultParts } from "./live-steps.js";
+import { liveToolRows, liveDisplayRows, plainStepText, liveCallParts, liveResultParts, liveEventKey } from "./live-steps.js";
 import {
   liveStepIcon,
   liveStepLabel,
@@ -410,5 +410,22 @@ describe("liveResultParts", () => {
     expect(liveResultParts("no output")).toEqual({ tag: "empty", text: "", bad: false });
     expect(liveResultParts("error · boom")).toEqual({ tag: "error", text: "boom", bad: true });
     expect(liveResultParts('{"total":20}')).toEqual({ tag: "", text: '{"total":20}', bad: false });
+  });
+});
+
+describe("liveEventKey", () => {
+  const ev = (ts: number, event = "agent:tool_call"): AgentFlowEvent =>
+    ({ event, ts, data: { agent_id: "a", tool_name: "Read" } }) as unknown as AgentFlowEvent;
+
+  it("keeps an event's key while newer events are prepended to the buffer", () => {
+    const first = ev(1000);
+    const before = liveEventKey(first);
+    // The store prepends: the same object moves from index 0 to index 2.
+    const buffer = [ev(1002), ev(1001), first];
+    expect(liveEventKey(buffer[2])).toBe(before);
+  });
+
+  it("tells apart two events with the same timestamp", () => {
+    expect(liveEventKey(ev(5000))).not.toBe(liveEventKey(ev(5000)));
   });
 });

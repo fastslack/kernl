@@ -20,7 +20,7 @@
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
     liveStepTokensTotal as liveStepTokensTotalOf,
-    liveDisplayRows, summarizeToolResult, liveCallParts, liveResultParts, type LiveRow, type LiveStepRow,
+    liveDisplayRows, liveEventKey, summarizeToolResult, liveCallParts, liveResultParts, type LiveRow, type LiveStepRow,
   } from '$lib/live-steps.js';
   import { agentActionOf, type AgentAction } from '$lib/agent-actions.js';
   import { t } from '$lib/i18n/index.js';
@@ -63,7 +63,7 @@
 
   $: liveHeadEvent = events[0] ?? null;
 
-  // Set of step keys (`${ts}-${idx}`) that the user has expanded — controls
+  // Set of step keys (liveEventKey) that the user has expanded — controls
   // whether the detail panel renders below the summary line. Defaults to
   // collapsed for everything so the timeline stays scannable.
   let expandedLiveSteps = new Set<string>();
@@ -177,7 +177,7 @@
     <div class="ip-empty">No events yet — stay tuned.</div>
   {:else}
     <ol class="live-timeline">
-      {#each displayRows as row (row.kind === 'tools' ? row.key : row.e.ts + '-' + row.i)}
+      {#each displayRows as row (row.kind === 'tools' ? row.key : liveEventKey(row.e))}
         {#if row.kind === 'tools'}
         {@const newest = row.items[0].e}
         {@const runOpen = openRuns.has(row.key)}
@@ -202,7 +202,7 @@
         {@const i = row.i}
         {@const etype = liveEventType(e)}
         {@const ecat = liveStepCategory(e)}
-        {@const stepKey = e.ts + '-' + i}
+        {@const stepKey = liveEventKey(e)}
         {@const isOpen = expandedLiveSteps.has(stepKey)}
         {@const hasPayload = etype === 'tool_call' || etype === 'tool_result' || etype === 'thought' || etype === 'final' || etype === 'error'}
         {@const detail = hasPayload ? null : liveEventDetail(e)}
