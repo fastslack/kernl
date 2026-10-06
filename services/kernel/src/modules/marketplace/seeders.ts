@@ -23,7 +23,7 @@ interface BundledItem {
 // should read from the SkillRegistry, not from bundled catalog seeds.
 const BUNDLED_EXTENSIONS: BundledItem[] = [];
 
-const BUNDLED_THEMES: Array<{
+export const BUNDLED_THEMES: Array<{
   slug: string;
   name: string;
   description: string;
@@ -50,7 +50,7 @@ const BUNDLED_THEMES: Array<{
       "--border-h": "#2A2E48",
       "--text-1": "#E0E2EA",
       "--text-2": "#8A8FA8",
-      "--text-3": "#4A4F6A",
+      "--text-3": "#7C8094",
       "--gold": "#D4A84B",
       "--teal": "#3DD6C8",
       "--purple": "#8B7CF6",
@@ -78,7 +78,7 @@ const BUNDLED_THEMES: Array<{
       "--border-h": "#B0B3C8",
       "--text-1": "#1A1D2A",
       "--text-2": "#4A4F6A",
-      "--text-3": "#8A8FA8",
+      "--text-3": "#5F6478",
       "--gold": "#B8860B",
       "--teal": "#0D9488",
       "--purple": "#7C3AED",
@@ -106,7 +106,7 @@ const BUNDLED_THEMES: Array<{
       "--border-h": "#2A7050",
       "--text-1": "#D4E8DC",
       "--text-2": "#7AAE90",
-      "--text-3": "#4A7860",
+      "--text-3": "#7EA38F",
       "--gold": "#D4A84B",
       "--teal": "#3DD6C8",
       "--purple": "#8B7CF6",
@@ -133,8 +133,8 @@ const BUNDLED_THEMES: Array<{
       "--border": "#5A2444",
       "--border-h": "#703056",
       "--text-1": "#E8D4DC",
-      "--text-2": "#AE7A90",
-      "--text-3": "#785060",
+      "--text-2": "#BF94A6",
+      "--text-3": "#A3828F",
       "--gold": "#D4A84B",
       "--teal": "#3DD6C8",
       "--purple": "#C084FC",
@@ -162,7 +162,7 @@ const BUNDLED_THEMES: Array<{
       "--border-h": "#444444",
       "--text-1": "#E0E0E0",
       "--text-2": "#888888",
-      "--text-3": "#555555",
+      "--text-3": "#878787",
       "--gold": "#CCCCCC",
       "--teal": "#AAAAAA",
       "--purple": "#999999",
@@ -192,8 +192,8 @@ const BUNDLED_THEMES: Array<{
       "--border": "#1a3320",
       "--border-h": "#2a5236",
       "--text-1": "#33ff77",
-      "--text-2": "#1f8048",
-      "--text-3": "#155832",
+      "--text-2": "#26AE59",
+      "--text-3": "#20964C",
       "--gold": "#ffb000",
       "--teal": "#4ddbff",
       "--purple": "#ff66c4",
@@ -311,7 +311,13 @@ export function seedDefaultThemes(db: SqliteDb): void {
       .prepare("SELECT id FROM marketplace_items WHERE slug = ?")
       .get(theme.slug) as { id: string } | undefined;
 
-    if (existing) continue;
+    if (existing) {
+      // Bundled palettes aren't user-editable, so keep existing installs in
+      // step with fixes to the seed (e.g. contrast corrections).
+      db.prepare("UPDATE marketplace_themes SET variables = ?, preview_colors = ? WHERE item_id = ?")
+        .run(JSON.stringify(theme.variables), JSON.stringify(theme.previewColors), existing.id);
+      continue;
+    }
 
     const itemId = newId();
 

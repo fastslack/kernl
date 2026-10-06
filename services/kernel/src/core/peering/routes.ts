@@ -16,7 +16,7 @@ import { verifyRequest } from "./auth.js";
 import type { PeerClient } from "./client.js";
 import type { FriendsStore, Trust } from "./friends-store.js";
 import type { PeerResolver } from "./resolver.js";
-import { hexOf } from "./descriptor.js";
+import { hexOf, isSafeReach } from "./descriptor.js";
 import type { Event as NostrEvent } from "nostr-tools/core";
 
 export interface PeeringRoutesDeps {
@@ -27,10 +27,12 @@ export interface PeeringRoutesDeps {
   /** The current signed descriptor. A getter, since reach changes at runtime. */
   currentDescriptor: () => NostrEvent | null;
   selfNpub: () => string;
+  /** Called when a friend is revoked, so in-flight transfers with them stop. */
+  onRevoked?: (npub: string) => void;
 }
 
 /** The absolute URL the peer signed. Rebuilt, never taken from a proxy header alone. */
-function absoluteUrl(req: IncomingMessage): string {
+export function absoluteUrl(req: IncomingMessage): string {
   const host = req.headers.host ?? "localhost";
   const proto = (req.headers["x-forwarded-proto"] as string | undefined) ?? "http";
   return `${proto}://${host}${req.url ?? ""}`;
@@ -69,16 +71,27 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
     server.json(res, 201, { friends: deps.friends.list().map(publicView) });
   });
 
-  server.route<{ petname?: string; note?: string; trust?: Trust }>("PUT", "/api/peering/friends/:npub", ({ params: { npub }, body }) => {
+  server.route<{ petname?: string; note?: string; trust?: Trust; address?: string; auto_accept?: boolean }>("PUT", "/api/peering/friends/:npub", ({ params: { npub }, body }) => {
     if (body.trust && !["pending", "trusted", "revoked"].includes(body.trust)) {
       throw new HttpError(400, "invalid trust value");
     }
+    let address: string | undefined;
+    if (body.address !== undefined) {
+      const normalized = normalizeAddress(body.address);
+      if (normalized === null) throw new HttpError(400, "address must look like 192.168.0.9:3086 or http://host:port");
+      address = normalized;
+    }
     const updated = deps.friends.update(npub, body);
     if (!updated) throw new HttpError(404, "not found");
+    if (address !== undefined) deps.friends.setManualUrl(npub, address);
+    if (typeof body.auto_accept === "boolean") deps.friends.setAutoAccept(npub, body.auto_accept);
+    if (body.trust === "revoked") deps.onRevoked?.(npub);
     return { friends: deps.friends.list().map(publicView) };
   });
 
   server.route("DELETE", "/api/peering/friends/:npub", ({ params: { npub } }) => {
+    // Removing is a revocation too: stop what is in flight before the row goes.
+    deps.onRevoked?.(npub);
     deps.friends.remove(npub);
     return { friends: deps.friends.list().map(publicView) };
   });
@@ -199,6 +212,26 @@ function publicView(f: ReturnType<FriendsStore["list"]>[number]) {
     last_seen_at: f.last_seen_at,
     last_reach: f.last_reach,
     last_error: f.last_error,
+    manual_url: f.manual_url ?? "",
+    auto_accept: f.auto_accept === 1,
     created_at: f.created_at,
   };
+}
+
+/**
+ * A hand-typed address as an origin: "" clears it, a bare host[:port] gets
+ * http://, and anything that is not a plain http(s) origin is refused (null).
+ */
+export function normalizeAddress(raw: string): string | null {
+  const t = raw.trim();
+  if (!t) return "";
+  const withScheme = /^[a-z]+:\/\//i.test(t) ? t : `http://${t}`;
+  try {
+    const u = new URL(withScheme);
+    if (u.pathname !== "/" || u.search || u.hash || u.username) return null;
+    const origin = u.origin;
+    return isSafeReach({ kind: u.hostname.endsWith(".onion") ? "onion" : "lan", url: origin, prio: 0 }) ? origin : null;
+  } catch {
+    return null;
+  }
 }

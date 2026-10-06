@@ -7,6 +7,8 @@
  * This module is framework-agnostic — the HTTP/MCP layers call into it.
  */
 
+import { homedir } from "node:os";
+import { join, dirname, resolve } from "node:path";
 import {
   type SqliteDb,
   type KernelConfig,
@@ -45,7 +47,11 @@ export class FsCommanderService {
   ) {
     this.ops = new OpEngine();
     this.crypto = new RemoteCrypto(config.fsCommander.encryptionKey);
-    const local = new LocalProvider(config.fsCommander.allowedRoots);
+    // Received files (file-lane) are always browsable, next to whatever the
+    // operator allowed. An empty list still means "the home folder".
+    const base = config.fsCommander.allowedRoots.length ? config.fsCommander.allowedRoots : [homedir()];
+    const received = join(dirname(resolve(config.sqlite.path)), "transfers", "incoming");
+    const local = new LocalProvider([...base, received]);
     this.providers.set(local.id, local);
     log.info(
       `filesystem-commander: local provider registered (roots=${local

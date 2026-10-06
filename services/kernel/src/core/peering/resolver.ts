@@ -106,7 +106,12 @@ export class PeerResolver {
       out.push({ url: clean, kind });
     };
 
-    const lastReach = this.deps.friends.get(npub)?.last_reach ?? "";
+    // An address the owner typed in beats anything learned: it is how a friend
+    // whose advertised names do not resolve here (mDNS inside a container, an
+    // older Kernl) is still reachable.
+    const friend = this.deps.friends.get(npub);
+    if (friend?.manual_url) push(friend.manual_url, "lan");
+    const lastReach = friend?.last_reach ?? "";
     if (lastReach) push(lastReach, "cache");
     for (const entry of cached?.reach ?? []) push(entry.url, entry.kind);
     return out;
@@ -174,12 +179,16 @@ export class PeerResolver {
 /** Reach entries this instance can advertise, given what is available. */
 export function buildReach(opts: {
   lanUrl?: string;
+  /** Every LAN address, best first (IPs before the mDNS name). */
+  lanUrls?: string[];
   directUrl?: string;
   onionUrl?: string;
   priorities: Record<ReachKind, number>;
 }): ReachEntry[] {
   const out: ReachEntry[] = [];
-  if (opts.lanUrl) out.push({ kind: "lan", url: opts.lanUrl, prio: opts.priorities.lan });
+  for (const url of [...(opts.lanUrls ?? []), ...(opts.lanUrl ? [opts.lanUrl] : [])]) {
+    out.push({ kind: "lan", url, prio: opts.priorities.lan });
+  }
   if (opts.directUrl) out.push({ kind: "direct", url: opts.directUrl, prio: opts.priorities.direct });
   if (opts.onionUrl) out.push({ kind: "onion", url: opts.onionUrl, prio: opts.priorities.onion });
   return out;

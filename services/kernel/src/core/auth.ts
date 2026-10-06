@@ -33,6 +33,8 @@ export function isAuthExemptPath(pathname: string): boolean {
 export const PEER_AUTH_PATHS = [
   "/api/cinema/directories/friend-view",
   "/api/peering/relay",
+  // Friend-to-friend transfers (file-lane): offer, status, parts, cancel.
+  "/api/peering/transfer",
   // A phone pushing HealthKit samples. Same reasoning as the peering routes:
   // it presents a token minted for this one endpoint and nothing else, and
   // requiring the kernel's master token as well would mean putting the key to
@@ -76,9 +78,12 @@ export function isPeerAuthenticatedPath(pathname: string): boolean {
  * the player sat at 0:00 with no error anywhere — the request never reached a
  * handler that could report one. The cinema frontend was already appending
  * `&auth=<token>` (Page.svelte:2100); only this list had not been told.
+ *
+ * `/api/transfers/:id/files/:n`: download of a received file from an
+ * `<a download>`, which cannot set headers.
  */
 const AUTH_QUERY_PATH_RE =
-  /^\/api\/(torrents\/(transcode|webseed-proxy|[^/?#]+\/file\/\d+\/stream)|cinema\/media\/(transcode|webseed-proxy|convert\/file$)|blender\/jobs\/[^/?#]+\/frame\/[^/?#]+$)/;
+  /^\/api\/(torrents\/(transcode|webseed-proxy|[^/?#]+\/file\/\d+\/stream)|cinema\/media\/(transcode|webseed-proxy|convert\/file$)|blender\/jobs\/[^/?#]+\/frame\/[^/?#]+$|transfers\/[^/?#]+\/files\/\d+$)/;
 
 export function isAuthenticated(req: IncomingMessage, token: string): boolean {
   const authHeader = req.headers.authorization;

@@ -419,7 +419,28 @@ export async function initHttpAndMcp(args: {
         });
         if (peering) {
           void peering.start();
+          // Friend-to-friend text and files (file-lane). Started first so a
+          // revocation can cancel what is in flight — but in its own try: a
+          // file-lane failure must not take the friends routes down with it.
+          let onRevoked: ((npub: string) => void) | undefined;
+          try {
+            const { startFileLane } = await import("../social-net/file-lane/index.js");
+            const { dirname, resolve } = await import("node:path");
+            const fileLane = startFileLane({
+              server: httpServer,
+              sqlite,
+              dataDir: config.sqlite.path === ":memory:" ? resolve("data") : dirname(resolve(config.sqlite.path)),
+              peering: { friends: peering.friends, client: peering.client },
+              notifier,
+              lang: config.language,
+              allowedRoots: config.fsCommander.allowedRoots,
+            });
+            onRevoked = (npub) => fileLane.owner.onFriendRevoked(npub);
+          } catch (err) {
+            log.warn("file-lane: failed to start — friend-to-friend sharing disabled", err);
+          }
           registerPeeringRoutes(httpServer, {
+            onRevoked,
             friends: peering.friends,
             resolver: peering.resolver,
             client: peering.client,

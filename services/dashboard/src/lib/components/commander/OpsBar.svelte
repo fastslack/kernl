@@ -10,6 +10,8 @@
 	export let activeWritable = true;
 	/** False when the *other* pane — the copy/move destination — is read-only. */
 	export let passiveWritable = true;
+	/** True when the active pane is the local provider (sending needs a local file). */
+	export let activeLocal = true;
 
 	interface Action {
 		key: string;
@@ -27,6 +29,8 @@
 		writesHere?: boolean;
 		/** Writes into the other pane — blocked when *that* one is read-only. */
 		writesThere?: boolean;
+		/** Disabled unless the active pane is the local provider. */
+		localOnly?: boolean;
 	}
 
 	const actions: Action[] = [
@@ -39,6 +43,7 @@
 		{ key: 'F7', id: 'mkdir', label: 'New folder', writesHere: true },
 		{ key: 'F8', id: 'delete', label: 'Delete', danger: true, needsTarget: true, writesHere: true },
 		{ key: '⌃B', id: 'bookmark', label: 'Bookmark' },
+		{ key: '⌃S', id: 'share', label: 'Send to a friend', needsFile: true, localOnly: true },
 		{ key: '⌃T', id: 'new-tab', label: 'New tab' },
 		{ key: '⌃R', id: 'remotes', label: 'Remotes' },
 		{ key: '⌃H', id: 'history', label: 'History' },
@@ -46,6 +51,7 @@
 	];
 
 	function disabled(a: Action): boolean {
+		if (a.localOnly && !activeLocal) return true;
 		if (a.writesHere && !activeWritable) return true;
 		if (a.writesThere && !passiveWritable) return true;
 		if (a.needsFile) return !hasFileCursor;
@@ -57,6 +63,7 @@
 	function hint(a: Action): string {
 		// Read-only reasons come first: they explain a block the user cannot
 		// resolve by selecting something, which every other hint implies.
+		if (a.localOnly && !activeLocal) return `${a.label} — only for local files`;
 		if (a.writesHere && !activeWritable) return `${a.label} — this location is read-only`;
 		if (a.writesThere && !passiveWritable) return `${a.label} — the other pane is read-only`;
 		if (a.needsFile && !hasFileCursor) return `${a.label} — select a file first`;
