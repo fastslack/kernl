@@ -35,7 +35,7 @@
   import { onDestroy, tick } from 'svelte';
   import { get, type Readable } from 'svelte/store';
   import ModelPicker from '../ModelPicker.svelte';
-  import { readChain, writeChain, runsOnClaudeCode, MAX_CHAIN_LINKS, type ChainLink } from '$lib/model-chain.js';
+  import { readChain, writeChain, engineFor, MAX_CHAIN_LINKS, type ChainLink } from '$lib/model-chain.js';
   import { linkHealth, chainUsable, type ProviderStatus } from '$lib/provider-health.js';
   import { loadPickerProviders } from '$lib/llm-provider-list.js';
   import { refreshPrices } from '$lib/model-prices.js';
@@ -128,10 +128,14 @@
   /** The chain, as three columns, in one write. */
   function saveChain(next: ChainLink[]) {
     const fields: Record<string, unknown> = writeChain(next);
-    // The Claude Code CLI only runs Claude models: a primary it cannot run
-    // moves the agent to the kernel executor in the same write, instead of
-    // saving a pick that fails every run on its first turn.
-    if (executor === 'claude_code' && next[0] && !runsOnClaudeCode(next[0])) fields.executor_type = 'native';
+    // The engine follows the primary model, in the same write: a Claude Code
+    // model runs on the claude_code executor, any other on the kernel's. Only
+    // when the primary itself changes — adding or removing a fallback must not
+    // move an agent whose engine was set before this rule existed.
+    const head = next[0];
+    const prev = links[0];
+    const primaryChanged = !!head && (!prev || head.provider !== prev.provider || head.model !== prev.model);
+    if (primaryChanged && engineFor(head) !== executor) fields.executor_type = engineFor(head);
     return write(fields);
   }
   /**
@@ -288,34 +292,14 @@
   {/if}
 
   {#if !isScript}
-    <!-- ── Engine and model ── -->
+    <!-- ── Model (the engine follows it, model-chain.ts engineFor) ── -->
     <div class="cfg-group">
       <header class="cfg-gh">
         <h3 class="cfg-h">{$t('agent.config.engine_title')}</h3>
-        <p class="cfg-sub">{$t('agent.config.engine_sub')}</p>
       </header>
 
       <div class="rt-field">
         <div class="rt-lbl">
-          <span>{$t('agent.config.executor')}</span>
-          {#if $store?.saving?.has('executor_type')}<span class="rt-lbl-note">{$t('agent.runtime.saving')}</span>{/if}
-        </div>
-        <div class="rt-seg" role="group" aria-label={$t('agent.runtime.executor_aria')}>
-          <button class="rt-seg-b" class:on={executor === 'native'} on:click={() => setExecutor('native')}>
-            <span class="rt-seg-t">Kernl</span>
-            <span class="rt-seg-d">{$t('agent.config.executor_native')}</span>
-          </button>
-          <button class="rt-seg-b" class:on={executor === 'claude_code'} on:click={() => setExecutor('claude_code')}>
-            <span class="rt-seg-t">Claude Code</span>
-            <span class="rt-seg-d">{$t('agent.config.executor_claude_code')}</span>
-          </button>
-        </div>
-        {#if fieldError.executor_type}<p class="rt-err">{fieldError.executor_type}</p>{/if}
-      </div>
-
-      <div class="rt-field">
-        <div class="rt-lbl">
-          <span>{$t('agent.config.model')}</span>
           <span class="rt-lbl-note">
             {$t('agent.config.model_help')} ·
             <button class="rt-price-link" type="button" on:click={onRefreshPrices} disabled={pricesBusy}
@@ -335,7 +319,8 @@
                 provider={link.provider}
                 model={link.model}
                 {providers}
-                {requiresTools}
+                requiresTools={i === 0 || requiresTools}
+                engineFollows={i === 0}
                 busy={chainSaving}
                 disabled={chainSaving}
                 error={i === 0 ? chainError : ''}
@@ -368,7 +353,8 @@
                 provider={draft.provider}
                 model={draft.model}
                 {providers}
-                {requiresTools}
+                requiresTools={links.length === 0 || requiresTools}
+                engineFollows={links.length === 0}
                 busy={chainSaving}
                 disabled={chainSaving}
                 placeholder={$t('agent.runtime.choose_fallback')}
@@ -385,15 +371,13 @@
           </button>
         {/if}
 
-        {#if chainError}
-          <p class="rt-err">{chainError}</p>
+        {#if chainError || fieldError.executor_type}
+          <p class="rt-err">{chainError || fieldError.executor_type}</p>
         {:else if deadChain}
           <p class="rt-dead">
             No link in this chain can run this agent. That is the failure the
             executor reports as “No LLM provider in the chain can run tool calls”.
           </p>
-        {:else if executor === 'claude_code'}
-          <p class="rt-note">{$t('agent.config.claude_code_note')}</p>
         {/if}
       </div>
     </div>

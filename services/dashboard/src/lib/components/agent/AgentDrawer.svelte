@@ -142,8 +142,8 @@
   let headModelError = '';
   async function setHeadModel(next: { provider: string; model: string }) {
     headModelError = '';
-    // A non-Claude model on a claude_code agent also moves it to the kernel
-    // executor — the Claude Code CLI cannot run it (model-chain.ts).
+    // The engine follows the pick: a Claude Code model moves the agent to the
+    // claude_code executor, any other to the kernel's (model-chain.ts).
     await detail.patch(primaryModelPatch(agent ?? {}, headChain, next));
     headModelError = String($detail.error || '');
   }
@@ -365,7 +365,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
                 <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
-                             providers={headProviders} requiresTools={true}
+                             providers={headProviders} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
                   <span class="ip-chip ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
@@ -378,7 +378,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
                 <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
-                             providers={headProviders} requiresTools={false}
+                             providers={headProviders} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
                   <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError}

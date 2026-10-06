@@ -914,7 +914,7 @@ const es: Record<I18nKey, string> = {
   "agent.head.state_paused_title": "Pausado: la agenda y los disparadores están apagados. Igual se puede ejecutar a mano.",
   "agent.head.state_auto_title": "El kernel lo frenó después de {n} fallas seguidas. Reanudar reinicia el contador.",
   "agent.head.state_running_title": "Está corriendo ahora mismo.",
-  "agent.config.engine_title": "Motor y modelo",
+  "agent.config.engine_title": "Modelo",
   "agent.config.engine_sub": "Quién piensa por este agente y con qué modelo de IA.",
   "agent.config.executor": "Motor",
   "agent.config.executor_native": "Kernl maneja el loop y llama a las herramientas con el modelo de abajo.",
