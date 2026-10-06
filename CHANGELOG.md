@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-06
+
+### Upgrading from 0.4.0
+
+- **Old data is now deleted every night, by retention policies that are on
+  by default.** They replace the old `script:cleanup` agent, which is retired
+  on the first boot. Out of the box: completed runs of agents without a model
+  (polls, scheduled checks) after 14 days, failed or cancelled runs of any
+  agent after 60, the agent event log, old prompt versions and rejected
+  evolution proposals after 30, read notifications after 7, and daily model
+  usage after 365. Completed runs of agents that use a model feed their memory
+  and are kept: that policy ships off. Review or change any of them in
+  System → Storage before the first night if you want to keep more.
+- **An office or agent folder the kernel cannot see is refused.** Setting an
+  office repo or an agent's `__cwd_path__` to a host folder outside every
+  mount of a Dockerized kernel now answers 400 (an office repo must also be
+  writable), instead of saving it and letting the agent quietly work
+  somewhere else. The Office Kit still records such a repo on its agents, with
+  a warning, so the office starts working once it is mounted. Folders already
+  stored that way are reported once on boot. To give offices their repos, set
+  `KERNL_PROJECTS_ROOT` in `.env` (mounted read-write by
+  `docker-compose.host.yml`); unset, nothing changes.
+- **The primary model picks the engine of a Claude Code agent in both
+  directions.** 0.4.0 moved an agent to the kernel's executor when its model
+  was not Claude; picking a Claude Code (SDK) model now moves it to the
+  `claude_code` executor too, and any other model, a Claude model through the
+  API included, to the kernel's. Agents keep their engine until their primary
+  model is changed.
+- **`GET /api/agents/:id/cwd-files` lists one level.** It returns the root,
+  or the folder named by `?dir=`, with each subfolder's entry count; folders
+  of more than 500 entries are cut, with `truncated` and `total` saying so.
+  It used to return the whole tree in one answer.
+
 ### Added
 
 - **Connect Claude Code with one button.** "Connect with my subscription"
@@ -16,6 +49,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   where the approval cannot find its way back to the container on its own,
   Kernl opens the page and you paste back the address your browser is left on
   — still no terminal.
+- **Claude Opus 5.5 on Claude Code agents.** The Claude agent SDK moves to
+  0.3.290, which bundles Claude Code 2.1.290; the 2.1.114 it replaces was
+  refused by the API for Opus 5.5 ("version 2.1.280 or newer is required").
+- **Documents, photos and short videos in chats.** Attach up to ten files to
+  a message, in the chat, the 3D office chat and the office creator. Images
+  are scaled down, PDF and Word documents are read as text, and videos up to
+  three minutes are sampled into frames, and transcribed when a whisper model
+  is already on disk, so the model sees what was sent.
+- **System → Storage.** Shows what takes room in the database, table by
+  table, what each retention policy would free, and lets you turn policies on
+  or off, change their days and run them now, with progress. Extensions bring
+  their own policies; Cinema and Music add a cap on their catalog size.
+- **Switch an office off.** A switched-off office keeps its agents, schedules
+  and lot, but nothing in it runs: schedules and event triggers skip it and
+  its running runs are cancelled. The top agent is never stopped. A power
+  button sits on the office cards and the office panel, and switched-off
+  offices are dimmed in 3D.
+- **Agents founded without a prompt get a full mandate**, written by the
+  model from their title, role, office and team.
+- **A shared office can work for any project.** The project of the caller
+  decides whose work a run is, so memory, inbox and files stay apart per
+  project; a run without one is told to establish it first. The agent chat
+  carries a project, picked in the tab when the office serves several, with
+  its own thread each. Extensions read the run's project with
+  `projects.current()`.
+- **Chats are grouped by where they started** (3D office, dashboard, MCP,
+  messaging, setup) and titled by subject after the first exchange
+  (`CHAT_TITLE_MODEL` picks the model). Reopening an agent's 3D chat resumes
+  its last conversation.
+
+### Changed
+
+- **The model menu lists only what works**: providers that are not
+  configured, or that found no models, are left out, and Claude Code (SDK)
+  comes first. Claude Code models can be picked as the primary model of any
+  agent, since picking one moves the agent onto the engine that runs it. The
+  agent's Model section is just the model list now; the engine switch and its
+  notes are gone.
+- **The Workspace tab opens folders on demand.** It loads the agent's folder
+  one level at a time instead of the whole tree: a real repo mounted from the
+  host answered with 224,741 entries and 35 MB, and the tab hung on it. The
+  root now arrives in a few kilobytes.
+- **The Workspace tab shows where an agent really works** when its
+  `__cwd_path__` is not mounted in the container, instead of an empty folder.
+- **LIVE reads better.** Each step is one line with its result and timing as
+  tags; tool names are readable, with the MCP server in its own tag; a step
+  you opened stays open while new events arrive; and the whole run is shown,
+  not its first 60 steps.
+- **Deleting an office is "Destroy office"**, with a clearer confirmation and
+  a demolition in the 3D world.
+- **The chief's desk sits further from the back wall.**
+- **Chatting with an agent no longer passes its reply down its chains**, and
+  chain traffic stays out of the chat. Replies saved to memory are no longer
+  cut at 2,000 characters, and the suggestion chips under the chat are gone.
+
+### Fixed
+
+- Pasting the redirect of a Claude Code sign-in in Docker was always refused:
+  the CLI listened on `::1` while the kernel called `127.0.0.1`. Both are
+  tried now.
+- `services/kernel/package-lock.json` had fallen behind `package.json` (it
+  missed `mammoth`), which would have broken the `npm ci` of the release
+  build.
+
+### Removed
+
+- The agent drawer's link to the DevOps panel, a page that no longer exists.
 
 ## [0.4.0] - 2026-10-04
 
