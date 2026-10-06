@@ -1,6 +1,7 @@
 import {
   type ExtensibleModule,
   type EmbeddingsClient,
+  agePolicy,
   defineModule,
 } from "@kernl/extension-sdk";
 import { rssRegistryMigrations } from "./migrations.js";
@@ -31,6 +32,18 @@ export function createRssRegistryModule(): RssRegistryModule {
 
   const mod = defineModule({
     name: "rss-registry",
+    retentionPolicies: () => [
+      agePolicy({
+        id: "rss.items",
+        label: "RSS feed articles",
+        description: "Articles downloaded from your feeds. They come back if the feed still publishes them.",
+        kind: "personal",
+        table: "rss_items",
+        dateColumn: "fetched_at",
+        defaultDays: 90,
+        defaultEnabled: false,
+      }),
+    ],
     migrations: rssRegistryMigrations,
 
     init(ctx) {

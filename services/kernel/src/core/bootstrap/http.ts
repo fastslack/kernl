@@ -18,6 +18,7 @@
  *  - Starts the McpHttpRouter (`/mcp`) when useHttp is true.
  */
 
+import { existsSync } from "node:fs";
 import { log } from "../logger.js";
 import type { KernelConfig } from "../config.js";
 import type { SqliteDb } from "../db/sqlite.js";
@@ -306,6 +307,9 @@ export async function initHttpAndMcp(args: {
       // step, detect local servers, remove a provider, reorder the chain.
       const { registerConnectRoutes } = await import("../llm/connect-routes.js");
       const claudeCodeTransition = await import("../llm/claude-code-transition.js");
+      const { createClaudeLogin } = await import("../llm/claude-code-login.js");
+      const { findClaudeCli } = await import("../../sdk/claude-cli.js");
+      const { resetClaudeCodeSdkCache } = await import("../llm/client.js");
       registerConnectRoutes(httpServer, {
         registry: llmRegistry,
         claudeCode: config.claudeCode,
@@ -328,6 +332,15 @@ export async function initHttpAndMcp(args: {
         hasClaudeCredential: () => claudeCodeTransition.hasClaudeCodeCredential(),
         claudeCodeTransition: () => claudeCodeTransition.applyClaudeCodeTransition(),
         loginCommand: () => claudeCodeTransition.claudeCodeLoginCommand(),
+        // In a container the CLI has no browser to open, and the host's browser
+        // cannot reach the callback port it listens on: capture the approval
+        // link for the dashboard instead, and take the redirect back by paste.
+        claudeLogin: createClaudeLogin({
+          cli: () => findClaudeCli(),
+          onSignedIn: resetClaudeCodeSdkCache,
+          captureBrowser: existsSync("/.dockerenv"),
+        }),
+        browserLogin: () => !existsSync("/.dockerenv"),
       });
 
       // The chat service and llm() were built before credentials were migrated

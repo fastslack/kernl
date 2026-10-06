@@ -34,6 +34,24 @@ import { serializeCheckpoint, type RunCheckpoint } from "./executor/run-checkpoi
 import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
 import { localDate } from "../../sdk/clock.js";
 import { retiredLearnings } from "./learning-diff.js";
+import type { ContentBlock } from "../../core/llm/chat-types.js";
+import { resolveInputCaps, TEXT_ONLY_CAPS, type InputCaps } from "../../core/llm/input-caps.js";
+import { getAttachmentService, type AttachmentRecord } from "../attachments/index.js";
+import {
+  blocksText,
+  buildAttachmentBlocks,
+  hasNativeBlocks,
+  looksLikeNativeBlockRejection,
+  withoutNativeBlocks,
+} from "../attachments/blocks.js";
+
+/**
+ * Cap on a reply saved to the agent's memory. The agent panel's chat reads its
+ * thread from that memory, so a lower cap cut answers mid-sentence (it was
+ * 2000). The prompt side trims each entry itself (system-prompt.ts), so a long
+ * entry doesn't grow later prompts; this only guards against runaway output.
+ */
+const MEMORY_REPLY_MAX = 20_000;
 
 // Public surface kept on this module — callers import these from executor.js.
 export type { ExecutionResult } from "./executor/shared.js";
@@ -69,6 +87,8 @@ interface NativeLoopRun {
   systemText: string;
   effectiveGoal: string;
   goalWithMemory: string;
+  /** The run's attachments (agents.run attachment_ids), rebuilt per model. */
+  attachments: AttachmentRecord[];
   resume?: RunCheckpoint;
 }
 
@@ -313,6 +333,7 @@ export class AgentExecutor {
         agent, run, service, events, depth, runState, recorder,
         chain: chainResolution.chain,
         llmTools, toolExecutor, systemText, effectiveGoal, goalWithMemory,
+        attachments: runAttachments(run),
         resume: params.resume,
       });
     } finally {
@@ -397,8 +418,14 @@ export class AgentExecutor {
       return failedBeforeStart("claude_code executor not wired — check module initialization");
     }
     try {
+      // That executor takes a goal string only: attachments ride in it as
+      // text (extracted text, transcript, description).
+      const attachments = runAttachments(run);
+      const goalWithAttachments = attachments.length > 0
+        ? `${goal}\n\n${blocksText(buildAttachmentBlocks(attachments, TEXT_ONLY_CAPS, 0))}`
+        : goal;
       const result = await this.claudeCodeExecutor.execute({
-        agent, goal, run, service, events, depth,
+        agent, goal: goalWithAttachments, run, service, events, depth,
       });
       // We still want the declarative chains to run on completion.
       this.executeDeclarativeChains(agent, run, result, service, depth, events);
@@ -555,7 +582,7 @@ export class AgentExecutor {
 
       // Save agent response to conversational memory (only for manual/chat runs)
       if (run.trigger_type === "manual") {
-        service.addMemory(agent.id, "assistant", finalContent.slice(0, 2000), run.id, run.project_id ?? null);
+        service.addMemory(agent.id, "assistant", finalContent.slice(0, MEMORY_REPLY_MAX), run.id, run.project_id ?? null);
       }
 
       // Emit flow event: run completed
@@ -659,12 +686,19 @@ export class AgentExecutor {
    */
   private async runModelChain(r: NativeLoopRun, active: { provider: ChatLlmProvider }): Promise<LlmLoopResult> {
     const { agent, recorder, chain, resume } = r;
-    const llmMessages: ChatMessage[] = [
-      { role: "user", content: r.goalWithMemory },
-    ];
-    const initialMessagesSnapshot: ChatMessage[] = JSON.parse(JSON.stringify(llmMessages));
+    // The opening user turn is rebuilt for every entry of the chain: its
+    // attachments go natively only where that entry's model takes them.
+    const capsFor = (entry: ModelChainEntry, textOnly: boolean): InputCaps =>
+      textOnly ? TEXT_ONLY_CAPS : resolveInputCaps(entry.provider.name, entry.model);
+    const llmMessages: ChatMessage[] = [];
     let loopResult: LlmLoopResult | undefined;
     let chainIdx = 0;
+    // Start (or restart) the conversation from the goal at the top of the loop.
+    let needsReset = !resume;
+    // One retry per entry with every attachment as text, when the model
+    // refused a native block.
+    let textOnly = false;
+    let sentNative = false;
     // A resumed run continues its own conversation on the entry it had
     // committed to. If the chain got shorter since, the conversation is
     // still valid on any model — start over at the top of the chain.
@@ -675,6 +709,10 @@ export class AgentExecutor {
       llmMessages.push(...prepared.messages);
       chainIdx = resume.chainIdx < chain.length ? resume.chainIdx : 0;
       resumeFrom = { iterations: resume.iterations, totalTokens: resume.totalTokens, elapsedMs: resume.elapsedMs };
+      // Checkpoints carry no attachment payload: put the goal's back.
+      if (r.attachments.length > 0 && llmMessages[0]?.role === "user") {
+        llmMessages[0] = { role: "user", content: openingContent(r.goalWithMemory, r.attachments, capsFor(chain[chainIdx], false)) };
+      }
       if (prepared.unknownToolCalls.length > 0) {
         log.warn(
           `Agent "${agent.name}": resuming run ${r.run.id} with ${prepared.unknownToolCalls.length} tool call(s) of unknown outcome`,
@@ -690,12 +728,16 @@ export class AgentExecutor {
         reason: chainIdx === 0 ? "Primary" : "Fallback",
         message: label,
       });
-      if (chainIdx > 0 && !resumeFrom) {
-        // Reset messages on retry so the new model starts from the same goal
+      if (needsReset) {
+        // A fresh start, or a retry: the model starts from the same goal,
+        // with the attachments built for it.
+        const content = openingContent(r.goalWithMemory, r.attachments, capsFor(entry, textOnly));
+        sentNative = Array.isArray(content) && hasNativeBlocks(content);
         llmMessages.length = 0;
-        for (const m of JSON.parse(JSON.stringify(initialMessagesSnapshot)) as ChatMessage[]) {
-          llmMessages.push(m);
-        }
+        llmMessages.push({ role: "user", content });
+        needsReset = false;
+      } else {
+        sentNative = llmMessages.some((m) => Array.isArray(m.content) && hasNativeBlocks(m.content));
       }
       try {
         loopResult = await runToolLoop({
@@ -713,7 +755,8 @@ export class AgentExecutor {
             ...recorder.loopHooks(),
             onCheckpoint: (cp) => {
               try {
-                r.service.saveCheckpoint(r.run.id, serializeCheckpoint(cp, chainIdx, recorder.stepNumber));
+                const light = r.attachments.length > 0 ? { ...cp, messages: withoutNativeBlocks(cp.messages) } : cp;
+                r.service.saveCheckpoint(r.run.id, serializeCheckpoint(light, chainIdx, recorder.stepNumber));
               } catch (err) {
                 // A run must never fail because its safety net did.
                 log.warn(`Agent "${agent.name}": checkpoint write failed: ${err instanceof Error ? err.message : err}`);
@@ -723,6 +766,14 @@ export class AgentExecutor {
         });
         break; // success (or soft abort via loopResult.abortReason) — commit this entry
       } catch (innerErr) {
+        if (sentNative && !textOnly && !r.runState.cancelled && looksLikeNativeBlockRejection(innerErr)) {
+          const reason = innerErr instanceof Error ? innerErr.message : String(innerErr);
+          log.warn(`Agent "${agent.name}": ${label} refused an attachment block (${reason.slice(0, 120)}), retrying with attachments as text`);
+          textOnly = true;
+          needsReset = true;
+          resumeFrom = undefined;
+          continue;
+        }
         const retryable = isRetryableChainError(innerErr);
         const nextIdx = chainIdx + 1;
         if (!retryable || nextIdx >= chain.length) throw innerErr;
@@ -746,6 +797,8 @@ export class AgentExecutor {
         chainIdx = nextIdx;
         // The next entry starts over from the goal, not from the checkpoint.
         resumeFrom = undefined;
+        needsReset = true;
+        textOnly = false;
       }
     }
     if (!loopResult) {
@@ -792,7 +845,7 @@ export class AgentExecutor {
           provider: candidate,
           systemText: retrySystem,
           model: undefined,
-          messages: [{ role: "user", content: retryGoal }],
+          messages: [{ role: "user", content: openingContent(retryGoal, r.attachments, resolveInputCaps(candidate.name)) }],
           tools: retryTools,
           executeTool: this.toolRunner(r.toolExecutor, r.agent, r.run, r.depth),
           caller: `agent:${agent.name}/retry`,
@@ -806,7 +859,7 @@ export class AgentExecutor {
           steps_count: recorder.stepNumber + retryResult.iterations,
           tokens_used: totalTokens + retryResult.totalTokens,
         };
-        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, 2000), run.id, run.project_id ?? null);
+        service.addMemory(agent.id, "assistant", retryResult.finalContent.slice(0, MEMORY_REPLY_MAX), run.id, run.project_id ?? null);
         recorder.emit("agent:flow:run_completed", {
           status: retryExecResult.status, steps_count: retryExecResult.steps_count,
           tokens_used: retryExecResult.tokens_used,
@@ -1015,6 +1068,9 @@ export class AgentExecutor {
   ): void {
     const declarativeCap = this.configRef?.agents?.maxInvokeDepth ?? DEFAULT_MAX_CHAIN_DEPTH;
     if (depth >= declarativeCap) return;
+
+    // A chat turn answers the operator; it is not work to pass down the chain.
+    if (isChatRun(sourceRun)) return;
 
     const chains = service.getChainsBySource(sourceAgent.id);
     if (chains.length === 0) return;
@@ -1421,4 +1477,35 @@ function evaluateChainCondition(conditionJson: string, result: ExecutionResult):
   } catch {
     return true;
   }
+}
+
+/** True for a run started from the agent panel's chat (agents.run with chat: true). */
+export function isChatRun(run: Pick<AgentRun, "trigger_payload">): boolean {
+  try {
+    return (JSON.parse(run.trigger_payload || "{}") as { chat?: unknown }).chat === true;
+  } catch {
+    return false;
+  }
+}
+
+/** Attachment ids a run was started with (agents.run attachment_ids → trigger_payload). */
+export function runAttachmentIds(run: Pick<AgentRun, "trigger_payload">): string[] {
+  try {
+    const ids = (JSON.parse(run.trigger_payload || "{}") as { attachment_ids?: unknown }).attachment_ids;
+    return Array.isArray(ids) ? ids.filter((x): x is string => typeof x === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function runAttachments(run: Pick<AgentRun, "trigger_payload">): AttachmentRecord[] {
+  const ids = runAttachmentIds(run);
+  if (ids.length === 0) return [];
+  return getAttachmentService()?.getRecords(ids) ?? [];
+}
+
+/** The opening user turn: the goal alone, or the attachments' blocks followed by it. */
+export function openingContent(goal: string, attachments: readonly AttachmentRecord[], caps: InputCaps): string | ContentBlock[] {
+  if (attachments.length === 0) return goal;
+  return [...buildAttachmentBlocks(attachments, caps, 0), { type: "text", text: goal }];
 }

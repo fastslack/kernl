@@ -1,7 +1,8 @@
 <script lang="ts">
   /**
-   * The chat's conversation list: search, select, new, two-step delete and
-   * the collapse toggle.
+   * The chat's conversation list: search, source filter, sections per source
+   * (3D office, chats, MCP, messaging, setup — each foldable), select, new,
+   * two-step delete and the collapse toggle.
    *
    * The episodes and the selection belong to the page — the header, the
    * transcript and the model picker read them too — so they arrive as props
@@ -12,6 +13,9 @@
   import { providerIcon, providerColor } from '$lib/chat-view.js';
   import { timeAgo } from '$shared/utils';
   import { readApiError } from '$lib/api.js';
+  import {
+    groupEpisodes, countBySource, modelLine, sourceOf, SOURCE_LABEL, type EpisodeSource,
+  } from '$lib/chat-groups.js';
 
   export let episodes: any[] = [];
   export let selectedEpisodeId: string | null = null;
@@ -24,10 +28,33 @@
 
   let searchQuery = '';
   let deleteConfirmId: string | null = null;
+  let sourceFilter: EpisodeSource | null = null;
 
-  $: filteredEpisodes = searchQuery
-    ? episodes.filter(e => (e.title || '').toLowerCase().includes(searchQuery.toLowerCase()))
-    : episodes;
+  $: chips = countBySource(episodes);
+  // A filter on a source that no longer has chats would show an empty list
+  // with no chip to clear it.
+  $: if (sourceFilter && !chips.some((c) => c.source === sourceFilter)) sourceFilter = null;
+  $: groups = groupEpisodes(episodes, { source: sourceFilter, query: searchQuery });
+  $: shownCount = groups.reduce((n, g) => n + g.episodes.length, 0);
+
+  // Folded sections, remembered per browser.
+  const FOLD_KEY = 'kernl.chat.folded';
+  let folded: Record<string, boolean> = {};
+  try { folded = JSON.parse(localStorage.getItem(FOLD_KEY) || '{}') ?? {}; } catch { folded = {}; }
+  function toggleFold(source: EpisodeSource) {
+    folded = { ...folded, [source]: !folded[source] };
+    try { localStorage.setItem(FOLD_KEY, JSON.stringify(folded)); } catch { /* private mode */ }
+  }
+
+  /** Who the chat is with, when the source has sub-groups: the 3D agent, the
+   *  messaging platform, the setup team. */
+  function rowTag(ep: any): string {
+    return sourceOf(ep) === 'dashboard' || sourceOf(ep) === 'mcp' ? '' : (ep.source_label || '');
+  }
+  function rowTitle(ep: any): string {
+    if (ep.title) return ep.title;
+    return sourceOf(ep) === 'office3d' ? 'No messages yet' : 'New conversation';
+  }
 
   // ── Delete episode ─────────────────────────────────
   // Two-step: first click on trash arms `deleteConfirmId`, second click on
@@ -90,9 +117,38 @@
     />
   </div>
 
-  <!-- Episode list -->
+  {#if chips.length > 1}
+    <div class="cx-chips" role="group" aria-label="Filter by origin">
+      <button class="cx-chip" class:on={!sourceFilter} aria-pressed={!sourceFilter} on:click={() => (sourceFilter = null)}>
+        All <span class="cx-chip-n">{episodes.length}</span>
+      </button>
+      {#each chips as c (c.source)}
+        <button
+          class="cx-chip"
+          class:on={sourceFilter === c.source}
+          aria-pressed={sourceFilter === c.source}
+          on:click={() => (sourceFilter = sourceFilter === c.source ? null : c.source)}
+        >
+          {SOURCE_LABEL[c.source]} <span class="cx-chip-n">{c.count}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  <!-- Episode list, one foldable section per origin -->
   <div class="cx-list">
-    {#each filteredEpisodes as ep, i (ep.id)}
+    {#each groups as g (g.source)}
+      <button
+        class="cx-group"
+        aria-expanded={!folded[g.source]}
+        on:click={() => toggleFold(g.source)}
+      >
+        <svg class="cx-group-caret" class:open={!folded[g.source]} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" width="10" height="10" aria-hidden="true"><path d="m9 6 6 6-6 6"/></svg>
+        <span class="cx-group-name">{g.label}</span>
+        <span class="cx-group-n">{g.episodes.length}</span>
+      </button>
+      {#if !folded[g.source]}
+    {#each g.episodes as ep, i (ep.id)}
       <div
         class="cx-ep"
         class:active={ep.id === selectedEpisodeId}
@@ -101,15 +157,17 @@
         tabindex="0"
         on:click={() => onSelect(ep.id)}
         on:keydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelect(ep.id); } }}
-        style="animation-delay: {i * 30}ms"
+        style="animation-delay: {Math.min(i, 10) * 30}ms"
       >
         <div class="cx-ep-avatar" style="color: {providerColor(ep.llm_provider)}">
           {providerIcon(ep.llm_provider)}
         </div>
         <div class="cx-ep-body">
-          <div class="cx-ep-title">{ep.title || 'New conversation'}</div>
+          <div class="cx-ep-title" class:cx-ep-untitled={!ep.title} title={ep.title || ''}>{rowTitle(ep)}</div>
           <div class="cx-ep-sub">
-            <span class="cx-ep-count">{ep.message_count}</span>
+            {#if rowTag(ep)}<span class="cx-ep-tag">{rowTag(ep)}</span>{/if}
+            <span class="cx-ep-model" title={modelLine(ep)}>{modelLine(ep)}</span>
+            <span class="cx-ep-count" title="{ep.message_count} messages">{ep.message_count}</span>
             <span class="cx-ep-time">{timeAgo(ep.updated_at)}</span>
           </div>
         </div>
@@ -159,10 +217,12 @@
         {/if}
       </div>
     {/each}
+      {/if}
+    {/each}
 
-    {#if !filteredEpisodes.length}
+    {#if !shownCount}
       <div class="cx-list-empty">
-        {#if searchQuery}
+        {#if searchQuery || sourceFilter}
           <span>No matches</span>
         {:else}
           <span>No conversations yet</span>
@@ -290,6 +350,66 @@
     box-shadow: 0 0 0 2px rgba(212, 168, 75, 0.08);
   }
 
+  /* Origin filter */
+  .cx-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    padding: 0 14px 8px;
+    flex-shrink: 0;
+  }
+  .cx-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: transparent;
+    color: var(--text-2);
+    font-family: var(--font-body);
+    font-size: 11px;
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .cx-chip:hover { border-color: var(--text-3); color: var(--text-1); }
+  .cx-chip.on {
+    border-color: rgba(212, 168, 75, 0.5);
+    background: rgba(212, 168, 75, 0.1);
+    color: var(--gold);
+  }
+  .cx-chip:focus-visible { outline: 2px solid var(--gold); outline-offset: 1px; }
+  .cx-chip-n { font-family: var(--font-mono); font-size: 10px; color: var(--text-3); }
+  .cx-chip.on .cx-chip-n { color: inherit; }
+
+  /* Section header per origin */
+  .cx-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 100%;
+    padding: 8px 6px 4px;
+    border: none;
+    background: transparent;
+    color: var(--text-3);
+    font-family: var(--font-body);
+    font-size: 10.5px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    position: sticky;
+    top: -6px;
+    z-index: 1;
+    background: var(--surface-1);
+  }
+  .cx-group:hover { color: var(--text-1); }
+  .cx-group:focus-visible { outline: 2px solid var(--gold); outline-offset: -2px; border-radius: 4px; }
+  .cx-group-caret { transition: transform 0.15s; }
+  .cx-group-caret.open { transform: rotate(90deg); }
+  .cx-group-name { flex: 1; text-align: left; }
+  .cx-group-n { font-family: var(--font-mono); font-weight: 500; letter-spacing: 0; }
+
   /* Episode list */
   .cx-list {
     flex: 1;
@@ -305,7 +425,7 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 10px 12px;
+    padding: 7px 10px;
     border-radius: 10px;
     border: 1px solid transparent;
     background: transparent;
@@ -362,6 +482,8 @@
     line-height: 1.3;
   }
 
+  .cx-ep-untitled { color: var(--text-3); font-style: italic; }
+
   .cx-ep-sub {
     display: flex;
     align-items: center;
@@ -369,9 +491,29 @@
     margin-top: 2px;
     font-size: 10.5px;
     color: var(--text-3);
+    min-width: 0;
   }
 
+  .cx-ep-tag {
+    flex-shrink: 0;
+    max-width: 80px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--gold);
+  }
+
+  .cx-ep-model {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .cx-ep-time { flex-shrink: 0; margin-left: auto; }
+
   .cx-ep-count {
+    flex-shrink: 0;
     background: var(--surface-3);
     border-radius: 4px;
     padding: 0 4px;

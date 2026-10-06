@@ -1,5 +1,6 @@
 import {
   type ExtensibleModule,
+  agePolicy,
   defineModule,
   runMigrations,
 } from "@kernl/extension-sdk";
@@ -31,6 +32,19 @@ export function createGoogleSyncModule(): GoogleSyncModule {
 
   const mod = defineModule({
     name: "google-sync",
+    retentionPolicies: () => [
+      agePolicy({
+        id: "google.emails",
+        label: "Synced Gmail messages",
+        description: "Local copy of old mail (it stays in Gmail). Starred mail and mail waiting for a reply are never deleted.",
+        kind: "personal",
+        table: "google_emails",
+        dateColumn: "date",
+        where: "is_starred = 0 AND attention_needed <> 1",
+        defaultDays: 180,
+        defaultEnabled: false,
+      }),
+    ],
 
     async init(ctx) {
       // Six migration sets, each under its own key.

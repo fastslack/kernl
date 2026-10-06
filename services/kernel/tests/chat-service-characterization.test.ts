@@ -193,7 +193,7 @@ describe("ChatService.chatStream — prompt", () => {
         `${header}\nBe brief.`,
       ].join("\n\n"));
       expect(seenOpts!.model).toBe("sonnet");
-      expect(r.message.content).toBe("streamed");
+      expect(r.message?.content).toBe("streamed");
       expect(events).toEqual(["done"]);
     }
   });

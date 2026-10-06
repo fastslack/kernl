@@ -12,6 +12,8 @@ import { answerAndDeliver } from "./question-delivery.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
 import { log } from "../../core/logger.js";
+import { getAttachmentService } from "../attachments/index.js";
+import { bindAttachmentIdsArg } from "../attachments/bind-arg.js";
 import { promptAgentDesigner, promptAgentDesignerFlowHint } from "../../core/i18n/prompts.js";
 import type {
   WorkspaceServiceLike,
@@ -84,6 +86,7 @@ export function registerAgentRoutes(
     ["PUT", "/api/agents/flows/:flow_id/repo", "agents.flows.set_repo"],
     ["POST", "/api/agents/flows/:flow_id/lead", "agents.flows.set_lead"],
     ["PUT", "/api/agents/flows/:flow_id/distribute", "agents.flows.set_distribute"],
+    ["PUT", "/api/agents/flows/:flow_id/paused", "agents.flows.set_paused"],
     ["POST", "/api/agents/chain", "agents.chain.create"],
     ["DELETE", "/api/agents/chain/:id", "agents.chain.delete"],
     ["PUT", "/api/agents/schedules/:id", "agents.schedule.update"],
@@ -518,15 +521,37 @@ export function registerAgentRoutes(
     runs: service.listRuns({ agent_id: id, limit: 20 }).map(r => ({ ...r, steps: service.getSteps(r.id) })),
   }));
 
-  // GET /api/agents/:id/memory — get conversation memory for an agent
-  server.route("GET", "/api/agents/:id/memory", ({ params: { id }, query }) => ({
-    memory: service.getMemory(id, Math.min(parseInt(query.get("limit") ?? "50", 10), 200)),
-  }));
+  // GET /api/agents/:id/memory — get conversation memory for an agent.
+  // Each entry: { role, content, created_at, attachments: AttachmentMeta[] }
+  // (attachments that no longer exist are left out).
+  // `project` (id or slug) reads that project's thread; omitted, the thread
+  // that belongs to no project — memory is kept apart per project.
+  const memoryProject = (ref: unknown): string | null => {
+    if (typeof ref !== "string" || !ref) return null;
+    const id = service.getProjectGate()?.resolve(ref) ?? null;
+    if (!id) throw new HttpError(400, `Unknown project "${ref}"`);
+    return id;
+  };
+  server.route("GET", "/api/agents/:id/memory", ({ params: { id }, query }) => {
+    const attachments = getAttachmentService();
+    const projectId = memoryProject(query.get("project"));
+    return {
+      memory: service.getMemory(id, Math.min(parseInt(query.get("limit") ?? "50", 10), 200), projectId).map((m) => ({
+        ...m,
+        attachments: m.attachments.length && attachments
+          ? attachments.getRecords(m.attachments).map((r) => attachments.toMeta(r))
+          : [],
+      })),
+    };
+  });
 
-  // POST /api/agents/:id/memory — add a manual memory entry (for chat persistence)
-  server.route<{ role: string; content: string }>("POST", "/api/agents/:id/memory", ({ params: { id }, body }) => {
-    if (!body.content) throw new HttpError(400, "content required");
-    service.addMemory(id, (body.role as "user" | "assistant") ?? "user", body.content);
+  // POST /api/agents/:id/memory — add a manual memory entry (for chat persistence).
+  // `attachment_ids` are bound (400 on a bad one) and kept with the entry.
+  server.route<{ role: string; content: string; attachment_ids?: unknown; project?: unknown }>("POST", "/api/agents/:id/memory", ({ params: { id }, body }) => {
+    const attachmentIds = bindAttachmentIdsArg(body.attachment_ids).map((r) => r.id);
+    if (!body.content && attachmentIds.length === 0) throw new HttpError(400, "content required");
+    const projectId = memoryProject(body.project);
+    service.addMemory(id, (body.role as "user" | "assistant") ?? "user", body.content ?? "", "", projectId, attachmentIds);
     return { ok: true };
   });
 

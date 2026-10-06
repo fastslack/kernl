@@ -16,29 +16,29 @@ export function textOf(content: string | ContentBlock[]): string {
     .join("");
 }
 
-/** Check if content has image blocks */
-function hasImages(content: string | ContentBlock[]): boolean {
-  if (typeof content === "string") return false;
-  return content.some((b) => b.type === "image");
-}
+/**
+ * The user-visible parts of a user turn, in their original order: text and
+ * images stay as they are; a PDF `document` block (which these APIs cannot
+ * take) becomes a one-line note. Order matters for attachments — each one's
+ * `[Adjunto: …]` header sits right before its image.
+ */
+type UserPart = { kind: "text"; text: string } | { kind: "image"; url: string };
 
-/** Convert content to OpenAI vision format */
-function toOpenAiContent(content: string | ContentBlock[]): string | Array<Record<string, unknown>> {
-  if (typeof content === "string") return content;
-  if (!hasImages(content)) return textOf(content);
-  const parts: Array<Record<string, unknown>> = [];
-  for (const b of content) {
-    if (b.type === "text") {
-      parts.push({ type: "text", text: b.text });
-    } else if (b.type === "image") {
+function userParts(blocks: ContentBlock[]): UserPart[] {
+  const parts: UserPart[] = [];
+  for (const b of blocks) {
+    if (b.type === "text") parts.push({ kind: "text", text: b.text });
+    else if (b.type === "image") {
       const img = b as ImageBlock;
-      parts.push({
-        type: "image_url",
-        image_url: { url: `data:${img.source.media_type};base64,${img.source.data}` },
-      });
-    }
+      parts.push({ kind: "image", url: `data:${img.source.media_type};base64,${img.source.data}` });
+    } else if (b.type === "document") parts.push({ kind: "text", text: "[pdf adjunto: este modelo no puede leerlo]" });
   }
   return parts;
+}
+
+/** Text parts of a user turn joined by newlines — separate blocks are separate lines. */
+function userText(parts: UserPart[]): string {
+  return parts.filter((p): p is { kind: "text"; text: string } => p.kind === "text").map((p) => p.text).join("\n");
 }
 
 /**
@@ -63,7 +63,6 @@ export function kernelMessagesToOpenAi(
     const textBlocks: Array<{ type: "text"; text: string }> = [];
     const toolUses: Array<{ type: "tool_use"; id: string; name: string; input: Record<string, unknown> }> = [];
     const toolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string; is_error?: boolean }> = [];
-    const images: Array<{ type: "image"; source: { media_type: string; data: string } }> = [];
 
     for (const b of m.content) {
       if (b.type === "text") textBlocks.push(b as { type: "text"; text: string });
@@ -72,7 +71,7 @@ export function kernelMessagesToOpenAi(
         const tr = b as { type: "tool_result"; tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean };
         const contentStr = typeof tr.content === "string" ? tr.content : textOf(tr.content);
         toolResults.push({ type: "tool_result", tool_use_id: tr.tool_use_id, content: contentStr, is_error: tr.is_error });
-      } else if (b.type === "image") images.push(b as { type: "image"; source: { media_type: string; data: string } });
+      }
     }
 
     if (m.role === "assistant") {
@@ -101,19 +100,16 @@ export function kernelMessagesToOpenAi(
         });
       }
     }
-    if (textBlocks.length > 0 || images.length > 0) {
-      // Any plain text / image content in a user turn
-      const blocks: Array<Record<string, unknown>> = [];
-      for (const t of textBlocks) blocks.push({ type: "text", text: t.text });
-      for (const img of images) {
-        blocks.push({
-          type: "image_url",
-          image_url: { url: `data:${img.source.media_type};base64,${img.source.data}` },
-        });
-      }
+    const parts = userParts(m.content);
+    if (parts.length > 0) {
+      // Any plain text / image content in a user turn (history included —
+      // attachments of past turns arrive here as blocks too), in order.
+      const hasImage = parts.some((p) => p.kind === "image");
       out.push({
         role: "user",
-        content: images.length > 0 ? blocks : textBlocks.map((t) => t.text).join(""),
+        content: hasImage
+          ? parts.map((p) => (p.kind === "text" ? { type: "text", text: p.text } : { type: "image_url", image_url: { url: p.url } }))
+          : userText(parts),
       });
     }
   }
@@ -157,13 +153,11 @@ export function kernelMessagesToResponsesInput(
     const textBlocks: Array<{ type: "text"; text: string }> = [];
     const toolUses: Array<{ type: "tool_use"; id: string; name: string; input: Record<string, unknown> }> = [];
     const toolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean }> = [];
-    const images: Array<ImageBlock> = [];
 
     for (const b of m.content) {
       if (b.type === "text") textBlocks.push(b as { type: "text"; text: string });
       else if (b.type === "tool_use") toolUses.push(b as { type: "tool_use"; id: string; name: string; input: Record<string, unknown> });
       else if (b.type === "tool_result") toolResults.push(b as { type: "tool_result"; tool_use_id: string; content: string | ContentBlock[]; is_error?: boolean });
-      else if (b.type === "image") images.push(b as ImageBlock);
     }
 
     if (m.role === "assistant") {
@@ -195,15 +189,10 @@ export function kernelMessagesToResponsesInput(
         output: tr.is_error ? `ERROR: ${out}` : out,
       });
     }
-    if (textBlocks.length > 0 || images.length > 0) {
-      const content: Array<Record<string, unknown>> = [];
-      for (const t of textBlocks) content.push({ type: "input_text", text: t.text });
-      for (const img of images) {
-        content.push({
-          type: "input_image",
-          image_url: `data:${img.source.media_type};base64,${img.source.data}`,
-        });
-      }
+    const parts = userParts(m.content);
+    if (parts.length > 0) {
+      const content = parts.map((p) =>
+        p.kind === "text" ? { type: "input_text", text: p.text } : { type: "input_image", image_url: p.url });
       input.push({ type: "message", role: "user", content });
     }
   }

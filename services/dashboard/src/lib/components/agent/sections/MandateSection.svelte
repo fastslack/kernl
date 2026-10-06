@@ -11,10 +11,15 @@
   one line the record already carries. So the description stays visible and the
   `<pre>` is one click away. Everything the old block could show, it still
   shows; the copy button still copies the full prompt without expanding.
+
+  Since 2026-10-05 the prompt is also editable here (✎ edit): a textarea in
+  place of the rendered markdown, saved through agents.update.
 -->
 <script lang="ts">
   import type { Readable } from 'svelte/store';
+  import { tick } from 'svelte';
   import { formatRunOutput } from '$lib/run-format.js';
+  import { updateAgent } from '$lib/api.js';
 
   /** The drawer's agent store (`AgentDrawer` publishes it on the overview slot). */
   export let store: Readable<any>;
@@ -37,7 +42,32 @@
 
   $: state = $store ?? {};
   $: agent = (state.agent ?? {}) as Record<string, any>;
-  $: text = prompt ?? String(agent.system_prompt ?? '');
+  // ── Editing ──
+  // The prompt edits in place: Edit swaps the rendered markdown for a
+  // textarea, Save writes system_prompt through agents.update. The saved text
+  // shows at once (savedText) — the caller's `prompt` comes from its own
+  // detail fetch, which only catches up on its next refresh.
+  let editing = false;
+  let draft = '';
+  let saving = false;
+  let saveError = '';
+  let savedText: string | null = null;
+  /** Bumped on every successful save: re-keys the "saved" flash so it replays each time. */
+  let savedTick = 0;
+  let savedVisible = false;
+  let savedTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Bumped on every failure: re-keys the shake. */
+  let errorTick = 0;
+  let editor: HTMLTextAreaElement;
+  let lastAgentId = '';
+  $: if (String(agent.id ?? '') !== lastAgentId) {
+    lastAgentId = String(agent.id ?? '');
+    savedText = null;
+    editing = false;
+    saveError = '';
+  }
+
+  $: text = savedText ?? prompt ?? String(agent.system_prompt ?? '');
   $: isLoading = loading ?? !!state.loading;
   $: description = String(agent.description ?? '');
   $: builtin = String(agent.builtin_handler ?? '');
@@ -58,6 +88,64 @@
     return l.length > 140 ? l.slice(0, 140) + '…' : l;
   }
 
+  async function startEdit() {
+    draft = text;
+    saveError = '';
+    editing = true;
+    collapsed = false;
+    await tick();
+    editor?.focus();
+  }
+
+  function cancelEdit() {
+    editing = false;
+    saveError = '';
+  }
+
+  /**
+   * Save, then check the kernel kept it: agents.update answers with the stored
+   * agent, and a save counts only when its system_prompt is what was sent.
+   * Anything else — no agent in the answer, a different prompt, a thrown
+   * error — stays on screen as an error with the editor still open.
+   */
+  async function save() {
+    const id = String(agent.id ?? '');
+    if (saving) return;
+    if (!id) { fail('This agent has no id yet — reopen it and try again.'); return; }
+    saving = true;
+    saveError = '';
+    const sent = draft;
+    console.debug('[mandate] saving', { id, chars: sent.length });
+    try {
+      const res = (await updateAgent(id, { system_prompt: sent })) as { agent?: { system_prompt?: unknown } } | null;
+      const stored = res?.agent?.system_prompt;
+      if (typeof stored !== 'string') throw new Error('The kernel answered without the agent — the change may not be stored.');
+      if (stored !== sent) throw new Error('The kernel answered, but the stored prompt is different from what you wrote.');
+      console.debug('[mandate] saved', { id, chars: stored.length });
+      savedText = stored;
+      editing = false;
+      savedTick++;
+      savedVisible = true;
+      if (savedTimer) clearTimeout(savedTimer);
+      savedTimer = setTimeout(() => (savedVisible = false), 2600);
+    } catch (err) {
+      console.error('[mandate] save failed', err);
+      fail(err instanceof Error ? err.message : String(err));
+    } finally {
+      saving = false;
+    }
+  }
+
+  function fail(message: string) {
+    saveError = message;
+    errorTick++;
+  }
+
+  function onEditorKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); cancelEdit(); }
+    else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void save(); }
+  }
+
   let copiedKey: string | null = null;
   async function copy(t: string, key: string) {
     try {
@@ -71,27 +159,70 @@
   }
 </script>
 
-<section class="ip-sec ip-mandate" class:sec-compact={compact} class:ip-mandate-open={!collapsed && !!text}>
+<!-- Editing, the section takes its natural height (not the leftover-height
+     flex of an open mandate), so the editor and its buttons never spill over
+     the sections below; the tab scrolls instead. -->
+<section class="ip-sec ip-mandate" class:sec-compact={compact} class:ip-mandate-open={!collapsed && !!text && !editing} class:ip-mandate-editing={editing}>
   <div class="ip-sec-hrow">
     <button class="ip-sec-h ip-sec-btn" on:click={() => (collapsed = !collapsed)}>
       <span class="ip-caret" class:open={!collapsed}>▸</span>
       Mandate
       {#if text}<span class="ip-sec-c">{text.length} chars</span>{/if}
     </button>
-    {#if text}
-      <button class="ip-icon-btn" title="copy system prompt" on:click={() => copy(text, 'sys')}>{copiedKey === 'sys' ? '✓ copied' : '⧉ copy'}</button>
+    {#if savedVisible}
+      {#key savedTick}
+        <span class="ip-saved-chip" role="status">✓ Saved</span>
+      {/key}
     {/if}
+    <span class="ip-mandate-actions">
+      {#if !builtin && agent.id && !editing}
+        <button class="ip-icon-btn" title="edit the system prompt" on:click={startEdit}>✎ edit</button>
+      {/if}
+      {#if text && !editing}
+        <button class="ip-icon-btn" title="copy system prompt" on:click={() => copy(text, 'sys')}>{copiedKey === 'sys' ? '✓ copied' : '⧉ copy'}</button>
+      {/if}
+    </span>
   </div>
 
   {#if summary}
     <p class="ip-role">{summary}</p>
   {/if}
 
-  {#if !collapsed}
+  {#if editing}
+    <div class="ip-progress" class:on={saving} aria-hidden="true"><span></span></div>
+    <textarea
+      class="ip-mandate-edit"
+      class:is-saving={saving}
+      class:is-error={!!saveError}
+      readonly={saving}
+      bind:this={editor}
+      bind:value={draft}
+      on:keydown={onEditorKey}
+      spellcheck="false"
+      aria-label="System prompt"
+    ></textarea>
+    {#key errorTick}
+    <div class="ip-mandate-editbar" class:shake={errorTick > 0 && !!saveError}>
+      <span class="ip-sec-c">{draft.length} chars</span>
+      {#if draft !== text && !saving && !saveError}<span class="ip-dirty" title="Unsaved changes">● unsaved</span>{/if}
+      <span class="ip-mandate-hint">Ctrl+Enter saves · Esc cancels</span>
+      <span class="ip-spacer"></span>
+      <button class="ip-icon-btn" type="button" on:click={cancelEdit} disabled={saving}>Cancel</button>
+      <button class="ip-icon-btn ip-save" class:busy={saving} type="button" on:click={save} disabled={saving || (draft === text && !saveError)}>
+        {#if saving}<span class="ip-spin" aria-hidden="true"></span>Saving…{:else if saveError}Retry{:else}Save{/if}
+      </button>
+    </div>
+    {/key}
+    {#if saveError}<p class="ip-mandate-err" role="alert">✗ Not saved — {saveError}</p>{/if}
+  {:else if !collapsed}
     {#if text}
+      {#key savedTick}
+      <div class="ip-flash-wrap" class:flash={savedTick > 0}>
       <!-- Rendered, not raw: prompts are written in markdown. formatRunOutput
            escapes HTML first (the same renderer as the run output). -->
       <div class="ip-mandate-md">{@html formatRunOutput(text)}</div>
+      </div>
+      {/key}
     {:else if builtin}
       <div class="ip-mandate-alt">
         Runs a builtin handler — no system prompt.
@@ -209,4 +340,44 @@
     white-space:nowrap;
   }
   .ip-icon-btn:hover{background:rgba(120,130,160,.16);color:#f0f2f7}
+  .ip-mandate-actions{display:inline-flex;gap:6px}
+  .ip-mandate-editing{flex:none}
+  .ip-mandate-edit{
+    display:block;height:min(60vh,560px);min-height:200px;width:100%;box-sizing:border-box;resize:vertical;
+    padding:12px 14px;border-radius:8px;
+    background:rgba(0,0,0,.35);border:1px solid color-mix(in srgb, var(--flow-color) 45%, rgba(120,130,160,.2));
+    font:400 12px/1.55 'JetBrains Mono',monospace;color:#e0e3ec;
+  }
+  .ip-mandate-edit:focus{outline:none;border-color:var(--flow-color)}
+  .ip-mandate-editbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:8px;position:relative;z-index:1}
+  .ip-mandate-hint{font:400 10.5px 'Manrope',sans-serif;color:#6a6f82}
+  .ip-mandate-err{margin:8px 0 0;padding:8px 10px;border-radius:6px;font:500 11.5px/1.45 'Manrope',sans-serif;color:#ffb0b0;background:rgba(255,90,90,.08);border:1px solid rgba(255,90,90,.3);animation:ip-fade-in .2s ease-out}
+  .ip-mandate-edit.is-saving{opacity:.6}
+  .ip-mandate-edit.is-error{border-color:rgba(255,110,110,.7)}
+  .ip-dirty{font:600 10.5px 'Manrope',sans-serif;color:#f5c26b}
+  /* Indeterminate bar over the editor while the save is in flight. */
+  .ip-progress{height:2px;margin-bottom:4px;border-radius:2px;overflow:hidden;background:transparent}
+  .ip-progress.on{background:rgba(159,232,192,.12)}
+  .ip-progress span{display:block;height:100%;width:35%;background:#9fe8c0;transform:translateX(-110%)}
+  .ip-progress.on span{animation:ip-indeterminate 1s ease-in-out infinite}
+  .ip-spin{display:inline-block;width:9px;height:9px;margin-right:6px;vertical-align:-1px;border-radius:50%;border:1.5px solid rgba(159,232,192,.35);border-top-color:#9fe8c0;animation:ip-rot .7s linear infinite}
+  .ip-save.busy{opacity:1;cursor:progress}
+  .shake{animation:ip-shake .4s ease-in-out}
+  /* Saved: the chip pops in by the heading, the mandate glows once. */
+  .ip-saved-chip{margin-left:auto;margin-right:8px;font:700 10.5px 'Manrope',sans-serif;color:#0d2a1c;background:#9fe8c0;padding:2px 8px;border-radius:999px;animation:ip-pop 2.6s ease-out forwards}
+  .ip-flash-wrap{display:flex;flex-direction:column;flex:1;min-height:0;border-radius:8px}
+  .ip-flash-wrap.flash{animation:ip-glow 1.4s ease-out}
+  @keyframes ip-indeterminate{0%{transform:translateX(-110%)}100%{transform:translateX(320%)}}
+  @keyframes ip-rot{to{transform:rotate(360deg)}}
+  @keyframes ip-shake{0%,100%{transform:translateX(0)}20%{transform:translateX(-6px)}40%{transform:translateX(5px)}60%{transform:translateX(-4px)}80%{transform:translateX(2px)}}
+  @keyframes ip-pop{0%{opacity:0;transform:scale(.6)}12%{opacity:1;transform:scale(1.12)}22%{transform:scale(1)}80%{opacity:1}100%{opacity:0}}
+  @keyframes ip-glow{0%{box-shadow:0 0 0 0 rgba(159,232,192,.75)}60%{box-shadow:0 0 0 6px rgba(159,232,192,0)}100%{box-shadow:none}}
+  @keyframes ip-fade-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+  @media (prefers-reduced-motion: reduce){
+    .ip-progress.on span,.ip-spin,.shake,.ip-saved-chip,.ip-flash-wrap.flash{animation:none}
+    .ip-progress.on span{transform:none;width:100%}
+  }
+  .ip-spacer{flex:1}
+  .ip-save{color:#9fe8c0;border-color:rgba(159,232,192,.35)}
+  .ip-save:disabled{opacity:.45;cursor:default}
 </style>

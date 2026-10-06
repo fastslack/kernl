@@ -7,11 +7,11 @@ import { officeKindOf, type OfficeKind } from './office-kinds.js';
 export type AgentState = 'working' | 'paused' | 'error' | 'idle';
 
 export interface RailAgentInput { id: string; name: string; flow_id: string; active: number; role?: string; rank_id?: string }
-export interface RailFlowInput { id: string; name: string; color: string; active: number; kind?: string | null }
+export interface RailFlowInput { id: string; name: string; color: string; active: number; kind?: string | null; paused?: number }
 export interface RailRankInput { id: string; level: number; active: number }
 
 export interface RailAgent { id: string; name: string; lead: boolean; state: AgentState }
-export interface RailOffice { id: string; name: string; color: string; kind: OfficeKind; agents: RailAgent[]; working: number }
+export interface RailOffice { id: string; name: string; color: string; kind: OfficeKind; agents: RailAgent[]; working: number; paused: boolean }
 export interface RailModel { offices: RailOffice[]; headquarters: RailAgent | null; unassigned: RailAgent[] }
 
 export interface RailInput {
@@ -72,6 +72,7 @@ export function buildRailModel(input: RailInput): RailModel {
 			kind: officeKindOf(flow),
 			agents,
 			working: agents.filter((a) => a.state === 'working').length,
+			paused: flow.paused === 1,
 		});
 	}
 	offices.sort((x, y) => byName(x.name, y.name));

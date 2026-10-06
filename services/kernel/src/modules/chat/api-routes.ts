@@ -7,11 +7,12 @@ import { resolve } from "node:path";
 import type { ServerResponse } from "node:http";
 import { HttpError, isHttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import type { ChatService } from "./service.js";
-import { chatOperations } from "./operations.js";
+import { attachmentIdsArg, chatOperations } from "./operations.js";
 import { EpisodeLockedError } from "./service.js";
 import type { MemoryDistiller } from "./memory-distiller.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { PermissionBus } from "./permission-bus.js";
+import { getAttachmentService } from "../attachments/index.js";
 import type {
   ChatStreamEvent,
   ChatStreamSink,
@@ -64,11 +65,35 @@ export function registerChatRoutes(
         /** When true, the SDK session ignores host user settings (plugins,
          *  user-scope MCP servers) — built-ins + kernel MCP only. */
         isolate_settings?: boolean;
+        /** Warm the subprocess and prompt cache without storing the turn. */
+        warmup?: boolean;
+        /** Ids from POST /api/attachments; bound before the stream opens. */
+        attachment_ids?: string[];
       }>(req);
       episodeId = body.episode_id ?? "";
-      if (!body.episode_id || !body.message) {
-        server.json(res, 400, { error: "episode_id and message required" });
+      let attachmentIds: string[];
+      try {
+        attachmentIds = attachmentIdsArg(body.attachment_ids);
+      } catch (err) {
+        server.json(res, 400, { error: err instanceof Error ? err.message : "Bad request" });
         return;
+      }
+      if (!body.episode_id || (!body.message && attachmentIds.length === 0)) {
+        server.json(res, 400, { error: "episode_id and message (or attachment_ids) required" });
+        return;
+      }
+      // Bind before the stream opens, so a bad id is a plain 400 rather than
+      // an error event (binding again inside chatStream is a no-op).
+      if (attachmentIds.length > 0 && body.warmup !== true) {
+        try {
+          const svc = getAttachmentService();
+          if (!svc) throw new HttpError(400, "Attachments are not available in this kernel");
+          svc.bind(attachmentIds);
+        } catch (err) {
+          const status = isHttpError(err) ? err.status : 400;
+          server.json(res, status, { error: err instanceof Error ? err.message : "Bad request" });
+          return;
+        }
       }
 
       const sres = res as ServerResponse;
@@ -118,12 +143,14 @@ export function registerChatRoutes(
       };
 
       try {
-        await chatService.chatStream(body.episode_id, body.message, sink, {
+        await chatService.chatStream(body.episode_id, body.message ?? "", sink, {
           permission,
           signal: abortController.signal,
           allowedTools: Array.isArray(body.allowed_tools) ? body.allowed_tools : undefined,
           disallowedTools: Array.isArray(body.disallowed_tools) ? body.disallowed_tools : undefined,
           isolateSettings: body.isolate_settings === true,
+          warmup: body.warmup === true,
+          attachmentIds,
         });
       } catch (err) {
         flush({

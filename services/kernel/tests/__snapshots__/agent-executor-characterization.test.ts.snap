@@ -99,6 +99,11 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
   ],
   [
     "svc",
+    "getProjectGate",
+    [],
+  ],
+  [
+    "svc",
     "getUnreadInbox",
     [
       "agent-1",
@@ -691,6 +696,11 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
   ],
   [
     "svc",
+    "getProjectGate",
+    [],
+  ],
+  [
+    "svc",
     "getUnreadInbox",
     [
       "agent-1",
@@ -971,6 +981,11 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
     [
       "agent-1",
     ],
+  ],
+  [
+    "svc",
+    "getProjectGate",
+    [],
   ],
   [
     "svc",
@@ -1449,6 +1464,11 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
   ],
   [
     "svc",
+    "getProjectGate",
+    [],
+  ],
+  [
+    "svc",
     "getUnreadInbox",
     [
       "agent-1",
@@ -1921,6 +1941,11 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
   ],
   [
     "svc",
+    "getProjectGate",
+    [],
+  ],
+  [
+    "svc",
     "getUnreadInbox",
     [
       "agent-1",
@@ -2376,6 +2401,11 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
   ],
   [
     "svc",
+    "getProjectGate",
+    [],
+  ],
+  [
+    "svc",
     "getUnreadInbox",
     [
       "agent-1",
@@ -2665,6 +2695,11 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
     [
       "agent-1",
     ],
+  ],
+  [
+    "svc",
+    "getProjectGate",
+    [],
   ],
   [
     "svc",
@@ -3066,6 +3101,11 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
     [
       "agent-1",
     ],
+  ],
+  [
+    "svc",
+    "getProjectGate",
+    [],
   ],
   [
     "svc",
@@ -4020,6 +4060,11 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
     [
       "agent-1",
     ],
+  ],
+  [
+    "svc",
+    "getProjectGate",
+    [],
   ],
   [
     "svc",

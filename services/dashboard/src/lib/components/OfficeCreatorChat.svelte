@@ -2,7 +2,8 @@
   /**
    * Streaming chat modal that replaces the legacy "New Office" form.
    *
-   * Creates a fresh chat episode pinned to the claude_code provider, primed
+   * Continues this agent's last 3D episode for the chosen model (or opens one),
+   * pinned to the claude_code provider by default, primed
    * with a system instruction that turns Claude into an "office architect"
    * with access to the kernel_agents_* MCP tools. The user describes what
    * they want; Claude asks clarifying questions, then actually creates the
@@ -17,8 +18,13 @@
   import { foldThinking } from '$lib/chat-md';
   import { collapseRepeats } from '$lib/collapse-repeats.js';
   import OfficeToolRun, { toolKeys, type OfficeToolCall } from './OfficeToolRun.svelte';
+  import { storedToDisplay } from '$lib/office-chat-history.js';
+  import ChatComposer from './ChatComposer.svelte';
+  import AttachmentStrip from './AttachmentStrip.svelte';
+  import type { AttachmentMeta, ComposerSendDetail } from '$lib/attachments/types.js';
   import {
     startChatEpisode,
+    getChatMessages,
     sendChatMessageStream,
     respondChatPermission,
     type ChatStreamEvent,
@@ -131,7 +137,6 @@ Kernel tools you have (use ONE per turn):
   }
   $: avatarText = avatarInitials(topAgentName);
   $: chatTitle = topAgentName;
-  $: episodeTitle = `${topAgentName} (chat)`;
   $: chatPlaceholder = `Message ${topAgentName}…`;
   $: showRankLabel =
     !!topAgentRankLabel.trim() &&
@@ -186,6 +191,8 @@ Kernel tools you have (use ONE per turn):
   type DisplayMessage = {
     role: 'user' | 'assistant';
     blocks: StreamBlock[];
+    /** A user turn's attachments — metas, or bare ids from history. */
+    attachments?: Array<AttachmentMeta | string>;
   };
 
   let episodeId: string | null = null;
@@ -284,7 +291,9 @@ Kernel tools you have (use ONE per turn):
     } catch { /* keep silent — selector just won't populate */ }
   }
   let input = '';
-  let inputEl: HTMLTextAreaElement;
+  let composer: ChatComposer;
+  /** The whole panel takes dropped files, not just the composer. */
+  let modalEl: HTMLDivElement | null = null;
   let scrollEl: HTMLDivElement;
   /** Boot phase — drives the loader. Once 'ready', the loader fades out
    *  and the chat slides in. Failure surfaces inside the loader. */
@@ -323,20 +332,26 @@ Kernel tools you have (use ONE per turn):
   });
 
   /**
-   * Create the episode and warm it up. Also the path taken when the user picks
-   * a different model: a switch starts a FRESH episode rather than repointing
-   * the current one, because `instructions` are set at creation and the tool
-   * policy has to change with the provider. Repointing would leave a Claude
-   * Code prompt in front of a model that has none of those tools.
+   * Open the episode and warm it up. By default this CONTINUES the agent's
+   * latest 3D episode for the current model (its transcript is replayed), so
+   * reopening the panel does not add a row to /chat every time; `fresh` opens
+   * a new one. A model switch lands on that model's own episode rather than
+   * repointing the current one, because the tool policy in `instructions`
+   * has to match the provider — a Claude Code prompt in front of a model with
+   * none of those tools would invite calls that cannot land.
    */
-  async function openChannel(): Promise<void> {
+  async function openChannel(fresh = false): Promise<void> {
     const startedAt = performance.now();
     startError = '';
     phase = 'connecting';
-    // 1) Create the chat episode (fast — DB row + handshake).
+    // 1) Resume or create the chat episode (fast — DB row + handshake).
     try {
       const ep = (await startChatEpisode({
-        title: episodeTitle,
+        // No title: the first real message names it, as on /chat. The agent
+        // is carried by source_label.
+        source: 'office3d',
+        source_label: topAgentName,
+        resume: !fresh,
         provider,
         ...(model ? { model } : {}),
         // A user-authored prompt is honoured whatever the provider; only the
@@ -344,9 +359,10 @@ Kernel tools you have (use ONE per turn):
         instructions: (topAgentSystemPrompt && topAgentSystemPrompt.trim().length > 0)
           ? topAgentSystemPrompt
           : defaultInstructions(topAgentName, provider),
-      })) as { id: string };
+      })) as { id: string; resumed?: boolean; message_count?: number };
       episodeId = ep?.id ?? null;
       if (!episodeId) throw new Error('episode id missing in response');
+      messages = ep.resumed && ep.message_count ? storedToDisplay(await getChatMessages(episodeId)) : [];
     } catch (e: any) {
       startError = e?.message || 'Failed to start chat';
       phase = 'error';
@@ -368,25 +384,39 @@ Kernel tools you have (use ONE per turn):
     }
     phase = 'ready';
     await tick();
-    inputEl?.focus({ preventScroll: true });
+    scrollToBottom();
+    composer?.focus();
   }
 
-  /**
-   * Switch the channel to another model. The transcript goes with the old
-   * episode, so this is destructive to the conversation — the confirm only
-   * appears once there is something to lose.
-   */
-  async function pickModel(slug: string, id: string): Promise<void> {
-    modelMenuOpen = false;
-    if (slug === provider && id === model) return;
-    if (messages.length > 0 && !confirm('Switching model starts a new conversation. Continue?')) return;
+  /** Leaves the current conversation where it is (still listed in /chat) and
+   *  starts a blank one with the same agent and model. */
+  async function newConversation(): Promise<void> {
+    if (sending || switching) return;
     switching = true;
+    resetTransient();
+    await openChannel(true);
+    switching = false;
+  }
+
+  function resetTransient() {
     streamAbort?.abort();
     warmupAbort?.abort();
     messages = [];
     streamingBlocks = [];
     pendingPermission = null;
     allowAllSession = false;
+  }
+
+  /**
+   * Switch the channel to another model. Nothing is lost: the current
+   * transcript stays in its episode and comes back when this model is picked
+   * again, and the new model resumes its own last conversation.
+   */
+  async function pickModel(slug: string, id: string): Promise<void> {
+    modelMenuOpen = false;
+    if (slug === provider && id === model) return;
+    switching = true;
+    resetTransient();
     provider = slug;
     model = id;
     rememberChoice(slug, id);
@@ -404,13 +434,12 @@ Kernel tools you have (use ONE per turn):
     if (!episodeId) return;
     warmupAbort = new AbortController();
     try {
-      // The warmup is persisted to the episode (the streaming endpoint
-      // doesn't accept a skip-persistence flag) but stays hidden from the
-      // UI — each modal open creates a throwaway episode so the user
-      // never browses to it.
+      // `warmup` keeps the turn out of the episode: not stored, and on a
+      // throwaway SDK session so the resumed conversation never sees it.
       const stream = sendChatMessageStream(
         {
           episode_id: episodeId,
+          warmup: true,
           message: 'Ping. Respond with exactly the word "ready" and nothing else.',
           allowed_tools: TOP_AGENT_ALLOWED_TOOLS,
           disallowed_tools: TOP_AGENT_DISALLOWED_TOOLS,
@@ -433,20 +462,24 @@ Kernel tools you have (use ONE per turn):
     }
   }
 
-  async function doSend() {
+  async function doSend(detail: ComposerSendDetail) {
     if (sending || phase !== 'ready' || !episodeId) return;
-    const msg = input.trim();
-    if (!msg) return;
+    const msg = detail.text.trim();
+    if (!msg && detail.attachmentIds.length === 0) return;
     input = '';
-    if (inputEl) inputEl.style.height = 'auto';
-    await runStreamingTurn(msg);
+    await runStreamingTurn(msg, detail.attachments);
   }
 
-  async function runStreamingTurn(msg: string) {
+  async function runStreamingTurn(msg: string, attachments: AttachmentMeta[] = []) {
     if (!episodeId) return;
+    const attachmentIds = attachments.map((a) => a.id);
     messages = [
       ...messages,
-      { role: 'user', blocks: [{ type: 'text', text: msg }] },
+      {
+        role: 'user',
+        blocks: msg ? [{ type: 'text', text: msg }] : [],
+        ...(attachments.length ? { attachments } : {}),
+      },
     ];
     sending = true;
     streamingBlocks = [];
@@ -457,7 +490,8 @@ Kernel tools you have (use ONE per turn):
     try {
       const stream = sendChatMessageStream(
         { episode_id: episodeId, message: msg, allowed_tools: TOP_AGENT_ALLOWED_TOOLS,
-          disallowed_tools: TOP_AGENT_DISALLOWED_TOOLS, isolate_settings: true },
+          disallowed_tools: TOP_AGENT_DISALLOWED_TOOLS, isolate_settings: true,
+          ...(attachmentIds.length ? { attachment_ids: attachmentIds } : {}) },
         streamAbort.signal,
       );
       for await (const ev of stream) {
@@ -465,9 +499,11 @@ Kernel tools you have (use ONE per turn):
       }
     } catch (e: any) {
       if (e?.name !== 'AbortError') {
+        // The composer let go of the files on send; a retry has to re-attach.
+        const lost = attachmentIds.length ? ' — the attachments were not sent; attach them again to retry.' : '';
         messages = [
           ...messages,
-          { role: 'assistant', blocks: [{ type: 'text', text: 'Error: ' + (e?.message ?? e) }] },
+          { role: 'assistant', blocks: [{ type: 'text', text: 'Error: ' + (e?.message ?? e) + lost }] },
         ];
       }
     } finally {
@@ -592,21 +628,6 @@ Kernel tools you have (use ONE per turn):
     scrollEl.scrollTop = scrollEl.scrollHeight;
   }
 
-  function onKeydown(e: KeyboardEvent) {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      doSend();
-    } else if (e.key === 'Escape') {
-      handleClose();
-    }
-  }
-
-  function autoResize(e: Event) {
-    const ta = e.target as HTMLTextAreaElement;
-    ta.style.height = 'auto';
-    ta.style.height = Math.min(ta.scrollHeight, 160) + 'px';
-  }
-
   function handleClose() {
     if (streamAbort) {
       try { streamAbort.abort(); } catch { /* ignore */ }
@@ -643,6 +664,7 @@ Kernel tools you have (use ONE per turn):
      stays visible and interactive while the channel is open. -->
 <div class="oc-overlay" role="presentation">
   <div
+    bind:this={modalEl}
     class="oc-modal"
     style="--cmd-color:{topAgentColor};"
     on:click|stopPropagation
@@ -761,6 +783,13 @@ Kernel tools you have (use ONE per turn):
             </div>
           {/if}
         </div>
+        <button
+          class="oc-close oc-new"
+          on:click={newConversation}
+          disabled={sending || switching}
+          title="New conversation"
+          aria-label="New conversation"
+        >+</button>
         <button class="oc-close" on:click={handleClose} title="Close (Esc)">×</button>
       </div>
     </header>
@@ -782,6 +811,9 @@ Kernel tools you have (use ONE per turn):
               {m.role === 'user' ? 'You' : avatarText}
             </div>
             <div class="oc-body-inner">
+              {#if m.attachments?.length}
+                <div class="oc-atts"><AttachmentStrip attachments={m.attachments} /></div>
+              {/if}
               {#each collapseRepeats(m.blocks, foldKey) as r}
                 {#if r.item.type === 'text'}
                   <div class="oc-text">{@html formatMd(r.item.text)}</div>
@@ -838,23 +870,16 @@ Kernel tools you have (use ONE per turn):
     </div>
 
     <footer class="oc-foot">
-      <textarea
-        bind:this={inputEl}
-        class="oc-input"
+      <ChatComposer
+        bind:this={composer}
         bind:value={input}
-        on:keydown={onKeydown}
-        on:input={autoResize}
+        {sending}
+        attachments
+        dropTarget={modalEl}
         placeholder={chatPlaceholder}
-        rows="1"
-        disabled={sending}
-      ></textarea>
-      <button
-        class="oc-send"
-        on:click={doSend}
-        disabled={sending || !input.trim()}
-      >
-        {sending ? '…' : 'Send'}
-      </button>
+        sendLabel={`Send to ${topAgentName}`}
+        on:send={(e) => doSend(e.detail)}
+      />
     </footer>
     </div>
     {/if}
@@ -1132,6 +1157,8 @@ Kernel tools you have (use ONE per turn):
     border-radius: 6px;
   }
   .oc-close:hover { background: rgba(255, 255, 255, 0.06); color: var(--text-1, #f0f0f0); }
+  .oc-new { font-size: 18px; }
+  .oc-new:disabled { opacity: 0.4; cursor: default; }
 
   /* ── Model selector ──────────────────────────────────────────────
      Sits left of the close button, deliberately quiet: the model matters
@@ -1372,44 +1399,14 @@ Kernel tools you have (use ONE per turn):
     40% { opacity: 1; transform: translateY(-3px); }
   }
 
+  /* The shared composer draws its own top rule; this band only pads it and
+     hands it the top agent's colour as its accent. */
   .oc-foot {
-    display: flex;
-    gap: 8px;
-    align-items: flex-end;
-    padding: 10px 12px;
-    border-top: 1px solid var(--border, #2a2a2a);
+    padding: 0 12px 10px;
     background: rgba(255, 255, 255, 0.02);
+    --flow-color: var(--cmd-color, #d4a84b);
   }
-  .oc-input {
-    flex: 1;
-    background: rgba(0, 0, 0, 0.4);
-    border: 1px solid var(--border, #2a2a2a);
-    border-radius: 8px;
-    padding: 8px 12px;
-    color: var(--text-1, #f0f0f0);
-    font-family: inherit;
-    font-size: 13px;
-    resize: none;
-    max-height: 160px;
-    overflow-y: auto;
-    line-height: 1.45;
-  }
-  .oc-input:focus { outline: none; border-color: var(--cmd-color, #d4a84b); }
-  .oc-input:disabled { opacity: 0.5; cursor: not-allowed; }
-  .oc-send {
-    background: var(--cmd-color, #d4a84b);
-    color: #1a1a1a;
-    border: none;
-    padding: 8px 18px;
-    border-radius: 8px;
-    font-weight: 700;
-    cursor: pointer;
-    font-size: 12px;
-    letter-spacing: 0.4px;
-    text-transform: uppercase;
-  }
-  .oc-send:disabled { opacity: 0.4; cursor: not-allowed; }
-  .oc-send:not(:disabled):hover { filter: brightness(1.08); }
+  .oc-msg-user .oc-atts :global(.as) { justify-content: flex-end; }
 
   /* Inline tool-permission card (was a modal over the whole page). */
   .oc-perm {

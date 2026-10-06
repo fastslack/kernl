@@ -274,7 +274,35 @@ export class AgentFlowsService {
     return this.getFlow(id);
   }
 
-  /** Rewrite the sandbox variables of every agent in the office that works on a repo. */
+  /**
+   * Switch an office off or back on. A paused office keeps its agents,
+   * schedules, triggers and lot; createRun refuses runs for its members, the
+   * scheduler skips their slots and event triggers skip them. Agent rows are
+   * left alone, so resuming brings back exactly the members that were active.
+   */
+  setFlowPaused(id: string, paused: boolean): AgentFlow | undefined {
+    const flow = this.getFlow(id);
+    if (!flow || flow.active !== 1) return undefined;
+    this.db
+      .prepare("UPDATE agent_flows SET paused = ?, updated_at = ? WHERE id = ?")
+      .run(paused ? 1 : 0, isoNow(), id);
+    this.events.emit("data.changed", { module: "agents", action: paused ? "flow_paused" : "flow_resumed" });
+    return this.getFlow(id);
+  }
+
+  /** True when the office exists and is switched off. '' (no office) is never paused. */
+  isFlowPaused(id: string | null | undefined): boolean {
+    if (!id) return false;
+    const row = this.db.prepare("SELECT paused FROM agent_flows WHERE id = ?").get(id) as { paused: number } | undefined;
+    return row?.paused === 1;
+  }
+
+  /** Whether the office switch stops this agent — see agentOfficePaused. */
+  isAgentOfficePaused(agentId: string): boolean {
+    return agentOfficePaused(this.db, agentId);
+  }
+
+    /** Rewrite the sandbox variables of every agent in the office that works on a repo. */
   private propagateRepoIsolation(flowId: string, isolation: RepoIsolation): void {
     const rows = this.db
       .prepare("SELECT id, variables FROM agents WHERE flow_id = ?")
@@ -397,4 +425,26 @@ export class AgentFlowsService {
     this.events.emit("data.changed", { module: "agents", action: "agent_flow_changed" });
     return true;
   }
+}
+
+/**
+ * True when the agent's office is switched off and the switch applies to it.
+ * The top agent (holder of the highest active rank) is exempt: the dashboard
+ * shows it as headquarters, apart from the office it happens to sit in, so
+ * switching that office off from its card must not silence the chief.
+ * Shared by createRun, the scheduler and the reactive engine.
+ */
+export function agentOfficePaused(db: SqliteDb, agentId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT COALESCE(f.paused, 0) AS paused, a.rank_id
+         FROM agents a LEFT JOIN agent_flows f ON f.id = a.flow_id
+        WHERE a.id = ?`,
+    )
+    .get(agentId) as { paused: number; rank_id: string | null } | undefined;
+  if (!row || row.paused !== 1) return false;
+  const top = db
+    .prepare("SELECT id FROM agent_ranks WHERE active = 1 ORDER BY level DESC LIMIT 1")
+    .get() as { id: string } | undefined;
+  return !(top && row.rank_id === top.id);
 }

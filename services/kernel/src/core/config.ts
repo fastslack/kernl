@@ -76,6 +76,8 @@ export interface KernelConfig {
     preferredProvider: string;
     preferredModel: string;
     extractionModel: string;
+    /** CHAT_TITLE_MODEL — model that names conversations; empty = default chain. */
+    titleModel: string;
     contextBudget: number;
     maxEpisodeMessages: number;
     decayIntervalMs: number;
@@ -409,6 +411,7 @@ export function loadConfig(): KernelConfig {
       preferredProvider: process.env.CHAT_PREFERRED_PROVIDER ?? "",
       preferredModel: process.env.CHAT_PREFERRED_MODEL ?? "",
       extractionModel: process.env.CHAT_EXTRACTION_MODEL ?? "",
+      titleModel: process.env.CHAT_TITLE_MODEL ?? "",
       contextBudget: parseInt(process.env.CHAT_CONTEXT_BUDGET ?? "2000", 10),
       maxEpisodeMessages: parseInt(process.env.CHAT_MAX_EPISODE_MESSAGES ?? "100", 10),
       decayIntervalMs: parseInt(process.env.CHAT_DECAY_INTERVAL_MS ?? "3600000", 10),

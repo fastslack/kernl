@@ -22,7 +22,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onMount } from 'svelte';
-  import { extPages } from '$lib/ext-host.js';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
   // Contenido por defecto del tab Overview. Quien monta el drawer puede
   // reemplazarlo por el suyo (el mundo 3D lo hace, para meterle sus tres
@@ -142,8 +141,8 @@
   let headModelError = '';
   async function setHeadModel(next: { provider: string; model: string }) {
     headModelError = '';
-    // A non-Claude model on a claude_code agent also moves it to the kernel
-    // executor — the Claude Code CLI cannot run it (model-chain.ts).
+    // The engine follows the pick: a Claude Code model moves the agent to the
+    // claude_code executor, any other to the kernel's (model-chain.ts).
     await detail.patch(primaryModelPatch(agent ?? {}, headChain, next));
     headModelError = String($detail.error || '');
   }
@@ -185,11 +184,6 @@
   // distingue eso de una pausa pedida por el operador: la marca sí.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent.auto_paused_at || '');
   $: autoPausedAgo = autoPaused ? sinceLabel(agent?.auto_paused_at ?? '') : '';
-  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
-  // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
-  // The panel is a paid extension's page: without `com.kernl.devops` active,
-  // /devops is the "extension not available" screen, so the link stays hidden.
-  $: devopsOffice = traitsOf(flow).devopsLink && $extPages.some((p) => p.view === 'devops');
   // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
   // office is watching it happen — so the drawer offers the way through. The
   // link carries no piece id on purpose: Scene Studio opens whichever piece is
@@ -365,7 +359,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
                 <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
-                             providers={headProviders} requiresTools={true}
+                             providers={headProviders} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
                   <span class="ip-chip ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
@@ -378,7 +372,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
                 <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
-                             providers={headProviders} requiresTools={false}
+                             providers={headProviders} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
                   <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError}
@@ -421,11 +415,6 @@
                   : $t('agent.head.run')}
           </span>
         </button>
-        {#if devopsOffice}
-          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
-            <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
-          </a>
-        {/if}
         {#if creativosOffice}
           <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
                   title="Watch this office draw, live, without leaving the office">

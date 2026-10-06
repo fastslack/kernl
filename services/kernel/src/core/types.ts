@@ -330,7 +330,80 @@ export interface KernelModule {
    * lazy code-bundle channel) — a module can use either or both.
    */
   getAgentDrivers?(): AgentDriver[];
+  /**
+   * Optional — data retention policies for the tables this module owns. The
+   * storage module collects them on every run (so toggling an extension adds
+   * or removes its rows), shows them on /system?tab=storage and applies the
+   * enabled ones nightly. See `RetentionPolicy`.
+   */
+  getRetentionPolicies?(): RetentionPolicy[];
   shutdown(): Promise<void>;
+}
+
+// ── Data retention ───────────────────────────────────────
+
+/**
+ * What a policy's data is, which decides its default and how the storage page
+ * presents it:
+ *   - operational: logs, polls, history the product writes about itself.
+ *   - cache: anything rebuilt on demand.
+ *   - reference: catalogs re-ingestable from their upstream.
+ *   - personal: the user's own data (mail, feeds, LLM runs) — never on by default.
+ */
+export type RetentionKind = "operational" | "cache" | "reference" | "personal";
+
+export interface RetentionRunContext {
+  db: SqliteDb;
+  /** Retention in days chosen by the user, or null for a policy without an age cut. */
+  days: number | null;
+  /** ISO timestamp `days` ago, or null when `days` is null. */
+  cutoff: string | null;
+  /** Upper bound of rows one `purge` call may delete. */
+  batchSize: number;
+}
+
+export interface RetentionPolicy {
+  /** Stable id, namespaced by owner: "agents.scheduled-runs", "rss.items". */
+  id: string;
+  label: string;
+  /** One line shown under the label: what is deleted and what is always kept. */
+  description: string;
+  kind: RetentionKind;
+  /** Tables whose weight this policy accounts for (size estimates only). */
+  tables: string[];
+  /** Default retention in days; null = no age cut (the policy decides what goes). */
+  defaultDays: number | null;
+  /** Choices offered in the UI. Defaults to [7, 14, 30, 60, 90, 180, 365]. */
+  dayOptions?: number[];
+  /** Whether the policy runs before the user touches it. */
+  defaultEnabled: boolean;
+  /** Rows the policy would delete right now with these settings. Read-only. */
+  estimate(rc: RetentionRunContext): number;
+  /**
+   * Delete at most `rc.batchSize` eligible rows and return how many went. The
+   * runner calls it again until it returns less than the batch size, so a
+   * policy never holds the write lock for long.
+   */
+  purge(rc: RetentionRunContext): number;
+  /** Optional work after the last batch (e.g. rebuilding an FTS index). */
+  afterPurge?(rc: RetentionRunContext, deleted: number): void;
+  /**
+   * For data that a background collector keeps adding (catalog ingesters):
+   * a ceiling the user sets on the storage page. The collector reads it with
+   * `retentionCap()` from the SDK and parks itself once the count reaches it.
+   */
+  capacity?: RetentionCapacity;
+}
+
+export interface RetentionCapacity {
+  /** What `count` counts, as a key the dashboard words ("titles"). */
+  unit: string;
+  /** Current amount, e.g. live titles in the catalog. */
+  count(db: SqliteDb): number;
+  /** Ceiling before the user picks one; null = no limit. */
+  defaultCap: number | null;
+  /** Choices offered in the UI (null, "no limit", is always offered too). */
+  capOptions: number[];
 }
 
 // ── Extension System (self-registering modules) ──────────

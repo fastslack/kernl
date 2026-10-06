@@ -105,11 +105,25 @@ export function runsOnClaudeCode(link: ChainLink): boolean {
   return provider === "claudecode" || provider === "claude" || provider === "anthropic" || provider === "";
 }
 
+/** The Claude Code SDK provider — stored as `claude_code`, listed as `claude-code`. */
+export function isClaudeCodeProvider(provider: string): boolean {
+  return provider.toLowerCase().replace(/[^a-z]/g, "") === "claudecode";
+}
+
 /**
- * The fields to write when `link` becomes an agent's primary model. Picking a
- * model the claude_code executor cannot run moves the agent to the kernel's
- * own executor in the same write, which runs any provider in the chain —
- * otherwise the pick is saved and silently never used.
+ * The engine a primary model implies. The Claude Code SDK cannot carry the
+ * kernel's tool loop and runs its own, so its models only work on the
+ * claude_code executor; every other provider is driven by the kernel.
+ */
+export function engineFor(link: ChainLink): "claude_code" | "native" {
+  return isClaudeCodeProvider(link.provider) ? "claude_code" : "native";
+}
+
+/**
+ * The fields to write when `link` becomes an agent's primary model. The
+ * engine follows the pick in the same write — a Claude Code model moves the
+ * agent to the claude_code executor, any other model to the kernel's — so
+ * the pick is never saved onto an engine that cannot run it.
  */
 export function primaryModelPatch(
   agent: { executor_type?: string },
@@ -117,6 +131,8 @@ export function primaryModelPatch(
   link: ChainLink,
 ): Record<string, string> {
   const fields: Record<string, string> = writeChain([link, ...chain.slice(1)]);
-  if (agent.executor_type === "claude_code" && !runsOnClaudeCode(link)) fields.executor_type = "native";
+  const current = agent.executor_type === "claude_code" ? "claude_code" : "native";
+  const next = engineFor(link);
+  if (next !== current) fields.executor_type = next;
   return fields;
 }

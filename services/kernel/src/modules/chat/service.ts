@@ -26,6 +26,7 @@ import { ContextEngine, type RetrievedContext } from "./context-engine.js";
 import { LocalEmbeddings } from "../../core/embeddings/local.js";
 import { ExtractionPipeline } from "./extraction.js";
 import type { MemoryDistiller } from "./memory-distiller.js";
+import { TITLE_AT, type ChatTitler } from "./titler.js";
 import {
   convertToolsForLlm,
   buildToolExecutor,
@@ -44,7 +45,9 @@ import type {
   ChatStreamSink,
   ChatStreamEvent,
   PermissionRequester,
+  EpisodeSource,
 } from "./types.js";
+import { EPISODE_SOURCES } from "./types.js";
 import { ChatClaudeCodeProvider } from "../../core/llm/claude-code-adapter.js";
 import { canonicalSlug } from "../../core/llm/provider-catalog.js";
 // Iteration-budget warning — single canonical copy lives in the core tool-loop
@@ -52,6 +55,19 @@ import { canonicalSlug } from "../../core/llm/provider-catalog.js";
 // loop on the same rails).
 import { formatBudgetWarning } from "../../core/llm/tool-loop.js";
 import { localDate } from "../../sdk/clock.js";
+import { resolveInputCaps, TEXT_ONLY_CAPS } from "../../core/llm/input-caps.js";
+import { getAttachmentService } from "../attachments/index.js";
+import type { AttachmentMeta, AttachmentRecord } from "../attachments/index.js";
+import { buildAttachmentBlocks, hasNativeBlocks, looksLikeNativeBlockRejection } from "../attachments/blocks.js";
+import {
+  applySlots,
+  encodeEnvelope,
+  fillSlots,
+  parseEnvelope,
+  prepareHistory,
+  type AttachmentSlot,
+  type FilledSlots,
+} from "./attachment-history.js";
 
 /**
  * Load the SOUL prompt from `assets/SOUL.md`. Cached after the first read —
@@ -99,6 +115,17 @@ function extractTextFromBlocks(blocks: ContentBlock[]): string {
     if (b.type === "text") parts.push(b.text);
   }
   return parts.join("").trim();
+}
+
+/** Rough token cost of attachments, for the episode counters only. */
+function estimateAttachmentTokens(recs: readonly AttachmentRecord[]): number {
+  let n = 0;
+  for (const r of recs) {
+    if (r.kind === "image") n += 1000;
+    else if (r.kind === "video") n += 1000 * Math.min(r.derived.frames?.length ?? 0, 16) + estimateTokens(r.derived.transcript ?? "");
+    else n += estimateTokens(r.derived.text ?? "");
+  }
+  return n;
 }
 
 /** Count tool_use blocks for the context_used summary. */
@@ -164,6 +191,7 @@ export class ChatService {
    * and minimal bootstraps that don't need recall just leave it null.
    */
   private distiller: MemoryDistiller | null = null;
+  private titler: ChatTitler | null = null;
   /** How many distilled facts to inject per turn. Tunable from chat config. */
   private memoryRecallLimit = 12;
   // Prepared statements — compiled once, reused on every call
@@ -221,6 +249,10 @@ export class ChatService {
    * Wire the memory distiller post-construction. Idempotent — calling with
    * `null` disables recall injection without breaking the chat loop.
    */
+  setTitler(titler: ChatTitler | null): void {
+    this.titler = titler;
+  }
+
   setDistiller(distiller: MemoryDistiller | null): void {
     this.distiller = distiller;
     log.info(`Chat: memory distiller ${distiller ? "wired" : "cleared"} for recall injection`);
@@ -259,6 +291,9 @@ export class ChatService {
     provider?: string;
     model?: string;
     instructions?: string;
+    /** Where it was started; unknown values fall back to dashboard. */
+    source?: string;
+    source_label?: string;
   }): Episode {
     const now = isoNow();
     // A chat that names its model keeps it, and that pick is remembered.
@@ -281,14 +316,18 @@ export class ChatService {
       llm_model: start.model,
       total_tokens: 0,
       instructions: input.instructions || "",
+      source: EPISODE_SOURCES.includes(input.source as EpisodeSource)
+        ? (input.source as EpisodeSource)
+        : "dashboard",
+      source_label: input.source_label || "",
       created_at: now,
       updated_at: now,
     };
 
     this.db
       .prepare(
-        `INSERT INTO chat_episodes (id, title, summary, status, message_count, llm_provider, llm_model, total_tokens, instructions, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO chat_episodes (id, title, summary, status, message_count, llm_provider, llm_model, total_tokens, instructions, source, source_label, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         episode.id,
@@ -300,6 +339,8 @@ export class ChatService {
         episode.llm_model,
         episode.total_tokens,
         episode.instructions,
+        episode.source,
+        episode.source_label,
         episode.created_at,
         episode.updated_at,
       );
@@ -315,6 +356,41 @@ export class ChatService {
 
     this.events.emit("data.changed", { module: "chat", action: "episode_created" });
     return episode;
+  }
+
+  /**
+   * The episode a fixed surface (the 3D panel) should continue: the latest
+   * active one with the same source, label, provider and model. Provider
+   * spellings are compared canonically — the 3D panel says `claude_code`, the
+   * registry `claude-code`. The surface's current instructions replace the
+   * stored ones, so an edited agent prompt applies to the continued chat.
+   * Creates a fresh episode when none matches.
+   */
+  resumeOrCreateEpisode(input: {
+    title?: string;
+    provider?: string;
+    model?: string;
+    instructions?: string;
+    source: string;
+    source_label?: string;
+  }): Episode & { resumed: boolean } {
+    const candidates = this.db
+      .prepare(
+        `SELECT * FROM chat_episodes
+         WHERE status = 'active' AND source = ? AND source_label = ? AND llm_model = ?
+         ORDER BY updated_at DESC`,
+      )
+      .all(input.source, input.source_label || "", input.model || "") as Episode[];
+    const wanted = canonicalSlug(input.provider || "");
+    const found = candidates.find((e) => canonicalSlug(e.llm_provider) === wanted);
+    if (!found) return { ...this.createEpisode(input), resumed: false };
+    if (input.instructions !== undefined && input.instructions !== found.instructions) {
+      this.db
+        .prepare("UPDATE chat_episodes SET instructions = ? WHERE id = ?")
+        .run(input.instructions, found.id);
+      found.instructions = input.instructions;
+    }
+    return { ...found, resumed: true };
   }
 
   getEpisode(id: string): Episode | undefined {
@@ -403,6 +479,8 @@ export class ChatService {
   deleteEpisode(id: string): boolean {
     const episode = this.getEpisode(id);
     if (!episode) return false;
+    // Read before the rows go: the attachments die with the messages that referenced them.
+    const attachmentIds = this.episodeAttachmentIds(id);
     const trx = this.db.transaction(() => {
       this.db
         .prepare(
@@ -416,6 +494,11 @@ export class ChatService {
     const ok = trx();
     if (!ok) return false;
     this.lastMemoryId.delete(id);
+    if (attachmentIds.length > 0) {
+      getAttachmentService()?.deleteMany(attachmentIds).catch((err) => {
+        log.warn(`Chat: deleting attachments of episode ${id} failed: ${err instanceof Error ? err.message : String(err)}`);
+      });
+    }
     this.events.emit("data.changed", { module: "chat", action: "episode_deleted" });
     // Note: Neo4j Episode/Memory nodes are NOT deleted here. They become
     // orphans (no SQLite row pointing at them) but don't break anything.
@@ -557,12 +640,19 @@ export class ChatService {
       skipExtraction?: boolean;
       images?: Array<{ data: string; media_type: string }>;
       documents?: Array<{ data: string; media_type: string; filename?: string }>;
+      /** Uploaded attachments (attachments module) — bound here, all or nothing. */
+      attachmentIds?: string[];
     },
   ): Promise<ChatResponse> {
     const episode = this.getEpisode(episodeId);
     if (!episode) throw new Error(`Episode not found: ${episodeId}`);
     if (episode.status === "archived")
       throw new Error("Cannot chat in an archived episode");
+
+    // Bind first: an unknown / unready attachment refuses the send (400)
+    // before anything is stored.
+    const attachmentRecords = this.bindAttachments(options?.attachmentIds);
+    const attachmentIds = attachmentRecords.map((r) => r.id);
 
     // 1. Store user message (text part + image/document references in metadata)
     const images = options?.images ?? [];
@@ -591,9 +681,10 @@ export class ChatService {
       }
     }
 
-    const userTokens = estimateTokens(userMessage) + (images.length * 1000) + (documents.length * 3000);
-    const storedContent = (imageRefs.length > 0 || documentRefs.length > 0)
-      ? JSON.stringify({ text: userMessage, images: imageRefs, documents: documentRefs })
+    const userTokens = estimateTokens(userMessage) + (images.length * 1000) + (documents.length * 3000) +
+      estimateAttachmentTokens(attachmentRecords);
+    const storedContent = (imageRefs.length > 0 || documentRefs.length > 0 || attachmentIds.length > 0)
+      ? encodeEnvelope({ text: userMessage, attachments: attachmentIds, images: imageRefs, documents: documentRefs })
       : userMessage;
     const userMsg = this.storeMessage(
       episodeId,
@@ -633,23 +724,12 @@ export class ChatService {
       modelHint: episode.llm_model ? ` (${episode.llm_model})` : "",
     });
 
-    // 5. Assemble LLM messages
-    const llmMessages: ChatMessage[] = [];
-
-    for (const m of trimmedHistory) {
-      // Check if message content is a JSON with attachments (stored format)
-      let parsedContent: string | ContentBlock[] = m.content;
-      if (m.role === "user" && m.content.startsWith("{")) {
-        try {
-          const parsed = JSON.parse(m.content) as { text?: string; images?: string[]; documents?: unknown };
-          if ((parsed.images && parsed.images.length > 0) || parsed.documents) {
-            // For history messages, only send the text (attachments already processed)
-            parsedContent = parsed.text ?? "";
-          }
-        } catch { /* not JSON, use as-is */ }
-      }
-      llmMessages.push({ role: m.role, content: parsedContent });
-    }
+    // 5. Assemble LLM messages. Turns with attachments leave a slot that is
+    //    filled per model (its caps, the turn's age) when each link of the
+    //    chain is called; legacy envelopes go as their text, as before.
+    const prepared = prepareHistory(trimmedHistory, (ids) => this.attachmentRecords(ids));
+    const llmMessages: ChatMessage[] = prepared.messages;
+    const attachmentSlots = prepared.slots;
 
     // Replace the last user message with content blocks if attachments are present
     if ((images.length > 0 || documents.length > 0) && llmMessages.length > 0) {
@@ -745,6 +825,7 @@ export class ChatService {
         {
           system: systemForThisTurn,
           tools: hasTools ? this.llmTools : undefined,
+          attachmentSlots,
         },
       );
 
@@ -814,7 +895,7 @@ export class ChatService {
           { provider, model: llmModel },
           fallbackChain,
           llmMessages,
-          { system: synthesisSystem, tools: undefined },
+          { system: synthesisSystem, tools: undefined, attachmentSlots },
         );
         totalTokens += synthesis.tokens_used;
         if (synthesis.content) {
@@ -882,10 +963,8 @@ export class ChatService {
     });
     this.events.emit("data.changed", { module: "chat", action: "message" });
 
-    // 12. Auto-set title from first exchange
-    if (episode.message_count <= 1 && !episode.title) {
-      this.autoTitle(episodeId, userMessage, finalContent);
-    }
+    // 12. Title from the first exchange, renamed by subject when a titler is wired
+    this.titleAfterTurn(episodeId, userMessage || attachmentRecords.map((r) => r.filename).join(", "));
 
     const contextSummary = context
       ? `${context.method} (${context.memories.length} memories, ${context.totalTokens} tokens)${toolsUsed.length > 0 ? ` + ${toolsUsed.length} tools` : ""}`
@@ -930,8 +1009,16 @@ export class ChatService {
        *  turn — the session sees only SDK built-ins + the kernel MCP server.
        *  Used by focused chats like the commander panel. */
       isolateSettings?: boolean;
+      /** A throwaway turn that only warms the subprocess and the prompt cache:
+       *  nothing is stored, the episode's SDK session is neither resumed nor
+       *  replaced, and no title, memory or chat events follow. */
+      warmup?: boolean;
+      /** Uploaded attachments (attachments module) — bound here, all or nothing.
+       *  Ignored on a warmup. Earlier turns' attachments are already in the
+       *  SDK session this turn resumes, so only this turn's are sent. */
+      attachmentIds?: string[];
     } = {},
-  ): Promise<{ message: Message; tokens_used: number }> {
+  ): Promise<{ message: Message | null; tokens_used: number }> {
     const episode = this.getEpisode(episodeId);
     if (!episode) throw new Error(`Episode not found: ${episodeId}`);
     if (episode.status === "archived")
@@ -956,9 +1043,21 @@ export class ChatService {
       );
     }
 
-    // 1. Persist the user turn so reloads show it.
-    const userTokens = estimateTokens(userMessage);
-    const userMsg = this.storeMessage(episodeId, "user", userMessage, userTokens);
+    if (options.warmup) return this.warmupStream(provider, providerName, episode, userMessage, sink, options);
+
+    // 1. Persist the user turn so reloads show it. Attachments are bound
+    //    first: a bad id refuses the turn before anything is stored.
+    const attachmentRecords = this.bindAttachments(options.attachmentIds);
+    const userTokens = estimateTokens(userMessage) + estimateAttachmentTokens(attachmentRecords);
+    const storedUser = attachmentRecords.length > 0
+      ? encodeEnvelope({ text: userMessage, attachments: attachmentRecords.map((r) => r.id) })
+      : userMessage;
+    const userMsg = this.storeMessage(episodeId, "user", storedUser, userTokens);
+    const turnContent = (caps: { vision: boolean; pdf: boolean; video: boolean }): string | ContentBlock[] => {
+      if (attachmentRecords.length === 0) return userMessage;
+      const blocks = buildAttachmentBlocks(attachmentRecords, caps, 0);
+      return userMessage ? [...blocks, { type: "text", text: userMessage }] : blocks;
+    };
 
     // 2. Build the system prompt — same SOUL + identity guard + recall stack
     // the synchronous path uses, so the SDK loop carries the kernel persona.
@@ -1001,18 +1100,29 @@ export class ChatService {
       stopReason?: string;
       sessionId?: string;
     };
+    const runTurn = (content: string | ContentBlock[]) => provider.chatCompletionStream(content, wrappedSink, {
+      model: episode.llm_model || undefined,
+      system: systemText,
+      sessionId: episode.sdk_session_id || undefined,
+      permission: options.permission,
+      cwd: process.env.CHAT_CLAUDE_CWD || process.cwd(),
+      signal: options.signal,
+      allowedTools: options.allowedTools,
+      disallowedTools: options.disallowedTools,
+      isolateSettings: options.isolateSettings,
+    });
+    const content = turnContent(resolveInputCaps(providerName, episode.llm_model));
     try {
-      runResult = await provider.chatCompletionStream(userMessage, wrappedSink, {
-        model: episode.llm_model || undefined,
-        system: systemText,
-        sessionId: episode.sdk_session_id || undefined,
-        permission: options.permission,
-        cwd: process.env.CHAT_CLAUDE_CWD || process.cwd(),
-        signal: options.signal,
-        allowedTools: options.allowedTools,
-        disallowedTools: options.disallowedTools,
-        isolateSettings: options.isolateSettings,
-      });
+      try {
+        runResult = await runTurn(content);
+      } catch (err) {
+        // A refused native block, before anything came back: once more with
+        // the attachments as text.
+        const native = Array.isArray(content) && hasNativeBlocks(content);
+        if (!native || collectedBlocks.length > 0 || options.signal?.aborted || !looksLikeNativeBlockRejection(err)) throw err;
+        log.warn(`Chat stream: attachment block refused (${err instanceof Error ? err.message.slice(0, 160) : String(err)}) — retrying with attachments as text`);
+        runResult = await runTurn(turnContent(TEXT_ONLY_CAPS));
+      }
     } catch (err) {
       sink({
         type: "error",
@@ -1055,16 +1165,57 @@ export class ChatService {
     });
     this.events.emit("data.changed", { module: "chat", action: "message" });
 
-    // Auto-title from the first exchange — mirrors the sync path so the
-    // sidebar reflects the conversation as it grows.
-    if (episode.message_count <= 1 && !episode.title) {
-      this.autoTitle(episodeId, userMessage, finalText);
-    }
+    // Title from the first exchange — mirrors the sync path so the sidebar
+    // reflects the conversation as it grows.
+    this.titleAfterTurn(episodeId, userMessage || attachmentRecords.map((r) => r.filename).join(", "));
 
     // Memory + extraction hooks — best-effort, same as sync chat.
     this.createMemoryNodes(episodeId, userMsg, assistantMsg).catch(() => {});
 
     return { message: assistantMsg, tokens_used: runResult.tokensUsed };
+  }
+
+  /** chatStream's warmup branch: same provider call and system prompt (so the
+   *  prompt cache it fills is the one the next real turn reads), but on a
+   *  fresh SDK session and with every event but the final one dropped. */
+  private async warmupStream(
+    provider: ChatClaudeCodeProvider,
+    providerName: string,
+    episode: Episode,
+    userMessage: string,
+    sink: ChatStreamSink,
+    options: {
+      permission?: PermissionRequester;
+      signal?: AbortSignal;
+      allowedTools?: string[];
+      disallowedTools?: string[];
+      isolateSettings?: boolean;
+    },
+  ): Promise<{ message: null; tokens_used: number }> {
+    const systemText = this.buildSystemPrompt({
+      identityProvider: providerName,
+      modelHint: episode.llm_model ? ` (${episode.llm_model})` : "",
+      episodeInstructions: episode.instructions,
+    });
+    try {
+      const run = await provider.chatCompletionStream(userMessage, (ev) => {
+        if (ev.type === "permission_request") sink(ev);
+      }, {
+        model: episode.llm_model || undefined,
+        system: systemText,
+        permission: options.permission,
+        cwd: process.env.CHAT_CLAUDE_CWD || process.cwd(),
+        signal: options.signal,
+        allowedTools: options.allowedTools,
+        disallowedTools: options.disallowedTools,
+        isolateSettings: options.isolateSettings,
+      });
+      sink({ type: "done", final_text: "", tokens_used: run.tokensUsed, stop_reason: run.stopReason, message_id: "" });
+      return { message: null, tokens_used: run.tokensUsed };
+    } catch (err) {
+      sink({ type: "error", message: err instanceof Error ? err.message : String(err) });
+      throw err;
+    }
   }
 
   private persistSdkSessionId(episodeId: string, sessionId: string): void {
@@ -1177,7 +1328,7 @@ export class ChatService {
     primary: { provider: ChatLlmProvider; model: string },
     chain: Array<{ provider: string; model: string }>,
     messages: ChatMessage[],
-    opts: { system: string; tools?: ToolDefinitionForLlm[] },
+    opts: { system: string; tools?: ToolDefinitionForLlm[]; attachmentSlots?: AttachmentSlot[] },
   ): Promise<{ content: string; tokens_used: number; tool_calls?: import("./types.js").ToolUseBlock[] }> {
     type Link = { provider: ChatLlmProvider; model: string; label: string };
     const links: Link[] = [{ provider: primary.provider, model: primary.model, label: primary.provider.name }];
@@ -1191,14 +1342,33 @@ export class ChatService {
     }
 
     const errMsg = (err: unknown) => (err instanceof Error ? err.message : String(err));
+    const slots = opts.attachmentSlots ?? [];
+    const call = (l: Link, msgs: ChatMessage[]) => l.provider.chatCompletion(msgs, {
+      model: l.model || undefined,
+      system: opts.system,
+      tools: opts.tools,
+      caller: "chat",
+    });
     return runWithFallbackChain(
       links,
-      (l) => l.provider.chatCompletion(messages, {
-        model: l.model || undefined,
-        system: opts.system,
-        tools: opts.tools,
-        caller: "chat",
-      }),
+      async (l) => {
+        if (slots.length === 0) return call(l, messages);
+        // Attachments are rebuilt for each link with that model's caps. The
+        // claude_code shim takes blocks only in the prompt it sends and
+        // carries the rest of the history as a transcript, so its past turns
+        // go as text.
+        const historyAsText = canonicalSlug(l.provider.name) === "claude-code";
+        const filled = this.filledSlotsFor(slots, resolveInputCaps(l.provider.name, l.model), historyAsText);
+        try {
+          return await call(l, applySlots(messages, filled));
+        } catch (err) {
+          if (!filled.native || !looksLikeNativeBlockRejection(err)) throw err;
+          // The provider refused a native block (size, format, no vision):
+          // once more on the same link with every attachment as text.
+          log.warn(`Chat: ${l.label} refused an attachment block (${errMsg(err).slice(0, 160)}) — retrying with attachments as text`);
+          return call(l, applySlots(messages, this.filledSlotsFor(slots, TEXT_ONLY_CAPS, historyAsText)));
+        }
+      },
       {
         // Caller-side schema/tool errors fail identically on every provider —
         // bail immediately so the user sees the real cause, not the last
@@ -1222,6 +1392,64 @@ export class ChatService {
         },
       },
     );
+  }
+
+  /** Slot contents per (slots, caps) — the tool loop calls the same link
+   *  several times per turn, and each fill reads and encodes the files. */
+  private slotCache = new WeakMap<readonly AttachmentSlot[], Map<string, FilledSlots>>();
+
+  private filledSlotsFor(slots: AttachmentSlot[], caps: { vision: boolean; pdf: boolean; video: boolean }, historyAsText: boolean): FilledSlots {
+    let perCaps = this.slotCache.get(slots);
+    if (!perCaps) {
+      perCaps = new Map();
+      this.slotCache.set(slots, perCaps);
+    }
+    const key = `${+caps.vision}${+caps.pdf}${+caps.video}${+historyAsText}`;
+    let filled = perCaps.get(key);
+    if (!filled) {
+      filled = fillSlots(slots, caps, { historyAsText });
+      perCaps.set(key, filled);
+    }
+    return filled;
+  }
+
+  /** Bind the attachments a message is about to reference (400 on a bad id). */
+  private bindAttachments(ids: readonly string[] | undefined): AttachmentRecord[] {
+    if (!ids || ids.length === 0) return [];
+    const svc = getAttachmentService();
+    if (!svc) throw new Error("Attachments are not available in this kernel");
+    return svc.bind(ids);
+  }
+
+  private attachmentRecords(ids: readonly string[]): AttachmentRecord[] {
+    if (ids.length === 0) return [];
+    return getAttachmentService()?.getRecords(ids) ?? [];
+  }
+
+  /** Attachment ids referenced by an episode's user messages. */
+  private episodeAttachmentIds(episodeId: string): string[] {
+    const rows = this.db
+      .prepare("SELECT content FROM chat_messages WHERE episode_id = ? AND role = 'user' AND content LIKE '{%'")
+      .all(episodeId) as Array<{ content: string }>;
+    const ids = new Set<string>();
+    for (const r of rows) for (const id of parseEnvelope(r.content)?.attachments ?? []) ids.add(id);
+    return [...ids];
+  }
+
+  /**
+   * Messages for the dashboard: each user message whose envelope references
+   * attachments gets `attachments: AttachmentMeta[]` (ids that no longer
+   * resolve are left out). `content` stays as stored.
+   */
+  withAttachmentMetas(messages: Message[]): Array<Message & { attachments?: AttachmentMeta[] }> {
+    const svc = getAttachmentService();
+    if (!svc) return messages;
+    return messages.map((m) => {
+      if (m.role !== "user") return m;
+      const ids = parseEnvelope(m.content)?.attachments ?? [];
+      if (ids.length === 0) return m;
+      return { ...m, attachments: svc.getRecords(ids).map((r) => svc.toMeta(r)) };
+    });
   }
 
   /**
@@ -1331,19 +1559,25 @@ export class ChatService {
     }
   }
 
-  private autoTitle(
-    episodeId: string,
-    userMessage: string,
-    _assistantResponse: string,
-  ): void {
-    // Simple heuristic: use first ~60 chars of user message as title
-    const title =
-      userMessage.length > 60
-        ? userMessage.slice(0, 57) + "..."
-        : userMessage;
-
-    this.db
-      .prepare("UPDATE chat_episodes SET title = ?, updated_at = ? WHERE id = ? AND title = ''")
-      .run(title, isoNow(), episodeId);
+  /**
+   * An untitled episode gets the first message's 60-char cut right away, so
+   * the sidebar is never blank. Then, for titles the system wrote, the titler
+   * names it by subject at the counts in TITLE_AT.
+   */
+  private titleAfterTurn(episodeId: string, userMessage: string): void {
+    const ep = this.db
+      .prepare("SELECT title, title_auto, message_count FROM chat_episodes WHERE id = ?")
+      .get(episodeId) as { title: string; title_auto: number; message_count: number } | undefined;
+    if (!ep) return;
+    if (!ep.title) {
+      const cut = userMessage.length > 60 ? userMessage.slice(0, 57) + "..." : userMessage;
+      this.db
+        .prepare("UPDATE chat_episodes SET title = ?, title_auto = 1, updated_at = ? WHERE id = ? AND title = ''")
+        .run(cut, isoNow(), episodeId);
+      ep.title_auto = 1;
+    }
+    if (this.titler && ep.title_auto === 1 && (TITLE_AT as readonly number[]).includes(ep.message_count)) {
+      this.titler.request(episodeId);
+    }
   }
 }

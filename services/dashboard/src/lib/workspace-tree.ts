@@ -19,6 +19,8 @@ export type WsTreeRow = {
   isDir: boolean;
   size: number;
   fileCount: number;
+  /** Set on the "… N more" row closing a folder the server cut short. */
+  more?: number;
 };
 
 // Filter out lockfiles / bun cache dirs / OS junk from the workspace tree.
@@ -42,13 +44,21 @@ export function isWorkspacePathHidden(path: string): boolean {
  * still renders its folders. Children of a collapsed directory are skipped.
  */
 export function buildWsRows(
-  files: Array<{ path: string; type: string; size: number }>,
+  files: Array<{ path: string; type: string; size: number; count?: number }>,
   collapsed: Set<string>,
+  /** Folders listed one level at a time and cut short: entries not shown, per folder ('' = root). */
+  more: Map<string, number> = new Map(),
 ): WsTreeRow[] {
   const dirs = new Set<string>();
   const leafFiles: Array<{ path: string; size: number }> = [];
+  // A folder listed on demand arrives with its entry count before it is opened.
+  const declared = new Map<string, number>();
   for (const f of files) {
-    if (f.type === 'dir') { dirs.add(f.path); continue; }
+    if (f.type === 'dir') {
+      dirs.add(f.path);
+      if (typeof f.count === 'number') declared.set(f.path, f.count);
+      continue;
+    }
     leafFiles.push({ path: f.path, size: f.size });
     const segs = f.path.split('/');
     for (let i = 1; i < segs.length; i++) dirs.add(segs.slice(0, i).join('/'));
@@ -72,7 +82,7 @@ export function buildWsRows(
   }
   const countCache = new Map<string, number>();
   const countFiles = (dir: string): number => {
-    const hit = countCache.get(dir);
+    const hit = countCache.get(dir) ?? declared.get(dir);
     if (hit !== undefined) return hit;
     const c = children.get(dir);
     let n = c ? c.files.length : 0;
@@ -91,6 +101,8 @@ export function buildWsRows(
     for (const f of [...c.files].sort((a, b) => a.path.localeCompare(b.path))) {
       rows.push({ path: f.path, name: f.path.split('/').pop() ?? f.path, depth, isDir: false, size: f.size, fileCount: 0 });
     }
+    const hidden = more.get(dir) ?? 0;
+    if (hidden > 0) rows.push({ path: `${dir}/\u0000more`, name: `… ${hidden} more`, depth, isDir: false, size: 0, fileCount: 0, more: hidden });
   };
   walk('', 0);
   return rows;

@@ -125,7 +125,11 @@
     const lead = team.members[0];
     try {
       // /api/chat/episodes is GET-only — creating one is /api/chat/start.
-      const ep = await call('/api/chat/start', { title: `${$t(team.nameKey)} — first run` });
+      const ep = await call('/api/chat/start', {
+        title: `${$t(team.nameKey)} — first run`,
+        source: 'setup',
+        source_label: $t(team.nameKey),
+      });
       const episodeId = ep?.episode?.id ?? ep?.id ?? ep?.episode_id;
       if (!episodeId) throw new Error($t('setup.team_no_convo'));
       const reply = await call('/api/chat/message', {

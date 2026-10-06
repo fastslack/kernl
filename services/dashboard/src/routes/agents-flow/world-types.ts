@@ -3,6 +3,8 @@
 // used to be declared inline in the component; they live here so every piece
 // that reads or writes the same state agrees on its shape.
 
+import type { AttachmentMeta } from '$lib/attachments/types.js';
+
 /** One agent row of the world, as the /agents-flow graph payload carries it. */
 export type WorldAgent = {
   id: string; name: string; description: string;
@@ -34,7 +36,7 @@ export type WorldChain = {
   label: string; active: number;
 };
 
-export type WorldFlow = { id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string; kind?: string | null; lot_id?: string };
+export type WorldFlow = { id: string; name: string; color: string; active: number; home_workspace_id?: string; home_repo_path?: string; kind?: string | null; lot_id?: string; paused?: number };
 
 export type WorldRank = {
   id: string; name: string; level: number;
@@ -119,7 +121,8 @@ export interface MgmtEntry {
 }
 
 /** One line of the operator-moderated meeting's chat. */
-export type MeetingChatLine = { role: 'you' | string; name: string; text: string; color: string; ts: number };
+/** `attachments`: the operator's files on that line (agents' lines carry none). */
+export type MeetingChatLine = { role: 'you' | string; name: string; text: string; color: string; ts: number; attachments?: AttachmentMeta[] };
 
 /** The CSS keyframe an animated agent-event tag's icon plays. */
 export type AnimatedTagAnim = 'pulse' | 'spin' | 'shake' | 'wobble' | 'bounce' | 'sparkle' | 'pop';

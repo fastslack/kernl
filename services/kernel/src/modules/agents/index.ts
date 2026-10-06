@@ -19,6 +19,7 @@ import { QuestionTriager } from "./question-triager.js";
 import { KernlBugService } from "./kernl-bugs-service.js";
 import { kernlBugTools } from "./kernl-bugs-tools.js";
 import { commentOnRepeat } from "./kernl-bugs-github.js";
+import { auditHostPaths } from "./host-path-audit.js";
 import { agentsTools } from "./tools.js";
 import { auditTools } from "./audit-tools.js";
 import { createAnalysisResourceProvider, createSkillResourceProvider } from "./resources.js";
@@ -35,6 +36,13 @@ import type {
   ProjectGateLike,
 } from "./advanced-types.js";
 import type { EmbeddingsClient } from "../../core/embeddings/client.js";
+
+/**
+ * The host-folder audit waits this long after init: the notification channels
+ * are extensions that register after the core modules, and a send before them
+ * reaches nobody (and would be retried on the next boot anyway).
+ */
+const HOST_PATH_AUDIT_DELAY_MS = 60_000;
 
 /**
  * Public surface of the agents module.
@@ -92,6 +100,7 @@ export function createAgentsModule(): AgentsModule {
   let agentScheduler: AgentScheduler | null = null;
   let questionTriager: QuestionTriager | null = null;
   let kernlBugs: KernlBugService | null = null;
+  let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
 
   // Advanced-capability slots — populated when `ext:agent-advanced` registers.
   const altExecutors = new Map<string, AltExecutorLike>();
@@ -180,6 +189,16 @@ export function createAgentsModule(): AgentsModule {
       // (has workspace or notes tools) gets the new analysis/search tools
       // auto-granted. Idempotent — only patches when missing.
       upgradeWorkspaceAccess(ctx.sqlite);
+
+      // Office repos and agent cwds the kernel cannot see (a Dockerized kernel
+      // without that folder mounted): logged on every boot, notified once.
+      hostPathAuditTimer = setTimeout(() => {
+        hostPathAuditTimer = null;
+        auditHostPaths({ db: ctx.sqlite, notify: (n) => ctx.notifier.send(n) }).catch((err) => {
+          log.warn(`host-path audit failed: ${err instanceof Error ? err.message : String(err)}`);
+        });
+      }, HOST_PATH_AUDIT_DELAY_MS);
+      hostPathAuditTimer.unref?.();
     },
 
     getTools() {
@@ -324,6 +343,7 @@ export function createAgentsModule(): AgentsModule {
     },
 
     async shutdown() {
+      if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
       agentScheduler?.stop();
       questionTriager?.stop();
       reactiveEngine?.stop();

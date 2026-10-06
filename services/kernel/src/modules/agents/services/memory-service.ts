@@ -10,6 +10,25 @@ import {
 } from "../../../core/ranking/relevance.js";
 import type { AgentLearning, AgentRun } from "../types.js";
 
+/** One conversational memory entry. `attachments`: chat attachment ids it carried. */
+export interface MemoryEntry {
+  role: string;
+  content: string;
+  attachments: string[];
+  created_at: string;
+}
+
+function toMemoryEntry(row: { role: string; content: string; attachments?: string | null; created_at: string }): MemoryEntry {
+  let attachments: string[] = [];
+  if (row.attachments) {
+    try {
+      const parsed = JSON.parse(row.attachments);
+      if (Array.isArray(parsed)) attachments = parsed.filter((x): x is string => typeof x === "string");
+    } catch { /* a broken cell reads as none */ }
+  }
+  return { role: row.role, content: row.content, attachments, created_at: row.created_at };
+}
+
 /**
  * What an agent remembers: conversational memory, distilled learnings, and the
  * relevance ranking that decides what gets injected into a prompt. Owns
@@ -154,21 +173,23 @@ export class AgentMemoryService {
 
   // ── Conversational Memory ─────────────────────────
 
-  /** Save a message to agent's conversational memory */
-  addMemory(agentId: string, role: "user" | "assistant", content: string, runId = "", projectId: string | null = null): void {
+  /** Save a message to agent's conversational memory. `attachments`: ids of
+   *  chat attachments the message carried (already bound by the caller). */
+  addMemory(agentId: string, role: "user" | "assistant", content: string, runId = "", projectId: string | null = null, attachments: readonly string[] = []): void {
     const id = newId();
     this.db.prepare(
-      "INSERT INTO agent_memory (id, agent_id, role, content, run_id, project_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)"
-    ).run(id, agentId, role, content, runId, projectId, isoNow());
+      "INSERT INTO agent_memory (id, agent_id, role, content, run_id, project_id, attachments, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    ).run(id, agentId, role, content, runId, projectId, attachments.length ? JSON.stringify(attachments) : "", isoNow());
     this.scheduleEmbed("agent_memory", "embedding", "embedding_model", id, content);
   }
 
   /** Get recent conversational memory for an agent (last N exchanges).
    *  Strictly per project: null reads only memory written without one. */
-  getMemory(agentId: string, limit = 20, projectId: string | null = null): Array<{ role: string; content: string; created_at: string }> {
-    return this.db
-      .prepare("SELECT role, content, created_at FROM agent_memory WHERE agent_id = ? AND project_id IS ? ORDER BY created_at DESC LIMIT ?")
-      .all(agentId, projectId, limit) as Array<{ role: string; content: string; created_at: string }>;
+  getMemory(agentId: string, limit = 20, projectId: string | null = null): MemoryEntry[] {
+    const rows = this.db
+      .prepare("SELECT role, content, attachments, created_at FROM agent_memory WHERE agent_id = ? AND project_id IS ? ORDER BY created_at DESC LIMIT ?")
+      .all(agentId, projectId, limit) as Array<{ role: string; content: string; attachments: string; created_at: string }>;
+    return rows.map(toMemoryEntry);
   }
 
   /** Clear all memory for an agent */
@@ -184,7 +205,7 @@ export class AgentMemoryService {
     limit = 20,
     pool = 100,
     projectId: string | null = null,
-  ): Array<{ role: string; content: string; created_at: string }> {
+  ): MemoryEntry[] {
     const recent = this.getMemory(agentId, pool, projectId);
     return rankByRelevance(recent, goal, m => m.content, limit);
   }
@@ -204,27 +225,26 @@ export class AgentMemoryService {
     cosineWeight?: number,
     minScore?: number,
     projectId: string | null = null,
-  ): Array<{ role: string; content: string; created_at: string }> {
+  ): MemoryEntry[] {
     const rows = this.db
       .prepare(
-        `SELECT role, content, created_at, embedding
+        `SELECT role, content, attachments, created_at, embedding
          FROM agent_memory WHERE agent_id = ? AND project_id IS ?
          ORDER BY created_at DESC LIMIT ?`,
       )
       .all(agentId, projectId, pool) as Array<{
         role: string;
         content: string;
+        attachments: string;
         created_at: string;
         embedding: Buffer | Uint8Array | null;
       }>;
     const items = rows.map(r => ({
-      role: r.role,
-      content: r.content,
-      created_at: r.created_at,
+      ...toMemoryEntry(r),
       embedding: blobToVector(r.embedding),
     }));
     return rankByEmbedding(items, goalVector, goal, m => m.content, limit, cosineWeight, minScore)
-      .map(({ role, content, created_at }) => ({ role, content, created_at }));
+      .map(({ role, content, attachments, created_at }) => ({ role, content, attachments, created_at }));
   }
 
   /**

@@ -9,6 +9,8 @@
 	export let inbox = 0;
 	/** View-menu entries offered by world plugins (extension buildings), e.g. hide a roof. */
 	export let extraItems: Array<{ id: string; label: string }> = [];
+	/** Whether the Message Stream bar at the bottom is shown (toggled from the View menu). */
+	export let streamVisible = true;
 
 	const dispatch = createEventDispatcher<{
 		newoffice: void;
@@ -17,6 +19,7 @@
 		fit: void;
 		turntable: void;
 		perf: void;
+		stream: void;
 		extra: { id: string };
 		inbox: void;
 		registerrepo: void;
@@ -80,6 +83,9 @@
 					</button>
 					<button class="bar-pop-item bar-pop-item--row" type="button" role="menuitem" on:click|stopPropagation={() => pick(() => dispatch('perf'))}>
 						<Icon name="activity" /><span>{$t('office.bar.view_perf')}</span><kbd class="k-kbd">⇧P</kbd>
+					</button>
+					<button class="bar-pop-item bar-pop-item--row" type="button" role="menuitemcheckbox" aria-checked={streamVisible} on:click|stopPropagation={() => pick(() => dispatch('stream'))}>
+						<Icon name="eye" /><span>{$t('office.bar.view_stream')}</span><span class="bar-check" aria-hidden="true">{streamVisible ? '✓' : ''}</span>
 					</button>
 					{#each extraItems as item (item.id)}
 						<button class="bar-pop-item bar-pop-item--row" type="button" role="menuitem" on:click|stopPropagation={() => pick(() => dispatch('extra', { id: item.id }))}>
@@ -151,4 +157,5 @@
 	}
 	@media (prefers-reduced-motion: reduce) { .bar-new { transition: none; } }
 	@media (max-width: 1100px) { .bar-stats { display: none; } }
+	.bar-check { margin-left: auto; min-width: 1em; color: var(--teal); font-weight: 700; text-align: right; }
 </style>

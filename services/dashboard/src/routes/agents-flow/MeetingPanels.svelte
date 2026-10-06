@@ -7,6 +7,8 @@
   // transcript's tail-follow lives here, because it is about this DOM.
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import ChatComposer from '$lib/components/ChatComposer.svelte';
+  import AttachmentStrip from '$lib/components/AttachmentStrip.svelte';
+  import type { AttachmentMeta } from '$lib/attachments/types.js';
   import Icon from '$lib/components/ui/Icon.svelte';
   // Aliased like in AgentWorld3D: `t` is a local name in templates.
   import { t as translate } from '$lib/i18n/index.js';
@@ -33,7 +35,10 @@
   /** bind: — the composer's draft. */
   export let meetingInput: string;
   export let endMeeting: () => void;
-  export let sendMeetingMessage: (text?: string) => void;
+  export let sendMeetingMessage: (text?: string, attachments?: AttachmentMeta[]) => void;
+
+  /** The meeting dialog — files dropped anywhere on it join the draft. */
+  let meetingPanelEl: HTMLDivElement | null = null;
 
   export let agents: WorldAgent[];
   export let flowColor: (aid: string) => string;
@@ -162,7 +167,7 @@
 
 <!-- Active Meeting Panel (the operator moderates) -->
 {#if meetingActive && meetingPanelOpen}
-  <div class="meeting-panel">
+  <div class="meeting-panel" bind:this={meetingPanelEl}>
     <div class="meeting-header">
       <div class="meeting-title">{$translate('meeting.human.title', { topic: meetingTopic })}</div>
       <div class="meeting-attendees">
@@ -184,7 +189,8 @@
           {#if msg.role !== 'you'}
             <div class="meeting-msg-text ip-out-md">{@html formatRunOutput(msg.text)}</div>
           {:else}
-            <span class="meeting-msg-text">{msg.text}</span>
+            {#if msg.attachments?.length}<AttachmentStrip attachments={msg.attachments} />{/if}
+            {#if msg.text}<span class="meeting-msg-text">{msg.text}</span>{/if}
           {/if}
         </div>
       {/each}
@@ -203,7 +209,9 @@
         hint={$translate('meeting.human.hint')}
         sendLabel={$translate('meeting.human.send')}
         maxRows={4}
-        on:send={(e) => sendMeetingMessage(e.detail)}
+        attachments
+        dropTarget={meetingPanelEl}
+        on:send={(e) => sendMeetingMessage(e.detail.text, e.detail.attachments)}
       />
     </div>
   </div>

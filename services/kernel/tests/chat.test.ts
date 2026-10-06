@@ -82,6 +82,7 @@ function stubConfig(): KernelConfig {
       preferredProvider: "",
       preferredModel: "",
       extractionModel: "",
+      titleModel: "",
       contextBudget: 2000,
       maxEpisodeMessages: 100,
       decayIntervalMs: 3600000,

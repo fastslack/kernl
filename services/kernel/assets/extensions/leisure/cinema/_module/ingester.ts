@@ -171,7 +171,16 @@ export async function ingestPass(
   let pages = 0;
   let finished = false;
 
+  const cap = service.catalogCap();
   for (let p = 0; p < maxPages; p++) {
+    // Checked per page: one pass can span several, and the point is to stop
+    // at the ceiling, not a few thousand titles past it.
+    if (cap > 0 && service.catalogSize() >= cap) {
+      log.info(`cinema ingest: ${run.collection} parked — catalog reached its ceiling of ${cap} titles`);
+      service.updateRun(run.id, { cursor, status: "paused", error: "row ceiling reached" });
+      finished = false;
+      break;
+    }
     let resp: ScrapeResponse;
     try {
       resp = await fetchScrapePage(query, cursor, pageSize);
@@ -290,6 +299,11 @@ export async function ingestNextChunk(
   opts: IngestPassOptions = {},
 ): Promise<IngestPassResult | null> {
   if (collections.length === 0) return null;
+
+  // At the ceiling set on System › Storage: nothing to fetch, don't even
+  // wake a run or hit archive.org.
+  const cap = service.catalogCap();
+  if (cap > 0 && service.catalogSize() >= cap) return null;
 
   // Build a snapshot of latest runs per collection.
   const snapshot = collections.map((c) => ({ collection: c, latest: service.latestRun(c) }));
