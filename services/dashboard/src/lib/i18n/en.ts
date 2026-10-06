@@ -953,8 +953,6 @@ const en = {
   "agent.config.look_sub": "How it looks in the 3D world.",
   "agent.config.skin": "Skin",
   "agent.config.loading": "Loading settings…",
-  "agent.drawer.devops_panel": "DevOps panel",
-  "agent.drawer.devops_title": "Open the DevOps control panel — repos, backlog, dev stacks",
   "agent.drawer.resume_hint": "Resume re-enables the schedule and clears the counter.",
   "agent.drawer.pause_title": "Pause: stop schedule + event triggers. Manual Run still works.",
   "agent.drawer.resume_title": "Resume: re-enable schedule + event triggers.",
