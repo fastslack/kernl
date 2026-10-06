@@ -114,14 +114,20 @@ describe("StorageService", () => {
     seedLog(300, 20);
     seedLog(100, 1);
     const snap = await svc.measure();
-    expect(snap.exact).toBe(false);
+    // Exact only where SQLite was built with dbstat: bun 1.4 (CI) has it, 1.3 does not.
+    const hasDbstat = (() => {
+      try { db.prepare("SELECT 1 FROM dbstat LIMIT 1").get(); return true; } catch { return false; }
+    })();
+    expect(snap.exact).toBe(hasDbstat);
     const t = snap.tables.find((x) => x.name === "ext_log")!;
     expect(t.rows).toBe(400);
     expect(t.bytes).toBeGreaterThan(400 * 50);
-    // Calibrated: the tables add up to the pages in use.
-    const used = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count * 4096
-      - (db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count * 4096;
-    expect(Math.abs(snap.tables.reduce((s, x) => s + x.bytes, 0) - used)).toBeLessThan(snap.tables.length + 1);
+    if (!snap.exact) {
+      // Calibrated: the estimated tables add up to the pages in use.
+      const used = (db.prepare("PRAGMA page_count").get() as { page_count: number }).page_count * 4096
+        - (db.prepare("PRAGMA freelist_count").get() as { freelist_count: number }).freelist_count * 4096;
+      expect(Math.abs(snap.tables.reduce((s, x) => s + x.bytes, 0) - used)).toBeLessThan(snap.tables.length + 1);
+    }
     const p = snap.policies.find((x) => x.id === "ext.log")!;
     expect(p.eligibleRows).toBe(300);
     expect(p.eligibleBytes).toBe(Math.round((300 * p.bytes) / 400));
