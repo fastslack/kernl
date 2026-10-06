@@ -14,6 +14,7 @@ import { isPathInside } from "../../../core/fs-paths.js";
 import type { AgentService } from "../service.js";
 import type { WorkspaceServiceLike } from "../advanced-types.js";
 import { agentVariables } from "../agent-fields.js";
+import { listDirLevel } from "./cwd-listing.js";
 
 export function registerWorkspaceFileRoutes(
   server: KernelHttpServer,
@@ -172,34 +173,23 @@ export function registerWorkspaceFileRoutes(
 
   // GET /api/agents/:id/cwd-files — list files under an agent's __cwd_path__
   // (an absolute repo path OUTSIDE data/workspaces). Jailed to that path.
-  server.route("GET", "/api/agents/:id/cwd-files", async ({ params: { id } }) => {
+  server.route("GET", "/api/agents/:id/cwd-files", async ({ params: { id }, query }) => {
     const { root, vars } = requireAgentCwd(id);
-    const { readdir, stat } = await import("node:fs/promises");
-    const files: Array<{ path: string; type: string; size: number }> = [];
-    async function walk(d: string, prefix: string, depth: number): Promise<void> {
-      if (depth > 8) return;
-      let entries;
-      try { entries = await readdir(d, { withFileTypes: true }); } catch { return; }
-      for (const e of entries) {
-        if (e.name === "node_modules" || e.name === ".git" || e.name === ".wrangler") continue;
-        const rel = prefix ? `${prefix}/${e.name}` : e.name;
-        if (e.isDirectory()) {
-          files.push({ path: rel, type: "dir", size: 0 });
-          await walk(resolve(d, e.name), rel, depth + 1);
-        } else {
-          const s = await stat(resolve(d, e.name)).catch(() => ({ size: 0 }));
-          files.push({ path: rel, type: "file", size: (s as { size: number }).size });
-        }
-      }
-    }
     // A path the kernel can't see (a host repo not mounted into the container)
     // lists as empty, exactly like an empty repo — but the executor does not
     // run there, it falls back to the office home. `exists` lets the panel
     // follow it instead of showing an empty directory nobody writes to.
     const exists = existsSync(root);
-    if (exists) await walk(root, "", 0);
     const previewUrl = typeof vars.__preview_url__ === "string" ? vars.__preview_url__ : null;
-    return { cwd: root, exists, preview_url: previewUrl, files, total: files.length };
+    // One level per request (`?dir=` for a subfolder): the panel opens folders
+    // on demand. A whole real repo was 35 MB in one answer (cwd-listing.ts).
+    const dir = query.get("dir") ?? "";
+    const level = exists ? await listDirLevel(root, dir) : null;
+    if (exists && dir && !level) throw new HttpError(404, "folder not found");
+    return {
+      cwd: root, exists, preview_url: previewUrl, dir: level?.dir ?? "",
+      files: level?.entries ?? [], total: level?.total ?? 0, truncated: level?.truncated ?? false,
+    };
   });
 
   // GET /api/agents/:id/cwd-file?path=... — read a file jailed under __cwd_path__
