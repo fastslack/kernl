@@ -107,3 +107,18 @@ describe("wsFmtSize", () => {
     expect(wsFmtSize(1048576)).toBe("1.0 MB");
   });
 });
+
+describe("buildWsRows — folders listed on demand", () => {
+  it("shows the server's count for a folder that was never opened", () => {
+    const rows = buildWsRows([{ path: "web", type: "dir", size: 0, count: 42 }], new Set(["web"]));
+    expect(rows).toEqual([{ path: "web", name: "web", depth: 0, isDir: true, size: 0, fileCount: 42 }]);
+  });
+  it("closes a folder cut short with one '… N more' row", () => {
+    const rows = buildWsRows(
+      [{ path: "shots", type: "dir", size: 0, count: 3 }, { path: "shots/a.png", type: "file", size: 1 }],
+      new Set(),
+      new Map([["shots", 2]]),
+    );
+    expect(rows.map((r) => [r.name, r.depth, r.more ?? 0])).toEqual([["shots", 0, 0], ["a.png", 1, 0], ["… 2 more", 1, 2]]);
+  });
+});

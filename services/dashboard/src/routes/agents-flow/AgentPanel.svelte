@@ -352,6 +352,60 @@
   // collapse set stays, because loadWorkspaceFiles() resets it on reload.
   let wsCollapsed: Set<string> = new Set();
 
+  // A __cwd_path__ repo is listed one folder at a time: the root on load, then
+  // each folder the first time it is opened. A real repo mounted from the host
+  // is hundreds of thousands of files; the whole tree in one answer was 35 MB.
+  let wsLazy = false;
+  /** Folders already fetched ('' = root), and the ones in flight. */
+  let wsLoadedDirs: Set<string> = new Set();
+  let wsLoadingDirs: Set<string> = new Set();
+  /** Folders the server cut short: entries not listed. */
+  let wsMore: Map<string, number> = new Map();
+  /** Bumped on every reload, so a folder fetched for the previous agent is dropped. */
+  let wsGeneration = 0;
+  /** The agent whose tree is loaded — folders are only ever fetched for it. */
+  let wsAgentId: string | null = null;
+
+  /** Merge one listed level in; its subfolders start closed. */
+  function addWsLevel(data: any): void {
+    const entries: Array<{ path: string; type: string; size: number; count?: number }> = data?.files ?? [];
+    const dir = String(data?.dir ?? '');
+    for (const e of entries) if (e.type === 'dir') wsCollapsed.add(e.path);
+    wsCollapsed = wsCollapsed;
+    workspaceFiles = [...workspaceFiles, ...entries];
+    wsLoadedDirs = new Set(wsLoadedDirs).add(dir);
+    const hidden = Number(data?.total ?? 0) - entries.length;
+    if (data?.truncated && hidden > 0) wsMore = new Map(wsMore).set(dir, hidden);
+  }
+
+  async function loadWsDir(agentId: string, dir: string): Promise<void> {
+    const gen = wsGeneration;
+    wsLoadingDirs = new Set(wsLoadingDirs).add(dir);
+    try {
+      const res = await fetch(`/api/agents/${agentId}/cwd-files?dir=${encodeURIComponent(dir)}`);
+      const data: any = res.ok ? await res.json() : null;
+      if (gen !== wsGeneration) return;
+      if (data) addWsLevel(data);
+      else wsLoadedDirs = new Set(wsLoadedDirs).add(dir); // don't retry a folder that failed
+    } catch { /* stays unloaded; reopening retries */ }
+    finally {
+      if (gen === wsGeneration) {
+        const next = new Set(wsLoadingDirs);
+        next.delete(dir);
+        wsLoadingDirs = next;
+      }
+    }
+  }
+
+  // Opening a folder (taking it out of `wsCollapsed`) fetches it the first time.
+  $: if (wsLazy && wsAgentId && wsAgentId === selectedAgent) {
+    for (const f of workspaceFiles) {
+      if (f.type === 'dir' && !wsCollapsed.has(f.path) && !wsLoadedDirs.has(f.path) && !wsLoadingDirs.has(f.path)) {
+        void loadWsDir(wsAgentId, f.path);
+      }
+    }
+  }
+
   let runsLoading = false;
   let expandedRunId: string | null = null;
   let runSteps: HistoryStep[] = [];
@@ -435,16 +489,26 @@
     workspaceFileContent = null;
     workspacePreviewUrl = null;
     wsCollapsed = new Set();
+    wsGeneration++;
+    wsAgentId = agent.id;
+    wsLazy = false;
+    wsLoadedDirs = new Set();
+    wsLoadingDirs = new Set();
+    wsMore = new Map();
     try {
       if (info.cwdPath) {
-        // External __cwd_path__ repo — listed via the agent-scoped cwd endpoint.
+        // External __cwd_path__ repo — listed via the agent-scoped cwd endpoint,
+        // its root only; folders load as they are opened.
         const res = await fetch(`/api/agents/${agent.id}/cwd-files`);
         const data: any = await res.json();
-        workspaceFiles = data?.files ?? [];
+        workspaceFiles = [];
+        addWsLevel(data);
+        wsLazy = true;
         workspacePreviewUrl = typeof data?.preview_url === 'string' ? data.preview_url : null;
         // A kernel older than the `exists` flag lists a missing path as empty.
         if (data?.exists === false || (data?.exists === undefined && workspaceFiles.length === 0)) {
           cwdMissingFor = agent.id;
+          wsLazy = false;
           info = resolveAgentWorkspace(agent, flows, { cwdMissing: true });
           workspacePreviewUrl = null;
         }
@@ -981,7 +1045,7 @@ Boss says: "${msg || '(see the attached files)'}"`;
     extraTabs={myPanelTabs}
     running={liveIsRunning}
     historyCount={agentRuns.length}
-    workspaceCount={visibleWorkspaceFiles.length}
+    workspaceCount={wsLazy ? 0 : visibleWorkspaceFiles.length}
     {starting}
     {startMsg}
     {togglingPause}
@@ -1206,6 +1270,9 @@ Boss says: "${msg || '(see the attached files)'}"`;
         previewUrl={workspacePreviewUrl}
         loading={workspaceLoading}
         files={visibleWorkspaceFiles}
+        lazy={wsLazy}
+        more={wsMore}
+        loadingDirs={wsLoadingDirs}
         bind:collapsed={wsCollapsed}
         bind:fileContent={workspaceFileContent}
         onOpenFile={loadWorkspaceFile}
