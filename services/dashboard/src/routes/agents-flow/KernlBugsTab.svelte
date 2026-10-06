@@ -12,6 +12,7 @@
   import { t } from '$lib/i18n/index.js';
   import { fmtRelTime } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
+  import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import { bugsApi, sortBugs, statusTone, type KernlBug, type BugStatus } from '$lib/kernl-bugs.js';
 
   const STATUS_KEY = {
@@ -216,7 +217,13 @@
           <div class="kb-row"><button class="kb-btn" type="button" on:click={() => save(selected)} disabled={!!actionBusy}>{$t('office.kernl.save')}</button></div>
         {/if}
 
-        <div class="kb-preview-h">{$t('office.kernl.preview')}</div>
+        <div class="kb-preview-h">
+          <span>{$t('office.kernl.preview')}</span>
+          {#if preview}
+            <CopyTextBtn inline title={$t('office.chief.copy')}
+              text={`# ${preview.title}\n\n${preview.labels.length ? `Labels: ${preview.labels.join(', ')}\n\n` : ''}${preview.body}`} />
+          {/if}
+        </div>
         {#if preview}
           <div class="kb-preview">
             <div class="kb-preview-title">{preview.title}</div>
@@ -304,7 +311,7 @@
   .kb-time{margin-left:auto}
 
   .kb-detail{display:flex;flex-direction:column;gap:9px;padding:12px;border-radius:9px;background:rgba(0,0,0,.2);border:1px solid rgba(120,130,160,.16)}
-  .kb-preview-h{font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;color:#8a8fa8;margin-top:4px}
+  .kb-preview-h{display:flex;align-items:center;justify-content:space-between;gap:8px;font:700 10px 'Syne',sans-serif;letter-spacing:1px;text-transform:uppercase;color:#8a8fa8;margin-top:4px}
   .kb-preview{border-radius:8px;border:1px solid rgba(120,130,160,.18);background:rgba(10,12,20,.6);padding:10px 12px}
   .kb-preview-title{font:700 13px 'Manrope',sans-serif;color:#f0f2f7;margin-bottom:5px}
   .kb-labels{display:flex;gap:5px;margin-bottom:8px}
