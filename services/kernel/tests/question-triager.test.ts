@@ -84,7 +84,9 @@ describe("QuestionTriager", () => {
   it("fire() with no active chief hands the unseen questions to the human", async () => {
     const q = service.createQuestion({ from_agent_id: workerId, question: "Q1", options: OPTS });
     expect(q.status).toBe("triage");
-    service.updateAgent(chiefId, { active: false });
+    // The chief can no longer be switched off through the service; a database
+    // from before that rule can still hold an inactive one.
+    db.prepare("UPDATE agents SET active = 0 WHERE id = ?").run(chiefId);
     expect(await triager.fire()).toBeNull();
     expect(runs.length).toBe(0);
     const after = service.getQuestion(q.id)!;

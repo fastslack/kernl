@@ -914,6 +914,8 @@ const es: Record<I18nKey, string> = {
   "agent.head.pause": "Pausar",
   "agent.head.resume": "Reanudar",
   "agent.head.state_active": "Activo",
+  "agent.head.always_on": "Siempre activo",
+  "agent.head.always_on_title": "Indispensable para el sistema: no se puede desactivar ni borrar.",
   "agent.head.state_paused": "Pausado",
   "agent.head.state_auto": "Frenado",
   "agent.head.state_running": "Corriendo",
