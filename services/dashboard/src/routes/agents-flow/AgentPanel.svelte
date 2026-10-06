@@ -412,13 +412,25 @@
     if (chatScrollEl) chatScrollEl.scrollTop = chatScrollEl.scrollHeight;
   }
 
-  $: selWorkspaceInfo = selData ? resolveAgentWorkspace(selData, flows) : null;
+  // Set when the kernel says the agent's __cwd_path__ doesn't exist on its side
+  // (a host repo that isn't mounted): the executor runs in the office home
+  // then, and the tab follows it instead of listing an empty path.
+  let cwdMissingFor: string | null = null;
+  $: cwdMissing = !!selectedAgent && cwdMissingFor === selectedAgent;
+  $: selWorkspaceInfo = selData ? withMissingCwdHint(resolveAgentWorkspace(selData, flows, { cwdMissing }), selData) : null;
+
+  function withMissingCwdHint<T extends { cwdHint: string }>(info: T, agent: any): T {
+    if (!cwdMissing) return info;
+    let cwd = '';
+    try { cwd = String((typeof agent?.variables === 'string' ? JSON.parse(agent.variables) : agent?.variables)?.__cwd_path__ ?? ''); } catch { /* no vars */ }
+    return { ...info, cwdHint: `${cwd} no está montado en el contenedor de Kernl: el agente trabaja acá` };
+  }
 
   async function loadWorkspaceFiles() {
     if (!selectedAgent || workspaceLoading) return;
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent, flows);
+    let info = resolveAgentWorkspace(agent, flows, { cwdMissing });
     workspaceLoading = true;
     workspaceFileContent = null;
     workspacePreviewUrl = null;
@@ -430,11 +442,18 @@
         const data: any = await res.json();
         workspaceFiles = data?.files ?? [];
         workspacePreviewUrl = typeof data?.preview_url === 'string' ? data.preview_url : null;
-      } else if (info.wsId) {
+        // A kernel older than the `exists` flag lists a missing path as empty.
+        if (data?.exists === false || (data?.exists === undefined && workspaceFiles.length === 0)) {
+          cwdMissingFor = agent.id;
+          info = resolveAgentWorkspace(agent, flows, { cwdMissing: true });
+          workspacePreviewUrl = null;
+        }
+      }
+      if (!info.cwdPath && info.wsId) {
         const res = await fetch(`/api/agents/workspace/${info.wsId}`);
         const data: any = await res.json();
         workspaceFiles = data?.files ?? [];
-      } else {
+      } else if (!info.cwdPath) {
         workspaceFiles = [];
       }
     } catch { workspaceFiles = []; }
@@ -444,7 +463,7 @@
   async function loadWorkspaceFile(path: string) {
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
-    const info = resolveAgentWorkspace(agent, flows);
+    const info = resolveAgentWorkspace(agent, flows, { cwdMissing });
     try {
       const url = info.cwdPath
         ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`

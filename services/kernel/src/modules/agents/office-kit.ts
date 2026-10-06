@@ -29,6 +29,7 @@ import { applyRepoIsolation } from "./repo-isolation.js";
 import { agentVariables } from "./agent-fields.js";
 import { isoNow, slugify } from "../../core/helpers.js";
 import { HttpError } from "../../sdk/http-error.js";
+import { hostPathReachable } from "../../core/host-paths.js";
 
 // Canonical slugify now lives in core/helpers. Re-export it here so existing
 // importers of `office-kit`'s slugify (tests, agents tools/rpc/store) keep
@@ -431,6 +432,13 @@ export function materializeOffice(
     chained: [],
     warnings: [],
   };
+  // A repo the kernel cannot see (Docker without that folder mounted) is still
+  // recorded on the agents, so the office starts working the moment it is
+  // mounted; until then it is reported and nothing is created or registered
+  // there — a registration would point at a folder that does not exist here.
+  const repoReach = repoPath ? hostPathReachable(repoPath) : null;
+  const repoReachable = !repoReach || repoReach.ok;
+  if (repoReach && !repoReach.ok) report.warnings.push(`repo: ${repoReach.reason}`);
 
   // 1) Flow ────────────────────────────────────────────────────
   const mode = opts.mode ?? "upsert";
@@ -605,7 +613,9 @@ export function materializeOffice(
   // 5) Repo registration (best-effort) ─────────────────────────
   if (repoPath) {
     report.repo = { registered: false, path: repoPath };
-    if (opts.repoService) {
+    if (!repoReachable) {
+      // Already reported above; registration waits until the folder is mounted.
+    } else if (opts.repoService) {
       try {
         if (opts.repoService.getByPath(repoPath)) {
           report.repo.registered = true;

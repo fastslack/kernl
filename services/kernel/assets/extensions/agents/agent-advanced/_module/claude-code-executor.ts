@@ -20,7 +20,7 @@
  */
 
 import { mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
-import { resolve, isAbsolute } from "node:path";
+import { resolve } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
@@ -53,6 +53,7 @@ import {
   resolveDefaultSocketPath as resolveKernelMcpSocketPath,
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
+  hostPathReachable,
 } from "@kernl/extension-sdk";
 import { failureNote } from "./failure-note.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
@@ -531,8 +532,33 @@ export class ClaudeCodeExecutor {
     let childEnvResolved: Record<string, string | undefined> = {};
 
     try {
-      const { cwd, officeHomeFlow } = this.resolveCwd(agent, run, service);
+      const { cwd, officeHomeFlow, cwdFallback } = this.resolveCwd(agent, run, service);
       cwdResolved = cwd;
+      if (cwdFallback) {
+        // The fallback keeps the run alive, but the operator has to see that
+        // it is not working where the agent was pointed: a step in LIVE and
+        // History, not just a log line.
+        const stepNum = ++stepNumber;
+        const note = `⚠️ No se usó la carpeta de trabajo ${cwdFallback.requested}: ${cwdFallback.reason} Este run trabaja en ${cwd}.`;
+        service.addStep({ run_id: run.id, step_number: stepNum, type: "error", content: note });
+        events?.emit("agent:flow:step", {
+          agent_id: agent.id,
+          agent_name: agent.name,
+          run_id: run.id,
+          step_number: stepNum,
+          type: "error",
+          content_preview: note,
+        });
+        service.logEvent({
+          run_id: run.id,
+          agent_id: agent.id,
+          agent_name: agent.name,
+          event_type: "step",
+          event_subtype: "cwd_fallback",
+          detail: note.slice(0, 200),
+          raw_data: { step_number: stepNum, requested: cwdFallback.requested, fallback: cwd, reason: cwdFallback.reason },
+        });
+      }
       const vars = this.parseVariables(agent);
       if (officeHomeFlow) await prepareOfficeWorkspace(service, run.id, officeHomeFlow.id, vars);
       let systemPrompt = this.buildSystemPrompt(agent, goal, service, run.project_id ?? null);
@@ -1363,7 +1389,7 @@ export class ClaudeCodeExecutor {
     agent: Agent,
     run: AgentRun,
     service?: AgentService,
-  ): { cwd: string; officeHomeFlow: AgentFlow | null } {
+  ): { cwd: string; officeHomeFlow: AgentFlow | null; cwdFallback?: { requested: string; reason: string } } {
     // Prioridad:
     //   1. __cwd_path__ in the agent's variables (absolute path outside the kernel)
     //   2. workspace in the run's trigger_payload (per-run override)
@@ -1372,15 +1398,23 @@ export class ClaudeCodeExecutor {
     //      shared office working for a project, the project's own office home
     //   5. fallback: data/workspaces/agent-<id>/
     const vars = this.parseVariables(agent);
+    let cwdFallback: { requested: string; reason: string } | undefined;
     if (vars.__cwd_path__) {
       const p = vars.__cwd_path__;
       // isAbsolute, not startsWith("/"): `C:\code\proj` is absolute too, and was
-      // silently swapped for the workspace fallback.
-      if (isAbsolute(p) && existsSync(p)) {
+      // silently swapped for the workspace fallback. Reachable, not just
+      // existing: in Docker a folder outside every host mount can exist inside
+      // the container (an old mkdir) and its writes never reach the host.
+      const reach = hostPathReachable(p);
+      if (reach.ok && reach.exists) {
         return { cwd: p, officeHomeFlow: null };
       }
+      cwdFallback = {
+        requested: p,
+        reason: reach.ok ? `${p} no existe.` : reach.reason,
+      };
       log.warn(
-        `ClaudeCodeExecutor: __cwd_path__="${p}" inválido (no absoluto o no existe) — cae a workspace fallback`,
+        `ClaudeCodeExecutor: __cwd_path__="${p}" inválido (${cwdFallback.reason}) — cae a workspace fallback`,
       );
     }
 
@@ -1407,10 +1441,16 @@ export class ClaudeCodeExecutor {
         // project's office, so each project's documents stay with it.
         const homeFlowId = (run.project_id && service.getProjectGate()?.homeOffice?.(agent.flow_id, run.project_id)) || agent.flow_id;
         const home = service.resolveFlowHome(homeFlowId);
-        if (home && (home.kind !== "git" || existsSync(home.path))) {
+        // A promoted office repo the kernel cannot see falls through to the
+        // workspace below, reported like an unreachable __cwd_path__.
+        const repoReach = home?.kind === "git" ? hostPathReachable(home.path) : null;
+        if (home && repoReach && !(repoReach.ok && repoReach.exists) && !cwdFallback) {
+          cwdFallback = { requested: home.path, reason: repoReach.ok ? `${home.path} no existe.` : repoReach.reason };
+        }
+        if (home && (!repoReach || (repoReach.ok && repoReach.exists))) {
           mkdirSync(home.path, { recursive: true });
           try { seedOfficeHome(home.path, home.flow); } catch { /* non-fatal */ }
-          return { cwd: home.path, officeHomeFlow: home.flow };
+          return { cwd: home.path, officeHomeFlow: home.flow, cwdFallback };
         }
       } catch (err) {
         log.warn(`ClaudeCodeExecutor: resolveFlowHome failed for flow ${agent.flow_id}: ${err instanceof Error ? err.message : String(err)}`);
@@ -1440,7 +1480,7 @@ export class ClaudeCodeExecutor {
       }
     }
 
-    return { cwd: root, officeHomeFlow: null };
+    return { cwd: root, officeHomeFlow: null, cwdFallback };
   }
 
   /**

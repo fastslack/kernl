@@ -196,10 +196,13 @@ export interface FlowHome {
  * else a registered `__workspace__`, else its office's home (the git repo the
  * office was promoted to, or the office workspace), else the per-agent default.
  * Without `flows` an office agent would show a directory it never runs in.
+ * `cwdMissing`: the kernel reported the `__cwd_path__` doesn't exist on its
+ * side (a host repo not mounted into the container). The executor skips it
+ * then and runs in the next candidate, so the panel does the same.
  */
-export function resolveAgentWorkspace(agent: any, flows: FlowHome[] = []): AgentWorkspaceInfo {
+export function resolveAgentWorkspace(agent: any, flows: FlowHome[] = [], opts: { cwdMissing?: boolean } = {}): AgentWorkspaceInfo {
   const vars = safeParse(agent?.variables) || {};
-  if (isAbsoluteHostPath(vars.__cwd_path__)) {
+  if (!opts.cwdMissing && isAbsoluteHostPath(vars.__cwd_path__)) {
     return {
       wsId: null,
       cwdPath: vars.__cwd_path__,

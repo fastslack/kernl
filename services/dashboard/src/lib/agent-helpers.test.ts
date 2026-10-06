@@ -221,6 +221,14 @@ describe("resolveAgentWorkspace", () => {
     { id: "repo-office", home_workspace_id: "ws_home", home_repo_path: "/srv/office" },
   ];
 
+  it("follows the executor past a repo path the kernel cannot see", () => {
+    const agent = { id: "a", flow_id: "office", variables: { __cwd_path__: "/home/u/Heural/repo" } };
+    expect(resolveAgentWorkspace(agent, flows).cwdPath).toBe("/home/u/Heural/repo");
+    expect(resolveAgentWorkspace(agent, flows, { cwdMissing: true })).toMatchObject({
+      wsId: "4dbe35a9-0b32", cwdPath: null, cwdLabel: "data/workspaces/4dbe35a9-0b32",
+    });
+  });
+
   it("uses the office workspace home for an agent without its own workspace", () => {
     const info = resolveAgentWorkspace({ id: "a", flow_id: "office" }, flows);
     expect(info).toMatchObject({ wsId: "4dbe35a9-0b32", cwdPath: null, cwdLabel: "data/workspaces/4dbe35a9-0b32" });
