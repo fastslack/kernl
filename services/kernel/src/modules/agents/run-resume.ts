@@ -16,6 +16,9 @@ import type { AgentExecutor } from "./executor.js";
 import type { AgentService } from "./service.js";
 import { parseCheckpoint } from "./executor/run-checkpoint.js";
 
+/** The executor's budget for an agent without max_tokens (executor.ts, `budgets.maxTokens`). */
+const DEFAULT_AGENT_TOKEN_BUDGET = 150_000;
+
 /** Defaults for the automatic pass; both overridable through the environment. */
 export function autoResumePolicy(env: NodeJS.ProcessEnv = process.env): { resumeWithinMs: number; maxResumes: number } {
   const num = (raw: string | undefined, fallback: number) => {
@@ -64,6 +67,16 @@ export function resumeRun(
   const stored = service.getCheckpoint(runId);
   const checkpoint = stored ? parseCheckpoint(stored.data) : null;
   if (!checkpoint) return { ok: false, error: "This run has no usable checkpoint" };
+  // A run stopped by its token budget resumes with the same spend and the
+  // same budget, so it would abort again before its first turn.
+  const budget = agent.max_tokens ?? DEFAULT_AGENT_TOKEN_BUDGET;
+  const budgetAbort = service.getRunConditions(runId).find((c) => c.type === "Aborted" && c.status === "True" && c.reason === "TokenBudget");
+  if (budgetAbort || checkpoint.totalTokens >= budget) {
+    return {
+      ok: false,
+      error: `The run stopped on its token budget (${checkpoint.totalTokens} spent of ${budget}); resuming would stop again at once. Raise the agent's max_tokens or start a new run.`,
+    };
+  }
   // The checkpoint is written before the tool_call step of its turn is
   // recorded, so it can trail the steps table. Continue after whatever is
   // actually there, or the resumed run reuses step numbers.
