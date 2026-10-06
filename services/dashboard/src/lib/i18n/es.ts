@@ -956,6 +956,8 @@ const es: Record<I18nKey, string> = {
   "agent.config.look_sub": "Cómo se ve en el mundo 3D.",
   "agent.config.skin": "Skin",
   "agent.config.loading": "Cargando la configuración…",
+  "agent.drawer.devops_panel": "Panel DevOps",
+  "agent.drawer.devops_title": "Abrir el panel de control DevOps — repos, backlog, stacks de desarrollo",
   "agent.drawer.resume_hint": "Reanudar rehabilita el schedule y limpia el contador.",
   "agent.drawer.pause_title": "Pausar: corta el schedule y los triggers. Correr a mano sigue andando.",
   "agent.drawer.resume_title": "Reanudar: rehabilita el schedule y los triggers.",

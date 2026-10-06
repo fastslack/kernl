@@ -113,10 +113,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   missed `mammoth`), which would have broken the `npm ci` of the release
   build.
 
-### Removed
-
-- The agent drawer's link to the DevOps panel, a page that no longer exists.
-
 ## [0.4.0] - 2026-10-04
 
 ### Upgrading from 0.3.2
