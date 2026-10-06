@@ -319,6 +319,14 @@
             <!-- The schedule switch. It used to be a separate Pausar/Reanudar
                  button next to Ejecutar; both live on the state they change
                  now. Same `resume` event: the listener reads `active`. -->
+            {#if agent.system_protected}
+              <!-- The Chief and the core system agents are never switched
+                   off; the kernel refuses it too (409). -->
+              <span class="ip-state ip-state-on ip-state-locked" title={$t('agent.head.always_on_title')}>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                <span class="ip-state-l">{$t('agent.head.always_on')}</span>
+              </span>
+            {:else}
             <button class="ip-state" type="button" role="switch" aria-checked={agent.active === 1}
                     class:ip-state-on={agent.active === 1} class:ip-state-off={agent.active !== 1}
                     class:ip-state-tripped={autoPaused}
@@ -338,6 +346,7 @@
                     ? $t('agent.head.state_auto')
                     : $t('agent.head.state_paused')}</span>
             </button>
+            {/if}
             {#if !editingName}
               <!-- Last in the row, so showing it on hover moves nothing. -->
               <button class="ip-name-edit-btn" type="button" title={$t('agent.drawer.rename_title')}
@@ -969,4 +978,5 @@
     flex:1;min-height:0;width:100%;
     border:0;display:block;background:#0b0d14;
   }
+  .ip-state-locked{cursor:default;gap:6px}
 </style>

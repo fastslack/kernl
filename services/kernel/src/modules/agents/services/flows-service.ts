@@ -11,6 +11,7 @@ import { agentVariables } from "../agent-fields.js";
 import { parseWorkspaceSpec, isEmptySpec, type WorkspaceSpec } from "../workspace-spec.js";
 import { prepareWorkspace, type WorkspaceSetupResult } from "../workspace-setup.js";
 import { lotFits, parseLotId, pickLot } from "../office-lots.js";
+import { PROTECTED_BUILTIN_HANDLERS, PROTECTED_AGENT_NAMES } from "../protected-agents.js";
 
 /** How long a new office may still move to a bigger lot while its agents arrive. */
 const LOT_SETTLE_MS = 10 * 60_000;
@@ -323,17 +324,22 @@ export class AgentFlowsService {
     // Single transaction (spec §2.4): a failure partway through must leave
     // the agents' flow_id/active untouched rather than half-unassigning them.
     const trx = this.db.transaction(() => {
-      // Pause everyone in the office except the top-rank agent: removing an
-      // office must never switch off the Chief.
+      // Pause everyone in the office except the agents the system cannot run
+      // without (the Chief and the rest in protected-agents.ts): removing an
+      // office must never switch them off.
+      const handlers = [...PROTECTED_BUILTIN_HANDLERS];
+      const names = [...PROTECTED_AGENT_NAMES];
       this.db
         .prepare(
           `UPDATE agents SET active = 0, updated_at = ?
             WHERE flow_id = ?
               AND COALESCE(rank_id, '') NOT IN (
                 SELECT id FROM agent_ranks WHERE level = (SELECT MAX(level) FROM agent_ranks)
-              )`,
+              )
+              AND COALESCE(builtin_handler, '') NOT IN (${handlers.map(() => "?").join(",")})
+              AND name NOT IN (${names.map(() => "?").join(",")})`,
         )
-        .run(now, id);
+        .run(now, id, ...handlers, ...names);
       const moved = this.db.prepare("UPDATE agents SET flow_id = '', updated_at = ? WHERE flow_id = ?").run(now, id);
       this.db.prepare("UPDATE agent_flows SET active = 0, lot_id = '', updated_at = ? WHERE id = ?").run(now, id);
       return { unassigned: Number(moved.changes) };

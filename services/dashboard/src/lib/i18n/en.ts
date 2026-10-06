@@ -911,6 +911,8 @@ const en = {
   "agent.head.pause": "Pause",
   "agent.head.resume": "Resume",
   "agent.head.state_active": "Active",
+  "agent.head.always_on": "Always on",
+  "agent.head.always_on_title": "Essential to the system: it cannot be deactivated or deleted.",
   "agent.head.state_paused": "Paused",
   "agent.head.state_auto": "Stopped",
   "agent.head.state_running": "Running",
