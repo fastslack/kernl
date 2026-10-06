@@ -118,6 +118,12 @@ describe("claudeCliPath", () => {
 });
 
 describe("claudeCodeLoginCommand", () => {
+  it("uses cmd.exe syntax on Windows, which has no VAR=value prefix", () => {
+    const exe = "C:\\Program Files\\Kernl\\node_modules\\@anthropic-ai\\claude-agent-sdk-win32-x64\\claude.exe";
+    const cmd = claudeCodeLoginCommand({ XDG_CONFIG_HOME: "/x" }, false, exe, "win32");
+    expect(cmd).toBe(`set "CLAUDE_CONFIG_DIR=/x/kernl/claude" && "${exe}"`);
+  });
+
   it("wraps the real path in docker exec inside a container", () => {
     const cmd = claudeCodeLoginCommand({ XDG_CONFIG_HOME: "/app/data/xdg" }, true, `/app/${SDK}`);
     expect(cmd).toBe(

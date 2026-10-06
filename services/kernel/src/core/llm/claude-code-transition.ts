@@ -59,9 +59,16 @@ export function claudeCodeLoginCommand(
   env: NodeJS.ProcessEnv = process.env,
   inDocker: boolean = existsSync("/.dockerenv"),
   cli: string = claudeCliPath(),
+  platform: string = process.platform,
 ): string {
   // A portable .app can be unpacked under a folder with spaces in its name.
   const bin = /\s/.test(cli) ? `"${cli}"` : cli;
+  // cmd.exe has no `VAR=value command` prefix: it read CLAUDE_CONFIG_DIR as
+  // the program name and answered "no se reconoce como un comando". This form
+  // is cmd's own; quoting the whole assignment keeps a trailing space out.
+  if (platform === "win32" && !inDocker) {
+    return `set "CLAUDE_CONFIG_DIR=${claudeConfigDir(env)}" && ${bin}`;
+  }
   const cmd = `CLAUDE_CONFIG_DIR="${claudeConfigDir(env)}" ${bin}`;
   return inDocker ? `docker compose exec kernel sh -c '${cmd}'` : cmd;
 }
