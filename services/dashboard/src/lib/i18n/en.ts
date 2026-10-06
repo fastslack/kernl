@@ -911,7 +911,7 @@ const en = {
   "agent.head.state_paused_title": "Paused: schedule and triggers are off. Manual runs still work.",
   "agent.head.state_auto_title": "The kernel stopped it after {n} consecutive failures. Resume clears the counter.",
   "agent.head.state_running_title": "Running right now.",
-  "agent.config.engine_title": "Engine and model",
+  "agent.config.engine_title": "Model",
   "agent.config.engine_sub": "What does the thinking for this agent, and with which AI model.",
   "agent.config.executor": "Engine",
   "agent.config.executor_native": "Kernl runs the loop and calls tools with the model below.",
