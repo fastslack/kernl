@@ -27,6 +27,7 @@ import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { parseSchedulePatch } from "./services/schedules-service.js";
 import { setOfficeRepo } from "./office-repo.js";
+import { vetAgentCwdPath } from "./host-path-audit.js";
 import { bindAttachmentIdsArg } from "../attachments/bind-arg.js";
 
 export interface AgentOperationDeps {
@@ -85,6 +86,8 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       const name = str(input, "name").trim();
       if (!name) throw new HttpError(400, "name is required");
       const fields = pickArgs(input, { ...AGENT_FIELDS, flow_id: "string" });
+      // A __cwd_path__ the kernel cannot see is refused (400) before the row exists.
+      const warnings = vetAgentCwdPath(fields.variables);
       const agent = svc().createAgent({ ...fields, name, variables: fields.variables as Record<string, string> | undefined });
 
       // Optional inline schedule (agent-create with cron). Non-fatal on error.
@@ -101,12 +104,16 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
           log.warn(`Could not add schedule for ${agent.id}: ${String(err)}`);
         }
       }
-      return { success: true, agent_id: agent.id, agent };
+      return { success: true, agent_id: agent.id, agent, ...(warnings.length ? { warnings } : {}) };
     },
 
     "agents.update": (input) => {
       const id = required(input, "id");
       const fields = pickArgs(input, { ...AGENT_FIELDS, name: "string", active: "boolean", under_revision: "boolean" });
+      // A new or changed __cwd_path__ the kernel cannot see is refused (400);
+      // the one the agent already had is kept and comes back as a warning.
+      const current = fields.variables !== undefined ? svc().getAgent(id) : undefined;
+      const warnings = current ? vetAgentCwdPath(fields.variables, current.variables ?? "") : [];
       // The chain, the engine and the loose pair are one edit for the person
       // making it, so they have to be one write — otherwise `provider` and the
       // chain head can end up disagreeing between two requests. Skills are
@@ -119,7 +126,7 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
         skills: normalizeSkillsInput(input.skills),
       });
       if (!updated) throw new HttpError(404, "Agent not found");
-      return { success: true, agent: updated };
+      return { success: true, agent: updated, ...(warnings.length ? { warnings } : {}) };
     },
 
     "agents.delete": (input) => {

@@ -192,9 +192,14 @@ export function registerWorkspaceFileRoutes(
         }
       }
     }
-    await walk(root, "", 0);
+    // A path the kernel can't see (a host repo not mounted into the container)
+    // lists as empty, exactly like an empty repo — but the executor does not
+    // run there, it falls back to the office home. `exists` lets the panel
+    // follow it instead of showing an empty directory nobody writes to.
+    const exists = existsSync(root);
+    if (exists) await walk(root, "", 0);
     const previewUrl = typeof vars.__preview_url__ === "string" ? vars.__preview_url__ : null;
-    return { cwd: root, preview_url: previewUrl, files, total: files.length };
+    return { cwd: root, exists, preview_url: previewUrl, files, total: files.length };
   });
 
   // GET /api/agents/:id/cwd-file?path=... — read a file jailed under __cwd_path__
