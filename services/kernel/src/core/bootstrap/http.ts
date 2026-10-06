@@ -337,7 +337,14 @@ export async function initHttpAndMcp(args: {
         // link for the dashboard instead, and take the redirect back by paste.
         claudeLogin: createClaudeLogin({
           cli: () => findClaudeCli(),
-          onSignedIn: resetClaudeCodeSdkCache,
+          // The readiness verdict from boot said "no session"; without the
+          // refresh it outlived the sign-in and the banner stayed up. On a
+          // Claude-Code-only install (a fresh Windows box) nothing else ever
+          // marked it stale.
+          onSignedIn: () => {
+            resetClaudeCodeSdkCache();
+            refreshLlmConsumers("Claude Code signed in");
+          },
           captureBrowser: existsSync("/.dockerenv"),
         }),
         browserLogin: () => !existsSync("/.dockerenv"),

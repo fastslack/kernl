@@ -34,6 +34,7 @@ import {
 import {
   log,
   findClaudeCli,
+  claudeAuthEnv,
   toPermissionRulePath,
   logLlmStart,
   logLlmEnd,
@@ -652,6 +653,14 @@ export class ClaudeCodeExecutor {
         // el CLI busca bajo `/home/bun/.claude/` y tira "Not logged in".
         if (process.env.HOST_HOME) {
           childEnv.HOME = process.env.HOST_HOME;
+        } else {
+          // Everywhere else the session is the one the connect dialog created,
+          // under Kernl's own config dir — the dir "Probar" and the chat use.
+          // Without it the CLI looked in the user's ~/.claude: on a native
+          // Windows install the connection tested fine and every agent run
+          // failed "Not logged in". On Windows the credential itself sits in
+          // Credential Manager keyed by this dir, so it has to match exactly.
+          Object.assign(childEnv, claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }));
         }
       } else if (apiKey) {
         childEnv.ANTHROPIC_API_KEY = apiKey;

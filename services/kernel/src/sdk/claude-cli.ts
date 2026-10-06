@@ -151,3 +151,40 @@ export function findClaudeCli(
 
   return (opts.bundled ?? (() => bundledClaudeCli({ platform })))();
 }
+
+/**
+ * Where the CLI keeps its credentials.
+ *
+ * Same XDG rule as the license (see license/service.ts): honour
+ * XDG_CONFIG_HOME when the launcher sets it, else ~/.config. Under Docker that
+ * resolves inside the data volume, so the login outlives the container; on a
+ * native install it is the user's own config directory, so it outlives an
+ * upgrade. No per-platform branch is needed for either.
+ */
+export function claudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  const xdg = env.XDG_CONFIG_HOME;
+  const base = xdg && xdg.length > 0 ? xdg : resolve(homedir(), ".config");
+  return resolve(base, "kernl", "claude");
+}
+
+/**
+ * Environment additions for every `claude` child process.
+ *
+ * `oauthToken` is the escape hatch for hosts where the interactive flow cannot
+ * run at all (no PTY — Windows without ConPTY, locked-down sandboxes): the
+ * operator pastes a token minted by `claude setup-token` anywhere else and it
+ * is injected here instead. Verified against the CLI: with the variable set,
+ * `auth status` reports authMethod "oauth_token".
+ */
+export function claudeAuthEnv(opts: { oauthToken?: string; env?: NodeJS.ProcessEnv } = {}): Record<string, string> {
+  const out: Record<string, string> = {
+    CLAUDE_CONFIG_DIR: claudeConfigDir(opts.env ?? process.env),
+  };
+  // Fall back to the environment. The adapter that makes real calls is built
+  // with no config (client.ts constructs it zero-arg), so a token that lived
+  // only in the provider registry never reached it: the dialog verified fine
+  // and every actual request still failed "Not logged in".
+  const token = (opts.oauthToken ?? (opts.env ?? process.env).CLAUDE_CODE_OAUTH_TOKEN ?? "").trim();
+  if (token) out.CLAUDE_CODE_OAUTH_TOKEN = token;
+  return out;
+}

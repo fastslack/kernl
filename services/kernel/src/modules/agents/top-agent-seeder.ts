@@ -113,6 +113,15 @@ export function seedTopAgent(db: SqliteDb, service: AgentService): void {
     db.prepare(
       `UPDATE agents SET flow_id = ?, show_on_dashboard = 1, active = 1, role = 'manager', allowed_tools = '[]', updated_at = datetime('now') WHERE id = ?`,
     ).run(flow.id, existing.id);
+    // Earlier seeds wrote the Claude Code provider and left the engine on its
+    // default, native — a pair that can never run: the native loop drops
+    // claude_code ("No LLM provider in the chain can run tool calls"). Only
+    // that seeded pair is repaired; any engine or model the user picked stays.
+    db.prepare(
+      `UPDATE agents SET executor_type = 'claude_code', updated_at = datetime('now')
+        WHERE id = ? AND COALESCE(executor_type, 'native') = 'native'
+          AND provider IN ('claude_code', 'claude-code') AND COALESCE(model_chain, '') = ''`,
+    ).run(existing.id);
     return;
   }
 
@@ -130,5 +139,7 @@ export function seedTopAgent(db: SqliteDb, service: AgentService): void {
     rank_id: topRank.id,
     role: "manager",
   });
+  // The engine has to follow the provider: native would drop claude_code.
+  service.setExecutorType(agent.id, "claude_code");
   log.info(`Commander seeder: created agent "${agent.name}" (${agent.id}) in flow ${flow.id}`);
 }
