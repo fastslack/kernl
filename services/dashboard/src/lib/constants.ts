@@ -81,6 +81,7 @@ export const NAV_GROUPS: NavGroup[] = [
 		views: [
 			// Explicit order — items without one sort to 999 and land after
 			// every manifest-contributed tab regardless of intent.
+			{ id: 'share', label: 'Share', icon: '📤', order: 5 },
 			{ id: 'irc', label: 'IRC', icon: '📡', order: 40 }
 		]
 	},

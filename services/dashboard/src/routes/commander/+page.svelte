@@ -2,6 +2,10 @@
 	import { onMount, onDestroy } from 'svelte';
 	import { get } from 'svelte/store';
 	import { page } from '$app/stores';
+	import { goto } from '$app/navigation';
+	import { apiFetchRaw } from '$lib/api.js';
+	import { t } from '$lib/i18n/index.js';
+	import Modal from '$lib/components/ui/Modal.svelte';
 	import {
 		leftPane,
 		rightPane,
@@ -520,12 +524,65 @@
 				awaitingBookmark = true;
 				break;
 			}
+			case 'share':
+				void openShare();
+				break;
 			case 'remotes':
 				remoteManagerOpen = true;
 				break;
 			case 'history':
 				bookmarksOpen = true;
 				break;
+		}
+	}
+
+	// ── Send to a friend (file-lane) ────────────────────────────────
+	let shareOpen = false;
+	let sharePath = '';
+	let shareFriends: Array<{ npub: string; petname: string }> = [];
+	let shareError = '';
+	let shareBusy = false;
+	let shareLoading = false;
+
+	async function openShare(): Promise<void> {
+		const e = currentEntry();
+		if (!e || e.kind !== 'file' || !activeT || activeT.providerId !== 'local') return;
+		sharePath = joinPath(activeT.path, e.name);
+		shareError = '';
+		shareFriends = [];
+		shareOpen = true;
+		shareLoading = true;
+		try {
+			const r = await apiFetchRaw('/api/peering/friends');
+			if (!r.ok) throw new Error(`HTTP ${r.status}`);
+			const list = ((await r.json()).friends ?? []) as Array<{ npub: string; petname: string; trust: string }>;
+			shareFriends = list.filter((f) => f.trust === 'trusted');
+		} catch (err) {
+			shareError = err instanceof Error ? err.message : String(err);
+		} finally {
+			shareLoading = false;
+		}
+	}
+
+	async function sendToFriend(npub: string): Promise<void> {
+		if (shareBusy) return;
+		shareBusy = true;
+		shareError = '';
+		try {
+			const r = await apiFetchRaw('/api/transfers', {
+				method: 'POST',
+				body: JSON.stringify({ npub, paths: [sharePath] })
+			});
+			if (!r.ok) {
+				const body = (await r.json().catch(() => ({}))) as { error?: string };
+				throw new Error(body.error ?? `HTTP ${r.status}`);
+			}
+			shareOpen = false;
+			await goto('/share');
+		} catch (err) {
+			shareError = err instanceof Error ? err.message : String(err);
+		} finally {
+			shareBusy = false;
 		}
 	}
 
@@ -710,7 +767,7 @@
 		const tag = (ev.target as HTMLElement)?.tagName;
 		if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 		// If modal is open, swallow everything except escape (dialog handles esc).
-		if (modal) return;
+		if (modal || shareOpen) return;
 
 		if (ev.key === 'Tab') {
 			ev.preventDefault();
@@ -760,6 +817,7 @@
 		if (ev.key === 'F8' || ev.key === 'Delete') { ev.preventDefault(); handleAction('delete'); return; }
 		if (ev.key === ':') { ev.preventDefault(); modal = { kind: 'cmd' }; return; }
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'b') { ev.preventDefault(); handleAction('bookmark'); return; }
+		if ((ev.ctrlKey || ev.metaKey) && ev.key === 's') { ev.preventDefault(); handleAction('share'); return; }
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 'h') { ev.preventDefault(); bookmarksOpen = true; return; }
 		// Shift variant first: with Shift held, ev.key is "R", so the remotes
 		// binding below would not match anyway — but ordering makes that explicit.
@@ -943,6 +1001,7 @@
 		{hasCursor}
 		{activeWritable}
 		{passiveWritable}
+		activeLocal={activeT?.providerId === 'local'}
 	/>
 </div>
 
@@ -1047,6 +1106,22 @@
 		}}
 	/>
 {/if}
+
+<Modal open={shareOpen} title={$t('share.from_files')} width="420px" on:close={() => (shareOpen = false)}>
+	<p style="margin:0 0 12px"><strong>{basenameHostPath(sharePath)}</strong></p>
+	{#if shareFriends.length}
+		<p style="margin:0 0 8px">{$t('share.pick_friend_modal')}</p>
+		<div style="display:flex;flex-direction:column;gap:6px">
+			{#each shareFriends as f (f.npub)}
+				<button type="button" disabled={shareBusy} on:click={() => sendToFriend(f.npub)}>{f.petname || f.npub.slice(0, 12)}</button>
+			{/each}
+		</div>
+	{:else if !shareError && !shareLoading}
+		<p style="margin:0 0 8px">{$t('share.friends_empty')}</p>
+		<a href="/friends">{$t('share.friends_add')}</a>
+	{/if}
+	{#if shareError}<p role="alert" style="color:var(--danger,#e5484d)">{$t('share.error.generic', { msg: shareError })}</p>{/if}
+</Modal>
 
 {#if bookmarksOpen}
 	<BookmarksDropdown

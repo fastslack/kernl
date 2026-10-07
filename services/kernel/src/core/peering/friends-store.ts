@@ -21,6 +21,10 @@ export interface Friend {
   last_seen_at: string | null;
   last_reach: string;
   last_error: string;
+  /** Address the owner set by hand, tried before anything advertised. */
+  manual_url: string;
+  /** 1 when files from this friend are accepted without asking. */
+  auto_accept: number;
   created_at: string;
   updated_at: string;
 }
@@ -61,6 +65,13 @@ CREATE TABLE IF NOT EXISTS kernl_presence (
 export class FriendsStore {
   constructor(private db: SqliteDb) {
     this.db.exec(MIGRATION);
+    const cols = this.db.prepare(`PRAGMA table_info(kernl_friends)`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "manual_url")) {
+      this.db.exec(`ALTER TABLE kernl_friends ADD COLUMN manual_url TEXT NOT NULL DEFAULT ''`);
+    }
+    if (!cols.some((c) => c.name === "auto_accept")) {
+      this.db.exec(`ALTER TABLE kernl_friends ADD COLUMN auto_accept INTEGER NOT NULL DEFAULT 0`);
+    }
   }
 
   // ── Friends ─────────────────────────────────────────────────
@@ -148,6 +159,21 @@ export class FriendsStore {
         isoNow(),
         npub,
       );
+    return this.get(npub);
+  }
+
+  /** Set or clear (empty string) the hand-typed address. */
+  setManualUrl(npub: string, url: string): Friend | undefined {
+    if (!this.get(npub)) return undefined;
+    this.db
+      .prepare(`UPDATE kernl_friends SET manual_url=?, updated_at=? WHERE npub=?`)
+      .run(url, isoNow(), npub);
+    return this.get(npub);
+  }
+
+  setAutoAccept(npub: string, on: boolean): Friend | undefined {
+    if (!this.get(npub)) return undefined;
+    this.db.prepare(`UPDATE kernl_friends SET auto_accept=?, updated_at=? WHERE npub=?`).run(on ? 1 : 0, isoNow(), npub);
     return this.get(npub);
   }
 

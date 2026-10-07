@@ -1476,17 +1476,29 @@ export function agentsTools(
         // Read from inside a run → only that run's project letters (and those
         // without one). Read from outside (dashboard) → everything.
         const callerRunId = getRequestContext().callerRunId;
-        const projectId = callerRunId ? service.getRun(callerRunId)?.project_id ?? null : undefined;
-        const messages = service.listInbox(targetId, { status, limit, projectId });
-        if (messages.length === 0) return textResult(`No ${status} messages.`);
-
+        const callerRun = callerRunId ? service.getRun(callerRunId) : undefined;
+        const projectId = callerRunId ? callerRun?.project_id ?? null : undefined;
+        // The run's prompt already delivered (and marked read) its letters;
+        // the agent's own default view still has to show them.
+        const ownDefault = !input.status && !!callerRun && targetId === callerId;
+        const messages = service.listInbox(targetId, {
+          status, limit, projectId,
+          alsoReadSince: ownDefault ? callerRun!.created_at : undefined,
+        });
         const target = service.getAgent(targetId);
-        const lines: string[] = [`# ${target?.name ?? targetId} — ${status} inbox (${messages.length})`];
+        // An agent reading a colleague's inbox is almost always a wrong id —
+        // a woken Recruiter Desk read Pitch's and concluded it had no letters.
+        const notYours = callerId && targetId !== callerId
+          ? `⚠ This is ${target?.name ?? targetId}'s inbox, not yours. Call without agent_id to read your own.\n\n`
+          : "";
+        if (messages.length === 0) return textResult(`${notYours}No ${status} messages.`);
+
+        const lines: string[] = [`${notYours}# ${target?.name ?? targetId} — ${status} inbox (${messages.length})`];
         for (const m of messages) {
           const sender = service.getAgent(m.from_agent_id)?.name ?? m.from_agent_id;
           const ts = m.created_at.slice(0, 16).replace("T", " ");
           lines.push(`\n## [${ts}] From ${sender} — ${m.subject}`);
-          lines.push(`_(id: ${m.id})_`);
+          lines.push(`_(id: ${m.id}${ownDefault && m.status === "read" ? " · already in your context for this run — acknowledge it once handled" : ""})_`);
           lines.push(m.body);
         }
         return textResult(lines.join("\n"));
@@ -1507,7 +1519,7 @@ export function agentsTools(
         const callerId = resolveCallerAgentId(input);
         if (!callerId) return errorResult("Caller agent context missing — kernel_agents_inbox_ack is only usable from an agent run.");
         const acked = service.ackInboxFor(callerId, input.message_ids);
-        if (acked === 0) return errorResult("None of those ids are unread letters addressed to you.");
+        if (acked === 0) return errorResult("None of those ids are open letters addressed to you (wrong ids, someone else's letters, or already archived).");
         return textResult(`Acknowledged ${acked} letter(s).`);
       },
     }),

@@ -168,3 +168,62 @@ describe("tor-aware fetch routing", () => {
     expect(clearnetCalls).toBe(1);
   });
 });
+
+describe("onion fetch with a binary body (file-lane parts)", () => {
+  it("sends a Uint8Array intact with the right content-length", async () => {
+    const { createHash, randomBytes } = await import("node:crypto");
+    const seen: { length?: string; sha?: string } = {};
+    // CONNECT, then read the tunnelled request until content-length bytes of body arrived.
+    const server = createServer((socket: Socket) => {
+      let buf = Buffer.alloc(0);
+      let tunnelled = false;
+      socket.on("data", (c: Buffer) => {
+        buf = Buffer.concat([buf, c]);
+        if (!tunnelled) {
+          const end = buf.indexOf("\r\n\r\n");
+          if (end === -1) return;
+          tunnelled = true;
+          buf = buf.subarray(end + 4);
+          socket.write("HTTP/1.1 200 Connection established\r\n\r\n");
+        }
+        const end = buf.indexOf("\r\n\r\n");
+        if (end === -1) return;
+        const head = buf.subarray(0, end).toString("latin1");
+        const len = Number(/content-length: (\d+)/i.exec(head)?.[1] ?? -1);
+        const body = buf.subarray(end + 4);
+        if (body.length < len) return;
+        seen.length = String(len);
+        seen.sha = createHash("sha256").update(body.subarray(0, len)).digest("hex");
+        const payload = JSON.stringify({ result: "ok" });
+        socket.end(`HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${payload.length}\r\n\r\n${payload}`);
+      });
+      socket.on("error", () => undefined);
+    });
+    await new Promise<void>((res) => server.listen(0, "127.0.0.1", () => res()));
+    const port = (server.address() as { port: number }).port;
+    try {
+      const data = new Uint8Array(randomBytes(3 * 1024 * 1024 + 7));
+      const res = await onionFetch("http://abc.onion/api/peering/transfer/x/files/0/chunks/0", {
+        method: "PUT",
+        headers: { "content-type": "application/octet-stream" },
+        body: data as unknown as BodyInit,
+      }, { proxyHost: "127.0.0.1", proxyPort: port });
+      expect(res.status).toBe(200);
+      expect(await res.json()).toEqual({ result: "ok" });
+      expect(seen.length).toBe(String(data.length));
+      expect(seen.sha).toBe(createHash("sha256").update(data).digest("hex"));
+    } finally {
+      await new Promise<void>((res) => server.close(() => res()));
+    }
+  });
+
+  it("refuses a body type it cannot send instead of dropping it", async () => {
+    proxy = await startFakeProxy({});
+    await expect(
+      onionFetch("http://abc.onion/x", { method: "POST", body: new FormData() }, {
+        proxyHost: "127.0.0.1",
+        proxyPort: proxy.port,
+      }),
+    ).rejects.toThrow("string or binary");
+  });
+});

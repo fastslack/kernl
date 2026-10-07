@@ -43,6 +43,8 @@
   let catalogError = '';
   let chosenSlug = '';
   let connectedName = '';
+  /** Set when the user leaves the AI step without a provider. */
+  let aiSkipped = false;
   /** Why the kernel says no agent can run yet. Empty when it can. */
   let readinessMsg = '';
 
@@ -84,7 +86,7 @@
   async function recheckReadiness(): Promise<{ ok: boolean; detail?: string }> {
     try {
       const r = await fetch('/api/llm/readiness/recheck', { method: 'POST', headers: { 'Content-Type': 'application/json' } });
-      if (!r.ok) return { ok: false, detail: `readiness check failed (HTTP ${r.status})` };
+      if (!r.ok) return { ok: false, detail: $t('setup.readiness_http', { status: String(r.status) }) };
       return (await r.json()) as { ok: boolean; detail?: string };
     } catch (e) {
       return { ok: false, detail: e instanceof Error ? e.message : String(e) };
@@ -97,7 +99,21 @@
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
   function back(): void {
-    if (step > 0) step--;
+    // A skipped AI step also skipped the team step, so going back from mail
+    // lands on the AI step again instead of a team that cannot be hired.
+    if (step === 3 && aiSkipped) step = 1;
+    else if (step > 0) step--;
+    if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  /**
+   * Leave the AI step without a provider. The team step needs a model to hire
+   * and greet, so it is skipped too; mail and WhatsApp still run.
+   */
+  function skipAi(): void {
+    aiSkipped = true;
+    chosenSlug = '';
+    step = 3;
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -246,7 +262,10 @@
           <h2>{$t('llm.title')}</h2>
           <p class="step-lede">{$t('llm.lede')}</p>
           {#if catalogError}
-            <p class="status err" role="alert">⚠ {$t('setup.llm_load_error')}</p>
+            <p class="status err" role="alert">
+              ⚠ {$t('setup.llm_load_error')}
+              <button class="btn-ghost" on:click={() => { catalogError = ''; void loadCatalog(); }}>{$t('action.retry')}</button>
+            </p>
           {:else if !catalog}
             <p class="status">{$t('welcome.setup_llm_loading')}</p>
           {:else}
@@ -254,10 +273,10 @@
           {/if}
           <!-- Leaving without a provider is a legitimate way to install: the
                gate only covers the routes that call a model, and the dashboard
-               banner links back here. -->
+               banner links to the AI providers in Settings. -->
           <div class="step-nav">
             <button class="btn-ghost" on:click={back}>{$t('setup.btn_back')}</button>
-            <button class="btn-ghost" on:click={() => finish('/')} title={$t('setup.llm_later_hint')}>{$t('llm.skip')}</button>
+            <button class="btn-ghost" on:click={skipAi} title={$t('setup.llm_later_hint')}>{$t('llm.skip')}</button>
           </div>
         {:else}
           {#key chosenProvider.slug}
@@ -320,22 +339,24 @@
           </div>
           <div class="summary-row">
             <span class="summary-k">{$t('setup.done_llm')}</span>
-            <!-- No "skipped" branch: reaching this step means a provider ran a
-                 tool call, so there is always a name to show. -->
-            <span class="summary-v">{connectedName}</span>
+            <span class="summary-v">{connectedName || $t('setup.done_llm_skipped')}</span>
           </div>
         </div>
 
         <SetupChecklist />
 
         <div class="step-nav center">
-          <button class="btn-primary big" on:click={() => finish('/agents-flow')}>{$t('setup.done_cta_office')}</button>
+          {#if aiSkipped}
+            <button class="btn-primary big" on:click={() => finish('/settings?section=ai&card=providers')}>{$t('setup.done_cta_connect_ai')}</button>
+          {:else}
+            <button class="btn-primary big" on:click={() => finish('/agents-flow')}>{$t('setup.done_cta_office')}</button>
+          {/if}
           <button class="btn-ghost big" on:click={() => finish('/settings?welcome=1')}>{$t('setup.done_cta_settings')}</button>
         </div>
 
         <p class="reset-hint">
           {$t('setup.done_revisit')}
-          <code>localStorage.removeItem('kernl.setupComplete')</code>
+          <a href="/setup">{$t('setup.done_revisit_link')}</a>
         </p>
       </section>
     {/if}

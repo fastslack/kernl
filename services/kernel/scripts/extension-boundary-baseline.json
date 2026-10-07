@@ -25,7 +25,6 @@
       "src/core/llm/chat-openai.ts",
       "src/core/llm/chat-provider.ts",
       "src/core/llm/claude-code-adapter.ts",
-      "src/core/llm/claude-code-auth.ts",
       "src/core/llm/credentials.ts",
       "src/core/llm/lmstudio-detect.ts",
       "src/core/llm/logger.ts",

@@ -244,6 +244,21 @@ export function resolveAgentWorkspace(agent: any, flows: FlowHome[] = [], opts: 
   };
 }
 
+/**
+ * Where an agent that works on a repo keeps its own files — memory, notes,
+ * drafts — apart from that repo: its registered `__workspace__`, else its
+ * office's workspace, else the per-agent default. Null when the agent has no
+ * repo: then the workspace `resolveAgentWorkspace` returns already is its own.
+ */
+export function resolveAgentNotesWorkspace(agent: any, flows: FlowHome[] = [], opts: { cwdMissing?: boolean } = {}): { wsId: string; label: string } | null {
+  if (!resolveAgentWorkspace(agent, flows, opts).cwdPath) return null;
+  const vars = safeParse(agent?.variables) || {};
+  const flow = agent?.flow_id ? flows.find(f => f.id === agent.flow_id) : undefined;
+  const id = [vars.__workspace__, flow?.home_workspace_id, `agent-${agent?.id}`]
+    .find((v) => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v)) as string;
+  return { wsId: id, label: `data/workspaces/${id}` };
+}
+
 /** True when the agent is backed by a Google-sync builtin handler. */
 export function dependsOnGoogleAuth(a: any): boolean {
   const h = a?.builtin_handler;

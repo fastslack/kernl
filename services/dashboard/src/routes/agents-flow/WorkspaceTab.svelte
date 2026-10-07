@@ -41,7 +41,14 @@
   export let collapsed: Set<string> = new Set();
 
   /** Bound: the parent fills it on open and clears it on reload. */
-  export let fileContent: { path: string; content: string } | null = null;
+  export let fileContent: { path: string; content: string; source?: 'agent' | 'repo' } | null = null;
+
+  /**
+   * The agent's own files (memory, notes, drafts) when it works on a repo —
+   * kept in a second section so they never read as part of the developer's
+   * code. Null when the agent has no repo: then `files` already are its own.
+   */
+  export let notes: { wsId: string; label: string; files: Array<{ path: string; type: string; size: number }>; loading: boolean } | null = null;
 
   /**
    * The tree arrives one folder at a time: the parent fetches a folder when it
@@ -56,16 +63,42 @@
   export let loadingDirs: Set<string> = new Set();
 
   /** Ask the world to fetch one file — it knows which endpoint applies. */
-  export let onOpenFile: (path: string) => void = () => {};
+  export let onOpenFile: (path: string, source: 'agent' | 'repo') => void = () => {};
+
+  // Two sections: the agent's own files, and the repo it works on.
+  $: hasRepo = !!info?.cwdPath;
+  $: agentFiles = hasRepo ? (notes?.files ?? []) : files;
+  $: repoFiles = hasRepo ? files : [];
+  let section: 'agent' | 'repo' = 'agent';
+  // Open on the repo the agent works on; switching agent starts over.
+  let sectionFor = '';
+  $: if (info && sectionFor !== info.cwdLabel) {
+    sectionFor = info.cwdLabel;
+    section = hasRepo ? 'repo' : 'agent';
+    agentCollapsed = new Set();
+  }
+  $: if (!hasRepo) section = 'agent';
+  let agentCollapsed: Set<string> = new Set();
+
+  $: onRepo = section === 'repo';
+  $: shownFiles = onRepo ? repoFiles : agentFiles;
+  $: shownCollapsed = onRepo ? collapsed : agentCollapsed;
+  $: shownLazy = onRepo && lazy;
 
   function toggleWsDir(path: string): void {
-    if (collapsed.has(path)) collapsed.delete(path); else collapsed.add(path);
-    collapsed = collapsed;
+    const set = onRepo ? collapsed : agentCollapsed;
+    if (set.has(path)) set.delete(path); else set.add(path);
+    if (onRepo) collapsed = collapsed; else agentCollapsed = agentCollapsed;
+  }
+  function setCollapsed(next: Set<string>): void {
+    if (onRepo) collapsed = next; else agentCollapsed = next;
   }
 
-  $: wsRows = buildWsRows(files, collapsed, more);
-  $: wsAllDirs = [...new Set(buildWsRows(files, new Set()).filter(r => r.isDir).map(r => r.path))];
-  $: wsFileCount = files.filter(f => f.type !== 'dir').length;
+  $: wsRows = buildWsRows(shownFiles, shownCollapsed, onRepo ? more : new Map());
+  $: wsAllDirs = [...new Set(buildWsRows(shownFiles, new Set()).filter(r => r.isDir).map(r => r.path))];
+  $: wsFileCount = shownFiles.filter(f => f.type !== 'dir').length;
+  $: agentFileCount = agentFiles.filter(f => f.type !== 'dir').length;
+  $: repoName = (info?.cwdPath ?? '').split('/').filter(Boolean).pop() ?? '';
 </script>
 
 <div class="ws-panel">
@@ -77,44 +110,76 @@
           ? (safeParse(vars.__additional_directories__) || [])
           : [])}
     {@const sandboxDriver = vars.__sandbox_driver__ || (vars.__container_sandbox__ ? 'docker' : '')}
-    <div class="ws-cwd-card">
-      <div class="ws-cwd-row">
-        <span class="ws-cwd-lbl">cwd</span>
-        <code class="ws-cwd-path">{info.cwdLabel}</code>
+
+    <!-- Two worlds, never mixed: what the agent keeps for itself, and the
+         developer's repo it works on. Each has its own colour throughout. -->
+    {#if hasRepo}
+      <div class="ws-sections" role="tablist" aria-label="Archivos">
+        <button role="tab" class="ws-sec ws-sec-agent" class:on={!onRepo} aria-selected={!onRepo} on:click={() => { section = 'agent'; fileContent = null; }}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3a6 6 0 0 0-6 6c0 2.2 1.2 3.6 2 4.5V17h8v-3.5c.8-.9 2-2.3 2-4.5a6 6 0 0 0-6-6Z"/><path d="M9.5 21h5"/></svg>
+          <span class="ws-sec-txt"><b>Del agente</b><small>memoria, notas y apuntes</small></span>
+          <span class="ws-sec-n">{notes?.loading ? '…' : agentFileCount}</span>
+        </button>
+        <button role="tab" class="ws-sec ws-sec-repo" class:on={onRepo} aria-selected={onRepo} on:click={() => { section = 'repo'; fileContent = null; }}>
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="18" cy="8" r="2"/><path d="M6 8v8"/><path d="M18 10c0 4-6 3-10 6"/></svg>
+          <span class="ws-sec-txt"><b>Repositorio</b><small>{repoName || 'código del proyecto'}</small></span>
+        </button>
       </div>
-      <div class="ws-cwd-hint">{info.cwdHint}</div>
-      {#if previewUrl}
-        <div class="ws-cwd-row ws-cwd-preview">
-          <span class="ws-cwd-lbl">preview</span>
-          <a class="ws-preview-link" style="color:#4ade80;word-break:break-all;text-decoration:none" href={previewUrl} target="_blank" rel="noopener noreferrer">🔗 {previewUrl}</a>
+    {/if}
+
+    {#if onRepo}
+      <div class="ws-cwd-card ws-card-repo">
+        <div class="ws-card-title">Repositorio del desarrollador <span>el código del proyecto · lo que el agente edita acá queda en el repo</span></div>
+        <div class="ws-cwd-row">
+          <span class="ws-cwd-lbl">cwd</span>
+          <code class="ws-cwd-path">{info.cwdLabel}</code>
         </div>
-      {/if}
-      {#if extraDirs.length}
-        <div class="ws-cwd-row ws-cwd-extra">
-          <span class="ws-cwd-lbl">+dirs</span>
-          <div class="ws-cwd-paths">
-            {#each extraDirs as d}<code class="ws-cwd-path">{d}</code>{/each}
+        <div class="ws-cwd-hint">{info.cwdHint}</div>
+        {#if previewUrl}
+          <div class="ws-cwd-row ws-cwd-preview">
+            <span class="ws-cwd-lbl">preview</span>
+            <a class="ws-preview-link" style="color:#4ade80;word-break:break-all;text-decoration:none" href={previewUrl} target="_blank" rel="noopener noreferrer">🔗 {previewUrl}</a>
           </div>
-        </div>
-      {/if}
-      <div class="ws-cwd-row ws-cwd-guard" class:warn={!sandboxDriver}>
-        <span class="ws-cwd-lbl">guard</span>
-        {#if sandboxDriver}
-          <span class="ws-guard-ok">📦 sandbox: {sandboxDriver} — Bash confinado al sandbox</span>
-        {:else}
-          <span class="ws-guard-warn">⚠ no sandbox — Read/Edit/Write/Glob/Grep are scoped to the cwd, but <strong>Bash is unrestricted inside the kernel container</strong></span>
         {/if}
+        {#if extraDirs.length}
+          <div class="ws-cwd-row ws-cwd-extra">
+            <span class="ws-cwd-lbl">+dirs</span>
+            <div class="ws-cwd-paths">
+              {#each extraDirs as d}<code class="ws-cwd-path">{d}</code>{/each}
+            </div>
+          </div>
+        {/if}
+        <div class="ws-cwd-row ws-cwd-guard" class:warn={!sandboxDriver}>
+          <span class="ws-cwd-lbl">guard</span>
+          {#if sandboxDriver}
+            <span class="ws-guard-ok">📦 sandbox: {sandboxDriver} — Bash confinado al sandbox</span>
+          {:else}
+            <span class="ws-guard-warn">⚠ no sandbox — Read/Edit/Write/Glob/Grep are scoped to the cwd, but <strong>Bash is unrestricted inside the kernel container</strong></span>
+          {/if}
+        </div>
       </div>
-    </div>
+    {:else}
+      <div class="ws-cwd-card ws-card-agent">
+        <div class="ws-card-title">Archivos del agente <span>su memoria, notas y apuntes · {hasRepo ? 'no son parte del repositorio' : 'este agente no trabaja sobre un repositorio'}</span></div>
+        <div class="ws-cwd-row">
+          <span class="ws-cwd-lbl">dónde</span>
+          <code class="ws-cwd-path">{hasRepo ? notes?.label : info.cwdLabel}</code>
+        </div>
+        {#if !hasRepo}<div class="ws-cwd-hint">{info.cwdHint}</div>{/if}
+      </div>
+    {/if}
   {/if}
-  {#if loading}
-    <div class="ws-loading">Loading workspace...</div>
+  {#if loading || (!onRepo && notes?.loading)}
+    <div class="ws-loading">Cargando archivos…</div>
   {:else if !info?.wsId && !info?.cwdPath}
     <div class="ws-empty">This agent uses <code>__cwd_path__</code> (an absolute path). To see it, register it as a workspace or browse via the global Workspace tab.</div>
   {:else if fileContent}
     <div class="ws-file-view">
       <div class="ws-file-header">
         <button class="ws-back" on:click={() => fileContent = null}>← Back</button>
+        {#if hasRepo}
+          <span class="ws-origin" class:repo={fileContent.source !== 'agent'}>{fileContent.source === 'agent' ? 'agente' : 'repo'}</span>
+        {/if}
         <span class="ws-file-path">{fileContent.path}</span>
         {#if detectLang(fileContent.path)}
           <span class="ws-file-lang">{detectLang(fileContent.path)}</span>
@@ -129,23 +194,23 @@
         {/if}
       </div>
     </div>
-  {:else if files.length === 0}
-    <div class="ws-empty">No files yet. This agent hasn't created anything in its workspace.</div>
+  {:else if shownFiles.length === 0}
+    <div class="ws-empty">{onRepo ? 'El repositorio no tiene archivos para mostrar.' : 'El agente todavía no guardó archivos propios.'}</div>
   {:else}
     <div class="ws-toolbar">
-      {#if !lazy}<span class="ws-count">{wsFileCount} {wsFileCount === 1 ? 'file' : 'files'}</span>{/if}
-      <button class="ws-tb-btn" on:click={() => { collapsed = new Set(wsAllDirs); }} disabled={collapsed.size >= wsAllDirs.length}>⊟ Collapse all</button>
-      {#if !lazy}<button class="ws-tb-btn" on:click={() => { collapsed = new Set(); }} disabled={collapsed.size === 0}>⊞ Expand all</button>{/if}
+      {#if !shownLazy}<span class="ws-count">{wsFileCount} {wsFileCount === 1 ? 'file' : 'files'}</span>{/if}
+      <button class="ws-tb-btn" on:click={() => setCollapsed(new Set(wsAllDirs))} disabled={shownCollapsed.size >= wsAllDirs.length}>⊟ Collapse all</button>
+      {#if !shownLazy}<button class="ws-tb-btn" on:click={() => setCollapsed(new Set())} disabled={shownCollapsed.size === 0}>⊞ Expand all</button>{/if}
     </div>
-    <div class="ws-tree">
+    <div class="ws-tree" class:ws-tree-agent={!onRepo} class:ws-tree-repo={onRepo && hasRepo}>
       {#each wsRows as r (r.path)}
         {#if r.isDir}
           <button class="ws-row ws-dir" on:click={() => toggleWsDir(r.path)} title={r.path}>
             {#each { length: r.depth } as _}<span class="ws-guide"></span>{/each}
-            <span class="ws-chev" class:open={!collapsed.has(r.path)}>▸</span>
-            <span class="ws-icon">{collapsed.has(r.path) ? '📁' : '📂'}</span>
+            <span class="ws-chev" class:open={!shownCollapsed.has(r.path)}>▸</span>
+            <span class="ws-icon">{shownCollapsed.has(r.path) ? '📁' : '📂'}</span>
             <span class="ws-name ws-dirname">{r.name}</span>
-            <span class="ws-badge">{loadingDirs.has(r.path) ? '…' : r.fileCount}</span>
+            <span class="ws-badge">{onRepo && loadingDirs.has(r.path) ? '…' : r.fileCount}</span>
           </button>
         {:else if r.more}
           <div class="ws-row ws-more" title="Folder too big to list whole">
@@ -154,7 +219,7 @@
             <span class="ws-name">{r.name}</span>
           </div>
         {:else}
-          <button class="ws-row ws-file" on:click={() => onOpenFile(r.path)} title={r.path}>
+          <button class="ws-row ws-file" on:click={() => onOpenFile(r.path, onRepo ? 'repo' : 'agent')} title={r.path}>
             {#each { length: r.depth } as _}<span class="ws-guide"></span>{/each}
             <span class="ws-chev-spacer"></span>
             <span class="ws-icon">{wsFileIcon(r.name)}</span>
@@ -333,4 +398,37 @@
   }
   .ws-file-md :global(table.md-table th){ background:rgba(90,110,160,.1); font-weight:600; }
   .ws-file-md :global(hr){ border:none; border-top:1px solid rgba(90,110,160,.2); margin:16px 0; }
+
+  /* ── Agent files vs the repo: one colour each, everywhere ── */
+  .ws-sections{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin:0 8px 10px}
+  .ws-sec{
+    display:flex;align-items:center;gap:9px;padding:8px 10px;border-radius:9px;cursor:pointer;text-align:left;
+    border:1px solid rgba(120,130,160,.18);background:rgba(120,130,160,.05);color:#8a8fa8;
+    transition:background .15s,border-color .15s,color .15s;
+  }
+  .ws-sec:hover{background:rgba(120,130,160,.1);color:#d0d4e4}
+  .ws-sec-txt{display:flex;flex-direction:column;min-width:0;flex:1}
+  .ws-sec-txt b{font:700 12px 'Manrope',sans-serif;color:inherit}
+  .ws-sec-txt small{font:500 10px 'Manrope',sans-serif;opacity:.8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .ws-sec-n{flex-shrink:0;min-width:20px;padding:1px 7px;border-radius:9px;text-align:center;font:700 10px/16px 'JetBrains Mono',monospace;background:rgba(120,130,160,.14)}
+  .ws-sec-agent.on{background:rgba(167,139,250,.14);border-color:rgba(167,139,250,.55);color:#d8ccff}
+  .ws-sec-agent.on .ws-sec-n{background:rgba(167,139,250,.3);color:#efe9ff}
+  .ws-sec-repo.on{background:rgba(45,212,191,.12);border-color:rgba(45,212,191,.5);color:#a7f3e6}
+  .ws-sec:focus-visible{outline:2px solid #a78bfa;outline-offset:2px}
+
+  .ws-card-title{display:flex;flex-direction:column;gap:1px;font:700 12px 'Manrope',sans-serif;color:#e8ecf5}
+  .ws-card-title span{font:500 10.5px 'Manrope',sans-serif;color:#9aa0b8}
+  .ws-card-agent{background:linear-gradient(180deg,rgba(167,139,250,.12),rgba(167,139,250,.03));border-color:rgba(167,139,250,.3)}
+  .ws-card-agent .ws-cwd-lbl{background:rgba(167,139,250,.22);color:#d0c2ff}
+  .ws-card-repo{background:linear-gradient(180deg,rgba(45,212,191,.1),rgba(45,212,191,.02));border-color:rgba(45,212,191,.28)}
+  .ws-card-repo > .ws-cwd-row:not(.ws-cwd-guard):not(.ws-cwd-extra) .ws-cwd-lbl{background:rgba(45,212,191,.2);color:#99eedd}
+
+  .ws-tree-agent{border-color:rgba(167,139,250,.22);box-shadow:inset 3px 0 0 rgba(167,139,250,.55)}
+  .ws-tree-repo{border-color:rgba(45,212,191,.2);box-shadow:inset 3px 0 0 rgba(45,212,191,.5)}
+  .ws-origin{
+    flex-shrink:0;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:.05em;
+    font:700 9px 'JetBrains Mono',monospace;background:rgba(167,139,250,.2);color:#d8ccff;border:1px solid rgba(167,139,250,.45);
+  }
+  .ws-origin.repo{background:rgba(45,212,191,.16);color:#99eedd;border-color:rgba(45,212,191,.42)}
+  @media (prefers-reduced-motion: reduce){ .ws-sec{transition:none} }
 </style>

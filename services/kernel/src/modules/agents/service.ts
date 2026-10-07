@@ -35,6 +35,7 @@ import { AgentRanksService } from "./services/ranks-service.js";
 import { AgentRunsService } from "./services/runs-service.js";
 import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
+import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
 
 export type QuestionStatus = "triage" | "pending" | "answered" | "dismissed";
 export interface AgentQuestion {
@@ -666,6 +667,12 @@ export class AgentService {
     return this.db.prepare(sql).all(...params) as Agent[];
   }
 
+  /** Why this agent can never be switched off, or null. See protected-agents.ts. */
+  protectedReason(agent: Pick<Agent, "name" | "rank_id" | "builtin_handler">): string | null {
+    const top = this.db.prepare(`${TOP_RANK_IDS_SQL} LIMIT 1`).get() as { id: string } | undefined;
+    return protectedReason(agent, top?.id ?? null);
+  }
+
   updateAgent(
     id: string,
     input: Partial<{
@@ -703,6 +710,10 @@ export class AgentService {
   ): Agent | undefined {
     const agent = this.getAgent(id);
     if (!agent) return undefined;
+    if (input.active === false) {
+      const why = this.protectedReason(agent);
+      if (why) throw new ProtectedAgentError(agent.name, why);
+    }
 
     const { sets, params } = buildPatch(
       // Only a known engine is written; anything else leaves the column alone.
@@ -745,6 +756,8 @@ export class AgentService {
   deleteAgent(id: string): boolean {
     const agent = this.getAgent(id);
     if (!agent) return false;
+    const why = this.protectedReason(agent);
+    if (why) throw new ProtectedAgentError(agent.name, why);
 
     this.db.prepare("UPDATE agents SET active = 0, updated_at = ? WHERE id = ?").run(isoNow(), id);
     this.events.emit("data.changed", { module: "agents", action: "agent_deleted" });
@@ -794,7 +807,9 @@ export class AgentService {
     const fails = (agent.consecutive_failures ?? 0) + 1;
     const reason = (outcome.error ?? "").trim().slice(0, 500) || "run failed without an error message";
     const threshold = this.autoPauseThreshold();
-    const shouldPause = threshold > 0 && fails >= threshold && agent.active === 1;
+    // A protected agent keeps counting failures and the Chief still hears about
+    // them, but it is never switched off: the system needs it running.
+    const shouldPause = threshold > 0 && fails >= threshold && agent.active === 1 && !this.protectedReason(agent);
 
     if (!shouldPause) {
       this.db
@@ -1118,16 +1133,18 @@ export class AgentService {
       .run(isoNow(), ...messageIds);
   }
 
-  /** Mark read exactly those of `messageIds` that are unread letters addressed
-   *  to `agentId`. Returns how many were acknowledged. */
+  /** Acknowledge those of `messageIds` that are letters addressed to `agentId`
+   *  and not archived. A letter the run's prompt already delivered is `read`
+   *  and acknowledges too — refusing it told the agent its own letter was not
+   *  its own. Returns how many were acknowledged. */
   ackInboxFor(agentId: string, messageIds: string[]): number {
     if (!agentId || messageIds.length === 0) return 0;
     const placeholders = messageIds.map(() => "?").join(",");
     const res = this.db
       .prepare(
         `UPDATE agent_office_inbox
-         SET status = 'read', read_at = ?
-         WHERE id IN (${placeholders}) AND to_agent_id = ? AND status = 'unread'`,
+         SET status = 'read', read_at = COALESCE(read_at, ?)
+         WHERE id IN (${placeholders}) AND to_agent_id = ? AND status IN ('unread', 'read')`,
       )
       .run(isoNow(), ...messageIds, agentId);
     return Number(res.changes ?? 0);
@@ -1413,11 +1430,21 @@ export class AgentService {
       limit?: number;
       /** Same scoping as getUnreadInbox: undefined = all, null = no project, id = none + that project. */
       projectId?: string | null;
+      /**
+       * With status "unread": also the letters marked read at or after this
+       * instant. A run's system prompt delivers its unread letters and marks
+       * them read before the first turn, so from inside that run "unread"
+       * alone came back empty while the wake-up goal said there were letters.
+       */
+      alsoReadSince?: string;
     },
   ): AgentOfficeInboxMessage[] {
     let sql = "SELECT * FROM agent_office_inbox WHERE to_agent_id = ?";
     const params: unknown[] = [agentId];
-    if (opts?.status) {
+    if (opts?.status === "unread" && opts.alsoReadSince) {
+      sql += " AND (status = 'unread' OR (status = 'read' AND read_at >= ?))";
+      params.push(opts.alsoReadSince);
+    } else if (opts?.status) {
       sql += " AND status = ?";
       params.push(opts.status);
     }

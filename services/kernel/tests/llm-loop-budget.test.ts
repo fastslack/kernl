@@ -168,3 +168,46 @@ describe("llm-loop iteration budget warnings", () => {
     expect(result.hitMaxIterations).toBe(true);
   });
 });
+
+describe("llm-loop token budget", () => {
+  // Usage is only known after a call; checking the running total alone let
+  // the crossing turn run in full (174k on a 150k budget).
+  it("stops before a call the last turn's size says would cross the budget", async () => {
+    const seen: Array<string | undefined> = [];
+    const seenTools: boolean[] = [];
+    const toolTurn = (n: number): Partial<ChatCompletionResult> => ({
+      content: "", tokens_used: 30,
+      tool_calls: [{ type: "tool_use", id: `t${n}`, name: "noop", input: { n } }],
+    });
+    const r = await runToolLoop({
+      provider: fakeProvider([toolTurn(1), toolTurn(2), toolTurn(3), toolTurn(4), { content: "done" }], seen, seenTools),
+      systemText: "BASE",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "noop", description: "noop", input_schema: {} }],
+      executeTool: async () => ({ text: "ok", isError: false }),
+      budgets: { maxIterations: 20, maxTokens: 100, maxErrors: 5, timeoutMs: 60_000 },
+    });
+    expect(seen.length).toBe(3);
+    expect(r.totalTokens).toBe(90);
+    expect(r.status).toBe("aborted");
+    expect(r.abortReason).toMatch(/^Token budget would be exceeded/);
+  });
+
+  it("still lets a turn that fits run", async () => {
+    const seen: Array<string | undefined> = [];
+    const seenTools: boolean[] = [];
+    const r = await runToolLoop({
+      provider: fakeProvider([
+        { content: "", tokens_used: 30, tool_calls: [{ type: "tool_use", id: "t1", name: "noop", input: {} }] },
+        { content: "done", tokens_used: 30 },
+      ], seen, seenTools),
+      systemText: "BASE",
+      messages: [{ role: "user", content: "hi" }],
+      tools: [{ name: "noop", description: "noop", input_schema: {} }],
+      executeTool: async () => ({ text: "ok", isError: false }),
+      budgets: { maxIterations: 20, maxTokens: 60, maxErrors: 5, timeoutMs: 60_000 },
+    });
+    expect(r.status).toBe("completed");
+    expect(r.totalTokens).toBe(60);
+  });
+});

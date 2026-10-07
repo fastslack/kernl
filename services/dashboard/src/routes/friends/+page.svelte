@@ -20,6 +20,7 @@
     last_seen_at: string | null;
     last_reach: string;
     last_error: string;
+    manual_url: string;
     created_at: string;
   }
   interface Reach { kind: 'lan' | 'direct' | 'onion'; url: string; prio: number }
@@ -35,6 +36,11 @@
   let newNpub = '';
   let newPetname = '';
   let adding = false;
+
+  /** npub -> address being typed, for rows whose address editor is open. */
+  let addrDraft: Record<string, string> = {};
+  let addrOpen: Record<string, boolean> = {};
+  let addrBusy: Record<string, boolean> = {};
 
   /** npub -> live probe result, so a row can show what actually answered. */
   let probes: Record<string, { busy: boolean; via?: string; reachable?: boolean; error?: string }> = {};
@@ -107,6 +113,35 @@
     }
   }
 
+  /** Save (or clear) the hand-typed address, then probe it straight away. */
+  async function saveAddress(f: Friend) {
+    addrBusy = { ...addrBusy, [f.npub]: true };
+    try {
+      const res = await call(`/api/peering/friends/${encodeURIComponent(f.npub)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ address: addrDraft[f.npub] ?? '' }),
+      });
+      friends = res.friends ?? friends;
+      addrOpen = { ...addrOpen, [f.npub]: false };
+      error = '';
+      await probe(f);
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      addrBusy = { ...addrBusy, [f.npub]: false };
+    }
+  }
+
+  function openAddress(f: Friend) {
+    addrDraft = { ...addrDraft, [f.npub]: f.manual_url.replace(/^http:\/\//, '') };
+    addrOpen = { ...addrOpen, [f.npub]: true };
+  }
+
+  /** "192.168.0.136:3088" for a LAN entry — what you read out to a friend. */
+  function hostOf(url: string): string {
+    try { return new URL(url).host; } catch { return url; }
+  }
+
   async function remove(f: Friend) {
     if (!confirm(`Remove ${f.petname || short(f.npub)}? Their directories stay; the link goes.`)) return;
     try {
@@ -149,7 +184,7 @@
     const p = probes[f.npub];
     if (p?.via) return p.via;
     if (f.last_reach.includes('.onion')) return 'onion';
-    if (f.last_reach.includes('.local')) return 'lan';
+    if (f.last_reach.includes('.local') || /^https?:\/\/(10|192\.168|172\.(1[6-9]|2\d|3[01]))\./.test(f.last_reach)) return 'lan';
     if (f.last_reach) return 'direct';
     return '';
   }
@@ -187,7 +222,7 @@
     {#if descriptor?.reach?.length}
       <div class="reach">
         {#each descriptor.reach as r (r.url)}
-          <span class="chip" class:onion={r.kind === 'onion'} title={r.url}>{r.kind}</span>
+          <span class="chip" class:onion={r.kind === 'onion'} title={r.url}>{r.kind === 'lan' ? `lan · ${hostOf(r.url)}` : r.kind}</span>
         {/each}
       </div>
     {:else}
@@ -253,10 +288,34 @@
           <button class="btn ghost danger" on:click={() => remove(f)}>Remove</button>
         </div>
 
-        {#if p && !p.busy && p.reachable === false}
-          <p class="row-err">unreachable — {p.error ?? f.last_error ?? 'no transport answered'}</p>
-        {:else if f.last_error && f.trust === 'trusted'}
-          <p class="row-err">{f.last_error}</p>
+        {#if (p && !p.busy && p.reachable === false) || (f.last_error && f.trust === 'trusted')}
+          <p class="row-err" title={p?.error ?? f.last_error}>
+            Can't reach this instance right now. If it is on your network, enter its address
+            below — it is shown on that machine's Friends page, next to <b>lan</b>.
+          </p>
+        {/if}
+
+        {#if addrOpen[f.npub]}
+          <form class="addr" on:submit|preventDefault={() => saveAddress(f)}>
+            <label class="addr-label" for="addr-{f.npub}">Address on your network</label>
+            <input
+              id="addr-{f.npub}"
+              class="inp mono"
+              bind:value={addrDraft[f.npub]}
+              placeholder="192.168.0.9:3086"
+              spellcheck="false"
+            />
+            <button class="btn" type="submit" disabled={addrBusy[f.npub]}>{addrBusy[f.npub] ? 'Saving…' : 'Save & probe'}</button>
+            <button class="btn ghost" type="button" on:click={() => (addrOpen = { ...addrOpen, [f.npub]: false })}>Cancel</button>
+            <p class="addr-help">Leave it empty to go back to finding it automatically.</p>
+          </form>
+        {:else if f.manual_url}
+          <p class="addr-set">
+            Address set by hand: <code>{hostOf(f.manual_url)}</code>
+            <button class="link" on:click={() => openAddress(f)}>change</button>
+          </p>
+        {:else if (p && !p.busy && p.reachable === false) || (f.last_error && f.trust === 'trusted')}
+          <p class="addr-set"><button class="link" on:click={() => openAddress(f)}>Enter its address</button></p>
         {/if}
       </article>
     {/each}
@@ -334,7 +393,20 @@
   .row.revoked { opacity: 0.55; }
   .row-err {
     grid-column: 1 / -1; margin: 0;
-    font-family: var(--font-mono); font-size: 11px; color: var(--red, #F04770);
+    font-size: 12.5px; line-height: 1.5; color: var(--orange, #F0883E);
+  }
+
+  .addr {
+    grid-column: 1 / -1; display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  }
+  .addr-label { font-size: 12.5px; color: var(--text-2); }
+  .addr .inp { width: 220px; }
+  .addr-help { flex-basis: 100%; margin: 0; font-size: 12px; color: var(--text-3); }
+  .addr-set { grid-column: 1 / -1; margin: 0; font-size: 12.5px; color: var(--text-2); }
+  .addr-set code { font-family: var(--font-mono); color: var(--teal, #3DD6C8); }
+  .link {
+    background: none; border: 0; padding: 0; margin-left: 6px; cursor: pointer;
+    color: var(--teal, #3DD6C8); font-size: 12.5px; text-decoration: underline;
   }
 
   .dot {

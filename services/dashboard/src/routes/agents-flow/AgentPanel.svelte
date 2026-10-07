@@ -33,7 +33,7 @@
   import { fmtRelTime, fmtTokens, triggerColor } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
   import { isWorkspacePathHidden } from '$lib/workspace-tree.js';
-  import { resolveAgentWorkspace, dependsOnGoogleAuth } from '$lib/agent-helpers.js';
+  import { resolveAgentWorkspace, resolveAgentNotesWorkspace, dependsOnGoogleAuth } from '$lib/agent-helpers.js';
   import { fetchRecentRunSummaries } from './recent-runs.js';
   import { attachmentMarkers } from '$lib/chat-view.js';
   import { chatProjectChoices, defaultChatProject, chatProjectKey, type ChatProject } from '$lib/chat-project.js';
@@ -341,11 +341,16 @@
   let panelTab: 'info' | 'config' | 'live' | 'history' | 'memory' | 'chat' | 'workspace' | 'skills' | (string & {}) = 'info';
   let agentRuns: Array<{ id: string; status: string; steps_count: number; tokens_used: number; trigger_type: string; created_at: string; result?: string; error?: string }> = [];
   let workspaceFiles: Array<{ path: string; type: string; size: number }> = [];
-  let workspaceFileContent: { path: string; content: string } | null = null;
+  let workspaceFileContent: { path: string; content: string; source?: 'agent' | 'repo' } | null = null;
   let workspaceLoading = false;
   let workspacePreviewUrl: string | null = null;
 
   $: visibleWorkspaceFiles = workspaceFiles.filter(f => !isWorkspacePathHidden(f.path));
+
+  // An agent that works on a repo keeps its own memory, notes and drafts
+  // elsewhere. The tab used to show only the repo, so those were invisible
+  // and nothing told the agent's files apart from the developer's code.
+  let agentNotes: { wsId: string; label: string; files: Array<{ path: string; type: string; size: number }>; loading: boolean } | null = null;
 
   // ── Workspace tree ─────────────────────────────────────────────────
   // Row building moved to WorkspaceTab.svelte with the markup. Only the
@@ -495,6 +500,9 @@
     wsLoadedDirs = new Set();
     wsLoadingDirs = new Set();
     wsMore = new Map();
+    const notesWs = resolveAgentNotesWorkspace(agent, flows, { cwdMissing });
+    agentNotes = notesWs ? { ...notesWs, files: [], loading: true } : null;
+    if (notesWs) void loadAgentNotes(agent.id, notesWs.wsId, wsGeneration);
     try {
       if (info.cwdPath) {
         // External __cwd_path__ repo — listed via the agent-scoped cwd endpoint,
@@ -511,6 +519,7 @@
           wsLazy = false;
           info = resolveAgentWorkspace(agent, flows, { cwdMissing: true });
           workspacePreviewUrl = null;
+          agentNotes = null; // the fallback workspace is the agent's own
         }
       }
       if (!info.cwdPath && info.wsId) {
@@ -524,18 +533,34 @@
     workspaceLoading = false;
   }
 
-  async function loadWorkspaceFile(path: string) {
+  /** The agent's own files, beside the repo it works on. */
+  async function loadAgentNotes(agentId: string, wsId: string, gen: number): Promise<void> {
+    let files: Array<{ path: string; type: string; size: number }> = [];
+    try {
+      const res = await fetch(`/api/agents/workspace/${wsId}`);
+      const data: any = res.ok ? await res.json() : null;
+      files = (data?.files ?? []).filter((f: { path: string }) => !isWorkspacePathHidden(f.path));
+    } catch { /* shown as empty */ }
+    if (gen !== wsGeneration || wsAgentId !== agentId || !agentNotes) return;
+    agentNotes = { ...agentNotes, files, loading: false };
+  }
+
+  /** `source` says which tree the file is in: the agent's own files or the repo. */
+  async function loadWorkspaceFile(path: string, source: 'agent' | 'repo' = 'repo') {
     const agent = agents.find(a => a.id === selectedAgent);
     if (!agent) return;
     const info = resolveAgentWorkspace(agent, flows, { cwdMissing });
+    const fromNotes = source === 'agent' && agentNotes;
     try {
-      const url = info.cwdPath
-        ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`
-        : `/api/agents/workspace/${info.wsId}/file?path=${encodeURIComponent(path)}`;
+      const url = fromNotes
+        ? `/api/agents/workspace/${agentNotes!.wsId}/file?path=${encodeURIComponent(path)}`
+        : info.cwdPath
+          ? `/api/agents/${agent.id}/cwd-file?path=${encodeURIComponent(path)}`
+          : `/api/agents/workspace/${info.wsId}/file?path=${encodeURIComponent(path)}`;
       const res = await fetch(url);
       const data: any = await res.json();
-      workspaceFileContent = { path, content: data?.content ?? '' };
-    } catch { workspaceFileContent = { path, content: 'Error loading file' }; }
+      workspaceFileContent = { path, content: data?.content ?? '', source };
+    } catch { workspaceFileContent = { path, content: 'Error loading file', source }; }
   }
 
   async function loadRunSteps(runId: string) {
@@ -1270,6 +1295,7 @@ Boss says: "${msg || '(see the attached files)'}"`;
         previewUrl={workspacePreviewUrl}
         loading={workspaceLoading}
         files={visibleWorkspaceFiles}
+        notes={agentNotes}
         lazy={wsLazy}
         more={wsMore}
         loadingDirs={wsLoadingDirs}

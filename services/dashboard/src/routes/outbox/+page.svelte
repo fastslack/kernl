@@ -61,6 +61,11 @@
   let rejectNote = '';
   let scheduling = false;
   let scheduleAt = '';
+  // "A" sends publicly, so the shortcut arms on the first press and only fires
+  // on a second press within a few seconds; the button click stays one step.
+  let sendArmed = false;
+  let sendArmTimer: ReturnType<typeof setTimeout> | undefined;
+  function disarmSend() { sendArmed = false; clearTimeout(sendArmTimer); }
 
   async function call(path: string, init: RequestInit = {}): Promise<any> {
     const r = await apiFetchRaw(path, { ...init, headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) } });
@@ -114,6 +119,7 @@
     dirty = false;
     rejecting = scheduling = false;
     rejectNote = '';
+    disarmSend();
     notice = '';
   }
 
@@ -193,7 +199,10 @@
       const n = visible[i + (e.key === 'j' ? 1 : -1)];
       if (n) pick(n.id);
     } else if (selected.status === 'draft') {
-      if (e.key === 'a') void approve();
+      if (e.key === 'a') {
+        if (sendArmed) { disarmSend(); void approve(); }
+        else { sendArmed = true; clearTimeout(sendArmTimer); sendArmTimer = setTimeout(() => (sendArmed = false), 4000); }
+      }
       else if (e.key === 'r') { rejecting = true; scheduling = false; }
       else if (e.key === 'p') { scheduling = true; rejecting = false; }
     }
@@ -362,7 +371,7 @@
               <button class="btn danger" on:click={() => { rejecting = true; scheduling = false; }}>Rechazar <kbd>R</kbd></button>
               <span class="spacer"></span>
               <button class="btn" on:click={() => { scheduling = true; rejecting = false; }}>Programar <kbd>P</kbd></button>
-              <button class="btn primary" on:click={() => approve()} disabled={busy}>{busy ? 'Enviando…' : 'Aprobar y enviar ahora'} <kbd>A</kbd></button>
+              <button class="btn primary" on:click={() => { disarmSend(); approve(); }} disabled={busy}>{busy ? 'Enviando…' : sendArmed ? '¿Enviar ahora? Apretá A de nuevo' : 'Aprobar y enviar ahora'} <kbd>A</kbd></button>
             </div>
             <p class="muted small keys">Atajos: <kbd>J</kbd>/<kbd>K</kbd> para moverte entre borradores.</p>
           {/if}
