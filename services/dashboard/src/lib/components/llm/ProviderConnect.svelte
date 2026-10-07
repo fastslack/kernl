@@ -21,6 +21,11 @@
   /** Docker: open the approval page here and take the redirect back by paste. */
   export let pasteLogin = false;
 
+  // The kernel writes the command for the shell it expects: on Windows that is
+  // cmd.exe's `set "VAR=…" && …`, which PowerShell rejects, so the intro has
+  // to name the program to open (claudeCodeLoginCommand, claude-code-transition.ts).
+  $: cmdExeCommand = loginCommand.startsWith('set "');
+
   const dispatch = createEventDispatcher<{ back: void; connected: ProbeResult }>();
 
   let apiKey = '';
@@ -253,11 +258,12 @@
           <button type="button" class="pc-link" aria-expanded={showTerminal} on:click={() => (showTerminal = !showTerminal)}>{$t('llm.cc_terminal')}</button>
         {/if}
         {#if !(browserLogin || pasteLogin) || showTerminal}
-          <p class="pc-muted">{$t('llm.cc_command_intro')}</p>
+          <p class="pc-muted">{$t(cmdExeCommand ? 'llm.cc_command_intro_win' : 'llm.cc_command_intro')}</p>
           <div class="pc-cmd">
             <code>{loginCommand}</code>
             <button type="button" class="pc-btn ghost" on:click={copyCommand}>{copied ? $t('llm.copied') : $t('llm.copy_command')}</button>
           </div>
+          <p class="pc-muted">{$t('llm.cc_command_after')}</p>
         {/if}
       {:else if provider.needsKey}
         <label class="pc-label" for="pc-key">{$t('llm.key_label')}</label>

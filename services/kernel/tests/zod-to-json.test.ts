@@ -100,3 +100,43 @@ describe("zodToJsonSchema — wrappers", () => {
     });
   });
 });
+
+describe("zodToJsonSchema across zod copies", () => {
+  // Every extension resolves its own zod, so its nodes are not instances of
+  // the kernel's classes. Before, each such tool published an empty schema.
+  it("converts a schema whose nodes come from another zod copy", () => {
+    const foreign = (typeName: string, extra: Record<string, unknown> = {}) => ({ _def: { typeName }, isOptional: () => false, ...extra });
+    const schema = foreign("ZodObject", {
+      shape: {
+        job_id: foreign("ZodString", { description: "the job" }),
+        text: foreign("ZodString"),
+        http_status: { _def: { typeName: "ZodOptional", innerType: foreign("ZodNumber") }, isOptional: () => true },
+      },
+    });
+    expect(zodToJsonSchema(schema as never)).toEqual({
+      type: "object",
+      properties: {
+        job_id: { type: "string", description: "the job" },
+        text: { type: "string" },
+        http_status: { type: "number" },
+      },
+      required: ["job_id", "text"],
+    });
+  });
+
+  it("keeps descriptions on booleans, enums and arrays, and reads records and nullables", () => {
+    const s = z.object({
+      force: z.boolean().optional().describe("Allow moving backwards"),
+      kind: z.enum(["cv", "letter"]).describe("Which document"),
+      tags: z.array(z.string()).describe("Labels"),
+      value: z.record(z.unknown()).describe("The whole block"),
+      note: z.string().nullable(),
+    });
+    const out = zodToJsonSchema(s) as { properties: Record<string, Record<string, unknown>> };
+    expect(out.properties.force.description).toBe("Allow moving backwards");
+    expect(out.properties.kind).toEqual({ type: "string", enum: ["cv", "letter"], description: "Which document" });
+    expect(out.properties.tags.description).toBe("Labels");
+    expect(out.properties.value.type).toBe("object");
+    expect(out.properties.note.type).toBe("string");
+  });
+});

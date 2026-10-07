@@ -173,6 +173,22 @@ describe("resumeRun", () => {
     });
   });
 
+  it("refuses a run its token budget stopped, instead of aborting again at once", () => {
+    const run = interruptedRun();
+    service.setRunCondition(run.id, { type: "Aborted", status: "True", reason: "TokenBudget", message: "Token budget exhausted (174209/150000)" });
+    const outcome = resumeRun({ service, executor, events }, run.id, "automatic");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toMatch(/token budget.*max_tokens/);
+  });
+
+  it("refuses a checkpoint that already spent the agent's budget", () => {
+    const run = interruptedRun();
+    service.updateAgent(run.agent_id, { max_tokens: 40 });
+    const outcome = resumeRun({ service, executor, events }, run.id, "automatic");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error).toMatch(/40 spent of 40/);
+  });
+
   it("refuses a run without a checkpoint", () => {
     const agent = service.createAgent({ name: "Plain" });
     const run = service.createRun({ agent_id: agent.id, goal: "x" });

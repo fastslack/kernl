@@ -93,7 +93,7 @@
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
-  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander'];
+  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander', 'notifications', 'share'];
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
@@ -188,7 +188,19 @@
 
   // Re-subscribe page channels when WS (re)connects
   onWsConnected(() => subscribePageChannels());
-  $: mainGroups = navGroups.slice(0, -1);
+  // Tools is hidden from the sidebar unless Settings → General turns it on
+  // (DASHBOARD_SHOW_TOOLS_MENU). Its pages still open by URL.
+  let showToolsMenu = false;
+  async function loadShellPrefs() {
+    try {
+      const res = await fetch('/api/settings/catalog');
+      if (!res.ok) return;
+      const data = await res.json();
+      const item = (data?.settings ?? []).find((s: { key: string }) => s.key === 'DASHBOARD_SHOW_TOOLS_MENU');
+      showToolsMenu = item?.value === 'true';
+    } catch { /* offline: keep the default */ }
+  }
+  $: mainGroups = navGroups.slice(0, -1).filter((g) => g.id !== 'tools' || showToolsMenu);
 
   // Items may declare a `path` override (absolute URL, possibly with query
   // string). When present, we navigate there instead of the implicit `/${id}`.
@@ -332,6 +344,8 @@
     // Instance peering. Core, not an extension: it is how this kernel knows
     // who it is and which other instances it trusts.
     'friends',
+    // Friend-to-friend text and files (file-lane). Core, like peering.
+    'share',
   ]);
 
   // Views granted by nav (hardcoded NAV_GROUPS base + manifest navItems),
@@ -441,6 +455,8 @@
     evictServiceWorkers();
 
     refreshManifest();
+    void loadShellPrefs();
+    window.addEventListener('settings:saved', loadShellPrefs);
     // Re-apply the manifest whenever an extension is enabled/disabled/uninstalled.
     // The /extensions page dispatches this event after each mutation.
     onManifestChangeRef = () => refreshManifest();
@@ -471,6 +487,7 @@
     if (typeof window !== 'undefined' && onManifestChangeRef) {
       window.removeEventListener('manifest:refresh', onManifestChangeRef);
     }
+    if (typeof window !== 'undefined') window.removeEventListener('settings:saved', loadShellPrefs);
     musicBridgeDispose?.();
   });
   // Non-reactive reference so onDestroy can reach the handler.

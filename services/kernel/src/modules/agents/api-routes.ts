@@ -9,6 +9,7 @@ import type { AgentService, QuestionStatus } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { answerAndDeliver } from "./question-delivery.js";
+import { askOpinion } from "./question-opinion.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
 import { log } from "../../core/logger.js";
@@ -238,6 +239,21 @@ export function registerAgentRoutes(
       return { success: true, resume_run_id: result.resume_run_id };
     },
   );
+
+  // A second opinion the operator can take as a fifth option. Answers nothing.
+  server.route("POST", "/api/agents/questions/:id/opinion", async ({ params: { id } }) => {
+    const q = service.getQuestion(id);
+    if (!q) throw new HttpError(404, "Question not found");
+    const agent = service.getAgent(q.from_agent_id);
+    const { llm } = await import("../../core/llm/client.js");
+    try {
+      const opinion = await askOpinion(q, agent ? { name: agent.name, description: agent.description } : undefined,
+        designerLang, (opts) => llm().chatJson(opts));
+      return { opinion };
+    } catch (e) {
+      throw new HttpError(502, e instanceof Error ? e.message : String(e));
+    }
+  });
 
   server.route("POST", "/api/agents/questions/:id/dismiss", ({ params: { id } }) => {
     if (!service.dismissQuestion(id)) throw new HttpError(404, "Question not found or already handled");

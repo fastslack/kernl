@@ -27,6 +27,12 @@ export const CONNECT_TIMEOUT_MS = 90_000;
 export const RESPONSE_TIMEOUT_MS = 60_000;
 /** A descriptor is a couple of KB; this cap is about a peer gone wrong. */
 export const MAX_RESPONSE_BYTES = 8 * 1024 * 1024;
+/**
+ * Slowest upload rate a binary body is given time for. A file-lane part is
+ * 8 MiB; at this floor it gets ~9 minutes on top of the base response budget,
+ * which a slow but working circuit clears and a dead one does not.
+ */
+export const MIN_ONION_UPLOAD_BYTES_PER_SEC = 16 * 1024;
 
 export interface OnionFetchOptions {
   /** host:port of tor's HTTPTunnelPort. */
@@ -119,6 +125,8 @@ export async function onionFetch(
     throw new Error(`onion requests must be http://, got ${target.protocol}`);
   }
 
+  // Before the tunnel: an unsendable body must not leave a socket open.
+  const body = requestBodyBytes(init?.body);
   const socket = await openTunnel(opts, target.hostname, port);
 
   const method = (init?.method ?? "GET").toUpperCase();
@@ -134,17 +142,35 @@ export async function onionFetch(
       headers[k.toLowerCase()] = v;
     }
   }
-  const body = typeof init?.body === "string" ? init.body : undefined;
-  if (body !== undefined) headers["content-length"] = String(Buffer.byteLength(body));
+  if (body !== undefined) headers["content-length"] = String(body.length);
+  const baseTimeout = opts.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS;
+  // A big binary body (a file part) needs time to climb the circuit before
+  // any answer can come back; JSON bodies keep the plain budget.
+  const timeoutMs = body && typeof init?.body !== "string"
+    ? baseTimeout + Math.ceil((body.length / MIN_ONION_UPLOAD_BYTES_PER_SEC) * 1000)
+    : baseTimeout;
 
   return speakHttp(socket, {
     requestLine: `${method} ${target.pathname + target.search} HTTP/1.1`,
     headers,
     body,
-    timeoutMs: opts.responseTimeoutMs ?? RESPONSE_TIMEOUT_MS,
+    timeoutMs,
     signal: init?.signal ?? undefined,
     label: target.host,
   });
+}
+
+/**
+ * The request body as bytes: strings (JSON) and binary views (file parts).
+ * Anything else — streams, FormData — is not something peering sends, and is
+ * refused loudly rather than silently dropped.
+ */
+function requestBodyBytes(body: RequestInit["body"] | undefined): Buffer | undefined {
+  if (body === undefined || body === null) return undefined;
+  if (typeof body === "string") return Buffer.from(body, "utf8");
+  if (body instanceof ArrayBuffer) return Buffer.from(body);
+  if (ArrayBuffer.isView(body)) return Buffer.from(body.buffer, body.byteOffset, body.byteLength);
+  throw new Error("onion requests support only string or binary bodies");
 }
 
 /**
@@ -153,14 +179,14 @@ export async function onionFetch(
  * Written by hand because Bun's `node:http` ignores `createConnection` and
  * tries to dial the target itself, which for an .onion can only ever fail.
  * The surface needed here is small and fully under our control: both ends are
- * Kernl instances exchanging a few KB of JSON.
+ * Kernl instances exchanging JSON, plus file-lane parts (up to 8 MiB) going up.
  */
 function speakHttp(
   socket: Socket,
   opts: {
     requestLine: string;
     headers: Record<string, string>;
-    body?: string;
+    body?: Buffer;
     timeoutMs: number;
     signal?: AbortSignal;
     label: string;
@@ -218,7 +244,7 @@ function speakHttp(
         .map(([k, v]) => `${k}: ${v}`)
         .join("\r\n") +
       "\r\n\r\n";
-    socket.write(head + (opts.body ?? ""));
+    socket.write(opts.body ? Buffer.concat([Buffer.from(head), opts.body]) : head);
   });
 }
 

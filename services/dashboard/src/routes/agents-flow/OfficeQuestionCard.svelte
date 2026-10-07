@@ -27,6 +27,36 @@
     if (!text || busy) return;
     if (await onFree(q, text)) free = '';
   }
+
+  // The AI's own take, offered as a fifth option. Asking answers nothing;
+  // taking it sends the opinion as a free answer.
+  interface Opinion { answer: string; reasoning: string; matches_option: number | null }
+  let opinion: Opinion | null = null;
+  let opinionLoading = false;
+  let opinionError = '';
+
+  async function askOpinion(): Promise<void> {
+    if (opinionLoading) return;
+    opinionLoading = true;
+    opinionError = '';
+    try {
+      const res = await fetch(`/api/agents/questions/${q.id}/opinion`, { method: 'POST' });
+      const body = await res.json().catch(() => null);
+      if (!res.ok || !body?.opinion) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      opinion = body.opinion;
+    } catch (e) {
+      opinionError = e instanceof Error ? e.message : String(e);
+    } finally {
+      opinionLoading = false;
+    }
+  }
+
+  function takeOpinion(): void {
+    if (!opinion || busy) return;
+    const pick = opinion.matches_option;
+    if (pick !== null && q.options[pick]) onAnswer(q, pick, q.options[pick]);
+    else void onFree(q, opinion.answer);
+  }
 </script>
 
 <div class="bq-card">
@@ -55,15 +85,46 @@
   <div class="bq-options">
     {#each q.options as opt, i (i)}
       {@const optUrl = urlForOption(q, opt)}
-      <button class="bq-option" class:bq-option-link={!!optUrl}
+      <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={opinion?.matches_option === i}
               on:click={() => onAnswer(q, i, opt)}
               disabled={busy}
-              title={optUrl ? `Opens ${optUrl}` : opt.label}>
+              title={opinion?.matches_option === i && opinion.reasoning ? opinion.reasoning : optUrl ? `Opens ${optUrl}` : opt.label}>
         <span class="bq-option-idx">{i + 1}</span>
         <span class="bq-option-lbl">{opt.label}</span>
+        {#if opinion?.matches_option === i}<span class="bq-pick-tag">{$t('office.chief.q_opinion_pick')}</span>{/if}
         {#if optUrl}<span class="bq-option-linkico" aria-hidden="true">↗</span>{/if}
       </button>
     {/each}
+
+    {#if opinion && opinion.matches_option !== null}
+      <!-- It picked one of the chief's options: the tag on that option says it all. -->
+    {:else if opinion}
+      <div class="bq-opinion" aria-live="polite">
+        <div class="bq-opinion-head">
+          <span class="bq-option-idx bq-ai-idx">{q.options.length + 1}</span>
+          <span class="bq-opinion-title">{$t('office.chief.q_opinion_label')}</span>
+        </div>
+        <p class="bq-opinion-answer">{opinion.answer}</p>
+        {#if opinion.reasoning}<p class="bq-opinion-why">{opinion.reasoning}</p>{/if}
+        <div class="bq-opinion-actions">
+          <button class="bq-opinion-retry" type="button" on:click={askOpinion} disabled={opinionLoading || busy}>
+            {opinionLoading ? $t('office.chief.q_opinion_loading') : $t('office.chief.q_opinion_retry')}
+          </button>
+          <button class="bq-opinion-send" type="button" on:click={takeOpinion} disabled={busy || opinionLoading}>{$t('office.chief.q_opinion_send')}</button>
+        </div>
+      </div>
+    {:else}
+      <button class="bq-ask-ai" type="button" on:click={askOpinion} disabled={opinionLoading || busy}>
+        <span class="bq-option-idx bq-ai-idx">{q.options.length + 1}</span>
+        {#if opinionLoading}
+          <span class="bq-spin" aria-hidden="true"></span>{$t('office.chief.q_opinion_loading')}
+        {:else}
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" /></svg>
+          {$t('office.chief.q_opinion_ask')}
+        {/if}
+      </button>
+      {#if opinionError}<p class="bq-opinion-err" role="alert">{$t('office.chief.q_opinion_error')}: {opinionError}</p>{/if}
+    {/if}
   </div>
   <form class="bq-free" on:submit|preventDefault={submitFree}>
     <input class="bq-free-input" placeholder={$t('office.chief.q_other')} bind:value={free} disabled={busy}
@@ -142,6 +203,38 @@
   .bq-option-link:hover:not(:disabled) .bq-option-linkico{
     opacity:1; transform:translate(2px,-2px);
   }
+  /* The AI's opinion: a violet fifth slot under the chief's four options. */
+  .bq-ask-ai, .bq-opinion{ grid-column:1 / -1; }
+  .bq-ask-ai{
+    display:flex; align-items:center; gap:8px; padding:8px 10px;
+    background:rgba(167,139,250,.06); color:#c4b5fd;
+    border:1px dashed rgba(167,139,250,.45); border-radius:5px;
+    font:600 11px 'Manrope',sans-serif; cursor:pointer; text-align:left; transition:all .12s;
+  }
+  .bq-ask-ai:hover:not(:disabled){ background:rgba(167,139,250,.14); border-style:solid; color:#e4dcff; }
+  .bq-ask-ai:disabled{ cursor:progress; }
+  .bq-ai-idx{ color:#a78bfa !important; }
+  .bq-spin{ width:11px; height:11px; border-radius:50%; border:2px solid rgba(167,139,250,.3); border-top-color:#a78bfa; animation:bq-spin .8s linear infinite; }
+  @keyframes bq-spin{ to{ transform:rotate(360deg); } }
+  .bq-opinion{
+    padding:9px 10px; border-radius:6px;
+    background:linear-gradient(180deg, rgba(167,139,250,.14) 0%, rgba(167,139,250,.05) 100%);
+    border:1px solid rgba(167,139,250,.45);
+  }
+  .bq-opinion-head{ display:flex; align-items:center; gap:8px; }
+  .bq-opinion-title{ font:700 11px 'Manrope',sans-serif; color:#e4dcff; }
+  .bq-opinion-answer{ margin:7px 0 0; font:600 12px/1.5 'Manrope',sans-serif; color:#f1edff; word-break:break-word; }
+  .bq-opinion-why{ margin:5px 0 0; font:500 10.5px/1.5 'Manrope',sans-serif; color:#a9a3c9; word-break:break-word; }
+  .bq-opinion-actions{ display:flex; justify-content:flex-end; gap:6px; margin-top:8px; }
+  .bq-opinion-retry, .bq-opinion-send{ padding:6px 11px; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
+  .bq-opinion-retry{ background:transparent; color:#c4b5fd; border:1px solid rgba(167,139,250,.35); }
+  .bq-opinion-send{ background:#a78bfa; color:#1a1430; border:1px solid #a78bfa; }
+  .bq-opinion-send:hover:not(:disabled){ filter:brightness(1.08); }
+  .bq-opinion-retry:disabled, .bq-opinion-send:disabled{ opacity:.5; cursor:default; }
+  .bq-opinion-err{ grid-column:1 / -1; margin:0; font:500 10.5px 'Manrope',sans-serif; color:#ef5d6e; }
+  .bq-option-pick{ border-color:#a78bfa; box-shadow:inset 0 0 0 1px rgba(167,139,250,.35); }
+  .bq-pick-tag{ flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#1a1430; background:#a78bfa; padding:1px 6px; border-radius:8px; text-transform:uppercase; }
+  @media (prefers-reduced-motion: reduce){ .bq-spin{ animation:none; } }
   .bq-chief-note{ font:500 10.5px 'Manrope',sans-serif; color:#f0b86e; background:#2a2214; border-left:2px solid #f0b86e; padding:5px 8px; border-radius:3px; margin:4px 0 6px; }
   .bq-free{ display:flex; gap:5px; margin-top:6px; }
   .bq-free-input{ flex:1; min-width:0; padding:7px 9px; background:#11131f; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:500 11px 'Manrope',sans-serif; }

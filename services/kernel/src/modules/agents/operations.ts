@@ -139,7 +139,8 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       const agent = svc().getAgent(id);
       if (!agent) throw new HttpError(404, "Agent not found");
       return {
-        agent,
+        // Why the panel must not offer a pause switch, when it must not.
+        agent: { ...agent, system_protected: svc().protectedReason(agent) },
         runs: svc().listRuns({ agent_id: id, limit: 5 }),
         triggers: svc().listEventTriggers(id),
         schedules: svc().listSchedules(id),

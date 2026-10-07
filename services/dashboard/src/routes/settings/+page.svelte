@@ -356,6 +356,8 @@
         if (v === 'es' || v === 'en') await setUserLocale(v as Locale);
       }
       await refreshCatalog(dirty.map((d) => d.key));
+      // The shell reads some settings too (e.g. whether Tools shows in the sidebar).
+      if (updated.length) window.dispatchEvent(new CustomEvent('settings:saved', { detail: { keys: updated } }));
       cardState = {
         ...cardState,
         [card.id]: errs.length ? { error: $t('settings.card.error') } : { savedMsg: $t('settings.card.saved') },

@@ -22,6 +22,7 @@
 <script lang="ts">
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onMount } from 'svelte';
+  import { extPages } from '$lib/ext-host.js';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
   // Contenido por defecto del tab Overview. Quien monta el drawer puede
   // reemplazarlo por el suyo (el mundo 3D lo hace, para meterle sus tres
@@ -184,6 +185,11 @@
   // distingue eso de una pausa pedida por el operador: la marca sí.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent.auto_paused_at || '');
   $: autoPausedAgo = autoPaused ? sinceLabel(agent?.auto_paused_at ?? '') : '';
+  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
+  // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
+  // The panel is a paid extension's page: without `com.kernl.devops` active,
+  // /devops is the "extension not available" screen, so the link stays hidden.
+  $: devopsOffice = traitsOf(flow).devopsLink && $extPages.some((p) => p.view === 'devops');
   // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
   // office is watching it happen — so the drawer offers the way through. The
   // link carries no piece id on purpose: Scene Studio opens whichever piece is
@@ -313,6 +319,14 @@
             <!-- The schedule switch. It used to be a separate Pausar/Reanudar
                  button next to Ejecutar; both live on the state they change
                  now. Same `resume` event: the listener reads `active`. -->
+            {#if agent.system_protected}
+              <!-- The Chief and the core system agents are never switched
+                   off; the kernel refuses it too (409). -->
+              <span class="ip-state ip-state-on ip-state-locked" title={$t('agent.head.always_on_title')}>
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+                <span class="ip-state-l">{$t('agent.head.always_on')}</span>
+              </span>
+            {:else}
             <button class="ip-state" type="button" role="switch" aria-checked={agent.active === 1}
                     class:ip-state-on={agent.active === 1} class:ip-state-off={agent.active !== 1}
                     class:ip-state-tripped={autoPaused}
@@ -332,6 +346,7 @@
                     ? $t('agent.head.state_auto')
                     : $t('agent.head.state_paused')}</span>
             </button>
+            {/if}
             {#if !editingName}
               <!-- Last in the row, so showing it on hover moves nothing. -->
               <button class="ip-name-edit-btn" type="button" title={$t('agent.drawer.rename_title')}
@@ -415,6 +430,11 @@
                   : $t('agent.head.run')}
           </span>
         </button>
+        {#if devopsOffice}
+          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
+            <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
+          </a>
+        {/if}
         {#if creativosOffice}
           <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
                   title="Watch this office draw, live, without leaving the office">
@@ -958,4 +978,5 @@
     flex:1;min-height:0;width:100%;
     border:0;display:block;background:#0b0d14;
   }
+  .ip-state-locked{cursor:default;gap:6px}
 </style>

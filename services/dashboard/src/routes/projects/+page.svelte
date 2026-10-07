@@ -285,6 +285,17 @@
     }
   }
 
+  /** Each project keeps one of the page's hues (`--pj-h0`…`--pj-h5`), picked from its id. */
+  function hueOf(key: string): string {
+    let h = 0;
+    for (const c of key) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+    return `var(--pj-h${h % 6})`;
+  }
+  function initials(name: string): string {
+    return name.trim().split(/\s+/).slice(0, 2).map((w) => w[0]?.toUpperCase() ?? '').join('') || '?';
+  }
+  const STATUS_LABEL: Record<Status, string> = { active: 'Activo', paused: 'Pausado', archived: 'Archivado' };
+
   function connState(p: Project): { cls: string; label: string } {
     if (!p.connector_url) return { cls: 'off', label: 'Sin conexión de datos (opcional)' };
     if (p.connector_error) return { cls: 'bad', label: `Error de conexión: ${p.connector_error}` };
@@ -319,6 +330,7 @@
 
 <ViewHeader title="Proyectos" sub="Los productos o negocios para los que trabajan tus oficinas de agentes" />
 
+<div class="pj">
 {#if error}<div class="banner err" role="alert">{error}</div>{/if}
 
 <div class="layout">
@@ -338,17 +350,18 @@
     <ul>
       {#each projects as p (p.id)}
         {@const cs = connState(p)}
-        <li class:sel={mode === 'view' && p.id === selectedId}>
+        <li class:sel={mode === 'view' && p.id === selectedId} style="--hue: {hueOf(p.id)}">
           <button class="row" on:click={() => select(p.id)}>
+            <span class="avatar" aria-hidden="true">{initials(p.name)}</span>
             <span class="name">{p.name}
               <small>
-                <span class="cdot {cs.cls}" aria-hidden="true"></span>
-                {p.status === 'active' ? 'Activo' : p.status === 'paused' ? 'Pausado' : 'Archivado'}
-                · {(p.offices ?? []).filter((o) => o.active).length || 'sin'} oficina{(p.offices ?? []).filter((o) => o.active).length === 1 ? '' : 's'}
+                <span class="pill st-{p.status}">{STATUS_LABEL[p.status]}</span>
+                <span class="cdot {cs.cls}" title={cs.label} aria-hidden="true"></span>
+                {(p.offices ?? []).filter((o) => o.active).length || 'sin'} oficina{(p.offices ?? []).filter((o) => o.active).length === 1 ? '' : 's'}
               </small>
             </span>
-            <span class="num" title="Borradores esperando tu aprobación">{p.pending_drafts ?? 0}<small>por aprobar</small></span>
-            <span class="num" title="Leads de este proyecto">{p.leads ?? 0}<small>leads</small></span>
+            <span class="num pending" class:hot={(p.pending_drafts ?? 0) > 0} title="Borradores esperando tu aprobación">{p.pending_drafts ?? 0}<small>por aprobar</small></span>
+            <span class="num leads" title="Leads de este proyecto">{p.leads ?? 0}<small>leads</small></span>
           </button>
           <button class="more" aria-label="Más acciones para {p.name}" on:click|stopPropagation={() => (menuFor = menuFor === p.id ? '' : p.id)}>⋯</button>
           {#if menuFor === p.id}
@@ -399,9 +412,10 @@
         </div>
       </form>
     {:else if detail}
-      <div class="dhead">
-        <div>
-          <h2>{detail.project.name}</h2>
+      <div class="dhead" style="--hue: {hueOf(detail.project.id)}">
+        <span class="avatar big" aria-hidden="true">{initials(detail.project.name)}</span>
+        <div class="dtitle">
+          <h2>{detail.project.name} <span class="pill st-{detail.project.status}">{STATUS_LABEL[detail.project.status]}</span></h2>
           <p class="muted small">Identificador <code>{detail.project.slug}</code></p>
         </div>
         {#if notice}<span class="notice" aria-live="polite">✓ {notice}</span>{/if}
@@ -531,7 +545,11 @@
 
     {:else if !loading}
       <div class="intro">
-        <div class="intro-icon" aria-hidden="true">📁</div>
+        <div class="intro-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="34" height="34" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M12 21v-9" /><path d="M12 12C12 8 9 5 4 5c0 4 3 7 8 7Z" /><path d="M12 14c0-3.5 2.6-6 7-6 0 3.5-2.6 6-7 6Z" />
+          </svg>
+        </div>
         <h2>Tus agentes trabajan mejor cuando saben para quién trabajan</h2>
         <p>Un proyecto es un producto o negocio tuyo. Le contás a tus oficinas qué vendés y a quién, y ellas preparan posts, mails y propuestas para ese proyecto. <b>Nada se publica sin que lo apruebes.</b></p>
         <ol class="how">
@@ -544,53 +562,74 @@
     {/if}
   </section>
 </div>
+</div>
 
 <style>
+  /* The page's own palette. The active theme may flatten --teal & co. to grey;
+     these hues stay warm and alive whatever theme is on. */
+  .pj {
+    --pj-life: #34D399; --pj-life-2: #2DD4BF; --pj-on-life: #052E22;
+    --pj-sun: #FBBF24; --pj-sky: #38BDF8; --pj-coral: #FB7185; --pj-violet: #A78BFA;
+    --pj-h0: #34D399; --pj-h1: #38BDF8; --pj-h2: #FBBF24; --pj-h3: #FB7185; --pj-h4: #A78BFA; --pj-h5: #A3E635;
+    --pj-grad: linear-gradient(135deg, var(--pj-life), var(--pj-life-2));
+    --teal: var(--pj-life); /* children (BriefFields, ChipInput) pick up the page accent */
+  }
   .banner { border-radius: var(--radius-sm); padding: 9px 12px; margin-bottom: 10px; font-size: 13.5px; }
-  .banner.err { background: rgba(255, 90, 90, 0.08); border: 1px solid var(--red); color: var(--red); }
+  .banner.err { background: color-mix(in srgb, var(--pj-coral) 10%, transparent); border: 1px solid var(--pj-coral); color: var(--pj-coral); }
   .layout { display: grid; grid-template-columns: minmax(320px, 34%) 1fr; gap: 16px; height: calc(100vh - 150px); min-height: 0; }
-  section { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); min-height: 0; overflow: auto; }
-  .list { padding: 12px 10px; }
+  section { background: var(--panel, var(--surface-1)); border: 1px solid var(--border); border-radius: 14px; min-height: 0; overflow: auto; }
+  .list { padding: 12px 10px; background: linear-gradient(180deg, color-mix(in srgb, var(--pj-life) 7%, var(--surface-1)), var(--surface-1) 160px); }
   .detail { padding: 20px 24px; }
   h2 { margin: 0; font-family: var(--font-display); font-size: 18px; color: var(--text-1); font-weight: 600; }
-  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 0 4px 10px; border-bottom: 1px solid var(--border); }
-  .list-head h2 { font-size: 15px; }
-  .count { color: var(--text-3); font-weight: 400; margin-left: 4px; }
+  .list-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding: 2px 4px 12px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+  .list-head h2 { font-size: 15px; display: flex; align-items: center; gap: 8px; }
+  .count { display: inline-grid; place-items: center; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 999px; background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); font-size: 12px; font-weight: 700; }
   ul { list-style: none; margin: 0; padding: 0; }
-  .list li { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
-  .list li.sel { background: var(--surface-2); }
-  .row { flex: 1; display: grid; grid-template-columns: 1fr 72px 52px; align-items: center; gap: 8px; min-height: 52px; padding: 6px 8px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: var(--radius-sm); }
-  .row:hover { background: var(--surface-2); }
-  .name { display: flex; flex-direction: column; gap: 2px; font-size: 14.5px; font-weight: 500; }
-  .name small { display: flex; align-items: center; gap: 6px; color: var(--text-3); font-size: 12px; font-weight: 400; }
-  .num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: 15px; }
-  .num small { color: var(--text-3); font-size: 10.5px; }
-  .cdot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); display: inline-block; }
-  .cdot.ok { background: var(--green); } .cdot.warn { background: var(--orange); } .cdot.bad { background: var(--red); } .cdot.off { background: transparent; border: 1px solid var(--text-3); }
-  .more { width: 36px; height: 36px; background: none; border: 0; color: var(--text-2); cursor: pointer; font-size: 18px; border-radius: var(--radius-sm); }
-  .more:hover { background: var(--surface-3); }
-  .menu { position: absolute; right: 6px; top: 44px; z-index: 20; background: var(--surface-3); border: 1px solid var(--border-h); border-radius: var(--radius-sm); display: flex; flex-direction: column; min-width: 130px; padding: 4px; }
-  .menu button { background: none; border: 0; color: var(--text-1); text-align: left; padding: 8px 12px; cursor: pointer; font: inherit; font-size: 13.5px; border-radius: 4px; }
-  .menu button:hover { background: var(--surface-2); }
-  .btn { background: var(--surface-2); border: 1px solid var(--border); color: var(--text-1); border-radius: var(--radius-sm); padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; min-height: 38px; transition: background 150ms ease-out; }
+  .list li { position: relative; display: flex; align-items: center; border-radius: 10px; margin-bottom: 4px; border: 1px solid transparent; transition: background 150ms ease-out, border-color 150ms ease-out; }
+  .list li:hover { background: color-mix(in srgb, var(--hue) 6%, transparent); }
+  .list li.sel { background: color-mix(in srgb, var(--hue) 11%, var(--surface-1)); border-color: color-mix(in srgb, var(--hue) 45%, transparent); box-shadow: inset 3px 0 0 var(--hue); }
+  .row { flex: 1; display: grid; grid-template-columns: 36px 1fr 66px 50px; align-items: center; gap: 10px; min-height: 56px; padding: 7px 8px 7px 10px; background: none; border: 0; color: var(--text-1); text-align: left; cursor: pointer; font: inherit; border-radius: 10px; }
+  .avatar { display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px; font-family: var(--font-display); font-weight: 700; font-size: 13.5px; color: var(--hue); background: color-mix(in srgb, var(--hue) 16%, transparent); border: 1px solid color-mix(in srgb, var(--hue) 35%, transparent); }
+  .avatar.big { width: 48px; height: 48px; border-radius: 13px; font-size: 17px; flex: none; }
+  .name { display: flex; flex-direction: column; gap: 3px; font-size: 14.5px; font-weight: 600; min-width: 0; }
+  .name small { display: flex; align-items: center; gap: 6px; color: var(--text-2); font-size: 12px; font-weight: 400; }
+  .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; font-weight: 600; padding: 1px 8px; border-radius: 999px; line-height: 1.6; vertical-align: middle; }
+  .pill::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .st-active { color: var(--pj-life); background: color-mix(in srgb, var(--pj-life) 14%, transparent); }
+  .st-paused { color: var(--pj-sun); background: color-mix(in srgb, var(--pj-sun) 14%, transparent); }
+  .st-archived { color: var(--text-3); background: var(--surface-2); }
+  .num { display: flex; flex-direction: column; align-items: flex-end; font-variant-numeric: tabular-nums; font-size: 16px; font-weight: 700; color: var(--text-2); }
+  .num small { color: var(--text-3); font-size: 10.5px; font-weight: 400; }
+  .num.pending.hot { color: var(--pj-sun); }
+  .num.leads { color: var(--pj-sky); }
+  .cdot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-3); display: inline-block; }
+  .cdot.ok { background: var(--pj-life); } .cdot.warn { background: var(--pj-sun); } .cdot.bad { background: var(--pj-coral); } .cdot.off { display: none; }
+  .more { width: 36px; height: 36px; background: none; border: 0; color: var(--text-2); cursor: pointer; font-size: 18px; border-radius: 8px; }
+  .more:hover { background: var(--surface-3); color: var(--text-1); }
+  .menu { position: absolute; right: 6px; top: 46px; z-index: 20; background: var(--surface-3); border: 1px solid var(--border-h); border-radius: 10px; display: flex; flex-direction: column; min-width: 140px; padding: 4px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+  .menu button { background: none; border: 0; color: var(--text-1); text-align: left; padding: 8px 12px; cursor: pointer; font: inherit; font-size: 13.5px; border-radius: 6px; }
+  .menu button:hover { background: color-mix(in srgb, var(--pj-life) 12%, transparent); }
+  .btn { background: var(--surface-2); border: 1px solid var(--border-h); color: var(--text-1); border-radius: 9px; padding: 8px 14px; cursor: pointer; font: inherit; font-size: 13.5px; min-height: 38px; transition: background 150ms ease-out, transform 120ms ease-out, box-shadow 150ms ease-out; }
   .btn:hover:not(:disabled) { background: var(--surface-3); }
-  .btn.primary { background: var(--teal); color: var(--bg); border-color: var(--teal); font-weight: 600; }
-  .btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--teal); }
+  .btn:active:not(:disabled) { transform: scale(0.98); }
+  .btn.primary { background: var(--pj-grad); color: var(--pj-on-life); border-color: transparent; font-weight: 700; box-shadow: 0 4px 16px color-mix(in srgb, var(--pj-life) 25%, transparent); }
+  .btn.primary:hover:not(:disabled) { background: var(--pj-grad); filter: brightness(1.07); box-shadow: 0 6px 20px color-mix(in srgb, var(--pj-life) 35%, transparent); }
   .btn.big { padding: 11px 22px; font-size: 15px; }
-  .btn:disabled { opacity: 0.45; cursor: default; }
-  .link { background: none; border: 0; padding: 0; color: var(--teal); font: inherit; font-size: 12.5px; cursor: pointer; }
+  .btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+  .link { background: none; border: 0; padding: 0; color: var(--pj-life); font: inherit; font-size: 12.5px; cursor: pointer; }
   .link:hover { text-decoration: underline; }
   .field { display: flex; flex-direction: column; gap: 6px; }
   .field.grow { flex: 1; }
   label { font-size: 14px; font-weight: 600; color: var(--text-1); }
-  .req { color: var(--teal); }
-  input, select { background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); color: var(--text-1); padding: 9px 11px; font: inherit; font-size: 14px; min-height: 40px; }
-  input:focus, select:focus, button:focus-visible, summary:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
-  input[aria-invalid='true'] { border-color: var(--red); }
+  .req { color: var(--pj-coral); }
+  input, select { background: var(--bg); border: 1px solid var(--border-h); border-radius: 9px; color: var(--text-1); padding: 9px 11px; font: inherit; font-size: 14px; min-height: 40px; transition: border-color 150ms ease-out, box-shadow 150ms ease-out; }
+  input:focus, select:focus { outline: none; border-color: var(--pj-life); box-shadow: 0 0 0 3px color-mix(in srgb, var(--pj-life) 22%, transparent); }
+  button:focus-visible, summary:focus-visible { outline: 2px solid var(--pj-life); outline-offset: 2px; }
+  input[aria-invalid='true'] { border-color: var(--pj-coral); }
   .help { margin: 0; font-size: 12.5px; line-height: 1.55; color: var(--text-2); }
   .help b { color: var(--text-1); font-weight: 600; }
-  .err { margin: 0; font-size: 12.5px; color: var(--red); }
-  code { font-family: var(--font-mono); font-size: 12px; color: var(--text-1); background: var(--surface-2); padding: 1px 6px; border-radius: 4px; }
+  .err { margin: 0; font-size: 12.5px; color: var(--pj-coral); }
+  code { font-family: var(--font-mono); font-size: 12px; color: var(--pj-life); background: color-mix(in srgb, var(--pj-life) 10%, transparent); padding: 1px 7px; border-radius: 5px; }
   .muted { color: var(--text-3); font-size: 13.5px; } .small { font-size: 12.5px; margin: 4px 0 0; } .pad { padding: 10px 6px; }
   .create { display: flex; flex-direction: column; gap: 18px; max-width: 760px; }
   .create header { display: flex; flex-direction: column; gap: 6px; }
@@ -600,37 +639,42 @@
   .slug-edit input { flex: 1; min-height: 34px; padding: 6px 9px; font-family: var(--font-mono); font-size: 13px; }
   .actions { display: flex; justify-content: flex-end; gap: 10px; }
   .stack { display: flex; flex-direction: column; gap: 16px; max-width: 760px; }
-  .dhead { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 14px; }
-  .notice { color: var(--green); font-size: 13px; }
-  .steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 10px; margin: 0 0 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius); }
-  .steps button { display: flex; align-items: center; gap: 8px; background: none; border: 0; color: var(--text-1); font: inherit; font-size: 13.5px; cursor: pointer; padding: 6px 10px; border-radius: var(--radius-sm); }
-  .steps button:hover:not(:disabled) { background: var(--surface-3); }
-  .steps li.is-done button { color: var(--text-3); cursor: default; }
+  .dhead { display: flex; align-items: center; gap: 14px; margin: -20px -24px 16px; padding: 18px 24px; background: linear-gradient(120deg, color-mix(in srgb, var(--hue) 16%, transparent), transparent 70%); border-bottom: 1px solid color-mix(in srgb, var(--hue) 25%, var(--border)); }
+  .dtitle { flex: 1; min-width: 0; }
+  .dtitle h2 { display: flex; align-items: center; gap: 10px; font-size: 20px; }
+  .notice { color: var(--pj-life); font-size: 13px; font-weight: 600; background: color-mix(in srgb, var(--pj-life) 12%, transparent); padding: 4px 10px; border-radius: 999px; }
+  .steps { display: flex; flex-wrap: wrap; gap: 8px; list-style: none; padding: 8px; margin: 0 0 14px; background: color-mix(in srgb, var(--pj-sun) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--pj-sun) 25%, var(--border)); border-radius: 12px; }
+  .steps button { display: flex; align-items: center; gap: 8px; background: none; border: 0; color: var(--text-1); font: inherit; font-size: 13.5px; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
+  .steps button:hover:not(:disabled) { background: color-mix(in srgb, var(--pj-sun) 12%, transparent); }
   .steps em { color: var(--text-3); font-style: normal; font-size: 12px; }
-  .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--teal); color: var(--teal); font-size: 12px; font-weight: 600; }
-  .steps li.is-done .mark { background: var(--teal); color: var(--bg); }
-  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 16px; }
-  .tabs button { background: none; border: 0; border-bottom: 2px solid transparent; color: var(--text-2); padding: 9px 14px; cursor: pointer; font: inherit; font-size: 14px; }
-  .tabs button.on { color: var(--text-1); border-bottom-color: var(--teal); }
-  .tabs small { color: var(--text-3); font-size: 11.5px; margin-left: 2px; }
+  .mark { display: inline-grid; place-items: center; width: 22px; height: 22px; border-radius: 50%; border: 1.5px solid var(--pj-sun); color: var(--pj-sun); font-size: 12px; font-weight: 700; }
+  .steps li.is-done .mark { background: var(--pj-life); border-color: var(--pj-life); color: var(--pj-on-life); }
+  .tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 18px; }
+  .tabs button { position: relative; background: none; border: 0; color: var(--text-2); padding: 10px 14px; cursor: pointer; font: inherit; font-size: 14px; border-radius: 8px 8px 0 0; transition: color 150ms ease-out, background 150ms ease-out; }
+  .tabs button:hover { color: var(--text-1); background: var(--surface-2); }
+  .tabs button.on { color: var(--text-1); font-weight: 600; }
+  .tabs button.on::after { content: ''; position: absolute; left: 10px; right: 10px; bottom: -1px; height: 3px; border-radius: 3px 3px 0 0; background: var(--pj-grad); }
+  .tabs small { display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); font-size: 11px; font-weight: 600; }
+  .tabs button.on small { background: color-mix(in srgb, var(--pj-life) 18%, transparent); color: var(--pj-life); }
   .link-form { display: flex; gap: 10px; align-items: flex-end; margin: 12px 0 6px; max-width: 760px; }
   .link-form select { min-width: 170px; }
-  .links { margin-top: 12px; max-width: 760px; }
-  .links li { display: flex; align-items: center; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); }
-  .links .no-links { color: var(--text-3); font-size: 13.5px; border-bottom: 0; }
-  .chip { font-size: 12px; padding: 2px 9px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-2); white-space: nowrap; }
+  .links { margin-top: 12px; max-width: 760px; display: flex; flex-direction: column; gap: 6px; }
+  .links li { display: flex; align-items: center; gap: 10px; padding: 6px 6px 6px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface-1); }
+  .links .no-links { color: var(--text-2); font-size: 13.5px; border-style: dashed; padding: 14px; background: none; }
+  .chip { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--pj-sky); background: color-mix(in srgb, var(--pj-sky) 14%, transparent); white-space: nowrap; }
   .ref { flex: 1; font-size: 14px; color: var(--text-1); }
   .no-acc { margin: 0; min-height: 40px; display: flex; align-items: center; font-size: 13px; color: var(--text-2); }
-  .x { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 18px; width: 36px; height: 36px; border-radius: var(--radius-sm); }
-  .x:hover { color: var(--red); background: var(--surface-2); }
+  .x { background: none; border: 0; color: var(--text-3); cursor: pointer; font-size: 18px; width: 36px; height: 36px; border-radius: 8px; }
+  .x:hover { color: var(--pj-coral); background: color-mix(in srgb, var(--pj-coral) 10%, transparent); }
   .pull { font-size: 13.5px; color: var(--text-1); }
-  .hook { margin-top: 16px; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 14px; max-width: 760px; }
+  .hook { margin-top: 16px; border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; max-width: 760px; }
   .hook summary { cursor: pointer; font-size: 13.5px; color: var(--text-1); font-weight: 500; }
   .hook[open] { display: flex; flex-direction: column; gap: 10px; }
-  .copyline { display: flex; align-items: center; gap: 10px; width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 8px 10px; cursor: pointer; text-align: left; color: var(--text-1); }
+  .copyline { display: flex; align-items: center; gap: 10px; width: 100%; background: var(--bg); border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; cursor: pointer; text-align: left; color: var(--text-1); }
+  .copyline:hover { border-color: var(--pj-life); }
   .copyline span { font-size: 12px; color: var(--text-3); width: 70px; }
-  .copyline code { flex: 1; background: none; color: var(--teal); word-break: break-all; padding: 0; }
-  .copyline em { font-style: normal; font-size: 12px; color: var(--text-3); }
+  .copyline code { flex: 1; background: none; color: var(--pj-life); word-break: break-all; padding: 0; }
+  .copyline em { font-style: normal; font-size: 12px; color: var(--pj-life); }
   .offices-box { max-width: 760px; }
   .home-office { display: flex; align-items: center; gap: 10px; margin-top: 16px; font-size: 14px; color: var(--text-1); }
   .home-office select { min-width: 220px; }
@@ -638,17 +682,18 @@
   .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
   .offices-box h3 { margin: 0 0 4px; font-size: 15px; color: var(--text-1); font-weight: 600; }
   .office-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 8px; margin-top: 10px; }
-  .toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 400; color: var(--text-1); padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm); cursor: pointer; }
-  .toggle:has(input:checked) { border-color: var(--teal); background: rgba(61, 214, 200, 0.06); }
-  .toggle input { width: 16px; height: 16px; min-height: 0; accent-color: var(--teal); }
+  .toggle { display: flex; align-items: center; gap: 10px; font-size: 14px; font-weight: 500; color: var(--text-1); padding: 10px 12px; border: 1px solid var(--border); border-radius: 10px; cursor: pointer; transition: border-color 150ms ease-out, background 150ms ease-out; }
+  .toggle:hover { border-color: var(--border-h); }
+  .toggle:has(input:checked) { border-color: color-mix(in srgb, var(--pj-violet) 60%, transparent); background: color-mix(in srgb, var(--pj-violet) 10%, transparent); }
+  .toggle input { width: 16px; height: 16px; min-height: 0; accent-color: var(--pj-violet); }
   .intro { max-width: 560px; margin: 40px auto; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px; }
-  .intro-icon { font-size: 40px; }
+  .intro-icon { display: grid; place-items: center; width: 68px; height: 68px; border-radius: 20px; color: var(--pj-life); background: color-mix(in srgb, var(--pj-life) 14%, transparent); box-shadow: 0 0 40px color-mix(in srgb, var(--pj-life) 20%, transparent); }
   .intro h2 { font-size: 20px; line-height: 1.35; }
   .intro p { margin: 0; color: var(--text-2); font-size: 14.5px; line-height: 1.6; }
   .intro p b { color: var(--text-1); }
   .how { list-style: none; padding: 0; margin: 6px 0; display: flex; flex-direction: column; gap: 10px; text-align: left; width: 100%; }
-  .how li { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px 12px; }
-  .how span { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--teal); color: var(--bg); font-weight: 700; font-size: 13px; }
+  .how li { display: flex; gap: 12px; align-items: center; font-size: 14px; color: var(--text-1); background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; }
+  .how span { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: var(--pj-grad); color: var(--pj-on-life); font-weight: 700; font-size: 13px; }
   @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } .link-form { flex-wrap: wrap; } }
-  @media (prefers-reduced-motion: reduce) { .btn { transition: none; } }
+  @media (prefers-reduced-motion: reduce) { .btn, .list li, .tabs button, .toggle, input, select { transition: none; } .btn:active:not(:disabled) { transform: none; } }
 </style>

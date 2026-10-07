@@ -105,4 +105,53 @@ describe("caller-aware agent tools over the MCP path", () => {
     const res = await tool.handler(tool.inputSchema.parse({ message_ids: ["x"] }) as any);
     expect(text(res)).toMatch(/Caller agent context missing/);
   });
+
+  // A woken run gets its letters in the system prompt, which marks them read
+  // before the first turn. Its own inbox then came back empty and its ack was
+  // refused, so it went looking and burned its budget.
+  describe("letters the run's prompt already delivered", () => {
+    async function inRun(name: string, args: Record<string, unknown>, callerAgentId: string, runId: string) {
+      const tool = tools.find((t) => t.name === name)!;
+      const parsed = tool.inputSchema.parse(stripInternalArgs(args));
+      return runWithContext({ callerAgentId, callerRunId: runId, callerDepth: 1 }, () => tool.handler(parsed as any));
+    }
+    function delivered() {
+      const a = mk("Career Lead");
+      const b = mk("Recruiter Desk");
+      const { message } = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "Despachá el lote", body: "x" });
+      const run = service.createRun({ agent_id: b.id, goal: "You have 1 unacknowledged letter(s)" });
+      service.markInboxRead([message!.id]);
+      return { a, b, message: message!, run };
+    }
+
+    it("still lists them in the run's own default inbox", async () => {
+      const { b, run } = delivered();
+      const res = text(await inRun("kernel_agents_inbox", {}, b.id, run.id));
+      expect(res).toContain("Despachá el lote");
+      expect(res).toContain("already in your context");
+    });
+
+    it("acknowledges them", async () => {
+      const { b, message, run } = delivered();
+      const res = text(await inRun("kernel_agents_inbox_ack", { message_ids: [message.id] }, b.id, run.id));
+      expect(res).toContain("Acknowledged 1");
+    });
+
+    it("warns an agent that reads a colleague's inbox by mistake", async () => {
+      const { a, b, run } = delivered();
+      const res = text(await inRun("kernel_agents_inbox", { agent_id: a.id }, b.id, run.id));
+      expect(res).toMatch(/Career Lead's inbox, not yours/);
+    });
+
+    it("does not resurface letters read before the run", async () => {
+      const a = mk("Sender");
+      const b = mk("Receiver");
+      const { message } = service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "old news", body: "x" });
+      service.markInboxRead([message!.id]);
+      db.prepare("UPDATE agent_office_inbox SET read_at = ? WHERE id = ?").run("2026-01-01T00:00:00.000Z", message!.id);
+      const run = service.createRun({ agent_id: b.id, goal: "g" });
+      const res = text(await inRun("kernel_agents_inbox", {}, b.id, run.id));
+      expect(res).toContain("No unread messages");
+    });
+  });
 });

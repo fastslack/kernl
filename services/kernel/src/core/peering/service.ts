@@ -16,6 +16,7 @@ import { detectTor, makeTorAwareFetch, isTorListening, DEFAULT_HTTP_TUNNEL_PORT 
 import { PresenceAnnouncer } from "./announce.js";
 import type { NostrRelayPool } from "../nostr/nostr-relay-pool.js";
 import { buildDescriptor, signDescriptor, DEFAULT_PRIORITY, type InstanceDescriptor } from "./descriptor.js";
+import { currentLanEnv, lanReachUrls } from "./lan.js";
 
 export interface PeeringOptions {
   sqlite: SqliteDb;
@@ -97,7 +98,15 @@ export class PeeringService {
 
   /** Returns null when no instance key is available; peering then stays off. */
   static create(opts: PeeringOptions): PeeringService | null {
-    const identity = loadOrCreateCoreNostrIdentity(opts.sqlite, opts.encryptionKey);
+    let identity: NostrIdentity | null;
+    try {
+      identity = loadOrCreateCoreNostrIdentity(opts.sqlite, opts.encryptionKey);
+    } catch (err) {
+      // An instance key that exists but cannot be read must not be replaced:
+      // run without peering rather than as a different instance.
+      log.warn(`peering: instance key unreadable — peering disabled: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
     if (!identity) {
       log.warn("peering: no instance identity — peering disabled");
       return null;
@@ -168,7 +177,7 @@ export class PeeringService {
       name,
       version: this.opts.version,
       reach: buildReach({
-        lanUrl: host ? `http://${host}.local:${this.opts.port}` : undefined,
+        lanUrls: lanReachUrls(currentLanEnv(this.opts.port)),
         directUrl: this.opts.directUrl || process.env.KERNEL_PUBLIC_URL || undefined,
         onionUrl: onionUrl || undefined,
         priorities: DEFAULT_PRIORITY,

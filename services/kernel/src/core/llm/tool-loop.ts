@@ -194,6 +194,8 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
 
   let iterations = resumeFrom?.iterations ?? 0;
   let totalTokens = resumeFrom?.totalTokens ?? 0;
+  /** Tokens of the previous call — the estimate for the next one. */
+  let lastTurnTokens = 0;
   let finalContent = "";
   const toolsUsed = new Set<string>();
   let consecutiveErrors = 0;
@@ -224,6 +226,14 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
       if (isCancelled?.()) { abortReason = "Cancelled by user"; break; }
       if (timedOut) { abortReason = `Timeout after ${Math.round(timeoutMs / 1000)}s`; break; }
       if (totalTokens >= maxTokens) { abortReason = `Token budget exhausted (${totalTokens}/${maxTokens})`; break; }
+      // Usage is only known after a call, so checking the total alone lets the
+      // turn that crosses the line run in full (174k on a 150k budget). Every
+      // turn re-sends the whole history, so the last one is a floor for the
+      // next: stop before a call that would land past the budget.
+      if (lastTurnTokens > 0 && totalTokens + lastTurnTokens > maxTokens) {
+        abortReason = `Token budget would be exceeded by the next turn (${totalTokens} spent + ~${lastTurnTokens} for the next turn > ${maxTokens})`;
+        break;
+      }
       if (consecutiveErrors >= maxErrors) { abortReason = `${maxErrors} consecutive tool errors`; break; }
 
       iterations++;
@@ -245,6 +255,7 @@ export async function runToolLoop(config: LlmLoopConfig): Promise<LlmLoopResult>
 
       const completion = await provider.chatCompletion(messages, opts);
       totalTokens += completion.tokens_used;
+      lastTurnTokens = completion.tokens_used;
 
       if (isCancelled?.()) { abortReason = "Cancelled by user"; break; }
 

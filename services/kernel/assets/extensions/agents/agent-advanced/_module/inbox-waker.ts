@@ -98,8 +98,9 @@ export class InboxWaker {
       const senderName = sender?.name ?? p.from_agent_id;
       const subject = (p.subject || "(no subject)").slice(0, 200);
       const goal =
-        `Inbox wake-up: ${senderName} just sent you "${subject}". ` +
-        `Read your inbox with kernel_agents_inbox, decide if a reply is needed, ` +
+        `Inbox wake-up: ${senderName} just sent you "${subject}" (id ${p.message_id}). ` +
+        `It is already in your context, in the inbox block; kernel_agents_inbox with no agent_id shows it too. ` +
+        `Decide if a reply is needed, ` +
         `and respond via kernel_agents_post_to_colleague (or take whatever action the message asks for). ` +
         `When done, acknowledge the letter with kernel_agents_inbox_ack.`;
 
@@ -237,9 +238,11 @@ export class InboxWaker {
       const projectId = all[0].project_id ?? null;
       const unread = all.filter((m) => (m.project_id ?? null) === projectId || (m.project_id ?? null) === null);
       const goal =
-        `You have ${unread.length} unacknowledged letter(s) in your office inbox. ` +
-        `Read them with kernel_agents_inbox, handle each one, and acknowledge every letter you finished ` +
-        `with kernel_agents_inbox_ack. Letters you do not acknowledge will be handed to you again.`;
+        `You have ${unread.length} unacknowledged letter(s) in your office inbox: ` +
+        unread.map((m) => `"${(m.subject || "(no subject)").slice(0, 120)}" (id ${m.id})`).join("; ") + ". " +
+        `They are already in your context, in the inbox block; kernel_agents_inbox with no agent_id shows them too. ` +
+        `Handle each one, and acknowledge every letter you finished with kernel_agents_inbox_ack. ` +
+        `Letters you do not acknowledge will be handed to you again.`;
       const ids = unread.map((m) => m.id);
       if (!this.wake(agent, goal, { via: "inbox_sweeper", inbox_message_ids: ids, project_id: projectId })) continue;
       this.service.bumpInboxWakeAttempts(ids);
