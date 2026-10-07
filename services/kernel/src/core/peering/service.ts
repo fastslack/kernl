@@ -98,7 +98,15 @@ export class PeeringService {
 
   /** Returns null when no instance key is available; peering then stays off. */
   static create(opts: PeeringOptions): PeeringService | null {
-    const identity = loadOrCreateCoreNostrIdentity(opts.sqlite, opts.encryptionKey);
+    let identity: NostrIdentity | null;
+    try {
+      identity = loadOrCreateCoreNostrIdentity(opts.sqlite, opts.encryptionKey);
+    } catch (err) {
+      // An instance key that exists but cannot be read must not be replaced:
+      // run without peering rather than as a different instance.
+      log.warn(`peering: instance key unreadable — peering disabled: ${err instanceof Error ? err.message : String(err)}`);
+      return null;
+    }
     if (!identity) {
       log.warn("peering: no instance identity — peering disabled");
       return null;
