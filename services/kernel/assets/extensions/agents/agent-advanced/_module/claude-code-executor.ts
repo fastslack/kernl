@@ -782,13 +782,13 @@ export class ClaudeCodeExecutor {
         if (!useOAuth && apiKey) {
           sandboxEnv.ANTHROPIC_API_KEY = apiKey;
         }
-
         // A pasted setup-token is Kernl's session too; the driver mounts the
         // credential file of the dashboard sign-in, never the host's.
         const sandboxToken = useOAuth
           ? claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }).CLAUDE_CODE_OAUTH_TOKEN
           : undefined;
         if (sandboxToken) sandboxEnv.CLAUDE_CODE_OAUTH_TOKEN = sandboxToken;
+
         const skillMounts: Array<{ name: string; hostPath: string }> = [];
         for (const name of vars.__skills__ ?? []) {
           const hostPath = this.resolveSkillHostPath(name, agent.id);
@@ -1560,6 +1560,27 @@ export class ClaudeCodeExecutor {
         "## Asking the chief\n" +
           "- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.",
       );
+    }
+
+    // Answers to its own questions that came back while it was busy. This
+    // executor skips the office inbox on purpose, but these are the replies
+    // the agent asked for: without them a Claude Code agent asked the chief,
+    // got an answer filed in its inbox, and never saw it. Marked read here so
+    // the answer queue does not relaunch it with the same ones.
+    if (service) {
+      try {
+        const answers = service
+          .getUnreadInbox(agent.id, 20)
+          .filter((m) => m.from_agent_id === "__top_agent__" && m.subject.startsWith("ANSWER:"));
+        if (answers.length > 0) {
+          parts.push(
+            "## Answers to your earlier questions\n" +
+              "These arrived while you were busy. Act on them; do not re-ask.\n\n" +
+              answers.map((m) => m.body).join("\n\n---\n\n"),
+          );
+          service.markInboxRead(answers.map((m) => m.id));
+        }
+      } catch { /* inbox table missing in tests / fresh DB — non-fatal */ }
     }
 
     // Inject learnings ranked by relevance to current goal — same closed-loop

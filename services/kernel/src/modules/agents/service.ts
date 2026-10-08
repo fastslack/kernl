@@ -1384,6 +1384,17 @@ export class AgentService {
     return true;
   }
 
+  /** Agents with answers waiting unread in their inbox (question-delivery.ts). */
+  agentsWithPendingAnswers(): string[] {
+    const rows = this.db
+      .prepare(
+        `SELECT DISTINCT to_agent_id FROM agent_office_inbox
+         WHERE status = 'unread' AND from_agent_id = '__top_agent__' AND subject LIKE 'ANSWER:%'`,
+      )
+      .all() as Array<{ to_agent_id: string }>;
+    return rows.map((r) => r.to_agent_id);
+  }
+
   /** Chief hands a question to the human. */
   escalateQuestion(id: string, reason: string): boolean {
     const r = this.db
