@@ -22,7 +22,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onMount } from 'svelte';
-  import { extPages } from '$lib/ext-host.js';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
   // Contenido por defecto del tab Overview. Quien monta el drawer puede
   // reemplazarlo por el suyo (el mundo 3D lo hace, para meterle sus tres
@@ -212,11 +211,6 @@
     if (autoPaused) dispatch('resume');
     ccReady = await claudeCodeReady();
   }
-  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
-  // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
-  // The panel is a paid extension's page: without `com.kernl.devops` active,
-  // /devops is the "extension not available" screen, so the link stays hidden.
-  $: devopsOffice = traitsOf(flow).devopsLink && $extPages.some((p) => p.view === 'devops');
   // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
   // office is watching it happen — so the drawer offers the way through. The
   // link carries no piece id on purpose: Scene Studio opens whichever piece is
@@ -514,11 +508,6 @@
                   : $t('agent.head.run')}
           </span>
         </button>
-        {#if devopsOffice}
-          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
-            <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
-          </a>
-        {/if}
         {#if creativosOffice}
           <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
                   title="Watch this office draw, live, without leaving the office">
