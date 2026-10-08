@@ -50,8 +50,11 @@ export interface TorStatusView {
 
 export interface TorDaemonOptions {
   sqlite: SqliteDb;
-  /** Port the hidden service forwards to: the kernel's own HTTP port. */
-  kernelPort: number;
+  /**
+   * Port the hidden service forwards to: the onion gateway, never the
+   * kernel's own port (see onion-gateway.ts for why).
+   */
+  servicePort: number;
   /** Called whenever the onion goes up or down, so presence can be republished. */
   onChange?: () => void;
   /** Base for data/tor when KERNEL_TOR_HIDDEN_SERVICE_DIR is unset. Defaults to cwd. */
@@ -182,7 +185,7 @@ export class TorDaemon {
           `SocksPort 127.0.0.1:${this.socksPort}`,
           `HTTPTunnelPort 127.0.0.1:${this.httpPort}`,
           `HiddenServiceDir ${hsDir}`,
-          `HiddenServicePort 80 127.0.0.1:${this.opts.kernelPort}`,
+          `HiddenServicePort 80 127.0.0.1:${this.opts.servicePort}`,
           "Log notice stdout",
           "",
         ].join("\n"),
