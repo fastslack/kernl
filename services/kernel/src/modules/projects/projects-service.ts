@@ -328,6 +328,7 @@ export class ProjectsService {
     check(flowId: string, projectId: string): { ok: true } | { ok: false; error: string };
     context(flowId: string, projectId: string): { block: string; homeDir: string } | null;
     unscoped(flowId: string): string | null;
+    soleProject(flowId: string): string | null;
     homeOffice(flowId: string, projectId: string): string | null;
   } {
     return {
@@ -336,6 +337,11 @@ export class ProjectsService {
         try { return buildProjectContext(this, flowId, projectId); } catch { return null; }
       },
       unscoped: (flowId) => this.unscopedNotice(flowId),
+      soleProject: (flowId) => {
+        if (!flowId || this.officeServesAny(flowId)) return null;
+        const assigned = this.officeProjects(flowId).filter((o) => o.active && o.project.status === "active");
+        return assigned.length === 1 ? assigned[0].project.id : null;
+      },
       homeOffice: (flowId, projectId) => this.homeOfficeFor(flowId, projectId),
       check: (flowId, projectId) => {
         const p = this.row(projectId);

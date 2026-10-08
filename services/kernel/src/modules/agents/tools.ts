@@ -597,7 +597,7 @@ export function agentsTools(
     // ── kernel_agents_add_trigger ────────────────────
     defineTool({
       name: "kernel_agents_add_trigger",
-      description: "Add an event trigger or schedule to an agent. Event triggers fire when a matching event occurs. Schedules run periodically.",
+      description: "Add an event trigger or schedule to an agent. Event triggers fire when a matching event occurs. Schedules run periodically. A schedule's runs work for `project`; without it they inherit the project of an office that serves exactly one, and otherwise run outside any project (and cannot draft from a project's accounts).",
       schema: z.object({
         agent_id: z.string().describe("Agent ID"),
         type: z.enum(["event", "schedule"]).describe("Trigger type"),
@@ -607,6 +607,7 @@ export function agentsTools(
         interval_ms: z.number().optional().describe("Interval in ms for schedule type (e.g. 3600000 = 1h). Use cron instead for time-based scheduling."),
         cron: z.string().optional().describe("Cron expression for schedule type (e.g. '0 7 * * *' = daily at 7am, '0 */6 * * *' = every 6h, '0 9 * * 1' = Monday 9am). Takes precedence over interval_ms."),
         goal_override: z.string().optional().describe("Optional goal override for scheduled runs"),
+        project: z.string().optional().describe("Schedule type: project id or slug the scheduled runs work for. The agent's office must serve it. Omit to use the office's only project, if it has exactly one."),
       }),
       handler: async (input) => {
         const agent = service.getAgent(input.agent_id);
@@ -639,11 +640,23 @@ export function agentsTools(
           return errorResult("Either cron expression or interval_ms (>= 60000) is required for schedules");
         }
 
+        const gate = service.getProjectGate();
+        let projectId: string | null = null;
+        if (input.project) {
+          projectId = gate?.resolve(input.project) ?? null;
+          if (!projectId) return errorResult(`Unknown project "${input.project}".`);
+          const verdict = gate!.check(agent.flow_id ?? "", projectId);
+          if (!verdict.ok) return errorResult(verdict.error);
+        } else {
+          projectId = gate?.soleProject?.(agent.flow_id ?? "") ?? null;
+        }
+
         const schedule = service.addSchedule({
           agent_id: input.agent_id,
           interval_ms: input.interval_ms,
           cron_expression: input.cron,
           goal_override: input.goal_override,
+          project_id: projectId,
         });
 
         const scheduleInfo = input.cron
@@ -653,6 +666,7 @@ export function agentsTools(
         return textResult(
           `Schedule added (${schedule.id})\n` +
           `${scheduleInfo}\n` +
+          `- Project: ${projectId ? (input.project ?? projectId) + (input.project ? "" : " (the office's only project)") : "none — runs outside any project"}\n` +
           `- Next run: ${schedule.next_run_at}`,
         );
       },
