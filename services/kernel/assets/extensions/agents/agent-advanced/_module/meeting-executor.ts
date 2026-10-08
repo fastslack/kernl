@@ -24,6 +24,7 @@ import {
   type EventBus,
   type KernelConfig,
   type KernelLanguage,
+  EXTERNAL_CONTENT_NOTICE,
 } from "@kernl/extension-sdk";
 import type { ChatLlmProvider } from "../../../../../src/modules/chat/llm-adapter.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
@@ -622,6 +623,7 @@ export class MeetingExecutor {
     if (resolvedPrompt) {
       systemParts.push(resolvedPrompt);
     }
+    systemParts.push(EXTERNAL_CONTENT_NOTICE);
     systemParts.push(promptMeetingTurnSystem(lang, isDebate));
     if (hierarchyBlock) {
       systemParts.push(hierarchyBlock);

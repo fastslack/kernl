@@ -35,6 +35,8 @@ const MUST_BE_OUTBOUND = [
   "kernel_youtube_update_video", "kernel_events_invite", "kernel_events_invite_contacts",
   "kernel_comms_request_missing_info", "kernel_social_post", "kernel_social_react",
   "kernel_social_follow", "kernel_social_unfollow", "kernel_social_delete", "kernel_social_set_profile",
+  "kernel_mesh_call_peer_tool", "kernel_mesh_pair_peer",
+  "kernel_federation_connect", "kernel_federation_add_peer", "kernel_federation_sync", "kernel_federation_sync_peer",
 ];
 /** Names the regex matches that only talk to the operator, never to the outside. */
 const NOT_OUTBOUND = ["kernel_digest_send_now"];

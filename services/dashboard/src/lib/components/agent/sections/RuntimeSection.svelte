@@ -319,6 +319,7 @@
                 provider={link.provider}
                 model={link.model}
                 {providers}
+                loading={!providersLoaded}
                 requiresTools={i === 0 || requiresTools}
                 engineFollows={i === 0}
                 busy={chainSaving}
@@ -353,6 +354,7 @@
                 provider={draft.provider}
                 model={draft.model}
                 {providers}
+                loading={!providersLoaded}
                 requiresTools={links.length === 0 || requiresTools}
                 engineFollows={links.length === 0}
                 busy={chainSaving}

@@ -446,6 +446,10 @@ export async function initHttpAndMcp(args: {
             client: peering.client,
             currentDescriptor: () => peering.currentDescriptor(),
             selfNpub: () => peering.selfNpub(),
+            personaProof: () => peering.personaLinkProof(),
+            sealPersonaProof: (proof, friendPubkeyHex) => peering.sealPersonaProofFor(proof, friendPubkeyHex),
+            refreshPersona: (npub) => void peering.refreshPersona(npub),
+            instanceKeyShared: () => peering.instanceKeyIsShared(),
           });
         }
       } catch (err) {

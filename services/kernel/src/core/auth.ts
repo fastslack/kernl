@@ -35,6 +35,8 @@ export const PEER_AUTH_PATHS = [
   "/api/peering/relay",
   // Friend-to-friend transfers (file-lane): offer, status, parts, cancel.
   "/api/peering/transfer",
+  // A trusted friend asking which Social persona runs here (link-proof).
+  "/api/peering/persona",
   // A phone pushing HealthKit samples. Same reasoning as the peering routes:
   // it presents a token minted for this one endpoint and nothing else, and
   // requiring the kernel's master token as well would mean putting the key to

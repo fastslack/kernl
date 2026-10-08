@@ -39,6 +39,7 @@ import {
 } from "./core/llm/cost-router.js";
 import type { ToolMemoryService } from "./modules/tool-memory/service.js";
 import { getRequestContext } from "./core/request-context.js";
+import { proxyPeerCall } from "./core/peer-proxy.js";
 import type { MeshServiceLike } from "./core/extension-seams.js";
 
 /**
@@ -446,22 +447,15 @@ export function createMcpServer(
     // peer's receipt rides through under its own server_id. (#1 phase 2
     // will encadenar both signatures into a chained receipt.)
     if (mesh) {
+      const cid = `${Date.now()}_${req.params.name}`;
       const resolved = mesh.resolveLocal(req.params.name);
-      if (resolved) {
-        const cid = `${Date.now()}_${req.params.name}`;
-        events?.emit("tool.call.start", { tool: resolved.remoteName, from: "self", to: resolved.peer.peer_id, correlation_id: cid }).catch(() => {});
-        try {
-          const remote = await mesh.callPeerTool({
-            peerId: resolved.peer.peer_id,
-            toolName: resolved.remoteName,
-            arguments: req.params.arguments,
-          });
-          events?.emit("tool.call.end", { tool: resolved.remoteName, from: "self", to: resolved.peer.peer_id, isError: false, correlation_id: cid }).catch(() => {});
-          return remote as CallToolResult;
-        } catch (e) {
-          events?.emit("tool.call.end", { tool: resolved.remoteName, from: "self", to: resolved.peer.peer_id, isError: true, correlation_id: cid }).catch(() => {});
-          return toCallToolResult(errorResult(`mesh proxy failed: ${(e as Error).message}`));
-        }
+      const peerId = resolved?.peer.peer_id ?? "";
+      const remoteName = resolved?.remoteName ?? req.params.name;
+      if (resolved) events?.emit("tool.call.start", { tool: remoteName, from: "self", to: peerId, correlation_id: cid }).catch(() => {});
+      const out = await proxyPeerCall(mesh, req.params.name, req.params.arguments, getRequestContext());
+      if (out.handled) {
+        events?.emit("tool.call.end", { tool: remoteName, from: "self", to: peerId, isError: out.result.isError === true, correlation_id: cid }).catch(() => {});
+        return out.result as CallToolResult;
       }
     }
 

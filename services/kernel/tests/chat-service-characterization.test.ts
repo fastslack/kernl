@@ -13,6 +13,7 @@ import { chatMigrations } from "../src/modules/chat/migrations/001_chat.js";
 import { ChatService, _resetSoulCacheForTests } from "../src/modules/chat/service.js";
 import { EventBus } from "../src/core/event-bus.js";
 import { promptChatIdentity, promptTodayDate } from "../src/core/i18n/prompts.js";
+import { EXTERNAL_CONTENT_NOTICE } from "../src/sdk/external-content.js";
 import * as providerHealth from "../src/core/llm/provider-health.js";
 import { clearProviderExhausted, initProviderStatus } from "../src/core/llm/chat-adapters.js";
 import type { ChatLlmProvider } from "../src/core/llm/chat-adapters.js";
@@ -104,6 +105,7 @@ describe("ChatService.chat — prompt + fallback chain", () => {
       "CTX-BLOCK",
       "RECALL-BLOCK",
       promptChatIdentity("en", "p1", " (m1)"),
+      EXTERNAL_CONTENT_NOTICE,
     ].join("\n\n");
     for (const c of calls) {
       expect(Object.keys(c.opts!)).toEqual(["model", "system", "tools", "caller"]);
@@ -121,7 +123,7 @@ describe("ChatService.chat — prompt + fallback chain", () => {
     const ep = svc.createEpisode({ provider: "p1", model: "" });
     await svc.chat(ep.id, "hola", { skipExtraction: true });
     expect(calls[0].opts!.system).toBe([
-      dynamicPrompt(base, "es"), "CTX-BLOCK", "RECALL-BLOCK", promptChatIdentity("es", "p1", ""),
+      dynamicPrompt(base, "es"), "CTX-BLOCK", "RECALL-BLOCK", promptChatIdentity("es", "p1", ""), EXTERNAL_CONTENT_NOTICE,
     ].join("\n\n"));
     expect(calls[0].opts!.model).toBeUndefined();
   });
@@ -190,6 +192,7 @@ describe("ChatService.chatStream — prompt", () => {
         dynamicPrompt(base, lang),
         "RECALL-BLOCK",
         promptChatIdentity(lang, "claude_code", " (sonnet)"),
+        EXTERNAL_CONTENT_NOTICE,
         `${header}\nBe brief.`,
       ].join("\n\n"));
       expect(seenOpts!.model).toBe("sonnet");
@@ -209,7 +212,8 @@ describe("ChatService.chatStream — prompt", () => {
     const ep = svc.createEpisode({ provider: "claude_code", model: "" });
     // createEpisode falls back to chat.defaultModel ("") when none is given.
     await svc.chatStream(ep.id, "hi", () => {});
-    expect(seenOpts!.system).toBe([dynamicPrompt(base, "en"), "RECALL-BLOCK", promptChatIdentity("en", "claude_code", "")].join("\n\n"));
+    expect(seenOpts!.system).toBe([dynamicPrompt(base, "en"), "RECALL-BLOCK", promptChatIdentity("en", "claude_code", ""), EXTERNAL_CONTENT_NOTICE].join("\n\n"));
+    expect((seenOpts!.system as string).split(EXTERNAL_CONTENT_NOTICE)).toHaveLength(2);
     expect(seenOpts!.model).toBeUndefined();
   });
 });

@@ -25,6 +25,11 @@ export interface Friend {
   manual_url: string;
   /** 1 when files from this friend are accepted without asking. */
   auto_accept: number;
+  /**
+   * The friend's Social persona (npub), learned from a link-proof they handed
+   * us over peering. Empty when unknown. Never published.
+   */
+  persona_npub: string;
   created_at: string;
   updated_at: string;
 }
@@ -63,6 +68,9 @@ CREATE TABLE IF NOT EXISTS kernl_presence (
 `;
 
 export class FriendsStore {
+  /** Listeners for a friend becoming trusted (added trusted, or pending/revoked → trusted). */
+  private trustedListeners: Array<(npub: string) => void> = [];
+
   constructor(private db: SqliteDb) {
     this.db.exec(MIGRATION);
     const cols = this.db.prepare(`PRAGMA table_info(kernl_friends)`).all() as Array<{ name: string }>;
@@ -71,6 +79,27 @@ export class FriendsStore {
     }
     if (!cols.some((c) => c.name === "auto_accept")) {
       this.db.exec(`ALTER TABLE kernl_friends ADD COLUMN auto_accept INTEGER NOT NULL DEFAULT 0`);
+    }
+    if (!cols.some((c) => c.name === "persona_npub")) {
+      this.db.exec(`ALTER TABLE kernl_friends ADD COLUMN persona_npub TEXT NOT NULL DEFAULT ''`);
+    }
+  }
+
+  /**
+   * Run `cb` whenever a friend becomes trusted, whichever flow did it. The
+   * listener runs after the row is written; its errors never reach the writer.
+   */
+  onTrusted(cb: (npub: string) => void): void {
+    this.trustedListeners.push(cb);
+  }
+
+  private emitTrusted(npub: string): void {
+    for (const cb of this.trustedListeners) {
+      try {
+        cb(npub);
+      } catch {
+        // a listener must never break the write that triggered it
+      }
     }
   }
 
@@ -144,6 +173,7 @@ export class FriendsStore {
         now,
         now,
       );
+    if ((opts.trust ?? "pending") === "trusted") this.emitTrusted(npub);
     return this.get(npub);
   }
 
@@ -159,6 +189,7 @@ export class FriendsStore {
         isoNow(),
         npub,
       );
+    if (patch.trust === "trusted" && existing.trust !== "trusted") this.emitTrusted(npub);
     return this.get(npub);
   }
 
@@ -175,6 +206,26 @@ export class FriendsStore {
     if (!this.get(npub)) return undefined;
     this.db.prepare(`UPDATE kernl_friends SET auto_accept=?, updated_at=? WHERE npub=?`).run(on ? 1 : 0, isoNow(), npub);
     return this.get(npub);
+  }
+
+  /** Set or clear (empty string) the persona proven by the friend's link-proof. */
+  setPersona(npub: string, personaNpub: string): Friend | undefined {
+    if (!this.get(npub)) return undefined;
+    this.db.prepare(`UPDATE kernl_friends SET persona_npub=?, updated_at=? WHERE npub=?`).run(personaNpub, isoNow(), npub);
+    return this.get(npub);
+  }
+
+  /** Persona pubkeys (hex) of trusted friends only. */
+  trustedPersonas(): string[] {
+    const rows = this.db
+      .prepare(`SELECT persona_npub FROM kernl_friends WHERE trust = 'trusted' AND persona_npub <> ''`)
+      .all() as Array<{ persona_npub: string }>;
+    const out: string[] = [];
+    for (const r of rows) {
+      const hex = hexOf(r.persona_npub);
+      if (hex && !out.includes(hex)) out.push(hex);
+    }
+    return out;
   }
 
   remove(npub: string): void {

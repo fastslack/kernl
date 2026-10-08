@@ -15,6 +15,7 @@
  */
 
 import { log } from "../../../core/logger.js";
+import { EXTERNAL_CONTENT_NOTICE } from "../../../sdk/external-content.js";
 import type { KernelConfig, KernelLanguage } from "../../../core/config.js";
 import type { Agent } from "../types.js";
 import type { AgentService } from "../service.js";
@@ -74,6 +75,11 @@ export type SystemPromptStep = (
 
 const basePrompt: SystemPromptStep = (ctx) =>
   ctx.effectiveSystemPrompt || promptDefaultAgent(ctx.lang);
+
+// Third-party text reaches the agent inside <external> elements; this block
+// says what that means. Its own step so an empty custom prompt still falls
+// back to the default one in basePrompt.
+const externalNotice: SystemPromptStep = () => EXTERNAL_CONTENT_NOTICE;
 
 const todayDate: SystemPromptStep = (ctx) => promptTodayDate(ctx.lang, ctx.todayStr);
 
@@ -251,6 +257,7 @@ const styleDirective: SystemPromptStep = (ctx) => promptStyleDirective(ctx.lang)
 /** The system prompt, top to bottom. Order is part of the contract. */
 export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   basePrompt,
+  externalNotice,
   todayDate,
   skillsIndex,
   invokedBy,

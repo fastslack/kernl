@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg, wrapExternal } from "@kernl/extension-sdk";
 import type { IrcServer } from "./server/ircd.js";
 import type { IrcStore } from "./store.js";
 import type { ChannelBridge } from "./bridge/channel-bridge.js";
@@ -48,7 +48,7 @@ export function ircTools(deps: {
         if (rows.length === 0) return textResult(`No history for ${target}.`);
         return textResult(
           rows
-            .map((r) => `[${r.ts}] <${r.sender}> ${r.encrypted ? "🔒(encrypted)" : r.payload}`)
+            .map((r) => `[${r.ts}] ${r.encrypted ? `<${r.sender}> 🔒(encrypted)` : wrapExternal(`<${r.sender}> ${r.payload}`, { source: "irc", from: r.sender })}`)
             .join("\n"),
         );
       },

@@ -163,18 +163,6 @@ export class NostrDirectoriesProvider {
 
   get canPublish(): boolean { return this.identity !== null; }
 
-  /** Optional public-base URL to embed in social-post announcements
-   *  ("📁 https://my-host/cinema/directories/<id>"). Read from
-   *  DASHBOARD_PUBLIC_URL when the kernel is reachable from the open
-   *  internet; left empty otherwise — the kind-1 still goes out, just
-   *  without a clickable link. */
-  private get publicBase(): string {
-    const raw: string = (typeof process !== "undefined" && typeof process.env?.DASHBOARD_PUBLIC_URL === "string")
-      ? process.env.DASHBOARD_PUBLIC_URL
-      : "";
-    return raw.replace(/\/+$/, "");
-  }
-
   /**
    * After publishing a kind-30079 directory event, emit a regular kind-1
    * Nostr post that announces it. This makes directories discoverable
@@ -184,18 +172,17 @@ export class NostrDirectoriesProvider {
    * Tags are chosen so the post can be filtered out from a "show only
    * cinema" view (`#t=mtwcinema-directory`) AND linked back to the
    * underlying record (`#d=mtwcinema:dir:<id>`, `#e=<event_id>`).
+   *
+   * Signed by the persona, so it carries no link to this kernel (no
+   * DASHBOARD_PUBLIC_URL): that would tie the person to the machine.
    */
   private async announceToSocial(directory: CinemaDirectory, dirEventId: string): Promise<void> {
     if (!this.identity) return;
-    const link = this.publicBase
-      ? `${this.publicBase}/cinema/directories#${directory.id}`
-      : "";
     const lines = [
       `📁 ${directory.title}`,
       directory.description ? directory.description.slice(0, 280) : "",
       `${directory.items.length} pelis${directory.category ? ` · #${directory.category}` : ""}`,
     ].filter(Boolean);
-    if (link) lines.push(link);
     const note = this.identity.signEvent({
       kind: 1,
       created_at: Math.floor(Date.now() / 1000),

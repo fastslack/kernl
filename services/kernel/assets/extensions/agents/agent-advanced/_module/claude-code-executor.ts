@@ -55,6 +55,7 @@ import {
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
   hostPathReachable,
+  EXTERNAL_CONTENT_NOTICE,
 } from "@kernl/extension-sdk";
 import { failureNote } from "./failure-note.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
@@ -1549,6 +1550,7 @@ export class ClaudeCodeExecutor {
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
     if (base) parts.push(base);
+    parts.push(EXTERNAL_CONTENT_NOTICE);
     parts.push(promptTodayDate(lang, localDate()));
     parts.push(promptClaudeCodeWorkInstructions(lang));
 

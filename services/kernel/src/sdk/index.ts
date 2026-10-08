@@ -14,7 +14,8 @@
  * kernel with it. `tests/sdk-boundary.test.ts` enforces that.
  *
  * Heavy npm dependencies stay off this entry: `@kernl/extension-sdk/html`
- * (sanitize-html) and `@kernl/extension-sdk/nostr` (nostr-tools). When an
+ * (sanitize-html), `@kernl/extension-sdk/nostr` (nostr-tools) and
+ * `@kernl/extension-sdk/social` (share envelope, @noble/curves). When an
  * extension loads part of itself with `import()`, bun initialises this whole
  * barrel for that part — unused exports and their dependencies included.
  */
@@ -47,6 +48,7 @@ export * from "./url-guard.js";
 export * from "./crypto.js";
 export * from "./secrets.js";
 export * from "./prompt-sanitizer.js";
+export * from "./external-content.js";
 export * from "./strip-reasoning.js";
 export * from "./protected-files.js";
 export * from "./license-gate.js";

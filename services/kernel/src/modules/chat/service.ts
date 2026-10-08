@@ -55,6 +55,7 @@ import { canonicalSlug } from "../../core/llm/provider-catalog.js";
 // loop on the same rails).
 import { formatBudgetWarning } from "../../core/llm/tool-loop.js";
 import { localDate } from "../../sdk/clock.js";
+import { EXTERNAL_CONTENT_NOTICE } from "../../sdk/external-content.js";
 import { resolveInputCaps, TEXT_ONLY_CAPS } from "../../core/llm/input-caps.js";
 import { getAttachmentService } from "../attachments/index.js";
 import type { AttachmentMeta, AttachmentRecord } from "../attachments/index.js";
@@ -1455,7 +1456,8 @@ export class ChatService {
   /**
    * The system prompt both chat paths send: SOUL (+ user systemPrompt) with
    * today's date, then the retrieved-context block (sync path only), distilled
-   * recall, the identity guard and — when given — the episode's instructions,
+   * recall, the identity guard, the external-content notice and — when given —
+   * the episode's instructions,
    * joined by blank lines.
    */
   private buildSystemPrompt(opts: {
@@ -1497,6 +1499,9 @@ export class ChatService {
     // Claude because Claude said so earlier in the same chat). Tell each model
     // who it actually is at call time so it answers truthfully.
     systemParts.push(promptChatIdentity(lang, opts.identityProvider, opts.modelHint));
+    // Tool results (mails, posts, feeds, peers) arrive inside <external> elements:
+    // say once what that means, unless the configured prompt already does.
+    if (!dynamicSystemPrompt.includes(EXTERNAL_CONTENT_NOTICE)) systemParts.push(EXTERNAL_CONTENT_NOTICE);
     if (opts.episodeInstructions && opts.episodeInstructions.trim()) {
       const header = lang === "es" ? "## Instrucciones del episodio" : "## Episode instructions";
       systemParts.push(`${header}\n${opts.episodeInstructions.trim()}`);
