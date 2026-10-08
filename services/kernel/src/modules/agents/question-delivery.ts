@@ -179,11 +179,15 @@ export function answerAndDeliver(
       `**Answer:** ${input.selected_option}${noteSuffix}\n\n` +
       `Resume from where you stopped: act on the answer using your tools. ` +
       `Do not re-ask the same question.`;
+    // The resumed run works for the project the question was asked in; without
+    // it the agent wakes up outside its project and its drafts lose the link.
+    const askedIn = service.getQuestion(id)?.run_id;
     const run = service.createRun({
       agent_id: asker.id,
       trigger_type: "manual",
       goal,
       trigger_payload: { resume_question_id: id },
+      project_id: askedIn ? (service.getRun(askedIn)?.project_id ?? null) : null,
     });
     service.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
     executor
