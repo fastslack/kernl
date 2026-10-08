@@ -21,6 +21,18 @@ describe("email outbox channel", () => {
     expect(ch().validate(payload, "comms:nope")).toMatchObject({ ok: false, error: expect.stringMatching(/no encontrada/) });
   });
 
+  it("accepts the bare id, email:<id> and the account address, and says which format it wants", () => {
+    for (const ref of [acct, `email:${acct}`, `email_account:${acct}`, "ventas@x.ar", "email:VENTAS@x.ar"]) expect(ch().validate(payload, ref)).toEqual({ ok: true });
+    expect(ch().canonicalRef!("ventas@x.ar")).toBe(`comms:${acct}`);
+    expect(ch().canonicalRef!("email:heural")).toBeNull();
+    expect(ch().validate(payload, "email:heural")).toMatchObject({ ok: false, error: expect.stringMatching(/no encontrada\. account_ref: comms:<email_account_id>/) });
+  });
+
+  it("sends through an account named by its address", async () => {
+    const r = await ch().send(payload, "ventas@x.ar");
+    expect(service.getById(r.ref.slice(6)).account_id).toBe(acct);
+  });
+
   it("previews as a mail", () => {
     expect(ch().preview(payload)).toEqual({ title: "Hola", body: "Te escribo por…", meta: { Para: "ana@x.ar" } });
   });

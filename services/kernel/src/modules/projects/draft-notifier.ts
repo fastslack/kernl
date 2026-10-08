@@ -15,17 +15,18 @@ export class DraftNotifier {
     private windowMs: number = 10 * 60_000,
   ) {}
 
-  onChanged(e: { id: string; project_id: string; status: string }): void {
+  onChanged(e: { id: string; project_id: string | null; status: string }): void {
     if (e.status !== "draft" || this.announced.has(e.id)) return;
     this.announced.add(e.id);
-    const last = this.lastByProject.get(e.project_id);
+    const key = e.project_id ?? "__unscoped__";
+    const last = this.lastByProject.get(key);
     const t = this.now();
     if (last !== undefined && t - last < this.windowMs) return;
-    this.lastByProject.set(e.project_id, t);
-    const name = this.projectName(e.project_id);
+    this.lastByProject.set(key, t);
+    const name = e.project_id ? this.projectName(e.project_id) : null;
     void this.send({
-      title: `${name}: borrador para aprobar`,
-      body: `Un agente dejó un borrador de ${name} esperando tu aprobación en Aprobaciones (/outbox). Nada sale sin tu ok.`,
+      title: name ? `${name}: borrador para aprobar` : "Borrador para aprobar",
+      body: `Un agente dejó un borrador${name ? ` de ${name}` : ""} esperando tu aprobación en Aprobaciones (/outbox). Nada sale sin tu ok.`,
       priority: "normal",
       source: "projects",
     }).catch(() => { /* notification channels are best-effort */ });

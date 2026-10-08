@@ -57,6 +57,16 @@ describe("answerAndDeliver", () => {
     expect(service.getQuestion(q.id)?.selected_index).toBe(-1);
   });
 
+  it("resumes inside the project the question was asked in", () => {
+    service.setProjectGate({ check: () => ({ ok: true }) } as never);
+    const w = service.createAgent({ name: "W" });
+    const asked = service.createRun({ agent_id: w.id, goal: "prospect", project_id: "P1" });
+    service.updateRun(asked.id, { status: "completed" });
+    const q = service.createQuestion({ from_agent_id: w.id, question: "Ship?", options: OPTS, run_id: asked.id });
+    const r = answerAndDeliver(service, executor, events, q.id, { selected_index: 0, selected_option: "A", answered_by: "human" });
+    expect(service.getRun(r!.resume_run_id!)?.project_id).toBe("P1");
+  });
+
   it("returns null when the question is not answerable by that party", () => {
     const w = service.createAgent({ name: "W" });
     const q = service.createQuestion({ from_agent_id: w.id, question: "Ship?", options: OPTS });

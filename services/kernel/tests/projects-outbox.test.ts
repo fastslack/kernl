@@ -48,6 +48,23 @@ describe("OutboxService", () => {
     expect(() => outbox.propose({ ...base(), payload: { text: "" } })).toThrow(/text required/);
   });
 
+  it("an unknown channel error lists the registered channels", () => {
+    outbox.registerChannel("social_post", { validate: () => ({ ok: true }), preview: () => ({ title: "", body: "" }), send: async () => ({ ref: "" }) });
+    expect(() => outbox.propose({ ...base(), channel: "x_post" })).toThrow(/Registered channels: fake, social_post/);
+  });
+
+  it("kernel_outbox_propose describes the social_post contract and lists channels live", () => {
+    const [propose] = outboxTools(outbox, () => undefined, () => "");
+    for (const s of ['"social_post"', '"social:self"', "text: string", "reply_to?", "forum_id?", "tags?: string[]"]) {
+      expect(propose.description).toContain(s);
+    }
+    expect(propose.description).toContain("Registered channels right now: fake.");
+    outbox.registerChannel("social_post", { validate: () => ({ ok: true }), preview: () => ({ title: "", body: "" }), send: async () => ({ ref: "" }) });
+    expect(propose.description).toContain("Registered channels right now: fake, social_post.");
+    const payloadDesc = (propose.inputSchema as unknown as { shape: Record<string, { description?: string }> }).shape.payload.description ?? "";
+    expect(payloadDesc).not.toMatch(/^Channel payload: text/);
+  });
+
   it("edit → approve sends the edited payload once", async () => {
     const d = outbox.propose(base());
     outbox.edit(d.id, { text: "editado" });
@@ -108,7 +125,7 @@ describe("OutboxService", () => {
     expect(outbox.pendingCount()).toBe(2);
   });
 
-  it("kernel_outbox_propose drafts for the caller run's project and refuses outside one", async () => {
+  it("kernel_outbox_propose drafts for the caller run's project and drafts unscoped outside one", async () => {
     const runs: Record<string, { project_id: string | null; agent_id: string }> = {
       "R-P": { project_id: pid, agent_id: "A1" }, "R-N": { project_id: null, agent_id: "A1" },
     };
@@ -119,7 +136,8 @@ describe("OutboxService", () => {
     const item = outbox.list({ project_id: pid })[0];
     expect(item).toMatchObject({ status: "draft", flow_id: "F-1", agent_id: "A1", run_id: "R-P" });
     const no = await runWithContext({ callerAgentId: "A1", callerRunId: "R-N", callerDepth: 0 }, () => tool.handler(args));
-    expect(no.isError).toBe(true);
+    expect(no.isError).toBeFalsy();
+    expect(outbox.list().some((i) => i.run_id === "R-N" && i.project_id === null)).toBe(true);
     const bad = await runWithContext({ callerAgentId: "A1", callerRunId: "R-P", callerDepth: 0 },
       () => tool.handler({ ...args, account_ref: "twitter:999" }));
     expect(JSON.stringify(bad)).toContain("not linked");

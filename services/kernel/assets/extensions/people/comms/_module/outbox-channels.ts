@@ -4,7 +4,9 @@
  * propose a draft, the operator approves it, and the outbox calls `send` here.
  *
  * account_ref: `comms:<email_account_id>` for mail, `whatsapp:default` for
- * WhatsApp. A channel never falls back to another account, and every check
+ * WhatsApp. Mail also takes the bare id, `email:<id>` and the account's
+ * address — agents reach for all of them, and a project link stores the bare
+ * id or the address. A channel never falls back to another account, and every check
  * (including "do not contact") runs again at send time: the draft may have
  * been approved days after it was proposed.
  */
@@ -14,7 +16,30 @@ import { isDoNotContact, samePhone, whatsappNumber } from "./dnc.js";
 import { unsubscribeToken } from "./unsubscribe.js";
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const accountIdOf = (ref: string) => (ref.startsWith("comms:") ? ref.slice("comms:".length) : "");
+
+const MAIL_REF_HINT = "comms:<email_account_id> (the id from kernel_comms_list_accounts; the bare id or the account's address also work)";
+
+/** The email account a ref names, or "" — never the default account. */
+function resolveAccountId(svc: CommsService, ref: string): string {
+  const raw = String(ref ?? "").trim().replace(/^(comms|email_account|email):/i, "");
+  if (!raw) return "";
+  if (svc.getAccount(raw)) return raw;
+  return EMAIL_RE.test(raw) ? (svc.getAccountByEmail(raw)?.id ?? "") : "";
+}
+
+const accountMissing = (ref: string) => `Cuenta de correo ${ref} no encontrada. account_ref: ${MAIL_REF_HINT}`;
+
+/** Mail channels share how a ref is resolved and canonicalized. */
+function mailRefs(deps: CommsChannelDeps): Pick<OutboxChannelHandler, "canonicalRef" | "refHint"> {
+  return {
+    refHint: MAIL_REF_HINT,
+    canonicalRef: (ref) => {
+      const svc = deps.service();
+      const id = svc ? resolveAccountId(svc, ref) : "";
+      return id ? `comms:${id}` : null;
+    },
+  };
+}
 
 interface EmailPayload {
   to: string[];
@@ -40,8 +65,7 @@ export function emailChannel(deps: CommsChannelDeps): OutboxChannelHandler {
     if (bad !== undefined) return `Dirección inválida: ${bad}`;
     if (!p.subject?.trim()) return "Falta el asunto";
     if (!p.body?.trim()) return "Falta el cuerpo del mail";
-    const accountId = accountIdOf(ref);
-    if (!accountId || !svc.getAccount(accountId)) return `Cuenta de correo ${accountId || ref} no encontrada`;
+    if (!resolveAccountId(svc, ref)) return accountMissing(ref);
     const blocked = [...p.to, ...(p.cc ?? [])].find((a) => isDoNotContact(deps.db, { email: a }));
     if (blocked) return `${blocked} pidió no ser contactado`;
     if (p.contact_id && isDoNotContact(deps.db, { contactId: p.contact_id })) return "El contacto pidió no ser contactado";
@@ -49,6 +73,7 @@ export function emailChannel(deps: CommsChannelDeps): OutboxChannelHandler {
   };
 
   return {
+    ...mailRefs(deps),
     validate: (payload, ref) => {
       const err = problem(payload as EmailPayload, ref);
       return err ? { ok: false, error: err } : { ok: true };
@@ -69,7 +94,7 @@ export function emailChannel(deps: CommsChannelDeps): OutboxChannelHandler {
       const comm = svc.create({
         channel: "email",
         direction: "outbound",
-        account_id: accountIdOf(ref),
+        account_id: resolveAccountId(svc, ref),
         subject: p.subject,
         body: p.body,
         body_html: p.body_html,
@@ -132,8 +157,7 @@ export function emailCampaignChannel(deps: CommsChannelDeps & { secret: () => st
     if (!svc) return "Comms no está disponible";
     if (!p?.subject?.trim()) return "Falta el asunto";
     if (!p.body?.trim()) return "Falta el cuerpo";
-    const accountId = accountIdOf(ref);
-    if (!accountId || !svc.getAccount(accountId)) return `Cuenta de correo ${accountId || ref} no encontrada`;
+    if (!resolveAccountId(svc, ref)) return accountMissing(ref);
     if (resolveSegment(deps.db, p.segment).length === 0) return "El segmento no tiene ningún contacto con mail (o todos se dieron de baja)";
     if (!/^https?:\/\//.test(publicBase())) {
       return "Configurá la URL pública del kernel (KERNEL_PUBLIC_URL) para que el link de baja funcione en los mails";
@@ -142,6 +166,7 @@ export function emailCampaignChannel(deps: CommsChannelDeps & { secret: () => st
   };
 
   return {
+    ...mailRefs(deps),
     validate: (payload, ref) => {
       const err = problem(payload as CampaignPayload, ref);
       return err ? { ok: false, error: err } : { ok: true };
@@ -156,7 +181,7 @@ export function emailCampaignChannel(deps: CommsChannelDeps & { secret: () => st
       const err = problem(p, ref);
       if (err) throw new Error(err);
       const svc = deps.service()!;
-      const accountId = accountIdOf(ref);
+      const accountId = resolveAccountId(svc, ref);
       const body = p.body.includes("{{unsubscribe_url}}") ? p.body : p.body + UNSUB_FOOTER;
       const bodyHtml = p.body_html && !p.body_html.includes("{{unsubscribe_url}}") ? p.body_html + UNSUB_FOOTER_HTML : p.body_html;
       const template = svc.createTemplate({ name: `Outbox · ${p.subject}`, subject: p.subject, body, body_html: bodyHtml, account_id: accountId });

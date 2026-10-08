@@ -51,7 +51,7 @@ export type OutboxStatus = "draft" | "approved" | "sending" | "sent" | "rejected
 
 export interface OutboxItem {
   id: string;
-  project_id: string;
+  project_id: string | null;
   flow_id: string;
   agent_id: string;
   run_id: string;
@@ -80,4 +80,13 @@ export interface OutboxChannelHandler {
   validate(payload: unknown, accountRef: string): { ok: true } | { ok: false; error: string };
   preview(payload: unknown): OutboxPreview;
   send(payload: unknown, accountRef: string): Promise<{ ref: string }>;
+  /**
+   * The channel's canonical form of an account ref, or null when it names no
+   * account. Agents write the same account several ways (`comms:<id>`, the
+   * bare id, an address) and a project link stores whichever the operator
+   * picked; the outbox compares and stores the canonical form.
+   */
+  canonicalRef?(accountRef: string): string | null;
+  /** How account_ref is written for this channel — shown in kernel_outbox_propose's description. */
+  refHint?: string;
 }
