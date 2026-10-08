@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "bun:test";
 import {
   registerFeedbackHost, unregisterFeedbackHost, toast, confirm, ask, undoable, flushUndoables,
   isKernelRestarting, describeError, feedbackLabels, HttpFailure, type FeedbackHost, type ToastInput,
-} from "../assets/extensions/_shared/feedback.ts";
+} from "../assets/extensions/_shared/feedback.js";
 
 function fakeHost(answers: { confirm?: boolean; ask?: string | null } = {}) {
   const toasts: ToastInput[] = [];
