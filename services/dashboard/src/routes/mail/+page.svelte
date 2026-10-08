@@ -8,6 +8,7 @@
   import MailFetchButton from '$lib/components/MailFetchButton.svelte';
   import EmailBody from '$lib/components/EmailBody.svelte';
   import { bannerFor, nextPollMs, type SyncReport } from '$lib/mail-sync.js';
+  import { withAttachmentBlobs } from '$lib/mail-body.js';
   import { ask, undoable } from '$shared/feedback';
   import Skeleton from '$shared/components/Skeleton.svelte';
   import ErrorState from '$shared/components/ErrorState.svelte';
@@ -26,6 +27,7 @@
     email_labels: Array<{ id: string; name: string; color: string }>;
     linked_tasks: Array<{ id: string; title: string; status: string }>;
     linked_contacts: Array<{ id: string; name: string; email: string }>;
+    attachments?: Array<{ id: string; filename: string; mime_type: string; size_bytes: number; in_body: boolean }>;
   }
   interface AttentionItem {
     gmail_id: string; thread_id: string; from_email: string; from_name: string;
@@ -359,6 +361,63 @@
   function doSearch() { page = 1; loadFolder(); }
 
   // ── Formatting ───────────────────────────────────
+  function fmtSize(n: number): string {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function attachmentUrl(id: string): string {
+    return '/api/attachments?id=' + encodeURIComponent(id);
+  }
+
+  // Attachment bytes need the auth header, which window.fetch adds and an
+  // <img src> or a link cannot send: images are fetched as blobs when the
+  // message opens (thumbnails, screenshots inside the body), other files
+  // when clicked.
+  let blobUrls: Record<string, string> = {};
+  let blobsFor = '';
+  $: if (selectedEmail && selectedEmail.gmail_id !== blobsFor) loadImageBlobs(selectedEmail);
+  $: bodyHtml = selectedEmail ? withAttachmentBlobs(selectedEmail.body_html, blobUrls) : null;
+  onDestroy(() => { for (const u of Object.values(blobUrls)) URL.revokeObjectURL(u); });
+
+  async function attachmentBlob(id: string): Promise<string | null> {
+    try {
+      const r = await fetch(attachmentUrl(id));
+      return r.ok ? URL.createObjectURL(await r.blob()) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadImageBlobs(email: EmailDetail) {
+    blobsFor = email.gmail_id;
+    for (const u of Object.values(blobUrls)) URL.revokeObjectURL(u);
+    blobUrls = {};
+    for (const att of email.attachments ?? []) {
+      if (!att.mime_type.startsWith('image/')) continue;
+      const url = await attachmentBlob(att.id);
+      if (blobsFor !== email.gmail_id) { if (url) URL.revokeObjectURL(url); return; }
+      if (url) blobUrls = { ...blobUrls, [att.id]: url };
+    }
+  }
+
+  const PREVIEWABLE = /^(image\/|application\/pdf$|text\/plain$)/;
+
+  async function openAttachment(att: NonNullable<EmailDetail['attachments']>[number]) {
+    const preview = PREVIEWABLE.test(att.mime_type);
+    // Opened before the await: a tab opened after it counts as a popup.
+    const tab = preview && !blobUrls[att.id] ? window.open('', '_blank') : null;
+    const url = blobUrls[att.id] ?? await attachmentBlob(att.id);
+    if (!url) { tab?.close(); return; }
+    if (!blobUrls[att.id]) blobUrls = { ...blobUrls, [att.id]: url };
+    if (tab) { tab.location.href = url; return; }
+    const a = document.createElement('a');
+    a.href = url;
+    if (preview) { a.target = '_blank'; a.rel = 'noopener'; } else a.download = att.filename;
+    a.click();
+  }
+
   function fmtDate(d: string): string {
     if (!d) return '';
     try {
@@ -731,7 +790,24 @@
 
       <!-- Body -->
       <div class="detail-body">
-        <EmailBody html={selectedEmail.body_html} text={selectedEmail.body_text || selectedEmail.snippet || ''} />
+        {#if selectedEmail.attachments?.length}
+          <div class="attachments" aria-label="Attachments">
+            {#each selectedEmail.attachments as att (att.id)}
+              <button class="attachment" type="button" title={att.filename} on:click={() => openAttachment(att)}>
+                {#if att.mime_type.startsWith('image/') && blobUrls[att.id]}
+                  <img class="attachment-thumb" src={blobUrls[att.id]} alt="" />
+                {:else}
+                  <span class="attachment-icon" aria-hidden="true">{att.mime_type.startsWith('image/') ? '🖼️' : att.mime_type === 'application/pdf' ? '📄' : '📎'}</span>
+                {/if}
+                <span class="attachment-meta">
+                  <span class="attachment-name">{att.filename}</span>
+                  <span class="attachment-size">{fmtSize(att.size_bytes)}</span>
+                </span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <EmailBody html={bodyHtml} text={selectedEmail.body_text || selectedEmail.snippet || ''} />
       </div>
 
       <!-- Thread -->
@@ -1047,6 +1123,28 @@
     line-height: 1.6;
     color: var(--text);
   }
+
+  .attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .attachment {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 240px;
+    padding: 6px 10px 6px 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .attachment:hover { border-color: var(--border-h, var(--border)); background: var(--surface-hover, var(--surface)); }
+  .attachment-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; flex: none; background: #fff; }
+  .attachment-icon { width: 40px; height: 40px; display: grid; place-items: center; font-size: 20px; flex: none; }
+  .attachment-meta { display: flex; flex-direction: column; min-width: 0; }
+  .attachment-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attachment-size { font-size: 11px; color: var(--text-3); }
 
   .thread-btn {
     margin: 0 16px 8px;

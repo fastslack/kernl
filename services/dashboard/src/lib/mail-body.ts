@@ -38,14 +38,30 @@ const BASE_CSS = `
 
 /**
  * The iframe document. The CSP is the second wall behind blockRemoteImages:
- * with images blocked it only admits inline data: images, so nothing remote
- * can load even if a src slipped past the rewrite. Scripts are never allowed.
+ * with images blocked it only admits inline data: images and blob: (the
+ * message's own attachments, fetched with the session's token), so nothing
+ * remote can load even if a src slipped past the rewrite. Scripts are never
+ * allowed.
  */
 export function buildSrcdoc(html: string, showRemoteImages: boolean): string {
   const body = showRemoteImages ? html : blockRemoteImages(html).html;
-  const imgSrc = showRemoteImages ? "data: cid: http: https:" : "data: cid:";
+  const imgSrc = showRemoteImages ? "data: cid: blob: http: https:" : "data: cid: blob:";
   const csp = `default-src 'none'; img-src ${imgSrc}; style-src 'unsafe-inline'`;
   return `<!doctype html><html><head><meta charset="utf-8">` +
     `<meta http-equiv="Content-Security-Policy" content="${csp}">` +
     `<base target="_blank"><style>${BASE_CSS}</style></head><body>${body}</body></html>`;
+}
+
+/**
+ * Point the kernel's attachment URLs in a message body (`<img src="/api/attachments?id=…">`,
+ * rewritten from `cid:` by the kernel) at blob: URLs fetched with the auth
+ * header, which an <img> inside the frame could not send.
+ */
+export function withAttachmentBlobs(html: string | null, blobs: Record<string, string>): string | null {
+  if (!html) return html;
+  let out = html;
+  for (const [id, url] of Object.entries(blobs)) {
+    out = out.split(`src="/api/attachments?id=${encodeURIComponent(id)}"`).join(`src="${url}"`);
+  }
+  return out;
 }

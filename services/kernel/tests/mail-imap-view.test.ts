@@ -3,7 +3,10 @@
  * (comms:inbox-fetch), not in google_emails, and the view has to show both —
  * plus a per-account sync status that explains an empty mailbox.
  */
-import { describe, it, expect, beforeEach } from "bun:test";
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { mkdtempSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { runMigrations } from "../src/core/db/migrations.js";
 import { googleSyncMigrations } from "../assets/extensions/integration/google-sync/_module/migrations/001_google_sync.js";
 import { fullSyncMigrations } from "../assets/extensions/integration/google-sync/_module/migrations/002_full_sync.js";
@@ -237,5 +240,111 @@ describe("storableHtml", () => {
   it("drops an oversized document whole instead of truncating it", () => {
     expect(storableHtml(`<p>${"x".repeat(600 * 1024)}</p>`)).toBe("");
     expect(storableHtml("")).toBe("");
+  });
+});
+
+// IMAP attachments used to vanish: the decoder skipped them and the view had
+// nowhere to show them. They are kept on disk now, listed with the message,
+// and a screenshot pasted into the body points at its stored file.
+describe("IMAP mail attachments", () => {
+  const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3]);
+  let cwd: string;
+  let tmp: string;
+  let comms: ReturnType<typeof makeCommsDb>["service"];
+
+  beforeEach(() => {
+    cwd = process.cwd();
+    tmp = mkdtempSync(join(tmpdir(), "kernl-att-"));
+    process.chdir(tmp);
+    ({ db, service: comms } = makeCommsDb());
+    runMigrations(db as never, "google-sync", [...googleSyncMigrations, ...fullSyncMigrations, ...emailTriageMigrations, ...accountIdMigrations]);
+    runMigrations(db as never, "google-sync-body-html", bodyHtmlMigrations);
+    mail = new EmailService(db as never, new EventBus());
+    addAccount("i1", "admin@vps.org", "imap_smtp");
+  });
+  afterEach(() => {
+    process.chdir(cwd);
+    rmSync(tmp, { recursive: true, force: true });
+  });
+
+  function fakeImap(calls: string[], attachments = [
+    { filename: "image.png", mimeType: "image/png", content: png, contentId: "ii_1", inline: true },
+    { filename: "../../etc/informe.pdf", mimeType: "application/pdf", content: new Uint8Array([37, 80]), contentId: "", inline: false },
+  ]) {
+    (comms as unknown as { providers: Map<string, unknown> }).providers.set("i1", {
+      name: "imap_smtp",
+      capabilities: { fetchEmail: true },
+      async fetchEmail(uid: string) { calls.push(uid); return { attachments }; },
+    });
+  }
+
+  it("downloads a stored message's attachments once and shows them in the detail", async () => {
+    addComm("c1", "i1", "2026-10-01T10:00:00.000Z");
+    db.run(`UPDATE communications SET gmail_message_id = '42', body_html = '<p>captura</p><img src="cid:ii_1">' WHERE id = 'c1'`);
+    const calls: string[] = [];
+    fakeImap(calls);
+
+    expect(mail.listEmails({ folder: "inbox" }).emails[0].has_attachments).toBe(0);
+    await comms.ensureReceivedAttachments("c1");
+    await comms.ensureReceivedAttachments("c1");
+    expect(calls).toEqual(["42"]);
+
+    const email = mail.getEmail("comm:c1")!;
+    expect(email.has_attachments).toBe(1);
+    expect(email.attachments.map((a) => [a.filename, a.mime_type, a.in_body])).toEqual([
+      ["image.png", "image/png", true],
+      ["informe.pdf", "application/pdf", false],
+    ]);
+    expect(email.body_html).toContain(`src="/api/attachments?id=${email.attachments[0].id}"`);
+    expect(email.body_html).not.toContain("cid:");
+    expect(mail.listEmails({ folder: "inbox" }).emails[0].has_attachments).toBe(1);
+
+    const stored = comms.getAttachment(email.attachments[1].id)!;
+    expect(stored.stored_path.startsWith(join("data", "attachments", "c1"))).toBe(true);
+    expect(existsSync(stored.stored_path)).toBe(true);
+    expect(new Uint8Array(readFileSync(comms.getAttachment(email.attachments[0].id)!.stored_path))).toEqual(png);
+  });
+
+  it("tries again on the next open when the server failed, and stops once the message is gone", async () => {
+    addComm("c1", "i1", "2026-10-01T10:00:00.000Z");
+    db.run(`UPDATE communications SET gmail_message_id = '42' WHERE id = 'c1'`);
+    let error = "connect ETIMEDOUT";
+    let calls = 0;
+    (comms as unknown as { providers: Map<string, unknown> }).providers.set("i1", {
+      name: "imap_smtp",
+      capabilities: { fetchEmail: true },
+      async fetchEmail() { calls++; throw new Error(error); },
+    });
+    await comms.ensureReceivedAttachments("c1");
+    error = "IMAP message not found: 42";
+    await comms.ensureReceivedAttachments("c1");
+    await comms.ensureReceivedAttachments("c1");
+    expect(calls).toBe(2);
+  });
+
+  it("does not take the files of another message that now holds the same UID", async () => {
+    addComm("c1", "i1", "2026-10-01T10:00:00.000Z");
+    db.run(`UPDATE communications SET gmail_message_id = '42', metadata = json_set(metadata, '$.message_id_header', '<a@x>') WHERE id = 'c1'`);
+    const calls: string[] = [];
+    (comms as unknown as { providers: Map<string, unknown> }).providers.set("i1", {
+      name: "imap_smtp",
+      capabilities: { fetchEmail: true },
+      async fetchEmail(uid: string) {
+        calls.push(uid);
+        return { messageIdHeader: "<other@x>", attachments: [{ filename: "x.png", mimeType: "image/png", content: png, contentId: "", inline: false }] };
+      },
+    });
+    expect(await comms.ensureReceivedAttachments("c1")).toEqual([]);
+    await comms.ensureReceivedAttachments("c1");
+    expect(calls).toEqual(["42"]);
+  });
+
+  it("leaves outbound mail alone", async () => {
+    addComm("c1", "i1", "2026-10-01T10:00:00.000Z", "outbound", "sent");
+    db.run(`UPDATE communications SET gmail_message_id = '42' WHERE id = 'c1'`);
+    const calls: string[] = [];
+    fakeImap(calls);
+    expect(await comms.ensureReceivedAttachments("c1")).toEqual([]);
+    expect(calls).toEqual([]);
   });
 });
