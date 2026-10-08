@@ -922,6 +922,28 @@ export const agentsMigrations: Migration[] = [
       ALTER TABLE agent_memory ADD COLUMN attachments TEXT NOT NULL DEFAULT '';
     `,
   },
+  {
+    // A Kernl bug handed to the fixer agent (kernl-bugs-fix.ts): its own
+    // worktree and branch, the run that worked on it, and what got committed.
+    version: 55,
+    sql: `
+      CREATE TABLE IF NOT EXISTS kernl_bug_fixes (
+        bug_id      TEXT PRIMARY KEY REFERENCES kernl_bug_reports(id) ON DELETE CASCADE,
+        status      TEXT NOT NULL CHECK(status IN ('preparing','running','committing','ready','no_changes','failed','discarded')),
+        branch      TEXT NOT NULL DEFAULT '',
+        worktree    TEXT NOT NULL DEFAULT '',
+        base_sha    TEXT NOT NULL DEFAULT '',
+        run_id      TEXT NOT NULL DEFAULT '',
+        commit_sha  TEXT NOT NULL DEFAULT '',
+        files_json  TEXT NOT NULL DEFAULT '[]',
+        summary     TEXT NOT NULL DEFAULT '',
+        error       TEXT NOT NULL DEFAULT '',
+        started_at  TEXT NOT NULL,
+        finished_at TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_kernl_bug_fixes_status ON kernl_bug_fixes(status);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

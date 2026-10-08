@@ -7,12 +7,16 @@ import type { BugStatus, KernlBugService } from "./kernl-bugs-service.js";
 import { buildBugContext } from "./kernl-bugs-context.js";
 import { GitHubIssues, renderIssue, kernlVersion, commentOnRepeat } from "./kernl-bugs-github.js";
 import { agentOperations } from "./operations.js";
+import type { KernlFixService } from "./kernl-bugs-fix.js";
 
 const STATUSES = new Set(["new", "published", "fixed", "dismissed"]);
 
 export function registerKernlBugRoutes(
   server: KernelHttpServer,
-  deps: { bugs: KernlBugService; service: AgentService; executor?: AgentExecutor | null; events?: EventBus | null; fetchFn?: typeof fetch },
+  deps: {
+    bugs: KernlBugService; service: AgentService; executor?: AgentExecutor | null; events?: EventBus | null;
+    fetchFn?: typeof fetch; fixes?: KernlFixService | null;
+  },
 ): void {
   const { bugs, service } = deps;
   const github = () => new GitHubIssues(bugs.getToken(), bugs.getSettings().repo, deps.fetchFn ?? fetch);
@@ -36,9 +40,19 @@ export function registerKernlBugRoutes(
     catch (e) { throw new HttpError(400, (e as Error).message); }
   });
 
+  // ── Fixer (kernl-bugs-fix.ts) — before /:id so "fix" is never taken for an id.
+  server.route("GET", "/api/kernl/bugs/fix/preflight", () =>
+    deps.fixes?.preflight() ?? { ok: false, reasons: ["The fixer is not available in this kernel."], repo: "", root: "" });
+
   server.route("GET", "/api/kernl/bugs", ({ query }) => {
     const s = query.get("status");
-    return { bugs: bugs.list(s && STATUSES.has(s) ? (s as BugStatus) : undefined) };
+    const list = bugs.list(s && STATUSES.has(s) ? (s as BugStatus) : undefined);
+    const fixes: Record<string, string> = {};
+    for (const b of list) {
+      const f = deps.fixes?.get(b.id);
+      if (f && f.status !== "discarded") fixes[b.id] = f.status;
+    }
+    return { bugs: list, fixes };
   });
 
   server.route("GET", "/api/kernl/bugs/:id", ({ params: { id } }) => {
@@ -84,6 +98,29 @@ export function registerKernlBugRoutes(
       return { bug: bugs.update(id, { title: str(body?.title), area: str(body?.area), diagnosis: str(body?.diagnosis), repro: str(body?.repro), status: status as BugStatus | undefined }) };
     },
   );
+
+  const needFixes = () => {
+    if (!deps.fixes) throw new HttpError(503, "The fixer is not available in this kernel.");
+    return deps.fixes;
+  };
+  server.route("GET", "/api/kernl/bugs/:id/fix", ({ params: { id } }) => {
+    need(id);
+    return { fix: deps.fixes?.get(id) ?? null };
+  });
+  server.route("POST", "/api/kernl/bugs/:id/fix", async ({ params: { id } }) => {
+    const bug = need(id);
+    try { return { fix: await needFixes().start(bug) }; }
+    catch (e) { throw new HttpError(409, (e as Error).message); }
+  });
+  server.route("GET", "/api/kernl/bugs/:id/fix/diff", async ({ params: { id } }) => {
+    need(id);
+    return { diff: await needFixes().diff(id) };
+  });
+  server.route("DELETE", "/api/kernl/bugs/:id/fix", async ({ params: { id } }) => {
+    need(id);
+    try { return { fix: await needFixes().discard(id) }; }
+    catch (e) { throw new HttpError(409, (e as Error).message); }
+  });
 
   // Ids with a createIssue in flight: a second request (another tab, a
   // retry) inside that window would otherwise pass the status check too.
