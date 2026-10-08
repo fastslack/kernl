@@ -27,9 +27,29 @@ export type ModelTraits = {
   reasoning?: boolean;
   fast?: boolean;
   longContext?: boolean;
+  /** Can call tools. Absent = not verified (the kernel had no evidence). */
+  tools?: boolean;
 };
 
 export type ModelEntry = { id: string; traits?: ModelTraits };
+
+/** What a picker's run needs from a model. */
+export type ModelNeeds = { tools?: boolean };
+
+/**
+ * The models a picker may offer for `needs`. A model known not to call tools
+ * is dropped where the run is a tool loop (the Chief, agents, the chat); one
+ * with no evidence stays and is shown as not verified (`unverifiedTools`).
+ */
+export function usableModels<T extends ModelEntry>(entries: T[], needs: ModelNeeds): T[] {
+  if (!needs.tools) return entries;
+  return entries.filter((e) => e.traits?.tools !== false);
+}
+
+/** Offered to a tool loop without evidence either way. */
+export function unverifiedTools(e: { traits?: ModelTraits } | undefined, needs: ModelNeeds): boolean {
+  return !!needs.tools && e?.traits?.tools === undefined;
+}
 
 /** One line in the menu: an alias, plus the dated snapshots folded into it. */
 export type CatalogRow = {

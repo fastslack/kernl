@@ -42,7 +42,7 @@
   import { providerColor, fmtCtx } from '$lib/chat-view.js';
   import { modelEntries } from '$lib/llm-models.js';
   import ModelTraitBadges from '$lib/components/ModelTraitBadges.svelte';
-  import { buildCatalog, commonModels, rankModels, type CatalogRow } from '$lib/model-catalog.js';
+  import { buildCatalog, commonModels, rankModels, usableModels, type CatalogRow } from '$lib/model-catalog.js';
   import { startChatEpisode } from '$lib/api.js';
 
   /** The episode the menu switches (or forks from). */
@@ -89,7 +89,8 @@
             const mr = await fetch(`/api/llm-providers/${encodeURIComponent(p.slug)}/models`);
             if (mr.ok) {
               const mb = await mr.json();
-              models = modelEntries(mb.models);
+              // The chat runs Kernl's tools: a model known not to call them is not offered.
+              models = usableModels(modelEntries(mb.models), { tools: p.slug !== 'claude-code' });
               hidden = Number(mb.nonChatHidden ?? 0) || 0;
               nonChat = Array.isArray(mb.nonChatModels) ? mb.nonChatModels : [];
             }
@@ -457,7 +458,7 @@
                 </span>
                 <span class="cx-prov-row-meta">
                   {#if h.model.snapshot}<span class="cx-prov-tag cx-prov-tag-snap" title="Dated snapshot">dated</span>{/if}
-                  <ModelTraitBadges traits={h.model.traits} />
+                  <ModelTraitBadges traits={h.model.traits} needsTools={h.slug !== 'claude-code'} />
                   <span class="cx-prov-row-prov">{h.name}</span>
                 </span>
               </button>
@@ -484,7 +485,7 @@
                 >
                   <span class="cx-prov-row-name">{c.row.id}</span>
                   <span class="cx-prov-row-meta">
-                    <ModelTraitBadges traits={c.row.traits} />
+                    <ModelTraitBadges traits={c.row.traits} needsTools={c.slug !== 'claude-code'} />
                     <span class="cx-prov-row-prov">{c.name}</span>
                   </span>
                 </button>
@@ -559,7 +560,7 @@
                         on:mousemove={() => (provActive = ri)}
                       >
                         <span class="cx-prov-row-name">{row.id}</span>
-                        <span class="cx-prov-row-meta"><ModelTraitBadges traits={row.traits} /></span>
+                        <span class="cx-prov-row-meta"><ModelTraitBadges traits={row.traits} needsTools={c.provider.slug !== 'claude-code'} /></span>
                       </button>
                       {#if row.snapshots.length}
                         <button

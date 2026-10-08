@@ -6,6 +6,9 @@ import { getCatalogEntry } from "./provider-catalog.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./logger.js";
 import type { ChatLlmProvider } from "./chat-provider.js";
 
+/** Calls made only to learn about a model; see tool-verifier.ts. */
+export const PROBE_CALLER = "tool-verify";
+
 /**
  * Wrap a provider's `chatCompletion` to report latency + classify failures
  * into the shared health tracker. Mutates the instance once; safe to call
@@ -73,13 +76,18 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
         costUsd: result.cost_usd,
         caller,
         startedAt: t0,
+        toolsSent: opts?.tools?.length ?? 0,
+        toolCalls: result.tool_calls?.length ?? 0,
       }, { silent: true });
       return result;
     } catch (err) {
       const durationMs = Date.now() - t0;
       const kind = providerHealth.classifyError(err);
       const message = err instanceof Error ? err.message : String(err);
-      providerHealth.recordFailure(p.name, kind);
+      // Probing models one by one (tool-verifier.ts) is expected to hit dead
+      // ones; counting those as provider strikes put all of NVIDIA in backoff
+      // for minutes while it ran. A probe says nothing about the provider.
+      if (caller !== PROBE_CALLER) providerHealth.recordFailure(p.name, kind);
       // A model the provider advertises but does not serve retires itself
       // here, so the picker stops handing it to the next person.
       providerHealth.reportModelFault(p.name, requestedModel ?? "", kind, message);
@@ -100,6 +108,7 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
         errorMsg: message,
         caller,
         startedAt: t0,
+        toolsSent: opts?.tools?.length ?? 0,
       }, { silent: true });
       throw err;
     }

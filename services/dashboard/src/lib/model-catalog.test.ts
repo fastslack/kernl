@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test';
-import { parseModelId, buildCatalog, commonModels, rankModels } from './model-catalog.js';
+import { parseModelId, buildCatalog, commonModels, rankModels, usableModels, unverifiedTools } from './model-catalog.js';
 
 /** The real OpenAI catalogue from a live account, trimmed to the shapes that matter. */
 const OPENAI = [
@@ -156,5 +156,27 @@ describe('rankModels', () => {
 
   it('no match is an empty list, not the whole catalogue', () => {
     expect(rankModels(OPENAI, 'zzzqqq')).toEqual([]);
+  });
+});
+
+describe("usableModels", () => {
+  const entries = [
+    { id: "gpt-5.6", traits: { tools: true } },
+    { id: "babbage-002", traits: { tools: false } },
+    { id: "meta/llama-3.3-70b-instruct" },
+  ];
+
+  it("drops models that cannot call tools where the run needs them", () => {
+    expect(usableModels(entries, { tools: true }).map((e) => e.id)).toEqual(["gpt-5.6", "meta/llama-3.3-70b-instruct"]);
+  });
+
+  it("keeps every model where tools are not needed", () => {
+    expect(usableModels(entries, {}).length).toBe(3);
+  });
+
+  it("marks only the models with no evidence, and only where tools matter", () => {
+    expect(unverifiedTools(entries[2], { tools: true })).toBe(true);
+    expect(unverifiedTools(entries[0], { tools: true })).toBe(false);
+    expect(unverifiedTools(entries[2], {})).toBe(false);
   });
 });
