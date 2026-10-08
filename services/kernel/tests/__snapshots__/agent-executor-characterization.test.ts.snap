@@ -716,7 +716,12 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
     "getRelevantLearnings",
     [
       "agent-1",
-      "Hacé {{algo}}",
+      
+"Hacé {{algo}}
+
+---
+Nobody is watching this run: a schedule or an event started it, and nobody reads your final summary. If anything needs the operator — an approval, a decision, an account or permission to set up, anything only they can do — call kernel_agents_ask_supervisor for it before you finish (one question per decision, exactly 4 options, your recommended one first). Never end with a list of things for the operator to do: a list in your summary reaches nobody. If nothing needs the operator, do not ask."
+,
       15,
       null,
     ],
@@ -733,7 +738,12 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
     "findSimilarPastRuns",
     [
       "agent-1",
-      "Hacé {{algo}}",
+      
+"Hacé {{algo}}
+
+---
+Nobody is watching this run: a schedule or an event started it, and nobody reads your final summary. If anything needs the operator — an approval, a decision, an account or permission to set up, anything only they can do — call kernel_agents_ask_supervisor for it before you finish (one question per decision, exactly 4 options, your recommended one first). Never end with a list of things for the operator to do: a list in your summary reaches nobody. If nothing needs the operator, do not ask."
+,
       3,
       30,
       null,
@@ -744,7 +754,12 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
     "getRelevantMemory",
     [
       "agent-1",
-      "Hacé {{algo}}",
+      
+"Hacé {{algo}}
+
+---
+Nobody is watching this run: a schedule or an event started it, and nobody reads your final summary. If anything needs the operator — an approval, a decision, an account or permission to set up, anything only they can do — call kernel_agents_ask_supervisor for it before you finish (one question per decision, exactly 4 options, your recommended one first). Never end with a list of things for the operator to do: a list in your summary reaches nobody. If nothing needs the operator, do not ask."
+,
       50,
       100,
       null,
@@ -769,7 +784,12 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
     {
       "messages": [
         {
-          "content": "Hacé {{algo}}",
+          "content": 
+"Hacé {{algo}}
+
+---
+Nobody is watching this run: a schedule or an event started it, and nobody reads your final summary. If anything needs the operator — an approval, a decision, an account or permission to set up, anything only they can do — call kernel_agents_ask_supervisor for it before you finish (one question per decision, exactly 4 options, your recommended one first). Never end with a list of things for the operator to do: a list in your summary reaches nobody. If nothing needs the operator, do not ask."
+,
           "role": "user",
         },
       ],

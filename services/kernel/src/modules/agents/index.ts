@@ -16,6 +16,8 @@ import { AgentScheduler } from "./scheduler.js";
 import { autoResumePolicy } from "./run-resume.js";
 import { workspaceSpecTools } from "./workspace-spec-tools.js";
 import { QuestionTriager } from "./question-triager.js";
+import { UnattendedAskWatcher } from "./unattended-asks.js";
+import { llm } from "../../core/llm/client.js";
 import { AnswerQueue } from "./question-delivery.js";
 import { KernlBugService } from "./kernl-bugs-service.js";
 import { kernlBugTools } from "./kernl-bugs-tools.js";
@@ -188,6 +190,9 @@ export function createAgentsModule(): AgentsModule {
         const n = queue.sweep();
         if (n > 0) log.info(`answers: ${n} agent(s) have answers waiting — relaunching them`);
       }, 60_000);
+
+      // An unattended run that left something for the operator without asking: file the question for it.
+      new UnattendedAskWatcher(agentService, ctx.events, (o) => llm().chatJson(o)).start();
 
       // Kernl's own bugs, filed by the chief or the operator. The key seals the GitHub token.
       kernlBugs = new KernlBugService(ctx.sqlite, ctx.config.encryption.key);
