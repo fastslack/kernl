@@ -34,18 +34,30 @@
   let opinion: Opinion | null = null;
   let opinionLoading = false;
   let opinionError = '';
+  /** Why there is no opinion, as the kernel classified it: drives the sentence shown. */
+  let opinionReason: 'no_answer' | 'unavailable' | '' = '';
 
   async function askOpinion(): Promise<void> {
     if (opinionLoading) return;
     opinionLoading = true;
     opinionError = '';
+    opinionReason = '';
     try {
       const res = await fetch(`/api/agents/questions/${q.id}/opinion`, { method: 'POST' });
       const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.opinion) throw new Error(body?.error ?? `HTTP ${res.status}`);
+      if (!res.ok || !body?.opinion) {
+        // An older kernel sends no `reason`; its message still tells the two apart.
+        const msg = String(body?.detail ?? body?.error ?? '');
+        opinionReason = body?.reason === 'no_answer' || (!body?.reason && /did not return JSON|no answer/i.test(msg))
+          ? 'no_answer' : 'unavailable';
+        throw new Error(body?.detail ?? body?.error ?? `HTTP ${res.status}`);
+      }
       opinion = body.opinion;
     } catch (e) {
+      // The raw text (a model's half-finished thinking, a provider error) is
+      // for "see details"; the card says what happened and what to do.
       opinionError = e instanceof Error ? e.message : String(e);
+      if (!opinionReason) opinionReason = 'unavailable';
     } finally {
       opinionLoading = false;
     }
@@ -123,7 +135,19 @@
           {$t('office.chief.q_opinion_ask')}
         {/if}
       </button>
-      {#if opinionError}<p class="bq-opinion-err" role="alert">{$t('office.chief.q_opinion_error')}: {opinionError}</p>{/if}
+      {#if opinionError}
+        <div class="bq-opinion-err" role="alert">
+          <p>{$t(opinionReason === 'no_answer' ? 'office.chief.q_opinion_no_answer' : 'office.chief.q_opinion_unavailable')}</p>
+          <div class="bq-opinion-err-actions">
+            <button type="button" class="bq-opinion-retry" on:click={askOpinion} disabled={opinionLoading || busy}>{$t('office.chief.q_opinion_try_again')}</button>
+            {#if opinionReason === 'unavailable'}<a class="bq-opinion-link" href="/settings?section=ai&card=providers">{$t('office.chief.q_opinion_open_ai')}</a>{/if}
+            <details class="bq-opinion-detail">
+              <summary>{$t('office.chief.q_opinion_details')}</summary>
+              <pre>{opinionError}</pre>
+            </details>
+          </div>
+        </div>
+      {/if}
     {/if}
   </div>
   <form class="bq-free" on:submit|preventDefault={submitFree}>
@@ -231,7 +255,14 @@
   .bq-opinion-send{ background:#a78bfa; color:#1a1430; border:1px solid #a78bfa; }
   .bq-opinion-send:hover:not(:disabled){ filter:brightness(1.08); }
   .bq-opinion-retry:disabled, .bq-opinion-send:disabled{ opacity:.5; cursor:default; }
-  .bq-opinion-err{ grid-column:1 / -1; margin:0; font:500 10.5px 'Manrope',sans-serif; color:#ef5d6e; }
+  .bq-opinion-err{ grid-column:1 / -1; margin:0; font:500 11px 'Manrope',sans-serif; color:#e8b04b; display:flex; flex-direction:column; gap:6px; }
+  .bq-opinion-err p{ margin:0; }
+  .bq-opinion-err-actions{ display:flex; flex-wrap:wrap; align-items:center; gap:10px; }
+  .bq-opinion-link{ color:#9fb4e8; font-size:11px; text-decoration:none; }
+  .bq-opinion-link:hover{ text-decoration:underline; }
+  .bq-opinion-detail{ color:#8b93aa; font-size:10.5px; }
+  .bq-opinion-detail summary{ cursor:pointer; }
+  .bq-opinion-detail pre{ margin:4px 0 0; max-height:90px; overflow:auto; white-space:pre-wrap; font:500 10px 'JetBrains Mono',monospace; color:#8b93aa; }
   .bq-option-pick{ border-color:#a78bfa; box-shadow:inset 0 0 0 1px rgba(167,139,250,.35); }
   .bq-pick-tag{ flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#1a1430; background:#a78bfa; padding:1px 6px; border-radius:8px; text-transform:uppercase; }
   @media (prefers-reduced-motion: reduce){ .bq-spin{ animation:none; } }
