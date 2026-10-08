@@ -1,6 +1,6 @@
 import { type SqliteDb, type EventBus, newId, isoNow } from "@kernl/extension-sdk";
 import type {
-  EmailAction, EmailLabel, EmailListItem, EmailDetail,
+  EmailAction, EmailLabel, EmailListItem, EmailDetail, EmailAttachmentView,
   ThreadDetail, EmailCounts, EmailFolder, EmailCategory,
 } from "./types.js";
 import { readFetchStatus, type FetchStatus } from "./fetch-status.js";
@@ -39,7 +39,7 @@ const COMM_SOURCE = `(
          COALESCE(NULLIF(c.sent_at, ''), c.created_at) AS date,
          COALESCE(json_extract(c.metadata, '$.mail.is_read'), 0) AS is_read,
          COALESCE(json_extract(c.metadata, '$.mail.is_starred'), 0) AS is_starred,
-         0 AS has_attachments,
+         EXISTS (SELECT 1 FROM comm_attachments ca WHERE ca.comm_id = c.id) AS has_attachments,
          CASE c.direction WHEN 'inbound' THEN '["INBOX"]' ELSE '["SENT"]' END AS labels,
          length(COALESCE(c.body, '')) AS size_bytes,
          c.account_id,
@@ -289,6 +289,31 @@ export class EmailService {
     this.db.prepare(`UPDATE google_emails SET body_html = ? WHERE gmail_id = ?`).run(html, gmailId);
   }
 
+  /**
+   * The kept attachments of an IMAP message, and its HTML with every
+   * `cid:` image pointed at the stored file — a screenshot pasted into the
+   * mail then shows where the sender put it. Gmail rows keep no files yet.
+   */
+  private attachmentsOf(gmailId: string, html: string | null): { attachments: EmailAttachmentView[]; html: string | null } {
+    if (!gmailId.startsWith(COMM_MAIL_PREFIX)) return { attachments: [], html };
+    const rows = this.db.prepare(
+      `SELECT id, filename, mime_type, size_bytes, content_id FROM comm_attachments WHERE comm_id = ? ORDER BY created_at, rowid`,
+    ).all(gmailId.slice(COMM_MAIL_PREFIX.length)) as Array<Omit<EmailAttachmentView, "in_body"> & { content_id: string }>;
+    let body = html;
+    const attachments = rows.map(({ content_id, ...a }) => {
+      let inBody = false;
+      if (body && content_id) {
+        const ref = `src="cid:${content_id}"`;
+        if (body.includes(ref)) {
+          body = body.split(ref).join(`src="/api/attachments?id=${encodeURIComponent(a.id)}"`);
+          inBody = true;
+        }
+      }
+      return { ...a, in_body: inBody };
+    });
+    return { attachments, html: body };
+  }
+
   private enrichEmail(row: Record<string, unknown> & { gmail_id: string }): EmailDetail {
     const actions = this.db.prepare(
       `SELECT * FROM email_actions WHERE gmail_id = ? ORDER BY created_at DESC`
@@ -324,6 +349,8 @@ export class EmailService {
         ).all(...contactIds) as Array<{ id: string; name: string; email: string }>)
       : [];
 
+    const { attachments, html } = this.attachmentsOf(row.gmail_id, row.body_html == null ? null : String(row.body_html));
+
     return {
       gmail_id: String(row.gmail_id),
       thread_id: String(row.thread_id ?? ""),
@@ -334,14 +361,15 @@ export class EmailService {
       subject: String(row.subject ?? ""),
       snippet: String(row.snippet ?? ""),
       body_text: String(row.body_text ?? ""),
-      body_html: row.body_html == null ? null : String(row.body_html),
+      body_html: html,
       account_id: String(row.account_id ?? ""),
       date: String(row.date ?? ""),
       is_read: Number(row.is_read ?? 0),
       is_starred: Number(row.is_starred ?? 0),
-      has_attachments: Number(row.has_attachments ?? 0),
+      has_attachments: attachments.length ? 1 : Number(row.has_attachments ?? 0),
       labels: String(row.labels ?? ""),
       size_bytes: Number(row.size_bytes ?? 0),
+      attachments,
       actions,
       email_labels,
       linked_tasks,

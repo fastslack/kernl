@@ -16,7 +16,7 @@ import type { CommsService } from "./service.js";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { EmailTriageService } from "./email-triage-service.js";
 import type { EmailCategory, EmailDetail, EmailFolder } from "./types.js";
-import { EMAIL_CATEGORIES } from "./email-service.js";
+import { EMAIL_CATEGORIES, COMM_MAIL_PREFIX } from "./email-service.js";
 import { storableHtml } from "./gmail-helpers.js";
 import { GoogleAuth } from "../../../integration/google-sync/_module/auth.js";
 import { discover, normalizeEmail } from "./mail-discovery.js";
@@ -108,10 +108,21 @@ export function registerEmailRoutes(
     }
   };
 
+  /**
+   * IMAP mail ingested before attachments were kept has none on disk: fetch
+   * them from the server the first time the message is opened. Gives up on
+   * its own (the row stays as it was) when the server does not answer.
+   */
+  const ensureAttachments = async (gmailId: string): Promise<void> => {
+    if (!commsService || !gmailId.startsWith(COMM_MAIL_PREFIX)) return;
+    await commsService.ensureReceivedAttachments(gmailId.slice(COMM_MAIL_PREFIX.length));
+  };
+
   // ── Email detail ───────────────────────────────
   route("GET", "/api/emails/detail", "Failed to get email", async ({ query }) => {
     const gmailId = query.get("gmail_id");
     if (!gmailId) throw new HttpError(400, "Missing gmail_id");
+    await ensureAttachments(gmailId);
     const email = emailService.getEmail(gmailId);
     if (!email) throw new HttpError(404, "Email not found");
     await ensureHtml(email);
@@ -124,8 +135,12 @@ export function registerEmailRoutes(
   route("GET", "/api/emails/thread", "Failed to get thread", async ({ query }) => {
     const threadId = query.get("thread_id");
     if (!threadId) throw new HttpError(400, "Missing thread_id");
-    const thread = emailService.getThread(threadId);
+    let thread = emailService.getThread(threadId);
     if (!thread) throw new HttpError(404, "Thread not found");
+    if (threadId.startsWith(COMM_MAIL_PREFIX)) {
+      for (const m of thread.messages) await ensureAttachments(m.gmail_id);
+      thread = emailService.getThread(threadId) ?? thread;
+    }
     // One at a time: a long thread must not burst the Gmail API quota.
     for (const m of thread.messages) await ensureHtml(m);
     return thread;

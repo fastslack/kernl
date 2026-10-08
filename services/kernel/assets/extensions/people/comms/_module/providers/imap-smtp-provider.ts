@@ -5,7 +5,7 @@ import { log } from "@kernl/extension-sdk";
 import type { InboxMessage } from "../types.js";
 import type { EmailProvider, ProviderCapabilities, SendEmailOptions, SendResult } from "./types.js";
 import { stripHtml } from "../gmail-helpers.js";
-import { extractBodies } from "./mime-decode.js";
+import { extractMessage, type MailPart } from "./mime-decode.js";
 
 export interface ImapSmtpConfig {
   imap_host: string;
@@ -186,7 +186,7 @@ export class ImapSmtpProvider implements EmailProvider {
   async fetchEmail(messageId: string): Promise<{
     from: string; fromName: string; to: string; cc: string; subject: string;
     body: string; bodyHtml: string; date: string; messageIdHeader: string; threadId: string;
-    rawHeaders: Record<string, string>;
+    rawHeaders: Record<string, string>; attachments: MailPart[];
   }> {
     return this.withImap(async (client) => {
       const lock = await client.getMailboxLock("INBOX");
@@ -202,7 +202,7 @@ export class ImapSmtpProvider implements EmailProvider {
         const source = sourceBytes.toString("utf-8"); // header parsing only
         // Bodies come from the bytes: each part has its own transfer encoding
         // and charset, which a UTF-8 string of the whole message cannot honour.
-        const { text, html } = extractBodies(sourceBytes);
+        const { text, html, attachments } = extractMessage(sourceBytes);
         const rawHeaders = parseHeaderBlock(source);
 
         const fromEntry = env?.from?.[0];
@@ -218,6 +218,7 @@ export class ImapSmtpProvider implements EmailProvider {
           messageIdHeader: env?.messageId ?? rawHeaders["message-id"] ?? "",
           threadId: "",
           rawHeaders,
+          attachments,
         };
       } finally {
         lock.release();

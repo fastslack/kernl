@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, copyFileSync, statSync, unlinkSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, copyFileSync, statSync, unlinkSync, rmSync, writeFileSync } from "node:fs";
 import { basename, extname, join } from "node:path";
 import {
   type SqliteDb,
@@ -23,6 +23,7 @@ import type {
   EmailAccount, EmailAccountView, EmailTemplate, EmailCampaign, CampaignRecipient,
 } from "./types.js";
 import type { EmailProvider } from "./providers/types.js";
+import type { MailPart } from "./providers/mime-decode.js";
 import { GmailProvider } from "./providers/gmail-provider.js";
 import { ResendProvider } from "./providers/resend-provider.js";
 import { ImapSmtpProvider, type ImapSmtpConfig } from "./providers/imap-smtp-provider.js";
@@ -33,6 +34,8 @@ import {
 } from "./gmail-helpers.js";
 
 const ATTACHMENTS_DIR = "./data/attachments";
+/** Largest attachment of a received mail kept on disk; anything bigger stays on the mail server. */
+const MAX_RECEIVED_ATTACHMENT_BYTES = 25 * 1024 * 1024;
 
 const NO_EMAIL_PROVIDER = "No email provider configured. Add an email account or authenticate with Google first.";
 
@@ -733,6 +736,96 @@ export class CommsService {
       .all(commId) as CommAttachment[];
   }
 
+  /**
+   * Keep the attachments of a received mail: bytes under
+   * data/attachments/<commId>/, one comm_attachments row each. Names come from
+   * the sender, so only their last path segment survives, prefixed with the
+   * part's position so two "image.png" never overwrite each other.
+   */
+  storeReceivedAttachments(commId: string, parts: MailPart[]): CommAttachment[] {
+    const stored: CommAttachment[] = [];
+    if (!parts.length) return stored;
+    const destDir = join(ATTACHMENTS_DIR, commId);
+    mkdirSync(destDir, { recursive: true });
+    const insert = this.db.prepare(
+      `INSERT INTO comm_attachments (id, comm_id, filename, original_path, stored_path, mime_type, size_bytes, content_id, created_at)
+       VALUES (?, ?, ?, '', ?, ?, ?, ?, ?)`,
+    );
+    parts.forEach((part, i) => {
+      if (part.content.length > MAX_RECEIVED_ATTACHMENT_BYTES) {
+        log.warn(`Comms: attachment "${part.filename}" of ${commId} skipped (${part.content.length} bytes)`);
+        return;
+      }
+      const filename = basename(part.filename.replace(/\\/g, "/")).replace(/[\x00-\x1f]/g, "").slice(0, 200) || `attachment-${i + 1}`;
+      const storedPath = join(destDir, `${i + 1}-${filename}`);
+      writeFileSync(storedPath, part.content);
+      const att: CommAttachment = {
+        id: newId(),
+        comm_id: commId,
+        filename,
+        original_path: "",
+        stored_path: storedPath,
+        mime_type: part.mimeType || guessMime(filename),
+        size_bytes: part.content.length,
+        content_id: part.contentId,
+        created_at: isoNow(),
+      };
+      insert.run(att.id, att.comm_id, att.filename, att.stored_path, att.mime_type, att.size_bytes, att.content_id ?? "", att.created_at);
+      stored.push(att);
+    });
+    return stored;
+  }
+
+  private attachmentScans = new Map<string, Promise<CommAttachment[]>>();
+
+  /**
+   * The attachments of a received mail, downloading them the first time it is
+   * opened when it was ingested before attachments were kept. One IMAP fetch
+   * per message, ever: the row is marked scanned once it worked or the
+   * message is gone from the server. A failure leaves it unmarked, so the
+   * next open tries again.
+   */
+  async ensureReceivedAttachments(commId: string): Promise<CommAttachment[]> {
+    const pending = this.attachmentScans.get(commId);
+    if (pending) return pending;
+    const run = this.scanReceivedAttachments(commId).finally(() => this.attachmentScans.delete(commId));
+    this.attachmentScans.set(commId, run);
+    return run;
+  }
+
+  private async scanReceivedAttachments(commId: string): Promise<CommAttachment[]> {
+    const comm = this.getById(commId);
+    if (!comm || comm.direction !== "inbound" || !comm.account_id || !comm.gmail_message_id) return this.getAttachments(commId);
+    if (parseMetadata(comm.metadata).attachments_scanned) return this.getAttachments(commId);
+    const provider = this.getProvider(comm.account_id);
+    if (provider?.name !== "imap_smtp" || !provider.capabilities.fetchEmail) return this.getAttachments(commId);
+
+    const markScanned = () => this.db
+      .prepare(`UPDATE communications SET metadata = json_set(COALESCE(NULLIF(metadata, ''), '{}'), '$.attachments_scanned', json('true')) WHERE id = ?`)
+      .run(commId);
+    try {
+      const fetched = await provider.fetchEmail(comm.gmail_message_id);
+      // The stored id is an IMAP UID, which the server may have handed to
+      // another message since (a move, a new UIDVALIDITY). Never give this
+      // row another mail's files.
+      const expected = (parseMetadata(comm.metadata).message_id_header ?? "").trim();
+      if (expected && fetched.messageIdHeader && fetched.messageIdHeader.trim() !== expected) {
+        log.warn(`Comms: UID ${comm.gmail_message_id} of ${commId} is now another message; attachments not taken`);
+        markScanned();
+        return this.getAttachments(commId);
+      }
+      // A row may already hold some (an earlier scan that died half way).
+      this.db.prepare("DELETE FROM comm_attachments WHERE comm_id = ? AND original_path = ''").run(commId);
+      this.storeReceivedAttachments(commId, fetched.attachments ?? []);
+      markScanned();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/not found/i.test(msg)) markScanned();
+      log.warn(`Comms: attachments of ${commId} not fetched: ${msg}`);
+    }
+    return this.getAttachments(commId);
+  }
+
   // ── Thread ──────────────────────────────────────────
 
   getThread(threadId: string): Communication[] {
@@ -945,6 +1038,17 @@ export class CommsService {
       metadata: meta,
       ...(referencedThreadId ? { thread_id: referencedThreadId } : {}),
     });
+
+    if (fetched.attachments) {
+      try {
+        this.storeReceivedAttachments(comm.id, fetched.attachments);
+        this.db
+          .prepare(`UPDATE communications SET metadata = json_set(COALESCE(NULLIF(metadata, ''), '{}'), '$.attachments_scanned', json('true')) WHERE id = ?`)
+          .run(comm.id);
+      } catch (err) {
+        log.warn(`Comms: attachments of ${comm.id} not stored: ${err instanceof Error ? err.message : String(err)}`);
+      }
+    }
 
     log.info(`Fetched email: ${gmailMessageId} → ${comm.id} (from: ${fetched.from})`);
     return comm;
