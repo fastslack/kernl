@@ -23,7 +23,7 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import { isClaudeCodeProvider } from '$lib/model-chain.js';
-  import { buildCatalog, commonModels, rankModels, type ModelEntry } from '$lib/model-catalog.js';
+  import { buildCatalog, commonModels, rankModels, unverifiedTools, usableModels, type ModelEntry, type ModelNeeds } from '$lib/model-catalog.js';
   import { toolCapable, findProvider, type ProviderStatus } from '$lib/provider-health.js';
   import { bindListeners } from '$lib/outside-listeners.js';
   import { modelPrices, priceKey, fmtPrice } from '$lib/model-prices.js';
@@ -183,8 +183,22 @@
    * grouping into one ranked list — grouping is for browsing, ranking is for
    * finding.
    */
+  /**
+   * What a model of `p` must be able to do here. The run is a tool loop
+   * (`requiresTools`) unless the pick moves the agent to Claude Code, whose
+   * SDK runs its tools itself.
+   */
+  function needsFor(p: ProviderStatus): ModelNeeds {
+    return { tools: requiresTools && !isClaudeCodeProvider(p.slug) };
+  }
+
+  /** Only the models that can serve this run; the rest are never offered. */
+  function entriesFor(p: ProviderStatus & { models?: ModelEntry[] }): ModelEntry[] {
+    return usableModels(p.models ?? [], needsFor(p));
+  }
+
   function rowsFor(p: ProviderStatus & { models?: ModelEntry[] }, q: string, showAll: boolean) {
-    const entries = p.models ?? [];
+    const entries = entriesFor(p);
     if (q.trim()) return rankModels(entries, q).slice(0, 40);
     const groups = buildCatalog(entries);
     if (showAll) return groups.flatMap((g) => g.rows.map((r) => ({ id: r.id, traits: r.traits })));
@@ -193,7 +207,7 @@
 
   /** Total models a provider offers, for the "show all N" affordance. */
   function totalFor(p: ProviderStatus & { models?: ModelEntry[] }) {
-    return (p.models ?? []).length;
+    return entriesFor(p).length;
   }
 
   /** A provider name is a match too — "grok" should reach xAI's catalogue. */
@@ -312,6 +326,9 @@
                 on:click|stopPropagation={() => choose(s.p.slug, r.id)}
               >
                 <span class="mp-opt-id">{r.id}</span>
+                {#if unverifiedTools(r, needsFor(s.p))}
+                  <span class="mp-opt-unv" title="Not verified: Kernl has no evidence yet that this model can call tools. It is confirmed the first time it does.">?</span>
+                {/if}
                 {#if $prices.get(priceKey(s.p.slug, r.id))}
                   {@const pr = $prices.get(priceKey(s.p.slug, r.id))}
                   <span class="mp-opt-price" title="USD per million tokens — input / output">{pr ? fmtPrice(pr) : ''}</span>
@@ -346,6 +363,7 @@
 {/if}
 
 <style>
+  .mp-opt-unv{flex:none;font:600 9.5px 'JetBrains Mono',monospace;color:#e8b04b;border:1px solid rgba(232,176,75,.4);border-radius:99px;padding:0 5px;cursor:help}
   .mp-trigger{
     display:flex;align-items:center;gap:8px;width:100%;
     padding:7px 10px;border-radius:6px;

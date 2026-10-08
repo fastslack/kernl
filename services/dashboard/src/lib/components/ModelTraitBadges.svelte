@@ -9,7 +9,9 @@
    * colour from the theme. Each carries a title, and the pair is announced to
    * screen readers as one label rather than four mystery characters.
    */
-  export let traits: { vision?: boolean; reasoning?: boolean; fast?: boolean; longContext?: boolean } | undefined = undefined;
+  export let traits: { vision?: boolean; reasoning?: boolean; fast?: boolean; longContext?: boolean; tools?: boolean } | undefined = undefined;
+  /** The run behind this picker is a tool loop: flag models nobody has seen call a tool. */
+  export let needsTools = false;
 
   const ALL = [
     { key: 'vision', glyph: '◎', label: 'accepts images' },
@@ -18,7 +20,11 @@
     { key: 'longContext', glyph: '≣', label: 'long context' },
   ] as const;
 
-  $: shown = ALL.filter((t) => traits?.[t.key]);
+  $: unverified = needsTools && traits?.tools === undefined;
+  $: shown = [
+    ...ALL.filter((t) => traits?.[t.key]),
+    ...(unverified ? [{ key: 'tools', glyph: '?', label: 'tool use not verified yet' }] : []),
+  ];
 </script>
 
 {#if shown.length}

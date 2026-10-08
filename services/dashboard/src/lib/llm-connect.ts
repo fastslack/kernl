@@ -201,10 +201,17 @@ export async function claudeCodeReady(): Promise<boolean | null> {
 }
 export const saveChain = (links: ChainLink[]) => call<{ chain: ChainLink[] }>("/api/llm/chain", send("PUT", { links }));
 
-/** Models of a provider that is already connected and running. */
+/**
+ * Models of a provider that is already connected and running. The model
+ * chosen here serves the chat and the agents — both tool loops — so models
+ * known not to call tools are left out (Claude Code's SDK runs its own).
+ */
 export async function fetchLiveModels(slug: string): Promise<string[]> {
   const body = await call<{ models?: unknown[] }>(providerUrl(slug, "models"));
-  return modelIds((body.models ?? []) as never);
+  const raw = (body.models ?? []).filter(
+    (m) => slug === "claude-code" || (m as { traits?: { tools?: unknown } })?.traits?.tools !== false,
+  );
+  return modelIds(raw as never);
 }
 
 /** Builds the request body from the connect form: only the fields the

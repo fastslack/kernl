@@ -30,7 +30,7 @@ const PROBE_PROMPT = 'Call the kernl_connect_echo tool with word set to "ok". Re
 
 export async function probeAdapter(
   adapter: ChatLlmProvider,
-  opts: { model?: string; timeoutMs: number; local?: boolean },
+  opts: { model?: string; timeoutMs: number; local?: boolean; caller?: string },
 ): Promise<ProbeResult> {
   const started = Date.now();
   if (!adapter.available()) {
@@ -51,7 +51,7 @@ export async function probeAdapter(
           ...(toolLoop ? { tools: [PROBE_TOOL] } : {}),
           // Reasoning models spend tokens thinking before they call the tool.
           max_tokens: 1024,
-          caller: "provider-connect",
+          caller: opts.caller ?? "provider-connect",
         },
       ),
       new Promise<never>((_, reject) => {

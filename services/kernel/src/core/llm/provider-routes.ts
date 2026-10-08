@@ -19,7 +19,8 @@ import { clearProviderExhausted } from "./chat-adapters.js";
 import { llm } from "./client.js";
 import { getAllHealth } from "./provider-health.js";
 import { ModelBlocklist } from "./model-blocklist.js";
-import { recent as recentCalls, usage as llmUsage, type UsageGroup } from "./call-log.js";
+import { recent as recentCalls, usage as llmUsage, callLogDb, type UsageGroup } from "./call-log.js";
+import { toolSupportFor } from "./model-caps.js";
 import { classifyModel, type ModelTraits } from "./model-traits.js";
 import { getChatProviders } from "./readiness.js";
 import { getCatalogEntry } from "./provider-catalog.js";
@@ -134,6 +135,13 @@ export function registerLlmProviderRoutes(
       const classified = visible.map((id) => ({ id, traits: classifyModel(slug, id) }));
       const chat = classified.filter((m) => m.traits.chat);
       const nonChat = classified.length - chat.length;
+      // Tool calling per model, for the pickers that run a tool loop (the
+      // Chief, agents, chat). Claude Code's SDK runs its tools itself.
+      const tools = toolSupportFor(callLogDb(), slug, chat.map((m) => m.id));
+      for (const m of chat) {
+        const t = slug === "claude-code" ? true : tools.get(m.id);
+        if (t !== undefined) m.traits = { ...m.traits, tools: t };
+      }
       // The hidden ones by name, not just a count. Someone who types "image"
       // into a model picker is asking a real question, and "no model matches"
       // is a worse answer than "these exist, and here is why they can't answer
