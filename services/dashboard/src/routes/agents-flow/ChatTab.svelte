@@ -16,6 +16,10 @@
   import { fmtClock } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
+  import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
+  import { detectProvider } from '$lib/llm-connect.js';
+  import ClaudeSignIn from '$lib/components/llm/ClaudeSignIn.svelte';
+  import { t } from '$lib/i18n/index.js';
   import { speakReplies } from '$lib/voice/prefs.js';
   import { speakText, speech } from '$lib/voice/speech.js';
   import { extractChoices, choicesAsText } from '$lib/chat-choices.js';
@@ -65,6 +69,12 @@
   // at send time is the one.
   let awaiting: { agentName: string | undefined; repliesBefore: number; spoken: boolean } | null = null;
   $: replies = history.filter((m) => m.role === 'agent');
+  // Only the newest agent reply offers the sign-in: older "Not logged in"
+  // replies are history, and a button on each would read as several problems.
+  $: lastAgentIdx = history.map((m) => m.role).lastIndexOf('agent');
+
+  /** Wire the new session into the provider chain, as the connect dialog does. */
+  const wireSession = () => detectProvider('claude-code').then(() => {}, () => {});
 
   function noteSend(spoken: boolean) {
     awaiting = { agentName: agent?.name, repliesBefore: replies.length, spoken };
@@ -194,7 +204,12 @@
                   {#if live}<div class="chat-choices-hint">or type your own answer below</div>{/if}
                 </div>
               {/if}
-              {#if isLlmConfigError(msg.text)}
+              {#if i === lastAgentIdx && isClaudeCodeAuthError(msg.text)}
+                <div class="chat-signin">
+                  <span>{$t('llm.cc_session_lost_chat')}</span>
+                  <ClaudeSignIn showDone onDone={wireSession} />
+                </div>
+              {:else if isLlmConfigError(msg.text)}
                 <a class="llm-fix" href={LLM_SETTINGS_HREF}>⚙ Configure LLM →</a>
               {/if}
             {:else}
@@ -431,6 +446,7 @@
      A run that dies with no provider configured is not a report, it is a task.
      The kernel already names the screen in prose ("Settings → AI"); this is
      that sentence as something you can click. */
+  .chat-signin{display:flex; flex-direction:column; gap:8px; margin-top:10px; padding-top:10px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-1)}
   .llm-fix{
     flex-shrink:0;align-self:center;
     padding:3px 9px;border-radius:999px;text-decoration:none;white-space:nowrap;

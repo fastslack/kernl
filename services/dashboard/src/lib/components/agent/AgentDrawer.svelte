@@ -39,6 +39,9 @@
   import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
   import { traitsOf } from '$lib/office/office-kinds.js';
   import ModelPicker from './ModelPicker.svelte';
+  import ClaudeSignIn from '$lib/components/llm/ClaudeSignIn.svelte';
+  import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
+  import { detectProvider } from '$lib/llm-connect.js';
   import { readChain, primaryModelPatch } from '$lib/model-chain.js';
   import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
 
@@ -185,6 +188,17 @@
   // distingue eso de una pausa pedida por el operador: la marca sí.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent.auto_paused_at || '');
   $: autoPausedAgo = autoPaused ? sinceLabel(agent?.auto_paused_at ?? '') : '';
+  // "Not logged in · Please run /login" names a command nobody can run from
+  // here. The breaker tripped on a lapsed Claude Code session, so the banner
+  // offers the sign-in itself and resumes the agent once it is back.
+  $: sessionLost = autoPaused && isClaudeCodeAuthError(agent?.auto_pause_reason);
+
+  async function afterSignIn(): Promise<void> {
+    // Wire the new session into the provider chain, as the connect dialog does.
+    await detectProvider('claude-code').catch(() => {});
+    // `resume` toggles on `active`: only fire it while the agent is still stopped.
+    if (autoPaused) dispatch('resume');
+  }
   // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
   // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
   // The panel is a paid extension's page: without `com.kernl.devops` active,
@@ -473,7 +487,14 @@
             {#if agent.auto_pause_reason}
               <pre class="ip-tripped-why">{agent.auto_pause_reason}</pre>
             {/if}
-            <span class="ip-tripped-hint">{$t('agent.drawer.resume_hint')}</span>
+            {#if sessionLost}
+              <span class="ip-tripped-fix">{$t('llm.cc_session_lost')}</span>
+              {#key agent.id}
+                <ClaudeSignIn showDone onDone={afterSignIn} />
+              {/key}
+            {:else}
+              <span class="ip-tripped-hint">{$t('agent.drawer.resume_hint')}</span>
+            {/if}
           </div>
         </div>
       {/if}
@@ -856,6 +877,7 @@
     color:var(--text-2); background:rgba(0,0,0,.28); border-radius:5px;
   }
   .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
+  .ip-tripped-fix{font-size:12px; color:var(--text-1)}
   @media (prefers-reduced-motion: reduce){ .ip-sw-knob, .ip-state{transition:none} }
 
   /* ── Run ⇄ Stop ─────────────────
