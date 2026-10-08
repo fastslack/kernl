@@ -24,9 +24,9 @@
 
 <div align="center">
 
-<a href="https://lifekernl.com"><img src="docs/assets/office3d.gif" alt="Kernl's 3D agent office: an isometric floor plan where agent avatars sit at desks and finished work pops up as green DONE badges" width="900"></a>
+<a href="https://lifekernl.com"><img src="docs/assets/office3d.png" alt="Kernl's 3D agent building: an isometric floor plan of fourteen offices with agent avatars at their desks, meeting rooms, a reception, free lots and a warehouse with loading docks" width="900"></a>
 
-<sub><b>A real instance.</b> 59 agents across twelve departments, work landing live. Not a mockup and not a render — that is the <code>/agents-flow</code> view of a running Kernl, and the one-liner below gets you to it.</sub>
+<sub><b>A real instance.</b> 84 agents across fourteen offices, plus a warehouse. Not a mockup and not a render — that is the <code>/agents-flow</code> view of a running Kernl, and the one-liner below gets you to it.</sub>
 
 </div>
 
@@ -45,7 +45,8 @@
      dominates this project's e2e history. Judge the run by the PNG it leaves
      behind, not by its exit status.
 
-     The animated office3d.gif is rendered from the site repo's
+     The README shows the still (office3d.png). The animated office3d.gif, no
+     longer shown here, is rendered from the site repo's
      clips/kernl-office-16x9.mp4 (15s, 1920x1080). Note the crop: the source is a
      wide shot of the entire floor, and shrunk to fit a README column every agent
      label goes sub-legible and the DONE badges turn into specks — which defeats
