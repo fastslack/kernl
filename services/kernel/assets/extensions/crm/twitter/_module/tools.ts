@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg, wrapExternal } from "@kernl/extension-sdk";
 import type { TwitterService } from "./service.js";
 
 export function twitterTools(service: TwitterService): ToolDefinition[] {
@@ -467,7 +467,8 @@ export function twitterTools(service: TwitterService): ToolDefinition[] {
 
         const lines = mentions.map((m) => {
           const status = m.replied ? "[REPLIED]" : "[NEW]";
-          return `${status} @${m.author_handle} (${m.author_name || "unknown"})\n  ${m.content.slice(0, 120)}${m.content.length > 120 ? "..." : ""}\n  Detected: ${m.detected_at} | X ID: ${m.x_post_id}\n  ID: ${m.id}`;
+          const text = `@${m.author_handle} (${m.author_name || "unknown"})\n${m.content.slice(0, 120)}${m.content.length > 120 ? "..." : ""}`;
+          return `${status} ${wrapExternal(text, { source: "twitter", from: `@${m.author_handle}` })}\n  Detected: ${m.detected_at} | X ID: ${m.x_post_id}\n  ID: ${m.id}`;
         });
         return textResult(`${mentions.length} mention(s):\n\n${lines.join("\n\n")}`);
       },

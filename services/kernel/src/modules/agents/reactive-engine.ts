@@ -8,6 +8,32 @@ import { resolveGoal } from "./executor.js";
 
 const MAX_CONCURRENT_EVENT_RUNS = 3;
 
+/**
+ * Events Kernl emits about its own state (agents, tasks, projects, the
+ * outbox, reminders, schedules, the kernel itself, goals, offices, meetings,
+ * plans). Their payloads come from Kernl, so a goal built from them is not
+ * wrapped. Everything else — mail/comms, rss, twitter, reddit, social, irc,
+ * chat, mesh, federation, webhooks and any event name we don't recognise —
+ * is wrapped by default: an unknown event is treated as third-party text
+ * until someone adds its prefix here on purpose.
+ * Note: project:* events carry webhook payloads from the project's app (e.g. waitlist sign-ups), so they stay wrapped.
+ */
+export const INTERNAL_EVENT_PREFIXES: readonly string[] = [
+  "agent:", "agents.", "agent.", "task:", "tasks.", "task.", "projects.", "outbox:",
+  "reminder", "schedule", "kernel:", "kernel.", "system", "goal", "office", "meeting", "plan",
+];
+
+export function isInternalEvent(eventName: string): boolean {
+  return INTERNAL_EVENT_PREFIXES.some((p) => eventName.startsWith(p));
+}
+
+/** The goal of a run an event triggers: external events' values reach the model wrapped. */
+export function eventGoal(template: string, eventName: string, payload: unknown): string {
+  const variables = { event: payload as Record<string, unknown> };
+  const opts = isInternalEvent(eventName) ? {} : { external: { source: `event:${eventName}` } };
+  return resolveGoal(template, variables, opts) || `Triggered by event: ${eventName}`;
+}
+
 export class ReactiveEngine {
   private handlers = new Map<string, EventHandler>();
   private activeRuns = 0;
@@ -80,8 +106,7 @@ export class ReactiveEngine {
       if (!agent || !agent.active || this.service.isAgentOfficePaused(agent.id)) continue;
 
       // Resolve goal
-      const variables = { event: payload as Record<string, unknown> };
-      const goal = resolveGoal(agent.goal_template, variables) || `Triggered by event: ${eventName}`;
+      const goal = eventGoal(agent.goal_template, eventName, payload);
 
       // An event about a project (project:* from src/modules/projects) runs
       // for that project; the gate in createRun refuses offices not serving it.

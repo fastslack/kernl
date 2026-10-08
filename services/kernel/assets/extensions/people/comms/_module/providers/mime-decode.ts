@@ -19,11 +19,29 @@ export interface Bodies {
   html: string;
 }
 
+/** A part that is not one of the readable bodies: an attachment or an inline image. */
+export interface MailPart {
+  filename: string;
+  mimeType: string;
+  content: Uint8Array;
+  /** Content-ID without the angle brackets — what `cid:` in the HTML points at. */
+  contentId: string;
+  /** Shown in the body (Content-Disposition: inline), e.g. a screenshot pasted into Gmail. */
+  inline: boolean;
+}
+
+export interface DecodedMessage extends Bodies {
+  attachments: MailPart[];
+}
+
 interface Headers {
   contentType: string;
   params: Record<string, string>;
   encoding: string;
-  attachment: boolean;
+  disposition: string;
+  /** The part's name, decoded: Content-Disposition filename first, then Content-Type name. */
+  filename: string;
+  contentId: string;
 }
 
 /** Split a header line's value into its main token and `key=value` params. */
@@ -41,8 +59,52 @@ function parseParams(value: string): { main: string; params: Record<string, stri
   return { main: (main ?? '').trim().toLowerCase(), params };
 }
 
+/** RFC 2047 encoded words (`=?UTF-8?B?…?=`), as mail clients put them in `name=`. */
+function decodeEncodedWords(value: string): string {
+  return value
+    .replace(/\?=\s+=\?/g, '?==?') // whitespace between adjacent encoded words is not content
+    .replace(/=\?([^?]+)\?([bBqQ])\?([^?]*)\?=/g, (_m, charset: string, enc: string, data: string) => {
+      const raw = enc.toUpperCase() === 'B'
+        ? Uint8Array.from(Buffer.from(data, 'base64'))
+        : decodeQuotedPrintable(data.replace(/_/g, ' '));
+      return decodeCharset(raw, charset);
+    });
+}
+
+/**
+ * A parameter that may be RFC 2231 encoded (`filename*=UTF-8''a%20b.pdf`) or
+ * split in numbered pieces (`filename*0=…; filename*1=…`).
+ */
+function paramValue(params: Record<string, string>, key: string): string {
+  if (params[key + '*']) return decodeExtended(params[key + '*']);
+  if (params[key + '*0'] || params[key + '*0*']) {
+    let joined = '';
+    let encoded = false;
+    for (let i = 0; params[`${key}*${i}`] !== undefined || params[`${key}*${i}*`] !== undefined; i++) {
+      const piece = params[`${key}*${i}*`];
+      if (piece !== undefined) { encoded = true; joined += piece; } else joined += params[`${key}*${i}`];
+    }
+    return encoded ? decodeExtended(joined) : joined;
+  }
+  return params[key] ? decodeEncodedWords(params[key]) : '';
+}
+
+function decodeExtended(value: string): string {
+  const m = /^([^']*)'[^']*'(.*)$/.exec(value);
+  const charset = m ? m[1] : 'utf-8';
+  const data = m ? m[2] : value;
+  const bytes: number[] = [];
+  for (let i = 0; i < data.length; i++) {
+    if (data[i] === '%' && /^[0-9A-Fa-f]{2}$/.test(data.slice(i + 1, i + 3))) {
+      bytes.push(parseInt(data.slice(i + 1, i + 3), 16));
+      i += 2;
+    } else bytes.push(data.charCodeAt(i) & 0xff);
+  }
+  return decodeCharset(Uint8Array.from(bytes), charset || 'utf-8');
+}
+
 function parseHeaders(block: string): Headers {
-  // Unfold continuation lines, then read the three headers that matter.
+  // Unfold continuation lines, then read the headers that matter.
   const lines = block.replace(/\r?\n[ \t]+/g, ' ').split(/\r?\n/);
   const get = (name: string) => {
     const line = lines.find((l) => l.toLowerCase().startsWith(name + ':'));
@@ -54,7 +116,9 @@ function parseHeaders(block: string): Headers {
     contentType: ct.main || 'text/plain',
     params: ct.params,
     encoding: get('content-transfer-encoding').toLowerCase(),
-    attachment: disp.main === 'attachment',
+    disposition: disp.main,
+    filename: (paramValue(disp.params, 'filename') || paramValue(ct.params, 'name')).trim(),
+    contentId: get('content-id').replace(/^<|>$/g, '').trim(),
   };
 }
 
@@ -96,7 +160,14 @@ function decodeCharset(bytes: Uint8Array, charset: string | undefined): string {
   }
 }
 
-function walk(raw: string, found: Bodies, depth: number): void {
+/** Extension for a part that arrived without a name. */
+const EXT_BY_TYPE: Record<string, string> = {
+  'image/png': 'png', 'image/jpeg': 'jpg', 'image/gif': 'gif', 'image/webp': 'webp',
+  'application/pdf': 'pdf', 'text/plain': 'txt', 'text/html': 'html', 'text/calendar': 'ics',
+  'message/rfc822': 'eml',
+};
+
+function walk(raw: string, found: DecodedMessage, depth: number): void {
   if (depth > 20) return; // a malformed or hostile message nesting forever
   const { head, body } = splitPart(raw);
   const h = parseHeaders(head);
@@ -111,8 +182,21 @@ function walk(raw: string, found: Bodies, depth: number): void {
     for (const chunk of chunks) walk(chunk.replace(/^\r?\n/, ''), found, depth + 1);
     return;
   }
-  if (h.attachment) return;
-  if (h.contentType !== 'text/plain' && h.contentType !== 'text/html') return;
+  const isBody = (h.contentType === 'text/plain' || h.contentType === 'text/html')
+    && h.disposition !== 'attachment'
+    && !(h.disposition === 'inline' && h.filename);
+  if (!isBody) {
+    const n = found.attachments.length + 1;
+    const ext = EXT_BY_TYPE[h.contentType] ?? 'bin';
+    found.attachments.push({
+      filename: h.filename || `attachment-${n}.${ext}`,
+      mimeType: h.contentType,
+      content: decodeTransfer(body, h.encoding),
+      contentId: h.contentId,
+      inline: h.disposition === 'inline',
+    });
+    return;
+  }
 
   const text = decodeCharset(decodeTransfer(body, h.encoding), h.params.charset)
     .replace(/\r\n/g, '\n')
@@ -121,12 +205,21 @@ function walk(raw: string, found: Bodies, depth: number): void {
   else if (!found.text) found.text = text;
 }
 
-/** Decoded `text/plain` and `text/html` bodies (first of each, attachments skipped). */
-export function extractBodies(source: Uint8Array | Buffer): Bodies {
-  const found: Bodies = { text: '', html: '' };
+/**
+ * Decoded `text/plain` and `text/html` bodies (first of each) plus every
+ * other leaf part — attachments and inline images — with its decoded bytes.
+ */
+export function extractMessage(source: Uint8Array | Buffer): DecodedMessage {
+  const found: DecodedMessage = { text: '', html: '', attachments: [] };
   if (!source || source.length === 0) return found;
   const raw = Buffer.from(source).toString('latin1');
   if (!/\r?\n\r?\n/.test(raw)) return found; // headers only, no body
   walk(raw, found, 0);
   return found;
+}
+
+/** Decoded `text/plain` and `text/html` bodies (first of each, attachments skipped). */
+export function extractBodies(source: Uint8Array | Buffer): Bodies {
+  const { text, html } = extractMessage(source);
+  return { text, html };
 }

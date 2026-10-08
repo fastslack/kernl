@@ -7,6 +7,11 @@
  *   2. SKILL.md          — Anthropic Claude Code skill (yaml frontmatter)
  *   3. SKILL.json        — legacy Kernl skill layout
  *
+ * Folders without a marker can still hold `<name>-SKILL.md` files, several
+ * skills side by side (forks such as claude-for-legal-argentina). Each one is
+ * staged into `<cacheDir>.skills/<slug>/` with the files it names (see
+ * skill-staging.ts), and the walk keeps descending past them.
+ *
  * The first hit wins per directory; we stop descending once we identify a
  * skill/extension. That handles repos like `coreyhaines31/marketingskills`
  * (each top-level subfolder is a skill with SKILL.md) AND repos that ship
@@ -29,9 +34,11 @@ import { log } from "../../../core/logger.js";
 import type { ExtensionManifest } from "../../extensions/schema.js";
 import { readManifest } from "../../extensions/bundle.js";
 import {
+  PREFIXED_SKILL_FILE,
   readSkillAsExtensionManifest,
   readSkillMdAsExtensionManifest,
 } from "./normalizers.js";
+import { stageSkillFile } from "./skill-staging.js";
 import type {
   CatalogFilter,
   CatalogItem,
@@ -72,6 +79,11 @@ export class GitCatalogProvider implements CatalogProvider {
     this.label = opts.label;
   }
 
+  /** Where prefixed skill files are staged; next to the clone, never inside it. */
+  private get stagedRoot(): string {
+    return `${this.opts.cacheDir}.skills`;
+  }
+
   async list(filter?: CatalogFilter): Promise<CatalogItem[]> {
     if (this.discoveredAt === 0) await this.refresh();
     return applyFilter(this.toCatalogItems(), filter);
@@ -96,6 +108,7 @@ export class GitCatalogProvider implements CatalogProvider {
     try {
       await this.cloneOrPull();
       this.commitSha = await this.readCommitSha();
+      await rm(this.stagedRoot, { recursive: true, force: true });
       this.discovered = await this.walkForItems(this.opts.cacheDir);
       this.discoveredAt = Date.now();
       log.info(
@@ -113,6 +126,7 @@ export class GitCatalogProvider implements CatalogProvider {
   /** Drop the cache dir entirely (e.g. user unsubscribed from this repo). */
   async destroy(): Promise<void> {
     await rm(this.opts.cacheDir, { recursive: true, force: true }).catch(() => {});
+    await rm(this.stagedRoot, { recursive: true, force: true }).catch(() => {});
     this.discovered = [];
     this.discoveredAt = 0;
   }
@@ -181,11 +195,16 @@ export class GitCatalogProvider implements CatalogProvider {
         out.push(captured);
         return;
       }
-      let entries: { name: string; isDirectory: () => boolean }[] = [];
+      let entries: { name: string; isDirectory: () => boolean; isFile: () => boolean }[] = [];
       try {
         entries = await readdir(dir, { withFileTypes: true });
       } catch {
         return;
+      }
+      for (const e of entries) {
+        if (!e.isFile() || !PREFIXED_SKILL_FILE.test(e.name)) continue;
+        const item = await this.tryReadPrefixedSkill(dir, e.name);
+        if (item && !out.some((o) => o.manifest.slug === item.manifest.slug)) out.push(item);
       }
       for (const e of entries) {
         if (!e.isDirectory()) continue;
@@ -243,6 +262,23 @@ export class GitCatalogProvider implements CatalogProvider {
       }
     }
     return null;
+  }
+
+  /** A `<name>-SKILL.md` file, staged into its own folder so it installs like any skill. */
+  private async tryReadPrefixedSkill(dir: string, file: string): Promise<DiscoveredItem | null> {
+    try {
+      const manifest = await readSkillMdAsExtensionManifest(dir, {
+        file,
+        repoRoot: this.opts.cacheDir,
+        repoName: this.opts.label || this.opts.url,
+      });
+      const staged = join(this.stagedRoot, manifest.slug);
+      await stageSkillFile({ repoRoot: this.opts.cacheDir, dir, file, outDir: staged });
+      return { manifest, directory: staged };
+    } catch (err) {
+      log.warn(`GitCatalogProvider ${this.name}: invalid ${file} at ${dir}: ${err}`);
+      return null;
+    }
   }
 
   private toCatalogItems(): CatalogItem[] {

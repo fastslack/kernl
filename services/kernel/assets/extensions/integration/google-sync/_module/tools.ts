@@ -9,6 +9,8 @@ import {
   textResult,
   errorResult,
   limitArg,
+  bareAddress,
+  wrapExternal,
 } from "@kernl/extension-sdk";
 import type { GoogleAuth } from "./auth.js";
 import type { GoogleClient } from "./google-client.js";
@@ -314,8 +316,10 @@ export function googleSyncTools(
           if (results.length === 0) {
             return textResult("No emails found matching your criteria.");
           }
+          // Sender name, subject and snippet are third-party text; the address is validated plain text.
           const lines = results.map((e) =>
-            `• ${e.date.split("T")[0]} | ${e.from_name || e.from_email} | ${e.subject}\n  ${e.snippet.slice(0, 100)}`,
+            `• ${e.date.split("T")[0]} | reply-to: ${bareAddress(e.from_email) || "(none)"}\n  ` +
+            wrapExternal(`${e.from_name || e.from_email} | ${e.subject}\n${e.snippet.slice(0, 100)}`, { source: "email", from: e.from_email }),
           );
           return textResult(`Found ${results.length} email(s):\n\n${lines.join("\n\n")}`);
         } catch (err) {

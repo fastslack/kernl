@@ -459,6 +459,36 @@ export const DOCKER_UPDATE_HINT =
   "&& docker compose -f docker-compose.yml up -d kernel dashboard";
 
 /**
+ * The update command for the stack as it was actually started.
+ *
+ * DOCKER_UPDATE_HINT names only docker-compose.yml. A stack started with
+ * overrides (gpu.yml for whisper, host.yml for the host folders and the
+ * Claude Code session) recreated from that line comes back without them, and
+ * quietly: the agents lose their session, the file commander its folders.
+ * Compose stamps every container with the files and the directory it was
+ * started from, so the command is rebuilt from those labels; `cd` first,
+ * because the overrides read their variables from that directory's .env.
+ * Without labels (not started by compose) the generic line is all there is.
+ */
+export function dockerUpdateHint(labels?: Record<string, string | undefined> | null): string {
+  const files = (labels?.["com.docker.compose.project.config_files"] ?? "")
+    .split(",")
+    .map((f) => f.trim())
+    .filter(Boolean);
+  const dir = labels?.["com.docker.compose.project.working_dir"]?.trim() ?? "";
+  if (files.length === 0 || !dir) return DOCKER_UPDATE_HINT;
+  const quote = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, "'\\''")}'`);
+  const prefix = dir.endsWith("/") ? dir : `${dir}/`;
+  const fileArgs = files
+    .map((f) => `-f ${quote(f.startsWith(prefix) ? f.slice(prefix.length) : f)}`)
+    .join(" ");
+  return (
+    `cd ${quote(dir)} && git pull && docker compose ${fileArgs} build kernel dashboard ` +
+    `&& docker compose ${fileArgs} up -d kernel dashboard`
+  );
+}
+
+/**
  * Every process below `root`, from (pid, parent) pairs.
  *
  * Children the kernel started — whisper, ffmpeg, a bun child for an agent —

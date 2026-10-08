@@ -15,6 +15,7 @@
   import { formatRunOutput } from '$lib/run-format.js';
   import { urlForOption, buildFixerGoal } from '$lib/agent-helpers.js';
   import { t } from '$lib/i18n/index.js';
+  import { confirm as confirmDialog } from '$shared/feedback';
   import { groupReports, reportKey, plainPreview, type ReportGroup } from '$lib/office/report-groups.js';
   import OfficeQuestionCard from './OfficeQuestionCard.svelte';
   import FailureGroupCard from './FailureGroupCard.svelte';
@@ -256,7 +257,7 @@
   let bulkBusy = false;
   async function dismissAllQuestions(ask = true) {
     if (bulkBusy || pendingQuestions.length === 0) return;
-    if (ask && !confirm($t('office.chief.confirm_dismiss_questions', { n: String(pendingQuestions.length) }))) return;
+    if (ask && !(await confirmDialog({ title: $t('office.chief.confirm_dismiss_questions', { n: String(pendingQuestions.length) }), danger: true }))) return;
     bulkBusy = true;
     const snapshot = [...pendingQuestions];
     try {
@@ -275,8 +276,8 @@
   function clearActivity() {
     removeReports(officeReports.filter(r => r.status !== 'failed'));
   }
-  function clearAllOfficeData() {
-    if (!confirm($t('office.chief.confirm_clear_everything'))) return;
+  async function clearAllOfficeData() {
+    if (!(await confirmDialog({ title: $t('office.chief.confirm_clear_everything'), danger: true }))) return;
     void dismissAllQuestions(false);
     // Not a reload: the list is rebuilt from agent_runs, which would bring
     // back everything this just cleared if it were not recorded.

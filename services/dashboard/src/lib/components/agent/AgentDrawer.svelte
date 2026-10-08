@@ -22,7 +22,6 @@
 <script lang="ts">
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher, onMount } from 'svelte';
-  import { extPages } from '$lib/ext-host.js';
   import { createAgentDetailStore } from '$lib/stores/agent-detail.js';
   // Contenido por defecto del tab Overview. Quien monta el drawer puede
   // reemplazarlo por el suyo (el mundo 3D lo hace, para meterle sus tres
@@ -39,6 +38,9 @@
   import { agentType, agentUsesSkills, modelChainFallbacks, CLAUDE_CODE_DEFAULT_MODEL } from '../../../routes/agents-flow/office3d/types.js';
   import { traitsOf } from '$lib/office/office-kinds.js';
   import ModelPicker from './ModelPicker.svelte';
+  import ClaudeSignIn from '$lib/components/llm/ClaudeSignIn.svelte';
+  import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
+  import { claudeCodeReady, detectProvider } from '$lib/llm-connect.js';
   import { readChain, primaryModelPatch } from '$lib/model-chain.js';
   import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
 
@@ -185,26 +187,79 @@
   // distingue eso de una pausa pedida por el operador: la marca sí.
   $: autoPaused = !!agent && agent.active !== 1 && !!(agent.auto_paused_at || '');
   $: autoPausedAgo = autoPaused ? sinceLabel(agent?.auto_paused_at ?? '') : '';
-  // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
-  // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
-  // The panel is a paid extension's page: without `com.kernl.devops` active,
-  // /devops is the "extension not available" screen, so the link stays hidden.
-  $: devopsOffice = traitsOf(flow).devopsLink && $extPages.some((p) => p.view === 'devops');
+  // "Not logged in · Please run /login" names a command nobody can run from
+  // here. The breaker tripped on a lapsed Claude Code session, so the banner
+  // offers the sign-in itself and resumes the agent once it is back.
+  $: sessionLost = autoPaused && isClaudeCodeAuthError(agent?.auto_pause_reason);
+
+  // A claude_code agent runs only on Kernl's own Claude Code session. Asked
+  // once per agent opened, so the header can say so before a run fails.
+  let ccReady: boolean | null = null;
+  let ccCheckedFor = '';
+  $: if (agent && agentType(agent) === 'claude_code' && ccCheckedFor !== agent.id) {
+    ccCheckedFor = agent.id;
+    ccReady = null;
+    const id = agent.id;
+    void claudeCodeReady().then((r) => { if (ccCheckedFor === id) ccReady = r; });
+  }
+  $: ccMissing = !!agent && agentType(agent) === 'claude_code' && ccReady === false;
+
+  async function afterSignIn(): Promise<void> {
+    // Wire the new session into the provider chain, as the connect dialog does.
+    await detectProvider('claude-code').catch(() => {});
+    // `resume` toggles on `active`: only fire it while the agent is still stopped.
+    if (autoPaused) dispatch('resume');
+    ccReady = await claudeCodeReady();
+  }
   // CREATIVOS draws onto the Scene Studio canvas, and the whole point of that
   // office is watching it happen — so the drawer offers the way through. The
   // link carries no piece id on purpose: Scene Studio opens whichever piece is
   // moving, which is the one the operator came to see.
   $: creativosOffice = traitsOf(flow).liveScene;
 
-  function onOfficeChange(e: Event) {
-    const select = e.currentTarget as HTMLSelectElement;
-    const flowId = select.value;
-    if (flowId && flowId !== flow?.id) {
-      dispatch('move', { flowId });
-      // Show the office the agent is actually in; the refresh after a
-      // successful move brings the new value.
-      select.value = flow?.id ?? '';
-    }
+  // The office chip opens its own menu: a native <select> drops a plain OS
+  // list that no stylesheet reaches. Fixed-positioned from the chip, so the
+  // header's overflow never clips it.
+  let officeOpen = false;
+  let officeBtn: HTMLButtonElement | null = null;
+  let officeMenu: HTMLDivElement | null = null;
+  let officeMenuPos = { top: 0, left: 0 };
+  // The drawer's backdrop-filter makes it the containing block for anything
+  // fixed inside it (and its overflow clips it), so the menu lives on <body>.
+  function portal(node: HTMLElement) {
+    document.body.appendChild(node);
+    return { destroy() { node.remove(); } };
+  }
+
+  function toggleOfficeMenu() {
+    if (officeOpen) { officeOpen = false; return; }
+    const r = officeBtn?.getBoundingClientRect();
+    if (r) officeMenuPos = { top: r.bottom + 6, left: Math.min(r.left, window.innerWidth - 260) };
+    officeOpen = true;
+    // Land on the current office so arrows start from where the agent is.
+    requestAnimationFrame(() => {
+      const items = officeMenu?.querySelectorAll<HTMLButtonElement>('.om-item');
+      (officeMenu?.querySelector<HTMLButtonElement>('.om-item.cur') ?? items?.[0])?.focus();
+    });
+  }
+  function pickOffice(flowId: string) {
+    officeOpen = false;
+    officeBtn?.focus();
+    // The refresh after a successful move brings the new office.
+    if (flowId && flowId !== flow?.id) dispatch('move', { flowId });
+  }
+  function onOfficeMenuKey(e: KeyboardEvent) {
+    if (e.key === 'Escape') { e.stopPropagation(); officeOpen = false; officeBtn?.focus(); return; }
+    if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+    e.preventDefault();
+    const items = [...(officeMenu?.querySelectorAll<HTMLButtonElement>('.om-item') ?? [])];
+    const i = items.indexOf(document.activeElement as HTMLButtonElement);
+    items[(i + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length]?.focus();
+  }
+  function onOfficeOutside(e: PointerEvent) {
+    if (!officeOpen) return;
+    const t = e.target as Node;
+    if (!officeMenu?.contains(t) && !officeBtn?.contains(t)) officeOpen = false;
   }
   $: movableOffices = offices.filter((o) => o.active !== 0);
 
@@ -355,15 +410,38 @@
           </div>
           <div class="ip-meta">
               {#if movableOffices.length > 0}
-                <label class="ip-office" style="--f:{flow?.color ?? 'var(--text-3)'}">
+                <button type="button" class="ip-office" class:open={officeOpen} class:none={!flow?.id}
+                        style="--f:{flow?.color ?? '#8a8fa8'}" bind:this={officeBtn}
+                        aria-haspopup="menu" aria-expanded={officeOpen} aria-label={$t('office.drawer.office')}
+                        on:click={toggleOfficeMenu}>
                   <span class="ip-office-dot" aria-hidden="true"></span>
-                  <select class="ip-office-select" aria-label={$t('office.drawer.office')} value={flow?.id ?? ''} on:change={onOfficeChange}>
-                    {#if !flow?.id}<option value="">{$t('office.rail.unassigned')}</option>{/if}
-                    {#each movableOffices as o (o.id)}
-                      <option value={o.id}>{o.name}</option>
-                    {/each}
-                  </select>
-                </label>
+                  <span class="ip-office-name">{flow?.name ?? $t('office.rail.unassigned')}</span>
+                  <span class="ip-chip-caret" aria-hidden="true">▾</span>
+                </button>
+                {#if officeOpen}
+                  <!-- svelte-ignore a11y-no-static-element-interactions -->
+                  <div class="om" role="menu" tabindex="-1" use:portal bind:this={officeMenu} on:keydown={onOfficeMenuKey}
+                       style="top:{officeMenuPos.top}px;left:{officeMenuPos.left}px">
+                    <div class="om-head">{$t('office.drawer.office')}</div>
+                    {#if !flow?.id}
+                      <div class="om-item om-none cur" aria-current="true">
+                        <span class="om-dot" aria-hidden="true"></span>
+                        <span class="om-name">{$t('office.rail.unassigned')}</span>
+                        <span class="om-check" aria-hidden="true">✓</span>
+                      </div>
+                    {/if}
+                    <div class="om-list">
+                      {#each movableOffices as o (o.id)}
+                        <button type="button" role="menuitem" class="om-item" class:cur={o.id === flow?.id}
+                                style="--f:{o.color || '#8a8fa8'}" on:click={() => pickOffice(o.id)}>
+                          <span class="om-dot" aria-hidden="true"></span>
+                          <span class="om-name">{o.name}</span>
+                          {#if o.id === flow?.id}<span class="om-check" aria-hidden="true">✓</span>{/if}
+                        </button>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
               {:else if flow}
                 <span class="ip-flow" style="--f:{flow.color}">{flow.name}</span>
               {/if}
@@ -374,7 +452,7 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
                 <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
-                             providers={headProviders} requiresTools={true} engineFollows
+                             providers={headProviders} loading={headProvidersLoading} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
                   <span class="ip-chip ip-chip-llm ip-chip-btn" class:ip-chip-err={!!headModelError}
@@ -387,11 +465,11 @@
               <!-- svelte-ignore a11y-no-static-element-interactions -->
               <span class="ip-chip-pick" on:pointerdown={loadHeadProviders} on:focusin={loadHeadProviders}>
                 <ModelPicker provider={headChain[0]?.provider ?? ''} model={headChain[0]?.model ?? ''}
-                             providers={headProviders} requiresTools={true} engineFollows
+                             providers={headProviders} loading={headProvidersLoading} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
-                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError}
-                        title={headModelError || $t('agent.head.change_model_title')}>
+                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError || ccMissing}
+                        title={headModelError || (ccMissing ? $t('llm.cc_agent_not_connected') : $t('agent.head.change_model_title'))}>
                     <b>Claude Code</b><span class="ip-chip-v">{agent.model || CLAUDE_CODE_DEFAULT_MODEL}</span><span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
                   </span>
                 </ModelPicker>
@@ -430,11 +508,6 @@
                   : $t('agent.head.run')}
           </span>
         </button>
-        {#if devopsOffice}
-          <a class="ip-btn ip-btn-ghost" href="/devops" style="text-decoration:none" title={$t('agent.drawer.devops_title')}>
-            <span class="ip-btn-ico">🛠</span><span>{$t('agent.drawer.devops_panel')}</span>
-          </a>
-        {/if}
         {#if creativosOffice}
           <button class="ip-btn ip-btn-live" on:click={() => (sceneOpen = true)}
                   title="Watch this office draw, live, without leaving the office">
@@ -473,7 +546,26 @@
             {#if agent.auto_pause_reason}
               <pre class="ip-tripped-why">{agent.auto_pause_reason}</pre>
             {/if}
-            <span class="ip-tripped-hint">{$t('agent.drawer.resume_hint')}</span>
+            {#if sessionLost}
+              <span class="ip-tripped-fix">{$t('llm.cc_session_lost')}</span>
+              {#key agent.id}
+                <ClaudeSignIn showDone onDone={afterSignIn} />
+              {/key}
+            {:else}
+              <span class="ip-tripped-hint">{$t('agent.drawer.resume_hint')}</span>
+            {/if}
+          </div>
+        </div>
+      {/if}
+
+      {#if ccMissing && !sessionLost}
+        <div class="ip-tripped ip-cc-missing" role="status">
+          <span class="ip-tripped-ico" aria-hidden="true">◇</span>
+          <div class="ip-tripped-body">
+            <span class="ip-tripped-fix">{$t('llm.cc_agent_not_connected')}</span>
+            {#key agent.id}
+              <ClaudeSignIn showDone onDone={afterSignIn} />
+            {/key}
           </div>
         </div>
       {/if}
@@ -558,7 +650,7 @@
     </div>
   {/if}
 
-<svelte:window on:keydown={onSceneKeydown} on:fullscreenchange={syncFullscreenFlag} />
+<svelte:window on:keydown={onSceneKeydown} on:fullscreenchange={syncFullscreenFlag} on:pointerdown={onOfficeOutside} on:resize={() => (officeOpen = false)} />
 
 {#if sceneOpen}
   <!-- Live preview of whatever this office is drawing right now. The iframe
@@ -704,16 +796,39 @@
   .ip-chip-err{border-color:rgba(239,93,110,.65)}
   .ip-flow{color:#dde0ea;font-weight:600}
   .ip-flow::before{content:'';width:8px;height:8px;border-radius:2px;background:var(--f, var(--flow-color))}
-  .ip-office { position: relative; max-width: 200px; cursor: pointer; }
-  .ip-office:hover { border-color: rgba(120,130,160,.35); }
-  .ip-office-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--f); flex: none; }
-  .ip-office-select {
-    appearance: none; background: transparent; border: none; border-radius: var(--radius-sm);
-    color: #dde0ea; font: inherit; font-weight: 600; padding: 0; max-width: 170px; text-overflow: ellipsis; cursor: pointer; outline: none;
-    /* As wide as the office name, not as wide as the longest option. */
-    field-sizing: content;
+  .ip-office { position: relative; max-width: 200px; cursor: pointer; color: #dde0ea; font-weight: 600; transition: border-color .12s, background .12s; }
+  .ip-office:hover, .ip-office.open { border-color: color-mix(in srgb, var(--f) 60%, transparent); background: color-mix(in srgb, var(--f) 10%, transparent); }
+  .ip-office:focus-visible { outline: 2px solid color-mix(in srgb, var(--f) 70%, white); outline-offset: 1px; }
+  .ip-office.none { color: #a9aec0; font-style: italic; }
+  .ip-office.none .ip-office-dot { background: transparent; border: 1.5px dashed #8a8fa8; }
+  .ip-office-dot { width: 8px; height: 8px; border-radius: 2px; background: var(--f); flex: none; box-shadow: 0 0 6px color-mix(in srgb, var(--f) 60%, transparent); }
+  .ip-office-name { overflow: hidden; text-overflow: ellipsis; }
+  .ip-office .ip-chip-caret { margin-left: 2px; transition: transform .15s; }
+  .ip-office.open .ip-chip-caret { transform: rotate(180deg); }
+  /* Office menu */
+  .om {
+    position: fixed; z-index: 10000; width: 250px; padding: 6px;
+    background: linear-gradient(180deg, #1d1f27, #16171d); border: 1px solid rgba(140,150,190,.22);
+    border-radius: 12px; box-shadow: 0 18px 48px rgba(0,0,0,.55), 0 0 0 1px rgba(0,0,0,.4);
+    font: 500 13px 'Manrope', sans-serif; animation: om-in .14s ease-out; outline: none;
   }
-  .ip-office:focus-within { border-color: rgba(120,170,255,.6); }
+  @keyframes om-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } to { opacity: 1; transform: none; } }
+  .om-head { padding: 6px 10px 8px; font: 700 10px 'Manrope', sans-serif; letter-spacing: .08em; text-transform: uppercase; color: #7f86a0; }
+  .om-list { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 2px; }
+  .om-item {
+    display: flex; align-items: center; gap: 10px; width: 100%; min-height: 34px; padding: 6px 10px;
+    background: none; border: 0; border-radius: 8px; color: #dde0ea; font: inherit; text-align: left; cursor: pointer;
+    transition: background .1s;
+  }
+  button.om-item:hover, button.om-item:focus-visible { background: color-mix(in srgb, var(--f) 16%, transparent); outline: none; }
+  .om-item.cur { background: color-mix(in srgb, var(--f, #8a8fa8) 12%, transparent); font-weight: 700; }
+  .om-dot { width: 10px; height: 10px; border-radius: 3px; flex: none; background: var(--f); box-shadow: 0 0 8px color-mix(in srgb, var(--f) 55%, transparent); }
+  .om-none { cursor: default; color: #a9aec0; font-style: italic; margin-bottom: 4px; border-bottom: 1px solid rgba(140,150,190,.14); border-radius: 8px 8px 0 0; }
+  .om-none .om-dot { background: transparent; border: 1.5px dashed #8a8fa8; box-shadow: none; }
+  .om-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .om-check { color: var(--f, #8a8fa8); font-weight: 700; }
+  .om-none .om-check { color: #8a8fa8; }
+  @media (prefers-reduced-motion: reduce) { .om { animation: none; } .ip-office .ip-chip-caret { transition: none; } }
   .ip-close{
     background:rgba(255,255,255,.03);border:1px solid rgba(120,130,160,.12);
     color:#8a8fa8;
@@ -846,6 +961,8 @@
     border-radius:8px;
   }
   .ip-tripped-ico{font-size:13px; line-height:1.3; flex:none}
+  .ip-cc-missing{background:rgba(232,176,75,.08); border-color:rgba(232,176,75,.32)}
+  .ip-cc-missing .ip-tripped-ico{color:#e8b04b}
   .ip-tripped-body{display:flex; flex-direction:column; gap:4px; min-width:0}
   .ip-tripped-head{font-size:11.5px; font-weight:600; color:#f87171}
   .ip-tripped-when{font-weight:400; opacity:.75}
@@ -856,6 +973,7 @@
     color:var(--text-2); background:rgba(0,0,0,.28); border-radius:5px;
   }
   .ip-tripped-hint{font-size:10.5px; color:var(--text-3)}
+  .ip-tripped-fix{font-size:12px; color:var(--text-1)}
   @media (prefers-reduced-motion: reduce){ .ip-sw-knob, .ip-state{transition:none} }
 
   /* ── Run ⇄ Stop ─────────────────

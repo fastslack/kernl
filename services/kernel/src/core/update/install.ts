@@ -26,14 +26,16 @@ import {
   rmSync,
   writeFileSync,
 } from "node:fs";
+import { request as httpRequest } from "node:http";
+import { hostname } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { log } from "../logger.js";
 import { isPathInside } from "../fs-paths.js";
 import { currentVersion } from "./version.js";
 import {
-  DOCKER_UPDATE_HINT,
   descendantsOf,
+  dockerUpdateHint,
   installKind,
   installRootFrom,
   isContainer,
@@ -193,6 +195,38 @@ export function detectInstall(): Promise<InstallInfo> {
   return installCache;
 }
 
+/**
+ * The compose labels of the container this kernel runs in, read from the
+ * Docker socket when it is mounted. Null whenever that is not possible: no
+ * socket, no permission, not a compose container. Never throws, never waits
+ * more than two seconds.
+ */
+function ownComposeLabels(): Promise<Record<string, string> | null> {
+  const socketPath = "/var/run/docker.sock";
+  if (!existsSync(socketPath)) return Promise.resolve(null);
+  return new Promise((done) => {
+    const req = httpRequest(
+      { socketPath, path: `/containers/${encodeURIComponent(hostname())}/json`, timeout: 2000 },
+      (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c: string) => (body += c));
+        res.on("end", () => {
+          try {
+            const labels = (JSON.parse(body) as { Config?: { Labels?: Record<string, string> } }).Config?.Labels;
+            done(res.statusCode === 200 && labels ? labels : null);
+          } catch {
+            done(null);
+          }
+        });
+      },
+    );
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => done(null));
+    req.end();
+  });
+}
+
 async function describe(): Promise<InstallInfo> {
   const here = moduleDir();
   const marks = process.platform === "win32" ? await windowsMsiMarks() : {};
@@ -208,7 +242,7 @@ async function describe(): Promise<InstallInfo> {
       target: null,
       canApply: false,
       reason: "Kernl is running in a container. The image is what gets updated, not the files inside it.",
-      hint: DOCKER_UPDATE_HINT,
+      hint: dockerUpdateHint(await ownComposeLabels()),
     };
   }
   if (kind === "unknown") {

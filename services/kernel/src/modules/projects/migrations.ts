@@ -133,4 +133,39 @@ export const projectsMigrations: Migration[] = [
     version: 7,
     sql: `ALTER TABLE projects ADD COLUMN home_flow_id TEXT NOT NULL DEFAULT '';`,
   },
+  {
+    // Drafts no longer need a project: agents outside projects (and the social
+    // network) draft here too. SQLite can't drop NOT NULL in place → rebuild.
+    version: 8,
+    sql: `
+      CREATE TABLE outbox_items_v8 (
+        id            TEXT PRIMARY KEY,
+        project_id    TEXT REFERENCES projects(id) ON DELETE CASCADE,
+        flow_id       TEXT NOT NULL DEFAULT '',
+        agent_id      TEXT NOT NULL DEFAULT '',
+        run_id        TEXT NOT NULL DEFAULT '',
+        channel       TEXT NOT NULL,
+        account_ref   TEXT NOT NULL,
+        payload       TEXT NOT NULL DEFAULT '{}',
+        scheduled_for TEXT,
+        status        TEXT NOT NULL DEFAULT 'draft'
+                      CHECK(status IN ('draft','approved','sending','sent','rejected','failed')),
+        review_note   TEXT NOT NULL DEFAULT '',
+        sent_ref      TEXT NOT NULL DEFAULT '',
+        error         TEXT NOT NULL DEFAULT '',
+        created_at    TEXT NOT NULL,
+        updated_at    TEXT NOT NULL,
+        decided_at    TEXT,
+        sent_at       TEXT
+      );
+      INSERT INTO outbox_items_v8 (id, project_id, flow_id, agent_id, run_id, channel, account_ref, payload, scheduled_for,
+        status, review_note, sent_ref, error, created_at, updated_at, decided_at, sent_at)
+      SELECT id, project_id, flow_id, agent_id, run_id, channel, account_ref, payload, scheduled_for,
+        status, review_note, sent_ref, error, created_at, updated_at, decided_at, sent_at FROM outbox_items;
+      DROP TABLE outbox_items;
+      ALTER TABLE outbox_items_v8 RENAME TO outbox_items;
+      CREATE INDEX IF NOT EXISTS idx_outbox_status  ON outbox_items(status, scheduled_for);
+      CREATE INDEX IF NOT EXISTS idx_outbox_project ON outbox_items(project_id, status);
+    `,
+  },
 ];

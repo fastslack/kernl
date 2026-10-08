@@ -7,6 +7,7 @@
 <script lang="ts">
   import { readApiError } from '$lib/api.js';
   import { onMount } from 'svelte';
+  import { confirm } from '$shared/feedback';
 
   type Skill = { name: string; source: 'user' | 'plugin'; plugin?: string; marketplace?: string; description: string; path: string };
   type Plugin = { name: string; marketplace: string; path: string; description: string; provides: { skills: string[]; agents: string[]; commands: string[] } };
@@ -92,7 +93,12 @@
   }
 
   async function removeUserScopeMcp(name: string) {
-    if (!confirm(`Remove "${name}" from user scope? This affects EVERY claude_code agent on the host.`)) return;
+    if (!(await confirm({
+      title: `Remove "${name}" from user scope?`,
+      body: 'Every claude_code agent on this host will lose access to this MCP.',
+      danger: true,
+      confirmLabel: 'Remove',
+    }))) return;
     try {
       const res = await fetch(`/api/claude-config/mcp/${encodeURIComponent(name)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
@@ -155,7 +161,12 @@
   }
 
   async function removeMarketplace(name: string) {
-    if (!confirm(`Delete marketplace "${name}" and all of its plugins?`)) return;
+    if (!(await confirm({
+      title: `Delete marketplace "${name}"?`,
+      body: 'The marketplace and all of its plugins will be removed.',
+      danger: true,
+      confirmLabel: 'Delete',
+    }))) return;
     mpBusy = { ...mpBusy, [name]: true };
     try {
       const res = await fetch(`/api/agents/marketplaces/${encodeURIComponent(name)}`, { method: 'DELETE' });
@@ -241,15 +252,14 @@
 
   // ── Agent isolation controls ─────────────────────────────────────
 
-  function setSettingsMode(mode: 'inherit' | 'isolate') {
+  async function setSettingsMode(mode: 'inherit' | 'isolate') {
     if (mode === agentVars.settingsMode) return;
-    if (mode === 'isolate' && !confirm(
-      'Isolate this agent?\n\n' +
-      'The agent will IGNORE all user-scope config ' +
-      '(~/.claude.json, ~/.claude/settings.json).\n' +
-      'It will only see the MCPs/plugins you defined here for it.\n\n' +
-      'Confirm?'
-    )) return;
+    if (mode === 'isolate' && !(await confirm({
+      title: 'Isolate this agent?',
+      body: 'The agent will ignore all of your host-wide configuration. ' +
+        'It will only see the MCPs and plugins you define here for it.',
+      confirmLabel: 'Isolate',
+    }))) return;
     scheduleSave({ settingsMode: mode });
   }
 
@@ -270,13 +280,12 @@
     const mergedPlugins = Array.from(new Set([...userPlugins, ...agentVars.plugins]));
     const mcpCount = Object.keys(userMcps).length;
     const plugCount = userPlugins.length;
-    if (!confirm(
-      `Copy user-scope config to "${selectedAgent.name}"?\n\n` +
-      `About to add:\n` +
-      `  • ${mcpCount} MCPs\n` +
-      `  • ${plugCount} plugins\n\n` +
-      `The agent's existing config is KEPT (the agent wins on collisions).`
-    )) return;
+    if (!(await confirm({
+      title: `Copy host-wide config to "${selectedAgent.name}"?`,
+      body: `About to add ${mcpCount} MCPs and ${plugCount} plugins. ` +
+        `The agent's existing config is kept (the agent wins on collisions).`,
+      confirmLabel: 'Copy',
+    }))) return;
     scheduleSave({ mcpServers: mergedMcps, plugins: mergedPlugins });
   }
 
@@ -615,7 +624,12 @@
 
   async function removePrivatePlugin(name: string) {
     if (!selectedAgent) return;
-    if (!confirm(`Delete the private copy of "${name}" for ${selectedAgent.name}?\nFiles are removed from data/agents/…/plugins/${name}/. The user-scope plugin is left intact.`)) return;
+    if (!(await confirm({
+      title: `Delete the private copy of "${name}" for ${selectedAgent.name}?`,
+      body: 'The agent\'s private copy of this plugin is deleted. The host-wide plugin is left intact.',
+      danger: true,
+      confirmLabel: 'Delete',
+    }))) return;
     try {
       const res = await fetch(`/api/agents/${selectedAgent.id}/private-plugins/${encodeURIComponent(name)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);
@@ -644,7 +658,12 @@
 
   async function removePrivateSkill(name: string) {
     if (!selectedAgent) return;
-    if (!confirm(`Delete the private copy of skill "${name}" for ${selectedAgent.name}?`)) return;
+    if (!(await confirm({
+      title: `Delete the private copy of skill "${name}" for ${selectedAgent.name}?`,
+      body: 'Only this agent\'s private copy is deleted.',
+      danger: true,
+      confirmLabel: 'Delete',
+    }))) return;
     try {
       const res = await fetch(`/api/agents/${selectedAgent.id}/private-skills/${encodeURIComponent(name)}`, { method: 'DELETE' });
       if (!res.ok) throw new Error((await readApiError(res)) ?? res.statusText);

@@ -13,6 +13,8 @@ import { FsCommanderService } from "../assets/extensions/productivity/filesystem
 
 function mkConfig(allowedRoots: string[]): KernelConfig {
   return {
+    // The service puts received files next to the database.
+    sqlite: { path: "/tmp/kernl-fs-commander-test/kernel.db" },
     fsCommander: {
       allowedRoots,
       maxPreviewBytes: 2_097_152,

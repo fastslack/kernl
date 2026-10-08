@@ -1,7 +1,9 @@
 import { describe, it, expect, afterEach } from "bun:test";
 import { getHost, installedHost, setHost, SDK_MAJOR, KernlHostVersionError } from "../src/sdk/host.js";
 import { log as sdkLog } from "../src/sdk/log.js";
-import { llm, getRequestContext, peering } from "../src/sdk/facades.js";
+import { llm, getRequestContext, peering, instanceNostrIdentity, instanceKeyIsShared, registerPersona, friendPersonas } from "../src/sdk/facades.js";
+import { NostrIdentity } from "../src/sdk/nostr-identity.js";
+import type { PeeringService } from "../src/sdk/types.js";
 import { installTestHost, resetHost } from "../src/sdk/testing.js";
 import { installKernlHost } from "../src/core/host-runtime.js";
 import { setLogLevel } from "../src/core/logger.js";
@@ -30,6 +32,63 @@ describe("extension host", () => {
     expect(peering()).toBeNull();
     expect(getRequestContext()).toEqual({ callerAgentId: "", callerRunId: "", callerDepth: 0 });
     expect(() => llm()).toThrow("Kernl host not installed: llm() only works inside a running kernel");
+  });
+
+  it("exposes the instance identity of the running peering service", () => {
+    const instance = NostrIdentity.fromEd25519Seed(new Uint8Array(32).fill(7));
+    const service = {
+      identity: instance,
+      instanceNostrIdentity: () => instance,
+      instanceKeyIsShared: () => true,
+    } as unknown as PeeringService;
+    installTestHost({ peering: () => service });
+
+    expect(instanceNostrIdentity()?.pubkeyHex).toBe(instance.pubkeyHex);
+    expect(instanceKeyIsShared()).toBe(true);
+  });
+
+  it("tolerates an older core whose peering service lacks the accessors", () => {
+    const instance = NostrIdentity.fromEd25519Seed(new Uint8Array(32).fill(8));
+    installTestHost({ peering: () => ({ identity: instance }) as unknown as PeeringService });
+
+    expect(() => instanceNostrIdentity()).not.toThrow();
+    expect(instanceNostrIdentity()?.pubkeyHex).toBe(instance.pubkeyHex);
+    expect(instanceKeyIsShared()).toBe(false);
+  });
+
+  it("hands the persona to the peering service and reads friends' personas back", () => {
+    const persona = NostrIdentity.fromEd25519Seed(new Uint8Array(32).fill(9));
+    const seen: Array<NostrIdentity | null> = [];
+    const service = {
+      registerPersona: (p: NostrIdentity | null) => { seen.push(p); },
+      friendPersonas: () => ["ab".repeat(32)],
+    } as unknown as PeeringService;
+    installTestHost({ peering: () => service });
+
+    expect(registerPersona(persona)).toBe(true);
+    registerPersona(null);
+    expect(seen).toEqual([persona, null]);
+    expect(friendPersonas()).toEqual(["ab".repeat(32)]);
+  });
+
+  it("registers no persona on an older core or with peering off", () => {
+    const persona = NostrIdentity.fromEd25519Seed(new Uint8Array(32).fill(10));
+    installTestHost({ peering: () => ({ identity: persona }) as unknown as PeeringService });
+    expect(registerPersona(persona)).toBe(false);
+    expect(friendPersonas()).toEqual([]);
+
+    installTestHost({ peering: () => null });
+    expect(registerPersona(persona)).toBe(false);
+    expect(friendPersonas()).toEqual([]);
+    // Nothing is stashed process-wide for later: no key outlives the call.
+    expect(Object.keys(globalThis).some((k) => k.toLowerCase().includes("persona"))).toBe(false);
+  });
+
+  it("has no instance identity while peering is off", () => {
+    installTestHost({ peering: () => null });
+
+    expect(instanceNostrIdentity()).toBeNull();
+    expect(instanceKeyIsShared()).toBe(false);
   });
 
   it("refuses a host that speaks another SDK major", () => {

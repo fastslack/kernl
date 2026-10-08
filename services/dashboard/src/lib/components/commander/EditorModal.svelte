@@ -9,6 +9,7 @@
 	import { onMount } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
 	import { basenameHostPath } from '$lib/host-path.js';
+	import { confirm as confirmDialog } from '$shared/feedback';
 
 	export let providerId: string;
 	export let path: string;
@@ -95,13 +96,28 @@
 		}
 	}
 
-	function onKey(ev: KeyboardEvent): void {
+	let confirmingDiscard = false;
+
+	async function onKey(ev: KeyboardEvent): Promise<void> {
+		if (ev.defaultPrevented || confirmingDiscard) return;
 		if ((ev.ctrlKey || ev.metaKey) && ev.key === 's') {
 			ev.preventDefault();
 			save();
 		} else if (ev.key === 'Escape') {
 			if (content !== original) {
-				if (!confirm('Discard unsaved changes?')) return;
+				confirmingDiscard = true;
+				let discard = false;
+				try {
+					discard = await confirmDialog({
+						title: 'Discard unsaved changes?',
+						body: 'Your edits to this file will be lost.',
+						confirmLabel: 'Discard',
+						danger: true
+					});
+				} finally {
+					confirmingDiscard = false;
+				}
+				if (!discard) return;
 			}
 			onClose();
 		}

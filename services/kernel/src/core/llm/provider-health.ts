@@ -507,6 +507,12 @@ export function classifyError(err: unknown): FailureKind {
   if (/unknown model|model[_ ]not[_ ]found|no such model|invalid model|does not exist|not a valid model|model .{0,40}(is )?(not found|not available|unavailable|not supported)/i.test(msg)) {
     return "model";
   }
+  // NVIDIA's catalogue keeps listing models it no longer serves; calling one
+  // answers 404 "Function '<uuid>' not found for account". That is the model,
+  // not NVIDIA: 46 of its 68 listed models answered this on 2026-10-08.
+  if (/\b404\b.{0,80}function '[0-9a-f-]{8,}'.{0,60}not found/i.test(msg)) {
+    return "model";
+  }
   // "exhausted" must be checked BEFORE the auth check below — xAI returns
   // HTTP 403 for both "bad key" and "out of credits" and uses the *body*
   // to disambiguate (e.g. "Your team … has either used all available

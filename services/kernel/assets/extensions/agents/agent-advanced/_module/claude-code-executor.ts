@@ -55,6 +55,7 @@ import {
   resolveMcpBridgePath,
   chooseKernelMcpTransport,
   hostPathReachable,
+  EXTERNAL_CONTENT_NOTICE,
 } from "@kernl/extension-sdk";
 import { failureNote } from "./failure-note.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
@@ -647,21 +648,15 @@ export class ClaudeCodeExecutor {
       if (useOAuth) {
         childEnv.ANTHROPIC_API_KEY = undefined;
         childEnv.ANTHROPIC_AUTH_TOKEN = undefined;
-        // When the kernel runs in a container the process user is usually not
-        // the host user (e.g. `bun` with $HOME=/home/bun), but the OAuth creds
-        // live in the `$HOST_HOME/.claude/` bind-mount. Without this override,
-        // el CLI busca bajo `/home/bun/.claude/` y tira "Not logged in".
-        if (process.env.HOST_HOME) {
-          childEnv.HOME = process.env.HOST_HOME;
-        } else {
-          // Everywhere else the session is the one the connect dialog created,
-          // under Kernl's own config dir — the dir "Probar" and the chat use.
-          // Without it the CLI looked in the user's ~/.claude: on a native
-          // Windows install the connection tested fine and every agent run
-          // failed "Not logged in". On Windows the credential itself sits in
-          // Credential Manager keyed by this dir, so it has to match exactly.
-          Object.assign(childEnv, claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }));
-        }
+        // One session for everything: the one AI connections signs in, under
+        // Kernl's own config dir — the dir "Probar" and the chat use. Agents
+        // used to borrow the operator's host login in Docker (HOME=$HOST_HOME,
+        // the ~/.claude bind-mount), so they kept running on that subscription
+        // while AI connections said Claude Code was not connected. Without a
+        // Kernl session the CLI now answers "Not logged in", which the agent
+        // panel turns into the sign-in. On Windows the credential sits in
+        // Credential Manager keyed by this dir, so it has to match exactly.
+        Object.assign(childEnv, claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }));
       } else if (apiKey) {
         childEnv.ANTHROPIC_API_KEY = apiKey;
       }
@@ -788,6 +783,12 @@ export class ClaudeCodeExecutor {
         if (!useOAuth && apiKey) {
           sandboxEnv.ANTHROPIC_API_KEY = apiKey;
         }
+        // A pasted setup-token is Kernl's session too; the driver mounts the
+        // credential file of the dashboard sign-in, never the host's.
+        const sandboxToken = useOAuth
+          ? claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }).CLAUDE_CODE_OAUTH_TOKEN
+          : undefined;
+        if (sandboxToken) sandboxEnv.CLAUDE_CODE_OAUTH_TOKEN = sandboxToken;
 
         const skillMounts: Array<{ name: string; hostPath: string }> = [];
         for (const name of vars.__skills__ ?? []) {
@@ -1549,6 +1550,7 @@ export class ClaudeCodeExecutor {
     const base = resolveAgentSystemPrompt(agent, lang);
     const parts: string[] = [];
     if (base) parts.push(base);
+    parts.push(EXTERNAL_CONTENT_NOTICE);
     parts.push(promptTodayDate(lang, localDate()));
     parts.push(promptClaudeCodeWorkInstructions(lang));
 
@@ -1560,6 +1562,27 @@ export class ClaudeCodeExecutor {
         "## Asking the chief\n" +
           "- `kernel_agents_ask_supervisor({ question, context, options })` — when you are in doubt (unclear requirements, priorities, or a decision you are not authorized to make), ask the chief instead of guessing. Exactly 4 concrete options, your preferred one first. Keep working on what doesn't depend on it; the answer comes back on its own. Never re-ask an answered question.",
       );
+    }
+
+    // Answers to its own questions that came back while it was busy. This
+    // executor skips the office inbox on purpose, but these are the replies
+    // the agent asked for: without them a Claude Code agent asked the chief,
+    // got an answer filed in its inbox, and never saw it. Marked read here so
+    // the answer queue does not relaunch it with the same ones.
+    if (service) {
+      try {
+        const answers = service
+          .getUnreadInbox(agent.id, 20)
+          .filter((m) => m.from_agent_id === "__top_agent__" && m.subject.startsWith("ANSWER:"));
+        if (answers.length > 0) {
+          parts.push(
+            "## Answers to your earlier questions\n" +
+              "These arrived while you were busy. Act on them; do not re-ask.\n\n" +
+              answers.map((m) => m.body).join("\n\n---\n\n"),
+          );
+          service.markInboxRead(answers.map((m) => m.id));
+        }
+      } catch { /* inbox table missing in tests / fresh DB — non-fatal */ }
     }
 
     // Inject learnings ranked by relevance to current goal — same closed-loop

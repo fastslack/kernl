@@ -60,6 +60,8 @@ export interface CommAttachment {
   stored_path: string;
   mime_type: string;
   size_bytes: number;
+  /** Content-ID of an inline image in received mail; '' otherwise. */
+  content_id?: string;
   created_at: string;
 }
 
@@ -80,6 +82,8 @@ export interface CommMetadata {
   message_id_header?: string;
   reply_to_message_id?: string;
   quoted_text?: string;
+  /** Received mail whose attachments were already looked for on the server. */
+  attachments_scanned?: boolean;
 }
 
 // ── Templates & Campaigns ─────────────────────
@@ -205,11 +209,22 @@ export interface EmailDetail {
   email_labels: EmailLabel[];
   linked_tasks: Array<{ id: string; title: string; status: string }>;
   linked_contacts: Array<{ id: string; name: string; email: string }>;
+  /** Files the message carried; served by GET /api/attachments?id=. */
+  attachments: EmailAttachmentView[];
   // Triage fields
   urgency?: string;
   attention_needed?: number;
   ai_summary?: string;
   draft_comm_id?: string;
+}
+
+export interface EmailAttachmentView {
+  id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  /** Shown inside the HTML body through its `cid:` reference. */
+  in_body: boolean;
 }
 
 export interface ThreadDetail {

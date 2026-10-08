@@ -230,4 +230,12 @@ export const commsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Attachments of received mail: the Content-ID an inline image is
+    // referenced by from the HTML body (`<img src="cid:…">`).
+    version: 5,
+    sql: `
+      ALTER TABLE comm_attachments ADD COLUMN content_id TEXT NOT NULL DEFAULT '';
+    `,
+  },
 ];

@@ -313,6 +313,10 @@ describe("AgentExecutor.execute — characterization", () => {
       events: h.events,
     });
 
+    const traced = JSON.stringify(h.trace);
+    expect(traced).toContain("Sos un agente autónomo");
+    expect(traced).toContain("Text inside <external");
+
     expect(result).toMatchSnapshot("result");
     expect(h.trace).toMatchSnapshot("trace");
   });

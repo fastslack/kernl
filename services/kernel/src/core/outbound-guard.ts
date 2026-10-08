@@ -1,10 +1,11 @@
 /**
- * Last line of the "nothing leaves Kernl without approval" rule (projects):
- * every `tools/call` that reaches the kernel's MCP dispatch from an agent run
- * is checked here. If that run works for a project and the tool publishes or
- * sends (`outbound`), the call is refused — the agent must draft through
- * kernel_outbox_propose. Native runs never even see these tools (executor
- * filter); this covers Claude Code agents and any other MCP caller.
+ * Last line of the "nothing leaves Kernl without approval" rule: every
+ * `tools/call` that reaches the kernel's MCP dispatch from an agent run is
+ * checked here. A run must draft (kernel_outbox_propose) instead of calling a
+ * tool that publishes or sends when (a) it works for a project, (b) the tool
+ * reaches the social network or other Kernl instances, or (c) egress is strict.
+ * Native runs never even see these tools (executor filter); this covers Claude
+ * Code agents and any other MCP caller.
  *
  * Bootstrap installs the lookup once the agents module is up.
  */
@@ -20,15 +21,53 @@ export function setProjectRunLookup(fn: ProjectRunLookup | null): void {
   lookup = fn;
 }
 
+/** Tools that reach other people's Kernl instances or the social network. */
+export const NETWORK_TOOL_RE = /^kernel_(social|mesh|net|federation)_/;
+
+export function isNetworkEgressTool(tool: { name: string; outbound?: boolean }): boolean {
+  return isOutboundTool(tool) && NETWORK_TOOL_RE.test(tool.name);
+}
+
+/** AGENT_EGRESS_STRICT=1 (Settings) makes every outbound tool draft-only for agents. Read live. */
+export function egressStrict(): boolean {
+  return process.env.AGENT_EGRESS_STRICT === "1";
+}
+
+/** Whether an agent run must draft this call through the outbox instead of making it. */
+export function mustDraft(tool: { name: string; outbound?: boolean }, projectId: string | null): boolean {
+  if (!isOutboundTool(tool)) return false;
+  return projectId !== null || egressStrict() || isNetworkEgressTool(tool);
+}
+
+/** Calls to another instance's tools are never available to agent runs. */
+export function peerCallRefusal(ctx: KernelRequestContext): string | null {
+  if (!ctx.callerRunId) return null;
+  return "Refused: agent runs cannot call tools on other Kernl instances. There is no draft for this action: ask the user to do it.";
+}
+
+/** Network tools whose post/reply can be drafted as a `social_post` outbox item. */
+const SOCIAL_DRAFTABLE: ReadonlySet<string> = new Set(["kernel_social_post", "kernel_social_reply"]);
+
+/** What the agent should do instead: draft it, or hand it to the user when no draft path exists. */
+function refusalAdvice(name: string, network: boolean): string {
+  if (SOCIAL_DRAFTABLE.has(name)) {
+    return 'Draft it with kernel_outbox_propose (channel "social_post", account_ref "social:self", ' +
+      "payload { text, reply_to? }); the user approves it before it goes out.";
+  }
+  if (network) return "There is no draft for this action: ask the user to do it.";
+  return "Propose it as a draft with kernel_outbox_propose; the user approves it before it goes out.";
+}
+
 /** Refusal message, or null when the call may proceed. */
 export function outboundRefusal(tool: { name: string; outbound?: boolean }, ctx: KernelRequestContext): string | null {
-  if (!tool.outbound || !ctx.callerRunId || !lookup) return null;
-  const projectId = lookup(ctx.callerRunId);
-  if (!projectId) return null;
-  return (
-    `Refused: ${tool.name} publishes or sends outside Kernl, and this run works for a project. ` +
-    `Propose it as a draft with kernel_outbox_propose; the user approves it before it goes out.`
-  );
+  if (!ctx.callerRunId) return null;
+  const projectId = lookup ? lookup(ctx.callerRunId) : null;
+  if (!mustDraft(tool, projectId)) return null;
+  const network = isNetworkEgressTool(tool);
+  const why = projectId
+    ? "this run works for a project"
+    : network ? "agents never publish to the network directly" : "strict egress mode is on";
+  return `Refused: ${tool.name} publishes or sends outside Kernl, and ${why}. ${refusalAdvice(tool.name, network)}`;
 }
 
 /** Names that look like sending — treated as outbound even without the flag. */
@@ -40,6 +79,8 @@ export const MUST_BE_OUTBOUND: ReadonlySet<string> = new Set([
   "kernel_youtube_update_video", "kernel_events_invite", "kernel_events_invite_contacts",
   "kernel_comms_request_missing_info", "kernel_social_post", "kernel_social_react",
   "kernel_social_follow", "kernel_social_unfollow", "kernel_social_delete", "kernel_social_set_profile",
+  "kernel_mesh_call_peer_tool", "kernel_mesh_pair_peer",
+  "kernel_federation_connect", "kernel_federation_add_peer", "kernel_federation_sync", "kernel_federation_sync_peer",
 ]);
 
 /** Names the regex matches that only talk to the operator, never to the outside. */

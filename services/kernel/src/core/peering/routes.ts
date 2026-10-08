@@ -18,6 +18,7 @@ import type { FriendsStore, Trust } from "./friends-store.js";
 import type { PeerResolver } from "./resolver.js";
 import { hexOf, isSafeReach } from "./descriptor.js";
 import type { Event as NostrEvent } from "nostr-tools/core";
+import type { LinkProof, SealedLinkProof } from "../social-net/link-proof.js";
 
 export interface PeeringRoutesDeps {
   friends: FriendsStore;
@@ -29,6 +30,18 @@ export interface PeeringRoutesDeps {
   selfNpub: () => string;
   /** Called when a friend is revoked, so in-flight transfers with them stop. */
   onRevoked?: (npub: string) => void;
+  /** Link-proof for the Social persona running here; null when none. */
+  personaProof?: () => LinkProof | null;
+  /**
+   * Seals a proof for one friend (NIP-44 v2, instance key → their instance
+   * key). Without it the persona route answers 404: the proof never leaves
+   * in the clear.
+   */
+  sealPersonaProof?: (proof: LinkProof, friendPubkeyHex: string) => SealedLinkProof;
+  /** Ask a friend which persona runs there (best-effort, throttled by the service). */
+  refreshPersona?: (npub: string) => void;
+  /** True when the instance key is the Social persona key (legacy shared key). */
+  instanceKeyShared?: () => boolean;
 }
 
 /** The absolute URL the peer signed. Rebuilt, never taken from a proxy header alone. */
@@ -55,7 +68,15 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
     } catch {
       descriptor = null;
     }
-    return { npub: deps.selfNpub(), descriptor };
+    // `shared`: the instance key is also the public persona key, so presence
+    // links the two publicly until the persona is rotated. For the UI to warn.
+    let shared = false;
+    try {
+      shared = deps.instanceKeyShared?.() ?? false;
+    } catch {
+      shared = false;
+    }
+    return { npub: deps.selfNpub(), descriptor, shared };
   });
 
   // ── Owner: friends ──────────────────────────────────────────
@@ -148,6 +169,23 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
     }
   });
 
+  // ── Called by a friend: which persona runs here ─────────────
+  // Friends only: publicly the persona and the instance stay unlinked. A
+  // stranger gets the same 403 whether or not a persona exists. The proof is
+  // sealed to the caller's instance key, so only that friend can read it.
+  server.get("/api/peering/persona", async (req, res) => {
+    const auth = await verifyRequest({ req, url: absoluteUrl(req), friends: deps.friends });
+    if (!auth.ok || !auth.npub) {
+      const signed = !!req.headers["authorization"];
+      return server.json(res, signed && auth.reason === "signer is not a trusted friend" ? 403 : 401, {
+        error: signed ? "refused" : "unauthorized",
+      });
+    }
+    const proof = deps.personaProof?.() ?? null;
+    if (!proof || !deps.sealPersonaProof || !auth.pubkeyHex) return server.json(res, 404, { error: "no persona" });
+    return server.json(res, 200, deps.sealPersonaProof(proof, auth.pubkeyHex));
+  });
+
   // ── Owner: is this friend reachable right now? ──────────────
   server.route("POST", "/api/peering/friends/:npub/probe", async ({ params: { npub } }) => {
     const peer = await deps.resolver.resolve(npub);
@@ -157,6 +195,7 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
         error: deps.friends.get(npub)?.last_error ?? "unreachable",
       };
     }
+    deps.refreshPersona?.(npub);
     return { reachable: true, via: peer.kind, origin: peer.origin };
   });
 }
@@ -214,6 +253,7 @@ function publicView(f: ReturnType<FriendsStore["list"]>[number]) {
     last_error: f.last_error,
     manual_url: f.manual_url ?? "",
     auto_accept: f.auto_accept === 1,
+    persona_npub: f.persona_npub ?? "",
     created_at: f.created_at,
   };
 }

@@ -1,6 +1,6 @@
 import { log } from "../../core/logger.js";
 import { runWithContext } from "../../core/request-context.js";
-import { isOutboundTool } from "../../core/outbound-guard.js";
+import { mustDraft } from "../../core/outbound-guard.js";
 import { isoNow } from "../../core/helpers.js";
 import { zodToJsonSchema } from "../../core/zod-to-json.js";
 import type { ToolDefinition, ToolResult } from "../../core/types.js";
@@ -26,6 +26,7 @@ import {
   failedBeforeStart,
   type ExecutionResult,
 } from "./executor/shared.js";
+import { wrapExternal, type ExternalMeta } from "../../sdk/external-content.js";
 import { agentAllowedTools, agentDeniedTools, agentVariables } from "./agent-fields.js";
 import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from "./executor/model-chain.js";
 import { assembleSystemPrompt } from "./executor/system-prompt.js";
@@ -146,9 +147,9 @@ function isQuotaErrorMessage(errorMsg: string): boolean {
 
 export { OUTBOUND_NAME_RE } from "../../core/outbound-guard.js";
 
-/** A project run never sees tools that publish or send (they go through the outbox). */
+/** A run never sees tools it must draft instead (outbox): project runs, network tools, strict mode. */
 export function filterOutboundTools<T extends { name: string; outbound?: boolean }>(tools: T[], projectId: string | null): T[] {
-  return projectId ? tools.filter((t) => !isOutboundTool(t)) : tools;
+  return tools.filter((t) => !mustDraft(t, projectId));
 }
 
 export class AgentExecutor {
@@ -1446,10 +1447,15 @@ export function abortCategory(abortReason: string): string {
   return "Other";
 }
 
-/** Resolve {{variable}} placeholders in a goal template */
+/**
+ * Resolve {{variable}} placeholders in a goal template. With `external`, each
+ * substituted value that could carry text is wrapped as third-party content;
+ * token-like values (numbers, booleans, ids, slugs, bare addresses) are not.
+ */
 export function resolveGoal(
   template: string,
   variables: Record<string, unknown>,
+  opts: { external?: ExternalMeta } = {},
 ): string {
   if (!template) return "";
   return template.replace(/\{\{(\w+(?:\.\w+)*)\}\}/g, (_match, path: string) => {
@@ -1459,8 +1465,22 @@ export function resolveGoal(
       if (value == null || typeof value !== "object") return "";
       value = (value as Record<string, unknown>)[part];
     }
-    return value != null ? String(value) : "";
+    if (value == null) return "";
+    const s = String(value);
+    if (!opts.external || s === "" || isTokenLike(value)) return s;
+    return wrapExternal(s, opts.external);
   });
+}
+
+/**
+ * Values that can't carry an instruction: numbers, booleans, and short
+ * strings with no spaces made of id/slug/address characters. Wrapping them
+ * would only bury the ids an agent needs to act on.
+ */
+const TOKEN_LIKE = /^[\w:.@\/-]{1,64}$/;
+function isTokenLike(value: unknown): boolean {
+  if (typeof value === "number" || typeof value === "boolean") return true;
+  return typeof value === "string" && TOKEN_LIKE.test(value);
 }
 
 /** Evaluate a chain condition against an execution result */

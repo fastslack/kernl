@@ -355,7 +355,7 @@ export interface KernelEvents {
 /** An outbox item changed state (proposed, edited, approved, sent, failed…). */
 export interface OutboxChangedPayload {
   id: string;
-  project_id: string;
+  project_id: string | null;
   status: string;
 }
 
@@ -363,7 +363,7 @@ export interface OutboxChangedPayload {
 export interface OutboxRejectedPayload {
   item_id: string;
   agent_id: string;
-  project_id: string;
+  project_id: string | null;
   note: string;
 }
 

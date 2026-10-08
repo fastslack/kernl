@@ -322,7 +322,7 @@ describe("email:triage driver", () => {
   it("works end to end with real writer/dispatch whose services are absent", async () => {
     // Real AgendaWriter (all services null) + real MailOfficeDispatch whose
     // agents getter returns null — what index.ts builds when getModule finds nothing.
-    for (const m of commsMigrations.filter((m) => m.version >= 2)) db.exec(m.sql);
+    for (const m of commsMigrations.filter((m) => m.version >= 2 && m.version <= 4)) db.exec(m.sql);
     insertInbound(db, "c1", {}, { thread_id: "conv-1" });
     const triage = new EmailTriageService(db as any, {} as any);
     const item = { kind: "appointment" as const, title: "Call", start_at: "2099-10-02T10:00", all_day: false, confidence: "high" as const, evidence: "e" };

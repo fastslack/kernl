@@ -10,6 +10,7 @@
   // same way it did when this was inline. 'refresh' and 'moveagent' are
   // dispatched from here and forwarded by the world to the page unchanged.
   import { onMount, createEventDispatcher, tick } from 'svelte';
+  import { toast, confirm as confirmDialog, describeError } from '$shared/feedback';
   import type { AgentFlowEvent } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
   import { agentType, type SkinDefinition } from './office3d/index.js';
@@ -710,13 +711,14 @@
         // token comes from the layout's window.fetch interceptor.
         const r = await fetch('/api/google/auth/start?force=1', { method: 'POST' });
         const d: any = await r.json().catch(() => ({ error: `HTTP ${r.status} ${r.statusText}` }));
-        if (!r.ok) { alert(d?.error ?? `HTTP ${r.status}`); return; }
-        if (d?.error) { alert(d.error); return; }
+        if (!r.ok) { toast.error(d?.error ?? `HTTP ${r.status}`); return; }
+        if (d?.error) { toast.error(String(d.error)); return; }
         if (d?.authUrl) { window.location.href = d.authUrl; return; }
-        alert('No auth URL returned by /api/google/auth/start (response: ' + JSON.stringify(d).slice(0, 200) + ')');
+        toast.error('Google did not return a sign-in link', { detail: JSON.stringify(d).slice(0, 200), action: { label: 'Retry', run: () => { void startReauth(provider); } } });
       }
     } catch (e: any) {
-      alert(e?.message ?? String(e));
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: 'Retry', run: () => { void startReauth(provider); } } });
     } finally {
       reauthLoading = false;
     }
@@ -814,10 +816,18 @@
   async function resolveRevision(mode: 'accept' | 'reject') {
     if (!selectedAgent || !selData || revisionBusy) return;
     const name = selData.name || 'this agent';
-    const msg = mode === 'accept'
-      ? `Keep "${name}"? Clears the REVISION flag and leaves the agent running.`
-      : `Reject "${name}"? It will be DEACTIVATED. Row stays in the DB — re-enable any time.`;
-    if (!confirm(msg)) return;
+    const proceed = mode === 'accept'
+      ? await confirmDialog({
+          title: `Keep "${name}"?`,
+          body: 'The review flag is cleared and the agent keeps running exactly as it is.',
+          confirmLabel: 'Keep agent',
+        })
+      : await confirmDialog({
+          title: `Reject "${name}"?`,
+          body: 'The agent is switched off and stops running. Nothing is deleted: you can turn it back on later.',
+          confirmLabel: 'Switch off',
+        });
+    if (!proceed) return;
     revisionBusy = true;
     const body = mode === 'accept'
       ? { under_revision: false }

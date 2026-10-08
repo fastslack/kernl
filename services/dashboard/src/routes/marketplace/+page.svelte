@@ -2,6 +2,7 @@
   import { goto } from '$app/navigation';
   import { marketplace, activeTheme } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
+  import { toast, describeError } from '$shared/feedback';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import Badge from '$shared/components/Badge.svelte';
@@ -128,7 +129,8 @@
       a.click();
       URL.revokeObjectURL(url);
     } catch (e: any) {
-      alert('Export failed: ' + e.message);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: 'Retry', run: () => void doExport(id, name) } });
     }
   }
 

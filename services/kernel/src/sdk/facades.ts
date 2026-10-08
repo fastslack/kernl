@@ -13,6 +13,7 @@ import type { LlmCallRecord } from "../core/llm/call-log.js";
 import type { MediaTool, MediaToolStatus } from "../core/media-tools.js";
 import type { KernelRequestContext } from "../core/request-context.js";
 import type { PeeringService } from "../core/peering/service.js";
+import type { NostrIdentity } from "./nostr-identity.js";
 
 /**
  * The kernel's LLM driver. Every model call goes through it: provider
@@ -91,6 +92,60 @@ export function mediaToolError(tool: MediaTool, cause?: unknown): Error {
 /** The kernel's peering service, or null when peering is off. */
 export function peering(): PeeringService | null {
   return getHost().peering();
+}
+
+/**
+ * The instance's own Nostr identity (the key peering signs with), or null
+ * while peering is off. Never the user's social persona: whatever is signed
+ * with it is tied to this machine, not to the person.
+ */
+export function instanceNostrIdentity(): NostrIdentity | null {
+  const service = getHost().peering();
+  if (!service) return null;
+  // Extension bundles inline this SDK and may run on an older core whose
+  // PeeringService predates the accessor; its `identity` field is the same
+  // instance key, so fall back to it only in that case.
+  if (typeof service.instanceNostrIdentity !== "function") return service.identity ?? null;
+  return service.instanceNostrIdentity();
+}
+
+/**
+ * True when the instance key is the same key as the Social persona (a legacy
+ * install that kept old friendships). Public "this is a Kernl instance"
+ * announcements must then stay off: signing them would link the persona to
+ * the machine. False while peering is off.
+ */
+export function instanceKeyIsShared(): boolean {
+  const service = getHost().peering();
+  // An older core (see instanceNostrIdentity) cannot tell; report not shared.
+  if (!service || typeof service.instanceKeyIsShared !== "function") return false;
+  return service.instanceKeyIsShared();
+}
+
+/**
+ * Tell the kernel which Social persona runs on this instance, so trusted
+ * friends can fetch a link-proof for it over peering (never published). The
+ * kernel keeps only the proof, never the key; pass null to withdraw it.
+ *
+ * Returns false when it did not take: peering off or not started yet, an
+ * older core, or another persona already registered. Peering starts after
+ * extensions initialise, so call it again from `registerRoutes` (which runs
+ * once peering exists); nothing is stashed in between.
+ */
+export function registerPersona(identity: NostrIdentity | null): boolean {
+  const service = getHost().peering();
+  if (!service || typeof service.registerPersona !== "function") return false;
+  return service.registerPersona(identity) !== false;
+}
+
+/**
+ * Persona pubkeys (hex) of trusted friends, learned from their link-proofs.
+ * Empty when peering is off or the core predates link-proofs.
+ */
+export function friendPersonas(): string[] {
+  const service = getHost().peering();
+  if (!service || typeof service.friendPersonas !== "function") return [];
+  return service.friendPersonas();
 }
 
 /** Verify a NIP-98 signed request from a peer against the friends store. */

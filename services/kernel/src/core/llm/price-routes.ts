@@ -16,6 +16,9 @@ import type { SqliteDb } from "../db/sqlite.js";
 import { log } from "../logger.js";
 import type { LlmProviderRegistry } from "./provider-registry.js";
 import { ModelPriceStore, refreshModelPrices, isPriceable } from "./model-prices.js";
+import { storeLiteLlmToolSupport } from "./model-caps.js";
+import { verifyAll, type VerifyReport } from "./tool-verifier.js";
+import { getChatProviders } from "./readiness.js";
 import { createChainLlmClient } from "./client.js";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
@@ -50,10 +53,32 @@ export function registerPriceRoutes(
       .filter((p) => typeof p.provider?.listModels === "function")
       .map((p) => ({ slug: p.slug, listModels: () => p.provider!.listModels!() }));
 
+  // Models nobody has evidence about get asked once a pass (tool-verifier.ts).
+  // Runs after a price refresh: that is when the model lists and prices are fresh.
+  let verifying: Promise<VerifyReport[]> | null = null;
+  const verifyTools = (): Promise<VerifyReport[]> => {
+    if (verifying) return verifying;
+    const adapters = getChatProviders();
+    if (!adapters) return Promise.resolve([]);
+    verifying = verifyAll({
+      db: deps.db,
+      adapters,
+      listModels: async (slug) => (await deps.registry.getProvider(slug)?.listModels?.()) ?? [],
+      outputPrice: (slug, model) => store.list(slug).find((p) => p.model === model)?.outputPerMTok,
+    })
+      .catch((e) => { log.warn(`tool verify failed — ${String(e).slice(0, 200)}`); return []; })
+      .finally(() => { verifying = null; });
+    return verifying;
+  };
+
   const refresh = (why: string): Promise<unknown> => {
     if (running) return running;
-    running = refreshModelPrices({ store, providers: runningExternal() })
-      .then((r) => { lastRefresh = { at: new Date().toISOString(), priced: r.priced }; return r; })
+    running = refreshModelPrices({
+      store,
+      providers: runningExternal(),
+      toolSupport: (slug, verdicts) => storeLiteLlmToolSupport(deps.db, slug, verdicts),
+    })
+      .then((r) => { lastRefresh = { at: new Date().toISOString(), priced: r.priced }; void verifyTools(); return r; })
       .catch((e) => {
         lastRefresh = { at: new Date().toISOString(), priced: 0, error: String(e) };
         log.warn(`model prices: refresh (${why}) failed — ${String(e).slice(0, 200)}`);
@@ -77,6 +102,9 @@ export function registerPriceRoutes(
     last_refresh: lastRefresh,
     source: "litellm",
   }));
+
+  // Ask every unknown model now instead of waiting for the next pass.
+  server.route("POST", "/api/llm/tools/verify", async () => ({ reports: await verifyTools() }));
 
   server.route("POST", "/api/llm/prices/refresh", async () => {
     await refresh("manual");
