@@ -15,6 +15,7 @@
 #     bin/static/                 static HTML pages
 #     bin/extensions/             pre-built .kernl bundles
 #     bin/mtw-server/, bin/whatsapp-bridge/  sidecars (every platform)
+#     bin/tor/                    tor + its libraries (Tor Expert Bundle)
 #     bin/mtw.binary.toml         mtw.toml template for the sidecars (under bin/
 #                                 so every format that ships bin/ ships it too)
 #     node_modules/               native deps (downloaded for $PLATFORM)
@@ -223,6 +224,60 @@ case "$PLATFORM" in
     fi
     ;;
 esac
+
+# ── 2c.1) Vendor tor (Tor Expert Bundle) ────────────────────────────
+# The Friends page has a "Reachable from anywhere" switch that runs a Tor onion
+# service (services/kernel/src/core/peering/tor-daemon.ts). Docker gets tor
+# from apt; a native install had none, so the switch would have been a dead
+# control on exactly the machines that sit behind CGNAT or a phone's hotspot.
+#
+# The official expert bundle, pinned by version AND by sha256: the checksums
+# below are copied from that release's sha256sums-signed-build.txt, so a
+# swapped file on the mirror fails the build instead of shipping. Only tor/
+# (binary + its libraries, flat) and the licence texts are kept; the
+# pluggable transports and geoip files are for censorship circumvention, which
+# an onion service does not need, and would add ~15 MB.
+#
+# Layout matters per platform: macOS loads libevent from @executable_path and
+# Windows looks beside the .exe, but the Linux binary has no RUNPATH — the
+# kernel sets LD_LIBRARY_PATH to the binary's own directory when it spawns it.
+#
+# Best-effort like whisper: no bundle means the switch says "this install has
+# no Tor" — but a checksum mismatch is a hard failure.
+TOR_BUNDLE_VERSION="${TOR_BUNDLE_VERSION:-15.0.23}"
+case "$PLATFORM" in
+  linux-x64)    TOR_ASSET="linux-x86_64";   TOR_SHA256="08d49de27f542b8f73e2014e064d8320562b5d20019c03d4725c5a5249d97985" ;;
+  darwin-arm64) TOR_ASSET="macos-aarch64";  TOR_SHA256="e8ea3f667c83309abad34280f0f9e1cfae52843da6b8db111ca15d6221051db5" ;;
+  darwin-x64)   TOR_ASSET="macos-x86_64";   TOR_SHA256="be1be1cb13cd093713f02a0beade0d2471b61119011bfeb0efc08353eadf2e4e" ;;
+  win-x64)      TOR_ASSET="windows-x86_64"; TOR_SHA256="231dad6b9cb401a54c260db7046965ef04e4f72ff071b140d423fb5da281ab1e" ;;
+esac
+# A bumped version without new checksums would only ever fail the check.
+if [ -n "${TOR_BUNDLE_SHA256:-}" ]; then TOR_SHA256="$TOR_BUNDLE_SHA256"; fi
+TOR_TARBALL="tor-expert-bundle-${TOR_ASSET}-${TOR_BUNDLE_VERSION}.tar.gz"
+TOR_URL="https://archive.torproject.org/tor-package-archive/torbrowser/${TOR_BUNDLE_VERSION}/${TOR_TARBALL}"
+
+echo "▶ downloading tor ($PLATFORM, expert bundle $TOR_BUNDLE_VERSION)"
+TMP_T="$(mktemp -d)"
+if curl -fsSL -o "$TMP_T/tor.tar.gz" "$TOR_URL"; then
+  GOT="$(sha256sum "$TMP_T/tor.tar.gz" | cut -d' ' -f1)"
+  if [ "$GOT" != "$TOR_SHA256" ]; then
+    echo "ERROR: $TOR_TARBALL sha256 is $GOT, expected $TOR_SHA256" >&2
+    exit 1
+  fi
+  tar xzf "$TMP_T/tor.tar.gz" -C "$TMP_T"
+  mkdir -p "$SRC_TREE/bin/tor/licenses"
+  find "$TMP_T/tor" -maxdepth 1 -type f -exec cp -a {} "$SRC_TREE/bin/tor/" \;
+  cp -a "$TMP_T/docs/." "$SRC_TREE/bin/tor/licenses/"
+  case "$PLATFORM" in
+    win-x64) chmod 0755 "$SRC_TREE/bin/tor/tor.exe" ;;
+    *)       chmod 0755 "$SRC_TREE/bin/tor/tor" ;;
+  esac
+  echo "  tor bundle: $(du -sh "$SRC_TREE/bin/tor" | cut -f1)"
+else
+  echo "  WARN: no tor bundle at $TOR_URL"
+  echo "  WARN: the Friends page's Tor switch will report that this install has no Tor"
+fi
+rm -rf "$TMP_T"
 
 # ── 2d) Vendor mtw-server + whatsapp-bridge ─────────────────────────
 # Docker runs both as their own services; a binary install has no compose

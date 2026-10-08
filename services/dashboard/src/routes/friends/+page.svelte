@@ -13,6 +13,7 @@
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
+  import Toggle from '$lib/components/settings/Toggle.svelte';
 
   interface Friend {
     npub: string;
@@ -71,7 +72,67 @@
     }
   }
 
-  onMount(load);
+  onMount(() => {
+    load();
+    loadTor();
+    return () => clearTimeout(torPoll);
+  });
+
+  // ── Tor: reachable from any network ─────────────────────────
+  interface TorStatus {
+    enabled: boolean;
+    state: 'off' | 'missing' | 'starting' | 'up' | 'error';
+    progress: number;
+    onion: string;
+    error: string;
+    external: boolean;
+  }
+  let tor: TorStatus | null = null;
+  let torBusy = false;
+  let torCopied = false;
+  let torPoll: ReturnType<typeof setTimeout> | undefined;
+
+  async function loadTor() {
+    try {
+      tor = await call('/api/peering/tor');
+    } catch {
+      tor = null; // an older kernel without the switch: hide the row
+    }
+    scheduleTorPoll();
+  }
+
+  /** While tor connects the progress moves every few seconds; follow it. */
+  function scheduleTorPoll() {
+    clearTimeout(torPoll);
+    if (tor?.state === 'starting') torPoll = setTimeout(loadTor, 1500);
+    else if (tor?.state === 'up' && !descriptor?.reach?.some((r) => r.kind === 'onion')) load();
+  }
+
+  async function setTor(on: boolean) {
+    torBusy = true;
+    try {
+      tor = await call('/api/peering/tor', { method: 'PUT', body: JSON.stringify({ enabled: on }) });
+      error = '';
+      await load(); // the reach chips change with it
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      await loadTor();
+    } finally {
+      torBusy = false;
+    }
+    scheduleTorPoll();
+  }
+
+  async function copyOnion() {
+    if (!tor?.onion) return;
+    try {
+      await navigator.clipboard.writeText(tor.onion);
+      torCopied = true;
+      setTimeout(() => (torCopied = false), 1600);
+    } catch {
+      error = 'could not reach the clipboard — select the address and copy it by hand';
+    }
+  }
 
   async function copySelf() {
     try {
@@ -236,6 +297,30 @@
       <span class="chip warn">no reachable address</span>
     {/if}
   </div>
+
+  {#if tor}
+    <div class="tor">
+      <Toggle checked={tor.enabled} disabled={torBusy} on:click={() => tor && setTor(!tor.enabled)} />
+      <div class="tor-body">
+        <span class="tor-title">Reachable from anywhere <span class="tor-sub">· Tor</span></span>
+        {#if tor.state === 'up'}
+          <span class="tor-line">
+            Friends reach you from any network, no ports to open.
+            <button class="link" on:click={copyOnion} title={tor.onion}>{torCopied ? 'copied' : 'copy onion address'}</button>
+            {#if tor.external}<span class="tor-note">(a Tor already running on this machine)</span>{/if}
+          </span>
+        {:else if tor.state === 'starting'}
+          <span class="tor-line">Connecting to the Tor network… {tor.progress}%</span>
+          <span class="tor-bar"><span style="width: {Math.max(4, tor.progress)}%"></span></span>
+          {#if tor.error}<span class="tor-line warn">{tor.error}</span>{/if}
+        {:else if tor.state === 'missing' || tor.state === 'error'}
+          <span class="tor-line warn">{tor.error}</span>
+        {:else}
+          <span class="tor-line">Off — friends reach you only on this network. Turn it on to be reachable from home, the office or a phone's hotspot alike.</span>
+        {/if}
+      </div>
+    </div>
+  {/if}
 </section>
 
 <!-- ── Add ─────────────────────────────────────────────────────── -->
@@ -367,6 +452,24 @@
   .id-foot { display: flex; align-items: flex-start; gap: 16px; margin-top: 14px; flex-wrap: wrap; }
   .id-foot .hint { flex: 1; min-width: 260px; margin: 0; }
   .reach { display: flex; gap: 6px; flex-wrap: wrap; }
+
+  /* ── Tor switch ───────────────────────────────────────────── */
+  .tor {
+    display: flex; align-items: flex-start; gap: 12px;
+    margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--border, #22263a);
+  }
+  .tor :global(.tg) { margin-top: 2px; }
+  .tor-body { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1; }
+  .tor-title { font-size: 13px; color: var(--text-1); }
+  .tor-sub { color: var(--purple, #8B7CF6); font-family: var(--font-mono); font-size: 11px; }
+  .tor-line { font-size: 12.5px; line-height: 1.5; color: var(--text-2); }
+  .tor-line.warn { color: var(--orange, #F0883E); }
+  .tor-note { color: var(--text-3); margin-left: 4px; }
+  .tor-bar {
+    display: block; height: 3px; max-width: 320px; border-radius: 2px;
+    background: var(--border, #22263a); overflow: hidden;
+  }
+  .tor-bar span { display: block; height: 100%; background: var(--purple, #8B7CF6); transition: width 0.4s ease; }
 
   /* ── Chips & pills ────────────────────────────────────────── */
   .chip {

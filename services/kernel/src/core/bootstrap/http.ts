@@ -419,6 +419,16 @@ export async function initHttpAndMcp(args: {
         });
         if (peering) {
           void peering.start();
+          // The Tor switch on the Friends page. The kernel runs the daemon
+          // itself (bundled binary natively, apt's in Docker); its onion goes
+          // into our presence only while it is actually answering.
+          const { TorDaemon } = await import("../peering/tor-daemon.js");
+          const tor = new TorDaemon({
+            sqlite,
+            kernelPort: config.dashboard.port,
+            onChange: () => peering.refresh(tor.status().onion),
+          });
+          void tor.reconcile().catch((err) => log.warn("peering: tor failed to start", err));
           // Friend-to-friend text and files (file-lane). Started first so a
           // revocation can cancel what is in flight — but in its own try: a
           // file-lane failure must not take the friends routes down with it.
@@ -450,6 +460,7 @@ export async function initHttpAndMcp(args: {
             sealPersonaProof: (proof, friendPubkeyHex) => peering.sealPersonaProofFor(proof, friendPubkeyHex),
             refreshPersona: (npub) => void peering.refreshPersona(npub),
             instanceKeyShared: () => peering.instanceKeyIsShared(),
+            tor: { status: () => tor.status(), setEnabled: (on) => tor.setEnabled(on) },
           });
         }
       } catch (err) {
