@@ -10,6 +10,8 @@ import type { NostrIdentity } from "../nostr/nostr-identity.js";
 import type { FriendsStore } from "./friends-store.js";
 import { buildAuthHeader } from "./auth.js";
 import type { PeerResolver, FetchLike } from "./resolver.js";
+import { npubOf } from "./descriptor.js";
+import { openLinkProof, verifyLinkProof } from "../social-net/link-proof.js";
 
 export interface PeerResponse<T = unknown> {
   ok: boolean;
@@ -26,6 +28,18 @@ export interface PeerClientDeps {
   resolver: PeerResolver;
   fetchImpl: FetchLike;
   timeoutMs?: number;
+  /**
+   * Called after any request to a friend succeeds. The peering service uses
+   * it to learn the friend's persona while they are known to be answering.
+   * Must not throw (errors are swallowed anyway).
+   */
+  onFriendAnswered?: (npub: string) => void;
+}
+
+/** How a persona fetch ended. `definitive`: the friend gave an answer worth caching for hours. */
+export interface PersonaFetchOutcome {
+  persona: string | null;
+  definitive: boolean;
 }
 
 export const REQUEST_TIMEOUT_MS = 15_000;
@@ -34,6 +48,8 @@ export const REQUEST_TIMEOUT_MS = 15_000;
  * (see MIN_ONION_UPLOAD_BYTES_PER_SEC), so the caller must not abort sooner.
  */
 export const ONION_PUT_TIMEOUT_MS = 11 * 60_000;
+/** Where a friend hands over the link-proof of its Social persona. */
+export const PERSONA_PATH = "/api/peering/persona";
 
 export class PeerClient {
   constructor(private deps: PeerClientDeps) {}
@@ -72,7 +88,10 @@ export class PeerClient {
         signal: controller.signal,
       });
       const body = await res.json().catch(() => undefined);
-      if (res.ok) this.deps.friends.markSeen(npub, peer.origin);
+      if (res.ok) {
+        this.deps.friends.markSeen(npub, peer.origin);
+        this.answered(npub);
+      }
       return { ok: res.ok, status: res.status, data: body, via: peer.kind, error: res.ok ? undefined : `HTTP ${res.status}` };
     } catch (err) {
       return { ok: false, status: 0, error: err instanceof Error ? err.message : String(err), via: peer.kind };
@@ -131,6 +150,56 @@ export class PeerClient {
     }
   }
 
+  /**
+   * Ask a trusted friend which Social persona runs on their instance and
+   * remember it once its link-proof checks out against their instance key.
+   * A 404 means they have none (any old one is forgotten); any other failure
+   * keeps what we knew. Returns the persona hex, or null. Never throws.
+   */
+  async fetchPersona(npub: string): Promise<string | null> {
+    return (await this.fetchPersonaOutcome(npub)).persona;
+  }
+
+  /**
+   * fetchPersona, plus whether the answer was definitive: a proof (good or
+   * bad), a 404 (no persona) or a 403 (they do not trust us) is an answer; a
+   * network error, a timeout or a 5xx is not, and is worth retrying soon.
+   * The proof arrives NIP-44 sealed to our instance key (openLinkProof).
+   */
+  async fetchPersonaOutcome(npub: string): Promise<PersonaFetchOutcome> {
+    try {
+      const friend = this.deps.friends.get(npub);
+      if (!friend || friend.trust !== "trusted") return { persona: null, definitive: true };
+      const res = await this.request<unknown>(npub, PERSONA_PATH, "GET");
+      if (!res.ok) {
+        // A persona is an extra: a friend without one (or on an older core)
+        // must not show up as broken, so whatever error was there stays.
+        this.deps.friends.markError(npub, friend.last_error);
+        if (res.status === 404) this.deps.friends.setPersona(npub, "");
+        return { persona: null, definitive: res.status === 404 || res.status === 403 };
+      }
+      const opened = openLinkProof(res.data, this.deps.identity.secretKey, friend.pubkey_hex);
+      const checked = verifyLinkProof(opened, friend.pubkey_hex);
+      if (!checked.ok) {
+        log.debug(`peering: persona proof from ${npub} rejected: ${opened === null ? "not sealed for us" : checked.error}`);
+        return { persona: null, definitive: true };
+      }
+      this.deps.friends.setPersona(npub, npubOf(checked.proof.persona));
+      return { persona: checked.proof.persona, definitive: true };
+    } catch (err) {
+      log.debug(`peering: persona fetch from ${npub} failed: ${err instanceof Error ? err.message : String(err)}`);
+      return { persona: null, definitive: false };
+    }
+  }
+
+  private answered(npub: string): void {
+    try {
+      this.deps.onFriendAnswered?.(npub);
+    } catch {
+      // best-effort by contract
+    }
+  }
+
   private async request<T>(
     npub: string,
     path: string,
@@ -170,6 +239,7 @@ export class PeerClient {
       }
       const data = (await res.json()) as T;
       this.deps.friends.markSeen(npub, peer.origin);
+      this.answered(npub);
       return { ok: true, status: res.status, data, via: peer.kind };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

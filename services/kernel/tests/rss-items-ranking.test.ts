@@ -114,7 +114,8 @@ describe("kernel_rss_items ranking", () => {
     expect(Number(header![1])).toBeLessThanOrEqual(3);
 
     // top result is the most alpha-heavy item
-    const firstBullet = text.split("\n").find((l) => l.startsWith("- "));
+    // each item is wrapped as untrusted: "- <external …>\n…\n</external>"
+    const firstBullet = text.match(/^- <external[\s\S]*?<\/external>/m)?.[0];
     expect(firstBullet).toContain("alpha alpha alpha");
 
     // beta-only items must NOT survive an alpha-only top-3
@@ -134,7 +135,8 @@ describe("kernel_rss_items ranking", () => {
     const text = await callText(e.items, { query: "alpha", limit: 3 });
     const header = text.match(/## Items \((\d+)\)/);
     expect(Number(header![1])).toBeLessThanOrEqual(3);
-    const firstBullet = text.split("\n").find((l) => l.startsWith("- "));
+    // each item is wrapped as untrusted: "- <external …>\n…\n</external>"
+    const firstBullet = text.match(/^- <external[\s\S]*?<\/external>/m)?.[0];
     expect(firstBullet).toContain("alpha alpha alpha");
   });
 });
