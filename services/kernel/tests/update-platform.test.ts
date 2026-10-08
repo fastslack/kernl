@@ -16,7 +16,9 @@
  */
 import { describe, it, expect } from "bun:test";
 import {
+  DOCKER_UPDATE_HINT,
   assetSpecFor,
+  dockerUpdateHint,
   installKind,
   installRootFrom,
   isSwappable,
@@ -271,5 +273,38 @@ describe("relaunchCommandFor", () => {
   it("has nothing to start for an install it does not manage", () => {
     expect(relaunchCommandFor("/opt/kernl", "linux-package")).toBeNull();
     expect(relaunchCommandFor("/whatever", "unknown")).toBeNull();
+  });
+});
+
+describe("dockerUpdateHint", () => {
+  const labels = {
+    "com.docker.compose.project.working_dir": "/home/op/kernl",
+    "com.docker.compose.project.config_files":
+      "/home/op/kernl/docker-compose.yml,/home/op/kernl/docker-compose.gpu.yml,/home/op/kernl/docker-compose.host.yml",
+  };
+
+  it("rebuilds the stack with every compose file it was started with", () => {
+    // The generic line names only docker-compose.yml: run on a stack with
+    // overrides, it brought the kernel back without the host folders and the
+    // Claude Code session.
+    const files = "-f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.host.yml";
+    expect(dockerUpdateHint(labels)).toBe(
+      `cd /home/op/kernl && git pull && docker compose ${files} build kernel dashboard ` +
+        `&& docker compose ${files} up -d kernel dashboard`,
+    );
+  });
+
+  it("keeps a file from another directory absolute and quotes what the shell would split", () => {
+    const hint = dockerUpdateHint({
+      "com.docker.compose.project.working_dir": "/home/op/my stack",
+      "com.docker.compose.project.config_files": "/home/op/my stack/docker-compose.yml,/etc/kernl/extra.yml",
+    });
+    expect(hint).toStartWith("cd '/home/op/my stack' && git pull && docker compose -f docker-compose.yml -f /etc/kernl/extra.yml build");
+  });
+
+  it("falls back to the generic line without compose labels", () => {
+    expect(dockerUpdateHint(null)).toBe(DOCKER_UPDATE_HINT);
+    expect(dockerUpdateHint({})).toBe(DOCKER_UPDATE_HINT);
+    expect(dockerUpdateHint({ "com.docker.compose.project.config_files": "/a/docker-compose.yml" })).toBe(DOCKER_UPDATE_HINT);
   });
 });
