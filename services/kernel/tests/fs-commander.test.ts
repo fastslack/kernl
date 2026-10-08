@@ -14,9 +14,11 @@ import {
 import { PathOutOfScopeError } from "../assets/extensions/productivity/filesystem-commander/_module/providers/provider.js";
 
 // A partial KernelConfig is enough for these unit tests — the service only
-// reads `fsCommander.allowedRoots` at construction.
+// reads `fsCommander.allowedRoots` and `sqlite.path` at construction.
 function mkConfig(allowedRoots: string[]): KernelConfig {
   return {
+    // The service puts received files next to the database.
+    sqlite: { path: "/tmp/kernl-fs-commander-test/kernel.db" },
     fsCommander: {
       allowedRoots,
       maxPreviewBytes: 2_097_152,
@@ -213,6 +215,8 @@ describe("FsCommanderService remotes (persistence)", () => {
   it("persists an SFTP remote encrypted and reloads it on a fresh service", async () => {
     const db = mkDb();
     const cfg: KernelConfig = {
+      // The service puts received files next to the database.
+      sqlite: { path: "/tmp/kernl-fs-commander-test/kernel.db" },
       fsCommander: {
         allowedRoots: [sandbox],
         maxPreviewBytes: 2_097_152,
@@ -249,6 +253,8 @@ describe("FsCommanderService remotes (persistence)", () => {
     const svc = new FsCommanderService(
       mkDb(),
       {
+        // The service puts received files next to the database.
+        sqlite: { path: "/tmp/kernl-fs-commander-test/kernel.db" },
         fsCommander: {
           allowedRoots: [sandbox],
           maxPreviewBytes: 2_097_152,
