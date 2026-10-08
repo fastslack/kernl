@@ -25,11 +25,25 @@
 #                its writes never reach the repo; the kernel refuses such paths
 #                and notifies about existing ones. It may contain KERNL_FS_ROOT:
 #                that folder stays read-only (the more specific mount wins).
+# KERNL_REPO_PATH
+#                optional. The kernl repo itself, for the Kernl fixer (the
+#                "Que lo arregle Claude Code" button in the chief's office).
+#                Only its .git is mounted writable: the working tree stays as
+#                read-only as KERNL_FS_ROOT makes it, so a fix can never touch
+#                what other sessions have uncommitted. Fixes live as git
+#                worktrees under KERNL_FIX_ROOT, each on its own fix/ branch.
+# KERNL_REPO_GIT required with KERNL_REPO_PATH: its .git, written in .env as
+#                KERNL_REPO_GIT=${KERNL_REPO_PATH}/.git (compose has no
+#                "if set, append" interpolation).
+# KERNL_FIX_ROOT optional. Where those worktrees go. Must be inside
+#                KERNL_PROJECTS_ROOT (writable) and outside KERNL_FS_ROOT.
 
 services:
   kernel:
     environment:
       FS_COMMANDER_ALLOWED_ROOTS: ${KERNL_FS_ROOT:?set KERNL_FS_ROOT in .env to the folder the Filesystem Commander may browse}
+      KERNL_REPO_PATH: ${KERNL_REPO_PATH:-}
+      KERNL_FIX_ROOT: ${KERNL_FIX_ROOT:-}
     volumes:
       # Read-only: the commander exposes delete and move over HTTP, so write
       # access is a deliberate later step, not a default.
@@ -38,6 +52,9 @@ services:
       # /dev/null onto itself — compose has no optional volumes, and that is
       # the one bind that exists everywhere and changes nothing.
       - ${KERNL_PROJECTS_ROOT:-/dev/null}:${KERNL_PROJECTS_ROOT:-/dev/null}
+      # Writable .git of the kernl repo, nothing else of it (see KERNL_REPO_PATH).
+      # Unset, /dev/null lands on a path nothing reads.
+      - ${KERNL_REPO_GIT:-/dev/null}:${KERNL_REPO_GIT:-/run/kernl-repo-unset}
       # The operator's Claude Code login. claude_code agents run the CLI with
       # HOME=$HOST_HOME and read their OAuth session from here; without these
       # two mounts every claude_code run fails "OAuth session expired and could

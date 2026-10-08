@@ -88,3 +88,22 @@ describe("kernl bug routes · review fixes", () => {
     expect(n).toBe(1);
   });
 });
+
+describe("kernl bug fix routes", () => {
+  it("say why the fixer is unavailable instead of failing obscurely", async () => {
+    const pre = await call("GET", "/api/kernl/bugs/fix/preflight");
+    expect(pre.ok).toBe(false);
+    expect(pre.reasons[0]).toMatch(/not available/);
+    const { bug } = bugs.report({ title: "x", source: "chief" });
+    expect((await call("GET", `/api/kernl/bugs/${bug.id}/fix`)).fix).toBeNull();
+    await expect(call("POST", `/api/kernl/bugs/${bug.id}/fix`)).rejects.toThrow(/not available/);
+  });
+
+  it("lists the fix status next to each report", async () => {
+    const { bug } = bugs.report({ title: "x", source: "chief" });
+    const fixes = { get: (id: string) => (id === bug.id ? { status: "running" } : null), preflight: () => ({ ok: true, reasons: [] }) };
+    const fs = fakeServer();
+    registerKernlBugRoutes(fs.server as any, { bugs, service, fixes: fixes as any });
+    expect((await fs.call("GET", "/api/kernl/bugs")).fixes).toEqual({ [bug.id]: "running" });
+  });
+});
