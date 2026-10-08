@@ -6,6 +6,7 @@ import {
   type ToolDefinition,
   RankingService,
   limitArg,
+  wrapExternal,
 } from "@kernl/extension-sdk";
 import type { RssRegistryService } from "./service.js";
 import type { RssItemWithFeed } from "./types.js";
@@ -89,8 +90,11 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
             ? service.getFeedBySlug(slug)
             : null;
         if (!feed) return errorResult("Feed not found");
+        // The feed's name and description are written by whoever publishes it.
+        const about = [feed.name, feed.description ?? ""].filter(Boolean).join("\n");
         return textResult(
-          `## ${feed.name}\n` +
+          `## Feed ${feed.slug}\n` +
+            `${wrapExternal(about, { source: "rss", from: feed.feed_url })}\n` +
             `- Slug: ${feed.slug}\n` +
             `- URL: ${feed.feed_url}\n` +
             `- Status: ${feed.status}\n` +
@@ -137,7 +141,10 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
         if (feeds.length === 0) return textResult("No feeds found");
         return textResult(
           `## Search Results (${feeds.length})\n\n` +
-            feeds.map((f) => `- **${f.name}** (${f.slug})\n  ${f.description?.slice(0, 100) || f.feed_url}`).join("\n"),
+            feeds
+              .map((f) => `- (${f.slug}) ${f.feed_url}\n  ` +
+                wrapExternal(`${f.name}\n${f.description?.slice(0, 100) ?? ""}`, { source: "rss", from: f.feed_url }))
+              .join("\n"),
         );
       },
     }),
@@ -171,7 +178,7 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
       handler: async ({ id }) => {
         if (id) {
           const r = await service.fetchFeed(id);
-          if (!r.ok) return errorResult(`Fetch failed: ${r.error}`);
+          if (!r.ok) return errorResult(`Fetch failed: ${wrapExternal(String(r.error ?? ""), { source: "rss", from: id })}`);
           return textResult(`Fetched ${r.feed_id}: ${r.new_items} new of ${r.total_items} total`);
         }
         const all = await service.fetchAllActive();
@@ -226,7 +233,7 @@ export function rssRegistryTools(service: RssRegistryService): ToolDefinition[] 
               .slice(0, 30)
               .map(
                 (i) =>
-                  `- **${i.title || "(untitled)"}** — ${i.feed_name}` +
+                  `- ${wrapExternal(`${i.title || "(untitled)"} — ${i.feed_name}`, { source: "rss", from: i.feed_name })}` +
                   (i.published_at ? `  \n  ${i.published_at}` : ""),
               )
               .join("\n"),

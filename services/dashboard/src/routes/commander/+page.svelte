@@ -42,7 +42,7 @@
 	import Pane from '$lib/components/commander/Pane.svelte';
 	import StatusBar from '$lib/components/commander/StatusBar.svelte';
 	import OpsBar from '$lib/components/commander/OpsBar.svelte';
-	import ConfirmDialog from '$lib/components/commander/ConfirmDialog.svelte';
+	import { confirm as confirmDialog, ask } from '$shared/feedback';
 	import ProgressToast from '$lib/components/commander/ProgressToast.svelte';
 	import CommandBar from '$lib/components/commander/CommandBar.svelte';
 	import PreviewPane from '$lib/components/commander/PreviewPane.svelte';
@@ -129,14 +129,11 @@
 	}
 
 	// ── Modal state ──────────────────────────────────────────────────
-	type Modal =
-		| { kind: 'mkdir' }
-		| { kind: 'rename'; current: string }
-		| { kind: 'delete'; paths: string[]; recursive: boolean }
-		| { kind: 'copy-to'; items: Array<{ from: string; to: string }>; dst: PaneId }
-		| { kind: 'move-to'; items: Array<{ from: string; to: string }>; dst: PaneId }
-		| { kind: 'cmd' };
+	type Modal = { kind: 'cmd' };
 	let modal: Modal | null = null;
+	// True while one of the feedback kit's dialogs (confirm / ask) is open. Those
+	// render outside this page, so the global key handler must not act on files.
+	let dialogDepth = 0;
 
 	// ── OP subscriptions (auto-cleanup) ─────────────────────────────
 	const opStreams = new Map<string, { close: () => void }>();
@@ -469,12 +466,12 @@
 	function handleAction(id: string): void {
 		switch (id) {
 			case 'mkdir':
-				modal = { kind: 'mkdir' };
+				void promptMkdir();
 				break;
 			case 'rename': {
 				const e = currentEntry();
 				if (!e) return;
-				modal = { kind: 'rename', current: e.name };
+				void promptRename(e.name);
 				break;
 			}
 			case 'delete': {
@@ -483,7 +480,7 @@
 				const recursive = activeT!.entries.some(
 					(e) => e.kind === 'dir' && (activeT!.selection.has(e.name) || e.name === activeT!.cursor)
 				);
-				modal = { kind: 'delete', paths, recursive };
+				void confirmDelete(paths, recursive);
 				break;
 			}
 			case 'copy':
@@ -515,13 +512,7 @@
 			case 'bookmark': {
 				if (!activeT) return;
 				const suggested = basenameHostPath(activeT.path) || activeT.path;
-				modal = {
-					kind: 'mkdir' // reuse the prompt dialog by misnaming; handled below
-				} as typeof modal;
-				// Inline one-off prompt: create an anonymous mkdir-like modal for label.
-				// We stash the suggested label into the mkdir handler via a closure below.
-				pendingBookmarkLabel = suggested;
-				awaitingBookmark = true;
+				void promptBookmark(suggested);
 				break;
 			}
 			case 'share':
@@ -586,10 +577,6 @@
 		}
 	}
 
-	// Bookmark-label prompt state (reuses the mkdir modal shape to avoid a new one).
-	let awaitingBookmark = false;
-	let pendingBookmarkLabel = '';
-
 	function queueTransfer(kind: 'copy' | 'move'): void {
 		if (!activeT || !passiveT) return;
 		const paths = selectedPaths(activeT);
@@ -598,17 +585,100 @@
 			from,
 			to: joinPath(passiveT!.path, basenameHostPath(from))
 		}));
-		modal =
-			kind === 'copy'
-				? { kind: 'copy-to', items, dst: passiveSide }
-				: { kind: 'move-to', items, dst: passiveSide };
+		void confirmTransfer(kind, items, passiveSide);
 	}
 
-	async function doDelete(): Promise<void> {
-		if (!modal || modal.kind !== 'delete' || !activeT) return;
-		const paths = modal.paths;
-		const recursive = modal.recursive;
-		modal = null;
+	/** Runs a kit dialog while keeping the page's keyboard shortcuts quiet. */
+	async function withDialog<T>(run: () => Promise<T>): Promise<T> {
+		dialogDepth++;
+		try {
+			return await run();
+		} finally {
+			dialogDepth--;
+		}
+	}
+
+	async function confirmDelete(paths: string[], recursive: boolean): Promise<void> {
+		const what = `${paths.length} ${paths.length === 1 ? 'item' : 'items'}${recursive ? ' (folders included, with everything inside them)' : ''}`;
+		const ok = await withDialog(() =>
+			confirmDialog({
+				title: 'Delete selection?',
+				body: `${what} will be deleted for good. This cannot be undone.`,
+				confirmLabel: 'Delete',
+				danger: true,
+				...(paths.length > 10 || recursive ? { typeToConfirm: 'YES' } : {})
+			})
+		);
+		if (ok) await doDelete(paths, recursive);
+	}
+
+	async function confirmTransfer(
+		kind: 'copy' | 'move',
+		items: Array<{ from: string; to: string }>,
+		dst: PaneId
+	): Promise<void> {
+		const label = kind === 'copy' ? 'Copy' : 'Move';
+		const dstPath = dst === 'left' ? leftTab?.path : rightTab?.path;
+		const ok = await withDialog(() =>
+			confirmDialog({
+				title: `${label} ${items.length} ${items.length === 1 ? 'item' : 'items'}?`,
+				body: `To the ${dst} pane (${dstPath ?? ''}).`,
+				confirmLabel: label
+			})
+		);
+		if (ok) await doTransfer(kind, items);
+	}
+
+	async function promptMkdir(): Promise<void> {
+		const name = await withDialog(() =>
+			ask({
+				title: 'Create directory',
+				body: `In ${activeT?.path ?? ''}`,
+				label: 'Name',
+				confirmLabel: 'Create'
+			})
+		);
+		if (name !== null) await doMkdir(name);
+	}
+
+	async function promptBookmark(suggested: string): Promise<void> {
+		const label = await withDialog(() =>
+			ask({
+				title: 'Bookmark path',
+				body: `Bookmark ${activeT?.providerId}:${activeT?.path}`,
+				label: 'Label',
+				initial: suggested,
+				confirmLabel: 'Save'
+			})
+		);
+		if (label === null || !label.trim() || !activeT) return;
+		try {
+			await bookmarkAdd({
+				label: label.trim(),
+				provider_id: activeT.providerId,
+				path: activeT.path
+			});
+		} catch (err) {
+			setPaneError(activeSide, err instanceof Error ? err.message : String(err));
+		}
+	}
+
+	async function promptRename(current: string): Promise<void> {
+		const next = await withDialog(() =>
+			ask({
+				title: 'Rename',
+				body: `In ${activeT?.path ?? ''}`,
+				label: 'New name',
+				initial: current,
+				confirmLabel: 'Rename',
+				validate: (v) => validateRename(v, current)
+			})
+		);
+		if (next !== null) await doRename(current, next);
+	}
+
+	async function doDelete(paths: string[], recursive: boolean): Promise<void> {
+		if (!activeT) return;
 		try {
 			const res = await remove(activeT.providerId, paths, recursive);
 			refresh(activeSide);
@@ -639,28 +709,7 @@
 	}
 
 	async function doMkdir(name: string): Promise<void> {
-		if (!activeT || !name.trim()) {
-			modal = null;
-			awaitingBookmark = false;
-			return;
-		}
-		// Route: if this prompt was opened for a bookmark, save a bookmark instead
-		// of creating a directory.
-		if (awaitingBookmark) {
-			modal = null;
-			awaitingBookmark = false;
-			try {
-				await bookmarkAdd({
-					label: name.trim(),
-					provider_id: activeT.providerId,
-					path: activeT.path
-				});
-			} catch (err) {
-				setPaneError(activeSide, err instanceof Error ? err.message : String(err));
-			}
-			return;
-		}
-		modal = null;
+		if (!activeT || !name.trim()) return;
 		try {
 			await mkdir(activeT.providerId, joinPath(activeT.path, name.trim()), false);
 			refresh(activeSide);
@@ -676,24 +725,23 @@
 	 * silently relocating a file because the user typed a slash is exactly the
 	 * kind of surprise a file manager must not spring. Use F6 to move.
 	 */
-	function validateRename(name: string): string | null {
+	function validateRename(name: string, current: string): string | null {
 		const trimmed = name.trim();
 		if (!trimmed) return 'Name cannot be empty';
 		if (trimmed === '.' || trimmed === '..') return 'Reserved name';
 		if (trimmed.includes('/')) return 'A name cannot contain “/” — use F6 to move';
-		if (modal?.kind === 'rename' && trimmed === modal.current) return null;
+		if (trimmed === current) return null;
 		if (activeT?.entries.some((e) => e.name === trimmed)) {
 			return `“${trimmed}” already exists here`;
 		}
 		return null;
 	}
 
-	async function doRename(next: string): Promise<void> {
-		if (!modal || modal.kind !== 'rename' || !activeT) return;
-		const from = joinPath(activeT.path, modal.current);
+	async function doRename(current: string, next: string): Promise<void> {
+		if (!activeT) return;
+		const from = joinPath(activeT.path, current);
 		const to = joinPath(activeT.path, next.trim());
 		const side = activeSide;
-		modal = null;
 		if (from === to) return;
 		try {
 			await renameFs(activeT.providerId, from, to);
@@ -710,12 +758,8 @@
 		}
 	}
 
-	async function doTransfer(): Promise<void> {
-		if (!modal || !activeT || !passiveT) return;
-		if (modal.kind !== 'copy-to' && modal.kind !== 'move-to') return;
-		const { items } = modal;
-		const kind = modal.kind === 'copy-to' ? 'copy' : 'move';
-		modal = null;
+	async function doTransfer(kind: 'copy' | 'move', items: Array<{ from: string; to: string }>): Promise<void> {
+		if (!activeT || !passiveT) return;
 		try {
 			const starter = kind === 'copy' ? startCopy : startMove;
 			const opId = await starter({
@@ -763,11 +807,13 @@
 	}
 
 	function onKeydown(ev: KeyboardEvent): void {
+		// The kit's dialog preventDefaults the Escape/Enter it handled; it must not also act here.
+		if (ev.defaultPrevented) return;
 		// If any input-like element has focus, skip — let it type.
 		const tag = (ev.target as HTMLElement)?.tagName;
 		if (tag === 'INPUT' || tag === 'TEXTAREA') return;
 		// If modal is open, swallow everything except escape (dialog handles esc).
-		if (modal || shareOpen) return;
+		if (modal || shareOpen || dialogDepth > 0) return;
 
 		if (ev.key === 'Tab') {
 			ev.preventDefault();
@@ -1017,56 +1063,7 @@
 </div>
 
 <!-- Modals -->
-{#if modal?.kind === 'mkdir'}
-	<ConfirmDialog
-		title={awaitingBookmark ? 'Bookmark path' : 'Create directory'}
-		message={awaitingBookmark
-			? `Bookmark ${activeT?.providerId}:${activeT?.path}`
-			: `In ${activeT?.path ?? ''}`}
-		inputLabel={awaitingBookmark ? 'Label' : 'Name'}
-		initialValue={awaitingBookmark ? pendingBookmarkLabel : ''}
-		confirmLabel={awaitingBookmark ? 'Save' : 'Create'}
-		on:confirm={(e) => doMkdir(e.detail.value)}
-		on:cancel={() => {
-			modal = null;
-			awaitingBookmark = false;
-		}}
-	/>
-{:else if modal?.kind === 'rename'}
-	<ConfirmDialog
-		title="Rename"
-		message={`In ${activeT?.path ?? ''}`}
-		inputLabel="New name"
-		initialValue={modal.current}
-		selectRange="basename"
-		validate={validateRename}
-		confirmLabel="Rename"
-		on:confirm={(e) => doRename(e.detail.value)}
-		on:cancel={() => (modal = null)}
-	/>
-{:else if modal?.kind === 'delete'}
-	<ConfirmDialog
-		title="Delete selection"
-		message={`This will remove ${modal.paths.length} entries${
-			modal.recursive ? ' (including directories)' : ''
-		}.`}
-		confirmLabel="Delete"
-		variant="danger"
-		requireTypeYes={modal.paths.length > 10 || modal.recursive}
-		on:confirm={doDelete}
-		on:cancel={() => (modal = null)}
-	/>
-{:else if modal?.kind === 'copy-to' || modal?.kind === 'move-to'}
-	<ConfirmDialog
-		title={modal.kind === 'copy-to' ? 'Copy' : 'Move'}
-		message={`${modal.items.length} item${modal.items.length > 1 ? 's' : ''} → ${
-			modal.dst === 'left' ? '← left' : 'right →'
-		} pane (${modal.dst === 'left' ? leftTab?.path : rightTab?.path})`}
-		confirmLabel={modal.kind === 'copy-to' ? 'Copy' : 'Move'}
-		on:confirm={doTransfer}
-		on:cancel={() => (modal = null)}
-	/>
-{:else if modal?.kind === 'cmd'}
+{#if modal?.kind === 'cmd'}
 	<CommandBar
 		initial=""
 		on:run={(e) => runCmd(e.detail.cmd)}

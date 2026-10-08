@@ -1,13 +1,19 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { house } from '$lib/stores.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import KpiCard from '$shared/components/KpiCard.svelte';
   import Badge from '$shared/components/Badge.svelte';
   import Empty from '$shared/components/Empty.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
   import { fmtTime, formatCents } from '$shared/utils';
 
   $: hd = ($house as any);
+  // The store is fed by a channel push that may never come (module absent):
+  // show the skeleton for a bounded time, then fall back to the empty state.
+  let waited = false;
+  onMount(() => { const t = setTimeout(() => (waited = true), 4000); return () => clearTimeout(t); });
   // API shape: { available, overdueMaintenance:[], upcomingMaintenance:[], activeProjects:[],
   //              openIncidents:[], expiringWarranties:[], ytdSpendCents, applianceCount, vendorCount }
   $: maintenance = (hd?.overdueMaintenance ?? []) as any[];
@@ -20,6 +26,9 @@
 
 <ViewHeader title="House" sub="Home management" />
 
+{#if !hd && !waited}
+  <Skeleton variant="cards" rows={6} />
+{:else}
 <div class="kpi-row anim">
     <KpiCard label="Overdue Maintenance" value={maintenance.length} accent="--red" color={maintenance.length > 0 ? 'var(--red)' : 'var(--text-1)'} />
     <KpiCard label="Active Projects" value={projects.length} accent="--blue" color="var(--blue)" />
@@ -101,4 +110,5 @@
       hint="Track appliances, maintenance schedules, warranties and repair projects in one place. Ask your assistant to log an appliance or a repair to get started."
     />
   </Panel>
+{/if}
 {/if}

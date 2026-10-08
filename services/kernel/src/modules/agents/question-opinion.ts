@@ -57,24 +57,68 @@ export function buildOpinionPrompt(q: AgentQuestion, asker: OpinionAsker | undef
   return lines.join("\n");
 }
 
+/**
+ * Why there is no opinion, in terms the card can explain. `no_answer`: a model
+ * answered but never got to the JSON (a reasoning model that thinks out loud
+ * and runs out of room, or one that ignores the format). `unavailable`: no
+ * model answered at all.
+ */
+export class OpinionError extends Error {
+  constructor(readonly reason: "no_answer" | "unavailable", readonly detail: string) {
+    super(detail);
+    this.name = "OpinionError";
+  }
+}
+
+/**
+ * Reasoning models (nemotron-3-super on NVIDIA, measured 2026-10-08) think in
+ * plain text before answering: at 700 tokens the reply was cut mid-thought,
+ * "We need to produce JSON with answer, reasoning…", and the card showed that
+ * raw. So: room to think, and one stricter retry before giving up.
+ */
+const FIRST_BUDGET = 2500;
+const RETRY_BUDGET = 5000;
+const RETRY_NUDGE: Record<KernelLanguage, string> = {
+  es: "\n\nIMPORTANTE: tu respuesta anterior no fue el JSON. Respondé únicamente con el objeto JSON, sin razonamiento ni texto antes o después.",
+  en: "\n\nIMPORTANT: your previous reply was not the JSON. Reply with the JSON object only, with no reasoning or text before or after it.",
+};
+
+const NO_JSON = /did not return JSON|no answer/i;
+
 export async function askOpinion(
   q: AgentQuestion,
   asker: OpinionAsker | undefined,
   language: KernelLanguage,
   chatJson: ChatJson,
 ): Promise<QuestionOpinion> {
-  const raw = (await chatJson({
-    system: SYSTEM[language],
-    user: buildOpinionPrompt(q, asker),
-    maxTokens: 700,
-    caller: "agents:question-opinion",
-  })) as Partial<{ answer: unknown; reasoning: unknown; matches_option: unknown }> | null;
-  const answer = typeof raw?.answer === "string" ? raw.answer.trim() : "";
-  if (!answer) throw new Error("LLM returned no answer");
-  const n = typeof raw?.matches_option === "number" ? Math.trunc(raw.matches_option) : NaN;
-  return {
-    answer,
-    reasoning: typeof raw?.reasoning === "string" ? raw.reasoning.trim() : "",
-    matches_option: n >= 1 && n <= q.options.length ? n - 1 : null,
-  };
+  const user = buildOpinionPrompt(q, asker);
+  let lastNoJson = "";
+  for (const attempt of [0, 1]) {
+    let raw: Partial<{ answer: unknown; reasoning: unknown; matches_option: unknown }> | null;
+    try {
+      raw = (await chatJson({
+        system: SYSTEM[language] + (attempt === 1 ? RETRY_NUDGE[language] : ""),
+        user,
+        maxTokens: attempt === 0 ? FIRST_BUDGET : RETRY_BUDGET,
+        caller: "agents:question-opinion",
+      })) as typeof raw;
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (!NO_JSON.test(msg)) throw new OpinionError("unavailable", msg);
+      lastNoJson = msg;
+      continue;
+    }
+    const answer = typeof raw?.answer === "string" ? raw.answer.trim() : "";
+    if (!answer) {
+      lastNoJson = "LLM returned no answer";
+      continue;
+    }
+    const n = typeof raw?.matches_option === "number" ? Math.trunc(raw.matches_option) : NaN;
+    return {
+      answer,
+      reasoning: typeof raw?.reasoning === "string" ? raw.reasoning.trim() : "",
+      matches_option: n >= 1 && n <= q.options.length ? n - 1 : null,
+    };
+  }
+  throw new OpinionError("no_answer", lastNoJson);
 }

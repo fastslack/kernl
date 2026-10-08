@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg, wrapExternal } from "@kernl/extension-sdk";
 import type { RedditService } from "./service.js";
 
 export function redditTools(service: RedditService): ToolDefinition[] {
@@ -145,7 +145,7 @@ export function redditTools(service: RedditService): ToolDefinition[] {
         if (items.length === 0) return textResult("No posts found.");
         const lines = items.map(
           (i, idx) =>
-            `${idx + 1}. [${i.score} ↑] ${i.title}\n   u/${i.author}\n   ${i.permalink}`,
+            `${idx + 1}. [${i.score} ↑] ${wrapExternal(`${i.title}\nu/${i.author}`, { source: "reddit", from: `u/${i.author}` })}\n   ${i.permalink}`,
         );
         return textResult(`Top ${items.length} from r/${input.subreddit}:\n\n${lines.join("\n\n")}`);
       },

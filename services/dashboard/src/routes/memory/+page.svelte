@@ -5,10 +5,12 @@
   import KpiCard from '$shared/components/KpiCard.svelte';
   import Badge from '$shared/components/Badge.svelte';
   import Empty from '$shared/components/Empty.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
+  import { HttpFailure } from '$shared/feedback';
   import { timeAgo } from '$shared/utils';
   import {
-    getDistilledFacts,
-    getDistilledSummary,
+    apiFetchRaw,
     type DistilledFact,
     type DistilledSummary,
   } from '$lib/api.js';
@@ -19,21 +21,32 @@
   let activeCategory: string | null = null;
   let searchQuery = '';
   let loading = true;
-  let error = '';
+  // Kept set while a retry is in flight (cleared only on success) so ErrorState
+  // stays mounted and its 60 s auto-retry cap is not reset on every cycle.
+  let error: unknown = null;
+
+  // Throws HttpFailure on non-2xx so ErrorState can tell a kernel restart apart.
+  async function getJson<T>(url: string): Promise<T> {
+    const r = await apiFetchRaw(url);
+    if (!r.ok) throw new HttpFailure(r.status, r.headers.get('content-type') ?? '', await r.text());
+    return (await r.json()) as T;
+  }
 
   // ── Load ─────────────────────────────────────────
   async function load() {
     loading = true;
-    error = '';
     try {
+      const params = new URLSearchParams({ limit: '200' });
+      if (activeCategory) params.set('category', activeCategory);
       const [s, f] = await Promise.all([
-        getDistilledSummary(),
-        getDistilledFacts({ category: activeCategory ?? undefined, limit: 200 }),
+        getJson<DistilledSummary>('/api/chat/distilled-facts/summary'),
+        getJson<{ facts?: DistilledFact[] }>('/api/chat/distilled-facts?' + params.toString()),
       ]);
-      summary = s;
-      facts = f;
+      summary = { categories: s?.categories ?? [], total: s?.total ?? 0 };
+      facts = f?.facts ?? [];
+      error = null;
     } catch (err) {
-      error = err instanceof Error ? err.message : 'Failed to load memory';
+      error = err;
     } finally {
       loading = false;
     }
@@ -94,10 +107,10 @@
   sub={`${summary.total} fact${summary.total === 1 ? '' : 's'} distilled across ${summary.categories.length} categor${summary.categories.length === 1 ? 'y' : 'ies'}`}
 />
 
-{#if loading && facts.length === 0}
-  <div class="loading-view">Loading memory...</div>
-{:else if error}
-  <Empty message={`Error: ${error}`} />
+{#if error}
+  <ErrorState {error} title="Failed to load memory" on:retry={load} />
+{:else if loading && facts.length === 0}
+  <Skeleton variant="rows" rows={6} />
 {:else if summary.total === 0}
   <Empty message="No durable memory yet — archive a chat session and the distiller will extract facts automatically." />
 {:else}

@@ -45,9 +45,24 @@ export class OutboxService {
     return [...this.channels.keys()].sort();
   }
 
+  /** account_ref format per channel, for the channels that document one. */
+  refHints(): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const name of this.listChannels()) {
+      const hint = this.channels.get(name)!.refHint;
+      if (hint) out[name] = hint;
+    }
+    return out;
+  }
+
   private handler(channel: string): OutboxChannelHandler {
     const h = this.channels.get(channel);
-    if (!h) throw new Error(`No outbox channel "${channel}" is registered`);
+    if (!h) {
+      const known = this.listChannels();
+      throw new Error(
+        `No outbox channel "${channel}" is registered. Registered channels: ${known.length ? known.join(", ") : "(none)"}`,
+      );
+    }
     return h;
   }
 
@@ -67,21 +82,41 @@ export class OutboxService {
   }
 
   propose(input: {
-    project_id: string; flow_id: string; agent_id: string; run_id: string;
+    project_id: string | null; flow_id: string; agent_id: string; run_id: string;
     channel: string; account_ref: string; payload: unknown; scheduled_for?: string | null;
   }): OutboxItem {
     const h = this.handler(input.channel);
     const when = normalizeWhen(input.scheduled_for) ?? null;
-    const linked = this.projects.links(input.project_id).some((l) => l.ref_id === input.account_ref);
-    if (!linked) throw new Error(`Account ${input.account_ref} is not linked to this project`);
-    const v = h.validate(input.payload, input.account_ref);
+    const canon = (ref: string) => h.canonicalRef?.(ref) ?? ref;
+    const accountRef = canon(input.account_ref);
+    const isThisAccount = (l: { ref_id: string }) => l.ref_id === input.account_ref || canon(l.ref_id) === accountRef;
+    let projectId = input.project_id;
+    if (!projectId && input.flow_id) {
+      // A run outside any project (an office-wide directive from the chief, a
+      // chain it started) still drafts from a project's account. When exactly
+      // one project of the office has that account linked, the draft is that
+      // project's — otherwise it lands unscoped and out of the project's queue.
+      const owners = this.projects.list({ flowId: input.flow_id }).filter((p) => this.projects.links(p.id).some(isThisAccount));
+      if (owners.length === 1) projectId = owners[0].id;
+    }
+    if (projectId) {
+      const links = this.projects.links(projectId);
+      const linked = links.some(isThisAccount);
+      if (!linked) {
+        const known = links.filter((l) => l.kind === "social_account" || l.kind === "email_account").map((l) => l.ref_id);
+        throw new Error(
+          `Account ${input.account_ref} is not linked to this project. Linked accounts: ${known.length ? known.join(", ") : "(none)"}`,
+        );
+      }
+    }
+    const v = h.validate(input.payload, accountRef);
     if (!v.ok) throw new Error(v.error);
     const now = isoNow();
     const id = newId();
     this.db.prepare(
       `INSERT INTO outbox_items (id, project_id, flow_id, agent_id, run_id, channel, account_ref, payload, scheduled_for, status, created_at, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)`,
-    ).run(id, input.project_id, input.flow_id, input.agent_id, input.run_id, input.channel, input.account_ref,
+    ).run(id, projectId, input.flow_id, input.agent_id, input.run_id, input.channel, accountRef,
       JSON.stringify(input.payload ?? {}), when, now, now);
     const item = this.mustGet(id);
     this.changed(item);

@@ -2,6 +2,7 @@
   import { readApiError } from '$lib/api.js';
   import { onMount, onDestroy, tick } from 'svelte';
   import { t } from '$lib/i18n/index.js';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
   import SkillsHub from '$lib/components/SkillsHub.svelte';
   import { SUGGESTED_SKILL_REPOS, isSubscribed, type SuggestedRepo } from '$lib/skill-repos.js';
@@ -532,7 +533,8 @@
       await Promise.all([fetchList(), fetchCatalog()]);
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
-      alert(`Install failed: ${(e as Error).message}`);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: $t('feedback.retry'), run: () => void installFromStore(slug) } });
     } finally {
       installing[slug] = false;
       installing = { ...installing };
@@ -553,7 +555,8 @@
       await Promise.all([fetchList(), fetchCatalog()]);
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
-      alert(`Install failed: ${(e as Error).message}`);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: $t('feedback.retry'), run: () => void installFromCatalog(entry) } });
     } finally {
       installing[entry.slug] = false;
       installing = { ...installing };
@@ -907,37 +910,46 @@
       await fetchRepos();
       await fetchList();
     } catch (e) {
-      alert(`Sync failed: ${(e as Error).message}`);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: $t('feedback.retry'), run: () => void syncRepo(id) } });
     } finally {
       busyRepoId = null;
     }
   }
 
   async function installAllFromRepo(repo: CatalogRepoRow): Promise<void> {
-    if (!confirm(
-      `Install ALL skills from "${repo.name}"?\n\n` +
-      `This will install every discovered item from ${repo.url} into your kernel. ` +
-      `Items already installed will be skipped.\n\nProceed?`,
-    )) return;
+    if (!(await confirm({
+      title: `Install ALL skills from "${repo.name}"?`,
+      body: `This will install every discovered item from ${repo.url} into your kernel. ` +
+        `Items already installed will be skipped.`,
+      confirmLabel: 'Install all',
+    }))) return;
     busyRepoId = repo.id;
     try {
       const r = await fetch(`${BASE}/api/marketplace/repos/${repo.id}/install-all`, { method: 'POST' });
       const body = await r.json();
       if (!body.success) throw new Error(body.error ?? 'install-all failed');
-      alert(
-        `Done!\n  Installed: ${body.installed}\n  Skipped (already installed): ${body.skipped}\n  Errored: ${body.errored}`,
-      );
+      const summary = `Installed ${body.installed}, already present ${body.skipped}, errored ${body.errored}`;
+      const counts = `Installed: ${body.installed}\nSkipped (already installed): ${body.skipped}\nErrored: ${body.errored}`;
+      if (body.errored > 0) toast.error(`Install finished with errors: ${summary}`, { detail: counts });
+      else toast.success(`Install finished: ${summary}`, { detail: counts });
       await fetchList();
     } catch (e) {
-      alert(`Install-all failed: ${(e as Error).message}`);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: $t('feedback.retry'), run: () => void installAllFromRepo(repo) } });
     } finally {
       busyRepoId = null;
     }
   }
 
   async function removeRepo(id: string, name: string): Promise<void> {
-    if (!confirm(`Unsubscribe from "${name}"?\n\nThe local cache will be deleted. ` +
-                 `Items already installed from this repo stay installed (their receipts persist).`)) return;
+    if (!(await confirm({
+      title: `Unsubscribe from "${name}"?`,
+      body: `The local copy of this repository will be deleted. ` +
+        `Items already installed from it stay installed.`,
+      danger: true,
+      confirmLabel: 'Unsubscribe',
+    }))) return;
     busyRepoId = id;
     try {
       const r = await fetch(`${BASE}/api/marketplace/repos/${id}`, { method: 'DELETE' });
@@ -946,7 +958,8 @@
       await fetchRepos();
       await fetchList();
     } catch (e) {
-      alert(`Remove failed: ${(e as Error).message}`);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail });
     } finally {
       busyRepoId = null;
     }
@@ -982,7 +995,13 @@
     await actionOn(id, `/api/extensions/item/${encodeURIComponent(id)}/disable`);
   }
   async function doUninstall(id: string, name: string): Promise<void> {
-    if (!confirm(`Uninstall "${name}"? This deletes the extension files and row.`)) return;
+    if (!(await confirm({
+      title: `Uninstall "${name}"?`,
+      body: 'The extension and its files will be deleted from this kernel.',
+      danger: true,
+      confirmLabel: 'Uninstall',
+      typeToConfirm: name,
+    }))) return;
     await actionOn(id, `/api/extensions/item/${encodeURIComponent(id)}/uninstall`);
     if (selected?.id === id) selected = null;
   }
@@ -990,12 +1009,13 @@
   /** Activate a `requires_activation` extension. Goes through the same enable
    *  endpoint but shows a consent dialog first so the click is auditable. */
   async function doActivate(ext: any): Promise<void> {
-    const ok = confirm(
-      `Activate "${ext.name}"?\n\n` +
-      `This is a Pro-author extension. By activating you confirm you're ` +
-      `authorised to use it (license, contributor, gift, etc.).\n\n` +
-      `The activation event is recorded in the install receipt.`,
-    );
+    const ok = await confirm({
+      title: `Activate "${ext.name}"?`,
+      body: `This is a Pro-author extension. By activating you confirm you're ` +
+        `authorised to use it (license, contributor, gift, etc.).\n\n` +
+        `The activation is recorded in the install receipt.`,
+      confirmLabel: 'Activate',
+    });
     if (!ok) return;
     await doEnable(ext.id);
   }
@@ -1006,7 +1026,7 @@
       await navigator.clipboard.writeText(text);
     } catch {
       // Older browsers / iframes — fall back to a prompt the user can copy from.
-      window.prompt('Copy:', text);
+      await ask({ title: 'Copy to clipboard', label: 'Copy:', initial: text });
     }
   }
 
@@ -1037,7 +1057,8 @@
       // a page reload.
       window.dispatchEvent(new CustomEvent('manifest:refresh'));
     } catch (e) {
-      alert(`Action failed: ${(e as Error).message}`);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: $t('feedback.retry'), run: () => void actionOn(id, url) } });
     }
   }
 
@@ -1429,14 +1450,19 @@
     });
     if (!r.ok) {
       const b = await r.json();
-      alert(`Approve failed: ${b.error ?? r.status}`);
+      toast.error('Approve failed', { detail: String(b.error ?? r.status) });
       return;
     }
     await loadPairings();
   }
 
   async function revokePairing(userId: string): Promise<void> {
-    if (!confirm(`Revoke access for ${userId}? They'll be back in pairing-code mode next time they write.`)) return;
+    if (!(await confirm({
+      title: `Revoke access for ${userId}?`,
+      body: 'They will need a new pairing code the next time they write.',
+      danger: true,
+      confirmLabel: 'Revoke',
+    }))) return;
     const r = await fetch(`${BASE}/api/security/pairing/revoke`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -1444,7 +1470,7 @@
     });
     if (!r.ok) {
       const b = await r.json();
-      alert(`Revoke failed: ${b.error ?? r.status}`);
+      toast.error('Revoke failed', { detail: String(b.error ?? r.status) });
       return;
     }
     await loadPairings();
@@ -1461,7 +1487,12 @@
   }
 
   async function logoutWhatsApp(): Promise<void> {
-    if (!confirm('Log out of WhatsApp? The next pairing will require a new QR scan.')) return;
+    if (!(await confirm({
+      title: 'Log out of WhatsApp?',
+      body: 'The next pairing will require a new QR scan.',
+      danger: true,
+      confirmLabel: 'Log out',
+    }))) return;
     await fetch(`${BASE}/api/notifications/whatsapp/logout`, { method: 'POST' });
     await pollWhatsAppStatus();
   }

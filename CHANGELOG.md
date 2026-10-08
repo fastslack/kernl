@@ -7,6 +7,136 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.3] - 2026-10-08
+
+### Upgrading from 0.4.2
+
+- **Agents no longer publish to the social network or call other Kernl
+  instances on their own.** A post or reply from an agent run becomes a
+  `social_post` draft in Approvals, which you approve before it goes out;
+  follows, reactions, profile changes, mesh and federation calls are refused
+  with a message telling the agent to ask you. `AGENT_EGRESS_STRICT=1` goes
+  further and makes every tool that publishes or sends draft-only for agents,
+  project or not.
+- **Approvals accepts drafts without a project.** The outbox table is rebuilt
+  on first boot (migration 8) so `project_id` can be empty; existing drafts
+  are copied as they are. Account refs are stored in each channel's canonical
+  form, so `comms:<id>`, the bare id and the address all name the same mail
+  account.
+- **Claude Code agents run only on Kernl's own session.** In Docker they used
+  to borrow the host's `~/.claude` login and sandboxes mounted the host's
+  credentials, so agents kept running while AI connections said Claude Code
+  was not connected. Sign in from the dashboard once; until then the agent
+  panel says so and offers the sign-in.
+- **The Kernl fixer needs the repo mounted to work.** "Que lo arregle Claude
+  Code" in the Kernl bugs tab needs `KERNL_REPO_PATH`, `KERNL_REPO_GIT` and
+  `KERNL_FIX_ROOT` in `.env` (see `docker-compose.host.yml`). Unset, the
+  button explains what is missing and nothing else changes.
+
+### Added
+
+- **Third-party text is fenced off for agents.** Mail, Nostr posts, RSS items
+  and peer tool results reach a model inside one `<external>` element that
+  the text cannot close or fake; invisible and bidi characters are dropped,
+  and known injection patterns are flagged, never removed.
+- **Signed share cards.** A shared movie, show, record, book, link or note
+  travels as a strictly validated card signed with the sender's Nostr key.
+  Friends can learn which Social persona runs on which Kernl through a sealed
+  proof both keys sign; nobody else can tell.
+- **Fix a Kernl bug from its report.** The Kernl bugs tab shows each report
+  inline with filters and status, and can hand one to a coding agent that
+  works in its own git worktree and sandbox, on its own `fix/` branch. The
+  kernel commits there and never pushes or merges.
+- **Check for new mail from the mail page**, which runs the IMAP fetch now and
+  says how many messages came in. IMAP mail keeps its attachments, and the
+  mail view lists and opens them.
+- **Kernl's own toasts, confirms and loading states** replace every browser
+  alert, confirm and prompt. Irreversible actions say what is lost, and
+  uninstalling or deleting an agent, account or remote asks you to type its
+  name; archive, trash and block in Mail act at once with Undo. Daily screens
+  show a skeleton while loading and say what failed, with Retry.
+- **Sign in to Claude Code from the agent that lost its session**, from its
+  banner or under the failed reply in its chat; it resumes once the session is
+  back.
+- **Skills written as `<name>-SKILL.md`** are imported, with the files they
+  name; an agent opens those files with `kernel_skill_load(slug, file)`.
+- **A schedule can work for a project.** `kernel_agents_add_trigger` takes a
+  `project`; without one, the runs inherit the project of an office that
+  serves exactly one.
+
+### Changed
+
+- **Model pickers are ordered by use.** The providers and models you run most
+  come first, with a call count next to each used model, and the menu shows a
+  loader while the model list arrives instead of "nothing matches".
+- **Model pickers offer only models that can call tools** where the run needs
+  them, and mark the ones not yet verified. Claude Code lists its real models
+  after a browser sign-in, Opus 5.5 included.
+- **Approvals gives the draft the whole screen**, lists mail by subject, and
+  uses its own colours.
+- **The office chip in the agent panel opens a styled menu** instead of the
+  browser's plain list.
+- **The agent panel no longer links to the DevOps panel**; the office panel
+  still does.
+- **The Docker update hint keeps your overrides**: it builds the command from
+  the compose files the stack was started with.
+
+### Fixed
+
+- Answering several questions in a row left all but the first undelivered;
+  the agent is now relaunched with every waiting answer when its run ends.
+- The AI opinion on an escalated question showed a reasoning model's
+  half-finished thinking as an error. It now gets room to answer, one retry,
+  and a clear message when there is no answer.
+- `/mail` failed with a 500 when the dev server rendered it.
+
+## [0.4.2] - 2026-10-07
+
+### Upgrading from 0.4.1
+
+- **The instance key no longer changes when Social is installed.** The
+  instance seed now always wins over the Social persona's; a seed that exists
+  but cannot be decrypted turns peering off instead of minting a new
+  identity. Installs whose friendships were made under the persona key keep
+  it.
+- **The Chief and the core system agents are always on.** Deactivating or
+  deleting the Chief, Agent Offline Monitor, Agent Factory or Data Retention
+  is refused with a 409, and the failure breaker never pauses them.
+
+### Added
+
+- **Send text and files to Kernl friends**, over the LAN, a public URL or Tor:
+  signed offers, 8 MiB resumable parts with hashes, 24 h expiry. Social →
+  Share has the composer and the activity; Commander gains "Send to a friend"
+  and browses received files. Peering advertises real LAN addresses
+  (`KERNEL_LAN_URL` in Docker), a port 3088 that passes only signed routes,
+  and a manual address per friend.
+- **Ask the AI for its opinion on an escalated question.** When it agrees
+  with an option, that option is marked recommended; otherwise it proposes
+  its own answer.
+- **The Workspace tab separates the agent's own files from the repo** it
+  works on.
+- **Copy a Kernl bug's issue preview** exactly as it would be published.
+
+### Changed
+
+- `/projects` has its own warm palette, per-project colours and initials.
+- The Tools menu is hidden unless Settings → General → "Show the Tools menu"
+  is on.
+- Bundled themes meet WCAG AA contrast.
+- The terminal sign-in to Claude Code is explained step by step, and names
+  Command Prompt on Windows.
+
+### Fixed
+
+- Agents could not run on a Claude-Code-only install, as on a fresh Windows
+  box: the executor looked for the session in `~/.claude`.
+- Extension tools were published with an empty input schema, so agents
+  guessed parameter names.
+- An agent run crossed its token budget by a whole turn, and resuming a run
+  the budget had stopped failed on its first turn.
+- A woken agent could not find or acknowledge the letters it was woken for.
+
 ## [0.4.1] - 2026-10-06
 
 ### Upgrading from 0.4.0

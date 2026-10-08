@@ -21,6 +21,7 @@
 
 import { log } from "../logger.js";
 import type { SqliteDb } from "../db/sqlite.js";
+import { isToolsUnsupportedError, observeToolSupport } from "./model-caps.js";
 
 export interface LlmCallRecord {
   slug: string;            // logical provider slug (grok, claude, nvidia, …)
@@ -38,6 +39,10 @@ export interface LlmCallRecord {
   errorMsg?: string;       // truncated to 500 chars on insert
   caller?: string;         // free-form ("email-triage", "agent:foo", "probe", "subs-translate", …)
   startedAt: number;       // epoch ms
+  /** Tool definitions the request carried; with `toolCalls`, what model-caps learns from. */
+  toolsSent?: number;
+  /** Tool calls the model returned. */
+  toolCalls?: number;
 }
 
 const KEEP_LAST = 5_000;
@@ -53,6 +58,8 @@ interface CallLogGlobals {
 }
 const G = globalThis as CallLogGlobals;
 function db(): SqliteDb | null { return G.__mtwLlmCallLogDb ?? null; }
+/** The kernel's DB as the call log holds it — shared with model-caps readers. */
+export function callLogDb(): SqliteDb | null { return db(); }
 
 export function attachDb(db: SqliteDb): void {
   G.__mtwLlmCallLogDb = db;
@@ -124,6 +131,23 @@ export function attachDb(db: SqliteDb): void {
 export function record(r: LlmCallRecord, opts: { silent?: boolean } = {}): void {
   if (!opts.silent) logCall(r);
   persist(r);
+  learnToolSupport(r);
+}
+
+/**
+ * Evidence about tool support, as a side effect of calls that happen anyway:
+ * a returned tool call proves yes; the provider refusing the tools proves no.
+ * A request with tools that came back as plain text proves nothing.
+ */
+function learnToolSupport(r: LlmCallRecord): void {
+  const d = db();
+  if (!d || !r.toolsSent || !r.model || r.model.startsWith("(")) return;
+  try {
+    if (r.ok && (r.toolCalls ?? 0) > 0) observeToolSupport(d, r.slug, r.model, true);
+    else if (!r.ok && isToolsUnsupportedError(r.errorMsg ?? "")) observeToolSupport(d, r.slug, r.model, false);
+  } catch {
+    // Learning is best-effort; the call itself already succeeded or failed.
+  }
 }
 
 function logCall(r: LlmCallRecord): void {

@@ -9,7 +9,7 @@ import type { AgentService, QuestionStatus } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { answerAndDeliver } from "./question-delivery.js";
-import { askOpinion } from "./question-opinion.js";
+import { OpinionError, askOpinion } from "./question-opinion.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
 import { log } from "../../core/logger.js";
@@ -251,7 +251,10 @@ export function registerAgentRoutes(
         designerLang, (opts) => llm().chatJson(opts));
       return { opinion };
     } catch (e) {
-      throw new HttpError(502, e instanceof Error ? e.message : String(e));
+      // The card explains `reason`; `detail` is there for "see details" only.
+      const reason = e instanceof OpinionError ? e.reason : "unavailable";
+      const detail = e instanceof Error ? e.message : String(e);
+      throw new HttpError(502, detail, { error: detail, reason, detail });
     }
   });
 

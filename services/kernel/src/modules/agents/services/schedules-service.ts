@@ -64,6 +64,7 @@ export class AgentSchedulesService {
     interval_ms?: number;
     cron_expression?: string;
     goal_override?: string;
+    project_id?: string | null;
   }): AgentSchedule {
     const now = isoNow();
     const cronExpr = input.cron_expression ?? "";
@@ -80,20 +81,20 @@ export class AgentSchedulesService {
       last_run_at: null,
       active: 1,
       created_at: now,
-      project_id: null,
+      project_id: input.project_id ?? null,
       per_project: 0,
     };
 
     this.db
       .prepare(
         `INSERT INTO agent_schedules (id, agent_id, interval_ms, cron_expression, goal_override,
-         next_run_at, last_run_at, active, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         next_run_at, last_run_at, active, created_at, project_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         schedule.id, schedule.agent_id, schedule.interval_ms, schedule.cron_expression,
         schedule.goal_override, schedule.next_run_at, schedule.last_run_at,
-        schedule.active, schedule.created_at,
+        schedule.active, schedule.created_at, schedule.project_id,
       );
 
     this.events.emit("data.changed", { module: "agents", action: "schedule_added" });

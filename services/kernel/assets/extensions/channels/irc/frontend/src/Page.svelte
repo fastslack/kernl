@@ -6,6 +6,7 @@
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import type { ExtPageContext } from '$shared/types';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
 
   export let ctx: ExtPageContext;
 
@@ -69,8 +70,8 @@
     account = p.account;
     selectedProfile = name;
   }
-  function saveProfile() {
-    const name = (prompt('Save this connection as:', selectedProfile || nick || 'kernl') ?? '').trim();
+  async function saveProfile() {
+    const name = ((await ask({ title: 'Save connection', label: 'Save this connection as:', initial: selectedProfile || nick || 'kernl', validate: (v) => (v.trim() ? null : 'Name required') })) ?? '').trim();
     if (!name) return;
     const entry: Profile = { name, url, nick, account };
     const i = profiles.findIndex((p) => p.name === name);
@@ -179,7 +180,7 @@
   const connectNetwork = (u: Upstream) => callNetworks(`/api/irc/upstreams/${u.id}/connect`, { method: 'POST' });
   const disconnectNetwork = (u: Upstream) => callNetworks(`/api/irc/upstreams/${u.id}/disconnect`, { method: 'POST' });
   async function removeNetwork(u: Upstream) {
-    if (!confirm(`Remove ${u.label || u.network}? Its scrollback stays, the connection goes.`)) return;
+    if (!(await confirm({ title: `Remove ${u.label || u.network}?`, body: 'Its scrollback stays, the connection goes.', confirmLabel: 'Remove', danger: true }))) return;
     await callNetworks(`/api/irc/upstreams/${u.id}`, { method: 'DELETE' });
   }
 

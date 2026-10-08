@@ -10,6 +10,7 @@
   import { onMount, tick } from 'svelte';
   import { apiFetchRaw, readApiError } from '$lib/api.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
   import BriefFields, { emptyBrief, type BriefDraft } from '$lib/components/projects/BriefFields.svelte';
 
   type Status = 'active' | 'paused' | 'archived';
@@ -342,7 +343,7 @@
     </div>
 
     {#if loading}
-      <p class="muted pad">Cargando…</p>
+      <Skeleton variant="rows" rows={4} />
     {:else if projects.length === 0}
       <p class="muted pad">Todavía no creaste ninguno.</p>
     {/if}

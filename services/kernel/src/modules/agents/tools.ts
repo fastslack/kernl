@@ -597,7 +597,7 @@ export function agentsTools(
     // ── kernel_agents_add_trigger ────────────────────
     defineTool({
       name: "kernel_agents_add_trigger",
-      description: "Add an event trigger or schedule to an agent. Event triggers fire when a matching event occurs. Schedules run periodically.",
+      description: "Add an event trigger or schedule to an agent. Event triggers fire when a matching event occurs. Schedules run periodically. A schedule's runs work for `project`; without it they inherit the project of an office that serves exactly one, and otherwise run outside any project (and cannot draft from a project's accounts).",
       schema: z.object({
         agent_id: z.string().describe("Agent ID"),
         type: z.enum(["event", "schedule"]).describe("Trigger type"),
@@ -607,6 +607,7 @@ export function agentsTools(
         interval_ms: z.number().optional().describe("Interval in ms for schedule type (e.g. 3600000 = 1h). Use cron instead for time-based scheduling."),
         cron: z.string().optional().describe("Cron expression for schedule type (e.g. '0 7 * * *' = daily at 7am, '0 */6 * * *' = every 6h, '0 9 * * 1' = Monday 9am). Takes precedence over interval_ms."),
         goal_override: z.string().optional().describe("Optional goal override for scheduled runs"),
+        project: z.string().optional().describe("Schedule type: project id or slug the scheduled runs work for. The agent's office must serve it. Omit to use the office's only project, if it has exactly one."),
       }),
       handler: async (input) => {
         const agent = service.getAgent(input.agent_id);
@@ -639,11 +640,23 @@ export function agentsTools(
           return errorResult("Either cron expression or interval_ms (>= 60000) is required for schedules");
         }
 
+        const gate = service.getProjectGate();
+        let projectId: string | null = null;
+        if (input.project) {
+          projectId = gate?.resolve(input.project) ?? null;
+          if (!projectId) return errorResult(`Unknown project "${input.project}".`);
+          const verdict = gate!.check(agent.flow_id ?? "", projectId);
+          if (!verdict.ok) return errorResult(verdict.error);
+        } else {
+          projectId = gate?.soleProject?.(agent.flow_id ?? "") ?? null;
+        }
+
         const schedule = service.addSchedule({
           agent_id: input.agent_id,
           interval_ms: input.interval_ms,
           cron_expression: input.cron,
           goal_override: input.goal_override,
+          project_id: projectId,
         });
 
         const scheduleInfo = input.cron
@@ -653,6 +666,7 @@ export function agentsTools(
         return textResult(
           `Schedule added (${schedule.id})\n` +
           `${scheduleInfo}\n` +
+          `- Project: ${projectId ? (input.project ?? projectId) + (input.project ? "" : " (the office's only project)") : "none — runs outside any project"}\n` +
           `- Next run: ${schedule.next_run_at}`,
         );
       },
@@ -1710,15 +1724,37 @@ export function agentsTools(
         "'Available skills' section, to read the step-by-step playbook before acting.",
       schema: z.object({
         slug: z.string().describe("Skill slug — must be one listed in the agent's Available skills index"),
+        file: z
+          .string()
+          .optional()
+          .describe("A reference file the skill ships (a path from its 'Files in this skill' list). Omit to load the playbook itself."),
       }),
       handler: async (input) => {
-        const { slug } = input;
+        const { slug, file } = input;
         const resolver = executor.getSkillResolver();
         if (!resolver) return errorResult("Skill resolver not initialized");
         const resolved = resolver.resolve(slug);
         if (!resolved) return errorResult(`Skill not installed: ${slug}`);
+        if (file) {
+          const text = resolver.readFile(slug, file);
+          if (text === null) {
+            const files = resolver.listFiles(slug);
+            return errorResult(
+              `No file "${file}" in skill ${slug}.` +
+                (files.length ? ` Files: ${files.join(", ")}` : " This skill ships no reference files."),
+            );
+          }
+          return textResult(`# Skill ${slug} · ${file}\n\n${text}`);
+        }
+        // Skills that lean on profiles or models name them in the body; the
+        // list is what makes those names openable instead of dead references.
+        const files = resolver.listFiles(slug);
+        const index = files.length
+          ? `\n\n---\n\n## Files in this skill\nOpen one with kernel_skill_load(slug: "${slug}", file: "<path>") when the playbook refers to it:\n` +
+            files.map((f) => `- ${f}`).join("\n")
+          : "";
         return textResult(
-          `# Skill: ${resolved.slug}\n\n${resolved.description}\n\n---\n\n${resolved.body}`,
+          `# Skill: ${resolved.slug}\n\n${resolved.description}\n\n---\n\n${resolved.body}${index}`,
         );
       },
     }),

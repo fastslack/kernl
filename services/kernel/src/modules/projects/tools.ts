@@ -9,45 +9,64 @@ import type { OutboxService } from "./outbox-service.js";
 export type RunLookup = (runId: string) => { project_id: string | null; agent_id: string } | undefined;
 export type FlowOfAgent = (agentId: string) => string;
 
+/**
+ * The social_post contract is spelled out statically: it is the one draft
+ * path an agent has to the social network (the egress guard points here),
+ * and its extension may register after this description is first read.
+ */
+const PROPOSE_BASE =
+  "Propose something that leaves Kernl (a post, an email, a message, a social-network post) as a DRAFT for the user to approve. " +
+  "Inside a project run the account must be linked to that project. Nothing is published until a human approves it. " +
+  'Social network post or reply: channel "social_post", account_ref "social:self", ' +
+  "payload { text: string, reply_to?: string (post id), forum_id?: string, tags?: string[] }.";
+
+export function proposeDescription(channels: string[], refHints: Record<string, string> = {}): string {
+  if (!channels.length) return PROPOSE_BASE;
+  const hints = Object.entries(refHints).map(([ch, hint]) => `${ch}: ${hint}`);
+  return `${PROPOSE_BASE} Registered channels right now: ${channels.join(", ")}.` +
+    (hints.length ? ` account_ref by channel — ${hints.join("; ")}.` : "");
+}
+
 export function outboxTools(outbox: OutboxService, getRun: RunLookup, flowOf: FlowOfAgent): ToolDefinition[] {
-  return [
-    defineTool({
-      name: "kernel_outbox_propose",
-      description:
-        "Propose something that leaves Kernl (a post, an email, a message) as a DRAFT for the user to approve. " +
-        "Only usable from a run that works for a project; the account must be linked to that project " +
-        "(see the project block of your prompt). Nothing is published until a human approves it.",
-      schema: z.object({
-        channel: z.string().describe("Outbox channel, e.g. x_post, linkedin_post, email, whatsapp"),
-        account_ref: z.string().describe("Linked account, e.g. twitter:123"),
-        payload: z.record(z.unknown()).describe("Channel payload: text, recipients, attachments, thread…"),
-        scheduled_for: z.string().optional().describe("ISO time to publish at, once approved"),
-      }),
-      handler: async (input) => {
-        const runId = getRequestContext().callerRunId;
-        const run = runId ? getRun(runId) : undefined;
-        if (!run?.project_id) return errorResult("kernel_outbox_propose only works inside a run for a project.");
-        try {
-          const item = outbox.propose({
-            project_id: run.project_id,
-            flow_id: flowOf(run.agent_id),
-            agent_id: run.agent_id,
-            run_id: runId,
-            channel: input.channel,
-            account_ref: input.account_ref,
-            payload: input.payload,
-            scheduled_for: input.scheduled_for ?? null,
-          });
-          return textResult(
-            `Draft ${item.id} queued for approval (${item.channel} via ${item.account_ref}). ` +
-            `It will NOT be sent until the user approves it.`,
-          );
-        } catch (err) {
-          return errorResult(err instanceof Error ? err.message : String(err));
-        }
-      },
+  const propose = defineTool({
+    name: "kernel_outbox_propose",
+    description: PROPOSE_BASE,
+    schema: z.object({
+      channel: z.string().describe('Outbox channel, e.g. social_post. An unknown channel is refused with the list of registered ones.'),
+      account_ref: z.string().describe("Linked account, e.g. social:self for social_post, comms:<email_account_id> for email. The tool description lists each channel's format."),
+      payload: z.record(z.unknown()).describe("Channel payload; its fields depend on the channel (social_post: text, reply_to?, forum_id?, tags?)."),
+      scheduled_for: z.string().optional().describe("ISO time to publish at, once approved"),
     }),
-  ];
+    handler: async (input) => {
+      const runId = getRequestContext().callerRunId ?? "";
+      const run = runId ? getRun(runId) : undefined;
+      try {
+        const item = outbox.propose({
+          project_id: run?.project_id ?? null,
+          flow_id: run ? flowOf(run.agent_id) : "",
+          agent_id: run?.agent_id ?? "",
+          run_id: runId,
+          channel: input.channel,
+          account_ref: input.account_ref,
+          payload: input.payload,
+          scheduled_for: input.scheduled_for ?? null,
+        });
+        return textResult(
+          `Draft ${item.id} queued for approval (${item.channel} via ${item.account_ref}). ` +
+          `It will NOT be sent until the user approves it.`,
+        );
+      } catch (err) {
+        return errorResult(err instanceof Error ? err.message : String(err));
+      }
+    },
+  });
+  // Channels are registered by extensions after this module starts: read them live.
+  Object.defineProperty(propose, "description", {
+    get: () => proposeDescription(outbox.listChannels(), outbox.refHints()),
+    enumerable: true,
+    configurable: true,
+  });
+  return [propose];
 }
 
 /**

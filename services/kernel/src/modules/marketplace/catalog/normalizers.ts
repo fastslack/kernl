@@ -339,18 +339,42 @@ export function deriveSkillCategory(
   return segments.length ? slugify(segments[0]!) : fallback;
 }
 
+/**
+ * `<name>-SKILL.md`: several skills sharing one folder, each in its own file.
+ * Not the Anthropic layout, but forks write it (Probanza-ar's
+ * claude-for-legal-argentina keeps `plazos-SKILL.md` next to `diagnostico-SKILL.md`).
+ */
+export const PREFIXED_SKILL_FILE = /^(.+)-SKILL\.md$/i;
+
+/**
+ * A prefixed skill file with no frontmatter still names itself: the file
+ * prefix is the name and the first prose paragraph is what it is for. Without
+ * this, `diagnostico-SKILL.md` would be dropped although it is a skill.
+ */
+function frontmatterFromProse(raw: string, name: string): { fm: SkillMdFrontmatter; body: string } {
+  const para = raw
+    .split(/\n\s*\n/)
+    .map((p) => p.split("\n").map((l) => l.replace(/^\s*>\s?/, "").trim()).filter(Boolean).join(" "))
+    .find((p) => p && !p.startsWith("#") && !/^-{3,}$/.test(p));
+  return { fm: { name, description: para ?? "" } as SkillMdFrontmatter, body: raw };
+}
+
 export async function readSkillMdAsExtensionManifest(
   skillDir: string,
-  opts?: { repoRoot?: string; repoName?: string },
+  opts?: { repoRoot?: string; repoName?: string; file?: string },
 ): Promise<ExtensionManifest> {
-  const raw = await readFile(join(skillDir, "SKILL.md"), "utf-8");
-  const parsed = parseFrontmatter(raw);
+  const file = opts?.file ?? "SKILL.md";
+  const prefixed = PREFIXED_SKILL_FILE.exec(file);
+  const raw = await readFile(join(skillDir, file), "utf-8");
+  const parsed = parseFrontmatter(raw) ?? (prefixed ? frontmatterFromProse(raw, prefixed[1]!) : null);
   if (!parsed) {
     throw new Error(`SKILL.md missing YAML frontmatter: ${skillDir}`);
   }
   const { fm, body } = parsed;
+  // A prefixed file is its own "skill folder" for naming and category.
+  const ownDir = prefixed ? join(skillDir, prefixed[1]!) : skillDir;
   const inferredName =
-    fm.name && fm.name.length > 0 ? fm.name : basename(skillDir) || "unnamed-skill";
+    fm.name && fm.name.length > 0 ? fm.name : basename(ownDir) || "unnamed-skill";
   // Coerced, not trusted: anything the parser hands back that is not a string
   // must degrade to the placeholder rather than reach the manifest. That is
   // the check whose absence hid the block-scalar bug — `[]` and `"|-"` both
@@ -375,7 +399,7 @@ export async function readSkillMdAsExtensionManifest(
     // Frontmatter still wins when the author wrote one; only the default
     // changed. It used to be the literal "community", which put 433 of 565
     // catalog items in one bucket and made the filter useless.
-    category: fm.category ?? deriveSkillCategory(skillDir, opts?.repoRoot, opts?.repoName),
+    category: fm.category ?? deriveSkillCategory(ownDir, opts?.repoRoot, opts?.repoName),
     tags: Array.isArray(fm.tags)
       ? (fm.tags as unknown[]).filter((t): t is string => typeof t === "string")
       : [],

@@ -17,13 +17,18 @@
 //   - Privilege escalation (sudo, run as administrator)
 //   - Spanish-language equivalents (a real concern for this codebase)
 //
+// This catalogue is shared by wrapExternal (flag only) AND by the agent /
+// skill / reflection-optimizer gates (which reject), so every pattern must be
+// safe for first-party prompts too, not just for third-party text.
+//
 // Each pattern is intentionally narrow so legitimate skill text does not
 // trigger. False positives observed during dogfood drove the constraints.
 
 export const INJECTION_PATTERNS: RegExp[] = [
   // ── Role hijacking (EN) ─────────────────────────────────────────────
-  /ignore\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?)/i,
-  /disregard\s+(all\s+)?(previous|above|prior)\s+(instructions?|prompts?)/i,
+  /ignore\s+(all\s+)?(the\s+)?(previous|above|prior)\s+(instructions?|prompts?)/i,
+  /disregard\s+(all\s+)?(the\s+)?(previous|above|prior)\s+(instructions?|prompts?)/i,
+  /\bnew\s+instructions\s+follow\b/i,
   /you\s+are\s+now\s+(?:a\s+|an\s+)?(?:dan|godmode|jailbroken|unrestricted|developer\s+mode)/i,
   /new\s+instructions\s*:\s*\n/i,
   // Allow up to ~5 words between "override" and the target keyword so phrases
@@ -40,6 +45,20 @@ export const INJECTION_PATTERNS: RegExp[] = [
   /a\s+partir\s+de\s+ahora\s+(sos|eres)\s+(dan|jailbroken|sin\s+restricciones)/i,
   /(sos|eres)\s+ahora\s+(dan|jailbroken|sin\s+restricciones)/i,
 
+  // ── Role hijacking (PT) ─────────────────────────────────────────────
+  /(?:ignore|esque[çc]a|desconsidere)\s+(?:todas\s+)?(?:as\s+)?instru[çc][õo]es\s+(?:anteriores|acima|pr[ée]vias)/i,
+
+  // ── Forged element / transcript structure ───────────────────────────
+  // A forged closing tag or an opening tag with attributes of the <external>
+  // wrapper (wrapExternal has already turned its "<" into "‹"), or a fake chat
+  // turn. A bare "<external>" stays legal so prompts can document the wrapper.
+  /[<‹]\s*\/\s*external\s*>/i,
+  /[<‹]\s*external\s+(?:source|trust|from)\s*=/i,
+  /&(?:lt|#0*60|#x0*3c);\s*\/\s*external\b/i,
+  /^\s*SYSTEM\s*:\s*(?:[Yy]ou|[Yy]our|[Tt]he\s+user|[Ii]gnore|[Oo]bey|[Dd]isregard|[Ff]rom\s+now|[Oo]verride)\b/m,
+  /^#{2,3}\s*Instruction\s*$/m,
+  /^(?:Human|User)\s*:[^\n]*\n\s*Assistant\s*:/m,
+
   // ── Indirect injection (model-control tokens) ───────────────────────
   /\[SYSTEM\]\s*:/i,
   /\[INST\]/,
@@ -55,6 +74,8 @@ export const INJECTION_PATTERNS: RegExp[] = [
   /\bsetenv\s*\(\s*["']ANTHROPIC/i,
 
   // ── Data exfiltration ───────────────────────────────────────────────
+  /(?:send|mand[áa]|envi[áa]|upload|forward)[^\n.]{0,50}(?:~\/\.\w|\.env\b|id_rsa|\/etc\/(?:passwd|shadow))/i,
+  /(?:reveal|print|show|reply\s+with|repeat)\s+(?:me\s+)?(?:your|the)\s+(?:hidden\s+)?system\s+prompt/i,
   /curl\s+[^|]*\|\s*(bash|sh|zsh)/i,
   /wget\s+[^|]*\|\s*(bash|sh|zsh)/i,
   /Invoke-Expression\s*\(/i,

@@ -446,6 +446,10 @@ export async function initHttpAndMcp(args: {
             client: peering.client,
             currentDescriptor: () => peering.currentDescriptor(),
             selfNpub: () => peering.selfNpub(),
+            personaProof: () => peering.personaLinkProof(),
+            sealPersonaProof: (proof, friendPubkeyHex) => peering.sealPersonaProofFor(proof, friendPubkeyHex),
+            refreshPersona: (npub) => void peering.refreshPersona(npub),
+            instanceKeyShared: () => peering.instanceKeyIsShared(),
           });
         }
       } catch (err) {
@@ -591,7 +595,14 @@ export async function initHttpAndMcp(args: {
       const kernlBugs = agentsModule.getKernlBugs?.();
       if (kernlBugs) {
         const { registerKernlBugRoutes } = await import("../../modules/agents/kernl-bugs-routes.js");
-        registerKernlBugRoutes(httpServer, { bugs: kernlBugs, service: agentService, executor: agentExecutor, events });
+        const { createKernlFixer } = await import("../../modules/agents/kernl-bugs-fix-agents.js");
+        const fixes = agentExecutor
+          ? createKernlFixer({
+              db: sqlite, service: agentService, executor: agentExecutor, events, bugs: kernlBugs,
+              sandboxReady: () => !!sandboxRegistry.getDriver("docker")?.getStatus().ready,
+            })
+          : null;
+        registerKernlBugRoutes(httpServer, { bugs: kernlBugs, service: agentService, executor: agentExecutor, events, fixes });
       }
     }
 

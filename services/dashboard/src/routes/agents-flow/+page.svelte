@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, onDestroy, tick } from 'svelte';
+  import { confirm as confirmDialog } from '$shared/feedback';
   import { page } from '$app/stores';
   import { goto } from '$app/navigation';
   import { get } from 'svelte/store';
@@ -212,7 +213,7 @@
   }
 
   async function clearPersistedEvents() {
-    if (!confirm('Clear all persisted event logs?')) return;
+    if (!(await confirmDialog({ title: 'Clear all saved event logs?', body: 'The saved history of agent events is erased for good. Live events are not affected.', confirmLabel: 'Clear logs', danger: true }))) return;
     try { await rpcOrCall('agents.eventLog.clear', {}, async () => { await fetch('/api/agents/event-log', { method: 'DELETE' }); }); } catch { /* ignore */ }
     persistedEvents = [];
     persistedTotal = 0;

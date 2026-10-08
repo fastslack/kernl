@@ -18,6 +18,7 @@
   import { onMount } from 'svelte';
   import type { ExtPageContext } from '$shared/types';
   import { jsonApi } from '$shared/api';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
 
   export let ctx: ExtPageContext;
 
@@ -186,13 +187,13 @@
     try {
       const body = await api.postJson(`/api/cinema/directories/${dir.id}/publish`);
       lastError = '';
-      alert(`✓ publicado a ${body.relays?.length ?? 0} relays`);
+      toast.success(`Publicado a ${body.relays?.length ?? 0} relays`);
       await loadMine();
     } catch (err: any) { lastError = err?.message ?? String(err); }
   }
 
   async function unfollowDir(dir: Directory) {
-    if (!confirm(`Dejar de seguir "${dir.title}"?`)) return;
+    if (!(await confirm({ title: `Dejar de seguir "${dir.title}"?`, confirmLabel: 'Dejar de seguir' }))) return;
     try {
       await ctx.fetchRaw(`/api/cinema/directories/${dir.id}/unfollow`, {
         method: 'POST',
@@ -213,7 +214,7 @@
   }
 
   async function deleteDir(dir: Directory) {
-    if (!confirm(`Delete "${dir.title}"?`)) return;
+    if (!(await confirm({ title: `Delete "${dir.title}"?`, body: 'The directory and its items are removed.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await ctx.fetchRaw(`/api/cinema/directories/${dir.id}/delete`, { method: 'POST' });
       await loadMine();

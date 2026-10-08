@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg } from "@kernl/extension-sdk";
+import { type ToolDefinition, defineTool, defineToolNoInput, textResult, errorResult, limitArg, wrapExternal } from "@kernl/extension-sdk";
 import type { CommsService } from "./service.js";
 import { MISSING_VOCAB, type MissingField, checkAutoSend, missingInfoBody, detectLang, sanitizeFirstName } from "./auto-send.js";
 import { parseEmailAddress } from "./gmail-helpers.js";
@@ -8,6 +8,18 @@ const channelEnum = z.enum(["email", "whatsapp", "mattermost", "x", "instagram",
 const statusEnum = z.enum(["draft", "ready", "sending", "sent", "failed", "archived"]);
 const accountTypeEnum = z.enum(["personal", "work", "transactional", "marketing"]);
 const providerEnum = z.enum(["gmail", "resend", "imap_smtp"]);
+
+/** Wrap third-party text of a stored communication; outbound text is the user's own. */
+function extComm(c: { direction: string; metadata?: string }, text: string): string {
+  if (c.direction !== "inbound") return text;
+  let from: string | undefined;
+  try {
+    from = (JSON.parse(c.metadata || "{}") as { from?: string }).from;
+  } catch {
+    from = undefined;
+  }
+  return wrapExternal(text, { source: "email", from });
+}
 
 export function commsTools(service: CommsService): ToolDefinition[] {
   return [
@@ -114,7 +126,7 @@ export function commsTools(service: CommsService): ToolDefinition[] {
           `${comm.channel.toUpperCase()} — ${comm.status}\n` +
           `  ID: ${comm.id}\n` +
           `  Direction: ${comm.direction}\n` +
-          `  Subject: ${comm.subject || "(none)"}\n` +
+          `  Subject: ${extComm(comm, comm.subject || "(none)")}\n` +
           `  To: ${comm.recipients_to || "(none)"}\n` +
           (comm.recipients_cc ? `  CC: ${comm.recipients_cc}\n` : "") +
           (comm.recipients_bcc ? `  BCC: ${comm.recipients_bcc}\n` : "") +
@@ -124,7 +136,7 @@ export function commsTools(service: CommsService): ToolDefinition[] {
           (comm.in_reply_to ? `  Reply to: ${comm.in_reply_to}\n` : "") +
           (comm.sent_at ? `  Sent: ${comm.sent_at}\n` : "") +
           (comm.error_message ? `  Error: ${comm.error_message}\n` : "") +
-          `\nBody:\n${comm.body || "(empty)"}\n` +
+          `\nBody:\n${extComm(comm, comm.body || "(empty)")}\n` +
           `\nAttachments:\n${attLines}`,
         );
       },
@@ -148,7 +160,7 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
         const lines = comms.map(
           (c) =>
-            `[${c.status}] ${c.channel} — ${c.subject || "(no subject)"}\n` +
+            `[${c.status}] ${c.channel} — ${extComm(c, c.subject || "(no subject)")}\n` +
             `  To: ${c.recipients_to || "(none)"} | ${c.updated_at}\n` +
             `  ID: ${c.id}`,
         );
@@ -239,9 +251,9 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
         const lines = comms.map(
           (c, i) =>
-            `${i + 1}. [${c.status}] ${c.direction} — ${c.subject || "(no subject)"}\n` +
+            `${i + 1}. [${c.status}] ${c.direction} — ${extComm(c, c.subject || "(no subject)")}\n` +
             `   To: ${c.recipients_to || "(none)"}\n` +
-            `   ${c.body ? c.body.slice(0, 100) + (c.body.length > 100 ? "..." : "") : "(empty)"}\n` +
+            `   ${c.body ? extComm(c, c.body.slice(0, 100) + (c.body.length > 100 ? "..." : "")) : "(empty)"}\n` +
             `   ${c.sent_at ? `Sent: ${c.sent_at}` : `Created: ${c.created_at}`}\n` +
             `   ID: ${c.id}`,
         );
@@ -269,10 +281,8 @@ export function commsTools(service: CommsService): ToolDefinition[] {
 
           const lines = messages.map(
             (m, i) =>
-              `${i + 1}. ${m.subject}\n` +
-              `   From: ${m.from}\n` +
+              `${i + 1}. ${wrapExternal(`${m.subject}\nFrom: ${m.from}\n${m.snippet.slice(0, 120)}${m.snippet.length > 120 ? "..." : ""}`, { source: "email", from: m.from })}\n` +
               `   Date: ${m.date}\n` +
-              `   ${m.snippet.slice(0, 120)}${m.snippet.length > 120 ? "..." : ""}\n` +
               `   Gmail ID: ${m.gmail_id} | Thread: ${m.gmail_thread_id}` +
               (m.labels.length > 0 ? `\n   Labels: ${m.labels.join(", ")}` : ""),
           );
@@ -301,13 +311,13 @@ export function commsTools(service: CommsService): ToolDefinition[] {
           return textResult(
             `Email fetched and stored:\n` +
             `  ID: ${comm.id}\n` +
-            `  From: ${meta.from_name || meta.from || "(unknown)"} <${meta.from || ""}>\n` +
+            `  From: ${wrapExternal(`${meta.from_name || meta.from || "(unknown)"} <${meta.from || ""}>`, { source: "email", from: meta.from })}\n` +
             `  To: ${comm.recipients_to}\n` +
-            `  Subject: ${comm.subject}\n` +
+            `  Subject: ${wrapExternal(comm.subject, { source: "email", from: meta.from })}\n` +
             `  Date: ${comm.sent_at}\n` +
             `  Contact: ${comm.contact_id || "(no CRM match)"}\n` +
             `  Gmail Thread: ${comm.gmail_thread_id}\n` +
-            `\nBody:\n${comm.body || "(empty)"}`,
+            `\nBody:\n${wrapExternal(comm.body || "(empty)", { source: "email", from: meta.from })}`,
           );
         } catch (err) {
           return errorResult(`Fetch failed: ${err instanceof Error ? err.message : String(err)}`);

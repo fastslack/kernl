@@ -76,12 +76,19 @@ export interface CinemaModule extends ExtensibleModule {
    *  loaded earlier in bootstrap). Idempotent — safe to call again on
    *  reload. */
   setSearchInfra(graph: GraphDriver | null, embeddings: EmbeddingsClient | null): void;
-  /** Wire the Nostr identity for subtitle publishing. Pass null to
-   *  keep the Nostr provider in read-only mode (queries still work,
-   *  publish() throws NotPublishable). Identity is typically derived
-   *  from social/index.ts via NostrIdentity.fromEd25519Seed(seed).
-   *  Called once after the social module initializes its identity. */
-  setNostrIdentity(identity: NostrIdentity | null, sharedPool?: NostrRelayPool | null): void;
+  /** Wire the two Nostr identities cinema publishes with.
+   *  - `identity` signs PUBLIC directories (kind 30079 + the kind-1 note):
+   *    the Social persona when Social is installed, else the instance key.
+   *  - `instanceIdentity` signs subtitle announcements (kind 30078): they
+   *    point at bytes this kernel hosts (webseed), so they speak for the
+   *    machine and must never be signed by the persona.
+   *  Null keeps the matching provider read-only (queries still work,
+   *  publish() throws NotPublishable). */
+  setNostrIdentity(
+    identity: NostrIdentity | null,
+    sharedPool: NostrRelayPool | null | undefined,
+    instanceIdentity: NostrIdentity | null,
+  ): void;
   /**
    * If the local catalog is empty, kick off a background ingest pass so
    * the /cinema page isn't empty on a fresh user's first load. Idempotent:
@@ -114,8 +121,8 @@ export function createCinemaModule(): CinemaModule {
   let convertJobs: ConvertJobService | null = null;
   let directoriesService: CinemaDirectoriesService | null = null;
   let directoriesProvider: NostrDirectoriesProvider | null = null;
-  /** Local kernel's Nostr identity. Held here so we can reuse it for
-   *  directory publishing — same npub as subs, so trust unifies. */
+  /** Identity that owns and signs public directories (persona when Social
+   *  is installed, else the instance key). Subs use the instance key. */
   let localIdentity: NostrIdentity | null = null;
   /** Captured at initialize() — the agent drivers need config + getModule. */
   let ctxRef: ModuleContext | null = null;
@@ -246,7 +253,7 @@ export function createCinemaModule(): CinemaModule {
       }
     },
 
-    setNostrIdentity(identity, sharedPool) {
+    setNostrIdentity(identity, sharedPool, instanceIdentity) {
       localIdentity = identity;
       if (!registry) return;
       // Replace the read-only Nostr provider with a publish-capable one.
@@ -255,7 +262,7 @@ export function createCinemaModule(): CinemaModule {
       // opening a fresh fan of relay sockets — kernel-wide we go from
       // ~12 connections to 5.
       const opts = sharedPool ? { sharedPool } : {};
-      registry.register(new NostrSubsProvider(identity, opts));
+      registry.register(new NostrSubsProvider(instanceIdentity, opts));
       directoriesProvider = new NostrDirectoriesProvider(identity, opts);
     },
 

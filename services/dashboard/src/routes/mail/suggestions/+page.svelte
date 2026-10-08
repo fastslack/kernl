@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
   import { goto } from '$app/navigation';
   import {
     listEmailSuggestions,
@@ -173,7 +174,7 @@
   {/if}
 
   {#if loading && suggestions.length === 0}
-    <div class="empty">Loading…</div>
+    <Skeleton variant="rows" rows={6} />
   {:else if filtered.length === 0}
     <div class="empty">
       {#if suggestions.length === 0}

@@ -1,3 +1,4 @@
+import type { MailPart } from "./mime-decode.js";
 import type { InboxMessage, Communication } from "../types.js";
 
 export interface SendEmailOptions {
@@ -52,5 +53,7 @@ export interface EmailProvider {
      * CommsService.fetchEmail treats a missing value as "no headers".
      */
     rawHeaders?: Record<string, string>;
+    /** Attachments and inline images with their bytes. Only the IMAP provider decodes them today. */
+    attachments?: MailPart[];
   }>;
 }

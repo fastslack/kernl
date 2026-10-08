@@ -25,6 +25,13 @@ const en = {
   "mailbody.view_text": "Plain text",
   "mailbody.view_html": "Formatted",
   "mailbody.empty": "(empty)",
+  "mailsync.check.button": "Check for new mail",
+  "mailsync.check.running": "Checking…",
+  "mailsync.check.found": "{n} new",
+  "mailsync.check.none": "No new mail",
+  "mailsync.check.done": "Checked",
+  "mailsync.check.slow": "Still checking in the background",
+  "mailsync.check.failed": "The check failed",
 };
 
 /** Every key of the mail-sync banner strings. `mail-sync.es.ts` is typed against it. */

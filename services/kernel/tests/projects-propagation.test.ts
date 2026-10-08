@@ -61,6 +61,35 @@ describe("project propagation", () => {
     expect(JSON.stringify(res)).toContain("paused");
   });
 
+  function triggerTool() {
+    return agentsTools(agents, new AgentExecutor(), events).find((t) => t.name === "kernel_agents_add_trigger")!;
+  }
+
+  it("kernel_agents_add_trigger ties a schedule to the named project", async () => {
+    const res = await triggerTool().handler({ agent_id: agentId, type: "schedule", cron: "0 * * * *", project: "heural" });
+    expect(res.isError).toBeFalsy();
+    expect(agents.listSchedules(agentId)[0].project_id).toBe(heural);
+  });
+
+  it("kernel_agents_add_trigger inherits the project of an office that serves only one", async () => {
+    await triggerTool().handler({ agent_id: agentId, type: "schedule", cron: "0 * * * *" });
+    expect(agents.listSchedules(agentId)[0].project_id).toBe(heural);
+  });
+
+  it("kernel_agents_add_trigger leaves the schedule unscoped when the office serves several projects", async () => {
+    const other = projects.create({ slug: "otro", name: "Otro", brief: { value_prop: "v", audience: "a" } }).id;
+    projects.assignOffice(agents.getAgent(agentId)!.flow_id!, other);
+    await triggerTool().handler({ agent_id: agentId, type: "schedule", cron: "0 * * * *" });
+    expect(agents.listSchedules(agentId)[0].project_id).toBeNull();
+  });
+
+  it("kernel_agents_add_trigger refuses a project the office does not serve", async () => {
+    projects.create({ slug: "ajeno", name: "Ajeno", brief: { value_prop: "v", audience: "a" } });
+    const res = await triggerTool().handler({ agent_id: agentId, type: "schedule", cron: "0 * * * *", project: "ajeno" });
+    expect(res.isError).toBe(true);
+    expect(agents.listSchedules(agentId).length).toBe(0);
+  });
+
   it("due schedules carry their project_id and templates never come due", () => {
     const s = agents.addSchedule({ agent_id: agentId, interval_ms: 60_000 });
     const t = agents.addSchedule({ agent_id: agentId, interval_ms: 60_000, goal_override: "tpl" });

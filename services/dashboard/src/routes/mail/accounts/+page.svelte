@@ -1,6 +1,8 @@
 <script lang="ts">
   import { readApiError } from '$lib/api.js';
+  import { confirm as confirmDialog } from '$shared/feedback';
   import { onMount } from 'svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
   import { goto } from '$app/navigation';
   import { fmtRelTime } from '$lib/display-format.js';
   import {
@@ -294,7 +296,13 @@
   }
 
   async function deleteAccount(acc: EmailAccount) {
-    if (!confirm(`Delete account "${acc.label}" (${acc.email})? Linked messages will be kept but unlabelled.`)) return;
+    if (!(await confirmDialog({
+      title: `Delete account "${acc.label}"?`,
+      body: `${acc.email} is disconnected and removed. Messages already downloaded stay, but lose their account label.`,
+      confirmLabel: 'Delete account',
+      danger: true,
+      typeToConfirm: acc.label || acc.email,
+    }))) return;
     const r = await fetch('/api/email-accounts/delete', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -542,7 +550,7 @@
 
   <section class="accounts-list">
     {#if loading}
-      <div class="empty">Loading…</div>
+      <Skeleton variant="rows" rows={4} />
     {:else if accounts.length === 0}
       <div class="empty">
         <p>No email accounts yet.</p>

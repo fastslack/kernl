@@ -18,6 +18,7 @@
  * AFTER `initializeAll` since they cover tables created by module migrations.
  */
 
+import { getRequestContext } from "../request-context.js";
 import { log } from "../logger.js";
 import type { ToolDefinition, ModuleContext } from "../types.js";
 import type { Identity } from "../attestation.js";
@@ -41,6 +42,7 @@ import { createAttachmentsModule } from "../../modules/attachments/index.js";
 import { createAgentsModule } from "../../modules/agents/index.js";
 import { createProjectsModule } from "../../modules/projects/index.js";
 import { setProjectRunLookup } from "../outbound-guard.js";
+import { dispatchPlanPeerCall } from "../peer-proxy.js";
 import { useProjects } from "../host-runtime.js";
 import { setOfficeSchedulesChangedHook } from "../../modules/agents/extension-facade.js";
 import { projectsHostFor } from "../../modules/projects/sdk-host.js";
@@ -171,42 +173,7 @@ export async function initCoreModules(args: {
       // outcome verbatim so the plan_receipt's merkle root mixes
       // local + remote attestations.
       if (toolName.startsWith("peer:")) {
-        const meshSvc = getMesh()?.getService() ?? null;
-        const resolved = meshSvc?.resolveLocal(toolName);
-        if (!resolved || !meshSvc) {
-          return {
-            isError: true,
-            output: { error: `mesh tool not resolvable (peer not trusted?): ${toolName}` },
-            duration_ms: Date.now() - started,
-          };
-        }
-        try {
-          const remote = await meshSvc.callPeerTool({
-            peerId: resolved.peer.peer_id,
-            toolName: resolved.remoteName,
-            arguments: args,
-          });
-          const r = remote as {
-            isError?: boolean;
-            content?: Array<{ text?: string }>;
-            structuredContent?: unknown;
-            _meta?: { ["mtw.attestation"]?: import("../attestation.js").Receipt };
-          };
-          return {
-            isError: r.isError === true,
-            output: r.structuredContent ?? { content: r.content ?? [] },
-            // The peer's signed receipt rides through unchanged — its
-            // server_id will differ from ours, which is the whole point.
-            receipt: r._meta?.["mtw.attestation"],
-            duration_ms: Date.now() - started,
-          };
-        } catch (err: unknown) {
-          return {
-            isError: true,
-            output: { error: err instanceof Error ? err.message : String(err) },
-            duration_ms: Date.now() - started,
-          };
-        }
+        return dispatchPlanPeerCall(getMesh()?.getService() ?? null, toolName, args, getRequestContext(), started);
       }
 
       // Local path: resolve from the live catalog and dispatch in-process.
@@ -311,10 +278,10 @@ export async function initCoreModules(args: {
     });
     // A rejected draft's note becomes a learning for that project.
     ctx.events.on("outbox:rejected", (p) => {
-      const e = p as { agent_id: string; project_id: string; note: string };
+      const e = p as { agent_id: string; project_id: string | null; note: string };
       if (!e.agent_id) return;
       agentsModule.getService()?.addLearning({
-        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id,
+        agent_id: e.agent_id, type: "avoid", content: `Rejected draft: ${e.note}`, confidence: 0.7, project_id: e.project_id ?? undefined,
       });
     });
     // A bundle reinstall replaces an office agent's schedules → re-clone.

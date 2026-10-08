@@ -83,7 +83,7 @@ export function createProjectsModule(): ProjectsModule {
         (msg) => ctx.notifier.send(msg),
         (pid) => svcForNames.get(pid)?.name ?? pid,
       );
-      ctx.events.on("outbox:changed", (p) => drafts.onChanged(p as { id: string; project_id: string; status: string }));
+      ctx.events.on("outbox:changed", (p) => drafts.onChanged(p as { id: string; project_id: string | null; status: string }));
       const interrupted = outbox.recoverInterrupted();
       if (interrupted > 0) log.warn(`projects: ${interrupted} outbox item(s) were interrupted while sending — marked failed`);
       tools = [

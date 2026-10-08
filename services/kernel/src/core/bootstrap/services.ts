@@ -33,6 +33,7 @@ import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import type { Notifier } from "../notify/notifier.js";
 import type { EmbeddingsClient } from "../embeddings/index.js";
 import type { NostrRelayPool } from "../nostr/nostr-relay-pool.js";
+import type { NostrIdentity } from "../nostr/nostr-identity.js";
 
 // NOTE: setupEventListeners() moved out of core — now lives in the
 // `events-reminders-integration` extension which self-installs via the loader.
@@ -249,25 +250,29 @@ export async function wireServices(args: {
     // by relevance to a query (top-k) instead of dumping the raw inventory —
     // a hallucination vector for curator agents. Null degrades to lexical.
     ext.rssRegistryModule?.setEmbeddingsClient(embeddingsClient);
-    // Wire cinema's Nostr publishing identity. With the paid social
-    // extension installed, derive it from social's ed25519 seed (unified
-    // npub across social posts + subtitle announcements) and share its
-    // relay pool. Without social, fall back to a core-owned persisted seed
-    // (src/core/nostr/identity-store.ts) — same tagged derivation, so a
-    // kernel that previously ran social keeps the npub it broadcast under.
+    // Wire cinema's Nostr publishing identities. Two lanes:
+    //   - public directories go out under the Social persona when Social is
+    //     installed (that is the person curating), else under the instance;
+    //   - subtitle announcements point at bytes this kernel hosts (webseed),
+    //     so they are always signed with the INSTANCE key
+    //     (src/core/nostr/identity-store.ts), never the persona.
+    // Social's relay pool is shared when available.
     try {
       if (ext.cinemaModule) {
-        let cinemaIdentity = ext.socialModule?.deriveNostrIdentity() ?? null;
-        let sharedPool: NostrRelayPool | null = null;
-        if (cinemaIdentity) {
-          sharedPool = ext.socialModule?.getNostrBridge()?.getRelayPool() ?? null;
-        } else {
-          const { loadOrCreateCoreNostrIdentity } = await import("../nostr/identity-store.js");
-          cinemaIdentity = loadOrCreateCoreNostrIdentity(sqlite, config.encryption.key);
+        const { loadOrCreateCoreNostrIdentity } = await import("../nostr/identity-store.js");
+        let instanceIdentity: NostrIdentity | null = null;
+        try {
+          instanceIdentity = loadOrCreateCoreNostrIdentity(sqlite, config.encryption.key);
+        } catch (err) {
+          // Unreadable instance key: subs stay read-only, directories still
+          // wire under the persona if there is one.
+          log.warn("cinema: instance key unreadable — subtitle publishing disabled", err);
         }
-        if (cinemaIdentity) {
-          ext.cinemaModule.setNostrIdentity(cinemaIdentity, sharedPool);
-        }
+        const persona = ext.socialModule?.deriveNostrIdentity() ?? null;
+        const sharedPool: NostrRelayPool | null = persona
+          ? ext.socialModule?.getNostrBridge()?.getRelayPool() ?? null
+          : null;
+        ext.cinemaModule.setNostrIdentity(persona ?? instanceIdentity, sharedPool, instanceIdentity);
       }
     } catch (err) {
       log.warn("cinema: failed to wire Nostr identity — subs publish disabled", err);

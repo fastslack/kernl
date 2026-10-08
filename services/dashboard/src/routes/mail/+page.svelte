@@ -5,8 +5,13 @@
   import { listEmailSuggestions, fetchGoogleSyncStatus, apiFetchRaw } from '$lib/api';
   import AccountSwitcher from '$lib/components/AccountSwitcher.svelte';
   import MailSyncBanner from '$lib/components/MailSyncBanner.svelte';
+  import MailFetchButton from '$lib/components/MailFetchButton.svelte';
   import EmailBody from '$lib/components/EmailBody.svelte';
   import { bannerFor, nextPollMs, type SyncReport } from '$lib/mail-sync.js';
+  import { withAttachmentBlobs } from '$lib/mail-body.js';
+  import { ask, undoable } from '$shared/feedback';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
 
   // ── Types ────────────────────────────────────────
   interface EmailListItem {
@@ -22,6 +27,7 @@
     email_labels: Array<{ id: string; name: string; color: string }>;
     linked_tasks: Array<{ id: string; title: string; status: string }>;
     linked_contacts: Array<{ id: string; name: string; email: string }>;
+    attachments?: Array<{ id: string; filename: string; mime_type: string; size_bytes: number; in_body: boolean }>;
   }
   interface AttentionItem {
     gmail_id: string; thread_id: string; from_email: string; from_name: string;
@@ -60,6 +66,10 @@
   let thread: { thread_id: string; subject: string; messages: EmailDetail[] } | null = null;
   let moreOpen = false;
   let loading = false;
+  // Last folder-load failure; stays set (ErrorState mounted) while it retries.
+  let loadError: unknown = null;
+  // Mail removed on screen whose Undo window is still open; a reload must not bring it back.
+  const pendingRemoved = new Set<string>();
 
   // Attention queue state
   let attentionItems: AttentionItem[] = [];
@@ -173,7 +183,13 @@
     // finally: a failed request must not leave the list stuck on "Loading…".
     try {
       const d = await api('/api/emails?' + qs);
-      if (d) { emails = d.emails; total = d.total; page = d.page; }
+      if (!d) throw new Error('Could not load emails');
+      const hidden = d.emails.filter((e: EmailListItem) => pendingRemoved.has(e.gmail_id)).length;
+      emails = d.emails.filter((e: EmailListItem) => !pendingRemoved.has(e.gmail_id));
+      total = Math.max(0, d.total - hidden); page = d.page;
+      loadError = null;
+    } catch (err) {
+      loadError = err;
     } finally {
       loading = false;
     }
@@ -238,14 +254,74 @@
   }
   function toggleStar(gmailId: string) { doAction('star', { gmail_id: gmailId }, (d: any) => { if (selectedEmail?.gmail_id === gmailId) selectedEmail.is_starred = d?.starred ? 1 : 0; }); }
   function toggleRead(gmailId: string) { doAction('read', { gmail_id: gmailId }); }
-  function archive(gmailId: string) { doAction('archive', { gmail_id: gmailId }, () => { selectedId = null; selectedEmail = null; }); }
-  function trash(gmailId: string) { doAction('trash', { gmail_id: gmailId }, () => { selectedId = null; selectedEmail = null; }); }
+  // Take the mail off the list now, offer Undo, and only tell the kernel when it was not undone.
+  function removeWithUndo(label: string, endpoint: string, body: Record<string, unknown>, gmailId: string) {
+    const idx = emails.findIndex((e) => e.gmail_id === gmailId);
+    const removed = idx >= 0 ? emails[idx] : null;
+    const prevSelectedId = selectedId, prevSelectedEmail = selectedEmail;
+    const ctx = `${folder}|${page}|${query}|${selectedAccountId}|${category}`;
+    undoable({
+      label,
+      apply: () => {
+        pendingRemoved.add(gmailId);
+        if (removed) { emails = emails.filter((e) => e.gmail_id !== gmailId); total = Math.max(0, total - 1); }
+        selectedId = null; selectedEmail = null;
+      },
+      revert: () => {
+        pendingRemoved.delete(gmailId);
+        if (ctx === `${folder}|${page}|${query}|${selectedAccountId}|${category}`) {
+          if (removed && !emails.some((e) => e.gmail_id === gmailId)) {
+            emails = [...emails.slice(0, idx), removed, ...emails.slice(idx)];
+            total += 1;
+          }
+          if (selectedId === null) { selectedId = prevSelectedId; selectedEmail = prevSelectedEmail; }
+        } else {
+          loadFolder(); loadCounts();
+        }
+      },
+      commit: async () => {
+        try {
+          const d = await post('/api/emails/' + endpoint, body);
+          if (d == null) throw new Error('The action could not be completed');
+        } finally {
+          pendingRemoved.delete(gmailId);
+        }
+        loadCounts();
+        loadFolder();
+      },
+    });
+  }
+  function archive(gmailId: string) { removeWithUndo('Conversation archived', 'archive', { gmail_id: gmailId }, gmailId); }
+  function trash(gmailId: string) { removeWithUndo('Conversation moved to trash', 'trash', { gmail_id: gmailId }, gmailId); }
   function restore(gmailId: string) { doAction('restore', { gmail_id: gmailId }, () => { selectedId = null; selectedEmail = null; }); }
   function markImportant(gmailId: string) { doAction('important', { gmail_id: gmailId }); }
   function snooze(gmailId: string, days: number) { doAction('snooze', { gmail_id: gmailId, until: new Date(Date.now() + days * 86400000).toISOString() }); }
-  function blockSender(email: string) { doAction('block', { email }); }
-  function addNote(gmailId: string) {
-    const note = prompt('Add a note:');
+  function blockSender(email: string) {
+    let ids: string[] = [];
+    undoable({
+      label: `Sender blocked: ${email}`,
+      apply: () => {
+        ids = emails.filter((e) => e.from_email === email).map((e) => e.gmail_id);
+        ids.forEach((id) => pendingRemoved.add(id));
+        emails = emails.filter((e) => e.from_email !== email);
+        total = Math.max(0, total - ids.length);
+        if (selectedEmail?.from_email === email) { selectedId = null; selectedEmail = null; }
+      },
+      revert: () => { ids.forEach((id) => pendingRemoved.delete(id)); loadFolder(); loadCounts(); },
+      commit: async () => {
+        try {
+          const d = await post('/api/emails/block', { email });
+          if (d == null) throw new Error('The action could not be completed');
+        } finally {
+          ids.forEach((id) => pendingRemoved.delete(id));
+        }
+        loadCounts();
+        loadFolder();
+      },
+    });
+  }
+  async function addNote(gmailId: string) {
+    const note = await ask({ title: 'Add a note', label: 'Note' });
     if (note?.trim()) doAction('note', { gmail_id: gmailId, note: note.trim() }, () => loadDetail(gmailId));
   }
   function createTask(gmailId: string) { doAction('action', { gmail_id: gmailId, action: 'create_task' }, () => loadDetail(gmailId)); }
@@ -285,6 +361,63 @@
   function doSearch() { page = 1; loadFolder(); }
 
   // ── Formatting ───────────────────────────────────
+  function fmtSize(n: number): string {
+    if (n < 1024) return n + ' B';
+    if (n < 1024 * 1024) return Math.round(n / 1024) + ' KB';
+    return (n / (1024 * 1024)).toFixed(1) + ' MB';
+  }
+
+  function attachmentUrl(id: string): string {
+    return '/api/attachments?id=' + encodeURIComponent(id);
+  }
+
+  // Attachment bytes need the auth header, which window.fetch adds and an
+  // <img src> or a link cannot send: images are fetched as blobs when the
+  // message opens (thumbnails, screenshots inside the body), other files
+  // when clicked.
+  let blobUrls: Record<string, string> = {};
+  let blobsFor = '';
+  $: if (selectedEmail && selectedEmail.gmail_id !== blobsFor) loadImageBlobs(selectedEmail);
+  $: bodyHtml = selectedEmail ? withAttachmentBlobs(selectedEmail.body_html, blobUrls) : null;
+  onDestroy(() => { for (const u of Object.values(blobUrls)) URL.revokeObjectURL(u); });
+
+  async function attachmentBlob(id: string): Promise<string | null> {
+    try {
+      const r = await fetch(attachmentUrl(id));
+      return r.ok ? URL.createObjectURL(await r.blob()) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function loadImageBlobs(email: EmailDetail) {
+    blobsFor = email.gmail_id;
+    for (const u of Object.values(blobUrls)) URL.revokeObjectURL(u);
+    blobUrls = {};
+    for (const att of email.attachments ?? []) {
+      if (!att.mime_type.startsWith('image/')) continue;
+      const url = await attachmentBlob(att.id);
+      if (blobsFor !== email.gmail_id) { if (url) URL.revokeObjectURL(url); return; }
+      if (url) blobUrls = { ...blobUrls, [att.id]: url };
+    }
+  }
+
+  const PREVIEWABLE = /^(image\/|application\/pdf$|text\/plain$)/;
+
+  async function openAttachment(att: NonNullable<EmailDetail['attachments']>[number]) {
+    const preview = PREVIEWABLE.test(att.mime_type);
+    // Opened before the await: a tab opened after it counts as a popup.
+    const tab = preview && !blobUrls[att.id] ? window.open('', '_blank') : null;
+    const url = blobUrls[att.id] ?? await attachmentBlob(att.id);
+    if (!url) { tab?.close(); return; }
+    if (!blobUrls[att.id]) blobUrls = { ...blobUrls, [att.id]: url };
+    if (tab) { tab.location.href = url; return; }
+    const a = document.createElement('a');
+    a.href = url;
+    if (preview) { a.target = '_blank'; a.rel = 'noopener'; } else a.download = att.filename;
+    a.click();
+  }
+
   function fmtDate(d: string): string {
     if (!d) return '';
     try {
@@ -344,7 +477,9 @@
     document.addEventListener('keydown', handleKey);
   });
   onDestroy(() => {
-    document.removeEventListener('keydown', handleKey);
+    // onDestroy also runs when the page renders on the server (the dev
+    // server's SSR), where there is no document and onMount never ran.
+    if (typeof document !== 'undefined') document.removeEventListener('keydown', handleKey);
     if (syncTimer) clearTimeout(syncTimer);
   });
 
@@ -427,6 +562,7 @@
       <AccountSwitcher bind:value={selectedAccountId} onChange={onAccountChange} />
       <input type="text" placeholder="Search emails..." bind:value={query} on:keydown={(e) => e.key === 'Enter' && doSearch()} />
       <button on:click={doSearch}>Search</button>
+      <MailFetchButton onTick={loadSyncStatus} />
     </div>
 
     {#if showTabs}
@@ -510,8 +646,10 @@
             {/if}
           {/each}
         {/if}
+      {:else if loadError}
+        <ErrorState error={loadError} on:retry={loadFolder} />
       {:else if loading}
-        <div class="mail-empty">Loading...</div>
+        <Skeleton variant="rows" rows={8} />
       {:else if !emails.length}
         {#if !syncExplainsEmpty}<div class="mail-empty">No emails in this folder</div>{/if}
       {:else}
@@ -652,7 +790,24 @@
 
       <!-- Body -->
       <div class="detail-body">
-        <EmailBody html={selectedEmail.body_html} text={selectedEmail.body_text || selectedEmail.snippet || ''} />
+        {#if selectedEmail.attachments?.length}
+          <div class="attachments" aria-label="Attachments">
+            {#each selectedEmail.attachments as att (att.id)}
+              <button class="attachment" type="button" title={att.filename} on:click={() => openAttachment(att)}>
+                {#if att.mime_type.startsWith('image/') && blobUrls[att.id]}
+                  <img class="attachment-thumb" src={blobUrls[att.id]} alt="" />
+                {:else}
+                  <span class="attachment-icon" aria-hidden="true">{att.mime_type.startsWith('image/') ? '🖼️' : att.mime_type === 'application/pdf' ? '📄' : '📎'}</span>
+                {/if}
+                <span class="attachment-meta">
+                  <span class="attachment-name">{att.filename}</span>
+                  <span class="attachment-size">{fmtSize(att.size_bytes)}</span>
+                </span>
+              </button>
+            {/each}
+          </div>
+        {/if}
+        <EmailBody html={bodyHtml} text={selectedEmail.body_text || selectedEmail.snippet || ''} />
       </div>
 
       <!-- Thread -->
@@ -968,6 +1123,28 @@
     line-height: 1.6;
     color: var(--text);
   }
+
+  .attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .attachment {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: 240px;
+    padding: 6px 10px 6px 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+  }
+  .attachment:hover { border-color: var(--border-h, var(--border)); background: var(--surface-hover, var(--surface)); }
+  .attachment-thumb { width: 40px; height: 40px; object-fit: cover; border-radius: 4px; flex: none; background: #fff; }
+  .attachment-icon { width: 40px; height: 40px; display: grid; place-items: center; font-size: 20px; flex: none; }
+  .attachment-meta { display: flex; flex-direction: column; min-width: 0; }
+  .attachment-name { font-size: 12px; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .attachment-size { font-size: 11px; color: var(--text-3); }
 
   .thread-btn {
     margin: 0 16px 8px;

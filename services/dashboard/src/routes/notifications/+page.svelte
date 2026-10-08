@@ -5,6 +5,9 @@
   import { miniMd } from '$lib/mini-md.js';
   import { timeAgo } from '$shared/utils';
   import { rpcOrCall } from '$lib/ws.js';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
+  import { HttpFailure } from '$shared/feedback';
   import { markNotifRead as markRead, markAllNotifsRead as markAllRead } from '$lib/notifications.js';
 
   // Emoji shortcodes + markdown rendering
@@ -170,9 +173,32 @@
   }
   function selectByIndex() { if (filtered[selectedIndex]) selectedId = filtered[selectedIndex].id; }
 
+  // ── Initial list load ──
+  // A failed load used to leave the stores empty, which read as "No
+  // notifications". The error stays set while a retry is in flight (cleared only
+  // on success) so ErrorState stays mounted and its 60 s auto-retry cap holds.
+  let loadError: unknown = null;
+  let loading = false;
+  async function loadList() {
+    loading = true;
+    try {
+      const d = await rpcOrCall('notifications.list', {}, async () => {
+        const r = await fetch('/api/notifications');
+        if (!r.ok) throw new HttpFailure(r.status, r.headers.get('content-type') ?? '', await r.text());
+        return r.json();
+      }) as any;
+      notifications.set(d?.notifications ?? []);
+      unreadCount.set(d?.unread ?? 0);
+      loadError = null;
+    } catch (e) {
+      loadError = e;
+    } finally { loading = false; }
+  }
+
   // ── Lifecycle ──
   let refreshInterval: any;
   onMount(() => {
+    void loadList();
     fetchChannels();
     refreshInterval = setInterval(fetchChannels, 15000);
     window.addEventListener('keydown', onKey);
@@ -311,7 +337,11 @@
 
     <!-- ═══ MAIN: Notification Stream ═══ -->
     <div class="N-stream">
-      {#if filtered.length === 0}
+      {#if loadError && allNotifs.length === 0}
+        <ErrorState error={loadError} on:retry={loadList} />
+      {:else if loading && allNotifs.length === 0}
+        <Skeleton variant="rows" rows={8} />
+      {:else if filtered.length === 0}
         <div class="N-empty">
           <div class="N-empty-icon">🔕</div>
           <div class="N-empty-text">{searchQuery ? 'No matches' : filter === 'unread' ? 'All caught up!' : 'No notifications'}</div>

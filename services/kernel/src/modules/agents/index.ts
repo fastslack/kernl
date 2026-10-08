@@ -16,6 +16,7 @@ import { AgentScheduler } from "./scheduler.js";
 import { autoResumePolicy } from "./run-resume.js";
 import { workspaceSpecTools } from "./workspace-spec-tools.js";
 import { QuestionTriager } from "./question-triager.js";
+import { AnswerQueue } from "./question-delivery.js";
 import { KernlBugService } from "./kernl-bugs-service.js";
 import { kernlBugTools } from "./kernl-bugs-tools.js";
 import { commentOnRepeat } from "./kernl-bugs-github.js";
@@ -99,6 +100,8 @@ export function createAgentsModule(): AgentsModule {
   let reactiveEngine: ReactiveEngine | null = null;
   let agentScheduler: AgentScheduler | null = null;
   let questionTriager: QuestionTriager | null = null;
+  let answerQueue: AnswerQueue | null = null;
+  let answerSweepTimer: ReturnType<typeof setTimeout> | null = null;
   let kernlBugs: KernlBugService | null = null;
   let hostPathAuditTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -173,6 +176,18 @@ export function createAgentsModule(): AgentsModule {
       // Office agents' questions reach the chief in batches; see question-triager.ts.
       questionTriager = new QuestionTriager(agentService, agentExecutor, ctx.events);
       questionTriager.start();
+
+      // Answers filed while the asker was busy: relaunch it once its run ends,
+      // with all of them. The sweep picks up the ones already waiting, after
+      // the providers have had time to come up.
+      answerQueue = new AnswerQueue(agentService, agentExecutor, ctx.events);
+      answerQueue.start();
+      const queue = answerQueue;
+      answerSweepTimer = setTimeout(() => {
+        answerSweepTimer = null;
+        const n = queue.sweep();
+        if (n > 0) log.info(`answers: ${n} agent(s) have answers waiting — relaunching them`);
+      }, 60_000);
 
       // Kernl's own bugs, filed by the chief or the operator. The key seals the GitHub token.
       kernlBugs = new KernlBugService(ctx.sqlite, ctx.config.encryption.key);
@@ -346,6 +361,8 @@ export function createAgentsModule(): AgentsModule {
       if (hostPathAuditTimer) clearTimeout(hostPathAuditTimer);
       agentScheduler?.stop();
       questionTriager?.stop();
+      answerQueue?.stop();
+      if (answerSweepTimer) clearTimeout(answerSweepTimer);
       reactiveEngine?.stop();
       // Workspace compose / debate / inbox-waker / subscription teardown is
       // owned by the `ext:agent-advanced` extension's own shutdown().

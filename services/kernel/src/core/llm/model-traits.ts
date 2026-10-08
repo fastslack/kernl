@@ -35,6 +35,11 @@ export interface ModelTraits {
   fast?: boolean;
   /** ≥100k context window (best-effort from name). */
   longContext?: boolean;
+  /**
+   * Can it call tools? Absent = not verified. Not decided here — model-caps.ts
+   * merges what this Kernl observed, LiteLLM and a few name rules.
+   */
+  tools?: boolean;
 }
 
 export function classifyModel(slug: string, modelId: string): ModelTraits {

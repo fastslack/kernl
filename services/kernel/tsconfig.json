@@ -20,7 +20,8 @@
     "paths": {
       "@kernl/extension-sdk": ["./src/sdk/index.ts"],
       "@kernl/extension-sdk/html": ["./src/sdk/html.ts"],
-      "@kernl/extension-sdk/nostr": ["./src/sdk/nostr.ts"]
+      "@kernl/extension-sdk/nostr": ["./src/sdk/nostr.ts"],
+      "@kernl/extension-sdk/social": ["./src/sdk/social.ts"]
     }
   },
   "include": ["src/**/*", "bin/**/*", "tests/**/*"],

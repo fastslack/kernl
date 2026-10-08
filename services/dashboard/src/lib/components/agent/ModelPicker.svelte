@@ -23,13 +23,16 @@
 <script lang="ts">
   import { createEventDispatcher, onDestroy, tick } from 'svelte';
   import { isClaudeCodeProvider } from '$lib/model-chain.js';
-  import { buildCatalog, commonModels, rankModels, type ModelEntry } from '$lib/model-catalog.js';
+  import { buildCatalog, commonModels, rankModels, unverifiedTools, usableModels, type ModelEntry, type ModelNeeds } from '$lib/model-catalog.js';
   import { toolCapable, findProvider, type ProviderStatus } from '$lib/provider-health.js';
   import { bindListeners } from '$lib/outside-listeners.js';
   import { modelPrices, priceKey, fmtPrice } from '$lib/model-prices.js';
+  import { modelUsage, refreshUsage, byUsage, fmtUses, type ModelUsage } from '$lib/model-usage.js';
 
   // USD per million tokens, input / output — from the kernel's LiteLLM table.
   const prices = modelPrices();
+  // Calls per model, all time — the order the menu offers them in.
+  const usage = modelUsage();
 
   /** Provider name as the agent stores it — may be `claude_code`, not the slug. */
   export let provider = '';
@@ -53,6 +56,12 @@
   /** Non-empty paints the trigger red and titles it with the reason. */
   export let error = '';
   export let placeholder = 'choose a model';
+  /**
+   * The provider list is still on its way. Callers fetch it lazily (on the
+   * first press), so without this the menu opened onto an empty list and
+   * reported "nothing matches" and the agent's provider as "not installed".
+   */
+  export let loading = false;
 
   const dispatch = createEventDispatcher();
 
@@ -117,6 +126,7 @@
     if (disabled) return;
     query = '';
     expanded = new Set();
+    refreshUsage();
     place();
     open = true;
     void tick().then(() => searchEl?.focus());
@@ -183,17 +193,44 @@
    * grouping into one ranked list — grouping is for browsing, ranking is for
    * finding.
    */
-  function rowsFor(p: ProviderStatus & { models?: ModelEntry[] }, q: string, showAll: boolean) {
-    const entries = p.models ?? [];
+  /**
+   * What a model of `p` must be able to do here. The run is a tool loop
+   * (`requiresTools`) unless the pick moves the agent to Claude Code, whose
+   * SDK runs its tools itself.
+   */
+  function needsFor(p: ProviderStatus): ModelNeeds {
+    return { tools: requiresTools && !isClaudeCodeProvider(p.slug) };
+  }
+
+  /** Only the models that can serve this run; the rest are never offered. */
+  function entriesFor(p: ProviderStatus & { models?: ModelEntry[] }): ModelEntry[] {
+    return usableModels(p.models ?? [], needsFor(p));
+  }
+
+  /**
+   * Without a query the models the user runs come first, most used on top;
+   * the preview always shows every used model and fills the rest of its
+   * slots from the catalogue's common picks. A query keeps ranking by match.
+   */
+  function rowsFor(p: ProviderStatus & { models?: ModelEntry[] }, q: string, showAll: boolean, u: ModelUsage) {
+    const entries = entriesFor(p);
     if (q.trim()) return rankModels(entries, q).slice(0, 40);
+    const calls = (id: string) => u.byModel.get(priceKey(p.slug, id)) ?? 0;
     const groups = buildCatalog(entries);
-    if (showAll) return groups.flatMap((g) => g.rows.map((r) => ({ id: r.id, traits: r.traits })));
-    return commonModels(groups, [], PREVIEW).map((r) => ({ id: r.id, traits: r.traits }));
+    const all = groups.flatMap((g) => g.rows.map((r) => ({ id: r.id, traits: r.traits })));
+    if (showAll) return byUsage(all, (r) => calls(r.id));
+    const used = byUsage(all.filter((r) => calls(r.id) > 0), (r) => calls(r.id));
+    const seen = new Set(used.map((r) => r.id));
+    const fill = commonModels(groups, [], PREVIEW)
+      .filter((r) => !seen.has(r.id))
+      .slice(0, Math.max(0, PREVIEW - used.length))
+      .map((r) => ({ id: r.id, traits: r.traits }));
+    return [...used, ...fill];
   }
 
   /** Total models a provider offers, for the "show all N" affordance. */
   function totalFor(p: ProviderStatus & { models?: ModelEntry[] }) {
-    return (p.models ?? []).length;
+    return entriesFor(p).length;
   }
 
   /** A provider name is a match too — "grok" should reach xAI's catalogue. */
@@ -213,11 +250,14 @@
    */
   $: shown = providers
     .filter((p) => p.ready && totalFor(p) > 0)
-    .sort((a, b) => Number(isClaudeCodeProvider(b.slug)) - Number(isClaudeCodeProvider(a.slug)))
+    // The providers the user runs most first; with no history, Claude Code first.
+    .sort((a, b) =>
+      ($usage.bySlug.get(b.slug) ?? 0) - ($usage.bySlug.get(a.slug) ?? 0) ||
+      Number(isClaudeCodeProvider(b.slug)) - Number(isClaudeCodeProvider(a.slug)))
     .map((p) => {
     const capable = toolCapable(p);
     const blockedTools = requiresTools && capable === false && !(engineFollows && isClaudeCodeProvider(p.slug));
-    const rows = rowsFor(p, query, expanded.has(p.slug));
+    const rows = rowsFor(p, query, expanded.has(p.slug), $usage);
     return {
       p,
       blockedTools,
@@ -279,11 +319,22 @@
         bind:value={query}
         type="text"
         placeholder="filter models…"
+        disabled={loading}
         spellcheck="false"
         autocomplete="off"
         on:click|stopPropagation
       />
     </div>
+    {#if loading}
+      <div class="mp-loading" role="status" aria-live="polite">
+        <span class="mp-spin" aria-hidden="true"></span>
+        <span class="mp-loading-t">Cargando modelos…</span>
+        <span class="mp-loading-s">Consultando tus proveedores</span>
+        <div class="mp-skel" aria-hidden="true">
+          {#each [72, 54, 64, 46] as w}<span style="width:{w}%"></span>{/each}
+        </div>
+      </div>
+    {:else}
     <div class="mp-scroll">
       {#each shown as s (s.p.slug)}
         {#if s.visible}
@@ -312,6 +363,13 @@
                 on:click|stopPropagation={() => choose(s.p.slug, r.id)}
               >
                 <span class="mp-opt-id">{r.id}</span>
+                {#if $usage.byModel.get(priceKey(s.p.slug, r.id))}
+                  {@const n = $usage.byModel.get(priceKey(s.p.slug, r.id)) ?? 0}
+                  <span class="mp-opt-uses" title="{n} {n === 1 ? 'llamada' : 'llamadas'} con este modelo">{fmtUses(n)}</span>
+                {/if}
+                {#if unverifiedTools(r, needsFor(s.p))}
+                  <span class="mp-opt-unv" title="Not verified: Kernl has no evidence yet that this model can call tools. It is confirmed the first time it does.">?</span>
+                {/if}
                 {#if $prices.get(priceKey(s.p.slug, r.id))}
                   {@const pr = $prices.get(priceKey(s.p.slug, r.id))}
                   <span class="mp-opt-price" title="USD per million tokens — input / output">{pr ? fmtPrice(pr) : ''}</span>
@@ -330,7 +388,7 @@
         {/if}
       {/each}
       {#if shown.filter((s) => s.visible).length === 0}
-        <div class="mp-empty">nothing matches “{query}”</div>
+        <div class="mp-empty">{query.trim() ? `nothing matches “${query}”` : 'no providers configured'}</div>
       {/if}
       {#if provider && !current}
         <div class="mp-group mp-group-blocked">
@@ -342,10 +400,12 @@
         </div>
       {/if}
     </div>
+    {/if}
   </div>
 {/if}
 
 <style>
+  .mp-opt-unv{flex:none;font:600 9.5px 'JetBrains Mono',monospace;color:#e8b04b;border:1px solid rgba(232,176,75,.4);border-radius:99px;padding:0 5px;cursor:help}
   .mp-trigger{
     display:flex;align-items:center;gap:8px;width:100%;
     padding:7px 10px;border-radius:6px;
@@ -387,6 +447,30 @@
   }
   .mp-search input:focus{border-color:rgba(120,170,255,.55)}
   .mp-scroll{overflow-y:auto;padding:6px}
+  .mp-search input:disabled{opacity:.5;cursor:wait}
+
+  .mp-loading{display:flex;flex-direction:column;align-items:center;gap:4px;padding:22px 16px 18px}
+  .mp-spin{
+    width:26px;height:26px;margin-bottom:8px;border-radius:50%;
+    background:conic-gradient(from 0deg, transparent 0 25%, #38bdf8 50%, #8b5cf6 75%, #f472b6);
+    -webkit-mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+            mask:radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 3px));
+    animation:mp-rot .8s linear infinite;
+  }
+  .mp-loading-t{font:600 12.5px 'Manrope',sans-serif;color:#e6e8f0}
+  .mp-loading-s{font:500 11px 'Manrope',sans-serif;color:#7d8299}
+  .mp-skel{display:flex;flex-direction:column;gap:7px;width:100%;margin-top:14px}
+  .mp-skel span{
+    height:9px;border-radius:5px;
+    background:linear-gradient(90deg, rgba(120,130,160,.10) 0%, rgba(139,92,246,.22) 50%, rgba(120,130,160,.10) 100%);
+    background-size:200% 100%;animation:mp-shimmer 1.3s ease-in-out infinite;
+  }
+  .mp-skel span:nth-child(2){animation-delay:.12s}
+  .mp-skel span:nth-child(3){animation-delay:.24s}
+  .mp-skel span:nth-child(4){animation-delay:.36s}
+  @keyframes mp-rot{to{transform:rotate(360deg)}}
+  @keyframes mp-shimmer{from{background-position:100% 0}to{background-position:-100% 0}}
+  @media (prefers-reduced-motion: reduce){.mp-spin{animation-duration:2.4s}.mp-skel span{animation:none}}
 
   .mp-group{margin-bottom:8px}
   .mp-group-blocked .mp-opt-id{opacity:.55}
@@ -405,6 +489,13 @@
   }
   .mp-why-tools{color:#ef5d6e;background:rgba(239,93,110,.1);border-color:rgba(239,93,110,.32)}
 
+  .mp-opt-uses{
+    margin-left:auto;flex:none;
+    font:600 9.5px 'JetBrains Mono',monospace;font-variant-numeric:tabular-nums;
+    color:#a78bfa;background:rgba(139,92,246,.12);border:1px solid rgba(139,92,246,.28);
+    border-radius:99px;padding:0 6px;
+  }
+  .mp-opt-uses + .mp-opt-price{margin-left:0}
   .mp-opt-price{
     margin-left:auto;flex:none;padding-left:10px;
     font:500 10px 'JetBrains Mono',monospace;color:#7d8299;font-variant-numeric:tabular-nums;

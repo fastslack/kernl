@@ -10,7 +10,7 @@
  */
 
 import { z } from "zod";
-import { defineTool, textResult, type ToolDefinition } from "@kernl/extension-sdk";
+import { defineTool, textResult, wrapExternal, type ToolDefinition } from "@kernl/extension-sdk";
 import type { EmailAnalysisService } from "./email-analysis-service.js";
 import type { TaskPayload, ReminderPayload, ContactPayload, ShoppingPayload } from "./email-analysis-service.js";
 import type { TaskService } from "../../../productivity/tasks/_module/service.js";
@@ -19,31 +19,34 @@ import type { CrmService } from "../../crm/_module/service.js";
 import type { ShoppingService } from "../../../home/shopping/_module/service.js";
 import type { CommsService } from "./service.js";
 
+/**
+ * One suggestion. The id/type/status line is Kernl's own; everything below it
+ * (the mail's subject and sender, and what the analyzer extracted from the
+ * mail) is third-party text and reaches the model wrapped.
+ */
 function fmtSuggestion(s: {
   id: string; comm_id: string; type: string; status: string;
   payload: unknown; created_at: string;
   subject?: string; from_email?: string;
 }): string {
   const p = s.payload as Record<string, unknown>;
-  const lines: string[] = [
-    `**[${s.id}]** \`${s.type}\` — ${s.status}`,
-    `  Email: "${s.subject ?? "(unknown)"}" from ${s.from_email ?? "?"}`,
-  ];
+  const detail: string[] = [`Email: "${s.subject ?? "(unknown)"}" from ${s.from_email ?? "?"}`];
   switch (s.type) {
     case "task":
-      lines.push(`  Task: ${p.title} | priority: ${p.priority}${p.context ? ` | ctx: ${p.context}` : ""}${p.due_date ? ` | due: ${p.due_date}` : ""}`);
+      detail.push(`Task: ${p.title} | priority: ${p.priority}${p.context ? ` | ctx: ${p.context}` : ""}${p.due_date ? ` | due: ${p.due_date}` : ""}`);
       break;
     case "reminder":
-      lines.push(`  Reminder: ${p.title} | at: ${p.trigger_at}`);
+      detail.push(`Reminder: ${p.title} | at: ${p.trigger_at}`);
       break;
     case "contact":
-      lines.push(`  Contact: ${p.name} <${p.email}>${p.company ? ` @ ${p.company}` : ""}`);
+      detail.push(`Contact: ${p.name} <${p.email}>${p.company ? ` @ ${p.company}` : ""}`);
       break;
     case "shopping":
-      lines.push(`  Shopping: ${p.name}${p.quantity ? ` × ${p.quantity}` : ""}`);
+      detail.push(`Shopping: ${p.name}${p.quantity ? ` × ${p.quantity}` : ""}`);
       break;
   }
-  return lines.join("\n");
+  return `**[${s.id}]** \`${s.type}\` — ${s.status}\n` +
+    wrapExternal(detail.join("\n"), { source: "email", ...(s.from_email ? { from: s.from_email } : {}) });
 }
 
 export function emailAnalysisTools(
@@ -118,7 +121,8 @@ export function emailAnalysisTools(
         const result = await analysisService.analyzeById(comm_id);
         const lines: string[] = [
           `## Email Analysis`,
-          `**Summary:** ${result.summary || "(no summary)"}`,
+          // The summary is derived from the mail's text: third-party content.
+          `**Summary:** ${result.summary ? wrapExternal(result.summary, { source: "email" }) : "(no summary)"}`,
           `**Suggestions found:** ${result.suggestions.length}`,
           "",
         ];
@@ -215,7 +219,7 @@ export function emailAnalysisTools(
             await commsService.fetchEmail(msg.gmail_id);
             fetched++;
           } catch (e) {
-            fetchErrors.push(`"${msg.subject}": ${String(e)}`);
+            fetchErrors.push(`${wrapExternal(msg.subject, { source: "email", from: msg.from })}: ${String(e)}`);
           }
         }
 

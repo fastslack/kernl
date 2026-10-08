@@ -8,6 +8,7 @@
   import KpiCard from '$shared/components/KpiCard.svelte';
   import Empty from '$shared/components/Empty.svelte';
   import type { ExtPageContext } from '$shared/types';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
 
   export let ctx: ExtPageContext;
 
@@ -111,13 +112,13 @@
       await loadAll();
       closeModal();
     } catch (e: any) {
-      alert('Error: ' + e.message);
+      { const d = describeError(e); toast.error(d.title, { detail: d.detail }); }
     }
     saving = false;
   }
 
   async function cancelSub(id: string) {
-    if (!confirm('Cancel this subscription?')) return;
+    if (!(await confirm({ title: 'Cancel this subscription?', body: 'It stops being tracked as active.', confirmLabel: 'Cancel subscription', danger: true }))) return;
     try {
       await rpcOrCall('subscriptions.cancel', { id });
       await loadAll();

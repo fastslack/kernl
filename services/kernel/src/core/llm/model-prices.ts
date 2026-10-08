@@ -46,6 +46,7 @@ type LiteLlmEntry = {
   output_cost_per_token?: number;
   litellm_provider?: string;
   mode?: string;
+  supports_function_calling?: boolean;
 };
 
 const perMTok = (perToken: number) => Math.round(perToken * 1e6 * 1e6) / 1e6;
@@ -77,6 +78,31 @@ export function matchPrices(data: Record<string, unknown>, slug: string, modelId
       inputPerMTok: perMTok(e.input_cost_per_token!),
       outputPerMTok: perMTok(e.output_cost_per_token!),
     });
+  }
+  return out;
+}
+
+/**
+ * LiteLLM's word on tool calling for `modelIds` of `slug`: only explicit
+ * answers. A model it lists but not as chat (video, audio) cannot run a tool
+ * loop either; a model it does not list stays out of the map (not verified).
+ */
+export function matchToolSupport(data: Record<string, unknown>, slug: string, modelIds: string[]): Map<string, boolean> {
+  const litellm = LITELLM_PROVIDER[slug];
+  const out = new Map<string, boolean>();
+  if (!litellm) return out;
+  const prefix = `${litellm}/`;
+  const index = new Map<string, LiteLlmEntry>();
+  for (const [key, raw] of Object.entries(data)) {
+    const e = raw as LiteLlmEntry;
+    if (!e || typeof e !== "object" || e.litellm_provider !== litellm) continue;
+    index.set((key.startsWith(prefix) ? key.slice(prefix.length) : key).toLowerCase(), e);
+  }
+  for (const model of modelIds) {
+    const e = index.get(model.toLowerCase());
+    if (!e) continue;
+    if (e.mode && e.mode !== "chat" && e.mode !== "responses") out.set(model, false);
+    else if (typeof e.supports_function_calling === "boolean") out.set(model, e.supports_function_calling);
   }
   return out;
 }
@@ -153,6 +179,8 @@ export async function refreshModelPrices(deps: {
   store: ModelPriceStore;
   providers: Array<{ slug: string; listModels: () => Promise<string[]> }>;
   fetchTable?: () => Promise<Record<string, unknown>>;
+  /** Receives LiteLLM's tool-calling verdicts per provider (model-caps.ts). */
+  toolSupport?: (slug: string, verdicts: Map<string, boolean>) => void;
 }): Promise<{ priced: number; providers: string[] }> {
   const external = deps.providers.filter((p) => isPriceable(p.slug));
   if (external.length === 0) return { priced: 0, providers: [] };
@@ -168,8 +196,10 @@ export async function refreshModelPrices(deps: {
   const done: string[] = [];
   for (const p of external) {
     try {
-      const prices = matchPrices(table, p.slug, await p.listModels());
+      const models = await p.listModels();
+      const prices = matchPrices(table, p.slug, models);
       deps.store.replace(p.slug, prices);
+      deps.toolSupport?.(p.slug, matchToolSupport(table, p.slug, models));
       priced += prices.length;
       done.push(p.slug);
     } catch (e) {
