@@ -5,6 +5,7 @@
   import { listEmailSuggestions, fetchGoogleSyncStatus, apiFetchRaw } from '$lib/api';
   import AccountSwitcher from '$lib/components/AccountSwitcher.svelte';
   import MailSyncBanner from '$lib/components/MailSyncBanner.svelte';
+  import MailFetchButton from '$lib/components/MailFetchButton.svelte';
   import EmailBody from '$lib/components/EmailBody.svelte';
   import { bannerFor, nextPollMs, type SyncReport } from '$lib/mail-sync.js';
   import { ask, undoable } from '$shared/feedback';
@@ -417,7 +418,9 @@
     document.addEventListener('keydown', handleKey);
   });
   onDestroy(() => {
-    document.removeEventListener('keydown', handleKey);
+    // onDestroy also runs when the page renders on the server (the dev
+    // server's SSR), where there is no document and onMount never ran.
+    if (typeof document !== 'undefined') document.removeEventListener('keydown', handleKey);
     if (syncTimer) clearTimeout(syncTimer);
   });
 
@@ -559,6 +562,7 @@
                 <div class="mail-snippet">{item.ai_summary || item.snippet || ''}</div>
                 {#if item.draft_comm_id && item.draft_status === 'draft'}
                   <div class="draft-actions">
+      <MailFetchButton onTick={loadSyncStatus} />
                     <button class="draft-btn approve" on:click|stopPropagation={() => approveDraft(item.draft_comm_id)} disabled={sendingDraft}>
                       {sendingDraft ? 'Sending...' : '✓ Send'}
                     </button>
