@@ -503,6 +503,7 @@
       <AccountSwitcher bind:value={selectedAccountId} onChange={onAccountChange} />
       <input type="text" placeholder="Search emails..." bind:value={query} on:keydown={(e) => e.key === 'Enter' && doSearch()} />
       <button on:click={doSearch}>Search</button>
+      <MailFetchButton onTick={loadSyncStatus} />
     </div>
 
     {#if showTabs}
@@ -562,7 +563,6 @@
                 <div class="mail-snippet">{item.ai_summary || item.snippet || ''}</div>
                 {#if item.draft_comm_id && item.draft_status === 'draft'}
                   <div class="draft-actions">
-      <MailFetchButton onTick={loadSyncStatus} />
                     <button class="draft-btn approve" on:click|stopPropagation={() => approveDraft(item.draft_comm_id)} disabled={sendingDraft}>
                       {sendingDraft ? 'Sending...' : '✓ Send'}
                     </button>
