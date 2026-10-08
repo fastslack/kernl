@@ -263,7 +263,7 @@ export interface CatalogSkill {
 	id: string;
 	slug: string;
 	status?: string;
-	manifest?: { name?: string; description?: string } | null;
+	manifest?: { name?: string; description?: string; category?: string } | null;
 	origin?: { provider?: string; source?: { type?: string; url?: string } };
 }
 

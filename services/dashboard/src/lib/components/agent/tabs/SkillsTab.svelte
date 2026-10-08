@@ -437,6 +437,9 @@
   let repoNoticeKind: 'info' | 'warn' = 'warn';
   let repoSkills: CatalogSkill[] = [];
   let repoLabel = '';
+  /** Folder the repo filed its skills under; '' shows them all. */
+  let repoCategory = '';
+  let bulkBusy = false;
 
   /** "cloudai-x/threejs-skills" — the half of a clone URL worth a heading. */
   function repoDisplayName(url: string): string {
@@ -451,6 +454,7 @@
     repoError = '';
     repoNotice = '';
     repoSkills = [];
+    repoCategory = '';
     try {
       const sub = await subscribeRepo(url, repoRef);
       repoLabel = repoDisplayName(url);
@@ -481,6 +485,35 @@
 
   /** Same rule as the search list: what is attached is not on offer. */
   $: repoRows = repoSkills.filter((e) => !attached.includes(e.slug));
+
+  // A big repo is several bundles under one roof: claude-for-legal-argentina
+  // ships 150 US skills and the ten Argentine ones live in `argentina/`. The
+  // folder each skill was filed under is how the operator finds the set they
+  // came for, and installs it in one go instead of guessing row by row.
+  $: repoCats = Object.entries(
+    repoSkills.reduce<Record<string, number>>((acc, e) => {
+      const c = e.manifest?.category || '';
+      acc[c] = (acc[c] ?? 0) + 1;
+      return acc;
+    }, {})
+  )
+    .filter(([c]) => c)
+    .sort(([a], [b]) => a.localeCompare(b));
+  $: repoShown = repoCategory ? repoRows.filter((e) => e.manifest?.category === repoCategory) : repoRows;
+
+  /** Install (when needed) and attach every skill of the chosen folder, one at a time. */
+  async function attachShown(): Promise<void> {
+    bulkBusy = true;
+    try {
+      for (const e of [...repoShown]) {
+        if (attached.includes(e.slug)) continue;
+        if (bySlug.has(e.slug)) await attach(e.slug);
+        else await installAndAttach(e.slug, e.id);
+      }
+    } finally {
+      bulkBusy = false;
+    }
+  }
 
   // ── Costs ─────────────────────────────────────────────────────────
   /** Fixed, paid on every run: the index block the executor injects. */
@@ -815,11 +848,26 @@
             <span class="sk-c">{repoSkills.length}</span>
           </h3>
         </header>
-        {#if repoRows.length === 0}
+        {#if repoCats.length > 1}
+          <div class="sk-cats" role="group" aria-label={$t('agent.skills.repo_cats_label')}>
+            <button type="button" class="sk-cat" class:on={!repoCategory} aria-pressed={!repoCategory}
+                    on:click={() => (repoCategory = '')}>{$t('agent.skills.repo_cats_all')}</button>
+            {#each repoCats as [cat, n] (cat)}
+              <button type="button" class="sk-cat" class:on={repoCategory === cat} aria-pressed={repoCategory === cat}
+                      on:click={() => (repoCategory = cat)}>{cat} <span class="sk-cat-n">{n}</span></button>
+            {/each}
+          </div>
+          {#if repoCategory && repoShown.length > 1}
+            <button type="button" class="sk-add sk-add-dl sk-bulk" on:click={attachShown} disabled={bulkBusy}>
+              {bulkBusy ? '…' : $t('agent.skills.repo_attach_all', { n: String(repoShown.length), cat: repoCategory })}
+            </button>
+          {/if}
+        {/if}
+        {#if repoShown.length === 0}
           <p class="sk-empty">{$t('agent.skills.repo_all_attached')}</p>
         {:else}
           <ul class="sk-list">
-            {#each repoRows as e (e.id)}
+            {#each repoShown as e (e.id)}
               {@const isInstalled = bySlug.has(e.slug)}
               <li class="sk-row">
                 <span class="sk-glyph" aria-hidden="true">{isInstalled ? '▸' : '⬇'}</span>
@@ -1195,6 +1243,37 @@
   }
   .sk-repo-head {
     margin-top: 4px;
+  }
+  .sk-cats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+    margin: 2px 0 6px;
+  }
+  .sk-cat {
+    cursor: pointer;
+    border-radius: 99px;
+    border: 1px solid rgba(120, 130, 160, 0.3);
+    background: rgba(26, 31, 48, 0.8);
+    color: #a9bcf0;
+    font: 600 10px 'JetBrains Mono', monospace;
+    padding: 3px 9px;
+  }
+  .sk-cat:hover {
+    border-color: #9fb4e8;
+  }
+  .sk-cat.on {
+    color: #0a0e14;
+    background: #9fb4e8;
+    border-color: #9fb4e8;
+  }
+  .sk-cat-n {
+    opacity: 0.7;
+  }
+  .sk-bulk {
+    align-self: flex-start;
+    margin-bottom: 6px;
+    padding: 5px 10px;
   }
   /* Same shape as .sk-warn, repainted: nothing went wrong here. Written as a
      two-class selector because .sk-warn is declared further down — at equal

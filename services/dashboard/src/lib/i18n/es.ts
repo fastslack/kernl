@@ -1064,6 +1064,9 @@ const es: Record<I18nKey, string> = {
   "agent.skills.repo_already": "Ya estaba suscrito — mostrando lo que trae.",
   "agent.skills.repo_no_skills": "Suscrito, pero no se encontraron skills. Este repo no tiene carpetas con SKILL.md — puede ser un índice que enlaza a skills alojadas en otros repositorios.",
   "agent.skills.repo_all_attached": "Todas las skills de este repo ya están asignadas a este agente.",
+  "agent.skills.repo_cats_label": "Carpetas del repo",
+  "agent.skills.repo_cats_all": "Todas",
+  "agent.skills.repo_attach_all": "Instalar y agregar las {n} de {cat}",
 
   "agent.skills.ranked_hint": "rankeadas, no generadas",
   "agent.skills.ranked_hint_title": "Coincidencia determinística de palabras + IDF entre el prompt de este agente y el texto de cada skill. No se llama a ningún modelo.",

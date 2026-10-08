@@ -1061,6 +1061,9 @@ const en = {
   "agent.skills.repo_already": "Already subscribed — showing what it carries.",
   "agent.skills.repo_no_skills": "Subscribed, but no skills were found. This repo has no SKILL.md folders — it may be an index that links to skills hosted in other repositories.",
   "agent.skills.repo_all_attached": "Every skill in this repo is already attached to this agent.",
+  "agent.skills.repo_cats_label": "Repo folders",
+  "agent.skills.repo_cats_all": "All",
+  "agent.skills.repo_attach_all": "Install and attach all {n} in {cat}",
 
   "agent.skills.ranked_hint": "ranked, not generated",
   "agent.skills.ranked_hint_title": "Deterministic keyword + IDF overlap between this agent's prompt and each skill's text. No model is called.",
