@@ -17,6 +17,9 @@
 
 import { ChatClaudeCodeProvider } from "../claude-code-adapter.js";
 import { hasClaudeCodeCredential } from "../claude-code-transition.js";
+import { claudeConfigDir } from "../claude-code-auth.js";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type {
   LlmProvider,
   LlmProviderCapabilities,
@@ -36,12 +39,37 @@ const MODEL_ALIASES = ["opus", "sonnet", "haiku"];
 /** Only for when the catalogue cannot be reached — never the source of truth.
  *  Being a hardcoded list is exactly what made the picker go stale. */
 const FALLBACK_MODELS = [
+  "claude-opus-5-5",
+  "claude-sonnet-5-5",
+  "claude-haiku-5-5",
+  "claude-fable-5-1",
   "claude-opus-4-7",
-  "claude-opus-4-6",
   "claude-sonnet-4-6",
-  "claude-sonnet-4-5",
   "claude-haiku-4-5",
 ];
+
+/** How long a fetched model list is trusted before asking again. */
+const MODELS_TTL_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * The access token of the session the dashboard sign-in created (the CLI
+ * keeps it in Kernl's config dir), while it is still valid. Without this the
+ * catalogue was only asked when someone had pasted a setup-token, so every
+ * browser sign-in saw the hardcoded floor — no Opus 5.5, no Sonnet 5.5.
+ */
+export function sessionAccessToken(dir: string = claudeConfigDir(), now: number = Date.now()): string {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, ".credentials.json"), "utf-8")) as {
+      claudeAiOauth?: { accessToken?: unknown; expiresAt?: unknown };
+    };
+    const o = raw.claudeAiOauth;
+    if (!o || typeof o.accessToken !== "string" || !o.accessToken) return "";
+    if (typeof o.expiresAt === "number" && o.expiresAt < now + 60_000) return "";
+    return o.accessToken;
+  } catch {
+    return "";
+  }
+}
 
 const CAPS: LlmProviderCapabilities = {
   tools: false,         // tool-calling is handled inside the SDK, not exposed to the caller
@@ -65,6 +93,7 @@ class ClaudeCodeProviderImpl implements LlmProvider {
   private lastModel?: string;
   private oauthToken = "";
   private cachedModels: string[] | null = null;
+  private cachedAt = 0;
 
   configure(config: Record<string, unknown>): void {
     if (typeof config.defaultModel === "string" && config.defaultModel) {
@@ -155,9 +184,9 @@ class ClaudeCodeProviderImpl implements LlmProvider {
    * editing a setting. Both forms verified end to end through the SDK.
    */
   async listModels(): Promise<string[]> {
-    if (this.cachedModels) return this.cachedModels;
+    if (this.cachedModels && Date.now() - this.cachedAt < MODELS_TTL_MS) return this.cachedModels;
 
-    const token = this.oauthToken;
+    const token = this.oauthToken || sessionAccessToken();
     if (token) {
       try {
         const res = await fetch("https://api.anthropic.com/v1/models?limit=100", {
@@ -172,6 +201,7 @@ class ClaudeCodeProviderImpl implements LlmProvider {
           const ids = (body.data ?? []).map((m) => m.id).filter((id): id is string => !!id);
           if (ids.length > 0) {
             this.cachedModels = [...MODEL_ALIASES, ...ids];
+            this.cachedAt = Date.now();
             return this.cachedModels;
           }
         }
@@ -180,8 +210,9 @@ class ClaudeCodeProviderImpl implements LlmProvider {
         // still lets the operator pick something.
       }
     }
-    // Not cached: a later call, once a token is configured, should try again.
-    return [...MODEL_ALIASES, ...FALLBACK_MODELS];
+    // A list fetched earlier beats the floor; neither is cached, so a later
+    // call (token refreshed by the CLI) asks again.
+    return this.cachedModels ?? [...MODEL_ALIASES, ...FALLBACK_MODELS];
   }
 
   async chatCompletion(
