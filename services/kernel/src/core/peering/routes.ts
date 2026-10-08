@@ -19,6 +19,7 @@ import type { PeerResolver } from "./resolver.js";
 import { hexOf, isSafeReach } from "./descriptor.js";
 import type { Event as NostrEvent } from "nostr-tools/core";
 import type { LinkProof, SealedLinkProof } from "../social-net/link-proof.js";
+import type { TorStatusView } from "./tor-daemon.js";
 
 export interface PeeringRoutesDeps {
   friends: FriendsStore;
@@ -42,6 +43,8 @@ export interface PeeringRoutesDeps {
   refreshPersona?: (npub: string) => void;
   /** True when the instance key is the Social persona key (legacy shared key). */
   instanceKeyShared?: () => boolean;
+  /** The Tor switch. Omit and the routes answer 404 (no daemon in this build). */
+  tor?: { status: () => TorStatusView; setEnabled: (on: boolean) => Promise<TorStatusView> };
 }
 
 /** The absolute URL the peer signed. Rebuilt, never taken from a proxy header alone. */
@@ -57,6 +60,18 @@ export function registerPeeringRoutes(server: KernelHttpServer, deps: PeeringRou
     const event = deps.currentDescriptor();
     if (!event) throw new HttpError(503, "presence not ready");
     return event;
+  });
+
+  // ── Owner: the Tor switch ───────────────────────────────────
+  server.route("GET", "/api/peering/tor", () => {
+    if (!deps.tor) throw new HttpError(404, "tor is not available in this build");
+    return deps.tor.status();
+  });
+
+  server.route<{ enabled?: unknown }>("PUT", "/api/peering/tor", async ({ body }) => {
+    if (!deps.tor) throw new HttpError(404, "tor is not available in this build");
+    if (typeof body.enabled !== "boolean") throw new HttpError(400, "enabled must be true or false");
+    return deps.tor.setEnabled(body.enabled);
   });
 
   // ── Owner: our own identity ─────────────────────────────────

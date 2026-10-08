@@ -43,6 +43,8 @@ cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 # ffmpeg, so an install without one generates no subtitles whatever the user
 # picks in the UI.
 [ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$PKG_DIR/"
+# tor.exe + its DLLs, flat, for the Friends page's Tor switch.
+[ -d "$SRC_TREE/bin/tor" ]        && cp -a "$SRC_TREE/bin/tor"        "$PKG_DIR/"
 # mtw-server + whatsapp-bridge (stage-payload 2d) and the mtw.toml template the
 # kernel renders on boot — sidecars.ts looks for them under <app>/bin/.
 if [ -f "$SRC_TREE/bin/mtw-server/mtw-server.exe" ] && [ -f "$SRC_TREE/bin/whatsapp-bridge/whatsapp-bridge.exe" ]; then
