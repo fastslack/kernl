@@ -37,7 +37,7 @@ describe("TorDaemon", () => {
   const make = (over: Partial<ConstructorParameters<typeof TorDaemon>[0]> = {}) => {
     daemon = new TorDaemon({
       sqlite: db as never,
-      kernelPort: 3087,
+      servicePort: 3090,
       baseDir: root,
       findBinary: () => bin,
       isListening: async () => false,
@@ -90,7 +90,7 @@ describe("TorDaemon", () => {
     expect(s.onion).toMatch(/^http:\/\/[a-z2-7]{56}\.onion$/);
     expect(changes).toBe(1);
     const torrc = readFileSync(join(root, "data/tor/torrc"), "utf-8");
-    expect(torrc).toContain("HiddenServicePort 80 127.0.0.1:3087");
+    expect(torrc).toContain("HiddenServicePort 80 127.0.0.1:3090");
     expect(torrc).toContain(`DataDirectory ${join(root, "data/tor/state")}`);
   });
 

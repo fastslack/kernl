@@ -422,10 +422,16 @@ export async function initHttpAndMcp(args: {
           // The Tor switch on the Friends page. The kernel runs the daemon
           // itself (bundled binary natively, apt's in Docker); its onion goes
           // into our presence only while it is actually answering.
+          // The onion reaches only the gateway, which serves the presence card
+          // plus whatever the operator chose to publish — never the kernel.
+          const { OnionGateway } = await import("../peering/onion-gateway.js");
+          const kernelHttp = httpServer;
+          const gateway = new OnionGateway({ sqlite, dispatch: (req, res) => kernelHttp.dispatch(req, res) });
+          await gateway.start();
           const { TorDaemon } = await import("../peering/tor-daemon.js");
           const tor = new TorDaemon({
             sqlite,
-            kernelPort: config.dashboard.port,
+            servicePort: gateway.port,
             onChange: () => peering.refresh(tor.status().onion),
           });
           void tor.reconcile().catch((err) => log.warn("peering: tor failed to start", err));
@@ -460,7 +466,12 @@ export async function initHttpAndMcp(args: {
             sealPersonaProof: (proof, friendPubkeyHex) => peering.sealPersonaProofFor(proof, friendPubkeyHex),
             refreshPersona: (npub) => void peering.refreshPersona(npub),
             instanceKeyShared: () => peering.instanceKeyIsShared(),
-            tor: { status: () => tor.status(), setEnabled: (on) => tor.setEnabled(on) },
+            tor: {
+              status: () => tor.status(),
+              setEnabled: (on) => tor.setEnabled(on),
+              services: () => gateway.services(),
+              setService: (id, on) => gateway.setService(id, on),
+            },
           });
         }
       } catch (err) {

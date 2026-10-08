@@ -427,6 +427,15 @@ export class KernelHttpServer {
     });
   }
 
+  /**
+   * Serve a request that arrived through another listener — the onion gateway
+   * (peering/onion-gateway.ts), which has already filtered the path down to
+   * the services the operator chose to publish and applied its own rate limit.
+   */
+  dispatch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+    return this.handleRequest(req, res);
+  }
+
   private async handleRequest(req: IncomingMessage, res: ServerResponse): Promise<void> {
     // CORS preflight. Without an allow-listed Origin the response carries no
     // CORS headers at all, which the browser reads as "denied" — the request

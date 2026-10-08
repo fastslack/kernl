@@ -79,6 +79,7 @@
   });
 
   // ── Tor: reachable from any network ─────────────────────────
+  interface OnionService { id: string; label: string; description: string; enabled: boolean; locked: boolean }
   interface TorStatus {
     enabled: boolean;
     state: 'off' | 'missing' | 'starting' | 'up' | 'error';
@@ -86,6 +87,25 @@
     onion: string;
     error: string;
     external: boolean;
+    services?: OnionService[];
+  }
+  let svcBusy: Record<string, boolean> = {};
+
+  /** Publish or withdraw one service on the onion. Everything else stays 404. */
+  async function setService(svc: OnionService) {
+    svcBusy = { ...svcBusy, [svc.id]: true };
+    try {
+      tor = await call(`/api/peering/tor/services/${encodeURIComponent(svc.id)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ enabled: !svc.enabled }),
+      });
+      error = '';
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+      await loadTor();
+    } finally {
+      svcBusy = { ...svcBusy, [svc.id]: false };
+    }
   }
   let tor: TorStatus | null = null;
   let torBusy = false;
@@ -307,8 +327,10 @@
           <span class="tor-line">
             Friends reach you from any network, no ports to open.
             <button class="link" on:click={copyOnion} title={tor.onion}>{torCopied ? 'copied' : 'copy onion address'}</button>
-            {#if tor.external}<span class="tor-note">(a Tor already running on this machine)</span>{/if}
           </span>
+          {#if tor.external}
+            <span class="tor-line warn">This Tor was not started by Kernl, so what its onion serves is not controlled from here.</span>
+          {/if}
         {:else if tor.state === 'starting'}
           <span class="tor-line">Connecting to the Tor network… {tor.progress}%</span>
           <span class="tor-bar"><span style="width: {Math.max(4, tor.progress)}%"></span></span>
@@ -317,6 +339,25 @@
           <span class="tor-line warn">{tor.error}</span>
         {:else}
           <span class="tor-line">Off — friends reach you only on this network. Turn it on to be reachable from home, the office or a phone's hotspot alike.</span>
+        {/if}
+
+        {#if tor.enabled && tor.services?.length}
+          <div class="svc">
+            <span class="svc-head">What the onion shows <span class="svc-sub">· the address is public; everything not listed answers "not found"</span></span>
+            {#each tor.services as svc (svc.id)}
+              <div class="svc-row" class:off={!svc.enabled}>
+                <Toggle
+                  checked={svc.enabled}
+                  disabled={svc.locked || svcBusy[svc.id]}
+                  on:click={() => !svc.locked && setService(svc)}
+                />
+                <span class="svc-text">
+                  <span class="svc-label">{svc.label}{#if svc.locked}<span class="svc-lock"> · always</span>{/if}</span>
+                  <span class="svc-desc">{svc.description}</span>
+                </span>
+              </div>
+            {/each}
+          </div>
         {/if}
       </div>
     </div>
@@ -470,6 +511,17 @@
     background: var(--border, #22263a); overflow: hidden;
   }
   .tor-bar span { display: block; height: 100%; background: var(--purple, #8B7CF6); transition: width 0.4s ease; }
+
+  .svc { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
+  .svc-head { font-size: 12px; color: var(--text-1); }
+  .svc-sub { color: var(--text-3); }
+  .svc-row { display: flex; align-items: flex-start; gap: 10px; }
+  .svc-row :global(.tg) { margin-top: 1px; }
+  .svc-row.off .svc-label { color: var(--text-2); }
+  .svc-text { display: flex; flex-direction: column; min-width: 0; }
+  .svc-label { font-size: 12.5px; color: var(--text-1); }
+  .svc-lock { color: var(--text-3); font-size: 11px; }
+  .svc-desc { font-size: 11.5px; line-height: 1.45; color: var(--text-3); }
 
   /* ── Chips & pills ────────────────────────────────────────── */
   .chip {
