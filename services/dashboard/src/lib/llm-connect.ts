@@ -183,6 +183,22 @@ export const startClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-c
 export const claudeLoginStatus = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login");
 export const deliverClaudeLogin = (url: string) => call<ClaudeLoginStatus>("/api/llm/claude-code/login/callback", send("POST", { url }));
 export const cancelClaudeLogin = () => call<ClaudeLoginStatus>("/api/llm/claude-code/login", { method: "DELETE" });
+/**
+ * Whether Kernl itself has a Claude Code session: the one source every
+ * claude_code agent runs on. null when the kernel could not be asked.
+ */
+export async function claudeCodeReady(): Promise<boolean | null> {
+  // The same answer AI connections shows: whether Kernl has the session.
+  // `ready` in /api/llm-providers is a different thing (the adapter is up in
+  // the registry) and stays false until the chain reloads, which made the
+  // agent banner say "not connected" right under "signed in again".
+  try {
+    const cc = (await fetchCatalog()).providers.find((p) => p.slug === "claude-code");
+    return cc ? cc.connected : null;
+  } catch {
+    return null;
+  }
+}
 export const saveChain = (links: ChainLink[]) => call<{ chain: ChainLink[] }>("/api/llm/chain", send("PUT", { links }));
 
 /** Models of a provider that is already connected and running. */

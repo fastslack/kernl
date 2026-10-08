@@ -11,11 +11,12 @@
  * the previous `claude-sandbox.ts` did — via `HOST_KERNEL_ROOT` env var.
  */
 
-import { mkdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { log } from "../../logger.js";
+import { claudeConfigDir } from "../../llm/claude-code-auth.js";
 import type {
   SandboxDriver,
   SandboxDriverStatus,
@@ -176,12 +177,12 @@ export class DockerSandboxDriver implements SandboxDriver {
     const claudeCli = opts.hostBinaries?.claudeCli
       ?? process.env.HOST_CLAUDE_CLI
       ?? join(hostHome, ".local/bin/claude");
-    const claudeJson = opts.hostBinaries?.claudeJson
-      ?? process.env.HOST_CLAUDE_JSON
-      ?? join(hostHome, ".claude.json");
-    const claudeCreds = opts.hostBinaries?.claudeCreds
-      ?? process.env.HOST_CLAUDE_CREDS
-      ?? join(hostHome, ".claude/.credentials.json");
+    // The session is Kernl's own (the AI connections sign-in), never the
+    // operator's host ~/.claude: a sandboxed agent must not keep running on a
+    // subscription Kernl says is disconnected. Explicit overrides still win.
+    const session = kernlClaudeSessionFiles();
+    const claudeJson = opts.hostBinaries?.claudeJson ?? process.env.HOST_CLAUDE_JSON ?? null;
+    const claudeCreds = opts.hostBinaries?.claudeCreds ?? process.env.HOST_CLAUDE_CREDS ?? null;
 
 
     const envFlags: string[] = [];
@@ -198,9 +199,13 @@ export class DockerSandboxDriver implements SandboxDriver {
         ? `  -v ${shellQuote(opts.workspace.hostPath)}:/workspace \\`
         : mountForKernelPath(opts.workspace.kernelPath, "/workspace"),
       `  -v ${shellQuote(claudeCli)}:/usr/local/bin/claude:ro \\`,
-      `  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`,
-      `  -v ${shellQuote(claudeCreds)}:/mnt/credentials.json:ro \\`,
     ];
+    // Overrides are host paths; Kernl's own files live in the kernel's data
+    // volume and go through mountForKernelPath. Missing ones are not mounted.
+    if (claudeJson) mounts.push(`  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`);
+    else if (existsSync(session.json)) mounts.push(mountForKernelPath(session.json, "/mnt/claude.json", { readonly: true }));
+    if (claudeCreds) mounts.push(`  -v ${shellQuote(claudeCreds)}:/mnt/credentials.json:ro \\`);
+    else if (existsSync(session.creds)) mounts.push(mountForKernelPath(session.creds, "/mnt/credentials.json", { readonly: true }));
 
     for (const s of opts.skillMounts ?? []) {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(s.name)) continue;
@@ -225,9 +230,10 @@ export class DockerSandboxDriver implements SandboxDriver {
       "#!/bin/sh",
       "set -e",
       'mkdir -p "$HOME/.claude"',
-      'cp /mnt/claude.json "$HOME/.claude.json"',
-      'cp /mnt/credentials.json "$HOME/.claude/.credentials.json"',
-      'chmod 600 "$HOME/.claude.json" "$HOME/.claude/.credentials.json"',
+      // Absent when Kernl has no session (or uses a pasted token): the CLI
+      // then says "Not logged in", which the agent panel turns into sign-in.
+      'if [ -f /mnt/claude.json ]; then cp /mnt/claude.json "$HOME/.claude.json"; chmod 600 "$HOME/.claude.json"; fi',
+      'if [ -f /mnt/credentials.json ]; then cp /mnt/credentials.json "$HOME/.claude/.credentials.json"; chmod 600 "$HOME/.claude/.credentials.json"; fi',
       ...skillLinkLines,
       `exec ${entry}`,
       "",
@@ -346,6 +352,15 @@ export function mountForKernelPath(
     return `  --mount type=volume,src=${shellQuote(vol)},dst=${shellQuote(containerPath)},volume-subpath=${shellQuote(sub)}${ro} \\`;
   }
   return `  -v ${shellQuote(kernelPathToHost(kernelPath))}:${shellQuote(containerPath)}${opts.readonly ? ":ro" : ""} \\`;
+}
+
+/**
+ * The Claude Code session the dashboard sign-in writes (CLAUDE_CONFIG_DIR is
+ * Kernl's config dir, so the CLI keeps both files there). Kernel-side paths.
+ */
+export function kernlClaudeSessionFiles(): { json: string; creds: string } {
+  const dir = claudeConfigDir();
+  return { json: join(dir, ".claude.json"), creds: join(dir, ".credentials.json") };
 }
 
 export function kernelPathToHost(p: string): string {

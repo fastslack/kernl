@@ -62,6 +62,7 @@ const es: Record<LlmConnectKey, string> = {
   "llm.cc_session_lost_chat": "Claude Code se quedó sin sesión. Iniciá sesión acá y volvé a mandar el mensaje.",
   "llm.cc_open_settings": "Iniciar sesión en Conexiones de IA",
   "llm.cc_resuming": "Sesión lista. Reanudando el agente…",
+  "llm.cc_agent_not_connected": "Claude Code no está conectado en Kernl, así que este agente no va a poder correr. Iniciá sesión acá o cambiale el modelo.",
   "llm.cc_command_intro": "Copiá esto y pegalo tal cual en una terminal:",
   "llm.cc_command_intro_win": "Abrí el Símbolo del sistema (cmd, no PowerShell) y pegá esto tal cual, con las comillas:",
   "llm.cc_command_after": "Se abre Claude Code. Si no te pide iniciar sesión, escribí /login y aprobá en el navegador con tu cuenta de Claude. Cuando termine, salí con /exit y tocá Detectar.",
