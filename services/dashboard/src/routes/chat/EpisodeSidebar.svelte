@@ -12,6 +12,7 @@
    */
   import { providerIcon, providerColor } from '$lib/chat-view.js';
   import { timeAgo } from '$shared/utils';
+  import { toast, describeError } from '$shared/feedback';
   import { readApiError } from '$lib/api.js';
   import {
     groupEpisodes, countBySource, modelLine, sourceOf, SOURCE_LABEL, type EpisodeSource,
@@ -82,7 +83,8 @@
       await onDeleted(id);
       deleteConfirmId = null;
     } catch (err) {
-      alert(`Delete failed: ${(err as Error).message}`);
+      const d = describeError(err);
+      toast.error(d.title, { detail: d.detail, action: { label: 'Retry', run: () => { void confirmDelete(id, ev); } } });
     } finally {
       deletingEpisodeId = null;
     }

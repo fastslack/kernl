@@ -10,6 +10,9 @@
   import BarChart from '$shared/components/BarChart.svelte';
   import Badge from '$shared/components/Badge.svelte';
   import Empty from '$shared/components/Empty.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
+  import { HttpFailure } from '$shared/feedback';
   import { fmtTime } from '$shared/utils';
 
   // Data from stores
@@ -39,6 +42,10 @@
   interface Approval { id: string; channel: string; created_at: string; preview?: { title?: string; body?: string } }
   let approvals: Approval[] | null = null;
   let approvalsPending = 0;
+  // A failed load (anything but a kernel without the module) keeps the error
+  // here instead of hiding the card. It stays set while a retry is in flight so
+  // ErrorState remains mounted and its 60 s auto-retry cap is not reset.
+  let approvalsError: unknown = null;
 
   async function loadApprovals() {
     try {
@@ -46,10 +53,16 @@
         apiFetchRaw('/api/outbox?status=draft&limit=5'),
         apiFetchRaw('/api/outbox/count'),
       ]);
-      if (!list.ok || !count.ok) return;
-      approvals = (((await list.json()) as { items?: Approval[] }).items ?? []);
-      approvalsPending = ((await count.json()) as { pending?: number }).pending ?? approvals.length;
-    } catch { /* offline or no projects module: keep the section hidden */ }
+      // 404: a kernel without the projects module — keep the section hidden.
+      if (list.status === 404 || count.status === 404) { approvalsError = null; return; }
+      for (const r of [list, count]) {
+        if (!r.ok) throw new HttpFailure(r.status, r.headers.get('content-type') ?? '', await r.text());
+      }
+      const items = (((await list.json()) as { items?: Approval[] }).items ?? []);
+      approvalsPending = ((await count.json()) as { pending?: number }).pending ?? items.length;
+      approvals = items;
+      approvalsError = null;
+    } catch (e) { approvalsError = e; }
   }
 
   const approvalTitle = (a: Approval) =>
@@ -98,7 +111,7 @@
 </script>
 
 {#if !d}
-  <div class="loading-view">Loading work overview...</div>
+  <Skeleton variant="cards" rows={6} />
 {:else}
   <ViewHeader title="Work" sub="Your productivity command center" />
 
@@ -140,9 +153,11 @@
     </OverviewCard>
 
     <!-- Pending Approvals -->
-    {#if approvals}
+    {#if approvals || approvalsError}
       <OverviewCard title="Pending Approvals" icon={ICONS.approvals} iconColor="var(--orange)" navigate={goto} actions={[{ label: 'Review All', href: '/outbox' }]}>
-        {#if approvals.length > 0}
+        {#if approvalsError}
+          <ErrorState error={approvalsError} on:retry={loadApprovals} />
+        {:else if approvals && approvals.length > 0}
           <ul class="card-list">
             {#each approvals as a (a.id)}
               <li>

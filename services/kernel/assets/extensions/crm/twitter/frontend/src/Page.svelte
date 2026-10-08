@@ -11,6 +11,7 @@
   import Empty from '$shared/components/Empty.svelte';
   import { fmtTime } from '$shared/utils';
   import type { ExtPageContext } from '$shared/types';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
 
   export let ctx: ExtPageContext;
 
@@ -107,14 +108,14 @@
           body: JSON.stringify({ id })
         }).then(r => r.json())
       );
-      if (!data.ok) alert('Publish failed: ' + (data.error || 'Unknown error'));
+      if (!data.ok) toast.error('Publish failed', { detail: data.error || 'Unknown error' });
       await reload();
     } catch { /* ignore */ }
     publishing = new Set([...publishing].filter(x => x !== id));
   }
 
   async function deletePost(id: string) {
-    if (!confirm('Delete this post?')) return;
+    if (!(await confirm({ title: 'Delete this post?', body: 'The post is removed and cannot be recovered.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await rpcOrCall('twitter.posts.delete', { id }, () =>
         ctx.fetchRaw('/api/twitter/posts/delete', {
@@ -282,7 +283,7 @@
           body: JSON.stringify({ account_id: accountId })
         }).then(r => r.json())
       );
-      if (data.new_mentions > 0) alert(`Found ${data.new_mentions} new mention(s)`);
+      if (data.new_mentions > 0) toast.info(`Found ${data.new_mentions} new mention(s)`);
       await reload();
     } catch { /* ignore */ }
   }

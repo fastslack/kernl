@@ -1346,6 +1346,22 @@ const en = {
   "settings.voice.picker.preview": "Listen",
   "settings.voice.picker.preview_download": "Listen (downloads the voice the first time)",
   "settings.voice.picker.eleven_placeholder": "ElevenLabs voice ID (e.g. 21m00Tcm4TlvDq8ikWAM)",
+  "feedback.undo": "Undo",
+  "feedback.retry": "Retry",
+  "feedback.cancel": "Cancel",
+  "feedback.confirm": "Confirm",
+  "feedback.show_detail": "Show details",
+  "feedback.hide_detail": "Hide details",
+  "feedback.restarting": "Kernl is restarting…",
+  "feedback.type_to_confirm": "Type {name} to confirm",
+  "feedback.something_wrong": "Something went wrong",
+  "feedback.close": "Close",
+  "feedback.error.title": "This page could not load",
+  "feedback.error.not_found": "This page doesn't exist",
+  "feedback.error.home": "Back to home",
+  "feedback.error.report": "Copy details to report it",
+  "feedback.error.copied": "Details copied",
+  "feedback.error.search_hint": "Press Ctrl+K to search",
 } satisfies Record<string, string>;
 
 /**

@@ -1,10 +1,14 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { files } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import KpiCard from '$shared/components/KpiCard.svelte';
   import Badge from '$shared/components/Badge.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
+  import { HttpFailure } from '$shared/feedback';
   import { fmtTime } from '$shared/utils';
 
   function fmtBytes(bytes: number): string {
@@ -138,6 +142,37 @@
     } catch { return null; }
   }
 
+  /** Like safeFetch, but a failure is thrown (HttpFailure on non-2xx) instead of turned into null. */
+  async function loadJson(url: string): Promise<any> {
+    const action = urlToRpcAction(url, 'GET');
+    const viaHttp = async () => {
+      const r = await fetch(url);
+      if (!r.ok) throw new HttpFailure(r.status, r.headers.get('content-type') ?? '', await r.text());
+      return r.json();
+    };
+    return action ? rpcOrCall(action, urlArgs(url), viaHttp) : viaHttp();
+  }
+
+  // Load errors stay set while a retry is in flight (cleared only on success) so
+  // each ErrorState stays mounted and its 60 s auto-retry cap is not reset.
+  let overviewError: unknown = null;
+  let overviewLoading = false;
+  let browseError: unknown = null;
+  let treeError: unknown = null;
+
+  async function loadOverview() {
+    overviewLoading = true;
+    try {
+      files.set(await loadJson('/api/dashboard/files'));
+      overviewError = null;
+    } catch (e) {
+      overviewError = e;
+    } finally { overviewLoading = false; }
+  }
+
+  // The shell fills the store on its own; only fetch here when it has not (yet).
+  onMount(() => { if (!$files) void loadOverview(); });
+
   function post(url: string, body: unknown) {
     return safeFetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
   }
@@ -193,8 +228,11 @@
         if (r?.min) params.set('min_size', String(r.min));
         if (r?.max) params.set('max_size', String(r.max));
       }
-      const data = await safeFetch(`/api/files/browse?${params}`);
+      const data = await loadJson(`/api/files/browse?${params}`);
       if (data) { browseFiles = data.files ?? []; browseTotal = data.total ?? 0; }
+      browseError = null;
+    } catch (e) {
+      browseError = e;
     } finally { browseLoading = false; }
   }
 
@@ -246,7 +284,15 @@
   }
 
   async function loadVirtualTree() {
-    const data = await safeFetch('/api/files/virtual-tree');
+    let data: any;
+    try {
+      data = await loadJson('/api/files/virtual-tree');
+      treeError = null;
+    } catch (e) {
+      treeError = e;
+      treeLoaded = true; // stops the tab-init statement from re-fetching in a loop
+      return;
+    }
     virtualTree = data?.tree ?? [];
     treeLoaded = true;
     // Auto-expand top level
@@ -262,7 +308,7 @@
   }
 
   // ── Tab init ───────────────────────────────────
-  $: if (tab === 'browse' && browseFiles.length === 0 && !browseLoading && hasData) {
+  $: if (tab === 'browse' && browseFiles.length === 0 && !browseLoading && !browseError && hasData) {
     loadFilters();
     loadBrowse();
   }
@@ -330,7 +376,13 @@
   </div>
 {/if}
 
-{#if !fd}
+{#if !fd && overviewError}
+  <ErrorState error={overviewError} on:retry={loadOverview} />
+
+{:else if !fd && overviewLoading}
+  <Skeleton variant="cards" rows={6} />
+
+{:else if !fd}
   <div class="loading-view">File indexer backend is not available in this build.</div>
 
 {:else if !hasData}
@@ -538,10 +590,14 @@
       <div class="browse-main">
         <div class="browse-header">
           <span class="browse-count">{browseTotal.toLocaleString()} files</span>
-          {#if browseLoading}<span class="browse-loading">Loading...</span>{/if}
+          {#if browseLoading && browseFiles.length > 0}<span class="browse-loading">Updating…</span>{/if}
         </div>
 
-        {#if browseFiles.length === 0 && !browseLoading}
+        {#if browseError}
+          <ErrorState error={browseError} on:retry={() => loadBrowse(false)} />
+        {:else if browseLoading && browseFiles.length === 0}
+          <Skeleton variant="rows" rows={8} />
+        {:else if browseFiles.length === 0}
           <div class="empty-state">No files match the current filters</div>
         {:else}
           <div class="browse-list">
@@ -649,7 +705,9 @@
         </div>
       </Panel>
 
-      {#if virtualTree.length > 0}
+      {#if treeError}
+        <ErrorState error={treeError} on:retry={loadVirtualTree} />
+      {:else if virtualTree.length > 0}
         <Panel title="Virtual Folder Structure" dotColor="var(--teal)" cls="anim d2">
           <div class="vtree">
             {#each virtualTree.filter(n => n.level === 0) as folder}

@@ -1,10 +1,12 @@
 <script lang="ts">
   import { readApiError } from '$lib/api.js';
   import { onMount } from 'svelte';
+  import { confirm as confirmDialog } from '$shared/feedback';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import KpiCard from '$shared/components/KpiCard.svelte';
   import Empty from '$shared/components/Empty.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
 
   interface Rank {
     id: string; name: string; level: number;
@@ -136,10 +138,10 @@
 
   async function deleteRank(rank: Rank) {
     const count = (agentsByRank.get(rank.id) ?? []).length;
-    const msg = count > 0
-      ? `Delete "${rank.name}"? ${count} agent(s) will be left without a rank.`
-      : `Delete "${rank.name}"?`;
-    if (!confirm(msg)) return;
+    const body = count > 0
+      ? `${count} agent(s) will be left without a rank. This cannot be undone.`
+      : 'This cannot be undone.';
+    if (!(await confirmDialog({ title: `Delete "${rank.name}"?`, body, confirmLabel: 'Delete rank', danger: true }))) return;
     try {
       const res = await fetch(`/api/agents/ranks/${rank.id}`, { method: 'DELETE' });
       if (!res.ok) throw new Error(res.statusText);
@@ -185,7 +187,7 @@
 {/if}
 
 {#if loading}
-  <div class="loading-view">Loading ranks…</div>
+  <Skeleton variant="rows" rows={5} />
 {:else}
 
 <div class="kpi-row anim">

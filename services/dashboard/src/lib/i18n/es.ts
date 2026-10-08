@@ -1349,6 +1349,22 @@ const es: Record<I18nKey, string> = {
   "settings.voice.picker.preview": "Escuchar",
   "settings.voice.picker.preview_download": "Escuchar (la primera vez baja la voz)",
   "settings.voice.picker.eleven_placeholder": "ID de voz de ElevenLabs (p. ej. 21m00Tcm4TlvDq8ikWAM)",
+  "feedback.undo": "Deshacer",
+  "feedback.retry": "Reintentar",
+  "feedback.cancel": "Cancelar",
+  "feedback.confirm": "Confirmar",
+  "feedback.show_detail": "Ver detalle",
+  "feedback.hide_detail": "Ocultar detalle",
+  "feedback.restarting": "Kernl se está reiniciando…",
+  "feedback.type_to_confirm": "Escribí {name} para confirmar",
+  "feedback.something_wrong": "Algo salió mal",
+  "feedback.close": "Cerrar",
+  "feedback.error.title": "Esta página no se pudo cargar",
+  "feedback.error.not_found": "Esta página no existe",
+  "feedback.error.home": "Volver al inicio",
+  "feedback.error.report": "Copiar el detalle para reportarlo",
+  "feedback.error.copied": "Detalle copiado",
+  "feedback.error.search_hint": "Apretá Ctrl+K para buscar",
 };
 
 export default es;

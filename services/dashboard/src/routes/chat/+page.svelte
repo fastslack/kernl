@@ -17,21 +17,13 @@
   import { SentenceSplitter, speech, speakText } from '$lib/voice/speech.js';
   import PermissionModal, { type PendingPermission } from './PermissionModal.svelte';
 
-  /**
-   * A failed turn is reported twice — once by the SSE `error` event and once by
-   * the HTTP reply — so the same text landed in the transcript as two bubbles.
-   * Whichever arrives second is dropped.
-   */
-  function appendError(text: string): void {
-    const last = messages[messages.length - 1];
-    if (last && last.role === 'assistant' && last.content === text) return;
-    messages = [...messages, { role: 'assistant', content: text, created_at: new Date().toISOString() }];
-  }
-
   import { fmtTime } from '$shared/utils';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
+  import { HttpFailure, describeError, toast } from '$shared/feedback';
+  import { rpcOrCall } from '$lib/ws.js';
   import {
     getChatEpisodes,
-    getChatMessages,
     startChatEpisode,
     sendChatMessage,
     sendChatMessageStream,
@@ -58,6 +50,9 @@
   let input = '';
   let sending = false;
   let loading = false;
+  // Kept set while a retry is in flight (cleared only on success) so ErrorState
+  // stays mounted and its 60 s auto-retry cap is not reset on every cycle.
+  let messagesError: unknown = null;
   let piiStatus: any = null;
   let msgArea: HTMLDivElement;
   let inputArea: ChatInputArea;
@@ -90,13 +85,31 @@
     }
   }
 
+  // Throws HttpFailure on non-2xx so ErrorState can tell a kernel restart apart.
+  async function fetchMessages(id: string): Promise<any[]> {
+    const res: any = await rpcOrCall('chat.messages.list', { episode_id: id }, async () => {
+      const r = await fetch('/api/chat/messages?episode_id=' + encodeURIComponent(id));
+      if (!r.ok) throw new HttpFailure(r.status, r.headers.get('content-type') ?? '', await r.text());
+      return r.json();
+    });
+    return Array.isArray(res) ? res : (res?.messages ?? []);
+  }
+
   async function selectEpisode(id: string) {
+    // Same episode = a retry: keep the error (and ErrorState mounted) until it succeeds.
+    const isRetry = id === selectedEpisodeId;
+    if (!isRetry) messagesError = null;
     selectedEpisodeId = id;
     loading = true;
     try {
-      const msgs = await getChatMessages(id);
-      messages = (msgs as any[]).filter(m => m.role !== 'system');
+      const msgs = await fetchMessages(id);
+      messages = msgs.filter(m => m.role !== 'system');
+      messagesError = null;
+    } catch (e) {
+      if (id === selectedEpisodeId) { messagesError = e; messages = []; }
     } finally { loading = false; }
+    // An auto-retry must not steal scroll or focus from the user.
+    if (isRetry) return;
     await tick();
     scrollBottom();
     inputArea?.focus();
@@ -145,6 +158,16 @@
     for (const p of pieces) speech.push(p);
   }
 
+  // One failed turn is reported by both the SSE error event and the HTTP
+  // reply; show it once. turnLost is appended to the visible message.
+  let turnErrorShown = false;
+  let turnLost = '';
+  function reportTurnError(message: string, detail?: string) {
+    if (turnErrorShown) return;
+    turnErrorShown = true;
+    toast.error(message + turnLost, detail ? { detail } : undefined);
+  }
+
   async function doSend(detail: ComposerSendDetail) {
     const spoken = nextSendSpoken;
     nextSendSpoken = false;
@@ -154,6 +177,8 @@
     const msg = detail.text.trim();
     const attachmentIds = detail.attachmentIds;
     if (!msg && attachmentIds.length === 0) return;
+    turnErrorShown = false;
+    turnLost = attachmentIds.length ? ' — the attachments were not sent; attach them again to retry.' : '';
 
     input = '';
     // The local echo draws its strip from the metas the composer handed over;
@@ -181,14 +206,14 @@
           messages = [...messages, { role: 'assistant', content: data.message.content, created_at: new Date().toISOString() }];
           if (splitter && typeof data.message.content === 'string') speakText(data.message.content);
         } else if (data.error) {
-          appendError('Error: ' + data.error);
+          reportTurnError(String(data.error));
         }
       }
     } catch (e: any) {
       // The composer already let go of the files; say so, so a retry
       // re-attaches them instead of silently going without.
-      const lost = attachmentIds.length ? ' — the attachments were not sent; attach them again to retry.' : '';
-      appendError('Connection error: ' + e.message + lost);
+      const d = describeError(e);
+      reportTurnError(d.title, d.detail);
     } finally {
       splitter = null;
       sending = false;
@@ -277,7 +302,7 @@
       streamingBlocks = [];
       streamingActive = false;
     } else if (ev.type === 'error') {
-      appendError('Error: ' + ev.message);
+      reportTurnError(String(ev.message));
       streamingBlocks = [];
       streamingActive = false;
     }
@@ -418,11 +443,10 @@
 
     <!-- Messages area -->
     <div bind:this={msgArea} class="cx-messages">
-      {#if loading}
-        <div class="cx-loader">
-          <div class="cx-loader-bar"></div>
-          <span>Loading messages...</span>
-        </div>
+      {#if messagesError}
+        <ErrorState error={messagesError} on:retry={() => selectedEpisodeId && selectEpisode(selectedEpisodeId)} />
+      {:else if loading}
+        <Skeleton variant="rows" rows={4} />
       {:else if !selectedEpisodeId}
         <div class="cx-empty">
           <div class="cx-empty-glyph">

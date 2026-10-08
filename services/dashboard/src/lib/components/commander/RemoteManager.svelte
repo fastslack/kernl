@@ -7,6 +7,7 @@
 	 */
 	import { onMount } from 'svelte';
 	import { createEventDispatcher } from 'svelte';
+	import { toast, confirm as confirmDialog } from '$shared/feedback';
 
 	export let onClose: () => void;
 
@@ -115,11 +116,20 @@
 			method: 'POST'
 		});
 		const data = (await r.json()) as { ok: boolean; error?: string };
-		alert(data.ok ? '✓ Connected' : `✗ ${data.error ?? 'Failed'}`);
+		if (data.ok) toast.success('Connected');
+		else toast.error('Could not connect to this remote', { detail: data.error ?? undefined, action: { label: 'Retry', run: () => { void testRemote(id); } } });
 	}
 
 	async function removeRemote(id: string): Promise<void> {
-		if (!confirm('Remove this remote?')) return;
+		const name = remotes.find((x) => x.id === id)?.label ?? '';
+		const ok = await confirmDialog({
+			title: name ? `Remove "${name}"?` : 'Remove this remote?',
+			body: 'Commander forgets this connection and its saved credentials. The files on the remote are not touched.',
+			confirmLabel: 'Remove remote',
+			danger: true,
+			...(name ? { typeToConfirm: name } : {})
+		});
+		if (!ok) return;
 		await fetch(`/api/fs/remotes/${encodeURIComponent(id)}`, {
 			method: 'DELETE'
 		});
@@ -141,7 +151,10 @@
 	}
 
 	function onKey(ev: KeyboardEvent): void {
-		if (ev.key === 'Escape') onClose();
+		if (ev.key === 'Escape') {
+			if (ev.defaultPrevented) return;
+			onClose();
+		}
 	}
 
 	$: canSubmit =

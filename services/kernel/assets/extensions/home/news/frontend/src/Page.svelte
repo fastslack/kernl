@@ -7,6 +7,7 @@
   import { sanitizeHtml } from '$shared/sanitize';
   import Empty from '$shared/components/Empty.svelte';
   import type { ExtPageContext } from '$shared/types';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
 
   export let ctx: ExtPageContext;
 
@@ -166,7 +167,7 @@
   }
 
   async function deleteColumn(id: string) {
-    if (!confirm('Delete this column?')) return;
+    if (!(await confirm({ title: 'Delete this column?', body: 'The column is removed; its feeds stay available.', confirmLabel: 'Delete', danger: true }))) return;
     await rpcOrCall('news.columns.delete', { id }, async () => {
       const res = await ctx.fetchRaw(`/api/news/columns/${id}`, { method: 'DELETE' });
       return res.json();

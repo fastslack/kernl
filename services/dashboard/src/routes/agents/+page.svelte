@@ -2,6 +2,7 @@
   import { agents } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
   import Badge from '$shared/components/Badge.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
   // El mismo drawer que monta /agents-flow. Esta página tenía el suyo: una
   // grilla de solo lectura, sin skills, sin triggers y sin nada editable.
   import AgentDrawer from '$lib/components/agent/AgentDrawer.svelte';
@@ -10,6 +11,7 @@
   import { fmtTime, timeAgo } from '$shared/utils';
   import { runAgent, stopAgent, deleteAgent, createAgent, updateAgent } from '$lib/api.js';
   import { agentFromResponse } from '$lib/stores/agent-detail.js';
+  import { toast, confirm as confirmDialog, describeError } from '$shared/feedback';
 
   $: ag = ($agents as any);
   $: allAgents = ag?.agents ?? [];
@@ -411,21 +413,29 @@
 
   async function doRunAgent(id: string) {
     try { await runAgent(id); }
-    catch (e: any) { alert('Error: ' + e.message); }
+    catch (e: any) { const d = describeError(e); toast.error(d.title, { detail: d.detail, action: { label: 'Retry', run: () => doRunAgent(id) } }); }
   }
 
   async function doStopAgent(id: string) {
     stoppingIds.add(id);
     stoppingIds = stoppingIds;
     try { await stopAgent(id); }
-    catch (e: any) { alert('Error stopping: ' + e.message); }
+    catch (e: any) { const d = describeError(e); toast.error(d.title, { detail: d.detail, action: { label: 'Retry', run: () => doStopAgent(id) } }); }
     finally { stoppingIds.delete(id); stoppingIds = stoppingIds; }
   }
 
   async function doDeleteAgent(id: string) {
-    if (!confirm('Delete this agent?')) return;
+    const agentName = String(allAgents.find((a: any) => a.id === id)?.name ?? '');
+    const ok = await confirmDialog({
+      title: 'Delete this agent?',
+      body: 'The agent, its schedule and its settings are removed for good. This cannot be undone.',
+      confirmLabel: 'Delete agent',
+      danger: true,
+      ...(agentName ? { typeToConfirm: agentName } : {}),
+    });
+    if (!ok) return;
     try { await deleteAgent(id); backToOverview(); }
-    catch (e: any) { alert('Error: ' + e.message); }
+    catch (e: any) { const d = describeError(e); toast.error(d.title, { detail: d.detail }); }
   }
 
   // REVISION resolution:
@@ -436,7 +446,11 @@
   // of the row is only updated when it did — a declined confirm or a failed
   // PUT must leave the REVISION badge exactly where it is.
   async function doAcceptRevision(id: string, name: string): Promise<boolean> {
-    if (!confirm(`Keep "${name}"? This clears the REVISION flag and leaves the agent running as-is.`)) return false;
+    if (!(await confirmDialog({
+      title: `Keep "${name}"?`,
+      body: 'The review flag is cleared and the agent keeps running exactly as it is.',
+      confirmLabel: 'Keep agent',
+    }))) return false;
     try {
       const res = await fetch(`/api/agents/${id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -444,11 +458,15 @@
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return true;
-    } catch (e: any) { alert('Error: ' + e.message); return false; }
+    } catch (e: any) { const d = describeError(e); toast.error(d.title, { detail: d.detail }); return false; }
   }
 
   async function doRejectRevision(id: string, name: string): Promise<boolean> {
-    if (!confirm(`Reject "${name}"? It will be DEACTIVATED (active=0). The row stays in the DB so you can re-enable it later.`)) return false;
+    if (!(await confirmDialog({
+      title: `Reject "${name}"?`,
+      body: 'The agent is switched off and stops running. Nothing is deleted: you can turn it back on later.',
+      confirmLabel: 'Switch off',
+    }))) return false;
     try {
       const res = await fetch(`/api/agents/${id}`, {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
@@ -456,7 +474,7 @@
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return true;
-    } catch (e: any) { alert('Error: ' + e.message); return false; }
+    } catch (e: any) { const d = describeError(e); toast.error(d.title, { detail: d.detail }); return false; }
   }
 
   async function doCreateAgent() {
@@ -550,7 +568,7 @@
   </div>
 
   {#if !ag}
-    <div class="ag-loading">Loading agents...</div>
+    <div class="ag-loading"><div style="width:100%;max-width:720px;padding:16px"><Skeleton variant="rows" rows={6} /></div></div>
   {:else}
     <!-- KPI Row -->
     <div class="ag-kpis">
@@ -782,7 +800,7 @@
             </div>
             <div class="ag-panel-body">
               {#if loadingDetail}
-                <div class="ag-empty"><div class="ag-empty-sub">Loading...</div></div>
+                <Skeleton variant="text" rows={6} />
               {:else}
                 <!-- Run Info -->
                 <div class="detail-section">

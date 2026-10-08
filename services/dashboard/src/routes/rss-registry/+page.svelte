@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { toast, confirm as confirmDialog, describeError } from '$shared/feedback';
   import { rssRegistry } from '$lib/stores.js';
   import { rpcOrCall } from '$lib/ws.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
@@ -84,7 +85,8 @@
         feeds = [...feeds];
       }
     } catch (e: any) {
-      alert('Toggle failed: ' + e.message);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail, action: { label: 'Retry', run: () => { void toggleFeed(feed); } } });
     } finally {
       togglingId = null;
     }
@@ -118,7 +120,8 @@
       await fetch(`/api/registry/rss/${feed.id}/refresh`, { method: 'POST' });
       await load();
     } catch (err) {
-      alert('Refresh failed');
+      const d = describeError(err);
+      toast.error('Could not refresh this feed', { detail: d.detail, action: { label: 'Retry', run: () => { void refreshFeed(feed); } } });
     }
   }
 
@@ -134,12 +137,18 @@
   }
 
   async function deleteFeed(feed: Feed) {
-    if (!confirm(`Delete feed "${feed.name}"? Items will be removed too.`)) return;
+    if (!(await confirmDialog({
+      title: `Delete feed "${feed.name}"?`,
+      body: 'The feed and all the items collected from it are removed for good.',
+      confirmLabel: 'Delete feed',
+      danger: true,
+    }))) return;
     try {
       await fetch(`/api/registry/rss/${feed.id}`, { method: 'DELETE' });
       await load();
     } catch (err) {
-      alert('Delete failed');
+      const d = describeError(err);
+      toast.error('Could not delete this feed', { detail: d.detail });
     }
   }
 
@@ -180,10 +189,11 @@
         addUrl = ''; addPreview = null; addCategory = '';
         await load();
       } else {
-        alert('Add failed: ' + (d.error ?? 'unknown'));
+        toast.error('Could not add this feed', { detail: d.error ?? undefined, action: { label: 'Retry', run: () => { void commitAdd(); } } });
       }
     } catch (err: any) {
-      alert('Add failed: ' + err.message);
+      const d = describeError(err);
+      toast.error('Could not add this feed', { detail: d.detail, action: { label: 'Retry', run: () => { void commitAdd(); } } });
     }
   }
 

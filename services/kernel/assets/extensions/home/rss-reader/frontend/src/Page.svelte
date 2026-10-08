@@ -6,6 +6,7 @@
   import { sanitizeHtml } from '$shared/sanitize';
   import type { ExtPageContext } from '$shared/types';
   import { jsonApi } from '$shared/api';
+  import { toast, confirm, ask, describeError } from '$shared/feedback';
 
   export let ctx: ExtPageContext;
 
@@ -278,7 +279,7 @@
       await bootstrap();
       await loadItems();
     } catch (err) {
-      alert('Refresh failed: ' + (err instanceof Error ? err.message : err));
+      { const d = describeError(err); toast.error(`Refresh failed: ${d.title}`, { detail: d.detail }); }
     } finally {
       refreshing = false;
     }
@@ -338,7 +339,7 @@
   }
 
   async function markAllRead() {
-    if (!confirm('Mark all visible items as read?')) return;
+    if (!(await confirm({ title: 'Mark all visible items as read?', body: 'Every item in the current view will be marked as read.', confirmLabel: 'Mark as read' }))) return;
     try {
       await ctx.fetchRaw('/api/reader/rss/markAllRead', {
         method: 'POST',
@@ -412,7 +413,7 @@
       // Mirror change locally so the UI updates immediately, no full refetch.
       categories = categories.map(c => c.id === id ? { ...c, name } : c);
     } catch (err) {
-      alert('Rename failed: ' + (err instanceof Error ? err.message : err));
+      { const d = describeError(err); toast.error(`Rename failed: ${d.title}`, { detail: d.detail }); }
     } finally {
       cancelEditCat();
     }
@@ -431,7 +432,7 @@
         categories = [...categories, data.category];
       }
     } catch (err) {
-      alert('Create failed: ' + (err instanceof Error ? err.message : err));
+      { const d = describeError(err); toast.error(`Create failed: ${d.title}`, { detail: d.detail }); }
     } finally {
       creatingCat = false;
       newCatName = '';
@@ -444,17 +445,14 @@
 
   async function deleteCategoryConfirm(cat: { id: string; name: string }) {
     const feedsInside = feeds.filter(f => f.category_id === cat.id).length;
-    const msg = feedsInside > 0
-      ? `Delete folder "${cat.name}"? The ${feedsInside} feed${feedsInside !== 1 ? 's' : ''} inside will move to Uncategorized.`
-      : `Delete empty folder "${cat.name}"?`;
-    if (!confirm(msg)) return;
+    if (!(await confirm({ title: `Delete folder "${cat.name}"?`, body: feedsInside > 0 ? `The ${feedsInside} feed${feedsInside !== 1 ? 's' : ''} inside will move to Uncategorized.` : 'The folder is empty.', confirmLabel: 'Delete', danger: true }))) return;
     try {
       await categoryApi.sendJson('DELETE', `/api/registry/rss/categories/${cat.id}`);
       // Local mirror: drop the category, orphan its feeds.
       categories = categories.filter(c => c.id !== cat.id);
       feeds = feeds.map(f => f.category_id === cat.id ? { ...f, category_id: null } : f);
     } catch (err) {
-      alert('Delete failed: ' + (err instanceof Error ? err.message : err));
+      { const d = describeError(err); toast.error(`Delete failed: ${d.title}`, { detail: d.detail }); }
     }
   }
 
