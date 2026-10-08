@@ -647,21 +647,15 @@ export class ClaudeCodeExecutor {
       if (useOAuth) {
         childEnv.ANTHROPIC_API_KEY = undefined;
         childEnv.ANTHROPIC_AUTH_TOKEN = undefined;
-        // When the kernel runs in a container the process user is usually not
-        // the host user (e.g. `bun` with $HOME=/home/bun), but the OAuth creds
-        // live in the `$HOST_HOME/.claude/` bind-mount. Without this override,
-        // el CLI busca bajo `/home/bun/.claude/` y tira "Not logged in".
-        if (process.env.HOST_HOME) {
-          childEnv.HOME = process.env.HOST_HOME;
-        } else {
-          // Everywhere else the session is the one the connect dialog created,
-          // under Kernl's own config dir — the dir "Probar" and the chat use.
-          // Without it the CLI looked in the user's ~/.claude: on a native
-          // Windows install the connection tested fine and every agent run
-          // failed "Not logged in". On Windows the credential itself sits in
-          // Credential Manager keyed by this dir, so it has to match exactly.
-          Object.assign(childEnv, claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }));
-        }
+        // One session for everything: the one AI connections signs in, under
+        // Kernl's own config dir — the dir "Probar" and the chat use. Agents
+        // used to borrow the operator's host login in Docker (HOME=$HOST_HOME,
+        // the ~/.claude bind-mount), so they kept running on that subscription
+        // while AI connections said Claude Code was not connected. Without a
+        // Kernl session the CLI now answers "Not logged in", which the agent
+        // panel turns into the sign-in. On Windows the credential sits in
+        // Credential Manager keyed by this dir, so it has to match exactly.
+        Object.assign(childEnv, claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }));
       } else if (apiKey) {
         childEnv.ANTHROPIC_API_KEY = apiKey;
       }
@@ -789,6 +783,12 @@ export class ClaudeCodeExecutor {
           sandboxEnv.ANTHROPIC_API_KEY = apiKey;
         }
 
+        // A pasted setup-token is Kernl's session too; the driver mounts the
+        // credential file of the dashboard sign-in, never the host's.
+        const sandboxToken = useOAuth
+          ? claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }).CLAUDE_CODE_OAUTH_TOKEN
+          : undefined;
+        if (sandboxToken) sandboxEnv.CLAUDE_CODE_OAUTH_TOKEN = sandboxToken;
         const skillMounts: Array<{ name: string; hostPath: string }> = [];
         for (const name of vars.__skills__ ?? []) {
           const hostPath = this.resolveSkillHostPath(name, agent.id);

@@ -41,7 +41,7 @@
   import ModelPicker from './ModelPicker.svelte';
   import ClaudeSignIn from '$lib/components/llm/ClaudeSignIn.svelte';
   import { isClaudeCodeAuthError } from '$lib/claude-code-auth.js';
-  import { detectProvider } from '$lib/llm-connect.js';
+  import { claudeCodeReady, detectProvider } from '$lib/llm-connect.js';
   import { readChain, primaryModelPatch } from '$lib/model-chain.js';
   import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
 
@@ -193,11 +193,24 @@
   // offers the sign-in itself and resumes the agent once it is back.
   $: sessionLost = autoPaused && isClaudeCodeAuthError(agent?.auto_pause_reason);
 
+  // A claude_code agent runs only on Kernl's own Claude Code session. Asked
+  // once per agent opened, so the header can say so before a run fails.
+  let ccReady: boolean | null = null;
+  let ccCheckedFor = '';
+  $: if (agent && agentType(agent) === 'claude_code' && ccCheckedFor !== agent.id) {
+    ccCheckedFor = agent.id;
+    ccReady = null;
+    const id = agent.id;
+    void claudeCodeReady().then((r) => { if (ccCheckedFor === id) ccReady = r; });
+  }
+  $: ccMissing = !!agent && agentType(agent) === 'claude_code' && ccReady === false;
+
   async function afterSignIn(): Promise<void> {
     // Wire the new session into the provider chain, as the connect dialog does.
     await detectProvider('claude-code').catch(() => {});
     // `resume` toggles on `active`: only fire it while the agent is still stopped.
     if (autoPaused) dispatch('resume');
+    ccReady = await claudeCodeReady();
   }
   // Phase 4 (B): DevOps affordance — is the selected agent part of a DevOps office
   // (kind 'devops')? If so, offer a deep-link to the paid DevOps control panel (/devops).
@@ -404,8 +417,8 @@
                              providers={headProviders} requiresTools={true} engineFollows
                              busy={headSaving} disabled={headSaving} error={headModelError}
                              on:change={(e) => setHeadModel(e.detail)}>
-                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError}
-                        title={headModelError || $t('agent.head.change_model_title')}>
+                  <span class="ip-chip ip-chip-sdk ip-chip-btn" class:ip-chip-err={!!headModelError || ccMissing}
+                        title={headModelError || (ccMissing ? $t('llm.cc_agent_not_connected') : $t('agent.head.change_model_title'))}>
                     <b>Claude Code</b><span class="ip-chip-v">{agent.model || CLAUDE_CODE_DEFAULT_MODEL}</span><span class="ip-chip-caret" aria-hidden="true">{headSaving || headProvidersLoading ? '◌' : '▾'}</span>
                   </span>
                 </ModelPicker>
@@ -495,6 +508,18 @@
             {:else}
               <span class="ip-tripped-hint">{$t('agent.drawer.resume_hint')}</span>
             {/if}
+          </div>
+        </div>
+      {/if}
+
+      {#if ccMissing && !sessionLost}
+        <div class="ip-tripped ip-cc-missing" role="status">
+          <span class="ip-tripped-ico" aria-hidden="true">◇</span>
+          <div class="ip-tripped-body">
+            <span class="ip-tripped-fix">{$t('llm.cc_agent_not_connected')}</span>
+            {#key agent.id}
+              <ClaudeSignIn showDone onDone={afterSignIn} />
+            {/key}
           </div>
         </div>
       {/if}
@@ -867,6 +892,8 @@
     border-radius:8px;
   }
   .ip-tripped-ico{font-size:13px; line-height:1.3; flex:none}
+  .ip-cc-missing{background:rgba(232,176,75,.08); border-color:rgba(232,176,75,.32)}
+  .ip-cc-missing .ip-tripped-ico{color:#e8b04b}
   .ip-tripped-body{display:flex; flex-direction:column; gap:4px; min-width:0}
   .ip-tripped-head{font-size:11.5px; font-weight:600; color:#f87171}
   .ip-tripped-when{font-weight:400; opacity:.75}

@@ -59,6 +59,7 @@ const en = {
   "llm.cc_session_lost_chat": "Claude Code lost its session. Sign in here, then send your message again.",
   "llm.cc_open_settings": "Sign in from AI connections",
   "llm.cc_resuming": "Signed in. Resuming the agent…",
+  "llm.cc_agent_not_connected": "Claude Code is not connected in Kernl, so this agent cannot run. Sign in here or switch it to another model.",
   "llm.cc_command_intro": "Copy this and paste it as is into a terminal:",
   "llm.cc_command_intro_win": "Open Command Prompt (cmd, not PowerShell) and paste this as is, quotes included:",
   "llm.cc_command_after": "Claude Code opens. If it does not ask you to sign in, type /login and approve in the browser with your Claude account. When it is done, leave with /exit and click Detect.",
