@@ -3,6 +3,9 @@
   import { renderMarkdown } from '$lib/workspace-md.js';
   import { highlightCode, detectLang } from '$lib/workspace-highlight.js';
   import { timeAgo } from '$shared/utils';
+  import Skeleton from '$shared/components/Skeleton.svelte';
+  import ErrorState from '$shared/components/ErrorState.svelte';
+  import { HttpFailure, describeError, toast } from '$shared/feedback';
 
   type WorkspaceRow = { id: string; name: string; description: string; shared: boolean; files: number; bytes: number; mtime: number };
   type Office = { flow_id: string; name: string; color: string; workspaces: WorkspaceRow[] };
@@ -16,7 +19,10 @@
   let loadingList = false;
   let loadingTree = false;
   let loadingFile = false;
-  let error = '';
+  // Screen-level load errors stay set while a retry is in flight (cleared only
+  // on success), so ErrorState stays mounted and its 60 s auto-retry cap holds.
+  let listError: unknown = null;
+  let treeError: unknown = null;
   let query = '';
   let modalOpen = false;
 
@@ -35,12 +41,19 @@
     window.history.replaceState({}, '', u.toString());
   }
 
+  // Throws HttpFailure on non-2xx so ErrorState can tell a kernel restart apart.
+  async function getJson(url: string): Promise<any> {
+    const r = await fetch(url);
+    if (!r.ok) throw new HttpFailure(r.status, r.headers.get('content-type') ?? '', await r.text());
+    return r.json();
+  }
+
   async function loadWorkspaces() {
     loadingList = true;
     try {
-      const r = await fetch('/api/agents/workspaces');
-      const j = await r.json();
+      const j = await getJson('/api/agents/workspaces');
       offices = j.offices ?? [];
+      listError = null;
       if (!selectedWs) {
         // 1. Honour deep-link first: `?ws=<id>` jumps straight to that workspace.
         const requested = wsFromUrl();
@@ -58,23 +71,25 @@
         }
       }
     } catch (e) {
-      error = String(e);
+      listError = e;
     } finally {
       loadingList = false;
     }
   }
 
   async function selectWorkspace(wsId: string) {
+    // Same workspace = a retry: keep the error (and ErrorState mounted) until it succeeds.
+    if (wsId !== selectedWs) { treeError = null; entries = []; }
     selectedWs = wsId;
     syncUrl(wsId);
     loadingTree = true;
     expanded = new Set<string>();  // reset when switching workspace
     try {
-      const r = await fetch(`/api/agents/workspace/${encodeURIComponent(wsId)}`);
-      const j = await r.json();
+      const j = await getJson(`/api/agents/workspace/${encodeURIComponent(wsId)}`);
       entries = j.files ?? [];
+      treeError = null;
     } catch (e) {
-      error = String(e);
+      treeError = e;
     } finally {
       loadingTree = false;
     }
@@ -87,11 +102,11 @@
     loadingFile = true;
     content = '';
     try {
-      const r = await fetch(`/api/agents/workspace/${encodeURIComponent(selectedWs)}/file?path=${encodeURIComponent(path)}`);
-      const j = await r.json();
+      const j = await getJson(`/api/agents/workspace/${encodeURIComponent(selectedWs)}/file?path=${encodeURIComponent(path)}`);
       content = j.content ?? '';
     } catch (e) {
-      error = String(e);
+      const d = describeError(e);
+      toast.error(d.title, { detail: d.detail });
     } finally {
       loadingFile = false;
     }
@@ -111,7 +126,7 @@
     try {
       await navigator.clipboard.writeText(content);
     } catch (e) {
-      error = 'Clipboard unavailable: ' + String(e);
+      toast.error('Clipboard unavailable', { detail: describeError(e).detail });
     }
   }
 
@@ -375,8 +390,10 @@
       <h2>Offices / Workspaces</h2>
       <button class="refresh" on:click={loadWorkspaces} title="Refresh">↻</button>
     </div>
-    {#if loadingList}
-      <div class="muted">Loading…</div>
+    {#if listError}
+      <ErrorState error={listError} on:retry={loadWorkspaces} />
+    {:else if loadingList && offices.length === 0}
+      <Skeleton variant="rows" rows={5} />
     {:else if offices.length === 0}
       <div class="muted">No workspaces yet. Offices create them via <code>kernel_workspace_create</code>.</div>
     {:else}
@@ -428,8 +445,10 @@
     </div>
     {#if !selectedWs}
       <div class="muted">Pick a workspace on the left.</div>
-    {:else if loadingTree}
-      <div class="muted">Loading…</div>
+    {:else if treeError}
+      <ErrorState error={treeError} on:retry={() => selectedWs && selectWorkspace(selectedWs)} />
+    {:else if loadingTree && entries.length === 0}
+      <Skeleton variant="rows" rows={8} />
     {:else if entries.length === 0}
       <div class="muted">This workspace is empty.</div>
     {:else}
@@ -498,7 +517,7 @@
       </header>
       <div class="modal-body" class:md={isMd}>
         {#if loadingFile}
-          <div class="muted">Loading…</div>
+          <Skeleton variant="text" rows={8} delay={0} />
         {:else if isMd}
           <div class="md-body">{@html renderedBody}</div>
         {:else}
@@ -507,10 +526,6 @@
       </div>
     </div>
   </div>
-{/if}
-
-{#if error}
-  <div class="error">{error}<button on:click={() => (error = '')}>✕</button></div>
 {/if}
 
 <style>
@@ -819,14 +834,4 @@
   :global(.modal-body .md-body hr) { border: none; border-top: 1px solid rgba(90, 110, 160, 0.2); margin: 18px 0; }
 
   .muted { padding: 16px; color: var(--muted, #8fa0c3); font-size: 12px; }
-
-  .error {
-    position: fixed;
-    bottom: 20px; right: 20px;
-    background: #ef4444; color: white;
-    padding: 10px 14px; border-radius: 6px;
-    display: flex; gap: 10px; align-items: center;
-    font-size: 12px; z-index: 200;
-  }
-  .error button { background: transparent; border: none; color: white; cursor: pointer; }
 </style>

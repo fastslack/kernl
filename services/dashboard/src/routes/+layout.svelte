@@ -13,6 +13,7 @@
   import SideNav from '$lib/components/SideNav.svelte';
   import type { SideNavItem } from '$lib/components/SideNav.svelte';
   import CommandPalette from '$lib/components/CommandPalette.svelte';
+  import FeedbackHost from '$lib/components/feedback/FeedbackHost.svelte';
   import ExtensionGate from '$lib/components/ExtensionGate.svelte';
   import NotificationDropdown from '$lib/components/NotificationDropdown.svelte';
   import OutboxBadge from '$lib/components/OutboxBadge.svelte';
@@ -829,6 +830,8 @@
   on:select={(e) => { e.detail.command.action(); closeCmd(); }}
 />
 {/if}
+
+<FeedbackHost />
 
 <!--
   Music player — mounted at the ROOT (outside the {#if isStandalonePage} +

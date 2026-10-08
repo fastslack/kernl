@@ -11,6 +11,7 @@
   import { onMount, onDestroy, tick } from 'svelte';
   import { apiFetchRaw, readApiError } from '$lib/api.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
 
   type Status = 'draft' | 'approved' | 'sending' | 'sent' | 'rejected' | 'failed';
   interface Item {
@@ -272,7 +273,7 @@
   <div class="layout">
     <section class="queue" aria-label="Cola">
       {#if loading}
-        <p class="muted pad">Cargando…</p>
+        <Skeleton variant="rows" rows={5} />
       {:else if visible.length === 0}
         <p class="muted pad">{currentTab.empty}</p>
       {/if}

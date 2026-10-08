@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { toast, confirm as confirmDialog } from '$shared/feedback';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
   import KpiCard from '$shared/components/KpiCard.svelte';
@@ -151,7 +152,11 @@
 
   async function doRestore(version: number) {
     if (!selectedAgentId) return;
-    if (!confirm(`Restore system_prompt to v${version}? This creates a new version pointing at it.`)) return;
+    if (!(await confirmDialog({
+      title: `Restore the agent's instructions to version ${version}?`,
+      body: 'Nothing is overwritten: a new version is created from this one, and the current one stays in the history.',
+      confirmLabel: 'Restore',
+    }))) return;
     busyAction = `restore:${version}`;
     try {
       await restorePromptVersion(selectedAgentId, version);
@@ -182,7 +187,7 @@
     try {
       const res = await runEvolutionCycle(selectedAgentId, { dryRun: true }) as { triggered: boolean; reason?: string };
       if (!res.triggered) {
-        alert(`No cycle triggered — ${res.reason ?? 'not enough failures'}`);
+        toast.info('No improvement cycle was started', { detail: res.reason ?? 'There are not enough failures to learn from yet.' });
       }
       await selectAgent(selectedAgentId);
     } catch (e) {

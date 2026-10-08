@@ -12,6 +12,7 @@
    */
   import { onMount, tick } from 'svelte';
   import { rpcPost } from '$lib/api.js';
+  import Skeleton from '$shared/components/Skeleton.svelte';
 
   type Repo = {
     id: string; name: string; path: string; description: string; tags: string;
@@ -222,7 +223,7 @@
   {/if}
 
   {#if loading}
-    <p class="rp-muted">Loading…</p>
+    <Skeleton variant="rows" rows={4} />
   {:else if loadError}
     <div class="rp-error" role="alert">
       {loadError}

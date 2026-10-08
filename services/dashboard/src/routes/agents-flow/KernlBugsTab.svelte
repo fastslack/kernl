@@ -10,6 +10,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { t } from '$lib/i18n/index.js';
+  import { confirm as confirmDialog } from '$shared/feedback';
   import { fmtRelTime } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
@@ -107,8 +108,8 @@
   const save = (b: KernlBug) => act('save', () => bugsApi.update(b.id, { title: editTitle, diagnosis: editDiagnosis }));
   const markFixed = (b: KernlBug) => act('fixed', () => bugsApi.update(b.id, { status: 'fixed' }));
   const dismiss = (b: KernlBug) => act('dismiss', () => bugsApi.update(b.id, { status: 'dismissed' }));
-  function publish(b: KernlBug): void {
-    if (!confirm($t('office.kernl.confirm_publish', { title: b.title, repo: settings.repo }))) return;
+  async function publish(b: KernlBug): Promise<void> {
+    if (!(await confirmDialog({ title: $t('office.kernl.confirm_publish', { title: b.title, repo: settings.repo }) }))) return;
     void act('publish', () => bugsApi.publish(b.id));
   }
 

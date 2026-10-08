@@ -2,6 +2,7 @@
   import { onMount, onDestroy } from 'svelte';
   import { getOfficeEnv, configureOfficeEnv, officeEnvAction, type OfficeEnvStatus, type OfficeEnvConfig } from '$lib/api.js';
   import { t } from '$lib/i18n/index.js';
+  import { confirm as confirmDialog } from '$shared/feedback';
 
   /** The office (flow) whose shared environment this controls. */
   export let flowId: string;
@@ -119,7 +120,7 @@
 
   async function act(action: 'up' | 'pause' | 'resume' | 'stop' | 'restart') {
     if (busy) return;
-    if (action === 'stop' && !confirm($t('office.env.stop_confirm'))) return;
+    if (action === 'stop' && !(await confirmDialog({ title: $t('office.env.stop_confirm'), danger: true }))) return;
     busy = true; error = '';
     try {
       const r = await officeEnvAction(action, flowId);

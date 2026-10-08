@@ -2,6 +2,7 @@
   import { createEventDispatcher } from 'svelte';
   import { t } from '$lib/i18n/index.js';
   import type { RailModel, RailOffice } from '$lib/office/rail-model.js';
+  import Skeleton from '$shared/components/Skeleton.svelte';
   export let model: RailModel;
   export let loading = false;
   export let error = false;
@@ -39,7 +40,7 @@
   {#if error}
     <div class="empty" role="alert"><p>{$t('office.directory.error')}</p><button class="k-btn" on:click={() => dispatch('retry')}>{$t('office.directory.retry')}</button></div>
   {:else if loading}
-    <p class="empty" role="status">{$t('office.directory.loading')}</p>
+    <div role="status" aria-label={$t('office.directory.loading')}><Skeleton variant="cards" rows={6} /></div>
   {:else}
     <div class="office-grid">
       {#each matches as office (office.id)}

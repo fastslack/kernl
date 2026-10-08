@@ -8,9 +8,11 @@
     it stays quiet until it matters.
   */
   import { onMount } from 'svelte';
+  import { confirm as confirmDialog } from '$shared/feedback';
   import { apiFetchRaw, readApiError } from '$lib/api.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Panel from '$shared/components/Panel.svelte';
+  import Skeleton from '$shared/components/Skeleton.svelte';
 
   interface Friend {
     npub: string;
@@ -143,7 +145,12 @@
   }
 
   async function remove(f: Friend) {
-    if (!confirm(`Remove ${f.petname || short(f.npub)}? Their directories stay; the link goes.`)) return;
+    if (!(await confirmDialog({
+      title: `Remove ${f.petname || short(f.npub)}?`,
+      body: 'You stop being connected with this friend. Their directories stay on your side.',
+      confirmLabel: 'Remove friend',
+      danger: true,
+    }))) return;
     try {
       const res = await call(`/api/peering/friends/${encodeURIComponent(f.npub)}`, { method: 'DELETE' });
       friends = res.friends ?? friends;
@@ -248,7 +255,7 @@
 
 <!-- ── The list ────────────────────────────────────────────────── -->
 {#if loading}
-  <Panel><p class="hint">loading…</p></Panel>
+  <Panel><Skeleton variant="rows" rows={4} /></Panel>
 {:else if friends.length === 0}
   <Panel>
     <div class="empty">
