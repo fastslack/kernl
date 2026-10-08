@@ -1710,15 +1710,37 @@ export function agentsTools(
         "'Available skills' section, to read the step-by-step playbook before acting.",
       schema: z.object({
         slug: z.string().describe("Skill slug — must be one listed in the agent's Available skills index"),
+        file: z
+          .string()
+          .optional()
+          .describe("A reference file the skill ships (a path from its 'Files in this skill' list). Omit to load the playbook itself."),
       }),
       handler: async (input) => {
-        const { slug } = input;
+        const { slug, file } = input;
         const resolver = executor.getSkillResolver();
         if (!resolver) return errorResult("Skill resolver not initialized");
         const resolved = resolver.resolve(slug);
         if (!resolved) return errorResult(`Skill not installed: ${slug}`);
+        if (file) {
+          const text = resolver.readFile(slug, file);
+          if (text === null) {
+            const files = resolver.listFiles(slug);
+            return errorResult(
+              `No file "${file}" in skill ${slug}.` +
+                (files.length ? ` Files: ${files.join(", ")}` : " This skill ships no reference files."),
+            );
+          }
+          return textResult(`# Skill ${slug} · ${file}\n\n${text}`);
+        }
+        // Skills that lean on profiles or models name them in the body; the
+        // list is what makes those names openable instead of dead references.
+        const files = resolver.listFiles(slug);
+        const index = files.length
+          ? `\n\n---\n\n## Files in this skill\nOpen one with kernel_skill_load(slug: "${slug}", file: "<path>") when the playbook refers to it:\n` +
+            files.map((f) => `- ${f}`).join("\n")
+          : "";
         return textResult(
-          `# Skill: ${resolved.slug}\n\n${resolved.description}\n\n---\n\n${resolved.body}`,
+          `# Skill: ${resolved.slug}\n\n${resolved.description}\n\n---\n\n${resolved.body}${index}`,
         );
       },
     }),

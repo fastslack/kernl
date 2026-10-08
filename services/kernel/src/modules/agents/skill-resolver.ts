@@ -14,9 +14,9 @@
  * makes it easy to swap the cache (LRU? Redis?) later.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 import type { SqliteDb } from "../../core/db/sqlite.js";
 import { log } from "../../core/logger.js";
 import { jsonObject } from "../../core/helpers.js";
@@ -38,6 +38,11 @@ interface CacheEntry {
   version: string;
 }
 
+/** Reference files an agent may open from a skill folder: prose only. */
+const SKILL_FILE_EXT = /\.(md|markdown|txt)$/i;
+const SKILL_FILE_MAX_BYTES = 256 * 1024;
+const SKILL_FILES_MAX = 200;
+
 export class SkillBodyResolver {
   private cache = new Map<string, CacheEntry>();
 
@@ -57,15 +62,72 @@ export class SkillBodyResolver {
     return out;
   }
 
-  /** Resolve a single slug. Returns null when not installed or body missing. */
-  resolve(slug: string): ResolvedSkill | null {
-    const row = this.db
+  private row(slug: string): { install_path: string; manifest_json: string } | undefined {
+    return this.db
       .prepare(
         `SELECT install_path, manifest_json
            FROM installed_extensions
           WHERE slug = ? AND type = 'skill' AND status IN ('active','installed')`,
       )
       .get(slug) as { install_path: string; manifest_json: string } | undefined;
+  }
+
+  /**
+   * The reference files a skill ships besides its SKILL.md (profiles, models,
+   * templates), as paths relative to the skill folder. The body names them;
+   * this is what lets the agent actually open them with kernel_skill_load.
+   */
+  listFiles(slug: string): string[] {
+    const row = this.row(slug);
+    if (!row || !existsSync(row.install_path)) return [];
+    const root = resolve(row.install_path);
+    const out: string[] = [];
+    const walk = (dir: string, depth: number): void => {
+      if (depth > 4 || out.length >= SKILL_FILES_MAX) return;
+      let entries: import("node:fs").Dirent[];
+      try {
+        entries = readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries.sort((a, b) => a.name.localeCompare(b.name))) {
+        if (e.name.startsWith(".")) continue;
+        const full = join(dir, e.name);
+        if (e.isDirectory()) walk(full, depth + 1);
+        else if (e.isFile() && SKILL_FILE_EXT.test(e.name)) {
+          const rel = relative(root, full).split(sep).join("/");
+          if (rel !== "SKILL.md" && out.length < SKILL_FILES_MAX) out.push(rel);
+        }
+      }
+    };
+    walk(root, 0);
+    return out;
+  }
+
+  /**
+   * One reference file of a skill. Null when the skill is not installed, the
+   * path leaves the skill folder, or it is not a readable text file.
+   */
+  readFile(slug: string, file: string): string | null {
+    const row = this.row(slug);
+    if (!row) return null;
+    const root = resolve(row.install_path);
+    const full = resolve(root, file);
+    const rel = relative(root, full);
+    if (!rel || rel.startsWith("..") || rel.startsWith(sep)) return null;
+    if (!SKILL_FILE_EXT.test(full)) return null;
+    try {
+      const st = statSync(full);
+      if (!st.isFile() || st.size > SKILL_FILE_MAX_BYTES) return null;
+      return readFileSync(full, "utf-8");
+    } catch {
+      return null;
+    }
+  }
+
+  /** Resolve a single slug. Returns null when not installed or body missing. */
+  resolve(slug: string): ResolvedSkill | null {
+    const row = this.row(slug);
     if (!row) {
       log.debug(`SkillBodyResolver: slug not installed: ${slug}`);
       return null;
