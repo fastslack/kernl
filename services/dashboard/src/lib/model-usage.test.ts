@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect } from 'bun:test';
 import { byUsage, foldUsage, fmtUses } from './model-usage.js';
 import { priceKey } from './model-prices.js';
 
