@@ -28,6 +28,13 @@ const es: Record<MailSyncKey, string> = {
   "mailbody.view_text": "Texto plano",
   "mailbody.view_html": "Con formato",
   "mailbody.empty": "(vacío)",
+  "mailsync.check.button": "Buscar correo nuevo",
+  "mailsync.check.running": "Buscando…",
+  "mailsync.check.found": "{n} nuevos",
+  "mailsync.check.none": "No hay correo nuevo",
+  "mailsync.check.done": "Revisado",
+  "mailsync.check.slow": "Sigue buscando en segundo plano",
+  "mailsync.check.failed": "La búsqueda falló",
 };
 
 export default es;
