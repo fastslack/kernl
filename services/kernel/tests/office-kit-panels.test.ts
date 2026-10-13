@@ -62,3 +62,43 @@ describe("extension office panels", () => {
     expect(new PanelStore(db).getSpec("demo2")).toBeNull();
   });
 });
+
+describe("panels lifecycle", () => {
+  it("drops the stored spec when the office is re-applied without panels or with an invalid one", () => {
+    const db = setup();
+    const svc = new AgentService(db, new EventBus());
+    const agents = [{ slug: "vigia", name: "Vigía", prompt: "x" }];
+    const r = materializeOffice(db, svc, officeDefinitionFromJson({ name: "Ciclo", agents, panels }), {});
+    expect(new PanelStore(db).getSpec(r.flowId)).not.toBeNull();
+    materializeOffice(db, svc, officeDefinitionFromJson({ name: "Ciclo", agents }), {});
+    expect(new PanelStore(db).getSpec(r.flowId)).toBeNull();
+    materializeOffice(db, svc, officeDefinitionFromJson({ name: "Ciclo", agents, panels }), {});
+    const bad = { ...panels, actions: { ronda: { type: "run", label: "R", agent: "ghost", goal: "x" } } };
+    materializeOffice(db, svc, officeDefinitionFromJson({ name: "Ciclo", agents, panels: bad }), {});
+    expect(new PanelStore(db).getSpec(r.flowId)).toBeNull();
+  });
+
+  it("removes an office's spec and records when the office is deleted", () => {
+    const db = setup();
+    const svc = new AgentService(db, new EventBus());
+    const r = materializeOffice(db, svc, officeDefinitionFromJson({ name: "Borrar", agents: [{ slug: "vigia", name: "Vigía", prompt: "x" }], panels }), {});
+    const store = new PanelStore(db);
+    store.putRecord(r.flowId, "events", "k", { text: "x" }, "agent");
+    svc.deleteFlow(r.flowId);
+    expect(store.getSpec(r.flowId)).toBeNull();
+    expect(store.listRecords(r.flowId, "events")).toEqual([]);
+  });
+});
+
+describe("extension office panels lifecycle", () => {
+  it("drops a previous spec when a reinstall ships no panels", async () => {
+    const { AgentsFacade } = await import("../src/modules/agents/extension-facade.js");
+    const db = setup();
+    const facade = new AgentsFacade(db);
+    await facade.installOfficeFromPayload({ slug: "demo3", name: "Demo3" });
+    await facade.installAgentFromPayload({ slug: "vigia", name: "Vigía", flow_slug: "demo3", system_prompt: "x" });
+    await facade.installOfficePanelsFromPayload({ slug: "demo3", name: "Demo3", panels });
+    await facade.installOfficePanelsFromPayload({ slug: "demo3", name: "Demo3" });
+    expect(new PanelStore(db).getSpec("demo3")).toBeNull();
+  });
+});

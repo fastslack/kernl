@@ -644,11 +644,16 @@ export function materializeOffice(
   }
 
   // 5) Panels ──────────────────────────────────────────────────
-  if (def.panels !== undefined) {
+  // The manifest is the source of truth: no block, or a block that fails
+  // validation, leaves the office without panels rather than with old ones.
+  if (def.panels === undefined) {
+    try { new PanelStore(db).deleteSpec(flow.id); } catch { /* panels module absent */ }
+  } else {
     const slugs = (db.prepare("SELECT slug FROM agents WHERE flow_id = ?").all(flow.id) as Array<{ slug: string }>).map((r) => r.slug);
     const parsed = parsePanelSpec(def.panels, { agentSlugs: slugs });
     if (!parsed.ok) {
       report.warnings.push(`panels not stored: ${parsed.error}`);
+      try { new PanelStore(db).deleteSpec(flow.id); } catch { /* panels module absent */ }
     } else {
       try {
         new PanelStore(db).saveSpec(flow.id, parsed.spec, repoPath ?? "");

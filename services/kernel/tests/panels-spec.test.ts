@@ -56,3 +56,12 @@ describe("parsePanelSpec", () => {
     expect(r.ok ? "" : r.error).toContain('"ghost" is not an input field');
   });
 });
+
+describe("parsePanelSpec patterns", () => {
+  it("rejects a pattern that does not compile", () => {
+    const bad = { ...base, actions: { ...base.actions, "vigia.mode": { ...base.actions["vigia.mode"],
+      input: { type: "object", properties: { mode: { type: "string", pattern: "([" } } } } } };
+    const r = parsePanelSpec(bad, ctx);
+    expect(r.ok ? "" : r.error).toContain("pattern");
+  });
+});

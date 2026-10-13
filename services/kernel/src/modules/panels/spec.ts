@@ -17,7 +17,7 @@ const Lite: z.ZodType<LiteSchema> = z.lazy(() => z.object({
   required: z.array(z.string()).optional(),
   items: Lite.optional(),
   enum: z.array(z.unknown()).optional(),
-  pattern: z.string().max(400).optional(),
+  pattern: z.string().max(400).refine((p) => { try { new RegExp(p); return true; } catch { return false; } }, "pattern is not a valid regular expression").optional(),
   minimum: z.number().optional(),
   maximum: z.number().optional(),
   maxLength: z.number().int().positive().optional(),
