@@ -25,6 +25,8 @@
   import { fetchOfficeTemplates, fetchLicenseFeatures, moveAgentToOffice, runAgentWithGoal, setOfficePaused, type OfficeReport, type OfficeTemplatesResponse } from '$lib/office/office-api.js';
   import { environmentLicensed, officeRepoPath } from '$lib/office/team-model.js';
   import { errorMessage } from '$lib/office/office-errors.js';
+  import { fetchPanelOffices } from '$lib/panels/client.js';
+  import { anchorMap } from '$lib/panels/anchors.js';
 
   // ── Types ──────────────────────────────────────
   interface AgentData {
@@ -625,6 +627,10 @@
     else if (action === 'fit') void enterWorld(() => world?.fitAll());
   }
 
+  /** Office → panel view its 3D whiteboard opens. Reloaded when offices change. */
+  let panelAnchors = new Map<string, string>();
+  async function loadPanelAnchors() { panelAnchors = anchorMap(await fetchPanelOffices()); }
+
   /** Panel view a deep link asked for; the office panel opens on it. */
   let panelInitialView: string | null = null;
 
@@ -676,6 +682,7 @@
       ranks = graphData.ranks ?? [];
       assignColors(graphData.agents);
       applyDeepLinksOnce();
+      void loadPanelAnchors();
     } else {
       dataError = true;
     }
@@ -706,6 +713,7 @@
       // Only reassign graphData when something the UI cares about changed — a
       // fresh array ref would otherwise re-trigger reactive blocks (3D scene
       // fingerprint, derived stats) on every poll with no structural diff.
+      if (flowsChanged) void loadPanelAnchors();
       if (!graphData || agentsChanged || chainsChanged || flowsChanged) {
         graphData = newData;
         flows = newData.flows ?? flows;
@@ -793,6 +801,7 @@
           agents={worldAgents}
           {chains}
           flows={worldFlows}
+          {panelAnchors}
           {ranks}
           {dataLoaded}
           {dataError}
@@ -801,6 +810,7 @@
           {stats}
           on:refresh={refresh}
           on:officeclick={(e) => openPanel(e.detail.flowId)}
+          on:panelclick={(e) => { panelInitialView = e.detail.view; openPanel(e.detail.flowId); }}
           on:demolished={(e) => (ghosts = ghosts.filter((g) => g.flow.id !== e.detail.flowId))}
           on:inbox={(e) => (inboxCount = e.detail.count)}
           on:moveagent={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
