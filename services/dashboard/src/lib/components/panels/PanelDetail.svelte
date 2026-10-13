@@ -40,7 +40,7 @@
       {/each}
     </div>
     {#if openAction && spec.actions?.[openAction]}
-      <PanelForm {flowId} actionId={openAction} action={spec.actions[openAction]} preset={{ key: rowKey }} />
+      {#key `${rowKey}:${openAction}`}<PanelForm {flowId} actionId={openAction} action={spec.actions[openAction]} preset={{ key: rowKey }} />{/key}
     {/if}
   {/if}
 </div>

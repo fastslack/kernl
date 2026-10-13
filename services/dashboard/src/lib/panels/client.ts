@@ -40,8 +40,13 @@ export function pollSource(
     if (stopped) return;
     try {
       const r = await readSource(flowId, source, { ...opts, since: version });
+      // A view switched away while this read was in flight: its data is not ours to show.
+      if (stopped) return;
       if (!r.unchanged) { version = r.version; onData(r.data, r.version); }
-    } catch (e) { onError(e instanceof Error ? e.message : String(e)); }
+    } catch (e) {
+      if (stopped) return;
+      onError(e instanceof Error ? e.message : String(e));
+    }
     if (!stopped) timer = setTimeout(tick, everyMs);
   };
   let timer: ReturnType<typeof setTimeout> = setTimeout(tick, 0);

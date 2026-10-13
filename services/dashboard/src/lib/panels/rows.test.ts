@@ -18,3 +18,9 @@ describe("rows", () => {
     expect(g.map((c) => c.column)).toEqual(["a", "b", "z"]);
   });
 });
+
+describe("toRows keys", () => {
+  it("keeps the map key even when the record has its own key field", () => {
+    expect(toRows({ "web#1": { key: "otro", state: "ready" } })[0].key).toBe("web#1");
+  });
+});

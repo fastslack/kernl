@@ -16,16 +16,16 @@
   {#each columns as col (col.column)}
     <section class="pb-col" aria-label={col.column}>
       <header>{col.column} <span>{col.rows.length}</span></header>
-      {#each col.rows as r, i (String(r.key ?? i))}
+      {#each col.rows as r, i (i)}
         <div class="pb-card" role="button" tabindex="0" on:click={() => view.detail && dispatch('open', String(r.key ?? ''))}
                  on:keydown={(e) => e.key === 'Enter' && view.detail && dispatch('open', String(r.key ?? ''))}>
           <div class="pb-t">{renderText(view.card?.title ?? '{{key}}', r)}</div>
           {#if view.card?.subtitle}<div class="pb-s">{renderText(view.card.subtitle, r)}</div>{/if}
           {#if view.card?.badges?.length}
-            <div class="pb-b">{#each view.card.badges as b (b)}{#if r[b]}<span>{String(r[b])}</span>{/if}{/each}</div>
+            <div class="pb-b">{#each view.card.badges as b, bi (bi)}{#if r[b]}<span>{String(r[b])}</span>{/if}{/each}</div>
           {/if}
           {#if view.card?.links?.length}
-            <div class="pb-l">{#each view.card.links as l (l.href)}{@const href = safeHref(renderText(l.href, r))}{#if href}<a {href} target="_blank" rel="noopener noreferrer" on:click|stopPropagation>{textOf(l.label, $locale)}</a>{/if}{/each}</div>
+            <div class="pb-l">{#each view.card.links as l, li (li)}{@const href = safeHref(renderText(l.href, r))}{#if href}<a {href} target="_blank" rel="noopener noreferrer" on:click|stopPropagation>{textOf(l.label, $locale)}</a>{/if}{/each}</div>
           {/if}
         </div>
       {/each}

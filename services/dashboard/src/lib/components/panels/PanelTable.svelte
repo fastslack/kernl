@@ -18,7 +18,7 @@
   <table class="pt">
     <thead><tr>{#each fields as f (f.key)}<th>{textOf(f.label, $locale) || f.key}</th>{/each}</tr></thead>
     <tbody>
-      {#each shown as r, i (String(r.key ?? i))}
+      {#each shown as r, i (i)}
         <tr tabindex="0" on:click={() => view.detail && dispatch('open', String(r.key ?? ''))} on:keydown={(e) => e.key === 'Enter' && view.detail && dispatch('open', String(r.key ?? ''))}>
           {#each fields as f (f.key)}<td title={cell(r[f.key])}>{cell(r[f.key])}</td>{/each}
         </tr>
