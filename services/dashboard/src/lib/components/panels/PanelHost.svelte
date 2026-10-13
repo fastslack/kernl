@@ -101,8 +101,15 @@
         <PanelBoard {view} {rows} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'timeline'}
         <PanelTimeline items={rows.map((r) => ({ at: String(r[view?.time ?? 'updated_at'] ?? ''), text: view?.text ? view.text.replace(/\{\{\s*([\w.#-]+)\s*\}\}/g, (_m, k) => String(r[k] ?? '')) : String(r.key ?? '') }))} />
+      {:else if view.component === 'detail'}
+        <PanelDetail {flowId} {view} {spec} rowKey={null} />
       {:else if view.component === 'form' && view.action && spec.actions?.[view.action]}
         {#key `${flowId}:${view.action}`}<PanelForm {flowId} actionId={view.action} action={spec.actions[view.action]} />{/key}
+        {#each view.actions ?? [] as a (a)}
+          {#if spec.actions?.[a]}
+            <div class="ph-extra">{#key `${flowId}:${a}`}<PanelForm {flowId} actionId={a} action={spec.actions[a]} />{/key}</div>
+          {/if}
+        {/each}
       {/if}
     {/if}
   </div>
@@ -114,5 +121,6 @@
   .ph-tabs button { background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 10px; color: var(--text-2); font: 600 11.5px 'Manrope', sans-serif; cursor: pointer; min-height: 30px; }
   .ph-tabs button.on { border-color: var(--border-h); color: var(--text-1); background: var(--surface-2); }
   .ph-tabs button:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
+  .ph-extra { border-top: 1px solid var(--border); padding-top: 8px; }
   .ph-err { margin: 0; padding: 6px 10px; border-radius: 6px; background: rgba(240, 71, 112, .12); color: #ff9fb5; font: 500 11.5px 'Manrope', sans-serif; }
 </style>

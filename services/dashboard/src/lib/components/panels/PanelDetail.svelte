@@ -10,19 +10,20 @@
   export let flowId: string;
   export let view: PanelView;
   export let spec: PanelSpec;
-  export let rowKey: string;
+  /** The opened record, or null when this detail is a tab of its own (no back button, no key). */
+  export let rowKey: string | null;
   const dispatch = createEventDispatcher<{ back: void }>();
   let row: Record<string, unknown> | null = null;
   let error = '';
   let openAction: string | null = null;
   const [source, select] = (view.data ?? '').split(/:(.*)/s);
-  const stop = pollSource(flowId, source, { select, key: rowKey }, (d) => { row = (d as Record<string, unknown>) ?? null; }, (m) => (error = m));
+  const stop = pollSource(flowId, source, { select, ...(rowKey ? { key: rowKey } : {}) }, (d) => { row = (d as Record<string, unknown>) ?? null; }, (m) => (error = m));
   onDestroy(stop);
   $: sections = view.sections ?? Object.keys(row ?? {});
 </script>
 
 <div class="pd">
-  <button class="pd-back" on:click={() => dispatch('back')}>← {rowKey}</button>
+  {#if rowKey}<button class="pd-back" on:click={() => dispatch('back')}>← {rowKey}</button>{/if}
   {#if error}<p class="pd-err" role="alert">{error}</p>{/if}
   {#if row}
     {#each sections as s (s)}
@@ -40,7 +41,7 @@
       {/each}
     </div>
     {#if openAction && spec.actions?.[openAction]}
-      {#key `${rowKey}:${openAction}`}<PanelForm {flowId} actionId={openAction} action={spec.actions[openAction]} preset={{ key: rowKey }} />{/key}
+      {#key `${rowKey}:${openAction}`}<PanelForm {flowId} actionId={openAction} action={spec.actions[openAction]} preset={rowKey ? { key: rowKey } : {}} />{/key}
     {/if}
   {/if}
 </div>
