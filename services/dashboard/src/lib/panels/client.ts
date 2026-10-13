@@ -52,3 +52,10 @@ export function pollSource(
   let timer: ReturnType<typeof setTimeout> = setTimeout(tick, 0);
   return () => { stopped = true; clearTimeout(timer); };
 }
+
+/** Offices that declare panels, with their 3D anchors. Empty on any failure. */
+export async function fetchPanelOffices(): Promise<Array<{ flowId: string; anchors: Array<{ object: string; view: string }>; views: string[] }>> {
+  try {
+    return ((await apiFetch('/api/panels')) as { offices: Array<{ flowId: string; anchors: Array<{ object: string; view: string }>; views: string[] }> }).offices;
+  } catch { return []; }
+}

@@ -94,6 +94,7 @@ export function buildRooms(
       board.position.set(bx, 1.75, bz);
       board.rotation.y = rotY;
       g.add(board);
+      board.userData.wallBoard = true; // anchor "wall-board" of office panels
       const frame = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(BW + 0.12, BH + 0.12, 0.03), boardFrameMat);
       frame.position.set(bx, 1.75, bz);
       frame.rotation.y = rotY;

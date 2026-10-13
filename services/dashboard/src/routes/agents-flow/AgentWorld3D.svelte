@@ -37,7 +37,7 @@
     resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
-  import { propOf, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
+  import { propOf, tagProp, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
   import {
     createRenderer, configureRenderer, createLabelRenderer, applyEnvironment,
     initialCameraDistance, createPostProcessing,
@@ -85,6 +85,8 @@
   export let agents: WorldAgent[] = [];
   export let chains: WorldChain[] = [];
   export let flows: WorldFlow[] = [];
+  /** Office → panel view its whiteboard opens (offices that declare a "wall-board" anchor). */
+  export let panelAnchors: Map<string, string> = new Map();
   export let ranks: WorldRank[] = [];
   export let flowEvents: AgentFlowEvent[] = [];
   export let runningAgentIds: Set<string> = new Set();
@@ -1492,6 +1494,26 @@
   // can open it.
   let registerRepoModal: RegisterRepoModal | null = null;
 
+  // Office panels: the room's whiteboard opens the view its office anchored to "wall-board".
+  let panelBoardProps: any[] = [];
+  function tagPanelBoards(target: any) {
+    if (!target) return;
+    for (const b of panelBoardProps) delete b.userData.prop;
+    officeProps = officeProps.filter((p) => !panelBoardProps.includes(p));
+    panelBoardProps = [];
+    target.traverse((o: any) => {
+      if (!o.userData?.wallBoard) return;
+      const flowId = o.parent?.userData?.flowId as string | undefined;
+      const view = flowId ? panelAnchors.get(flowId) : undefined;
+      if (!flowId || !view) return;
+      tagProp(o, { tip: () => '📋 Panel', click: () => dispatch('panelclick', { flowId, view }) });
+      panelBoardProps.push(o);
+    });
+    officeProps = [...officeProps, ...panelBoardProps];
+    rayTargetsCache = null;
+  }
+  $: if (staticGroup) { panelAnchors; tagPanelBoards(staticGroup); }
+
   function buildThemedOffices(target: any) {
     officeProps = [];
     reposOperatorPos = null;
@@ -1538,6 +1560,7 @@
     // 3D breaker LEDs update synchronously; the door-sign CSS2D elements only
     // attach to the DOM on the first render, so defer that repaint a beat.
     for (const [fid, st] of infraState) setInfraBreaker(fid, st);
+    tagPanelBoards(target);
     setTimeout(() => updateInfraSignsAll(), 150);
   }
 
