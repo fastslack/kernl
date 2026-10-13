@@ -153,6 +153,16 @@ export function filterOutboundTools<T extends { name: string; outbound?: boolean
   return tools.filter((t) => !mustDraft(t, projectId));
 }
 
+/** `__self_improve__: false` in an agent's variables turns off its self-grading after each run. */
+function selfImproveDisabled(agent: Agent): boolean {
+  try {
+    const vars = JSON.parse(String(agent.variables || "{}")) as Record<string, unknown>;
+    return vars.__self_improve__ === false;
+  } catch {
+    return false;
+  }
+}
+
 export class AgentExecutor {
   private allTools: ToolDefinition[] = [];
 
@@ -918,6 +928,9 @@ export class AgentExecutor {
     events?: EventBus,
   ): Promise<void> {
     if (!this.evalService || !this.evalService.isEnabled()) return;
+    // Opt-out per agent (`__self_improve__: false`): no grading means no feedback,
+    // so the reflection that rewrites prompts from failed runs never starts either.
+    if (selfImproveDisabled(agent)) return;
 
     // Notify the 3D flow that grading is in progress
     events?.emit("agent:flow:auto_eval_started", {
