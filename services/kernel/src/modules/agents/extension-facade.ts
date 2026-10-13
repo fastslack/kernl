@@ -33,6 +33,8 @@ import { computeNextCronRun } from "./cron-utils.js";
 import { kernelTimezone } from "../../sdk/clock.js";
 import { sanitizeAgentPayload } from "../../core/prompt-sanitizer.js";
 import { isFlowKind } from "./types.js";
+import { parsePanelSpec } from "../panels/spec.js";
+import { PanelStore } from "../panels/store.js";
 
 interface AgentPayload {
   slug: string;
@@ -390,6 +392,24 @@ export class AgentsFacade implements AgentsFacadeLike {
     }
     log.info(`agents: office upserted from bundle → ${p.slug}`);
     return p.slug;
+  }
+
+  /**
+   * The office's panels (panels.v1), stored after its agents are installed:
+   * an action may only name agents of the office, and before this step there
+   * are none. An invalid spec is logged and skipped; the office still installs.
+   */
+  async installOfficePanelsFromPayload(payload: unknown): Promise<void> {
+    const p = payload as OfficePayload & { panels?: unknown };
+    if (!p.slug?.trim() || !p.panels || typeof p.panels !== "object") return;
+    try {
+      const slugs = (this.db.prepare("SELECT slug FROM agents WHERE flow_id = ?").all(p.slug) as Array<{ slug: string }>).map((r) => r.slug);
+      const parsed = parsePanelSpec(p.panels, { agentSlugs: slugs });
+      if (parsed.ok) new PanelStore(this.db).saveSpec(p.slug, parsed.spec, "");
+      else log.warn(`agents: office ${p.slug} panels not stored: ${parsed.error}`);
+    } catch (err) {
+      log.warn(`agents: office ${p.slug} panels not stored: ${String(err)}`);
+    }
   }
 
   async installChainFromPayload(payload: unknown): Promise<string> {
