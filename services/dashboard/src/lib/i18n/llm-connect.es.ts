@@ -12,6 +12,7 @@ const es: Record<LlmConnectKey, string> = {
   "llm.connected": "Conectado",
   "llm.choose_other": "Elegir otro",
   "llm.key_label": "API key",
+  "llm.key_label_optional": "API key (opcional)",
   "llm.key_hint_warn": "Esta key no tiene el formato habitual de {name}. Si la copiaste completa, probala igual.",
   "llm.open_key_page": "Abrir {host}",
   "llm.base_url": "Dirección del servidor",

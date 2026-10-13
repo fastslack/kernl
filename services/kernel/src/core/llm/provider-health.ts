@@ -40,6 +40,12 @@ const RATE_LIMIT_WINDOWS_MS: Record<string, number> = {
   nvidia: 60_000,
   grok: 30_000,
   xai: 30_000,
+  mistral: 60_000,
+  together: 60_000,
+  fireworks: 60_000,
+  moonshot: 60_000,
+  qwen: 60_000,
+  zai: 60_000,
   // Local — never rate-limited
   ollama: 0,
   lmstudio: 0,
@@ -47,6 +53,7 @@ const RATE_LIMIT_WINDOWS_MS: Record<string, number> = {
   "claude-code": 0,
   // Custom OpenAI-compatible — conservative default
   custom: 30_000,
+  "openai-compatible": 30_000,
 };
 
 const DEFAULT_WINDOW_MS = 60_000;

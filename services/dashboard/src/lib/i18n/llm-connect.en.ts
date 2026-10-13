@@ -9,6 +9,7 @@ const en = {
   "llm.connected": "Connected",
   "llm.choose_other": "Choose another",
   "llm.key_label": "API key",
+  "llm.key_label_optional": "API key (optional)",
   "llm.key_hint_warn": "This key doesn't look like a {name} key. If you copied it whole, try it anyway.",
   "llm.open_key_page": "Open {host}",
   "llm.base_url": "Server address",

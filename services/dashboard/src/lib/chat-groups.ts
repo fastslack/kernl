@@ -34,6 +34,8 @@ const PROVIDER_NAMES: Record<string, string> = {
   claude_code: 'Claude Code', 'claude-code': 'Claude Code', anthropic: 'Anthropic', claude: 'Anthropic',
   openai: 'OpenAI', nvidia: 'NVIDIA', ollama: 'Ollama', lmstudio: 'LM Studio', grok: 'Grok',
   gemini: 'Gemini', openrouter: 'OpenRouter', groq: 'Groq', mistral: 'Mistral', deepseek: 'DeepSeek',
+  minimax: 'MiniMax', cerebras: 'Cerebras', together: 'Together AI', fireworks: 'Fireworks AI',
+  moonshot: 'Kimi', qwen: 'Qwen', zai: 'Z.ai', 'openai-compatible': 'OpenAI-compatible',
 };
 
 export function providerName(slug: string | undefined): string {

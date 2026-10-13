@@ -46,16 +46,23 @@ const post = (path: string, body: unknown = {}) =>
   fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 describe("connect routes", () => {
-  it("GET /api/llm/catalog lists the 12 providers with state, never the raw key", async () => {
+  it("GET /api/llm/catalog lists the 20 providers with state, never the raw key", async () => {
     store.nvidia = { apiKey: "nvapi-1234567890abcd", connectedAt: "t" };
     chain = [{ provider: "nim", model: "" }];
     const body = await (await fetch(`${base}/api/llm/catalog`)).json() as any;
-    expect(body.providers).toHaveLength(12);
+    expect(body.providers).toHaveLength(20);
     const nv = body.providers.find((p: any) => p.slug === "nvidia");
     expect(nv).toMatchObject({ recommended: true, connected: true, model: "nvidia/nemotron-3-super-120b-a12b" });
     expect(nv.keyMasked).not.toContain("1234567890");
     expect(body.chain).toEqual([{ provider: "nvidia", model: "" }]);
     expect(JSON.stringify(body)).not.toContain("nvapi-1234567890abcd");
+  });
+
+  it("connect keeps the optional key of an OpenAI-compatible server", async () => {
+    const r = await (await post("/api/llm-providers/openai-compatible/connect", { apiKey: "sk-local", baseUrl: "http://10.0.0.5:8000/v1", model: "llama" })).json() as any;
+    expect(r.ok).toBe(true);
+    expect(overrides[0]).toMatchObject({ apiKey: "sk-local", baseUrl: "http://10.0.0.5:8000/v1" });
+    expect(store["openai-compatible"]).toMatchObject({ apiKey: "sk-local", baseUrl: "http://10.0.0.5:8000/v1", defaultModel: "llama" });
   });
 
   it("test uses the pasted key and saves nothing", async () => {
@@ -159,6 +166,22 @@ describe("detectLocalServer", () => {
     const r = await detectLocalServer(getCatalogEntry("ollama")!, fakeFetch);
     expect(r).toEqual({ found: true, baseUrl: "http://host.docker.internal:11434/v1", models: ["qwen3"] });
     expect(tried[0]).toBe("http://localhost:11434/v1/models");
+    setCredentialSource(null);
+  });
+
+  it("tries every port of a server that may run on several", async () => {
+    setCredentialSource({ loadConfig: () => ({}), saveConfig: () => true });
+    const tried: string[] = [];
+    const fakeFetch = (async (url: unknown) => {
+      tried.push(String(url));
+      if (String(url) === "http://localhost:8000/v1/models") {
+        return new Response(JSON.stringify({ data: [{ id: "meta-llama/Llama-3.3-70B-Instruct" }] }), { status: 200 });
+      }
+      throw new Error("ECONNREFUSED");
+    }) as unknown as typeof fetch;
+    const r = await detectLocalServer(getCatalogEntry("openai-compatible")!, fakeFetch);
+    expect(r).toEqual({ found: true, baseUrl: "http://localhost:8000/v1", models: ["meta-llama/Llama-3.3-70B-Instruct"] });
+    expect(tried.slice(0, 2)).toEqual(["http://localhost:8080/v1/models", "http://localhost:8000/v1/models"]);
     setCredentialSource(null);
   });
 });

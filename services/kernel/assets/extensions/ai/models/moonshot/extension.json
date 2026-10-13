@@ -1,0 +1,17 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.moonshot",
+  "slug": "moonshot",
+  "name": "Moonshot (Kimi)",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "Kimi models by Moonshot AI.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/moonshot.svg",
+  "permissions": [
+    "network"
+  ],
+  "built_in": true
+}
