@@ -342,6 +342,11 @@ export class AgentFlowsService {
         .run(now, id, ...handlers, ...names);
       const moved = this.db.prepare("UPDATE agents SET flow_id = '', updated_at = ? WHERE flow_id = ?").run(now, id);
       this.db.prepare("UPDATE agent_flows SET active = 0, lot_id = '', updated_at = ? WHERE id = ?").run(now, id);
+      // The office's panels go with it: a new office reusing this id (an
+      // extension's slug) must not inherit its spec or its records.
+      for (const sql of ["DELETE FROM office_panels WHERE flow_id = ?", "DELETE FROM panel_records WHERE owner = ?"]) {
+        try { this.db.prepare(sql).run(id); } catch { /* panels tables absent */ }
+      }
       return { unassigned: Number(moved.changes) };
     });
     const result = trx();
