@@ -18,7 +18,8 @@
  *  - Starts the McpHttpRouter (`/mcp`) when useHttp is true.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
 import { log } from "../logger.js";
 import type { KernelConfig } from "../config.js";
 import type { SqliteDb } from "../db/sqlite.js";
@@ -346,6 +347,15 @@ export async function initHttpAndMcp(args: {
             refreshLlmConsumers("Claude Code signed in");
           },
           captureBrowser: existsSync("/.dockerenv"),
+          // On a shared volume, the host relay (docker-compose.host.yml) sees
+          // the link and catches the redirect itself: no paste needed.
+          ...(process.env.KERNL_CLAUDE_LOGIN_DIR ? {
+            shimDir: () => {
+              const base = process.env.KERNL_CLAUDE_LOGIN_DIR!;
+              mkdirSync(base, { recursive: true });
+              return mkdtempSync(join(base, "login-"));
+            },
+          } : {}),
         }),
         browserLogin: () => !existsSync("/.dockerenv"),
       });

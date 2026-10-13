@@ -7,7 +7,7 @@
 import { describe, it, expect } from "bun:test";
 import { EventEmitter } from "node:events";
 import type { ChildProcess } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -27,7 +27,8 @@ function fakeChild() {
 }
 
 function setup(opts: { cli?: string | null; timeoutMs?: number; captureBrowser?: boolean; fetchImpl?: typeof fetch } = {}) {
-  const shimDir = mkdtempSync(join(tmpdir(), "kernl-login-test-"));
+  const base = mkdtempSync(join(tmpdir(), "kernl-login-test-"));
+  const dirs: string[] = [];
   const spawned: Array<{ cmd: string; args: string[]; env: NodeJS.ProcessEnv; proc: ReturnType<typeof fakeChild> }> = [];
   let signedIn = 0;
   const login = createClaudeLogin({
@@ -40,10 +41,10 @@ function setup(opts: { cli?: string | null; timeoutMs?: number; captureBrowser?:
     onSignedIn: () => { signedIn++; },
     timeoutMs: opts.timeoutMs,
     captureBrowser: opts.captureBrowser,
-    shimDir: () => shimDir,
+    shimDir: () => { const d = mkdtempSync(join(base, "s-")); dirs.push(d); return d; },
     fetchImpl: opts.fetchImpl,
   });
-  return { login, spawned, signedIn: () => signedIn, shimDir };
+  return { login, spawned, signedIn: () => signedIn, dirs };
 }
 
 describe("callbackTarget", () => {
@@ -98,6 +99,21 @@ describe("createClaudeLogin", () => {
     const file = /> "([^"]+)"/.exec(readFileSync(shim, "utf-8"))![1];
     writeFileSync(file, AUTHORIZE + "\n");
     expect(login.status().authorizeUrl).toBe(AUTHORIZE);
+  });
+
+  // The host relay (docker-compose.host.yml) listens while the link is there:
+  // a link left behind would keep it holding a dead port on the host.
+  it("in Docker, removes the approval link once the sign-in ends, however it ends", async () => {
+    for (const end of ["exit", "fail", "cancel", "timeout"] as const) {
+      const { login, spawned, dirs } = setup({ captureBrowser: true, timeoutMs: end === "timeout" ? 5 : undefined });
+      login.start();
+      expect(existsSync(dirs[0])).toBe(true);
+      if (end === "exit") spawned[0].proc.emit("exit", 0);
+      if (end === "fail") spawned[0].proc.emit("exit", 1);
+      if (end === "cancel") login.cancel();
+      if (end === "timeout") await new Promise((r) => setTimeout(r, 20));
+      expect(existsSync(dirs[0])).toBe(false);
+    }
   });
 
   it("is done when the CLI exits cleanly, and says so once", () => {
