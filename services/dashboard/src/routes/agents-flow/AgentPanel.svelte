@@ -41,6 +41,7 @@
   import type { AttachmentMeta } from '$lib/attachments/types.js';
   import { eventLogToFlowEvents, type HistoryStep } from '$lib/history-steps.js';
   import { liveEventType } from '$lib/live-steps.js';
+  import { pendingChatReply } from '$lib/chat-handoff.js';
   import type { WorldAgent, WorldChain, WorldFlow, WorldStats } from './world-types.js';
 
   /** bind: — the drawer's close button clears it. */
@@ -613,6 +614,14 @@
     } finally {
       if (expandedRunId === runId) runStepsLoading = false;
     }
+  }
+
+  // A choice the operator picked in a My Office report: send it here, as a chat turn.
+  $: if ($pendingChatReply && selectedAgent === $pendingChatReply.agentId && !chatSending) {
+    const text = $pendingChatReply.text;
+    pendingChatReply.set(null);
+    selectPanelTab('chat');
+    void talkToAgent(text);
   }
 
   function selectPanelTab(tab: typeof panelTab) {
