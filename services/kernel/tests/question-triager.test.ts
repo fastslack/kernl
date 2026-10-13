@@ -67,6 +67,39 @@ describe("QuestionTriager", () => {
     expect(runs.length).toBe(1);
   });
 
+  it("hands the questions to the human at once when the chief's triage run fails", async () => {
+    const failing = {
+      execute: async () => ({ status: "failed", result: "", error: "Safety abort: Tool \"kernel_agents_feedback\" called 3 times with the same args", steps_count: 3, tokens_used: 0 }),
+    } as never;
+    const t = new QuestionTriager(service, failing, events, { debounceMs: 20, timeoutMs: 60_000, sweepMs: 60_000 });
+    const q = service.createQuestion({ from_agent_id: workerId, question: "Q1", options: OPTS });
+    await t.fire();
+    await Bun.sleep(5);
+    const after = service.getQuestion(q.id)!;
+    expect(after.status).toBe("pending");
+    expect(after.chief_note).toContain("triage run failed");
+    expect(after.chief_note).toContain("Safety abort");
+  });
+
+  it("hands over what a completed chief run left unresolved, and only that", async () => {
+    let answered = "";
+    const partial = {
+      execute: async () => {
+        service.answerQuestion(answered, { selected_index: 0, selected_option: "A", answered_by: "chief" });
+        return { status: "completed", result: "", steps_count: 1, tokens_used: 0 };
+      },
+    } as never;
+    const t = new QuestionTriager(service, partial, events, { debounceMs: 20, timeoutMs: 60_000, sweepMs: 60_000 });
+    const a = service.createQuestion({ from_agent_id: workerId, question: "Q1", options: OPTS });
+    const b = service.createQuestion({ from_agent_id: workerId, question: "Q2", options: OPTS });
+    answered = a.id;
+    await t.fire();
+    await Bun.sleep(5);
+    expect(service.getQuestion(a.id)!.status).toBe("answered");
+    expect(service.getQuestion(b.id)!.status).toBe("pending");
+    expect(service.getQuestion(b.id)!.chief_note).toContain("without resolving");
+  });
+
   it("sweep hands stale questions to the human", () => {
     const t = new QuestionTriager(service, executor, events, { debounceMs: 20, timeoutMs: -1, sweepMs: 60_000 });
     const q = service.createQuestion({ from_agent_id: workerId, question: "Q1", options: OPTS });
