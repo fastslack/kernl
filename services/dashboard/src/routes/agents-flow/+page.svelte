@@ -625,15 +625,25 @@
     else if (action === 'fit') void enterWorld(() => world?.fitAll());
   }
 
+  /** Panel view a deep link asked for; the office panel opens on it. */
+  let panelInitialView: string | null = null;
+
   function applyDeepLinks() {
     try {
       const url = new URL(window.location.href);
       if (url.searchParams.get('new') === 'office') openWizard();
-      const officeId = url.searchParams.get('office');
-      if (officeId) void openPanel(officeId);
+      // ?office=<id or name>[&panel=<view>] opens that office, on one of its panels.
+      const officeRef = url.searchParams.get('office');
+      if (officeRef) {
+        const ref = officeRef.toLowerCase();
+        const match = flows.find((f) => f.id === officeRef) ?? flows.find((f) => f.name.toLowerCase() === ref);
+        panelInitialView = url.searchParams.get('panel');
+        void openPanel(match?.id ?? officeRef);
+      }
       if (url.searchParams.has('new') || url.searchParams.has('office')) {
         url.searchParams.delete('new');
         url.searchParams.delete('office');
+        url.searchParams.delete('panel');
         window.history.replaceState(null, '', url.toString());
       }
     } catch { /* ignore */ }
@@ -828,7 +838,8 @@
           {envAvailable}
           otherOfficeNames={activeFlows.filter((f) => f.id !== panelOfficeId).map((f) => f.name)}
           top="0px"
-          on:close={() => (panelOfficeId = null)}
+          initialPanelView={panelInitialView}
+          on:close={() => { panelOfficeId = null; panelInitialView = null; }}
           on:changed={refresh}
           on:agentopen={(e) => { panelOfficeId = null; world?.focusAgentById(e.detail.id); }}
           on:deleted={onOfficeDeleted}
