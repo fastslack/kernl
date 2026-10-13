@@ -57,6 +57,7 @@ export interface AgentsFacadeLike {
   installFlowFromPayload(payload: unknown): Promise<string>;
   installOfficeFromPayload?(payload: unknown): Promise<string>;
   installChainFromPayload?(payload: unknown): Promise<string>;
+  installOfficePanelsFromPayload?(payload: unknown): Promise<void>;
   uninstallBySource(extensionId: string): Promise<void>;
 }
 
@@ -318,6 +319,11 @@ async function installOffice(
     const payload = JSON.parse(await readFile(join(installDir, rel), "utf-8"));
     payload.__extension_id = manifest.id;
     await deps.agentsFacade.installAgentFromPayload(payload);
+  }
+  // 2b) Office panels — after the agents, which their actions may name.
+  if (manifest.office && deps.agentsFacade.installOfficePanelsFromPayload) {
+    const payload = JSON.parse(await readFile(join(installDir, manifest.office), "utf-8"));
+    await deps.agentsFacade.installOfficePanelsFromPayload(payload);
   }
   // 3) Internal chains (source_slug → target_slug).
   if (deps.agentsFacade.installChainFromPayload) {
