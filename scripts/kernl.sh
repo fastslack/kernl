@@ -25,7 +25,7 @@ set -Eeuo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PROJECT="kernl-public"
-SERVICES=(neo4j searxng mtw-request whatsapp-bridge kernel dashboard)
+SERVICES=(neo4j searxng mtw-request whatsapp-bridge kernel dashboard claude-login-relay)
 
 if [[ -t 1 ]]; then
   R=$'\e[31m' G=$'\e[32m' Y=$'\e[33m' B=$'\e[1m' D=$'\e[2m' N=$'\e[0m'
@@ -115,12 +115,12 @@ missing_overrides() {
 # ── status ───────────────────────────────────────────────────────────────────
 
 cmd_status() {
-  printf "${B}%-17s %-11s %-10s %-9s %s${N}\n" SERVICE STATE HEALTH RESTARTS NOTE
+  printf "${B}%-19s %-11s %-10s %-9s %s${N}\n" SERVICE STATE HEALTH RESTARTS NOTE
   local s c state health restarts note reason
   for s in "${SERVICES[@]}"; do
     c="$(container "$s")"
     if ! docker inspect "$c" >/dev/null 2>&1; then
-      printf "%-17s %s\n" "$s" "${R}absent${N}"; continue
+      printf "%-19s %s\n" "$s" "${R}absent${N}"; continue
     fi
     state="$(docker inspect "$c" --format '{{.State.Status}}')"
     health="$(docker inspect "$c" --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}-{{end}}')"
@@ -145,7 +145,7 @@ cmd_status() {
     (( restarts > 5 )) && rcolor="$R"
     printf -v state "%-11s" "$state"
     printf -v restarts "%-9s" "$restarts"
-    printf "%-17s %s %-10s %s %b\n" "$s" "$color$state$N" "$health" "$rcolor$restarts$N" "$note"
+    printf "%-19s %s %-10s %s %b\n" "$s" "$color$state$N" "$health" "$rcolor$restarts$N" "$note"
   done
 
   echo
