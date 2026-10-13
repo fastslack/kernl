@@ -21,7 +21,7 @@ export function selectPath(data: unknown, selector: string, vars: Record<string,
 export function toRows(data: unknown): Row[] {
   if (Array.isArray(data)) return data.filter((x) => x && typeof x === 'object') as Row[];
   if (data && typeof data === 'object') {
-    return Object.entries(data as Row).map(([key, v]) => ({ key, ...(v && typeof v === 'object' && !Array.isArray(v) ? (v as Row) : { value: v }) }));
+    return Object.entries(data as Row).map(([key, v]) => ({ ...(v && typeof v === 'object' && !Array.isArray(v) ? (v as Row) : { value: v }), key }));
   }
   return [];
 }

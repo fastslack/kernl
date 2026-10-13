@@ -9,6 +9,7 @@
   import { fetchPanel, pollSource, fetchAudit } from '$lib/panels/client.js';
   import { textOf } from '$lib/panels/template.js';
   import { toRows, joinRows } from '$lib/panels/rows.js';
+  import { tabViews, firstView } from '$lib/panels/views.js';
   import type { PanelSpec, PanelView } from '$lib/panels/types.js';
   import PanelTable from './PanelTable.svelte';
   import PanelBoard from './PanelBoard.svelte';
@@ -28,15 +29,22 @@
   let detailKey: string | null = null;
   let audit: Awaited<ReturnType<typeof fetchAudit>> = [];
 
-  $: detailTargets = new Set((spec?.views ?? []).map((v) => v.detail).filter(Boolean) as string[]);
-  $: tabs = (spec?.views ?? []).filter((v) => !detailTargets.has(v.id));
+  $: tabs = spec ? tabViews(spec) : [];
   $: view = (spec?.views ?? []).find((v) => v.id === active) ?? null;
   $: detailView = view?.detail ? spec?.views.find((v) => v.id === view?.detail) ?? null : null;
 
   async function load(id: string) {
-    spec = (await fetchPanel(id))?.spec ?? null;
-    const first = spec?.views.find((v) => v.id === initialView) ?? tabs[0] ?? spec?.views[0];
-    if (first) select(first.id);
+    // Another office: nothing of the previous one may keep polling or show.
+    stopAll();
+    spec = null;
+    active = '';
+    rows = [];
+    error = '';
+    const loaded = (await fetchPanel(id))?.spec ?? null;
+    if (id !== flowId) return; // the operator moved on while this loaded
+    spec = loaded;
+    const first = spec ? firstView(spec, initialView) : null;
+    if (first) select(first);
   }
   $: if (flowId) void load(flowId);
 
@@ -94,7 +102,7 @@
       {:else if view.component === 'timeline'}
         <PanelTimeline items={rows.map((r) => ({ at: String(r[view?.time ?? 'updated_at'] ?? ''), text: view?.text ? view.text.replace(/\{\{\s*([\w.#-]+)\s*\}\}/g, (_m, k) => String(r[k] ?? '')) : String(r.key ?? '') }))} />
       {:else if view.component === 'form' && view.action && spec.actions?.[view.action]}
-        <PanelForm {flowId} actionId={view.action} action={spec.actions[view.action]} />
+        {#key `${flowId}:${view.action}`}<PanelForm {flowId} actionId={view.action} action={spec.actions[view.action]} />{/key}
       {/if}
     {/if}
   </div>
