@@ -17,10 +17,15 @@ import { resumeRun } from "./run-resume.js";
  */
 const RESUME_DELAY_MS = 5_000;
 
+/** Scheduled LLM runs allowed in flight at once. */
+const MAX_SCHEDULED_RUNS = 4;
+
 export class AgentScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  /** Agents with a scheduled LLM run in flight: runs go out without blocking the tick. */
+  private inFlight = new Set<string>();
   private registryId: string | null = null;
   private cleanupRegistryId: string | null = null;
   private builtinHandlers = new Map<string, BuiltinHandler>();
@@ -190,7 +195,24 @@ export class AgentScheduler {
           if (agent.builtin_handler && this.builtinHandlers.has(agent.builtin_handler)) {
             await this.executeBuiltin(agent, schedule);
           } else {
-            await this.executeLlm(agent, schedule);
+            // An LLM run can take an hour. Awaiting it here held every other due
+            // schedule (other offices included) until it finished, so runs go out
+            // in parallel — at most MAX_SCHEDULED_RUNS at once, never two of the
+            // same agent. A schedule that finds no free slot stays due and goes
+            // out on a later tick; one whose agent is still running skips the slot.
+            if (this.inFlight.has(agent.id)) {
+              const skipTo = this.computeNextRun(schedule.cron_expression, schedule.interval_ms);
+              this.service.updateScheduleNextRun(schedule.id, skipTo, isoNow());
+              continue;
+            }
+            if (this.inFlight.size >= MAX_SCHEDULED_RUNS) continue;
+            this.inFlight.add(agent.id);
+            this.executeLlm(agent, schedule)
+              .catch((err) => {
+                const msg = err instanceof Error ? err.message : String(err);
+                log.error(`Agent scheduler: schedule ${schedule.id} (agent "${schedule.agent_name ?? schedule.agent_id}") failed: ${msg}`);
+              })
+              .finally(() => this.inFlight.delete(agent.id));
           }
 
           // Advance next_run_at
