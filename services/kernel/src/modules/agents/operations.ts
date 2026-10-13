@@ -17,6 +17,7 @@
 
 import type { Operation } from "../../sdk/args.js";
 import { resumeRun } from "./run-resume.js";
+import { startAgentRun } from "./start-run.js";
 import { pickArgs } from "../../sdk/args.js";
 import { HttpError, isHttpError } from "../../sdk/http-error.js";
 import { log } from "../../core/logger.js";
@@ -191,37 +192,15 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       };
       let run;
       try {
-        run = service.createRun({
-          agent_id: agent.id,
-          trigger_type: "manual",
-          goal,
-          trigger_payload: Object.keys(payload).length ? payload : undefined,
-          project_id: projectId,
-        });
+        run = startAgentRun(
+          { service, executor, events: events ?? undefined },
+          { agent, goal, triggerPayload: payload, projectId },
+        );
       } catch (err) {
         // A project refusal is the caller's input; anything else keeps its status.
         if (projectId) throw new HttpError(400, err instanceof Error ? err.message : String(err));
         throw err;
       }
-      service.updateRun(run.id, { status: "running", started_at: now() });
-
-      // Run async — don't await. Both branches feed the circuit breaker: a
-      // manual run counts exactly like a scheduled one, so a "Run now" that
-      // keeps failing advances the counter and one that works clears it.
-      executor.execute({ agent, goal, run, service, events: events ?? undefined }).then((result) => {
-        service.updateRun(run.id, {
-          status: result.status,
-          result: result.result,
-          error: result.error,
-          steps_count: result.steps_count,
-          tokens_used: result.tokens_used,
-          completed_at: now(),
-        });
-        service.recordRunOutcome(agent.id, { ok: result.status === "completed", error: result.error, run_id: run.id });
-      }).catch((err) => {
-        service.updateRun(run.id, { status: "failed", error: String(err), completed_at: now() });
-        service.recordRunOutcome(agent.id, { ok: false, error: String(err), run_id: run.id });
-      });
 
       return { success: true, run_id: run.id, status: "running" };
     },
