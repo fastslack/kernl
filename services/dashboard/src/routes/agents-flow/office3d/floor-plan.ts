@@ -259,12 +259,17 @@ export function computeFloorPlan(
   };
 }
 
-export function nearestCorridorNode(point: Vec3, grid: CorridorGrid): Vec3 {
+/** The corridor node nearest `point`. Nodes equally near (one each side of
+ *  the lobby) tie; `toward` breaks it in favour of the side the walker comes
+ *  from — otherwise the first in the list wins and walkers cross the lobby to
+ *  the far corridor and back. */
+export function nearestCorridorNode(point: Vec3, grid: CorridorGrid, toward?: Vec3): Vec3 {
   let best = grid.nodes[0] || { x: 0, y: 0, z: 0 };
-  let bestD = Infinity;
+  let bestD = Infinity, bestT = Infinity;
   for (const n of grid.nodes) {
     const d = (n.x - point.x) ** 2 + (n.z - point.z) ** 2;
-    if (d < bestD) { bestD = d; best = n; }
+    const t = toward ? Math.abs(n.x - toward.x) + Math.abs(n.z - toward.z) : 0;
+    if (d < bestD - 1e-6 || (Math.abs(d - bestD) <= 1e-6 && t < bestT)) { bestD = d; bestT = t; best = n; }
   }
   return best;
 }

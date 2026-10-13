@@ -7,7 +7,7 @@ import type { RoomInfo, Vec3 } from '../types.js';
 import type { CorridorGrid } from '../floor-plan.js';
 import { nearestCorridorNode } from '../floor-plan.js';
 import {
-  avoidDesks, enterViaDoor, meetingRoomAabbs, nearestHCorrZ, nearestVCorrX, nearestVCorrXBetween,
+  avoidDesks, corridorRoute, enterViaDoor, meetingRoomAabbs,
   roomAabbs, zoneObstacles,
 } from '../walkers/pathfinding.js';
 
@@ -42,7 +42,7 @@ export function workSpots(room: RoomInfo): WorkSpot[] {
 /**
  * From a point in the open (the lobby, below the entrance) along the
  * corridors and in through the lot's door to `spot`. The same H/V corridor
- * legs every walker uses, then around every other office, meeting room and
+ * route every walker uses, then around every other office, meeting room and
  * the reception. Reverse it to walk back out.
  */
 export function crewRoute(
@@ -65,23 +65,9 @@ export function crewRoute(
   if (grid.segments.length > 0) {
     const door = { x: (room as any).doorX ?? room.cx, y: 0, z: (room as any).doorCZ ?? room.doorZ };
     const src = entryNode(from, door, grid);
-    const tgt = nearestCorridorNode(door, grid);
-    pts.push({ ...src });
-    if (Math.abs(src.x - tgt.x) > 1 || Math.abs(src.z - tgt.z) > 1) {
-      const srcHZ = nearestHCorrZ(src.z, grid);
-      const tgtHZ = nearestHCorrZ(tgt.z, grid);
-      if (Math.abs(src.x - tgt.x) > 1) {
-        const vx = nearestVCorrXBetween(src.x, tgt.x, grid);
-        pts.push({ x: vx, y: 0, z: srcHZ });
-        if (Math.abs(srcHZ - tgtHZ) > 1) pts.push({ x: vx, y: 0, z: tgtHZ });
-        pts.push({ x: tgt.x, y: 0, z: tgtHZ });
-      } else if (Math.abs(srcHZ - tgtHZ) > 1) {
-        const vx = nearestVCorrX(src.x, grid);
-        pts.push({ x: vx, y: 0, z: srcHZ });
-        pts.push({ x: vx, y: 0, z: tgtHZ });
-      }
-    }
-    pts.push({ ...tgt });
+    const tgt = nearestCorridorNode(door, grid, src);
+    // Shortest way along the corridors, same as every walker (pathfinding.ts).
+    pts.push(...corridorRoute(src, tgt, grid));
   }
   pts.push(...enterViaDoor(spot, room));
   pts.push({ ...spot });

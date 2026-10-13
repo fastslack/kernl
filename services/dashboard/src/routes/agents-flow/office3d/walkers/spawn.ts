@@ -13,10 +13,8 @@ import {
   avoidDesks,
   roomAabbs,
   meetingRoomAabbs,
-  nearestHCorrZ,
-  nearestVCorrX,
-  nearestVCorrXBetween,
   exitViaDoor,
+  corridorRoute,
   planPointWalk,
   zoneObstacles,
 } from './pathfinding.js';
@@ -397,30 +395,11 @@ export function sendCommuteWalker(opts: CommuteWalkerOpts): void {
     const srcDoorX = (srcRoom as any).doorX ?? srcRoom.cx;
     const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
     pts.push(...exitViaDoor(desk, srcRoom));
+    // Shortest way along the corridors (pathfinding.ts:corridorRoute) — never
+    // a diagonal between corridor nodes that don't share a straight segment.
     const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, opts.corridorGrid);
-    pts.push({ ...srcCorrNode });
-
-    // Traverse corridors with proper H/V routing — never jump diagonally
-    // between corridor nodes that don't share a straight segment.
-    const tgtCorrNode = nearestCorridorNode(opts.exitPoint, opts.corridorGrid);
-    if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1 || Math.abs(srcCorrNode.z - tgtCorrNode.z) > 1) {
-      const srcHZ = nearestHCorrZ(srcCorrNode.z, opts.corridorGrid);
-      const tgtHZ = nearestHCorrZ(tgtCorrNode.z, opts.corridorGrid);
-      if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1) {
-        const vCorrX = nearestVCorrXBetween(srcCorrNode.x, tgtCorrNode.x, opts.corridorGrid);
-        pts.push({ x: vCorrX, y: 0, z: srcHZ });
-        if (Math.abs(srcHZ - tgtHZ) > 1) {
-          pts.push({ x: vCorrX, y: 0, z: tgtHZ });
-        }
-        pts.push({ x: tgtCorrNode.x, y: 0, z: tgtHZ });
-      } else if (Math.abs(srcHZ - tgtHZ) > 1) {
-        const vCorrX = nearestVCorrX(srcCorrNode.x, opts.corridorGrid);
-        pts.push({ x: vCorrX, y: 0, z: srcHZ });
-        pts.push({ x: vCorrX, y: 0, z: tgtHZ });
-        pts.push({ x: tgtCorrNode.x, y: 0, z: tgtHZ });
-      }
-    }
-    pts.push({ ...tgtCorrNode });
+    const tgtCorrNode = nearestCorridorNode(opts.exitPoint, opts.corridorGrid, srcCorrNode);
+    pts.push(...corridorRoute(srcCorrNode, tgtCorrNode, opts.corridorGrid));
   }
   pts.push({ ...opts.exitPoint });
 

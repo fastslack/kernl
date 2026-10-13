@@ -257,6 +257,16 @@
   let receptionDriverFrontPos: { x: number; y: number; z: number } | null = null;
   // Street/staircase geometry — exposed so the taxi drop-off knows where the
   // car needs to spawn the agent walker, without re-deriving it from corGrid.
+  /** Where taxi commuters enter and leave the building: the south end of the
+   *  lobby, at the top of the staircase. They used to go through the reception
+   *  at the NORTH end of the lobby — first through the pickup spot behind the
+   *  counter (straight over it, 86 of 86), then past its front — and walk the
+   *  whole lobby back down to the stairs: up to twice the walk, the wrong way. */
+  function lobbyExitPos(): { x: number; y: number; z: number } {
+    const fallback = receptionDriverFrontPos ?? receptionFrontPos!;
+    if (!taxiContext) return fallback;
+    return { x: taxiContext.entryCX, y: 0, z: corGrid.buildingBounds.maxZ };
+  }
   let taxiContext: {
     entryCX: number; pedOuterZ1: number; streetDrop: number; southLaneZ: number;
     plinthOuterZ1: number; plinthDrop: number;
@@ -546,7 +556,7 @@
           // the curb until the walker arrives + fades into it.
           sendCommuteWalker({
             scene, walkers, agentId, mode: 'leave',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: agentColor,
             deskAabbs, sittingWorkers,
@@ -564,7 +574,7 @@
           // Fallback if street geometry isn't ready yet.
           sendCommuteWalker({
             scene, walkers, agentId, mode: 'leave',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: agentColor,
             deskAabbs, sittingWorkers,
@@ -588,7 +598,7 @@
               const stairsTop    = { x: taxiContext.entryCX, y: 0, z: taxiContext.plinthOuterZ1 - 0.3 };
               sendCommuteWalker({
                 scene, walkers, agentId, mode: 'arrive',
-                exitPoint: receptionFrontPos,
+                exitPoint: lobbyExitPos(),
                 deskPos, rooms: roomMap, corridorGrid: corGrid,
                 agents, color: agentColor,
                 deskAabbs, sittingWorkers,
@@ -602,7 +612,7 @@
           // frame after layout): use the legacy reception fade-in.
           sendCommuteWalker({
             scene, walkers, agentId, mode: 'arrive',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: agentColor,
             deskAabbs, sittingWorkers,
@@ -649,7 +659,7 @@
             const stairsTop    = { x: taxiContext.entryCX, y: 0, z: taxiContext.plinthOuterZ1 - 0.3 };
             sendCommuteWalker({
               scene, walkers, agentId, mode: 'arrive',
-              exitPoint: receptionFrontPos,
+              exitPoint: lobbyExitPos(),
               deskPos, rooms: roomMap, corridorGrid: corGrid,
               agents, color: agentColor,
               deskAabbs, sittingWorkers,
@@ -661,7 +671,7 @@
       } else {
         sendCommuteWalker({
           scene, walkers, agentId, mode: 'arrive',
-          exitPoint: receptionFrontPos,
+          exitPoint: lobbyExitPos(),
           deskPos, rooms: roomMap, corridorGrid: corGrid,
           agents, color: agentColor,
           deskAabbs, sittingWorkers,
@@ -981,7 +991,7 @@
           const drop = { ...outdoor[0], x: outdoor[0].x + ((i % 3) - 1) * 0.6 };
           sendCommuteWalker({
             scene, walkers, agentId: a.id, mode: 'arrive',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: flowColor(a.id),
             deskAabbs, sittingWorkers,
@@ -1571,6 +1581,8 @@
       myOffice: { rect: officeSlot, door: myOfficeResult.doorPos },
       reception: receptionObstacles(receptionCX, hallSlot.cz),
       plugins: [...offGridSites.values()].flatMap(st => st.obstacles),
+      // Same slots buildMeetingRooms gets below (everything but the hall and My Office).
+      meetingRooms: meetingRooms.filter((_, i) => i !== 1 && i !== 3),
     });
     // Seat the top agent at the executive desk. The seeder
     // guarantees one agent with rank.level === 11; if multiple are
