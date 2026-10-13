@@ -1611,3 +1611,49 @@ textarea.k-input { height: auto; padding: 8px 10px; resize: vertical; line-heigh
 @media (prefers-reduced-motion: reduce) {
   .nav-item { transition: none; }
 }
+
+/* ── JSON viewer ($lib/json-view.ts) ──────────────────────────────────
+   Tool calls, tool results and ```json blocks everywhere in the dashboard.
+   Fixed colours on purpose: a monochrome theme turns --blue/--green grey,
+   and the colours are what tells a key from a string from a number. */
+.jv {
+  font: 500 10.5px/1.55 'JetBrains Mono', ui-monospace, monospace;
+  color: #d8dcea;
+  background: rgba(0, 0, 0, .32);
+  border: 1px solid rgba(120, 130, 160, .18);
+  border-radius: 6px;
+  padding: 6px 9px;
+  margin: 4px 0;
+  max-height: 360px;
+  overflow: auto;
+  overflow-wrap: anywhere;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 130, 160, .25) transparent;
+}
+.jv-k { color: #8fb4ff; }
+.jv-s { color: #a6dd9c; }
+.jv-n { color: #f2b56b; }
+.jv-b { color: #c79cff; }
+.jv-z { color: #7d839c; font-style: italic; }
+.jv-p { color: #6f7590; }
+.jv-i { color: #5a5f7a; margin-right: 6px; }
+.jv-nest { padding-left: 10px; margin-left: 2px; border-left: 1px solid rgba(120, 130, 160, .18); }
+.jv > .jv-nest:first-child { padding-left: 0; margin-left: 0; border-left: 0; }
+.jv-row { min-width: 0; }
+/* A string with newlines reads as text, in the prose font, under its key. */
+.jv-text {
+  white-space: pre-wrap;
+  font: 500 11px/1.5 'Manrope', system-ui, sans-serif;
+  color: #cfd3e1;
+  background: rgba(120, 130, 160, .08);
+  border-radius: 4px;
+  padding: 4px 7px;
+  margin: 2px 0 3px 10px;
+}
+/* JSON found inside a string sits in the flow, without a second frame. */
+.jv .jv { background: none; border: 0; padding: 0; margin: 2px 0 2px 10px; max-height: none; overflow: visible; }
+.jv-more { color: #7d839c; font-style: italic; }
+.jv-cut { margin-top: 5px; color: #c9a84c; font-size: 10px; }
+.jv-issues { list-style: none; margin: 0; padding: 0; color: #ffb3bd; }
+.jv-issues li + li { margin-top: 2px; }
+.jv-empty { margin: 0; font: italic 400 11.5px 'Manrope', sans-serif; color: #7d839c; }

@@ -12,7 +12,7 @@
   import type { AgentFlowEvent } from '$lib/stores.js';
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
   import { fmtClock } from '$lib/display-format.js';
-  import { formatRunOutput } from '$lib/run-format.js';
+  import { liveStepHtml } from '$lib/step-view.js';
   import { emailCommId } from '$lib/agent-helpers.js';
   import {
     liveStepIcon, liveStepLabel, liveEventType, liveEventSummary,
@@ -275,12 +275,12 @@
             <div class="live-step-detail copy-wrap">
               <CopyTextBtn text={String(e.data.content_preview ?? '') || liveEventSummary(e)} title="Copy event content" />
               <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
-                {@html formatRunOutput(liveEventSummary(e))}
+                {@html liveStepHtml(e)}
               </div>
               {#if res}
                 <div class="live-step-res-h" class:bad={resBad}>{resBad ? '✗ Error' : '← Result'}</div>
                 <div class="live-step-txt ip-out-md" on:click={onOutputClick} role="presentation">
-                  {@html formatRunOutput(liveEventSummary(res.e))}
+                  {@html liveStepHtml(res.e)}
                 </div>
               {/if}
             </div>
