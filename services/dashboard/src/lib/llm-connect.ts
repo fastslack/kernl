@@ -18,6 +18,8 @@ export interface CatalogProvider {
   recommended: boolean;
   kind: string;
   needsKey: boolean;
+  /** No key needed, but the server may ask for one: the form offers the field. */
+  optionalKey?: boolean;
   keyUrl: string;
   keyHint: string;
   logo: string;
@@ -223,7 +225,7 @@ export function connectInputFor(
 ): ConnectInput {
   const out: ConnectInput = {};
   const apiKey = form.apiKey.trim();
-  if (p.needsKey && apiKey) out.apiKey = apiKey;
+  if ((p.needsKey || p.optionalKey) && apiKey) out.apiKey = apiKey;
   if (form.model.trim()) out.model = form.model.trim();
   if (p.regions.length > 0 && form.region) out.region = form.region;
   if ((p.group === "local" || p.baseUrlEditable) && !p.needsKey && form.baseUrl.trim()) out.baseUrl = form.baseUrl.trim();

@@ -1,0 +1,15 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.openai-compatible",
+  "slug": "openai-compatible",
+  "name": "OpenAI-compatible server",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "Any server that speaks the OpenAI API: llama.cpp, vLLM, Jan, LocalAI or a proxy.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/openai-compatible.svg",
+  "permissions": ["network"],
+  "built_in": true
+}

@@ -173,6 +173,10 @@
       {:else}
         <label class="pc-label" for="pc-url">{$t('llm.base_url')}</label>
         <input id="pc-url" class="pc-input" bind:value={baseUrl} spellcheck="false" autocomplete="off" />
+        {#if provider.optionalKey}
+          <label class="pc-label" for="pc-key">{$t('llm.key_label_optional')}</label>
+          <SecretInput id="pc-key" bind:value={apiKey} masked={provider.keyMasked} configured={!!provider.keyMasked} />
+        {/if}
       {/if}
 
       {#if provider.regions.length > 0}

@@ -8,6 +8,7 @@ const base = {
 };
 const nvidia = { ...base, slug: "nvidia", group: "free", kind: "openai-compatible", needsKey: true } as CatalogProvider;
 const ollama = { ...base, slug: "ollama", group: "local", kind: "openai-compatible", needsKey: false, baseUrlEditable: true } as CatalogProvider;
+const custom = { ...ollama, slug: "openai-compatible", optionalKey: true } as CatalogProvider;
 const minimax = { ...nvidia, slug: "minimax", group: "paid", regions: [{ id: "global", label: { es: "", en: "" }, baseUrl: "" }] } as CatalogProvider;
 
 describe("connect form", () => {
@@ -18,6 +19,15 @@ describe("connect form", () => {
       .toEqual({ model: "qwen3", baseUrl: "http://host.docker.internal:11434/v1" });
     expect(connectInputFor(minimax, { apiKey: "k", model: "", region: "china", baseUrl: "" }))
       .toEqual({ apiKey: "k", region: "china" });
+  });
+
+  it("an OpenAI-compatible server sends its address and, if given, its optional key", () => {
+    expect(connectInputFor(custom, { apiKey: " sk-local ", model: "llama", region: "", baseUrl: " http://10.0.0.5:8000/v1 " }))
+      .toEqual({ apiKey: "sk-local", model: "llama", baseUrl: "http://10.0.0.5:8000/v1" });
+    expect(connectInputFor(custom, { apiKey: "", model: "", region: "", baseUrl: "http://x/v1" }))
+      .toEqual({ baseUrl: "http://x/v1" });
+    expect(canConnect(custom, { apiKey: "", baseUrl: "" }, false)).toBe(false);
+    expect(canConnect(custom, { apiKey: "", baseUrl: "http://x/v1" }, false)).toBe(true);
   });
 
   it("enables Connect only when it can succeed", () => {

@@ -4,7 +4,9 @@
  * openai, grok, nvidia and minimax were four near-identical files that only
  * differed in a URL, a key prefix and a default model — which is how their
  * defaults drifted apart. The differences now live in the catalog and this one
- * class serves them all, plus ollama, openrouter, gemini, deepseek and groq.
+ * class serves them all, plus ollama, openrouter, gemini, deepseek, groq and
+ * every provider added since (cerebras, mistral, together, fireworks, moonshot,
+ * qwen, zai and the generic openai-compatible server).
  */
 
 import { buildChatAdapter, type ChatLlmProvider } from "../chat-adapters.js";
@@ -81,7 +83,9 @@ class CatalogOpenAiProvider implements LlmProvider {
 
   getConfigSchema(): ConfigField[] {
     const fields: ConfigField[] = [];
-    if (this.entry.needsKey) fields.push({ key: "apiKey", label: "API key", type: "password", required: true });
+    if (this.entry.needsKey || this.entry.optionalKey) {
+      fields.push({ key: "apiKey", label: "API key", type: "password", required: this.entry.needsKey });
+    }
     if (this.entry.baseUrlEditable) {
       fields.push({ key: "baseUrl", label: "Base URL", type: "text", required: false, placeholder: this.entry.baseUrl });
     }
@@ -102,9 +106,11 @@ class CatalogOpenAiProvider implements LlmProvider {
       const detail = await r.text().catch(() => "");
       throw new Error(`HTTP ${r.status}: ${detail.slice(0, 300)}`);
     }
-    const body = (await r.json()) as { data?: Array<{ id?: string }> };
+    const body = (await r.json()) as { data?: Array<{ id?: string }> } | Array<{ id?: string }>;
+    // Most return { data: [...] }; Together answers a bare array.
+    const list = Array.isArray(body) ? body : (body.data ?? []);
     // Gemini's compatible endpoint returns "models/<id>" but only accepts "<id>".
-    return (body.data ?? [])
+    return list
       .map((m) => (m.id ?? "").replace(/^models\//, ""))
       .filter(Boolean)
       .sort();

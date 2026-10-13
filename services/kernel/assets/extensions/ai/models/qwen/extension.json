@@ -1,0 +1,17 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.qwen",
+  "slug": "qwen",
+  "name": "Qwen (Alibaba Cloud)",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "Qwen models on Alibaba Cloud Model Studio.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/qwen.svg",
+  "permissions": [
+    "network"
+  ],
+  "built_in": true
+}

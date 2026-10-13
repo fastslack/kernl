@@ -50,14 +50,14 @@ export async function detectLocalServer(entry: ProviderCatalogEntry, fetchImpl: 
   const stored = getStoredConfig(entry.slug).baseUrl;
   const candidates = [...new Set([
     ...(typeof stored === "string" && stored ? [stored] : []),
-    ...probe.hosts.map((h) => `http://${h}:${probe.port}${probe.path}`),
+    ...probe.hosts.flatMap((h) => (probe.ports ?? [probe.port]).map((port) => `http://${h}:${port}${probe.path}`)),
   ])];
   for (const baseUrl of candidates) {
     try {
       const r = await fetchImpl(modelsUrl(baseUrl), { signal: AbortSignal.timeout(1500) });
       if (!r.ok) continue;
-      const body = (await r.json()) as { data?: Array<{ id?: string }> };
-      const models = (body.data ?? [])
+      const body = (await r.json()) as { data?: Array<{ id?: string }> } | Array<{ id?: string }>;
+      const models = (Array.isArray(body) ? body : (body.data ?? []))
         .map((m) => m.id ?? "")
         .filter((id) => id && classifyModel(entry.slug, id).chat);
       return { found: true, baseUrl, models };
@@ -126,7 +126,7 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
       const cfg = getProviderConfig(e.slug);
       return {
         slug: e.slug, name: e.name, group: e.group, recommended: !!e.recommended, kind: e.kind,
-        needsKey: e.needsKey, keyUrl: e.keyUrl ?? "", keyHint: e.keyHint ?? "", logo: e.logo,
+        needsKey: e.needsKey, optionalKey: !!e.optionalKey, keyUrl: e.keyUrl ?? "", keyHint: e.keyHint ?? "", logo: e.logo,
         blurb: e.blurb, tag: e.tag, pricing: e.pricing, steps: e.steps, models: e.models,
         baseUrlEditable: !!e.baseUrlEditable, regions: e.regions ?? [], docsUrl: e.docsUrl ?? "",
         connected: isConnected(e.slug), model: cfg.model,
