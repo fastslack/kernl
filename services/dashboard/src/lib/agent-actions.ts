@@ -13,6 +13,8 @@
  * agent itself wrote.
  */
 
+import { issuesText, parseLoose, splitTrailingJson, validationIssues } from './json-view.js';
+
 export type AgentActionKind = 'message' | 'edit' | 'learning' | 'run' | 'meeting' | 'escalate';
 
 export interface AgentAction {
@@ -134,6 +136,20 @@ function editChanges(preview: string): string {
  * `result` is the paired tool_result's preview when it already came back;
  * `nameOf` turns an agent id into its name when the caller knows the roster.
  */
+/**
+ * The kernel's failure in readable words. A zod rejection arrives as
+ * "MCP error …: [{code, expected, path, message}]": say it per field
+ * ("body: Required (expected string, got undefined)") instead of the JSON.
+ */
+function failureText(preview: string): string {
+  const text = preview.replace(/^\s*(error:\s*)?/i, '').trim();
+  const parsed = parseLoose(text);
+  if (parsed && validationIssues(parsed.value)) return issuesText(parsed.value);
+  const tail = splitTrailingJson(text);
+  if (tail && validationIssues(tail.value)) return issuesText(tail.value);
+  return text;
+}
+
 export function agentActionOf(
   tool: string,
   input: string,
@@ -146,7 +162,7 @@ export function agentActionOf(
   const success = SUCCESS[kind];
   const failed = !!result && (result.failed || (!!success && !success.test(result.preview.trim())));
   const outcome: AgentAction['outcome'] = !result ? 'pending' : failed ? 'failed' : 'ok';
-  const failure = failed ? result!.preview.replace(/^\s*(error:\s*)?/i, '').trim() : '';
+  const failure = failed ? failureText(result!.preview) : '';
   const named = (id: string, fallbackName = '') =>
     fallbackName || (id ? nameOf(id) ?? '' : '') || (result && !result.failed ? boldName(result.preview) : '') || shortId(id);
 
