@@ -8,7 +8,11 @@ import { PanelGateway, type PanelDeps } from "./gateway.js";
 import { registerPanelsRoutes } from "./api-routes.js";
 import { panelTools } from "./tools.js";
 
-type Deps = PanelDeps & { ownerOfRun: (runId: string) => string | null };
+type Deps = PanelDeps & {
+  ownerOfRun: (runId: string) => string | null;
+  officeAgentSlugs: (flowId: string) => string[];
+  officeRoot: (flowId: string) => string;
+};
 
 export function createPanelsModule(): ExtensibleModule & { setDeps(d: Deps): void; getStore(): PanelStore | null } {
   let store: PanelStore | null = null;
@@ -33,7 +37,12 @@ export function createPanelsModule(): ExtensibleModule & { setDeps(d: Deps): voi
         const runId = getRequestContext().callerRunId;
         return runId && deps ? deps.ownerOfRun(runId) : null;
       });
-      dashboard = { registerRoutes: (server) => registerPanelsRoutes(server, gw, s) };
+      dashboard = {
+        registerRoutes: (server) => registerPanelsRoutes(server, gw, s, {
+          officeAgentSlugs: (f) => deps?.officeAgentSlugs(f) ?? [],
+          officeRoot: (f) => deps?.officeRoot(f) ?? "",
+        }),
+      };
     },
     getTools() { return tools; },
     getDashboardDescriptor() { return dashboard; },

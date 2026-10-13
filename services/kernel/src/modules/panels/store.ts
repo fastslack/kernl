@@ -21,6 +21,11 @@ export class PanelStore {
     return r ? { spec: parse(r.spec_json) as PanelSpec, rootDir: r.root_dir, updatedAt: r.updated_at } : null;
   }
 
+  listSpecs(): Array<{ flowId: string; spec: PanelSpec }> {
+    const rows = this.db.prepare("SELECT flow_id, spec_json FROM office_panels ORDER BY flow_id").all() as Array<{ flow_id: string; spec_json: string }>;
+    return rows.map((r) => ({ flowId: r.flow_id, spec: parse(r.spec_json) as PanelSpec }));
+  }
+
   deleteSpec(flowId: string): void {
     this.db.prepare("DELETE FROM office_panels WHERE flow_id = ?").run(flowId);
   }

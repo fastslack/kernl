@@ -300,6 +300,15 @@ export async function initCoreModules(args: {
         for (const sch of list) svc?.updateSchedule(sch.id, { active });
         return list.length;
       },
+      officeAgentSlugs: (flowId) =>
+        (agents()?.listAgents() ?? []).filter((x) => x.flow_id === flowId).map((x) => (x as { slug?: string }).slug ?? "").filter(Boolean),
+      // The office folder: the one cwd every agent of the office shares (Office Kit repo offices).
+      officeRoot: (flowId) => {
+        const cwds = new Set((agents()?.listAgents() ?? []).filter((x) => x.flow_id === flowId).map((x) => {
+          try { return String((JSON.parse(String(x.variables || "{}")) as Record<string, unknown>).__cwd_path__ ?? ""); } catch { return ""; }
+        }).filter(Boolean));
+        return cwds.size === 1 ? [...cwds][0] : "";
+      },
       ownerOfRun: (runId) => {
         const svc = agents();
         const run = svc?.getRun(runId);
