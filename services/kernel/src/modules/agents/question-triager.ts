@@ -22,7 +22,7 @@ export function buildTriageGoal(questions: AgentQuestion[], service: AgentServic
   return [
     `Office agents sent you ${questions.length} question(s). Resolve every one of them in this run.`,
     "",
-    "- Answer it yourself with `kernel_agents_questions_answer` (option index, or `text` when no option fits) when it is operational or technical and you can settle it from what you know or can find with your tools.",
+    "- Answer it yourself with `kernel_agents_questions_answer` (option index, or `text` when no option fits; `leaves_work_to_operator` is required on every answer, true or false) when it is operational or technical and you can settle it from what you know or can find with your tools.",
     "- Hand it to the human with `kernel_agents_questions_escalate` and a one-line reason when it is a product or business decision, involves money, is irreversible or destructive, is something the human has to own, or you are not sure.",
     "- Never answer with something that leaves work to the human (hold until they say so, wait for them to set or approve something): set `leaves_work_to_operator: true` — it is escalated instead.",
     "- Do not message the askers directly; the answer reaches them on its own.",
