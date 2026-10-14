@@ -99,7 +99,8 @@ export interface TelegramInboundContext {
 
 export interface TelegramReplyLike {
   text: string;
-  parseMode?: string;
+  /** null = plain text (no Markdown parsing). */
+  parseMode?: string | null;
   inlineKeyboard?: unknown;
   /** For a voice note: what to say out loud, when `text` is empty because
    *  the answer was already streamed into the chat. */

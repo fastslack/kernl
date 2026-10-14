@@ -9,6 +9,11 @@ function fitOne(text: string): string {
   return text.length <= TELEGRAM_MAX_LENGTH ? text : `${text.slice(0, TELEGRAM_MAX_LENGTH - 1)}…`;
 }
 
+/** A reply's parse mode: null = plain text, unset = Markdown. */
+function parseModeOf(mode: "Markdown" | "MarkdownV2" | "HTML" | null | undefined): "Markdown" | "MarkdownV2" | "HTML" | undefined {
+  return mode === null ? undefined : (mode ?? "Markdown");
+}
+
 export type { InlineButton };
 
 /** Context from an incoming Telegram message */
@@ -28,7 +33,8 @@ export interface TelegramResponse {
   /** For a voice note: what to say out loud. Set when `text` is empty
    *  because the answer was already streamed into the chat. */
   speak?: string;
-  parseMode?: "Markdown" | "MarkdownV2" | "HTML";
+  /** null = plain text (no parsing); unset = Markdown. */
+  parseMode?: "Markdown" | "MarkdownV2" | "HTML" | null;
   replyToMessageId?: number;
   disableNotification?: boolean;
   inlineKeyboard?: InlineButton[][];  // Rows of buttons
@@ -165,7 +171,7 @@ export class TelegramTransport {
         // so we must NOT post a duplicate.
         if (response.text) {
           await this.replyChunked(ctx, response.text, {
-            parse_mode: response.parseMode ?? "Markdown",
+            parse_mode: parseModeOf(response.parseMode),
             reply_parameters: response.replyToMessageId
               ? { message_id: response.replyToMessageId }
               : undefined,
@@ -210,12 +216,16 @@ export class TelegramTransport {
         // Edit the original message if it exists, otherwise send new
         if (ctx.callbackQuery.message) {
           await ctx.editMessageText(fitOne(response.text), {
-            parse_mode: response.parseMode ?? "Markdown",
+            parse_mode: parseModeOf(response.parseMode),
             reply_markup: keyboard,
+          }).catch((err: unknown) => {
+            // Someone else already wrote this same text (an operator question's
+            // resolution edits its message too): nothing left to do.
+            if (!/message is not modified/i.test(String(err))) throw err;
           });
         } else {
           await this.replyChunked(ctx, response.text, {
-            parse_mode: response.parseMode ?? "Markdown",
+            parse_mode: parseModeOf(response.parseMode),
             reply_markup: keyboard,
           });
         }
@@ -523,7 +533,7 @@ export class TelegramTransport {
       return;
     }
     if (reply.text) {
-      await this.replyChunked(ctx, reply.text, { parse_mode: reply.parseMode ?? "Markdown" })
+      await this.replyChunked(ctx, reply.text, { parse_mode: parseModeOf(reply.parseMode) })
         .catch(() => this.replyChunked(ctx, reply.text));
     }
 

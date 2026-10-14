@@ -110,7 +110,11 @@ export async function wireServicesLate(args: {
     },
     answer: (id, choice) =>
       resolveHumanChoice(agentService as AgentService, agentExecutor as AgentExecutor, events, id, choice),
-    linkFor: (id) => `/agents-flow?question=${id}`,
+    dashboardUrl: () => {
+      const base = (process.env.KERNEL_PUBLIC_URL ?? "").trim().replace(/\/$/, "");
+      return /^https?:\/\//.test(base) ? `${base}/agents-flow` : null;
+    },
+    language: () => config.language,
   }) : null;
 
   // Wire all channel providers (Telegram, WhatsApp, Slack, Discord, WebChat) to Orchestrator.
