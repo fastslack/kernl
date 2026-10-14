@@ -37,16 +37,12 @@ describe("QuestionTriager", () => {
   });
   afterEach(() => { triager.stop(); db.close(); });
 
-  it("sweep emits a reminder for questions waiting on the operator for more than 24 h", () => {
-    const reminded: string[] = [];
-    events.on("agent:question_remind" as never, ((p: { question_id: string }) => reminded.push(p.question_id)) as never);
+  it("the sweep leaves reminders alone: they wait for the operator driver", () => {
     const w = service.createAgent({ name: "W" });
     const { id } = service.createQuestion({ from_agent_id: w.id, question: "?", options: OPTS, for_operator: true });
     db.run("UPDATE agent_questions SET created_at = ? WHERE id = ?", [new Date(Date.now() - 25 * 3_600_000).toISOString(), id]);
     triager.sweep();
-    expect(reminded).toEqual([id]);
-    triager.sweep();
-    expect(reminded).toEqual([id]);
+    expect(service.getQuestion(id)!.reminded_at).toBeNull();
   });
 
   it("batches several questions into one chief run", async () => {

@@ -26,6 +26,7 @@ import { wireMessageRouting } from "../message-routing.js";
 import { HttpError, type KernelHttpServer } from "../http-server.js";
 import { OperatorComms } from "../operator-comms/driver.js";
 import { buildAdapters } from "../operator-comms/adapters.js";
+import { remindDue, REMIND_SWEEP_MS } from "../operator-comms/reminders.js";
 import { resolveHumanChoice } from "../../modules/agents/question-delivery.js";
 import type { AgentService } from "../../modules/agents/service.js";
 import type { AgentExecutor } from "../../modules/agents/executor.js";
@@ -170,8 +171,16 @@ export async function wireServicesLate(args: {
     p.catch((err) => log.warn(`operator-comms ${what}: ${err instanceof Error ? err.message : String(err)}`));
   if (operatorComms) events.on("agent:question_asked" as never, ((p: { question_id: string }) => safe("ask", operatorComms.ask(p.question_id))) as never);
   if (operatorComms) events.on("agent:question_owed" as never, ((p: { question_id: string }) => safe("owed", operatorComms.owed(p.question_id))) as never);
-  if (operatorComms) events.on("agent:question_remind" as never, ((p: { question_id: string }) => safe("remind", operatorComms.remind(p.question_id))) as never);
   if (operatorComms) events.on("agent:question_resolved" as never, ((p: { question_id: string }) => safe("resolved", operatorComms.resolved(p.question_id))) as never);
+  // 24 h reminders start here, once the driver exists: from the triager's
+  // sweep (agents init, before this stage) a reminder due at boot was marked
+  // and emitted to nobody. No driver → no reminders.
+  if (operatorComms) {
+    const reminders = setInterval(() => {
+      void safe("remind", remindDue(agentService as AgentService, operatorComms).then(() => undefined));
+    }, REMIND_SWEEP_MS);
+    reminders.unref();
+  }
 
   // Offices and agents can tell the operator something without asking anything.
   // Registered here (not in the agents routes) because the driver only exists
