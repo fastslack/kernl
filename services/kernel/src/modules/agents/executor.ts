@@ -157,7 +157,8 @@ export function filterOutboundTools<T extends { name: string; outbound?: boolean
 function selfImproveDisabled(agent: Agent): boolean {
   try {
     const vars = JSON.parse(String(agent.variables || "{}")) as Record<string, unknown>;
-    return vars.__self_improve__ === false;
+    // Extension seeds can only carry string variables: "false" counts too.
+    return vars.__self_improve__ === false || vars.__self_improve__ === "false";
   } catch {
     return false;
   }
