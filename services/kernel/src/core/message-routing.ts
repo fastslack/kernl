@@ -12,6 +12,7 @@ import type { AgentService } from "../modules/agents/service.js";
 import type { AgentExecutor } from "../modules/agents/executor.js";
 import type { EventBus } from "./event-bus.js";
 import type { VoiceService } from "../voice/service.js";
+import type { OperatorComms } from "./operator-comms/driver.js";
 import { WHATSAPP_CC_AGENT_NAME } from "../modules/agents/agent-name-conventions.js";
 import { runTopAgentStreamed } from "./telegram-stream.js";
 import { log } from "./logger.js";
@@ -28,8 +29,9 @@ export function wireMessageRouting(opts: {
   agentExecutor?: AgentExecutor | null;
   events?: EventBus | null;
   voiceService?: VoiceService | null;
+  operatorComms?: OperatorComms | null;
 }): void {
-  const { notificationRegistry, orchestrator, rateLimiter, pairingManager, agentService, agentExecutor, events, voiceService } = opts;
+  const { notificationRegistry, orchestrator, rateLimiter, pairingManager, agentService, agentExecutor, events, voiceService, operatorComms } = opts;
 
   // Wire Telegram message routing to Orchestrator (if active in marketplace)
   const telegramProvider = notificationRegistry.getProvider("telegram") as unknown as TelegramProviderLike | undefined;
@@ -37,6 +39,9 @@ export function wireMessageRouting(opts: {
   if (telegramTransport) {
     telegramTransport.onMessage(async (text, msgCtx) => {
       log.debug(`Telegram message from ${msgCtx.userId}: ${text}`);
+
+      const coded = operatorComms ? await operatorComms.tryCodeReply(text) : null;
+      if (coded) return { text: coded };
 
       // Natural-language messages go to the top agent (the top-rank
       // commander agent), streamed live via editMessage. Slash commands and
@@ -82,6 +87,8 @@ export function wireMessageRouting(opts: {
       telegramTransport.setVoiceService(voiceService, true);
       telegramTransport.onVoice(async (text, msgCtx) => {
         log.debug(`Telegram voice from ${msgCtx.userId}: ${text}`);
+        const coded = operatorComms ? await operatorComms.tryCodeReply(text) : null;
+        if (coded) return { text: coded };
         const topAgent =
           !text.trim().startsWith("/") && agentService && agentExecutor
             ? agentService.getTopAgent()
@@ -115,6 +122,9 @@ export function wireMessageRouting(opts: {
 
     telegramTransport.onCallback(async (data, msgCtx) => {
       log.debug(`Telegram callback from ${msgCtx.userId}: ${data}`);
+      if (data.startsWith("oq:") && operatorComms) {
+        return { text: await operatorComms.handleCallback(data) };
+      }
       const response = await orchestrator.handleCallback(data, {
         userId: msgCtx.userId,
         chatId: msgCtx.chatId,
@@ -159,6 +169,8 @@ export function wireMessageRouting(opts: {
           };
         }
       }
+      const coded = operatorComms ? await operatorComms.tryCodeReply(message.text) : null;
+      if (coded) return { text: coded };
       const response = await orchestrator.handleMessage(message.text, {
         userId: msgCtx.userId,
         chatId: msgCtx.chatId,
@@ -208,6 +220,12 @@ export function wireMessageRouting(opts: {
           agentExecutor,
           events,
         });
+        return;
+      }
+
+      const coded = operatorComms ? await operatorComms.tryCodeReply(msg.text) : null;
+      if (coded) {
+        await waProvider.sendTo(msg.chat, { title: "", body: coded });
         return;
       }
 

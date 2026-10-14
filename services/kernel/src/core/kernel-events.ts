@@ -148,6 +148,11 @@ export interface AgentQuestionOwedPayload {
   question_id: string;
 }
 
+/** A question has waited on the operator for 24 h: send a reminder. */
+export interface AgentQuestionRemindPayload {
+  question_id: string;
+}
+
 /** A question left the operator's queue for good. */
 export interface AgentQuestionResolvedPayload {
   question_id: string;
@@ -303,6 +308,7 @@ export interface KernelEvents {
   "agent:question_asked": AgentQuestionAskedPayload;
   "agent:question_triage": AgentQuestionTriagePayload;
   "agent:question_owed": AgentQuestionOwedPayload;
+  "agent:question_remind": AgentQuestionRemindPayload;
   "agent:question_resolved": AgentQuestionResolvedPayload;
 
   // Agent flow (real-time execution)
