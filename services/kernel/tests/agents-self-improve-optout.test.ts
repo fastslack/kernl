@@ -37,6 +37,12 @@ describe("self-improvement opt-out", () => {
     expect(h.graded).toEqual([]);
   });
 
+  test("the string \"false\" (extension seeds only carry strings) also opts out", async () => {
+    const h = harness();
+    await h.grade({ id: "seeded", variables: JSON.stringify({ __self_improve__: "false" }) });
+    expect(h.graded).toEqual([]);
+  });
+
   test("unreadable variables do not stop the grading", async () => {
     const h = harness();
     await h.grade({ id: "broken", variables: "{not json" });
