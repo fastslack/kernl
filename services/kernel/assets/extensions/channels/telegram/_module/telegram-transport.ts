@@ -328,17 +328,23 @@ export class TelegramTransport {
       parseMode?: "Markdown" | "MarkdownV2" | "HTML";
       disableNotification?: boolean;
       replyToMessageId?: number;
+      /** Inline keyboard; only the last chunk carries it. */
+      buttons?: InlineButton[][];
     },
   ): Promise<number> {
     // Over the limit it goes out as several messages; the first one carries
-    // the reply reference and the last one's id is returned.
+    // the reply reference, the last one the buttons and its id is returned.
     let lastId = 0;
-    for (const [i, piece] of chunkText(text, TELEGRAM_MAX_LENGTH).entries()) {
+    const pieces = chunkText(text, TELEGRAM_MAX_LENGTH);
+    for (const [i, piece] of pieces.entries()) {
       const result = await this.bot.api.sendMessage(chatId, piece, {
         parse_mode: options?.parseMode ?? "Markdown",
         disable_notification: options?.disableNotification,
         reply_parameters: i === 0 && options?.replyToMessageId
           ? { message_id: options.replyToMessageId }
+          : undefined,
+        reply_markup: i === pieces.length - 1 && options?.buttons
+          ? { inline_keyboard: options.buttons.map((r) => r.map((b) => ({ text: b.text, callback_data: b.callbackData }))) }
           : undefined,
       });
       lastId = result.message_id;
