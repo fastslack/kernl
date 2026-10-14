@@ -232,9 +232,12 @@ export function resolveHumanChoice(
 ): ChoiceResult {
   const q = service.getQuestion(id);
   if (!q || (q.status !== "pending" && q.status !== "owed")) return { ok: false, reason: "not_open" };
-  const final = (selected_index: number, selected_option: string, note?: string): ChoiceResult =>
-    answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human" })
+  const final = (selected_index: number, selected_option: string, note?: string): ChoiceResult => {
+    // Before the answer is delivered: a stale "keep waiting" letter must not ride along with it.
+    if (q.status === "owed") service.markOwedLettersRead(id);
+    return answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human" })
       ? { ok: true, status: "answered" } : { ok: false, reason: "not_open" };
+  };
   const owe = (selected_index: number, selected_option: string): ChoiceResult => {
     if (!service.markOwed(id, { selected_index, selected_option })) return { ok: false, reason: "not_open" };
     service.postLetterAboutQuestion(id, q.question,
@@ -257,6 +260,7 @@ export function resolveHumanChoice(
       return choice.text.trim() ? final(-1, choice.text.trim(), choice.text.trim()) : { ok: false, reason: "bad_choice" };
     case "dismiss": {
       if (!service.dismissQuestion(id)) return { ok: false, reason: "not_open" };
+      service.markOwedLettersRead(id);
       service.postLetterAboutQuestion(id, q.question,
         `**Question:** ${q.question}\n\n**Answer:** DESCARTADA por el operador. Seguí tu protocolo para una pregunta descartada (no la repitas igual).`);
       return { ok: true, status: "dismissed" };

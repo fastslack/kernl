@@ -4,7 +4,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
-import { AnswerQueue, answersGoal, answerAndDeliver, deliverPendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
+import { AnswerQueue, answersGoal, answerAndDeliver, deliverPendingAnswers, pendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
 
 const OPTS = [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }];
 
@@ -224,6 +224,61 @@ describe("resolveHumanChoice", () => {
     resolveHumanChoice(service, executor, events, id, { kind: "task" });
     expect(resolveHumanChoice(service, executor, events, id, { kind: "dismiss" })).toEqual({ ok: true, status: "dismissed" });
     expect(service.getUnreadInbox(w.id).some((l) => l.body.includes("DESCARTADA"))).toBe(true);
+  });
+
+  describe("closing an owed question retires its 'keep waiting' letter", () => {
+    const owedLetters = (agentId: string) => pendingAnswers(service, agentId).filter((l) => l.body.includes("a cargo del operador"));
+
+    it("Listo", () => {
+      const { w, id } = ask();
+      resolveHumanChoice(service, executor, events, id, { kind: "task" });
+      expect(owedLetters(w.id).length).toBe(1);
+      resolveHumanChoice(service, executor, events, id, { kind: "done" });
+      expect(pendingAnswers(service, w.id).length).toBe(0);
+    });
+
+    it("a final option", () => {
+      const { w, id } = ask();
+      resolveHumanChoice(service, executor, events, id, { kind: "task" });
+      resolveHumanChoice(service, executor, events, id, { kind: "option", index: 0 });
+      expect(owedLetters(w.id).length).toBe(0);
+    });
+
+    it("free text", () => {
+      const { w, id } = ask();
+      resolveHumanChoice(service, executor, events, id, { kind: "task" });
+      resolveHumanChoice(service, executor, events, id, { kind: "free", text: "lo hice a mano" });
+      expect(owedLetters(w.id).length).toBe(0);
+    });
+
+    it("dismiss keeps only the DESCARTADA letter", () => {
+      const { w, id } = ask();
+      resolveHumanChoice(service, executor, events, id, { kind: "task" });
+      resolveHumanChoice(service, executor, events, id, { kind: "dismiss" });
+      const left = pendingAnswers(service, w.id);
+      expect(left.length).toBe(1);
+      expect(left[0].body).toContain("DESCARTADA");
+    });
+
+    it("a busy asker gets the final answer alone, not with the stale letter", () => {
+      const { w, id } = ask();
+      resolveHumanChoice(service, executor, events, id, { kind: "task" });
+      const busy = service.createRun({ agent_id: w.id, goal: "busy" });
+      service.updateRun(busy.id, { status: "running" });
+      resolveHumanChoice(service, executor, events, id, { kind: "done" });
+      const left = pendingAnswers(service, w.id);
+      expect(left.length).toBe(1);
+      expect(left[0].body).not.toContain("a cargo del operador");
+    });
+
+    it("leaves other questions' owed letters alone", () => {
+      const { w, id } = ask();
+      const other = service.createQuestion({ from_agent_id: w.id, question: "otra?", options: TASKY, for_operator: true }).id;
+      resolveHumanChoice(service, executor, events, id, { kind: "task" });
+      resolveHumanChoice(service, executor, events, other, { kind: "task" });
+      resolveHumanChoice(service, executor, events, id, { kind: "done" });
+      expect(owedLetters(w.id).map((l) => l.subject)).toEqual(["ANSWER: otra?"]);
+    });
   });
 
   it("a second answer gets not_open and changes nothing", () => {
