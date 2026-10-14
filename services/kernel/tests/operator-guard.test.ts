@@ -9,6 +9,15 @@ describe("leavesWorkToOperator", () => {
     "Esperá a que el humano cargue la variable en DEV",
     "Dejarlo en espera hasta que el operador lo revise en GitLab",
     "Hold until the operator confirms",
+    "Mantené la cola retenida",
+    "Mantené retenida la cola",
+    "Queda en espera del operador",
+    "El operador debe aprobar",
+    "Que lo decida el operador",
+    "Pedile al operador que cargue la variable",
+    "Wait for the operator",
+    "Waiting on the operator to approve",
+    "Needs operator approval",
   ];
   const keep = [
     "Opción 0: aceptá SUPER_ADMIN para el E2E de web#2584 (api!105) por ahora. Motivo: el diagnóstico está verificado.",
