@@ -1094,6 +1094,8 @@
 
   // ── Pending questions from agents (top-agent inbox) ──────────────
   let pendingQuestions: PendingQuestion[] = [];
+  /** Questions the operator took on ("Te toca"): chosen, work still theirs. */
+  let owedQuestions: PendingQuestion[] = [];
   // Questions the chief hasn't resolved yet (count only) and the ones it
   // resolved on its own — read-only audit trail for MyOfficePanel.
   let triageCount = 0;
@@ -1102,12 +1104,14 @@
   let questionsLoaded = false;
   async function loadPendingQuestions() {
     try {
-      const [pending, triage, chief] = await Promise.all([
+      const [pending, owed, triage, chief] = await Promise.all([
         fetch('/api/agents/questions?status=pending&limit=50'),
+        fetch('/api/agents/questions?status=owed&limit=50'),
         fetch('/api/agents/questions?status=triage&limit=50'),
         fetch('/api/agents/questions?status=answered&answered_by=chief&limit=10'),
       ]);
       if (pending.ok) pendingQuestions = ((await pending.json()).questions ?? []) as PendingQuestion[];
+      if (owed.ok) owedQuestions = ((await owed.json()).questions ?? []) as PendingQuestion[];
       if (triage.ok) triageCount = ((await triage.json()).questions ?? []).length;
       if (chief.ok) chiefAnswered = ((await chief.json()).questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
@@ -4429,8 +4433,8 @@
   const dispatch = createEventDispatcher();
 
   let lastInboxCount = -1;
-  $: if (pendingQuestions.length !== lastInboxCount) {
-    lastInboxCount = pendingQuestions.length;
+  $: if (pendingQuestions.length + owedQuestions.length !== lastInboxCount) {
+    lastInboxCount = pendingQuestions.length + owedQuestions.length;
     dispatch('inbox', { count: lastInboxCount });
   }
 
@@ -4946,6 +4950,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     bind:myOfficeTab
     bind:officeReports
     bind:pendingQuestions
+    bind:owedQuestions
     {triageCount}
     {chiefAnswered}
     bind:fixerStatus

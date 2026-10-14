@@ -54,6 +54,8 @@
   export let officeReports: OfficeReport[];
   /** bind: — polled by the world, which also lights the top agent's halo from it. */
   export let pendingQuestions: PendingQuestion[];
+  /** Questions the operator took on: chosen, the work still theirs. */
+  export let owedQuestions: PendingQuestion[] = [];
   /** Questions the chief is still triaging (count only). */
   export let triageCount = 0;
   /** Recent questions the chief resolved on its own — read-only audit. */
@@ -213,46 +215,58 @@
     if (target) {
       window.open(target, '_blank', 'noopener,noreferrer');
     }
+    await sendChoice(q, { kind: 'option', index: idx });
+  }
+
+  // One write path for every way of answering. The kernel says where the
+  // question went: 'owed' (the chosen option leaves work to the operator) moves
+  // it to "Te toca"; anything else closes it. 409 = already answered elsewhere,
+  // so it leaves the list too. Resolves true when it left the list.
+  async function sendChoice(q: PendingQuestion, choice: Record<string, unknown>): Promise<boolean> {
     questionSubmitting = { ...questionSubmitting, [q.id]: true };
     try {
-      await fetch(`/api/agents/questions/${q.id}/answer`, {
+      const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selected_index: idx, selected_option: opt.label }),
+        body: JSON.stringify({ choice }),
       });
+      if (!res.ok && res.status !== 409) return false;
+      const body = await res.json().catch(() => null);
       pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
+      owedQuestions = owedQuestions.filter(x => x.id !== q.id);
+      if (res.ok && body?.status === 'owed') {
+        const chosen = choice.kind === 'task'
+          ? $t('office.chief.take_it')
+          : q.options[Number(choice.index)]?.label ?? '';
+        owedQuestions = [{ ...q, status: 'owed', owed_at: new Date().toISOString(), selected_option: chosen }, ...owedQuestions];
+      }
+      return true;
+    } catch {
+      return false;
     } finally {
       questionSubmitting = { ...questionSubmitting, [q.id]: false };
     }
   }
+  const takeIt = (q: PendingQuestion) => sendChoice(q, { kind: 'task' });
+  const markDone = (q: PendingQuestion, note: string) =>
+    sendChoice(q, { kind: 'done', ...(note.trim() ? { note: note.trim() } : {}) });
   async function dismissQuestion(q: PendingQuestion) {
     if (questionSubmitting[q.id]) return;
     questionSubmitting = { ...questionSubmitting, [q.id]: true };
     try {
       await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
       pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
+      owedQuestions = owedQuestions.filter(x => x.id !== q.id);
     } finally {
       questionSubmitting = { ...questionSubmitting, [q.id]: false };
     }
   }
 
-  // Free-text answers — for when none of the chief's options fit. Sent as
-  // selected_index -1 so the kernel knows it's not one of the fixed options.
+  // Free-text answers — for when none of the chief's options fit.
   // Resolves true when it landed, so the card can clear its input.
   async function answerFree(q: PendingQuestion, text: string): Promise<boolean> {
     if (!text || questionSubmitting[q.id]) return false;
-    questionSubmitting = { ...questionSubmitting, [q.id]: true };
-    try {
-      const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ selected_index: -1, selected_option: text, note: text }),
-      });
-      if (res.ok) pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
-      return res.ok;
-    } finally {
-      questionSubmitting = { ...questionSubmitting, [q.id]: false };
-    }
+    return sendChoice(q, { kind: 'free', text });
   }
 
   // Bulk actions for the My Office panel.
@@ -455,7 +469,7 @@
   {@const activityReports = officeReports.filter(r => r.status !== 'failed')}
   {@const errorGroups = groupReports(errorReports)}
   {@const chief = topAgent()}
-  {@const needsYou = pendingQuestions.length + errorGroups.length}
+  {@const needsYou = pendingQuestions.length + owedQuestions.length + errorGroups.length}
   <div class="info-panel office-reports-panel">
     <!-- Header: whose office, what the chief is doing, and the two ways to
          reach the chief itself. -->
@@ -497,7 +511,7 @@
       <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'questions'} class:active={myOfficeTab === 'questions'}
               on:click={() => myOfficeTab = 'questions'}>
         {$t('office.chief.tab_questions')}
-        {#if pendingQuestions.length > 0}<span class="mo-tab-badge mo-tab-badge-q">{pendingQuestions.length}</span>{/if}
+        {#if pendingQuestions.length + owedQuestions.length > 0}<span class="mo-tab-badge mo-tab-badge-q" title={$t('office.chief.waiting_you', { n: String(pendingQuestions.length + owedQuestions.length) })}>{pendingQuestions.length + owedQuestions.length}</span>{/if}
       </button>
       <button class="ip-tab" role="tab" aria-selected={myOfficeTab === 'errors'} class:active={myOfficeTab === 'errors'}
               on:click={() => myOfficeTab = 'errors'}>
@@ -540,6 +554,20 @@
           </div>
         {/if}
 
+        {#if owedQuestions.length > 0}
+          <div class="or-section">
+            <span class="or-section-title or-section-q">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
+          </div>
+          <div class="bq-list">
+            {#each owedQuestions as q (q.id)}
+              <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
+                                  busy={!!questionSubmitting[q.id]}
+                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                                  onTake={takeIt} onDone={markDone} />
+            {/each}
+          </div>
+        {/if}
+
         {#if pendingQuestions.length > 0}
           <div class="or-section">
             <span class="or-section-title or-section-q">{$t('office.chief.needs_answer', { n: String(pendingQuestions.length) })}</span>
@@ -551,7 +579,8 @@
             {#each pendingQuestions.slice(0, 2) as q (q.id)}
               <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
                                   busy={!!questionSubmitting[q.id]}
-                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree} />
+                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                                  onTake={takeIt} onDone={markDone} />
             {/each}
           </div>
         {/if}
@@ -602,6 +631,19 @@
 
       {:else if myOfficeTab === 'questions'}
         <!-- ═══ QUESTIONS ═══ -->
+        {#if owedQuestions.length > 0}
+          <div class="or-section">
+            <span class="or-section-title or-section-q">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
+          </div>
+          <div class="bq-list">
+            {#each owedQuestions as q (q.id)}
+              <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
+                                  busy={!!questionSubmitting[q.id]}
+                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                                  onTake={takeIt} onDone={markDone} />
+            {/each}
+          </div>
+        {/if}
         {#if loading && pendingQuestions.length === 0}
           <div class="mo-skel" role="status" aria-live="polite" aria-label={$t('office.chief.loading')}>
             <div class="mo-skel-h"><span class="mo-spin" aria-hidden="true"></span>{$t('office.chief.loading')}</div>
@@ -614,7 +656,7 @@
             {/each}
           </div>
         {:else if pendingQuestions.length === 0}
-          <div class="or-empty">{$t('office.chief.no_questions')}</div>
+          {#if owedQuestions.length === 0}<div class="or-empty">{$t('office.chief.no_questions')}</div>{/if}
           {#if triageCount > 0}
             <div class="or-section-hint mo-center">{$t('office.chief.status_triage', { n: String(triageCount) })}</div>
           {/if}
@@ -629,7 +671,8 @@
             {#each pendingQuestions as q (q.id)}
               <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
                                   busy={!!questionSubmitting[q.id]}
-                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree} />
+                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                                  onTake={takeIt} onDone={markDone} />
             {/each}
           </div>
         {/if}
