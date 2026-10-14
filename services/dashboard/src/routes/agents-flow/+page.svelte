@@ -617,6 +617,15 @@
     }
   }
 
+  // The right button pans the camera, so the browser's menu stays shut over
+  // the 3D — and over the panels and modals on it too, where it used to pop
+  // up. A text field keeps it, for paste.
+  function onContextMenu(e: MouseEvent) {
+    const el = e.target as HTMLElement | null;
+    if (el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+    e.preventDefault();
+  }
+
   function onShortcut(e: KeyboardEvent) {
     if (wizardOpen || meetingOpen) return;
     // Any open dialog (shared Modal, the world's own modals, other aria-modal surfaces) owns the keyboard.
@@ -762,7 +771,7 @@
 
 <svelte:window on:keydown={onShortcut} />
 
-<div class="flow-shell">
+<div class="flow-shell" on:contextmenu={onContextMenu} role="presentation">
   <div class="office-layout" class:office-layout--collapsed={railCollapsed} class:office-layout--directory={directoryView}>
     <div class="office-rail-container" class:rail-hidden={directoryView}>
     <OfficeRail
