@@ -85,6 +85,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `claude_code` agents' long replies were cut in the chat thread.
 - The camera missed the office it was focusing at some frame rates.
 - A redrawn provider logo stayed hidden behind the browser cache.
+- A sandboxed `claude_code` run could rotate Kernl's Claude session away,
+  leaving every later run with "OAuth expired". Sandboxes now get the access
+  token without the refresh token, the kernel refreshes it first when it
+  would expire mid-run, and a dead session counts as an auth failure.
 
 ## [0.4.3] - 2026-10-08
 
