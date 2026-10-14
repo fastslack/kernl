@@ -34,8 +34,8 @@ cask "kernl" do
   arch arm: "arm64", intel: "x64"
 
   version "0.4.4"
-  sha256 arm:   "6a329b5cbb7cb6f9364be3a9a0c668f5d8547951219588aee99f42a559e7481d",
-         intel: "d308ea744018bfda86d7d0d48c3d4baaaf7df777b1c23193346c712f839ecb02"
+  sha256 arm:   "99ae5a23601dd6a64b1a86eb5a3fc7d4d797128121d4ce7f03736413d04dcfe5",
+         intel: "5109d8610a184eeed108316d05e90415329d2f008ba71742a90719808cc69f1c"
 
   url "https://github.com/fastslack/kernl/releases/download/v#{version}/Kernl-#{version}-#{arch}.dmg",
       verified: "github.com/fastslack/kernl/"
