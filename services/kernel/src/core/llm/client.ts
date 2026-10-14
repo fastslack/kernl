@@ -18,6 +18,7 @@ import * as callLog from "./call-log.js";
 import * as limiter from "./limiter.js";
 import { ChatClaudeCodeProvider } from "./claude-code-adapter.js";
 import { applyModelQuirks, chatCompletionsUrl, fallbackOrder, getCatalogEntry } from "./provider-catalog.js";
+import { fitOpenAiParams } from "./chat-openai.js";
 import { parseRetryAfterMs, sleep, withJitter, type RetryableError } from "./retry.js";
 import { orderLinksByHealth, runWithFallbackChain } from "./fallback-chain.js";
 import { getProviderConfig, isConnected } from "./credentials.js";
@@ -501,6 +502,7 @@ export class LlmClient {
     if (opts.temperature !== undefined) body.temperature = opts.temperature;
     if (opts.json) body.response_format = { type: "json_object" };
     applyModelQuirks(body, slugOf(link), model);
+    fitOpenAiParams(body, slugOf(link), model);
 
     const ctrl = new AbortController();
     const timer = setTimeout(() => ctrl.abort(), link.timeoutMs ?? 60_000);
