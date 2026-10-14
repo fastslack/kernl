@@ -110,16 +110,23 @@ const NAME_RE = /^kernel_[a-z0-9]+(_[a-z0-9]+)*$/;
 /** A module factory paired with a label; each is booted independently. */
 interface Candidate {
   name: string;
-  make: () => { initialize(ctx: unknown): Promise<void>; getTools(): ToolDefinition[] };
+  make: () => { initialize(ctx: unknown): Promise<void>; getTools(): ToolDefinition[]; shutdown?(): Promise<void> };
 }
 
 const collected: ToolDefinition[] = [];
+/** Every module initialize() was called on, so afterAll can stop its timers. */
+const booted: Array<{ shutdown?(): Promise<void> }> = [];
 const skipped: Array<{ module: string; reason: string }> = [];
 const perModuleCounts: Record<string, number> = {};
 let db: Database;
 
 describe("tool catalog", () => {
-  afterAll(() => {
+  afterAll(async () => {
+    // Modules start delayed timers (the agents' answer sweep, the store's
+    // license refresh: 60 s). Left running they fire on the closed database in
+    // the middle of another file's test — which only happens on a run slower
+    // than a minute, so in CI and not locally.
+    for (const mod of booted) await mod.shutdown?.().catch(() => {});
     db?.close();
   });
 
@@ -169,6 +176,7 @@ describe("tool catalog", () => {
     for (const c of candidates) {
       try {
         const mod = c.make();
+        booted.push(mod);
         // Guard against a module whose initialize() blocks (e.g. awaiting a
         // dependency that never arrives in this bare context).
         let timer: ReturnType<typeof setTimeout> | undefined;
