@@ -1102,7 +1102,10 @@
   let chiefAnswered: PendingQuestion[] = [];
   /** First answer in: until then the office cannot say "nothing pending". */
   let questionsLoaded = false;
+  /** Bumped by the panel on every local answer/dismiss. */
+  let questionsRev = 0;
   async function loadPendingQuestions() {
+    const rev = questionsRev;
     try {
       const [pending, owed, triage, chief] = await Promise.all([
         fetch('/api/agents/questions?status=pending&limit=50'),
@@ -1110,10 +1113,16 @@
         fetch('/api/agents/questions?status=triage&limit=50'),
         fetch('/api/agents/questions?status=answered&answered_by=chief&limit=10'),
       ]);
-      if (pending.ok) pendingQuestions = ((await pending.json()).questions ?? []) as PendingQuestion[];
-      if (owed.ok) owedQuestions = ((await owed.json()).questions ?? []) as PendingQuestion[];
-      if (triage.ok) triageCount = ((await triage.json()).questions ?? []).length;
-      if (chief.ok) chiefAnswered = ((await chief.json()).questions ?? []) as PendingQuestion[];
+      // Parse everything first, then assign in one synchronous block so a
+      // render never sees a card in both lists or in none.
+      const [p, o, tr, c] = await Promise.all([pending, owed, triage, chief].map((r) => (r.ok ? r.json().catch(() => null) : null)));
+      // A local answer/dismiss happened while this poll was in flight: its
+      // snapshot predates it, so the next poll will carry the truth.
+      if (rev !== questionsRev) return;
+      if (p) pendingQuestions = (p.questions ?? []) as PendingQuestion[];
+      if (o) owedQuestions = (o.questions ?? []) as PendingQuestion[];
+      if (tr) triageCount = (tr.questions ?? []).length;
+      if (c) chiefAnswered = (c.questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
     finally { questionsLoaded = true; }
   }
@@ -4951,6 +4960,7 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     bind:officeReports
     bind:pendingQuestions
     bind:owedQuestions
+    bind:questionsRev
     {triageCount}
     {chiefAnswered}
     bind:fixerStatus
