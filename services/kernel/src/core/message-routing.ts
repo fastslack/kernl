@@ -17,10 +17,10 @@ import { WHATSAPP_CC_AGENT_NAME } from "../modules/agents/agent-name-conventions
 import { runTopAgentStreamed } from "./telegram-stream.js";
 import { log } from "./logger.js";
 
-async function tryCode(oc: OperatorComms | null | undefined, text: string): Promise<string | null> {
+async function tryCode(oc: OperatorComms | null | undefined, text: string, platform: string): Promise<string | null> {
   if (!oc) return null;
   try {
-    return await oc.tryCodeReply(text);
+    return await oc.tryCodeReply(text, platform);
   } catch (err) {
     log.warn(`operator-comms code reply: ${err instanceof Error ? err.message : String(err)}`);
     return null;
@@ -50,8 +50,8 @@ export function wireMessageRouting(opts: {
     telegramTransport.onMessage(async (text, msgCtx) => {
       log.debug(`Telegram message from ${msgCtx.userId}: ${text}`);
 
-      const coded = await tryCode(operatorComms, text);
-      if (coded) return { text: coded };
+      const coded = await tryCode(operatorComms, text, "telegram");
+      if (coded) return { text: coded, parseMode: null };
 
       // Natural-language messages go to the top agent (the top-rank
       // commander agent), streamed live via editMessage. Slash commands and
@@ -97,8 +97,8 @@ export function wireMessageRouting(opts: {
       telegramTransport.setVoiceService(voiceService, true);
       telegramTransport.onVoice(async (text, msgCtx) => {
         log.debug(`Telegram voice from ${msgCtx.userId}: ${text}`);
-        const coded = await tryCode(operatorComms, text);
-        if (coded) return { text: coded };
+        const coded = await tryCode(operatorComms, text, "telegram");
+        if (coded) return { text: coded, parseMode: null };
         const topAgent =
           !text.trim().startsWith("/") && agentService && agentExecutor
             ? agentService.getTopAgent()
@@ -133,7 +133,8 @@ export function wireMessageRouting(opts: {
     telegramTransport.onCallback(async (data, msgCtx) => {
       log.debug(`Telegram callback from ${msgCtx.userId}: ${data}`);
       if (data.startsWith("oq:") && operatorComms) {
-        return { text: (await operatorComms.handleCallback(data)) || "Botón inválido." };
+        // Plain text: the reply replaces the question, which may hold _ or *.
+        return { text: await operatorComms.handleCallback(data), parseMode: null };
       }
       const response = await orchestrator.handleCallback(data, {
         userId: msgCtx.userId,
@@ -179,7 +180,7 @@ export function wireMessageRouting(opts: {
           };
         }
       }
-      const coded = await tryCode(operatorComms, message.text);
+      const coded = await tryCode(operatorComms, message.text, msgCtx.platform);
       if (coded) return { text: coded };
       const response = await orchestrator.handleMessage(message.text, {
         userId: msgCtx.userId,
@@ -233,7 +234,7 @@ export function wireMessageRouting(opts: {
         return;
       }
 
-      const coded = await tryCode(operatorComms, msg.text);
+      const coded = await tryCode(operatorComms, msg.text, "whatsapp");
       if (coded) {
         await waProvider.sendTo(msg.chat, { title: "", body: coded });
         return;
