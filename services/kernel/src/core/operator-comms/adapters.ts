@@ -6,13 +6,16 @@ type ProviderLike = {
   sendNotification(p: { title: string; body?: string; silent?: boolean }): Promise<boolean>;
 } & Partial<TelegramProviderLike>;
 
+/** The dashboard's provider ids: it has its own surface (the bell), never a channel here. */
+const DASHBOARD_IDS = new Set(["dashboard", "dashboard-notifications"]);
+
 /**
  * One adapter per notification provider that is running, except the dashboard
  * (it has its own surface). Telegram gets inline buttons and edit; everything
  * else is notify-only.
  */
 export function buildAdapters(registry: { list(): ProviderLike[] }): OperatorChannelAdapter[] {
-  return registry.list().filter((p) => p.id !== "dashboard").map((p): OperatorChannelAdapter => {
+  return registry.list().filter((p) => !DASHBOARD_IDS.has(p.id)).map((p): OperatorChannelAdapter => {
     const transport = p.id === "telegram" ? p.getTransport?.() : null;
     const chat = p.getDefaultChatId?.() ?? null;
     if (transport && chat != null) {
@@ -20,7 +23,7 @@ export function buildAdapters(registry: { list(): ProviderLike[] }): OperatorCha
         id: p.id, buttons: true, receive: true, isReady: () => p.isReady(),
         async send(m: OperatorMessage): Promise<SentRef | null> {
           const buttons = m.buttons?.map((r) => r.map((b) => ({ text: b.text, callbackData: b.data })));
-          const id = await transport.send(chat, m.text, { parseMode: null, ...(buttons ? { buttons } : {}) });
+          const id = await transport.send(chat, m.text, { parseMode: null, ...(m.silent ? { disableNotification: true } : {}), ...(buttons ? { buttons } : {}) });
           return id ? { target: String(chat), messageId: String(id) } : null;
         },
         async edit(ref: SentRef, text: string): Promise<void> {
