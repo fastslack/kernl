@@ -21,8 +21,17 @@
   export let onAnswer: (q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) => void;
   export let onDismiss: (q: PendingQuestion) => void;
   export let onFree: (q: PendingQuestion, text: string) => Promise<boolean>;
+  /** "Lo veo yo": the work is the operator's; the question moves to "Te toca". */
+  export let onTake: (q: PendingQuestion) => Promise<boolean> | void = () => {};
+  /** "Listo": the operator did the work (optional note). */
+  export let onDone: (q: PendingQuestion, note: string) => Promise<boolean> | void = () => {};
 
   let free = '';
+  let doneNote = '';
+  $: owed = q.status === 'owed';
+  // Owed: the choice is made; the options left are the real ones, not the "task" one.
+  $: shown = q.options.map((o, i) => ({ o, i })).filter(({ o }) => !owed || !o.task);
+  $: guardEscalated = !!q.chief_note?.startsWith('escalada: la respuesta dejaba trabajo al operador');
   $: ctxUrl = firstUrlIn(q.context);
 
   async function submitFree(): Promise<void> {
@@ -132,12 +141,17 @@
   <div class="bq-head">
     <span class="bq-from-dot" style="background:{color}"></span>
     <span class="bq-from">{agentName}</span>
-    <span class="bq-time">{fmtRelTime(q.created_at)}</span>
+    <span class="bq-time">{fmtRelTime(owed && q.owed_at ? q.owed_at : q.created_at)}</span>
     <button class="bq-dismiss" title={$t('office.chief.q_dismiss')} aria-label={$t('office.chief.q_dismiss')}
             on:click={() => onDismiss(q)} disabled={busy}>×</button>
   </div>
   <div class="bq-question">{q.question}</div>
-  {#if q.chief_note}
+  {#if owed}
+    <div class="bq-chose">{$t('office.chief.you_chose', { opt: q.selected_option ?? '' })}</div>
+  {/if}
+  {#if guardEscalated}
+    <div class="bq-chief-note">{$t('office.chief.escalated_guard')}</div>
+  {:else if q.chief_note}
     <div class="bq-chief-note">{$t('office.chief.q_escalated')}: {q.chief_note}</div>
   {/if}
   {#if q.context}
@@ -152,7 +166,7 @@
     </a>
   {/if}
   <div class="bq-options">
-    {#each q.options as opt, i (i)}
+    {#each shown as { o: opt, i } (i)}
       {@const optUrl = urlForOption(q, opt)}
       <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
               on:click={() => onAnswer(q, i, opt)}
@@ -164,6 +178,20 @@
         {#if optUrl}<span class="bq-option-linkico" aria-hidden="true">↗</span>{/if}
       </button>
     {/each}
+
+    {#if !owed}
+      <button class="bq-option bq-take" type="button" on:click={() => onTake(q)} disabled={busy}>
+        <span class="bq-option-lbl">{$t('office.chief.take_it')}</span>
+      </button>
+    {:else}
+      <div class="bq-done-row">
+        <input class="bq-free-input" placeholder={$t('office.chief.done_note')} bind:value={doneNote} disabled={busy}
+               aria-label={$t('office.chief.done_note')} />
+        <button class="bq-option bq-done" type="button" on:click={() => onDone(q, doneNote)} disabled={busy}>
+          <span class="bq-option-lbl">{$t('office.chief.done')}</span>
+        </button>
+      </div>
+    {/if}
 
     {#if opinion}
       <div class="bq-opinion" aria-live="polite">
@@ -360,6 +388,11 @@
   .bq-pick-tag{ flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#1a1430; background:#a78bfa; padding:1px 6px; border-radius:8px; text-transform:uppercase; }
   @media (prefers-reduced-motion: reduce){ .bq-spin{ animation:none; } }
   .bq-chief-note{ font:500 10.5px 'Manrope',sans-serif; color:#f0b86e; background:#2a2214; border-left:2px solid #f0b86e; padding:5px 8px; border-radius:3px; margin:4px 0 6px; }
+  .bq-chose{ font:600 11px 'Manrope',sans-serif; color:#7ee0a1; margin:0 0 6px; }
+  .bq-take{ border-style:dashed; color:#f0b874; }
+  .bq-done-row{ grid-column:1 / -1; display:flex; gap:5px; }
+  .bq-done{ flex-shrink:0; border-color:rgba(126,224,161,.45); color:#7ee0a1; }
+  .bq-done:hover:not(:disabled){ background:rgba(126,224,161,.14); border-color:#7ee0a1; color:#c8f5d8; }
   .bq-free{ display:flex; gap:5px; margin-top:6px; }
   .bq-free-input{ flex:1; min-width:0; padding:7px 9px; background:#11131f; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:500 11px 'Manrope',sans-serif; }
   .bq-free-send{ padding:7px 11px; background:#1f2440; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }

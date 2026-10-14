@@ -55,9 +55,11 @@ export interface PendingQuestion {
   flow_id: string;
   question: string;
   context: string;
-  options: Array<{ label: string; value?: string; url?: string }>;
+  options: Array<{ label: string; value?: string; url?: string; task?: boolean }>;
   created_at: string;
-  status?: 'triage' | 'pending' | 'answered' | 'dismissed';
+  status?: 'triage' | 'pending' | 'owed' | 'answered' | 'dismissed';
+  /** When the operator took the work on (status 'owed'). */
+  owed_at?: string | null;
   chief_note?: string;
   answered_by?: '' | 'chief' | 'human';
   selected_option?: string;
