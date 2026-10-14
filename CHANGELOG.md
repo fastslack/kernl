@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The LIVE pill shows one dot per model of the chain and each one's score.
 - **System overview** (`/control`): how this Kernl is doing at a glance, with
   a way into every part of it.
+- **"What would the AI answer?"** on an office question is now answered by a
+  read-only investigator that reads the issue, its merge request, the code
+  and the git history before giving an opinion, and shows its progress.
 - **Office panels.** An office can declare panels (sources, views and actions,
   `panels.v1`) in the Office Kit manifest or an extension's office seed. They
   show as tabs in the office's 3D panel and open from the whiteboard in its
