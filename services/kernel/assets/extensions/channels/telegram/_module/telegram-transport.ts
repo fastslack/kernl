@@ -325,7 +325,8 @@ export class TelegramTransport {
     chatId: number,
     text: string,
     options?: {
-      parseMode?: "Markdown" | "MarkdownV2" | "HTML";
+      /** null = plain text (no parse_mode). Omitted = Markdown. */
+      parseMode?: "Markdown" | "MarkdownV2" | "HTML" | null;
       disableNotification?: boolean;
       replyToMessageId?: number;
       /** Inline keyboard; only the last chunk carries it. */
@@ -338,7 +339,7 @@ export class TelegramTransport {
     const pieces = chunkText(text, TELEGRAM_MAX_LENGTH);
     for (const [i, piece] of pieces.entries()) {
       const result = await this.bot.api.sendMessage(chatId, piece, {
-        parse_mode: options?.parseMode ?? "Markdown",
+        parse_mode: options?.parseMode === null ? undefined : (options?.parseMode ?? "Markdown"),
         disable_notification: options?.disableNotification,
         reply_parameters: i === 0 && options?.replyToMessageId
           ? { message_id: options.replyToMessageId }
@@ -546,10 +547,10 @@ export class TelegramTransport {
     chatId: number,
     messageId: number,
     text: string,
-    parseMode?: "Markdown" | "MarkdownV2" | "HTML",
+    parseMode?: "Markdown" | "MarkdownV2" | "HTML" | null,
   ): Promise<void> {
     await this.bot.api.editMessageText(chatId, messageId, fitOne(text), {
-      parse_mode: parseMode ?? "Markdown",
+      parse_mode: parseMode === null ? undefined : (parseMode ?? "Markdown"),
     });
   }
 
