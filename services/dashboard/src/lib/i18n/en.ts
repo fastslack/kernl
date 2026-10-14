@@ -1222,6 +1222,7 @@ const en = {
   "office.chief.done_note": "Note (optional)",
   "office.chief.you_chose": "You chose: {opt}",
   "office.chief.escalated_guard": "auto-escalated: it left work to you",
+  "office.chief.chief_proposal": "the chief's proposal",
   "office.chief.q_escalated": "The chief passed it to you because",
   "office.chief.q_context": "show context",
   "office.chief.q_other": "Other answer…",

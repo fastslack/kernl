@@ -1225,6 +1225,7 @@ const es: Record<I18nKey, string> = {
   "office.chief.done_note": "Nota (opcional)",
   "office.chief.you_chose": "Elegiste: {opt}",
   "office.chief.escalated_guard": "escalada sola: dejaba trabajo al operador",
+  "office.chief.chief_proposal": "propuesta del Chief",
   "office.chief.q_escalated": "El chief te la pasó porque",
   "office.chief.q_context": "ver contexto",
   "office.chief.q_other": "Otra respuesta…",
