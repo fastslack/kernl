@@ -5,10 +5,10 @@
 
 import { HttpError, type KernelHttpServer, type RouteMethod } from "../../core/http-server.js";
 import { agentOperations } from "./operations.js";
-import type { AgentService, QuestionStatus } from "./service.js";
+import type { AgentService, QuestionOption, QuestionStatus } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
-import { answerAndDeliver } from "./question-delivery.js";
+import { resolveHumanChoice, type HumanChoice } from "./question-delivery.js";
 import { createQuestionInvestigator, type QuestionInvestigator } from "./question-investigator.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
@@ -34,6 +34,26 @@ import type { ExtensionOfficeSource } from "./office-templates.js";
 
 type ConversationKind = "chat" | "meeting" | "debate";
 type ConversationStatus = "open" | "closed";
+
+/** The operator's answer as a `HumanChoice`: the new `{choice}` body, or the old `{selected_index, selected_option}`. */
+export function parseAnswerBody(body: unknown): HumanChoice | null {
+  const b = (body ?? {}) as Record<string, unknown>;
+  const c = b.choice as Record<string, unknown> | undefined;
+  if (c && typeof c === "object") {
+    switch (c.kind) {
+      case "option": return Number.isInteger(c.index) ? { kind: "option", index: c.index as number } : null;
+      case "task": return { kind: "task" };
+      case "done": return { kind: "done", ...(typeof c.note === "string" && c.note.trim() ? { note: c.note.trim() } : {}) };
+      case "dismiss": return { kind: "dismiss" };
+      case "free": return typeof c.text === "string" && c.text.trim() ? { kind: "free", text: c.text.trim() } : null;
+      default: return null;
+    }
+  }
+  if (typeof b.selected_index === "number" && typeof b.selected_option === "string" && b.selected_option.trim()) {
+    return b.selected_index >= 0 ? { kind: "option", index: b.selected_index } : { kind: "free", text: b.selected_option.trim() };
+  }
+  return null;
+}
 
 /** `?limit=` clamped to [1, 500], 50 when absent or not a number. */
 function clampLimit(raw: string | null): number {
@@ -234,19 +254,31 @@ export function registerAgentRoutes(
     return { questions, total: questions.length };
   });
 
-  server.route<{ selected_index: number; selected_option: string; note?: string }>(
-    "POST", "/api/agents/questions/:id/answer", ({ params: { id }, body }) => {
-      if (typeof body.selected_index !== "number" || typeof body.selected_option !== "string" || !body.selected_option.trim()) {
-        throw new HttpError(400, "selected_index and selected_option required");
-      }
-      const result = answerAndDeliver(service, executor, events, id, {
-        selected_index: body.selected_index,
-        selected_option: body.selected_option.trim(),
-        note: body.note,
-        answered_by: "human",
-      });
-      if (!result) throw new HttpError(404, "Question not found or already answered");
-      return { success: true, resume_run_id: result.resume_run_id };
+  server.route("POST", "/api/agents/questions/:id/answer", ({ params: { id }, body }) => {
+    const choice = parseAnswerBody(body);
+    if (!choice) throw new HttpError(400, "choice required");
+    const r = resolveHumanChoice(service, executor, events, id, choice);
+    if (!r.ok) throw new HttpError(r.reason === "not_open" ? 409 : 400, r.reason, { reason: r.reason });
+    return { success: true, status: r.status };
+  });
+
+  // An office's host process (Heural's host-ops) files a question for one of its agents:
+  // the answer reaches that agent like any other.
+  server.route<{ from_agent_slug: string; question: string; context?: string; options: QuestionOption[]; for_operator?: boolean }>(
+    "POST", "/api/agents/questions", ({ body }) => {
+      const agent = body?.from_agent_slug ? service.getAgentBySlug(body.from_agent_slug) : undefined;
+      if (!agent) throw new HttpError(404, "agent not found");
+      const question = String(body.question ?? "").trim();
+      const options = (Array.isArray(body.options) ? body.options : [])
+        .map((o) => {
+          const label = String(o?.label ?? "").trim();
+          const url = typeof o?.url === "string" && /^https?:\/\//i.test(o.url.trim()) ? o.url.trim() : undefined;
+          return label ? { label, ...(url ? { url } : {}), ...(o?.task ? { task: true } : {}) } : null;
+        })
+        .filter((x): x is QuestionOption => x !== null);
+      if (!question || options.length < 2 || options.length > 4) throw new HttpError(400, "question and 2-4 options required");
+      return service.createQuestion({ from_agent_id: agent.id, flow_id: agent.flow_id ?? "", question,
+        context: String(body.context ?? ""), options, for_operator: body.for_operator !== false });
     },
   );
 
@@ -271,7 +303,8 @@ export function registerAgentRoutes(
   });
 
   server.route("POST", "/api/agents/questions/:id/dismiss", ({ params: { id } }) => {
-    if (!service.dismissQuestion(id)) throw new HttpError(404, "Question not found or already handled");
+    const r = resolveHumanChoice(service, executor, events, id, { kind: "dismiss" });
+    if (!r.ok) throw new HttpError(404, "Question not found or already handled");
     return { success: true };
   });
 
