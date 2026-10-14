@@ -806,6 +806,15 @@ export function zoneObstacles(enteringMyOffice = false, enteringMeeting?: WalkRe
   return out;
 }
 
+/** `to` moved `dist` toward the door along the door's axis: the spot right
+ *  behind a chair that faces away from the door. */
+function behindFromDoor(to: Vec3, door: { x: number; z: number }, dist: number): Vec3 {
+  const dx = door.x - to.x, dz = door.z - to.z;
+  return Math.abs(dz) >= Math.abs(dx)
+    ? { x: to.x, y: 0, z: to.z + Math.sign(dz) * dist }
+    : { x: to.x + Math.sign(dx) * dist, y: 0, z: to.z };
+}
+
 export interface PointWalkInput {
   from: Vec3;
   targetPoint: Vec3;
@@ -887,7 +896,11 @@ export function planPointWalk(input: PointWalkInput): Vec3[] {
   if (targetRoom) {
     pts.push(...enterViaDoor(targetPoint, targetRoom));
   } else if (intoMyOffice) {
-    pts.push(...enterViaDoor(targetPoint, rectAsRoom(myOffice!.rect, myOffice!.door)));
+    // The visitor armchairs stand in one row facing away from the door: come
+    // up behind the row, line up with the chair and step into it from the
+    // back, instead of walking along the row through whoever already sits.
+    const behind = behindFromDoor(targetPoint, myOffice!.door, 0.9);
+    pts.push(...enterViaDoor(behind, rectAsRoom(myOffice!.rect, myOffice!.door)), ...pin([behind]));
   } else if (viaPoint) {
     // Meeting rooms aren't in the `rooms` map — they hand us their door
     // midpoint instead. Square up on the doorway, step through, and only then

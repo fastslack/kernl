@@ -100,4 +100,10 @@ describe("pickFreeChair", () => {
     const full = [walkerAt(0, 0), walkerAt(5, 0)];
     expect(pickFreeChair(seats, full)).toEqual(seats[0]);
   });
+
+  it("strict: a full room gives no chair, so nobody sits on someone already seated", () => {
+    const full = [walkerAt(0, 0), walkerAt(5, 0, "visit")];
+    expect(pickFreeChair(seats, full, true)).toBeNull();
+    expect(pickFreeChair(seats, [walkerAt(0, 0)], true)).toEqual(seats[1]);
+  });
 });

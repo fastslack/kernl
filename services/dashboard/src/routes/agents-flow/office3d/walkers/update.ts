@@ -196,6 +196,7 @@ export function updateWalkers(
       const autoReturnSec =
         w.targetId === 'meeting' ? 600.0
         : w.targetId === 'myoffice' ? 9.0   // sit, file the report, then leave
+        : w.targetId === 'visit' ? 9.0      // same visit on foot: the armchairs were full
         : w.targetId === 'infra' ? 6.0      // operate the power console, then leave
         : 2.0;
 

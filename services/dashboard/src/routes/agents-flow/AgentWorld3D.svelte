@@ -194,6 +194,7 @@
   // visitor faces (the desk). Visitors (reports, meetings held here) sit in
   // these instead of piling onto one floor point. Populated by buildMyOffice.
   let myOfficeSeats: Array<{ x: number; y: number; z: number }> = [];
+  let myOfficeStands: Array<{ x: number; y: number; z: number }> = [];
   let myOfficeDeskFacing: { x: number; y: number; z: number } | null = null;
   // ── Office infrastructure (Docker container per flow) — power state ──
   // The Repos Office holds the master power console; each office's container
@@ -1596,6 +1597,7 @@
     myOfficeHitbox = myOfficeResult.hitbox;
     myOfficeNoteDropPos = myOfficeResult.noteDropPos;
     myOfficeSeats = myOfficeResult.visitorChairs;
+    myOfficeStands = myOfficeResult.visitorStands;
     myOfficeDeskFacing = myOfficeResult.deskFacingPos;
     // Neither room is in the flow-room map, so tell the walker router about
     // them: walkers enter the headquarters office only through its door and
@@ -1611,7 +1613,7 @@
     // guarantees one agent with rank.level === 11; if multiple are
     // present we honor the first one and ignore the rest (seeder also
     // enforces a single row, this is defensive).
-    placeTopAgent(target, myOfficeResult.seatPos, myOfficeResult.headPos, myOfficeResult.seatFacingY);
+    placeTopAgent(target, myOfficeResult.seatPos, myOfficeResult.headPos, myOfficeResult.seatFacingY, myOfficeResult.seatLift);
     // Wire up the desk paper-stack. Notes parent to `target` (= scene) and
     // their fall animation lives on the shared anim registry. The stack is
     // recreated on every scene rebuild — clear() drops the old meshes first.
@@ -1684,6 +1686,8 @@
     seatPos: { x: number; y: number; z: number },
     headPos: { x: number; y: number; z: number },
     facingY: number,
+    /** Height of the dais the executive chair stands on. */
+    seatLift = 0,
   ): void {
     disposeTopAgent();
     // The top agent = whoever holds the highest-level rank. Whatever name
@@ -1707,7 +1711,7 @@
       walker: false,
     });
     const group = new THREE.Group();
-    group.position.set(seatPos.x, 0, seatPos.z);
+    group.position.set(seatPos.x, seatLift, seatPos.z);
     group.add(human.group);
     human.group.rotation.y = facingY;
     // Seated pose offsets (same numbers used for regular seated workers).
@@ -2856,7 +2860,7 @@
     triggerDeliveryForAgent, tryFireAnim, spawnErrorFx, spawnHandoffPacketFx,
     spawnTradeCelebration,
     refreshSelectedAgentRuns: () => agentPanel?.refreshRuns(),
-    isOfficeLeader, isSeniorRank, addOfficeReport, pickFreeMyOfficeChair,
+    isOfficeLeader, isSeniorRank, addOfficeReport, pickMyOfficeSpot,
     flowColor, sameOffice, coordinateInMeetingRoom,
     spawnMeetingDecor, updateMeetingDecorTurn, disposeMeetingDecor,
     pushMgmtLog, playTopAgentChime, loadPendingQuestions,
@@ -4668,9 +4672,16 @@
     return sameOfficeOf(agents, srcId, tgtId);
   }
 
-  /** Free visitor chair in My Office; seats and walkers live in this component. */
-  function pickFreeMyOfficeChair(): { x: number; y: number; z: number } | null {
-    return pickFreeChair(myOfficeSeats, walkers as unknown as SeatedWalker[]);
+  /** Where a visitor to My Office goes: a free armchair, or a spot on foot
+   *  behind the row when every armchair is taken. Seated visitors face
+   *  straight ahead so the body lines up with the chair. */
+  function pickMyOfficeSpot(): { pos: { x: number; y: number; z: number }; seated: boolean; face?: { x: number; y: number; z: number } } | null {
+    const seated = walkers as unknown as SeatedWalker[];
+    const face = myOfficeDeskFacing ?? undefined;
+    const chair = pickFreeChair(myOfficeSeats, seated, true);
+    if (chair) return { pos: chair, seated: true, face: face ? { x: chair.x, y: face.y, z: face.z } : undefined };
+    const stand = pickFreeChair(myOfficeStands, seated) ?? myOfficePos;
+    return stand ? { pos: stand, seated: false, face } : null;
   }
 
   async function sendMeetingMessage(text?: string, attachments: AttachmentMeta[] = []) {
