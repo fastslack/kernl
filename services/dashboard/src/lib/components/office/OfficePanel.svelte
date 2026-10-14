@@ -20,6 +20,7 @@
 
 <script lang="ts">
 	import OfficeProjects from './OfficeProjects.svelte';
+	import PanelHost from '$lib/components/panels/PanelHost.svelte';
 	import { createEventDispatcher, tick } from 'svelte';
 	import { extPages } from '$lib/ext-host.js';
 	import Drawer from '$lib/components/ui/Drawer.svelte';
@@ -85,6 +86,8 @@
 	export let envAvailable: boolean | null = null;
 	export let otherOfficeNames: string[] = [];
 	export let top = '52px';
+	/** View of the office's declared panels to open first (from ?panel= in the URL). */
+	export let initialPanelView: string | null = null;
 
 	const dispatch = createEventDispatcher<{ close: void; changed: void; agentopen: { id: string }; deleted: { unassigned: number; flowId: string } }>();
 
@@ -445,6 +448,10 @@
 	</svelte:fragment>
 
 	{#if office}
+		<!-- The office's own panels (panels.v1). Renders nothing when it declares none. -->
+		<section class="op-section op-panels">
+			<PanelHost flowId={office.id} initialView={initialPanelView} />
+		</section>
 		<section class="op-section">
 			<h3 class="k-section-title">{$t('office.panel.general')}</h3>
 			<div class="k-field">

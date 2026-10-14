@@ -8,6 +8,7 @@
   "description": "Shopping lists, products catalog, low-stock alerts.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "home",
   "tags": [
     "shopping",

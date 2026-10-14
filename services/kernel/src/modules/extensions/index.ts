@@ -11,6 +11,8 @@ import { extensionsMigrations } from "./migrations.js";
 import { ExtensionService } from "./service.js";
 import { extensionsTools } from "./tools.js";
 import { registerExtensionsRoutes } from "./api-routes.js";
+import { registerEditionRoutes } from "./edition-routes.js";
+import type { SqliteDb } from "../../core/db/sqlite.js";
 import { linkPayloadModules } from "./ensure-packages.js";
 import type { InstallerDeps } from "./installer.js";
 
@@ -36,12 +38,14 @@ export function createExtensionsModule(
   },
 ): ExtensionsModuleHandle {
   let service: ExtensionService | null = null;
+  let db: SqliteDb | null = null;
   let tools: ToolDefinition[] = [];
 
   const handle = {
     name: "extensions",
     async initialize(ctx: ModuleContext) {
       runMigrations(ctx.sqlite, "extensions", extensionsMigrations);
+      db = ctx.sqlite;
 
       const deps: InstallerDeps = {
         db: ctx.sqlite,
@@ -74,6 +78,7 @@ export function createExtensionsModule(
       return {
         registerRoutes: (server) => {
           if (service) registerExtensionsRoutes(server, service);
+          if (service && db) registerEditionRoutes(server, db, service);
         },
         stores: ["extensions"],
         fetchEndpoints: [{ url: "/api/extensions", store: "extensions" }],
@@ -81,6 +86,7 @@ export function createExtensionsModule(
     },
     async shutdown() {
       service = null;
+      db = null;
       tools = [];
     },
     get service(): ExtensionService {

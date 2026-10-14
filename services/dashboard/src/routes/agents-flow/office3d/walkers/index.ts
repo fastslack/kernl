@@ -6,7 +6,8 @@ export function initWalkers(three: any, css2d: any) {
   setRuntime(three, css2d);
 }
 
-export { sendWalker, sendWalkerToPoint, sendCommuteWalker } from './spawn.js';
+export { sendWalker, sendWalkerToPoint, sendCommuteWalker, setWalkerStatusMount } from './spawn.js';
 export { updateWalkers, removeArrivedWalkers, syncSeatedVisibility } from './update.js';
 export { setWalkZones } from './pathfinding.js';
 export type { SittingWorkerEntry, SittingWorkers, WalkerToPointOpts, CommuteWalkerOpts } from './types.js';
+export type { WalkerStatusMount } from './spawn.js';

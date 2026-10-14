@@ -6,13 +6,30 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe("catalog providers", () => {
-  it("registers all 12 catalog slugs", () => {
+  it("registers all 21 catalog slugs", () => {
     const reg = new LlmProviderRegistry();
     registerBuiltinLlmProviders(reg);
     expect(reg.getAvailableSlugs().sort()).toEqual([
-      "claude", "claude-code", "deepseek", "gemini", "grok", "groq",
-      "lmstudio", "minimax", "nvidia", "ollama", "openai", "openrouter",
+      "cerebras", "claude", "claude-code", "deepseek", "fireworks", "gemini", "grok", "groq",
+      "lmstudio", "minimax", "mistral", "moonshot", "nvidia", "ollama", "openai", "openai-compatible",
+      "openrouter", "qwen", "together", "xiaomi", "zai",
     ]);
+  });
+
+  it("lists models from an API that answers a bare array (Together)", async () => {
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify([{ id: "zai-org/GLM-5.3", type: "chat" }, { id: "openai/gpt-oss-120b", type: "chat" }]), { status: 200 })
+    ) as unknown as typeof fetch;
+    const p = createCatalogProvider("together")();
+    p.configure({ apiKey: "k" });
+    await p.start();
+    expect(await p.listModels!()).toEqual(["openai/gpt-oss-120b", "zai-org/GLM-5.3"]);
+  });
+
+  it("an OpenAI-compatible server offers an optional key", () => {
+    const f = createCatalogProvider("openai-compatible")().getConfigSchema();
+    expect(f.map((x) => x.key)).toEqual(["apiKey", "baseUrl", "defaultModel"]);
+    expect(f[0].required).toBe(false);
   });
 
   it("refuses kinds it does not implement", () => {

@@ -13,16 +13,43 @@ import {
   avoidDesks,
   roomAabbs,
   meetingRoomAabbs,
-  nearestHCorrZ,
-  nearestVCorrX,
-  nearestVCorrXBetween,
   exitViaDoor,
+  corridorRoute,
   planPointWalk,
   zoneObstacles,
 } from './pathfinding.js';
 
 /** Size of every standing humanoid on the floor — walkers, and anyone who must read as one of them. */
 export const WALKER_SCALE = 1.3;
+
+/**
+ * Puts a walker's message inside the agent's nameplate, the way a working
+ * agent's status shows; returns the element, or null when the agent has no
+ * plate. The plate follows the walker, so the message travels with it.
+ */
+export type WalkerStatusMount = (agentId: string, text: string, color: string) => HTMLElement | null;
+let statusMount: WalkerStatusMount | null = null;
+export function setWalkerStatusMount(fn: WalkerStatusMount | null): void { statusMount = fn; }
+
+/**
+ * The walker's message. It used to be a white card of its own floating over
+ * the body, right under the nameplate, so the two covered each other.
+ */
+function walkerBubble(group: any, agentId: string, message: string | undefined, color: string): any {
+  if (!message) return null;
+  const el = statusMount?.(agentId, message, color);
+  if (el) return { element: el, parent: null };
+  const bd = document.createElement('div');
+  bd.textContent = message;
+  bd.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
+    background:#f0f0e8;border:2px solid #222;padding:3px 8px;
+    border-radius:4px;box-shadow:2px 3px 0 #000;
+    white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;`;
+  const bubble = new rt.CSS2DObject(bd);
+  bubble.position.set(0, 2.4, 0);
+  group.add(bubble);
+  return bubble;
+}
 
 // Local helper — resolve the agent's skin from the shared registry, then
 // build the per-mesh humanoid in the right outfit.
@@ -154,19 +181,7 @@ export function sendWalker(
   glow.position.y = 0.03;
   h.group.add(glow);
 
-  // Message bubble
-  let bubble: any = null;
-  if (message) {
-    const bd = document.createElement('div');
-    bd.textContent = message;
-    bd.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
-      background:#f0f0e8;border:2px solid #222;padding:3px 8px;
-      border-radius:4px;box-shadow:2px 3px 0 #000;
-      white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;`;
-    bubble = new rt.CSS2DObject(bd);
-    bubble.position.set(0, 2.4, 0);
-    h.group.add(bubble);
-  }
+  const bubble = walkerBubble(h.group, srcId, message, color);
 
   // Pre-compute cumulative distances for O(log n) interpolation
   const fwdCumDist = buildCumDist(forwardPts);
@@ -287,17 +302,7 @@ export function sendWalkerToPoint(
   glow.rotation.x = -Math.PI / 2; glow.position.y = 0.03;
   h.group.add(glow);
 
-  let bubble: any = null;
-  if (message) {
-    const bd = document.createElement('div');
-    bd.textContent = message;
-    bd.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
-      background:#f0f0e8;border:2px solid #222;padding:3px 8px;
-      border-radius:4px;box-shadow:2px 3px 0 #000;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;`;
-    bubble = new rt.CSS2DObject(bd);
-    bubble.position.set(0, 2.4, 0);
-    h.group.add(bubble);
-  }
+  const bubble = walkerBubble(h.group, srcId, message, color);
 
   // Visible paper-note prop in the right hand for report deliveries. Folded
   // letter look — white sheet, bottom strip tinted with the sender's flow
@@ -397,30 +402,11 @@ export function sendCommuteWalker(opts: CommuteWalkerOpts): void {
     const srcDoorX = (srcRoom as any).doorX ?? srcRoom.cx;
     const srcDoorZ = (srcRoom as any).doorCZ ?? srcRoom.doorZ;
     pts.push(...exitViaDoor(desk, srcRoom));
+    // Shortest way along the corridors (pathfinding.ts:corridorRoute) — never
+    // a diagonal between corridor nodes that don't share a straight segment.
     const srcCorrNode = nearestCorridorNode({ x: srcDoorX, y: 0, z: srcDoorZ }, opts.corridorGrid);
-    pts.push({ ...srcCorrNode });
-
-    // Traverse corridors with proper H/V routing — never jump diagonally
-    // between corridor nodes that don't share a straight segment.
-    const tgtCorrNode = nearestCorridorNode(opts.exitPoint, opts.corridorGrid);
-    if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1 || Math.abs(srcCorrNode.z - tgtCorrNode.z) > 1) {
-      const srcHZ = nearestHCorrZ(srcCorrNode.z, opts.corridorGrid);
-      const tgtHZ = nearestHCorrZ(tgtCorrNode.z, opts.corridorGrid);
-      if (Math.abs(srcCorrNode.x - tgtCorrNode.x) > 1) {
-        const vCorrX = nearestVCorrXBetween(srcCorrNode.x, tgtCorrNode.x, opts.corridorGrid);
-        pts.push({ x: vCorrX, y: 0, z: srcHZ });
-        if (Math.abs(srcHZ - tgtHZ) > 1) {
-          pts.push({ x: vCorrX, y: 0, z: tgtHZ });
-        }
-        pts.push({ x: tgtCorrNode.x, y: 0, z: tgtHZ });
-      } else if (Math.abs(srcHZ - tgtHZ) > 1) {
-        const vCorrX = nearestVCorrX(srcCorrNode.x, opts.corridorGrid);
-        pts.push({ x: vCorrX, y: 0, z: srcHZ });
-        pts.push({ x: vCorrX, y: 0, z: tgtHZ });
-        pts.push({ x: tgtCorrNode.x, y: 0, z: tgtHZ });
-      }
-    }
-    pts.push({ ...tgtCorrNode });
+    const tgtCorrNode = nearestCorridorNode(opts.exitPoint, opts.corridorGrid, srcCorrNode);
+    pts.push(...corridorRoute(srcCorrNode, tgtCorrNode, opts.corridorGrid));
   }
   pts.push({ ...opts.exitPoint });
 

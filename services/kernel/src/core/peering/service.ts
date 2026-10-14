@@ -268,10 +268,12 @@ export class PeeringService {
   /**
    * Rebuild after something about our reachability changed (e.g. tor came up)
    * and tell the relays, so friends do not keep probing a dead address.
+   * `onionUrl` is the caller's word on the onion — the TorDaemon knows whether
+   * it is answering; the hostname file outlives the daemon.
    */
-  refresh(): void {
-    const tor = detectTor({ dataDir: this.opts.dataDir });
-    this.descriptor = this.buildOwn(tor.onionUrl);
+  refresh(onionUrl?: string): void {
+    const onion = onionUrl ?? detectTor({ dataDir: this.opts.dataDir }).onionUrl;
+    this.descriptor = this.buildOwn(onion);
     this.signed = signDescriptor(this.identity, this.descriptor);
     void this.announcer?.publishOnce();
   }

@@ -30,6 +30,8 @@ import { agentVariables } from "./agent-fields.js";
 import { isoNow, slugify } from "../../core/helpers.js";
 import { HttpError } from "../../sdk/http-error.js";
 import { hostPathReachable } from "../../core/host-paths.js";
+import { parsePanelSpec } from "../panels/spec.js";
+import { PanelStore } from "../panels/store.js";
 
 // Canonical slugify now lives in core/helpers. Re-export it here so existing
 // importers of `office-kit`'s slugify (tests, agents tools/rpc/store) keep
@@ -103,6 +105,8 @@ export interface OfficeDefinition {
   /** JSON schema of the settings this office keeps per project it serves
    *  (src/modules/projects office_project_schemas). */
   projectSettingsSchema?: Record<string, unknown>;
+  /** Office panels (panels.v1, src/modules/panels/spec.ts). Validated against this office's agents when applied. */
+  panels?: unknown;
   /** Room theme and agent buttons. Default 'general'. */
   kind?: FlowKind;
   /** How repo agents run when `repo` is set. Default 'host', the historical posture. */
@@ -332,6 +336,7 @@ export function officeDefinitionFromJson(raw: unknown): OfficeDefinition {
       o.project_settings_schema && typeof o.project_settings_schema === "object" && !Array.isArray(o.project_settings_schema)
         ? (o.project_settings_schema as Record<string, unknown>)
         : undefined,
+    panels: o.panels && typeof o.panels === "object" && !Array.isArray(o.panels) ? o.panels : undefined,
     agents,
     cron: cronValid
       ? {
@@ -635,6 +640,26 @@ export function materializeOffice(
       }
     } else {
       report.warnings.push(`repo: no repos service available — register ${repoPath} later via kernel_repos_register`);
+    }
+  }
+
+  // 5) Panels ──────────────────────────────────────────────────
+  // The manifest is the source of truth: no block, or a block that fails
+  // validation, leaves the office without panels rather than with old ones.
+  if (def.panels === undefined) {
+    try { new PanelStore(db).deleteSpec(flow.id); } catch { /* panels module absent */ }
+  } else {
+    const slugs = (db.prepare("SELECT slug FROM agents WHERE flow_id = ?").all(flow.id) as Array<{ slug: string }>).map((r) => r.slug);
+    const parsed = parsePanelSpec(def.panels, { agentSlugs: slugs });
+    if (!parsed.ok) {
+      report.warnings.push(`panels not stored: ${parsed.error}`);
+      try { new PanelStore(db).deleteSpec(flow.id); } catch { /* panels module absent */ }
+    } else {
+      try {
+        new PanelStore(db).saveSpec(flow.id, parsed.spec, repoPath ?? "");
+      } catch (err) {
+        report.warnings.push(`panels not stored: ${err instanceof Error ? err.message : String(err)}`);
+      }
     }
   }
 

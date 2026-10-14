@@ -325,6 +325,14 @@ function priceFor(prices: Map<string, Price>, slug: string, model: string): Pric
   return prices.get(`${slug}\0${m}`) ?? prices.get(`${slug}\0${m.replace(/-\d{4}-?\d{2}-?\d{2}$/, "")}`);
 }
 
+/** USD for this many tokens at the stored price of slug/model; null when no price is known. */
+export function estimateCostUsd(slug: string, model: string, inputTokens: number, outputTokens: number): number | null {
+  const currentDb = db();
+  if (!currentDb) return null;
+  const p = priceFor(loadPrices(currentDb), slug, model);
+  return p ? (inputTokens * p.inputPerMTok + outputTokens * p.outputPerMTok) / 1e6 : null;
+}
+
 export function usage(q: UsageQuery = {}): UsageRow[] {
   const currentDb = db();
   if (!currentDb) return [];

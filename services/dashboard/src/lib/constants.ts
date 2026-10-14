@@ -93,6 +93,8 @@ export const NAV_GROUPS: NavGroup[] = [
 		// Los items con `parent` quedan fuera de la barra de grupo por el
 		// filtro de `subViews` en +layout.svelte y los recoge `railViewsFor`.
 		views: [
+			// First, so the System icon lands here: how this Kernl is doing, and a way into every part of it.
+			{ id: 'control', label: 'Overview', icon: '💚', order: 5 },
 			{ id: 'settings', label: 'Settings', icon: '⚙️', order: 10 },
 			{ id: 'system', label: 'System', icon: '🖥️', order: 20 },
 			{ id: 'extensions', label: 'Extensions', icon: '🧩', order: 30 },
@@ -118,12 +120,12 @@ export const SUB_TAB_LABELS: Record<string, string> = {
 	wellness: 'Overview', health: 'Health', training: 'Training', nutrition: 'Nutrition',
 	// `skills` has no tab any more — it redirects into /extensions?tab=skills.
 	// The label stays so the breadcrumb reads sanely during the redirect.
-	'ai-overview': 'Overview', agents: 'Agents', offices: 'Offices', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', workspace: 'Workspace', skills: 'Skills', marketplace: 'Store',
+	'ai-overview': 'Overview', agents: 'Agents', offices: 'Offices', 'agents-flow': '3D', autogenesis: 'Evolutions', ranks: 'Ranks', workspace: 'Workspace', bench: 'Bench', skills: 'Skills', marketplace: 'Store',
 	cinema: 'Cinema',
 	books: 'Books',
 	music: 'Music',
 	repos: 'Repos',
-	settings: 'Settings', system: 'System', extensions: 'Extensions', notifications: 'Notifications',
+	control: 'Overview', settings: 'Settings', system: 'System', extensions: 'Extensions', notifications: 'Notifications',
 	// Rutas de sistema fuera de la tab bar, alcanzadas desde el rail de /system:
 	architecture: 'Arch 3D', friends: 'Friends',
 	'api-registry': 'API Registry', 'rss-registry': 'RSS Feeds'

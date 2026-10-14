@@ -37,10 +37,22 @@
 #                "if set, append" interpolation).
 # KERNL_FIX_ROOT optional. Where those worktrees go. Must be inside
 #                KERNL_PROJECTS_ROOT (writable) and outside KERNL_FS_ROOT.
+#
+# ── Claude login relay ─────────────────────────────────────────────────────
+# "Connect with my subscription" sends the browser back to localhost:<port> on
+# THIS machine, while the CLI waiting for it listens inside the container: in
+# a plain Docker stack the user has to paste that dead address into the
+# dashboard. claude-login-relay listens on that port on the host (it runs with
+# the host's network) and hands the redirect to the kernel itself. It needs
+# Linux: on Docker Desktop the host network is a VM's, not the browser's. The
+# paste keeps working with or without it.
 
 services:
   kernel:
     environment:
+      # Where the kernel leaves the CLI's approval link while a sign-in waits,
+      # on the data volume the relay below reads.
+      KERNL_CLAUDE_LOGIN_DIR: /app/data/claude-login
       FS_COMMANDER_ALLOWED_ROOTS: ${KERNL_FS_ROOT:?set KERNL_FS_ROOT in .env to the folder the Filesystem Commander may browse}
       KERNL_REPO_PATH: ${KERNL_REPO_PATH:-}
       KERNL_FIX_ROOT: ${KERNL_FIX_ROOT:-}
@@ -63,3 +75,18 @@ services:
       # the same file or each refresh invalidates the other's session.
       - ${HOST_HOME:-${HOME}}/.claude:${HOST_HOME:-${HOME}}/.claude
       - ${HOST_HOME:-${HOME}}/.claude.json:${HOST_HOME:-${HOME}}/.claude.json
+
+  claude-login-relay:
+    image: oven/bun:1
+    container_name: kernl-public-claude-login-relay
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      KERNL_CLAUDE_LOGIN_DIR: /kernl-data/claude-login
+      KERNL_TOKEN_FILE: /kernl-data/.kernel-auth-token
+      # The dashboard's published port: its nginx proxies /api to the kernel.
+      KERNL_API: http://127.0.0.1:3086
+    volumes:
+      - kernel-data:/kernl-data:ro
+      - ./services/claude-login-relay/relay.ts:/relay/relay.ts:ro
+    command: ["bun", "/relay/relay.ts"]

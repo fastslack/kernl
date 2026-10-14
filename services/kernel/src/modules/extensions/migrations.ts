@@ -102,4 +102,22 @@ export const extensionsMigrations: Migration[] = [
         ADD COLUMN install_receipt_json TEXT NOT NULL DEFAULT '{}';
     `,
   },
+  {
+    // Edition (personal / business) state. A key/value table of its own, not
+    // app_settings: ConfigService mirrors those into .env.
+    //
+    // `legacy` marks a kernel that already had extensions when this ran — an
+    // install from before editions existed. Picking an edition there must only
+    // ever add, never turn off what is in use. On a fresh database this runs
+    // before the built-in seeder, the table is empty, and no marker is written.
+    version: 4,
+    sql: `
+      CREATE TABLE IF NOT EXISTS edition_state (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL DEFAULT ''
+      );
+      INSERT OR IGNORE INTO edition_state (key, value)
+        SELECT 'legacy', '1' WHERE EXISTS (SELECT 1 FROM installed_extensions);
+    `,
+  },
 ];

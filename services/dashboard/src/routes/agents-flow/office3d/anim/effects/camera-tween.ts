@@ -1,10 +1,11 @@
 /**
  * Camera tween — eases controls.target and camera.position toward a destination.
  *
- * Mirrors the inline tween that lived in AgentWorld3D.svelte's animate() loop:
- * ease-out cubic over ~0.33s, with separate damping factors for target (0.15)
- * and position (0.10) so the focus point converges slightly faster than the
- * camera body — same visual feel the original code had.
+ * Ease-out cubic from wherever the camera is on the tween's first frame to the
+ * destination, landing on it exactly. (It used to nudge 10–15% of the remaining
+ * distance per frame and stop after ~0.33s: the camera never arrived — 20% short
+ * at 60 fps, 39% at 30 — and target and body stopped at different fractions, so
+ * the view ended off-centre and at the wrong angle.)
  */
 
 import type { Ticker } from '../registry.js';
@@ -15,12 +16,8 @@ export interface CameraTweenOpts {
   target: { x: number; y: number; z: number };
   /** Desired camera position in world space. */
   position: { x: number; y: number; z: number };
-  /** Tween convergence speed — `progress += deltaSec * convergeRate`. Default 3 = ~0.33s. */
+  /** Tween speed — `progress += deltaSec * convergeRate`. Default 2 = 0.5s. */
   convergeRate?: number;
-  /** Damping factor applied to the target each frame. Default 0.15. */
-  targetDamping?: number;
-  /** Damping factor applied to the camera body each frame. Default 0.10. */
-  positionDamping?: number;
   /** Tag for `registry.cancelByTag()`. Default `'camera-tween'`. */
   tag?: string;
 }
@@ -56,26 +53,36 @@ export function cameraTween(
     return { tag, update: () => true };
   }
 
-  const convergeRate = opts.convergeRate ?? 3;
-  const targetDamping = opts.targetDamping ?? 0.15;
-  const positionDamping = opts.positionDamping ?? 0.10;
+  const convergeRate = opts.convergeRate ?? 2;
   let progress = 0;
+  let from: { tx: number; ty: number; tz: number; px: number; py: number; pz: number } | null = null;
 
   return {
     tag,
     update(deltaSec: number): boolean {
+      from ??= {
+        tx: controls.target.x, ty: controls.target.y, tz: controls.target.z,
+        px: camera.position.x, py: camera.position.y, pz: camera.position.z,
+      };
       progress += deltaSec * convergeRate;
       const t = Math.min(progress, 1);
-      const ease = easeOutCubic(t);
-
-      controls.target.x += (opts.target.x - controls.target.x) * ease * targetDamping;
-      controls.target.y += (opts.target.y - controls.target.y) * ease * targetDamping;
-      controls.target.z += (opts.target.z - controls.target.z) * ease * targetDamping;
-      camera.position.x += (opts.position.x - camera.position.x) * ease * positionDamping;
-      camera.position.y += (opts.position.y - camera.position.y) * ease * positionDamping;
-      camera.position.z += (opts.position.z - camera.position.z) * ease * positionDamping;
-
-      return t >= 1;
+      if (t >= 1) {
+        controls.target.x = opts.target.x;
+        controls.target.y = opts.target.y;
+        controls.target.z = opts.target.z;
+        camera.position.x = opts.position.x;
+        camera.position.y = opts.position.y;
+        camera.position.z = opts.position.z;
+        return true;
+      }
+      const e = easeOutCubic(t);
+      controls.target.x = from.tx + (opts.target.x - from.tx) * e;
+      controls.target.y = from.ty + (opts.target.y - from.ty) * e;
+      controls.target.z = from.tz + (opts.target.z - from.tz) * e;
+      camera.position.x = from.px + (opts.position.x - from.px) * e;
+      camera.position.y = from.py + (opts.position.y - from.py) * e;
+      camera.position.z = from.pz + (opts.position.z - from.pz) * e;
+      return false;
     },
   };
 }

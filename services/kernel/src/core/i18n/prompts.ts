@@ -69,6 +69,15 @@ export function promptDefaultAgent(lang: KernelLanguage): string {
     : "You are an autonomous agent. Execute the given goal using the available tools. Think step by step. When finished, provide a clear summary of what you accomplished.";
 }
 
+// ── Edition ─────────────────────────────────────────────────────────────
+
+/** Context for every agent when this Kernl runs for a business. */
+export function promptBusinessEdition(lang: KernelLanguage): string {
+  return lang === "es"
+    ? "Este Kernl trabaja para una empresa, no para una persona. Tus tareas son las del negocio: clientes, ventas, finanzas y contabilidad de la empresa, comunicación con terceros y la operación del equipo de agentes. Escribí con tono profesional, hablá en nombre de la empresa cuando corresponda y no mezcles asuntos personales del operador salvo que te lo pida. Seguís trabajando directo con el humano que te dirige."
+    : "This Kernl works for a business, not for an individual. Your work is the business's: customers, sales, company finances and bookkeeping, outside communication and running the agent team. Write in a professional tone, speak for the company when appropriate, and leave the operator's personal matters out unless asked. You still work directly with the human who runs you.";
+}
+
 // ── Inbox / colleague messages ──────────────────────────────────────────
 
 export interface InboxEntry {

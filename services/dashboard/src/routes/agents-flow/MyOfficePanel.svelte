@@ -13,6 +13,8 @@
   import { isLlmConfigError, LLM_SETTINGS_HREF } from '$lib/llm-error.js';
   import { fmtRelTime } from '$lib/display-format.js';
   import { formatRunOutput } from '$lib/run-format.js';
+  import { extractChoices } from '$lib/chat-choices.js';
+  import { pendingChatReply } from '$lib/chat-handoff.js';
   import { urlForOption, buildFixerGoal } from '$lib/agent-helpers.js';
   import { t } from '$lib/i18n/index.js';
   import { confirm as confirmDialog } from '$shared/feedback';
@@ -434,6 +436,17 @@
 
   $: if (openReport?.runId) { loadFullReport(openReport.runId); } else { fullReportText = null; }
   $: displayReportText = (fullReportText ?? openReport?.text ?? '');
+  // A reply that ends in a ```choices block asks the operator to pick: the pop-up
+  // shows the buttons instead of the raw JSON, and a pick goes to the agent's chat.
+  $: reportParts = extractChoices(displayReportText);
+  function answerReportChoice(option: string) {
+    if (!openReport) return;
+    pendingChatReply.set({ agentId: openReport.agentId, text: option });
+    selectAgent(openReport.agentId);
+    showMyOfficePanel = false;
+    openReport = null;
+    focusAgent();
+  }
 </script>
 
 <!-- The chief's office -->
@@ -792,7 +805,19 @@
         {#if fullReportLoading && !fullReportText}
           <div style="color:#6a6f82;font:500 11px 'JetBrains Mono',monospace">{$t('office.chief.loading_report')}</div>
         {/if}
-        {@html formatRunOutput(displayReportText)}
+        {@html formatRunOutput(reportParts.body)}
+        {#if reportParts.choices}
+          <div class="rm-choices">
+            {#if reportParts.choices.question}<div class="rm-choices-q">{reportParts.choices.question}</div>{/if}
+            <div class="rm-choices-opts">
+              {#each reportParts.choices.options as opt, j (j)}
+                <button class="rm-choice" on:click|stopPropagation={() => answerReportChoice(opt)}>
+                  <span class="rm-choice-idx">{j + 1}</span><span class="rm-choice-lbl">{opt}</span>
+                </button>
+              {/each}
+            </div>
+          </div>
+        {/if}
       </div>
       <div class="rm-actions">
         <!-- Desestimar: drops this report (and its repeats, for a failure)
@@ -1280,4 +1305,25 @@
   @keyframes mo-shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
   .mo-skel-w30{width:30%}.mo-skel-w60{width:60%}.mo-skel-w90{width:90%}
   @media (prefers-reduced-motion: reduce){ .mo-spin, .mo-skel-line, .mo-skel-card{animation:none} }
+  /* Same look as the chat's choice buttons (ChatTab .chat-choices). */
+  .rm-choices{
+    margin-top:10px;padding:10px 12px;border-radius:8px;
+    background:linear-gradient(180deg, rgba(240,184,116,.08) 0%, rgba(240,184,116,.02) 100%);
+    border:1px solid rgba(240,184,116,.25);border-left:3px solid #f0b874;
+  }
+  .rm-choices-q{font:600 13px/1.45 'Manrope',sans-serif;color:#e7e9f4;margin:0 0 8px}
+  .rm-choices-opts{display:grid;grid-template-columns:1fr 1fr;gap:5px}
+  .rm-choice{
+    display:flex;align-items:center;gap:8px;min-height:36px;
+    padding:8px 10px;background:#161827;color:#cbd0e8;
+    border:1px solid #2a2f4a;border-radius:5px;
+    font:600 11px/1.35 'Manrope',sans-serif;cursor:pointer;transition:all .12s;text-align:left;
+  }
+  .rm-choice:hover,.rm-choice:focus-visible{background:#252840;border-color:#f0b874;color:#f4e1a3}
+  .rm-choice-idx{
+    flex-shrink:0;width:20px;height:20px;border-radius:3px;background:#0a0b14;
+    display:inline-flex;align-items:center;justify-content:center;
+    font:700 10px 'JetBrains Mono',monospace;color:#f0b874;
+  }
+  .rm-choice-lbl{flex:1;word-break:break-word}
 </style>

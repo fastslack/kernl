@@ -21,6 +21,9 @@ export interface ModelQuirks {
   extraBody?: Record<string, unknown>;
   /** Used only when the caller did not set one. */
   temperature?: number;
+  /** The provider fixes sampling for this model and rejects other values:
+   *  drop the caller's temperature and top_p. */
+  omitSampling?: boolean;
   topP?: number;
 }
 
@@ -36,6 +39,9 @@ export interface ProviderCatalogEntry {
   baseUrlEditable?: boolean;
   regions?: Array<{ id: string; label: Localized; baseUrl: string }>;
   needsKey: boolean;
+  /** No key required, but the server may ask for one (a self-hosted vLLM, a
+   *  proxy). The form offers the field and the key is sent when given. */
+  optionalKey?: boolean;
   keyUrl?: string;
   /** Regex source for a soft format warning. Never blocks a key. */
   keyHint?: string;
@@ -48,7 +54,9 @@ export interface ProviderCatalogEntry {
   quirks?: Record<string, ModelQuirks>;
   /** How many tools a request may carry before quality or the API gives out. */
   toolCap: number;
-  localProbe?: { hosts: string[]; port: number; path: string };
+  /** Where Detect looks. `ports`, when set, replaces `port`: a generic server
+   *  can be llama.cpp (8080), vLLM (8000) or Jan (1337). */
+  localProbe?: { hosts: string[]; port: number; ports?: number[]; path: string };
   docsUrl?: string;
   /** Overrides for the generic provider's defaults. `vision` / `pdf` / `video`
    *  also decide which attachments go to the model natively (input-caps.ts). */
@@ -163,6 +171,52 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     docsUrl: "https://openrouter.ai/docs/quickstart",
   },
   {
+    slug: "cerebras", aliases: [], name: "Cerebras", group: "free",
+    kind: "openai-compatible", baseUrl: "https://api.cerebras.ai/v1",
+    needsKey: true, keyUrl: "https://cloud.cerebras.ai",
+    logo: "/api/extensions/brand/cerebras.svg",
+    blurb: {
+      es: "Inferencia muy rápida de modelos abiertos, con un plan de prueba gratis.",
+      en: "Very fast inference of open models, with a free trial plan.",
+    },
+    tag: { es: "gratis · límites chicos", en: "free · small limits" },
+    pricing: {
+      es: "Plan de prueba gratis: 5 pedidos por minuto y 1 millón de tokens por día por modelo.",
+      en: "Free trial: 5 requests per minute and 1 million tokens per day per model.",
+    },
+    steps: {
+      es: ["Creá tu cuenta en cloud.cerebras.ai", "Abrí API Keys en la barra de la izquierda y creá una", "Copiá la key y pegala acá"],
+      en: ["Create your account at cloud.cerebras.ai", "Open API Keys in the left bar and create one", "Copy the key and paste it here"],
+    },
+    models: { recommended: "qwen-3.8-27b", fast: "gpt-oss-120b" },
+    toolCap: 64,
+    capabilities: { contextWindow: 64_000 },
+    docsUrl: "https://inference-docs.cerebras.ai/resources/openai",
+  },
+  {
+    slug: "mistral", aliases: [], name: "Mistral", group: "free",
+    kind: "openai-compatible", baseUrl: "https://api.mistral.ai/v1",
+    needsKey: true, keyUrl: "https://console.mistral.ai",
+    logo: "/api/extensions/brand/mistral.svg",
+    blurb: {
+      es: "Los modelos de Mistral, con acceso gratis a la API sin tarjeta.",
+      en: "Mistral's models, with free API access and no card.",
+    },
+    tag: { es: "gratis · sin tarjeta", en: "free · no card" },
+    pricing: {
+      es: "Modo gratis sin tarjeta, con límites de uso. Mistral puede usar lo que mandás en el modo gratis para entrenar sus modelos.",
+      en: "Free mode with no card, with usage limits. Mistral may use what you send on the free mode to train its models.",
+    },
+    steps: {
+      es: ["Creá tu cuenta en console.mistral.ai", "Abrí API Keys y tocá “Create new key”", "Copiá la key (se muestra una sola vez) y pegala acá"],
+      en: ["Create your account at console.mistral.ai", "Open API Keys and click “Create new key”", "Copy the key (it is shown only once) and paste it here"],
+    },
+    models: { recommended: "mistral-medium-latest", fast: "mistral-small-latest" },
+    toolCap: 64,
+    capabilities: { contextWindow: 256_000 },
+    docsUrl: "https://docs.mistral.ai/api/",
+  },
+  {
     slug: "ollama", aliases: [], name: "Ollama", group: "local",
     kind: "openai-compatible", baseUrl: "http://localhost:11434/v1", baseUrlEditable: true,
     needsKey: false, logo: "/api/extensions/brand/ollama.svg",
@@ -200,6 +254,24 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     toolCap: 16,
     localProbe: { hosts: ["127.0.0.1", "host.docker.internal"], port: 1234, path: "/v1" },
     docsUrl: "https://lmstudio.ai/docs/app/api/endpoints/openai",
+  },
+  {
+    slug: "openai-compatible", aliases: ["custom-openai"], name: "OpenAI-compatible server", group: "local",
+    kind: "openai-compatible", baseUrl: "http://localhost:8080/v1", baseUrlEditable: true,
+    needsKey: false, optionalKey: true, logo: "/api/extensions/brand/openai-compatible.svg",
+    blurb: {
+      es: "Cualquier servidor que hable la API de OpenAI: llama.cpp, vLLM, Jan, LocalAI o un proxy.",
+      en: "Any server that speaks the OpenAI API: llama.cpp, vLLM, Jan, LocalAI or a proxy.",
+    },
+    tag: { es: "local · tu servidor", en: "local · your server" },
+    pricing: { es: "Gratis si corre en tu máquina o en tu red.", en: "Free when it runs on your machine or network." },
+    steps: {
+      es: ["Arrancá tu servidor con su API compatible con OpenAI", "Escribí su dirección (termina en /v1) y la key si te la pide", "Tocá Detectar o Conectar"],
+      en: ["Start your server with its OpenAI-compatible API", "Write its address (it ends in /v1) and the key if it asks for one", "Click Detect or Connect"],
+    },
+    models: {},
+    toolCap: 16,
+    localProbe: { hosts: ["localhost", "host.docker.internal"], port: 8080, ports: [8080, 8000, 1337], path: "/v1" },
   },
   {
     slug: "claude", aliases: ["anthropic"], name: "Anthropic", group: "paid",
@@ -306,6 +378,168 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     docsUrl: "https://platform.minimax.io/docs/api-reference/text-openai-api",
   },
   {
+    slug: "together", aliases: ["together-ai"], name: "Together AI", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://api.together.ai/v1",
+    needsKey: true, keyUrl: "https://api.together.ai/settings/projects/~current/api-keys",
+    logo: "/api/extensions/brand/together.svg",
+    blurb: {
+      es: "Cientos de modelos abiertos (GLM, Kimi, gpt-oss) con una sola key.",
+      en: "Hundreds of open models (GLM, Kimi, gpt-oss) with one key.",
+    },
+    tag: { es: "pago por uso", en: "pay as you go" },
+    pricing: { es: "Precargás saldo; la primera compra mínima es de USD 15.", en: "Prepaid credit; the first purchase is at least USD 15." },
+    steps: {
+      es: ["Creá tu cuenta en together.ai y cargá saldo", "Abrí Settings → API Keys y tocá “Create key”", "Copiá la key (se muestra una sola vez) y pegala acá"],
+      en: ["Create your account at together.ai and add credit", "Open Settings → API Keys and click “Create key”", "Copy the key (it is shown only once) and paste it here"],
+    },
+    models: { recommended: "zai-org/GLM-5.3", fast: "openai/gpt-oss-120b", candidates: ["zai-org/GLM-5.3-Flash", "moonshotai/Kimi-K3"] },
+    toolCap: 64,
+    capabilities: { contextWindow: 128_000 },
+    docsUrl: "https://docs.together.ai/docs/openai-api-compatibility",
+  },
+  {
+    slug: "fireworks", aliases: ["fireworks-ai"], name: "Fireworks AI", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://api.fireworks.ai/inference/v1",
+    needsKey: true, keyUrl: "https://app.fireworks.ai/settings/users/api-keys",
+    logo: "/api/extensions/brand/fireworks.svg",
+    blurb: {
+      es: "Modelos abiertos rápidos y baratos, con créditos de prueba.",
+      en: "Fast, cheap open models, with trial credits.",
+    },
+    tag: { es: "pago por uso", en: "pay as you go" },
+    pricing: {
+      es: "Pagás por uso. Sin medio de pago tenés créditos de prueba y 10 pedidos por minuto.",
+      en: "Pay per use. Without a payment method you get trial credits and 10 requests per minute.",
+    },
+    steps: {
+      es: ["Creá tu cuenta en fireworks.ai", "Abrí Settings → API Keys y tocá “Create API key”", "Copiá la key y pegala acá"],
+      en: ["Create your account at fireworks.ai", "Open Settings → API Keys and click “Create API key”", "Copy the key and paste it here"],
+    },
+    models: {
+      recommended: "accounts/fireworks/models/glm-5p3",
+      fast: "accounts/fireworks/models/glm-5p3-flash",
+      candidates: ["accounts/fireworks/models/gpt-oss-120b"],
+    },
+    toolCap: 64,
+    capabilities: { contextWindow: 128_000 },
+    docsUrl: "https://docs.fireworks.ai/tools-sdks/openai-compatibility",
+  },
+  {
+    slug: "moonshot", aliases: ["kimi"], name: "Moonshot (Kimi)", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://api.moonshot.ai/v1",
+    regions: [
+      { id: "global", label: { es: "Internacional", en: "International" }, baseUrl: "https://api.moonshot.ai/v1" },
+      { id: "china", label: { es: "China", en: "China" }, baseUrl: "https://api.moonshot.cn/v1" },
+    ],
+    needsKey: true, keyUrl: "https://platform.kimi.ai/console/api-keys",
+    logo: "/api/extensions/brand/moonshot.svg",
+    blurb: {
+      es: "Los modelos Kimi, fuertes en agentes y código, con contexto largo.",
+      en: "Kimi models, strong at agents and code, with a long context.",
+    },
+    tag: { es: "pago por uso", en: "pay as you go" },
+    pricing: {
+      es: "Precargás saldo desde USD 1. Con la primera recarga tenés 3 pedidos por minuto.",
+      en: "Prepaid credit from USD 1. The first top-up allows 3 requests per minute.",
+    },
+    steps: {
+      es: ["Entrá a platform.kimi.ai y cargá saldo", "Abrí API Keys y creá una", "Copiá la key y pegala acá"],
+      en: ["Open platform.kimi.ai and add credit", "Open API Keys and create one", "Copy the key and paste it here"],
+    },
+    // K3 always reasons and its reasoning must be sent back in a tool loop,
+    // which this adapter does not do yet: K2.6 is the safer default.
+    models: { recommended: "kimi-k2.6", candidates: ["kimi-k3"] },
+    // Kimi fixes its own sampling; any other temperature is rejected.
+    quirks: { "kimi-k2.6": { omitSampling: true }, "kimi-k3": { omitSampling: true } },
+    toolCap: 64,
+    capabilities: { contextWindow: 256_000 },
+    docsUrl: "https://platform.kimi.ai/docs/api/chat",
+  },
+  {
+    slug: "qwen", aliases: ["dashscope", "alibaba"], name: "Qwen (Alibaba Cloud)", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    regions: [
+      { id: "singapore", label: { es: "Internacional (Singapur)", en: "International (Singapore)" }, baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1" },
+      { id: "china", label: { es: "China (Pekín)", en: "China (Beijing)" }, baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1" },
+    ],
+    needsKey: true, keyUrl: "https://modelstudio.console.alibabacloud.com/ap-southeast-1/settings/api-key", keyHint: "^sk-",
+    logo: "/api/extensions/brand/qwen.svg",
+    blurb: {
+      es: "Los modelos Qwen de Alibaba Cloud, con una cuota gratis para empezar.",
+      en: "Alibaba Cloud's Qwen models, with a free quota to start.",
+    },
+    tag: { es: "pago por uso · cuota gratis", en: "pay as you go · free quota" },
+    pricing: {
+      es: "En la región Singapur, 1 millón de tokens gratis por modelo durante 90 días. Después pagás por uso.",
+      en: "In the Singapore region, 1 million free tokens per model for 90 days. Then pay per use.",
+    },
+    steps: {
+      es: ["Entrá a Alibaba Cloud Model Studio y elegí la región arriba a la derecha", "Abrí API Key y tocá “Create API Key”", "Copiá la key (empieza con sk-) y pegala acá, con la misma región"],
+      en: ["Open Alibaba Cloud Model Studio and pick the region at the top right", "Open API Key and click “Create API Key”", "Copy the key (it starts with sk-) and paste it here, with the same region"],
+    },
+    models: { recommended: "qwen3.8-max", fast: "qwen3.8-flash", candidates: ["qwen3.7-plus"] },
+    toolCap: 64,
+    capabilities: { contextWindow: 128_000 },
+    docsUrl: "https://www.alibabacloud.com/help/en/model-studio/compatibility-of-openai-with-dashscope",
+  },
+  {
+    slug: "zai", aliases: ["glm", "zhipu"], name: "Z.ai (GLM)", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://api.z.ai/api/paas/v4",
+    regions: [
+      { id: "global", label: { es: "Internacional", en: "International" }, baseUrl: "https://api.z.ai/api/paas/v4" },
+      { id: "china", label: { es: "China", en: "China" }, baseUrl: "https://open.bigmodel.cn/api/paas/v4" },
+    ],
+    needsKey: true, keyUrl: "https://z.ai/manage-apikey/apikey-list",
+    logo: "/api/extensions/brand/zai.svg",
+    blurb: {
+      es: "Los modelos GLM de Z.ai, buenos para agentes, y algunos Flash gratis.",
+      en: "Z.ai's GLM models, good at agents, and some free Flash ones.",
+    },
+    tag: { es: "pago por uso · Flash gratis", en: "pay as you go · free Flash" },
+    pricing: {
+      es: "Pagás por uso. Los modelos GLM-4.7-Flash y GLM-4.5-Flash son gratis.",
+      en: "Pay per use. GLM-4.7-Flash and GLM-4.5-Flash are free.",
+    },
+    steps: {
+      es: ["Creá tu cuenta en z.ai", "Abrí la página de API keys y creá una", "Copiá la key y pegala acá"],
+      en: ["Create your account at z.ai", "Open the API keys page and create one", "Copy the key and paste it here"],
+    },
+    models: { recommended: "glm-5.3", fast: "glm-5.3-flash", candidates: ["glm-4.7-flash"] },
+    toolCap: 64,
+    capabilities: { contextWindow: 200_000 },
+    docsUrl: "https://docs.z.ai/guides/overview/quick-start",
+  },
+  {
+    slug: "xiaomi", aliases: ["mimo", "xiaomi-mimo"], name: "Xiaomi MiMo", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://api.xiaomimimo.com/v1",
+    // Token Plan keys (tp-…) only work on the Token Plan servers, not here.
+    needsKey: true, keyUrl: "https://platform.xiaomimimo.com/#/console/api-keys", keyHint: "^sk-",
+    logo: "/api/extensions/brand/xiaomi.svg",
+    blurb: {
+      es: "Los modelos MiMo de Xiaomi, baratos, con contexto de un millón de tokens.",
+      en: "Xiaomi's MiMo models, cheap, with a one-million-token context.",
+    },
+    tag: { es: "pago por uso · barato", en: "pay as you go · cheap" },
+    pricing: {
+      es: "Pagás por uso, con precios bajos. Las keys del Token Plan (tp-…) no sirven acá.",
+      en: "Pay per use, at low prices. Token Plan keys (tp-…) don't work here.",
+    },
+    steps: {
+      es: ["Creá tu cuenta en platform.xiaomimimo.com y cargá saldo", "Abrí API Keys y creá una", "Copiá la key (empieza con sk-) y pegala acá"],
+      en: ["Create your account at platform.xiaomimimo.com and add credit", "Open API Keys and create one", "Copy the key (it starts with sk-) and paste it here"],
+    },
+    models: { recommended: "mimo-v2.6-pro", fast: "mimo-v2.6-flash" },
+    // In thinking mode MiMo wants its reasoning sent back in a tool loop,
+    // which this adapter does not do yet: turn thinking off.
+    quirks: {
+      "mimo-v2.6-pro": { extraBody: { thinking: { type: "disabled" } } },
+      "mimo-v2.6-flash": { extraBody: { thinking: { type: "disabled" } } },
+    },
+    toolCap: 64,
+    capabilities: { contextWindow: 1_048_576 },
+    docsUrl: "https://mimo.mi.com/docs/en-US/quick-start/summary/first-api-call",
+  },
+  {
     slug: "claude-code", aliases: ["claude_code"], name: "Claude Code", group: "subscription",
     kind: "claude-code", baseUrl: "", needsKey: false,
     logo: "/api/extensions/brand/claude-code.svg",
@@ -380,6 +614,7 @@ export function quirksFor(slug: string, model: string): ModelQuirks | undefined 
 export function applyModelQuirks(body: Record<string, unknown>, slug: string, model: string): void {
   const quirks = quirksFor(slug, model);
   if (!quirks) return;
+  if (quirks.omitSampling) { delete body.temperature; delete body.top_p; }
   if (body.temperature === undefined && quirks.temperature !== undefined) body.temperature = quirks.temperature;
   if (quirks.topP !== undefined) body.top_p = quirks.topP;
   if (quirks.extraBody) Object.assign(body, quirks.extraBody);

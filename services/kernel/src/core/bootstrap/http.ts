@@ -18,7 +18,8 @@
  *  - Starts the McpHttpRouter (`/mcp`) when useHttp is true.
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync } from "node:fs";
+import { join } from "node:path";
 import { log } from "../logger.js";
 import type { KernelConfig } from "../config.js";
 import type { SqliteDb } from "../db/sqlite.js";
@@ -346,6 +347,15 @@ export async function initHttpAndMcp(args: {
             refreshLlmConsumers("Claude Code signed in");
           },
           captureBrowser: existsSync("/.dockerenv"),
+          // On a shared volume, the host relay (docker-compose.host.yml) sees
+          // the link and catches the redirect itself: no paste needed.
+          ...(process.env.KERNL_CLAUDE_LOGIN_DIR ? {
+            shimDir: () => {
+              const base = process.env.KERNL_CLAUDE_LOGIN_DIR!;
+              mkdirSync(base, { recursive: true });
+              return mkdtempSync(join(base, "login-"));
+            },
+          } : {}),
         }),
         browserLogin: () => !existsSync("/.dockerenv"),
       });
@@ -419,6 +429,22 @@ export async function initHttpAndMcp(args: {
         });
         if (peering) {
           void peering.start();
+          // The Tor switch on the Friends page. The kernel runs the daemon
+          // itself (bundled binary natively, apt's in Docker); its onion goes
+          // into our presence only while it is actually answering.
+          // The onion reaches only the gateway, which serves the presence card
+          // plus whatever the operator chose to publish — never the kernel.
+          const { OnionGateway } = await import("../peering/onion-gateway.js");
+          const kernelHttp = httpServer;
+          const gateway = new OnionGateway({ sqlite, dispatch: (req, res) => kernelHttp.dispatch(req, res) });
+          await gateway.start();
+          const { TorDaemon } = await import("../peering/tor-daemon.js");
+          const tor = new TorDaemon({
+            sqlite,
+            servicePort: gateway.port,
+            onChange: () => peering.refresh(tor.status().onion),
+          });
+          void tor.reconcile().catch((err) => log.warn("peering: tor failed to start", err));
           // Friend-to-friend text and files (file-lane). Started first so a
           // revocation can cancel what is in flight — but in its own try: a
           // file-lane failure must not take the friends routes down with it.
@@ -450,6 +476,12 @@ export async function initHttpAndMcp(args: {
             sealPersonaProof: (proof, friendPubkeyHex) => peering.sealPersonaProofFor(proof, friendPubkeyHex),
             refreshPersona: (npub) => void peering.refreshPersona(npub),
             instanceKeyShared: () => peering.instanceKeyIsShared(),
+            tor: {
+              status: () => tor.status(),
+              setEnabled: (on) => tor.setEnabled(on),
+              services: () => gateway.services(),
+              setService: (id, on) => gateway.setService(id, on),
+            },
           });
         }
       } catch (err) {

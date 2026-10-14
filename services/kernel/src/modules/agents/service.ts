@@ -6,6 +6,7 @@ import { newId, isoNow } from "../../core/helpers.js";
 import { buildPatch, type PatchColumn } from "../../sdk/query-helpers.js";
 import { agentModelChain } from "./agent-fields.js";
 import { log } from "../../core/logger.js";
+import { readEditionMode, type EditionMode } from "../../core/edition.js";
 import type {
   Agent,
   AgentFlow,
@@ -409,6 +410,11 @@ export class AgentService {
     const agents = this.listAgents({ active: true });
     const ranks = new Map(this.listRanks().map(r => [r.id, r]));
     return agents.map(a => ({ agent: a, rank: ranks.get(a.rank_id) ?? null }));
+  }
+
+  /** Edition this Kernl runs as (personal / business); null when not chosen yet. */
+  getEditionMode(): EditionMode | null {
+    return readEditionMode(this.db);
   }
 
   /**

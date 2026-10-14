@@ -1,15 +1,17 @@
 import { describe, it, expect } from "bun:test";
 import {
   PROVIDER_CATALOG, getCatalogEntry, canonicalSlug, fallbackOrder,
-  chatCompletionsUrl, modelsUrl, quirksFor,
+  chatCompletionsUrl, modelsUrl, quirksFor, applyModelQuirks,
 } from "../src/core/llm/provider-catalog.js";
 
 describe("provider catalog", () => {
-  it("has the 12 providers with unique slugs and aliases", () => {
+  it("has the 21 providers with unique slugs and aliases", () => {
     const slugs = PROVIDER_CATALOG.map((e) => e.slug);
     expect(slugs).toEqual([
-      "nvidia", "gemini", "groq", "openrouter", "ollama", "lmstudio",
-      "claude", "openai", "deepseek", "grok", "minimax", "claude-code",
+      "nvidia", "gemini", "groq", "openrouter", "cerebras", "mistral",
+      "ollama", "lmstudio", "openai-compatible",
+      "claude", "openai", "deepseek", "grok", "minimax", "together", "fireworks", "moonshot", "qwen", "zai", "xiaomi",
+      "claude-code",
     ]);
     const all = PROVIDER_CATALOG.flatMap((e) => [e.slug, ...e.aliases]);
     expect(new Set(all).size).toBe(all.length);
@@ -42,7 +44,7 @@ describe("provider catalog", () => {
   });
 
   it("local providers need no key and know where to probe", () => {
-    for (const slug of ["ollama", "lmstudio"]) {
+    for (const slug of ["ollama", "lmstudio", "openai-compatible"]) {
       const e = getCatalogEntry(slug)!;
       expect(e.needsKey).toBe(false);
       expect(e.localProbe?.hosts).toContain("host.docker.internal");
@@ -60,9 +62,9 @@ describe("provider catalog", () => {
 
   it("falls back recommended → free → paid → local → subscription", () => {
     expect(fallbackOrder()).toEqual([
-      "nvidia", "gemini", "groq", "openrouter",
-      "claude", "openai", "deepseek", "grok", "minimax",
-      "ollama", "lmstudio", "claude-code",
+      "nvidia", "gemini", "groq", "openrouter", "cerebras", "mistral",
+      "claude", "openai", "deepseek", "grok", "minimax", "together", "fireworks", "moonshot", "qwen", "zai", "xiaomi",
+      "ollama", "lmstudio", "openai-compatible", "claude-code",
     ]);
   });
 
@@ -80,5 +82,28 @@ describe("provider catalog", () => {
     expect(q?.temperature).toBe(1);
     expect(quirksFor("nvidia", "some/other-model")).toBeUndefined();
     expect(quirksFor("nim", "nvidia/nemotron-3-super-120b-a12b")).toBeDefined();
+  });
+
+  it("drops the caller's sampling for Kimi models, whose sampling is fixed", () => {
+    const body: Record<string, unknown> = { model: "kimi-k2.6", temperature: 0.2, top_p: 0.9 };
+    applyModelQuirks(body, "moonshot", "kimi-k2.6");
+    expect(body.temperature).toBeUndefined();
+    expect(body.top_p).toBeUndefined();
+    const other: Record<string, unknown> = { temperature: 0.2 };
+    applyModelQuirks(other, "mistral", "mistral-small-latest");
+    expect(other.temperature).toBe(0.2);
+  });
+
+  it("turns MiMo's thinking off, since its reasoning is not sent back in a tool loop", () => {
+    const body: Record<string, unknown> = { model: "mimo-v2.6-pro" };
+    applyModelQuirks(body, "xiaomi", "mimo-v2.6-pro");
+    expect(body.thinking).toEqual({ type: "disabled" });
+  });
+
+  it("resolves the new aliases", () => {
+    expect(canonicalSlug("kimi")).toBe("moonshot");
+    expect(canonicalSlug("dashscope")).toBe("qwen");
+    expect(canonicalSlug("glm")).toBe("zai");
+    expect(canonicalSlug("mimo")).toBe("xiaomi");
   });
 });

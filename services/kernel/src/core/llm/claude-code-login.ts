@@ -29,7 +29,7 @@
  */
 
 import { spawn as nodeSpawn, type ChildProcess } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeAuthEnv, stripAnsi } from "./claude-code-auth.js";
@@ -53,7 +53,11 @@ export interface ClaudeLoginDeps {
   timeoutMs?: number;
   /** Docker mode: record the approval link instead of opening a browser. */
   captureBrowser?: boolean;
-  /** Where the shim writes the link; a fresh temp dir by default. */
+  /**
+   * A fresh dir per sign-in for the shim and the link it writes; a temp dir by
+   * default. Removed when the sign-in ends, so its presence means "waiting":
+   * the host relay (docker-compose.host.yml) watches for it.
+   */
   shimDir?: () => string;
   /** Delivers the pasted redirect to the CLI. */
   fetchImpl?: typeof fetch;
@@ -108,12 +112,17 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
   let child: ChildProcess | null = null;
   let timer: ReturnType<typeof setTimeout> | null = null;
   let urlFile: string | null = null;
+  let shimDir: string | null = null;
 
   const finish = (next: ClaudeLoginStatus) => {
     if (timer) clearTimeout(timer);
     timer = null;
     child = null;
     urlFile = null;
+    if (shimDir) {
+      try { rmSync(shimDir, { recursive: true, force: true }); } catch { /* a temp dir; the OS gets it eventually */ }
+      shimDir = null;
+    }
     status = next;
   };
 
@@ -142,7 +151,8 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
 
     const env: NodeJS.ProcessEnv = { ...process.env, ...claudeAuthEnv() };
     if (deps.captureBrowser) {
-      const { shim, file } = writeShim((deps.shimDir ?? (() => mkdtempSync(join(tmpdir(), "kernl-claude-login-"))))());
+      shimDir = (deps.shimDir ?? (() => mkdtempSync(join(tmpdir(), "kernl-claude-login-"))))();
+      const { shim, file } = writeShim(shimDir);
       env.BROWSER = shim;
       urlFile = file;
     }

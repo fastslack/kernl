@@ -30,6 +30,7 @@ import { wrapExternal, type ExternalMeta } from "../../sdk/external-content.js";
 import { agentAllowedTools, agentDeniedTools, agentVariables } from "./agent-fields.js";
 import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from "./executor/model-chain.js";
 import { assembleSystemPrompt } from "./executor/system-prompt.js";
+import { goalForRun } from "./unattended-asks.js";
 import { RunRecorder } from "./executor/run-recorder.js";
 import { serializeCheckpoint, type RunCheckpoint } from "./executor/run-checkpoint.js";
 import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
@@ -150,6 +151,17 @@ export { OUTBOUND_NAME_RE } from "../../core/outbound-guard.js";
 /** A run never sees tools it must draft instead (outbox): project runs, network tools, strict mode. */
 export function filterOutboundTools<T extends { name: string; outbound?: boolean }>(tools: T[], projectId: string | null): T[] {
   return tools.filter((t) => !mustDraft(t, projectId));
+}
+
+/** `__self_improve__: false` in an agent's variables turns off its self-grading after each run. */
+function selfImproveDisabled(agent: Agent): boolean {
+  try {
+    const vars = JSON.parse(String(agent.variables || "{}")) as Record<string, unknown>;
+    // Extension seeds can only carry string variables: "false" counts too.
+    return vars.__self_improve__ === false || vars.__self_improve__ === "false";
+  } catch {
+    return false;
+  }
 }
 
 export class AgentExecutor {
@@ -298,7 +310,11 @@ export class AgentExecutor {
       }
 
       // 4. Interpolate variables in prompts
-      const { lang, effectiveGoal, effectiveSystemPrompt } = this.interpolatePrompts(agent, goal);
+      const interpolated = this.interpolatePrompts(agent, goal);
+      const { lang, effectiveSystemPrompt } = interpolated;
+      // Nobody reads an unattended run's summary: the model is told how to reach
+      // the operator (unattended-asks.ts). The recorded goal stays as asked.
+      const effectiveGoal = goalForRun(interpolated.effectiveGoal, run, agent);
 
       // 5. Build system prompt (enriched with learnings)
       const assembling = assembleSystemPrompt({
@@ -422,9 +438,9 @@ export class AgentExecutor {
       // That executor takes a goal string only: attachments ride in it as
       // text (extracted text, transcript, description).
       const attachments = runAttachments(run);
-      const goalWithAttachments = attachments.length > 0
+      const goalWithAttachments = goalForRun(attachments.length > 0
         ? `${goal}\n\n${blocksText(buildAttachmentBlocks(attachments, TEXT_ONLY_CAPS, 0))}`
-        : goal;
+        : goal, run, agent);
       const result = await this.claudeCodeExecutor.execute({
         agent, goal: goalWithAttachments, run, service, events, depth,
       });
@@ -913,6 +929,9 @@ export class AgentExecutor {
     events?: EventBus,
   ): Promise<void> {
     if (!this.evalService || !this.evalService.isEnabled()) return;
+    // Opt-out per agent (`__self_improve__: false`): no grading means no feedback,
+    // so the reflection that rewrites prompts from failed runs never starts either.
+    if (selfImproveDisabled(agent)) return;
 
     // Notify the 3D flow that grading is in progress
     events?.emit("agent:flow:auto_eval_started", {

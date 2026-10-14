@@ -20,7 +20,9 @@
 # Both need a green release rehearsal for the current dev commit, pushed:
 #   gh workflow run release.yml --ref dev     (builds all four, publishes nothing)
 #   scripts/release.sh --cask 0.2.3     after CI: point the Homebrew cask at
-#                                       the DMGs that were actually published
+#                                       the DMGs that were actually published,
+#                                       then confirm lifekernl.com serves 0.2.3
+#   scripts/release.sh --site 0.2.3     only the lifekernl.com check (retry)
 #
 # Preparing is deliberately separate from pushing. Pushing the tag publishes a
 # release to everyone; everything before it is a local commit you can undo with
@@ -45,6 +47,7 @@ EXTRA_MANIFESTS=(
 )
 CASK="packaging/homebrew/kernl.rb"
 REPO_SLUG="fastslack/kernl"
+SITE_URL="${SITE_URL:-https://lifekernl.com}"   # overridable only to test --site
 DEV_BRANCH="dev"
 STABLE_BRANCH="stable"
 
@@ -120,6 +123,47 @@ cask_mode() {
   git add "$CASK"
   git commit -q -m "Point the cask at $version"
   ok "committed — push $DEV_BRANCH when you are ready"
+
+  site_mode "$version"
+}
+
+# ── Mode: --site ─────────────────────────────────────────────────────────────
+# lifekernl.com is not redeployed per release: its Worker reads the newest
+# GitHub release on each request (cached 5 minutes) and writes it into the
+# page and the /download/<platform> redirects. That only works while the
+# Worker can reach the GitHub API — unauthenticated, Cloudflare's shared IPs
+# exhaust the 60/hour budget and the site silently keeps an old answer. So a
+# release is not done until the site says so: poll until it serves the new tag.
+site_mode() {
+  local version="$1" tag="v$1"
+  [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "version must look like 1.2.3, got '$version'"
+  command -v curl >/dev/null || die "curl is required"
+  local wait="${SITE_WAIT:-600}" deadline=$((SECONDS + ${SITE_WAIT:-600})) got=""
+
+  step "Waiting for $SITE_URL to serve $tag (up to ${wait}s)"
+  while :; do
+    got="$(curl -fsS --max-time 10 "$SITE_URL/download/latest.json?release=$version" 2>/dev/null \
+      | sed -n 's/.*"tag":"\([^"]*\)".*/\1/p')"
+    [[ "$got" == "$tag" ]] && break
+    if (( SECONDS >= deadline )); then
+      local raw; raw="$(curl -sS --max-time 10 "$SITE_URL/download/latest.json" 2>&1 | head -c 200)"
+      die "$SITE_URL still serves '${got:-nothing}' instead of $tag after ${wait}s.
+  /download/latest.json answered: $raw
+  {\"error\":\"unavailable\"} means the site Worker cannot reach GitHub — usually the
+  API rate limit. Check its secret: cd ../lifekernl.com && npx wrangler secret put GITHUB_TOKEN"
+    fi
+    sleep 20
+  done
+  ok "$SITE_URL/download/latest.json → $tag"
+
+  local page; page="$(curl -fsS --max-time 10 "$SITE_URL/?release=$version" \
+    | sed -n 's/.*data-release="version">\([^<]*\)<.*/\1/p' | head -1)"
+  [[ "$page" == "$tag" ]] || die "the home page shows '${page:-nothing}', not $tag"
+  ok "home page shows $tag"
+
+  local loc; loc="$(curl -sS -o /dev/null --max-time 10 -w '%{redirect_url}' "$SITE_URL/download/linux")"
+  [[ "$loc" == *"/download/$tag/"* ]] || die "/download/linux redirects to '$loc', not a $tag asset"
+  ok "/download/linux → ${loc##*/}"
 }
 
 # ── Mode: --undo ─────────────────────────────────────────────────────────────
@@ -143,6 +187,7 @@ undo_mode() {
 [[ $# -ge 1 ]] || usage
 case "${1:-}" in
   --cask) [[ $# -eq 2 ]] || usage; cask_mode "$2"; exit 0 ;;
+  --site) [[ $# -eq 2 ]] || usage; site_mode "$2"; exit 0 ;;
   --undo) [[ $# -eq 2 ]] || usage; undo_mode "$2"; exit 0 ;;
   -h|--help) usage ;;
 esac

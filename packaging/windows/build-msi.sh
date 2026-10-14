@@ -38,6 +38,7 @@ cp "$SRC_TREE/bin/mcp-server.js" "$PKG_DIR/mcp-server.js"
 # lines are the whole fix.
 [ -d "$SRC_TREE/bin/whisper" ]    && cp -a "$SRC_TREE/bin/whisper"    "$PKG_DIR/"
 [ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$PKG_DIR/"
+[ -d "$SRC_TREE/bin/tor" ]        && cp -a "$SRC_TREE/bin/tor"        "$PKG_DIR/"
 # mtw-server + whatsapp-bridge (stage-payload 2d) and the mtw.toml template the
 # kernel renders on boot — sidecars.ts looks for them under <app>/bin/.
 if [ -f "$SRC_TREE/bin/mtw-server/mtw-server.exe" ] && [ -f "$SRC_TREE/bin/whatsapp-bridge/whatsapp-bridge.exe" ]; then

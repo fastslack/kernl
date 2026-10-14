@@ -33,6 +33,7 @@ import { createDashboardModule } from "../../modules/dashboard/index.js";
 import { createMetaModule } from "../../modules/meta/index.js";
 import { createMcpPlansModule } from "../../modules/mcp-plans/index.js";
 import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/tool-memory/index.js";
+import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
@@ -41,6 +42,8 @@ import { createChatModule } from "../../modules/chat/index.js";
 import { createAttachmentsModule } from "../../modules/attachments/index.js";
 import { createAgentsModule } from "../../modules/agents/index.js";
 import { createProjectsModule } from "../../modules/projects/index.js";
+import { createPanelsModule } from "../../modules/panels/index.js";
+import { startAgentRun } from "../../modules/agents/start-run.js";
 import { setProjectRunLookup } from "../outbound-guard.js";
 import { dispatchPlanPeerCall } from "../peer-proxy.js";
 import { useProjects } from "../host-runtime.js";
@@ -153,6 +156,9 @@ export async function initCoreModules(args: {
   // ── Storage (DB size + retention policies collected from every module) ──
   registry.register(createStorageModule(() => registry.allModules()));
 
+  // ── Model Bench (compares the configured models on Kernl's own work; /bench) ──
+  registry.register(createBenchModule());
+
   // ── Brain (unified semantic memory across modules) ──
   // Same late-bound embeddings promise as tool-memory. Auto-indexing is
   // gated behind BRAIN_AUTO_INDEX=1 (see modules/brain/index.ts) so a full
@@ -241,6 +247,9 @@ export async function initCoreModules(args: {
   // tables reference flows and it registers the project gate on agents.
   const projectsModule = createProjectsModule();
   registry.register(projectsModule);
+  // Office panels: declared views and actions of an office, shown in the 3D world.
+  const panelsModule = createPanelsModule();
+  registry.register(panelsModule);
   // Office environments moved to the paid DevOps extension. The shared
   // container an office's agents run commands in is a DevOps capability, not a
   // base-install one; that extension registers it behind `pro:devops`, so an
@@ -265,6 +274,53 @@ export async function initCoreModules(args: {
 
   // ── Initialize every registered module ─────────────
   await registry.initializeAll(ctx);
+
+  // Panels ↔ agents seam: actions reach agents only through these functions.
+  {
+    const agents = () => agentsModule.getService();
+    panelsModule.setDeps({
+      agentInOffice: (flowId, slug) => {
+        // `slug` is a column of agents that the Agent type does not declare.
+        const a = agents()?.listAgents().find((x) => (x as { slug?: string }).slug === slug && x.flow_id === flowId);
+        return a ? { id: a.id, name: a.name, active: a.active === 1 } : null;
+      },
+      postLetter: ({ toAgentId, subject, body }) => {
+        const svc = agents();
+        const chief = svc?.getTopAgent();
+        if (!svc || !chief) return { ok: false, error: "no chief to send the letter from" };
+        const r = svc.postToColleague({ from_agent_id: chief.id, to_agent_id: toAgentId, subject, body });
+        return r.message ? { ok: true } : { ok: false, error: r.error ?? "not delivered" };
+      },
+      startRun: ({ agentId, goal }) => {
+        const svc = agents();
+        const executor = agentsModule.getExecutor();
+        const agent = svc?.getAgent(agentId);
+        if (!svc || !executor || !agent) throw new Error("agents are not available");
+        return { runId: startAgentRun({ service: svc, executor, events: ctx.events }, { agent, goal }).id };
+      },
+      setSchedulesActive: (agentId, active) => {
+        const svc = agents();
+        const list = svc?.listSchedules(agentId) ?? [];
+        for (const sch of list) svc?.updateSchedule(sch.id, { active });
+        return list.length;
+      },
+      officeAgentSlugs: (flowId) =>
+        (agents()?.listAgents() ?? []).filter((x) => x.flow_id === flowId).map((x) => (x as { slug?: string }).slug ?? "").filter(Boolean),
+      // The office folder: the one cwd every agent of the office shares (Office Kit repo offices).
+      officeRoot: (flowId) => {
+        const cwds = new Set((agents()?.listAgents() ?? []).filter((x) => x.flow_id === flowId).map((x) => {
+          try { return String((JSON.parse(String(x.variables || "{}")) as Record<string, unknown>).__cwd_path__ ?? ""); } catch { return ""; }
+        }).filter(Boolean));
+        return cwds.size === 1 ? [...cwds][0] : "";
+      },
+      ownerOfRun: (runId) => {
+        const svc = agents();
+        const run = svc?.getRun(runId);
+        const agent = run ? svc?.getAgent(run.agent_id) : undefined;
+        return agent?.flow_id || null;
+      },
+    });
+  }
 
   // Projects ↔ agents seam: createRun validates project_id through it.
   const projectsService = projectsModule.getService();

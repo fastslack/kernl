@@ -9,9 +9,11 @@
   import { t, locale } from '$lib/i18n/index.js';
   import SecretInput from '$lib/components/settings/SecretInput.svelte';
   import ClaudeSignIn from './ClaudeSignIn.svelte';
+  import ModelPicker from '$lib/components/agent/ModelPicker.svelte';
+  import { loadPickerProviders, type PickerProvider } from '$lib/llm-provider-list.js';
   import {
     canConnect, connectInputFor, connectProvider, detectProvider, errorView,
-    fetchLiveModels, hostOf, keyLooksWrong, modelOptions, pick,
+    hostOf, keyLooksWrong, modelOptions, pick,
     type CatalogProvider, type ProbeResult,
   } from '$lib/llm-connect.js';
 
@@ -48,6 +50,21 @@
   $: steps = $locale === 'es' ? provider.steps.es : provider.steps.en;
   $: keyWarn = apiKey.trim().length >= 6 && keyLooksWrong(provider, apiKey);
   $: options = modelOptions(provider, liveModels);
+  /** Claude Code's model can only be chosen once its session works: saving probes it first. */
+  $: cliModel = isCli && provider.connected;
+
+  // A connected provider gets the site's model picker, over the models the
+  // kernel discovered for it (Claude Code: its aliases and full ids). Before
+  // connecting there is no list to ask for, so the plain field stays.
+  let picker: ModelPicker | null = null;
+  let pickerProviders: PickerProvider[] = [];
+  let pickerLoading = false;
+  async function loadPicker(): Promise<void> {
+    pickerLoading = true;
+    try { pickerProviders = (await loadPickerProviders()).filter((p) => p.slug === provider.slug); }
+    finally { pickerLoading = false; }
+  }
+  $: if (provider.connected && !pickerProviders.length && !pickerLoading) void loadPicker();
   $: view = result?.error ? errorView(result.error.code) : null;
   $: ready = canConnect(provider, { apiKey, baseUrl }, phase === 'busy');
 
@@ -97,10 +114,6 @@
     }
   }
 
-  async function loadLive(): Promise<void> {
-    try { liveModels = await fetchLiveModels(provider.slug); } catch { /* the typed field still works */ }
-  }
-
   async function copyCommand(): Promise<void> {
     try {
       await navigator.clipboard.writeText(loginCommand);
@@ -113,7 +126,7 @@
     switch (view?.action) {
       case 'retry': void connect(); break;
       case 'fast_model': if (provider.models.fast) void connect(provider.models.fast); break;
-      case 'pick_model': if (provider.connected) void loadLive(); document.getElementById('pc-model')?.focus(); break;
+      case 'pick_model': if (provider.connected) picker?.openMenu(); else document.getElementById('pc-model')?.focus(); break;
       case 'redetect': void detect(); break;
       case 'copy_command': void copyCommand(); break;
       case 'add_backup': dispatch('back'); break;
@@ -173,6 +186,10 @@
       {:else}
         <label class="pc-label" for="pc-url">{$t('llm.base_url')}</label>
         <input id="pc-url" class="pc-input" bind:value={baseUrl} spellcheck="false" autocomplete="off" />
+        {#if provider.optionalKey}
+          <label class="pc-label" for="pc-key">{$t('llm.key_label_optional')}</label>
+          <SecretInput id="pc-key" bind:value={apiKey} masked={provider.keyMasked} configured={!!provider.keyMasked} />
+        {/if}
       {/if}
 
       {#if provider.regions.length > 0}
@@ -214,16 +231,26 @@
       {/if}
       {#if switched}<p class="pc-muted">{$t('llm.err.model_switched', { model: switched })}</p>{/if}
 
-      {#if !isCli}
+      {#if !isCli || cliModel}
         <label class="pc-label" for="pc-model">{$t('llm.model_label')}</label>
-        <input id="pc-model" class="pc-input" list="pc-models" bind:value={model} spellcheck="false" autocomplete="off" />
-        <datalist id="pc-models">
-          {#each options as o (o.value)}
-            <option value={o.value}>{o.kind === 'recommended' ? $t('llm.model_recommended') : o.kind === 'fast' ? $t('llm.model_fast') : ''}</option>
-          {/each}
-        </datalist>
-        {#if provider.connected && liveModels.length === 0}
-          <button type="button" class="pc-link" on:click={loadLive}>{$t('llm.model_other')}</button>
+        {#if provider.connected}
+          <ModelPicker bind:this={picker} provider={provider.slug} {model} providers={pickerProviders} loading={pickerLoading}
+                       requiresTools={!isCli} engineFollows placeholder={$t('llm.model_pick')}
+                       on:change={(e) => (model = e.detail.model)} />
+        {:else}
+          <input id="pc-model" class="pc-input" list="pc-models" bind:value={model} spellcheck="false" autocomplete="off" />
+          <datalist id="pc-models">
+            {#each options as o (o.value)}
+              <option value={o.value}>{o.kind === 'recommended' ? $t('llm.model_recommended') : o.kind === 'fast' ? $t('llm.model_fast') : ''}</option>
+            {/each}
+          </datalist>
+        {/if}
+        {#if cliModel}
+          <p class="pc-muted">{$t('llm.cc_model_hint')}</p>
+          <div class="pc-row">
+            <button type="button" class="pc-btn" disabled={phase === 'busy' || !model.trim() || model.trim() === provider.model}
+                    on:click={() => connect()}>{$t('llm.cc_model_save')}</button>
+          </div>
         {/if}
       {/if}
       <p class="pc-muted pc-foot-note">{$t('llm.usage_note')}</p>

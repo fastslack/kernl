@@ -129,7 +129,9 @@ describe("LlmClient OpenAI-compatible request", () => {
     expect(seen[0].body).toBe(JSON.stringify({
       model: "gpt-4o-mini",
       messages: [{ role: "system", content: "SYS" }, { role: "user", content: "hi" }],
-      max_tokens: 2048,
+      // api.openai.com: the newer name every chat model takes, and the only
+      // one the reasoning models (gpt-5, o-series) accept — see fitOpenAiParams in chat-openai.ts.
+      max_completion_tokens: 2048,
     }));
     expect(seen[0].hasSignal).toBe(true);
     expect(r).toEqual({ text: "answer", model: "gpt-4o-mini-2024", provider: "openai", inputTokens: 11, outputTokens: 5 });

@@ -8,6 +8,7 @@
   "description": "WLED/Tasmota light control with zones, scenes, schedules.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "house",
   "tags": [
     "lights",
