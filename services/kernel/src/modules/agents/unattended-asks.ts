@@ -120,11 +120,12 @@ export class UnattendedAskWatcher {
     });
   }
 
-  /** Open questions (waiting on the chief or the operator) asked by this agent. */
+  /** Open questions (waiting on the chief or the operator, owed included) asked by this agent. */
   private openQuestions(agentId: string): AgentQuestion[] {
     return [
       ...this.service.listQuestions({ status: "triage", limit: 200 }),
       ...this.service.listQuestions({ status: "pending", limit: 200 }),
+      ...this.service.listQuestions({ status: "owed", limit: 200 }),
     ].filter((q) => q.from_agent_id === agentId);
   }
 

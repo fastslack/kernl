@@ -102,6 +102,15 @@ describe("UnattendedAskWatcher", () => {
     expect(dup.created).toEqual([]);
   });
 
+  it("an owed question (the operator is on it) counts as open", async () => {
+    let seen: string[] = [];
+    const llm = async (o: { user: string }) => { seen = [o.user]; return YES; };
+    const owed = fakeService({ open: [{ from_agent_id: "a1", status: "owed", question: YES.question }] });
+    expect(await new UnattendedAskWatcher(owed.svc, new EventBus(), llm).check("r1")).toBeNull();
+    expect(owed.created).toEqual([]);
+    expect(seen[0]).toContain(`- ${YES.question}`);
+  });
+
   it("listens to run_completed", async () => {
     const events = new EventBus();
     const { svc, created } = fakeService();
