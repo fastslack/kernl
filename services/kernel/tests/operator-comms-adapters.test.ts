@@ -11,7 +11,7 @@ describe("buildAdapters", () => {
       sendNotification: async () => true,
     };
     const wa = { id: "whatsapp", capabilities: ["notify", "receive"], isReady: () => true, sendNotification: async (p: unknown) => { calls.push(p); return true; } };
-    const dash = { id: "dashboard", capabilities: ["notify"], isReady: () => true, sendNotification: async () => true };
+    const dash = { id: "dashboard-notifications", capabilities: ["notify"], isReady: () => true, sendNotification: async () => true };
     const adapters = buildAdapters({ list: () => [telegram, wa, dash] } as never);
     expect(adapters.map((a) => a.id)).toEqual(["telegram", "whatsapp"]);
     const ref = await adapters[0].send({ text: "hola", buttons: [[{ text: "A", data: "oq:x:0" }]] });
@@ -36,6 +36,21 @@ describe("buildAdapters", () => {
     await a.send({ text: "merge_hold *x* web#2588:web-3-c", buttons: [[{ text: "A", data: "oq:x:0" }]] });
     const opts = calls[0][3] as { parseMode?: unknown };
     expect(opts.parseMode).toBeNull();
+  });
+
+  it("skips the dashboard under either id it registers with", () => {
+    const mk = (id: string) => ({ id, capabilities: ["notify"], isReady: () => true, sendNotification: async () => true });
+    const adapters = buildAdapters({ list: () => [mk("dashboard"), mk("dashboard-notifications"), mk("whatsapp")] } as never);
+    expect(adapters.map((a) => a.id)).toEqual(["whatsapp"]);
+  });
+
+  it("a silent message goes out without a notification sound on telegram", async () => {
+    const calls: unknown[][] = [];
+    const [a] = buildAdapters({ list: () => [tg(7, calls)] } as never);
+    await a.send({ text: "aviso", silent: true });
+    expect((calls[0][3] as { disableNotification?: boolean }).disableNotification).toBe(true);
+    await a.send({ text: "pregunta", buttons: [[{ text: "A", data: "oq:x:0" }]] });
+    expect((calls[1][3] as { disableNotification?: boolean }).disableNotification).toBeUndefined();
   });
 
   it("edits with no parse mode", async () => {
