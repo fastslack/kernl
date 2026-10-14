@@ -17,6 +17,7 @@ import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { log } from "../../logger.js";
 import { claudeConfigDir } from "../../llm/claude-code-auth.js";
+import { prepareSandboxCredentials } from "../claude-session.js";
 import type {
   SandboxDriver,
   SandboxDriverStatus,
@@ -205,7 +206,12 @@ export class DockerSandboxDriver implements SandboxDriver {
     if (claudeJson) mounts.push(`  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`);
     else if (existsSync(session.json)) mounts.push(mountForKernelPath(session.json, "/mnt/claude.json", { readonly: true }));
     if (claudeCreds) mounts.push(`  -v ${shellQuote(claudeCreds)}:/mnt/credentials.json:ro \\`);
-    else if (existsSync(session.creds)) mounts.push(mountForKernelPath(session.creds, "/mnt/credentials.json", { readonly: true }));
+    else {
+      // A copy without the refresh token: a sandbox that refreshed would
+      // rotate it away from Kernl's own file (see ../claude-session.ts).
+      const creds = await prepareSandboxCredentials(session.creds, resolve(WRAPPER_DIR, `${opts.runId}-credentials.json`));
+      if (creds) mounts.push(mountForKernelPath(creds, "/mnt/credentials.json", { readonly: true }));
+    }
 
     for (const s of opts.skillMounts ?? []) {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(s.name)) continue;
@@ -284,6 +290,7 @@ export class DockerSandboxDriver implements SandboxDriver {
     try { unlinkSync(handle.executablePath); } catch { /* already gone */ }
     const bootstrap = handle.executablePath.replace(/\.sh$/, "-bootstrap.sh");
     try { unlinkSync(bootstrap); } catch { /* already gone */ }
+    try { unlinkSync(handle.executablePath.replace(/\.sh$/, "-credentials.json")); } catch { /* none written */ }
   }
 }
 

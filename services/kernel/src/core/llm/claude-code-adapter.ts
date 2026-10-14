@@ -710,7 +710,7 @@ function recordStreamFailure(model: string, caller: string, startedAt: number, m
     model,
     ok: false,
     latencyMs: Date.now() - startedAt,
-    errorKind: /authentication|login/i.test(message) ? "auth" : "transient",
+    errorKind: /authenticat|login|logged in|oauth session expired|could not be refreshed/i.test(message) ? "auth" : "transient",
     errorMsg: message,
     caller,
     startedAt,
