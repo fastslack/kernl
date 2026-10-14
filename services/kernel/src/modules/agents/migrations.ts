@@ -962,6 +962,69 @@ export const agentsMigrations: Migration[] = [
       );
     `,
   },
+  {
+    // Operator decisions (spec 2026-10-14): 'owed' = the operator chose an
+    // option that leaves them a task; the question stays open until "Listo".
+    // for_operator = asked straight to the operator (no chief triage).
+    // reminded_at = last 24 h reminder. operator_messages = what the
+    // operator-comms driver sent per channel, to update it and to map the
+    // "Q<code> <n>" replies of text-only channels. Rebuilt for the CHECK.
+    version: 57,
+    sql: `
+      CREATE TABLE agent_questions_new (
+        id                TEXT PRIMARY KEY,
+        from_agent_id     TEXT NOT NULL,
+        flow_id           TEXT NOT NULL DEFAULT '',
+        meeting_id        TEXT NOT NULL DEFAULT '',
+        run_id            TEXT NOT NULL DEFAULT '',
+        question          TEXT NOT NULL,
+        context           TEXT NOT NULL DEFAULT '',
+        options           TEXT NOT NULL DEFAULT '[]',
+        status            TEXT NOT NULL DEFAULT 'pending'
+                          CHECK(status IN ('triage','pending','owed','answered','dismissed')),
+        selected_option   TEXT NOT NULL DEFAULT '',
+        selected_index    INTEGER NOT NULL DEFAULT -1,
+        answered_note     TEXT NOT NULL DEFAULT '',
+        answered_at       TEXT,
+        answered_by       TEXT NOT NULL DEFAULT '',
+        chief_note        TEXT NOT NULL DEFAULT '',
+        triage_started_at TEXT,
+        created_at        TEXT NOT NULL,
+        opinion_status    TEXT NOT NULL DEFAULT '',
+        opinion_run_id    TEXT NOT NULL DEFAULT '',
+        opinion_json      TEXT NOT NULL DEFAULT '',
+        opinion_error     TEXT NOT NULL DEFAULT '',
+        opinion_at        TEXT,
+        owed_at           TEXT,
+        reminded_at       TEXT,
+        for_operator      INTEGER NOT NULL DEFAULT 0
+      );
+      INSERT INTO agent_questions_new
+        (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status,
+         selected_option, selected_index, answered_note, answered_at, answered_by, chief_note,
+         triage_started_at, created_at, opinion_status, opinion_run_id, opinion_json, opinion_error, opinion_at)
+      SELECT id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status,
+             selected_option, selected_index, answered_note, answered_at, answered_by, chief_note,
+             triage_started_at, created_at, opinion_status, opinion_run_id, opinion_json, opinion_error, opinion_at
+      FROM agent_questions;
+      DROP TABLE agent_questions;
+      ALTER TABLE agent_questions_new RENAME TO agent_questions;
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_status ON agent_questions(status, created_at);
+      CREATE INDEX IF NOT EXISTS idx_agent_questions_from   ON agent_questions(from_agent_id, created_at);
+      CREATE TABLE IF NOT EXISTS operator_messages (
+        id          TEXT PRIMARY KEY,
+        question_id TEXT NOT NULL,
+        channel     TEXT NOT NULL,
+        target      TEXT NOT NULL DEFAULT '',
+        message_id  TEXT NOT NULL DEFAULT '',
+        code        INTEGER NOT NULL,
+        status      TEXT NOT NULL DEFAULT 'sent',
+        created_at  TEXT NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_operator_messages_q    ON operator_messages(question_id);
+      CREATE INDEX IF NOT EXISTS idx_operator_messages_code ON operator_messages(code);
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

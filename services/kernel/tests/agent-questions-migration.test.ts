@@ -23,3 +23,21 @@ describe("agents migration 45 — agent_questions triage", () => {
     db.close();
   });
 });
+
+describe("v57 — owed status and operator messages", () => {
+  it("accepts 'owed', keeps existing rows and adds operator_messages", () => {
+    const db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations.filter((m) => m.version < 57));
+    db.run(`INSERT INTO agent_questions (id, from_agent_id, question, options, status, created_at, opinion_status)
+            VALUES ('q1','a1','Ship?','[]','pending','2026-10-14T00:00:00Z','')`);
+    runMigrations(db, "agents", agentsMigrations);
+    db.run("UPDATE agent_questions SET status='owed', owed_at='2026-10-14T01:00:00Z' WHERE id='q1'");
+    const row = db.query("SELECT status, owed_at, reminded_at, for_operator, opinion_status FROM agent_questions WHERE id='q1'").get() as Record<string, unknown>;
+    expect(row).toEqual({ status: "owed", owed_at: "2026-10-14T01:00:00Z", reminded_at: null, for_operator: 0, opinion_status: "" });
+    expect(() => db.run("UPDATE agent_questions SET status='bogus' WHERE id='q1'")).toThrow();
+    db.run(`INSERT INTO operator_messages (id, question_id, channel, target, message_id, code, status, created_at)
+            VALUES ('m1','q1','telegram','123','55',7,'sent','2026-10-14T01:00:00Z')`);
+    expect((db.query("SELECT code FROM operator_messages").get() as { code: number }).code).toBe(7);
+    db.close();
+  });
+});
