@@ -15,6 +15,12 @@ describe("leavesWorkToOperator", () => {
     "Ack ahora y esperar el veredicto",
     "Enviar al Vigía un resumen del estado y próximos pasos",
     "Opción 0, con el ledger como fuente de verdad mientras tanto.",
+    "Levantá el merge_hold y mergeá",
+    "Usá un ternary operator ahí",
+    "Devolvé un formato human-readable",
+    "Usá el operador de spread",
+    "Mantené el fix en la rama y rebaseá",
+    "Queda en espera de CI, reintentá después",
   ];
   for (const t of escalate) it(`escalates: ${t.slice(0, 40)}`, () => expect(leavesWorkToOperator(t)).toBe(true));
   for (const t of keep) it(`keeps: ${t.slice(0, 40)}`, () => expect(leavesWorkToOperator(t)).toBe(false));

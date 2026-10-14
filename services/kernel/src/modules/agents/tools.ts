@@ -1344,7 +1344,8 @@ export function agentsTools(
               selected_option = q.options[i].label;
             }
             if (input.leaves_work_to_operator || leavesWorkToOperator(selected_option)) {
-              service.escalateQuestion(q.id, `escalada: la respuesta dejaba trabajo al operador — propuesta del Chief: ${selected_option.slice(0, 300)}`);
+              const escalated = service.escalateQuestion(q.id, `escalada: la respuesta dejaba trabajo al operador — propuesta del Chief: ${selected_option.slice(0, 300)}`);
+              if (!escalated) return errorResult(`Question ${q.id} is not waiting for triage.`);
               return textResult(`Escalated ${q.id} to the human: the answer left work to the operator.`);
             }
             const res = answerAndDeliver(service, executor, events, q.id, {
