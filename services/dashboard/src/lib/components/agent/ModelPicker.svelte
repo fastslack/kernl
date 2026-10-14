@@ -92,8 +92,14 @@
    * screen edge. Rendering it on <body> puts the two coordinate systems back
    * in agreement, and takes it out of the panel's stacking context as well.
    */
+  //
+  // Inside a modal <dialog> (the provider dialog in Settings → AI) the menu
+  // goes into that dialog instead: showModal() puts the dialog in the top
+  // layer, and nothing on <body> can paint above it whatever its z-index —
+  // the menu opened underneath the dialog. The dialog has no transform, so
+  // `position: fixed` still measures against the viewport in there.
   function portal(node: HTMLElement) {
-    document.body.appendChild(node);
+    (trigger?.closest('dialog[open]') ?? document.body).appendChild(node);
     return {
       destroy() {
         node.remove();
