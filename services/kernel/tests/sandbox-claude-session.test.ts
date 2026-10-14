@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach } from "bun:test";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   sandboxCredentials,
   writeSandboxCredentials,
+  writeSandboxClaudeJson,
   needsRefresh,
   ensureFreshClaudeSession,
 } from "../src/core/sandbox/claude-session.js";
@@ -30,6 +31,31 @@ describe("sandbox credentials", () => {
   it("are not written for a blank or unreadable session", () => {
     expect(sandboxCredentials(JSON.stringify({ claudeAiOauth: { accessToken: "", refreshToken: "" } }))).toBeNull();
     expect(sandboxCredentials("not json")).toBeNull();
+  });
+});
+
+// Bind-mounting the live .claude.json lost a race with the CLI's atomic
+// rewrite (tmp + rename): runc mounted an inode that no longer existed and the
+// run died at 0.17s with exit 127. Each run mounts its own copy instead.
+describe("sandbox .claude.json", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "kernl-claude-json-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  it("is a private per-run copy that a rewrite of the original does not touch", () => {
+    const src = join(dir, ".claude.json");
+    const dest = join(dir, "run-1-claude.json");
+    writeFileSync(src, JSON.stringify({ userID: "u1" }));
+    expect(writeSandboxClaudeJson(src, dest)).toBe(dest);
+    expect(statSync(dest).mode & 0o777).toBe(0o600);
+
+    writeFileSync(`${src}.tmp`, JSON.stringify({ userID: "u2" }));
+    renameSync(`${src}.tmp`, src);
+    expect(JSON.parse(readFileSync(dest, "utf-8")).userID).toBe("u1");
+  });
+
+  it("is not written when there is no original", () => {
+    expect(writeSandboxClaudeJson(join(dir, "missing.json"), join(dir, "out.json"))).toBeNull();
   });
 });
 

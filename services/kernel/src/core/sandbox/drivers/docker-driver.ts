@@ -11,13 +11,13 @@
  * the previous `claude-sandbox.ts` did — via `HOST_KERNEL_ROOT` env var.
  */
 
-import { existsSync, mkdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
+import { mkdirSync, writeFileSync, unlinkSync, chmodSync } from "node:fs";
 import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { log } from "../../logger.js";
 import { claudeConfigDir } from "../../llm/claude-code-auth.js";
-import { prepareSandboxCredentials } from "../claude-session.js";
+import { prepareSandboxCredentials, writeSandboxClaudeJson } from "../claude-session.js";
 import type {
   SandboxDriver,
   SandboxDriverStatus,
@@ -203,8 +203,12 @@ export class DockerSandboxDriver implements SandboxDriver {
     ];
     // Overrides are host paths; Kernl's own files live in the kernel's data
     // volume and go through mountForKernelPath. Missing ones are not mounted.
-    if (claudeJson) mounts.push(`  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`);
-    else if (existsSync(session.json)) mounts.push(mountForKernelPath(session.json, "/mnt/claude.json", { readonly: true }));
+    // .claude.json goes in as a per-run copy: the CLI rewrites the original
+    // with a rename, which can pull it out from under the bind mid-start.
+    const jsonCopy = writeSandboxClaudeJson(claudeJson ?? session.json, resolve(WRAPPER_DIR, `${opts.runId}-claude.json`));
+    if (jsonCopy) mounts.push(mountForKernelPath(jsonCopy, "/mnt/claude.json", { readonly: true }));
+    // An override the kernel can't read (a host path it doesn't see) is bound as before.
+    else if (claudeJson) mounts.push(`  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`);
     if (claudeCreds) mounts.push(`  -v ${shellQuote(claudeCreds)}:/mnt/credentials.json:ro \\`);
     else {
       // A copy without the refresh token: a sandbox that refreshed would
@@ -291,6 +295,7 @@ export class DockerSandboxDriver implements SandboxDriver {
     const bootstrap = handle.executablePath.replace(/\.sh$/, "-bootstrap.sh");
     try { unlinkSync(bootstrap); } catch { /* already gone */ }
     try { unlinkSync(handle.executablePath.replace(/\.sh$/, "-credentials.json")); } catch { /* none written */ }
+    try { unlinkSync(handle.executablePath.replace(/\.sh$/, "-claude.json")); } catch { /* none written */ }
   }
 }
 
