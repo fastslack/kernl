@@ -39,6 +39,8 @@ import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./off
 import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
 
 export type QuestionStatus = "triage" | "pending" | "answered" | "dismissed";
+/** The investigator's second opinion: '' none asked, running, ready, failed. */
+export type OpinionStatus = "" | "running" | "ready" | "failed";
 export interface AgentQuestion {
   id: string; from_agent_id: string; flow_id: string; meeting_id: string; run_id: string;
   question: string; context: string; options: Array<{ label: string; value?: string; url?: string }>;
@@ -46,6 +48,11 @@ export interface AgentQuestion {
   answered_note: string; answered_at: string | null;
   answered_by: "" | "chief" | "human"; chief_note: string; triage_started_at: string | null;
   created_at: string;
+  opinion_status: OpinionStatus; opinion_run_id: string;
+  /** The parsed QuestionOpinion as stored (question-opinion.ts), or null. */
+  opinion: Record<string, unknown> | null;
+  /** When failed: "no_answer" | "unavailable", then ": " and the detail. */
+  opinion_error: string; opinion_at: string | null;
 }
 
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
@@ -1298,7 +1305,54 @@ export class AgentService {
       chief_note: String(r.chief_note ?? ""),
       triage_started_at: r.triage_started_at == null ? null : String(r.triage_started_at),
       created_at: String(r.created_at ?? ""),
+      opinion_status: String(r.opinion_status ?? "") as OpinionStatus,
+      opinion_run_id: String(r.opinion_run_id ?? ""),
+      opinion: (() => {
+        if (!r.opinion_json) return null;
+        try { return JSON.parse(String(r.opinion_json)) as Record<string, unknown>; } catch { return null; }
+      })(),
+      opinion_error: String(r.opinion_error ?? ""),
+      opinion_at: r.opinion_at == null ? null : String(r.opinion_at),
     };
+  }
+
+  /** The investigator started on this question. */
+  startQuestionOpinion(id: string, runId: string): void {
+    this.db.prepare(
+      `UPDATE agent_questions SET opinion_status = 'running', opinion_run_id = ?, opinion_json = '', opinion_error = '', opinion_at = ? WHERE id = ?`,
+    ).run(runId, isoNow(), id);
+    this.events.emit("data.changed", { module: "agents", action: "question_opinion", question_id: id });
+  }
+
+  /** The investigator's run ended: its opinion, or why there is none. */
+  finishQuestionOpinion(id: string, result: { opinion: Record<string, unknown> } | { error: string }): void {
+    const ok = "opinion" in result;
+    this.db.prepare(
+      `UPDATE agent_questions SET opinion_status = ?, opinion_json = ?, opinion_error = ?, opinion_at = ? WHERE id = ?`,
+    ).run(ok ? "ready" : "failed", ok ? JSON.stringify(result.opinion) : "", ok ? "" : result.error.slice(0, 4000), isoNow(), id);
+    this.events.emit("data.changed", { module: "agents", action: "question_opinion", question_id: id });
+  }
+
+  /** Questions whose opinion is still being investigated. */
+  listRunningOpinions(): AgentQuestion[] {
+    return (this.db.prepare("SELECT * FROM agent_questions WHERE opinion_status = 'running'").all() as Record<string, unknown>[])
+      .map((r) => this.mapQuestionRow(r));
+  }
+
+  /** The question an investigator run is working on. */
+  getQuestionByOpinionRun(runId: string): AgentQuestion | undefined {
+    if (!runId) return undefined;
+    const r = this.db.prepare("SELECT * FROM agent_questions WHERE opinion_run_id = ?").get(runId) as Record<string, unknown> | undefined;
+    return r ? this.mapQuestionRow(r) : undefined;
+  }
+
+  /** One of the kernel's own agents, by role ("question-investigator"). */
+  getSystemAgentId(role: string): string {
+    return (this.db.prepare("SELECT agent_id FROM agent_system_agents WHERE role = ?").get(role) as { agent_id: string } | undefined)?.agent_id ?? "";
+  }
+
+  setSystemAgentId(role: string, agentId: string): void {
+    this.db.prepare("INSERT OR REPLACE INTO agent_system_agents (role, agent_id) VALUES (?, ?)").run(role, agentId);
   }
 
   getQuestion(id: string): AgentQuestion | undefined {

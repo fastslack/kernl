@@ -38,6 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   The LIVE pill shows one dot per model of the chain and each one's score.
 - **System overview** (`/control`): how this Kernl is doing at a glance, with
   a way into every part of it.
+- **"What would the AI answer?"** on an office question is now answered by a
+  read-only investigator that reads the issue, its merge request, the code
+  and the git history before giving an opinion, and shows its progress.
 - **Office panels.** An office can declare panels (sources, views and actions,
   `panels.v1`) in the Office Kit manifest or an extension's office seed. They
   show as tabs in the office's 3D panel and open from the whiteboard in its
@@ -60,6 +63,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every other schedule.
 - **A connected provider's model is chosen with the model picker**, Claude
   Code included; the model is tested before it is saved.
+- **The message stream shows each post's time and tokens** in their own
+  columns on the left: the clock, how long the post took, the tokens it
+  consumed and the run total so far. `claude_code` agents now report their
+  tokens per model turn instead of only at the end of the run.
+- **The office panel is wider**, its board is coloured by state, and Destroy
+  office moved out of the footer into a danger zone.
 - **3D walkers take the shortest corridor path** around desks, meeting rooms
   and the reception, and carry their message inside their nameplate.
 - **The Claude sign-in redirect is caught on the host**, so a Docker stack on

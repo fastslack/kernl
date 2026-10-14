@@ -944,6 +944,24 @@ export const agentsMigrations: Migration[] = [
       CREATE INDEX IF NOT EXISTS idx_kernl_bug_fixes_status ON kernl_bug_fixes(status);
     `,
   },
+  {
+    // The second opinion on an escalated question is a run of the read-only
+    // investigator now (question-investigator.ts), not one chat call: it is
+    // kept on the question so the card shows it again after a reload.
+    // agent_system_agents: the kernel's own agents by role (the investigator).
+    version: 56,
+    sql: `
+      ALTER TABLE agent_questions ADD COLUMN opinion_status TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN opinion_run_id TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN opinion_json TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN opinion_error TEXT NOT NULL DEFAULT '';
+      ALTER TABLE agent_questions ADD COLUMN opinion_at TEXT;
+      CREATE TABLE IF NOT EXISTS agent_system_agents (
+        role     TEXT PRIMARY KEY,
+        agent_id TEXT NOT NULL
+      );
+    `,
+  },
   // NOTE: versions 38-40 were rename/back-compat migrations for the themed
   // Spanish naming scheme. They are gone — the neutral names are seeded
   // directly (ranks-seeder.ts, top-agent-seeder.ts), so a fresh install is

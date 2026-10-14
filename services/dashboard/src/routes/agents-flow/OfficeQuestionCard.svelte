@@ -9,7 +9,10 @@
   import { t } from '$lib/i18n/index.js';
   import { fmtRelTime } from '$lib/display-format.js';
   import { firstUrlIn, urlForOption } from '$lib/agent-helpers.js';
-  import type { PendingQuestion } from './world-types.js';
+  import { onDestroy } from 'svelte';
+  import { agentFlowEvents } from '$lib/stores.js';
+  import { opinionStepLabel } from '$lib/opinion-progress.js';
+  import type { PendingQuestion, QuestionOpinion } from './world-types.js';
 
   export let q: PendingQuestion;
   export let agentName: string;
@@ -28,46 +31,100 @@
     if (await onFree(q, text)) free = '';
   }
 
-  // The AI's own take, offered as a fifth option. Asking answers nothing;
-  // taking it sends the opinion as a free answer.
-  interface Opinion { answer: string; reasoning: string; matches_option: number | null }
-  let opinion: Opinion | null = null;
-  let opinionLoading = false;
+  // The AI's own take, offered as a fifth option. Asking starts the kernel's
+  // read-only investigator (it reads the issue, the MR, the code and git) and
+  // answers nothing; taking it sends the opinion. The opinion is kept on the
+  // question, so it comes back after a reload.
+  type OpinionStatus = '' | 'running' | 'ready' | 'failed';
+  interface OpinionState { status: OpinionStatus; run_id: string; opinion: QuestionOpinion | null; reason?: string; detail?: string }
+  let opStatus: OpinionStatus = q.opinion_status ?? '';
+  let runId = q.opinion_run_id ?? '';
+  let opinion: QuestionOpinion | null = q.opinion_status === 'ready' ? q.opinion ?? null : null;
   let opinionError = '';
   /** Why there is no opinion, as the kernel classified it: drives the sentence shown. */
   let opinionReason: 'no_answer' | 'unavailable' | '' = '';
+  let starting = false;
+  let copied = false;
+  if (q.opinion_status === 'failed') failedFrom(q.opinion_error ?? '');
+
+  $: opinionLoading = starting || opStatus === 'running';
+  $: pick = opinion?.matches_option ?? null;
+  $: evidence = opinion?.evidence ?? [];
+
+  function failedFrom(raw: string): void {
+    const [reason, ...rest] = raw.split(': ');
+    opinionReason = reason === 'unavailable' ? 'unavailable' : 'no_answer';
+    opinionError = rest.join(': ') || raw || 'failed';
+  }
+
+  function apply(st: OpinionState): void {
+    opStatus = st.status;
+    runId = st.run_id;
+    if (st.status === 'ready') { opinion = st.opinion; opinionError = ''; opinionReason = ''; }
+    else if (st.status === 'failed') { opinion = null; opinionReason = st.reason === 'unavailable' ? 'unavailable' : 'no_answer'; opinionError = st.detail || 'failed'; }
+  }
 
   async function askOpinion(): Promise<void> {
     if (opinionLoading) return;
-    opinionLoading = true;
+    starting = true;
+    opinion = null;
     opinionError = '';
     opinionReason = '';
     try {
       const res = await fetch(`/api/agents/questions/${q.id}/opinion`, { method: 'POST' });
       const body = await res.json().catch(() => null);
-      if (!res.ok || !body?.opinion) {
-        // An older kernel sends no `reason`; its message still tells the two apart.
-        const msg = String(body?.detail ?? body?.error ?? '');
-        opinionReason = body?.reason === 'no_answer' || (!body?.reason && /did not return JSON|no answer/i.test(msg))
-          ? 'no_answer' : 'unavailable';
+      if (!res.ok || !body?.state) {
+        opinionReason = body?.reason === 'no_answer' ? 'no_answer' : 'unavailable';
         throw new Error(body?.detail ?? body?.error ?? `HTTP ${res.status}`);
       }
-      opinion = body.opinion;
+      apply(body.state);
     } catch (e) {
-      // The raw text (a model's half-finished thinking, a provider error) is
-      // for "see details"; the card says what happened and what to do.
+      // The raw text is for "see details"; the card says what happened and what to do.
       opinionError = e instanceof Error ? e.message : String(e);
       if (!opinionReason) opinionReason = 'unavailable';
+      opStatus = 'failed';
     } finally {
-      opinionLoading = false;
+      starting = false;
     }
   }
 
+  async function refresh(): Promise<void> {
+    try {
+      const res = await fetch(`/api/agents/questions/${q.id}/opinion`);
+      const body = await res.json().catch(() => null);
+      if (res.ok && body?.state) apply(body.state);
+    } catch { /* the next tick tries again */ }
+  }
+
+  // While it runs: its steps arrive on the agents.flow socket (newest first);
+  // its end does too, and a slow poll covers a socket that missed it.
+  $: liveSteps = opStatus === 'running' && runId
+    ? $agentFlowEvents.filter((e) => e.event === 'agent:flow:step' && e.data.run_id === runId && e.data.type === 'tool_call')
+    : [];
+  $: stepLabel = liveSteps.length ? opinionStepLabel(liveSteps[0].data.tool_name, liveSteps[0].data.content_preview) : null;
+  $: endedLive = opStatus === 'running' && !!runId && $agentFlowEvents.some((e) =>
+    (e.event === 'agent:flow:run_completed' && e.data.run_id === runId) ||
+    (e.event === 'agent:flow:question_opinion' && e.data.question_id === q.id));
+  $: if (endedLive) void refresh();
+  let poll: ReturnType<typeof setInterval> | null = null;
+  $: if (opStatus === 'running' && !poll) poll = setInterval(refresh, 10_000);
+  $: if (opStatus !== 'running' && poll) { clearInterval(poll); poll = null; }
+  onDestroy(() => { if (poll) clearInterval(poll); });
+
   function takeOpinion(): void {
     if (!opinion || busy) return;
-    const pick = opinion.matches_option;
-    if (pick !== null && q.options[pick]) onAnswer(q, pick, q.options[pick]);
+    // A bare option goes as that option; one with conditions goes as the whole answer.
+    if (pick !== null && !opinion.extends_option && q.options[pick]) onAnswer(q, pick, q.options[pick]);
     else void onFree(q, opinion.answer);
+  }
+
+  async function copyAnswer(): Promise<void> {
+    if (!opinion) return;
+    try {
+      await navigator.clipboard.writeText(opinion.answer);
+      copied = true;
+      setTimeout(() => { copied = false; }, 1500);
+    } catch { /* clipboard blocked: the text is on screen to select */ }
   }
 </script>
 
@@ -97,28 +154,50 @@
   <div class="bq-options">
     {#each q.options as opt, i (i)}
       {@const optUrl = urlForOption(q, opt)}
-      <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={opinion?.matches_option === i}
+      <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
               on:click={() => onAnswer(q, i, opt)}
               disabled={busy}
-              title={opinion?.matches_option === i && opinion.reasoning ? opinion.reasoning : optUrl ? `Opens ${optUrl}` : opt.label}>
+              title={pick === i && opinion?.reasoning ? opinion.reasoning : optUrl ? `Opens ${optUrl}` : opt.label}>
         <span class="bq-option-idx">{i + 1}</span>
         <span class="bq-option-lbl">{opt.label}</span>
-        {#if opinion?.matches_option === i}<span class="bq-pick-tag">{$t('office.chief.q_opinion_pick')}</span>{/if}
+        {#if pick === i}<span class="bq-pick-tag">{opinion?.extends_option ? '+' : ''}{$t('office.chief.q_opinion_pick')}</span>{/if}
         {#if optUrl}<span class="bq-option-linkico" aria-hidden="true">↗</span>{/if}
       </button>
     {/each}
 
-    {#if opinion && opinion.matches_option !== null}
-      <!-- It picked one of the chief's options: the tag on that option says it all. -->
-    {:else if opinion}
+    {#if opinion}
       <div class="bq-opinion" aria-live="polite">
         <div class="bq-opinion-head">
-          <span class="bq-option-idx bq-ai-idx">{q.options.length + 1}</span>
-          <span class="bq-opinion-title">{$t('office.chief.q_opinion_label')}</span>
+          <span class="bq-option-idx bq-ai-idx">{pick !== null ? pick + 1 : q.options.length + 1}</span>
+          <span class="bq-opinion-title">
+            {pick === null ? $t('office.chief.q_opinion_label')
+              : opinion.extends_option ? $t('office.chief.q_opinion_extends', { n: pick + 1 })
+              : $t('office.chief.q_opinion_matches', { n: pick + 1 })}
+          </span>
+          <span class="bq-verified" class:bq-verified-no={evidence.length === 0}>
+            {evidence.length ? $t('office.chief.q_opinion_verified', { n: evidence.length }) : $t('office.chief.q_opinion_not_verified')}
+          </span>
         </div>
         <p class="bq-opinion-answer">{opinion.answer}</p>
         {#if opinion.reasoning}<p class="bq-opinion-why">{opinion.reasoning}</p>{/if}
+        {#if opinion.needs_human?.length}
+          <div class="bq-op-human">
+            <span class="bq-op-label">{$t('office.chief.q_opinion_needs_human')}</span>
+            <ul>{#each opinion.needs_human as h (h)}<li>{h}</li>{/each}</ul>
+          </div>
+        {/if}
+        {#if evidence.length || opinion.unverified?.length}
+          <details class="bq-op-evidence">
+            <summary>{$t('office.chief.q_opinion_evidence', { n: evidence.length })}{#if opinion.unverified?.length} · ⚠ {opinion.unverified.length}{/if}</summary>
+            {#if evidence.length}<ul>{#each evidence as ev (ev)}<li>{ev}</li>{/each}</ul>{/if}
+            {#if opinion.unverified?.length}
+              <span class="bq-op-label bq-op-warn">{$t('office.chief.q_opinion_unverified')}</span>
+              <ul class="bq-op-warn">{#each opinion.unverified as u (u)}<li>{u}</li>{/each}</ul>
+            {/if}
+          </details>
+        {/if}
         <div class="bq-opinion-actions">
+          <button class="bq-opinion-retry" type="button" on:click={copyAnswer}>{copied ? $t('office.chief.q_opinion_copied') : $t('office.chief.q_opinion_copy')}</button>
           <button class="bq-opinion-retry" type="button" on:click={askOpinion} disabled={opinionLoading || busy}>
             {opinionLoading ? $t('office.chief.q_opinion_loading') : $t('office.chief.q_opinion_retry')}
           </button>
@@ -129,13 +208,15 @@
       <button class="bq-ask-ai" type="button" on:click={askOpinion} disabled={opinionLoading || busy}>
         <span class="bq-option-idx bq-ai-idx">{q.options.length + 1}</span>
         {#if opinionLoading}
-          <span class="bq-spin" aria-hidden="true"></span>{$t('office.chief.q_opinion_loading')}
+          <span class="bq-spin" aria-hidden="true"></span>
+          <span class="bq-step">{stepLabel ? $t(stepLabel.key, stepLabel.params) : $t('office.chief.q_opinion_loading')}</span>
+          {#if liveSteps.length}<span class="bq-step-n">{$t('office.chief.q_opinion_steps', { n: liveSteps.length })}</span>{/if}
         {:else}
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8z" /><path d="M19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z" /></svg>
           {$t('office.chief.q_opinion_ask')}
         {/if}
       </button>
-      {#if opinionError}
+      {#if opinionError && !opinionLoading}
         <div class="bq-opinion-err" role="alert">
           <p>{$t(opinionReason === 'no_answer' ? 'office.chief.q_opinion_no_answer' : 'office.chief.q_opinion_unavailable')}</p>
           <div class="bq-opinion-err-actions">
@@ -247,7 +328,7 @@
   }
   .bq-opinion-head{ display:flex; align-items:center; gap:8px; }
   .bq-opinion-title{ font:700 11px 'Manrope',sans-serif; color:#e4dcff; }
-  .bq-opinion-answer{ margin:7px 0 0; font:600 12px/1.5 'Manrope',sans-serif; color:#f1edff; word-break:break-word; }
+  .bq-opinion-answer{ margin:7px 0 0; font:600 12px/1.5 'Manrope',sans-serif; color:#f1edff; word-break:break-word; white-space:pre-wrap; }
   .bq-opinion-why{ margin:5px 0 0; font:500 10.5px/1.5 'Manrope',sans-serif; color:#a9a3c9; word-break:break-word; }
   .bq-opinion-actions{ display:flex; justify-content:flex-end; gap:6px; margin-top:8px; }
   .bq-opinion-retry, .bq-opinion-send{ padding:6px 11px; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }
@@ -263,6 +344,18 @@
   .bq-opinion-detail{ color:#8b93aa; font-size:10.5px; }
   .bq-opinion-detail summary{ cursor:pointer; }
   .bq-opinion-detail pre{ margin:4px 0 0; max-height:90px; overflow:auto; white-space:pre-wrap; font:500 10px 'JetBrains Mono',monospace; color:#8b93aa; }
+  .bq-verified{ margin-left:auto; flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#7ee0a1; background:rgba(126,224,161,.12); border:1px solid rgba(126,224,161,.35); padding:1px 6px; border-radius:8px; }
+  .bq-verified-no{ color:#e8b04b; background:rgba(232,176,75,.1); border-color:rgba(232,176,75,.35); }
+  .bq-op-label{ display:block; font:700 9.5px 'JetBrains Mono',monospace; text-transform:uppercase; letter-spacing:.3px; color:#c4b5fd; margin:6px 0 2px; }
+  .bq-op-human{ margin-top:6px; padding:5px 8px; border-left:2px solid #e8b04b; background:rgba(232,176,75,.08); border-radius:3px; }
+  .bq-op-human .bq-op-label{ color:#e8b04b; margin-top:0; }
+  .bq-op-human ul, .bq-op-evidence ul{ margin:0; padding-left:16px; font:500 10.5px/1.45 'Manrope',sans-serif; color:#cbc5e6; }
+  .bq-op-evidence{ margin-top:6px; }
+  .bq-op-evidence summary{ cursor:pointer; font:500 10px 'JetBrains Mono',monospace; color:#a9a3c9; }
+  .bq-op-evidence ul{ margin-top:4px; max-height:140px; overflow-y:auto; }
+  .bq-op-warn{ color:#e8b04b !important; }
+  .bq-step{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bq-step-n{ flex-shrink:0; font:600 9.5px 'JetBrains Mono',monospace; color:#8f86b8; }
   .bq-option-pick{ border-color:#a78bfa; box-shadow:inset 0 0 0 1px rgba(167,139,250,.35); }
   .bq-pick-tag{ flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#1a1430; background:#a78bfa; padding:1px 6px; border-radius:8px; text-transform:uppercase; }
   @media (prefers-reduced-motion: reduce){ .bq-spin{ animation:none; } }

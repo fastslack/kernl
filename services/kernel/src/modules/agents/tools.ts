@@ -10,6 +10,7 @@ import type { MeetingExecutorLike } from "./advanced-types.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { resolveGoal, extractRoleFromReply, stripRoleWrapper } from "./executor.js";
 import { getRequestContext } from "../../core/request-context.js";
+import { askingRun, formatQuestionContext } from "./question-context.js";
 import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
 import { answerAndDeliver } from "./question-delivery.js";
 import { resumeRun } from "./run-resume.js";
@@ -1245,12 +1246,9 @@ export function agentsTools(
           from_agent_id: caller.id,
           flow_id: caller.flow_id ?? "",
           meeting_id: input.meeting_id ?? "",
-          // `run_id` is never populated: no code path in src/ injects
-          // `__caller_run_id` (AgentExecutor only injects `__caller_agent_id`).
-          // Kept as a fixed "" rather than removing the column/field from
-          // createQuestion() — changing it would touch AgentService's
-          // question schema for a field that already never had any value.
-          run_id: "",
+          // The run that asked: set for native runs (executor) and claude_code
+          // runs (X-Caller-Run-Id). The opinion investigator reads it.
+          run_id: getRequestContext().callerRunId || "",
           question,
           context: input.context ?? "",
           options,
@@ -1272,6 +1270,21 @@ export function agentsTools(
             "Never re-ask a question that was already answered.",
           schema: askSupervisorSchema,
           handler: askSupervisorHandler,
+        }),
+        defineTool({
+          name: "kernel_agents_question_context",
+          description:
+            "Read-only. Everything about an escalated question: the question, the chief's reason, the 4 options, the full context, " +
+            "and the asking agent's run (its goal and steps up to the question).",
+          schema: z.object({ question_id: z.string().describe("The question's id.") }),
+          handler: async ({ question_id }) => {
+            const q = service.getQuestion(question_id);
+            if (!q) return errorResult(`Question ${question_id} not found.`);
+            const agent = service.getAgent(q.from_agent_id);
+            const run = askingRun(q, service.listRuns({ agent_id: q.from_agent_id, limit: 30 }));
+            return textResult(formatQuestionContext(q, agent ? { name: agent.name, description: agent.description } : undefined,
+              run, run ? service.getSteps(run.id) : []));
+          },
         }),
       ];
     })(),

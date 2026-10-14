@@ -424,10 +424,10 @@
 
 <svelte:window on:click={onWindowClick} on:keydown|capture={onWindowKeydown} on:scroll|capture={() => (menuFor = null)} on:resize={() => (menuFor = null)} />
 
-<Drawer open={open && !!office} {top} label={office ? $t('office.panel.label', { name: office.name }) : ''} on:close>
+<Drawer open={open && !!office} {top} width="clamp(480px, 64vw, 1080px)" label={office ? $t('office.panel.label', { name: office.name }) : ''} on:close>
 	<svelte:fragment slot="head">
 		{#if office}
-			<div class="op-top">
+			<div class="op-top" style="--oc:{office.color}">
 				<span class="op-dot" style="background:{office.color}"></span>
 				<h2 class="op-title">{office.name}</h2>
 				<button class="op-power" class:on={office.paused !== 1} type="button" aria-pressed={office.paused !== 1}
@@ -436,7 +436,7 @@
 					on:click={togglePower}>⏻ {$t(office.paused === 1 ? 'office.power.off' : 'office.power.on')}</button>
 				<button class="k-icon-btn" type="button" aria-label={$t('office.common.close')} on:click={() => dispatch('close')}><Icon name="x" /></button>
 			</div>
-			<div class="op-chips">
+			<div class="op-chips" style="--oc:{office.color}">
 				<span class="k-chip op-kind">{kindLabel(kind)}</span>
 				<span class="k-chip">{$t('office.panel.agents', { n: agents.length })}</span>
 				{#if office.paused === 1}<span class="k-chip op-off">{$t('office.power.off_help')}</span>{/if}
@@ -667,6 +667,12 @@
 				<LockedFeature title={$t('office.locked.environment_title')} description={$t('office.locked.environment_body')} />
 			{/if}
 		</section>
+
+		<section class="op-section op-danger">
+			<h3 class="k-section-title">{$t('office.panel.danger')}</h3>
+			<p class="k-help">{$t('office.panel.danger_help')}</p>
+			<button class="k-btn k-btn--danger op-self-start" type="button" on:click={() => (deleteOpen = true)}>{$t('office.panel.delete')}</button>
+		</section>
 	{/if}
 
 	<svelte:fragment slot="foot">
@@ -677,7 +683,6 @@
 					<a class="k-btn k-btn--ghost" href="/devops">{$t('office.panel.devops')}</a>
 				{/if}
 			</div>
-			<button class="k-btn k-btn--danger" type="button" on:click={() => (deleteOpen = true)}><span aria-hidden="true">💥</span>{$t('office.panel.delete')}</button>
 		{/if}
 	</svelte:fragment>
 </Drawer>
@@ -695,16 +700,20 @@
 
 <style>
 	.op-top { display: flex; align-items: center; gap: 10px; }
-	.op-dot { width: 12px; height: 12px; border-radius: 3px; flex: none; }
-	.op-title { flex: 1; min-width: 0; margin: 0; font: 600 18px/1.2 var(--font-display); color: var(--text-1); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+	.op-dot { width: 12px; height: 12px; border-radius: 3px; flex: none; box-shadow: 0 0 10px var(--oc); }
+	.op-title {
+		flex: 1; min-width: 0; margin: 0; font: 800 19px/1.2 var(--font-display); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+		background: linear-gradient(90deg, color-mix(in srgb, var(--oc) 75%, white), #22D3EE 60%, #A78BFA); -webkit-background-clip: text; background-clip: text; color: transparent;
+	}
 	.op-power { flex: none; display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px; border-radius: 999px; border: 1px solid var(--border-h); background: var(--surface-2); color: var(--text-3); font: 600 12px var(--font-body); cursor: pointer; }
 	.op-power.on { color: var(--green); border-color: color-mix(in srgb, var(--green) 45%, var(--border)); }
 	.op-power:disabled { opacity: 0.5; cursor: wait; }
 	.op-power:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
-	.op-off { color: var(--text-2); }
+	.op-chips .op-off { color: var(--text-2); background: var(--surface-2); border-color: var(--border); }
 	.op-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
-	.op-kind { font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; }
-	.op-working { color: var(--green); }
+	.op-chips .k-chip { color: color-mix(in srgb, #A78BFA 70%, white); background: color-mix(in srgb, #A78BFA 14%, transparent); border-color: color-mix(in srgb, #A78BFA 40%, transparent); }
+	.op-chips .op-kind { font-family: var(--font-mono); letter-spacing: 0.04em; text-transform: uppercase; color: color-mix(in srgb, var(--oc) 70%, white); background: color-mix(in srgb, var(--oc) 16%, transparent); border-color: color-mix(in srgb, var(--oc) 45%, transparent); }
+	.op-chips .op-working { color: #34D399; background: color-mix(in srgb, #34D399 14%, transparent); border-color: color-mix(in srgb, #34D399 45%, transparent); box-shadow: 0 0 12px -4px #34D399; }
 	.op-section { display: grid; gap: 12px; padding: 16px 0; border-bottom: 1px solid var(--border); }
 	.op-section:last-child { border-bottom: 0; }
 	.op-status { margin-left: auto; font-weight: 400; font-size: 11.5px; color: var(--text-3); }
@@ -766,6 +775,7 @@
 	}
 	.op-callout p { margin: 0 0 8px; }
 	.op-foot-left { display: flex; gap: 4px; }
+	.op-danger { margin-top: 24px; }
 	@media (prefers-reduced-motion: reduce) {
 		.op-switch-track, .op-switch-thumb { transition: none; }
 	}

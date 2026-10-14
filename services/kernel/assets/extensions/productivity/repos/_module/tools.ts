@@ -15,6 +15,7 @@ import {
 import type { RepoService } from "./service.js";
 import { RepoService as RepoServiceClass } from "./service.js";
 import type { Repo } from "./types.js";
+import { gitArgs, showFileArgs } from "./git-args.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -23,6 +24,7 @@ const MAX_READ_BYTES = 200_000;          // 200 KB per read call
 const MAX_LIST_ENTRIES = 500;            // entries per list call
 const MAX_SEARCH_RESULTS = 200;          // results per search
 const MAX_OUTPUT_BYTES = 20_000;         // truncate exec/search output
+const MAX_PATCH_BYTES = 60_000;          // a diff/show with the patch
 
 // Files we never traverse — keep search and list responsive.
 const SKIP_DIRS = new Set([
@@ -332,23 +334,37 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
       name: "kernel_repos_read",
       description:
         "Read a file from a registered repo, relative to its root. " +
-        "Large files (>200 KB) are returned in chunks — pass `offset` to page.",
+        "Large files (>200 KB) are returned in chunks — pass `offset` to page. " +
+        "With `ref` (a branch, tag or sha, e.g. `origin/develop`) it reads the file as committed there, " +
+        "not the working tree — which may be on another branch or carry uncommitted changes.",
       schema: z.object({
         ...repoSelectorSchema,
         file: z.string().describe("Repo-relative path, e.g. `src/index.ts`."),
         offset: z.number().optional().describe("Starting byte offset (default 0)."),
+        ref: z.string().optional().describe("Read the file at this ref instead of the working tree."),
       }),
       handler: async (a) => {
         const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const jailed = RepoServiceClass.jailPath(r.repo, a.file);
         if (!jailed.ok) return errorResult(jailed.error);
-        if (!existsSync(jailed.abs)) return errorResult(`file not found: ${a.file}`);
-        let st;
-        try { st = statSync(jailed.abs); } catch (e) { return errorResult(`stat failed: ${String(e)}`); }
-        if (!st.isFile()) return errorResult(`not a file: ${a.file}`);
         let raw;
-        try { raw = readFileSync(jailed.abs, "utf8"); } catch (e) { return errorResult(`read failed: ${String(e)}`); }
+        if (a.ref) {
+          const args = showFileArgs(a.ref, relative(r.repo.path, jailed.abs));
+          if (!args.ok) return errorResult(args.error);
+          try {
+            raw = (await execFileAsync("git", args.argv, { cwd: r.repo.path, timeout: 15_000, maxBuffer: 16 * 1024 * 1024 })).stdout;
+          } catch (err) {
+            const e = err as { stderr?: string; message?: string };
+            return errorResult(`git show ${a.ref}:${a.file} failed: ${(e.stderr || e.message || String(err)).trim()}`);
+          }
+        } else {
+          if (!existsSync(jailed.abs)) return errorResult(`file not found: ${a.file}`);
+          let st;
+          try { st = statSync(jailed.abs); } catch (e) { return errorResult(`stat failed: ${String(e)}`); }
+          if (!st.isFile()) return errorResult(`not a file: ${a.file}`);
+          try { raw = readFileSync(jailed.abs, "utf8"); } catch (e) { return errorResult(`read failed: ${String(e)}`); }
+        }
         const total = raw.length;
         const start = Math.max(0, Math.min(total, Math.floor(a.offset ?? 0)));
         const end = Math.min(total, start + MAX_READ_BYTES);
@@ -356,7 +372,7 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
         let suffix = "";
         if (end < total) suffix = `\n\n[... ${total - end} more bytes — call again with offset=${end}. Total: ${total} chars.]`;
         service.touch(r.repo.id);
-        return textResult(`### ${r.repo.name}:${a.file}${start > 0 ? ` (chars ${start}–${end} of ${total})` : ""}\n\n\`\`\`\n${chunk}${suffix}\n\`\`\``);
+        return textResult(`### ${r.repo.name}:${a.file}${a.ref ? ` @ ${a.ref}` : ""}${start > 0 ? ` (chars ${start}–${end} of ${total})` : ""}\n\n\`\`\`\n${chunk}${suffix}\n\`\`\``);
       },
     }),
 
@@ -494,51 +510,35 @@ export function repoTools(service: RepoService, visibleRoots: string[] = []): To
       name: "kernel_repos_git",
       description:
         "Run a read-only git operation against a registered repo. Supported ops: `status`, `diff`, `log`, `branch`, `show`. " +
+        "`ref` takes a ref or a range: `log` with `origin/stable..origin/develop` lists what develop has and stable does not; " +
+        "`grep` filters `log` by message (e.g. an issue number). `patch: true` returns the diff itself on `diff`/`show`. " +
         "Use `kernel_repos_exec` with `git ...` for anything that mutates (commit, push, checkout).",
       schema: z.object({
         ...repoSelectorSchema,
         op: z.enum(["status", "diff", "log", "branch", "show"]).describe("Which git op to run."),
-        ref: z.string().optional().describe("For `diff`/`log`/`show`: the ref/range (default: HEAD)."),
+        ref: z.string().optional().describe("For `diff`/`log`/`show`: the ref or range (default: HEAD)."),
         path: z.string().optional().describe("For `diff`/`log`: restrict to this path."),
         limit: limitArg(200, "For `log`: max commits (default 20)."),
+        grep: z.string().optional().describe("For `log`: only commits whose message contains this text (case-insensitive)."),
+        patch: z.boolean().optional().describe("For `diff`/`show`: include the patch, not just the file list (capped)."),
       }),
       handler: async (a) => {
         const r = resolveRepoOrError(service, { id: a.id, name: a.name }, callerAgentId(a));
         if (!r.ok) return errorResult(r.error);
         const cwd = r.repo.path;
-        let argv: string[];
-        switch (a.op) {
-          case "status": argv = ["status", "--short", "--branch"]; break;
-          case "diff": {
-            argv = ["diff", "--stat"];
-            if (a.ref) argv.push(a.ref);
-            if (a.path) {
-              const j = RepoServiceClass.jailPath(r.repo, a.path);
-              if (!j.ok) return errorResult(j.error);
-              argv.push("--", a.path);
-            }
-            break;
-          }
-          case "log": {
-            const limit = Math.max(1, Math.min(200, a.limit ?? 20));
-            argv = ["log", "--oneline", "--decorate", `-${limit}`];
-            if (a.ref) argv.push(a.ref);
-            if (a.path) {
-              const j = RepoServiceClass.jailPath(r.repo, a.path);
-              if (!j.ok) return errorResult(j.error);
-              argv.push("--", a.path);
-            }
-            break;
-          }
-          case "branch": argv = ["branch", "-a", "--no-color"]; break;
-          case "show": argv = ["show", "--stat", a.ref ?? "HEAD"]; break;
-          default: return errorResult(`unsupported op: ${a.op}`);
+        if (a.path && (a.op === "diff" || a.op === "log")) {
+          const j = RepoServiceClass.jailPath(r.repo, a.path);
+          if (!j.ok) return errorResult(j.error);
         }
+        const built = gitArgs({ op: a.op, ref: a.ref, path: a.op === "diff" || a.op === "log" ? a.path : undefined, limit: a.limit, grep: a.grep, patch: a.patch });
+        if (!built.ok) return errorResult(built.error);
+        const argv = built.argv;
+        const cap = a.patch ? MAX_PATCH_BYTES : MAX_OUTPUT_BYTES;
         try {
-          const { stdout, stderr } = await execFileAsync("git", argv, { cwd, timeout: 15_000, maxBuffer: 2 * 1024 * 1024 });
+          const { stdout, stderr } = await execFileAsync("git", argv, { cwd, timeout: 15_000, maxBuffer: 16 * 1024 * 1024 });
           service.touch(r.repo.id);
           const combined = (stdout + (stderr ? `\n--- stderr ---\n${stderr}` : "")).trim();
-          return textResult(`### git ${a.op} — ${r.repo.name}\n\n\`\`\`\n${truncate(combined || "(no output)", MAX_OUTPUT_BYTES)}\n\`\`\``);
+          return textResult(`### git ${a.op} — ${r.repo.name}\n\n\`\`\`\n${truncate(combined || "(no output)", cap)}\n\`\`\``);
         } catch (err) {
           const e = err as { stdout?: string; stderr?: string; message?: string };
           const combined = `${e.stdout ?? ""}${e.stderr ? `\n${e.stderr}` : ""}`.trim();

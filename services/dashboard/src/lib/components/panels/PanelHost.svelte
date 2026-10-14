@@ -119,7 +119,12 @@
   .ph { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
   .ph-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
   .ph-tabs button { background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 10px; color: var(--text-2); font: 600 11.5px 'Manrope', sans-serif; cursor: pointer; min-height: 30px; }
-  .ph-tabs button.on { border-color: var(--border-h); color: var(--text-1); background: var(--surface-2); }
+  .ph-tabs button:hover { color: var(--text-1); background: color-mix(in srgb, #22D3EE 6%, transparent); }
+  .ph-tabs button.on {
+    color: var(--text-1); border-color: color-mix(in srgb, #22D3EE 45%, var(--border));
+    background: linear-gradient(135deg, color-mix(in srgb, #22D3EE 20%, var(--surface-2)), color-mix(in srgb, #A78BFA 16%, var(--surface-2)));
+    box-shadow: 0 6px 16px -10px #22D3EE;
+  }
   .ph-tabs button:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
   .ph-extra { border-top: 1px solid var(--border); padding-top: 8px; }
   .ph-err { margin: 0; padding: 6px 10px; border-radius: 6px; background: rgba(240, 71, 112, .12); color: #ff9fb5; font: 500 11.5px 'Manrope', sans-serif; }
