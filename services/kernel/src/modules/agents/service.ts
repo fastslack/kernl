@@ -1430,6 +1430,23 @@ export class AgentService {
     return { from_agent_id: q.from_agent_id, question: q.question };
   }
 
+  /**
+   * The question left the operator (answered or dismissed): its "a cargo del
+   * operador" letters still unread would relaunch the asker with "keep
+   * waiting" for a question that is already closed. They are marked read.
+   */
+  markOwedLettersRead(id: string): number {
+    const q = this.getQuestion(id);
+    if (!q) return 0;
+    return this.db
+      .prepare(
+        `UPDATE agent_office_inbox SET status = 'read', read_at = ?
+         WHERE to_agent_id = ? AND from_agent_id = '__top_agent__' AND status = 'unread'
+           AND subject = ? AND instr(body, 'a cargo del operador') > 0`,
+      )
+      .run(isoNow(), q.from_agent_id, `ANSWER: ${q.question.slice(0, 160)}`).changes;
+  }
+
   /** A letter about a question to its asker (owed / dismissed notices). Subject keeps the ANSWER: prefix so AnswerQueue drains it. */
   postLetterAboutQuestion(id: string, subject: string, body: string): boolean {
     const q = this.getQuestion(id);
