@@ -3,10 +3,11 @@
    * Entity preview modal — what opens when a UUID chip inside a run output is
    * clicked.
    *
-   * The id could belong to any of seven things, and the kernel's tool results
+   * The id could belong to any of ten things, and the kernel's tool results
    * do not say which, so `open()` asks each endpoint in turn and renders
    * whichever one answers: communication, note, prospect, agent run, agent,
-   * CRM contact, reminder. Order matters — communications are the common case
+   * CRM contact, reminder, office letter, conversation, conversation turn
+   * (a turn opens its whole conversation). Order matters — communications are the common case
    * and are tried first.
    *
    * `handleOutputClick` stays in AgentWorld3D: it is wired to six different
@@ -87,12 +88,42 @@
         return;
       }
 
-      draftModalError = `ID ${entityId.slice(0, 8)}… not found in communications, notes, prospects, runs, agents, contacts, or reminders.`;
+      // Office letter — kernel_agents_post_to_colleague prints "inbox (id: …)".
+      const letterRes: any = await fetch('/api/agents/inbox/' + encodeURIComponent(entityId)).then(r => r.ok ? r.json() : null).catch(() => null);
+      if (letterRes?.message) {
+        const m = letterRes.message;
+        const [from, to] = await Promise.all([agentName(m.from_agent_id), agentName(m.to_agent_id)]);
+        draftModalData = { _type: 'letter', letter: m, from, to };
+        draftModalLoading = false;
+        return;
+      }
+
+      // Conversation, or one of its turns — either way the whole thread opens.
+      let convoId = entityId;
+      let turnId = '';
+      const turnRes: any = await fetch('/api/agents/messages/' + encodeURIComponent(entityId)).then(r => r.ok ? r.json() : null).catch(() => null);
+      if (turnRes?.message?.conversation_id) { convoId = turnRes.message.conversation_id; turnId = entityId; }
+      const convoRes: any = await fetch('/api/agents/conversations/' + encodeURIComponent(convoId)).then(r => r.ok ? r.json() : null).catch(() => null);
+      if (convoRes?.conversation) {
+        const names: Record<string, string> = {};
+        for (const p of convoRes.participants ?? []) names[p.id] = p.name;
+        draftModalData = { _type: 'conversation', conversation: convoRes.conversation, messages: convoRes.messages ?? [], names, turnId };
+        draftModalLoading = false;
+        return;
+      }
+
+      draftModalError = `ID ${entityId.slice(0, 8)}… not found in communications, notes, prospects, runs, agents, contacts, reminders, letters, or conversations.`;
     } catch (e: any) {
       draftModalError = e?.message || 'Failed to load';
     } finally {
       draftModalLoading = false;
     }
+  }
+
+  async function agentName(id: string): Promise<string> {
+    if (!id) return '—';
+    const r: any = await fetch('/api/agents/' + encodeURIComponent(id)).then(x => x.ok ? x.json() : null).catch(() => null);
+    return r?.agent?.name ?? id.slice(0, 8);
   }
 
   function closeDraftModal() {
@@ -114,7 +145,10 @@
             {:else if draftModalData?._type === 'agent'}Agent
             {:else if draftModalData?._type === 'contact'}Contact
             {:else if draftModalData?._type === 'reminder'}Reminder
-            {:else}Draft{/if}
+            {:else if draftModalData?._type === 'letter'}Letter
+            {:else if draftModalData?._type === 'conversation'}Conversation
+            {:else if draftModalData?.comm || draftModalLoading}Draft
+            {:else}Not found{/if}
           </div>
           <div class="modal-sub">
             {#if draftModalData?.comm}
@@ -132,7 +166,11 @@
               {draftModalData.contact.relationship || 'contact'} · <code>{draftModalData.contact.id?.slice(0,8)}</code>
             {:else if draftModalData?._type === 'reminder'}
               {draftModalData.reminder.status} · {draftModalData.reminder.repeat} · <code>{draftModalData.reminder.id?.slice(0,8)}</code>
-            {:else}Loading…{/if}
+            {:else if draftModalData?._type === 'letter'}
+              {draftModalData.letter.status} · <code>{draftModalData.letter.id?.slice(0,8)}</code>
+            {:else if draftModalData?._type === 'conversation'}
+              {draftModalData.conversation.kind} · {draftModalData.conversation.status} · {draftModalData.messages.length} turn(s) · <code>{draftModalData.conversation.id?.slice(0,8)}</code>
+            {:else if draftModalLoading}Loading…{/if}
           </div>
         </div>
         <button class="draft-modal-close" on:click={closeDraftModal} title="Close">×</button>
@@ -250,6 +288,37 @@
             <pre class="draft-body-pre">{rem.body}</pre>
           </div>
         {/if}
+
+      {:else if draftModalData?._type === 'letter'}
+        {@const l = draftModalData.letter}
+        <div class="draft-field"><span class="draft-lbl">From</span><span class="draft-val">{draftModalData.from}</span></div>
+        <div class="draft-field"><span class="draft-lbl">To</span><span class="draft-val">{draftModalData.to}</span></div>
+        <div class="draft-field"><span class="draft-lbl">Subject</span><span class="draft-val draft-subject">{l.subject || '(no subject)'}</span></div>
+        {#if l.created_at}<div class="draft-field"><span class="draft-lbl">Sent</span><span class="draft-val">{String(l.created_at).slice(0,16).replace('T',' ')}</span></div>{/if}
+        {#if l.read_at}<div class="draft-field"><span class="draft-lbl">Read</span><span class="draft-val">{String(l.read_at).slice(0,16).replace('T',' ')}</span></div>{/if}
+        <div class="draft-body copy-wrap">
+          <CopyTextBtn text={l.body || ''} title="Copy letter" />
+          <div class="draft-body-pre ip-out-md">{@html formatRunOutput(l.body || '(empty)')}</div>
+        </div>
+
+      {:else if draftModalData?._type === 'conversation'}
+        {@const cv = draftModalData.conversation}
+        <div class="draft-field"><span class="draft-lbl">Topic</span><span class="draft-val draft-subject">{cv.topic || '(no topic)'}</span></div>
+        <div class="draft-field"><span class="draft-lbl">With</span><span class="draft-val">{Object.values(draftModalData.names).join(', ') || '—'}</span></div>
+        <div class="draft-body convo-turns">
+          {#each draftModalData.messages as m (m.id)}
+            <div class="convo-turn" class:convo-turn-hit={m.id === draftModalData.turnId}>
+              <div class="convo-turn-head">
+                <span class="draft-subject">{draftModalData.names[m.from_agent_id] ?? m.from_agent_id.slice(0, 8)}</span>
+                <span class="draft-status">{m.role}</span>
+                <span class="convo-turn-ts">{String(m.created_at).slice(0,16).replace('T',' ')}</span>
+              </div>
+              <div class="ip-out-md convo-turn-body">{@html formatRunOutput(m.body || '')}</div>
+            </div>
+          {:else}
+            <div class="ip-loading">No turns yet.</div>
+          {/each}
+        </div>
       {/if}
 
       <div class="modal-actions">
@@ -326,4 +395,11 @@
     color:#d0d4e0;white-space:pre-wrap;word-break:break-word;
     scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent;
   }
+  .convo-turns{max-height:420px;overflow-y:auto;padding:8px;display:flex;flex-direction:column;gap:8px;
+    scrollbar-width:thin;scrollbar-color:rgba(120,130,160,.25) transparent}
+  .convo-turn{border-radius:6px;border:1px solid transparent}
+  .convo-turn-hit{border-color:rgba(16,185,129,.5)}
+  .convo-turn-head{display:flex;gap:8px;align-items:baseline;padding:4px 6px;font:400 11px 'Manrope',sans-serif}
+  .convo-turn-ts{margin-left:auto;font:400 10px 'JetBrains Mono',monospace;color:#6a6f82}
+  .convo-turn-body{max-height:none;padding:8px 12px}
 </style>
