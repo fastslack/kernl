@@ -439,6 +439,17 @@ const SETTING_CATALOG: SettingDef[] = [
     applyToConfig: (v) => { process.env.AGENTS_DEFAULT_SANDBOX_DRIVER = v; },
   },
   {
+    key: "OPERATOR_CHANNELS",
+    label: { en: "Operator channels", es: "Canales del operador" },
+    description: {
+      en: "Where agents' questions and reminders reach you, in order of preference (comma-separated provider ids, e.g. \"telegram,whatsapp\"). The first ready one is used; the dashboard always gets them. Empty = any ready channel.",
+      es: "Por dónde te llegan las preguntas y recordatorios de los agentes, en orden de preferencia (ids separados por coma, ej. \"telegram,whatsapp\"). Se usa el primero que esté listo; el dashboard las recibe siempre. Vacío = cualquier canal listo.",
+    },
+    category: "agents",
+    type: "string",
+    applyToConfig: (v) => { process.env.OPERATOR_CHANNELS = v; },
+  },
+  {
     key: "KERNEL_AGENT_DOCKER_NETWORK",
     label: { en: "Agent sandbox network", es: "Red del sandbox de agentes" },
     description: {

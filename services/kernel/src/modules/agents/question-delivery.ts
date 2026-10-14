@@ -37,7 +37,9 @@ export function answersGoal(letters: Array<{ body: string }>): string {
       ? "An answer to one of your earlier questions arrived while you were busy.\n\n"
       : `Answers to ${n} of your earlier questions arrived while you were busy.\n\n`) +
     letters.map((l) => l.body).join("\n\n---\n\n") +
-    "\n\nResume from where you stopped: act on each answer using your tools. " +
+    "\n\nResume from where you stopped: act on each final answer (and on each DESCARTADA one) using your tools. " +
+    "A letter marked \"a cargo del operador\" is NOT a final answer: the operator is still handling it, " +
+    "so keep waiting and take no action for it. " +
     "Do not re-ask questions that are answered here."
   );
 }

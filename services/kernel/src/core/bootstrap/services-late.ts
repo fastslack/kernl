@@ -23,7 +23,12 @@ import type { createRustDelegates } from "../rust/delegates.js";
 import type { DbDriverRegistry } from "../db-drivers/db-driver-registry.js";
 import { Orchestrator } from "../orchestrator.js";
 import { wireMessageRouting } from "../message-routing.js";
-import type { KernelHttpServer } from "../http-server.js";
+import { HttpError, type KernelHttpServer } from "../http-server.js";
+import { OperatorComms } from "../operator-comms/driver.js";
+import { buildAdapters } from "../operator-comms/adapters.js";
+import { resolveHumanChoice } from "../../modules/agents/question-delivery.js";
+import type { AgentService } from "../../modules/agents/service.js";
+import type { AgentExecutor } from "../../modules/agents/executor.js";
 import { VoiceService, registerVoiceRoutes } from "../../voice/index.js";
 import { RateLimiter, type PairingManager } from "../../security/index.js";
 
@@ -31,6 +36,7 @@ export interface ServicesLateResult {
   voiceService: VoiceService;
   rateLimiter: RateLimiter;
   orchestrator: Orchestrator;
+  operatorComms: OperatorComms;
 }
 
 export async function wireServicesLate(args: {
@@ -89,6 +95,23 @@ export async function wireServicesLate(args: {
   // ── Start all active channel providers from marketplace config ──
   await notificationRegistry.startAll();
 
+  // The one driver for operator decisions (spec 2026-10-14): built before the
+  // channels are wired because inbound replies/callbacks go through it.
+  const operatorComms = new OperatorComms({
+    db: sqlite,
+    service: agentService as AgentService,
+    adapters: () => buildAdapters({
+      list: () => notificationRegistry.getProviderIds().map((id) => notificationRegistry.getProvider(id)).filter(Boolean) as never,
+    }),
+    preference: () => (process.env.OPERATOR_CHANNELS ?? "").split(",").map((s) => s.trim()).filter(Boolean),
+    dashboard: async (n) => {
+      await notifier.send({ title: n.title, body: n.body, channel: "dashboard", priority: n.priority, source: "agents" });
+    },
+    answer: (id, choice) =>
+      resolveHumanChoice(agentService as AgentService, agentExecutor as AgentExecutor, events, id, choice),
+    linkFor: (id) => `/agents-flow?question=${id}`,
+  });
+
   // Wire all channel providers (Telegram, WhatsApp, Slack, Discord, WebChat) to Orchestrator.
   wireMessageRouting({
     notificationRegistry,
@@ -99,6 +122,7 @@ export async function wireServicesLate(args: {
     agentExecutor: agentExecutor as Parameters<typeof wireMessageRouting>[0]["agentExecutor"],
     events,
     voiceService,
+    operatorComms,
   });
 
   const activeProviders = notificationRegistry.getStatuses().filter((s) => s.connected);
@@ -141,35 +165,23 @@ export async function wireServicesLate(args: {
       });
   });
 
-  // ── Agents asking the operator → the bell ──────────
-  // An agent blocked on a question is waiting on a human who has no idea. The
-  // question panel only helps someone already looking at it, so route these
-  // the same way as an auto-pause. Scoped to questions on purpose: they are
-  // addressed to a person by construction, while agent-to-agent messages are
-  // constant and would drown the bell.
-  events.on("agent:question_asked" as never, (p: never) => {
-    const e = p as unknown as {
-      agent_name?: string;
-      question?: string;
-      options?: string[];
-    };
-    const name = e.agent_name || "An agent";
-    const opts = e.options ?? [];
-    void notifier
-      .send({
-        title: `${name} needs an answer`,
-        body:
-          `${(e.question || "").slice(0, 400)}` +
-          (opts.length ? `\n\nOptions: ${opts.join(" · ")}` : "") +
-          `\n\nAnswer it from /agents-flow.`,
-        channel: "dashboard",
-        priority: "normal",
-        source: "agents",
-      })
-      .catch((err) => {
-        log.warn(`Question notification from "${name}" failed: ${err instanceof Error ? err.message : String(err)}`);
-      });
+  // ── Operator decisions → one driver (spec 2026-10-14) ──
+  const safe = (what: string, p: Promise<void>) =>
+    p.catch((err) => log.warn(`operator-comms ${what}: ${err instanceof Error ? err.message : String(err)}`));
+  events.on("agent:question_asked" as never, ((p: { question_id: string }) => safe("ask", operatorComms.ask(p.question_id))) as never);
+  events.on("agent:question_owed" as never, ((p: { question_id: string }) => safe("owed", operatorComms.owed(p.question_id))) as never);
+  events.on("agent:question_remind" as never, ((p: { question_id: string }) => safe("remind", operatorComms.remind(p.question_id))) as never);
+  events.on("agent:question_resolved" as never, ((p: { question_id: string }) => safe("resolved", operatorComms.resolved(p.question_id))) as never);
+
+  // Offices and agents can tell the operator something without asking anything.
+  // Registered here (not in the agents routes) because the driver only exists
+  // once the channels are up, after the HTTP routes were registered.
+  httpServer?.route<{ title?: string; body?: string; source?: string }>("POST", "/api/operator/inform", ({ body }) => {
+    const title = String(body?.title ?? "").trim().slice(0, 200);
+    if (!title) throw new HttpError(400, "title required");
+    void operatorComms.inform({ title, body: String(body?.body ?? "").slice(0, 4000), source: String(body?.source ?? "office") });
+    return { success: true };
   });
 
-  return { voiceService, rateLimiter, orchestrator };
+  return { voiceService, rateLimiter, orchestrator, operatorComms };
 }

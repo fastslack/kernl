@@ -4,7 +4,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
-import { AnswerQueue, answerAndDeliver, deliverPendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
+import { AnswerQueue, answersGoal, answerAndDeliver, deliverPendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
 
 const OPTS = [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }];
 
@@ -195,6 +195,14 @@ describe("resolveHumanChoice", () => {
     expect(letters[0].subject.startsWith("ANSWER:")).toBe(true);
     expect(letters[0].body).toContain("a cargo del operador");
     expect(goals).toEqual([]);
+  });
+
+  it("answersGoal tells the agent an owed letter is not final", () => {
+    const { w, id } = ask();
+    resolveHumanChoice(service, executor, events, id, { kind: "task" });
+    const goal = answersGoal(service.getUnreadInbox(w.id));
+    expect(goal).toContain("a cargo del operador");
+    expect(goal).toContain("keep waiting and take no action");
   });
 
   it("Listo from owed → answered and the asker resumes", () => {
