@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { ToolDefinition } from "@kernl/extension-sdk";
-import { forgeConnectionTools } from "../../_lib/forge/index.js";
+import { forgeConnectionTools, forgeReadTools } from "../../_lib/forge/index.js";
 import type { GitHubConnectionsService } from "./connections-service.js";
 import type { GitHubRepoProvider } from "./provider.js";
 
@@ -8,7 +8,7 @@ export function githubChannelTools(
   connections: GitHubConnectionsService,
   provider: GitHubRepoProvider,
 ): ToolDefinition[] {
-  return forgeConnectionTools({
+  return [...forgeConnectionTools({
     prefix: "github",
     label: "GitHub",
     addDescription:
@@ -26,5 +26,12 @@ export function githubChannelTools(
     test: (id) => provider.testConnection(id),
     addedSuffix: () => "",
     listDetails: (c) => `app_id=${c.app_id}, installation=${c.installation_id}`,
-  });
+  }), ...forgeReadTools({
+    prefix: "github",
+    label: "GitHub",
+    changeNoun: "pr",
+    reader: provider,
+    connections: () => connections.list(),
+    hostOf: () => "github.com",
+  })];
 }

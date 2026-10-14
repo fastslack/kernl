@@ -39,6 +39,7 @@ import {
 } from "./core/llm/cost-router.js";
 import type { ToolMemoryService } from "./modules/tool-memory/service.js";
 import { getRequestContext } from "./core/request-context.js";
+import { callerToolDenial } from "./core/caller-tool-gate.js";
 import { proxyPeerCall } from "./core/peer-proxy.js";
 import type { MeshServiceLike } from "./core/extension-seams.js";
 
@@ -298,6 +299,11 @@ export function createMcpServer(
       const errResult = toCallToolResult(errorResult(`Unknown tool: ${name}`));
       return attachReceipt(name, args, errResult, []);
     }
+
+    // A read-only agent (the question investigator) is held to its tool set
+    // here too, not only by its executor's options (core/caller-tool-gate.ts).
+    const denial = callerToolDenial(getRequestContext().callerAgentId, name);
+    if (denial) return attachReceipt(name, args, toCallToolResult(errorResult(denial)), []);
 
     // Outbound tools (projects) are already guarded: the registry hands out
     // their wrapped copies (core/outbound-guard.ts, ModuleRegistry.getAllTools).

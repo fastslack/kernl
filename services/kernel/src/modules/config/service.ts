@@ -229,6 +229,17 @@ const SETTING_CATALOG: SettingDef[] = [
     applyToConfig: (v, c) => { c.agents.defaultModel = v; },
   },
   {
+    key: "QUESTION_OPINION_MODEL",
+    label: { en: "Question opinion model", es: "Modelo de la opinión sobre preguntas" },
+    description: {
+      en: "Model of the read-only investigator behind \"What would the AI answer?\" on escalated questions. It runs on Claude Code, with no fallback: if this model is unavailable, the card says so. Default claude-opus-5-5.",
+      es: "Modelo del investigador de solo lectura detrás de «¿Qué contestaría la IA?» en las preguntas escaladas. Corre en Claude Code, sin fallback: si este modelo no está disponible, la tarjeta lo dice. Por defecto claude-opus-5-5.",
+    },
+    category: "agents",
+    type: "string",
+    applyToConfig: (v) => { process.env.QUESTION_OPINION_MODEL = v; },
+  },
+  {
     key: "AGENTS_MAX_CONCURRENT",
     label: { en: "Agents Max Concurrent Runs", es: "Máximo de corridas simultáneas" },
     description: { en: "Maximum number of agent runs that can execute concurrently.", es: "Cantidad máxima de corridas de agentes en paralelo." },

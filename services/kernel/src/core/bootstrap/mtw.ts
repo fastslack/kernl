@@ -365,6 +365,8 @@ export async function initMtw(args: {
     "agent:flow:escalation",
     "agent:flow:question_asked",
     "agent:flow:question_answered",
+    // The investigator's opinion on a question is ready (or failed): the card reloads it.
+    "agent:flow:question_opinion",
     // Colleague letters: AgentWorld3D flies them desk to desk.
     "agent:inbox:posted",
   ] as const) {
