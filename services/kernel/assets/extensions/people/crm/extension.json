@@ -8,6 +8,7 @@
   "description": "Contacts, companies, leads — the people graph.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["business"],
   "category": "people",
   "tags": [
     "crm",

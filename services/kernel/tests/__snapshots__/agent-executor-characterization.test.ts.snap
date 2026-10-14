@@ -85,6 +85,11 @@ exports[`AgentExecutor.execute — characterization assembles every system-promp
   ],
   [
     "svc",
+    "getEditionMode",
+    [],
+  ],
+  [
+    "svc",
     "buildDirectoryBlock",
     [
       "agent-1",
@@ -684,6 +689,11 @@ exports[`AgentExecutor.execute — characterization builds the minimal prompt wi
   ],
   [
     "svc",
+    "getEditionMode",
+    [],
+  ],
+  [
+    "svc",
     "buildDirectoryBlock",
     [
       "agent-1",
@@ -991,6 +1001,11 @@ exports[`AgentExecutor.execute — characterization orders the model chain: dedu
     "log",
     "warn",
     "Agent "Nadia": dropped cc from the chain — 3 tools to run and those providers cannot execute a tool loop.",
+  ],
+  [
+    "svc",
+    "getEditionMode",
+    [],
   ],
   [
     "svc",
@@ -1480,6 +1495,11 @@ exports[`AgentExecutor.execute — characterization falls back to any alive tool
   ],
   [
     "svc",
+    "getEditionMode",
+    [],
+  ],
+  [
+    "svc",
     "buildDirectoryBlock",
     [
       "agent-1",
@@ -1959,6 +1979,11 @@ exports[`AgentExecutor.execute — characterization records a safety abort as an
   ],
   [
     "svc",
+    "getEditionMode",
+    [],
+  ],
+  [
+    "svc",
     "buildDirectoryBlock",
     [
       "agent-1",
@@ -2421,6 +2446,11 @@ exports[`AgentExecutor.execute — characterization cycles through other provide
   ],
   [
     "svc",
+    "getEditionMode",
+    [],
+  ],
+  [
+    "svc",
     "buildDirectoryBlock",
     [
       "agent-1",
@@ -2719,6 +2749,11 @@ exports[`AgentExecutor.execute — characterization records a non-retryable erro
         "variables": "{"role":"an analyst","team":"Ops"}",
       },
     ],
+  ],
+  [
+    "svc",
+    "getEditionMode",
+    [],
   ],
   [
     "svc",
@@ -3127,6 +3162,11 @@ exports[`AgentExecutor.execute — characterization wires kernel_agents_invoke p
         "variables": "{"role":"an analyst","team":"Ops"}",
       },
     ],
+  ],
+  [
+    "svc",
+    "getEditionMode",
+    [],
   ],
   [
     "svc",
@@ -4090,6 +4130,11 @@ exports[`AgentExecutor.execute — characterization stops on cancellation and un
         "variables": "{"role":"an analyst","team":"Ops"}",
       },
     ],
+  ],
+  [
+    "svc",
+    "getEditionMode",
+    [],
   ],
   [
     "svc",

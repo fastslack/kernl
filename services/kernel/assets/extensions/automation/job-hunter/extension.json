@@ -9,6 +9,7 @@
   "long_description": "Agent handlers for the \"Jobs Hunter\" office: one scraper per board stores keyword-matched ads as #job notes, the curator scores and promotes the best, and the dispatcher asks the jobs-drafter agent for a proposal per curated note. Each handler reads its tunables from its agent's variables. The office itself is created by scripts/seeds/jobs-office.ts; nothing is scheduled until then.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "automation",
   "tags": [
     "jobs",

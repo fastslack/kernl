@@ -14,6 +14,9 @@
 
 // ── Identity / classification ─────────────────────────────────────────
 
+/** Who an extension is for. Absent or empty means both. */
+export type Audience = "personal" | "business";
+
 /** Primary classification — what this extension IS, mostly. */
 export type ExtensionType =
   | "module"         // Backend Node module (KernelModule factory)
@@ -298,6 +301,8 @@ export interface ExtensionManifest {
   // ── Security / commerce / integrity ──
   permissions?: ExtensionPermission[];
   pricing?: PricingBlock;
+  /** Which edition activates this extension at setup. Absent → both. */
+  audience?: Audience[];
   integrity?: IntegrityBlock;
 
   /**

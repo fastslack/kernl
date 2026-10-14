@@ -9,6 +9,7 @@
   "description": "Backend for the Gitea channel: connection storage (host + PAT) and the RepoProvider implementation consumed by triage and any other module that needs Gitea access.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["business"],
   "category": "automation",
   "tags": [
     "gitea",

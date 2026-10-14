@@ -9,6 +9,7 @@
   "long_description": "Office that owns the triage maintainer-bot loop on a fixed cadence:\n\n- :00 of every hour — kernel_triage_sync against every enabled target.\n- :17 — pick items due for review (never reviewed, or updated since last review) and run kernel_triage_review on each.\n- :37 — apply pending high-confidence proposed closes with dry_run=false, snapshot-guarded and throttled.\n\nUses Anthropic Haiku 4.5 as the agent driver; the actual LLM review uses whatever the kernel's LlmClient is configured with.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["business"],
   "category": "automation",
   "tags": ["triage", "automation", "cron", "office"],
   "dependencies": ["com.kernl.triage"],

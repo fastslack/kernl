@@ -9,6 +9,7 @@
   "description": "Entertainment hub — cinema, shows, games, and other leisure activities.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "leisure",
   "frontend": {
     "navGroups": [
