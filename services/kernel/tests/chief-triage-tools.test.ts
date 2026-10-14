@@ -44,19 +44,19 @@ describe("chief triage tools", () => {
 
   it("answers by option index", async () => {
     const q = service.createQuestion({ from_agent_id: workerId, question: "Which DB?", options: OPTS });
-    await tool("kernel_agents_questions_answer").handler({ question_id: q.id, selected_index: 3, __caller_agent_id: chiefId });
+    await tool("kernel_agents_questions_answer").handler({ question_id: q.id, selected_index: 3, leaves_work_to_operator: false, __caller_agent_id: chiefId });
     expect(service.getQuestion(q.id)).toMatchObject({ status: "answered", answered_by: "chief", selected_option: "D", selected_index: 3 });
   });
 
   it("answers with free text", async () => {
     const q = service.createQuestion({ from_agent_id: workerId, question: "Which DB?", options: OPTS });
-    await tool("kernel_agents_questions_answer").handler({ question_id: q.id, text: "use sqlite", __caller_agent_id: chiefId });
+    await tool("kernel_agents_questions_answer").handler({ question_id: q.id, text: "use sqlite", leaves_work_to_operator: false, __caller_agent_id: chiefId });
     expect(service.getQuestion(q.id)).toMatchObject({ selected_option: "use sqlite", selected_index: -1 });
   });
 
   it("rejects an out-of-range index", async () => {
     const q = service.createQuestion({ from_agent_id: workerId, question: "Which DB?", options: OPTS });
-    const r = await tool("kernel_agents_questions_answer").handler({ question_id: q.id, selected_index: 7, __caller_agent_id: chiefId });
+    const r = await tool("kernel_agents_questions_answer").handler({ question_id: q.id, selected_index: 7, leaves_work_to_operator: false, __caller_agent_id: chiefId });
     expect(text(r)).toMatch(/selected_index/);
     expect(service.getQuestion(q.id)?.status).toBe("triage");
   });
@@ -65,5 +65,31 @@ describe("chief triage tools", () => {
     const q = service.createQuestion({ from_agent_id: workerId, question: "Spend $500?", options: OPTS });
     await tool("kernel_agents_questions_escalate").handler({ question_id: q.id, reason: "money", __caller_agent_id: chiefId });
     expect(service.getQuestion(q.id)).toMatchObject({ status: "pending", chief_note: "money" });
+  });
+
+  it("questions_answer escalates when the chief says it leaves work to the operator", async () => {
+    const q = service.createQuestion({ from_agent_id: workerId, question: "web!9?", options: OPTS });
+    const res = await tool("kernel_agents_questions_answer").handler({ question_id: q.id, selected_index: 0, leaves_work_to_operator: true, __caller_agent_id: chiefId });
+    expect(text(res)).toContain("Escalated");
+    expect(service.getQuestion(q.id)!.status).toBe("pending");
+  });
+
+  it("questions_answer escalates on the safety net even when the chief says false", async () => {
+    const q = service.createQuestion({ from_agent_id: workerId, question: "web!9?", options: OPTS });
+    await tool("kernel_agents_questions_answer").handler({ question_id: q.id, text: "Mantener merge_hold; REANUDAR lo decide el operador", leaves_work_to_operator: false, __caller_agent_id: chiefId });
+    const got = service.getQuestion(q.id)!;
+    expect(got.status).toBe("pending");
+    expect(got.chief_note).toContain("dejaba trabajo al operador");
+  });
+
+  it("ask_supervisor with for_operator goes straight to pending and keeps task flags", async () => {
+    await tool("kernel_agents_ask_supervisor").handler({
+      question: "¿Aprobar web!3?", for_operator: true,
+      options: [{ label: "Aprobar" }, { label: "Lo reviso yo", task: true }, { label: "Cambios" }, { label: "Esperar" }],
+      __caller_agent_id: workerId,
+    });
+    const q = service.listQuestions({ status: "pending" })[0];
+    expect(q.for_operator).toBe(true);
+    expect(q.options[1].task).toBe(true);
   });
 });
