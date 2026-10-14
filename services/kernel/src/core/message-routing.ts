@@ -17,6 +17,16 @@ import { WHATSAPP_CC_AGENT_NAME } from "../modules/agents/agent-name-conventions
 import { runTopAgentStreamed } from "./telegram-stream.js";
 import { log } from "./logger.js";
 
+async function tryCode(oc: OperatorComms | null | undefined, text: string): Promise<string | null> {
+  if (!oc) return null;
+  try {
+    return await oc.tryCodeReply(text);
+  } catch (err) {
+    log.warn(`operator-comms code reply: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
+
 const WHATSAPP_CC_PREFIX = /^\/cc(\s|$)/i;
 const WHATSAPP_MAX_CHARS = 3500;
 
@@ -40,7 +50,7 @@ export function wireMessageRouting(opts: {
     telegramTransport.onMessage(async (text, msgCtx) => {
       log.debug(`Telegram message from ${msgCtx.userId}: ${text}`);
 
-      const coded = operatorComms ? await operatorComms.tryCodeReply(text) : null;
+      const coded = await tryCode(operatorComms, text);
       if (coded) return { text: coded };
 
       // Natural-language messages go to the top agent (the top-rank
@@ -87,7 +97,7 @@ export function wireMessageRouting(opts: {
       telegramTransport.setVoiceService(voiceService, true);
       telegramTransport.onVoice(async (text, msgCtx) => {
         log.debug(`Telegram voice from ${msgCtx.userId}: ${text}`);
-        const coded = operatorComms ? await operatorComms.tryCodeReply(text) : null;
+        const coded = await tryCode(operatorComms, text);
         if (coded) return { text: coded };
         const topAgent =
           !text.trim().startsWith("/") && agentService && agentExecutor
@@ -123,7 +133,7 @@ export function wireMessageRouting(opts: {
     telegramTransport.onCallback(async (data, msgCtx) => {
       log.debug(`Telegram callback from ${msgCtx.userId}: ${data}`);
       if (data.startsWith("oq:") && operatorComms) {
-        return { text: await operatorComms.handleCallback(data) };
+        return { text: (await operatorComms.handleCallback(data)) || "Botón inválido." };
       }
       const response = await orchestrator.handleCallback(data, {
         userId: msgCtx.userId,
@@ -169,7 +179,7 @@ export function wireMessageRouting(opts: {
           };
         }
       }
-      const coded = operatorComms ? await operatorComms.tryCodeReply(message.text) : null;
+      const coded = await tryCode(operatorComms, message.text);
       if (coded) return { text: coded };
       const response = await orchestrator.handleMessage(message.text, {
         userId: msgCtx.userId,
@@ -223,7 +233,7 @@ export function wireMessageRouting(opts: {
         return;
       }
 
-      const coded = operatorComms ? await operatorComms.tryCodeReply(msg.text) : null;
+      const coded = await tryCode(operatorComms, msg.text);
       if (coded) {
         await waProvider.sendTo(msg.chat, { title: "", body: coded });
         return;
