@@ -221,10 +221,16 @@
     persistedTotal = 0;
   }
 
-  // Agents with currently running runs (based on real-time events)
+  // Agents with currently running runs (based on real-time events).
+  // A run cut short by a kernel restart never sends run_completed: the startup
+  // sweep only marks it failed in the DB, and this tab keeps its events across
+  // the reconnect. So a run the poll already sees finished counts as completed,
+  // or its agent would show as working until the page is reloaded.
   $: liveRunningAgents = (() => {
     const started = new Set<string>();
-    const completedRuns = new Set<string>();
+    const completedRuns = new Set<string>(
+      runs.filter(r => r.status !== 'running' && r.status !== 'pending').map(r => r.id),
+    );
     for (const e of flowEvents) {
       if (e.event === 'agent:flow:run_completed') completedRuns.add(String(e.data.run_id));
     }
