@@ -35,7 +35,7 @@ const PROVIDER_NAMES: Record<string, string> = {
   openai: 'OpenAI', nvidia: 'NVIDIA', ollama: 'Ollama', lmstudio: 'LM Studio', grok: 'Grok',
   gemini: 'Gemini', openrouter: 'OpenRouter', groq: 'Groq', mistral: 'Mistral', deepseek: 'DeepSeek',
   minimax: 'MiniMax', cerebras: 'Cerebras', together: 'Together AI', fireworks: 'Fireworks AI',
-  moonshot: 'Kimi', qwen: 'Qwen', zai: 'Z.ai', 'openai-compatible': 'OpenAI-compatible',
+  moonshot: 'Kimi', qwen: 'Qwen', zai: 'Z.ai', xiaomi: 'MiMo', 'openai-compatible': 'OpenAI-compatible',
 };
 
 export function providerName(slug: string | undefined): string {

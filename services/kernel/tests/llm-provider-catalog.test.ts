@@ -5,12 +5,12 @@ import {
 } from "../src/core/llm/provider-catalog.js";
 
 describe("provider catalog", () => {
-  it("has the 20 providers with unique slugs and aliases", () => {
+  it("has the 21 providers with unique slugs and aliases", () => {
     const slugs = PROVIDER_CATALOG.map((e) => e.slug);
     expect(slugs).toEqual([
       "nvidia", "gemini", "groq", "openrouter", "cerebras", "mistral",
       "ollama", "lmstudio", "openai-compatible",
-      "claude", "openai", "deepseek", "grok", "minimax", "together", "fireworks", "moonshot", "qwen", "zai",
+      "claude", "openai", "deepseek", "grok", "minimax", "together", "fireworks", "moonshot", "qwen", "zai", "xiaomi",
       "claude-code",
     ]);
     const all = PROVIDER_CATALOG.flatMap((e) => [e.slug, ...e.aliases]);
@@ -63,7 +63,7 @@ describe("provider catalog", () => {
   it("falls back recommended → free → paid → local → subscription", () => {
     expect(fallbackOrder()).toEqual([
       "nvidia", "gemini", "groq", "openrouter", "cerebras", "mistral",
-      "claude", "openai", "deepseek", "grok", "minimax", "together", "fireworks", "moonshot", "qwen", "zai",
+      "claude", "openai", "deepseek", "grok", "minimax", "together", "fireworks", "moonshot", "qwen", "zai", "xiaomi",
       "ollama", "lmstudio", "openai-compatible", "claude-code",
     ]);
   });
@@ -94,9 +94,16 @@ describe("provider catalog", () => {
     expect(other.temperature).toBe(0.2);
   });
 
+  it("turns MiMo's thinking off, since its reasoning is not sent back in a tool loop", () => {
+    const body: Record<string, unknown> = { model: "mimo-v2.6-pro" };
+    applyModelQuirks(body, "xiaomi", "mimo-v2.6-pro");
+    expect(body.thinking).toEqual({ type: "disabled" });
+  });
+
   it("resolves the new aliases", () => {
     expect(canonicalSlug("kimi")).toBe("moonshot");
     expect(canonicalSlug("dashscope")).toBe("qwen");
     expect(canonicalSlug("glm")).toBe("zai");
+    expect(canonicalSlug("mimo")).toBe("xiaomi");
   });
 });

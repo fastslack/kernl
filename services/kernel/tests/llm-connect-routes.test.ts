@@ -46,16 +46,21 @@ const post = (path: string, body: unknown = {}) =>
   fetch(`${base}${path}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
 
 describe("connect routes", () => {
-  it("GET /api/llm/catalog lists the 20 providers with state, never the raw key", async () => {
+  it("GET /api/llm/catalog lists the 21 providers with state, never the raw key", async () => {
     store.nvidia = { apiKey: "nvapi-1234567890abcd", connectedAt: "t" };
     chain = [{ provider: "nim", model: "" }];
     const body = await (await fetch(`${base}/api/llm/catalog`)).json() as any;
-    expect(body.providers).toHaveLength(20);
+    expect(body.providers).toHaveLength(21);
     const nv = body.providers.find((p: any) => p.slug === "nvidia");
     expect(nv).toMatchObject({ recommended: true, connected: true, model: "nvidia/nemotron-3-super-120b-a12b" });
     expect(nv.keyMasked).not.toContain("1234567890");
     expect(body.chain).toEqual([{ provider: "nvidia", model: "" }]);
     expect(JSON.stringify(body)).not.toContain("nvapi-1234567890abcd");
+  });
+
+  it("versions each brand logo by its contents, so a redrawn logo is not hidden by the browser cache", async () => {
+    const body = await (await fetch(`${base}/api/llm/catalog`)).json() as any;
+    for (const p of body.providers) expect(p.logo).toMatch(/^\/api\/extensions\/brand\/[a-z0-9-]+\.svg\?v=[0-9a-f]{8}$/);
   });
 
   it("connect keeps the optional key of an OpenAI-compatible server", async () => {

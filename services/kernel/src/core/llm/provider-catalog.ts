@@ -510,6 +510,36 @@ export const PROVIDER_CATALOG: readonly ProviderCatalogEntry[] = [
     docsUrl: "https://docs.z.ai/guides/overview/quick-start",
   },
   {
+    slug: "xiaomi", aliases: ["mimo", "xiaomi-mimo"], name: "Xiaomi MiMo", group: "paid",
+    kind: "openai-compatible", baseUrl: "https://api.xiaomimimo.com/v1",
+    // Token Plan keys (tp-…) only work on the Token Plan servers, not here.
+    needsKey: true, keyUrl: "https://platform.xiaomimimo.com/#/console/api-keys", keyHint: "^sk-",
+    logo: "/api/extensions/brand/xiaomi.svg",
+    blurb: {
+      es: "Los modelos MiMo de Xiaomi, baratos, con contexto de un millón de tokens.",
+      en: "Xiaomi's MiMo models, cheap, with a one-million-token context.",
+    },
+    tag: { es: "pago por uso · barato", en: "pay as you go · cheap" },
+    pricing: {
+      es: "Pagás por uso, con precios bajos. Las keys del Token Plan (tp-…) no sirven acá.",
+      en: "Pay per use, at low prices. Token Plan keys (tp-…) don't work here.",
+    },
+    steps: {
+      es: ["Creá tu cuenta en platform.xiaomimimo.com y cargá saldo", "Abrí API Keys y creá una", "Copiá la key (empieza con sk-) y pegala acá"],
+      en: ["Create your account at platform.xiaomimimo.com and add credit", "Open API Keys and create one", "Copy the key (it starts with sk-) and paste it here"],
+    },
+    models: { recommended: "mimo-v2.6-pro", fast: "mimo-v2.6-flash" },
+    // In thinking mode MiMo wants its reasoning sent back in a tool loop,
+    // which this adapter does not do yet: turn thinking off.
+    quirks: {
+      "mimo-v2.6-pro": { extraBody: { thinking: { type: "disabled" } } },
+      "mimo-v2.6-flash": { extraBody: { thinking: { type: "disabled" } } },
+    },
+    toolCap: 64,
+    capabilities: { contextWindow: 1_048_576 },
+    docsUrl: "https://mimo.mi.com/docs/en-US/quick-start/summary/first-api-call",
+  },
+  {
     slug: "claude-code", aliases: ["claude_code"], name: "Claude Code", group: "subscription",
     kind: "claude-code", baseUrl: "", needsKey: false,
     logo: "/api/extensions/brand/claude-code.svg",

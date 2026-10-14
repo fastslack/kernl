@@ -6,13 +6,13 @@ const realFetch = globalThis.fetch;
 afterEach(() => { globalThis.fetch = realFetch; });
 
 describe("catalog providers", () => {
-  it("registers all 20 catalog slugs", () => {
+  it("registers all 21 catalog slugs", () => {
     const reg = new LlmProviderRegistry();
     registerBuiltinLlmProviders(reg);
     expect(reg.getAvailableSlugs().sort()).toEqual([
       "cerebras", "claude", "claude-code", "deepseek", "fireworks", "gemini", "grok", "groq",
       "lmstudio", "minimax", "mistral", "moonshot", "nvidia", "ollama", "openai", "openai-compatible",
-      "openrouter", "qwen", "together", "zai",
+      "openrouter", "qwen", "together", "xiaomi", "zai",
     ]);
   });
 
