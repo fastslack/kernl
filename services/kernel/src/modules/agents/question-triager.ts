@@ -31,8 +31,6 @@ export function buildTriageGoal(questions: AgentQuestion[], service: AgentServic
   ].join("\n");
 }
 
-export const REMIND_AFTER_MS = 24 * 3_600_000;
-
 export class QuestionTriager {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private sweeper: ReturnType<typeof setInterval> | null = null;
@@ -78,12 +76,8 @@ export class QuestionTriager {
   sweep(): number {
     const n = this.service.expireTriage(new Date(Date.now() - this.timeoutMs).toISOString());
     if (n > 0) log.info(`Question triage: ${n} question(s) auto-escalated to the human`);
-    // 24 h reminders for what waits on the operator. markReminded happens here so
-    // a reminder is never repeated within 24 h, even with no channel.
-    for (const q of this.service.listRemindable(new Date(Date.now() - REMIND_AFTER_MS).toISOString())) {
-      this.service.markReminded(q.id);
-      this.events.emit("agent:question_remind", { question_id: q.id });
-    }
+    // 24 h reminders are not here: they need the operator driver, which only
+    // exists after the channels start (operator-comms/reminders.ts).
     return n;
   }
 

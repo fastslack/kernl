@@ -1562,7 +1562,7 @@ export class AgentService {
   listRemindable(olderThanIso: string): AgentQuestion[] {
     return (this.db
       .prepare(`SELECT * FROM agent_questions WHERE status IN ('pending','owed')
-                AND coalesce(reminded_at, owed_at, created_at) < ? ORDER BY created_at`)
+                AND max(coalesce(reminded_at, ''), coalesce(owed_at, ''), created_at) < ? ORDER BY created_at`)
       .all(olderThanIso) as Record<string, unknown>[]).map((r) => this.mapQuestionRow(r));
   }
 

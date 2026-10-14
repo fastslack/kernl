@@ -66,4 +66,15 @@ describe("questions — owed, for_operator, dismiss, reminders", () => {
     service.markReminded(id);
     expect(service.listRemindable("2026-10-13T00:00:00Z")).toEqual([]);
   });
+
+  it("remindable counts from the latest of reminded_at, owed_at and created_at", () => {
+    const w = service.createAgent({ name: "W" });
+    const { id } = service.createQuestion({ from_agent_id: w.id, question: "?", options: OPTS, for_operator: true });
+    // Reminded long ago, but went owed after the cutoff: not due.
+    db.run("UPDATE agent_questions SET status='owed', created_at='2026-10-01T00:00:00Z', reminded_at='2026-10-02T00:00:00Z', owed_at='2026-10-13T12:00:00Z' WHERE id=?", [id]);
+    expect(service.listRemindable("2026-10-13T00:00:00Z")).toEqual([]);
+    // Every timestamp before the cutoff: due.
+    db.run("UPDATE agent_questions SET owed_at='2026-10-12T00:00:00Z' WHERE id=?", [id]);
+    expect(service.listRemindable("2026-10-13T00:00:00Z").map((q) => q.id)).toEqual([id]);
+  });
 });
