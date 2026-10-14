@@ -130,6 +130,38 @@
     try { return new Date(ts).toLocaleTimeString('en-GB', { hour12: false }); } catch { return ''; }
   }
 
+  // ── Per-post time and tokens (the left column) ──
+  // How long each post took: the gap since the previous event of the same run.
+  // Computed over every event, not the filtered list, so a filter does not
+  // stretch a gap across the posts it hides.
+  function runDeltas(events: AgentFlowEvent[]): Map<AgentFlowEvent, number> {
+    const byRun = new Map<string, AgentFlowEvent[]>();
+    for (const e of events) {
+      const id = String(e.data.run_id ?? '');
+      if (!id) continue;
+      (byRun.get(id) ?? byRun.set(id, []).get(id)!).push(e);
+    }
+    const out = new Map<AgentFlowEvent, number>();
+    for (const list of byRun.values()) {
+      list.sort((a, b) => Date.parse(a.ts) - Date.parse(b.ts));
+      for (let i = 1; i < list.length; i++) {
+        const d = Date.parse(list[i].ts) - Date.parse(list[i - 1].ts);
+        if (Number.isFinite(d) && d >= 0) out.set(list[i], d);
+      }
+    }
+    return out;
+  }
+  $: deltas = runDeltas(flowEvents);
+
+  /** Tokens this post consumed: a model turn's own count, or a finished run's total. */
+  function postTokens(evt: AgentFlowEvent): number {
+    return Number(evt.data.tokens ?? evt.data.tokens_used ?? 0) || 0;
+  }
+  /** The run's running total at this post, when the event carries it. */
+  function runTokens(evt: AgentFlowEvent): number {
+    return Number(evt.data.tokens_total ?? 0) || 0;
+  }
+
   // ── Actions ────────────────────────────────────
   function exportStreamLog() {
     const data = filteredFlowEvents.map(e => ({
@@ -230,12 +262,15 @@
             <div class="stream-event" class:stream-event-expanded={expandedEvents.has(10000 + i)}
               on:click={() => toggleExpand(10000 + i)} role="button" tabindex="0"
               on:keydown={e => e.key === 'Enter' && toggleExpand(10000 + i)}>
-              <div class="stream-event-time">{eventTime(evt.created_at)}</div>
+              <div class="stream-meta">
+                <span class="stream-meta-clock">{eventTime(evt.created_at)}</span>
+                <span class="stream-meta-took" class:stream-meta-total={evt.event_subtype === 'completed'}>{evt.duration_ms ? fmtDuration(evt.duration_ms) : '·'}</span>
+                <span class="stream-meta-tok" class:stream-meta-none={!evt.tokens_used}>{evt.tokens_used ? fmtTokens(evt.tokens_used) + ' tok' : '—'}</span>
+                <span class="stream-meta-acc"></span>
+              </div>
               <div class="stream-event-icon" style="background:{color}">{(evt.event_subtype || evt.event_type).toUpperCase().slice(0, 6)}</div>
               <div class="stream-event-agent">{evt.agent_name}</div>
               <div class="stream-event-detail">{evt.detail}</div>
-              {#if evt.tokens_used}<div class="stream-event-tokens">{fmtTokens(evt.tokens_used)}</div>{/if}
-              {#if evt.duration_ms}<div class="stream-event-duration">{fmtDuration(evt.duration_ms)}</div>{/if}
               <div class="stream-expand-icon">{expandedEvents.has(10000 + i) ? '▾' : '▸'}</div>
             </div>
             {#if expandedEvents.has(10000 + i)}
@@ -270,6 +305,9 @@
             {@const isRateLimit = String(evt.data.type) === 'rate_limit_wait'}
             {@const runId = String(evt.data.run_id ?? '')}
             {@const runDur = isEnd && runId ? streamRunDurations[runId] : 0}
+            {@const took = isEnd ? runDur : deltas.get(evt)}
+            {@const tok = postTokens(evt)}
+            {@const acc = runTokens(evt)}
             <div class="stream-event"
               class:stream-event-chain={isChain}
               class:stream-event-start={isStart}
@@ -280,7 +318,14 @@
               role="button" tabindex="0"
               on:keydown={e => e.key === 'Enter' && toggleExpand(i)}
               style="--evt-color:{color}">
-              <div class="stream-event-time">{eventTime(evt.ts)}</div>
+              <div class="stream-meta">
+                <span class="stream-meta-clock">{eventTime(evt.ts)}</span>
+                <span class="stream-meta-took" class:stream-meta-total={isEnd} class:stream-meta-slow={!isEnd && (took ?? 0) >= 10000}
+                  title={isEnd ? 'Whole run' : 'Time since the previous post of this run'}>{took !== undefined && took > 0 ? (isEnd ? '' : '+') + fmtDuration(took) : '·'}</span>
+                <span class="stream-meta-tok" class:stream-meta-none={!tok}
+                  title={isEnd ? 'Tokens of the whole run' : 'Tokens this post consumed'}>{tok ? fmtTokens(tok) + ' tok' : '—'}</span>
+                <span class="stream-meta-acc" title="Run total so far">{acc && !isEnd ? 'Σ ' + fmtTokens(acc) : ''}</span>
+              </div>
               <div class="stream-event-icon" style="background:{color}">{icon}</div>
               <div class="stream-event-agent" style="color:{pal.color}"
                 on:click|stopPropagation={() => dispatch('selectAgent', agentId)}>
@@ -289,12 +334,6 @@
               <div class="stream-event-detail" class:stream-detail-tool={isStep && String(evt.data.type) === 'tool_call'}>
                 {eventDetail(evt)}
               </div>
-              {#if evt.data.tokens_used}
-                <div class="stream-event-tokens">{fmtTokens(Number(evt.data.tokens_used))}</div>
-              {/if}
-              {#if runDur}
-                <div class="stream-event-duration">{fmtDuration(runDur)}</div>
-              {/if}
               {#if isStep && evt.data.step_number}
                 <div class="stream-event-step">#{evt.data.step_number}</div>
               {/if}
@@ -440,10 +479,27 @@
   }
   @keyframes streamSlide { from { opacity: 0; transform: translateY(-4px); } }
 
-  .stream-event-time {
-    font-size: 9px; color: var(--text-3);
-    flex-shrink: 0; width: 55px; padding-top: 1px;
+  /* Left column: when the post happened, how long it took, what it cost. */
+  /* One line, four fixed columns: clock | took | tokens | run total. */
+  .stream-meta {
+    flex-shrink: 0;
+    display: grid; grid-template-columns: 58px 54px 60px 50px; align-items: baseline; column-gap: 6px;
+    padding-right: 8px; margin-right: 2px;
+    border-right: 1px solid var(--border);
+    font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap;
   }
+  .stream-meta > span { overflow: hidden; text-overflow: ellipsis; }
+  .stream-meta-clock { font-size: 11px; font-weight: 600; color: var(--text-1); }
+  .stream-meta-took {
+    justify-self: end; font-size: 10.5px; font-weight: 700; color: var(--teal);
+  }
+  .stream-meta-took.stream-meta-slow { color: var(--orange); }
+  .stream-meta-took.stream-meta-total {
+    color: var(--bg); background: var(--teal); padding: 0 5px; border-radius: 3px;
+  }
+  .stream-meta-tok { justify-self: end; font-size: 10.5px; font-weight: 700; color: var(--gold); }
+  .stream-meta-tok.stream-meta-none { color: var(--text-3); font-weight: 400; opacity: .6; }
+  .stream-meta-acc { justify-self: end; font-size: 9.5px; color: var(--text-3); }
   .stream-event-icon {
     font-size: 8px; font-weight: 700; letter-spacing: 0.3px;
     padding: 1px 5px; border-radius: 3px;
@@ -470,15 +526,6 @@
     font-size: 9px; color: var(--text-3);
     flex-shrink: 0; padding-top: 1px;
   }
-  .stream-event-tokens {
-    font-size: 9px; color: var(--gold); flex-shrink: 0;
-    font-family: var(--font-mono); padding-top: 1px;
-  }
-  .stream-event-duration {
-    font-size: 9px; color: var(--teal); flex-shrink: 0;
-    font-family: var(--font-mono); padding-top: 1px;
-    background: rgba(61,214,200,0.1); padding: 0 4px; border-radius: 3px;
-  }
   .stream-expand-icon {
     font-size: 9px; color: var(--text-3); flex-shrink: 0;
     width: 12px; text-align: center; opacity: 0.5;
@@ -486,7 +533,7 @@
   .stream-event:hover .stream-expand-icon { opacity: 1; }
 
   .stream-event-raw {
-    padding: 4px 8px 4px 72px;
+    padding: 4px 8px 4px 268px;
     animation: streamSlide 0.15s ease-out;
   }
   :global(.copy-wrap){position:relative}
