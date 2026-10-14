@@ -164,6 +164,15 @@ site_mode() {
   local loc; loc="$(curl -sS -o /dev/null --max-time 10 -w '%{redirect_url}' "$SITE_URL/download/linux")"
   [[ "$loc" == *"/download/$tag/"* ]] || die "/download/linux redirects to '$loc', not a $tag asset"
   ok "/download/linux → ${loc##*/}"
+
+  # Downloads follow the release on their own; /news is static and only
+  # changes when the site is redeployed, so a missing entry is a reminder.
+  local code; code="$(curl -sS -o /dev/null --max-time 10 -w '%{http_code}' "$SITE_URL/news/$version")"
+  if [[ "$code" == "200" ]]; then
+    ok "/news/$version is published"
+  else
+    warn "/news/$version answers $code — redeploy lifekernl.com (./deploy.sh) to publish the release notes"
+  fi
 }
 
 # ── Mode: --undo ─────────────────────────────────────────────────────────────
@@ -230,6 +239,13 @@ git rev-parse -q --verify "refs/tags/$TAG" >/dev/null && die "tag $TAG already e
 if git ls-remote --exit-code --tags origin "$TAG" >/dev/null 2>&1; then
   die "tag $TAG already exists on the remote"
 fi
+# lifekernl.com/news is built from both changelogs and refuses to publish a
+# version that is missing from either, so the entry has to exist, dated, in
+# English and in Spanish before the tag does.
+for f in CHANGELOG.md CHANGELOG.es.md; do
+  grep -qE "^## \[${VERSION//./\\.}\] - [0-9]{4}-[0-9]{2}-[0-9]{2}" "$f" 2>/dev/null \
+    || die "$f has no '## [$VERSION] - YYYY-MM-DD' entry — write it (and its translation) first"
+done
 ok "on $DEV_BRANCH, clean, $CURRENT → $VERSION, $TAG is free"
 
 # The tag is the first time CI builds the four packages for real. Every red
