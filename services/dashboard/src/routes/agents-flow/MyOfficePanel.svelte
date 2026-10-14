@@ -56,6 +56,8 @@
   export let pendingQuestions: PendingQuestion[];
   /** Questions the operator took on: chosen, the work still theirs. */
   export let owedQuestions: PendingQuestion[] = [];
+  /** Bumped by every local answer/dismiss; the poll in AgentWorld3D drops a result that started before it changed. */
+  export let questionsRev = 0;
   /** Questions the chief is still triaging (count only). */
   export let triageCount = 0;
   /** Recent questions the chief resolved on its own — read-only audit. */
@@ -224,6 +226,7 @@
   // so it leaves the list too. Resolves true when it left the list.
   async function sendChoice(q: PendingQuestion, choice: Record<string, unknown>): Promise<boolean> {
     questionSubmitting = { ...questionSubmitting, [q.id]: true };
+    questionsRev++;
     try {
       const res = await fetch(`/api/agents/questions/${q.id}/answer`, {
         method: 'POST',
@@ -244,6 +247,7 @@
     } catch {
       return false;
     } finally {
+      questionsRev++;
       questionSubmitting = { ...questionSubmitting, [q.id]: false };
     }
   }
@@ -253,11 +257,17 @@
   async function dismissQuestion(q: PendingQuestion) {
     if (questionSubmitting[q.id]) return;
     questionSubmitting = { ...questionSubmitting, [q.id]: true };
+    questionsRev++;
     try {
-      await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
-      pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
-      owedQuestions = owedQuestions.filter(x => x.id !== q.id);
-    } finally {
+      const res = await fetch(`/api/agents/questions/${q.id}/dismiss`, { method: 'POST' });
+      // Gone for good (done, or already closed elsewhere): drop it. Anything else keeps the card.
+      if (res.ok || res.status === 404 || res.status === 409) {
+        pendingQuestions = pendingQuestions.filter(x => x.id !== q.id);
+        owedQuestions = owedQuestions.filter(x => x.id !== q.id);
+      }
+    } catch { /* network: the card stays */ }
+    finally {
+      questionsRev++;
       questionSubmitting = { ...questionSubmitting, [q.id]: false };
     }
   }
@@ -276,6 +286,7 @@
     if (ask && !(await confirmDialog({ title: $t('office.chief.confirm_dismiss_questions', { n: String(pendingQuestions.length) }), danger: true }))) return;
     bulkBusy = true;
     const snapshot = [...pendingQuestions];
+    questionsRev++;
     try {
       // Fire all dismissals in parallel — server-side they're independent.
       await Promise.all(snapshot.map(q =>
@@ -283,6 +294,7 @@
       ));
       pendingQuestions = [];
     } finally {
+      questionsRev++;
       bulkBusy = false;
     }
   }
