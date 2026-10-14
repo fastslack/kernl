@@ -414,6 +414,31 @@ export async function prepareOfficeWorkspace(
  * explicitly in allowed_tools (the operator's deliberate choice). WebFetch
  * only reads.
  */
+/**
+ * Which sandbox driver a run uses: `__sandbox_driver__`, else the legacy
+ * `__container_sandbox__` (docker), else the instance default. `"none"` opts
+ * out of the default: an agent with no Bash and no file writes (the question
+ * investigator) needs no container, and outside one its permission rules are
+ * what the SDK enforces — with a driver they are dropped for bypassPermissions.
+ */
+export function resolveSandboxDriverSlug(
+  vars: { __sandbox_driver__?: string; __container_sandbox__?: boolean },
+  instanceDefault: string | undefined,
+): string | null {
+  const explicit = (vars.__sandbox_driver__ ?? "").trim();
+  if (explicit === "none") return null;
+  if (explicit !== "") return explicit;
+  if (vars.__container_sandbox__) return "docker";
+  // Instance-wide default. Without it, an agent only ran sandboxed if it
+  // thought to ask for a driver by name — and an agent created by another
+  // agent never does. It asked for `__sandbox__: false` instead, hit the
+  // hard-deny, and the operator's only obvious way out was to switch the
+  // deny off globally. Setting a default here means "sandboxed" is what you
+  // get for free and unsandboxed stays the deliberate exception.
+  const fallback = (instanceDefault ?? "").trim();
+  return fallback !== "" ? fallback : null;
+}
+
 export function toolPolicy(input: {
   usingSandbox: boolean;
   allowUnsandboxedBash: boolean;
@@ -1694,18 +1719,7 @@ export class ClaudeCodeExecutor {
    * is requested.
    */
   private resolveDriverSlug(vars: AgentVariablesMcp): string | null {
-    if (vars.__sandbox_driver__ && vars.__sandbox_driver__.trim() !== "") {
-      return vars.__sandbox_driver__;
-    }
-    if (vars.__container_sandbox__) return "docker";
-    // Instance-wide default. Without it, an agent only ran sandboxed if it
-    // thought to ask for a driver by name — and an agent created by another
-    // agent never does. It asked for `__sandbox__: false` instead, hit the
-    // hard-deny, and the operator's only obvious way out was to switch the
-    // deny off globally. Setting a default here means "sandboxed" is what you
-    // get for free and unsandboxed stays the deliberate exception.
-    const fallback = (process.env.AGENTS_DEFAULT_SANDBOX_DRIVER ?? "").trim();
-    return fallback !== "" ? fallback : null;
+    return resolveSandboxDriverSlug(vars, process.env.AGENTS_DEFAULT_SANDBOX_DRIVER);
   }
 
   /**
