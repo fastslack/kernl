@@ -840,6 +840,8 @@ const es: Record<I18nKey, string> = {
   "office.panel.export": "Exportar",
   "office.panel.devops": "Panel DevOps",
   "office.panel.delete": "Destruir oficina",
+  "office.panel.danger": "Zona de peligro",
+  "office.panel.danger_help": "Borra la oficina del mapa. Pide confirmación escribiendo su nombre.",
   "office.panel.delete_title": "¿Destruir {name}?",
   "office.panel.delete_body": "Sus {n} agentes pasan a Sin asignar, en pausa. No se borra ningún agente.",
   "office.panel.delete_type": "Escribí el nombre de la oficina para confirmar",
