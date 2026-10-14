@@ -51,6 +51,7 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
     // Per-model request tweaks the provider documents (sampling, template
     // flags). The caller's own temperature still wins.
     applyModelQuirks(body, this.name, model);
+    fitOpenAiParams(body, this.name, model);
     // Pass tools in OpenAI format if provided (sequential tool calls only).
     // truncateTools applies the right cap per slug — openai 128, grok 64,
     // nvidia 64 (Grok/NVIDIA inherit ChatOpenAiProvider but pass their
@@ -126,5 +127,40 @@ export class ChatOpenAiProvider implements ChatLlmProvider {
       output_tokens: data.usage?.completion_tokens,
       tool_calls: toolCalls.length > 0 ? toolCalls : undefined,
     };
+  }
+}
+
+/**
+ * OpenAI's own API changed two request parameters under Kernl's feet:
+ *
+ *   - `max_tokens` is refused by the reasoning models (GPT-5, o1/o3/o4…):
+ *     "Unsupported parameter: 'max_tokens' … Use 'max_completion_tokens'".
+ *     Every chat model on api.openai.com accepts `max_completion_tokens`, so
+ *     the official provider always gets that name.
+ *   - The same reasoning models only take the default sampling: a
+ *     `temperature` other than 1 (or a `top_p`) is a 400 too.
+ *   - Their token cap covers the reasoning as well as the answer: a probe
+ *     asking for 1024 tokens got them all spent thinking and came back empty.
+ *     They get a floor of REASONING_MIN_TOKENS; only what is used is billed.
+ *
+ * OpenAI-compatible providers (NVIDIA, Groq, OpenRouter, LM Studio…) keep
+ * `max_tokens`: several of them do not know the newer name.
+ */
+
+/** Models that reason before answering and only accept default sampling. */
+const REASONING = /^(gpt-5|o[1-9])(\b|[-.])/i;
+const REASONING_MIN_TOKENS = 8192;
+
+export function fitOpenAiParams(body: Record<string, unknown>, slug: string, model: string): void {
+  if (slug !== "openai") return;
+  if ("max_tokens" in body) {
+    body.max_completion_tokens = body.max_tokens;
+    delete body.max_tokens;
+  }
+  if (REASONING.test(model)) {
+    if (body.temperature !== undefined && body.temperature !== 1) delete body.temperature;
+    delete body.top_p;
+    const cap = Number(body.max_completion_tokens);
+    if (Number.isFinite(cap) && cap < REASONING_MIN_TOKENS) body.max_completion_tokens = REASONING_MIN_TOKENS;
   }
 }
