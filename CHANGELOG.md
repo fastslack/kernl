@@ -60,6 +60,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   every other schedule.
 - **A connected provider's model is chosen with the model picker**, Claude
   Code included; the model is tested before it is saved.
+- **The message stream shows each post's time and tokens** in their own
+  columns on the left: the clock, how long the post took, the tokens it
+  consumed and the run total so far. `claude_code` agents now report their
+  tokens per model turn instead of only at the end of the run.
+- **The office panel is wider**, its board is coloured by state, and Destroy
+  office moved out of the footer into a danger zone.
 - **3D walkers take the shortest corridor path** around desks, meeting rooms
   and the reception, and carry their message inside their nameplate.
 - **The Claude sign-in redirect is caught on the host**, so a Docker stack on
