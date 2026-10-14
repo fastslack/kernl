@@ -1216,7 +1216,7 @@ export function agentsTools(
           value: z.string().optional().describe("Optional internal value; defaults to label."),
           url: z.string().optional().describe("If set, picking this option opens the URL in a new browser tab (e.g. 'Yes — open the link' style options). Must be http(s)://."),
           task: z.boolean().optional().describe("Picking this leaves the operator a task (e.g. 'Lo reviso yo en GitLab'): the question stays open until they mark it done."),
-        })).length(4).describe("Exactly 4 multiple-choice options, your preferred one first."),
+        })).min(2).max(4).describe("2 to 4 options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
         for_operator: z.boolean().optional().describe("Only the operator can decide or do this (approve a risky MR, set something in an environment, a product decision): skip the chief."),
         ...CALLER_AGENT_ID_FIELD,
@@ -1243,7 +1243,7 @@ export function agentsTools(
             return label ? { label, value, ...(url ? { url } : {}), ...(o.task ? { task: true } : {}) } : null;
           })
           .filter((x): x is { label: string; value: string; url?: string; task?: boolean } => x !== null);
-        if (options.length !== 4) return errorResult("Provide exactly 4 non-empty options.");
+        if (options.length < 2 || options.length > 4) return errorResult("Provide 2 to 4 non-empty options, your preferred one first.");
 
         const res = service.createQuestion({
           from_agent_id: caller.id,
@@ -1269,7 +1269,7 @@ export function agentsTools(
           name: "kernel_agents_ask_supervisor",
           description:
             "Ask the chief about a doubt you can't resolve alone: unclear requirements, priorities, or a decision you are not authorized to make. " +
-            "Give exactly 4 concrete options, your preferred one first. The chief answers or escalates it to the human. " +
+            "Give 2 to 4 concrete options, your preferred one first. The chief answers or escalates it to the human. " +
             "Don't wait idle: keep working on what doesn't depend on it. The answer comes back as a new run or an inbox message. " +
             "Never re-ask a question that was already answered.",
           schema: askSupervisorSchema,
