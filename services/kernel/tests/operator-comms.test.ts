@@ -89,4 +89,23 @@ describe("OperatorComms", () => {
     await comms.handleCallback(`oq:${id}:0`); await comms.resolved(id);
     expect(tg.edits[0]).toContain("Resuelta: Aprobar");
   });
+
+  it("concurrent asks get distinct codes and each code answers its own question", async () => {
+    pref = ["whatsapp"]; const a = ask(); const b = ask();
+    await Promise.all([comms.ask(a), comms.ask(b)]);
+    const codes = wa.sent.map((m) => /Q(\d+) </.exec(m.text)![1]);
+    expect(new Set(codes).size).toBe(2);
+    await comms.tryCodeReply(`Q${codes[1]} 1`);
+    expect(service.getQuestion(b)!.selected_option).toBe("Aprobar");
+    expect(service.getQuestion(a)!.status).toBe("pending");
+  });
+
+  it("a text channel that cannot receive gets no Q-code instruction", async () => {
+    const mute = new FakeChannel("sms", false, false);
+    const c2 = new OperatorComms({ db, service, adapters: () => [mute], preference: () => [], dashboard: async () => { throw new Error("bell down"); }, answer: () => ({ ok: false, reason: "not_open" }), linkFor: (i) => `/x?${i}` });
+    await c2.ask(ask());
+    expect(mute.sent.length).toBe(1);
+    expect(mute.sent[0].text).not.toContain("Respondé");
+    expect(mute.sent[0].text).toContain("/x?");
+  });
 });
