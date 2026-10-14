@@ -17,12 +17,18 @@ const NAMES_OPERATOR = new RegExp(
     `\\b(decide|decidir|aprueba|aprobar) (el|la) ${WHO}\\b`,
     `\\buntil the ${WHO}\\b`,
     `\\bthe ${WHO} (has to|must|needs to|will|decides|should)\\b`,
+    `\\ben espera (de|del) (el |la )?${WHO}\\b`,
+    `\\b(el|la) ${WHO} (debe|tiene que|va a|decide|aprueba)\\b`,
+    `\\blo decida? (el|la) ${WHO}\\b`,
+    `\\bped\\S* al ${WHO}\\b`,
+    `\\bwait(ing)? (for|on) the ${WHO}\\b`,
+    `\\bneeds? (the )?${WHO}('s)? approval\\b`,
   ].join("|"),
   "i",
 );
 // A hold is only a hold when something is being kept/left waiting; lifting
 // merge_hold or waiting on CI is ordinary work.
-const HOLDS = /\b((mantener|mantené|mantene|seguir|sigue|dejar|dejá) (con )?(el )?merge_hold|mantener (la cola|retenid)|seguir retenid|dejarlo en espera|esperar nuevas instrucciones|hold until|keep (it )?on hold)/i;
+const HOLDS = /\b((mantener|mantené|mantene|seguir|sigue|dejar|dejá) (con )?(el )?merge_hold|(mantener|mantené|mantene) (la cola|retenid)|seguir retenid|dejarlo en espera|esperar nuevas instrucciones|hold until|keep (it )?on hold)/i;
 
 export function leavesWorkToOperator(text: string): boolean {
   const t = text.trim();
