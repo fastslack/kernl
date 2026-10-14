@@ -36,7 +36,7 @@ export interface ServicesLateResult {
   voiceService: VoiceService;
   rateLimiter: RateLimiter;
   orchestrator: Orchestrator;
-  operatorComms: OperatorComms;
+  operatorComms: OperatorComms | null;
 }
 
 export async function wireServicesLate(args: {
@@ -97,7 +97,7 @@ export async function wireServicesLate(args: {
 
   // The one driver for operator decisions (spec 2026-10-14): built before the
   // channels are wired because inbound replies/callbacks go through it.
-  const operatorComms = new OperatorComms({
+  const operatorComms = agentService && agentExecutor ? new OperatorComms({
     db: sqlite,
     service: agentService as AgentService,
     adapters: () => buildAdapters({
@@ -110,7 +110,7 @@ export async function wireServicesLate(args: {
     answer: (id, choice) =>
       resolveHumanChoice(agentService as AgentService, agentExecutor as AgentExecutor, events, id, choice),
     linkFor: (id) => `/agents-flow?question=${id}`,
-  });
+  }) : null;
 
   // Wire all channel providers (Telegram, WhatsApp, Slack, Discord, WebChat) to Orchestrator.
   wireMessageRouting({
@@ -168,18 +168,19 @@ export async function wireServicesLate(args: {
   // ── Operator decisions → one driver (spec 2026-10-14) ──
   const safe = (what: string, p: Promise<void>) =>
     p.catch((err) => log.warn(`operator-comms ${what}: ${err instanceof Error ? err.message : String(err)}`));
-  events.on("agent:question_asked" as never, ((p: { question_id: string }) => safe("ask", operatorComms.ask(p.question_id))) as never);
-  events.on("agent:question_owed" as never, ((p: { question_id: string }) => safe("owed", operatorComms.owed(p.question_id))) as never);
-  events.on("agent:question_remind" as never, ((p: { question_id: string }) => safe("remind", operatorComms.remind(p.question_id))) as never);
-  events.on("agent:question_resolved" as never, ((p: { question_id: string }) => safe("resolved", operatorComms.resolved(p.question_id))) as never);
+  if (operatorComms) events.on("agent:question_asked" as never, ((p: { question_id: string }) => safe("ask", operatorComms.ask(p.question_id))) as never);
+  if (operatorComms) events.on("agent:question_owed" as never, ((p: { question_id: string }) => safe("owed", operatorComms.owed(p.question_id))) as never);
+  if (operatorComms) events.on("agent:question_remind" as never, ((p: { question_id: string }) => safe("remind", operatorComms.remind(p.question_id))) as never);
+  if (operatorComms) events.on("agent:question_resolved" as never, ((p: { question_id: string }) => safe("resolved", operatorComms.resolved(p.question_id))) as never);
 
   // Offices and agents can tell the operator something without asking anything.
   // Registered here (not in the agents routes) because the driver only exists
   // once the channels are up, after the HTTP routes were registered.
   httpServer?.route<{ title?: string; body?: string; source?: string }>("POST", "/api/operator/inform", ({ body }) => {
     const title = String(body?.title ?? "").trim().slice(0, 200);
+    if (!operatorComms) throw new HttpError(503, "operator comms unavailable");
     if (!title) throw new HttpError(400, "title required");
-    void operatorComms.inform({ title, body: String(body?.body ?? "").slice(0, 4000), source: String(body?.source ?? "office") });
+    void safe("inform", operatorComms.inform({ title, body: String(body?.body ?? "").slice(0, 4000), source: String(body?.source ?? "office") }));
     return { success: true };
   });
 
