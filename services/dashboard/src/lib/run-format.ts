@@ -16,9 +16,24 @@
 
 import { escapeHtml } from '$shared/escape.js';
 import { jsonHtml, parseLoose, renderJsonFences, splitTrailingJson, validationIssues } from './json-view.js';
+import { highlightCode } from './workspace-highlight.js';
+import { codeBlockHtml, fenceLang, guessCode } from './code-guess.js';
 
 /** Sentinel `sanitizePreview` plants and `formatRunOutput` renders as a callout. */
 export const TRUNC_MARK = '\u0002TRUNCATED_HINT\u0002';
+
+export { codeBlockHtml };
+
+/** A terminal's output: monospace, one line per line, coloured when it is code. */
+export function terminalHtml(text: string): string {
+  const cut = text.indexOf(TRUNC_MARK);
+  const body = cut >= 0 ? text.slice(0, cut) : text;
+  const g = guessCode(body);
+  const html = g ? codeBlockHtml(g.code, g.lang, g.lineNumbers) : codeBlockHtml(body.replace(/^\n+|\s+$/g, ''), '');
+  return html + (cut >= 0 ? TRUNC_HTML : '');
+}
+
+const TRUNC_HTML = '<div class="md-trunc-hint">✂ Preview truncated by the server — open the HISTORY tab to see the full content.</div>';
 
 const UUID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 
@@ -177,6 +192,12 @@ export function formatRunOutput(text: string | undefined | null, baseUrl?: strin
     return (tail.prefix ? `<p class="md-p">${escapeHtml(tail.prefix)}</p>` : "") + jsonHtml(tail.value);
   }
 
+  // A body that is source code from top to bottom (a file a tool printed)
+  // is shown as code, not as one paragraph per line.
+  const cut = trimmed.indexOf(TRUNC_MARK);
+  const code = guessCode(cut >= 0 ? trimmed.slice(0, cut) : trimmed);
+  if (code) return codeBlockHtml(code.code, code.lang, code.lineNumbers) + (cut >= 0 ? TRUNC_HTML : "");
+
   // ```json fences go to the viewer first. A scanner finds where the JSON
   // really ends, so a string inside it holding its own ``` can't close the
   // fence early (an agent's letter with a json block in its body did).
@@ -190,9 +211,10 @@ export function formatRunOutput(text: string | undefined | null, baseUrl?: strin
   // Without this, JSON content that contains ## / ** / etc. gets mangled
   // (e.g. `## Context` inside a tool input becomes an <h3>).
   const fenceStash: string[] = [];
-  const source = withJson.replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_m, body) => {
+  const source = withJson.replace(/```([\w+-]*)\n?([\s\S]*?)```/g, (_m, info, body) => {
     const idx = fenceStash.length;
-    fenceStash.push(escapeHtml(String(body)));
+    const text = String(body).replace(/\n$/, "");
+    fenceStash.push(highlightCode(text, fenceLang(String(info)) || guessCode(text)?.lang || ""));
     return `\u0000CODEBLOCK${idx}\u0000`;
   });
   let html = escapeHtml(source);
@@ -248,12 +270,11 @@ export function formatRunOutput(text: string | undefined | null, baseUrl?: strin
   // Restore the fenced code blocks as <pre>. They were escaped at stash time
   // so they're safe to drop back in as-is.
   joined = joined.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_m, idx) => {
-    return `<pre class="md-codeblock">${fenceStash[Number(idx)]}</pre>`;
+    return `<pre class="md-codeblock code-view"><code>${fenceStash[Number(idx)]}</code></pre>`;
   });
   // Render the truncation sentinel as a visible callout. Both the raw
   // marker and an escaped variant (in case it went through escapeHtml
   // before the replace) are matched.
-  const TRUNC_HTML = '<div class="md-trunc-hint">✂ Preview truncated by the server — open the HISTORY tab to see the full content.</div>';
   joined = joined
     .replace(/\u0002TRUNCATED_HINT\u0002/g, TRUNC_HTML)
     .replace(/TRUNCATED_HINT/g, TRUNC_HTML); // defensive fallback

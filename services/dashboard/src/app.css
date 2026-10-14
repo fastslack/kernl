@@ -1580,6 +1580,48 @@ textarea.k-input { height: auto; padding: 8px 10px; resize: vertical; line-heigh
 /* JSON found inside a string sits in the flow, without a second frame. */
 .jv .jv { background: none; border: 0; padding: 0; margin: 2px 0 2px 10px; max-height: none; overflow: visible; }
 .jv-more { color: #7d839c; font-style: italic; }
+
+/* Source code (a fenced block, a file a tool printed, a Bash command or its
+   output): one line per line, never wrapped, coloured, in a tight monospace.
+   `pre.` outranks the markdown pane's own `.md-codeblock` box. */
+pre.code-view.md-codeblock {
+  font: 450 10.5px/1.42 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+  font-variant-ligatures: contextual;
+  tab-size: 2;
+  background: #0b0e15;
+  color: #d4d8e6;
+  border: 1px solid rgba(120, 130, 160, .16);
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin: 4px 0;
+  white-space: pre;
+  word-break: normal;
+  overflow-wrap: normal;
+  max-height: 360px;
+  overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(120, 130, 160, .25) transparent;
+}
+pre.code-view.md-codeblock:only-child { margin: 0; }
+/* Under a key of the JSON viewer: indented like a text value, and the viewer scrolls. */
+.jv pre.code-view.md-codeblock { margin: 2px 0 3px 10px; max-height: none; }
+.code-view > code { display: block; min-width: max-content; font: inherit; background: none; padding: 0; color: inherit; }
+.code-view.has-gutter { display: grid; grid-template-columns: auto 1fr; column-gap: 10px; }
+.code-view .code-gutter {
+  color: #4a5068;
+  text-align: right;
+  user-select: none;
+  padding-right: 8px;
+  border-right: 1px solid rgba(120, 130, 160, .14);
+}
+.code-view .hl-kw  { color: #c678dd; }
+.code-view .hl-str { color: #98c379; }
+.code-view .hl-num { color: #d19a66; }
+.code-view .hl-com { color: #6b7394; font-style: italic; }
+.code-view .hl-fn  { color: #61afef; }
+.code-view .hl-typ { color: #e5c07b; }
+.code-view .hl-key { color: #e06c75; }
+.code-view .hl-pun { color: #8a93ad; }
 .jv-cut { margin-top: 5px; color: #c9a84c; font-size: 10px; }
 .jv-issues { list-style: none; margin: 0; padding: 0; color: #ffb3bd; }
 .jv-issues li + li { margin-top: 2px; }
