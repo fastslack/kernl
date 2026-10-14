@@ -62,6 +62,24 @@ export interface PendingQuestion {
   answered_by?: '' | 'chief' | 'human';
   selected_option?: string;
   answered_at?: string | null;
+  /** The read-only investigator's second opinion, kept on the question. */
+  opinion_status?: '' | 'running' | 'ready' | 'failed';
+  opinion_run_id?: string;
+  opinion?: QuestionOpinion | null;
+  opinion_error?: string;
+}
+
+/** What the investigator answers (kernel: question-opinion.ts). */
+export interface QuestionOpinion {
+  answer: string;
+  reasoning: string;
+  /** 0-based option it picks, or null. */
+  matches_option: number | null;
+  /** It picks matches_option but adds conditions: send the answer, not the bare option. */
+  extends_option?: boolean;
+  evidence?: string[];
+  unverified?: string[];
+  needs_human?: string[];
 }
 
 // ── Live meeting transcripts ──────────────────

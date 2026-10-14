@@ -9,7 +9,7 @@ import type { AgentService, QuestionStatus } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
 import { resolveGoal } from "./executor.js";
 import { answerAndDeliver } from "./question-delivery.js";
-import { OpinionError, askOpinion } from "./question-opinion.js";
+import { createQuestionInvestigator, type QuestionInvestigator } from "./question-investigator.js";
 import type { EventBus } from "../../core/event-bus.js";
 import type { KernelLanguage } from "../../core/config.js";
 import { log } from "../../core/logger.js";
@@ -73,6 +73,10 @@ export function registerAgentRoutes(
   // the bridge is down, so both roads run the same function. A path param
   // is named after the input key the operation reads.
   const op = agentOperations({ service, executor, events });
+  // The read-only agent behind "What would the AI answer?" (needs the event bus to see its runs end).
+  const investigator: QuestionInvestigator | null = events
+    ? createQuestionInvestigator({ service, executor, events, language: designerLang })
+    : null;
   const bind = ([method, path, name]: [RouteMethod, string, string]) => server.operation(method, path, op[name]);
   ([
     ["POST", "/api/agents", "agents.create"],
@@ -247,21 +251,23 @@ export function registerAgentRoutes(
   );
 
   // A second opinion the operator can take as a fifth option. Answers nothing.
-  server.route("POST", "/api/agents/questions/:id/opinion", async ({ params: { id } }) => {
-    const q = service.getQuestion(id);
-    if (!q) throw new HttpError(404, "Question not found");
-    const agent = service.getAgent(q.from_agent_id);
-    const { llm } = await import("../../core/llm/client.js");
+  // POST starts the investigator (or joins the one already running); GET reads
+  // where it is. The card follows the run's steps over the agents.flow socket.
+  server.route("POST", "/api/agents/questions/:id/opinion", ({ params: { id } }) => {
+    if (!investigator) throw new HttpError(503, "The investigator is not wired (no event bus)", { reason: "unavailable" });
+    if (!service.getQuestion(id)) throw new HttpError(404, "Question not found");
     try {
-      const opinion = await askOpinion(q, agent ? { name: agent.name, description: agent.description } : undefined,
-        designerLang, (opts) => llm().chatJson(opts));
-      return { opinion };
+      return { state: investigator.start(id) };
     } catch (e) {
-      // The card explains `reason`; `detail` is there for "see details" only.
-      const reason = e instanceof OpinionError ? e.reason : "unavailable";
       const detail = e instanceof Error ? e.message : String(e);
-      throw new HttpError(502, detail, { error: detail, reason, detail });
+      throw new HttpError(502, detail, { error: detail, reason: "unavailable", detail });
     }
+  });
+
+  server.route("GET", "/api/agents/questions/:id/opinion", ({ params: { id } }) => {
+    const state = investigator?.state(id);
+    if (!state) throw new HttpError(404, "Question not found");
+    return { state };
   });
 
   server.route("POST", "/api/agents/questions/:id/dismiss", ({ params: { id } }) => {

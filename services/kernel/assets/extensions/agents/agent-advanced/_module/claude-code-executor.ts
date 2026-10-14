@@ -414,6 +414,31 @@ export async function prepareOfficeWorkspace(
  * explicitly in allowed_tools (the operator's deliberate choice). WebFetch
  * only reads.
  */
+/**
+ * Which sandbox driver a run uses: `__sandbox_driver__`, else the legacy
+ * `__container_sandbox__` (docker), else the instance default. `"none"` opts
+ * out of the default: an agent with no Bash and no file writes (the question
+ * investigator) needs no container, and outside one its permission rules are
+ * what the SDK enforces — with a driver they are dropped for bypassPermissions.
+ */
+export function resolveSandboxDriverSlug(
+  vars: { __sandbox_driver__?: string; __container_sandbox__?: boolean },
+  instanceDefault: string | undefined,
+): string | null {
+  const explicit = (vars.__sandbox_driver__ ?? "").trim();
+  if (explicit === "none") return null;
+  if (explicit !== "") return explicit;
+  if (vars.__container_sandbox__) return "docker";
+  // Instance-wide default. Without it, an agent only ran sandboxed if it
+  // thought to ask for a driver by name — and an agent created by another
+  // agent never does. It asked for `__sandbox__: false` instead, hit the
+  // hard-deny, and the operator's only obvious way out was to switch the
+  // deny off globally. Setting a default here means "sandboxed" is what you
+  // get for free and unsandboxed stays the deliberate exception.
+  const fallback = (instanceDefault ?? "").trim();
+  return fallback !== "" ? fallback : null;
+}
+
 export function toolPolicy(input: {
   usingSandbox: boolean;
   allowUnsandboxedBash: boolean;
@@ -450,6 +475,13 @@ export class ClaudeCodeExecutor {
    * resolveToolNameFromResult.
    */
   private toolUseNames = new Map<string, string>();
+  /**
+   * runId → the model turns already counted and the run's token total so far.
+   * The SDK sends one assistant message per content block, each repeating its
+   * turn's `usage` under the same message id: count a turn once, on its first
+   * block, so the stream can show what each post cost.
+   */
+  private turnTokens = new Map<string, { seen: Set<string>; total: number }>();
   /** Cached path to the Claude Code CLI — null = already searched, not found. */
   private cachedClaudeBin: string | null | undefined = undefined;
   /**
@@ -1223,6 +1255,7 @@ export class ClaudeCodeExecutor {
       return failedExecResult;
     } finally {
       this.activeRuns.delete(run.id);
+      this.turnTokens.delete(run.id);
       if (sandboxHandle && this.sandboxRegistry) {
         await this.sandboxRegistry.cleanup(sandboxHandle).catch((err) => {
           log.warn(`ClaudeCodeExecutor: sandbox cleanup failed: ${String(err)}`);
@@ -1247,6 +1280,22 @@ export class ClaudeCodeExecutor {
 
     if (msg.type === "assistant") {
       const content = msg.message.content ?? [];
+      // This turn's tokens ride on the first post of the turn; the rest carry the running total only.
+      const acc = this.turnTokens.get(run.id) ?? { seen: new Set<string>(), total: 0 };
+      this.turnTokens.set(run.id, acc);
+      const turnId = (msg.message as { id?: string }).id ?? "";
+      const u = (msg.message as { usage?: { input_tokens?: number; output_tokens?: number } }).usage;
+      let turnTokens = 0;
+      if (turnId && u && !acc.seen.has(turnId)) {
+        acc.seen.add(turnId);
+        turnTokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0);
+        acc.total += turnTokens;
+      }
+      const tokenFields = () => {
+        const f = { ...(turnTokens ? { tokens: turnTokens } : {}), tokens_total: acc.total };
+        turnTokens = 0;
+        return f;
+      };
       for (const block of content) {
         if (block.type === "text") {
           const text = block.text ?? "";
@@ -1260,6 +1309,7 @@ export class ClaudeCodeExecutor {
             step_number: stepNum,
             type: "thought",
             content_preview: text.slice(0, 2000),
+            ...tokenFields(),
           });
           service.logEvent({
             run_id: run.id,
@@ -1291,6 +1341,7 @@ export class ClaudeCodeExecutor {
             type: "tool_call",
             tool_name: toolName,
             content_preview: JSON.stringify(toolInput).slice(0, 800),
+            ...tokenFields(),
           });
           service.logEvent({
             run_id: run.id,
@@ -1336,6 +1387,7 @@ export class ClaudeCodeExecutor {
             tool_name: toolName,
             content_preview: toolResultText.slice(0, 2000),
             is_error: isError,
+            tokens_total: this.turnTokens.get(run.id)?.total ?? 0,
           });
           service.logEvent({
             run_id: run.id,
@@ -1367,6 +1419,8 @@ export class ClaudeCodeExecutor {
             step_number: stepNum,
             type: "final",
             content_preview: finalTxt.slice(0, 2000),
+            // `tokens` here would be the whole session's usage, not this post's: the run total goes on DONE.
+            tokens_total: this.turnTokens.get(run.id)?.total ?? 0,
           });
           service.logEvent({
             run_id: run.id,
@@ -1665,18 +1719,7 @@ export class ClaudeCodeExecutor {
    * is requested.
    */
   private resolveDriverSlug(vars: AgentVariablesMcp): string | null {
-    if (vars.__sandbox_driver__ && vars.__sandbox_driver__.trim() !== "") {
-      return vars.__sandbox_driver__;
-    }
-    if (vars.__container_sandbox__) return "docker";
-    // Instance-wide default. Without it, an agent only ran sandboxed if it
-    // thought to ask for a driver by name — and an agent created by another
-    // agent never does. It asked for `__sandbox__: false` instead, hit the
-    // hard-deny, and the operator's only obvious way out was to switch the
-    // deny off globally. Setting a default here means "sandboxed" is what you
-    // get for free and unsandboxed stays the deliberate exception.
-    const fallback = (process.env.AGENTS_DEFAULT_SANDBOX_DRIVER ?? "").trim();
-    return fallback !== "" ? fallback : null;
+    return resolveSandboxDriverSlug(vars, process.env.AGENTS_DEFAULT_SANDBOX_DRIVER);
   }
 
   /**

@@ -3,7 +3,13 @@ import {
   forgeRequest,
   snapshotHash,
   upsertMarked,
+  countDiff,
+  type ChangedFile,
   type CommentRef,
+  type ForgeReader,
+  type ItemDetail,
+  type ItemNote,
+  type ReadOptions,
   type RepoItem,
 } from "../../_lib/forge/index.js";
 import type { GitLabConnectionsService, GitLabConnection } from "./connections-service.js";
@@ -25,9 +31,30 @@ interface NoteRaw {
   id: number;
   body: string;
   system: boolean;
+  author?: { username: string } | null;
+  created_at?: string;
 }
 
-export class GitLabRepoProvider extends ForgeRepoProvider<GitLabConnection> {
+interface GitLabMrRaw extends GitLabIssueRaw {
+  state: "opened" | "closed";
+  merged_at?: string | null;
+  source_branch: string;
+  target_branch: string;
+  sha: string;
+  draft?: boolean;
+  work_in_progress?: boolean;
+}
+
+interface DiffRaw {
+  old_path: string;
+  new_path: string;
+  new_file: boolean;
+  deleted_file: boolean;
+  renamed_file: boolean;
+  diff: string;
+}
+
+export class GitLabRepoProvider extends ForgeRepoProvider<GitLabConnection> implements ForgeReader {
   readonly name = "gitlab";
   protected readonly label = "GitLab";
 
@@ -103,6 +130,46 @@ export class GitLabRepoProvider extends ForgeRepoProvider<GitLabConnection> {
     await this.request<unknown>(conn, "PUT", this.itemPath(repo, number, item.kind), { state_event: "close" });
   }
 
+  async readIssue(project: string, number: number, connectionId: string, opts: ReadOptions): Promise<ItemDetail> {
+    const conn = this.requireConnection(connectionId);
+    const base = `/projects/${encodeURIComponent(project)}/issues/${number}`;
+    const raw = await this.get<GitLabIssueRaw>(conn, base);
+    return { ...detailOf(raw, "issue"), notes: await this.latestNotes(conn, base, opts.notes ?? 15) };
+  }
+
+  async readChange(project: string, number: number, connectionId: string, opts: ReadOptions): Promise<ItemDetail> {
+    const conn = this.requireConnection(connectionId);
+    const base = `/projects/${encodeURIComponent(project)}/merge_requests/${number}`;
+    const raw = await this.get<GitLabMrRaw>(conn, base);
+    const diffs = await this.get<DiffRaw[]>(conn, `${base}/diffs?per_page=100`);
+    const files: ChangedFile[] = diffs.map((d) => ({
+      path: d.new_path,
+      old_path: d.renamed_file ? d.old_path : undefined,
+      status: d.new_file ? "added" : d.deleted_file ? "deleted" : d.renamed_file ? "renamed" : "modified",
+      ...countDiff(d.diff ?? ""),
+      ...(opts.patch && d.diff ? { patch: d.diff } : {}),
+    }));
+    return {
+      ...detailOf(raw, "merge_request"),
+      state: raw.merged_at ? "merged" : raw.state,
+      merged: !!raw.merged_at,
+      draft: !!(raw.draft ?? raw.work_in_progress),
+      source_branch: raw.source_branch,
+      target_branch: raw.target_branch,
+      head_sha: raw.sha,
+      files,
+      notes: await this.latestNotes(conn, base, opts.notes ?? 15),
+    };
+  }
+
+  /** The latest `n` human notes, oldest first. */
+  private async latestNotes(conn: GitLabConnection, base: string, n: number): Promise<ItemNote[]> {
+    if (n <= 0) return [];
+    const rows = await this.get<NoteRaw[]>(conn, `${base}/notes?sort=desc&order_by=created_at&per_page=100`);
+    return rows.filter((r) => !r.system).slice(0, n).reverse()
+      .map((r) => ({ author: r.author?.username ?? "", created_at: r.created_at ?? "", body: r.body ?? "" }));
+  }
+
   private itemPath(repo: string, number: number, kind: RepoItem["kind"]): string {
     return `/projects/${encodeURIComponent(repo)}/${kind === "issue" ? "issues" : "merge_requests"}/${number}`;
   }
@@ -123,6 +190,23 @@ export class GitLabRepoProvider extends ForgeRepoProvider<GitLabConnection> {
   private get<T>(conn: GitLabConnection, path: string): Promise<T> {
     return this.request<T>(conn, "GET", path);
   }
+}
+
+function detailOf(raw: GitLabIssueRaw, kind: ItemDetail["kind"]): ItemDetail {
+  return {
+    kind,
+    number: raw.iid,
+    title: raw.title,
+    state: raw.state,
+    url: raw.web_url,
+    author: raw.author?.username ?? "",
+    labels: raw.labels ?? [],
+    created_at: raw.created_at,
+    updated_at: raw.updated_at,
+    body: raw.description ?? "",
+    notes: [],
+    notes_total: raw.user_notes_count ?? 0,
+  };
 }
 
 function toRepoItem(raw: GitLabIssueRaw, kind: "issue" | "pull_request"): RepoItem {

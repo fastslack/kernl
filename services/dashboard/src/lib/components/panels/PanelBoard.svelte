@@ -5,17 +5,44 @@
   import { renderText, textOf } from '$lib/panels/template.js';
   import { groupBy } from '$lib/panels/rows.js';
   import type { PanelView } from '$lib/panels/types.js';
+  import { PALETTE } from '$lib/components/bench/model.js';
   export let view: PanelView;
   export let rows: Array<Record<string, unknown>> = [];
   const dispatch = createEventDispatcher<{ open: string }>();
   $: columns = groupBy(rows, view.columns ?? 'state', view.order ?? []);
   const safeHref = (h: string) => (/^https?:\/\//i.test(h) ? h : null);
+
+  // A column's colour says what its state means — same bright palette as Sistema → Resumen.
+  const P = PALETTE;
+  const TONES: Array<[RegExp, string]> = [
+    [/fail|error|block|reject|stuck/i, '#F43F5E'],
+    [/work|progress|doing|running|active/i, P.emerald],
+    [/review|check/i, P.violet],
+    [/qa|test/i, P.gold],
+    [/merg|deploy|ship|release/i, P.sky],
+    [/ready|approved/i, P.cyan],
+    [/done|closed|complete/i, P.lime],
+    [/queue|todo|backlog|pending|new|open/i, P.pink],
+  ];
+  const CYCLE = [P.cyan, P.violet, P.pink, P.gold, P.emerald, P.sky, P.orange, P.lime];
+  function tone(column: string): string {
+    for (const [re, color] of TONES) if (re.test(column)) return color;
+    let h = 0;
+    for (const ch of column) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+    return CYCLE[h % CYCLE.length];
+  }
+  const isLive = (column: string) => /work|progress|doing|running|active/i.test(column);
 </script>
 
 <div class="pb">
   {#each columns as col (col.column)}
-    <section class="pb-col" aria-label={col.column}>
-      <header>{col.column} <span>{col.rows.length}</span></header>
+    <section class="pb-col" class:pb-col--empty={col.rows.length === 0} aria-label={col.column} style="--tone:{tone(col.column)}">
+      <header>
+        <span class="pb-dot" class:pb-dot--live={isLive(col.column) && col.rows.length > 0} aria-hidden="true"></span>
+        <span class="pb-name">{col.column}</span>
+        <span class="pb-count">{col.rows.length}</span>
+      </header>
+      {#if col.rows.length === 0}<div class="pb-empty" aria-hidden="true"></div>{/if}
       {#each col.rows as r, i (i)}
         <div class="pb-card" role="button" tabindex="0" on:click={() => view.detail && dispatch('open', String(r.key ?? ''))}
                  on:keydown={(e) => e.key === 'Enter' && view.detail && dispatch('open', String(r.key ?? ''))}>
@@ -34,14 +61,52 @@
 </div>
 
 <style>
-  .pb { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); gap: 8px; overflow-x: auto; max-height: 62vh; }
-  .pb-col { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
-  .pb-col header { font: 700 10px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .05em; color: var(--text-3); display: flex; justify-content: space-between; padding: 0 2px; }
-  .pb-card { padding: 7px 9px; border-radius: 7px; background: var(--surface-1); border: 1px solid var(--border); cursor: pointer; display: flex; flex-direction: column; gap: 4px; }
-  .pb-card:hover, .pb-card:focus-visible { border-color: var(--border-h); outline: none; }
-  .pb-t { font: 600 11.5px 'Manrope', sans-serif; color: var(--text-1); overflow-wrap: anywhere; }
-  .pb-s { font: 500 11px 'Manrope', sans-serif; color: var(--text-2); }
-  .pb-b, .pb-l { display: flex; gap: 4px; flex-wrap: wrap; }
-  .pb-b span { font: 600 9.5px 'JetBrains Mono', monospace; padding: 1px 6px; border-radius: 999px; background: var(--surface-3); color: var(--text-2); }
-  .pb-l a { font: 600 10.5px 'Manrope', sans-serif; color: var(--teal); }
+  .pb { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(200px, 1fr); gap: 10px; overflow-x: auto; max-height: 62vh; padding: 2px 2px 6px; }
+  .pb-col {
+    display: flex; flex-direction: column; gap: 7px; min-width: 0; padding: 9px; border-radius: 12px;
+    background: linear-gradient(170deg, color-mix(in srgb, var(--tone) 16%, var(--surface-1)), var(--surface-1) 55%);
+    border: 1px solid color-mix(in srgb, var(--tone) 34%, var(--border));
+  }
+  .pb-col--empty { background: linear-gradient(170deg, color-mix(in srgb, var(--tone) 8%, var(--surface-1)), var(--surface-1) 40%); border-color: color-mix(in srgb, var(--tone) 18%, var(--border)); }
+  .pb-col header { display: flex; align-items: center; gap: 7px; padding: 0 2px 2px; font: 800 10.5px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .06em; color: var(--tone); }
+  .pb-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pb-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--tone); box-shadow: 0 0 8px var(--tone); }
+  .pb-dot--live { animation: pb-pulse 1.4s ease-in-out infinite; }
+  .pb-count {
+    font: 800 10px 'Manrope', sans-serif; padding: 1px 8px; border-radius: 999px;
+    color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  }
+  .pb-empty { flex: 1; min-height: 64px; border: 1px dashed color-mix(in srgb, var(--tone) 35%, transparent); border-radius: 10px; }
+  .pb-card {
+    padding: 9px 11px; border-radius: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 6px;
+    background: linear-gradient(160deg, color-mix(in srgb, var(--tone) 12%, var(--surface-2)), var(--surface-1) 75%);
+    border: 1px solid color-mix(in srgb, var(--tone) 30%, var(--border));
+    transition: transform .2s ease-out, box-shadow .2s, border-color .2s;
+  }
+  .pb-card:hover, .pb-card:focus-visible {
+    outline: none; transform: translateY(-2px);
+    border-color: color-mix(in srgb, var(--tone) 65%, var(--border));
+    box-shadow: 0 12px 24px -14px var(--tone);
+  }
+  .pb-t { font: 700 12px/1.4 'Manrope', sans-serif; color: var(--text-1); overflow-wrap: anywhere; }
+  .pb-s { font: 600 11px 'Manrope', sans-serif; color: color-mix(in srgb, var(--tone) 55%, var(--text-2)); }
+  .pb-b, .pb-l { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
+  .pb-b span {
+    font: 800 9.5px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px;
+    color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
+  }
+  .pb-l a {
+    font: 700 10.5px 'Manrope', sans-serif; color: #22D3EE; text-decoration: none;
+    padding: 1px 9px; border-radius: 999px; background: color-mix(in srgb, #22D3EE 10%, transparent); border: 1px solid color-mix(in srgb, #22D3EE 40%, transparent);
+  }
+  .pb-l a:hover { background: color-mix(in srgb, #22D3EE 22%, transparent); }
+  @keyframes pb-pulse {
+    0%, 100% { box-shadow: 0 0 6px var(--tone); transform: scale(1); }
+    50% { box-shadow: 0 0 14px var(--tone), 0 0 0 4px color-mix(in srgb, var(--tone) 22%, transparent); transform: scale(1.15); }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .pb-dot--live { animation: none; }
+    .pb-card { transition: none; }
+    .pb-card:hover, .pb-card:focus-visible { transform: none; }
+  }
 </style>

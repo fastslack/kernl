@@ -2,20 +2,32 @@
  * A second opinion on a question an agent escalated to the operator.
  *
  * The operator sees four options written by the chief, who escalated because
- * it was not sure. This asks the LLM to read the same material and say what
- * it would answer — which may be one of the four or something else — so the
- * card can offer it as a fifth option. Read-only: nothing is answered here.
+ * it was not sure. The opinion used to be one chat call over the question
+ * text, on whatever model the default chain picked: it stayed inside the
+ * chief's four options and never looked at the issue, the MR or the code.
+ * Now an investigator agent reads them first (question-investigator.ts);
+ * this file holds what it is told and how its answer is read back.
+ * Read-only: nothing is answered here.
  */
 import type { KernelLanguage } from "../../core/config.js";
 import type { AgentQuestion } from "./service.js";
+import type { QuestionRefs } from "./question-refs.js";
 
 export interface QuestionOpinion {
-  /** The answer it would send, ready to deliver as a free answer. */
+  /** The instruction for the agent, ready to send; numbered conditions when they matter. */
   answer: string;
-  /** Why, in two or three sentences, for the operator. */
+  /** Why, for the operator, citing the evidence. */
   reasoning: string;
-  /** 0-based index of the chief's option it agrees with, or null when none fits. */
+  /** 0-based index of the chief's option it picks, or null when none fits. */
   matches_option: number | null;
+  /** It picks matches_option but adds conditions: the answer, not the bare option, is what to send. */
+  extends_option: boolean;
+  /** What it read or checked: issue, MR, file:line, git command. */
+  evidence: string[];
+  /** What it states without having been able to check it. */
+  unverified: string[];
+  /** What only the operator can do (a query in PROD, a decision nobody wrote down). */
+  needs_human: string[];
 }
 
 export interface OpinionAsker {
@@ -23,102 +35,219 @@ export interface OpinionAsker {
   description?: string;
 }
 
-type ChatJson = (opts: { system: string; user: string; maxTokens: number; caller: string }) => Promise<unknown>;
+/** A registered repo, so `web#2595` can be read from the right forge project. */
+export interface KnownRepo {
+  name: string;
+  remote_url: string;
+}
 
-const SYSTEM: Record<KernelLanguage, string> = {
-  es:
-    "Sos un asesor técnico del operador de Kernl, un sistema de oficinas de agentes de IA. " +
-    "Un agente se trabó y escaló una pregunta; el chief propuso opciones pero no estaba seguro. " +
-    "Leé la pregunta, el motivo del chief, el contexto y las opciones, y decí qué contestarías vos. " +
-    "Si una opción es correcta, elegila; si ninguna lo es, proponé la tuya. " +
-    "La respuesta va directo al agente: escribila como una instrucción concreta y accionable, en español rioplatense, en 1 a 3 oraciones. " +
-    "Si con lo que tenés no alcanza para decidir, decilo en la respuesta y pedí al agente el dato puntual que falta. " +
-    'Devolvé SOLO JSON: {"answer": string, "reasoning": string, "matches_option": number|null} ' +
-    "(matches_option es el número de opción empezando en 1, o null).",
-  en:
-    "You advise the operator of Kernl, a system of AI agent offices. " +
-    "An agent got stuck and escalated a question; the chief proposed options but was not sure. " +
-    "Read the question, the chief's reason, the context and the options, and say what you would answer. " +
-    "If one option is right, pick it; if none is, propose your own. " +
-    "The answer goes straight to the agent: write it as a concrete, actionable instruction in 1 to 3 sentences. " +
-    "If what you have is not enough to decide, say so in the answer and ask the agent for the specific missing fact. " +
-    'Return ONLY JSON: {"answer": string, "reasoning": string, "matches_option": number|null} ' +
-    "(matches_option is the 1-based option number, or null).",
+/**
+ * The investigator's standing instructions (appended to its system prompt).
+ * The goal of each run carries the question itself.
+ */
+export const INVESTIGATOR_PROMPT: Record<KernelLanguage, string> = {
+  es: `Sos el investigador de preguntas escaladas de Kernl. Un agente de una oficina se trabó y escaló una
+pregunta; el chief propuso 4 opciones pero no estaba seguro, y el operador te pide tu opinión ANTES de
+contestar. Tu opinión no contesta nada: el operador la lee y decide.
+
+Solo podés LEER: issues y merge requests (kernel_gitlab_issue_read, kernel_gitlab_mr_read,
+kernel_github_issue_read, kernel_github_pr_read), el código y el git de los repos registrados
+(kernel_repos_list, kernel_repos_get, kernel_repos_read, kernel_repos_search, kernel_repos_git) y la
+pregunta con la corrida del agente que la hizo (kernel_agents_question_context). No tenés nada que escriba.
+
+Antes de opinar, siempre:
+1. kernel_agents_question_context con el question_id: la pregunta entera y qué estaba haciendo el agente.
+2. Leé el issue: descripción y últimos comentarios (sobre todo el último de quien hace QA y los
+   criterios de aceptación).
+3. Si la pregunta nombra un MR, leé su descripción y su diff (patch: true en los archivos que importan).
+4. Verificá en el código o en git cada afirmación en la que se apoya la decisión. Si una pregunta se
+   responde con un dato verificable (git log entre ramas, un grep, el texto del issue), verificalo en vez
+   de preguntarlo. Ejemplo: "¿esto ya está en producción?" se contesta con kernel_repos_git op log,
+   ref "origin/stable..origin/develop", grep con el número de issue.
+   Los checkouts de los repos pueden estar en otra rama o con cambios sin commitear: para leer lo que
+   está en una rama, kernel_repos_read con ref (ej. "origin/develop").
+
+Cómo pensar:
+- Las opciones del chief pueden estar todas mal, incompletas o mal planteadas. Tu trabajo principal es
+  encontrar lo que se les escapa: efectos colaterales, filtraciones por otro camino (un estado que
+  cambia en otra tabla o en otra pantalla y delata lo que se quería ocultar), datos que ya se pueden
+  obtener sin pedirlos, supuestos falsos sobre quién puede hacer qué.
+- El operador tiene acceso a GitLab, al servidor y a PROD. Nunca recomiendes "que lo haga otra persona
+  con acceso": si hay que hacerlo, la recomendación es hacerlo, con el comando o el link listos.
+- Separá la decisión de PRODUCTO (si el issue ya la define, citá el punto textual y seguilo) de la
+  decisión TÉCNICA (resolvela vos con un default sensato y decí cuál).
+- Si elegís una opción del chief pero le faltan condiciones, decilo: matches_option = esa opción y
+  extends_option = true, con las condiciones numeradas en answer.
+
+Tu mensaje final es SOLO este JSON, sin texto antes ni después:
+{"answer": string, "reasoning": string, "matches_option": number|null, "extends_option": boolean,
+ "evidence": string[], "unverified": string[], "needs_human": string[]}
+- answer: la instrucción para el agente, lista para pegar, en español rioplatense, concreta; condiciones
+  numeradas si hacen falta.
+- reasoning: por qué, para el operador, citando la evidencia ("api!95, descripción, sección 'Al
+  rechazar'", "git: los 7 commits ya están en origin/stable").
+- matches_option: el número de opción empezando en 1, o null si ninguna sirve.
+- evidence: cada cosa que leíste o verificaste (issue, MR, archivo:línea, comando git con su resultado).
+- unverified: lo que afirmás sin haberlo podido verificar.
+- needs_human: lo que solo el operador puede hacer, separado del resto.`,
+  en: `You are Kernl's investigator of escalated questions. An office agent got stuck and escalated a
+question; the chief proposed 4 options but was not sure, and the operator asks for your opinion BEFORE
+answering. Your opinion answers nothing: the operator reads it and decides.
+
+You can only READ: issues and merge requests (kernel_gitlab_issue_read, kernel_gitlab_mr_read,
+kernel_github_issue_read, kernel_github_pr_read), the code and git of the registered repos
+(kernel_repos_list, kernel_repos_get, kernel_repos_read, kernel_repos_search, kernel_repos_git) and the
+question with the asking agent's run (kernel_agents_question_context). Nothing you have writes.
+
+Before giving an opinion, always:
+1. kernel_agents_question_context with the question_id: the whole question and what the agent was doing.
+2. Read the issue: description and latest comments (above all the last one from whoever does QA, and the
+   acceptance criteria).
+3. If the question names an MR, read its description and diff (patch: true on the files that matter).
+4. Check in the code or in git every claim the decision rests on. If a question can be answered with a
+   verifiable fact (git log between branches, a grep, the issue text), verify it instead of asking. E.g.
+   "is this already in production?" is answered with kernel_repos_git op log, ref
+   "origin/stable..origin/develop", grep with the issue number.
+   Repo checkouts may be on another branch or carry uncommitted changes: to read what a branch has, use
+   kernel_repos_read with ref (e.g. "origin/develop").
+
+How to think:
+- The chief's options may all be wrong, incomplete or badly framed. Your main job is finding what they
+  miss: side effects, leaks through another path (a state that changes in another table or screen and
+  gives away what was meant to stay hidden), data that can already be obtained without asking, false
+  assumptions about who can do what.
+- The operator has access to GitLab, the server and PROD. Never recommend "have someone else with access
+  do it": if it has to be done, the recommendation is doing it, with the command or link ready.
+- Separate the PRODUCT decision (if the issue already defines it, quote the point and follow it) from the
+  TECHNICAL decision (settle it yourself with a sensible default and say which).
+- If you pick one of the chief's options but it lacks conditions, say so: matches_option = that option and
+  extends_option = true, with the conditions numbered in answer.
+
+Your final message is ONLY this JSON, with no text before or after:
+{"answer": string, "reasoning": string, "matches_option": number|null, "extends_option": boolean,
+ "evidence": string[], "unverified": string[], "needs_human": string[]}
+- answer: the instruction for the agent, ready to paste, concrete; numbered conditions when needed.
+- reasoning: why, for the operator, citing the evidence.
+- matches_option: the 1-based option number, or null when none fits.
+- evidence: each thing you read or checked (issue, MR, file:line, git command and what it showed).
+- unverified: what you state without having been able to check it.
+- needs_human: what only the operator can do, kept apart.`,
 };
 
-export function buildOpinionPrompt(q: AgentQuestion, asker: OpinionAsker | undefined): string {
+const MAX_CONTEXT = 40_000;
+
+/** `git@gitlab.com:heural/web.git` → `gitlab.com/heural/web`; "" when it is not a forge remote. */
+export function forgeProjectOf(remoteUrl: string): string {
+  const s = remoteUrl.trim();
+  const scp = /^[\w.-]+@([\w.-]+):(.+?)(?:\.git)?\/?$/.exec(s);
+  if (scp) return `${scp[1]}/${scp[2]}`;
+  try {
+    const u = new URL(s);
+    if (!/^(https?|ssh):$/.test(u.protocol)) return "";
+    const path = u.pathname.replace(/^\/+/, "").replace(/\.git$/, "").replace(/\/+$/, "");
+    return path ? `${u.hostname}/${path}` : "";
+  } catch {
+    return "";
+  }
+}
+
+/** The run's goal: the question, everything the chief saw, and where to start reading. */
+export function buildInvestigationGoal(
+  q: AgentQuestion,
+  asker: OpinionAsker | undefined,
+  refs: QuestionRefs,
+  repos: KnownRepo[],
+): string {
   const lines = [
-    `Agente: ${asker?.name ?? q.from_agent_id}${asker?.description ? ` — ${asker.description}` : ""}`,
+    `question_id: ${q.id}`,
+    `Agente que pregunta: ${asker?.name ?? q.from_agent_id}${asker?.description ? ` — ${asker.description}` : ""}`,
     `Pregunta: ${q.question}`,
   ];
   if (q.chief_note) lines.push(`Motivo del chief para escalarla: ${q.chief_note}`);
-  if (q.context) lines.push(`Contexto:\n${q.context.slice(0, 6000)}`);
-  lines.push("Opciones:", ...q.options.map((o, i) => `${i + 1}. ${o.label}${o.value && o.value !== o.label ? ` (${o.value})` : ""}`));
+  if (q.context) {
+    const ctx = q.context.length > MAX_CONTEXT
+      ? `${q.context.slice(0, MAX_CONTEXT)}\n… (${q.context.length - MAX_CONTEXT} caracteres más: kernel_agents_question_context los trae enteros)`
+      : q.context;
+    lines.push(`Contexto:\n${ctx}`);
+  }
+  lines.push("Opciones del chief:", ...q.options.map((o, i) => `${i + 1}. ${o.label}${o.value && o.value !== o.label ? ` (${o.value})` : ""}`));
+
+  const byName = new Map(repos.map((r) => [r.name.toLowerCase(), r]));
+  const project = (repo: string) => {
+    const r = byName.get(repo);
+    return r ? forgeProjectOf(r.remote_url) : "";
+  };
+  const start: string[] = [];
+  for (const i of refs.issues) {
+    const p = i.repo ? project(i.repo) : "";
+    start.push(p ? `- issue ${i.repo}#${i.number}: project "${p}", number ${i.number}` : `- issue ${i.repo || ""}#${i.number}${i.repo ? " (repo no registrado: buscalo con kernel_repos_list)" : " (sin repo: deducilo del contexto)"}`);
+  }
+  for (const c of refs.changes) {
+    const p = c.repo ? project(c.repo) : "";
+    start.push(p ? `- MR ${c.repo}!${c.number}: project "${p}", number ${c.number}` : `- MR ${c.repo || ""}!${c.number}${c.repo ? " (repo no registrado)" : " (sin repo: deducilo del contexto)"}`);
+  }
+  for (const s of refs.shas) start.push(`- commit ${s}`);
+  for (const p of refs.paths) start.push(`- archivo ${p.path}${p.line ? `:${p.line}` : ""}`);
+  if (start.length) lines.push("Referencias detectadas (empezá por acá):", ...start);
+  if (repos.length) {
+    lines.push("Repos registrados (name → proyecto en la forja):",
+      ...repos.map((r) => `- ${r.name}${forgeProjectOf(r.remote_url) ? ` → ${forgeProjectOf(r.remote_url)}` : ""}`));
+  }
   return lines.join("\n");
 }
 
-/**
- * Why there is no opinion, in terms the card can explain. `no_answer`: a model
- * answered but never got to the JSON (a reasoning model that thinks out loud
- * and runs out of room, or one that ignores the format). `unavailable`: no
- * model answered at all.
- */
-export class OpinionError extends Error {
-  constructor(readonly reason: "no_answer" | "unavailable", readonly detail: string) {
-    super(detail);
-    this.name = "OpinionError";
+const str = (v: unknown) => (typeof v === "string" ? v.trim() : "");
+const strList = (v: unknown) =>
+  Array.isArray(v) ? v.map((x) => (typeof x === "string" ? x.trim() : "")).filter(Boolean).slice(0, 40) : [];
+
+/** The JSON object in a final message: bare, fenced, or after some prose. */
+function extractJson(text: string): unknown {
+  const t = text.trim();
+  const tries = [t];
+  const fence = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
+  if (fence) tries.push(fence[1].trim());
+  const first = t.indexOf("{"), last = t.lastIndexOf("}");
+  if (first >= 0 && last > first) tries.push(t.slice(first, last + 1));
+  for (const s of tries) {
+    try { return JSON.parse(s); } catch { /* next */ }
   }
+  return null;
 }
 
 /**
- * Reasoning models (nemotron-3-super on NVIDIA, measured 2026-10-08) think in
- * plain text before answering: at 700 tokens the reply was cut mid-thought,
- * "We need to produce JSON with answer, reasoning…", and the card showed that
- * raw. So: room to think, and one stricter retry before giving up.
+ * Read the investigator's final message. The old shape ({answer, reasoning,
+ * matches_option}) is still accepted, with the new lists empty. null when
+ * there is no answer in it.
  */
-const FIRST_BUDGET = 2500;
-const RETRY_BUDGET = 5000;
-const RETRY_NUDGE: Record<KernelLanguage, string> = {
-  es: "\n\nIMPORTANTE: tu respuesta anterior no fue el JSON. Respondé únicamente con el objeto JSON, sin razonamiento ni texto antes o después.",
-  en: "\n\nIMPORTANT: your previous reply was not the JSON. Reply with the JSON object only, with no reasoning or text before or after it.",
-};
+export function parseOpinion(text: string, optionCount: number): QuestionOpinion | null {
+  const raw = extractJson(text) as Record<string, unknown> | null;
+  if (!raw || typeof raw !== "object") return null;
+  const answer = str(raw.answer);
+  if (!answer) return null;
+  const n = typeof raw.matches_option === "number" ? Math.trunc(raw.matches_option) : NaN;
+  const matches = n >= 1 && n <= optionCount ? n - 1 : null;
+  return {
+    answer,
+    reasoning: str(raw.reasoning),
+    matches_option: matches,
+    extends_option: matches !== null && raw.extends_option === true,
+    evidence: strList(raw.evidence),
+    unverified: strList(raw.unverified),
+    needs_human: strList(raw.needs_human),
+  };
+}
 
-const NO_JSON = /did not return JSON|no answer/i;
+/**
+ * Why there is no opinion, in terms the card can explain. `no_answer`: the
+ * investigator ran but its final message had no answer. `unavailable`: the
+ * model could not be reached (no Claude session, rate limit, the run failed
+ * to start). There is no fallback to a smaller model on purpose.
+ */
+export type OpinionFailure = "no_answer" | "unavailable";
 
-export async function askOpinion(
-  q: AgentQuestion,
-  asker: OpinionAsker | undefined,
-  language: KernelLanguage,
-  chatJson: ChatJson,
-): Promise<QuestionOpinion> {
-  const user = buildOpinionPrompt(q, asker);
-  let lastNoJson = "";
-  for (const attempt of [0, 1]) {
-    let raw: Partial<{ answer: unknown; reasoning: unknown; matches_option: unknown }> | null;
-    try {
-      raw = (await chatJson({
-        system: SYSTEM[language] + (attempt === 1 ? RETRY_NUDGE[language] : ""),
-        user,
-        maxTokens: attempt === 0 ? FIRST_BUDGET : RETRY_BUDGET,
-        caller: "agents:question-opinion",
-      })) as typeof raw;
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      if (!NO_JSON.test(msg)) throw new OpinionError("unavailable", msg);
-      lastNoJson = msg;
-      continue;
-    }
-    const answer = typeof raw?.answer === "string" ? raw.answer.trim() : "";
-    if (!answer) {
-      lastNoJson = "LLM returned no answer";
-      continue;
-    }
-    const n = typeof raw?.matches_option === "number" ? Math.trunc(raw.matches_option) : NaN;
-    return {
-      answer,
-      reasoning: typeof raw?.reasoning === "string" ? raw.reasoning.trim() : "",
-      matches_option: n >= 1 && n <= q.options.length ? n - 1 : null,
-    };
-  }
-  throw new OpinionError("no_answer", lastNoJson);
+/** A failed run's error, sorted into what the card says. */
+export function failureOf(error: string): OpinionFailure {
+  return /not logged in|oauth|credit balance|rate.?limit|429|overloaded|claude code cli|claude login|api key|authentication|unavailable|ENOENT|spawn/i.test(error)
+    ? "unavailable"
+    : "no_answer";
 }

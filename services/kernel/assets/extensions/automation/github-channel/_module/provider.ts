@@ -5,7 +5,12 @@ import {
   forgeRequest,
   snapshotHash,
   upsertMarked,
+  type ChangedFile,
   type CommentRef,
+  type ForgeReader,
+  type ItemDetail,
+  type ItemNote,
+  type ReadOptions,
   type RepoItem,
 } from "../../_lib/forge/index.js";
 import type { GitHubConnectionsService, GitHubConnection } from "./connections-service.js";
@@ -33,9 +38,36 @@ interface CommentRaw {
   id: number;
   body: string;
   html_url: string;
+  user?: { login: string } | null;
+  created_at?: string;
 }
 
-export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> {
+interface PullRaw {
+  number: number;
+  title: string;
+  body: string | null;
+  state: "open" | "closed";
+  user: { login: string } | null;
+  labels: Array<{ name: string }>;
+  created_at: string;
+  updated_at: string;
+  html_url: string;
+  merged: boolean;
+  draft?: boolean;
+  head: { ref: string; sha: string };
+  base: { ref: string };
+}
+
+interface PullFileRaw {
+  filename: string;
+  previous_filename?: string;
+  status: "added" | "removed" | "modified" | "renamed" | "copied" | "changed" | "unchanged";
+  additions: number;
+  deletions: number;
+  patch?: string;
+}
+
+export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> implements ForgeReader {
   readonly name = "github";
   protected readonly label = "GitHub";
 
@@ -98,6 +130,55 @@ export class GitHubRepoProvider extends ForgeRepoProvider<GitHubConnection> {
   async closeItem(repo: string, number: number, connectionId: string): Promise<void> {
     const conn = this.requireConnection(connectionId);
     await this.request<unknown>(conn, "PATCH", `/repos/${repo}/issues/${number}`, { state: "closed" });
+  }
+
+  async readIssue(project: string, number: number, connectionId: string, opts: ReadOptions): Promise<ItemDetail> {
+    const conn = this.requireConnection(connectionId);
+    const raw = await this.get<GitHubIssueRaw>(conn, `/repos/${project}/issues/${number}`);
+    const labels = raw.labels.map((l) => (typeof l === "string" ? l : l.name));
+    return {
+      kind: raw.pull_request != null ? "merge_request" : "issue",
+      number: raw.number, title: raw.title, state: raw.state, url: raw.html_url,
+      author: raw.user?.login ?? "", labels, created_at: raw.created_at, updated_at: raw.updated_at,
+      body: raw.body ?? "", notes_total: raw.comments,
+      notes: await this.latestComments(conn, project, number, raw.comments, opts.notes ?? 15),
+    };
+  }
+
+  async readChange(project: string, number: number, connectionId: string, opts: ReadOptions): Promise<ItemDetail> {
+    const conn = this.requireConnection(connectionId);
+    const pr = await this.get<PullRaw>(conn, `/repos/${project}/pulls/${number}`);
+    const issue = await this.get<GitHubIssueRaw>(conn, `/repos/${project}/issues/${number}`);
+    const rows = await this.get<PullFileRaw[]>(conn, `/repos/${project}/pulls/${number}/files?per_page=100`);
+    const files: ChangedFile[] = rows.map((f) => ({
+      path: f.filename,
+      old_path: f.previous_filename,
+      status: f.status === "removed" ? "deleted" : f.status === "added" ? "added" : f.status === "renamed" ? "renamed" : "modified",
+      additions: f.additions,
+      deletions: f.deletions,
+      ...(opts.patch && f.patch ? { patch: f.patch } : {}),
+    }));
+    return {
+      kind: "merge_request",
+      number: pr.number, title: pr.title, state: pr.merged ? "merged" : pr.state, url: pr.html_url,
+      author: pr.user?.login ?? "", labels: pr.labels.map((l) => l.name),
+      created_at: pr.created_at, updated_at: pr.updated_at, body: pr.body ?? "",
+      merged: pr.merged, draft: !!pr.draft,
+      source_branch: pr.head.ref, target_branch: pr.base.ref, head_sha: pr.head.sha, files,
+      notes_total: issue.comments,
+      notes: await this.latestComments(conn, project, number, issue.comments, opts.notes ?? 15),
+    };
+  }
+
+  /** The latest `n` comments, oldest first: GitHub lists them oldest first, so read the last page(s). */
+  private async latestComments(conn: GitHubConnection, project: string, number: number, total: number, n: number): Promise<ItemNote[]> {
+    if (n <= 0 || total <= 0) return [];
+    const lastPage = Math.max(1, Math.ceil(total / 100));
+    let rows = await this.get<CommentRaw[]>(conn, `/repos/${project}/issues/${number}/comments?per_page=100&page=${lastPage}`);
+    if (rows.length < n && lastPage > 1) {
+      rows = [...(await this.get<CommentRaw[]>(conn, `/repos/${project}/issues/${number}/comments?per_page=100&page=${lastPage - 1}`)), ...rows];
+    }
+    return rows.slice(-n).map((c) => ({ author: c.user?.login ?? "", created_at: c.created_at ?? "", body: c.body ?? "" }));
   }
 
   private request<T>(conn: GitHubConnection, method: "GET" | "POST" | "PATCH", path: string, body?: unknown): Promise<T> {

@@ -1,76 +1,101 @@
-import { describe, it, expect } from "vitest";
-import { OpinionError, askOpinion, buildOpinionPrompt } from "../src/modules/agents/question-opinion.js";
+import { describe, it, expect } from "bun:test";
+import {
+  buildInvestigationGoal, failureOf, forgeProjectOf, parseOpinion, INVESTIGATOR_PROMPT,
+} from "../src/modules/agents/question-opinion.js";
+import { parseQuestionRefs } from "../src/modules/agents/question-refs.js";
 import type { AgentQuestion } from "../src/modules/agents/service.js";
 
 const q: AgentQuestion = {
-  id: "q1", from_agent_id: "a1", flow_id: "f1", meeting_id: "", run_id: "r1",
-  question: "¿Qué falta para listar deals?", context: "error: Falta el proyecto",
-  options: [{ label: "Configurar env" }, { label: "Bug del kernel" }],
+  id: "q1", from_agent_id: "a1", flow_id: "", meeting_id: "", run_id: "",
+  question: "¿El profesional ve «rechazado» cuando el familiar rechaza? (web#2595, api!95)",
+  context: "El MR api!95 cambia toLink en app/services/family.js:120.",
+  options: [{ label: "Mostrar rechazado" }, { label: "Mostrar pendiente" }, { label: "Ocultar" }, { label: "Preguntar" }],
   status: "pending", selected_option: "", selected_index: -1, answered_note: "", answered_at: null,
-  answered_by: "", chief_note: "no pude confirmar la causa", triage_started_at: null, created_at: "2026-10-06T00:00:00Z",
+  answered_by: "", chief_note: "Es una decisión de privacidad", triage_started_at: null, created_at: "2026-10-14T03:00:00Z",
+  opinion_status: "", opinion_run_id: "", opinion: null, opinion_error: "", opinion_at: null,
 };
 
-describe("question opinion", () => {
-  it("puts the question, the chief's reason, the context and numbered options in the prompt", () => {
-    const p = buildOpinionPrompt(q, { name: "Closer", description: "cierra ventas" });
-    expect(p).toContain("Closer — cierra ventas");
-    expect(p).toContain("no pude confirmar la causa");
-    expect(p).toContain("Falta el proyecto");
-    expect(p).toContain("1. Configurar env");
-    expect(p).toContain("2. Bug del kernel");
+describe("buildInvestigationGoal", () => {
+  const repos = [
+    { name: "web", remote_url: "git@gitlab.com:heural/heural-web.git" },
+    { name: "api", remote_url: "https://gitlab.com/heural/oauth2-server.git" },
+  ];
+  const goal = buildInvestigationGoal(q, { name: "Resolver" }, parseQuestionRefs(q.question, q.chief_note, q.context), repos);
+
+  it("carries the question id, the chief's reason and the options numbered from 1", () => {
+    expect(goal).toContain("question_id: q1");
+    expect(goal).toContain("Motivo del chief para escalarla: Es una decisión de privacidad");
+    expect(goal).toContain("1. Mostrar rechazado");
+    expect(goal).toContain("4. Preguntar");
   });
 
-  it("maps the 1-based option to a 0-based index and tags the call", async () => {
-    let caller = "";
-    const o = await askOpinion(q, undefined, "es", async (opts) => {
-      caller = opts.caller;
-      return { answer: " Usá project ", reasoning: "porque sí", matches_option: 2 };
-    });
-    expect(caller).toBe("agents:question-opinion");
-    expect(o).toEqual({ answer: "Usá project", reasoning: "porque sí", matches_option: 1 });
+  it("maps each reference to its forge project so the investigator knows what to read first", () => {
+    expect(goal).toContain('issue web#2595: project "gitlab.com/heural/heural-web", number 2595');
+    expect(goal).toContain('MR api!95: project "gitlab.com/heural/oauth2-server", number 95');
+    expect(goal).toContain("archivo app/services/family.js:120");
   });
 
-  it("drops an option number outside the list", async () => {
-    const o = await askOpinion(q, undefined, "es", async () => ({ answer: "x", matches_option: 7 }));
-    expect(o.matches_option).toBeNull();
-  });
-
-  it("refuses a reply without an answer", async () => {
-    await expect(askOpinion(q, undefined, "es", async () => ({ reasoning: "?" }))).rejects.toThrow("no answer");
+  it("no longer cuts the context at 6000 characters", () => {
+    const long = { ...q, context: "x".repeat(20_000) };
+    expect(buildInvestigationGoal(long, undefined, parseQuestionRefs(""), []).length).toBeGreaterThan(20_000);
   });
 });
 
-describe("when the model does not get to the JSON", () => {
-  const q = {
-    id: "q1", from_agent_id: "a", question: "¿Dónde está Miniatura?", context: "", chief_note: "",
-    options: [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }],
-  } as unknown as AgentQuestion;
+describe("the investigator's instructions", () => {
+  it("say the chief's options may all be wrong and never to send it to someone else with access", () => {
+    expect(INVESTIGATOR_PROMPT.es).toContain("pueden estar todas mal");
+    expect(INVESTIGATOR_PROMPT.es).toContain("Nunca recomiendes \"que lo haga otra persona");
+    expect(INVESTIGATOR_PROMPT.en).toContain("may all be wrong");
+  });
+});
 
-  it("retries once with room to finish and a stricter instruction", async () => {
-    // nemotron-3-super, 2026-10-08: cut at 700 tokens mid-thought.
-    const calls: Array<{ system: string; maxTokens: number }> = [];
-    const o = await askOpinion(q, undefined, "es", async (opts) => {
-      calls.push(opts);
-      if (calls.length === 1) throw new Error("the model did not return JSON. It replied: We need to produce JSON with answer…");
-      return { answer: "Pedile el path completo", reasoning: "falta el dato", matches_option: 1 };
+describe("parseOpinion", () => {
+  it("reads the new format, with the option extended by conditions", () => {
+    const o = parseOpinion(JSON.stringify({
+      answer: "Opción 1, y además: 1) …", reasoning: "api!95 descripción", matches_option: 1, extends_option: true,
+      evidence: ["api!95 descripción, sección 'Al rechazar'"], unverified: [], needs_human: ["correr la query en PROD"],
+    }), 4);
+    expect(o).toEqual({
+      answer: "Opción 1, y además: 1) …", reasoning: "api!95 descripción", matches_option: 0, extends_option: true,
+      evidence: ["api!95 descripción, sección 'Al rechazar'"], unverified: [], needs_human: ["correr la query en PROD"],
     });
-    expect(o.answer).toBe("Pedile el path completo");
-    expect(calls).toHaveLength(2);
-    expect(calls[0].maxTokens).toBeGreaterThanOrEqual(2000);
-    expect(calls[1].maxTokens).toBeGreaterThan(calls[0].maxTokens);
-    expect(calls[1].system).toContain("únicamente con el objeto JSON");
   });
 
-  it("gives up after the retry with a reason the card can explain", async () => {
-    const err = await askOpinion(q, undefined, "es", async () => { throw new Error("the model did not return JSON. It replied: …"); }).catch((e) => e);
-    expect(err).toBeInstanceOf(OpinionError);
-    expect(err.reason).toBe("no_answer");
+  it("still takes the old format, with the new lists empty", () => {
+    const o = parseOpinion('{"answer":"Hacé B","reasoning":"r","matches_option":2}', 4);
+    expect(o).toEqual({ answer: "Hacé B", reasoning: "r", matches_option: 1, extends_option: false, evidence: [], unverified: [], needs_human: [] });
   });
 
-  it("does not retry when no model answered at all", async () => {
-    let n = 0;
-    const err = await askOpinion(q, undefined, "es", async () => { n++; throw new Error("No LLM provider is configured"); }).catch((e) => e);
-    expect(n).toBe(1);
-    expect(err.reason).toBe("unavailable");
+  it("finds the JSON after prose or inside a fence", () => {
+    expect(parseOpinion('Listo, esta es mi opinión:\n```json\n{"answer":"A"}\n```', 4)?.answer).toBe("A");
+    expect(parseOpinion('Investigué todo. {"answer":"B","matches_option":null}', 4)?.answer).toBe("B");
+  });
+
+  it("an out-of-range option is none, and extends_option needs an option", () => {
+    const o = parseOpinion('{"answer":"x","matches_option":9,"extends_option":true}', 4);
+    expect(o?.matches_option).toBeNull();
+    expect(o?.extends_option).toBe(false);
+  });
+
+  it("no answer → null", () => {
+    expect(parseOpinion("no JSON here", 4)).toBeNull();
+    expect(parseOpinion('{"reasoning":"only"}', 4)).toBeNull();
+  });
+});
+
+describe("forgeProjectOf", () => {
+  it("turns a remote into host/path, and anything else into ''", () => {
+    expect(forgeProjectOf("git@gitlab.com:heural/web.git")).toBe("gitlab.com/heural/web");
+    expect(forgeProjectOf("https://github.com/o/r.git")).toBe("github.com/o/r");
+    expect(forgeProjectOf("/home/x/repo")).toBe("");
+    expect(forgeProjectOf("")).toBe("");
+  });
+});
+
+describe("failureOf", () => {
+  it("a model that cannot be reached is 'unavailable'; anything else 'no_answer'", () => {
+    expect(failureOf("Not logged in · Please run /login")).toBe("unavailable");
+    expect(failureOf("Claude AI usage limit reached|429")).toBe("unavailable");
+    expect(failureOf("error_max_turns")).toBe("no_answer");
   });
 });
