@@ -208,6 +208,12 @@ export function registerAgentRoutes(
     if (!message) throw new HttpError(404, "message not found");
     return { message };
   });
+  // One conversation turn — the "turn" id kernel_agents_post_to_colleague prints.
+  server.route("GET", "/api/agents/messages/:id", ({ params: { id } }) => {
+    const message = service.getMessage(id);
+    if (!message) throw new HttpError(404, "message not found");
+    return { message };
+  });
   server.route("GET", "/api/agents/office/dismissed", () => ({ run_ids: service.listOfficeDismissed() }));
   server.route("POST", "/api/agents/office/dismiss", ({ body }) => ({ dismissed: service.dismissOfficeRuns(runIdsOf(body)) }));
   server.route("POST", "/api/agents/office/restore", ({ body }) => ({ restored: service.restoreOfficeRuns(runIdsOf(body)) }));
