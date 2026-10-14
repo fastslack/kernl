@@ -67,6 +67,26 @@ export function writeSandboxCredentials(src: string, dest: string): string | nul
   return dest;
 }
 
+/**
+ * The `.claude.json` a sandbox mounts: a private copy next to its wrapper.
+ *
+ * The CLI rewrites that file atomically (tmp + rename). A single-file bind of
+ * the original pins the inode Docker resolved, and when a concurrent rewrite
+ * renames over it before runc mounts, the run dies at start with "error
+ * mounting … /mnt/claude.json: no such file or directory" (exit 127). Nobody
+ * renames over the copy. Null when there is no original.
+ */
+export function writeSandboxClaudeJson(src: string, dest: string): string | null {
+  let raw: string;
+  try {
+    raw = readFileSync(src, "utf-8");
+  } catch {
+    return null;
+  }
+  writeFileSync(dest, raw, { encoding: "utf-8", mode: 0o600 });
+  return dest;
+}
+
 /** Does this session need refreshing before a sandbox gets it? */
 export function needsRefresh(o: OauthBlock | undefined, now: number, minMs: number): boolean {
   if (!o || typeof o.accessToken !== "string" || !o.accessToken) return false;
