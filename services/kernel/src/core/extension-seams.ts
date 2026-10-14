@@ -116,7 +116,7 @@ export interface TelegramTransportLike {
   send(
     chatId: number,
     text: string,
-    options?: { parseMode?: "Markdown" | "MarkdownV2" | "HTML"; disableNotification?: boolean },
+    options?: { parseMode?: "Markdown" | "MarkdownV2" | "HTML"; disableNotification?: boolean; buttons?: InlineButton[][] },
   ): Promise<number>;
   /** Edit a previously sent message in place (the streaming primitive). */
   editMessage(
@@ -129,6 +129,7 @@ export interface TelegramTransportLike {
 
 export interface TelegramProviderLike {
   getTransport(): TelegramTransportLike | null | undefined;
+  getDefaultChatId?(): number | null;
 }
 
 /**
