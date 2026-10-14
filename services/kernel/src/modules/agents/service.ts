@@ -1430,6 +1430,21 @@ export class AgentService {
     return { from_agent_id: q.from_agent_id, question: q.question };
   }
 
+  /** A letter about a question to its asker (owed / dismissed notices). Subject keeps the ANSWER: prefix so AnswerQueue drains it. */
+  postLetterAboutQuestion(id: string, subject: string, body: string): boolean {
+    const q = this.getQuestion(id);
+    const asker = q && this.getAgent(q.from_agent_id);
+    if (!q || !asker) return false;
+    this.db
+      .prepare(
+        `INSERT INTO agent_office_inbox
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
+         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+      )
+      .run(newId(), asker.flow_id ?? "", q.from_agent_id, `ANSWER: ${subject.slice(0, 160)}`, body, isoNow());
+    return true;
+  }
+
   /** Leave an answered question's answer in the asker's inbox, for when it
    *  cannot be relaunched right away. The sender is the headquarters. */
   postAnswerToInbox(id: string): boolean {

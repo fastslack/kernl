@@ -4,7 +4,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
-import { AnswerQueue, answerAndDeliver, deliverPendingAnswers } from "../src/modules/agents/question-delivery.js";
+import { AnswerQueue, answerAndDeliver, deliverPendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
 
 const OPTS = [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }];
 
@@ -169,5 +169,59 @@ describe("answers that arrive while the asker is busy", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(goals).toHaveLength(1);
     queue.stop();
+  });
+});
+
+describe("resolveHumanChoice", () => {
+  let db: InstanceType<typeof Database>;
+  let service: AgentService;
+  let events: EventBus;
+  let goals: string[];
+  const executor = { execute: async (p: { goal: string }) => { goals.push(p.goal); return { status: "completed", result: "", steps_count: 0, tokens_used: 0 }; } } as never;
+  const TASKY = [{ label: "Aprobar" }, { label: "Lo reviso yo", task: true }, { label: "Pedir cambios" }, { label: "Esperar" }];
+
+  beforeEach(() => { db = new Database(":memory:"); runMigrations(db, "agents", agentsMigrations); events = new EventBus(); service = new AgentService(db, events); goals = []; });
+  afterEach(() => db.close());
+
+  const ask = () => {
+    const w = service.createAgent({ name: "W" });
+    return { w, id: service.createQuestion({ from_agent_id: w.id, question: "web!7?", options: TASKY, for_operator: true }).id };
+  };
+
+  it("task option → owed and a letter that says it is on the operator", () => {
+    const { w, id } = ask();
+    expect(resolveHumanChoice(service, executor, events, id, { kind: "option", index: 1 })).toEqual({ ok: true, status: "owed" });
+    const letters = service.getUnreadInbox(w.id);
+    expect(letters[0].subject.startsWith("ANSWER:")).toBe(true);
+    expect(letters[0].body).toContain("a cargo del operador");
+    expect(goals).toEqual([]);
+  });
+
+  it("Listo from owed → answered and the asker resumes", () => {
+    const { id } = ask();
+    resolveHumanChoice(service, executor, events, id, { kind: "task" });
+    expect(resolveHumanChoice(service, executor, events, id, { kind: "done", note: "aprobado en GitLab" })).toEqual({ ok: true, status: "answered" });
+    expect(goals[0]).toContain("Listo: Lo veo yo");
+    expect(goals[0]).toContain("aprobado en GitLab");
+  });
+
+  it("a task option is not a final answer from owed", () => {
+    const { id } = ask();
+    resolveHumanChoice(service, executor, events, id, { kind: "task" });
+    expect(resolveHumanChoice(service, executor, events, id, { kind: "option", index: 1 })).toEqual({ ok: false, reason: "bad_choice" });
+  });
+
+  it("dismiss from owed → DESCARTADA letter", () => {
+    const { w, id } = ask();
+    resolveHumanChoice(service, executor, events, id, { kind: "task" });
+    expect(resolveHumanChoice(service, executor, events, id, { kind: "dismiss" })).toEqual({ ok: true, status: "dismissed" });
+    expect(service.getUnreadInbox(w.id).some((l) => l.body.includes("DESCARTADA"))).toBe(true);
+  });
+
+  it("a second answer gets not_open and changes nothing", () => {
+    const { id } = ask();
+    resolveHumanChoice(service, executor, events, id, { kind: "option", index: 0 });
+    expect(resolveHumanChoice(service, executor, events, id, { kind: "option", index: 2 })).toEqual({ ok: false, reason: "not_open" });
+    expect(service.getQuestion(id)!.selected_option).toBe("Aprobar");
   });
 });
