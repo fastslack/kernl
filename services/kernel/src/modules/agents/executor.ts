@@ -287,14 +287,14 @@ export class AgentExecutor {
 
       // Emit flow event: run started
       recorder.emit("agent:flow:run_started", {
-        goal: goal.slice(0, 300),
+        goal: goal.slice(0, 8000),
         trigger_type: run.trigger_type,
       });
       recorder.logEvent({
         event_type: "run",
         event_subtype: "started",
         detail: `Goal: ${goal.slice(0, 200)}`,
-        raw_data: { goal: goal.slice(0, 300), trigger_type: run.trigger_type },
+        raw_data: { goal: goal.slice(0, 8000), trigger_type: run.trigger_type },
       });
 
       // 1-2. Tools, with the per-run kernel_agents_invoke handler.
