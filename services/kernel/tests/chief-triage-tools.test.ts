@@ -92,4 +92,17 @@ describe("chief triage tools", () => {
     expect(q.for_operator).toBe(true);
     expect(q.options[1].task).toBe(true);
   });
+
+  it("ask_supervisor takes 2 to 4 options: 3 are accepted, 1 is rejected", async () => {
+    const ask = tool("kernel_agents_ask_supervisor");
+    const three = await ask.handler({ question: "¿Qué hago?", options: [{ label: "A" }, { label: "B" }, { label: "C" }], __caller_agent_id: workerId });
+    expect(text(three)).toContain("sent to the chief");
+    expect(service.listQuestions({ status: "triage" })[0].options.map((o) => o.label)).toEqual(["A", "B", "C"]);
+    const one = await ask.handler({ question: "¿Y esto?", options: [{ label: "A" }], __caller_agent_id: workerId });
+    expect((one as { isError?: boolean }).isError).toBe(true);
+    // Two labels, one blank: the schema passes, the handler's own check refuses it.
+    const blank = await ask.handler({ question: "¿Y esto?", options: [{ label: "A" }, { label: "  " }], __caller_agent_id: workerId });
+    expect(text(blank)).toContain("Provide 2 to 4 non-empty options");
+    expect(service.listQuestions({ status: "triage" }).length).toBe(1);
+  });
 });
