@@ -7,6 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.4] - 2026-10-14
+
+### Upgrading from 0.4.3
+
+- **The onion address no longer reaches the kernel.** It used to forward to
+  the kernel's own port, which put the dashboard, `/mcp`, `/api/health` and
+  `/api/metrics` on a public address behind only the owner token. It now
+  reaches a separate gateway that serves the presence card and nothing else,
+  until you publish a service from the Friends page. Over Tor, friends reach
+  only what you publish there.
+- **Tor is started by the kernel, not by the container entrypoint.** The
+  switch on the Friends page turns it on and off without editing `.env` or
+  restarting; `KERNEL_TOR=1` only sets the default until the switch is used.
+  The onion key in `/app/data/tor/kernl` is kept, so the address does not
+  change.
+- **Choose an edition.** Setup gains a personal/business step. On an install
+  from before editions (migration 4 marks it), choosing one only ever turns
+  extensions on, never off.
+
+### Added
+
+- **Personal or business edition.** It decides which free extensions start
+  active, which starter team setup offers, and the context every agent gets.
+  Change it from Settings → General; the extension store filters by it and
+  marks extensions made for only one.
+- **Model Bench** (`/bench`) scores every connected model on Kernl's own
+  kinds of work: tool calls, agent tasks, JSON, numbers, language, long
+  context and prompt injection, with deterministic checks, cost and history.
+  The LIVE pill shows one dot per model of the chain and each one's score.
+- **System overview** (`/control`): how this Kernl is doing at a glance, with
+  a way into every part of it.
+- **Office panels.** An office can declare panels (sources, views and actions,
+  `panels.v1`) in the Office Kit manifest or an extension's office seed. They
+  show as tabs in the office's 3D panel and open from the whiteboard in its
+  room. Every read and action is validated, rate-limited and audited.
+- **More AI providers**: Cerebras, Mistral, Together, Fireworks, Kimi, Qwen,
+  Z.ai, Xiaomi MiMo, and any OpenAI-compatible server. They come with brand
+  icons and a two-column picker.
+- **Tor in the native packages.** Linux, macOS and Windows builds ship Tor,
+  so a native install can be reachable from anywhere too.
+- **Answer a report's choices from My Office**; the pick goes to the agent's
+  chat.
+- **An agent can opt out of self-grading** after each run, and extension
+  seeds can opt one out.
+- **`scripts/kernl.sh`** starts, stops, tails and checks the local stack.
+- **A compact JSON viewer** for tool calls, results and agent messages.
+
+### Changed
+
+- **Scheduled agents run in parallel**, so one long run no longer holds back
+  every other schedule.
+- **A connected provider's model is chosen with the model picker**, Claude
+  Code included; the model is tested before it is saved.
+- **3D walkers take the shortest corridor path** around desks, meeting rooms
+  and the reception, and carry their message inside their nameplate.
+- **The Claude sign-in redirect is caught on the host**, so a Docker stack on
+  Linux needs no paste.
+- The chief's unresolved questions reach the operator as soon as its triage
+  run ends, and unattended runs reach the operator through the chief.
+
+### Fixed
+
+- OpenAI's reasoning models (GPT-5, o-series) refused every request:
+  `max_tokens` is now sent as `max_completion_tokens`, unsupported sampling is
+  dropped, and their token cap leaves room for the reasoning.
+- The model picker in the provider dialog opened underneath it.
+- `claude_code` agents' long replies were cut in the chat thread.
+- The camera missed the office it was focusing at some frame rates.
+- A redrawn provider logo stayed hidden behind the browser cache.
+
 ## [0.4.3] - 2026-10-08
 
 ### Upgrading from 0.4.2
