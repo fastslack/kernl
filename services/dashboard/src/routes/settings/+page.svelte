@@ -30,6 +30,7 @@
   import WhatsAppCard from '$lib/components/whatsapp/WhatsAppCard.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import LicensePanel from '$lib/components/LicensePanel.svelte';
+  import EditionCard from '$lib/components/settings/EditionCard.svelte';
   import {
     updateInfo, checking, updating, updateError, updateHint,
     canApplyUpdate, refreshUpdateInfo, applyUpdate, restartKernl, updateNotice,
@@ -687,6 +688,11 @@
               >{tab.title}</button>
             {/each}
           </div>
+        {/if}
+
+        <!-- ═══ Edition (first card of General only, so it doesn't repeat per tab) ═══ -->
+        {#if activeSection === 'general' && activeCard === cardTabs[0]?.id}
+          <EditionCard />
         {/if}
 
         <!-- ═══ License ═══ -->

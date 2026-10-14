@@ -14,11 +14,15 @@
   import { createEventDispatcher } from 'svelte';
   import { t } from '$lib/i18n/index.js';
   import { apiFetchRaw, readApiError } from '$lib/api.js';
+  import type { EditionMode } from '$lib/edition.js';
+
+  /** Which edition the wizard picked; decides which teams are offered. */
+  export let mode: EditionMode = 'personal';
 
   const dispatch = createEventDispatcher<{ done: void }>();
 
   interface Member { name: string; roleKey: string; prompt: string }
-  interface Team { id: string; nameKey: string; color: string; tagKey: string; members: Member[] }
+  interface Team { id: string; nameKey: string; color: string; tagKey: string; members: Member[]; audience: EditionMode[] }
 
   /**
    * Deliberately small teams. Three agents read as a team you can hold in your
@@ -27,7 +31,23 @@
    */
   const TEAMS: Team[] = [
     {
+      id: 'front',
+      nameKey: 'setup.team_front',
+      color: '#A855F7',
+      tagKey: 'setup.team_front_tag',
+      audience: ['business'],
+      members: [
+        { name: 'Lucía', roleKey: 'setup.role_account',
+          prompt: 'You look after customers: keep the CRM current, notice who has gone quiet, and draft the follow-up before anyone asks.' },
+        { name: 'Ramiro', roleKey: 'setup.role_sales',
+          prompt: 'You work the open opportunities: what moved, what stalled, and the one next step for each. Short and concrete.' },
+        { name: 'Inés', roleKey: 'setup.role_bookkeeper',
+          prompt: 'You keep the money straight: what was billed, what is owed, what is due this week. Flag anything that does not add up.' },
+      ],
+    },
+    {
       id: 'ops',
+      audience: ['personal', 'business'],
       nameKey: 'setup.team_ops',
       color: '#22C55E',
       tagKey: 'setup.team_ops_tag',
@@ -42,6 +62,7 @@
     },
     {
       id: 'research',
+      audience: ['personal', 'business'],
       nameKey: 'setup.team_research',
       color: '#38BDF8',
       tagKey: 'setup.team_research_tag',
@@ -56,6 +77,7 @@
     },
     {
       id: 'workshop',
+      audience: ['personal', 'business'],
       nameKey: 'setup.team_workshop',
       color: '#F59E0B',
       tagKey: 'setup.team_workshop_tag',
@@ -69,6 +91,9 @@
       ],
     },
   ];
+
+  // Personal sees ops, research and workshop; business sees front, ops and research.
+  $: teams = TEAMS.filter((tm) => tm.audience.includes(mode)).slice(0, 3);
 
   type Phase = 'choosing' | 'hiring' | 'proving' | 'ready' | 'failed';
 
@@ -162,7 +187,7 @@
     </header>
 
     <div class="teams" role="list">
-      {#each TEAMS as team, i (team.id)}
+      {#each teams as team, i (team.id)}
         <button
           class="team"
           role="listitem"

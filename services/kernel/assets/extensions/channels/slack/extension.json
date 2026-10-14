@@ -8,6 +8,7 @@
   "description": "Slack notification + bot channel (uses @slack/bolt).",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["business"],
   "category": "channels",
   "tags": [
     "channel",

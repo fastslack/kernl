@@ -8,6 +8,7 @@
   "description": "Workouts, programs, PRs, weekly summary.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "health",
   "tags": [
     "training",

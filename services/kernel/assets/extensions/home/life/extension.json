@@ -9,6 +9,7 @@
   "description": "Weather, clocks, and personal widgets.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "home",
   "frontend": {
     "pages": [

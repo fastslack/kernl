@@ -8,6 +8,7 @@
   "description": "archive.org audio catalog — vinyls (78rpm/georgeblood), netlabels, live music, radio. Browse, search, stream, save to library.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "leisure",
   "tags": [
     "music",

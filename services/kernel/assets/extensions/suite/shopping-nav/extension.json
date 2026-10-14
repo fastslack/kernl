@@ -9,6 +9,7 @@
   "description": "Grocery and retail tracking tab.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "home",
   "frontend": {
     "navItems": [

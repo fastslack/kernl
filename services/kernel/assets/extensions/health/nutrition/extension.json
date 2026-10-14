@@ -8,6 +8,7 @@
   "description": "Food log, fasting tracker, body stats.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "health",
   "tags": [
     "nutrition",
