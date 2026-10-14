@@ -79,14 +79,23 @@ export function buildMyOffice(
   /** Y-axis rotation (radians) for the seated occupant so they face the door
    *  (+Z) and any visitor sitting across the desk. */
   seatFacingY: number;
+  /** Height of the dais under the desk and the occupant's chair: the seated
+   *  occupant is lifted by this much. seatPos itself stays on the floor plane
+   *  (y = 0) because walkers leaving from it interpolate the path's y. */
+  seatLift: number;
   /** World-space point above the occupant's head — anchor for the
    *  COMANDANTE tag and the gold halo. */
   headPos: { x: number; y: number; z: number };
-  /** The 4 visitor chair seat positions in front of the desk. Walkers visiting
-   *  the office (reports, meetings held here) sit in these instead of piling
-   *  onto one point on the floor. */
+  /** Visitor armchair seat positions: one straight row facing the desk.
+   *  Walkers visiting the office (reports, questions, meetings held here) sit
+   *  in these instead of piling onto one point on the floor. */
   visitorChairs: Array<{ x: number; y: number; z: number }>;
-  /** Point a seated visitor should face — the desk / occupant. */
+  /** Where a visitor waits on foot, behind the row, when every armchair is
+   *  taken — never a seated pose without a chair under it. */
+  visitorStands: Array<{ x: number; y: number; z: number }>;
+  /** Point a visitor should face — the occupant. A seated visitor faces
+   *  straight ahead instead (same x as the chair, this z), so the body lines
+   *  up with the armchair it sits in. */
   deskFacingPos: { x: number; y: number; z: number };
   /** Midpoint of the doorway (south wall). Walkers must come in through it. */
   doorPos: { x: number; z: number };
@@ -100,14 +109,20 @@ export function buildMyOffice(
   const zBack = cz - d / 2;
   const zDoor = cz + d / 2;
 
-  const deskW = Math.min(4.4, w - 2.2);   // big, imposing — clamped to the room
-  const deskDepth = 1.5;
-  const deskTopY = 0.92;                   // taller than a worker desk → authority
+  const deskW = Math.min(5.0, w - 2.2);   // big, imposing — clamped to the room
+  const deskDepth = 1.6;
+  // The desk and the occupant's chair stand on a two-step dais: whoever walks
+  // in looks up at the desk.
+  const DAIS = 0.24;
+  const deskTopY = DAIS + 0.92;            // taller than a worker desk → authority
   // Desk pulled off the back wall so the occupant has room behind the chair
   // instead of sitting pressed against the window and the flags.
-  const deskCZ = zBack + 2.6;
+  const deskCZ = zBack + 2.9;
   const deskFrontZ = deskCZ + deskDepth / 2;
-  const cmdCZ = deskCZ - 1.3;              // occupant seat, behind the desk
+  const cmdCZ = deskCZ - 1.35;             // occupant seat, behind the desk
+  const daisW = deskW + 1.4;
+  const daisBackZ = zBack + WALL_T / 2 + 0.75;  // clear of the flag stands
+  const daisFrontZ = deskFrontZ + 0.55;
 
   // ── Floor: polished dark marble (lifted a touch so the luxury reads under
   // the single warm light instead of going pure black) ──
@@ -152,13 +167,46 @@ export function buildMyOffice(
   const steelMat = new rt.THREE.MeshStandardMaterial({ color: 0x1f2230, roughness: 0.4, metalness: 0.7 });
   applyPBR(steelMat, 'metal');
 
-  // ── Executive desk (large pedestal desk, faces the door) ──────────────────
-  // Desk top — big chamfered slab.
+  // ── Dais: two steps of dark marble with gold nosing, carpeted on top ─────
+  const daisStone = new rt.THREE.MeshStandardMaterial({ color: 0x1c1726, roughness: 0.28, metalness: 0.3 });
+  applyWorldTexture(daisStone, 'marble');
+  const daisD = daisFrontZ - daisBackZ;
+  const daisCZ = (daisFrontZ + daisBackZ) / 2;
+  // Lower step: a tread wider and deeper than the upper one on the open sides.
+  const step1 = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(daisW + 0.7, DAIS / 2, daisD + 0.35), daisStone);
+  step1.position.set(cx, DAIS / 4, daisCZ + 0.175);
+  step1.receiveShadow = true; step1.castShadow = true;
+  scene.add(step1);
+  const step2 = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(daisW, DAIS / 2, daisD), daisStone);
+  step2.position.set(cx, DAIS * 0.75, daisCZ);
+  step2.receiveShadow = true; step2.castShadow = true;
+  scene.add(step2);
+  // Gold nosing along each step's front and open sides.
+  for (const [sw, sd, sy, sz] of [
+    [daisW + 0.7, daisD + 0.35, DAIS / 2, daisCZ + 0.175],
+    [daisW, daisD, DAIS, daisCZ],
+  ] as [number, number, number, number][]) {
+    const front = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(sw + 0.02, 0.035, 0.05), goldTrim);
+    front.position.set(cx, sy - 0.012, sz + sd / 2);
+    scene.add(front);
+    for (const s of [-1, 1]) {
+      const side = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.05, 0.035, sd), goldTrim);
+      side.position.set(cx + s * (sw / 2), sy - 0.012, sz);
+      scene.add(side);
+    }
+  }
+  floorRug(scene, cx, daisCZ, daisW - 0.5, daisD - 0.4, 0x5a1420, 0x8a6a32, 0.1, DAIS);
+
+  // ── Executive desk (large pedestal desk on the dais, faces the door) ──────
+  // Desk top — big chamfered slab with a moulded edge band under it.
   const deskTopGeo = new RoundedBoxGeometry(deskW, 0.12, deskDepth, 2, 0.03);
   const deskTop = new rt.THREE.Mesh(deskTopGeo, mahogany);
   deskTop.position.set(cx, deskTopY, deskCZ);
   deskTop.castShadow = true; deskTop.receiveShadow = true;
   scene.add(deskTop);
+  const apron = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(deskW - 0.1, 0.05, deskDepth - 0.1), goldTrim);
+  apron.position.set(cx, deskTopY - 0.085, deskCZ);
+  scene.add(apron);
   // Tooled leather inlay on the writing surface.
   const inlay = new rt.THREE.Mesh(
     new rt.THREE.BoxGeometry(deskW - 0.6, 0.02, deskDepth - 0.45),
@@ -177,32 +225,63 @@ export function buildMyOffice(
     lip.position.set(cx + ox, deskTopY + 0.075, deskCZ + oz);
     scene.add(lip);
   }
-  // Side pedestals (drawer columns) + a front modesty panel between them.
-  const pedW = 0.78, pedH = deskTopY - 0.12;
-  for (const s of [-1, 1]) {
-    const ped = new rt.THREE.Mesh(new RoundedBoxGeometry(pedW, pedH, deskDepth - 0.18, 2, 0.02), mahogany);
-    ped.position.set(cx + s * (deskW / 2 - pedW / 2 - 0.04), pedH / 2, deskCZ);
-    ped.castShadow = true;
-    scene.add(ped);
-    // Three drawer handles per pedestal (gold).
-    for (let r = 0; r < 3; r++) {
-      const handle = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.22, 0.035, 0.04), goldTrim);
-      handle.position.set(
-        cx + s * (deskW / 2 - pedW / 2 - 0.04),
-        0.28 + r * 0.24,
-        deskFrontZ - 0.02,
-      );
-      scene.add(handle);
+  // One solid body under the top: the visitor side reads as a single wall of
+  // panelled wood, not two drawer columns with a gap.
+  const bodyH = deskTopY - 0.14 - DAIS;
+  const bodyY = DAIS + bodyH / 2;
+  const body = new rt.THREE.Mesh(new RoundedBoxGeometry(deskW - 0.2, bodyH, deskDepth - 0.2, 2, 0.02), mahogany);
+  body.position.set(cx, bodyY, deskCZ);
+  body.castShadow = true; body.receiveShadow = true;
+  scene.add(body);
+  // Plinth: a dark base proud of the body, gold line on top of it.
+  const plinth = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(deskW - 0.05, 0.1, deskDepth - 0.05), steelMat);
+  plinth.position.set(cx, DAIS + 0.05, deskCZ);
+  scene.add(plinth);
+  const plinthLine = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(deskW - 0.03, 0.025, 0.03), goldTrim);
+  plinthLine.position.set(cx, DAIS + 0.11, deskFrontZ - 0.02);
+  scene.add(plinthLine);
+  // Visitor face: four raised panels framed in gold between five pilasters,
+  // and the emblem medallion in the middle.
+  const faceZ = deskFrontZ - 0.1;
+  const pilasterXs = [-0.5, -0.25, 0, 0.25, 0.5].map((f) => cx + f * (deskW - 0.32));
+  for (const px of pilasterXs) {
+    const pil = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.16, bodyH - 0.08, 0.08), mahogany);
+    pil.position.set(px, bodyY + 0.02, faceZ + 0.03);
+    scene.add(pil);
+    for (const cy of [DAIS + 0.16, deskTopY - 0.2]) {
+      const cap = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.2, 0.04, 0.1), goldTrim);
+      cap.position.set(px, cy, faceZ + 0.04);
+      scene.add(cap);
     }
   }
-  // Front modesty panel (visitor side) with a gold accent strip.
-  const panelH = pedH - 0.06;
-  const panel = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(deskW - pedW * 2 - 0.1, panelH, 0.06), mahogany);
-  panel.position.set(cx, panelH / 2 + 0.04, deskFrontZ - 0.03);
-  scene.add(panel);
-  // Gold nameplate plaque on the desk front, facing visitors.
-  const plaque = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(1.3, 0.2, 0.03), goldTrim);
-  plaque.position.set(cx, deskTopY - 0.28, deskFrontZ + 0.01);
+  for (let i = 0; i < 4; i++) {
+    const midX = (pilasterXs[i] + pilasterXs[i + 1]) / 2;
+    const pw = pilasterXs[i + 1] - pilasterXs[i] - 0.36;
+    const ph = bodyH - 0.42;
+    const raised = new rt.THREE.Mesh(new RoundedBoxGeometry(pw, ph, 0.05, 2, 0.015), mahogany);
+    raised.position.set(midX, bodyY + 0.02, faceZ + 0.02);
+    scene.add(raised);
+    for (const [fw, fh, fx, fy] of [
+      [pw + 0.06, 0.025, 0, ph / 2], [pw + 0.06, 0.025, 0, -ph / 2],
+      [0.025, ph, -pw / 2, 0], [0.025, ph, pw / 2, 0],
+    ] as [number, number, number, number][]) {
+      const f = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(fw, fh, 0.03), goldTrim);
+      f.position.set(midX + fx, bodyY + 0.02 + fy, faceZ + 0.055);
+      scene.add(f);
+    }
+  }
+  // Emblem: a gold medallion with a dark star, on the central pilaster.
+  const medal = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.2, 0.2, 0.04, 24), goldTrim);
+  medal.rotation.x = Math.PI / 2;
+  medal.position.set(cx, bodyY + 0.06, faceZ + 0.1);
+  scene.add(medal);
+  const medalCore = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.13, 0.13, 0.045, 5), steelMat);
+  medalCore.rotation.x = Math.PI / 2;
+  medalCore.position.set(cx, bodyY + 0.06, faceZ + 0.105);
+  scene.add(medalCore);
+  // Gold nameplate plaque under the top edge, facing visitors.
+  const plaque = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(1.4, 0.13, 0.03), goldTrim);
+  plaque.position.set(cx, deskTopY - 0.14, deskFrontZ + 0.01);
   scene.add(plaque);
 
   // Monitor on the desk, screen facing the occupant (-Z, toward the back wall).
@@ -231,53 +310,85 @@ export function buildMyOffice(
   lampGlow.position.set(cx - deskW * 0.34, deskTopY + 0.4, deskCZ - 0.2);
   scene.add(lampGlow);
 
-  // ── Chair builder (occupant + visitors share this) ───────────────────────
-  // faceDir: +1 → occupant faces +Z (back panel on the -Z side);
-  //          -1 → occupant faces -Z (back panel on the +Z side).
+  // ── The occupant's throne: tall tufted back with wings and a gold crest ──
   const SEAT_Y = 0.47; // matches meeting-room chairs so seated walkers line up
-  function buildChair(px: number, pz: number, faceDir: number, mat: any, tall: boolean): void {
-    const seat = new rt.THREE.Mesh(new RoundedBoxGeometry(0.6, 0.1, 0.58, 2, 0.03), mat);
-    seat.position.set(px, SEAT_Y, pz); seat.castShadow = true; seat.receiveShadow = true;
+  {
+    const px = cx, pz = cmdCZ, y0 = DAIS;
+    const seat = new rt.THREE.Mesh(new RoundedBoxGeometry(0.78, 0.14, 0.7, 2, 0.04), leatherDark);
+    seat.position.set(px, y0 + SEAT_Y, pz); seat.castShadow = true;
     scene.add(seat);
-    const backH = tall ? 1.05 : 0.66;
-    const back = new rt.THREE.Mesh(new RoundedBoxGeometry(0.6, backH, 0.1, 2, 0.03), mat);
-    back.position.set(px, SEAT_Y + backH / 2, pz - faceDir * 0.27); back.castShadow = true;
+    const backH = 1.45;
+    const back = new rt.THREE.Mesh(new RoundedBoxGeometry(0.82, backH, 0.16, 3, 0.06), leatherDark);
+    back.position.set(px, y0 + SEAT_Y + backH / 2, pz - 0.33); back.castShadow = true;
     scene.add(back);
-    // Armrests
+    // Wings at shoulder height, turned in a little.
     for (const s of [-1, 1]) {
-      const arm = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.07, 0.07, 0.5), mat);
-      arm.position.set(px + s * 0.33, SEAT_Y + 0.2, pz);
+      const wing = new rt.THREE.Mesh(new RoundedBoxGeometry(0.1, 0.62, 0.34, 2, 0.04), leatherDark);
+      wing.position.set(px + s * 0.42, y0 + SEAT_Y + 0.95, pz - 0.2);
+      wing.rotation.y = -s * 0.25;
+      scene.add(wing);
+      const arm = new rt.THREE.Mesh(new RoundedBoxGeometry(0.12, 0.3, 0.66, 2, 0.04), leatherDark);
+      arm.position.set(px + s * 0.44, y0 + SEAT_Y + 0.12, pz);
       scene.add(arm);
+      const armCap = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.05, 10, 8), goldTrim);
+      armCap.position.set(px + s * 0.44, y0 + SEAT_Y + 0.28, pz + 0.32);
+      scene.add(armCap);
     }
-    // Pedestal post + 5-spoke base (simplified to a disc)
-    const post = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.045, 0.045, SEAT_Y - 0.18, 8), legMat);
-    post.position.set(px, (SEAT_Y - 0.18) / 2 + 0.09, pz);
+    // Gold crest across the top of the back and gold piping down its sides.
+    const crest = new rt.THREE.Mesh(new RoundedBoxGeometry(0.9, 0.08, 0.2, 2, 0.03), goldTrim);
+    crest.position.set(px, y0 + SEAT_Y + backH + 0.02, pz - 0.33);
+    scene.add(crest);
+    const finial = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.07, 12, 10), goldTrim);
+    finial.position.set(px, y0 + SEAT_Y + backH + 0.12, pz - 0.33);
+    scene.add(finial);
+    // Tufting buttons on the back, the side facing the room.
+    for (let r = 0; r < 3; r++) for (let c = -1; c <= 1; c++) {
+      const btn = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.025, 6, 5), goldTrim);
+      btn.position.set(px + c * 0.22, y0 + SEAT_Y + 0.45 + r * 0.3, pz - 0.245);
+      scene.add(btn);
+    }
+    const post = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.06, 0.06, SEAT_Y - 0.15, 10), legMat);
+    post.position.set(px, y0 + (SEAT_Y - 0.15) / 2 + 0.07, pz);
     scene.add(post);
-    const base = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.3, 0.3, 0.04, 14), legMat);
-    base.position.set(px, 0.04, pz);
+    const base = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.36, 0.38, 0.05, 18), goldTrim);
+    base.position.set(px, y0 + 0.035, pz);
     scene.add(base);
   }
 
-  // The occupant's tall executive chair, behind the desk, facing the door (+Z).
-  buildChair(cx, cmdCZ, +1, leatherDark, true);
-
-  // ── Visitor chairs — 4, in front of the desk, facing the desk (-Z) ────────
-  const seatGapX = Math.min(1.1, deskW * 0.28);
-  // Fit two rows between the desk front and the door (keep clearance at both).
-  const rowSpace = Math.max(0.95, Math.min(1.3, (zDoor - deskFrontZ - 1.5) / 2));
-  const frontRowZ = deskFrontZ + rowSpace;
-  const backRowZ = frontRowZ + rowSpace + 0.1;
-  const visitorChairs = [
-    { x: cx - seatGapX, y: 0, z: frontRowZ },
-    { x: cx + seatGapX, y: 0, z: frontRowZ },
-    { x: cx - seatGapX, y: 0, z: backRowZ },
-    { x: cx + seatGapX, y: 0, z: backRowZ },
-  ];
-  const visitorLeather = new rt.THREE.MeshStandardMaterial({ color: 0x3a2018, roughness: 0.5, metalness: 0.05 });
+  // ── Visitor armchairs: ONE straight row facing the desk (-Z) ─────────────
+  // Wingbacks on short gold legs, evenly spaced and centred on the desk. The
+  // row sits well off the dais so whoever comes in walks behind it and steps
+  // into their chair from the back (pathfinding.ts, planPointWalk).
+  const VISITORS = 5;
+  const seatPitch = Math.min(1.3, (deskW + 1.2) / VISITORS);
+  const rowZ = daisFrontZ + 2.1;
+  const visitorChairs = Array.from({ length: VISITORS }, (_, i) => ({
+    x: cx + (i - (VISITORS - 1) / 2) * seatPitch, y: 0, z: rowZ,
+  }));
+  // Standing spots behind the row, in the gaps between chairs.
+  const visitorStands = Array.from({ length: VISITORS - 1 }, (_, i) => ({
+    x: cx + (i - (VISITORS - 2) / 2) * seatPitch, y: 0, z: rowZ + 1.25,
+  }));
+  const visitorLeather = new rt.THREE.MeshStandardMaterial({ color: 0x5a1a1c, roughness: 0.45, metalness: 0.05 });
   applyPBR(visitorLeather, 'cloth');
+  const armchairs = propBatch();
+  const armchairGold = propBatch();
   for (const seat of visitorChairs) {
-    buildChair(seat.x, seat.z, -1, visitorLeather, false);
+    const { x: px, z: pz } = seat;
+    // Seat cushion, back (behind the sitter, +Z side), arms and wings.
+    armchairs.add(new RoundedBoxGeometry(0.66, 0.16, 0.6, 2, 0.04), px, SEAT_Y - 0.02, pz);
+    armchairs.add(new RoundedBoxGeometry(0.7, 0.92, 0.14, 2, 0.05), px, SEAT_Y + 0.42, pz + 0.3);
+    for (const s of [-1, 1]) {
+      armchairs.add(new RoundedBoxGeometry(0.12, 0.28, 0.58, 2, 0.04), px + s * 0.36, SEAT_Y + 0.1, pz + 0.02);
+      armchairs.add(new RoundedBoxGeometry(0.09, 0.42, 0.26, 2, 0.03), px + s * 0.34, SEAT_Y + 0.62, pz + 0.2, { ry: s * 0.3 });
+      for (const lz of [-0.24, 0.26]) {
+        armchairGold.add(new rt.THREE.CylinderGeometry(0.025, 0.018, SEAT_Y - 0.1, 6), px + s * 0.3, (SEAT_Y - 0.1) / 2, pz + lz);
+      }
+    }
+    armchairGold.add(new RoundedBoxGeometry(0.72, 0.03, 0.12, 1, 0.01), px, SEAT_Y + 0.89, pz + 0.3);
   }
+  armchairs.flush(scene, visitorLeather, true);
+  armchairGold.flush(scene, goldTrim);
 
   // ── Bookshelf (left wall) ──
   // An open case — back panel, two sides, five boards — so the books read.
@@ -420,7 +531,7 @@ export function buildMyOffice(
 
   // Globe on a stand beside the desk, on the occupant's left.
   {
-    const gx = cx - deskW / 2 - 0.75;
+    const gx = cx - daisW / 2 - 0.85;
     const gz = deskCZ - 0.1;
     const gy = 1.0;
     wood.add(new T.CylinderGeometry(0.26, 0.3, 0.06, 14), gx, 0.03, gz);
@@ -528,11 +639,14 @@ export function buildMyOffice(
   tinted.flush(scene, new T.MeshStandardMaterial({ roughness: 0.6, metalness: 0.05, vertexColors: true }), true);
   glow.flush(scene, new T.MeshBasicMaterial({ color: 0xffd890, transparent: true, opacity: 0.7 }));
 
-  // ── Large rug under the visitor seating zone (burgundy, gold binding) ──
-  const rugCZ = (deskFrontZ + backRowZ) / 2;
-  const rugD = Math.min(backRowZ - deskFrontZ + 1.6, d - 2);
-  const rugW = Math.min(deskW + 1.2, w - 1.4);
-  floorRug(scene, cx, rugCZ, rugW, rugD, 0x6a1a2a, 0x8a6a32, 0.15);
+  // ── Red runner from the door to the dais, and a rug under the row ──────
+  const rowRugW = (VISITORS - 1) * seatPitch + 1.8;
+  floorRug(scene, cx, rowZ + 0.3, rowRugW, 2.6, 0x4a1420, 0x8a6a32, 0.12);
+  // The runner stops at the row rug instead of lying across it: two rugs in
+  // the same spot z-fight at any polygon offset.
+  const rowRugBack = rowZ + 0.3 + 1.3 + 0.12;
+  const from = rowRugBack + 0.05, to = zDoor - 0.3;
+  if (to - from > 0.3) floorRug(scene, cx, (from + to) / 2, 1.3, to - from, 0x7a1422, 0xc9a84c, 0.06);
 
   // ── Warm ambient lighting — single PointLight (kept to one for perf) ──
   // Brighter + pulled toward the desk/visitor zone so the executive furniture
@@ -570,21 +684,22 @@ export function buildMyOffice(
 
   // ── Anchors returned to the caller ────────────────────────────────────────
   // Legacy single visitor point — desk-front center (used by data-packet arcs).
-  const visitorPos = { x: cx, y: 0, z: frontRowZ };
+  const visitorPos = { x: cx, y: 0, z: rowZ };
   // Note pile on the desk front edge, left of center (clear of the monitor).
   const noteDropPos = { x: cx - deskW * 0.22, y: deskTopY + 0.1, z: deskCZ + 0.25 };
+  const seatLift = DAIS;
   // Occupant seated behind the desk, facing the door (+Z). The humanoid's
   // front is already +Z (its tie sits at z=+0.16, and walkers face with
   // atan2(dx, dz)), so no turn: π put his back to the desk and the visitors.
   // The rank-and-file desks use π because they sit on the desk's +Z side.
   const seatPos = { x: cx, y: 0, z: cmdCZ };
   const seatFacingY = 0;
-  const headPos = { x: cx, y: 1.7, z: cmdCZ };
+  const headPos = { x: cx, y: 1.7 + DAIS, z: cmdCZ };
   // Visitors face the occupant across the desk.
   const deskFacingPos = { x: cx, y: 1.0, z: cmdCZ };
 
   const doorPos = { x: cx, z: zDoor };
-  return { visitorPos, hitbox, noteDropPos, seatPos, seatFacingY, headPos, visitorChairs, deskFacingPos, doorPos };
+  return { visitorPos, hitbox, noteDropPos, seatPos, seatFacingY, seatLift, headPos, visitorChairs, visitorStands, deskFacingPos, doorPos };
 }
 
 /**
@@ -597,6 +712,8 @@ export function buildMyOffice(
 function floorRug(
   scene: any, x: number, z: number, w: number, d: number,
   field: number, binding: number, border: number,
+  /** Height of the surface it lies on (0 = the floor). */
+  base = 0,
 ): void {
   const layer = (color: number, lw: number, ld: number, y: number, units: number) => {
     const mat = new rt.THREE.MeshStandardMaterial({
@@ -612,6 +729,6 @@ function floorRug(
     mesh.receiveShadow = true;
     scene.add(mesh);
   };
-  layer(binding, w + border * 2, d + border * 2, 0.028, -2);
-  layer(field, w, d, 0.03, -4);
+  layer(binding, w + border * 2, d + border * 2, base + 0.028, -2);
+  layer(field, w, d, base + 0.03, -4);
 }
