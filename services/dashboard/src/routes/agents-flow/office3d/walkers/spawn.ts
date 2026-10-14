@@ -22,6 +22,35 @@ import {
 /** Size of every standing humanoid on the floor — walkers, and anyone who must read as one of them. */
 export const WALKER_SCALE = 1.3;
 
+/**
+ * Puts a walker's message inside the agent's nameplate, the way a working
+ * agent's status shows; returns the element, or null when the agent has no
+ * plate. The plate follows the walker, so the message travels with it.
+ */
+export type WalkerStatusMount = (agentId: string, text: string, color: string) => HTMLElement | null;
+let statusMount: WalkerStatusMount | null = null;
+export function setWalkerStatusMount(fn: WalkerStatusMount | null): void { statusMount = fn; }
+
+/**
+ * The walker's message. It used to be a white card of its own floating over
+ * the body, right under the nameplate, so the two covered each other.
+ */
+function walkerBubble(group: any, agentId: string, message: string | undefined, color: string): any {
+  if (!message) return null;
+  const el = statusMount?.(agentId, message, color);
+  if (el) return { element: el, parent: null };
+  const bd = document.createElement('div');
+  bd.textContent = message;
+  bd.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
+    background:#f0f0e8;border:2px solid #222;padding:3px 8px;
+    border-radius:4px;box-shadow:2px 3px 0 #000;
+    white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;`;
+  const bubble = new rt.CSS2DObject(bd);
+  bubble.position.set(0, 2.4, 0);
+  group.add(bubble);
+  return bubble;
+}
+
 // Local helper — resolve the agent's skin from the shared registry, then
 // build the per-mesh humanoid in the right outfit.
 function buildWalkerHumanoid(srcId: string, agents: Array<{ id: string; skin_id?: string }>, color: string) {
@@ -152,19 +181,7 @@ export function sendWalker(
   glow.position.y = 0.03;
   h.group.add(glow);
 
-  // Message bubble
-  let bubble: any = null;
-  if (message) {
-    const bd = document.createElement('div');
-    bd.textContent = message;
-    bd.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
-      background:#f0f0e8;border:2px solid #222;padding:3px 8px;
-      border-radius:4px;box-shadow:2px 3px 0 #000;
-      white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;`;
-    bubble = new rt.CSS2DObject(bd);
-    bubble.position.set(0, 2.4, 0);
-    h.group.add(bubble);
-  }
+  const bubble = walkerBubble(h.group, srcId, message, color);
 
   // Pre-compute cumulative distances for O(log n) interpolation
   const fwdCumDist = buildCumDist(forwardPts);
@@ -285,17 +302,7 @@ export function sendWalkerToPoint(
   glow.rotation.x = -Math.PI / 2; glow.position.y = 0.03;
   h.group.add(glow);
 
-  let bubble: any = null;
-  if (message) {
-    const bd = document.createElement('div');
-    bd.textContent = message;
-    bd.style.cssText = `font:600 9px 'Fira Code',monospace;color:#111;
-      background:#f0f0e8;border:2px solid #222;padding:3px 8px;
-      border-radius:4px;box-shadow:2px 3px 0 #000;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis;`;
-    bubble = new rt.CSS2DObject(bd);
-    bubble.position.set(0, 2.4, 0);
-    h.group.add(bubble);
-  }
+  const bubble = walkerBubble(h.group, srcId, message, color);
 
   // Visible paper-note prop in the right hand for report deliveries. Folded
   // letter look — white sheet, bottom strip tinted with the sender's flow

@@ -24,7 +24,7 @@
     flipInfraLever, updateInfraConsole, getInfraOperatorPos, getInfraFacePos,
     resetInfraConsole, toggleInfraBoard, INFRA_VIS, type InfraState,
     sendWalker, sendWalkerToPoint, sendCommuteWalker, updateWalkers, removeArrivedWalkers, syncSeatedVisibility, animateSitting,
-    setWalkZones, receptionObstacles,
+    setWalkZones, setWalkerStatusMount, receptionObstacles,
     initDelivery, initDeliveryScene, enqueueDelivery, resetDelivery, markPackagePickedUp, updateDelivery,
     initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis,
     createAnimationRegistry, initAnimEffects,
@@ -1883,7 +1883,7 @@
   //
   // Now the tag is a span INSIDE the chip. It follows, scales and hides with
   // the nameplate for free, and an agent never shows more than one label.
-  function mountAgentStatus(aid: string, el: HTMLElement, dur: number): void {
+  function mountAgentStatus(aid: string, el: HTMLElement, dur: number): boolean {
     const old = speechBubbles.get(aid);
     if (old) {
       if (old.label?.parent) old.label.parent.remove(old.label);
@@ -1892,7 +1892,7 @@
       speechBubbles.delete(aid);
     }
     const inner = deskLabels.get(aid)?.element?.firstElementChild as HTMLElement | null;
-    if (!inner) return;
+    if (!inner) return false;
     inner.appendChild(el);
     speechBubbles.set(aid, { div: el, label: null, age: 0, maxAge: dur });
     animRegistry.add(bubbleFade(el, {
@@ -1903,6 +1903,7 @@
         if (speechBubbles.get(aid)?.div === el) speechBubbles.delete(aid);
       },
     }));
+    return true;
   }
 
   /** Shared shell for the in-chip tag: a hairline separator then the content. */
@@ -1914,13 +1915,13 @@
     return sp;
   }
 
-  function showBubble(aid: string, text: string, dur = 200) {
-    const sp = statusSpan('#f0f0e8');
+  function showBubble(aid: string, text: string, dur = 200, accent = '#f0f0e8'): HTMLElement | null {
+    const sp = statusSpan(accent);
     const t = document.createElement('span');
     t.textContent = text;
     t.style.cssText = "max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dfe4ef";
     sp.appendChild(t);
-    mountAgentStatus(aid, sp, dur);
+    return mountAgentStatus(aid, sp, dur) ? sp : null;
   }
 
   // ── Animated agent-event tag ────────────────────
@@ -2319,6 +2320,9 @@
     initOffice(THREE, CSS2DObject);
     initFurniture(THREE, CSS2DObject);
     initWalkers(THREE, CSS2DObject);
+    // A walker's message rides in its nameplate. The walk takes it down on
+    // arrival; the long fade only matters if the walk never ends.
+    setWalkerStatusMount((aid, text, color) => showBubble(aid, text, 3600, color));
     initAmbiance(THREE, CSS2DObject);
     initDelivery(THREE, CSS2DObject);
     initTaxi(THREE);
@@ -4352,6 +4356,7 @@
     }
   });
   onDestroy(() => {
+    setWalkerStatusMount(null);
     resizeObserver?.disconnect();
     resizeObserver = null;
     if (animId) cancelAnimationFrame(animId);
