@@ -20,6 +20,8 @@ const HOUR = 3_600_000;
 
 export class OperatorComms {
   private lastNoChannelWarn = 0;
+  private highWater = 0;
+  private reserved = new Map<string, number>();
   constructor(private readonly d: Deps) {}
 
   async ask(id: string): Promise<void> { await this.send(id, "ask"); }
@@ -42,7 +44,7 @@ export class OperatorComms {
   }
 
   async inform(n: { title: string; body: string; source: string }): Promise<void> {
-    await this.d.dashboard({ title: n.title, body: n.body, priority: "normal" });
+    await this.safeDashboard({ title: n.title, body: n.body, priority: "normal" });
     await this.deliver(() => ({ text: `${n.title}\n${n.body}`, silent: true }), null);
   }
 
@@ -78,12 +80,12 @@ export class OperatorComms {
     const q = this.d.service.getQuestion(id);
     if (!q || (q.status !== "pending" && q.status !== "owed")) return;
     const who = this.d.service.getAgent(q.from_agent_id)?.name ?? "Un agente";
-    await this.d.dashboard({ title: headline(q, who, kind).split("\n")[0], body: q.question, priority: kind === "ask" ? "high" : "normal" });
-    const code = this.codeFor(q.id);
+    const code = this.codeFor(q.id); // reserved synchronously, before any await
+    await this.safeDashboard({ title: headline(q, who, kind).split("\n")[0], body: q.question, priority: kind === "ask" ? "high" : "normal" });
     const link = this.d.linkFor(q.id);
     await this.deliver((a) => a.buttons
       ? { text: `${headline(q, who, kind)}\n\n${link}`, buttons: buttonsFor(q) }
-      : { text: textFor(q, who, kind, code, link) }, q, code);
+      : { text: textFor(q, who, kind, code, link, a.receive) }, q, code);
   }
 
   /** First ready channel in preference order; the next one if it fails. */
@@ -111,10 +113,20 @@ export class OperatorComms {
     }
   }
 
+  private async safeDashboard(n: Parameters<Deps["dashboard"]>[0]): Promise<void> {
+    try { await this.d.dashboard(n); }
+    catch (err) { log.warn(`operator-comms: dashboard failed: ${err instanceof Error ? err.message : String(err)}`); }
+  }
+
   private codeFor(questionId: string): number {
     const had = this.d.db.query("SELECT code FROM operator_messages WHERE question_id = ? LIMIT 1").get(questionId) as { code: number } | undefined;
     if (had) return had.code;
+    const mine = this.reserved.get(questionId);
+    if (mine) return mine;
     const max = this.d.db.query("SELECT coalesce(max(code), 0) AS m FROM operator_messages").get() as { m: number };
-    return max.m + 1;
+    const code = Math.max(max.m, this.highWater) + 1;
+    this.highWater = code;
+    this.reserved.set(questionId, code);
+    return code;
   }
 }

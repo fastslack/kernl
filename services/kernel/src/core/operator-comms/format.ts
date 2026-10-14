@@ -23,9 +23,10 @@ export function headline(q: AgentQuestion, who: string, kind: "ask" | "owed" | "
   return `${tag} — ${who}\n${q.question}${q.context ? `\n\n${q.context.slice(0, 600)}` : ""}`;
 }
 
-export function textFor(q: AgentQuestion, who: string, kind: "ask" | "owed" | "remind", code: number, link: string): string {
+export function textFor(q: AgentQuestion, who: string, kind: "ask" | "owed" | "remind", code: number, link: string, canReply = true): string {
   const lines = openOptions(q).map((o, i) => `${i + 1}. ${o.label}`);
   lines.push(q.status === "owed" ? "L. Listo" : "L. Lo veo yo");
   if (q.status === "owed") lines.push("D. Descartar");
-  return `${headline(q, who, kind)}\n\n${lines.join("\n")}\n\nRespondé "Q${code} <número>" o entrá a ${link}`;
+  const tail = canReply ? `Respondé "Q${code} <número>" o entrá a ${link}` : `Entrá a ${link}`;
+  return `${headline(q, who, kind)}\n\n${lines.join("\n")}\n\n${tail}`;
 }
