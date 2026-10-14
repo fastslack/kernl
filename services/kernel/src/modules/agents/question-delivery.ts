@@ -210,3 +210,54 @@ export function answerAndDeliver(
     return { ...result, resume_run_id: null };
   }
 }
+
+export type HumanChoice =
+  | { kind: "option"; index: number }
+  | { kind: "task" }
+  | { kind: "done"; note?: string }
+  | { kind: "dismiss" }
+  | { kind: "free"; text: string };
+
+export type ChoiceResult = { ok: true; status: "owed" | "answered" | "dismissed" } | { ok: false; reason: "not_open" | "bad_choice" };
+
+/** Every operator answer — dashboard, Telegram button, "Q<n> <k>" reply — goes through here. */
+export function resolveHumanChoice(
+  service: AgentService,
+  executor: Pick<AgentExecutor, "execute">,
+  events: EventBus | undefined,
+  id: string,
+  choice: HumanChoice,
+): ChoiceResult {
+  const q = service.getQuestion(id);
+  if (!q || (q.status !== "pending" && q.status !== "owed")) return { ok: false, reason: "not_open" };
+  const final = (selected_index: number, selected_option: string, note?: string): ChoiceResult =>
+    answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human" })
+      ? { ok: true, status: "answered" } : { ok: false, reason: "not_open" };
+  const owe = (selected_index: number, selected_option: string): ChoiceResult => {
+    if (!service.markOwed(id, { selected_index, selected_option })) return { ok: false, reason: "not_open" };
+    service.postLetterAboutQuestion(id, q.question,
+      `**Question:** ${q.question}\n\n**Answer:** ${selected_option} — a cargo del operador. ` +
+      `No actúes todavía: seguí esperando. Cuando termine vas a recibir la respuesta final (o DESCARTADA).`);
+    return { ok: true, status: "owed" };
+  };
+  switch (choice.kind) {
+    case "option": {
+      const opt = q.options[choice.index];
+      if (!opt) return { ok: false, reason: "bad_choice" };
+      if (opt.task) return q.status === "pending" ? owe(choice.index, opt.label) : { ok: false, reason: "bad_choice" };
+      return final(choice.index, opt.label);
+    }
+    case "task":
+      return q.status === "pending" ? owe(-1, "Lo veo yo") : { ok: false, reason: "bad_choice" };
+    case "done":
+      return q.status === "owed" ? final(-1, `Listo: ${q.selected_option}`, choice.note) : { ok: false, reason: "bad_choice" };
+    case "free":
+      return choice.text.trim() ? final(-1, choice.text.trim(), choice.text.trim()) : { ok: false, reason: "bad_choice" };
+    case "dismiss": {
+      if (!service.dismissQuestion(id)) return { ok: false, reason: "not_open" };
+      service.postLetterAboutQuestion(id, q.question,
+        `**Question:** ${q.question}\n\n**Answer:** DESCARTADA por el operador. Seguí tu protocolo para una pregunta descartada (no la repitas igual).`);
+      return { ok: true, status: "dismissed" };
+    }
+  }
+}
