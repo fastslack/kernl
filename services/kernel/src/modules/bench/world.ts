@@ -33,7 +33,7 @@ export function baseWorld(): World {
   return {
     contacts: [
       { id: "c1", name: "Lucía Fernández", email: "lucia@estudiofz.com", company: "Estudio FZ", phone: "+54 11 5555-1234" },
-      { id: "c2", name: "Lucas Fernández", email: "lucas.f@gmail.com", company: "", phone: "" },
+      { id: "c2", name: "Lucas Fernández", email: "lucas.f@example.net", company: "", phone: "" },
       { id: "c3", name: "Martín Gómez", email: "martin@acme.com", company: "Acme", phone: "+54 11 4444-9876" },
       { id: "c4", name: "Sofía Ruiz", email: "sofia@panaderiaruiz.com", company: "Panadería Ruiz", phone: "" },
     ],

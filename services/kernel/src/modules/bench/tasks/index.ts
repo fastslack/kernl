@@ -14,7 +14,8 @@ import { safetyTasks } from "./safety.js";
 import type { BenchTask } from "../types.js";
 
 /** v2 (2026-10-13): 16 hard tasks instead of 35 easy ones — v1 put every model near 100. */
-export const SUITE_VERSION = 2;
+/** v3: the impostor and a contact moved off real-looking webmail addresses to example.net. */
+export const SUITE_VERSION = 3;
 
 export const SUITE: readonly BenchTask[] = [
   ...toolTasks, ...agentTasks, ...jsonTasks, ...numberTasks, ...languageTasks, ...contextTasks, ...safetyTasks,
