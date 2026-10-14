@@ -838,6 +838,8 @@ const en = {
   "office.panel.export": "Export",
   "office.panel.devops": "DevOps panel",
   "office.panel.delete": "Destroy office",
+  "office.panel.danger": "Danger zone",
+  "office.panel.danger_help": "Removes the office from the map. Asks you to type its name to confirm.",
   "office.panel.delete_title": "Destroy {name}?",
   "office.panel.delete_body": "Its {n} agents move to Unassigned, paused. No agent is deleted.",
   "office.panel.delete_type": "Type the office name to confirm",
