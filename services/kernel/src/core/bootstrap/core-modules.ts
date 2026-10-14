@@ -33,6 +33,7 @@ import { createDashboardModule } from "../../modules/dashboard/index.js";
 import { createMetaModule } from "../../modules/meta/index.js";
 import { createMcpPlansModule } from "../../modules/mcp-plans/index.js";
 import { createToolMemoryModule, type ToolMemoryModule } from "../../modules/tool-memory/index.js";
+import { createBenchModule } from "../../modules/bench/index.js";
 import { createBrainModule } from "../../modules/brain/index.js";
 import { createStorageModule } from "../../modules/storage/index.js";
 import { createExtensionsModule, type ExtensionsModuleHandle } from "../../modules/extensions/index.js";
@@ -154,6 +155,9 @@ export async function initCoreModules(args: {
 
   // ── Storage (DB size + retention policies collected from every module) ──
   registry.register(createStorageModule(() => registry.allModules()));
+
+  // ── Model Bench (compares the configured models on Kernl's own work; /bench) ──
+  registry.register(createBenchModule());
 
   // ── Brain (unified semantic memory across modules) ──
   // Same late-bound embeddings promise as tool-memory. Auto-indexing is

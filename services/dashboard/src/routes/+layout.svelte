@@ -94,7 +94,7 @@
 
   // Full-bleed pages that need special layout handling. Extension page
   // bundles can also request it via `frontend.pages[].fullBleed`.
-  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander', 'notifications', 'share'];
+  const FULL_BLEED_VIEWS = ['news', 'chat', 'agents-flow', 'architecture', 'mail', 'rss-reader', 'cinema', 'books', 'music', 'commander', 'notifications', 'share', 'bench', 'control'];
   $: isFullBleed =
     FULL_BLEED_VIEWS.includes(currentView) ||
     $extPagesStore.some((p) => p.view === currentView && p.fullBleed);
@@ -337,7 +337,7 @@
 
   // Core routes that are ALWAYS allowed regardless of the manifest.
   const CORE_ROUTES = new Set([
-    'settings', 'system', 'sysoverview', 'architecture', 'extensions',
+    'control', 'settings', 'system', 'sysoverview', 'architecture', 'extensions',
     'notifications', 'marketplace', 'setup', 'welcome', 'login', 'chat',
     'commander', 'agents', 'agents-flow', 'workspace', 'files', 'models',
     'providers', 'memory', 'skills',

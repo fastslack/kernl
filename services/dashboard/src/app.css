@@ -467,82 +467,9 @@ html, body {
    .ws-pill look survives. */
 .ws-pill-btn.open { color: var(--text-1); border-color: var(--text-2); }
 
-/* Popover anchored under the LIVE pill — lists the LLM chain (primary +
-   fallbacks) with per-link health from /api/llm/chain. */
+/* Anchor for the LIVE pill's popover (the LLM chain with health and bench
+   scores), which styles itself in LlmChainPill.svelte. */
 .live-pill-wrap { position: relative; }
-.live-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  z-index: 1000;
-  min-width: 380px;
-  max-width: 520px;
-  background: var(--bg-1, #0b0d10);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  box-shadow: 0 12px 28px rgba(0,0,0,0.45);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  color: var(--text-2);
-  overflow: hidden;
-}
-.lp-head {
-  display: flex; align-items: center; justify-content: space-between;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-2, rgba(255,255,255,0.02));
-}
-.lp-title { font-weight: 600; letter-spacing: 0.5px; color: var(--text-1); }
-.lp-refresh {
-  background: none; border: 1px solid var(--border); color: var(--text-3);
-  width: 24px; height: 22px; border-radius: 4px; cursor: pointer; font-size: 13px;
-  line-height: 1;
-}
-.lp-refresh:hover:not(:disabled) { color: var(--text-1); border-color: var(--text-3); }
-.lp-empty { padding: 14px; text-align: center; color: var(--text-3); }
-.lp-err   { color: var(--red, #ff6b6b); }
-.lp-list  { list-style: none; padding: 4px 0; margin: 0; }
-.lp-row {
-  display: grid;
-  grid-template-columns: 18px 80px 1fr auto;
-  grid-template-areas:
-    "rank slug model status"
-    ".    reason reason reason"
-    ".    meta meta meta";
-  align-items: center;
-  gap: 6px 8px;
-  padding: 6px 10px;
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 60%, transparent);
-}
-.lp-row:last-child { border-bottom: none; }
-.lp-rank   { grid-area: rank; color: var(--text-3); font-size: 9px; text-align: center; }
-.lp-slug   { grid-area: slug; color: var(--text-1); font-weight: 600; }
-.lp-model  { grid-area: model; color: var(--text-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lp-status {
-  grid-area: status;
-  font-size: 9px; letter-spacing: 0.6px;
-  padding: 2px 6px; border-radius: 999px;
-  border: 1px solid var(--border);
-  white-space: nowrap;
-}
-.lp-status[data-status="active"]     { color: var(--green, #6fcf6f); border-color: color-mix(in srgb, var(--green, #6fcf6f) 50%, var(--border)); background: color-mix(in srgb, var(--green, #6fcf6f) 10%, transparent); }
-.lp-status[data-status="standby"]    { color: var(--text-2); border-color: var(--border); }
-.lp-status[data-status="no-key"]     { color: var(--text-3); border-color: var(--border); opacity: 0.7; }
-.lp-status[data-status="quota"]      { color: var(--gold, #f5c463); border-color: color-mix(in srgb, var(--gold, #f5c463) 55%, var(--border)); background: color-mix(in srgb, var(--gold, #f5c463) 12%, transparent); }
-.lp-status[data-status="rate-limit"] { color: var(--gold, #f5c463); border-color: color-mix(in srgb, var(--gold, #f5c463) 40%, var(--border)); }
-.lp-status[data-status="auth"]       { color: var(--red, #ff6b6b); border-color: color-mix(in srgb, var(--red, #ff6b6b) 55%, var(--border)); background: color-mix(in srgb, var(--red, #ff6b6b) 12%, transparent); }
-.lp-status[data-status="degraded"]   { color: var(--gold, #f5c463); border-color: color-mix(in srgb, var(--gold, #f5c463) 30%, var(--border)); opacity: 0.85; }
-.lp-meta { grid-area: meta; display: flex; gap: 10px; color: var(--text-3); font-size: 10px; }
-.lp-meta-warn { color: var(--gold, #f5c463); }
-.lp-reason { grid-area: reason; color: var(--text-3); font-size: 10px; font-style: italic; }
-.lp-foot {
-  padding: 7px 10px;
-  border-top: 1px solid var(--border);
-  background: var(--bg-2, rgba(255,255,255,0.02));
-  text-align: right;
-}
-.lp-foot a { color: var(--text-3); text-decoration: none; font-size: 10px; }
-.lp-foot a:hover { color: var(--text-1); }
 
 /* Search trigger — full-text icon + label + ⌘K hint. Label collapses on
    narrow viewports so the icon + kbd survive. */
