@@ -55,6 +55,19 @@ describe("remindDue", () => {
     expect(reminded).toEqual([old]);
   });
 
+  it("a sweep that starts while a slow channel is still sending repeats nothing", async () => {
+    const a = waiting(30); const b = waiting(26);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const slow = { remind: async (id: string) => { reminded.push(id); await gate; } };
+    const first = remindDue(service, slow);
+    const second = remindDue(service, slow); // the next tick, the first still stuck on its first send
+    release();
+    expect(await first).toBe(2);
+    expect(await second).toBe(0);
+    expect(reminded.sort()).toEqual([a, b].sort());
+  });
+
   it("a recent owed_at holds the reminder even if an old reminder exists", async () => {
     const id = waiting(72);
     service.markOwed(id, { selected_index: 1, selected_option: "B" });

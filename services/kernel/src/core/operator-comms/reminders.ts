@@ -5,9 +5,10 @@ export const REMIND_AFTER_MS = 24 * 3_600_000;
 export const REMIND_SWEEP_MS = 60_000;
 
 /**
- * 24 h reminders for what waits on the operator. The question is marked
- * before it is sent, so a reminder is never repeated within 24 h — even with
- * no channel ready. Returns how many were sent.
+ * 24 h reminders for what waits on the operator. Every due question is marked
+ * before the first one is sent, so a reminder is never repeated within 24 h —
+ * not with no channel ready, and not when a slow channel makes the next sweep
+ * start while this one is still sending. Returns how many were sent.
  */
 export async function remindDue(
   service: Pick<AgentService, "listRemindable" | "markReminded">,
@@ -15,9 +16,7 @@ export async function remindDue(
   now = Date.now(),
 ): Promise<number> {
   const due = service.listRemindable(new Date(now - REMIND_AFTER_MS).toISOString());
-  for (const q of due) {
-    service.markReminded(q.id);
-    await comms.remind(q.id);
-  }
+  for (const q of due) service.markReminded(q.id);
+  for (const q of due) await comms.remind(q.id);
   return due.length;
 }
