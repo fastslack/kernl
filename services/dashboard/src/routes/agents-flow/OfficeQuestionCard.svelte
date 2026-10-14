@@ -32,6 +32,8 @@
   // Owed: the choice is made; the options left are the real ones, not the "task" one.
   $: shown = q.options.map((o, i) => ({ o, i })).filter(({ o }) => !owed || !o.task);
   $: guardEscalated = !!q.chief_note?.startsWith('escalada: la respuesta dejaba trabajo al operador');
+  // What the chief would have answered: the text after "propuesta del Chief:".
+  $: chiefProposal = guardEscalated ? (q.chief_note?.split('propuesta del Chief:')[1] ?? '').trim() : '';
   $: ctxUrl = firstUrlIn(q.context);
 
   async function submitFree(): Promise<void> {
@@ -150,7 +152,9 @@
     <div class="bq-chose">{$t('office.chief.you_chose', { opt: q.selected_option ?? '' })}</div>
   {/if}
   {#if guardEscalated}
-    <div class="bq-chief-note">{$t('office.chief.escalated_guard')}</div>
+    <div class="bq-chief-note">
+      {$t('office.chief.escalated_guard')}{#if chiefProposal} — {$t('office.chief.chief_proposal')}: {chiefProposal}{/if}
+    </div>
   {:else if q.chief_note}
     <div class="bq-chief-note">{$t('office.chief.q_escalated')}: {q.chief_note}</div>
   {/if}
