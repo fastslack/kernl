@@ -3,7 +3,11 @@
  * anything is saved, and wired into the chain in the same step.
  */
 
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { basename } from "node:path";
 import { HttpError, type KernelHttpServer } from "../http-server.js";
+import { assetsDir } from "../assets-root.js";
 import { buildChatAdapter, type ChatLlmProvider } from "./chat-adapters.js";
 import type { ClaudeCodeProviderOptions } from "./claude-code-adapter.js";
 import {
@@ -16,6 +20,21 @@ import { classifyModel } from "./model-traits.js";
 import { probeAdapter, type ProbeResult } from "./provider-probe.js";
 import { maskSecret } from "./provider-routes.js";
 import type { ClaudeLogin } from "./claude-code-login.js";
+
+// Brand logos are cached by the browser for a day, so a redrawn logo would
+// stay hidden behind the old one: the URL carries a hash of the file instead.
+const logoVersions = new Map<string, string>();
+function versionedLogo(url: string): string {
+  if (!url.startsWith("/api/extensions/brand/")) return url;
+  let v = logoVersions.get(url);
+  if (v === undefined) {
+    try {
+      v = createHash("sha1").update(readFileSync(`${assetsDir("brand-logos")}/${basename(url)}`)).digest("hex").slice(0, 8);
+    } catch { v = ""; }
+    logoVersions.set(url, v);
+  }
+  return v ? `${url}?v=${v}` : url;
+}
 
 export interface ChainLink { provider: string; model: string }
 export interface DetectResult { found: boolean; baseUrl: string; models: string[] }
@@ -126,7 +145,7 @@ export function registerConnectRoutes(server: KernelHttpServer, deps: ConnectDep
       const cfg = getProviderConfig(e.slug);
       return {
         slug: e.slug, name: e.name, group: e.group, recommended: !!e.recommended, kind: e.kind,
-        needsKey: e.needsKey, optionalKey: !!e.optionalKey, keyUrl: e.keyUrl ?? "", keyHint: e.keyHint ?? "", logo: e.logo,
+        needsKey: e.needsKey, optionalKey: !!e.optionalKey, keyUrl: e.keyUrl ?? "", keyHint: e.keyHint ?? "", logo: versionedLogo(e.logo),
         blurb: e.blurb, tag: e.tag, pricing: e.pricing, steps: e.steps, models: e.models,
         baseUrlEditable: !!e.baseUrlEditable, regions: e.regions ?? [], docsUrl: e.docsUrl ?? "",
         connected: isConnected(e.slug), model: cfg.model,

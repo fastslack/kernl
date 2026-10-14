@@ -39,6 +39,7 @@ const LITELLM_PROVIDER: Record<string, string> = {
   moonshot: "moonshot",
   qwen: "dashscope",
   zai: "zai",
+  xiaomi: "xiaomi_mimo",
 };
 
 export interface ModelPrice {

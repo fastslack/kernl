@@ -46,6 +46,7 @@ const RATE_LIMIT_WINDOWS_MS: Record<string, number> = {
   moonshot: 60_000,
   qwen: 60_000,
   zai: 60_000,
+  xiaomi: 60_000,
   // Local — never rate-limited
   ollama: 0,
   lmstudio: 0,

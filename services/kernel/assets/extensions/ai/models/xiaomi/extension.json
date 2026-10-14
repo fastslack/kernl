@@ -1,0 +1,17 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.xiaomi",
+  "slug": "xiaomi",
+  "name": "Xiaomi MiMo",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "MiMo models by Xiaomi.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/xiaomi.svg",
+  "permissions": [
+    "network"
+  ],
+  "built_in": true
+}
