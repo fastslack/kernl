@@ -8,6 +8,7 @@
   "description": "Mattermost notification channel — sends notifications via incoming webhook.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["business"],
   "category": "channels",
   "tags": ["channel", "mattermost", "notifications"],
   "kernel_min": "0.1.0",

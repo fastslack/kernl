@@ -37,6 +37,7 @@ import {
   promptWorkspaceMandate,
   promptProgressiveDiscovery,
   promptStyleDirective,
+  promptBusinessEdition,
 } from "../../../core/i18n/prompts.js";
 
 export interface SystemPromptContext {
@@ -82,6 +83,12 @@ const basePrompt: SystemPromptStep = (ctx) =>
 const externalNotice: SystemPromptStep = () => EXTERNAL_CONTENT_NOTICE;
 
 const todayDate: SystemPromptStep = (ctx) => promptTodayDate(ctx.lang, ctx.todayStr);
+
+// Business edition: every agent learns it works for a company, not a person.
+// Read per run so switching editions applies without re-seeding any prompt —
+// the stored prompts stay the user's.
+export const editionContext: SystemPromptStep = (ctx) =>
+  ctx.service.getEditionMode?.() === "business" ? promptBusinessEdition(ctx.lang) : null;
 
 // Procedural skills index — for each slug in agent.skills_json, surface a
 // one-line entry (slug + frontmatter description) so the model knows the
@@ -259,6 +266,7 @@ export const SYSTEM_PROMPT_STEPS: ReadonlyArray<SystemPromptStep> = [
   basePrompt,
   externalNotice,
   todayDate,
+  editionContext,
   skillsIndex,
   invokedBy,
   progressiveDiscovery,

@@ -9,6 +9,7 @@
   "description": "Default landing dashboard.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "core",
   "frontend": {
     "navGroups": [

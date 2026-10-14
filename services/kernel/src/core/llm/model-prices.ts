@@ -32,6 +32,14 @@ const LITELLM_PROVIDER: Record<string, string> = {
   deepseek: "deepseek",
   grok: "xai",
   minimax: "minimax",
+  cerebras: "cerebras",
+  mistral: "mistral",
+  together: "together_ai",
+  fireworks: "fireworks_ai",
+  moonshot: "moonshot",
+  qwen: "dashscope",
+  zai: "zai",
+  xiaomi: "xiaomi_mimo",
 };
 
 export interface ModelPrice {

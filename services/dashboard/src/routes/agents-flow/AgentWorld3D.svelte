@@ -24,7 +24,7 @@
     flipInfraLever, updateInfraConsole, getInfraOperatorPos, getInfraFacePos,
     resetInfraConsole, toggleInfraBoard, INFRA_VIS, type InfraState,
     sendWalker, sendWalkerToPoint, sendCommuteWalker, updateWalkers, removeArrivedWalkers, syncSeatedVisibility, animateSitting,
-    setWalkZones, receptionObstacles,
+    setWalkZones, setWalkerStatusMount, receptionObstacles,
     initDelivery, initDeliveryScene, enqueueDelivery, resetDelivery, markPackagePickedUp, updateDelivery,
     initTaxi, initTaxiScene, enqueueTaxi, updateTaxis, resetTaxis,
     createAnimationRegistry, initAnimEffects,
@@ -37,7 +37,7 @@
     resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
-  import { propOf, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
+  import { propOf, tagProp, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
   import {
     createRenderer, configureRenderer, createLabelRenderer, applyEnvironment,
     initialCameraDistance, createPostProcessing,
@@ -85,6 +85,8 @@
   export let agents: WorldAgent[] = [];
   export let chains: WorldChain[] = [];
   export let flows: WorldFlow[] = [];
+  /** Office → panel view its whiteboard opens (offices that declare a "wall-board" anchor). */
+  export let panelAnchors: Map<string, string> = new Map();
   export let ranks: WorldRank[] = [];
   export let flowEvents: AgentFlowEvent[] = [];
   export let runningAgentIds: Set<string> = new Set();
@@ -257,6 +259,16 @@
   let receptionDriverFrontPos: { x: number; y: number; z: number } | null = null;
   // Street/staircase geometry — exposed so the taxi drop-off knows where the
   // car needs to spawn the agent walker, without re-deriving it from corGrid.
+  /** Where taxi commuters enter and leave the building: the south end of the
+   *  lobby, at the top of the staircase. They used to go through the reception
+   *  at the NORTH end of the lobby — first through the pickup spot behind the
+   *  counter (straight over it, 86 of 86), then past its front — and walk the
+   *  whole lobby back down to the stairs: up to twice the walk, the wrong way. */
+  function lobbyExitPos(): { x: number; y: number; z: number } {
+    const fallback = receptionDriverFrontPos ?? receptionFrontPos!;
+    if (!taxiContext) return fallback;
+    return { x: taxiContext.entryCX, y: 0, z: corGrid.buildingBounds.maxZ };
+  }
   let taxiContext: {
     entryCX: number; pedOuterZ1: number; streetDrop: number; southLaneZ: number;
     plinthOuterZ1: number; plinthDrop: number;
@@ -546,7 +558,7 @@
           // the curb until the walker arrives + fades into it.
           sendCommuteWalker({
             scene, walkers, agentId, mode: 'leave',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: agentColor,
             deskAabbs, sittingWorkers,
@@ -564,7 +576,7 @@
           // Fallback if street geometry isn't ready yet.
           sendCommuteWalker({
             scene, walkers, agentId, mode: 'leave',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: agentColor,
             deskAabbs, sittingWorkers,
@@ -588,7 +600,7 @@
               const stairsTop    = { x: taxiContext.entryCX, y: 0, z: taxiContext.plinthOuterZ1 - 0.3 };
               sendCommuteWalker({
                 scene, walkers, agentId, mode: 'arrive',
-                exitPoint: receptionFrontPos,
+                exitPoint: lobbyExitPos(),
                 deskPos, rooms: roomMap, corridorGrid: corGrid,
                 agents, color: agentColor,
                 deskAabbs, sittingWorkers,
@@ -602,7 +614,7 @@
           // frame after layout): use the legacy reception fade-in.
           sendCommuteWalker({
             scene, walkers, agentId, mode: 'arrive',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: agentColor,
             deskAabbs, sittingWorkers,
@@ -649,7 +661,7 @@
             const stairsTop    = { x: taxiContext.entryCX, y: 0, z: taxiContext.plinthOuterZ1 - 0.3 };
             sendCommuteWalker({
               scene, walkers, agentId, mode: 'arrive',
-              exitPoint: receptionFrontPos,
+              exitPoint: lobbyExitPos(),
               deskPos, rooms: roomMap, corridorGrid: corGrid,
               agents, color: agentColor,
               deskAabbs, sittingWorkers,
@@ -661,7 +673,7 @@
       } else {
         sendCommuteWalker({
           scene, walkers, agentId, mode: 'arrive',
-          exitPoint: receptionFrontPos,
+          exitPoint: lobbyExitPos(),
           deskPos, rooms: roomMap, corridorGrid: corGrid,
           agents, color: agentColor,
           deskAabbs, sittingWorkers,
@@ -981,7 +993,7 @@
           const drop = { ...outdoor[0], x: outdoor[0].x + ((i % 3) - 1) * 0.6 };
           sendCommuteWalker({
             scene, walkers, agentId: a.id, mode: 'arrive',
-            exitPoint: receptionFrontPos,
+            exitPoint: lobbyExitPos(),
             deskPos, rooms: roomMap, corridorGrid: corGrid,
             agents, color: flowColor(a.id),
             deskAabbs, sittingWorkers,
@@ -1482,6 +1494,26 @@
   // can open it.
   let registerRepoModal: RegisterRepoModal | null = null;
 
+  // Office panels: the room's whiteboard opens the view its office anchored to "wall-board".
+  let panelBoardProps: any[] = [];
+  function tagPanelBoards(target: any) {
+    if (!target) return;
+    for (const b of panelBoardProps) delete b.userData.prop;
+    officeProps = officeProps.filter((p) => !panelBoardProps.includes(p));
+    panelBoardProps = [];
+    target.traverse((o: any) => {
+      if (!o.userData?.wallBoard) return;
+      const flowId = o.parent?.userData?.flowId as string | undefined;
+      const view = flowId ? panelAnchors.get(flowId) : undefined;
+      if (!flowId || !view) return;
+      tagProp(o, { tip: () => '📋 Panel', click: () => dispatch('panelclick', { flowId, view }) });
+      panelBoardProps.push(o);
+    });
+    officeProps = [...officeProps, ...panelBoardProps];
+    rayTargetsCache = null;
+  }
+  $: if (staticGroup) { panelAnchors; tagPanelBoards(staticGroup); }
+
   function buildThemedOffices(target: any) {
     officeProps = [];
     reposOperatorPos = null;
@@ -1528,6 +1560,7 @@
     // 3D breaker LEDs update synchronously; the door-sign CSS2D elements only
     // attach to the DOM on the first render, so defer that repaint a beat.
     for (const [fid, st] of infraState) setInfraBreaker(fid, st);
+    tagPanelBoards(target);
     setTimeout(() => updateInfraSignsAll(), 150);
   }
 
@@ -1571,6 +1604,8 @@
       myOffice: { rect: officeSlot, door: myOfficeResult.doorPos },
       reception: receptionObstacles(receptionCX, hallSlot.cz),
       plugins: [...offGridSites.values()].flatMap(st => st.obstacles),
+      // Same slots buildMeetingRooms gets below (everything but the hall and My Office).
+      meetingRooms: meetingRooms.filter((_, i) => i !== 1 && i !== 3),
     });
     // Seat the top agent at the executive desk. The seeder
     // guarantees one agent with rank.level === 11; if multiple are
@@ -1848,7 +1883,7 @@
   //
   // Now the tag is a span INSIDE the chip. It follows, scales and hides with
   // the nameplate for free, and an agent never shows more than one label.
-  function mountAgentStatus(aid: string, el: HTMLElement, dur: number): void {
+  function mountAgentStatus(aid: string, el: HTMLElement, dur: number): boolean {
     const old = speechBubbles.get(aid);
     if (old) {
       if (old.label?.parent) old.label.parent.remove(old.label);
@@ -1857,7 +1892,7 @@
       speechBubbles.delete(aid);
     }
     const inner = deskLabels.get(aid)?.element?.firstElementChild as HTMLElement | null;
-    if (!inner) return;
+    if (!inner) return false;
     inner.appendChild(el);
     speechBubbles.set(aid, { div: el, label: null, age: 0, maxAge: dur });
     animRegistry.add(bubbleFade(el, {
@@ -1868,6 +1903,7 @@
         if (speechBubbles.get(aid)?.div === el) speechBubbles.delete(aid);
       },
     }));
+    return true;
   }
 
   /** Shared shell for the in-chip tag: a hairline separator then the content. */
@@ -1879,13 +1915,13 @@
     return sp;
   }
 
-  function showBubble(aid: string, text: string, dur = 200) {
-    const sp = statusSpan('#f0f0e8');
+  function showBubble(aid: string, text: string, dur = 200, accent = '#f0f0e8'): HTMLElement | null {
+    const sp = statusSpan(accent);
     const t = document.createElement('span');
     t.textContent = text;
     t.style.cssText = "max-width:170px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#dfe4ef";
     sp.appendChild(t);
-    mountAgentStatus(aid, sp, dur);
+    return mountAgentStatus(aid, sp, dur) ? sp : null;
   }
 
   // ── Animated agent-event tag ────────────────────
@@ -2284,6 +2320,9 @@
     initOffice(THREE, CSS2DObject);
     initFurniture(THREE, CSS2DObject);
     initWalkers(THREE, CSS2DObject);
+    // A walker's message rides in its nameplate. The walk takes it down on
+    // arrival; the long fade only matters if the walk never ends.
+    setWalkerStatusMount((aid, text, color) => showBubble(aid, text, 3600, color));
     initAmbiance(THREE, CSS2DObject);
     initDelivery(THREE, CSS2DObject);
     initTaxi(THREE);
@@ -4317,6 +4356,7 @@
     }
   });
   onDestroy(() => {
+    setWalkerStatusMount(null);
     resizeObserver?.disconnect();
     resizeObserver = null;
     if (animId) cancelAnimationFrame(animId);

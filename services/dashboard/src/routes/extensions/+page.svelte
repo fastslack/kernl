@@ -2,6 +2,7 @@
   import { readApiError } from '$lib/api.js';
   import { onMount, onDestroy, tick } from 'svelte';
   import { t } from '$lib/i18n/index.js';
+  import { fetchEdition, audienceOfManifest, type Audience } from '$lib/edition.js';
   import { toast, confirm, ask, describeError } from '$shared/feedback';
   import HostIntegrations from '$lib/components/HostIntegrations.svelte';
   import SkillsHub from '$lib/components/SkillsHub.svelte';
@@ -36,6 +37,7 @@
       description?: string;
       author?: string;
       license?: string;
+      audience?: Audience[];
       category?: string;
       icon?: string;
       logo?: string;
@@ -228,6 +230,7 @@
       category?: string;
       tags?: string[];
       license?: string;
+      audience?: Audience[];
       permissions?: string[];
       pricing?: { amount_cents: number; currency: string; model: string };
     };
@@ -269,10 +272,23 @@
     category: string;
     /** Human name of the repo it came from, for the "by source" grouping. */
     sourceLabel: string;
+    /** Which editions activate it; both when the manifest says nothing. */
+    audience: Audience[];
   }
 
   let tab: Tab = 'discover';
   let priceFilter: PriceFilter = '';
+  /** '' = all; otherwise only what the given edition activates. Defaults to the current edition. */
+  let audienceFilter: Audience | '' = '';
+  /** The edition the kernel runs as; what "clear filters" returns the audience filter to. */
+  let editionMode: Audience | '' = '';
+  /** Set once the user picks an audience, so a late edition fetch can't overwrite it. */
+  let audienceTouched = false;
+
+  function pickAudience(a: Audience | ''): void {
+    audienceTouched = true;
+    audienceFilter = a;
+  }
   let typeMenuOpen = false;
 
   let catalogItems: CatalogEntry[] = [];
@@ -595,6 +611,7 @@
       provider: e.origin?.provider ?? '',
       category: e.manifest.category ?? '',
       sourceLabel: repoLabelFor(e),
+      audience: audienceOfManifest(e.manifest),
     };
   }
 
@@ -635,9 +652,14 @@
       provider: 'installed',
       category: x.manifest?.category ?? '',
       sourceLabel: '',
+      audience: audienceOfManifest(x.manifest),
     };
   }
 
+
+  function matchesAudience(vm: CardVM): boolean {
+    return !audienceFilter || vm.audience.includes(audienceFilter);
+  }
 
   function matchesPrice(vm: CardVM): boolean {
     if (priceFilter === 'free') return vm.priceCents === 0;
@@ -668,7 +690,8 @@
         : catalogItems
             .map(catalogToVM)
             .filter((vm) => !isInstalledStatus(vm.status))
-            .filter(matchesPrice);
+            .filter(matchesPrice)
+            .filter(matchesAudience);
 
   /** The paid shelf — the storefront rail. Owned-but-uninstalled leads it. */
   $: shelfCards = tab === 'discover'
@@ -1174,10 +1197,11 @@
     filterType = '';
     filterStatus = '';
     priceFilter = '';
+    audienceFilter = editionMode;
     void refetchActive();
   }
 
-  $: filtersActive = !!(search || filterType || filterStatus || priceFilter);
+  $: filtersActive = !!(search || filterType || filterStatus || priceFilter || (tab === 'discover' && audienceFilter !== editionMode));
 
   // ── WhatsApp panel ─────────────────────────────────────────────────
   // Beyond the pairing QR, this drawer also surfaces:
@@ -1531,6 +1555,7 @@
     const wanted = new URLSearchParams(location.search).get('tab');
     if (wanted === 'skills' || wanted === 'installed' || wanted === 'updates') tab = wanted;
 
+    fetchEdition().then((s) => { editionMode = s.mode ?? ''; if (s.mode && !audienceTouched) audienceFilter = s.mode; }).catch(() => {});
     fetchList();
     fetchRepos();
     fetchCatalog();
@@ -1663,6 +1688,15 @@
         </div>
       {/if}
     </div>
+
+    <!-- Audience: defaults to the current edition; 'All' shows everything -->
+    {#if tab === 'discover'}
+      <div class="seg" role="group" aria-label={$t('edition.title')}>
+        <button class:seg-on={audienceFilter === 'personal'} on:click={() => pickAudience('personal')}>{$t('edition.filter_mine')}</button>
+        <button class:seg-on={audienceFilter === 'business'} on:click={() => pickAudience('business')}>{$t('edition.filter_business')}</button>
+        <button class:seg-on={audienceFilter === ''} on:click={() => pickAudience('')}>{$t('edition.filter_all')}</button>
+      </div>
+    {/if}
 
     <!-- Price: the one axis people actually filter a store by -->
     <div class="seg" role="group" aria-label="Price">
@@ -1997,7 +2031,7 @@
               </div>
 
               <h3 class="pcard-name">{vm.name}</h3>
-              <div class="pcard-meta">{meta.label} · v{vm.version}</div>
+              <div class="pcard-meta">{meta.label} · v{vm.version}{#if vm.audience.length === 1} · {$t(`edition.badge_${vm.audience[0]}`)}{/if}</div>
               <p class="pcard-desc">{vm.description || '(no description)'}</p>
 
               <div class="pcard-trust">
@@ -2114,6 +2148,10 @@
                 <span>{meta.label}</span>
                 <span class="sep">·</span>
                 <span>v{vm.version}</span>
+                {#if vm.audience.length === 1}
+                  <span class="sep">·</span>
+                  <span>{$t(`edition.badge_${vm.audience[0]}`)}</span>
+                {/if}
                 {#if vm.updateAvailable && vm.installedVersion}
                   <span class="sep">·</span>
                   <span class="card-from">from v{vm.installedVersion}</span>
@@ -2206,6 +2244,7 @@
       <span class="tag tag-type">{meta.label}</span>
       <span class="tag">v{vm.version}</span>
       {#if vm.catalog?.manifest.license}<span class="tag tag-muted">{vm.catalog.manifest.license}</span>{/if}
+      {#if vm.audience.length === 1}<span class="tag tag-muted">{$t(`edition.badge_${vm.audience[0]}`)}</span>{/if}
       <span class="tag tag-price">
         {vm.status === 'for_sale' || vm.status === 'owned' ? priceBadge(vm) : fmtMoney(vm.priceCents, vm.currency)}
       </span>
@@ -2298,6 +2337,7 @@
       <span class="tag tag-status tag-status-{sel.status}">{STATUS_META[sel.status].label}</span>
       <span class="tag">v{sel.version}</span>
       {#if sel.manifest?.license}<span class="tag tag-muted">{sel.manifest.license}</span>{/if}
+      {#if audienceOfManifest(sel.manifest).length === 1}<span class="tag tag-muted">{$t(`edition.badge_${audienceOfManifest(sel.manifest)[0]}`)}</span>{/if}
       <span class="tag tag-price">{fmtPrice(sel.manifest)}</span>
     </div>
 

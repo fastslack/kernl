@@ -201,6 +201,13 @@ function isSafeIdentifier(value: unknown): value is string {
  * would let an agent be steered at an arbitrary endpoint, turning the
  * MCP channel into an SSRF + tool-poisoning vector.
  */
+/**
+ * Cap on a reply saved to the agent's memory: the same 20 000 as the native
+ * executor's MEMORY_REPLY_MAX. The chat panel reads its thread from that
+ * memory, and the 2000 this used to cut every longer answer mid-sentence.
+ */
+const MEMORY_REPLY_MAX = 20_000;
+
 const KERNEL_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "kernel"]);
 
 /** Where every sandbox driver mounts the agent's cwd (and sets its workdir). */
@@ -1092,7 +1099,9 @@ export class ClaudeCodeExecutor {
 
       if (run.trigger_type === "manual") {
         if (execResult.result) {
-          service.addMemory(agent.id, "assistant", execResult.result.slice(0, 2000), run.id, run.project_id ?? null);
+          // Same cap as the native executor: the chat panel reads its thread from
+          // this memory, and 2000 cut every longer answer mid-sentence.
+          service.addMemory(agent.id, "assistant", execResult.result.slice(0, MEMORY_REPLY_MAX), run.id, run.project_id ?? null);
         } else if (execResult.status === "failed") {
           // A failed run used to write NOTHING here, and the chat panel only
           // falls back to the run row when the thread has no agent message at

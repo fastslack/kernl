@@ -8,6 +8,7 @@
   "description": "Unified communications: emails, threads, accounts, campaigns, templates.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["business"],
   "category": "people",
   "tags": [
     "email",

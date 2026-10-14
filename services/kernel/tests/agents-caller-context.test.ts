@@ -54,6 +54,17 @@ describe("caller-aware agent tools over the MCP path", () => {
     expect(inbox[0].from_agent_id).toBe(a.id);
   });
 
+  it("every id post_to_colleague prints can be opened (the dashboard's id chips)", async () => {
+    const a = mk("Sender");
+    const b = mk("Receiver");
+    const out = text(await callOverMcp("kernel_agents_post_to_colleague", { to_agent_id: b.id, subject: "hola", body: "cuerpo" }, a.id));
+    const letter = out.match(/inbox \(id: ([\w-]+)\)/)![1];
+    const [, convo, turn] = out.match(/Conversation: ([\w-]+) \(turn ([\w-]+)/)!;
+    expect(service.getInboxMessage(letter)?.body).toBe("cuerpo");
+    expect(service.getConversation(convo)).toBeTruthy();
+    expect(service.getMessage(turn)?.conversation_id).toBe(convo);
+  });
+
   it("a forged __caller_agent_id is stripped; the context caller wins", async () => {
     const a = mk("Sender");
     const b = mk("Receiver");

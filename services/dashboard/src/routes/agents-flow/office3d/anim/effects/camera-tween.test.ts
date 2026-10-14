@@ -46,6 +46,28 @@ describe('cameraTween', () => {
     expect(camera.position.x).toBeLessThan(opts.position.x);
   });
 
+  it('lands exactly on the destination at any frame rate', () => {
+    setReducedMotion(false);
+    for (const fps of [30, 60, 144]) {
+      const { camera, controls } = rig();
+      const ticker = cameraTween(camera, controls, opts);
+      let done = false;
+      for (let i = 0; i < 1000 && !done; i++) done = ticker.update(1 / fps, 0);
+      expect(done).toBe(true);
+      expect(controls.target).toEqual(opts.target);
+      expect(camera.position).toEqual(opts.position);
+    }
+  });
+
+  it('starts from wherever the camera is when its first frame runs', () => {
+    setReducedMotion(false);
+    const { camera, controls } = rig();
+    const ticker = cameraTween(camera, controls, opts);
+    camera.position.x = 5;
+    ticker.update(0.001, 0);
+    expect(camera.position.x).toBeGreaterThanOrEqual(5);
+  });
+
   it('eases when there is no window (server / test runtime)', () => {
     delete g.window;
     const { camera, controls } = rig();

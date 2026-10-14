@@ -235,6 +235,9 @@ cp "$SRC_TREE/bin/mcp-server.js" "$APP_BUNDLE/Contents/Resources/"
 # subtitle at all — which is precisely what it did until now, since macOS also
 # hides Homebrew from a Finder-launched app.
 [ -d "$SRC_TREE/bin/ffmpeg" ]     && cp -a "$SRC_TREE/bin/ffmpeg"     "$APP_BUNDLE/Contents/Resources/"
+# tor + libevent, flat: the binary loads the dylib from @executable_path. CI
+# signs every Mach-O under Contents, so it gets signed with the rest.
+[ -d "$SRC_TREE/bin/tor" ]        && cp -a "$SRC_TREE/bin/tor"        "$APP_BUNDLE/Contents/Resources/"
 # mtw-server + whatsapp-bridge, kept under bin/ because that is where the
 # wrapper above and the kernel's sidecar stage look for them, with the
 # mtw.toml template beside them in bin/ (a payload staged before the template

@@ -115,7 +115,8 @@ export class QuestionTriager {
       goal,
       trigger_payload: { question_triage: questions.map((q) => q.id) },
     });
-    this.service.markTriageStarted(questions.map((q) => q.id));
+    const ids = questions.map((q) => q.id);
+    this.service.markTriageStarted(ids);
     this.service.updateRun(run.id, { status: "running", started_at: new Date().toISOString() });
     this.events.emit("agent.run.started", {
       run_id: run.id,
@@ -140,6 +141,9 @@ export class QuestionTriager {
         });
         // Circuit breaker tracking (persistent — see AgentService.recordRunOutcome)
         this.service.recordRunOutcome(chief.id, { ok: r.status !== "failed", error: r.error, run_id: run.id });
+        this.handOverLeftovers(ids, r.status === "failed"
+          ? `auto-escalated: the chief's triage run failed — ${String(r.error ?? "").slice(0, 160)}`
+          : "auto-escalated: the chief finished its triage run without resolving it");
       }, (err) => {
         const error = String(err);
         log.error(`Question triage: chief run ${run.id} threw`, err);
@@ -152,9 +156,23 @@ export class QuestionTriager {
           tokens_used: 0,
         });
         this.service.recordRunOutcome(chief.id, { ok: false, error, run_id: run.id });
+        this.handOverLeftovers(ids, `auto-escalated: the chief's triage run failed — ${error.slice(0, 160)}`);
       })
       .catch((err) => log.error(`Question triage: recording the outcome of run ${run.id} failed`, err));
     return run.id;
+  }
+
+  /**
+   * Whatever the chief's run left in triage goes to the human now. Waiting for
+   * the sweep cost ten minutes of silence for nothing: once the run is over,
+   * nobody else is going to triage those questions. (On 2026-10-13 the chief's
+   * run died in 14 s on a tool loop, and the Integrador's question reached the
+   * operator only when the sweep fired.)
+   */
+  private handOverLeftovers(ids: string[], reason: string): void {
+    for (const id of ids) {
+      if (this.service.getQuestion(id)?.status === "triage") this.service.escalateQuestion(id, reason);
+    }
   }
 
   private arm(): void {

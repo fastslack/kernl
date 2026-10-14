@@ -1,0 +1,17 @@
+{
+  "$schema": "kernl://extension/v1",
+  "id": "com.kernl.llm.together",
+  "slug": "together",
+  "name": "Together AI",
+  "version": "1.0.0",
+  "type": "llm-provider",
+  "category": "ai",
+  "description": "Open models served by Together AI.",
+  "author": "Kernl",
+  "license": "MIT",
+  "logo": "/api/extensions/brand/together.svg",
+  "permissions": [
+    "network"
+  ],
+  "built_in": true
+}

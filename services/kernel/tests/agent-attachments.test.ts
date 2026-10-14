@@ -120,7 +120,7 @@ const agent = (over: Partial<Agent> = {}) => ({
   executor_type: "native", progressive_discovery: 0, language_override: "", skills_json: "", ...over,
 }) as Agent;
 const run = (ids: string[]) => ({
-  id: "run-1", agent_id: "agent-1", trigger_type: "schedule", status: "running", goal: "",
+  id: "run-1", agent_id: "agent-1", trigger_type: "manual", status: "running", goal: "",
   trigger_payload: JSON.stringify({ attachment_ids: ids }),
 }) as unknown as AgentRun;
 

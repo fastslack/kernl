@@ -15,6 +15,7 @@
  */
 
 import { escapeHtml } from '$shared/escape.js';
+import { jsonHtml, parseLoose, renderJsonFences, splitTrailingJson, validationIssues } from './json-view.js';
 
 /** Sentinel `sanitizePreview` plants and `formatRunOutput` renders as a callout. */
 export const TRUNC_MARK = '\u0002TRUNCATED_HINT\u0002';
@@ -152,24 +153,44 @@ export function formatRunOutput(text: string | undefined | null, baseUrl?: strin
         // Recurse — the extracted string IS the markdown the agent wrote.
         // Append the structured envelope at the bottom inside a collapsed
         // <details> so power users can still inspect it.
-        const pretty = JSON.stringify(parsed, null, 2);
         return formatRunOutput(candidate, base) +
           '<details class="md-envelope"><summary>raw JSON envelope</summary>' +
-          `<pre class="md-codeblock">${escapeHtml(pretty)}</pre></details>`;
+          `${linkifyUuids(jsonHtml(parsed))}</details>`;
       }
-      // It's JSON but doesn't have a known content field — render the
-      // pretty-printed JSON as a single code block instead of as markdown.
-      return `<pre class="md-codeblock">${escapeHtml(JSON.stringify(parsed, null, 2))}</pre>`;
+      // It's JSON but doesn't have a known content field — render it with
+      // the JSON viewer instead of as markdown.
+      return linkifyUuids(jsonHtml(parsed));
     } catch {
       // Not actually valid JSON — fall through to the markdown pass.
     }
   }
 
+  // A top-level array, or JSON cut by a preview cap, goes to the viewer whole.
+  if (trimmed.startsWith("[") || (trimmed.startsWith("{") && !trimmed.endsWith("}"))) {
+    const loose = parseLoose(trimmed);
+    if (loose && typeof loose.value === "object" && loose.value !== null) return linkifyUuids(jsonHtml(loose.value, { truncated: loose.truncated }));
+  }
+  // "MCP error -32602: Invalid arguments: [...zod issues...]": the prose, then
+  // the issues one per line instead of a wall of JSON.
+  const tail = splitTrailingJson(trimmed);
+  if (tail && validationIssues(tail.value)) {
+    return (tail.prefix ? `<p class="md-p">${escapeHtml(tail.prefix)}</p>` : "") + jsonHtml(tail.value);
+  }
+
+  // ```json fences go to the viewer first. A scanner finds where the JSON
+  // really ends, so a string inside it holding its own ``` can't close the
+  // fence early (an agent's letter with a json block in its body did).
+  const jsonStash: string[] = [];
+  const withJson = renderJsonFences(String(text), (html) => {
+    jsonStash.push(html);
+    return `\n\u0000JSONBLOCK${jsonStash.length - 1}\u0000\n`;
+  }).text;
+
   // Protect triple-backtick fenced blocks from every markdown rule below.
   // Without this, JSON content that contains ## / ** / etc. gets mangled
   // (e.g. `## Context` inside a tool input becomes an <h3>).
   const fenceStash: string[] = [];
-  const source = String(text).replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_m, body) => {
+  const source = withJson.replace(/```(?:\w+)?\n?([\s\S]*?)```/g, (_m, body) => {
     const idx = fenceStash.length;
     fenceStash.push(escapeHtml(String(body)));
     return `\u0000CODEBLOCK${idx}\u0000`;
@@ -217,12 +238,13 @@ export function formatRunOutput(text: string | undefined | null, baseUrl?: strin
       closeList();
     } else {
       closeList();
-      if (/^<h[1-6]/.test(raw.trim())) out.push(raw);
+      if (/^<h[1-6]/.test(raw.trim()) || /^\u0000(?:CODE|JSON)BLOCK\d+\u0000$/.test(raw.trim())) out.push(raw);
       else out.push(`<p class="md-p">${raw}</p>`);
     }
   }
   closeList();
-  let joined = linkifyUuids(out.join(''));
+  // JSON blocks go back before the UUID pass, so ids inside them open too.
+  let joined = linkifyUuids(out.join('').replace(/\u0000JSONBLOCK(\d+)\u0000/g, (_m, idx) => jsonStash[Number(idx)]));
   // Restore the fenced code blocks as <pre>. They were escaped at stash time
   // so they're safe to drop back in as-is.
   joined = joined.replace(/\u0000CODEBLOCK(\d+)\u0000/g, (_m, idx) => {

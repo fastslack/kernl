@@ -114,10 +114,24 @@ describe("formatRunOutput", () => {
     expect(html).toContain('<details class="md-envelope">');
   });
 
-  it("pretty-prints json that has no known content field", () => {
+  it("shows json that has no known content field in the JSON viewer", () => {
     const html = formatRunOutput('{"a":1}', BASE);
-    expect(html).toContain('<pre class="md-codeblock">');
-    expect(html).toContain("&quot;a&quot;");
+    expect(html).toContain('<div class="jv">');
+    expect(html).toContain('<span class="jv-k">a</span>');
+  });
+
+  it("renders a ```json fence inside prose with the viewer, even when a string in it holds a fence", () => {
+    const html = formatRunOutput('Mirá esto:\n\n```json\n{"body":"x ```json {} ``` y","n":2}\n```\n\nY nada más.', BASE);
+    expect(html).toContain('<div class="jv">');
+    expect(html).toContain("Y nada más.");
+    expect(html).not.toContain("md-codeblock");
+  });
+
+  it("turns a zod error into one line per field", () => {
+    const zod = [{ code: "invalid_type", expected: "string", received: "undefined", path: ["body"], message: "Required" }];
+    const html = formatRunOutput("MCP error -32602: Invalid arguments: " + JSON.stringify(zod), BASE);
+    expect(html).toContain("jv-issues");
+    expect(html).toContain("MCP error -32602");
   });
 
   it("allows http links and rejects javascript: ones", () => {

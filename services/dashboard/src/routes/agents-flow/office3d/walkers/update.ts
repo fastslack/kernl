@@ -11,6 +11,16 @@ import { groundHeightAt } from './ground.js';
  *  deltaSec is the real time elapsed since last frame (for constant world-space speed).
  *  sittingWorkers map is used to restore source seated worker visibility on return.
  */
+/**
+ * Take a walker's message down. A floating card leaves with its parent; a tag
+ * inside the agent's nameplate has no parent in the scene and leaves by its element.
+ */
+function dropBubble(w: Walker): void {
+  if (!w.bubble) return;
+  if (w.bubble.parent) w.bubble.parent.remove(w.bubble);
+  w.bubble.element?.remove();
+}
+
 export function updateWalkers(
   scene: any,
   walkers: Walker[],
@@ -132,7 +142,7 @@ export function updateWalkers(
         }
       }
 
-      if (w.bubble && w.bubble.parent) w.bubble.parent.remove(w.bubble);
+      dropBubble(w);
     }
 
     // Talking/standing phase: most walkers auto-return after a short timeout.
@@ -203,10 +213,7 @@ export function updateWalkers(
         // Drop the envelope
         if (w.envelope.parent) w.envelope.parent.remove(w.envelope);
         w.envelope.geometry?.dispose(); w.envelope.material?.dispose();
-        if (w.bubble) {
-          if (w.bubble.parent) w.bubble.parent.remove(w.bubble);
-          if (w.bubble.element) w.bubble.element.remove();
-        }
+        dropBubble(w);
       }
     }
 
@@ -233,7 +240,7 @@ export function updateWalkers(
           if (seatedSrc) seatedSrc.setVisible(true);
         }
         // Clean up bubble DOM element if still around
-        if (w.bubble?.element) w.bubble.element.remove();
+        dropBubble(w);
         scene.remove(w.group);
         w.group.traverse((c: any) => { c.geometry?.dispose(); c.material?.dispose(); });
         walkers.splice(i, 1);
@@ -277,13 +284,13 @@ export function updateWalkers(
         w.maxAge = 20;
         // Drop any envelope still attached.
         if (w.envelope?.parent) w.envelope.parent.remove(w.envelope);
-        if (w.bubble?.element) w.bubble.element.remove();
+        dropBubble(w);
       } else {
         if (sittingWorkers) {
           const seatedSrc = sittingWorkers.get(w.sourceId);
           if (seatedSrc) seatedSrc.setVisible(true);
         }
-        if (w.bubble?.element) w.bubble.element.remove();
+        dropBubble(w);
         scene.remove(w.group);
         w.group.traverse((c: any) => { c.geometry?.dispose(); c.material?.dispose(); });
         walkers.splice(i, 1);
@@ -333,7 +340,7 @@ export function removeArrivedWalkers(
       // long meetings) → instant force-cleanup.
       w.age = 0;
       w.maxAge = 20;
-      if (w.bubble && w.bubble.parent) w.bubble.parent.remove(w.bubble);
+      dropBubble(w);
     }
   }
 }

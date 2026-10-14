@@ -25,6 +25,8 @@
   import { fetchOfficeTemplates, fetchLicenseFeatures, moveAgentToOffice, runAgentWithGoal, setOfficePaused, type OfficeReport, type OfficeTemplatesResponse } from '$lib/office/office-api.js';
   import { environmentLicensed, officeRepoPath } from '$lib/office/team-model.js';
   import { errorMessage } from '$lib/office/office-errors.js';
+  import { fetchPanelOffices } from '$lib/panels/client.js';
+  import { anchorMap } from '$lib/panels/anchors.js';
 
   // ── Types ──────────────────────────────────────
   interface AgentData {
@@ -625,15 +627,29 @@
     else if (action === 'fit') void enterWorld(() => world?.fitAll());
   }
 
+  /** Office → panel view its 3D whiteboard opens. Reloaded when offices change. */
+  let panelAnchors = new Map<string, string>();
+  async function loadPanelAnchors() { panelAnchors = anchorMap(await fetchPanelOffices()); }
+
+  /** Panel view a deep link asked for; the office panel opens on it. */
+  let panelInitialView: string | null = null;
+
   function applyDeepLinks() {
     try {
       const url = new URL(window.location.href);
       if (url.searchParams.get('new') === 'office') openWizard();
-      const officeId = url.searchParams.get('office');
-      if (officeId) void openPanel(officeId);
+      // ?office=<id or name>[&panel=<view>] opens that office, on one of its panels.
+      const officeRef = url.searchParams.get('office');
+      if (officeRef) {
+        const ref = officeRef.toLowerCase();
+        const match = flows.find((f) => f.id === officeRef) ?? flows.find((f) => f.name.toLowerCase() === ref);
+        panelInitialView = url.searchParams.get('panel');
+        void openPanel(match?.id ?? officeRef);
+      }
       if (url.searchParams.has('new') || url.searchParams.has('office')) {
         url.searchParams.delete('new');
         url.searchParams.delete('office');
+        url.searchParams.delete('panel');
         window.history.replaceState(null, '', url.toString());
       }
     } catch { /* ignore */ }
@@ -666,6 +682,7 @@
       ranks = graphData.ranks ?? [];
       assignColors(graphData.agents);
       applyDeepLinksOnce();
+      void loadPanelAnchors();
     } else {
       dataError = true;
     }
@@ -696,6 +713,7 @@
       // Only reassign graphData when something the UI cares about changed — a
       // fresh array ref would otherwise re-trigger reactive blocks (3D scene
       // fingerprint, derived stats) on every poll with no structural diff.
+      if (flowsChanged) void loadPanelAnchors();
       if (!graphData || agentsChanged || chainsChanged || flowsChanged) {
         graphData = newData;
         flows = newData.flows ?? flows;
@@ -783,6 +801,7 @@
           agents={worldAgents}
           {chains}
           flows={worldFlows}
+          {panelAnchors}
           {ranks}
           {dataLoaded}
           {dataError}
@@ -791,6 +810,7 @@
           {stats}
           on:refresh={refresh}
           on:officeclick={(e) => openPanel(e.detail.flowId)}
+          on:panelclick={(e) => { panelInitialView = e.detail.view; openPanel(e.detail.flowId); }}
           on:demolished={(e) => (ghosts = ghosts.filter((g) => g.flow.id !== e.detail.flowId))}
           on:inbox={(e) => (inboxCount = e.detail.count)}
           on:moveagent={(e) => moveAgent(e.detail.agentId, e.detail.flowId)}
@@ -828,7 +848,8 @@
           {envAvailable}
           otherOfficeNames={activeFlows.filter((f) => f.id !== panelOfficeId).map((f) => f.name)}
           top="0px"
-          on:close={() => (panelOfficeId = null)}
+          initialPanelView={panelInitialView}
+          on:close={() => { panelOfficeId = null; panelInitialView = null; }}
           on:changed={refresh}
           on:agentopen={(e) => { panelOfficeId = null; world?.focusAgentById(e.detail.id); }}
           on:deleted={onOfficeDeleted}

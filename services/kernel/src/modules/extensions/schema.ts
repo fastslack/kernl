@@ -343,6 +343,11 @@ export const extensionManifestSchema = z.object({
 
   permissions: z.array(permissionSchema).optional(),
   pricing: pricingSchema.optional(),
+  audience: z
+    .array(z.enum(["personal", "business"]))
+    .max(2)
+    .refine((a) => new Set(a).size === a.length, { message: "audience values must be unique" })
+    .optional(),
   integrity: integritySchema.optional(),
 
   // Built-in extensions ship compiled into the kernel — they're already loaded

@@ -36,6 +36,25 @@ describe('crew routes', () => {
 			}
 		});
 	}
+
+	// The hand-rolled corridor leg assumed every node sits on a horizontal
+	// corridor; from one on a vertical corridor it cut diagonally to the next
+	// junction. Walkers route with corridorRoute now — so must the crew.
+	it('walks the corridors squarely: no diagonal legs, on any lot', () => {
+		const off: string[] = [];
+		for (const [, room] of plan.rooms) {
+			for (const spot of workSpots(room)) {
+				const p = crewRoute(entrance, spot.pos, room, plan.rooms, plan.corridorGrid, plan.meetingRooms);
+				for (let i = 1; i < p.length; i++) {
+					if (Math.abs(p[i].x - p[i - 1].x) > 0.01 && Math.abs(p[i].z - p[i - 1].z) > 0.01) {
+						off.push(`${(room as any).lotId}: (${p[i - 1].x.toFixed(1)},${p[i - 1].z.toFixed(1)})→(${p[i].x.toFixed(1)},${p[i].z.toFixed(1)})`);
+						break;
+					}
+				}
+			}
+		}
+		expect(off.slice(0, 5)).toEqual([]);
+	});
 });
 
 describe('work spots', () => {

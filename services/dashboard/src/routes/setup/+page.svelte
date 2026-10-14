@@ -1,13 +1,14 @@
 <script lang="ts">
   /**
-   * First-run setup wizard — 6 steps:
-   *   0 — Language (ES / EN, persisted via setUserLocale)
-   *   1 — Connect your AI: pick a provider from the kernel catalog, then
-   *       connect it (tested with a real tool call before anything is saved)
-   *   2 — Hire a team
-   *   3 — Connect mail (optional)
-   *   4 — Connect WhatsApp (optional)
-   *   5 — Done
+   * First-run setup wizard — 7 steps (indexes live in `S` below):
+   *   language (ES / EN, persisted via setUserLocale)
+   *   edition  (personal or business: which free extensions start active)
+   *   AI provider: pick one from the kernel catalog, then connect it
+   *       (tested with a real tool call before anything is saved)
+   *   hire a team (depends on the edition)
+   *   mail (optional)
+   *   WhatsApp (optional)
+   *   done
    *
    * Completion is recorded in localStorage as `kernl.setupComplete=1`,
    * which +layout.svelte checks to skip re-prompting on subsequent visits.
@@ -21,12 +22,17 @@
   import ProviderGrid from '$lib/components/llm/ProviderGrid.svelte';
   import ProviderConnect from '$lib/components/llm/ProviderConnect.svelte';
   import { fetchCatalog, type CatalogResponse, type ProbeResult } from '$lib/llm-connect.js';
+  import EditionStep from '$lib/components/setup/EditionStep.svelte';
+  import { fetchEdition, type EditionMode } from '$lib/edition.js';
 
   // ── Wizard state ──────────────────────────────────────────────
-  // 6 steps: language -> provider -> hire a team -> mail -> WhatsApp -> done. The
-  // team step exists because finishing setup on an empty 3D floor is the worst
-  // first impression this product can make.
-  const TOTAL = 6;
+  // 7 steps: language -> edition -> provider -> hire a team -> mail -> WhatsApp
+  // -> done. The team step exists because finishing setup on an empty 3D floor
+  // is the worst first impression this product can make.
+  // Named steps: inserting one used to mean hunting every numeric literal.
+  const S = { lang: 0, edition: 1, llm: 2, team: 3, mail: 4, whatsapp: 5, done: 6 } as const;
+  const TOTAL = 7;
+  let edition: EditionMode = 'personal';
   let step = 0;
 
   // Step 0 — language
@@ -101,7 +107,7 @@
   function back(): void {
     // A skipped AI step also skipped the team step, so going back from mail
     // lands on the AI step again instead of a team that cannot be hired.
-    if (step === 3 && aiSkipped) step = 1;
+    if (step === S.mail && aiSkipped) step = S.llm;
     else if (step > 0) step--;
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -113,7 +119,7 @@
   function skipAi(): void {
     aiSkipped = true;
     chosenSlug = '';
-    step = 3;
+    step = S.mail;
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
@@ -133,14 +139,17 @@
   onMount(() => {
     chosenLang = $locale === 'en' ? 'en' : 'es';
     void loadCatalog();
+    // A repeated setup starts from the edition already chosen.
+    fetchEdition().then((s) => { if (s.mode) edition = s.mode; }).catch(() => {});
   });
 
   $: stepLabel =
-    step === 0 ? $t('setup.step_language')
-    : step === 1 ? $t('setup.step_llm')
-    : step === 2 ? 'Your team'
-    : step === 3 ? $t('setup.step_mail')
-    : step === 4 ? $t('setup.step_whatsapp')
+    step === S.lang ? $t('setup.step_language')
+    : step === S.edition ? $t('setup.step_edition')
+    : step === S.llm ? $t('setup.step_llm')
+    : step === S.team ? 'Your team'
+    : step === S.mail ? $t('setup.step_mail')
+    : step === S.whatsapp ? $t('setup.step_whatsapp')
     : $t('setup.step_done');
 </script>
 
@@ -216,7 +225,7 @@
 
   <main class="content">
 
-    {#if step === 0}
+    {#if step === S.lang}
       <!-- ─────────────────────────── Step 1 ─ Language ─── -->
       <section class="step-card">
         <h2>{$t('setup.lang_title')}</h2>
@@ -255,7 +264,12 @@
         </div>
       </section>
 
-    {:else if step === 1}
+    {:else if step === S.edition}
+      <section class="step-card">
+        <EditionStep on:done={(e) => { edition = e.detail; next(); }} />
+      </section>
+
+    {:else if step === S.llm}
       <!-- ─────────────────────────── Step 2 ─ Connect your AI ─── -->
       <section class="step-card llm-step">
         {#if !chosenProvider}
@@ -295,19 +309,19 @@
         {/if}
       </section>
 
-    {:else if step === 2}
+    {:else if step === S.team}
       <!-- ───────────────────── Step 3 ─ Hire a team ─── -->
       <section class="step-card">
-        <OfficeStep on:done={next} />
+        <OfficeStep mode={edition} on:done={next} />
       </section>
 
-    {:else if step === 3}
+    {:else if step === S.mail}
       <!-- ─────────────────────── Step 4 ─ Connect mail ─── -->
       <section class="step-card llm-step">
         <MailConnectCard mode="step" on:connected={next} on:skip={next} />
       </section>
 
-    {:else if step === 4}
+    {:else if step === S.whatsapp}
       <!-- ─────────────────────── Step 5 ─ Connect WhatsApp ─── -->
       <section class="step-card llm-step">
         <WhatsAppCard mode="step" on:linked={next} on:skip={next} />

@@ -8,6 +8,7 @@
   "description": "Track recurring subscriptions and cost summaries.",
   "author": "Kernl",
   "license": "Apache-2.0",
+  "audience": ["personal"],
   "category": "finance",
   "tags": [
     "subscriptions",

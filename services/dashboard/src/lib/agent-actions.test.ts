@@ -28,6 +28,16 @@ describe("agentActionOf", () => {
     expect(a?.failure).toBe('No agent named "Career Lead" found in your office. Use kernel_agents_directory or supply to_agent_id.');
   });
 
+  it("says a zod rejection per field instead of dumping the issue JSON", () => {
+    const zod = [{ code: "invalid_type", expected: "string", received: "undefined", path: ["body"], message: "Required" }];
+    const a = agentActionOf(
+      "mcp__kernel__kernel_agents_post_to_colleague",
+      JSON.stringify({ to_agent_name: "Heural Integrador", subject: "SOLO web#2590" }),
+      { preview: JSON.stringify(zod), failed: true },
+    );
+    expect(a?.failure).toBe("body: Required (expected string, got undefined)");
+  });
+
   it("reads a refusal recorded without an error flag as not delivered", () => {
     const a = agentActionOf(
       "mcp__kernel__kernel_agents_post_to_colleague",
