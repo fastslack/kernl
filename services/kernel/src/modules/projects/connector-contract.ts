@@ -60,8 +60,11 @@ export const FunnelProfileV2 = FunnelBase.extend({
 }).strip();
 export const FunnelActivatedV2 = FunnelBase.extend({ rule: z.string().max(100) }).strip();
 export const FunnelChurnedV2 = FunnelBase.extend({ reason: z.string().max(200).optional() }).strip();
+/** Referrals: who invited whom, both as opaque refs. */
+export const ReferralInvitedV2 = FunnelBase.extend({ invitee_ref: z.string().min(1).max(200), channel: z.string().max(50).optional() }).strip();
+export const ReferralAcceptedV2 = FunnelBase.extend({ inviter_ref: z.string().min(1).max(200) }).strip();
 export const FUNNEL_TYPES = ["user.signed_up", "user.email_verified", "user.profile_completed",
-  "professional.verified", "user.activated", "user.churned"] as const;
+  "professional.verified", "user.activated", "user.churned", "referral.invited", "referral.accepted"] as const;
 export type FunnelType = typeof FUNNEL_TYPES[number];
 const funnel = <T extends string, S extends z.ZodTypeAny>(type: T, data: S) =>
   z.object({ event_id: z.string(), type: z.literal(type), occurred_at: z.string(), data }).strip();
@@ -83,6 +86,8 @@ export const WebhookEventSchema = z.discriminatedUnion("type", [
   funnel("professional.verified", FunnelBase.strip()),
   funnel("user.activated", FunnelActivatedV2),
   funnel("user.churned", FunnelChurnedV2),
+  funnel("referral.invited", ReferralInvitedV2),
+  funnel("referral.accepted", ReferralAcceptedV2),
 ]);
 export type WebhookEvent = z.infer<typeof WebhookEventSchema>;
 
