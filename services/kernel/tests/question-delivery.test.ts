@@ -4,7 +4,7 @@ import { runMigrations } from "../src/core/db/migrations.js";
 import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
-import { AnswerQueue, answersGoal, answerAndDeliver, deliverPendingAnswers, pendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
+import { AnswerQueue, MAX_REDELIVERIES, answersGoal, answerAndDeliver, deliverPendingAnswers, pendingAnswers, resolveHumanChoice } from "../src/modules/agents/question-delivery.js";
 
 const OPTS = [{ label: "A" }, { label: "B" }, { label: "C" }, { label: "D" }];
 
@@ -169,6 +169,80 @@ describe("answers that arrive while the asker is busy", () => {
     await new Promise((r) => setTimeout(r, 20));
     expect(goals).toHaveLength(1);
     queue.stop();
+  });
+
+  describe("a relaunch that dies gives its answers back", () => {
+    const ending = (status: string) => ({
+      execute: async (p: { goal: string }) => {
+        goals.push(p.goal);
+        if (status === "throw") throw new Error("model chain exhausted");
+        return { status, result: "", steps_count: 0, tokens_used: 0 };
+      },
+    }) as never;
+    const settle = () => new Promise((r) => setTimeout(r, 5));
+
+    it("failed → the letters are unread again and the queue is asked to retry", async () => {
+      const w = service.createAgent({ name: "W" });
+      service.updateRun(answerWhileBusy(w.id, ["Ship?", "Price?"]), { status: "completed" });
+      const requeued: string[] = [];
+      deliverPendingAnswers(service, ending("failed"), events, w.id, (id) => requeued.push(id));
+      await settle();
+      expect(requeued).toEqual([w.id]);
+      expect(pendingAnswers(service, w.id)).toHaveLength(2);
+      // The next delivery warns that some of them may already be done.
+      deliverPendingAnswers(service, executor, events, w.id);
+      await settle();
+      expect(goals[1]).toContain("stopped before finishing");
+      expect(goals[1]).toContain("Ship?");
+      expect(pendingAnswers(service, w.id)).toHaveLength(0);
+    });
+
+    it("an executor that throws gives them back too", async () => {
+      const w = service.createAgent({ name: "W" });
+      service.updateRun(answerWhileBusy(w.id, ["Ship?"]), { status: "completed" });
+      deliverPendingAnswers(service, ending("throw"), events, w.id);
+      await settle();
+      expect(pendingAnswers(service, w.id)).toHaveLength(1);
+    });
+
+    it("cancelled keeps them read: stopping the agent is the operator's call", async () => {
+      const w = service.createAgent({ name: "W" });
+      service.updateRun(answerWhileBusy(w.id, ["Ship?"]), { status: "completed" });
+      const requeued: string[] = [];
+      deliverPendingAnswers(service, ending("cancelled"), events, w.id, (id) => requeued.push(id));
+      await settle();
+      expect(requeued).toEqual([]);
+      expect(pendingAnswers(service, w.id)).toHaveLength(0);
+    });
+
+    it(`gives up after ${MAX_REDELIVERIES} redeliveries instead of looping`, async () => {
+      const w = service.createAgent({ name: "W" });
+      service.updateRun(answerWhileBusy(w.id, ["Ship?"]), { status: "completed" });
+      for (let i = 0; i <= MAX_REDELIVERIES; i++) {
+        expect(deliverPendingAnswers(service, ending("failed"), events, w.id)).toBeTruthy();
+        await settle();
+      }
+      expect(goals).toHaveLength(MAX_REDELIVERIES + 1);
+      expect(pendingAnswers(service, w.id)).toHaveLength(0);
+    });
+
+    it("the queue redelivers after a failed run on its own", async () => {
+      const w = service.createAgent({ name: "W" });
+      service.updateRun(answerWhileBusy(w.id, ["Ship?"]), { status: "completed" });
+      let calls = 0;
+      const flaky = {
+        execute: async (p: { goal: string }) => {
+          goals.push(p.goal);
+          return { status: calls++ === 0 ? "failed" : "completed", result: "", steps_count: 0, tokens_used: 0 };
+        },
+      } as never;
+      const queue = new AnswerQueue(service, flaky, events, { retryMs: 5 });
+      expect(queue.sweep()).toBe(1);
+      await new Promise((r) => setTimeout(r, 40));
+      expect(goals).toHaveLength(2);
+      expect(pendingAnswers(service, w.id)).toHaveLength(0);
+      queue.stop();
+    });
   });
 });
 
