@@ -121,7 +121,9 @@ export class OutboxService {
       // chain it started) still drafts from a project's account. When exactly
       // one project of the office has that account linked, the draft is that
       // project's — otherwise it lands unscoped and out of the project's queue.
-      const owners = this.projects.list({ flowId: input.flow_id }).filter((p) => this.projects.links(p.id).some(isThisAccount));
+      // An internal channel has no account to match: the office's only project owns it.
+      const office = this.projects.list({ flowId: input.flow_id });
+      const owners = h.needsAccount === false ? office : office.filter((p) => this.projects.links(p.id).some(isThisAccount));
       if (owners.length === 1) projectId = owners[0].id;
     }
     if (projectId && h.needsAccount !== false) {

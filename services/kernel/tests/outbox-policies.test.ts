@@ -13,14 +13,14 @@ import { EventBus } from "../src/core/event-bus.js";
 const tick = () => new Promise((r) => setTimeout(r, 20));
 
 describe("outbox policies", () => {
-  let db: Database; let root: string; let outbox: OutboxService; let pid: string; let sent: unknown[];
+  let db: Database; let root: string; let outbox: OutboxService; let pid: string; let sent: unknown[]; let projects: ProjectsService;
   beforeEach(() => {
     db = new Database(":memory:");
     runMigrations(db, "agents", agentsMigrations);
     runMigrations(db, "projects", projectsMigrations);
     const events = new EventBus();
     root = mkdtempSync(join(tmpdir(), "op-"));
-    const projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: root });
+    projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: root });
     pid = projects.create({ slug: "heural", name: "Heural", brief: { value_prop: "v", audience: "a" } }).id;
     projects.link(pid, "social_account", "fake:1");
     sent = [];
@@ -83,5 +83,11 @@ describe("outbox policies", () => {
     const item = outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
     expect(item.status).toBe("draft");
     expect(() => outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "fake", account_ref: "nope", payload: {} })).toThrow("not linked");
+  });
+  it("a needsAccount:false draft from a run outside any project goes to the office's only project", () => {
+    outbox.registerChannel("web_change", { needsAccount: false, validate: () => ({ ok: true }), preview: () => ({ title: "t", body: "b" }), send: async () => ({ ref: "aprobado" }) });
+    projects.assignOffice("growth-office", pid);
+    const item = outbox.propose({ project_id: null, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
+    expect(item.project_id).toBe(pid);
   });
 });
