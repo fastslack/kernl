@@ -82,6 +82,8 @@ export interface QuestionOpinion {
   evidence?: string[];
   unverified?: string[];
   needs_human?: string[];
+  /** Other open questions the same evidence settles, each with its own pick (option 0-based, or null = free text). */
+  also_answers?: Array<{ question_id: string; option: number | null; answer: string; why: string }>;
 }
 
 // ── Live meeting transcripts ──────────────────
