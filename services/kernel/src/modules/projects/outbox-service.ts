@@ -2,7 +2,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { ProjectsService } from "./projects-service.js";
-import type { OutboxChannelHandler, OutboxItem, OutboxPreview, OutboxStatus } from "./types.js";
+import type { OutboxChannelHandler, OutboxItem, OutboxPolicy, OutboxPreview, OutboxStatus } from "./types.js";
 
 type Row = Omit<OutboxItem, "payload"> & { payload: string };
 
@@ -25,6 +25,31 @@ const toItem = (r: Row): OutboxItem => ({ ...r, payload: JSON.parse(r.payload ||
  */
 export class OutboxService {
   private channels = new Map<string, OutboxChannelHandler>();
+  private policies = new Map<string, OutboxPolicy>();
+
+  /** An extension's auto-approval rule. Same name replaces; order of first registration is kept. */
+  registerPolicy(name: string, fn: OutboxPolicy): void {
+    this.policies.set(name, fn);
+  }
+
+  /** The extension went away (uninstall, disable): its rule must stop approving now, not at the next restart. */
+  unregisterPolicy(name: string): void {
+    this.policies.delete(name);
+  }
+
+  /** First `auto` wins. A throwing policy is skipped; a rehearsal draft is never auto. */
+  private applyPolicies(item: OutboxItem): void {
+    if ((item.payload as { rehearsal?: unknown } | null)?.rehearsal === true) return;
+    for (const fn of this.policies.values()) {
+      let d: ReturnType<OutboxPolicy>;
+      try { d = fn(item); } catch { continue; }
+      if (d.decision !== "auto") continue;
+      this.db.prepare("UPDATE outbox_items SET review_note = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
+        .run(d.note.slice(0, 500), isoNow(), item.id);
+      queueMicrotask(() => { this.approve(item.id).catch(() => { /* stays a draft or failed; visible in Aprobaciones */ }); });
+      return;
+    }
+  }
 
   constructor(
     private db: SqliteDb,
@@ -120,6 +145,7 @@ export class OutboxService {
       JSON.stringify(input.payload ?? {}), when, now, now);
     const item = this.mustGet(id);
     this.changed(item);
+    this.applyPolicies(item);
     return item;
   }
 

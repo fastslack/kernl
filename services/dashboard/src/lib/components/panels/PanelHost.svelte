@@ -16,6 +16,7 @@
   import PanelDetail from './PanelDetail.svelte';
   import PanelForm from './PanelForm.svelte';
   import PanelTimeline from './PanelTimeline.svelte';
+  import PanelKpis from './PanelKpis.svelte';
 
   export let flowId: string;
   export let initialView: string | null = null;
@@ -104,6 +105,8 @@
     {:else if view}
       {#if detailKey && detailView}
         <PanelDetail {flowId} view={detailView} spec={spec} rowKey={detailKey} on:back={() => (detailKey = null)} />
+      {:else if view.component === 'kpis'}
+        <PanelKpis {rows} />
       {:else if view.component === 'table'}
         <PanelTable {view} {rows} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'board'}
