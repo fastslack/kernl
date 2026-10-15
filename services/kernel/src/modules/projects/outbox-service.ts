@@ -124,7 +124,7 @@ export class OutboxService {
       const owners = this.projects.list({ flowId: input.flow_id }).filter((p) => this.projects.links(p.id).some(isThisAccount));
       if (owners.length === 1) projectId = owners[0].id;
     }
-    if (projectId) {
+    if (projectId && h.needsAccount !== false) {
       const links = this.projects.links(projectId);
       const linked = links.some(isThisAccount);
       if (!linked) {

@@ -27,7 +27,8 @@ export function structuredResult<T>(value: T, text?: string): ToolResult {
   const display = text ?? JSON.stringify(value, null, 2);
   return {
     content: [{ type: "text", text: display }],
-    structuredContent: value,
+    // MCP requires an object here: a list goes out as { items } (the text keeps the plain array).
+    structuredContent: (Array.isArray(value) ? { items: value } : value) as T,
   };
 }
 

@@ -78,4 +78,10 @@ describe("outbox policies", () => {
     await tick();
     expect(status(item.id).status).toBe("draft");
   });
+  it("a channel that declares needsAccount:false takes drafts without a linked account", async () => {
+    outbox.registerChannel("web_change", { needsAccount: false, validate: () => ({ ok: true }), preview: () => ({ title: "t", body: "b" }), send: async () => ({ ref: "aprobado" }) });
+    const item = outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
+    expect(item.status).toBe("draft");
+    expect(() => outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "fake", account_ref: "nope", payload: {} })).toThrow("not linked");
+  });
 });
