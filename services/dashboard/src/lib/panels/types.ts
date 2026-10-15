@@ -16,7 +16,7 @@ export interface LiteSchema {
 }
 export interface PanelView {
   id: string; title: Text; icon?: string;
-  component: 'table' | 'board' | 'detail' | 'form' | 'timeline';
+  component: 'table' | 'board' | 'detail' | 'form' | 'timeline' | 'kpis';
   data?: string; join?: Record<string, string>; columns?: string; order?: string[]; counts?: string;
   fields?: Array<{ key: string; label?: Text; sub?: string }>;
   card?: { title: string; subtitle?: string; badges?: string[]; links?: Array<{ label: Text; href: string }> };

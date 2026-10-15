@@ -83,4 +83,9 @@ describe("parsePanelSpec patterns", () => {
     const r = parsePanelSpec(bad, ctx);
     expect(r.ok ? "" : r.error).toContain("pattern");
   });
+  it("accepts a kpis view", () => {
+    const r = parsePanelSpec({ version: 1, sources: { g: { type: "channel", name: "growthPanel", params: { project: "heural" } } },
+      views: [{ id: "resumen", title: { es: "Resumen", en: "Summary" }, component: "kpis", data: "g:$.kpis" }] }, ctx);
+    expect(r.ok ? r.spec.views[0].component : r.error).toBe("kpis");
+  });
 });

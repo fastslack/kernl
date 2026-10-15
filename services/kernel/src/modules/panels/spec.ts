@@ -50,7 +50,7 @@ const View = z.object({
   id: ID,
   title: Text,
   icon: z.string().max(32).optional(),
-  component: z.enum(["table", "board", "detail", "form", "timeline"]),
+  component: z.enum(["table", "board", "detail", "form", "timeline", "kpis"]),
   data: DataRef.optional(),
   join: z.record(z.string().max(64)).optional(),
   columns: z.string().max(64).optional(),

@@ -4,13 +4,17 @@ import { type SqliteDb, type GoogleTokens, isoNow, log } from "@kernl/extension-
 const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 
-const SCOPES = [
+/** Exported so other modules can check what the shared token covers. */
+export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/contacts.readonly",
   "https://www.googleapis.com/auth/contacts.other.readonly",
   "https://www.googleapis.com/auth/calendar.readonly",
   "https://www.googleapis.com/auth/tasks.readonly",
   "https://www.googleapis.com/auth/gmail.readonly",
   "https://www.googleapis.com/auth/gmail.send",
+  // Growth Engine: GA4 visits and Search Console queries, read-only.
+  "https://www.googleapis.com/auth/analytics.readonly",
+  "https://www.googleapis.com/auth/webmasters.readonly",
 ];
 
 export class GoogleAuth {
@@ -32,7 +36,7 @@ export class GoogleAuth {
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
       response_type: "code",
-      scope: SCOPES.join(" "),
+      scope: GOOGLE_SCOPES.join(" "),
       access_type: "offline",
       prompt: "consent",
     });
@@ -46,7 +50,7 @@ export class GoogleAuth {
       client_id: this.clientId,
       redirect_uri: redirectUri,
       response_type: "code",
-      scope: SCOPES.join(" "),
+      scope: GOOGLE_SCOPES.join(" "),
       access_type: "offline",
       prompt: "consent",
     });

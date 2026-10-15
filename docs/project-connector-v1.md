@@ -157,3 +157,27 @@ Cada evento aceptado dispara `project:<type>` dentro de Kernl, con el proyecto
 identificado. Las oficinas que atienden ese proyecto pueden reaccionar: por ejemplo,
 Ventas califica al nuevo inscripto de la waitlist y deja un borrador de seguimiento para
 que el operador lo apruebe.
+
+## Eventos de embudo (v2, aditivo)
+
+Para medir el crecimiento (Growth Engine), el proyecto manda por el mismo webhook firmado
+el recorrido de cada usuario. Los tipos v1 no cambian.
+
+| `type` | `data` |
+|---|---|
+| `user.signed_up` | `{ user_ref, at, source?, medium?, campaign?, content?, specialty?, province? }` |
+| `user.email_verified` | `{ user_ref, at }` |
+| `user.profile_completed` | `{ user_ref, at, specialty?, province? }` |
+| `professional.verified` | `{ user_ref, at }` |
+| `user.activated` | `{ user_ref, at, rule }` |
+| `user.churned` | `{ user_ref, at, reason? }` |
+
+- `user_ref` es un id opaco y estable (un hash o uuid), **nunca** email ni nombre.
+- Cualquier campo fuera de la tabla se descarta antes de guardar: si el proyecto manda
+  de más (email, nombre, datos clínicos), Kernl no lo almacena.
+- `user.activated` lo calcula el proyecto con su propia regla (`rule`); en Heural:
+  primera historia clínica creada dentro de los 7 días del registro.
+- Kernl guarda cada evento como registro `funnel_event` del proyecto (deduplicado por
+  `event_id`) y emite `project:<type>`.
+- La carga histórica usa este mismo contrato: el proyecto arma los eventos pasados y los
+  manda por el webhook, sin otro camino de ingesta.

@@ -90,3 +90,8 @@ export interface OutboxChannelHandler {
   /** How account_ref is written for this channel — shown in kernel_outbox_propose's description. */
   refHint?: string;
 }
+
+/** What an extension's policy says about a fresh draft. `auto` approves it on the normal path. */
+export type OutboxPolicyDecision = { decision: "auto"; note: string } | { decision: "manual"; note?: string };
+/** Runs right after a draft is stored. Throwing counts as "manual". */
+export type OutboxPolicy = (item: OutboxItem) => OutboxPolicyDecision;

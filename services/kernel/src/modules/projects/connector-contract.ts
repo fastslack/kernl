@@ -45,6 +45,27 @@ export const SnapshotV1Schema = z.object({
 }).strip();
 export type SnapshotV1 = z.infer<typeof SnapshotV1Schema>;
 
+/**
+ * Funnel events (contract v2, additive). Only an opaque user_ref and growth
+ * attributes: unknown keys (email, name, clinical data) are stripped, never stored.
+ */
+const FunnelBase = z.object({ user_ref: z.string().min(1).max(200), at: z.string() });
+export const FunnelSignupV2 = FunnelBase.extend({
+  source: z.string().max(100).optional(), medium: z.string().max(100).optional(),
+  campaign: z.string().max(200).optional(), content: z.string().max(200).optional(),
+  specialty: z.string().max(100).optional(), province: z.string().max(100).optional(),
+}).strip();
+export const FunnelProfileV2 = FunnelBase.extend({
+  specialty: z.string().max(100).optional(), province: z.string().max(100).optional(),
+}).strip();
+export const FunnelActivatedV2 = FunnelBase.extend({ rule: z.string().max(100) }).strip();
+export const FunnelChurnedV2 = FunnelBase.extend({ reason: z.string().max(200).optional() }).strip();
+export const FUNNEL_TYPES = ["user.signed_up", "user.email_verified", "user.profile_completed",
+  "professional.verified", "user.activated", "user.churned"] as const;
+export type FunnelType = typeof FUNNEL_TYPES[number];
+const funnel = <T extends string, S extends z.ZodTypeAny>(type: T, data: S) =>
+  z.object({ event_id: z.string(), type: z.literal(type), occurred_at: z.string(), data }).strip();
+
 export const WebhookEventSchema = z.discriminatedUnion("type", [
   z.object({ event_id: z.string(), type: z.literal("institution.created"), occurred_at: z.string(), data: InstitutionV1 }).strip(),
   z.object({ event_id: z.string(), type: z.literal("waitlist.joined"), occurred_at: z.string(), data: WaitlistEntryV1 }).strip(),
@@ -56,6 +77,12 @@ export const WebhookEventSchema = z.discriminatedUnion("type", [
     event_id: z.string(), type: z.literal("plan.changed"), occurred_at: z.string(),
     data: z.object({ institution_id: z.string(), from: z.string(), to: z.string() }).strip(),
   }).strip(),
+  funnel("user.signed_up", FunnelSignupV2),
+  funnel("user.email_verified", FunnelBase.strip()),
+  funnel("user.profile_completed", FunnelProfileV2),
+  funnel("professional.verified", FunnelBase.strip()),
+  funnel("user.activated", FunnelActivatedV2),
+  funnel("user.churned", FunnelChurnedV2),
 ]);
 export type WebhookEvent = z.infer<typeof WebhookEventSchema>;
 
