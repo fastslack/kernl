@@ -34,6 +34,25 @@ describe("parsePanelSpec", () => {
     expect(parsePanelSpec({ ...base, views: [{ ...base.views[0], component: "iframe" }] }, ctx).ok).toBe(false);
     expect(parsePanelSpec({ ...base, sources: { x: { type: "http", url: "http://a" } } }, ctx).ok).toBe(false);
   });
+  it("accepts a quieter second line under a table field", () => {
+    const table = { id: "t2", title: "T", component: "table", data: `${Object.keys(base.sources)[0]}:$`, fields: [{ key: "name", label: "Nombre", sub: "city" }] };
+    expect(parsePanelSpec({ ...base, views: [...base.views, table] }, ctx).ok).toBe(true);
+  });
+  it("accepts board counts from a declared source, and refuses them elsewhere", () => {
+    const board = { id: "b", title: "B", component: "board", data: `${Object.keys(base.sources)[0]}:$`, columns: "state" };
+    const src = Object.keys(base.sources)[0];
+    expect(parsePanelSpec({ ...base, views: [...base.views, { ...board, counts: `${src}:$.totals` }] }, ctx).ok).toBe(true);
+    const err = (v: unknown) => { const r = parsePanelSpec({ ...base, views: [...base.views, v] }, ctx); return r.ok ? "" : r.error; };
+    expect(err({ ...board, counts: "ghost:$" })).toContain('unknown source "ghost" in counts');
+    expect(err({ ...board, id: "t", component: "table", counts: `${src}:$` })).toContain("counts is only for a board");
+  });
+  it("accepts a module channel with string params, and nothing else in it", () => {
+    const withChannel = (src: unknown) => parsePanelSpec({ ...base, sources: { ...base.sources, pipe: src } }, ctx);
+    expect(withChannel({ type: "channel", name: "salesPanel", params: { project: "heural" } }).ok).toBe(true);
+    expect(withChannel({ type: "channel", name: "salesPanel", params: { project: 3 } }).ok).toBe(false);
+    expect(withChannel({ type: "channel", name: "../etc", params: {} }).ok).toBe(false);
+    expect(withChannel({ type: "channel", name: "salesPanel", url: "http://a" }).ok).toBe(false);
+  });
   it("rejects broken references with the exact reason", () => {
     const badSource = parsePanelSpec({ ...base, views: [{ ...base.views[0], data: "nope:$" }] }, ctx);
     expect(badSource).toEqual({ ok: false, error: expect.stringContaining('unknown source "nope"') });

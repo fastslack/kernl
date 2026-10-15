@@ -23,6 +23,8 @@
   let spec: PanelSpec | null = null;
   let active = '';
   let rows: Array<Record<string, unknown>> = [];
+  /** A board's real total per column, when its source caps the cards it sends. */
+  let counts: Record<string, number> | null = null;
   let error = '';
   let stop: (() => void) | null = null;
   let stops: Array<() => void> = [];
@@ -53,6 +55,7 @@
     detailKey = null;
     error = '';
     rows = [];
+    counts = null;
     stopAll();
     const v = spec?.views.find((x) => x.id === id);
     if (id === '__activity') { void fetchAudit(flowId).then((a) => (audit = a)); return; }
@@ -68,6 +71,12 @@
     stops.push(pollSource(flowId, source, { select }, (d) => { base = toRows(d); error = ''; recompute(); }, (m) => (error = m)));
     for (const src of Object.keys(v.join ?? {})) {
       stops.push(pollSource(flowId, src, { select: '$' }, (d) => { extra[src] = toRows(d); recompute(); }, () => {}));
+    }
+    if (v.counts) {
+      const [cSource, cSelect] = splitRef(v.counts);
+      stops.push(pollSource(flowId, cSource, { select: cSelect }, (d) => {
+        counts = d && typeof d === 'object' && !Array.isArray(d) ? (d as Record<string, number>) : null;
+      }, () => {}));
     }
   }
 
@@ -98,7 +107,7 @@
       {:else if view.component === 'table'}
         <PanelTable {view} {rows} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'board'}
-        <PanelBoard {view} {rows} on:open={(e) => (detailKey = e.detail)} />
+        <PanelBoard {view} {rows} {counts} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'timeline'}
         <PanelTimeline items={rows.map((r) => ({ at: String(r[view?.time ?? 'updated_at'] ?? ''), text: view?.text ? view.text.replace(/\{\{\s*([\w.#-]+)\s*\}\}/g, (_m, k) => String(r[k] ?? '')) : String(r.key ?? '') }))} />
       {:else if view.component === 'detail'}

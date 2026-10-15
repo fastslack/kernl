@@ -8,6 +8,12 @@
   import { PALETTE } from '$lib/components/bench/model.js';
   export let view: PanelView;
   export let rows: Array<Record<string, unknown>> = [];
+  /** Real total per column when the source sends only some cards; absent → the cards are all there is. */
+  export let counts: Record<string, number> | null = null;
+  const totalOf = (column: string, shown: number) => {
+    const n = counts?.[column];
+    return typeof n === 'number' && n > shown ? n : shown;
+  };
   const dispatch = createEventDispatcher<{ open: string }>();
   $: columns = groupBy(rows, view.columns ?? 'state', view.order ?? []);
   const safeHref = (h: string) => (/^https?:\/\//i.test(h) ? h : null);
@@ -40,7 +46,7 @@
       <header>
         <span class="pb-dot" class:pb-dot--live={isLive(col.column) && col.rows.length > 0} aria-hidden="true"></span>
         <span class="pb-name">{col.column}</span>
-        <span class="pb-count">{col.rows.length}</span>
+        <span class="pb-count">{totalOf(col.column, col.rows.length)}</span>
       </header>
       {#if col.rows.length === 0}<div class="pb-empty" aria-hidden="true"></div>{/if}
       {#each col.rows as r, i (i)}
@@ -56,6 +62,9 @@
           {/if}
         </div>
       {/each}
+      {#if totalOf(col.column, col.rows.length) > col.rows.length}
+        <div class="pb-more">+{totalOf(col.column, col.rows.length) - col.rows.length} {$locale.startsWith('en') ? 'more' : 'más'}</div>
+      {/if}
     </section>
   {/each}
 </div>
@@ -76,6 +85,7 @@
     font: 800 10px 'Manrope', sans-serif; padding: 1px 8px; border-radius: 999px;
     color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
   }
+  .pb-more { padding: 6px 4px; font-size: 11px; color: var(--text-3); text-align: center; }
   .pb-empty { flex: 1; min-height: 64px; border: 1px dashed color-mix(in srgb, var(--tone) 35%, transparent); border-radius: 10px; }
   .pb-card {
     padding: 9px 11px; border-radius: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 6px;

@@ -169,6 +169,16 @@ export class ProjectsService {
     this.events.emit("data.changed", { module: "projects", action: "office_unassigned" });
   }
 
+  /** The first active project an office serves, or null when it serves none. */
+  servedProject(flowId: string): string | null {
+    if (!flowId) return null;
+    const r = this.db.prepare(
+      `SELECT op.project_id FROM office_projects op JOIN projects p ON p.id = op.project_id
+       WHERE op.flow_id = ? AND op.active = 1 AND p.status = 'active' ORDER BY op.created_at LIMIT 1`,
+    ).get(flowId) as { project_id: string } | undefined;
+    return r?.project_id ?? null;
+  }
+
   officeProjects(flowId: string): Array<OfficeProject & { project: Project }> {
     const rows = this.db.prepare("SELECT * FROM office_projects WHERE flow_id = ?").all(flowId) as OfficeProjectRow[];
     return rows.flatMap((r) => {

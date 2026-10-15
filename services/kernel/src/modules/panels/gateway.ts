@@ -3,7 +3,7 @@
  * The only door between a panel and the kernel. Reads declared sources;
  * runs declared actions — validated, rate-limited and audited.
  */
-import { readSource, SourceError } from "./sources.js";
+import { readSource, readChannelSource, SourceError, type ChannelReader } from "./sources.js";
 import { renderTemplate, TemplateError } from "./template.js";
 import { coerceFormValues } from "./jsonschema-lite.js";
 import { selectPath, SelectorError } from "./select.js";
@@ -22,6 +22,8 @@ export interface PanelDeps {
   postLetter(input: { toAgentId: string; subject: string; body: string }): { ok: boolean; error?: string };
   startRun(input: { agentId: string; goal: string }): { runId: string };
   setSchedulesActive(agentId: string, active: boolean): number;
+  /** Module dashboard channels, for `channel` sources. Absent → those sources answer 503. */
+  readChannel?: ChannelReader;
   now?: () => number;
 }
 
@@ -44,14 +46,20 @@ export class PanelGateway {
     return s ? { spec: s.spec, updatedAt: s.updatedAt } : null;
   }
 
-  read(flowId: string, sourceId: string, opts: { select?: string; since?: string; vars?: Record<string, unknown> } = {}):
-    { version: string; data?: unknown; unchanged?: true } {
+  async read(flowId: string, sourceId: string, opts: { select?: string; since?: string; vars?: Record<string, unknown> } = {}):
+    Promise<{ version: string; data?: unknown; unchanged?: true }> {
     const { spec, rootDir } = this.load(flowId);
     const src = Object.prototype.hasOwnProperty.call(spec.sources, sourceId) ? spec.sources[sourceId] : undefined;
     if (!src) throw new PanelError(403, `source "${sourceId}" is not declared by this office`);
     let res: { version: string; data: unknown };
-    try { res = readSource(src, { owner: flowId, rootDir, store: this.store }); }
-    catch (e) { if (e instanceof SourceError) throw new PanelError(e.status, e.message); throw e; }
+    try {
+      res = src.type === "channel"
+        ? await readChannelSource(src, this.deps.readChannel)
+        : readSource(src, { owner: flowId, rootDir, store: this.store });
+    } catch (e) {
+      if (e instanceof SourceError) throw new PanelError(e.status, e.message);
+      throw e;
+    }
     if (opts.since && opts.since === res.version) return { version: res.version, unchanged: true };
     try {
       return { version: res.version, data: opts.select ? selectPath(res.data, opts.select, opts.vars ?? {}) : res.data };

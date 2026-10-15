@@ -36,10 +36,10 @@ export function registerPanelsRoutes(
     return s;
   });
 
-  server.route("GET", "/api/panels/:flowId/sources/:source", ({ params, query }) => {
+  server.route("GET", "/api/panels/:flowId/sources/:source", async ({ params, query }) => {
     try {
       const key = query.get("key");
-      return gw.read(params.flowId, params.source, {
+      return await gw.read(params.flowId, params.source, {
         select: query.get("select") ?? undefined,
         since: query.get("since") ?? undefined,
         vars: key ? { key } : {},

@@ -25,6 +25,7 @@ export function createPanelsModule(): ExtensibleModule & { setDeps(d: Deps): voi
     postLetter: (l) => deps ? deps.postLetter(l) : { ok: false, error: "panels not wired yet" },
     startRun: (r) => { if (!deps) throw new Error("panels not wired yet"); return deps.startRun(r); },
     setSchedulesActive: (a, on) => deps?.setSchedulesActive(a, on) ?? 0,
+    readChannel: (name, params) => deps?.readChannel ? deps.readChannel(name, params) : Promise.resolve(undefined),
   };
   return {
     name: "panels",
