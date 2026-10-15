@@ -1137,6 +1137,15 @@ export class AgentService {
   }
 
   /** Mark inbox messages as read. No-op if the list is empty. */
+  /** Gives letters back (a run that carried them died before acting). */
+  markInboxUnread(messageIds: string[]): void {
+    if (messageIds.length === 0) return;
+    const placeholders = messageIds.map(() => "?").join(",");
+    this.db
+      .prepare(`UPDATE agent_office_inbox SET status = 'unread', read_at = NULL WHERE id IN (${placeholders}) AND status = 'read'`)
+      .run(...messageIds);
+  }
+
   markInboxRead(messageIds: string[]): void {
     if (messageIds.length === 0) return;
     const placeholders = messageIds.map(() => "?").join(",");

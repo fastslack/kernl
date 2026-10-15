@@ -11,6 +11,11 @@
  * nothing woke it again, and a Claude Code agent never reads its inbox on
  * its own — the answers sat unread. `AnswerQueue` relaunches the asker once
  * whenever one of its runs ends, with every answer still waiting.
+ *
+ * A relaunch that dies (timeout, crash, a failed model chain) gives its answers
+ * back: the letters go unread again and are delivered once more, at most
+ * `MAX_REDELIVERIES` times each. A cancelled run keeps them read: stopping the
+ * agent is the operator's call.
  */
 
 import type { AgentService } from "./service.js";
@@ -22,6 +27,11 @@ import type { AgentOfficeInboxMessage } from "./types.js";
 /** Who the answer letters come from (`postAnswerToInbox`). */
 const HEADQUARTERS = "__top_agent__";
 
+/** Times a letter may come back after the run that carried it died. */
+export const MAX_REDELIVERIES = 2;
+/** Letter id → times it was given back. In memory: a restart resumes the run itself. */
+const redelivered = new Map<string, number>();
+
 /** Answers filed in the asker's inbox that no run has read yet, oldest first. */
 export function pendingAnswers(service: AgentService, agentId: string): AgentOfficeInboxMessage[] {
   return service
@@ -30,9 +40,13 @@ export function pendingAnswers(service: AgentService, agentId: string): AgentOff
 }
 
 /** The goal for a relaunch that carries every waiting answer. */
-export function answersGoal(letters: Array<{ body: string }>): string {
+export function answersGoal(letters: Array<{ body: string }>, retry = false): string {
   const n = letters.length;
   return (
+    (retry
+      ? "A previous run that carried some of these answers stopped before finishing. " +
+        "Check the current state before acting on each one: what that run already did must not be done twice.\n\n"
+      : "") +
     (n === 1
       ? "An answer to one of your earlier questions arrived while you were busy.\n\n"
       : `Answers to ${n} of your earlier questions arrived while you were busy.\n\n`) +
@@ -47,19 +61,22 @@ export function answersGoal(letters: Array<{ body: string }>): string {
 /**
  * Relaunch `agentId` with its waiting answers, if it is active, idle and has
  * any. Returns the new run id, or null when there was nothing to do.
+ * `requeue` is called when the run died and its answers went back to the inbox.
  */
 export function deliverPendingAnswers(
   service: AgentService,
   executor: Pick<AgentExecutor, "execute">,
   events: EventBus | undefined,
   agentId: string,
+  requeue: (agentId: string) => void = () => {},
 ): string | null {
   const agent = service.getAgent(agentId);
   if (!agent || !agent.active || service.hasRunningRun(agentId)) return null;
   const letters = pendingAnswers(service, agentId);
   if (letters.length === 0) return null;
-  service.markInboxRead(letters.map((l) => l.id));
-  const goal = answersGoal(letters);
+  const ids = letters.map((l) => l.id);
+  service.markInboxRead(ids);
+  const goal = answersGoal(letters, ids.some((id) => redelivered.has(id)));
   const run = service.createRun({
     agent_id: agentId,
     trigger_type: "manual",
@@ -75,10 +92,28 @@ export function deliverPendingAnswers(
         steps_count: r.steps_count, tokens_used: r.tokens_used,
         completed_at: new Date().toISOString(),
       });
+      settle(r.status);
     })
     .catch((err) => {
       service.updateRun(run.id, { status: "failed", error: String(err), completed_at: new Date().toISOString() });
+      settle("failed");
     });
+  function settle(status: string): void {
+    if (status === "completed" || status === "cancelled") {
+      for (const id of ids) redelivered.delete(id);
+      return;
+    }
+    const back = ids.filter((id) => (redelivered.get(id) ?? 0) < MAX_REDELIVERIES);
+    for (const id of ids) if (!back.includes(id)) redelivered.delete(id);
+    if (back.length === 0) {
+      log.warn(`answers: ${agent!.name}'s run ${run.id} ${status}; its answers were already given back ${MAX_REDELIVERIES} times`);
+      return;
+    }
+    for (const id of back) redelivered.set(id, (redelivered.get(id) ?? 0) + 1);
+    service.markInboxUnread(back);
+    log.warn(`answers: ${agent!.name}'s run ${run.id} ${status}; ${back.length} answer(s) back in the inbox`);
+    requeue(agentId);
+  }
   log.info(`answers: relaunched ${agent.name} with ${letters.length} waiting answer(s)`);
   return run.id;
 }
@@ -125,7 +160,7 @@ export class AnswerQueue {
           if (triesLeft > 1) this.schedule(agentId, triesLeft - 1);
           return;
         }
-        deliverPendingAnswers(this.service, this.executor, this.events, agentId);
+        deliverPendingAnswers(this.service, this.executor, this.events, agentId, (id) => this.schedule(id));
       } catch (err) {
         log.warn(`answers: delivery to ${agentId} failed — ${err instanceof Error ? err.message : String(err)}`);
       }
