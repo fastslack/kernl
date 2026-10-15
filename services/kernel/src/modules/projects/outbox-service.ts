@@ -171,6 +171,10 @@ export class OutboxService {
   }
 
   async approve(id: string, opts: { scheduled_for?: string | null } = {}): Promise<OutboxItem> {
+    // A rehearsal draft is built exactly as the real one, to review it, and never leaves.
+    if ((this.mustGet(id).payload as { rehearsal?: unknown } | null)?.rehearsal === true) {
+      throw new Error("Borrador de ensayo: no se envía. Usá «Mandarme una prueba» para verlo en tu casilla.");
+    }
     const now = isoNow();
     const sched = opts.scheduled_for === undefined ? this.mustGet(id).scheduled_for : normalizeWhen(opts.scheduled_for) ?? null;
     const res = this.db.prepare(
@@ -187,6 +191,30 @@ export class OutboxService {
       .run(isoNow(), id);
     if (Number(res.changes) === 0) throw new Error("Only a failed item can be retried");
     return this.sendClaimed(id);
+  }
+
+  /**
+   * Send a copy of a draft to the operator's own address, to see it as the
+   * recipient will. Only channels whose payload has a `to` list. The item is
+   * not touched (status, payload, events): nothing about the real send changes.
+   */
+  async testSend(id: string, to: string): Promise<{ ref: string }> {
+    const it = this.mustGet(id);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to.trim())) throw new Error("La dirección de prueba no es un email válido");
+    const p = { ...(it.payload as Record<string, unknown>) };
+    if (!Array.isArray(p.to)) throw new Error(`El canal ${it.channel} no tiene envío de prueba`);
+    p.to = [to.trim()];
+    delete p.cc;
+    delete p.rehearsal;
+    delete p.contact_id;
+    if (typeof p.subject === "string" && !p.subject.startsWith("[PRUEBA")) p.subject = `[PRUEBA] ${p.subject}`;
+    const h = this.handler(it.channel);
+    const v = h.validate(p, it.account_ref);
+    if (!v.ok) throw new Error(v.error);
+    const out = await h.send(p, it.account_ref);
+    // Not a change of the item: whoever tracks sends (sales) learns that a copy went out.
+    this.events.emit("outbox:test_sent", { id: it.id, project_id: it.project_id, to: to.trim(), ref: out.ref });
+    return out;
   }
 
   /** approved → sending atomically; whoever wins the UPDATE sends. */

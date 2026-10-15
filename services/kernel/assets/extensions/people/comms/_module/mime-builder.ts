@@ -8,6 +8,8 @@ export interface MimeOptions {
   body: string;
   bodyHtml?: string;
   inReplyTo?: string;
+  /** Extra headers (e.g. List-Unsubscribe); a key or value with CR/LF is dropped. */
+  headers?: Record<string, string>;
   attachments?: Array<{
     filename: string;
     mimeType: string;
@@ -32,6 +34,10 @@ export function buildMimeMessage(options: MimeOptions): string {
   if (options.bcc) lines.push(`Bcc: ${options.bcc}`);
   lines.push(`Subject: ${encodeSubject(options.subject)}`);
   lines.push("MIME-Version: 1.0");
+  for (const [k, v] of Object.entries(options.headers ?? {})) {
+    if (/[\r\n]/.test(k) || /[\r\n]/.test(v)) continue;
+    lines.push(`${k}: ${v}`);
+  }
   if (options.inReplyTo) {
     lines.push(`In-Reply-To: ${options.inReplyTo}`);
     lines.push(`References: ${options.inReplyTo}`);

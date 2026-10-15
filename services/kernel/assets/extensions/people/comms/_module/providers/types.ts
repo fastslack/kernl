@@ -10,6 +10,8 @@ export interface SendEmailOptions {
   bodyHtml?: string;
   inReplyTo?: string;
   threadId?: string;
+  /** Extra headers (e.g. List-Unsubscribe). Values must be header-safe: no CR/LF. */
+  headers?: Record<string, string>;
   attachments?: Array<{
     filename: string;
     mimeType: string;
