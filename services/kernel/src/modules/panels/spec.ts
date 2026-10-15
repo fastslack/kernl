@@ -34,6 +34,14 @@ const SafeRelPath = z.string().min(1).max(200).refine(
 const Source = z.discriminatedUnion("type", [
   z.object({ type: z.literal("state-file"), path: SafeRelPath, schema: Lite.optional() }).strict(),
   z.object({ type: z.literal("collection"), name: ID, schema: Lite.optional() }).strict(),
+  // A module's dashboard channel (the same read-only snapshot /api/dashboard/<name> serves),
+  // with fixed string params the office declares — e.g. which project.
+  z.object({
+    type: z.literal("channel"),
+    name: z.string().regex(/^[A-Za-z][A-Za-z0-9_.-]{0,63}$/, "channel names are letters, digits, . _ -"),
+    params: z.record(z.string().max(200)).refine((o) => Object.keys(o).length <= 10, "at most 10 params").optional(),
+    schema: Lite.optional(),
+  }).strict(),
 ]);
 
 const DataRef = z.string().regex(/^[a-z][a-z0-9_.-]{0,47}:\$/, 'data is "<source>:$<selector>"');
@@ -46,8 +54,11 @@ const View = z.object({
   data: DataRef.optional(),
   join: z.record(z.string().max(64)).optional(),
   columns: z.string().max(64).optional(),
+  // Board only: "<source>:$<selector>" to a { column: total } map, for sources that send a capped list.
+  counts: DataRef.optional(),
   order: z.array(z.string().max(64)).max(40).optional(),
-  fields: z.array(z.object({ key: z.string().max(64), label: Text.optional() }).strict()).max(30).optional(),
+  // `sub`: a second, quieter line under the field's value (e.g. "cardiólogo · Rosario" under the name).
+  fields: z.array(z.object({ key: z.string().max(64), label: Text.optional(), sub: z.string().max(64).optional() }).strict()).max(30).optional(),
   card: z.object({
     title: z.string().max(400),
     subtitle: z.string().max(400).optional(),
@@ -103,6 +114,9 @@ export function parsePanelSpec(raw: unknown, ctx: { agentSlugs: string[] }):
     const src = v.data?.split(":")[0];
     if (src && !sources.has(src)) errs.push(`view "${v.id}": unknown source "${src}"`);
     for (const j of Object.keys(v.join ?? {})) if (!sources.has(j)) errs.push(`view "${v.id}": unknown source "${j}" in join`);
+    const countsSrc = v.counts?.split(":")[0];
+    if (countsSrc && !sources.has(countsSrc)) errs.push(`view "${v.id}": unknown source "${countsSrc}" in counts`);
+    if (v.counts && v.component !== "board") errs.push(`view "${v.id}": counts is only for a board`);
     if (v.detail && !views.has(v.detail)) errs.push(`view "${v.id}": unknown view "${v.detail}"`);
     for (const a of [...(v.actions ?? []), ...(v.action ? [v.action] : [])]) {
       if (!actions.has(a)) errs.push(`view "${v.id}": unknown action "${a}"`);
