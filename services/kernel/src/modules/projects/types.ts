@@ -89,6 +89,8 @@ export interface OutboxChannelHandler {
   canonicalRef?(accountRef: string): string | null;
   /** How account_ref is written for this channel — shown in kernel_outbox_propose's description. */
   refHint?: string;
+  /** false: an internal channel (a task the operator applies by hand) — no linked account is needed. */
+  needsAccount?: boolean;
 }
 
 /** What an extension's policy says about a fresh draft. `auto` approves it on the normal path. */
