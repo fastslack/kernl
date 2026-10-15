@@ -58,4 +58,12 @@ describe("connector funnel events", () => {
     expect(post({ event_id: "v1", type: "institution.created", occurred_at: "2026-10-15T10:00:00Z", data: inst }).status).toBe(200);
     expect(conn.records(projects.get("heural")!.id, "institution").length).toBe(1);
   });
+  it("accepts referral events with opaque refs only", () => {
+    expect(post({ event_id: "r1", type: "referral.invited", occurred_at: "2026-10-15T10:00:00Z", data: { user_ref: "u1", invitee_ref: "u9", at: "2026-10-15T10:00:00Z", channel: "whatsapp", email: "x@y.com" } }).status).toBe(200);
+    expect(post({ event_id: "r2", type: "referral.accepted", occurred_at: "2026-10-15T11:00:00Z", data: { user_ref: "u9", inviter_ref: "u1", at: "2026-10-15T11:00:00Z" } }).status).toBe(200);
+    const recs = conn.records(projects.get("heural")!.id, "funnel_event");
+    expect(recs.map((r) => (r.data as { type: string }).type).sort()).toEqual(["referral.accepted", "referral.invited"]);
+    expect(JSON.stringify(recs)).not.toContain("x@y.com");
+    expect(post({ event_id: "r3", type: "referral.invited", occurred_at: "2026-10-15T10:00:00Z", data: { user_ref: "u1", at: "2026-10-15T10:00:00Z" } }).status).toBe(400);
+  });
 });
