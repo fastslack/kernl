@@ -28,6 +28,27 @@ export interface QuestionOpinion {
   unverified: string[];
   /** What only the operator can do (a query in PROD, a decision nobody wrote down). */
   needs_human: string[];
+  /** Other open questions this investigation also settles, each with its own pick. */
+  also_answers: AlsoAnswer[];
+}
+
+/** Another open question the same evidence answers. */
+export interface AlsoAnswer {
+  question_id: string;
+  /** 0-based index of THAT question's option, or null: then `answer` is sent as free text. */
+  option: number | null;
+  /** The instruction for that question's agent. */
+  answer: string;
+  /** Why the same evidence settles it, for the operator. */
+  why: string;
+}
+
+/** Another open question, as the investigator sees it in its goal. */
+export interface OtherQuestion {
+  id: string;
+  agent: string;
+  question: string;
+  options: string[];
 }
 
 export interface OpinionAsker {
@@ -78,10 +99,15 @@ Cómo pensar:
   decisión TÉCNICA (resolvela vos con un default sensato y decí cuál).
 - Si elegís una opción del chief pero le faltan condiciones, decilo: matches_option = esa opción y
   extends_option = true, con las condiciones numeradas en answer.
+- El goal trae las OTRAS preguntas abiertas. Si lo que investigaste también resuelve alguna (el mismo
+  issue o MR, la misma causa, la misma decisión de producto), sumala en also_answers con SU opción. Que se
+  parezcan no alcanza: "Reanudar" en un MR no es "Reanudar" en otro. Solo las que tu evidencia cubre;
+  ante la duda, afuera. No investigues cada una desde cero: es un extra de lo que ya leíste.
 
 Tu mensaje final es SOLO este JSON, sin texto antes ni después:
 {"answer": string, "reasoning": string, "matches_option": number|null, "extends_option": boolean,
- "evidence": string[], "unverified": string[], "needs_human": string[]}
+ "evidence": string[], "unverified": string[], "needs_human": string[],
+ "also_answers": [{"question_id": string, "option": number|null, "answer": string, "why": string}]}
 - answer: la instrucción para el agente, lista para pegar, en español rioplatense, concreta; condiciones
   numeradas si hacen falta.
 - reasoning: por qué, para el operador, citando la evidencia ("api!95, descripción, sección 'Al
@@ -89,7 +115,10 @@ Tu mensaje final es SOLO este JSON, sin texto antes ni después:
 - matches_option: el número de opción empezando en 1, o null si ninguna sirve.
 - evidence: cada cosa que leíste o verificaste (issue, MR, archivo:línea, comando git con su resultado).
 - unverified: lo que afirmás sin haberlo podido verificar.
-- needs_human: lo que solo el operador puede hacer, separado del resto.`,
+- needs_human: lo que solo el operador puede hacer, separado del resto.
+- also_answers: [] si ninguna otra se resuelve con lo mismo. option = el número de opción DE ESA pregunta
+  empezando en 1, o null si ninguna sirve (entonces answer va como texto libre); why = qué evidencia la
+  cubre.`,
   en: `You are Kernl's investigator of escalated questions. An office agent got stuck and escalated a
 question; the chief proposed 4 options but was not sure, and the operator asks for your opinion BEFORE
 answering. Your opinion answers nothing: the operator reads it and decides.
@@ -122,19 +151,29 @@ How to think:
   TECHNICAL decision (settle it yourself with a sensible default and say which).
 - If you pick one of the chief's options but it lacks conditions, say so: matches_option = that option and
   extends_option = true, with the conditions numbered in answer.
+- The goal lists the OTHER open questions. If what you investigated also settles one of them (the same
+  issue or MR, the same cause, the same product decision), add it to also_answers with ITS option. Looking
+  alike is not enough: "Resume" on one MR is not "Resume" on another. Only those your evidence covers;
+  when in doubt, leave it out. Do not investigate each from scratch: it is an extra on what you read.
 
 Your final message is ONLY this JSON, with no text before or after:
 {"answer": string, "reasoning": string, "matches_option": number|null, "extends_option": boolean,
- "evidence": string[], "unverified": string[], "needs_human": string[]}
+ "evidence": string[], "unverified": string[], "needs_human": string[],
+ "also_answers": [{"question_id": string, "option": number|null, "answer": string, "why": string}]}
 - answer: the instruction for the agent, ready to paste, concrete; numbered conditions when needed.
 - reasoning: why, for the operator, citing the evidence.
 - matches_option: the 1-based option number, or null when none fits.
 - evidence: each thing you read or checked (issue, MR, file:line, git command and what it showed).
 - unverified: what you state without having been able to check it.
-- needs_human: what only the operator can do, kept apart.`,
+- needs_human: what only the operator can do, kept apart.
+- also_answers: [] when no other question is settled by the same. option = THAT question's 1-based option
+  number, or null when none fits (answer then goes as free text); why = what evidence covers it.`,
 };
 
 const MAX_CONTEXT = 40_000;
+/** How many other open questions the goal lists, and how much of each. */
+const MAX_OTHERS = 30;
+const MAX_OTHER_TEXT = 400;
 
 /** `git@gitlab.com:heural/web.git` → `gitlab.com/heural/web`; "" when it is not a forge remote. */
 export function forgeProjectOf(remoteUrl: string): string {
@@ -157,6 +196,7 @@ export function buildInvestigationGoal(
   asker: OpinionAsker | undefined,
   refs: QuestionRefs,
   repos: KnownRepo[],
+  others: OtherQuestion[] = [],
 ): string {
   const lines = [
     `question_id: ${q.id}`,
@@ -193,6 +233,14 @@ export function buildInvestigationGoal(
     lines.push("Repos registrados (name → proyecto en la forja):",
       ...repos.map((r) => `- ${r.name}${forgeProjectOf(r.remote_url) ? ` → ${forgeProjectOf(r.remote_url)}` : ""}`));
   }
+  const listed = others.filter((o) => o.id !== q.id).slice(0, MAX_OTHERS);
+  if (listed.length) {
+    lines.push("Otras preguntas abiertas (para also_answers; no las investigues de cero):");
+    for (const o of listed) {
+      const text = o.question.length > MAX_OTHER_TEXT ? `${o.question.slice(0, MAX_OTHER_TEXT)}…` : o.question;
+      lines.push(`- question_id ${o.id} — ${o.agent}: ${text}`, ...o.options.map((l, i) => `    ${i + 1}. ${l}`));
+    }
+  }
   return lines.join("\n");
 }
 
@@ -219,7 +267,12 @@ function extractJson(text: string): unknown {
  * matches_option}) is still accepted, with the new lists empty. null when
  * there is no answer in it.
  */
-export function parseOpinion(text: string, optionCount: number): QuestionOpinion | null {
+export function parseOpinion(
+  text: string,
+  optionCount: number,
+  /** The other questions still open: id → how many options it has. */
+  others: ReadonlyMap<string, number> = new Map(),
+): QuestionOpinion | null {
   const raw = extractJson(text) as Record<string, unknown> | null;
   if (!raw || typeof raw !== "object") return null;
   const answer = str(raw.answer);
@@ -234,7 +287,27 @@ export function parseOpinion(text: string, optionCount: number): QuestionOpinion
     evidence: strList(raw.evidence),
     unverified: strList(raw.unverified),
     needs_human: strList(raw.needs_human),
+    also_answers: alsoAnswers(raw.also_answers, others),
   };
+}
+
+/** Only questions still open, each once, with an option that exists or a free answer. */
+function alsoAnswers(v: unknown, others: ReadonlyMap<string, number>): AlsoAnswer[] {
+  if (!Array.isArray(v)) return [];
+  const out: AlsoAnswer[] = [];
+  for (const x of v) {
+    if (!x || typeof x !== "object") continue;
+    const r = x as Record<string, unknown>;
+    const id = str(r.question_id);
+    const count = others.get(id);
+    if (count === undefined || out.some((a) => a.question_id === id)) continue;
+    const n = typeof r.option === "number" ? Math.trunc(r.option) : NaN;
+    const option = n >= 1 && n <= count ? n - 1 : null;
+    const answer = str(r.answer);
+    if (option === null && !answer) continue;
+    out.push({ question_id: id, option, answer, why: str(r.why) });
+  }
+  return out;
 }
 
 /**

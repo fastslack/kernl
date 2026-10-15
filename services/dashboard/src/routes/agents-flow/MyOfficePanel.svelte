@@ -20,6 +20,7 @@
   import { confirm as confirmDialog } from '$shared/feedback';
   import { groupReports, reportKey, plainPreview, type ReportGroup } from '$lib/office/report-groups.js';
   import OfficeQuestionCard from './OfficeQuestionCard.svelte';
+  import QuestionList from './QuestionList.svelte';
   import FailureGroupCard from './FailureGroupCard.svelte';
   import KernlBugsTab from './KernlBugsTab.svelte';
   import { bugsApi } from '$lib/kernl-bugs.js';
@@ -252,6 +253,11 @@
     }
   }
   const takeIt = (q: PendingQuestion) => sendChoice(q, { kind: 'task' });
+  /** The opinion's "also settles": each checked question with its own choice, one after the other. */
+  async function sendAlso(items: Array<{ q: PendingQuestion; choice: Record<string, unknown> }>) {
+    for (const it of items) await sendChoice(it.q, it.choice);
+  }
+  $: openQuestions = [...owedQuestions, ...pendingQuestions];
   const markDone = (q: PendingQuestion, note: string) =>
     sendChoice(q, { kind: 'done', ...(note.trim() ? { note: note.trim() } : {}) });
   async function dismissQuestion(q: PendingQuestion) {
@@ -575,7 +581,8 @@
               <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
                                   busy={!!questionSubmitting[q.id]}
                                   onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                                  onTake={takeIt} onDone={markDone} />
+                                  onTake={takeIt} onDone={markDone}
+                                  others={openQuestions} nameOf={agentNameOf} onAlso={sendAlso} />
             {/each}
           </div>
         {/if}
@@ -592,7 +599,8 @@
               <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
                                   busy={!!questionSubmitting[q.id]}
                                   onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                                  onTake={takeIt} onDone={markDone} />
+                                  onTake={takeIt} onDone={markDone}
+                                  others={openQuestions} nameOf={agentNameOf} onAlso={sendAlso} />
             {/each}
           </div>
         {/if}
@@ -648,12 +656,10 @@
             <span class="or-section-title or-section-q">{$t('office.chief.owed_title', { n: String(owedQuestions.length) })}</span>
           </div>
           <div class="bq-list">
-            {#each owedQuestions as q (q.id)}
-              <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
-                                  busy={!!questionSubmitting[q.id]}
-                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                                  onTake={takeIt} onDone={markDone} />
-            {/each}
+            <QuestionList questions={owedQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
+                          busy={questionSubmitting} send={sendChoice}
+                          onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                          onTake={takeIt} onDone={markDone} />
           </div>
         {/if}
         {#if loading && pendingQuestions.length === 0}
@@ -680,12 +686,10 @@
             </button>
           </div>
           <div class="bq-list">
-            {#each pendingQuestions as q (q.id)}
-              <OfficeQuestionCard {q} agentName={agentNameOf(q.from_agent_id)} color={flowColor(q.from_agent_id)}
-                                  busy={!!questionSubmitting[q.id]}
-                                  onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
-                                  onTake={takeIt} onDone={markDone} />
-            {/each}
+            <QuestionList questions={pendingQuestions} open={openQuestions} nameOf={agentNameOf} colorOf={flowColor}
+                          busy={questionSubmitting} send={sendChoice}
+                          onAnswer={answerQuestion} onDismiss={dismissQuestion} onFree={answerFree}
+                          onTake={takeIt} onDone={markDone} />
           </div>
         {/if}
         {#if chiefAnswered.length > 0}

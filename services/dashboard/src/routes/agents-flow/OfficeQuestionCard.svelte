@@ -25,6 +25,11 @@
   export let onTake: (q: PendingQuestion) => Promise<boolean> | void = () => {};
   /** "Listo": the operator did the work (optional note). */
   export let onDone: (q: PendingQuestion, note: string) => Promise<boolean> | void = () => {};
+  /** Every question open right now: what the opinion's "also settles" may point at. */
+  export let others: PendingQuestion[] = [];
+  export let nameOf: (agentId: string) => string = (id) => id.slice(0, 8);
+  /** Sends the opinion's answer to the checked "also settles" questions, each with its own choice. */
+  export let onAlso: (items: Array<{ q: PendingQuestion; choice: Record<string, unknown> }>) => Promise<void> | void = () => {};
 
   let free = '';
   let doneNote = '';
@@ -61,6 +66,25 @@
   $: opinionLoading = starting || opStatus === 'running';
   $: pick = opinion?.matches_option ?? null;
   $: evidence = opinion?.evidence ?? [];
+  // Only the ones still open: an answered one drops out of the list by itself.
+  $: also = (opinion?.also_answers ?? [])
+    .map((a) => ({ a, other: others.find((o) => o.id === a.question_id && o.id !== q.id) }))
+    .filter((x): x is { a: typeof x.a; other: PendingQuestion } => !!x.other);
+  let alsoOff: Record<string, boolean> = {};
+  let alsoSending = false;
+  $: alsoChecked = also.filter((x) => !alsoOff[x.other.id]);
+  async function sendAlso(): Promise<void> {
+    if (alsoSending || alsoChecked.length === 0) return;
+    alsoSending = true;
+    try {
+      await onAlso(alsoChecked.map(({ a, other }) => ({
+        q: other,
+        choice: a.option !== null && other.options[a.option] ? { kind: 'option', index: a.option } : { kind: 'free', text: a.answer },
+      })));
+    } finally {
+      alsoSending = false;
+    }
+  }
 
   function failedFrom(raw: string): void {
     const [reason, ...rest] = raw.split(': ');
@@ -216,6 +240,23 @@
           <div class="bq-op-human">
             <span class="bq-op-label">{$t('office.chief.q_opinion_needs_human')}</span>
             <ul>{#each opinion.needs_human as h (h)}<li>{h}</li>{/each}</ul>
+          </div>
+        {/if}
+        {#if also.length}
+          <div class="bq-op-also">
+            <span class="bq-op-label">{$t('office.chief.also_title', { n: String(also.length) })}</span>
+            {#each also as { a, other } (other.id)}
+              <label class="bq-also-row" title={a.why}>
+                <input type="checkbox" checked={!alsoOff[other.id]}
+                       on:change={(e) => (alsoOff = { ...alsoOff, [other.id]: !e.currentTarget.checked })} />
+                <span class="bq-also-q"><b>{nameOf(other.from_agent_id)}</b> · {other.question.split('\n')[0]}</span>
+                <span class="bq-also-a">→ {a.option !== null && other.options[a.option] ? other.options[a.option].label : `${$t('office.chief.also_free')}: ${a.answer}`}</span>
+              </label>
+            {/each}
+            <button class="bq-opinion-retry bq-also-send" type="button" on:click={sendAlso}
+                    disabled={alsoSending || alsoChecked.length === 0 || busy}>
+              {alsoSending ? '…' : $t('office.chief.also_send', { n: String(alsoChecked.length) })}
+            </button>
           </div>
         {/if}
         {#if evidence.length || opinion.unverified?.length}
@@ -386,6 +427,14 @@
   .bq-op-evidence summary{ cursor:pointer; font:500 10px 'JetBrains Mono',monospace; color:#a9a3c9; }
   .bq-op-evidence ul{ margin-top:4px; max-height:140px; overflow-y:auto; }
   .bq-op-warn{ color:#e8b04b !important; }
+  .bq-op-also{ margin-top:6px; padding:5px 8px; border-left:2px solid #a78bfa; background:rgba(167,139,250,.07); border-radius:3px; display:flex; flex-direction:column; gap:3px; }
+  .bq-op-also .bq-op-label{ margin-top:0; }
+  .bq-also-row{ display:grid; grid-template-columns:auto 1fr; gap:2px 6px; align-items:start; cursor:pointer; font:500 10.5px/1.4 'Manrope',sans-serif; color:#cbc5e6; }
+  .bq-also-row input{ margin:2px 0 0; accent-color:#a78bfa; grid-row:span 2; }
+  .bq-also-q{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bq-also-q b{ color:#e4dcff; font-weight:700; }
+  .bq-also-a{ color:#a9a3c9; word-break:break-word; }
+  .bq-also-send{ align-self:flex-end; margin-top:3px; }
   .bq-step{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bq-step-n{ flex-shrink:0; font:600 9.5px 'JetBrains Mono',monospace; color:#8f86b8; }
   .bq-option-pick{ border-color:#a78bfa; box-shadow:inset 0 0 0 1px rgba(167,139,250,.35); }

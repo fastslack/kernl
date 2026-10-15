@@ -7,7 +7,7 @@
 <script lang="ts">
 	import { t } from '$lib/i18n/index.js';
 	import { urlForOption } from '$lib/agent-helpers.js';
-	import OfficeQuestionCard from '../../../routes/agents-flow/OfficeQuestionCard.svelte';
+	import QuestionList from '../../../routes/agents-flow/QuestionList.svelte';
 	import type { PendingQuestion } from '../../../routes/agents-flow/world-types.js';
 
 	export let questions: PendingQuestion[] = [];
@@ -71,20 +71,16 @@
 {#if owed.length > 0}
 	<div class="oq-title">{$t('office.chief.owed_title', { n: String(owed.length) })}</div>
 	<div class="oq-list">
-		{#each owed as q (q.id)}
-			<OfficeQuestionCard {q} agentName={nameOf(q.from_agent_id)} {color} busy={!!busy[q.id]}
-				onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
-		{/each}
+		<QuestionList questions={owed} open={questions} {nameOf} colorOf={() => color} {busy} {send}
+			onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
 	</div>
 {/if}
 
 {#if pending.length > 0}
 	<div class="oq-title">{$t('office.chief.needs_answer', { n: String(pending.length) })}</div>
 	<div class="oq-list">
-		{#each pending as q (q.id)}
-			<OfficeQuestionCard {q} agentName={nameOf(q.from_agent_id)} {color} busy={!!busy[q.id]}
-				onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
-		{/each}
+		<QuestionList questions={pending} open={questions} {nameOf} colorOf={() => color} {busy} {send}
+			onAnswer={answer} onDismiss={dismiss} onFree={free} onTake={take} onDone={done} />
 	</div>
 {/if}
 
