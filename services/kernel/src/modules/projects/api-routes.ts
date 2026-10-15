@@ -220,6 +220,11 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     try { return { item: await outbox.retry(params.id) }; } catch (err) { return asHttp(err); }
   });
 
+  server.route<{ to?: unknown }>("POST", "/api/outbox/:id/test-send", async ({ params, body }) => {
+    const to = typeof body?.to === "string" ? body.to : "";
+    try { return { ok: true, ...(await outbox.testSend(params.id, to)) }; } catch (err) { return asHttp(err); }
+  });
+
   // ── Webhook (token-exempt, HMAC-authenticated; src/core/auth.ts) ──
   server.post("/api/projects/webhook/:slug", async (req, res) => {
     const slug = (req as unknown as { params?: Record<string, string> }).params?.slug ?? "";

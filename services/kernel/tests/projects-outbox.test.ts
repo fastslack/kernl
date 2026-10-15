@@ -185,3 +185,70 @@ describe("scheduled_for", () => {
     db.close(); rmSync(root, { recursive: true, force: true });
   });
 });
+
+describe("OutboxService.testSend", () => {
+  it("sends a copy to the given address and leaves the draft exactly as it was", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    runMigrations(db, "projects", projectsMigrations);
+    const events = new EventBus();
+    const root = mkdtempSync(join(tmpdir(), "ob-"));
+    const projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: root });
+    const pid = projects.create({ slug: "heural", name: "Heural", brief: { value_prop: "v", audience: "a" } }).id;
+    projects.link(pid, "email_account", "mail:1");
+    const outbox = new OutboxService(db, events, projects, () => {});
+    const sent: unknown[] = [];
+    outbox.registerChannel("email", {
+      validate: (p) => (Array.isArray((p as { to?: unknown }).to) ? { ok: true } : { ok: false, error: "to" }),
+      preview: (p) => ({ title: String((p as { subject: string }).subject), body: "" }),
+      send: async (p) => { sent.push(p); return { ref: "comms:t1" }; },
+    });
+    const changes: string[] = [];
+    events.on("outbox:changed", (e) => { changes.push((e as { status: string }).status); });
+    const it0 = outbox.propose({ project_id: pid, flow_id: "F", agent_id: "", run_id: "", channel: "email", account_ref: "mail:1",
+      payload: { to: ["ana@x.ar"], cc: ["b@x.ar"], subject: "Hola", body: "b", contact_id: "C1", deal_id: "D1" } });
+    changes.length = 0;
+    const r = await outbox.testSend(it0.id, "fastslack@gmail.com");
+    expect(r.ref).toBe("comms:t1");
+    expect(sent).toEqual([{ to: ["fastslack@gmail.com"], subject: "[PRUEBA] Hola", body: "b", deal_id: "D1" }]);
+    expect(outbox.get(it0.id)!.status).toBe("draft");
+    expect(changes).toEqual([]);
+    outbox.edit(it0.id, { to: ["fastslack@gmail.com"], subject: "[PRUEBA → ana@x.ar] Hola", body: "b" });
+    await outbox.testSend(it0.id, "fastslack@gmail.com");
+    expect((sent[1] as { subject: string }).subject).toBe("[PRUEBA → ana@x.ar] Hola");
+    await expect(outbox.testSend(it0.id, "no-es-mail")).rejects.toThrow(/dirección/);
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("OutboxService rehearsal drafts", () => {
+  it("a rehearsal draft can never be approved or sent, only test-sent, and its test send is announced", async () => {
+    const db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    runMigrations(db, "projects", projectsMigrations);
+    const events = new EventBus();
+    const root = mkdtempSync(join(tmpdir(), "ob-"));
+    const projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: root });
+    const pid = projects.create({ slug: "heural", name: "Heural", brief: { value_prop: "v", audience: "a" } }).id;
+    projects.link(pid, "email_account", "mail:1");
+    const outbox = new OutboxService(db, events, projects, () => {});
+    const sent: unknown[] = [];
+    outbox.registerChannel("email", {
+      validate: (p) => (Array.isArray((p as { to?: unknown }).to) ? { ok: true } : { ok: false, error: "to" }),
+      preview: (p) => ({ title: String((p as { subject: string }).subject), body: "" }),
+      send: async (p) => { sent.push(p); return { ref: "comms:t1" }; },
+    });
+    const tests: unknown[] = [];
+    events.on("outbox:test_sent", (e) => { tests.push(e); });
+    const it0 = outbox.propose({ project_id: pid, flow_id: "F", agent_id: "", run_id: "", channel: "email", account_ref: "mail:1",
+      payload: { to: ["ana@x.ar"], subject: "Hola", body: "b", rehearsal: true, track_id: "T1" } });
+    await expect(outbox.approve(it0.id)).rejects.toThrow(/ensayo/);
+    await expect(outbox.approve(it0.id, { scheduled_for: new Date(Date.now() + 3_600_000).toISOString() })).rejects.toThrow(/ensayo/);
+    expect(outbox.get(it0.id)!.status).toBe("draft");
+    expect(sent).toEqual([]);
+    await outbox.testSend(it0.id, "fastslack@gmail.com");
+    expect(sent).toEqual([{ to: ["fastslack@gmail.com"], subject: "[PRUEBA] Hola", body: "b", track_id: "T1" }]);
+    expect(tests).toEqual([{ id: it0.id, project_id: pid, to: "fastslack@gmail.com", ref: "comms:t1" }]);
+    rmSync(root, { recursive: true, force: true });
+  });
+});

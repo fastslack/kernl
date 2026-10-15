@@ -312,6 +312,15 @@ export class CommsService {
     recipients_to?: string;
     recipients_cc?: string;
     recipients_bcc?: string;
+    /** List-Unsubscribe header value, e.g. "<mailto:x@y.z?subject=baja>". */
+    list_unsubscribe?: string;
+    /**
+     * Send body_html exactly as given (a designed template the operator
+     * approved: <style>, media queries, gradients). The stored body_html stays
+     * sanitized, because the dashboard renders it; the raw copy lives in
+     * metadata.send_html and only goes to the provider.
+     */
+    html_verbatim?: boolean;
   }): Communication {
     const now = isoNow();
     const id = newId();
@@ -358,6 +367,10 @@ export class CommsService {
       recipients_to: recipientsTo,
       recipients_cc: input.recipients_cc ?? "",
       recipients_bcc: input.recipients_bcc ?? "",
+      metadata: JSON.stringify({
+        ...(input.list_unsubscribe ? { list_unsubscribe: input.list_unsubscribe } : {}),
+        ...(input.html_verbatim && input.body_html ? { send_html: input.body_html } : {}),
+      }),
       created_at: now,
       updated_at: now,
     });
@@ -908,9 +921,10 @@ export class CommsService {
         bcc: comm.recipients_bcc || undefined,
         subject: comm.subject,
         body: comm.body,
-        bodyHtml: comm.body_html || undefined,
+        bodyHtml: (typeof meta.send_html === "string" && meta.send_html) || comm.body_html || undefined,
         inReplyTo: mimeReplyTo,
         threadId: comm.gmail_thread_id || undefined,
+        ...(meta.list_unsubscribe ? { headers: { "List-Unsubscribe": String(meta.list_unsubscribe) } } : {}),
         attachments: attachments.map((a) => ({
           filename: a.filename,
           mimeType: a.mime_type,

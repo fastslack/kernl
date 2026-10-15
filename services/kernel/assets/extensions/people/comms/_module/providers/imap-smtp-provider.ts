@@ -40,6 +40,20 @@ export interface VerifyOptions {
  * protocols (Fastmail, Zoho, ProtonMail Bridge, self-hosted docker-mailserver, etc).
  * Credentials live in email_accounts.provider_config as ImapSmtpConfig JSON.
  */
+/** The nodemailer message for one send (attachments aside): pure, so what it carries is testable. */
+export function buildSmtpMail(options: SendEmailOptions, from: string): {
+  from: string; to: string; subject: string; text: string; cc?: string; bcc?: string; html?: string;
+  inReplyTo?: string; references?: string[]; headers?: Record<string, string>;
+} {
+  const mail: ReturnType<typeof buildSmtpMail> = { from, to: options.to, subject: options.subject, text: options.body };
+  if (options.cc) mail.cc = options.cc;
+  if (options.bcc) mail.bcc = options.bcc;
+  if (options.bodyHtml) mail.html = options.bodyHtml;
+  if (options.inReplyTo) { mail.inReplyTo = options.inReplyTo; mail.references = [options.inReplyTo]; }
+  if (options.headers && Object.keys(options.headers).length) mail.headers = { ...options.headers };
+  return mail;
+}
+
 export class ImapSmtpProvider implements EmailProvider {
   readonly name = "imap_smtp";
   readonly capabilities: ProviderCapabilities = {
@@ -122,19 +136,7 @@ export class ImapSmtpProvider implements EmailProvider {
 
   async send(options: SendEmailOptions): Promise<SendResult> {
     const transporter = this.buildSmtp();
-    const mail: Parameters<typeof transporter.sendMail>[0] = {
-      from: this.config.from || this.fromAddress,
-      to: options.to,
-      subject: options.subject,
-      text: options.body,
-    };
-    if (options.cc) mail.cc = options.cc;
-    if (options.bcc) mail.bcc = options.bcc;
-    if (options.bodyHtml) mail.html = options.bodyHtml;
-    if (options.inReplyTo) {
-      mail.inReplyTo = options.inReplyTo;
-      mail.references = [options.inReplyTo];
-    }
+    const mail: Parameters<typeof transporter.sendMail>[0] = buildSmtpMail(options, this.config.from || this.fromAddress);
     if (options.attachments?.length) {
       mail.attachments = options.attachments.map((a) => ({
         filename: a.filename,
