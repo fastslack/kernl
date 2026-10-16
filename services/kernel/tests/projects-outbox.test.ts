@@ -208,13 +208,13 @@ describe("OutboxService.testSend", () => {
     const it0 = outbox.propose({ project_id: pid, flow_id: "F", agent_id: "", run_id: "", channel: "email", account_ref: "mail:1",
       payload: { to: ["ana@x.ar"], cc: ["b@x.ar"], subject: "Hola", body: "b", contact_id: "C1", deal_id: "D1" } });
     changes.length = 0;
-    const r = await outbox.testSend(it0.id, "fastslack@gmail.com");
+    const r = await outbox.testSend(it0.id, "operator@example.com");
     expect(r.ref).toBe("comms:t1");
-    expect(sent).toEqual([{ to: ["fastslack@gmail.com"], subject: "[PRUEBA] Hola", body: "b", deal_id: "D1" }]);
+    expect(sent).toEqual([{ to: ["operator@example.com"], subject: "[PRUEBA] Hola", body: "b", deal_id: "D1" }]);
     expect(outbox.get(it0.id)!.status).toBe("draft");
     expect(changes).toEqual([]);
-    outbox.edit(it0.id, { to: ["fastslack@gmail.com"], subject: "[PRUEBA → ana@x.ar] Hola", body: "b" });
-    await outbox.testSend(it0.id, "fastslack@gmail.com");
+    outbox.edit(it0.id, { to: ["operator@example.com"], subject: "[PRUEBA → ana@x.ar] Hola", body: "b" });
+    await outbox.testSend(it0.id, "operator@example.com");
     expect((sent[1] as { subject: string }).subject).toBe("[PRUEBA → ana@x.ar] Hola");
     await expect(outbox.testSend(it0.id, "no-es-mail")).rejects.toThrow(/dirección/);
     rmSync(root, { recursive: true, force: true });
@@ -246,9 +246,9 @@ describe("OutboxService rehearsal drafts", () => {
     await expect(outbox.approve(it0.id, { scheduled_for: new Date(Date.now() + 3_600_000).toISOString() })).rejects.toThrow(/ensayo/);
     expect(outbox.get(it0.id)!.status).toBe("draft");
     expect(sent).toEqual([]);
-    await outbox.testSend(it0.id, "fastslack@gmail.com");
-    expect(sent).toEqual([{ to: ["fastslack@gmail.com"], subject: "[PRUEBA] Hola", body: "b", track_id: "T1" }]);
-    expect(tests).toEqual([{ id: it0.id, project_id: pid, to: "fastslack@gmail.com", ref: "comms:t1" }]);
+    await outbox.testSend(it0.id, "operator@example.com");
+    expect(sent).toEqual([{ to: ["operator@example.com"], subject: "[PRUEBA] Hola", body: "b", track_id: "T1" }]);
+    expect(tests).toEqual([{ id: it0.id, project_id: pid, to: "operator@example.com", ref: "comms:t1" }]);
     rmSync(root, { recursive: true, force: true });
   });
 });
