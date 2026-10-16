@@ -18,7 +18,7 @@ import {
   type KernelConfig,
   type RpcAction,
 } from "@kernl/extension-sdk";
-import { GoogleAuth } from "./auth.js";
+import { GoogleAuth, dashboardRedirectUri } from "./auth.js";
 import { encodeReturnState } from "./return-to.js";
 
 export interface GoogleSyncDashboardRpcDeps {
@@ -74,6 +74,8 @@ export function googleSyncOperations(deps: GoogleSyncDashboardRpcDeps): Record<s
           : null,
         tokenInfo,
         lastSync,
+        // What to paste in Google Cloud → OAuth client → Authorized redirect URIs.
+        redirectUri: dashboardRedirectUri(dashboardPort),
       };
     },
 
