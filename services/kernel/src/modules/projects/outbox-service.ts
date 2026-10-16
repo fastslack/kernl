@@ -198,6 +198,17 @@ export class OutboxService {
     return it;
   }
 
+  /** An approval waiting for its time goes back to draft (the operator's pause). Sending or sent: too late. */
+  withdraw(id: string): OutboxItem {
+    const res = this.db.prepare(
+      "UPDATE outbox_items SET status = 'draft', scheduled_for = NULL, decided_at = NULL, updated_at = ? WHERE id = ? AND status = 'approved'",
+    ).run(isoNow(), id);
+    if (Number(res.changes) === 0) throw new Error("Only an approved item waiting to be sent can be withdrawn");
+    const out = this.mustGet(id);
+    this.changed(out);
+    return out;
+  }
+
   async approve(id: string, opts: { scheduled_for?: string | null } = {}): Promise<OutboxItem> {
     // A rehearsal draft is built exactly as the real one, to review it, and never leaves.
     if ((this.mustGet(id).payload as { rehearsal?: unknown } | null)?.rehearsal === true) {
