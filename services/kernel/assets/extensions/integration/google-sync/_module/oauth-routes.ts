@@ -10,6 +10,7 @@
 import { type KernelHttpServer, type KernelConfig, type SqliteDb, log } from "@kernl/extension-sdk";
 import { GoogleAuth } from "./auth.js";
 import { googleSyncOperations } from "./dashboard-rpc-actions.js";
+import { returnTarget } from "./return-to.js";
 
 export function registerGoogleOAuthRoutes(
   server: KernelHttpServer,
@@ -46,16 +47,19 @@ export function registerGoogleOAuthRoutes(
     const url = new URL(req.url ?? "/", `http://localhost:${dashboardPort}`);
     const code = url.searchParams.get("code");
     const error = url.searchParams.get("error");
+    const state = url.searchParams.get("state");
+    // Back to the screen that started the link when it said which; the home page otherwise.
+    const back = (result: string, fallback: string) => returnTarget(state, publicBase, result) ?? loc(fallback);
 
     if (error) {
       log.warn(`Google OAuth denied: ${error}`);
-      res.writeHead(302, { Location: loc(`/?google_auth=denied&error=${encodeURIComponent(error)}`) });
+      res.writeHead(302, { Location: back("denied", `/?google_auth=denied&error=${encodeURIComponent(error)}`) });
       res.end();
       return;
     }
 
     if (!code) {
-      res.writeHead(302, { Location: loc("/?google_auth=error&error=missing_code") });
+      res.writeHead(302, { Location: back("error", "/?google_auth=error&error=missing_code") });
       res.end();
       return;
     }
@@ -64,11 +68,11 @@ export function registerGoogleOAuthRoutes(
       const auth = makeAuth();
       await auth.handleDashboardCallback(code, dashboardPort);
       log.info("Google OAuth: tokens saved via dashboard callback");
-      res.writeHead(302, { Location: loc("/?google_auth=success") });
+      res.writeHead(302, { Location: back("success", "/?google_auth=success") });
       res.end();
     } catch (err) {
       log.error("Google OAuth callback error", err);
-      res.writeHead(302, { Location: loc(`/?google_auth=error&error=${encodeURIComponent(String(err))}`) });
+      res.writeHead(302, { Location: back("error", `/?google_auth=error&error=${encodeURIComponent(String(err))}`) });
       res.end();
     }
   });

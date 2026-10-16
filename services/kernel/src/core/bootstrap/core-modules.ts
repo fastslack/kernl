@@ -24,6 +24,7 @@ import type { ToolDefinition, ModuleContext } from "../types.js";
 import type { Identity } from "../attestation.js";
 import type { CostRouter } from "../llm/cost-router.js";
 import type { ModuleRegistry } from "../module-registry.js";
+import type { DashboardRegistry } from "../dashboard-registry.js";
 import type { EmbeddingsClient } from "../embeddings/index.js";
 
 import { createChatProviders, resolveProvider } from "../llm/chat-adapters.js";
@@ -79,8 +80,10 @@ export async function initCoreModules(args: {
   registry: ModuleRegistry;
   ctx: ModuleContext;
   getMesh: () => MeshModule | null;
+  /** Module dashboard channels, read by office panels' `channel` sources. */
+  dashboardRegistry?: DashboardRegistry;
 }): Promise<CoreModulesResult> {
-  const { registry, ctx, getMesh } = args;
+  const { registry, ctx, getMesh, dashboardRegistry } = args;
 
   // ── Config — must register first so chat sees its tools at init ──
   const configModule = createConfigModule() as ConfigModule;
@@ -279,6 +282,9 @@ export async function initCoreModules(args: {
   {
     const agents = () => agentsModule.getService();
     panelsModule.setDeps({
+      // Channels register after the extensions stage; read at request time, so they are there by then.
+      readChannel: (name, params) =>
+        dashboardRegistry ? dashboardRegistry.queryChannel(name, ctx.sqlite, ctx.neo4j, params) : Promise.resolve(undefined),
       agentInOffice: (flowId, slug) => {
         // `slug` is a column of agents that the Agent type does not declare.
         const a = agents()?.listAgents().find((x) => (x as { slug?: string }).slug === slug && x.flow_id === flowId);
@@ -298,12 +304,7 @@ export async function initCoreModules(args: {
         if (!svc || !executor || !agent) throw new Error("agents are not available");
         return { runId: startAgentRun({ service: svc, executor, events: ctx.events }, { agent, goal }).id };
       },
-      setSchedulesActive: (agentId, active) => {
-        const svc = agents();
-        const list = svc?.listSchedules(agentId) ?? [];
-        for (const sch of list) svc?.updateSchedule(sch.id, { active });
-        return list.length;
-      },
+      setSchedulesActive: (agentId, active) => agents()?.setRunnableSchedulesActive(agentId, active) ?? 0,
       officeAgentSlugs: (flowId) =>
         (agents()?.listAgents() ?? []).filter((x) => x.flow_id === flowId).map((x) => (x as { slug?: string }).slug ?? "").filter(Boolean),
       // The office folder: the one cwd every agent of the office shares (Office Kit repo offices).
@@ -348,8 +349,15 @@ export async function initCoreModules(args: {
     if (outbox) {
       useProjects(() => projectsHostFor(projectsService, outbox, (pid, kind) => connector?.records(pid, kind) ?? []));
     }
-    // MCP dispatch refuses outbound tools to callers whose run has a project.
-    setProjectRunLookup((runId) => agentsModule.getService()?.getRun(runId)?.project_id ?? null);
+    // MCP dispatch refuses outbound tools to callers whose run has a project — and to any
+    // run of an agent whose office works for a project (inbox letters, panel runs): such an
+    // office drafts everything; Claude Code agents ignore denied_tools, so this is the stop.
+    setProjectRunLookup((runId) => {
+      const svc = agentsModule.getService();
+      const run = svc?.getRun(runId);
+      if (!run) return null;
+      return run.project_id ?? projectsService.servedProject(svc?.getAgent(run.agent_id)?.flow_id ?? "");
+    });
     // Offices seeded since the last boot may carry new per_project templates.
     try { projectsService.syncAllOfficeSchedules(); } catch (err) { log.warn(`projects: schedule sync failed: ${String(err)}`); }
   }

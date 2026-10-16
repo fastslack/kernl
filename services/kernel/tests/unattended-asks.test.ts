@@ -76,13 +76,15 @@ describe("UnattendedAskWatcher", () => {
     expect(created[0].options).toHaveLength(4);
   });
 
-  it("stays out of runs a person watched, builtin handlers, runs that asked, and failed runs", async () => {
+  it("stays out of runs a person watched, builtin handlers, opted-out agents, runs that asked, and failed runs", async () => {
     let calls = 0;
     const llm = async () => { calls++; return YES; };
     for (const o of [
       { run: run({ trigger_type: "manual" }) },
       { run: run({ parent_run_id: "p" }) },
       { agent: agent({ builtin_handler: "email:triage" }) },
+      { agent: agent({ variables: '{"__unattended_ask__": false}' }) },
+      { agent: agent({ variables: '{"__unattended_ask__": "false"}' }) },
       { steps: ["mcp__kernel__kernel_agents_ask_supervisor"] },
       { run: run({ status: "failed" }) },
       { run: run({ result: "Done." }) },
@@ -100,6 +102,15 @@ describe("UnattendedAskWatcher", () => {
     const dup = fakeService({ open: [{ from_agent_id: "a1", status: "pending", question: YES.question }] });
     expect(await new UnattendedAskWatcher(dup.svc, new EventBus(), async () => YES).check("r1")).toBeNull();
     expect(dup.created).toEqual([]);
+  });
+
+  it("an owed question (the operator is on it) counts as open", async () => {
+    let seen: string[] = [];
+    const llm = async (o: { user: string }) => { seen = [o.user]; return YES; };
+    const owed = fakeService({ open: [{ from_agent_id: "a1", status: "owed", question: YES.question }] });
+    expect(await new UnattendedAskWatcher(owed.svc, new EventBus(), llm).check("r1")).toBeNull();
+    expect(owed.created).toEqual([]);
+    expect(seen[0]).toContain(`- ${YES.question}`);
   });
 
   it("listens to run_completed", async () => {

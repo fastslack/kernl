@@ -89,6 +89,18 @@ export async function detectOperatorAsk(
   };
 }
 
+/**
+ * `__unattended_ask__: false` in an agent's variables: its reports are not read for operator asks. For
+ * offices whose agents ask by protocol (kernel_agents_ask_supervisor) — reading every one of their runs
+ * cost a call per run (680 a week) and turned "waiting for JOB-OK" reports into questions for the chief.
+ */
+export function unattendedAskDisabled(agent: Pick<Agent, "variables">): boolean {
+  try {
+    const v = JSON.parse(agent.variables || "{}").__unattended_ask__;
+    return v === false || v === "false";
+  } catch { return false; }
+}
+
 /** What the watcher needs from AgentService. */
 export interface UnattendedAskService {
   getRun(id: string): AgentRun | undefined | null;
@@ -120,11 +132,12 @@ export class UnattendedAskWatcher {
     });
   }
 
-  /** Open questions (waiting on the chief or the operator) asked by this agent. */
+  /** Open questions (waiting on the chief or the operator, owed included) asked by this agent. */
   private openQuestions(agentId: string): AgentQuestion[] {
     return [
       ...this.service.listQuestions({ status: "triage", limit: 200 }),
       ...this.service.listQuestions({ status: "pending", limit: 200 }),
+      ...this.service.listQuestions({ status: "owed", limit: 200 }),
     ].filter((q) => q.from_agent_id === agentId);
   }
 
@@ -133,7 +146,7 @@ export class UnattendedAskWatcher {
     const run = this.service.getRun(runId);
     if (!run || run.status !== "completed" || !isUnattended(run)) return null;
     const agent = this.service.getAgent(run.agent_id);
-    if (!agent || agent.builtin_handler) return null;
+    if (!agent || agent.builtin_handler || unattendedAskDisabled(agent)) return null;
     const result = (run.result ?? "").trim();
     if (result.length < 40) return null;
     if (this.service.getSteps(runId).some((s) => /ask_supervisor/.test(s.tool_name ?? ""))) return null;

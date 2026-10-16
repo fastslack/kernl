@@ -26,6 +26,7 @@ import type { ChatMessage } from "../../../../../src/modules/chat/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { Agent, AgentEvolutionRun, AgentFeedback, AgentRun } from "../../../../../src/modules/agents/types.js";
 import { buildAgentChain, runWithChain, type ChainCandidate } from "./chain-runner.js";
+import { hasFreshFailures, newestCreatedAt } from "./llm-gates.js";
 
 const PROPOSAL_SYSTEM_PROMPT_EN = `You are an agent prompt engineer. You rewrite an autonomous agent's system_prompt based on concrete failures.
 
@@ -123,6 +124,8 @@ export interface ReflectConfig {
   dryRun: boolean;
   /** Model override for the optimizer LLM. */
   model: string;
+  /** Reflect even when no failure is newer than the last cycle (a manual run from the UI/API). */
+  force?: boolean;
 }
 
 const DEFAULT_CONFIG: ReflectConfig = {
@@ -137,6 +140,8 @@ export class ReflectionOptimizer {
   private providers: Map<string, ChatLlmProvider> = new Map();
   private providerName = "";
   private configRef: KernelConfig | null = null;
+  /** agent id → newest failed run a cycle already looked at (proposal or not). */
+  private reflectedUpTo = new Map<string, string>();
 
   constructor(private service: AgentService) {}
 
@@ -195,6 +200,14 @@ export class ReflectionOptimizer {
     if (triggerRuns.length < cfg.minFailures) {
       return null;
     }
+    // The same failures stay in the last 10 runs for days: without this the 6-hourly sweep proposed a new
+    // prompt for them every time. A cycle runs again only when a failure is newer than the last one seen.
+    const since = this.reflectedUpTo.get(agentId) ?? this.service.listEvolutionRuns(agentId, 1)[0]?.created_at;
+    if (!cfg.force && !hasFreshFailures(triggerRuns, since)) {
+      return null;
+    }
+    const newest = newestCreatedAt(triggerRuns);
+    if (newest) this.reflectedUpTo.set(agentId, newest);
 
     // ── Select σ ──────────────────────────────────────
     const baseVersion = this.service.getActivePromptVersion(agentId);

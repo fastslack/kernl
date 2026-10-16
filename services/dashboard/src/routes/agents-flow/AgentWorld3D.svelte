@@ -34,7 +34,7 @@
     createNoteStack, type NoteStack,
     type AnimationRegistry,
     type DeliveryInfo,
-    resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL,
+    resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL, NAMEPLATE_HEIGHT, nameplateTransform,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
   import { propOf, tagProp, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
@@ -194,6 +194,7 @@
   // visitor faces (the desk). Visitors (reports, meetings held here) sit in
   // these instead of piling onto one floor point. Populated by buildMyOffice.
   let myOfficeSeats: Array<{ x: number; y: number; z: number }> = [];
+  let myOfficeStands: Array<{ x: number; y: number; z: number }> = [];
   let myOfficeDeskFacing: { x: number; y: number; z: number } | null = null;
   // ── Office infrastructure (Docker container per flow) — power state ──
   // The Repos Office holds the master power console; each office's container
@@ -1054,7 +1055,7 @@
         startY: 1.6,
         riseHeight: 4.5,
         durationSec: 3.0,
-        offsetXZ: { z: 0.55 },
+        offsetXZ: { z: 0.85 },
         tag: `promotion-glyph:${a.id}`,
       }));
     }
@@ -1093,22 +1094,35 @@
 
   // ── Pending questions from agents (top-agent inbox) ──────────────
   let pendingQuestions: PendingQuestion[] = [];
+  /** Questions the operator took on ("Te toca"): chosen, work still theirs. */
+  let owedQuestions: PendingQuestion[] = [];
   // Questions the chief hasn't resolved yet (count only) and the ones it
   // resolved on its own — read-only audit trail for MyOfficePanel.
   let triageCount = 0;
   let chiefAnswered: PendingQuestion[] = [];
   /** First answer in: until then the office cannot say "nothing pending". */
   let questionsLoaded = false;
+  /** Bumped by the panel on every local answer/dismiss. */
+  let questionsRev = 0;
   async function loadPendingQuestions() {
+    const rev = questionsRev;
     try {
-      const [pending, triage, chief] = await Promise.all([
+      const [pending, owed, triage, chief] = await Promise.all([
         fetch('/api/agents/questions?status=pending&limit=50'),
+        fetch('/api/agents/questions?status=owed&limit=50'),
         fetch('/api/agents/questions?status=triage&limit=50'),
         fetch('/api/agents/questions?status=answered&answered_by=chief&limit=10'),
       ]);
-      if (pending.ok) pendingQuestions = ((await pending.json()).questions ?? []) as PendingQuestion[];
-      if (triage.ok) triageCount = ((await triage.json()).questions ?? []).length;
-      if (chief.ok) chiefAnswered = ((await chief.json()).questions ?? []) as PendingQuestion[];
+      // Parse everything first, then assign in one synchronous block so a
+      // render never sees a card in both lists or in none.
+      const [p, o, tr, c] = await Promise.all([pending, owed, triage, chief].map((r) => (r.ok ? r.json().catch(() => null) : null)));
+      // A local answer/dismiss happened while this poll was in flight: its
+      // snapshot predates it, so the next poll will carry the truth.
+      if (rev !== questionsRev) return;
+      if (p) pendingQuestions = (p.questions ?? []) as PendingQuestion[];
+      if (o) owedQuestions = (o.questions ?? []) as PendingQuestion[];
+      if (tr) triageCount = (tr.questions ?? []).length;
+      if (c) chiefAnswered = (c.questions ?? []) as PendingQuestion[];
     } catch { /* best effort */ }
     finally { questionsLoaded = true; }
   }
@@ -1596,6 +1610,7 @@
     myOfficeHitbox = myOfficeResult.hitbox;
     myOfficeNoteDropPos = myOfficeResult.noteDropPos;
     myOfficeSeats = myOfficeResult.visitorChairs;
+    myOfficeStands = myOfficeResult.visitorStands;
     myOfficeDeskFacing = myOfficeResult.deskFacingPos;
     // Neither room is in the flow-room map, so tell the walker router about
     // them: walkers enter the headquarters office only through its door and
@@ -1611,7 +1626,7 @@
     // guarantees one agent with rank.level === 11; if multiple are
     // present we honor the first one and ignore the rest (seeder also
     // enforces a single row, this is defensive).
-    placeTopAgent(target, myOfficeResult.seatPos, myOfficeResult.headPos, myOfficeResult.seatFacingY);
+    placeTopAgent(target, myOfficeResult.seatPos, myOfficeResult.headPos, myOfficeResult.seatFacingY, myOfficeResult.seatLift);
     // Wire up the desk paper-stack. Notes parent to `target` (= scene) and
     // their fall animation lives on the shared anim registry. The stack is
     // recreated on every scene rebuild — clear() drops the old meshes first.
@@ -1684,6 +1699,8 @@
     seatPos: { x: number; y: number; z: number },
     headPos: { x: number; y: number; z: number },
     facingY: number,
+    /** Height of the dais the executive chair stands on. */
+    seatLift = 0,
   ): void {
     disposeTopAgent();
     // The top agent = whoever holds the highest-level rank. Whatever name
@@ -1707,7 +1724,7 @@
       walker: false,
     });
     const group = new THREE.Group();
-    group.position.set(seatPos.x, 0, seatPos.z);
+    group.position.set(seatPos.x, seatLift, seatPos.z);
     group.add(human.group);
     human.group.rotation.y = facingY;
     // Seated pose offsets (same numbers used for regular seated workers).
@@ -1777,7 +1794,8 @@
       powerChip: false,
     });
     const label = new CSS2DObject(div);
-    label.position.set(headPos.x, headPos.y + 0.5, headPos.z);
+    // On top of his head: the chip grows upward from the anchor (office3d/nameplate.ts).
+    label.position.set(headPos.x, headPos.y + 0.25, headPos.z);
     target.add(label);
     deskLabels.set(holder.id, label);
     topAgentLabel = label;
@@ -2776,7 +2794,9 @@
         // — swap panels instead of stacking them invisibly.
         showOfficeModal = false;
         selectedAgent = selectedAgent === hoveredAgent ? null : hoveredAgent;
-        focusAgent();
+        // Clicking someone you are already looking at up close only selects them: the camera stays put.
+        // It flies over only from far away, where the agent is a few pixels on screen.
+        if (selectedAgent && agentIsFar(selectedAgent)) focusAgent();
       }
     });
 
@@ -2856,7 +2876,7 @@
     triggerDeliveryForAgent, tryFireAnim, spawnErrorFx, spawnHandoffPacketFx,
     spawnTradeCelebration,
     refreshSelectedAgentRuns: () => agentPanel?.refreshRuns(),
-    isOfficeLeader, isSeniorRank, addOfficeReport, pickFreeMyOfficeChair,
+    isOfficeLeader, isSeniorRank, addOfficeReport, pickMyOfficeSpot,
     flowColor, sameOffice, coordinateInMeetingRoom,
     spawnMeetingDecor, updateMeetingDecorTurn, disposeMeetingDecor,
     pushMgmtLog, playTopAgentChime, loadPendingQuestions,
@@ -3334,6 +3354,14 @@
     }
   }
 
+  /** Beyond this camera→agent distance a click on the agent also flies the camera to it (an office fills the screen at ~30-40). */
+  const CLICK_FOCUS_MIN_DISTANCE = 45;
+  function agentIsFar(id: string): boolean {
+    const p = deskPos.get(id);
+    if (!p || !camera) return false;
+    return Math.hypot(camera.position.x - p.x, camera.position.y - 1.2, camera.position.z - p.z) > CLICK_FOCUS_MIN_DISTANCE;
+  }
+
   function focusAgent() {
     if (!selectedAgent || !controls) return;
     const p = deskPos.get(selectedAgent); if (!p) return;
@@ -3751,7 +3779,7 @@
         labelScales.set(aid, scale);
         const inner = lbl.element?.firstElementChild as HTMLElement | null;
         if (inner) {
-          inner.style.transform = `scale(${scale.toFixed(2)})`;
+          inner.style.transform = nameplateTransform(scale);
           inner.style.transformOrigin = 'center bottom';
         }
       }
@@ -3835,12 +3863,16 @@
         const dp = deskPos.get(agentId);
         if (w && !((w as any).returning && (w as any).progress >= 1)) {
           const g = (w as any).group;
-          if (g) lbl.position.set(g.position.x, 3.2, g.position.z);
+          if (g) lbl.position.set(g.position.x, NAMEPLATE_HEIGHT, g.position.z);
         } else if (dp) {
-          if (Math.abs(lbl.position.x - dp.x) > 0.05 || Math.abs(lbl.position.z - dp.z) > 0.05) {
+          // Back at the desk: over the seated worker (anchorDz behind the desk's centre), at head height.
+          const z = dp.z + (lbl.userData?.anchorDz ?? 0);
+          if (Math.abs(lbl.position.x - dp.x) > 0.05 || Math.abs(lbl.position.z - z) > 0.05) {
             lbl.position.x = dp.x;
-            lbl.position.z = dp.z;
+            lbl.position.z = z;
           }
+          const y = lbl.userData?.anchorDz !== undefined ? NAMEPLATE_HEIGHT : lbl.position.y;
+          if (lbl.position.y !== y) lbl.position.y = y;
         }
       }
 
@@ -4425,8 +4457,8 @@
   const dispatch = createEventDispatcher();
 
   let lastInboxCount = -1;
-  $: if (pendingQuestions.length !== lastInboxCount) {
-    lastInboxCount = pendingQuestions.length;
+  $: if (pendingQuestions.length + owedQuestions.length !== lastInboxCount) {
+    lastInboxCount = pendingQuestions.length + owedQuestions.length;
     dispatch('inbox', { count: lastInboxCount });
   }
 
@@ -4668,9 +4700,16 @@
     return sameOfficeOf(agents, srcId, tgtId);
   }
 
-  /** Free visitor chair in My Office; seats and walkers live in this component. */
-  function pickFreeMyOfficeChair(): { x: number; y: number; z: number } | null {
-    return pickFreeChair(myOfficeSeats, walkers as unknown as SeatedWalker[]);
+  /** Where a visitor to My Office goes: a free armchair, or a spot on foot
+   *  behind the row when every armchair is taken. Seated visitors face
+   *  straight ahead so the body lines up with the chair. */
+  function pickMyOfficeSpot(): { pos: { x: number; y: number; z: number }; seated: boolean; face?: { x: number; y: number; z: number } } | null {
+    const seated = walkers as unknown as SeatedWalker[];
+    const face = myOfficeDeskFacing ?? undefined;
+    const chair = pickFreeChair(myOfficeSeats, seated, true);
+    if (chair) return { pos: chair, seated: true, face: face ? { x: chair.x, y: face.y, z: face.z } : undefined };
+    const stand = pickFreeChair(myOfficeStands, seated) ?? myOfficePos;
+    return stand ? { pos: stand, seated: false, face } : null;
   }
 
   async function sendMeetingMessage(text?: string, attachments: AttachmentMeta[] = []) {
@@ -4935,6 +4974,8 @@ Respond to the latest message as ${agent.name}. Be concrete. Reference your actu
     bind:myOfficeTab
     bind:officeReports
     bind:pendingQuestions
+    bind:owedQuestions
+    bind:questionsRev
     {triageCount}
     {chiefAnswered}
     bind:fixerStatus

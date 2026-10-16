@@ -12,9 +12,20 @@ import type { AgentService } from "../modules/agents/service.js";
 import type { AgentExecutor } from "../modules/agents/executor.js";
 import type { EventBus } from "./event-bus.js";
 import type { VoiceService } from "../voice/service.js";
+import type { OperatorComms } from "./operator-comms/driver.js";
 import { WHATSAPP_CC_AGENT_NAME } from "../modules/agents/agent-name-conventions.js";
 import { runTopAgentStreamed } from "./telegram-stream.js";
 import { log } from "./logger.js";
+
+async function tryCode(oc: OperatorComms | null | undefined, text: string, platform: string): Promise<string | null> {
+  if (!oc) return null;
+  try {
+    return await oc.tryCodeReply(text, platform);
+  } catch (err) {
+    log.warn(`operator-comms code reply: ${err instanceof Error ? err.message : String(err)}`);
+    return null;
+  }
+}
 
 const WHATSAPP_CC_PREFIX = /^\/cc(\s|$)/i;
 const WHATSAPP_MAX_CHARS = 3500;
@@ -28,8 +39,9 @@ export function wireMessageRouting(opts: {
   agentExecutor?: AgentExecutor | null;
   events?: EventBus | null;
   voiceService?: VoiceService | null;
+  operatorComms?: OperatorComms | null;
 }): void {
-  const { notificationRegistry, orchestrator, rateLimiter, pairingManager, agentService, agentExecutor, events, voiceService } = opts;
+  const { notificationRegistry, orchestrator, rateLimiter, pairingManager, agentService, agentExecutor, events, voiceService, operatorComms } = opts;
 
   // Wire Telegram message routing to Orchestrator (if active in marketplace)
   const telegramProvider = notificationRegistry.getProvider("telegram") as unknown as TelegramProviderLike | undefined;
@@ -37,6 +49,9 @@ export function wireMessageRouting(opts: {
   if (telegramTransport) {
     telegramTransport.onMessage(async (text, msgCtx) => {
       log.debug(`Telegram message from ${msgCtx.userId}: ${text}`);
+
+      const coded = await tryCode(operatorComms, text, "telegram");
+      if (coded) return { text: coded, parseMode: null };
 
       // Natural-language messages go to the top agent (the top-rank
       // commander agent), streamed live via editMessage. Slash commands and
@@ -82,6 +97,8 @@ export function wireMessageRouting(opts: {
       telegramTransport.setVoiceService(voiceService, true);
       telegramTransport.onVoice(async (text, msgCtx) => {
         log.debug(`Telegram voice from ${msgCtx.userId}: ${text}`);
+        const coded = await tryCode(operatorComms, text, "telegram");
+        if (coded) return { text: coded, parseMode: null };
         const topAgent =
           !text.trim().startsWith("/") && agentService && agentExecutor
             ? agentService.getTopAgent()
@@ -115,6 +132,10 @@ export function wireMessageRouting(opts: {
 
     telegramTransport.onCallback(async (data, msgCtx) => {
       log.debug(`Telegram callback from ${msgCtx.userId}: ${data}`);
+      if (data.startsWith("oq:") && operatorComms) {
+        // Plain text: the reply replaces the question, which may hold _ or *.
+        return { text: await operatorComms.handleCallback(data), parseMode: null };
+      }
       const response = await orchestrator.handleCallback(data, {
         userId: msgCtx.userId,
         chatId: msgCtx.chatId,
@@ -159,6 +180,8 @@ export function wireMessageRouting(opts: {
           };
         }
       }
+      const coded = await tryCode(operatorComms, message.text, msgCtx.platform);
+      if (coded) return { text: coded };
       const response = await orchestrator.handleMessage(message.text, {
         userId: msgCtx.userId,
         chatId: msgCtx.chatId,
@@ -208,6 +231,12 @@ export function wireMessageRouting(opts: {
           agentExecutor,
           events,
         });
+        return;
+      }
+
+      const coded = await tryCode(operatorComms, msg.text, "whatsapp");
+      if (coded) {
+        await waProvider.sendTo(msg.chat, { title: "", body: coded });
         return;
       }
 

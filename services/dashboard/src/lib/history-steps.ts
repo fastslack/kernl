@@ -11,6 +11,7 @@
  */
 
 import { isAgentActionTool } from './agent-actions.js';
+import { isTerminalTool } from './code-guess.js';
 import type { AgentFlowEvent } from './stores.js';
 import { collapseRepeats } from './collapse-repeats.js';
 
@@ -82,6 +83,8 @@ export interface StepDetail {
   body: string;
   /** True when there was nothing to show — render `body` as a muted note. */
   empty: boolean;
+  /** A terminal's output (Bash and the like): show it as monospace text, not markdown. */
+  terminal?: boolean;
 }
 
 /**
@@ -103,6 +106,7 @@ export function historyStepDetail(s: StoredStep): StepDetail {
     const raw = String(s.tool_output ?? '');
     if (!raw.trim()) return { label: 'Output', body: 'No output was recorded for this call.', empty: true };
     const parsed = tryJson(raw);
+    if (parsed === undefined && isTerminalTool(s.tool_name)) return { label: 'Output', body: raw, empty: false, terminal: true };
     return {
       label: 'Output',
       body: parsed !== undefined ? '```json\n' + JSON.stringify(parsed, null, 2) + '\n```' : raw,

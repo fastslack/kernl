@@ -14,7 +14,7 @@
   const fold = (s: string) => s.normalize('NFD').replace(/\p{Diacritic}/gu, '').toLowerCase();
   $: matches = model.offices.filter(o => fold(o.name + ' ' + o.agents.map(a => a.name).join(' ')).includes(fold(query.trim())));
   function status(office: RailOffice) {
-    if (office.paused) return 'off';
+    if (office.paused) return office.working ? 'draining' : 'off';
     if (office.agents.some(a => a.state === 'error')) return 'review';
     if (office.working) return 'working';
     if (office.agents.length && office.agents.every(a => a.state === 'paused')) return 'paused';

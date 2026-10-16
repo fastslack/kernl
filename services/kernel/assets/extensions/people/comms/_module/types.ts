@@ -84,6 +84,10 @@ export interface CommMetadata {
   quoted_text?: string;
   /** Received mail whose attachments were already looked for on the server. */
   attachments_scanned?: boolean;
+  /** Outbound: List-Unsubscribe header value sent with the mail. */
+  list_unsubscribe?: string;
+  /** Outbound: the approved template HTML sent as written (body_html keeps the sanitized copy). */
+  send_html?: string;
 }
 
 // ── Templates & Campaigns ─────────────────────

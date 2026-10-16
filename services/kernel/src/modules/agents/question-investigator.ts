@@ -31,7 +31,7 @@ import type { AgentExecutor } from "./executor.js";
 import { startAgentRun } from "./start-run.js";
 import { parseQuestionRefs } from "./question-refs.js";
 import {
-  INVESTIGATOR_PROMPT, buildInvestigationGoal, failureOf, parseOpinion, type KnownRepo,
+  INVESTIGATOR_PROMPT, buildInvestigationGoal, failureOf, parseOpinion, type KnownRepo, type OtherQuestion,
 } from "./question-opinion.js";
 
 export const INVESTIGATOR_ROLE = "question-investigator";
@@ -152,9 +152,17 @@ export function createQuestionInvestigator(deps: {
     }
   };
 
+  /** Every question waiting on the operator except `id`: the ones an opinion may also settle. */
+  const openOthers = (id: string): AgentQuestion[] =>
+    (["pending", "owed"] as const)
+      .flatMap((status) => service.listQuestions({ status, limit: 200 }))
+      .filter((o) => o.id !== id);
+
   const finish = (q: AgentQuestion, run: { status: string; result: string; error: string }) => {
     if (run.status === "completed") {
-      const opinion = parseOpinion(run.result ?? "", q.options.length);
+      // Checked against what is open NOW: one answered meanwhile drops out.
+      const open = new Map(openOthers(q.id).map((o) => [o.id, o.options.length]));
+      const opinion = parseOpinion(run.result ?? "", q.options.length, open);
       service.finishQuestionOpinion(q.id, opinion
         ? { opinion: opinion as unknown as Record<string, unknown> }
         : { error: `no_answer: ${(run.result ?? "").slice(-1500) || "the investigator ended without an answer"}` });
@@ -213,8 +221,14 @@ export function createQuestionInvestigator(deps: {
       const agentId = ensureAgent();
       const agent = service.getAgent(agentId)!;
       const asker = service.getAgent(q.from_agent_id);
+      const others: OtherQuestion[] = openOthers(q.id).map((o) => ({
+        id: o.id,
+        agent: service.getAgent(o.from_agent_id)?.name ?? o.from_agent_id,
+        question: o.question,
+        options: o.options.map((x) => x.label),
+      }));
       const goal = buildInvestigationGoal(q, asker ? { name: asker.name, description: asker.description } : undefined,
-        parseQuestionRefs(q.question, q.chief_note, q.context), knownRepos());
+        parseQuestionRefs(q.question, q.chief_note, q.context), knownRepos(), others);
       const run = startAgentRun({ service, executor, events }, { agent, goal, triggerPayload: { question_id: q.id } });
       service.startQuestionOpinion(q.id, run.id);
       return opinionStateOf(service.getQuestion(q.id)!);

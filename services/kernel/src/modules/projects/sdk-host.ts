@@ -23,6 +23,8 @@ export function projectsHostFor(svc: ProjectsService, outbox: OutboxService, rec
     records: (projectId, kind) => records(projectId, kind),
     officeSettings: (flowId, projectId) => svc.officeSettings(flowId, projectId),
     registerOutboxChannel: (channel, handler) => outbox.registerChannel(channel, handler),
+    registerOutboxPolicy: (name, fn) => outbox.registerPolicy(name, fn),
+    unregisterOutboxPolicy: (name) => outbox.unregisterPolicy(name),
     propose: (item) => outbox.propose({
       project_id: item.project_id, flow_id: item.flow_id, agent_id: item.agent_id ?? "", run_id: item.run_id ?? "",
       channel: item.channel, account_ref: item.account_ref, payload: item.payload, scheduled_for: item.scheduled_for ?? null,

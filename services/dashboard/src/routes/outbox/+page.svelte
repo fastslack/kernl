@@ -12,6 +12,8 @@
   import { apiFetchRaw, readApiError } from '$lib/api.js';
   import ViewHeader from '$shared/components/ViewHeader.svelte';
   import Skeleton from '$shared/components/Skeleton.svelte';
+  import { confirm as confirmDialog } from '$shared/feedback';
+  import { isTemplated, isRehearsal, facets, matchesFilter, batchSummary, editedPayload, previewDoc, type ReviewFilter } from '$lib/outbox/review.js';
 
   type Status = 'draft' | 'approved' | 'sending' | 'sent' | 'rejected' | 'failed';
   interface Item {
@@ -58,6 +60,14 @@
 
   let text = '';
   let dirty = false;
+  // Sequence emails: how the designed mail is shown, the filters, the batch and the test address.
+  let view: 'design' | 'phone' | 'text' = 'design';
+  let filter: ReviewFilter = { paso: '', perfil: '', especialidad: '' };
+  let checked = new Set<string>();
+  let batch: null | 'approve' | 'reject' = null;
+  let batchNote = '';
+  let testTo = '';
+  try { testTo = localStorage.getItem('outbox.testTo') ?? ''; } catch { /* storage off */ }
   let rejecting = false;
   let rejectNote = '';
   let scheduling = false;
@@ -87,7 +97,15 @@
       if (pr) projects = pr.projects ?? [];
       if (ag) agentNames = Object.fromEntries((ag.agents ?? []).map((a: { id: string; name: string }) => [a.id, a.name]));
       await tick(); // let `visible` recompute from the new items
-      if (!visible.some((i) => i.id === selectedId)) pick(visible[0]?.id ?? '');
+      // ?item=<id> (a link from another screen): open that item on its own tab, whatever the filters.
+      const want = wantItem && items.find((i) => i.id === wantItem);
+      wantItem = '';
+      if (want) {
+        tab = (want.status === 'sending' ? 'approved' : want.status) as Status;
+        fChannel = ''; filter = { paso: '', perfil: '', especialidad: '' };
+        await tick();
+        pick(want.id);
+      } else if (!visible.some((i) => i.id === selectedId)) pick(visible[0]?.id ?? '');
       error = '';
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -97,12 +115,24 @@
   }
 
   const onFocus = () => { if (!dirty && !rejecting && !scheduling) void load(); };
-  onMount(() => { void load(); window.addEventListener('focus', onFocus); });
+  let wantItem = '';
+  onMount(() => {
+    const u = new URL(window.location.href);
+    wantItem = u.searchParams.get('item') ?? '';
+    if (wantItem) { u.searchParams.delete('item'); history.replaceState(history.state, '', u.toString()); }
+    void load(); window.addEventListener('focus', onFocus);
+  });
   onDestroy(() => { if (typeof window !== 'undefined') window.removeEventListener('focus', onFocus); });
 
   $: byChannel = items.filter((i) => !fChannel || i.channel === fChannel);
   $: counts = Object.fromEntries(TABS.map((t) => [t.id, byChannel.filter((i) => (t.id === 'approved' ? i.status === 'approved' || i.status === 'sending' : i.status === t.id)).length])) as Record<string, number>;
-  $: visible = byChannel.filter((i) => (tab === 'approved' ? i.status === 'approved' || i.status === 'sending' : i.status === tab));
+  $: filtered = byChannel.filter((i) => matchesFilter(i, filter));
+  $: visible = filtered.filter((i) => (tab === 'approved' ? i.status === 'approved' || i.status === 'sending' : i.status === tab));
+  $: seqFacets = facets(byChannel.filter((i) => (tab === 'approved' ? i.status === 'approved' || i.status === 'sending' : i.status === tab)));
+  $: checkedItems = visible.filter((i) => checked.has(i.id));
+  $: summary = batchSummary(checkedItems);
+  function toggle(id: string) { if (checked.has(id)) checked.delete(id); else checked.add(id); checked = checked; }
+  function toggleAll() { checked = checkedItems.length === visible.length ? new Set() : new Set(visible.map((i) => i.id)); }
   $: channelsPresent = [...new Set(items.map((i) => i.channel))].sort();
   $: selected = visible.find((i) => i.id === selectedId) ?? null;
   $: projectName = (id: string) => projects.find((p) => p.id === id)?.name ?? 'Proyecto';
@@ -122,6 +152,7 @@
     rejectNote = '';
     disarmSend();
     notice = '';
+    if (it && !testTo && typeof it.payload.test_of === 'string' && Array.isArray(it.payload.to)) testTo = String(it.payload.to[0] ?? '');
   }
 
   function setTab(t: Status | 'all') {
@@ -143,13 +174,14 @@
 
   async function saveEdit(it: Item) {
     if (!dirty) return;
-    await call(`/api/outbox/${it.id}`, { method: 'PUT', body: JSON.stringify({ payload: { ...it.payload, [textKey(it)]: text } }) });
+    await call(`/api/outbox/${it.id}`, { method: 'PUT', body: JSON.stringify({ payload: editedPayload(it.payload, textKey(it), text) }) });
     dirty = false;
   }
 
   const approve = (when: string | null = null) => act(async () => {
     const it = selected;
     if (!it) return;
+    if (isRehearsal(it)) throw new Error('Es un ensayo: no se envía. Usá «Mandarme una prueba» para verlo en tu casilla.');
     await saveEdit(it);
     const res = await call(`/api/outbox/${it.id}/approve`, { method: 'POST', body: JSON.stringify(when ? { scheduled_for: new Date(when).toISOString() } : {}) });
     if (res?.item?.status === 'failed') {
@@ -179,6 +211,57 @@
     notice = 'Enviado';
   });
 
+  /** Approve the checked drafts one by one, as the single approve does, so the outbox's pacing is the same. */
+  const approveBatch = () => act(async () => {
+    const failed: string[] = [];
+    for (const it of checkedItems.filter((x) => !isRehearsal(x))) {
+      const res = await call(`/api/outbox/${it.id}/approve`, { method: 'POST', body: '{}' }).catch((e) => ({ item: { status: 'failed', error: String(e) } }));
+      if (res?.item?.status === 'failed') failed.push(it.preview.title || it.id);
+    }
+    checked = new Set(); batch = null;
+    await load();
+    if (failed.length) throw new Error(`No salieron ${failed.length}: ${failed.slice(0, 3).join(', ')}. Están en "Con error".`);
+    notice = 'Enviados';
+  });
+
+  const rejectBatch = () => act(async () => {
+    for (const it of checkedItems) await call(`/api/outbox/${it.id}/reject`, { method: 'POST', body: JSON.stringify({ note: batchNote.trim() }) });
+    checked = new Set(); batch = null;
+    await load();
+    notice = 'Rechazados';
+  });
+
+  /** A test copy of every checked draft to the operator's inbox; the drafts keep waiting. */
+  const testBatch = () => act(async () => {
+    const to = testTo.trim();
+    try { localStorage.setItem('outbox.testTo', to); } catch { /* storage off */ }
+    let n = 0;
+    for (const it of checkedItems) {
+      await call(`/api/outbox/${it.id}/test-send`, { method: 'POST', body: JSON.stringify({ to }) });
+      n++;
+    }
+    notice = `${n} prueba${n === 1 ? '' : 's'} enviada${n === 1 ? '' : 's'} a ${to}. Los borradores siguen esperando.`;
+  });
+
+  /** A copy to the operator's own inbox; the draft keeps waiting for the ok. */
+  const sendTest = () => act(async () => {
+    const it = selected;
+    if (!it) return;
+    try { localStorage.setItem('outbox.testTo', testTo.trim()); } catch { /* storage off */ }
+    await saveEdit(it);
+    await call(`/api/outbox/${it.id}/test-send`, { method: 'POST', body: JSON.stringify({ to: testTo.trim() }) });
+    notice = `Prueba enviada a ${testTo.trim()}. El borrador sigue esperando tu ok.`;
+  });
+
+  /** The first edit of a designed mail asks first: it turns into plain text. */
+  async function onEdit(it: Item) {
+    if (!dirty && isTemplated(it)) {
+      const ok = await confirmDialog({ title: 'Si editás el texto, este email sale como texto simple y pierde el diseño. ¿Seguís?' });
+      if (!ok) { text = String(it.payload[textKey(it)] ?? ''); return; }
+    }
+    dirty = true;
+  }
+
   function quickWhen(kind: 'tomorrow' | 'monday' | 'twohours'): string {
     const d = new Date();
     if (kind === 'twohours') d.setHours(d.getHours() + 2, 0, 0, 0);
@@ -200,6 +283,7 @@
       const n = visible[i + (e.key === 'j' ? 1 : -1)];
       if (n) pick(n.id);
     } else if (selected.status === 'draft') {
+      if ((e.key === 'a' || e.key === 'p') && isRehearsal(selected)) return;
       if (e.key === 'a') {
         if (sendArmed) { disarmSend(); void approve(); }
         else { sendArmed = true; clearTimeout(sendArmTimer); sendArmTimer = setTimeout(() => (sendArmed = false), 4000); }
@@ -271,6 +355,17 @@
         </select>
       </label>
     {/if}
+    {#if seqFacets.paso.length}
+      <label class="sel"><span>Paso</span>
+        <select bind:value={filter.paso}><option value="">Todos</option>{#each seqFacets.paso as v}<option value={v}>{v}</option>{/each}</select>
+      </label>
+      <label class="sel"><span>Perfil</span>
+        <select bind:value={filter.perfil}><option value="">Todos</option>{#each seqFacets.perfil as v}<option value={v}>{v}</option>{/each}</select>
+      </label>
+      <label class="sel"><span>Especialidad</span>
+        <select bind:value={filter.especialidad}><option value="">Todas</option>{#each seqFacets.especialidad as v}<option value={v}>{v}</option>{/each}</select>
+      </label>
+    {/if}
   </div>
 
   <div class="layout">
@@ -280,12 +375,38 @@
       {:else if visible.length === 0}
         <p class="muted pad">{currentTab.empty}</p>
       {/if}
+      {#if tab === 'draft' && visible.length}
+        <div class="bulk">
+          <label class="all"><input type="checkbox" checked={checkedItems.length > 0 && checkedItems.length === visible.length} on:change={toggleAll} /> Todos</label>
+          {#if checkedItems.length}
+            {#if summary.sendable}<button class="btn primary" on:click={() => (batch = 'approve')}>Aprobar {summary.sendable}</button>{/if}
+            <button class="btn" disabled={busy || !testTo.includes('@')} on:click={testBatch} title="Una copia de cada uno a {testTo}">Mandarme {checkedItems.length} prueba{checkedItems.length === 1 ? '' : 's'}</button>
+            <button class="btn danger" on:click={() => { batch = 'reject'; batchNote = ''; }}>Rechazar {checkedItems.length}</button>
+          {/if}
+        </div>
+        {#if batch === 'approve'}
+          <div class="choice" role="group" aria-label="Aprobar en lote">
+            <p>Vas a enviar <b>{summary.count}</b> email{summary.count === 1 ? '' : 's'} a <b>{summary.recipients}</b> destinatario{summary.recipients === 1 ? '' : 's'} distinto{summary.recipients === 1 ? '' : 's'}.</p>
+            {#if summary.test}<p class="banner info">{summary.test} {summary.test === 1 ? 'es de prueba y va' : 'son de prueba y van'} a {summary.testTo.join(', ')}.</p>{/if}
+            {#if summary.rehearsal}<p class="banner info">{summary.rehearsal} {summary.rehearsal === 1 ? 'es de ensayo y no sale' : 'son de ensayo y no salen'}.</p>{/if}
+            {#if summary.real}<p class="banner err"><b>{summary.real} {summary.real === 1 ? 'va a un prospecto real' : 'van a prospectos reales'}.</b> Salen apenas confirmes.</p>{/if}
+            <div class="actions"><button class="btn" on:click={() => (batch = null)}>Volver</button><button class="btn primary" disabled={busy} on:click={approveBatch}>{busy ? 'Enviando…' : 'Confirmar y enviar'}</button></div>
+          </div>
+        {:else if batch === 'reject'}
+          <form class="choice" on:submit|preventDefault={rejectBatch}>
+            <label for="batch-note">¿Por qué no salen? «No contactar» frena la secuencia de esa persona.</label>
+            <input id="batch-note" bind:value={batchNote} required />
+            <div class="actions"><button type="button" class="btn" on:click={() => (batch = null)}>Volver</button><button class="btn danger" disabled={busy || !batchNote.trim()}>Rechazar {checkedItems.length}</button></div>
+          </form>
+        {/if}
+      {/if}
       <ul>
         {#each visible as it (it.id)}
-          <li>
+          <li class:pickable={tab === 'draft'}>
+            {#if tab === 'draft'}<input type="checkbox" class="pick" aria-label="Seleccionar" checked={checked.has(it.id)} on:change={() => toggle(it.id)} />{/if}
             <button class="row" class:sel={it.id === selectedId} on:click={() => pick(it.id)}>
               <span class="ch ch-{channel(it.channel).kind}">{channel(it.channel).label}</span>
-              <span class="first">{rowTitle(it)}</span>
+              <span class="first">{#if isRehearsal(it)}<span class="ensayo">Ensayo</span> {/if}{rowTitle(it)}</span>
               <span class="meta">{projectName(it.project_id)} · {agentNames[it.agent_id] ?? 'un agente'} · {ago(it.created_at)}</span>
             </button>
           </li>
@@ -331,8 +452,19 @@
               <dl class="mailhead">{#each Object.entries(selected.preview.meta) as [k, v]}<dt>{k}</dt><dd>{v}</dd>{/each}</dl>
             {/if}
           {/if}
-          {#if selected.status === 'draft'}
-            <textarea bind:value={text} on:input={() => (dirty = true)} aria-label="Texto del borrador"></textarea>
+          {#if isTemplated(selected)}
+            <div class="views" role="tablist" aria-label="Vista del email">
+              <button role="tab" aria-selected={view === 'design'} class:on={view === 'design'} on:click={() => (view = 'design')}>Diseño</button>
+              <button role="tab" aria-selected={view === 'phone'} class:on={view === 'phone'} on:click={() => (view = 'phone')}>Celular</button>
+              <button role="tab" aria-selected={view === 'text'} class:on={view === 'text'} on:click={() => (view = 'text')}>Texto</button>
+              {#if typeof selected.payload.preheader === 'string'}<small class="muted pre">En la bandeja: {selected.payload.preheader}</small>{/if}
+            </div>
+          {/if}
+          {#if isTemplated(selected) && view !== 'text'}
+            <!-- sandbox="" : no scripts, forms or navigation inside the mail -->
+            <iframe title="El email como lo va a ver el destinatario" sandbox="" class="mailframe" class:phone={view === 'phone'} srcdoc={previewDoc(selected, 'design')}></iframe>
+          {:else if selected.status === 'draft'}
+            <textarea bind:value={text} on:input={() => selected && onEdit(selected)} aria-label="Texto del borrador"></textarea>
             <div class="foot-line">
               <small class="muted">{dirty ? 'Editado: se guarda al aprobar o programar.' : 'Podés editar el texto antes de aprobarlo.'}</small>
               <small class="muted">{text.length} caracteres</small>
@@ -373,9 +505,17 @@
           {:else}
             <div class="actions main">
               <button class="btn danger" on:click={() => { rejecting = true; scheduling = false; }}>Rechazar <kbd>R</kbd></button>
+              {#if ch.kind === 'mail'}
+                <input class="testto" type="email" bind:value={testTo} placeholder="tu email de prueba" aria-label="Email de prueba" />
+                <button class="btn" disabled={busy || !testTo.includes('@')} on:click={sendTest}>Mandarme una prueba</button>
+              {/if}
               <span class="spacer"></span>
-              <button class="btn" on:click={() => { scheduling = true; rejecting = false; }}>Programar <kbd>P</kbd></button>
-              <button class="btn primary" on:click={() => { disarmSend(); approve(); }} disabled={busy}>{busy ? 'Enviando…' : sendArmed ? '¿Enviar ahora? Apretá A de nuevo' : 'Aprobar y enviar ahora'} <kbd>A</kbd></button>
+              {#if isRehearsal(selected)}
+                <span class="ensayo-note">Ensayo · así saldría al prospecto. No se envía: probalo en tu casilla.</span>
+              {:else}
+                <button class="btn" on:click={() => { scheduling = true; rejecting = false; }}>Programar <kbd>P</kbd></button>
+                <button class="btn primary" on:click={() => { disarmSend(); approve(); }} disabled={busy}>{busy ? 'Enviando…' : sendArmed ? '¿Enviar ahora? Apretá A de nuevo' : 'Aprobar y enviar ahora'} <kbd>A</kbd></button>
+              {/if}
             </div>
             <p class="muted small keys">Atajos: <kbd>J</kbd>/<kbd>K</kbd> para moverte entre borradores.</p>
           {/if}
@@ -488,4 +628,17 @@
   .how span { display: inline-grid; place-items: center; width: 26px; height: 26px; flex: none; border-radius: 50%; background: linear-gradient(135deg, var(--ob-sky), var(--ob-violet)); color: #fff; font-weight: 700; font-size: 13px; }
   @media (max-width: 900px) { .layout { grid-template-columns: 1fr; height: auto; } .card { min-height: 360px; } }
   @media (prefers-reduced-motion: reduce) { .btn, .row, .seg button { transition: none; } .btn.primary:hover:not(:disabled) { transform: none; } }
+  .bulk { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 6px 8px; }
+  .bulk .all { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--text-2); margin-right: auto; }
+  .bulk input, li .pick { min-height: 0; width: 16px; height: 16px; padding: 0; accent-color: var(--ob-violet); }
+  li.pickable { display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 6px; }
+  .views { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .views button { font: inherit; font-size: 13px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); background: none; color: var(--text-2); cursor: pointer; }
+  .views button.on { background: var(--ob-violet-soft); border-color: var(--ob-violet); color: var(--text-1); }
+  .views .pre { margin-left: auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 60%; }
+  .mailframe { flex: 1; width: 100%; min-height: 520px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: #fff; }
+  .mailframe.phone { width: 375px; max-width: 100%; align-self: center; }
+  .testto { width: 210px; min-height: 34px; font-size: 13px; }
+  .ensayo { display: inline-block; padding: 0 6px; margin-right: 4px; border-radius: 999px; border: 1px solid #a78bfa; color: #c4b5fd; font-size: 11px; font-weight: 700; letter-spacing: .3px; }
+  .ensayo-note { color: #c4b5fd; font-size: 13px; font-weight: 600; }
 </style>

@@ -49,6 +49,10 @@ interface EmailPayload {
   body_html?: string;
   reply_to_comm_id?: string;
   contact_id?: string;
+  /** List-Unsubscribe header: "<mailto:…>" or "<https://…>". */
+  list_unsubscribe?: string;
+  /** Send body_html as written (an approved designed template); the stored copy stays sanitized. */
+  html_verbatim?: boolean;
 }
 
 interface CommsChannelDeps {
@@ -65,6 +69,9 @@ export function emailChannel(deps: CommsChannelDeps): OutboxChannelHandler {
     if (bad !== undefined) return `Dirección inválida: ${bad}`;
     if (!p.subject?.trim()) return "Falta el asunto";
     if (!p.body?.trim()) return "Falta el cuerpo del mail";
+    if (p.list_unsubscribe !== undefined && !/^<(mailto:[^\s<>]+|https:\/\/[^\s<>]+)>$/.test(p.list_unsubscribe)) {
+      return "List-Unsubscribe inválido: tiene que ser <mailto:…> o <https://…>";
+    }
     if (!resolveAccountId(svc, ref)) return accountMissing(ref);
     const blocked = [...p.to, ...(p.cc ?? [])].find((a) => isDoNotContact(deps.db, { email: a }));
     if (blocked) return `${blocked} pidió no ser contactado`;
@@ -102,6 +109,8 @@ export function emailChannel(deps: CommsChannelDeps): OutboxChannelHandler {
         in_reply_to: p.reply_to_comm_id,
         recipients_to: p.to.map((a) => a.trim()).join(", "),
         recipients_cc: (p.cc ?? []).map((a) => a.trim()).join(", "),
+        list_unsubscribe: p.list_unsubscribe,
+        html_verbatim: p.html_verbatim === true,
       });
       await svc.sendEmail(comm.id);
       return { ref: `comms:${comm.id}` };

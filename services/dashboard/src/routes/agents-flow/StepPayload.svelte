@@ -5,7 +5,7 @@
    * there was nothing to show. The content comes from historyStepDetail.
    */
   import CopyTextBtn from '$lib/components/CopyTextBtn.svelte';
-  import { formatRunOutput } from '$lib/run-format.js';
+  import { formatRunOutput, terminalHtml } from '$lib/run-format.js';
   import type { StepDetail } from '$lib/history-steps.js';
 
   export let detail: StepDetail;
@@ -22,7 +22,7 @@
   {:else}
     {#if copyText}<CopyTextBtn text={copyText} title={detail.label ? `Copy ${detail.label.toLowerCase()}` : 'Copy'} />{/if}
     <div class="sp-md ip-out-md" on:click={onOutputClick} role="presentation">
-      {@html formatRunOutput(detail.body)}
+      {@html detail.terminal ? terminalHtml(detail.body) : formatRunOutput(detail.body)}
     </div>
   {/if}
 </div>

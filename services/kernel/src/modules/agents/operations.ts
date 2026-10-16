@@ -418,16 +418,18 @@ export function agentOperations(deps: AgentOperationDeps): Record<string, Operat
       return { success: true, ...svc().setOfficeLead(flow_id, required(input, "agent_id")) };
     },
 
-    // Office on/off. Pausing also cancels its members' running runs, so the
-    // switch stops spending tokens now, not after the current run finishes.
+    // Office on/off. Switching off is graceful by default: nothing new starts
+    // and the runs under way finish. `cut_now` also cancels its members'
+    // running runs, so the switch stops spending tokens now ("Cortar ya").
     "agents.flows.set_paused": (input) => {
       const flow_id = required(input, "flow_id");
       if (typeof input.paused !== "boolean") throw new HttpError(400, "paused must be a boolean");
+      if (input.cut_now !== undefined && typeof input.cut_now !== "boolean") throw new HttpError(400, "cut_now must be a boolean");
       const service = svc();
       const flow = service.setFlowPaused(flow_id, input.paused);
       if (!flow) throw new HttpError(404, `Office not found: ${flow_id}`);
       let cancelled = 0;
-      if (input.paused && executor) {
+      if (input.paused && input.cut_now === true && executor) {
         const stop = ops["agents.stop"];
         for (const agent of service.listAgents().filter((a) => a.flow_id === flow_id)) {
           const out = stop({ agent_id: agent.id }) as { cancelled?: number };

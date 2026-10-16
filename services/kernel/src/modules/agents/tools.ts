@@ -13,6 +13,7 @@ import { getRequestContext } from "../../core/request-context.js";
 import { askingRun, formatQuestionContext } from "./question-context.js";
 import { defineTool, defineToolNoInput, limitArg } from "../../core/tool-builder.js";
 import { answerAndDeliver } from "./question-delivery.js";
+import { leavesWorkToOperator } from "./operator-guard.js";
 import { resumeRun } from "./run-resume.js";
 import { formatTriageQuestion } from "./question-format.js";
 
@@ -1214,8 +1215,10 @@ export function agentsTools(
           label: z.string().describe("Short option label the user sees as a button."),
           value: z.string().optional().describe("Optional internal value; defaults to label."),
           url: z.string().optional().describe("If set, picking this option opens the URL in a new browser tab (e.g. 'Yes — open the link' style options). Must be http(s)://."),
-        })).length(4).describe("Exactly 4 multiple-choice options, your preferred one first."),
+          task: z.boolean().optional().describe("Picking this leaves the operator a task (e.g. 'Lo reviso yo en GitLab'): the question stays open until they mark it done."),
+        })).min(2).max(4).describe("2 to 4 options, your preferred one first."),
         meeting_id: z.string().optional().describe("If the question came out of a meeting, reference its id."),
+        for_operator: z.boolean().optional().describe("Only the operator can decide or do this (approve a risky MR, set something in an environment, a product decision): skip the chief."),
         ...CALLER_AGENT_ID_FIELD,
       });
       const askSupervisorHandler = async (input: z.infer<typeof askSupervisorSchema>) => {
@@ -1237,10 +1240,10 @@ export function agentsTools(
               const u = o.url.trim();
               if (/^https?:\/\//i.test(u)) url = u;
             }
-            return label ? { label, value, ...(url ? { url } : {}) } : null;
+            return label ? { label, value, ...(url ? { url } : {}), ...(o.task ? { task: true } : {}) } : null;
           })
-          .filter((x): x is { label: string; value: string; url?: string } => x !== null);
-        if (options.length !== 4) return errorResult("Provide exactly 4 non-empty options.");
+          .filter((x): x is { label: string; value: string; url?: string; task?: boolean } => x !== null);
+        if (options.length < 2 || options.length > 4) return errorResult("Provide 2 to 4 non-empty options, your preferred one first.");
 
         const res = service.createQuestion({
           from_agent_id: caller.id,
@@ -1252,6 +1255,7 @@ export function agentsTools(
           question,
           context: input.context ?? "",
           options,
+          for_operator: input.for_operator === true,
         });
         return textResult(
           res.status === "triage"
@@ -1265,7 +1269,7 @@ export function agentsTools(
           name: "kernel_agents_ask_supervisor",
           description:
             "Ask the chief about a doubt you can't resolve alone: unclear requirements, priorities, or a decision you are not authorized to make. " +
-            "Give exactly 4 concrete options, your preferred one first. The chief answers or escalates it to the human. " +
+            "Give 2 to 4 concrete options, your preferred one first. The chief answers or escalates it to the human. " +
             "Don't wait idle: keep working on what doesn't depend on it. The answer comes back as a new run or an inbox message. " +
             "Never re-ask a question that was already answered.",
           schema: askSupervisorSchema,
@@ -1321,6 +1325,7 @@ export function agentsTools(
             question_id: z.string(),
             selected_index: z.number().int().optional().describe("0-based index of the chosen option (0-3)."),
             text: z.string().optional().describe("Free-text answer, when no option fits."),
+            leaves_work_to_operator: z.boolean().describe("true when your answer leaves anything to the operator (they must act, decide, or you are holding until they say so). Then the question is escalated instead of closed."),
             ...CALLER_AGENT_ID_FIELD,
           }),
           handler: async (input) => {
@@ -1337,6 +1342,11 @@ export function agentsTools(
               }
               selected_index = i;
               selected_option = q.options[i].label;
+            }
+            if (input.leaves_work_to_operator || leavesWorkToOperator(selected_option)) {
+              const escalated = service.escalateQuestion(q.id, `escalada: la respuesta dejaba trabajo al operador — propuesta del Chief: ${selected_option.slice(0, 300)}`);
+              if (!escalated) return errorResult(`Question ${q.id} is not waiting for triage.`);
+              return textResult(`Escalated ${q.id} to the human: the answer left work to the operator.`);
             }
             const res = answerAndDeliver(service, executor, events, q.id, {
               selected_index, selected_option, note: text || undefined, answered_by: "chief",

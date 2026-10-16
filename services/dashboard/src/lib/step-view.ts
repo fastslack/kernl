@@ -6,7 +6,8 @@
  */
 
 import type { AgentFlowEvent } from './stores.js';
-import { formatRunOutput, linkifyUuids } from './run-format.js';
+import { formatRunOutput, linkifyUuids, terminalHtml } from './run-format.js';
+import { isTerminalTool } from './code-guess.js';
 import { jsonHtml, parseLoose } from './json-view.js';
 import { liveEventSummary } from './live-steps.js';
 
@@ -37,6 +38,8 @@ export function liveStepHtml(e: AgentFlowEvent): string {
         return linkifyUuids(jsonHtml(p.value, { truncated: p.truncated }));
       }
     }
+    // A terminal's output reads as a terminal: monospace, never markdown.
+    if (isTerminalTool(e.data.tool_name)) return terminalHtml(liveEventSummary(e));
   }
   return formatRunOutput(liveEventSummary(e));
 }
