@@ -211,6 +211,10 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     }
   });
 
+  server.route("POST", "/api/outbox/:id/withdraw", ({ params }) => {
+    try { return { item: outbox.withdraw(params.id) }; } catch (err) { return asHttp(err); }
+  });
+
   server.route("POST", "/api/outbox/:id/reject", ({ params, body }) => {
     const b = parse(RejectBody, body);
     try { return { item: outbox.reject(params.id, b.note) }; } catch (err) { return asHttp(err); }

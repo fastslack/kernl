@@ -90,4 +90,13 @@ describe("outbox policies", () => {
     const item = outbox.propose({ project_id: null, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
     expect(item.project_id).toBe(pid);
   });
+  it("withdraw takes a scheduled approval back to draft; one already sending or sent stays", async () => {
+    const it = propose({ text: "hola" });
+    const later = new Date(Date.now() + 3_600_000).toISOString();
+    await outbox.approve(it.id, { scheduled_for: later });
+    expect(outbox.withdraw(it.id)).toMatchObject({ status: "draft", scheduled_for: null });
+    await outbox.approve(it.id, {});
+    expect(sent.length).toBe(1);
+    expect(() => outbox.withdraw(it.id)).toThrow("approved");
+  });
 });
