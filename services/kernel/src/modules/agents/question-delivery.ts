@@ -175,6 +175,14 @@ export class AnswerQueue {
   }
 }
 
+/** `__answer_resume__: false` in an agent's variables: answers to its questions do not relaunch it. */
+export function answerResumeDisabled(agent: { variables?: string }): boolean {
+  try {
+    const v = JSON.parse(agent.variables || "{}").__answer_resume__;
+    return v === false || v === "false";
+  } catch { return false; }
+}
+
 export interface AnswerInput {
   selected_index: number;
   selected_option: string;
@@ -202,6 +210,9 @@ export function answerAndDeliver(
   });
 
   const asker = service.getAgent(result.from_agent_id);
+  // Its answers are read by something else (Heural's orchestrator reads agent_questions itself): relaunching
+  // the asker too ran it twice on every answer — 39 runs of the Integrador in two days, each able to act.
+  if (asker && answerResumeDisabled(asker)) return { ...result, resume_run_id: null };
   if (!asker || !asker.active || service.hasRunningRun(asker.id)) {
     service.postAnswerToInbox(id);
     return { ...result, resume_run_id: null };
