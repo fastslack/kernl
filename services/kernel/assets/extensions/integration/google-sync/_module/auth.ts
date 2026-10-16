@@ -44,7 +44,7 @@ export class GoogleAuth {
   }
 
   /** Build an auth URL that redirects to the main dashboard server instead of the ephemeral port */
-  getAuthUrlForDashboard(dashboardPort: number): string {
+  getAuthUrlForDashboard(dashboardPort: number, state = ""): string {
     const redirectUri = `http://localhost:${dashboardPort}/auth/google/callback`;
     const params = new URLSearchParams({
       client_id: this.clientId,
@@ -54,6 +54,7 @@ export class GoogleAuth {
       access_type: "offline",
       prompt: "consent",
     });
+    if (state) params.set("state", state);
     return `${GOOGLE_AUTH_URL}?${params.toString()}`;
   }
 
