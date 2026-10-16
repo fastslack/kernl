@@ -254,7 +254,7 @@ export function buildDesks(
       new THREE.BoxGeometry(2.6, 2.0, 2.0),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
     );
-    hitbox.position.set(0, 1.0, 0.1); // centered between desk front and chair back
+    hitbox.position.set(0, 1.0, 0.25); // centered between desk front and chair back
     hitbox.renderOrder = -1; // render first so it doesn't z-fight
     group.add(hitbox);
 
@@ -346,17 +346,17 @@ export function buildDesks(
     }
 
     // Chair seat + back — InstancedMesh + per-instance color (flow tint × 0.8)
-    setLocalAt(chairSeatInstance, idx, pos.x + 0 * S,  0.48 * S, pos.z + 0.55 * S);
-    setLocalAt(chairBackInstance, idx, pos.x + 0 * S,  0.75 * S, pos.z + 0.82 * S);
+    setLocalAt(chairSeatInstance, idx, pos.x + 0 * S,  0.48 * S, pos.z + 0.85 * S);
+    setLocalAt(chairBackInstance, idx, pos.x + 0 * S,  0.75 * S, pos.z + 1.12 * S);
     tmpColor.set(furnColor).multiplyScalar(0.8);
     setInstColor(chairSeatInstance, idx, tmpColor);
     setInstColor(chairBackInstance, idx, tmpColor);
 
     // Chair post + base → InstancedMesh
     tempMatrix.makeScale(S, S, S);
-    tempMatrix.setPosition(pos.x, 0.23 * S, pos.z + 0.55 * S);
+    tempMatrix.setPosition(pos.x, 0.23 * S, pos.z + 0.85 * S);
     chairPostInstance.setMatrixAt(idx, tempMatrix);
-    tempMatrix.setPosition(pos.x, 0.03 * S, pos.z + 0.55 * S);
+    tempMatrix.setPosition(pos.x, 0.03 * S, pos.z + 0.85 * S);
     chairBaseInstance.setMatrixAt(idx, tempMatrix);
 
     // Worker — pool path (InstancedMesh) preferred; otherwise individual mesh tree
@@ -368,10 +368,10 @@ export function buildDesks(
       const phase = Math.random() * Math.PI * 2;
       const canUsePool = pool && skin.manifest.id === DEFAULT_SKIN_ID;
       if (canUsePool && pool) {
-        // The desk group has scale S=1.3 → world position = pos + 0.55*S in z;
+        // The desk group has scale S=1.3 → world position = pos + 0.85*S in z;
         // also pass scale=S so the pool renders the same physical size.
         const slot = pool.add({
-          pos: [pos.x, 0, pos.z + 0.55 * S],
+          pos: [pos.x, 0, pos.z + 0.85 * S],
           rotY: Math.PI,
           scale: S,
           color,
@@ -388,7 +388,7 @@ export function buildDesks(
         });
       } else {
         const human = skin.createHumanoid({ flowColor: color, palette, scale: 1.0, walker: false });
-        human.group.position.set(0, 0, 0.55);
+        human.group.position.set(0, 0, 0.85);
         human.group.rotation.y = Math.PI;
         human.leftLeg.rotation.x = -1.5;
         human.rightLeg.rotation.x = -1.5;
@@ -428,7 +428,7 @@ export function buildDesks(
       }),
     );
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(0, 0.04, 0.3); // local: just under the chair/worker area
+    ring.position.set(0, 0.04, 0.55); // local: just under the chair/worker area
     ring.renderOrder = -1;
     group.add(ring);
 
@@ -438,7 +438,7 @@ export function buildDesks(
     // AABB for walker avoidance
     const sx = S * 2.4 / 2 + 0.25;
     const zFront = S * 0.65 + 0.25;
-    const zBack = S * 0.9 + 0.25;
+    const zBack = S * 1.2 + 0.25;
     deskAabbs.set(agent.id, { minX: pos.x - sx, maxX: pos.x + sx, minZ: pos.z - zFront, maxZ: pos.z + zBack, agentId: agent.id });
 
     // Nameplate — built by the shared builder so the desks and the top
