@@ -76,13 +76,15 @@ describe("UnattendedAskWatcher", () => {
     expect(created[0].options).toHaveLength(4);
   });
 
-  it("stays out of runs a person watched, builtin handlers, runs that asked, and failed runs", async () => {
+  it("stays out of runs a person watched, builtin handlers, opted-out agents, runs that asked, and failed runs", async () => {
     let calls = 0;
     const llm = async () => { calls++; return YES; };
     for (const o of [
       { run: run({ trigger_type: "manual" }) },
       { run: run({ parent_run_id: "p" }) },
       { agent: agent({ builtin_handler: "email:triage" }) },
+      { agent: agent({ variables: '{"__unattended_ask__": false}' }) },
+      { agent: agent({ variables: '{"__unattended_ask__": "false"}' }) },
       { steps: ["mcp__kernel__kernel_agents_ask_supervisor"] },
       { run: run({ status: "failed" }) },
       { run: run({ result: "Done." }) },

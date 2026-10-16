@@ -49,6 +49,17 @@ describe("answerAndDeliver", () => {
     expect(service.getUnreadInbox(w.id).length).toBe(1);
   });
 
+  it("an asker whose answers are read elsewhere (__answer_resume__: false) is not relaunched nor written to", () => {
+    const w = service.createAgent({ name: "W" });
+    db.prepare("UPDATE agents SET variables = ? WHERE id = ?").run('{"__answer_resume__": false}', w.id);
+    const q = service.createQuestion({ from_agent_id: w.id, question: "Ship?", options: OPTS });
+    const r = answerAndDeliver(service, executor, events, q.id, { selected_index: 1, selected_option: "B", answered_by: "human" });
+    expect(r?.resume_run_id).toBeNull();
+    expect(goals).toEqual([]);
+    expect(service.getUnreadInbox(w.id).length).toBe(0);
+    expect(service.getQuestion(q.id)?.status).toBe("answered");
+  });
+
   it("free text is delivered verbatim", () => {
     const w = service.createAgent({ name: "W" });
     const q = service.createQuestion({ from_agent_id: w.id, question: "Ship?", options: OPTS });
