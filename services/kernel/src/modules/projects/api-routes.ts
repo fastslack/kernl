@@ -211,6 +211,10 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
     }
   });
 
+  server.route("POST", "/api/outbox/:id/withdraw", ({ params }) => {
+    try { return { item: outbox.withdraw(params.id) }; } catch (err) { return asHttp(err); }
+  });
+
   server.route("POST", "/api/outbox/:id/reject", ({ params, body }) => {
     const b = parse(RejectBody, body);
     try { return { item: outbox.reject(params.id, b.note) }; } catch (err) { return asHttp(err); }
@@ -218,6 +222,11 @@ export function registerProjectsRoutes(server: KernelHttpServer, deps: ProjectsR
 
   server.route("POST", "/api/outbox/:id/retry", async ({ params }) => {
     try { return { item: await outbox.retry(params.id) }; } catch (err) { return asHttp(err); }
+  });
+
+  server.route<{ to?: unknown }>("POST", "/api/outbox/:id/test-send", async ({ params, body }) => {
+    const to = typeof body?.to === "string" ? body.to : "";
+    try { return { ok: true, ...(await outbox.testSend(params.id, to)) }; } catch (err) { return asHttp(err); }
   });
 
   // ── Webhook (token-exempt, HMAC-authenticated; src/core/auth.ts) ──

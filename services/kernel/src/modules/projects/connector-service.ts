@@ -3,7 +3,7 @@ import type { EventBus } from "../../core/event-bus.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { ProjectsService } from "./projects-service.js";
 import {
-  SnapshotV1Schema, WebhookEventSchema, verifySignature, describeZodError, type SnapshotV1,
+  SnapshotV1Schema, WebhookEventSchema, verifySignature, describeZodError, FUNNEL_TYPES, type SnapshotV1,
 } from "./connector-contract.js";
 
 /** How often a project is pulled; webhooks fill the gaps in between. */
@@ -126,6 +126,9 @@ export class ConnectorService {
     if (Number(fresh.changes) === 0) return { status: 200, body: "duplicate" };
     if (ev.type === "institution.created") this.ingestInstitution(p.id, ev.data);
     if (ev.type === "waitlist.joined") this.ingestWaitlist(p.id, ev.data);
+    if ((FUNNEL_TYPES as readonly string[]).includes(ev.type)) {
+      this.upsertRecord(p.id, "funnel_event", ev.event_id, { type: ev.type, occurred_at: ev.occurred_at, ...(ev.data as object) });
+    }
     this.projects.markConnector(p.id, { last_webhook_at: isoNow() });
     this.events.emit(`project:${ev.type}`, { ...ev.data, project_id: p.id, project_slug: p.slug, event_id: ev.event_id });
     return { status: 200, body: "ok" };

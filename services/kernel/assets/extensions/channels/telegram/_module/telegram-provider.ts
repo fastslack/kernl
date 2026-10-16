@@ -137,6 +137,11 @@ export class TelegramProvider implements NotificationProvider {
     return this.transport;
   }
 
+  /** Chat that proactive messages go to, or null when none is configured. */
+  getDefaultChatId(): number | null {
+    return this.transport?.getDefaultChatId() ?? null;
+  }
+
   private formatPayload(payload: NotificationPayload): string {
     return formatNotification(payload, { bold: "*", alert: "🚨 " });
   }

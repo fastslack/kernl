@@ -150,6 +150,23 @@ export class AgentSchedulesService {
       .all() as AgentSchedule[];
   }
 
+  /**
+   * Switch an agent's schedules that actually run — never a per_project
+   * template: switched off, the projects module would drop its clones on the
+   * next office sync and switching back on would not bring them back.
+   * Returns how many schedules it touched.
+   */
+  setRunnableSchedulesActive(agentId: string, active: boolean): number {
+    const r = this.db
+      .prepare(
+        `UPDATE agent_schedules SET active = ? WHERE agent_id = ?
+         AND NOT (per_project = 1 AND project_id IS NULL)`,
+      )
+      .run(active ? 1 : 0, agentId);
+    if (r.changes) this.events.emit("data.changed", { module: "agents", action: "schedule_updated" });
+    return r.changes;
+  }
+
   getDueSchedules(): Array<AgentSchedule & { agent_name: string }> {
     const now = isoNow();
     return this.db

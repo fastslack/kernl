@@ -38,12 +38,14 @@ import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
 
-export type QuestionStatus = "triage" | "pending" | "answered" | "dismissed";
+export type QuestionStatus = "triage" | "pending" | "owed" | "answered" | "dismissed";
+/** task: picking it leaves the operator a task — the question goes to 'owed', not 'answered'. */
+export type QuestionOption = { label: string; value?: string; url?: string; task?: boolean };
 /** The investigator's second opinion: '' none asked, running, ready, failed. */
 export type OpinionStatus = "" | "running" | "ready" | "failed";
 export interface AgentQuestion {
   id: string; from_agent_id: string; flow_id: string; meeting_id: string; run_id: string;
-  question: string; context: string; options: Array<{ label: string; value?: string; url?: string }>;
+  question: string; context: string; options: QuestionOption[];
   status: QuestionStatus; selected_option: string; selected_index: number;
   answered_note: string; answered_at: string | null;
   answered_by: "" | "chief" | "human"; chief_note: string; triage_started_at: string | null;
@@ -53,6 +55,7 @@ export interface AgentQuestion {
   opinion: Record<string, unknown> | null;
   /** When failed: "no_answer" | "unavailable", then ": " and the detail. */
   opinion_error: string; opinion_at: string | null;
+  owed_at: string | null; reminded_at: string | null; for_operator: boolean;
 }
 
 /** Fallback for `config.agents.autoPauseThreshold` when no config is injected. */
@@ -105,7 +108,7 @@ const DELEGATED = {
   ranks: ["createRank", "listRanks", "getRank", "getTopAgent", "updateRank", "deleteRank", "assignRankToAgent"],
   runs: ["createRun", "getRun", "listRuns", "cancelRun", "cleanupStaleRuns", "recoverStaleRuns", "addStep", "getSteps", "getRunEvents", "saveCheckpoint", "getCheckpoint", "reopenRun", "markCheckpointResumed", "deleteCheckpoint", "getRunConditions", "setRunCondition"],
   triggers: ["addEventTrigger", "listEventTriggers", "getActiveEventTriggers", "removeEventTrigger", "updateTriggerLastFired"],
-  schedules: ["addSchedule", "listSchedules", "getDueSchedules", "removeSchedule", "getSchedule", "updateSchedule", "updateScheduleNextRun"],
+  schedules: ["addSchedule", "listSchedules", "getDueSchedules", "removeSchedule", "getSchedule", "updateSchedule", "updateScheduleNextRun", "setRunnableSchedulesActive"],
   feedback: ["addFeedback", "getFeedback"],
   conversations: ["createConversation", "getConversation", "findOrCreateChatConversation", "listConversations", "closeConversation", "archiveConversation", "archiveClosedConversations", "parseParticipants", "addParticipant", "postMessage", "getMessage", "listMessages", "getDebateCooldown", "recordDebateCooldown", "countRecentAutoDebates"],
   chains: ["addChain", "listChains", "getChainsBySource", "removeChain"],
@@ -1134,6 +1137,15 @@ export class AgentService {
   }
 
   /** Mark inbox messages as read. No-op if the list is empty. */
+  /** Gives letters back (a run that carried them died before acting). */
+  markInboxUnread(messageIds: string[]): void {
+    if (messageIds.length === 0) return;
+    const placeholders = messageIds.map(() => "?").join(",");
+    this.db
+      .prepare(`UPDATE agent_office_inbox SET status = 'unread', read_at = NULL WHERE id IN (${placeholders}) AND status = 'read'`)
+      .run(...messageIds);
+  }
+
   markInboxRead(messageIds: string[]): void {
     if (messageIds.length === 0) return;
     const placeholders = messageIds.map(() => "?").join(",");
@@ -1228,26 +1240,29 @@ export class AgentService {
     run_id?: string;
     question: string;
     context?: string;
-    options: Array<{ label: string; value?: string; url?: string }>;
+    options: QuestionOption[];
     /** Skip the chief: the question goes straight to the human. */
     direct_to_human?: boolean;
+    /** Alias of direct_to_human; also stored as for_operator=1. */
+    for_operator?: boolean;
   }): { id: string; status: "triage" | "pending" } {
     const id = newId();
     const askedAt = isoNow();
     // The chief triages everyone else's questions; its own (or any question
     // when there is no active chief, or one the caller addresses to the human
     // explicitly) goes straight to the human.
-    const chief = input.direct_to_human ? undefined : this.getTopAgent();
+    const toOperator = input.direct_to_human || input.for_operator;
+    const chief = toOperator ? undefined : this.getTopAgent();
     const status: "triage" | "pending" = chief && chief.id !== input.from_agent_id ? "triage" : "pending";
     this.db
       .prepare(
         `INSERT INTO agent_questions
-          (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          (id, from_agent_id, flow_id, meeting_id, run_id, question, context, options, status, created_at, for_operator)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
       .run(
         id, input.from_agent_id, input.flow_id ?? "", input.meeting_id ?? "", input.run_id ?? "",
-        input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt,
+        input.question, input.context ?? "", JSON.stringify(input.options), status, askedAt, toOperator ? 1 : 0,
       );
     this.events.emit("data.changed", { module: "agents", action: "question_asked" });
     if (status === "pending") this.emitQuestionForHuman(id);
@@ -1313,6 +1328,9 @@ export class AgentService {
       })(),
       opinion_error: String(r.opinion_error ?? ""),
       opinion_at: r.opinion_at == null ? null : String(r.opinion_at),
+      owed_at: r.owed_at == null ? null : String(r.owed_at),
+      reminded_at: r.reminded_at == null ? null : String(r.reminded_at),
+      for_operator: Number(r.for_operator ?? 0) === 1,
     };
   }
 
@@ -1404,18 +1422,53 @@ export class AgentService {
     id: string,
     input: { selected_index: number; selected_option: string; note?: string; answered_by: "chief" | "human" },
   ): { from_agent_id: string; question: string } | null {
-    const expected = input.answered_by === "chief" ? "triage" : "pending";
     const q = this.getQuestion(id);
-    if (!q || q.status !== expected) return null;
-    this.db
+    if (!q) return null;
+    const allowed = input.answered_by === "chief" ? ["triage"] : ["pending", "owed"];
+    if (!allowed.includes(q.status)) return null;
+    const r = this.db
       .prepare(
         `UPDATE agent_questions
          SET status='answered', selected_option=?, selected_index=?, answered_note=?, answered_at=?, answered_by=?
          WHERE id=? AND status=?`,
       )
-      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.answered_by, id, expected);
+      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), input.answered_by, id, q.status);
+    if (r.changes === 0) return null;
     this.events.emit("data.changed", { module: "agents", action: "question_answered" });
+    this.events.emit("agent:question_resolved", { question_id: id, status: "answered" });
     return { from_agent_id: q.from_agent_id, question: q.question };
+  }
+
+  /**
+   * The question left the operator (answered or dismissed): its "a cargo del
+   * operador" letters still unread would relaunch the asker with "keep
+   * waiting" for a question that is already closed. They are marked read.
+   */
+  markOwedLettersRead(id: string): number {
+    const q = this.getQuestion(id);
+    if (!q) return 0;
+    return this.db
+      .prepare(
+        `UPDATE agent_office_inbox SET status = 'read', read_at = ?
+         WHERE to_agent_id = ? AND from_agent_id = '__top_agent__' AND status = 'unread'
+           AND subject = ? AND instr(body, 'a cargo del operador') > 0`,
+      )
+      .run(isoNow(), q.from_agent_id, `ANSWER: ${q.question.slice(0, 160)}`).changes;
+  }
+
+  /** A letter about a question to its asker (owed / dismissed notices). Subject keeps the ANSWER: prefix so AnswerQueue drains it. */
+  postLetterAboutQuestion(id: string, subject: string, body: string): boolean {
+    const q = this.getQuestion(id);
+    const asker = q && this.getAgent(q.from_agent_id);
+    if (!q || !asker) return false;
+    this.db
+      .prepare(
+        `INSERT INTO agent_office_inbox
+          (id, flow_id, from_agent_id, to_agent_id, subject, body, status, related_run_id, created_at, read_at)
+         VALUES (?, ?, '__top_agent__', ?, ?, ?, 'unread', '', ?, NULL)`,
+      )
+      .run(newId(), asker.flow_id ?? "", q.from_agent_id, `ANSWER: ${subject.slice(0, 160)}`, body, isoNow());
+    return true;
   }
 
   /** Leave an answered question's answer in the asker's inbox, for when it
@@ -1488,10 +1541,42 @@ export class AgentService {
     return this.listRuns({ agent_id: agentId, status: "running", limit: 1 }).length > 0;
   }
 
-  dismissQuestion(id: string): boolean {
-    const r = this.db.prepare("UPDATE agent_questions SET status='dismissed' WHERE id=? AND status='pending'").run(id);
-    if (r.changes > 0) this.events.emit("data.changed", { module: "agents", action: "question_dismissed" });
-    return r.changes > 0;
+  /** The operator chose a task option: the question stays open ('owed') until "Listo". */
+  markOwed(id: string, input: { selected_index: number; selected_option: string; note?: string }): AgentQuestion | null {
+    const r = this.db
+      .prepare(
+        `UPDATE agent_questions SET status='owed', selected_option=?, selected_index=?, answered_note=?, owed_at=?, answered_by='human'
+         WHERE id=? AND status='pending'`,
+      )
+      .run(input.selected_option, input.selected_index, input.note ?? "", isoNow(), id);
+    if (r.changes === 0) return null;
+    this.events.emit("data.changed", { module: "agents", action: "question_owed" });
+    this.events.emit("agent:question_owed", { question_id: id });
+    return this.getQuestion(id) ?? null;
+  }
+
+  /** Dismiss a question waiting on the operator. Returns it as it was, or null. */
+  dismissQuestion(id: string): AgentQuestion | null {
+    const before = this.getQuestion(id);
+    if (!before || (before.status !== "pending" && before.status !== "owed")) return null;
+    const r = this.db.prepare("UPDATE agent_questions SET status='dismissed', answered_at=? WHERE id=? AND status=?")
+      .run(isoNow(), id, before.status);
+    if (r.changes === 0) return null;
+    this.events.emit("data.changed", { module: "agents", action: "question_dismissed" });
+    this.events.emit("agent:question_resolved", { question_id: id, status: "dismissed" });
+    return before;
+  }
+
+  /** Questions on the operator with nothing new since `olderThanIso` (24 h reminders). */
+  listRemindable(olderThanIso: string): AgentQuestion[] {
+    return (this.db
+      .prepare(`SELECT * FROM agent_questions WHERE status IN ('pending','owed')
+                AND max(coalesce(reminded_at, ''), coalesce(owed_at, ''), created_at) < ? ORDER BY created_at`)
+      .all(olderThanIso) as Record<string, unknown>[]).map((r) => this.mapQuestionRow(r));
+  }
+
+  markReminded(id: string): void {
+    this.db.prepare("UPDATE agent_questions SET reminded_at=? WHERE id=?").run(isoNow(), id);
   }
 
   listInbox(

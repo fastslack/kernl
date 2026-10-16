@@ -16,6 +16,8 @@
   import PanelDetail from './PanelDetail.svelte';
   import PanelForm from './PanelForm.svelte';
   import PanelTimeline from './PanelTimeline.svelte';
+  import PanelKpis from './PanelKpis.svelte';
+  import { CYCLE } from '$lib/panels/look.js';
 
   export let flowId: string;
   export let initialView: string | null = null;
@@ -23,6 +25,8 @@
   let spec: PanelSpec | null = null;
   let active = '';
   let rows: Array<Record<string, unknown>> = [];
+  /** A board's real total per column, when its source caps the cards it sends. */
+  let counts: Record<string, number> | null = null;
   let error = '';
   let stop: (() => void) | null = null;
   let stops: Array<() => void> = [];
@@ -53,6 +57,7 @@
     detailKey = null;
     error = '';
     rows = [];
+    counts = null;
     stopAll();
     const v = spec?.views.find((x) => x.id === id);
     if (id === '__activity') { void fetchAudit(flowId).then((a) => (audit = a)); return; }
@@ -69,6 +74,12 @@
     for (const src of Object.keys(v.join ?? {})) {
       stops.push(pollSource(flowId, src, { select: '$' }, (d) => { extra[src] = toRows(d); recompute(); }, () => {}));
     }
+    if (v.counts) {
+      const [cSource, cSelect] = splitRef(v.counts);
+      stops.push(pollSource(flowId, cSource, { select: cSelect }, (d) => {
+        counts = d && typeof d === 'object' && !Array.isArray(d) ? (d as Record<string, number>) : null;
+      }, () => {}));
+    }
   }
 
   function splitRef(ref: string): [string, string] {
@@ -82,11 +93,13 @@
 {#if spec}
   <div class="ph">
     <div class="ph-tabs" role="tablist">
-      {#each tabs as t (t.id)}
-        <button role="tab" aria-selected={active === t.id} class:on={active === t.id} on:click={() => select(t.id)}>{textOf(t.title, $locale)}</button>
+      {#each tabs as t, i (t.id)}
+        <button role="tab" aria-selected={active === t.id} class:on={active === t.id} style="--hue:{CYCLE[i % CYCLE.length]}" on:click={() => select(t.id)}>
+          <i aria-hidden="true"></i>{textOf(t.title, $locale)}
+        </button>
       {/each}
-      <button role="tab" aria-selected={active === '__activity'} class:on={active === '__activity'} on:click={() => select('__activity')}>
-        {$locale.startsWith('en') ? 'Activity' : 'Actividad'}
+      <button role="tab" aria-selected={active === '__activity'} class:on={active === '__activity'} style="--hue:#94A3B8" on:click={() => select('__activity')}>
+        <i aria-hidden="true"></i>{$locale.startsWith('en') ? 'Activity' : 'Actividad'}
       </button>
     </div>
     {#if error}<p class="ph-err" role="alert">{error}</p>{/if}
@@ -95,10 +108,12 @@
     {:else if view}
       {#if detailKey && detailView}
         <PanelDetail {flowId} view={detailView} spec={spec} rowKey={detailKey} on:back={() => (detailKey = null)} />
+      {:else if view.component === 'kpis'}
+        <PanelKpis {rows} />
       {:else if view.component === 'table'}
         <PanelTable {view} {rows} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'board'}
-        <PanelBoard {view} {rows} on:open={(e) => (detailKey = e.detail)} />
+        <PanelBoard {view} {rows} {counts} on:open={(e) => (detailKey = e.detail)} />
       {:else if view.component === 'timeline'}
         <PanelTimeline items={rows.map((r) => ({ at: String(r[view?.time ?? 'updated_at'] ?? ''), text: view?.text ? view.text.replace(/\{\{\s*([\w.#-]+)\s*\}\}/g, (_m, k) => String(r[k] ?? '')) : String(r.key ?? '') }))} />
       {:else if view.component === 'detail'}
@@ -116,16 +131,24 @@
 {/if}
 
 <style>
-  .ph { display: flex; flex-direction: column; gap: 8px; min-height: 0; }
-  .ph-tabs { display: flex; gap: 4px; flex-wrap: wrap; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
-  .ph-tabs button { background: none; border: 1px solid transparent; border-radius: 6px; padding: 4px 10px; color: var(--text-2); font: 600 11.5px 'Manrope', sans-serif; cursor: pointer; min-height: 30px; }
-  .ph-tabs button:hover { color: var(--text-1); background: color-mix(in srgb, #22D3EE 6%, transparent); }
-  .ph-tabs button.on {
-    color: var(--text-1); border-color: color-mix(in srgb, #22D3EE 45%, var(--border));
-    background: linear-gradient(135deg, color-mix(in srgb, #22D3EE 20%, var(--surface-2)), color-mix(in srgb, #A78BFA 16%, var(--surface-2)));
-    box-shadow: 0 6px 16px -10px #22D3EE;
+  .ph { display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+  .ph-tabs { display: flex; gap: 6px; flex-wrap: wrap; padding-bottom: 2px; }
+  .ph-tabs button {
+    display: inline-flex; align-items: center; gap: 7px; min-height: 32px; padding: 0 12px; border-radius: 999px; cursor: pointer;
+    font: 700 12px 'Manrope', sans-serif; color: var(--text-2);
+    background: color-mix(in srgb, var(--hue) 6%, var(--surface-1)); border: 1px solid color-mix(in srgb, var(--hue) 20%, var(--border));
+    transition: color .15s, background .2s, border-color .2s, box-shadow .2s, transform .2s ease-out;
   }
-  .ph-tabs button:focus-visible { outline: 2px solid var(--teal); outline-offset: 1px; }
-  .ph-extra { border-top: 1px solid var(--border); padding-top: 8px; }
+  .ph-tabs button i { width: 7px; height: 7px; border-radius: 50%; background: var(--hue); opacity: .65; transition: opacity .2s, box-shadow .2s; }
+  .ph-tabs button:hover { color: var(--text-1); transform: translateY(-1px); border-color: color-mix(in srgb, var(--hue) 50%, var(--border)); background: color-mix(in srgb, var(--hue) 12%, var(--surface-1)); }
+  .ph-tabs button.on {
+    color: #fff; border-color: color-mix(in srgb, var(--hue) 70%, transparent);
+    background: linear-gradient(135deg, color-mix(in srgb, var(--hue) 34%, var(--surface-2)), color-mix(in srgb, var(--hue) 14%, var(--surface-2)));
+    box-shadow: 0 8px 20px -10px var(--hue);
+  }
+  .ph-tabs button.on i { opacity: 1; box-shadow: 0 0 8px var(--hue); }
+  .ph-tabs button:focus-visible { outline: 2px solid var(--hue); outline-offset: 2px; }
+  @media (prefers-reduced-motion: reduce) { .ph-tabs button { transition: none; } .ph-tabs button:hover { transform: none; } }
+  .ph-extra { padding-top: 2px; }
   .ph-err { margin: 0; padding: 6px 10px; border-radius: 6px; background: rgba(240, 71, 112, .12); color: #ff9fb5; font: 500 11.5px 'Manrope', sans-serif; }
 </style>

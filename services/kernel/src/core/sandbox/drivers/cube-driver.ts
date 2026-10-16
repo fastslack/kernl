@@ -32,7 +32,7 @@ import type {
   ConfigField,
 } from "../driver.js";
 import { kernlClaudeSessionFiles } from "./docker-driver.js";
-import { prepareSandboxCredentials } from "../claude-session.js";
+import { prepareSandboxCredentials, writeSandboxClaudeJson } from "../claude-session.js";
 
 const WRAPPER_DIR = "/app/data/.cube-wrappers";
 
@@ -238,7 +238,10 @@ export class CubeSandboxDriver implements SandboxDriver {
       `--volume ${shellQuote(hostWorkspace)}:/workspace`,
       `--volume ${shellQuote(claudeCli)}:/usr/local/bin/claude:ro`,
     ];
-    const jsonSrc = claudeJson ?? (existsSync(session.json) ? kernelPathToHost(session.json) : null);
+    // .claude.json goes in as a per-run copy: the CLI rewrites the original
+    // with a rename, which can pull it out from under the mount mid-start.
+    const jsonCopy = writeSandboxClaudeJson(claudeJson ?? session.json, resolve(WRAPPER_DIR, `${opts.runId}-claude.json`));
+    const jsonSrc = jsonCopy ? kernelPathToHost(jsonCopy) : claudeJson;
     // Kernl's own session goes in as a copy without the refresh token (see ../claude-session.ts).
     const credsCopy = claudeCreds ? null : await prepareSandboxCredentials(session.creds, resolve(WRAPPER_DIR, `${opts.runId}-credentials.json`));
     const credsSrc = claudeCreds ?? (credsCopy ? kernelPathToHost(credsCopy) : null);
@@ -340,6 +343,7 @@ export class CubeSandboxDriver implements SandboxDriver {
     const bootstrap = handle.executablePath.replace(/\.sh$/, "-bootstrap.sh");
     try { unlinkSync(bootstrap); } catch { /* already gone */ }
     try { unlinkSync(handle.executablePath.replace(/\.sh$/, "-credentials.json")); } catch { /* none written */ }
+    try { unlinkSync(handle.executablePath.replace(/\.sh$/, "-claude.json")); } catch { /* none written */ }
 
     // Best-effort: ask cubemastercli to garbage-collect the sandbox. If the
     // process already exited and Cube reaped it, this is a no-op.

@@ -549,7 +549,7 @@ export class ClaudeCodeExecutor {
       agent_id: agent.id,
       agent_name: agent.name,
       run_id: run.id,
-      goal: goal.slice(0, 300),
+      goal: goal.slice(0, 8000),
       trigger_type: run.trigger_type,
     });
     service.logEvent({
@@ -559,7 +559,7 @@ export class ClaudeCodeExecutor {
       event_type: "run",
       event_subtype: "started",
       detail: `[claude-code] ${goal.slice(0, 180)}`,
-      raw_data: { goal: goal.slice(0, 300), trigger_type: run.trigger_type, engine: "claude_code" },
+      raw_data: { goal: goal.slice(0, 8000), trigger_type: run.trigger_type, engine: "claude_code" },
     });
 
     // Handle returned by the sandbox driver. Cleaned up in the `finally`.

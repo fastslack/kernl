@@ -1,7 +1,7 @@
 // office3d/office/reception-decor.ts
 // Furnishing for the reception lobby: two waiting lounges flanking the runner
 // (rug always; sofa, coffee table and plants as glTF props) and real models in
-// place of the primitive topiaries, chandelier and counter vase.
+// place of the primitive topiaries and counter vase.
 //
 // The glTF props belong to the realism layer (office3d/realism.ts, part
 // 'models'): with ?realism=0 or ?realismSkip=models the primitives stay and
@@ -21,8 +21,6 @@ export function buildReceptionDecor(scene: any, opts: {
   counterZ: number;
   /** Primitive topiaries by the counter front, replaced by potted plants. */
   topiaries: Array<{ x: number; z: number; stand: any[] }>;
-  /** Chandelier anchor (top of the fitting) and its primitive parts. */
-  chandelier: { at: P; stand: any[] };
   /** Counter-top vase spot and its primitive parts. */
   vase: { at: P; stand: any[] };
 }): void {
@@ -79,17 +77,6 @@ export function buildReceptionDecor(scene: any, opts: {
         registerRealismSwitch('models', o, data, swapStandIn);
       });
   });
-
-  // ── Brass chandelier hanging over the counter (its top at the anchor).
-  const ch = opts.chandelier;
-  const CH_H = 1.15;
-  void placeModel(scene, 'Chandelier_02', { x: ch.at.x, y: ch.at.y - CH_H, z: ch.at.z }, { height: CH_H, shadows: false })
-    .then((o) => {
-      if (!o) return;
-      const data = { stand: ch.stand };
-      swapStandIn(o, data, true);
-      registerRealismSwitch('models', o, data, swapStandIn);
-    });
 
   // ── Brass vase on the counter top.
   const v = opts.vase;

@@ -83,7 +83,10 @@ export interface LiveEventContext {
   isOfficeLeader(agentId: string): boolean;
   isSeniorRank(agentId: string): boolean;
   addOfficeReport(agentId: string, text: string, status?: string, runId?: string): void;
-  pickFreeMyOfficeChair(): Vec3 | null;
+  /** Where a visitor to the top agent's office goes: a free armchair
+   *  (`seated`), or a spot on foot behind the row when every chair is taken.
+   *  `face` is the point to turn to on arrival. Null without an office. */
+  pickMyOfficeSpot(): { pos: Vec3; seated: boolean; face?: Vec3 } | null;
   flowColor(aid: string): string;
   sameOffice(srcId: string, tgtId: string): boolean;
   coordinateInMeetingRoom(srcId: string, tgtId: string, color: string, info?: CoordInfo): boolean;
@@ -104,7 +107,7 @@ export function processLiveEvents(ctx: LiveEventContext): void {
     markActivity, showAnimatedTag, showThinkingTag, pulseThinkingMonitor,
     triggerDeliveryForAgent, tryFireAnim, spawnErrorFx, spawnHandoffPacketFx,
     spawnTradeCelebration, refreshSelectedAgentRuns, isOfficeLeader, isSeniorRank,
-    addOfficeReport, pickFreeMyOfficeChair, flowColor, sameOffice,
+    addOfficeReport, pickMyOfficeSpot, flowColor, sameOffice,
     coordinateInMeetingRoom, spawnMeetingDecor, updateMeetingDecorTurn,
     disposeMeetingDecor, pushMgmtLog, playTopAgentChime, loadPendingQuestions,
     topAgent, highestRank, handleInfraToggle,
@@ -273,7 +276,6 @@ export function processLiveEvents(ctx: LiveEventContext): void {
         // Urgent → "meeting" path (running, no return until meeting ends).
         // Normal completion → "myoffice" path (walks in, drops a paper note
         // on the top agent's desk, walks back to own desk).
-        const walkerTargetId = isUrgent ? 'meeting' : 'myoffice';
         const reportColor = flowColor(aid);
         // Only normal (non-urgent) reports carry & drop a physical note.
         // Urgent walkers join a meeting instead — the top agent deals with
@@ -287,9 +289,12 @@ export function processLiveEvents(ctx: LiveEventContext): void {
           // the source desk (now following the walker) carries the meaning.
           // Seat the visitor in a free chair across the desk (not a single
           // floor point) and have them face the top agent while seated.
-          const seatPt = pickFreeMyOfficeChair() ?? ctx.myOfficePos!;
+          const spot = pickMyOfficeSpot();
+          if (!spot) return;
+          // A free armchair → seated; a full row → the visitor waits on foot.
+          const walkerTargetId = !spot.seated ? 'visit' : isUrgent ? 'meeting' : 'myoffice';
           sendWalkerToPoint(
-            ctx.scene, ctx.walkers, aid, seatPt, ctx.deskPos, ctx.roomMap, ctx.corGrid,
+            ctx.scene, ctx.walkers, aid, spot.pos, ctx.deskPos, ctx.roomMap, ctx.corGrid,
             ctx.agents, reportColor, undefined, ctx.deskAabbs,
             walkerTargetId, ctx.sittingWorkers, isUrgent,
             undefined,             // no viaPoint for myoffice/meeting walks
@@ -297,7 +302,7 @@ export function processLiveEvents(ctx: LiveEventContext): void {
             carryNote,             // visible paper in the right hand
             undefined, undefined,  // meetingRoomObstacles / exempt
             undefined,             // stay (auto-return after the sit)
-            ctx.myOfficeDeskFacing ?? undefined, // face the desk while seated
+            spot.face,             // face the desk while seated
           );
         }, isUrgent ? 500 : 2000); // urgent: less delay before running
       }
@@ -427,12 +432,13 @@ export function processLiveEvents(ctx: LiveEventContext): void {
       if (score <= 2 && ctx.myOfficePos && ctx.scene && aid && aid !== ctx.topAgentId && isSeniorRank(aid)) {
         const agentName = ctx.agents.find(a => a.id === aid)?.name ?? 'Agent';
         setTimeout(() => {
-          const seatPt = pickFreeMyOfficeChair() ?? ctx.myOfficePos!;
+          const spot = pickMyOfficeSpot();
+          if (!spot) return;
           sendWalkerToPoint(
-            ctx.scene, ctx.walkers, aid, seatPt, ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents,
-            '#F04770', undefined, ctx.deskAabbs, 'meeting', ctx.sittingWorkers, true,
+            ctx.scene, ctx.walkers, aid, spot.pos, ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents,
+            '#F04770', undefined, ctx.deskAabbs, spot.seated ? 'meeting' : 'visit', ctx.sittingWorkers, true,
             undefined, undefined, undefined, undefined, undefined, undefined,
-            ctx.myOfficeDeskFacing ?? undefined, // face the desk while seated
+            spot.face, // face the desk
           );
         }, 500);
       }
@@ -818,14 +824,21 @@ export function processLiveEvents(ctx: LiveEventContext): void {
           // The walker itself — stands up, walks the corridors to My Office,
           // says hello with the question text, returns to the desk.
           tryFireAnim(`ask-walk:${fromId}`, 25, () => {
+            // A free armchair, like a report — the bare office point is the
+            // gap between two chairs, and the seated pose there floated in
+            // mid-air. A full row: wait on foot behind it.
+            const spot = pickMyOfficeSpot();
+            if (!spot) return;
             sendWalkerToPoint(
-              ctx.scene, ctx.walkers, fromId, ctx.myOfficePos!,
+              ctx.scene, ctx.walkers, fromId, spot.pos,
               ctx.deskPos, ctx.roomMap, ctx.corGrid, ctx.agents,
               '#ffd166',                 // gold = "asking the boss"
               `❓ ${qTxt || 'question'}`, // bubble shows truncated question
-              ctx.deskAabbs, 'myoffice',     // customTargetId — same tag used by report completions
+              ctx.deskAabbs, spot.seated ? 'myoffice' : 'visit',
               ctx.sittingWorkers,
               true,                       // urgent = run instead of walk, 1.6× speed
+              undefined, undefined, false, undefined, undefined, undefined,
+              spot.face,                  // face the top agent
             );
           });
         }

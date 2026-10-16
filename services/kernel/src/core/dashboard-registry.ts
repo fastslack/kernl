@@ -190,10 +190,10 @@ export class DashboardRegistry {
   }
 
   /** Execute a registered channel's query function. Returns undefined if channel not found. */
-  async queryChannel(name: string, db: SqliteDb, neo4j: Neo4jClient): Promise<unknown | undefined> {
+  async queryChannel(name: string, db: SqliteDb, neo4j: Neo4jClient, params?: Record<string, string>): Promise<unknown | undefined> {
     const ch = this.channels.get(name);
     if (!ch) return undefined;
-    return ch.query(db, neo4j);
+    return ch.query(db, neo4j, params);
   }
 
   /** Check if a channel is registered */

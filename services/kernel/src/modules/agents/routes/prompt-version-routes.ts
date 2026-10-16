@@ -81,9 +81,11 @@ export function registerPromptVersionRoutes(
     commitMargin?: number;
     dryRun?: boolean;
     model?: string;
+    force?: boolean;
   } | null>("POST", "/api/agents/:id/evolution/run", async ({ params: { id }, body }) => {
     if (!optimizer) throw new HttpError(503, "optimizer not configured");
-    const run = await optimizer.runCycle(id, body ?? {});
+    // A cycle asked for by hand runs even when its failures were already reflected on (the sweep skips those).
+    const run = await optimizer.runCycle(id, { force: true, ...(body ?? {}) });
     if (!run) return { triggered: false, reason: "not enough failures in lookback window" };
     return { triggered: true, evolution: run };
   });

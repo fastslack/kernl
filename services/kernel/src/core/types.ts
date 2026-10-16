@@ -411,7 +411,12 @@ export interface RetentionCapacity {
 /** A single dashboard data channel that a module can register */
 export interface DashboardChannel {
   name: string;
-  query: (db: SqliteDb, neo4j: Neo4jClient) => Promise<unknown> | unknown;
+  /**
+   * `params` only arrives from an office panel's `channel` source (string
+   * values the panel declared); the dashboard route and the publisher call
+   * without it. Treat it as untrusted input.
+   */
+  query: (db: SqliteDb, neo4j: Neo4jClient, params?: Record<string, string>) => Promise<unknown> | unknown;
 }
 
 /** Navigation item for the frontend sidebar */

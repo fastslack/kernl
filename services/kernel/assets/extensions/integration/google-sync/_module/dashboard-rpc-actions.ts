@@ -18,7 +18,8 @@ import {
   type KernelConfig,
   type RpcAction,
 } from "@kernl/extension-sdk";
-import { GoogleAuth } from "./auth.js";
+import { GoogleAuth, dashboardRedirectUri } from "./auth.js";
+import { encodeReturnState } from "./return-to.js";
 
 export interface GoogleSyncDashboardRpcDeps {
   db: SqliteDb;
@@ -73,6 +74,8 @@ export function googleSyncOperations(deps: GoogleSyncDashboardRpcDeps): Record<s
           : null,
         tokenInfo,
         lastSync,
+        // What to paste in Google Cloud → OAuth client → Authorized redirect URIs.
+        redirectUri: dashboardRedirectUri(dashboardPort),
       };
     },
 
@@ -92,7 +95,11 @@ export function googleSyncOperations(deps: GoogleSyncDashboardRpcDeps): Record<s
       const auth = makeAuth();
       const force = input.force === true || input.force === "1" || input.force === "true";
       if (!force && auth.isAuthenticated()) return { alreadyAuthenticated: true };
-      return { authUrl: auth.getAuthUrlForDashboard(dashboardPort) };
+      // `return_to`: the screen that asked; after consent the browser goes back there.
+      const state = typeof input.return_to === "string"
+        ? encodeReturnState(input.return_to, (process.env.DASHBOARD_PUBLIC_URL ?? "").replace(/\/$/, ""))
+        : "";
+      return { authUrl: auth.getAuthUrlForDashboard(dashboardPort, state) };
     },
 
     "google.auth.revoke": () => {

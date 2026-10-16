@@ -30,6 +30,16 @@ export function receptionLounges(cx: number, counterZ: number): Array<{ x: numbe
   return ([-1, 1] as const).map((side) => ({ x: cx + side * RECEPTION_LOUNGE_X, z: counterZ + RECEPTION_LOUNGE_Z, side }));
 }
 
+/** The two planters at the front corners of the counter (pot + foliage,
+ *  0.35 in radius). Solid for walkers like the rest of the reception. */
+export function receptionPlanters(cx: number, counterZ: number): Array<{ x: number; z: number }> {
+  return ([-1, 1] as const).map((side) => ({
+    x: cx + side * (RECEPTION_COUNTER_W / 2 + 0.3),
+    z: counterZ + RECEPTION_COUNTER_D / 2 + 0.8,
+  }));
+}
+const PLANTER_HALF = 0.35;
+
 /** Z of the back wall's centre plane. */
 export function receptionBackWallZ(counterZ: number): number {
   return counterZ - RECEPTION_COUNTER_D / 2 - RECEPTION_WALL_GAP;
@@ -48,7 +58,8 @@ export function receptionDriverPos(cx: number, counterZ: number): Vec3 {
 
 /**
  * The solid pieces of the reception as walker obstacles: the counter (with its
- * overhanging top and rims), the two columns, the back wall and the two
+ * overhanging top and rims), the two columns, the planters at its front
+ * corners, the back wall and the two
  * waiting lounges (the whole rug, so nobody walks across the coffee table). Kept as
  * separate boxes, not one block: the pickup spot sits between the counter and
  * the back wall, and walkers reach it through the open sides.
@@ -68,6 +79,9 @@ export function receptionObstacles(cx: number, counterZ: number): Aabb2D[] {
     box(cx + colOff - COLUMN_HALF, cx + colOff + COLUMN_HALF, counterZ - COLUMN_HALF, counterZ + COLUMN_HALF),
     // Back wall is counterW + 0.8 wide; its gold crown overhangs to counterW + 1.2.
     box(cx - halfW - 0.6, cx + halfW + 0.6, backZ - 0.08, backZ + 0.08),
+    ...receptionPlanters(cx, counterZ).map((p) => box(
+      p.x - PLANTER_HALF, p.x + PLANTER_HALF, p.z - PLANTER_HALF, p.z + PLANTER_HALF,
+    )),
     ...receptionLounges(cx, counterZ).map((l) => box(
       l.x - RECEPTION_LOUNGE_RUG_W / 2, l.x + RECEPTION_LOUNGE_RUG_W / 2,
       l.z - RECEPTION_LOUNGE_RUG_D / 2, l.z + RECEPTION_LOUNGE_RUG_D / 2,

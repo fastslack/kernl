@@ -1,0 +1,102 @@
+import { describe, it, expect, beforeEach, afterEach } from "bun:test";
+import { Database } from "bun:sqlite";
+import { mkdtempSync, rmSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { runMigrations } from "../src/core/db/migrations.js";
+import { agentsMigrations } from "../src/modules/agents/migrations.js";
+import { projectsMigrations } from "../src/modules/projects/migrations.js";
+import { ProjectsService } from "../src/modules/projects/projects-service.js";
+import { OutboxService } from "../src/modules/projects/outbox-service.js";
+import { EventBus } from "../src/core/event-bus.js";
+
+const tick = () => new Promise((r) => setTimeout(r, 20));
+
+describe("outbox policies", () => {
+  let db: Database; let root: string; let outbox: OutboxService; let pid: string; let sent: unknown[]; let projects: ProjectsService;
+  beforeEach(() => {
+    db = new Database(":memory:");
+    runMigrations(db, "agents", agentsMigrations);
+    runMigrations(db, "projects", projectsMigrations);
+    const events = new EventBus();
+    root = mkdtempSync(join(tmpdir(), "op-"));
+    projects = new ProjectsService(db, events, { encryptionKey: "a".repeat(64), projectsRoot: root });
+    pid = projects.create({ slug: "heural", name: "Heural", brief: { value_prop: "v", audience: "a" } }).id;
+    projects.link(pid, "social_account", "fake:1");
+    sent = [];
+    outbox = new OutboxService(db, events, projects, () => {});
+    outbox.registerChannel("fake", {
+      validate: () => ({ ok: true }), preview: () => ({ title: "t", body: "b" }),
+      send: async (payload) => { sent.push(payload); return { ref: "r1" }; },
+    });
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+  const propose = (payload: unknown) => outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "fake", account_ref: "fake:1", payload });
+  const status = (id: string) => (db.prepare("SELECT status, review_note FROM outbox_items WHERE id = ?").get(id) as { status: string; review_note: string });
+
+  it("without policies a draft stays a draft", async () => {
+    const item = propose({ action_type: "community.reply" });
+    await tick();
+    expect(status(item.id).status).toBe("draft");
+  });
+
+  it("an auto decision approves and sends, with the rule as review_note", async () => {
+    outbox.registerPolicy("growth", (item) => (item.payload as { action_type?: string }).action_type === "community.reply"
+      ? { decision: "auto", note: "auto: community.reply (tope 5/día)" } : { decision: "manual" });
+    const item = propose({ action_type: "community.reply" });
+    expect(item.status).toBe("draft");
+    await tick();
+    expect(status(item.id)).toEqual({ status: "sent", review_note: "auto: community.reply (tope 5/día)" });
+    expect(sent.length).toBe(1);
+    const other = propose({ action_type: "content.publish" });
+    await tick();
+    expect(status(other.id).status).toBe("draft");
+  });
+
+  it("a throwing policy or a rehearsal draft never auto-approves", async () => {
+    outbox.registerPolicy("boom", () => { throw new Error("x"); });
+    outbox.registerPolicy("growth", () => ({ decision: "auto", note: "auto" }));
+    const reh = propose({ action_type: "community.reply", rehearsal: true });
+    await tick();
+    expect(status(reh.id).status).toBe("draft");
+    const ok = propose({ action_type: "community.reply" });
+    await tick();
+    expect(status(ok.id).status).toBe("sent");
+  });
+
+  it("registering the same name replaces the policy", async () => {
+    outbox.registerPolicy("growth", () => ({ decision: "auto", note: "a" }));
+    outbox.registerPolicy("growth", () => ({ decision: "manual" }));
+    const item = propose({ action_type: "community.reply" });
+    await tick();
+    expect(status(item.id).status).toBe("draft");
+  });
+  it("an unregistered policy no longer approves", async () => {
+    outbox.registerPolicy("growth", () => ({ decision: "auto", note: "a" }));
+    outbox.unregisterPolicy("growth");
+    const item = propose({ action_type: "community.reply" });
+    await tick();
+    expect(status(item.id).status).toBe("draft");
+  });
+  it("a channel that declares needsAccount:false takes drafts without a linked account", async () => {
+    outbox.registerChannel("web_change", { needsAccount: false, validate: () => ({ ok: true }), preview: () => ({ title: "t", body: "b" }), send: async () => ({ ref: "aprobado" }) });
+    const item = outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
+    expect(item.status).toBe("draft");
+    expect(() => outbox.propose({ project_id: pid, flow_id: "growth-office", agent_id: "", run_id: "", channel: "fake", account_ref: "nope", payload: {} })).toThrow("not linked");
+  });
+  it("a needsAccount:false draft from a run outside any project goes to the office's only project", () => {
+    outbox.registerChannel("web_change", { needsAccount: false, validate: () => ({ ok: true }), preview: () => ({ title: "t", body: "b" }), send: async () => ({ ref: "aprobado" }) });
+    projects.assignOffice("growth-office", pid);
+    const item = outbox.propose({ project_id: null, flow_id: "growth-office", agent_id: "", run_id: "", channel: "web_change", account_ref: "growth", payload: { title: "llms.txt" } });
+    expect(item.project_id).toBe(pid);
+  });
+  it("withdraw takes a scheduled approval back to draft; one already sending or sent stays", async () => {
+    const it = propose({ text: "hola" });
+    const later = new Date(Date.now() + 3_600_000).toISOString();
+    await outbox.approve(it.id, { scheduled_for: later });
+    expect(outbox.withdraw(it.id)).toMatchObject({ status: "draft", scheduled_for: null });
+    await outbox.approve(it.id, {});
+    expect(sent.length).toBe(1);
+    expect(() => outbox.withdraw(it.id)).toThrow("approved");
+  });
+});

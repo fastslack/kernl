@@ -5,33 +5,28 @@
   import { renderText, textOf } from '$lib/panels/template.js';
   import { groupBy } from '$lib/panels/rows.js';
   import type { PanelView } from '$lib/panels/types.js';
-  import { PALETTE } from '$lib/components/bench/model.js';
+  import { tone, isLive, humanize } from '$lib/panels/look.js';
   export let view: PanelView;
   export let rows: Array<Record<string, unknown>> = [];
+  /** Real total per column when the source sends only some cards; absent → the cards are all there is. */
+  export let counts: Record<string, number> | null = null;
+  const totalOf = (column: string, shown: number) => {
+    const n = counts?.[column];
+    return typeof n === 'number' && n > shown ? n : shown;
+  };
   const dispatch = createEventDispatcher<{ open: string }>();
   $: columns = groupBy(rows, view.columns ?? 'state', view.order ?? []);
   const safeHref = (h: string) => (/^https?:\/\//i.test(h) ? h : null);
-
-  // A column's colour says what its state means — same bright palette as Sistema → Resumen.
-  const P = PALETTE;
-  const TONES: Array<[RegExp, string]> = [
-    [/fail|error|block|reject|stuck/i, '#F43F5E'],
-    [/work|progress|doing|running|active/i, P.emerald],
-    [/review|check/i, P.violet],
-    [/qa|test/i, P.gold],
-    [/merg|deploy|ship|release/i, P.sky],
-    [/ready|approved/i, P.cyan],
-    [/done|closed|complete/i, P.lime],
-    [/queue|todo|backlog|pending|new|open/i, P.pink],
-  ];
-  const CYCLE = [P.cyan, P.violet, P.pink, P.gold, P.emerald, P.sky, P.orange, P.lime];
-  function tone(column: string): string {
-    for (const [re, color] of TONES) if (re.test(column)) return color;
-    let h = 0;
-    for (const ch of column) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
-    return CYCLE[h % CYCLE.length];
+  /** A badge says what it counts or when, never a raw ISO stamp; a date already past reads late. */
+  function badge(key: string, v: unknown): { text: string; late: boolean } {
+    const s = String(v);
+    if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+      const d = new Date(s);
+      if (!Number.isNaN(d.getTime())) return { text: d.toLocaleDateString($locale.startsWith('en') ? 'en' : 'es', { day: '2-digit', month: '2-digit' }), late: d.getTime() < Date.now() };
+    }
+    if (/^\d+$/.test(s)) return { text: `${s} ${humanize(key).toLowerCase()}`, late: false };
+    return { text: s, late: false };
   }
-  const isLive = (column: string) => /work|progress|doing|running|active/i.test(column);
 </script>
 
 <div class="pb">
@@ -40,7 +35,7 @@
       <header>
         <span class="pb-dot" class:pb-dot--live={isLive(col.column) && col.rows.length > 0} aria-hidden="true"></span>
         <span class="pb-name">{col.column}</span>
-        <span class="pb-count">{col.rows.length}</span>
+        <span class="pb-count">{totalOf(col.column, col.rows.length)}</span>
       </header>
       {#if col.rows.length === 0}<div class="pb-empty" aria-hidden="true"></div>{/if}
       {#each col.rows as r, i (i)}
@@ -49,13 +44,16 @@
           <div class="pb-t">{renderText(view.card?.title ?? '{{key}}', r)}</div>
           {#if view.card?.subtitle}<div class="pb-s">{renderText(view.card.subtitle, r)}</div>{/if}
           {#if view.card?.badges?.length}
-            <div class="pb-b">{#each view.card.badges as b, bi (bi)}{#if r[b]}<span>{String(r[b])}</span>{/if}{/each}</div>
+            <div class="pb-b">{#each view.card.badges as b, bi (bi)}{#if r[b]}{@const bd = badge(b, r[b])}<span class:pb-late={bd.late} title={humanize(b)}>{bd.text}</span>{/if}{/each}</div>
           {/if}
           {#if view.card?.links?.length}
             <div class="pb-l">{#each view.card.links as l, li (li)}{@const href = safeHref(renderText(l.href, r))}{#if href}<a {href} target="_blank" rel="noopener noreferrer" on:click|stopPropagation>{textOf(l.label, $locale)}</a>{/if}{/each}</div>
           {/if}
         </div>
       {/each}
+      {#if totalOf(col.column, col.rows.length) > col.rows.length}
+        <div class="pb-more">+{totalOf(col.column, col.rows.length) - col.rows.length} {$locale.startsWith('en') ? 'more' : 'más'}</div>
+      {/if}
     </section>
   {/each}
 </div>
@@ -76,6 +74,7 @@
     font: 800 10px 'Manrope', sans-serif; padding: 1px 8px; border-radius: 999px;
     color: color-mix(in srgb, var(--tone) 70%, white); background: color-mix(in srgb, var(--tone) 18%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 45%, transparent);
   }
+  .pb-more { padding: 6px 4px; font-size: 11px; color: var(--text-3); text-align: center; }
   .pb-empty { flex: 1; min-height: 64px; border: 1px dashed color-mix(in srgb, var(--tone) 35%, transparent); border-radius: 10px; }
   .pb-card {
     padding: 9px 11px; border-radius: 10px; cursor: pointer; display: flex; flex-direction: column; gap: 6px;
@@ -89,7 +88,8 @@
     box-shadow: 0 12px 24px -14px var(--tone);
   }
   .pb-t { font: 700 12px/1.4 'Manrope', sans-serif; color: var(--text-1); overflow-wrap: anywhere; }
-  .pb-s { font: 600 11px 'Manrope', sans-serif; color: color-mix(in srgb, var(--tone) 55%, var(--text-2)); }
+  .pb-s { font: 600 11px 'Manrope', sans-serif; color: color-mix(in srgb, var(--tone) 55%, var(--text-2)); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pb-b span.pb-late { color: #fecdd3; background: color-mix(in srgb, #F43F5E 22%, transparent); border-color: color-mix(in srgb, #F43F5E 55%, transparent); }
   .pb-b, .pb-l { display: flex; gap: 5px; flex-wrap: wrap; align-items: center; }
   .pb-b span {
     font: 800 9.5px 'Manrope', sans-serif; text-transform: uppercase; letter-spacing: .04em; padding: 1px 7px; border-radius: 999px;

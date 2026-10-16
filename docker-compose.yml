@@ -241,6 +241,10 @@ services:
     restart: unless-stopped
     ports:
       - "127.0.0.1:3086:80"   # loopback only; the API behind it requires a token
+      # Google's sign-in comes back to http://localhost:3087/auth/google/callback
+      # (the kernel's own port, the redirect URI registered with Google). In
+      # Docker the kernel port is not published, so the same nginx answers it.
+      - "127.0.0.1:3087:80"
       # Peering: only signed instance-to-instance routes (see the second server
       # in nginx.public.conf). Open to the LAN so friends can reach this Kernl;
       # set KERNEL_PEERING_BIND=127.0.0.1 to keep it local.

@@ -96,7 +96,7 @@ describe("formatRunOutput", () => {
 
   it("protects fenced code from the markdown rules", () => {
     const html = formatRunOutput("```\n## not a header\n```", BASE);
-    expect(html).toContain('<pre class="md-codeblock">');
+    expect(html).toContain('<pre class="md-codeblock code-view"><code>');
     expect(html).not.toContain("<h3");
   });
 

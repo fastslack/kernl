@@ -88,12 +88,14 @@ export interface SeatedWalker {
  * Pick a free visitor chair (one not already targeted by another walker) so
  * concurrent visitors don't stack on the same seat. Falls back to round-robin
  * when every chair is taken, and returns null when there are no chairs.
+ * With `strict`, a full room returns null instead: the caller sends the
+ * visitor to stand, never to sit on someone already seated.
  */
-export function pickFreeChair(seats: Point3[], walkers: SeatedWalker[]): Point3 | null {
+export function pickFreeChair(seats: Point3[], walkers: SeatedWalker[], strict = false): Point3 | null {
   if (seats.length === 0) return null;
   const taken = new Set<number>();
   for (const w of walkers) {
-    if (w.targetId !== 'myoffice' && w.targetId !== 'meeting') continue;
+    if (w.targetId !== 'myoffice' && w.targetId !== 'meeting' && w.targetId !== 'visit') continue;
     const curve = w.curve;
     const c = curve?.[curve.length - 1];
     if (!c) continue;
@@ -104,5 +106,5 @@ export function pickFreeChair(seats: Point3[], walkers: SeatedWalker[]): Point3 
   for (let i = 0; i < seats.length; i++) {
     if (!taken.has(i)) return seats[i];
   }
-  return seats[taken.size % seats.length];
+  return strict ? null : seats[taken.size % seats.length];
 }

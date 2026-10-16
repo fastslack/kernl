@@ -27,6 +27,7 @@
   import AiConnections from '$lib/components/llm/AiConnections.svelte';
   import LlmUsage from '$lib/components/llm/LlmUsage.svelte';
   import MailConnectCard from '$lib/components/mail/MailConnectCard.svelte';
+  import GoogleConnectCard from '$lib/components/settings/GoogleConnectCard.svelte';
   import WhatsAppCard from '$lib/components/whatsapp/WhatsAppCard.svelte';
   import UpdateProgress from '$lib/components/UpdateProgress.svelte';
   import LicensePanel from '$lib/components/LicensePanel.svelte';
@@ -784,6 +785,7 @@
 
         <!-- ═══ Integrations (rich) ═══ -->
         {#if activeSection === 'integrations'}
+          <GoogleConnectCard />
           <div class="int-grid">
             <div class="int-card">
               <div class="int-name">{$t('settings.integrations.api_registry')}</div>

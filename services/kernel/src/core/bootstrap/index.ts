@@ -98,6 +98,7 @@ export async function bootstrap(): Promise<void> {
     registry,
     ctx,
     getMesh: () => meshSlot.value,
+    dashboardRegistry,
   });
 
   // ── 4. Drivers + skill registry + identity + cost router + marketplace ──

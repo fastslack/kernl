@@ -2,7 +2,7 @@ import type { SqliteDb } from "../../core/db/sqlite.js";
 import type { EventBus } from "../../core/event-bus.js";
 import { newId, isoNow } from "../../core/helpers.js";
 import type { ProjectsService } from "./projects-service.js";
-import type { OutboxChannelHandler, OutboxItem, OutboxPreview, OutboxStatus } from "./types.js";
+import type { OutboxChannelHandler, OutboxItem, OutboxPolicy, OutboxPreview, OutboxStatus } from "./types.js";
 
 type Row = Omit<OutboxItem, "payload"> & { payload: string };
 
@@ -25,6 +25,31 @@ const toItem = (r: Row): OutboxItem => ({ ...r, payload: JSON.parse(r.payload ||
  */
 export class OutboxService {
   private channels = new Map<string, OutboxChannelHandler>();
+  private policies = new Map<string, OutboxPolicy>();
+
+  /** An extension's auto-approval rule. Same name replaces; order of first registration is kept. */
+  registerPolicy(name: string, fn: OutboxPolicy): void {
+    this.policies.set(name, fn);
+  }
+
+  /** The extension went away (uninstall, disable): its rule must stop approving now, not at the next restart. */
+  unregisterPolicy(name: string): void {
+    this.policies.delete(name);
+  }
+
+  /** First `auto` wins. A throwing policy is skipped; a rehearsal draft is never auto. */
+  private applyPolicies(item: OutboxItem): void {
+    if ((item.payload as { rehearsal?: unknown } | null)?.rehearsal === true) return;
+    for (const fn of this.policies.values()) {
+      let d: ReturnType<OutboxPolicy>;
+      try { d = fn(item); } catch { continue; }
+      if (d.decision !== "auto") continue;
+      this.db.prepare("UPDATE outbox_items SET review_note = ?, updated_at = ? WHERE id = ? AND status = 'draft'")
+        .run(d.note.slice(0, 500), isoNow(), item.id);
+      queueMicrotask(() => { this.approve(item.id).catch(() => { /* stays a draft or failed; visible in Aprobaciones */ }); });
+      return;
+    }
+  }
 
   constructor(
     private db: SqliteDb,
@@ -96,10 +121,12 @@ export class OutboxService {
       // chain it started) still drafts from a project's account. When exactly
       // one project of the office has that account linked, the draft is that
       // project's — otherwise it lands unscoped and out of the project's queue.
-      const owners = this.projects.list({ flowId: input.flow_id }).filter((p) => this.projects.links(p.id).some(isThisAccount));
+      // An internal channel has no account to match: the office's only project owns it.
+      const office = this.projects.list({ flowId: input.flow_id });
+      const owners = h.needsAccount === false ? office : office.filter((p) => this.projects.links(p.id).some(isThisAccount));
       if (owners.length === 1) projectId = owners[0].id;
     }
-    if (projectId) {
+    if (projectId && h.needsAccount !== false) {
       const links = this.projects.links(projectId);
       const linked = links.some(isThisAccount);
       if (!linked) {
@@ -120,6 +147,7 @@ export class OutboxService {
       JSON.stringify(input.payload ?? {}), when, now, now);
     const item = this.mustGet(id);
     this.changed(item);
+    this.applyPolicies(item);
     return item;
   }
 
@@ -170,7 +198,22 @@ export class OutboxService {
     return it;
   }
 
+  /** An approval waiting for its time goes back to draft (the operator's pause). Sending or sent: too late. */
+  withdraw(id: string): OutboxItem {
+    const res = this.db.prepare(
+      "UPDATE outbox_items SET status = 'draft', scheduled_for = NULL, decided_at = NULL, updated_at = ? WHERE id = ? AND status = 'approved'",
+    ).run(isoNow(), id);
+    if (Number(res.changes) === 0) throw new Error("Only an approved item waiting to be sent can be withdrawn");
+    const out = this.mustGet(id);
+    this.changed(out);
+    return out;
+  }
+
   async approve(id: string, opts: { scheduled_for?: string | null } = {}): Promise<OutboxItem> {
+    // A rehearsal draft is built exactly as the real one, to review it, and never leaves.
+    if ((this.mustGet(id).payload as { rehearsal?: unknown } | null)?.rehearsal === true) {
+      throw new Error("Borrador de ensayo: no se envía. Usá «Mandarme una prueba» para verlo en tu casilla.");
+    }
     const now = isoNow();
     const sched = opts.scheduled_for === undefined ? this.mustGet(id).scheduled_for : normalizeWhen(opts.scheduled_for) ?? null;
     const res = this.db.prepare(
@@ -187,6 +230,30 @@ export class OutboxService {
       .run(isoNow(), id);
     if (Number(res.changes) === 0) throw new Error("Only a failed item can be retried");
     return this.sendClaimed(id);
+  }
+
+  /**
+   * Send a copy of a draft to the operator's own address, to see it as the
+   * recipient will. Only channels whose payload has a `to` list. The item is
+   * not touched (status, payload, events): nothing about the real send changes.
+   */
+  async testSend(id: string, to: string): Promise<{ ref: string }> {
+    const it = this.mustGet(id);
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to.trim())) throw new Error("La dirección de prueba no es un email válido");
+    const p = { ...(it.payload as Record<string, unknown>) };
+    if (!Array.isArray(p.to)) throw new Error(`El canal ${it.channel} no tiene envío de prueba`);
+    p.to = [to.trim()];
+    delete p.cc;
+    delete p.rehearsal;
+    delete p.contact_id;
+    if (typeof p.subject === "string" && !p.subject.startsWith("[PRUEBA")) p.subject = `[PRUEBA] ${p.subject}`;
+    const h = this.handler(it.channel);
+    const v = h.validate(p, it.account_ref);
+    if (!v.ok) throw new Error(v.error);
+    const out = await h.send(p, it.account_ref);
+    // Not a change of the item: whoever tracks sends (sales) learns that a copy went out.
+    this.events.emit("outbox:test_sent", { id: it.id, project_id: it.project_id, to: to.trim(), ref: out.ref });
+    return out;
   }
 
   /** approved → sending atomically; whoever wins the UPDATE sends. */

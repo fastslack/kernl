@@ -7,6 +7,7 @@ import type { AgentService } from "../../../../../src/modules/agents/service.js"
 import { buildAgentChain, runWithChain } from "./chain-runner.js";
 import { resolveAgentLanguage } from "../../../../../src/modules/agents/i18n.js";
 import { promptEvalSystem } from "../../../../../src/core/i18n/prompts.js";
+import { evalEveryMin, shouldGrade } from "./llm-gates.js";
 
 export interface EvalResult {
   score: number;        // 1-5
@@ -23,6 +24,8 @@ export class AgentEvalService {
   private evalModel = "";
   private enabled = false;
   private configRef: KernelConfig | null = null;
+  /** agent id → when one of its runs was last graded. */
+  private lastGraded = new Map<string, number>();
 
   setProviders(providers: Map<string, ChatLlmProvider>, providerName: string, model: string): void {
     this.providers = providers;
@@ -52,6 +55,12 @@ export class AgentEvalService {
     service?: AgentService;
   }): Promise<EvalResult | null> {
     if (!this.enabled) return null;
+    // Failures are always graded; a completed run at most once an hour per agent (`__eval_every_min__`).
+    if (input.agent) {
+      const now = Date.now();
+      if (!shouldGrade(input.status, this.lastGraded.get(input.agent.id), now, evalEveryMin(input.agent.variables))) return null;
+      this.lastGraded.set(input.agent.id, now);
+    }
 
     // Eval is a structured-JSON grading task, NOT the agent's own work. Route
     // it through the configured (deterministic) eval provider FIRST, and only

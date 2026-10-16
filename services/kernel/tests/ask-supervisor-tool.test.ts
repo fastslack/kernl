@@ -64,15 +64,18 @@ describe("kernel_agents_ask_supervisor", () => {
     expect(service.listQuestions({ status: "pending" }).length).toBe(1);
   });
 
-  it("rejects anything but exactly 4 options", async () => {
+  it("takes 2 to 4 options and rejects 1 or 5", async () => {
     const agent = service.createAgent({ name: "Worker" });
     const supervisor = tools.find((t) => t.name === "kernel_agents_ask_supervisor")!;
-    const res = await supervisor.handler({
-      question: "Ship?",
-      options: [{ label: "Yes" }, { label: "No" }],
-      __caller_agent_id: agent.id,
+    const ask = (labels: string[]) => supervisor.handler({
+      question: "Ship?", options: labels.map((label) => ({ label })), __caller_agent_id: agent.id,
     });
-    expect(text(res)).toMatch(/exactly 4/i);
+    const one = await ask(["Yes"]);
+    expect((one as { isError?: boolean }).isError).toBe(true);
+    const five = await ask(["A", "B", "C", "D", "E"]);
+    expect((five as { isError?: boolean }).isError).toBe(true);
     expect(service.listQuestions({ status: "pending" }).length).toBe(0);
+    expect(text(await ask(["Yes", "No"]))).toMatch(/escalated to your supervisor/);
+    expect(service.listQuestions({ status: "pending" }).length).toBe(1);
   });
 });

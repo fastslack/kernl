@@ -11,6 +11,11 @@
  * nothing woke it again, and a Claude Code agent never reads its inbox on
  * its own — the answers sat unread. `AnswerQueue` relaunches the asker once
  * whenever one of its runs ends, with every answer still waiting.
+ *
+ * A relaunch that dies (timeout, crash, a failed model chain) gives its answers
+ * back: the letters go unread again and are delivered once more, at most
+ * `MAX_REDELIVERIES` times each. A cancelled run keeps them read: stopping the
+ * agent is the operator's call.
  */
 
 import type { AgentService } from "./service.js";
@@ -22,6 +27,11 @@ import type { AgentOfficeInboxMessage } from "./types.js";
 /** Who the answer letters come from (`postAnswerToInbox`). */
 const HEADQUARTERS = "__top_agent__";
 
+/** Times a letter may come back after the run that carried it died. */
+export const MAX_REDELIVERIES = 2;
+/** Letter id → times it was given back. In memory: a restart resumes the run itself. */
+const redelivered = new Map<string, number>();
+
 /** Answers filed in the asker's inbox that no run has read yet, oldest first. */
 export function pendingAnswers(service: AgentService, agentId: string): AgentOfficeInboxMessage[] {
   return service
@@ -30,14 +40,20 @@ export function pendingAnswers(service: AgentService, agentId: string): AgentOff
 }
 
 /** The goal for a relaunch that carries every waiting answer. */
-export function answersGoal(letters: Array<{ body: string }>): string {
+export function answersGoal(letters: Array<{ body: string }>, retry = false): string {
   const n = letters.length;
   return (
+    (retry
+      ? "A previous run that carried some of these answers stopped before finishing. " +
+        "Check the current state before acting on each one: what that run already did must not be done twice.\n\n"
+      : "") +
     (n === 1
       ? "An answer to one of your earlier questions arrived while you were busy.\n\n"
       : `Answers to ${n} of your earlier questions arrived while you were busy.\n\n`) +
     letters.map((l) => l.body).join("\n\n---\n\n") +
-    "\n\nResume from where you stopped: act on each answer using your tools. " +
+    "\n\nResume from where you stopped: act on each final answer (and on each DESCARTADA one) using your tools. " +
+    "A letter marked \"a cargo del operador\" is NOT a final answer: the operator is still handling it, " +
+    "so keep waiting and take no action for it. " +
     "Do not re-ask questions that are answered here."
   );
 }
@@ -45,19 +61,22 @@ export function answersGoal(letters: Array<{ body: string }>): string {
 /**
  * Relaunch `agentId` with its waiting answers, if it is active, idle and has
  * any. Returns the new run id, or null when there was nothing to do.
+ * `requeue` is called when the run died and its answers went back to the inbox.
  */
 export function deliverPendingAnswers(
   service: AgentService,
   executor: Pick<AgentExecutor, "execute">,
   events: EventBus | undefined,
   agentId: string,
+  requeue: (agentId: string) => void = () => {},
 ): string | null {
   const agent = service.getAgent(agentId);
   if (!agent || !agent.active || service.hasRunningRun(agentId)) return null;
   const letters = pendingAnswers(service, agentId);
   if (letters.length === 0) return null;
-  service.markInboxRead(letters.map((l) => l.id));
-  const goal = answersGoal(letters);
+  const ids = letters.map((l) => l.id);
+  service.markInboxRead(ids);
+  const goal = answersGoal(letters, ids.some((id) => redelivered.has(id)));
   const run = service.createRun({
     agent_id: agentId,
     trigger_type: "manual",
@@ -73,10 +92,28 @@ export function deliverPendingAnswers(
         steps_count: r.steps_count, tokens_used: r.tokens_used,
         completed_at: new Date().toISOString(),
       });
+      settle(r.status);
     })
     .catch((err) => {
       service.updateRun(run.id, { status: "failed", error: String(err), completed_at: new Date().toISOString() });
+      settle("failed");
     });
+  function settle(status: string): void {
+    if (status === "completed" || status === "cancelled") {
+      for (const id of ids) redelivered.delete(id);
+      return;
+    }
+    const back = ids.filter((id) => (redelivered.get(id) ?? 0) < MAX_REDELIVERIES);
+    for (const id of ids) if (!back.includes(id)) redelivered.delete(id);
+    if (back.length === 0) {
+      log.warn(`answers: ${agent!.name}'s run ${run.id} ${status}; its answers were already given back ${MAX_REDELIVERIES} times`);
+      return;
+    }
+    for (const id of back) redelivered.set(id, (redelivered.get(id) ?? 0) + 1);
+    service.markInboxUnread(back);
+    log.warn(`answers: ${agent!.name}'s run ${run.id} ${status}; ${back.length} answer(s) back in the inbox`);
+    requeue(agentId);
+  }
   log.info(`answers: relaunched ${agent.name} with ${letters.length} waiting answer(s)`);
   return run.id;
 }
@@ -123,7 +160,7 @@ export class AnswerQueue {
           if (triesLeft > 1) this.schedule(agentId, triesLeft - 1);
           return;
         }
-        deliverPendingAnswers(this.service, this.executor, this.events, agentId);
+        deliverPendingAnswers(this.service, this.executor, this.events, agentId, (id) => this.schedule(id));
       } catch (err) {
         log.warn(`answers: delivery to ${agentId} failed — ${err instanceof Error ? err.message : String(err)}`);
       }
@@ -136,6 +173,14 @@ export class AnswerQueue {
     for (const t of this.pending.values()) clearTimeout(t);
     this.pending.clear();
   }
+}
+
+/** `__answer_resume__: false` in an agent's variables: answers to its questions do not relaunch it. */
+export function answerResumeDisabled(agent: { variables?: string }): boolean {
+  try {
+    const v = JSON.parse(agent.variables || "{}").__answer_resume__;
+    return v === false || v === "false";
+  } catch { return false; }
 }
 
 export interface AnswerInput {
@@ -165,6 +210,9 @@ export function answerAndDeliver(
   });
 
   const asker = service.getAgent(result.from_agent_id);
+  // Its answers are read by something else (Heural's orchestrator reads agent_questions itself): relaunching
+  // the asker too ran it twice on every answer — 39 runs of the Integrador in two days, each able to act.
+  if (asker && answerResumeDisabled(asker)) return { ...result, resume_run_id: null };
   if (!asker || !asker.active || service.hasRunningRun(asker.id)) {
     service.postAnswerToInbox(id);
     return { ...result, resume_run_id: null };
@@ -208,5 +256,60 @@ export function answerAndDeliver(
     log.warn(`resume after answer failed: ${err instanceof Error ? err.message : String(err)}`);
     service.postAnswerToInbox(id);
     return { ...result, resume_run_id: null };
+  }
+}
+
+export type HumanChoice =
+  | { kind: "option"; index: number }
+  | { kind: "task" }
+  | { kind: "done"; note?: string }
+  | { kind: "dismiss" }
+  | { kind: "free"; text: string };
+
+export type ChoiceResult = { ok: true; status: "owed" | "answered" | "dismissed" } | { ok: false; reason: "not_open" | "bad_choice" };
+
+/** Every operator answer — dashboard, Telegram button, "Q<n> <k>" reply — goes through here. */
+export function resolveHumanChoice(
+  service: AgentService,
+  executor: Pick<AgentExecutor, "execute">,
+  events: EventBus | undefined,
+  id: string,
+  choice: HumanChoice,
+): ChoiceResult {
+  const q = service.getQuestion(id);
+  if (!q || (q.status !== "pending" && q.status !== "owed")) return { ok: false, reason: "not_open" };
+  const final = (selected_index: number, selected_option: string, note?: string): ChoiceResult => {
+    // Before the answer is delivered: a stale "keep waiting" letter must not ride along with it.
+    if (q.status === "owed") service.markOwedLettersRead(id);
+    return answerAndDeliver(service, executor, events, id, { selected_index, selected_option, note, answered_by: "human" })
+      ? { ok: true, status: "answered" } : { ok: false, reason: "not_open" };
+  };
+  const owe = (selected_index: number, selected_option: string): ChoiceResult => {
+    if (!service.markOwed(id, { selected_index, selected_option })) return { ok: false, reason: "not_open" };
+    service.postLetterAboutQuestion(id, q.question,
+      `**Question:** ${q.question}\n\n**Answer:** ${selected_option} — a cargo del operador. ` +
+      `No actúes todavía: seguí esperando. Cuando termine vas a recibir la respuesta final (o DESCARTADA).`);
+    return { ok: true, status: "owed" };
+  };
+  switch (choice.kind) {
+    case "option": {
+      const opt = q.options[choice.index];
+      if (!opt) return { ok: false, reason: "bad_choice" };
+      if (opt.task) return q.status === "pending" ? owe(choice.index, opt.label) : { ok: false, reason: "bad_choice" };
+      return final(choice.index, opt.label);
+    }
+    case "task":
+      return q.status === "pending" ? owe(-1, "Lo veo yo") : { ok: false, reason: "bad_choice" };
+    case "done":
+      return q.status === "owed" ? final(-1, `Listo: ${q.selected_option}`, choice.note) : { ok: false, reason: "bad_choice" };
+    case "free":
+      return choice.text.trim() ? final(-1, choice.text.trim(), choice.text.trim()) : { ok: false, reason: "bad_choice" };
+    case "dismiss": {
+      if (!service.dismissQuestion(id)) return { ok: false, reason: "not_open" };
+      service.markOwedLettersRead(id);
+      service.postLetterAboutQuestion(id, q.question,
+        `**Question:** ${q.question}\n\n**Answer:** DESCARTADA por el operador. Seguí tu protocolo para una pregunta descartada (no la repitas igual).`);
+      return { ok: true, status: "dismissed" };
+    }
   }
 }

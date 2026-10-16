@@ -55,9 +55,11 @@ export interface PendingQuestion {
   flow_id: string;
   question: string;
   context: string;
-  options: Array<{ label: string; value?: string; url?: string }>;
+  options: Array<{ label: string; value?: string; url?: string; task?: boolean }>;
   created_at: string;
-  status?: 'triage' | 'pending' | 'answered' | 'dismissed';
+  status?: 'triage' | 'pending' | 'owed' | 'answered' | 'dismissed';
+  /** When the operator took the work on (status 'owed'). */
+  owed_at?: string | null;
   chief_note?: string;
   answered_by?: '' | 'chief' | 'human';
   selected_option?: string;
@@ -80,6 +82,8 @@ export interface QuestionOpinion {
   evidence?: string[];
   unverified?: string[];
   needs_human?: string[];
+  /** Other open questions the same evidence settles, each with its own pick (option 0-based, or null = free text). */
+  also_answers?: Array<{ question_id: string; option: number | null; answer: string; why: string }>;
 }
 
 // ── Live meeting transcripts ──────────────────

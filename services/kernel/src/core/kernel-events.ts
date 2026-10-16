@@ -143,6 +143,22 @@ export interface AgentQuestionTriagePayload {
   agent_id: string;
 }
 
+/** A task option was chosen: the question stays open as 'owed' until "Listo". */
+export interface AgentQuestionOwedPayload {
+  question_id: string;
+}
+
+/** A question has waited on the operator for 24 h: send a reminder. */
+export interface AgentQuestionRemindPayload {
+  question_id: string;
+}
+
+/** A question left the operator's queue for good. */
+export interface AgentQuestionResolvedPayload {
+  question_id: string;
+  status: "answered" | "dismissed";
+}
+
 export interface AgentFlowResultPayload {
   agent_id: string;
   agent_name: string;
@@ -291,6 +307,9 @@ export interface KernelEvents {
   "agent:auto_paused": AgentAutoPausedPayload;
   "agent:question_asked": AgentQuestionAskedPayload;
   "agent:question_triage": AgentQuestionTriagePayload;
+  "agent:question_owed": AgentQuestionOwedPayload;
+  "agent:question_remind": AgentQuestionRemindPayload;
+  "agent:question_resolved": AgentQuestionResolvedPayload;
 
   // Agent flow (real-time execution)
   "agent:flow:run_started": AgentFlowRunStartedPayload;

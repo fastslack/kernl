@@ -1,6 +1,6 @@
 /** Build desks, chairs, monitors, and seated workers */
 
-import { buildNameplate, NAMEPLATE_HEIGHT } from './nameplate.js';
+import { buildNameplate, NAMEPLATE_HEIGHT, NAMEPLATE_SEAT_DZ } from './nameplate.js';
 import type { AgentData, Vec3, HumanoidParts, Aabb2D, RankData } from './types.js';
 import { resolveFlowColor, type FlowData } from './types.js';
 import type { SittingHumanoidPool } from './humanoid-pool.js';
@@ -38,6 +38,23 @@ export interface DeskResult {
   deskAabbs: Map<string, Aabb2D>;
 }
 
+/** Remove previous desk renders even when an async rebuild lost their tracking maps. */
+export function clearDeskObjects(scene: any): void {
+  const stale: any[] = [];
+  scene.traverse((o: any) => {
+    if (o.userData?._deskOwned || (o.userData?._deskTop && o.userData?.agentId)) stale.push(o);
+  });
+  for (const object of stale) {
+    object.removeFromParent();
+    object.traverse((child: any) => {
+      child.geometry?.dispose();
+      const materials = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+      for (const material of materials) material.dispose();
+      if (child.isInstancedMesh) child.dispose();
+    });
+  }
+}
+
 /** Build all desks with monitors, chairs, workers, and nameplates.
  *  Uses InstancedMesh for desk legs (4 per desk) and chair post/base to reduce draw calls. */
 export function buildDesks(
@@ -54,6 +71,7 @@ export function buildDesks(
    */
   pool: SittingHumanoidPool | null = null,
 ): DeskResult {
+  clearDeskObjects(scene);
   const deskGroups = new Map<string, any>();
   const deskLabels = new Map<string, any>();
   const sittingWorkers = new Map<string, SittingWorkerEntry>();
@@ -247,6 +265,7 @@ export function buildDesks(
     group.position.set(pos.x, 0, pos.z);
     group.scale.setScalar(S);
     group.userData.agentId = agent.id;
+    group.userData._deskOwned = true;
 
     // Invisible hitbox covering desk + chair + worker — makes clicking easy.
     // Uses opacity 0 + transparent (not visible:false, which Raycaster skips).
@@ -254,7 +273,7 @@ export function buildDesks(
       new THREE.BoxGeometry(2.6, 2.0, 2.0),
       new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }),
     );
-    hitbox.position.set(0, 1.0, 0.1); // centered between desk front and chair back
+    hitbox.position.set(0, 1.0, 0.25); // centered between desk front and chair back
     hitbox.renderOrder = -1; // render first so it doesn't z-fight
     group.add(hitbox);
 
@@ -346,17 +365,17 @@ export function buildDesks(
     }
 
     // Chair seat + back — InstancedMesh + per-instance color (flow tint × 0.8)
-    setLocalAt(chairSeatInstance, idx, pos.x + 0 * S,  0.48 * S, pos.z + 0.55 * S);
-    setLocalAt(chairBackInstance, idx, pos.x + 0 * S,  0.75 * S, pos.z + 0.82 * S);
+    setLocalAt(chairSeatInstance, idx, pos.x + 0 * S,  0.48 * S, pos.z + 0.85 * S);
+    setLocalAt(chairBackInstance, idx, pos.x + 0 * S,  0.75 * S, pos.z + 1.12 * S);
     tmpColor.set(furnColor).multiplyScalar(0.8);
     setInstColor(chairSeatInstance, idx, tmpColor);
     setInstColor(chairBackInstance, idx, tmpColor);
 
     // Chair post + base → InstancedMesh
     tempMatrix.makeScale(S, S, S);
-    tempMatrix.setPosition(pos.x, 0.23 * S, pos.z + 0.55 * S);
+    tempMatrix.setPosition(pos.x, 0.23 * S, pos.z + 0.85 * S);
     chairPostInstance.setMatrixAt(idx, tempMatrix);
-    tempMatrix.setPosition(pos.x, 0.03 * S, pos.z + 0.55 * S);
+    tempMatrix.setPosition(pos.x, 0.03 * S, pos.z + 0.85 * S);
     chairBaseInstance.setMatrixAt(idx, tempMatrix);
 
     // Worker — pool path (InstancedMesh) preferred; otherwise individual mesh tree
@@ -368,10 +387,10 @@ export function buildDesks(
       const phase = Math.random() * Math.PI * 2;
       const canUsePool = pool && skin.manifest.id === DEFAULT_SKIN_ID;
       if (canUsePool && pool) {
-        // The desk group has scale S=1.3 → world position = pos + 0.55*S in z;
+        // The desk group has scale S=1.3 → world position = pos + 0.85*S in z;
         // also pass scale=S so the pool renders the same physical size.
         const slot = pool.add({
-          pos: [pos.x, 0, pos.z + 0.55 * S],
+          pos: [pos.x, 0, pos.z + 0.85 * S],
           rotY: Math.PI,
           scale: S,
           color,
@@ -388,7 +407,7 @@ export function buildDesks(
         });
       } else {
         const human = skin.createHumanoid({ flowColor: color, palette, scale: 1.0, walker: false });
-        human.group.position.set(0, 0, 0.55);
+        human.group.position.set(0, 0, 0.85);
         human.group.rotation.y = Math.PI;
         human.leftLeg.rotation.x = -1.5;
         human.rightLeg.rotation.x = -1.5;
@@ -428,7 +447,7 @@ export function buildDesks(
       }),
     );
     ring.rotation.x = -Math.PI / 2;
-    ring.position.set(0, 0.04, 0.3); // local: just under the chair/worker area
+    ring.position.set(0, 0.04, 0.55); // local: just under the chair/worker area
     ring.renderOrder = -1;
     group.add(ring);
 
@@ -438,7 +457,7 @@ export function buildDesks(
     // AABB for walker avoidance
     const sx = S * 2.4 / 2 + 0.25;
     const zFront = S * 0.65 + 0.25;
-    const zBack = S * 0.9 + 0.25;
+    const zBack = S * 1.2 + 0.25;
     deskAabbs.set(agent.id, { minX: pos.x - sx, maxX: pos.x + sx, minZ: pos.z - zFront, maxZ: pos.z + zBack, agentId: agent.id });
 
     // Nameplate — built by the shared builder so the desks and the top
@@ -458,7 +477,9 @@ export function buildDesks(
     const labelHeight = NAMEPLATE_HEIGHT;
     const nl = new CSS2DObject(nd);
     nl.userData.isNameplate = true;   // marker for the purge at the top of buildDesks
-    nl.position.set(pos.x, labelHeight, pos.z);
+    // Over the seated worker's head (behind the desk), not the desk's centre: see NAMEPLATE_HEIGHT.
+    nl.userData.anchorDz = NAMEPLATE_SEAT_DZ;
+    nl.position.set(pos.x, labelHeight, pos.z + NAMEPLATE_SEAT_DZ);
     scene.add(nl);
     deskLabels.set(agent.id, nl);
 
@@ -474,6 +495,7 @@ export function buildDesks(
     lampInstance, paperInstance,
   ];
   for (const im of allInstances) {
+    im.userData._deskOwned = true;
     im.instanceMatrix.needsUpdate = true;
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
     scene.add(im);

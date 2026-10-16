@@ -99,7 +99,8 @@ export interface TelegramInboundContext {
 
 export interface TelegramReplyLike {
   text: string;
-  parseMode?: string;
+  /** null = plain text (no Markdown parsing). */
+  parseMode?: string | null;
   inlineKeyboard?: unknown;
   /** For a voice note: what to say out loud, when `text` is empty because
    *  the answer was already streamed into the chat. */
@@ -116,19 +117,20 @@ export interface TelegramTransportLike {
   send(
     chatId: number,
     text: string,
-    options?: { parseMode?: "Markdown" | "MarkdownV2" | "HTML"; disableNotification?: boolean },
+    options?: { parseMode?: "Markdown" | "MarkdownV2" | "HTML" | null; disableNotification?: boolean; buttons?: InlineButton[][] },
   ): Promise<number>;
   /** Edit a previously sent message in place (the streaming primitive). */
   editMessage(
     chatId: number,
     messageId: number,
     text: string,
-    parseMode?: "Markdown" | "MarkdownV2" | "HTML",
+    parseMode?: "Markdown" | "MarkdownV2" | "HTML" | null,
   ): Promise<void>;
 }
 
 export interface TelegramProviderLike {
   getTransport(): TelegramTransportLike | null | undefined;
+  getDefaultChatId?(): number | null;
 }
 
 /**

@@ -21,8 +21,24 @@
   export let onAnswer: (q: PendingQuestion, idx: number, opt: { label: string; value?: string; url?: string }) => void;
   export let onDismiss: (q: PendingQuestion) => void;
   export let onFree: (q: PendingQuestion, text: string) => Promise<boolean>;
+  /** "Lo veo yo": the work is the operator's; the question moves to "Te toca". */
+  export let onTake: (q: PendingQuestion) => Promise<boolean> | void = () => {};
+  /** "Listo": the operator did the work (optional note). */
+  export let onDone: (q: PendingQuestion, note: string) => Promise<boolean> | void = () => {};
+  /** Every question open right now: what the opinion's "also settles" may point at. */
+  export let others: PendingQuestion[] = [];
+  export let nameOf: (agentId: string) => string = (id) => id.slice(0, 8);
+  /** Sends the opinion's answer to the checked "also settles" questions, each with its own choice. */
+  export let onAlso: (items: Array<{ q: PendingQuestion; choice: Record<string, unknown> }>) => Promise<void> | void = () => {};
 
   let free = '';
+  let doneNote = '';
+  $: owed = q.status === 'owed';
+  // Owed: the choice is made; the options left are the real ones, not the "task" one.
+  $: shown = q.options.map((o, i) => ({ o, i })).filter(({ o }) => !owed || !o.task);
+  $: guardEscalated = !!q.chief_note?.startsWith('escalada: la respuesta dejaba trabajo al operador');
+  // What the chief would have answered: the text after "propuesta del Chief:".
+  $: chiefProposal = guardEscalated ? (q.chief_note?.split('propuesta del Chief:')[1] ?? '').trim() : '';
   $: ctxUrl = firstUrlIn(q.context);
 
   async function submitFree(): Promise<void> {
@@ -50,6 +66,25 @@
   $: opinionLoading = starting || opStatus === 'running';
   $: pick = opinion?.matches_option ?? null;
   $: evidence = opinion?.evidence ?? [];
+  // Only the ones still open: an answered one drops out of the list by itself.
+  $: also = (opinion?.also_answers ?? [])
+    .map((a) => ({ a, other: others.find((o) => o.id === a.question_id && o.id !== q.id) }))
+    .filter((x): x is { a: typeof x.a; other: PendingQuestion } => !!x.other);
+  let alsoOff: Record<string, boolean> = {};
+  let alsoSending = false;
+  $: alsoChecked = also.filter((x) => !alsoOff[x.other.id]);
+  async function sendAlso(): Promise<void> {
+    if (alsoSending || alsoChecked.length === 0) return;
+    alsoSending = true;
+    try {
+      await onAlso(alsoChecked.map(({ a, other }) => ({
+        q: other,
+        choice: a.option !== null && other.options[a.option] ? { kind: 'option', index: a.option } : { kind: 'free', text: a.answer },
+      })));
+    } finally {
+      alsoSending = false;
+    }
+  }
 
   function failedFrom(raw: string): void {
     const [reason, ...rest] = raw.split(': ');
@@ -132,12 +167,19 @@
   <div class="bq-head">
     <span class="bq-from-dot" style="background:{color}"></span>
     <span class="bq-from">{agentName}</span>
-    <span class="bq-time">{fmtRelTime(q.created_at)}</span>
+    <span class="bq-time">{fmtRelTime(owed && q.owed_at ? q.owed_at : q.created_at)}</span>
     <button class="bq-dismiss" title={$t('office.chief.q_dismiss')} aria-label={$t('office.chief.q_dismiss')}
             on:click={() => onDismiss(q)} disabled={busy}>×</button>
   </div>
   <div class="bq-question">{q.question}</div>
-  {#if q.chief_note}
+  {#if owed}
+    <div class="bq-chose">{$t('office.chief.you_chose', { opt: q.selected_option ?? '' })}</div>
+  {/if}
+  {#if guardEscalated}
+    <div class="bq-chief-note">
+      {$t('office.chief.escalated_guard')}{#if chiefProposal} — {$t('office.chief.chief_proposal')}: {chiefProposal}{/if}
+    </div>
+  {:else if q.chief_note}
     <div class="bq-chief-note">{$t('office.chief.q_escalated')}: {q.chief_note}</div>
   {/if}
   {#if q.context}
@@ -152,7 +194,7 @@
     </a>
   {/if}
   <div class="bq-options">
-    {#each q.options as opt, i (i)}
+    {#each shown as { o: opt, i } (i)}
       {@const optUrl = urlForOption(q, opt)}
       <button class="bq-option" class:bq-option-link={!!optUrl} class:bq-option-pick={pick === i}
               on:click={() => onAnswer(q, i, opt)}
@@ -164,6 +206,20 @@
         {#if optUrl}<span class="bq-option-linkico" aria-hidden="true">↗</span>{/if}
       </button>
     {/each}
+
+    {#if !owed}
+      <button class="bq-option bq-take" type="button" on:click={() => onTake(q)} disabled={busy}>
+        <span class="bq-option-lbl">{$t('office.chief.take_it')}</span>
+      </button>
+    {:else}
+      <div class="bq-done-row">
+        <input class="bq-free-input" placeholder={$t('office.chief.done_note')} bind:value={doneNote} disabled={busy}
+               aria-label={$t('office.chief.done_note')} />
+        <button class="bq-option bq-done" type="button" on:click={() => onDone(q, doneNote)} disabled={busy}>
+          <span class="bq-option-lbl">{$t('office.chief.done')}</span>
+        </button>
+      </div>
+    {/if}
 
     {#if opinion}
       <div class="bq-opinion" aria-live="polite">
@@ -184,6 +240,23 @@
           <div class="bq-op-human">
             <span class="bq-op-label">{$t('office.chief.q_opinion_needs_human')}</span>
             <ul>{#each opinion.needs_human as h (h)}<li>{h}</li>{/each}</ul>
+          </div>
+        {/if}
+        {#if also.length}
+          <div class="bq-op-also">
+            <span class="bq-op-label">{$t('office.chief.also_title', { n: String(also.length) })}</span>
+            {#each also as { a, other } (other.id)}
+              <label class="bq-also-row" title={a.why}>
+                <input type="checkbox" checked={!alsoOff[other.id]}
+                       on:change={(e) => (alsoOff = { ...alsoOff, [other.id]: !e.currentTarget.checked })} />
+                <span class="bq-also-q"><b>{nameOf(other.from_agent_id)}</b> · {other.question.split('\n')[0]}</span>
+                <span class="bq-also-a">→ {a.option !== null && other.options[a.option] ? other.options[a.option].label : `${$t('office.chief.also_free')}: ${a.answer}`}</span>
+              </label>
+            {/each}
+            <button class="bq-opinion-retry bq-also-send" type="button" on:click={sendAlso}
+                    disabled={alsoSending || alsoChecked.length === 0 || busy}>
+              {alsoSending ? '…' : $t('office.chief.also_send', { n: String(alsoChecked.length) })}
+            </button>
           </div>
         {/if}
         {#if evidence.length || opinion.unverified?.length}
@@ -354,12 +427,25 @@
   .bq-op-evidence summary{ cursor:pointer; font:500 10px 'JetBrains Mono',monospace; color:#a9a3c9; }
   .bq-op-evidence ul{ margin-top:4px; max-height:140px; overflow-y:auto; }
   .bq-op-warn{ color:#e8b04b !important; }
+  .bq-op-also{ margin-top:6px; padding:5px 8px; border-left:2px solid #a78bfa; background:rgba(167,139,250,.07); border-radius:3px; display:flex; flex-direction:column; gap:3px; }
+  .bq-op-also .bq-op-label{ margin-top:0; }
+  .bq-also-row{ display:grid; grid-template-columns:auto 1fr; gap:2px 6px; align-items:start; cursor:pointer; font:500 10.5px/1.4 'Manrope',sans-serif; color:#cbc5e6; }
+  .bq-also-row input{ margin:2px 0 0; accent-color:#a78bfa; grid-row:span 2; }
+  .bq-also-q{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .bq-also-q b{ color:#e4dcff; font-weight:700; }
+  .bq-also-a{ color:#a9a3c9; word-break:break-word; }
+  .bq-also-send{ align-self:flex-end; margin-top:3px; }
   .bq-step{ flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .bq-step-n{ flex-shrink:0; font:600 9.5px 'JetBrains Mono',monospace; color:#8f86b8; }
   .bq-option-pick{ border-color:#a78bfa; box-shadow:inset 0 0 0 1px rgba(167,139,250,.35); }
   .bq-pick-tag{ flex-shrink:0; font:700 9px 'JetBrains Mono',monospace; color:#1a1430; background:#a78bfa; padding:1px 6px; border-radius:8px; text-transform:uppercase; }
   @media (prefers-reduced-motion: reduce){ .bq-spin{ animation:none; } }
   .bq-chief-note{ font:500 10.5px 'Manrope',sans-serif; color:#f0b86e; background:#2a2214; border-left:2px solid #f0b86e; padding:5px 8px; border-radius:3px; margin:4px 0 6px; }
+  .bq-chose{ font:600 11px 'Manrope',sans-serif; color:#7ee0a1; margin:0 0 6px; }
+  .bq-take{ border-style:dashed; color:#f0b874; }
+  .bq-done-row{ grid-column:1 / -1; display:flex; gap:5px; }
+  .bq-done{ flex-shrink:0; border-color:rgba(126,224,161,.45); color:#7ee0a1; }
+  .bq-done:hover:not(:disabled){ background:rgba(126,224,161,.14); border-color:#7ee0a1; color:#c8f5d8; }
   .bq-free{ display:flex; gap:5px; margin-top:6px; }
   .bq-free-input{ flex:1; min-width:0; padding:7px 9px; background:#11131f; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:500 11px 'Manrope',sans-serif; }
   .bq-free-send{ padding:7px 11px; background:#1f2440; color:#cbd0e8; border:1px solid #2a2f4a; border-radius:5px; font:600 11px 'Manrope',sans-serif; cursor:pointer; }

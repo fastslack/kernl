@@ -2,8 +2,10 @@
 /**
  * Where a panel's data comes from. state-file: a JSON the office keeps in its
  * own folder, read-only and confined to it. collection: records agents of the
- * same office wrote with kernel_panel_record_*.
+ * same office wrote with kernel_panel_record_*. channel: a module's dashboard
+ * channel, live from its tables.
  */
+import { createHash } from "node:crypto";
 import { realpathSync, statSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { validateLite, stripSecrets } from "./jsonschema-lite.js";
@@ -42,7 +44,27 @@ function readStateFile(src: Extract<PanelSource, { type: "state-file" }>, rootDi
   return { version: `${st.mtimeMs}-${st.size}`, data: stripSecrets(src.schema, data) };
 }
 
-export function readSource(src: PanelSource, ctx: { owner: string; rootDir: string; store: PanelStore }): { version: string; data: unknown } {
+/** Reads a module's dashboard channel; undefined when no module registers it. */
+export type ChannelReader = (name: string, params: Record<string, string>) => Promise<unknown>;
+
+export async function readChannelSource(src: Extract<PanelSource, { type: "channel" }>, read: ChannelReader | undefined): Promise<{ version: string; data: unknown }> {
+  if (!read) throw new SourceError("module channels are not available", 503);
+  const data = await read(src.name, src.params ?? {});
+  if (data === undefined || data === null) throw new SourceError(`channel ${src.name} is not available (is its module installed?)`, 404);
+  const json = JSON.stringify(data);
+  if (json.length > MAX_SOURCE_BYTES) throw new SourceError(`channel ${src.name} is too large (${json.length} bytes)`, 413);
+  if (src.schema) {
+    const errs = validateLite(src.schema, data);
+    if (errs.length) throw new SourceError(`${src.name}: ${errs.slice(0, 5).join("; ")}`, 422);
+  }
+  // No mtime to lean on: the content is the version, so `since` still saves the transfer.
+  return { version: createHash("sha1").update(json).digest("hex").slice(0, 16), data: stripSecrets(src.schema, data) };
+}
+
+export function readSource(
+  src: Exclude<PanelSource, { type: "channel" }>,
+  ctx: { owner: string; rootDir: string; store: PanelStore },
+): { version: string; data: unknown } {
   if (src.type === "state-file") return readStateFile(src, ctx.rootDir);
   // A map keyed by record key, newest first: rows for tables and timelines, and
   // `$[{{key}}]` opens one record in a detail view.

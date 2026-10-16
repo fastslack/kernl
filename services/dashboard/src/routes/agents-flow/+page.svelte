@@ -221,10 +221,16 @@
     persistedTotal = 0;
   }
 
-  // Agents with currently running runs (based on real-time events)
+  // Agents with currently running runs (based on real-time events).
+  // A run cut short by a kernel restart never sends run_completed: the startup
+  // sweep only marks it failed in the DB, and this tab keeps its events across
+  // the reconnect. So a run the poll already sees finished counts as completed,
+  // or its agent would show as working until the page is reloaded.
   $: liveRunningAgents = (() => {
     const started = new Set<string>();
-    const completedRuns = new Set<string>();
+    const completedRuns = new Set<string>(
+      runs.filter(r => r.status !== 'running' && r.status !== 'pending').map(r => r.id),
+    );
     for (const e of flowEvents) {
       if (e.event === 'agent:flow:run_completed') completedRuns.add(String(e.data.run_id));
     }
@@ -611,6 +617,15 @@
     }
   }
 
+  // The right button pans the camera, so the browser's menu stays shut over
+  // the 3D — and over the panels and modals on it too, where it used to pop
+  // up. A text field keeps it, for paste.
+  function onContextMenu(e: MouseEvent) {
+    const el = e.target as HTMLElement | null;
+    if (el?.closest?.('input, textarea, select, [contenteditable=""], [contenteditable="true"]')) return;
+    e.preventDefault();
+  }
+
   function onShortcut(e: KeyboardEvent) {
     if (wizardOpen || meetingOpen) return;
     // Any open dialog (shared Modal, the world's own modals, other aria-modal surfaces) owns the keyboard.
@@ -756,7 +771,7 @@
 
 <svelte:window on:keydown={onShortcut} />
 
-<div class="flow-shell">
+<div class="flow-shell" on:contextmenu={onContextMenu} role="presentation">
   <div class="office-layout" class:office-layout--collapsed={railCollapsed} class:office-layout--directory={directoryView}>
     <div class="office-rail-container" class:rail-hidden={directoryView}>
     <OfficeRail

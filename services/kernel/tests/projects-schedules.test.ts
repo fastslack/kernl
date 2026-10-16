@@ -58,6 +58,17 @@ describe("per_project schedules", () => {
     expect(clones()).toEqual([h]);
   });
 
+  it("switching an agent's schedules off and on leaves the template alone, so a re-sync keeps the clone", () => {
+    const h = projects.create({ slug: "heural", name: "Heural", brief }).id;
+    projects.assignOffice(flowId, h);
+    const activeOf = () => db.prepare("SELECT project_id, active FROM agent_schedules WHERE agent_id = ? ORDER BY project_id").all(agentId);
+    expect(agents.setRunnableSchedulesActive(agentId, false)).toBe(1);
+    projects.assignOffice(flowId, h);
+    expect(activeOf()).toEqual([{ project_id: null, active: 1 }, { project_id: h, active: 0 }]);
+    expect(agents.setRunnableSchedulesActive(agentId, true)).toBe(1);
+    expect(activeOf()).toEqual([{ project_id: null, active: 1 }, { project_id: h, active: 1 }]);
+  });
+
   it("templates never come due", () => {
     db.prepare("UPDATE agent_schedules SET next_run_at = '2000-01-01T00:00:00Z'").run();
     expect(agents.getDueSchedules()).toEqual([]);

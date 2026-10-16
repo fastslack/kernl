@@ -7,7 +7,7 @@ import { applyWorldTexture, scaleUV } from '../textures.js';
 import { buildReceptionDecor } from './reception-decor.js';
 import {
   RECEPTION_COUNTER_W, RECEPTION_COUNTER_D, RECEPTION_COLUMN_GAP, RECEPTION_WALL_GAP,
-  receptionPickupPos, receptionDriverPos,
+  receptionPickupPos, receptionDriverPos, receptionPlanters,
 } from './reception-geometry.js';
 
 export interface ReceptionAnchors {
@@ -57,19 +57,34 @@ export function buildReception(
   panel.receiveShadow = true;
   scene.add(panel);
 
-  // ── Lower gold inlay band across the front ──
+  // ── Front: walnut panels between gold reveals, a backlit onyx centre ──
   const goldMat = new rt.THREE.MeshStandardMaterial({ color: 0xc9a84c, roughness: 0.3, metalness: 0.7 });
-  applyPBR(goldMat, 'trim'); // gold inlay/rims/columns/crown/fluting/bell/sconces — accent trim
-  const inlay = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW - 0.2, 0.15, 0.02), goldMat);
-  inlay.position.set(cx, counterH - 0.45, counterZ + counterD / 2 - 0.02);
-  scene.add(inlay);
-  // Dense vertical fluting (short gold strips) for a grander look
-  const fluteCount = 10;
-  for (let i = 0; i < fluteCount; i++) {
-    const fx = cx - counterW / 2 + 0.6 + i * ((counterW - 1.2) / (fluteCount - 1));
-    const flute = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.03, counterH * 0.55, 0.02), goldMat);
-    flute.position.set(fx, counterH * 0.3, counterZ + counterD / 2 - 0.01);
-    scene.add(flute);
+  applyPBR(goldMat, 'trim'); // gold reveals/rims/columns/crown/bell/sconces — accent trim
+  const onyxW = 2.4;
+  const faceZ = counterZ + counterD / 2;
+  // Reveals: thin vertical gold lines dividing the walnut into panels, plus
+  // a frame around the onyx.
+  const revealXs = [-4.2, -3.0, -1.8, 1.8, 3.0, 4.2];
+  for (const rx of revealXs) {
+    const rev = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(0.035, counterH - 0.32, 0.02), goldMat);
+    rev.position.set(cx + rx, (counterH - 0.32) / 2 + 0.14, faceZ + 0.005);
+    scene.add(rev);
+  }
+  const onyxMat = new rt.THREE.MeshStandardMaterial({
+    color: 0xf2dcae, emissive: new rt.THREE.Color(0xc8964a), emissiveIntensity: 0.2, roughness: 0.25,
+  });
+  applyWorldTexture(onyxMat, 'marble');
+  const onyx = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(onyxW, counterH - 0.36, 0.03), onyxMat);
+  onyx.position.set(cx, (counterH - 0.36) / 2 + 0.16, faceZ + 0.005);
+  scene.add(onyx);
+  for (const [fw, fh, fx, fy] of [
+    [onyxW + 0.08, 0.04, 0, counterH - 0.18], [onyxW + 0.08, 0.04, 0, 0.14],
+    [0.04, counterH - 0.32, -onyxW / 2 - 0.02, (counterH - 0.32) / 2 + 0.14],
+    [0.04, counterH - 0.32, onyxW / 2 + 0.02, (counterH - 0.32) / 2 + 0.14],
+  ] as [number, number, number, number][]) {
+    const f = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(fw, fh, 0.04), goldMat);
+    f.position.set(cx + fx, fy, faceZ + 0.015);
+    scene.add(f);
   }
 
   // ── Counter top slab (polished marble with gold rim) ──
@@ -97,6 +112,24 @@ export function buildReception(
     const rim = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW + 0.32, 0.12, 0.04), goldMat);
     rim.position.set(cx, counterH + 0.05, counterZ + dz);
     scene.add(rim);
+  }
+
+  // ── Raised transaction ledge along the visitors' edge: the hotel-desk
+  // silhouette — a second, higher slab of the same granite on gold posts.
+  const ledgeY = counterH + 0.3;
+  const ledgeZ = counterZ + counterD / 2 - 0.12;
+  const ledge = new rt.THREE.Mesh(new RoundedBoxGeometry(counterW + 0.1, 0.07, 0.4, 2, 0.02), topMat);
+  ledge.position.set(cx, ledgeY, ledgeZ);
+  ledge.castShadow = true;
+  scene.add(ledge);
+  const ledgeRim = new rt.THREE.Mesh(new rt.THREE.BoxGeometry(counterW + 0.12, 0.03, 0.03), goldMat);
+  ledgeRim.position.set(cx, ledgeY + 0.01, ledgeZ + 0.2);
+  scene.add(ledgeRim);
+  for (let i = 0; i < 7; i++) {
+    const lx = cx - counterW / 2 + 0.3 + i * ((counterW - 0.6) / 6);
+    const post = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.025, 0.025, 0.22, 8), goldMat);
+    post.position.set(lx, counterH + 0.17, ledgeZ);
+    scene.add(post);
   }
 
   // ── Warm LED coves: under the stone lip and along the toe kick, so the
@@ -278,9 +311,8 @@ export function buildReception(
   const potMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a3050, roughness: 0.5, metalness: 0.3 });
   const leafMat = new rt.THREE.MeshStandardMaterial({ color: 0x2a6e2a, roughness: 0.75 });
   const topiaries: Array<{ x: number; z: number; stand: any[] }> = [];
-  for (const side of [-1, 1]) {
-    const px = cx + side * (counterW / 2 + 0.3);
-    const pz = counterZ + counterD / 2 + 0.8;
+  for (const pl of receptionPlanters(cx, counterZ)) {
+    const px = pl.x, pz = pl.z;
     const pot = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.22, 0.2, 0.45, 10), potMat);
     pot.position.set(px, 0.225, pz);
     scene.add(pot);
@@ -411,75 +443,11 @@ export function buildReception(
 
   // ─────────────────────────────────────────────────────────────
   // ── Luxury / glamour layer ──
-  // Pendant chandelier, velvet rope stanchions, marble floor inlay, counter
-  // ornament + flowers, wall sconces flanking the video wall. None of these
-  // are functional, all are emissive-aware so they look right under bloom.
+  // Marble floor medallion and inlay, counter ornament + flowers, wall
+  // sconces flanking the video wall. Nothing hangs from the ceiling and
+  // nothing stands on the walkers' floor that the router does not know about
+  // (reception-geometry.ts lists every piece that stands on the floor).
   // ─────────────────────────────────────────────────────────────
-
-  // ── Crystal pendant chandelier above the counter ──
-  // Chain runs from ceiling to a chrome stem, ending in a fluted gold sphere
-  // and a ring of tear-drop crystals.
-  const chainMat = new rt.THREE.MeshStandardMaterial({ color: 0x4a3a14, roughness: 0.45, metalness: 0.7 });
-  applyPBR(chainMat, 'trim'); // chandelier gold chain — accent trim
-  const chandelierParts: any[] = [];
-  const chain = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.014, 0.014, 1.4, 6), chainMat);
-  chain.position.set(cx, WALL_H - 0.7, counterZ);
-  scene.add(chain);
-  chandelierParts.push(chain);
-  const chandBody = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.18, 14, 10), goldMat);
-  chandBody.position.set(cx, WALL_H - 1.45, counterZ);
-  scene.add(chandBody);
-  chandelierParts.push(chandBody);
-  // Glowing core
-  const chandGlow = new rt.THREE.Mesh(
-    new rt.THREE.SphereGeometry(0.1, 10, 8),
-    new rt.THREE.MeshStandardMaterial({
-      color: 0xffeec8, emissive: new rt.THREE.Color(0xffd28a), emissiveIntensity: 1.4,
-      roughness: 0.2, metalness: 0.1,
-    }),
-  );
-  chandGlow.position.set(cx, WALL_H - 1.45, counterZ);
-  scene.add(chandGlow);
-  chandelierParts.push(chandGlow);
-  // 8 crystal tear-drops hanging from the body
-  const crystalMat = new rt.THREE.MeshStandardMaterial({
-    color: 0xffe4a0, transparent: true, opacity: 0.85,
-    roughness: 0.05, metalness: 0.1,
-    emissive: new rt.THREE.Color(0xffd28a), emissiveIntensity: 0.3,
-  });
-  for (let i = 0; i < 8; i++) {
-    const a = (i / 8) * Math.PI * 2;
-    const cr = new rt.THREE.Mesh(new rt.THREE.ConeGeometry(0.04, 0.13, 6), crystalMat);
-    cr.position.set(cx + Math.cos(a) * 0.22, WALL_H - 1.62, counterZ + Math.sin(a) * 0.22);
-    cr.rotation.x = Math.PI; // tip pointing DOWN
-    scene.add(cr);
-    chandelierParts.push(cr);
-  }
-
-  // ── Velvet rope stanchions flanking the front of the counter ──
-  // Two short brass posts ~1.8u apart, joined by a maroon velvet rope sag.
-  const ropeMat = new rt.THREE.MeshStandardMaterial({ color: 0x5a0e1a, roughness: 0.95, metalness: 0.0 });
-  const stanchionXs = [cx - counterW / 2 + 1.2, cx + counterW / 2 - 1.2];
-  const stanchionZ = counterZ + counterD / 2 + 1.4;
-  for (const sx of stanchionXs) {
-    const post = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.045, 0.06, 0.85, 10), goldMat);
-    post.position.set(sx, 0.425, stanchionZ);
-    scene.add(post);
-    // Domed cap
-    const cap = new rt.THREE.Mesh(new rt.THREE.SphereGeometry(0.07, 10, 8), goldMat);
-    cap.position.set(sx, 0.87, stanchionZ);
-    scene.add(cap);
-    // Square base
-    const base = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.11, 0.13, 0.05, 12), goldMat);
-    base.position.set(sx, 0.025, stanchionZ);
-    scene.add(base);
-  }
-  // Velvet rope between the two posts (slight sag via Y position lower than caps)
-  const ropeLen = stanchionXs[1] - stanchionXs[0];
-  const rope = new rt.THREE.Mesh(new rt.THREE.CylinderGeometry(0.025, 0.025, ropeLen, 8), ropeMat);
-  rope.position.set(cx, 0.78, stanchionZ);
-  rope.rotation.z = Math.PI / 2;
-  scene.add(rope);
 
   // ── Gold inlay strip on the marble floor in front of the counter ──
   const floorInlay = new rt.THREE.Mesh(
@@ -495,6 +463,46 @@ export function buildReception(
   );
   floorInlay2.position.set(cx, 0.003, counterZ + counterD / 2 + 0.95);
   scene.add(floorInlay2);
+
+  // ── Marble medallion in the floor where visitors stop at the desk ──
+  // Concentric discs, each a step higher in depth priority than the one under
+  // it (polygonOffset), so they never z-fight with the lobby floor or the
+  // runner that crosses it — the medallion is set into the runner.
+  {
+    const mz = counterZ + counterD / 2 + 2.6;
+    const ring = (r0: number, r1: number, color: number, units: number, metal = 0.2) => {
+      const mat = new rt.THREE.MeshStandardMaterial({
+        color, roughness: 0.18, metalness: metal,
+        polygonOffset: true, polygonOffsetFactor: units / 2, polygonOffsetUnits: units,
+      });
+      const g = r0 > 0 ? new rt.THREE.RingGeometry(r0, r1, 64) : new rt.THREE.CircleGeometry(r1, 64);
+      const m = new rt.THREE.Mesh(g, mat);
+      m.rotation.x = -Math.PI / 2;
+      m.position.set(cx, 0.03, mz);
+      m.receiveShadow = true;
+      scene.add(m);
+    };
+    ring(0, 1.7, 0x1a1f33, -16);
+    ring(1.55, 1.62, 0xc9a84c, -18, 0.7);
+    ring(0, 1.15, 0xe8e2d4, -18);
+    ring(1.05, 1.1, 0xc9a84c, -20, 0.7);
+    ring(0, 0.55, 0x1a1f33, -20);
+    // A compass star in gold across the centre.
+    for (let i = 0; i < 4; i++) {
+      const mat = new rt.THREE.MeshStandardMaterial({
+        color: 0xc9a84c, roughness: 0.3, metalness: 0.7,
+        polygonOffset: true, polygonOffsetFactor: -11, polygonOffsetUnits: -22,
+      });
+      const shape = new rt.THREE.Shape();
+      shape.moveTo(0, 1.0); shape.lineTo(0.12, 0); shape.lineTo(0, -1.0); shape.lineTo(-0.12, 0); shape.closePath();
+      const star = new rt.THREE.Mesh(new rt.THREE.ShapeGeometry(shape), mat);
+      star.rotation.x = -Math.PI / 2;
+      star.rotation.z = (i * Math.PI) / 4;
+      star.scale.setScalar(i % 2 ? 0.7 : 1);
+      star.position.set(cx, 0.031, mz);
+      scene.add(star);
+    }
+  }
 
   // ── Tall ornamental vase + sculpted flowers on the counter top ──
   // Off-centered so it doesn't block the bell. Black marble base with gold trim.
@@ -567,12 +575,9 @@ export function buildReception(
   platform.position.set(cx, 0.02, counterZ - WALL_GAP_BEHIND_COUNTER / 2);
   scene.add(platform);
 
-  // ── Lounges + glTF props (sofas, plants, chandelier, vase) ──
+  // ── Lounges + glTF props (sofas, plants, vase) ──
   buildReceptionDecor(scene, {
     cx, counterZ, topiaries,
-    // Hung over the visitors' side of the counter, not over its centre: from
-    // the lobby camera a fitting above the counter covers the activity board.
-    chandelier: { at: { x: cx, y: WALL_H - 0.1, z: counterZ + counterD / 2 + 1.6 }, stand: chandelierParts },
     vase: { at: { x: vaseX, y: counterH + 0.1, z: counterZ }, stand: vaseParts },
   });
 

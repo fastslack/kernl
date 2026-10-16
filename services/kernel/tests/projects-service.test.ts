@@ -61,6 +61,17 @@ describe("ProjectsService", () => {
     expect(svc.list({ flowId: flow.id }).length).toBe(2);
   });
 
+  it("names the project an office serves, only while both are active, so its runs always draft", () => {
+    const p = svc.create({ slug: "heural", name: "Heural", brief: BRIEF });
+    const flow = agents.createFlow({ name: "Comercial" });
+    expect(svc.servedProject(flow.id)).toBeNull();
+    svc.assignOffice(flow.id, p.id);
+    expect(svc.servedProject(flow.id)).toBe(p.id);
+    svc.update(p.id, { status: "paused" });
+    expect(svc.servedProject(flow.id)).toBeNull();
+    expect(svc.servedProject("")).toBeNull();
+  });
+
   it("links existing resources without duplicates", () => {
     const p = svc.create({ slug: "heural", name: "Heural", brief: BRIEF });
     svc.link(p.id, "social_account", "twitter:123");

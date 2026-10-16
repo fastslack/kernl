@@ -54,17 +54,17 @@ describe("PanelGateway", () => {
     });
   });
 
-  it("reads a declared source with a selector and answers unchanged on the same version", () => {
-    const a = gw.read("f1", "ledger", { select: "$.issues" });
+  it("reads a declared source with a selector and answers unchanged on the same version", async () => {
+    const a = await gw.read("f1", "ledger", { select: "$.issues" });
     expect(a.data).toEqual({ "web#1": { state: "ready" } });
-    expect(gw.read("f1", "ledger", { since: a.version })).toEqual({ version: a.version, unchanged: true });
+    expect(await gw.read("f1", "ledger", { since: a.version })).toEqual({ version: a.version, unchanged: true });
   });
 
-  it("refuses undeclared sources and actions with 403, and audits the attempt", () => {
-    expect(() => gw.read("f1", "ghost")).toThrow(PanelError);
+  it("refuses undeclared sources and actions with 403, and audits the attempt", async () => {
+    await expect(gw.read("f1", "ghost")).rejects.toThrow(PanelError);
     try { gw.act("f1", "merge.everything", {}, "operator"); } catch (e) { expect((e as PanelError).status).toBe(403); }
     expect(store.listAudit("f1")[0]).toMatchObject({ action: "merge.everything", ok: false });
-    expect(() => gw.read("other-office", "ledger")).toThrow(PanelError);
+    await expect(gw.read("other-office", "ledger")).rejects.toThrow(PanelError);
   });
 
   it("sends a letter built from the case template, after validating the form", () => {
@@ -102,5 +102,46 @@ describe("PanelGateway", () => {
     const gw2 = new PanelGateway(store, { agentInOffice: () => null, postLetter: () => ({ ok: true }), startRun: () => ({ runId: "x" }), setSchedulesActive: () => 0 });
     try { gw2.act("f1", "ronda", {}, "operator"); throw new Error("no"); }
     catch (e) { expect((e as PanelError).status).toBe(409); }
+  });
+
+  describe("channel sources", () => {
+    const channelSpec = {
+      version: 1,
+      sources: { pipeline: { type: "channel", name: "salesPanel", params: { project: "heural" } }, ghost: { type: "channel", name: "nope" } },
+      views: [{ id: "deals", title: "Deals", component: "board", data: "pipeline:$.deals", columns: "stage" }],
+    };
+    const calls: Array<[string, Record<string, string>]> = [];
+    let payload: unknown = { deals: { d1: { stage: "new" } } };
+    const gwWith = (readChannel?: (n: string, p: Record<string, string>) => Promise<unknown>) => {
+      const parsed = parsePanelSpec(channelSpec, { agentSlugs: [] });
+      if (!parsed.ok) throw new Error(parsed.error);
+      store.saveSpec("f2", parsed.spec, "");
+      return new PanelGateway(store, {
+        agentInOffice: () => null, postLetter: () => ({ ok: true }), startRun: () => ({ runId: "r" }), setSchedulesActive: () => 0,
+        readChannel,
+      });
+    };
+    beforeEach(() => { calls.length = 0; payload = { deals: { d1: { stage: "new" } } }; });
+    const reader = async (n: string, p: Record<string, string>) => { calls.push([n, p]); return n === "salesPanel" ? payload : undefined; };
+
+    it("reads the module channel with the declared params, without an office folder", async () => {
+      const g = gwWith(reader);
+      const a = await g.read("f2", "pipeline", { select: "$.deals" });
+      expect(a.data).toEqual({ d1: { stage: "new" } });
+      expect(calls).toEqual([["salesPanel", { project: "heural" }]]);
+      expect(await g.read("f2", "pipeline", { since: a.version })).toEqual({ version: a.version, unchanged: true });
+      payload = { deals: { d1: { stage: "contacted" } } };
+      expect((await g.read("f2", "pipeline", { since: a.version })).version).not.toBe(a.version);
+    });
+
+    it("answers 404 for a channel no module registers and 503 without a reader", async () => {
+      await expect(gwWith(reader).read("f2", "ghost")).rejects.toMatchObject({ status: 404 });
+      await expect(gwWith(undefined).read("f2", "pipeline")).rejects.toMatchObject({ status: 503 });
+    });
+
+    it("refuses a channel answer over the size cap with 413", async () => {
+      payload = { blob: "x".repeat(1_100_000) };
+      await expect(gwWith(reader).read("f2", "pipeline")).rejects.toMatchObject({ status: 413 });
+    });
   });
 });

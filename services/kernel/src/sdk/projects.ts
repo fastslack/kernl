@@ -5,7 +5,7 @@
  * instance.
  */
 import { getHost } from "./host.js";
-import type { OutboxChannelHandler, OutboxItem } from "../modules/projects/types.js";
+import type { OutboxChannelHandler, OutboxItem, OutboxPolicy } from "../modules/projects/types.js";
 
 export type { OutboxChannelHandler, OutboxItem, OutboxPreview, ProjectBrief } from "../modules/projects/types.js";
 
@@ -39,6 +39,10 @@ export interface ProjectsHost {
   officeSettings(flowId: string, projectId: string): Record<string, unknown>;
   registerOutboxChannel(channel: string, handler: OutboxChannelHandler): void;
   propose(item: OutboxProposal): OutboxItem;
+  /** Optional: older kernels lack it. */
+  registerOutboxPolicy?(name: string, fn: OutboxPolicy): void;
+  /** Optional: older kernels lack it. */
+  unregisterOutboxPolicy?(name: string): void;
 }
 
 function host(): ProjectsHost {
@@ -63,4 +67,9 @@ export function registerOutboxChannel(channel: string, handler: OutboxChannelHan
 export const outbox = {
   /** Queue a draft for human approval (for extensions drafting outside an agent run). */
   propose: (item: OutboxProposal): OutboxItem => host().propose(item),
+  /** Auto-approval rule for this extension's drafts. On a kernel without policies it does nothing (every draft stays manual). */
+  registerPolicy: (name: string, fn: OutboxPolicy): void => { host().registerOutboxPolicy?.(name, fn); },
+  /** Call from shutdown(): the policy stops approving at once. */
+  unregisterPolicy: (name: string): void => { host().unregisterOutboxPolicy?.(name); },
 };
+export type { OutboxPolicy, OutboxPolicyDecision } from "../modules/projects/types.js";

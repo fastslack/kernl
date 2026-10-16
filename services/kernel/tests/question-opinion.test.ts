@@ -12,7 +12,7 @@ const q: AgentQuestion = {
   options: [{ label: "Mostrar rechazado" }, { label: "Mostrar pendiente" }, { label: "Ocultar" }, { label: "Preguntar" }],
   status: "pending", selected_option: "", selected_index: -1, answered_note: "", answered_at: null,
   answered_by: "", chief_note: "Es una decisión de privacidad", triage_started_at: null, created_at: "2026-10-14T03:00:00Z",
-  opinion_status: "", opinion_run_id: "", opinion: null, opinion_error: "", opinion_at: null,
+  opinion_status: "", opinion_run_id: "", opinion: null, opinion_error: "", opinion_at: null, owed_at: null, reminded_at: null, for_operator: false,
 };
 
 describe("buildInvestigationGoal", () => {
@@ -33,6 +33,21 @@ describe("buildInvestigationGoal", () => {
     expect(goal).toContain('issue web#2595: project "gitlab.com/heural/heural-web", number 2595');
     expect(goal).toContain('MR api!95: project "gitlab.com/heural/oauth2-server", number 95');
     expect(goal).toContain("archivo app/services/family.js:120");
+  });
+
+  it("lists the other open questions with their options, not itself, each cut short", () => {
+    const others = [
+      { id: "q1", agent: "Resolver", question: "self", options: ["A"] },
+      { id: "q2", agent: "Heural Integrador", question: "web#2595 (web!311): espera al operador", options: ["Reanudar", "Lo veo yo"] },
+      { id: "q3", agent: "QA", question: "y".repeat(1000), options: ["Sí"] },
+    ];
+    const g = buildInvestigationGoal(q, undefined, parseQuestionRefs(""), [], others);
+    expect(g).toContain("Otras preguntas abiertas");
+    expect(g).toContain("- question_id q2 — Heural Integrador: web#2595 (web!311): espera al operador");
+    expect(g).toContain("    2. Lo veo yo");
+    expect(g).not.toContain("question_id q1 —");
+    expect(g).not.toContain("y".repeat(401));
+    expect(buildInvestigationGoal(q, undefined, parseQuestionRefs(""), [])).not.toContain("Otras preguntas abiertas");
   });
 
   it("no longer cuts the context at 6000 characters", () => {
@@ -58,12 +73,13 @@ describe("parseOpinion", () => {
     expect(o).toEqual({
       answer: "Opción 1, y además: 1) …", reasoning: "api!95 descripción", matches_option: 0, extends_option: true,
       evidence: ["api!95 descripción, sección 'Al rechazar'"], unverified: [], needs_human: ["correr la query en PROD"],
+      also_answers: [],
     });
   });
 
   it("still takes the old format, with the new lists empty", () => {
     const o = parseOpinion('{"answer":"Hacé B","reasoning":"r","matches_option":2}', 4);
-    expect(o).toEqual({ answer: "Hacé B", reasoning: "r", matches_option: 1, extends_option: false, evidence: [], unverified: [], needs_human: [] });
+    expect(o).toEqual({ answer: "Hacé B", reasoning: "r", matches_option: 1, extends_option: false, evidence: [], unverified: [], needs_human: [], also_answers: [] });
   });
 
   it("finds the JSON after prose or inside a fence", () => {
@@ -75,6 +91,26 @@ describe("parseOpinion", () => {
     const o = parseOpinion('{"answer":"x","matches_option":9,"extends_option":true}', 4);
     expect(o?.matches_option).toBeNull();
     expect(o?.extends_option).toBe(false);
+  });
+
+  it("also_answers: only questions still open, once each, with an option of THAT question or a free answer", () => {
+    const open = new Map([["q2", 2], ["q3", 4]]);
+    const o = parseOpinion(JSON.stringify({
+      answer: "A",
+      also_answers: [
+        { question_id: "q2", option: 1, answer: "Reanudá", why: "mismo MR" },
+        { question_id: "q2", option: 2, answer: "dup", why: "" },
+        { question_id: "q3", option: 9, answer: "Texto libre", why: "misma causa" },
+        { question_id: "q3x", option: 1, answer: "no existe", why: "" },
+        { question_id: "q9", option: 1, answer: "ya contestada", why: "" },
+      ],
+    }), 4, open);
+    expect(o?.also_answers).toEqual([
+      { question_id: "q2", option: 0, answer: "Reanudá", why: "mismo MR" },
+      { question_id: "q3", option: null, answer: "Texto libre", why: "misma causa" },
+    ]);
+    // Without an option and without an answer there is nothing to send.
+    expect(parseOpinion('{"answer":"A","also_answers":[{"question_id":"q2","option":null}]}', 4, open)?.also_answers).toEqual([]);
   });
 
   it("no answer → null", () => {

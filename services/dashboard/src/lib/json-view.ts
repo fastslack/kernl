@@ -21,6 +21,7 @@
  */
 
 import { escapeHtml } from '$shared/escape.js';
+import { codeValueHtml } from './code-guess.js';
 
 /** One line of output fits in this many characters before it breaks into rows. */
 const INLINE_MAX = 72;
@@ -216,6 +217,8 @@ function inlineHtml(v: unknown): string {
 
 /** A long or multi-line string: its text, with any JSON inside it rendered as JSON. */
 function stringBlockHtml(s: string): string {
+  const code = codeValueHtml(null, s);
+  if (code) return code;
   const whole = s.trim();
   if (whole.startsWith('{') || whole.startsWith('[')) {
     const p = parseLoose(whole);
@@ -256,8 +259,9 @@ function valueHtml(v: unknown, budget: number): string {
   }
   const rows = Object.entries(v as Record<string, unknown>).map(([k, x]) => {
     const block = (typeof x === 'string' && isBlockString(x)) || (x !== null && typeof x === 'object' && inlineText(x, budget - k.length - 4) === null);
+    const code = typeof x === 'string' && isBlockString(x) ? codeValueHtml(k, x) : null;
     return block
-      ? `<div class="jv-row jv-row-b">${keyHtml(k)}<span class="jv-p">:</span>${valueHtml(x, budget - 4)}</div>`
+      ? `<div class="jv-row jv-row-b">${keyHtml(k)}<span class="jv-p">:</span>${code ?? valueHtml(x, budget - 4)}</div>`
       : `<div class="jv-row">${keyHtml(k)}<span class="jv-p">: </span>${inlineHtml(x)}</div>`;
   });
   return `<div class="jv-nest">${rows.join('')}</div>`;

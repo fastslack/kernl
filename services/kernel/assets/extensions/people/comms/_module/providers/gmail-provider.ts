@@ -32,6 +32,7 @@ export class GmailProvider implements EmailProvider {
       body: options.body,
       bodyHtml: options.bodyHtml,
       inReplyTo: options.inReplyTo,
+      headers: options.headers,
       attachments: options.attachments,
     });
 
