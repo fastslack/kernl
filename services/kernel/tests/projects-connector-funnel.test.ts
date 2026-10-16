@@ -31,7 +31,7 @@ describe("connector funnel events", () => {
 
   it("stores a funnel event once, strips personal fields, emits project:<type>", () => {
     const got: unknown[] = [];
-    events.on("project:user.signed_up", (p) => got.push(p));
+    events.on("project:user.signed_up", (p) => { got.push(p); });
     const ev = { event_id: "e1", type: "user.signed_up", occurred_at: "2026-10-15T10:00:00Z",
       data: { user_ref: "u1", at: "2026-10-15T10:00:00Z", source: "google", specialty: "pediatría", province: "CABA", email: "x@y.com", name: "Ana" } };
     expect(post(ev).status).toBe(200);
