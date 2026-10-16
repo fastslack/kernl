@@ -16,3 +16,15 @@ describe("google oauth: back to the screen that asked", () => {
     expect(encodeReturnState("javascript:alert(1)")).toBe("");
   });
 });
+
+import { Database } from "bun:sqlite";
+import { googleSyncOperations } from "../assets/extensions/integration/google-sync/_module/dashboard-rpc-actions.js";
+
+describe("google.status tells the redirect URI to register", () => {
+  it("is the kernel port's callback, with or without credentials", async () => {
+    const config = { google: { clientId: "", clientSecret: "", callbackPort: 0 }, dashboard: { port: 3087 } } as never;
+    const st = await googleSyncOperations({ db: new Database(":memory:") as never, config })["google.status"]({}) as { redirectUri: string; status: string };
+    expect(st.status).toBe("disconnected");
+    expect(st.redirectUri).toBe("http://localhost:3087/auth/google/callback");
+  });
+});

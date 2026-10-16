@@ -17,6 +17,9 @@ export const GOOGLE_SCOPES = [
   "https://www.googleapis.com/auth/webmasters.readonly",
 ];
 
+/** The redirect URI the Google Cloud OAuth client must list ("Authorized redirect URIs"). */
+export const dashboardRedirectUri = (dashboardPort: number) => `http://localhost:${dashboardPort}/auth/google/callback`;
+
 export class GoogleAuth {
   private callbackServer: Server | null = null;
 
@@ -45,7 +48,7 @@ export class GoogleAuth {
 
   /** Build an auth URL that redirects to the main dashboard server instead of the ephemeral port */
   getAuthUrlForDashboard(dashboardPort: number, state = ""): string {
-    const redirectUri = `http://localhost:${dashboardPort}/auth/google/callback`;
+    const redirectUri = dashboardRedirectUri(dashboardPort);
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: redirectUri,
@@ -60,7 +63,7 @@ export class GoogleAuth {
 
   /** Exchange an OAuth code received via the dashboard callback route */
   async handleDashboardCallback(code: string, dashboardPort: number): Promise<void> {
-    const redirectUri = `http://localhost:${dashboardPort}/auth/google/callback`;
+    const redirectUri = dashboardRedirectUri(dashboardPort);
     const body = new URLSearchParams({
       code,
       client_id: this.clientId,
