@@ -97,7 +97,15 @@
       if (pr) projects = pr.projects ?? [];
       if (ag) agentNames = Object.fromEntries((ag.agents ?? []).map((a: { id: string; name: string }) => [a.id, a.name]));
       await tick(); // let `visible` recompute from the new items
-      if (!visible.some((i) => i.id === selectedId)) pick(visible[0]?.id ?? '');
+      // ?item=<id> (a link from another screen): open that item on its own tab, whatever the filters.
+      const want = wantItem && items.find((i) => i.id === wantItem);
+      wantItem = '';
+      if (want) {
+        tab = (want.status === 'sending' ? 'approved' : want.status) as Status;
+        fChannel = ''; filter = { paso: '', perfil: '', especialidad: '' };
+        await tick();
+        pick(want.id);
+      } else if (!visible.some((i) => i.id === selectedId)) pick(visible[0]?.id ?? '');
       error = '';
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
@@ -107,7 +115,13 @@
   }
 
   const onFocus = () => { if (!dirty && !rejecting && !scheduling) void load(); };
-  onMount(() => { void load(); window.addEventListener('focus', onFocus); });
+  let wantItem = '';
+  onMount(() => {
+    const u = new URL(window.location.href);
+    wantItem = u.searchParams.get('item') ?? '';
+    if (wantItem) { u.searchParams.delete('item'); history.replaceState(history.state, '', u.toString()); }
+    void load(); window.addEventListener('focus', onFocus);
+  });
   onDestroy(() => { if (typeof window !== 'undefined') window.removeEventListener('focus', onFocus); });
 
   $: byChannel = items.filter((i) => !fChannel || i.channel === fChannel);
