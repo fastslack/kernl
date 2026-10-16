@@ -87,8 +87,10 @@ export class AgentRunsService {
       throw new Error(`createRun: agent ${input.agent_id} is inactive (active=0)`);
     }
     // Its office is switched off (agent_flows.paused): no path runs its
-    // members — the top agent excepted (agentOfficePaused).
-    if (agentOfficePaused(this.db, input.agent_id)) {
+    // members — the top agent excepted (agentOfficePaused). A run spawned by
+    // one still in flight passes: switching off lets the work under way end
+    // (delegations and immediate chains included) and takes nothing new.
+    if (agentOfficePaused(this.db, input.agent_id) && !this.parentInFlight(input.parent_run_id)) {
       throw new Error(`createRun: agent ${input.agent_id} belongs to a paused office`);
     }
 
@@ -203,6 +205,14 @@ export class AgentRunsService {
       this.scheduleEmbed("agent_runs", "goal_embedding", "goal_embedding_model", run.id, run.goal);
     }
     return run;
+  }
+
+  /** True when the given parent run is still pending or running. */
+  private parentInFlight(parentRunId: string | undefined): boolean {
+    const id = (parentRunId ?? "").trim();
+    if (!id) return false;
+    const row = this.db.prepare("SELECT status FROM agent_runs WHERE id = ?").get(id) as { status: string } | undefined;
+    return row?.status === "pending" || row?.status === "running";
   }
 
   getRun(id: string): AgentRun | undefined {

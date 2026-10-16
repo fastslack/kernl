@@ -1216,7 +1216,15 @@ export class AgentExecutor {
       };
 
       if (delay > 0) {
-        setTimeout(trigger, delay);
+        // By now the source run is over, so createRun can refuse the target
+        // (its office switched off meanwhile); a throw here escapes the timer.
+        setTimeout(() => {
+          try {
+            trigger();
+          } catch (err) {
+            log.warn(`Declarative chain "${label}" skipped: ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }, delay);
       } else {
         trigger();
       }

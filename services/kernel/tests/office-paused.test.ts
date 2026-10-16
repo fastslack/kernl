@@ -61,6 +61,22 @@ describe("office pause", () => {
     expect(() => service.createRun({ agent_id: member.id, goal: "sell" })).toThrow(/paused office/);
   });
 
+  it("lets a run spawned by one still in flight through, and nothing else", () => {
+    const { flow, member } = office();
+    const helper = service.createAgent({ name: "Helper", flow_id: flow.id });
+    const parent = service.createRun({ agent_id: member.id, goal: "sell" });
+    service.updateRun(parent.id, { status: "running" });
+    service.setFlowPaused(flow.id, true);
+
+    const child = service.createRun({ agent_id: helper.id, goal: "quote", parent_run_id: parent.id, parent_agent_id: member.id, depth: 1 });
+    expect(child.agent_id).toBe(helper.id);
+
+    service.updateRun(parent.id, { status: "completed" });
+    expect(() =>
+      service.createRun({ agent_id: helper.id, goal: "again", parent_run_id: parent.id, parent_agent_id: member.id, depth: 1 }),
+    ).toThrow(/paused office/);
+  });
+
   it("leaves the member rows untouched", () => {
     const { flow, member } = office();
     service.setFlowPaused(flow.id, true);
@@ -81,6 +97,16 @@ describe("office pause", () => {
     expect(out.flow.paused).toBe(1);
     await expect(Promise.resolve().then(() => action().handler({ flow_id: flow.id, paused: "yes" }))).rejects.toThrow();
     await expect(Promise.resolve().then(() => action().handler({ flow_id: "nope", paused: true }))).rejects.toThrow();
+    await expect(Promise.resolve().then(() => action().handler({ flow_id: flow.id, paused: true, cut_now: "yes" }))).rejects.toThrow();
+  });
+
+  it("switching off is graceful by default: running runs are left to finish", async () => {
+    const { flow, member } = office();
+    const run = service.createRun({ agent_id: member.id, goal: "sell" });
+    service.updateRun(run.id, { status: "running" });
+    const out = (await action().handler({ flow_id: flow.id, paused: true })) as { cancelled: number };
+    expect(out.cancelled).toBe(0);
+    expect(service.getRun(run.id)?.status).toBe("running");
   });
 
   it("a deleted office can't be paused", () => {
