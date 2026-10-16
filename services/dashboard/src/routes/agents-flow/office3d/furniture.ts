@@ -1,6 +1,6 @@
 /** Build desks, chairs, monitors, and seated workers */
 
-import { buildNameplate, NAMEPLATE_HEIGHT } from './nameplate.js';
+import { buildNameplate, NAMEPLATE_HEIGHT, NAMEPLATE_SEAT_DZ } from './nameplate.js';
 import type { AgentData, Vec3, HumanoidParts, Aabb2D, RankData } from './types.js';
 import { resolveFlowColor, type FlowData } from './types.js';
 import type { SittingHumanoidPool } from './humanoid-pool.js';
@@ -458,7 +458,9 @@ export function buildDesks(
     const labelHeight = NAMEPLATE_HEIGHT;
     const nl = new CSS2DObject(nd);
     nl.userData.isNameplate = true;   // marker for the purge at the top of buildDesks
-    nl.position.set(pos.x, labelHeight, pos.z);
+    // Over the seated worker's head (behind the desk), not the desk's centre: see NAMEPLATE_HEIGHT.
+    nl.userData.anchorDz = NAMEPLATE_SEAT_DZ;
+    nl.position.set(pos.x, labelHeight, pos.z + NAMEPLATE_SEAT_DZ);
     scene.add(nl);
     deskLabels.set(agent.id, nl);
 

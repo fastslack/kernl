@@ -45,8 +45,25 @@ function esc(s: string): string {
   ));
 }
 
-/** Height above the floor the chip should float at. */
-export const NAMEPLATE_HEIGHT = 2.6;
+/**
+ * Where the chip is anchored: the top of the agent's head (seated or standing, desk scale 1.3), not the
+ * middle of the desk. The chip grows UP from this point (see buildNameplate), so from any camera angle it
+ * sits above the head instead of over the face. It used to be centred on (desk, 2.6): with the camera up
+ * high that point projects onto the seated worker's head, and the lower half of the chip hid the face.
+ */
+export const NAMEPLATE_HEIGHT = 2.35;
+/** The seated worker is this far behind the desk's centre (chair at 0.85 × desk scale 1.3). */
+export const NAMEPLATE_SEAT_DZ = 0.85 * 1.3;
+/** Screen gap between the top of the head and the bottom of the chip. */
+const NAMEPLATE_GAP_PX = 6;
+
+/**
+ * The chip's transform for a given scale. The render loop calls this each time the distance changes:
+ * centred on the anchor horizontally, its bottom edge on the anchor, scaled from that bottom edge.
+ */
+export function nameplateTransform(scale: number): string {
+  return `translateX(-50%) scale(${scale.toFixed(2)})`;
+}
 
 /**
  * Build the chip element. The caller wraps it in a CSS2DObject; the returned
@@ -84,10 +101,15 @@ export function buildNameplate(opts: NameplateOpts): HTMLDivElement {
       `color:${active ? "#ff6b6b" : "#3dd68c"};">⏻</button>`
     : "";
 
+  // The outer box is 0×0, so CSS2DRenderer's centring puts its corner exactly on the anchor (the head);
+  // the chip hangs ABOVE that point, whatever its height (event tags appended inside it grow it upward).
   const el = document.createElement("div");
   el.className = "agent-nameplate";
+  el.style.cssText = "width:0;height:0;overflow:visible;";
   el.innerHTML =
-    `<div style="display:inline-flex;align-items:center;gap:5px;` +
+    `<div style="position:absolute;left:0;bottom:${NAMEPLATE_GAP_PX}px;transform:${nameplateTransform(1)};` +
+    `transform-origin:center bottom;` +
+    `display:inline-flex;align-items:center;gap:5px;` +
     `background:rgba(13,16,25,${active ? 0.82 : 0.6});` +
     `border:1px solid ${accent}${active ? "66" : "33"};` +
     `border-radius:5px;padding:2px 7px;white-space:nowrap;` +
