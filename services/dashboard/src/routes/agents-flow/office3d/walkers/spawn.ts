@@ -118,14 +118,14 @@ export function sendWalker(
     ...zoneObstacles(), // headquarters office + reception
   ];
 
-  // The seated worker is at z = 0.55 from desk center (see furniture.ts).
+  // The seated worker is at z = 0.85 from desk center (see furniture.ts).
   // The desk top extends from z = -0.65 to z = 0.65.
   // Walker should stand "in front" of the desk on the side AWAY from the chair,
   // i.e. at z = -1.0 from desk center (in front of the monitor side).
   // The seated worker faces the desk (rotation.y = PI), so "in front" = -z direction.
   const targetStandPos: Vec3 = { x: to.x, y: 0, z: to.z - 1.5 };
   // Where the seated target worker actually sits (for facing direction)
-  const targetWorkerPos = { x: to.x, z: to.z + 0.55 };
+  const targetWorkerPos = { x: to.x, z: to.z + 0.85 };
 
   // Hide the seated source worker — they "stood up" to deliver the message
   if (sittingWorkers) {

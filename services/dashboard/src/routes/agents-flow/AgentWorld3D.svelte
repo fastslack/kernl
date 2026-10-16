@@ -1055,7 +1055,7 @@
         startY: 1.6,
         riseHeight: 4.5,
         durationSec: 3.0,
-        offsetXZ: { z: 0.55 },
+        offsetXZ: { z: 0.85 },
         tag: `promotion-glyph:${a.id}`,
       }));
     }
