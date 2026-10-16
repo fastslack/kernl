@@ -34,7 +34,7 @@
     createNoteStack, type NoteStack,
     type AnimationRegistry,
     type DeliveryInfo,
-    resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL,
+    resolveFlowColor, CLAUDE_CODE_DEFAULT_MODEL, NAMEPLATE_HEIGHT, nameplateTransform,
     type Walker, type SpeechBubble, type HumanoidParts, type RoomInfo, type CorridorGrid, type Aabb2D, type HallwayLine,
   } from './office3d/index.js';
   import { propOf, tagProp, type InteractiveProp, type PropHit } from './office3d/wall-screen.js';
@@ -1794,7 +1794,8 @@
       powerChip: false,
     });
     const label = new CSS2DObject(div);
-    label.position.set(headPos.x, headPos.y + 0.5, headPos.z);
+    // On top of his head: the chip grows upward from the anchor (office3d/nameplate.ts).
+    label.position.set(headPos.x, headPos.y + 0.25, headPos.z);
     target.add(label);
     deskLabels.set(holder.id, label);
     topAgentLabel = label;
@@ -2793,7 +2794,9 @@
         // — swap panels instead of stacking them invisibly.
         showOfficeModal = false;
         selectedAgent = selectedAgent === hoveredAgent ? null : hoveredAgent;
-        focusAgent();
+        // Clicking someone you are already looking at up close only selects them: the camera stays put.
+        // It flies over only from far away, where the agent is a few pixels on screen.
+        if (selectedAgent && agentIsFar(selectedAgent)) focusAgent();
       }
     });
 
@@ -3351,6 +3354,14 @@
     }
   }
 
+  /** Beyond this camera→agent distance a click on the agent also flies the camera to it (an office fills the screen at ~30-40). */
+  const CLICK_FOCUS_MIN_DISTANCE = 45;
+  function agentIsFar(id: string): boolean {
+    const p = deskPos.get(id);
+    if (!p || !camera) return false;
+    return Math.hypot(camera.position.x - p.x, camera.position.y - 1.2, camera.position.z - p.z) > CLICK_FOCUS_MIN_DISTANCE;
+  }
+
   function focusAgent() {
     if (!selectedAgent || !controls) return;
     const p = deskPos.get(selectedAgent); if (!p) return;
@@ -3768,7 +3779,7 @@
         labelScales.set(aid, scale);
         const inner = lbl.element?.firstElementChild as HTMLElement | null;
         if (inner) {
-          inner.style.transform = `scale(${scale.toFixed(2)})`;
+          inner.style.transform = nameplateTransform(scale);
           inner.style.transformOrigin = 'center bottom';
         }
       }
@@ -3852,12 +3863,16 @@
         const dp = deskPos.get(agentId);
         if (w && !((w as any).returning && (w as any).progress >= 1)) {
           const g = (w as any).group;
-          if (g) lbl.position.set(g.position.x, 3.2, g.position.z);
+          if (g) lbl.position.set(g.position.x, NAMEPLATE_HEIGHT, g.position.z);
         } else if (dp) {
-          if (Math.abs(lbl.position.x - dp.x) > 0.05 || Math.abs(lbl.position.z - dp.z) > 0.05) {
+          // Back at the desk: over the seated worker (anchorDz behind the desk's centre), at head height.
+          const z = dp.z + (lbl.userData?.anchorDz ?? 0);
+          if (Math.abs(lbl.position.x - dp.x) > 0.05 || Math.abs(lbl.position.z - z) > 0.05) {
             lbl.position.x = dp.x;
-            lbl.position.z = dp.z;
+            lbl.position.z = z;
           }
+          const y = lbl.userData?.anchorDz !== undefined ? NAMEPLATE_HEIGHT : lbl.position.y;
+          if (lbl.position.y !== y) lbl.position.y = y;
         }
       }
 
