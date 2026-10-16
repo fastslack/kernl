@@ -7,6 +7,77 @@ y el proyecto sigue [Versionado Semántico](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-10-16
+
+### Actualizar desde 0.4.4
+
+- **Apagar una oficina ahora es gradual.** No arranca nada nuevo y lo que está
+  corriendo termina, incluido lo que delega. «Cortar ya» en el interruptor de
+  la oficina (o `cut_now: true`) lo cancela en el momento, como hacía antes.
+- **La migración 57** agrega el estado de pregunta a cargo del operador; corre
+  al arrancar.
+
+### Agregado
+
+- **Comunicación con el operador.** Un solo driver elige el canal del operador
+  para preguntas, recordatorios y resoluciones: Telegram con botones y códigos
+  Q, una notificación en los demás. La respuesta vuelve por el mismo camino.
+- **«Te toca», «Lo veo yo» y «Listo».** Una pregunta puede dejarle una tarea al
+  operador: se le recuerda con un timer, se cuenta en el dashboard y, al
+  cerrarla, se retira la carta de «seguí esperando» de quien preguntó.
+- **Pestañas en el panel de la oficina**: Paneles, Preguntas, General, Equipo,
+  Repo, Proyectos y Entorno. Los paneles propios de la oficina abren primero, y
+  su tablero muestra el total real de cada columna.
+- **Bandeja de salida.** El mail diseñado conserva su diseño y lleva
+  List-Unsubscribe. Aprobaciones filtra, previsualiza y manda pruebas de los
+  borradores, abre uno directo desde un link (`?item=`), y una aprobación
+  programada se puede retirar a borrador.
+- **Núcleo del Growth Engine**: eventos de embudo y de referidos en el conector
+  del proyecto, políticas de aprobación automática de la bandeja, una vista de
+  KPIs y alcances de solo lectura de Google Analytics y Search Console.
+- **Tarjeta de la cuenta de Google** en Configuración → Integraciones, con su
+  estado, un botón Conectar y la URI de redirección a registrar. El inicio de
+  sesión vuelve a la pantalla desde donde se lanzó.
+- **Personajes 3D nuevos**: skins retro, aventura, 2D expresivo, life-sim y
+  arcade, cada uno con su propio ritmo de animación.
+- **El código se ve como código** en la salida de los agentes: archivos que
+  imprimió una tool, bloques con cercas, comandos Bash y salida de terminal en
+  JetBrains Mono coloreado y sin cortes.
+
+### Cambiado
+
+- **Menos LLM en la automejora.** La reflexión corre solo si hay una falla más
+  nueva que el último ciclo. El auto-eval califica toda falla, pero una corrida
+  completa como máximo una vez por hora por agente (`__eval_every_min__`, 0 para
+  todas).
+- **Opt-outs por agente** para oficinas que manejan a sus agentes por protocolo:
+  `__unattended_ask__: false` deja de leer cada reporte desatendido buscando
+  preguntas para el operador, y `__answer_resume__: false` deja de relanzar a
+  quien preguntó cuando le responden.
+- **Las preguntas que llevan la misma respuesta se resuelven juntas**, y
+  ask_supervisor acepta de 2 a 4 opciones, la preferida primero.
+- **La oficina del agente principal** se rearmó alrededor de un estrado con una
+  fila de sillones para visitas, y la recepción tiene un mostrador vestido.
+- **Los carteles 3D van sobre la cabeza** y no sobre la cara, y un click en un
+  agente de cerca deja la cámara donde está.
+- **La pestaña LIVE muestra el objetivo completo** que recibió un agente (hasta
+  8000 caracteres, no los primeros 300).
+- **SDK**: `structuredResult` envuelve las listas como `{ items }`, y los canales
+  de la bandeja pueden declarar `needsAccount: false`.
+
+### Corregido
+
+- Un agente cuya corrida cortó un reinicio del kernel ya no figura corriendo.
+- Los sandboxes montan una copia por corrida de `.claude.json`, así la
+  reescritura del CLI no puede sacarlo de abajo del bind a mitad del arranque.
+- Las respuestas vuelven cuando muere la corrida que las llevaba.
+- Los recordatorios al operador nunca repiten una pregunta si dos barridos se
+  pisan.
+- El menú contextual del navegador queda cerrado sobre los paneles y modales de
+  la página 3D; los campos de texto lo conservan para pegar.
+- Un borrador interno de una corrida fuera de todo proyecto va al único
+  proyecto de la oficina.
+
 ## [0.4.4] - 2026-10-14
 
 ### Actualizar desde 0.4.3

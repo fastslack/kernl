@@ -7,6 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.5] - 2026-10-16
+
+### Upgrading from 0.4.4
+
+- **Switching an office off is now graceful.** Nothing new starts and the runs
+  under way finish, including what they delegate. "Cortar ya" on the office
+  switch (or `cut_now: true`) cancels them on the spot, as off used to.
+- **Migration 57** adds the owed question status; it runs on start.
+
+### Added
+
+- **Operator comms.** One driver picks the operator's channel for questions,
+  reminders and resolutions: Telegram with inline buttons and Q-codes, a
+  notification elsewhere. The answer comes back the same way.
+- **"Te toca", "Lo veo yo" and "Listo".** A question can leave a task with the
+  operator; it is reminded on a timer, counted in the dashboard, and closing it
+  retires the asker's "keep waiting" letter.
+- **Office panel tabs**: Panels, Questions, General, Team, Repo, Projects and
+  Environment. An office's own panels open first, and its board shows each
+  column's real total.
+- **Outbox.** Designed email keeps its layout and carries List-Unsubscribe.
+  Aprobaciones filters, previews and test-sends drafts, opens one straight from
+  a link (`?item=`), and a scheduled approval can be withdrawn back to draft.
+- **Growth Engine core**: funnel and referral events in the project connector,
+  outbox auto-approval policies, a KPIs panel view and read-only Google
+  Analytics and Search Console scopes.
+- **Google account card** in Settings → Integrations, with its status, a
+  Connect button and the redirect URI to register. Sign-in returns to the
+  screen that started it.
+- **New 3D characters**: retro, adventure, expressive 2D, life-sim and arcade
+  skins, each with its own animation timing.
+- **Code shows as code** in agent output: files a tool printed, fenced blocks,
+  Bash commands and terminal output in coloured, unwrapped JetBrains Mono.
+
+### Changed
+
+- **Less LLM spent on self-improvement.** Reflection runs only when a failure
+  is newer than the last cycle. Auto-eval grades every failure, but a completed
+  run at most once an hour per agent (`__eval_every_min__`, 0 for every run).
+- **Per-agent opt-outs** for offices that drive their agents by protocol:
+  `__unattended_ask__: false` stops reading each unattended report for operator
+  asks, and `__answer_resume__: false` stops relaunching the asker on an answer.
+- **Questions that take one answer are settled together**, and
+  ask_supervisor takes 2 to 4 options, the preferred one first.
+- **The top agent's office** is rebuilt around a dais with a row of visitor
+  armchairs, and reception gets a dressed counter.
+- **3D nameplates sit on top of the head** instead of over the face, and
+  clicking an agent up close keeps the camera where it is.
+- **The LIVE tab shows the whole goal** an agent was given (up to 8000
+  characters, not the first 300).
+- **SDK**: `structuredResult` wraps lists as `{ items }`, and outbox channels
+  can declare `needsAccount: false`.
+
+### Fixed
+
+- An agent whose run a kernel restart cut short no longer shows as running.
+- Sandboxes mount a per-run copy of `.claude.json`, so the CLI's rewrite of the
+  original cannot pull it out from under the bind mid-start.
+- Answers come back when the run that carried them dies.
+- Operator reminders never repeat a question when two sweeps overlap.
+- The browser's context menu stays shut over the 3D page's panels and modals;
+  text fields keep it for paste.
+- An internal draft from a run outside any project goes to the office's only
+  project.
+
 ## [0.4.4] - 2026-10-14
 
 ### Upgrading from 0.4.3
