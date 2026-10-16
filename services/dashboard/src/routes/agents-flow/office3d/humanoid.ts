@@ -169,9 +169,17 @@ export function createHumanoid(
   return { group, head, torso, leftArm: leftArmPivot, rightArm: rightArmPivot, leftLeg: leftLegPivot, rightLeg: rightLegPivot };
 }
 
+/** Alternate skins own their cel timing; classic figures keep smooth poses. */
+function characterTime(head: any, seconds: number, action: string, phase = 0): number {
+  head.userData?.animateAccessories?.(seconds + phase, action);
+  const sprite = head.userData?.spriteAnimation;
+  if (sprite) { sprite.action = action; sprite.seconds = seconds + phase; }
+  return head.userData?.animationStyle === 'retro' ? Math.floor(seconds * 10) / 10 : seconds;
+}
+
 /** Apply a walking pose to a Walker each frame. timeSec is accumulated real seconds. */
 export function animateWalk(w: Walker, _deltaSec?: number) {
-  const p = computeWalkPose(w.timeSec ?? w.age);
+  const p = computeWalkPose(characterTime(w.head, w.timeSec ?? w.age, 'walk'));
   w.leftLeg.rotation.x = p.legL;
   w.rightLeg.rotation.x = p.legR;
   w.leftArm.rotation.x = p.armL;
@@ -183,7 +191,7 @@ export function animateWalk(w: Walker, _deltaSec?: number) {
 
 /** Apply a running pose to a Walker — faster cadence, wider stride, forward lean. */
 export function animateRun(w: Walker, _deltaSec?: number) {
-  const p = computeRunPose(w.timeSec ?? w.age);
+  const p = computeRunPose(characterTime(w.head, w.timeSec ?? w.age, 'walk'));
   w.leftLeg.rotation.x = p.legL;
   w.rightLeg.rotation.x = p.legR;
   w.leftArm.rotation.x = p.armL;
@@ -211,7 +219,8 @@ export function animateSitting(
     isStretching   ? 'stretching' :
     isRunning      ? 'running' :
     'idle';
-  const p = computeSittingPose(mode, timeSec, phase);
+  const action = mode === 'spoken-to' ? 'talk' : mode === 'stretching' ? 'stretch' : mode === 'running' ? 'typing' : 'idle';
+  const p = computeSittingPose(mode, characterTime(parts.head, timeSec, action, phase), phase);
   parts.leftArm.rotation.x = p.armL;
   parts.rightArm.rotation.x = p.armR;
   parts.head.rotation.x = p.headX;
@@ -224,7 +233,7 @@ export function animateTalking(
   elapsedSec: number,
   phase: number,
 ) {
-  const p = computeTalkingPose(elapsedSec, phase);
+  const p = computeTalkingPose(characterTime(parts.head, elapsedSec, 'talk', phase), phase);
   parts.leftLeg.rotation.x = p.legL;
   parts.rightLeg.rotation.x = p.legR;
   parts.leftArm.rotation.x = p.armLX;

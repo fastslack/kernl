@@ -38,6 +38,23 @@ export interface DeskResult {
   deskAabbs: Map<string, Aabb2D>;
 }
 
+/** Remove previous desk renders even when an async rebuild lost their tracking maps. */
+export function clearDeskObjects(scene: any): void {
+  const stale: any[] = [];
+  scene.traverse((o: any) => {
+    if (o.userData?._deskOwned || (o.userData?._deskTop && o.userData?.agentId)) stale.push(o);
+  });
+  for (const object of stale) {
+    object.removeFromParent();
+    object.traverse((child: any) => {
+      child.geometry?.dispose();
+      const materials = Array.isArray(child.material) ? child.material : child.material ? [child.material] : [];
+      for (const material of materials) material.dispose();
+      if (child.isInstancedMesh) child.dispose();
+    });
+  }
+}
+
 /** Build all desks with monitors, chairs, workers, and nameplates.
  *  Uses InstancedMesh for desk legs (4 per desk) and chair post/base to reduce draw calls. */
 export function buildDesks(
@@ -54,6 +71,7 @@ export function buildDesks(
    */
   pool: SittingHumanoidPool | null = null,
 ): DeskResult {
+  clearDeskObjects(scene);
   const deskGroups = new Map<string, any>();
   const deskLabels = new Map<string, any>();
   const sittingWorkers = new Map<string, SittingWorkerEntry>();
@@ -247,6 +265,7 @@ export function buildDesks(
     group.position.set(pos.x, 0, pos.z);
     group.scale.setScalar(S);
     group.userData.agentId = agent.id;
+    group.userData._deskOwned = true;
 
     // Invisible hitbox covering desk + chair + worker — makes clicking easy.
     // Uses opacity 0 + transparent (not visible:false, which Raycaster skips).
@@ -476,6 +495,7 @@ export function buildDesks(
     lampInstance, paperInstance,
   ];
   for (const im of allInstances) {
+    im.userData._deskOwned = true;
     im.instanceMatrix.needsUpdate = true;
     if (im.instanceColor) im.instanceColor.needsUpdate = true;
     scene.add(im);
