@@ -146,10 +146,14 @@ export async function setLeadDistributes(flowId: string, enabled: boolean): Prom
 	return { created: Number(res?.created ?? 0), removed: Number(res?.removed ?? 0) };
 }
 
-/** Switch an office off (its agents stop running) or back on. */
-export async function setOfficePaused(flowId: string, paused: boolean): Promise<void> {
-	await rpcOrCall('agents.flows.set_paused', { flow_id: flowId, paused }, () =>
-		put(`/api/agents/flows/${encodeURIComponent(flowId)}/paused`, { paused }),
+/**
+ * Switch an office off or back on. Off is graceful: nothing new starts and the
+ * runs under way finish. `cutNow` also cancels them on the spot.
+ */
+export async function setOfficePaused(flowId: string, paused: boolean, cutNow = false): Promise<void> {
+	const body = cutNow ? { paused, cut_now: true } : { paused };
+	await rpcOrCall('agents.flows.set_paused', { flow_id: flowId, ...body }, () =>
+		put(`/api/agents/flows/${encodeURIComponent(flowId)}/paused`, body),
 	);
 }
 
