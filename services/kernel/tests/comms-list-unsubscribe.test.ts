@@ -5,12 +5,12 @@ import { buildResendPayload } from "../assets/extensions/people/comms/_module/pr
 import { emailChannel } from "../assets/extensions/people/comms/_module/outbox-channels.js";
 import { makeCommsDb } from "./mail-test-db.js";
 
-const LU = "<mailto:contacto@heural-tech.com?subject=baja>";
+const LU = "<mailto:contacto@example.com?subject=baja>";
 const base = { to: "a@x.com", subject: "Hola", body: "texto", bodyHtml: "<p>html</p>" };
 
 function withProvider() {
   const { db, service } = makeCommsDb();
-  const acct = service.addAccount({ label: "Ventas", email: "contacto@heural-tech.com", provider: "resend" }).id;
+  const acct = service.addAccount({ label: "Ventas", email: "contacto@example.com", provider: "resend" }).id;
   const send = vi.fn().mockResolvedValue({ messageId: "m", threadId: "" });
   service.registerProvider(acct, { name: "mock", capabilities: { send: true, searchInbox: false, fetchEmail: false }, send, searchInbox: vi.fn(), fetchEmail: vi.fn() } as never);
   return { db, service, acct, send, ch: emailChannel({ db, service: () => service }) };

@@ -2,8 +2,8 @@ import { describe, it, expect } from 'bun:test';
 import { isTemplated, isRehearsal, facets, matchesFilter, batchSummary, editedPayload, previewDoc } from './review.js';
 
 const t = (id: string, p: Record<string, unknown>) => ({ id, status: 'draft', channel: 'email', payload: p });
-const A = t('a', { to: ['fastslack@gmail.com'], test_of: 'x@x.ar', subject: 's', body: 'b', body_html: '<!doctype html><html><head><style>.x{color:red}</style></head><body>h</body></html>', html_verbatim: true, paso: 1, perfil: 'cronico', especialidad: 'Cardiología' });
-const B = t('b', { to: ['fastslack@gmail.com'], test_of: 'y@y.ar', subject: 's', body: 'b', body_html: '<p>h</p>', html_verbatim: true, paso: 1, perfil: 'centros', especialidad: 'Centro médico' });
+const A = t('a', { to: ['operator@example.com'], test_of: 'x@x.ar', subject: 's', body: 'b', body_html: '<!doctype html><html><head><style>.x{color:red}</style></head><body>h</body></html>', html_verbatim: true, paso: 1, perfil: 'cronico', especialidad: 'Cardiología' });
+const B = t('b', { to: ['operator@example.com'], test_of: 'y@y.ar', subject: 's', body: 'b', body_html: '<p>h</p>', html_verbatim: true, paso: 1, perfil: 'centros', especialidad: 'Centro médico' });
 const C = t('c', { to: ['real@z.ar'], subject: 's', body: 'b', body_html: '<p>h</p>', html_verbatim: true, paso: 2, perfil: 'agenda', especialidad: 'Pediatría' });
 const plain = t('d', { to: ['q@q.ar'], subject: 's', body: 'hola' });
 
@@ -21,7 +21,7 @@ describe('outbox review', () => {
   });
 
   it('summarizes a batch: test sends vs real prospects, and distinct recipients', () => {
-    expect(batchSummary([A, B, C])).toEqual({ count: 3, recipients: 2, test: 2, real: 1, rehearsal: 0, sendable: 3, testTo: ['fastslack@gmail.com'] });
+    expect(batchSummary([A, B, C])).toEqual({ count: 3, recipients: 2, test: 2, real: 1, rehearsal: 0, sendable: 3, testTo: ['operator@example.com'] });
   });
 
   it('editing a designed draft drops its HTML so what is approved is what was edited', () => {

@@ -11,8 +11,8 @@ describe('humanize', () => {
 
 describe('kindOf', () => {
   it('reads what a value is', () => {
-    expect(kindOf('email', 'geiser@gmail.com')).toBe('email');
-    expect(kindOf('telefono', '0341 743-7378')).toBe('phone');
+    expect(kindOf('email', 'ana@example.com')).toBe('email');
+    expect(kindOf('telefono', '0341 555-0100')).toBe('phone');
     expect(kindOf('web', 'centromedicogeiser.com.ar')).toBe('url');
     expect(kindOf('borradores', '1')).toBe('number');
     expect(kindOf('open', 214)).toBe('number');
@@ -27,7 +27,7 @@ describe('kindOf', () => {
 describe('hrefOf', () => {
   it('builds the link a value opens', () => {
     expect(hrefOf('email', 'a@b.co')).toBe('mailto:a@b.co');
-    expect(hrefOf('phone', '0341 743-7378')).toBe('tel:03417437378');
+    expect(hrefOf('phone', '0341 555-0100')).toBe('tel:03415550100');
     expect(hrefOf('url', 'x.com.ar')).toBe('https://x.com.ar');
     expect(hrefOf('text', 'x')).toBeNull();
   });
