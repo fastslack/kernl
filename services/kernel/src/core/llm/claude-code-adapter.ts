@@ -40,6 +40,11 @@ import { claudeAuthEnv } from "./claude-code-auth.js";
 // Through the host, not ./call-log.js — see chat-instrumentation.ts.
 import { recordLlmCall } from "../../sdk/facades.js";
 import { sdkResultUsage, sumSdkUsage, type SdkModelUsage } from "../../sdk/llm-usage.js";
+import {
+  ClaudeLimitObserver,
+  ClaudeUsageLimitError,
+  withClaudeLimitFallback,
+} from "../../sdk/claude-limits.js";
 import type {
   ChatMessage,
   ChatCompletionResult,
@@ -249,6 +254,14 @@ export class ChatClaudeCodeProvider {
     messages: ChatMessage[],
     opts?: ChatCompletionOptions,
   ): Promise<ChatCompletionResult> {
+    return withClaudeLimitFallback(opts?.model || this.defaultModel, (model) => this.completeOnce(messages, opts, model));
+  }
+
+  private async completeOnce(
+    messages: ChatMessage[],
+    opts: ChatCompletionOptions | undefined,
+    model: string,
+  ): Promise<ChatCompletionResult> {
     const bin = this.findBinary();
     if (!bin) {
       throw new Error(
@@ -260,7 +273,6 @@ export class ChatClaudeCodeProvider {
       logToolIgnoredOnce();
     }
 
-    const model = opts?.model || this.defaultModel;
     const lastUser = this.lastUserMessage(messages);
     if (!lastUser) {
       throw new Error("claude_code provider: no user message to send");
@@ -287,10 +299,13 @@ export class ChatClaudeCodeProvider {
     let usage: SdkModelUsage[] = [];
     let stopReason: string | undefined;
     let authFailed = false;
+    const limit = new ClaudeLimitObserver();
 
     const q = query({ prompt: promptIterable, options });
     try {
       for await (const msg of q) {
+        // The limit notice arrives as text; it is not the answer.
+        if (limit.observe(msg)) continue;
         if (msg.type === "assistant") {
           const blocks = (msg.message as { content?: unknown }).content;
           if (Array.isArray(blocks)) {
@@ -315,10 +330,14 @@ export class ChatClaudeCodeProvider {
           }
         }
       }
+    } catch (err) {
+      // The CLI may exit non-zero after reporting the limit; the limit is the cause.
+      if (!limit.hit) throw err;
     } finally {
       try { q.close(); } catch { /* already closed */ }
     }
 
+    if (limit.hit) throw new ClaudeUsageLimitError(limit.hit, model);
     if (authFailed) {
       throw new Error(
         "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.",
@@ -360,6 +379,20 @@ export class ChatClaudeCodeProvider {
     stopReason?: string;
     sessionId?: string;
   }> {
+    return withClaudeLimitFallback(opts.model || this.defaultModel, (model) => this.streamOnce(userText, sink, opts, model));
+  }
+
+  private async streamOnce(
+    userText: string | ContentBlock[],
+    sink: ChatStreamSink,
+    opts: ChatStreamCallOptions,
+    model: string,
+  ): Promise<{
+    finalText: string;
+    tokensUsed: number;
+    stopReason?: string;
+    sessionId?: string;
+  }> {
     const bin = this.findBinary();
     if (!bin) {
       throw new Error(
@@ -367,7 +400,6 @@ export class ChatClaudeCodeProvider {
       );
     }
 
-    const model = opts.model || this.defaultModel;
     const childEnv = this.buildChildEnv();
     const cwd = opts.cwd ?? process.cwd();
     const allowed = opts.allowedTools ?? DEFAULT_BUILTIN_TOOLS;
@@ -466,6 +498,9 @@ export class ChatClaudeCodeProvider {
     let stopReason: string | undefined;
     let authFailed = false;
     let sessionId: string | undefined = opts.sessionId;
+    const limit = new ClaudeLimitObserver();
+    // Anything shown to the user before a limit hits makes a retry a repeat.
+    let produced = false;
     const startedAt = Date.now();
     const caller = opts.caller ?? "chat";
 
@@ -480,6 +515,10 @@ export class ChatClaudeCodeProvider {
 
     try {
       for await (const msg of q) {
+        // Not streamed: a fallback model may still answer this turn, and if
+        // none can, the caller shows the limit as an error, not as a reply.
+        if (limit.observe(msg)) continue;
+        if (msg.type === "assistant") produced = true;
         if (msg.type === "system") {
           if (msg.subtype === "init" && "session_id" in msg && typeof msg.session_id === "string") {
             sessionId = msg.session_id;
@@ -561,13 +600,21 @@ export class ChatClaudeCodeProvider {
         }
       }
     } catch (err) {
-      recordStreamFailure(model, caller, startedAt, err instanceof Error ? err.message : String(err));
-      throw err;
+      if (!limit.hit) {
+        recordStreamFailure(model, caller, startedAt, err instanceof Error ? err.message : String(err));
+        throw err;
+      }
     } finally {
       opts.signal?.removeEventListener("abort", onAbort);
       try { q.close(); } catch { /* already closed */ }
     }
 
+    if (limit.hit) {
+      const err = new ClaudeUsageLimitError(limit.hit, model);
+      err.partial = produced;
+      recordStreamFailure(model, caller, startedAt, err.message);
+      throw err;
+    }
     if (authFailed) {
       const message = "claude_code: OAuth authentication failed. Run `claude login` to refresh credentials.";
       recordStreamFailure(model, caller, startedAt, message);
@@ -710,7 +757,9 @@ function recordStreamFailure(model: string, caller: string, startedAt: number, m
     model,
     ok: false,
     latencyMs: Date.now() - startedAt,
-    errorKind: /authenticat|login|logged in|oauth session expired|could not be refreshed/i.test(message) ? "auth" : "transient",
+    errorKind: /authenticat|login|logged in|oauth session expired|could not be refreshed/i.test(message)
+      ? "auth"
+      : /quota exhausted/i.test(message) ? "exhausted" : "transient",
     errorMsg: message,
     caller,
     startedAt,

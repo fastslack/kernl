@@ -45,7 +45,11 @@
     liveOpen = !liveOpen;
     if (liveOpen) { loadChain(); loadScores(); }
   }
-  onMount(loadChain);
+  onMount(() => {
+    loadChain();
+    const refresh = setInterval(() => { if (!chainLoading) loadChain(); }, 5000);
+    return () => clearInterval(refresh);
+  });
 
   // Svelte action — closes the popover when the user clicks anywhere
   // outside its wrapper. Inlined here because it's the only consumer.
@@ -58,6 +62,7 @@
   }
 
   $: links = chainData ? [chainData.primary, ...chainData.fallbacks] : [];
+  $: limitedLinks = links.filter((link) => !['active', 'standby'].includes(link.status));
   const scoreOf = (l: ChainLink) => scores[`${l.slug}/${l.model}`] ?? scores[l.slug];
   const STATUS_TONE: Record<ChainLink['status'], string> = {
     active: '#34D399', standby: '#94A3B8', 'no-key': '#64748B', quota: '#FBBF24', 'rate-limit': '#FBBF24', auth: '#F43F5E', degraded: '#FB923C',
@@ -76,6 +81,7 @@
   >
     <span class="ws-dot"></span>
     <span class="ws-label">{$wsConnected ? 'LIVE' : 'POLL'}</span>
+    {#if limitedLinks.length}<span class="lc-alert" title={limitedLinks.map((l) => `${l.model || l.slug}: ${l.reason || l.status}`).join(' · ')}>⚠ {limitedLinks.length}</span>{/if}
     {#if links.length}
       <span class="lc-dots" aria-hidden="true">
         {#each links.slice(0, 4) as l, i (l.slug + i)}<i style="background:{modelColor(l.slug)};color:{modelColor(l.slug)}" class:dim={l.status !== 'active' && l.status !== 'standby'}></i>{/each}
@@ -115,7 +121,11 @@
                   {#if link.lastSuccessAt}<span title={$t('live.lastOk')}>✓ {fmtSince(link.lastSuccessAt)}</span>{/if}
                   {#if link.blockedForMs && link.blockedForMs > 0}<span class="lc-warn">{$t('live.retryIn', { t: fmtCountdown(link.blockedForMs) })}</span>{/if}
                 </div>
-                {#if link.reason}<div class="lc-reason">{link.reason}</div>{/if}
+                {#if link.reason}<div class="lc-reason">⚠ {link.reason}</div>{/if}
+                {#if link.slug === 'claude-code' && link.status === 'auth'}
+                  <a class="lc-reconnect" href="/settings?section=ai&card=providers&connect=claude-code" on:click={() => (liveOpen = false)}>{$t('agent.failure.reconnect_claude')} →</a>
+                {/if}
+                {#if link.resetsAt}<div class="lc-reason">{$t('live.resetsAt', { t: new Date(link.resetsAt).toLocaleString() })}</div>{/if}
               </div>
               <span class="lc-status">{$t(`live.status.${link.status}`)}</span>
               {#if sc !== undefined}
@@ -137,6 +147,8 @@
 </div>
 
 <style>
+  .lc-alert { color: #fbbf24; font-size: 11px; margin-left: 5px; }
+
   .lc-dots { display: inline-flex; gap: 3px; margin-left: 6px; }
   .lc-dots i { width: 6px; height: 6px; border-radius: 50%; box-shadow: 0 0 6px currentColor; }
   .lc-dots i.dim { opacity: .35; box-shadow: none; }
@@ -176,7 +188,9 @@
   .lc-meta { display: flex; flex-wrap: wrap; gap: 8px; font-size: 10.5px; color: var(--text-3); margin-top: 2px; font-variant-numeric: tabular-nums; }
   .lc-prov { font-weight: 700; color: var(--c); }
   .lc-warn { color: #FBBF24; }
-  .lc-reason { font-size: 10.5px; color: var(--text-3); font-style: italic; margin-top: 2px; }
+  .lc-reason { font-size: 10.5px; color: #fbbf24; font-style: italic; margin-top: 2px; }
+  .lc-reconnect { display: inline-block; margin-top: 4px; font-size: 11px; font-weight: 600; color: #F43F5E; text-decoration: none; }
+  .lc-reconnect:hover { text-decoration: underline; }
   .lc-status {
     font-size: 9.5px; font-weight: 800; letter-spacing: .04em; text-transform: uppercase; padding: 3px 7px; border-radius: 999px; white-space: nowrap;
     color: var(--tone); background: color-mix(in srgb, var(--tone) 15%, transparent); border: 1px solid color-mix(in srgb, var(--tone) 40%, transparent);

@@ -31,6 +31,7 @@ export function liveStepIcon(type: string): string {
     case 'thought': return '💭';
     case 'final': return '✨';
     case 'rate_limit_wait': return '⏳';
+    case 'fallback_used': case 'provider_fallback': case 'model_fallback': return '⚠️';
     case 'error': return '⚠️';
     case 'auto_eval_started': return '📝';
     case 'auto_eval': return '📝';
@@ -50,6 +51,7 @@ export function liveStepLabel(type: string): string {
     case 'thought': return 'thinking';
     case 'final': return 'finalizing';
     case 'rate_limit_wait': return 'rate limited';
+    case 'fallback_used': case 'provider_fallback': case 'model_fallback': return 'LLM fallback';
     case 'error': return 'error';
     case 'auto_eval_started': return 'self-grading';
     case 'auto_eval': return 'self-eval';
@@ -85,6 +87,12 @@ export function liveEventSummary(e: AgentFlowEvent): string {
   if (t === 'run_completed') {
     const st = String(e.data.status ?? 'completed');
     return st === 'completed' ? 'Run completed successfully' : `Run ${st}`;
+  }
+  if (['fallback_used', 'provider_fallback', 'model_fallback'].includes(t)) {
+    const d = e.data;
+    const from = String(d.from_model ?? d.from ?? d.from_provider ?? 'LLM');
+    const to = String(d.to_model || d.to || d.to_provider || 'LLM');
+    return `${from} → ${to}`;
   }
   if (t === 'chain_triggered') return `Handoff → ${String(e.data.target_agent_name ?? 'next agent')}`;
   if (t === 'auto_eval_started') return 'Self-grading…';

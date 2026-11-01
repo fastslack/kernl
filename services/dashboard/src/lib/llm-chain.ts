@@ -8,6 +8,7 @@ export interface ChainLink {
 	reason?: string;
 	latencyMs?: number;
 	blockedForMs?: number;
+	resetsAt?: number;
 	lastSuccessAt?: number;
 	failures: number;
 }

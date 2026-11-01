@@ -31,6 +31,7 @@ import { agentAllowedTools, agentDeniedTools, agentVariables } from "./agent-fie
 import { buildModelChain, type ModelChainEntry, type ModelChainResolution } from "./executor/model-chain.js";
 import { assembleSystemPrompt } from "./executor/system-prompt.js";
 import { goalForRun } from "./unattended-asks.js";
+import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-access.js";
 import { RunRecorder } from "./executor/run-recorder.js";
 import { serializeCheckpoint, type RunCheckpoint } from "./executor/run-checkpoint.js";
 import { createInvokeHandler, invokeToolDef } from "./executor/invoke-tool.js";
@@ -72,6 +73,12 @@ interface ExecuteParams {
   depth?: number;
   /** Continue an interrupted native run from this checkpoint instead of from the goal. */
   resume?: RunCheckpoint;
+  runScopedTools?: ToolDefinition[];
+  fallbackPrompt?: string;
+  providerFallback?: { from_provider: string; from_model: string; reason: string };
+  requireCodingToolUse?: boolean;
+  /** Only the agent's own chain: the global chain is not a place this run may land. */
+  agentChainOnly?: boolean;
 }
 
 /** Everything the tool-loop phase of a native run needs. */
@@ -92,6 +99,8 @@ interface NativeLoopRun {
   /** The run's attachments (agents.run attachment_ids), rebuilt per model. */
   attachments: AttachmentRecord[];
   resume?: RunCheckpoint;
+  requireCodingToolUse?: boolean;
+  agentChainOnly?: boolean;
 }
 
 /**
@@ -164,6 +173,34 @@ function selfImproveDisabled(agent: Agent): boolean {
   }
 }
 
+/** Errors the claude_code executor raises to hand an unstarted run to another provider. */
+const CLAUDE_HANDOFF_ERRORS = new Set(["ClaudeUsageLimitError", "ClaudeAccessError"]);
+const CLAUDE_CODE_PROVIDERS = new Set(["claude-code", "claude_code"]);
+const CODING_TOOLS = ["Bash", "Edit", "Write", "MultiEdit", "NotebookEdit"];
+
+/** Can this agent change files or run commands? An empty tool list is the CLI's full toolset. */
+function isCodingAgent(agent: Agent): boolean {
+  const allowed = agentAllowedTools(agent);
+  const denied = new Set(agentDeniedTools(agent));
+  const usable = allowed.length === 0 ? CODING_TOOLS : allowed.filter((t) => CODING_TOOLS.includes(t));
+  return usable.some((t) => !denied.has(t));
+}
+
+/**
+ * Where a run whose Claude session is gone may go: the agent's own chain
+ * without its Claude Code links, then the same model on an Anthropic API key.
+ */
+function claudeAccessChain(
+  agent: Agent,
+  service: AgentService,
+  providers: Map<string, ChatLlmProvider>,
+): Array<{ provider: string; model: string }> {
+  const own = service.resolveModelChain(agent).filter((e) => e.provider && !CLAUDE_CODE_PROVIDERS.has(e.provider));
+  const api = providers.get("claude");
+  const same = api?.available() ? [{ provider: "claude", model: agent.model || "" }] : [];
+  return [...own, ...same];
+}
+
 export class AgentExecutor {
   private allTools: ToolDefinition[] = [];
 
@@ -202,7 +239,10 @@ export class AgentExecutor {
   }
 
   /** Cancel a running agent by run ID */
+  private nativeFallbackCleanup = new Map<string, () => Promise<void>>();
+
   cancelRun(runId: string): boolean {
+    void this.nativeFallbackCleanup.get(runId)?.().catch(err => log.warn(`Native fallback cleanup: ${err}`));
     const entry = this.activeRuns.get(runId);
     if (entry) {
       entry.cancelled = true;
@@ -299,14 +339,34 @@ export class AgentExecutor {
 
       // 1-2. Tools, with the per-run kernel_agents_invoke handler.
       const { llmTools, toolExecutor } = this.resolveRunTools(agent, run, service, events, depth);
+      const denied = new Set(agentDeniedTools(agent));
+      const allowed = agentAllowedTools(agent);
+      for (const tool of params.runScopedTools ?? []) {
+        if (denied.has(tool.name) || (allowed.length > 0 && !allowed.includes(tool.name))) continue;
+        const existing = llmTools.findIndex(t => t.name === tool.name);
+        if (existing >= 0) llmTools.splice(existing, 1);
+        llmTools.push({ name: tool.name, description: tool.description, input_schema: zodToJsonSchema(tool.inputSchema) as Record<string, unknown> });
+        toolExecutor.set(tool.name, tool.handler);
+      }
       if (llmTools.length === 0) {
         return this.noToolsResolved(agent);
       }
 
       // 3. Model fallback chain.
-      const chainResolution = this.resolveModelChain(agent, service, llmTools.length);
+      const chainResolution = this.resolveModelChain(agent, service, llmTools.length, params.agentChainOnly);
       if (!chainResolution.ok) {
         return failedBeforeStart(chainResolution.error);
+      }
+
+      if (params.providerFallback) {
+        const target = chainResolution.chain[0];
+        const fields = { ...params.providerFallback, to_provider: target.provider.name, to_model: target.model };
+        recorder.emit("agent:flow:fallback_used", fields);
+        recorder.logEvent({
+          event_type: "step", event_subtype: "fallback_used",
+          detail: `LLM fallback ${fields.from_provider}/${fields.from_model} → ${fields.to_provider}/${fields.to_model || "(default)"}: ${fields.reason}`,
+          raw_data: fields,
+        });
       }
 
       // 4. Interpolate variables in prompts
@@ -349,9 +409,11 @@ export class AgentExecutor {
       return await this.runNativeLoop({
         agent, run, service, events, depth, runState, recorder,
         chain: chainResolution.chain,
-        llmTools, toolExecutor, systemText, effectiveGoal, goalWithMemory,
+        llmTools, toolExecutor, systemText: params.fallbackPrompt ? `${systemText}\n\n${params.fallbackPrompt}` : systemText, effectiveGoal, goalWithMemory,
         attachments: runAttachments(run),
         resume: params.resume,
+        requireCodingToolUse: params.requireCodingToolUse,
+        agentChainOnly: params.agentChainOnly,
       });
     } finally {
       this.activeRuns.delete(run.id);
@@ -442,14 +504,74 @@ export class AgentExecutor {
         ? `${goal}\n\n${blocksText(buildAttachmentBlocks(attachments, TEXT_ONLY_CAPS, 0))}`
         : goal, run, agent);
       const result = await this.claudeCodeExecutor.execute({
-        agent, goal: goalWithAttachments, run, service, events, depth,
+        agent, goal: goalWithAttachments, run, service, events, depth, allowProviderFallback: true,
       });
       // We still want the declarative chains to run on completion.
       this.executeDeclarativeChains(agent, run, result, service, depth, events);
       return result;
+    } catch (err) {
+      // Extension bundles carry their own error classes; use their stable shape.
+      if (!(err instanceof Error) || !CLAUDE_HANDOFF_ERRORS.has(err.name) || (err as Error & { partial?: boolean }).partial !== false) throw err;
+      const accessLost = err.name === "ClaudeAccessError";
+      const coding = isCodingAgent(agent);
+      // First the agent's own non-Claude-Code links and the same model on an Anthropic key.
+      const chain = claudeAccessChain(agent, service, this.providers);
+      // A coding agent is never degraded to whatever model is left (19/10 23:05: on a usage limit QA fell
+      // to models that consumed its reviews without doing them): it waits for the reconnection or the reset.
+      if (coding && chain.length === 0) {
+        return this.waitForClaude(params, accessLost ? CLAUDE_ACCESS_WAITING : CLAUDE_LIMIT_WAITING, err.message);
+      }
+      service.logEvent({
+        run_id: run.id, agent_id: agent.id, agent_name: agent.name,
+        event_type: "step", event_subtype: "provider_fallback",
+        detail: accessLost
+          ? "Claude subscription access lost — continuing on another provider"
+          : "Claude Code quota exhausted — continuing through the native provider chain",
+        raw_data: { from: "claude_code", error: err.message },
+      });
+      let session: import("./advanced-types.js").NativeFallbackSession | undefined;
+      // Only a coding agent needs Bash/Read/Edit back; the others run on kernel tools.
+      if (coding) {
+        try {
+          session = await this.claudeCodeExecutor.prepareNativeFallbackTools?.({ ...params, depth });
+        } catch (error) {
+          return this.waitForClaude(params, accessLost ? CLAUDE_ACCESS_WAITING : CLAUDE_LIMIT_WAITING,
+            `${err.message} (native coding fallback unavailable: ${String(error)})`);
+        }
+      }
+      if (session) this.nativeFallbackCleanup.set(run.id, () => session.cleanup());
+      try {
+        // Clear the CLI-specific model so it cannot reach a different provider.
+        return await this.execute({
+          ...params,
+          runScopedTools: session?.tools,
+          fallbackPrompt: session?.prompt,
+          providerFallback: { from_provider: "claude_code", from_model: agent.model, reason: err.message },
+          requireCodingToolUse: coding,
+          agentChainOnly: coding,
+          agent: { ...agent, executor_type: "native", provider: "", model: "", model_chain: chain.length > 0 ? JSON.stringify(chain) : "" },
+        });
+      } finally {
+        this.nativeFallbackCleanup.delete(run.id);
+        await session?.cleanup();
+      }
     } finally {
       this.activeRuns.delete(run.id);
     }
+  }
+
+  /**
+   * The run stops without a fallback: Claude access is gone or its usage
+   * limit is reached. The error carries the waiting prefix so the breaker
+   * leaves the agent running and the dashboard says what it waits for.
+   */
+  private waitForClaude(params: ExecuteParams, prefix: string, reason: string): ExecutionResult {
+    const { agent, run, service, events } = params;
+    const message = `${prefix} ${reason}`;
+    service.logEvent({ run_id: run.id, agent_id: agent.id, agent_name: agent.name, event_type: "step", event_subtype: "error", detail: message });
+    service.recordRunOutcome(agent.id, { ok: false, error: message, run_id: run.id });
+    events?.emit("agent:flow:run_completed", { agent_id: agent.id, agent_name: agent.name, run_id: run.id, status: "failed", steps_count: 0, tokens_used: 0, error: message });
+    return failedBeforeStart(message);
   }
 
   /**
@@ -504,11 +626,12 @@ export class AgentExecutor {
    * see buildModelChain for the dedupe/availability/tool-capability/health
    * rules.
    */
-  private resolveModelChain(agent: Agent, service: AgentService, toolCount: number): ModelChainResolution {
+  private resolveModelChain(agent: Agent, service: AgentService, toolCount: number, agentChainOnly = false): ModelChainResolution {
     const resolution = buildModelChain({
       agentName: agent.name,
       agentChain: service.resolveModelChain(agent),
-      globalChain: this.configRef?.agents?.defaultModelChain ?? [],
+      globalChain: agentChainOnly ? [] : this.configRef?.agents?.defaultModelChain ?? [],
+      strict: agentChainOnly,
       providers: this.providers,
       defaultProvider: this.defaultProvider,
       toolCount,
@@ -563,6 +686,10 @@ export class AgentExecutor {
       finalContent = loopResult.finalContent;
       const abortReason = loopResult.abortReason;
       totalTokens += loopResult.totalTokens;
+
+      if (r.requireCodingToolUse && ![...recorder.toolsUsed].some(name => ["Bash", "Read", "Edit", "Write", "Glob", "Grep"].includes(name))) {
+        throw new Error("Coding fallback returned without using a coding tool; the assigned work remains incomplete");
+      }
 
       if (abortReason) {
         log.warn(`Agent "${agent.name}": ${abortReason}`);
@@ -640,7 +767,7 @@ export class AgentExecutor {
       const errorMsg = err instanceof Error ? err.message : String(err);
 
       // Quota exhaustion: cycle through ALL remaining providers until one works
-      if (isQuotaErrorMessage(errorMsg)) {
+      if (isQuotaErrorMessage(errorMsg) && !r.agentChainOnly) {
         const retried = await this.retryOnOtherProviders(r, active.provider, totalTokens);
         if (retried) return retried;
       }

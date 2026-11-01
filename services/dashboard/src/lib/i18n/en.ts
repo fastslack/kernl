@@ -164,6 +164,7 @@ const en = {
   "sh.sc.architecture.d": "How your Kernl is built",
   "nav.view.bench": "Bench",
   "live.pillTitle": "Live stream and the models in use — click to inspect",
+  "live.resetsAt": "Resets: {t}",
   "live.title": "Live models",
   "live.sub": "The chain Kernl runs on, in order, with its bench score",
   "live.refresh": "Check again",
@@ -1014,6 +1015,10 @@ const en = {
   "agent.failure.configure_providers": "Configure providers",
   "agent.failure.google_expired": "Google token expired",
   "agent.failure.reauth_google": "Re-authenticate Google",
+  "agent.failure.claude_access": "Claude access was lost",
+  "agent.failure.claude_limit": "Waiting for Claude's usage limit to reset",
+  "agent.failure.reconnect_claude": "Reconnect Claude",
+  "agent.failure.use_api_key": "Use another provider or API key",
   "agent.failure.generic": "The run failed",
 
   // Runtime section — the editable provider/model chain and the four limits.

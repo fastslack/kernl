@@ -37,6 +37,7 @@ import { AgentRunsService } from "./services/runs-service.js";
 import { AgentFeedbackService } from "./services/feedback-service.js";
 import { OfficeTeamError, DISTRIBUTE_CHAIN_LABEL, TOP_RANK_IDS_SQL } from "./office-team.js";
 import { protectedReason, ProtectedAgentError } from "./protected-agents.js";
+import { CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING } from "../../sdk/claude-access.js";
 
 export type QuestionStatus = "triage" | "pending" | "owed" | "answered" | "dismissed";
 /** task: picking it leaves the operator a task — the question goes to 'owed', not 'answered'. */
@@ -820,6 +821,13 @@ export class AgentService {
       return { paused: false, consecutive_failures: 0 };
     }
 
+    // Nothing is wrong with the agent while the Claude session is down or over its limit: it
+    // must not be switched off, or reconnecting would leave it paused.
+    if ([CLAUDE_ACCESS_WAITING, CLAUDE_LIMIT_WAITING].some((p) => (outcome.error ?? "").startsWith(p))) {
+      log.warn(`Agent "${agent.name}": ${outcome.error!.slice(0, 160)}`);
+      return { paused: false, consecutive_failures: agent.consecutive_failures ?? 0 };
+    }
+
     const fails = (agent.consecutive_failures ?? 0) + 1;
     const reason = (outcome.error ?? "").trim().slice(0, 500) || "run failed without an error message";
     const threshold = this.autoPauseThreshold();
@@ -1202,6 +1210,17 @@ export class AgentService {
          WHERE id IN (${ph}) AND status = 'unread'`,
       )
       .run(...messageIds);
+  }
+
+  /** Delivery failed before any work: return the original letters to the inbox. */
+  restoreFailedInboxDelivery(agentId: string, messageIds: string[], refundAttempt = true): void {
+    if (!messageIds.length) return;
+    const ph = messageIds.map(() => "?").join(",");
+    this.db.prepare(
+      `UPDATE agent_office_inbox SET status = 'unread', read_at = NULL,
+         wake_attempts = MAX(0, wake_attempts - ?)
+       WHERE to_agent_id = ? AND id IN (${ph}) AND status IN ('unread', 'read')`,
+    ).run(refundAttempt ? 1 : 0, agentId, ...messageIds);
   }
 
   /** Archive (unread → archived, read_at stays NULL) letters that exhausted their wakes.

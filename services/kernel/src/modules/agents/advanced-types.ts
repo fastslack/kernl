@@ -25,9 +25,18 @@ export interface AltExecuteParams {
   service: AgentService;
   events?: EventBus;
   depth?: number;
+  /** Let the caller continue an untouched run through other providers. */
+  allowProviderFallback?: boolean;
+}
+
+export interface NativeFallbackSession {
+  tools: import("../../core/types.js").ToolDefinition[];
+  cleanup(): Promise<void>;
+  prompt?: string;
 }
 
 export interface AltExecutorLike {
+  prepareNativeFallbackTools?(params: AltExecuteParams): Promise<NativeFallbackSession>;
   execute(params: AltExecuteParams): Promise<ExecutionResult>;
   cancelRun(runId: string): boolean;
 }

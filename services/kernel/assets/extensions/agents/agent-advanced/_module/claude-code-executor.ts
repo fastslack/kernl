@@ -56,7 +56,16 @@ import {
   chooseKernelMcpTransport,
   hostPathReachable,
   EXTERNAL_CONTENT_NOTICE,
+  ClaudeLimitObserver,
+  ClaudeUsageLimitError,
+  ClaudeAccessError,
+  isClaudeAccessError,
+  claudeLimitFallback,
+  rememberClaudeLimit,
+  routeAroundClaudeLimit,
+  getClaudeModelLimit,
 } from "@kernl/extension-sdk";
+import { createNativeCodingTools, nativeFallbackBindSource } from "./native-coding-tools.js";
 import { failureNote } from "./failure-note.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
@@ -78,6 +87,8 @@ export interface ClaudeCodeExecuteParams {
   service: AgentService;
   events?: EventBus;
   depth?: number;
+  /** Let the caller continue an untouched run through other providers. */
+  allowProviderFallback?: boolean;
 }
 
 /** Shape of an optional per-agent MCP config injected through `variables`. */
@@ -521,6 +532,47 @@ export class ClaudeCodeExecutor {
 
   getActiveRunIds(): string[] {
     return [...this.activeRuns.keys()];
+  }
+
+  async prepareNativeFallbackTools(params: ClaudeCodeExecuteParams) {
+    const { agent, run, service } = params;
+    const vars = this.parseVariables(agent);
+    const { cwd } = this.resolveCwd(agent, run, service);
+    const allowed = this.parseJsonArray(agent.allowed_tools);
+    const denied = this.parseJsonArray(agent.denied_tools);
+    const slug = this.resolveDriverSlug(vars);
+    const policy = toolPolicy({ usingSandbox: !!slug, allowUnsandboxedBash: process.env.KERNEL_ALLOW_UNSANDBOXED_BASH === "1", allowed: new Set(allowed), projectRun: !!run.project_id });
+    let executablePath = "/bin/sh";
+    let cleanup: (() => Promise<void>) | undefined;
+    if (slug) {
+      const registry = this.sandboxRegistry;
+      if (!registry || !registry.hasFactory(slug)) throw new Error(`Native coding fallback: sandbox driver ${slug} unavailable`);
+      if (!registry.getDriver(slug) && !await registry.startDriver(slug)) throw new Error(`Native coding fallback: sandbox ${slug} failed to start: ${registry.lastStartError}`);
+      if (!registry.getDriver(slug)?.capabilities.exec) throw new Error(`Native coding fallback: sandbox ${slug} cannot execute commands`);
+      const env = Object.fromEntries(Object.entries(vars.__env__ ?? {}).filter(([key]) => !/(API_KEY|TOKEN|SECRET|PASSWORD|AUTH)/i.test(key)));
+      const handle = await registry.prepareRun(slug, {
+        runId: `${run.id}-native`, workspace: { kernelPath: cwd, hostPath: hostPathFromKernel(cwd), snapshotId: vars.__sandbox_snapshot__ },
+        extraMounts: [
+          ...(cwd.startsWith("/") && cwd !== "/workspace" && (!cwd.startsWith("/app/") || hostPathFromKernel(cwd)) ? [{ host: nativeFallbackBindSource(cwd, hostPathFromKernel(cwd)), container: cwd }] : []),
+          ...(vars.__additional_directories__ ?? []).filter(dir => existsSync(dir)).map(dir => ({ host: nativeFallbackBindSource(dir, hostPathFromKernel(dir)), container: dir, readonly: true })),
+        ],
+        env, image: vars.__sandbox_image__, entryCommand: '"$@"',
+        network: vars.__no_network__ ? "none" : vars.__sandbox_network__ || process.env.KERNEL_AGENT_DOCKER_NETWORK || "kernl_default",
+      });
+      executablePath = handle.executablePath;
+      cleanup = () => registry.cleanup(handle);
+    } else {
+      // An SDK bubblewrap policy cannot protect native subprocesses. Require an
+      // actual driver unless the original agent deliberately opted out.
+      if (vars.__sandbox__ !== false || process.env.KERNEL_ALLOW_UNSANDBOXED_AGENTS !== "1") {
+        throw new Error("Native coding fallback requires a sandbox driver; SDK OS sandbox is unavailable for native tools");
+      }
+    }
+    // An unsandboxed session still uses a shell executable wrapper contract.
+    // /usr/bin/env forwards ['sh','-c',command] without nesting sh as a script.
+    if (!slug) executablePath = "/usr/bin/env";
+    const session = createNativeCodingTools({ executablePath, cwd, allowed, denied, includeBash: policy.includeBash, fsRoots: [cwd, ...(vars.__additional_directories__ ?? [])], timeoutMs: agent.timeout_ms, cleanup });
+    return { ...session, prompt: `Coding fallback workspace: ${slug ? "/workspace" : cwd}. Use Bash, Read, Edit, Write, Glob and Grep when available to carry out the assigned work. Acknowledging a message alone does not complete a development assignment.` };
   }
 
   async execute(params: ClaudeCodeExecuteParams): Promise<ExecutionResult> {
@@ -976,7 +1028,19 @@ export class ClaudeCodeExecutor {
       };
 
       const llmCaller = `claude_code:${agent.name}`;
-      const llmModel = options.model ?? "claude-opus-4-6";
+      // A model known to be over its usage limit is not tried again until it resets.
+      const requestedModel = options.model ?? "claude-opus-4-6";
+      let llmModel = routeAroundClaudeLimit(requestedModel);
+      if (llmModel !== requestedModel) {
+        const reason = getClaudeModelLimit(requestedModel)?.detail ?? "Configured model is still usage limited";
+        const fields = { from_provider: "claude_code", from_model: requestedModel, to_provider: "claude_code", to_model: llmModel, reason };
+        events?.emit("agent:flow:model_fallback", { agent_id: agent.id, agent_name: agent.name, run_id: run.id, ...fields });
+        service.logEvent({
+          run_id: run.id, agent_id: agent.id, agent_name: agent.name,
+          event_type: "step", event_subtype: "model_fallback",
+          detail: `${requestedModel} → ${llmModel}: ${reason}`, raw_data: fields,
+        });
+      }
       const llmStartedAt = Date.now();
       let llmTurns = 0;
       let lastTurnAt = llmStartedAt;
@@ -991,56 +1055,125 @@ export class ClaudeCodeExecutor {
         preview: goal,
       });
 
-      const q = query({ prompt: goal, options });
       let usage: SdkModelUsage[] = [];
 
-      try {
-        for await (const msg of q) {
-          if (abortController.signal.aborted) break;
-          if (msg.type === "result") usage = sdkResultUsage(msg, llmModel);
-          // Each `assistant` message is one LLM turn — log it so the operator
-          // can see the SDK loop progress at the same granularity as the
-          // OpenAI-shaped providers' instrumentProvider wrapper.
-          if (msg.type === "assistant") {
-            llmTurns++;
-            const now = Date.now();
-            const turnMs = now - lastTurnAt;
-            lastTurnAt = now;
-            const blocks = (msg.message?.content ?? []) as Array<{ type: string }>;
-            const toolCalls = blocks.filter((b) => b.type === "tool_use").length;
-            logLlmEnd({
+      // One pass per model. The usage limit does not throw: the CLI answers
+      // with the notice as text and a "success" result, which used to close
+      // the run as completed with the notice as its result.
+      for (;;) {
+        options.model = llmModel;
+        const limit = new ClaudeLimitObserver();
+        let produced = false;
+        const q = query({ prompt: goal, options });
+
+        try {
+          for await (const msg of q) {
+            if (abortController.signal.aborted) break;
+            if (limit.observe(msg)) continue;
+            // The CLI words a dead session as an assistant message too; that is not work done.
+            if (msg.type === "assistant" && !isClaudeAccessError(JSON.stringify(msg.message?.content ?? ""))) produced = true;
+            if (msg.type === "result") usage = sdkResultUsage(msg, llmModel);
+            // Each `assistant` message is one LLM turn — log it so the operator
+            // can see the SDK loop progress at the same granularity as the
+            // OpenAI-shaped providers' instrumentProvider wrapper.
+            if (msg.type === "assistant") {
+              llmTurns++;
+              const now = Date.now();
+              const turnMs = now - lastTurnAt;
+              lastTurnAt = now;
+              const blocks = (msg.message?.content ?? []) as Array<{ type: string }>;
+              const toolCalls = blocks.filter((b) => b.type === "tool_use").length;
+              logLlmEnd({
+                slug: "claude_code",
+                model: llmModel,
+                durationMs: turnMs,
+                toolCalls,
+                caller: `${llmCaller}/turn-${llmTurns}`,
+              });
+            }
+            const handled = this.handleMessage(msg, { agent, run, service, events, stepNumberRef: () => ++stepNumber });
+            if (handled.tokensAdded) totalTokens += handled.tokensAdded;
+            if (handled.finalText != null) finalText = handled.finalText;
+            if (handled.errorText) errorMsg = handled.errorText;
+          }
+        } catch (err) {
+          // The CLI may exit non-zero after reporting the limit; the limit is the cause.
+          if (!limit.hit) {
+            const message = err instanceof Error ? err.message : String(err);
+            const kind = isClaudeAccessError(message) ? "auth" : "transient";
+            logLlmFail({
               slug: "claude_code",
               model: llmModel,
-              durationMs: turnMs,
-              toolCalls,
-              caller: `${llmCaller}/turn-${llmTurns}`,
+              durationMs: Date.now() - llmStartedAt,
+              kind,
+              message,
+              caller: llmCaller,
             });
+            recordLlmCall({
+              slug: "claude-code",
+              model: llmModel,
+              ok: false,
+              latencyMs: Date.now() - llmStartedAt,
+              errorKind: kind,
+              errorMsg: message,
+              caller: `agent:${agent.name}`,
+              startedAt: llmStartedAt,
+            }, { silent: true });
+            // No model of the subscription can run: only another provider can.
+            if (kind === "auth" && params.allowProviderFallback && !produced && !abortController.signal.aborted) {
+              throw new ClaudeAccessError(message, llmModel);
+            }
+            throw err;
           }
-          const handled = this.handleMessage(msg, { agent, run, service, events, stepNumberRef: () => ++stepNumber });
-          if (handled.tokensAdded) totalTokens += handled.tokensAdded;
-          if (handled.finalText != null) finalText = handled.finalText;
-          if (handled.errorText) errorMsg = handled.errorText;
         }
-      } catch (err) {
-        logLlmFail({
-          slug: "claude_code",
-          model: llmModel,
-          durationMs: Date.now() - llmStartedAt,
-          kind: "transient",
-          message: err instanceof Error ? err.message : String(err),
-          caller: llmCaller,
+        // Same dead session, reported through the result instead of a throw.
+        if (!limit.hit && errorMsg && isClaudeAccessError(errorMsg)
+          && params.allowProviderFallback && !produced && !abortController.signal.aborted) {
+          throw new ClaudeAccessError(errorMsg, llmModel);
+        }
+        if (!limit.hit) break;
+
+        rememberClaudeLimit(llmModel, limit.hit);
+        // Only a run that has not done anything yet can start over elsewhere.
+        const next = produced ? null : claudeLimitFallback(llmModel);
+        if (!next) {
+          const limitError = new ClaudeUsageLimitError(limit.hit, llmModel);
+          limitError.partial = produced;
+          errorMsg = limitError.message;
+          recordLlmCall({
+            slug: "claude-code",
+            model: llmModel,
+            ok: false,
+            latencyMs: Date.now() - llmStartedAt,
+            errorKind: "exhausted",
+            errorMsg,
+            caller: `agent:${agent.name}`,
+            startedAt: llmStartedAt,
+          }, { silent: true });
+          if (params.allowProviderFallback && !produced && !abortController.signal.aborted) throw limitError;
+          break;
+        }
+        log.warn(`ClaudeCodeExecutor: agent "${agent.name}" — ${llmModel} hit its usage limit, retrying on ${next}`);
+        service.logEvent({
+          run_id: run.id,
+          agent_id: agent.id,
+          agent_name: agent.name,
+          event_type: "step",
+          event_subtype: "model_fallback",
+          detail: `${llmModel} hit its usage limit — retrying on ${next}`,
+          raw_data: {
+            from: llmModel,
+            to: next,
+            limit_type: limit.hit.limitType ?? limit.hit.kind,
+            resets_at: limit.hit.resetsAt ? new Date(limit.hit.resetsAt).toISOString() : null,
+          },
         });
-        recordLlmCall({
-          slug: "claude-code",
-          model: llmModel,
-          ok: false,
-          latencyMs: Date.now() - llmStartedAt,
-          errorKind: "transient",
-          errorMsg: err instanceof Error ? err.message : String(err),
-          caller: `agent:${agent.name}`,
-          startedAt: llmStartedAt,
-        }, { silent: true });
-        throw err;
+        events?.emit("agent:flow:model_fallback", {
+          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+          from_provider: "claude_code", from_model: llmModel,
+          to_provider: "claude_code", to_model: next, reason: limit.hit.detail,
+        });
+        llmModel = next;
       }
 
       // Token usage per model for the whole run, so agent spend shows up
@@ -1160,6 +1293,8 @@ export class ClaudeCodeExecutor {
 
       return execResult;
     } catch (err) {
+      // Preserve the typed handoff before completion events, memory or evaluation.
+      if (params.allowProviderFallback && (err instanceof ClaudeUsageLimitError || err instanceof ClaudeAccessError) && !err.partial) throw err;
       // err may not be an Error instance (some SDK rejects come through as
       // pass strings or plain objects). We build a robust baseMsg.
       let baseMsg = "";

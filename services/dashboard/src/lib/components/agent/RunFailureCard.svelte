@@ -20,6 +20,7 @@
   import { t } from '$lib/i18n/index.js';
   import { createEventDispatcher } from 'svelte';
   import { analyzeRunFailure, type RemedyKind } from '$lib/run-failure.js';
+  import ClaudeSignIn from '$lib/components/llm/ClaudeSignIn.svelte';
 
   /** The failed run's raw error text. */
   export let error: string;
@@ -38,8 +39,21 @@
     (r) => !(r.kind === 'switch-executor-claude-code' && agentType === 'claude_code'),
   );
 
+  /** Reconnecting happens right here: the sign-in dialog opens in the card. */
+  let signingIn = false;
+
   function fire(kind: RemedyKind) {
+    if (kind === 'reconnect-claude') {
+      signingIn = !signingIn;
+      return;
+    }
     dispatch('remedy', { kind });
+  }
+
+  /** Signed in again: run it on the new session. */
+  function afterSignIn() {
+    signingIn = false;
+    dispatch('remedy', { kind: 'retry' });
   }
 </script>
 
@@ -64,6 +78,11 @@
         </button>
       {/each}
     </div>
+    {#if signingIn}
+      <div class="rfc-signin">
+        <ClaudeSignIn showDone onDone={afterSignIn} />
+      </div>
+    {/if}
   </div>
 {/if}
 
@@ -84,6 +103,7 @@
     color:#ffb3bc;white-space:pre-wrap;word-break:break-word;
   }
   .rfc-actions{display:flex;flex-wrap:wrap;gap:7px}
+  .rfc-signin{padding-top:2px}
   .rfc-btn{
     padding:6px 11px;border-radius:7px;
     font:600 10.5px 'Syne',sans-serif;letter-spacing:.2px;

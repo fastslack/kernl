@@ -1,6 +1,6 @@
 /**
- * The question investigator: a read-only claude_code agent the "¿Qué
- * contestaría la IA?" button starts on an escalated question.
+ * The question investigator: a read-only agent the "¿Qué contestaría la IA?"
+ * button starts on an escalated question.
  *
  * The opinion used to be one chat call on the default model chain (which on
  * this kind of instance starts with small models), with the question text and
@@ -15,9 +15,10 @@
  *     `dontAsk`, anything not allowed is refused.
  *  3. The kernel's MCP dispatch holds it to the same list
  *     (core/caller-tool-gate.ts), whatever its executor was told.
- *  4. One model, no fallback chain (QUESTION_OPINION_MODEL, Opus by default):
- *     if it cannot run, the card says "unavailable" instead of showing a
- *     worse opinion.
+ *  4. A fallback chain (DEFAULT_OPINION_CHAIN): if the primary model cannot
+ *     run, the next entry in the chain takes over. The card shows the
+ *     opinion regardless of which link answered, so the operator always
+ *     gets a take.
  *
  * The opinion is stored on the question; nothing is answered until the
  * operator presses Send.
@@ -28,6 +29,7 @@ import { log } from "../../core/logger.js";
 import { restrictCallerTools } from "../../core/caller-tool-gate.js";
 import type { AgentService, AgentQuestion } from "./service.js";
 import type { AgentExecutor } from "./executor.js";
+import type { ModelChainEntry } from "./types.js";
 import { startAgentRun } from "./start-run.js";
 import { parseQuestionRefs } from "./question-refs.js";
 import {
@@ -63,28 +65,77 @@ export const INVESTIGATOR_DENIED = [
   "kernel_agents_ask_supervisor",
 ] as const;
 
-export const DEFAULT_OPINION_MODEL = "claude-opus-5-5";
+/**
+ * The investigator's fallback chain: tried in order, the first one that can
+ * answer wins. QUESTION_OPINION_CHAIN (JSON array of {provider,model}, in the
+ * same format as agents.defaultModelChain) overrides this default. The card
+ * surfaces whichever link answered so the operator still gets a take when the
+ * preferred model is unavailable.
+ */
+export const DEFAULT_OPINION_CHAIN: ModelChainEntry[] = [
+  { provider: "claude_code", model: "claude-opus-5-5" },
+  { provider: "anthropic", model: "claude-sonnet-5-5" },
+  { provider: "anthropic", model: "claude-haiku-5-5" },
+];
+
+function parseEnvChain(raw: string | undefined): ModelChainEntry[] | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return null;
+    const chain: ModelChainEntry[] = [];
+    for (const entry of parsed) {
+      if (!entry || typeof entry !== "object") continue;
+      const provider = String((entry as Record<string, unknown>).provider ?? "").trim();
+      const model = String((entry as Record<string, unknown>).model ?? "").trim();
+      if (provider && model) chain.push({ provider, model });
+    }
+    return chain.length > 0 ? chain : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The chain the investigator uses on its next run. QUESTION_OPINION_CHAIN
+ * (JSON array) wins; otherwise the curated default. The kernel's
+ * buildModelChain still applies dedupe, availability, tool-capability and
+ * health re-order on top of whatever we return here.
+ */
+export function resolveOpinionChain(): ModelChainEntry[] {
+  const fromEnv = parseEnvChain(process.env.QUESTION_OPINION_CHAIN);
+  return fromEnv ?? DEFAULT_OPINION_CHAIN;
+}
+
 const MAX_TURNS = 30;
 const TIMEOUT_MS = 8 * 60_000;
 const SETTLE_TRIES = 120;
 const SETTLE_EVERY_MS = 250;
 
-/** The agent's fixed definition: re-asserted before every run, so an edit in the panel cannot widen it. */
-export function investigatorDefinition(language: KernelLanguage, model = process.env.QUESTION_OPINION_MODEL || DEFAULT_OPINION_MODEL) {
+/**
+ * The agent's fixed definition: re-asserted before every run, so an edit in
+ * the panel cannot widen it. The chain is the agent's model_chain — the
+ * kernel's native tool loop iterates it (see executor.resolveModelChain).
+ */
+export function investigatorDefinition(
+  language: KernelLanguage,
+  chain: ModelChainEntry[] = resolveOpinionChain(),
+) {
   return {
     name: "Kernl Investigator",
     description: language === "es"
       ? "Investiga las preguntas escaladas antes de opinar: lee el issue, el MR, el código y git. Solo lectura. Lo lanza «¿Qué contestaría la IA?» en la tarjeta de la pregunta."
       : "Investigates escalated questions before giving an opinion: reads the issue, the MR, the code and git. Read-only. Started by \"What would the AI answer?\" on the question card.",
     system_prompt: INVESTIGATOR_PROMPT[language],
-    allowed_tools: [...INVESTIGATOR_TOOLS] as string[],
-    denied_tools: [...INVESTIGATOR_DENIED] as string[],
+    allowed_tools: [...INVESTIGATOR_TOOLS],
+    denied_tools: [...INVESTIGATOR_DENIED],
     variables: {
       __sandbox_driver__: "none",
       __permission_mode__: "dontAsk",
       __self_improve__: "false",
     } as Record<string, string>,
-    model,
+    model: "",
+    model_chain: chain,
     max_iterations: MAX_TURNS,
     timeout_ms: TIMEOUT_MS,
   };
@@ -131,11 +182,14 @@ export function createQuestionInvestigator(deps: {
     }
     service.updateAgent(id, {
       system_prompt: def.system_prompt, allowed_tools: def.allowed_tools, denied_tools: def.denied_tools,
-      variables: def.variables, model: def.model, max_iterations: def.max_iterations, timeout_ms: def.timeout_ms,
-      active: true,
+      variables: def.variables, model: "", model_chain: def.model_chain,
+      max_iterations: def.max_iterations, timeout_ms: def.timeout_ms, active: true,
     });
-    service.setExecutorType(id, "claude_code");
-    // Three failed opinions in a row (an expired Claude session) trip the breaker and the chief hears
+    // Native tool loop with the chain: each entry is tried in order, the
+    // first one that can answer wins (kernel's buildModelChain applies
+    // dedupe, availability, tool-capability and health re-order on top).
+    service.setExecutorType(id, "native");
+    // Three failed opinions in a row trip the breaker and the chief hears
     // about it; the next click is the operator trying again, so it starts clean.
     service.clearAutoPause(id);
     restrictCallerTools(id, INVESTIGATOR_TOOLS);

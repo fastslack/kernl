@@ -17,6 +17,8 @@ export class ChatClaudeProvider implements ChatLlmProvider {
     private defaultModel: string = CLAUDE_DEFAULT_MODEL,
   ) {}
 
+  getDefaultModel(): string { return this.defaultModel; }
+
   available(): boolean {
     return this.apiKey.length > 0;
   }

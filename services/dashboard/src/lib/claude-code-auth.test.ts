@@ -17,6 +17,22 @@ describe("isClaudeCodeAuthError", () => {
     ).toBe(true);
   });
 
+  it("matches a subscription the organization switched off", () => {
+    expect(
+      isClaudeCodeAuthError(
+        "Claude Code returned an error result: Your organization has disabled Claude subscription access for Claude Code · Use an Anthropic API key instead, or ask your admin to enable access",
+      ),
+    ).toBe(true);
+  });
+
+  it("matches a run the kernel held for the reconnection", () => {
+    expect(isClaudeCodeAuthError("Claude access lost — waiting for reconnection: claude_code: subscription access lost on claude-sonnet-5-5.")).toBe(true);
+  });
+
+  it("matches an expired OAuth session", () => {
+    expect(isClaudeCodeAuthError("Claude Code returned an error result: Failed to authenticate. API Error: 401 OAuth token has expired")).toBe(true);
+  });
+
   it("does not fire on a model talking about logins", () => {
     // Otherwise every answer about authentication sprouts a sign-in button.
     expect(isClaudeCodeAuthError("To log in to the app, run `npm start` and open the login page.")).toBe(false);

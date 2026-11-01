@@ -1,3 +1,4 @@
+import { describeChainLink } from "./chain-status.js";
 /**
  * Admin HTTP routes for LlmProviderRegistry.
  *
@@ -555,38 +556,9 @@ export function registerLlmProviderRoutes(
   server.route("GET", "/api/llm/chain", () => {
     const chain = llm().describeChain();
     const health = getAllHealth();
-    type LinkStatus = "active" | "standby" | "no-key" | "quota" | "rate-limit" | "auth" | "degraded";
-    const describe = (link: { slug: string; provider: string; model: string; available: boolean }, isPrimary: boolean) => {
-      const h = health[link.slug];
-      let status: LinkStatus;
-      let reason: string | undefined;
-      if (!link.available) {
-        status = "no-key";
-        reason = "no API key configured";
-      } else if (h?.blocked) {
-        const kind = h.lastFailureKind ?? "transient";
-        if (kind === "exhausted") { status = "quota"; reason = "credits exhausted / billing required"; }
-        else if (kind === "rate-limit") { status = "rate-limit"; reason = "rate-limited by provider"; }
-        else if (kind === "auth") { status = "auth"; reason = "auth rejected (bad key / forbidden)"; }
-        else { status = "degraded"; reason = "blocked after repeated transient failures"; }
-      } else if ((h?.failures ?? 0) > 0) {
-        status = "degraded";
-        reason = `${h?.failures} recent failure(s)`;
-      } else {
-        status = isPrimary ? "active" : "standby";
-      }
-      return {
-        slug: link.slug,
-        provider: link.provider,
-        model: link.model,
-        status,
-        reason,
-        latencyMs: h?.ewmaMs,
-        blockedForMs: h?.blockedFor,
-        lastSuccessAt: h?.lastSuccessAt,
-        failures: h?.failures ?? 0,
-      };
-    };
+    const blockedModels = blocklist.listAll();
+    const describe = (link: { slug: string; provider: string; model: string; available: boolean }, isPrimary: boolean) =>
+      describeChainLink(link, isPrimary, health[link.slug], blockedModels.find((b) => b.slug === link.slug && b.model === link.model));
     return {
       primary: describe(chain.primary, true),
       fallbacks: chain.fallbacks.map(l => describe(l, false)),

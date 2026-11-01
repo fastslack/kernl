@@ -43,6 +43,8 @@ export * from "./llm-usage.js";
 export * from "./fs-paths.js";
 export { hostPathReachable, type HostPathCheck } from "./host-paths.js";
 export * from "./claude-cli.js";
+export * from "./claude-limits.js";
+export * from "./claude-access.js";
 export * from "./mcp-transport.js";
 export * from "./url-guard.js";
 export * from "./crypto.js";

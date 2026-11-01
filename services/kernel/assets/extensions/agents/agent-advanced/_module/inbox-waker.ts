@@ -13,12 +13,15 @@
  *   4. Per-agent in-memory cooldown — same agent isn't woken twice within
  *      `quietMs` even if multiple messages arrive in quick succession.
  *   5. Kill switch: env AGENTS_INBOX_WAKE=0 disables entirely.
+ *   6. A claude_code agent whose model is over its usage limit stays asleep
+ *      (no wake, no attempt spent) until the limit lifts: otherwise it runs on
+ *      the fallback model all through the quota.
  *
  * Failure mode: any error is caught and logged. A broken waker must not
  * break the caller's postToColleague.
  */
 
-import { log, isoNow, type EventBus } from "@kernl/extension-sdk";
+import { log, isoNow, getClaudeModelLimit, type EventBus } from "@kernl/extension-sdk";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import type { AgentExecutor } from "../../../../../src/modules/agents/executor.js";
 import type { Agent, AgentOfficeInboxMessage } from "../../../../../src/modules/agents/types.js";
@@ -80,6 +83,9 @@ export class InboxWaker {
       const agent = this.service.getAgent(agentId);
       if (!agent || !agent.active) return;
       if (agent.wake_on_inbox === 0) return;
+      // An office switched off keeps its letters until it is switched back on.
+      if (this.service.isAgentOfficePaused(agentId)) return;
+      if (this.usageLimited(agent)) return;
 
       // Per-agent cooldown — collapse a burst of messages into one wake-up.
       const last = this.lastWakeAt.get(agentId) ?? 0;
@@ -158,6 +164,12 @@ export class InboxWaker {
     // its own lifecycle (timeouts, errors, completion events).
     this.executor.execute({ agent, goal, run, service: this.service, events: this.events })
       .then((result) => {
+        if (result.status === "failed" && result.steps_count === 0 && result.tokens_used === 0) {
+          const ids = Array.isArray(payload.inbox_message_ids)
+            ? payload.inbox_message_ids.filter((id): id is string => typeof id === "string")
+            : typeof payload.inbox_message_id === "string" ? [payload.inbox_message_id] : [];
+          this.service.restoreFailedInboxDelivery(agentId, ids, payload.via === "inbox_sweeper");
+        }
         this.service.updateRun(run.id, {
           status: result.status,
           result: result.result,
@@ -207,6 +219,12 @@ export class InboxWaker {
     this.sweepTimer.unref?.();
   }
 
+  /** The model a claude_code agent runs on is over its usage limit. */
+  private usageLimited(agent: Agent): boolean {
+    if (agent.executor_type !== "claude_code") return false;
+    return getClaudeModelLimit(agent.model || "claude-opus-4-6") !== null;
+  }
+
   /** Stop the periodic sweep started by startSweep(). Safe to call even if
    *  never started. */
   stopSweep(): void {
@@ -224,6 +242,8 @@ export class InboxWaker {
     let woke = 0;
     for (const agentId of this.service.listAgentsWithUnackedInbox(cutoff, since)) {
       if (this.inFlight.has(agentId)) continue;
+      // Switched off: no wake and no attempt spent, so nothing is archived while it is off.
+      if (this.service.isAgentOfficePaused(agentId)) continue;
       const last = this.lastWakeAt.get(agentId) ?? 0;
       if (Date.now() - last < this.cfg.quietMs) continue;
       if (this.service.listRuns({ agent_id: agentId, status: "running", limit: 1 }).length > 0) continue;
@@ -231,6 +251,8 @@ export class InboxWaker {
       if (this.scheduleFiresSoon(agentId)) continue;
       const agent = this.service.getAgent(agentId);
       if (!agent) continue;
+      // Over its usage limit: the letters wait, and no attempt is spent, so none is archived meanwhile.
+      if (this.usageLimited(agent)) continue;
       // One project per wake: the oldest letter's. The run for that project
       // also sees letters without a project; the rest wait for the next sweep.
       const all = this.service.getUnreadInbox(agentId, 20, since);
@@ -244,8 +266,11 @@ export class InboxWaker {
         `Handle each one, and acknowledge every letter you finished with kernel_agents_inbox_ack. ` +
         `Letters you do not acknowledge will be handed to you again.`;
       const ids = unread.map((m) => m.id);
-      if (!this.wake(agent, goal, { via: "inbox_sweeper", inbox_message_ids: ids, project_id: projectId })) continue;
       this.service.bumpInboxWakeAttempts(ids);
+      if (!this.wake(agent, goal, { via: "inbox_sweeper", inbox_message_ids: ids, project_id: projectId })) {
+        this.service.restoreFailedInboxDelivery(agentId, ids);
+        continue;
+      }
       woke++;
     }
     return woke;

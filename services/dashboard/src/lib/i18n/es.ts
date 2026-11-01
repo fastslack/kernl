@@ -167,6 +167,7 @@ const es: Record<I18nKey, string> = {
   "sh.sc.architecture.d": "Cómo está armado tu Kernl",
   "nav.view.bench": "Bench",
   "live.pillTitle": "Stream en vivo y modelos en uso — tocá para ver",
+  "live.resetsAt": "Se restablece: {t}",
   "live.title": "Modelos en vivo",
   "live.sub": "La cadena que usa Kernl, en orden, con su puntaje del bench",
   "live.refresh": "Volver a chequear",
@@ -1017,6 +1018,10 @@ const es: Record<I18nKey, string> = {
   "agent.failure.configure_providers": "Configurar providers",
   "agent.failure.google_expired": "El token de Google venció",
   "agent.failure.reauth_google": "Re-autenticar Google",
+  "agent.failure.claude_access": "Se perdió el acceso a Claude",
+  "agent.failure.claude_limit": "Esperando que se resetee el límite de uso de Claude",
+  "agent.failure.reconnect_claude": "Reconectar Claude",
+  "agent.failure.use_api_key": "Usar otro proveedor o API key",
   "agent.failure.generic": "El run falló",
 
   // Sección Runtime — la cadena provider/modelo editable y los cuatro límites.

@@ -429,3 +429,13 @@ describe("liveEventKey", () => {
     expect(liveEventKey(ev(5000))).not.toBe(liveEventKey(ev(5000)));
   });
 });
+
+
+describe("LLM fallback visibility", () => {
+  it("names both models without dumping the raw error", () => {
+    const e = ev({ from_provider: "claude_code", from_model: "sonnet", to_provider: "openai", to_model: "gpt-5-nano", reason: "weekly quota exhausted" }, "agent:flow:fallback_used");
+    expect(liveStepLabel(liveEventType(e))).toBe("LLM fallback");
+    expect(liveStepIcon(liveEventType(e))).toBe("⚠️");
+    expect(liveStepSummary(e)).toBe("sonnet → gpt-5-nano");
+  });
+});

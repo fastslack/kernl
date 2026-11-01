@@ -538,7 +538,7 @@ export function classifyError(err: unknown): FailureKind {
   }
   // The Claude Code CLI reports a dead session in words, with no status code.
   // As "transient" it was retried three times and never pointed at sign-in.
-  if (/failed to authenticate|oauth session expired|could not be refreshed|not logged in/i.test(msg)) {
+  if (/failed to authenticate|oauth session expired|could not be refreshed|not logged in|disabled Claude subscription access/i.test(msg)) {
     return "auth";
   }
   return "transient";

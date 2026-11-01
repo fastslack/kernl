@@ -25,6 +25,8 @@ export class ChatLmStudioProvider implements ChatLlmProvider {
     private defaultModel: string = "",
   ) {}
 
+  getDefaultModel(): string { return this.defaultModel; }
+
   available(): boolean {
     return this.baseUrl.length > 0;
   }

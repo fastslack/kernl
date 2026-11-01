@@ -176,11 +176,15 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
         agentService,
         agentExecutor,
         ctx.events,
-        { quietMs: ctx.config.agents?.inboxWakeQuietMs ?? 300_000 },
+        // Read from the environment here: config is built before the database opens, so a value saved in
+        // Settings (rehydrated into process.env by then) never reached config.agents (16/10).
+        { quietMs: Number(process.env.AGENTS_INBOX_WAKE_QUIET_MS) || ctx.config.agents?.inboxWakeQuietMs || 300_000 },
       );
       inboxWakerRef = inboxWaker;
       inboxWaker.start();
-      inboxWaker.startSweep(120_000, (letters) => {
+      // Letters written straight to the database (an office's host process) only reach their agent through
+      // this sweep: its interval is the latency of every such hop.
+      inboxWaker.startSweep(Number(process.env.AGENTS_INBOX_SWEEP_MS) || 120_000, (letters) => {
         void ctx.notifier?.send({
           title: `Office inbox: ${letters.length} letter(s) never handled`,
           body: letters.map((l) => `• ${l.subject}`).join("\n"),

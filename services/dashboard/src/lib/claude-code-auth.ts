@@ -12,6 +12,6 @@
  */
 export function isClaudeCodeAuthError(text: unknown): boolean {
   if (typeof text !== "string" || !text) return false;
-  return /not logged in|\bunauthori[sz]ed\b|401 not authenticated|invalid[_ -]?api[_ -]?key/i.test(text)
+  return /not logged in|\bunauthori[sz]ed\b|401 not authenticated|invalid[_ -]?api[_ -]?key|disabled Claude subscription access|Claude access lost|failed to authenticate|oauth (?:session|token) (?:has )?expired/i.test(text)
     && /claude|login|authenticat/i.test(text);
 }

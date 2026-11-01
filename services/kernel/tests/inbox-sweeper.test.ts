@@ -5,6 +5,7 @@ import { agentsMigrations } from "../src/modules/agents/migrations.js";
 import { AgentService } from "../src/modules/agents/service.js";
 import { EventBus } from "../src/core/event-bus.js";
 import { InboxWaker } from "../assets/extensions/agents/agent-advanced/_module/inbox-waker.js";
+import { clearClaudeLimits, rememberClaudeLimit } from "../src/sdk/claude-limits.js";
 
 let db: Database;
 let service: AgentService;
@@ -187,5 +188,57 @@ describe("inbox sweeper", () => {
     waker.stopSweep();
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(calls).toBe(0);
+  });
+});
+
+
+describe("failed wake delivery", () => {
+  it("does not discard a letter when the run failed before doing work", async () => {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const sender = mkAgent("Sender", flow.id);
+    const receiver = mkAgent("Receiver", flow.id);
+    const { message } = service.postToColleague({ from_agent_id: sender.id, to_agent_id: receiver.id, subject: "TRABAJAR", body: "Implement the task" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?, wake_attempts = 2", [AN_HOUR_AGO()]);
+    const failed = { execute: async () => {
+      service.markInboxRead([message!.id]);
+      return { status: "failed", result: "", error: "No usable provider", steps_count: 0, tokens_used: 0 };
+    } } as any;
+    const waker = new InboxWaker(service, failed, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    await Promise.resolve();
+    expect(service.archiveExhaustedInbox(3)).toHaveLength(0);
+    expect(service.getUnreadInbox(receiver.id).map(m => m.id)).toEqual([message!.id]);
+    expect((db.query("SELECT wake_attempts FROM agent_office_inbox").get() as any).wake_attempts).toBe(2);
+  });
+});
+
+describe("inbox waker during a Claude usage limit (22/10: the office woke on the fallback model all through the quota)", () => {
+  afterEach(() => clearClaudeLimits());
+
+  function limitedReceiver() {
+    const flow = service.createFlow({ name: "Ops" } as any);
+    const a = mkAgent("Sender", flow.id);
+    const b = service.createAgent({ name: "Coder", description: "c", flow_id: flow.id, active: true, model: "claude-sonnet-4-6" } as any);
+    service.setExecutorType(b.id, "claude_code");
+    service.postToColleague({ from_agent_id: a.id, to_agent_id: b.id, subject: "hola", body: "x" });
+    db.run("UPDATE agent_office_inbox SET created_at = ?", [AN_HOUR_AGO()]);
+    return b;
+  }
+
+  it("the sweep leaves a claude_code agent asleep while its model is limited, without spending an attempt", async () => {
+    limitedReceiver();
+    rememberClaudeLimit("claude-sonnet-4-6", { kind: "rate_limit", detail: "limit", resetsAt: Date.now() + 3_600_000 });
+    const waker = new InboxWaker(service, executor, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(0);
+    expect(executed).toEqual([]);
+    const row = db.query("SELECT wake_attempts FROM agent_office_inbox").get() as { wake_attempts: number };
+    expect(row.wake_attempts).toBe(0);
+  });
+
+  it("wakes it once the limit lifts", async () => {
+    const b = limitedReceiver();
+    const waker = new InboxWaker(service, executor, events, { quietMs: 60_000 });
+    expect(await waker.sweep()).toBe(1);
+    expect(executed).toEqual([b.id]);
   });
 });
