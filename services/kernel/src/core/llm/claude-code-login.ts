@@ -33,6 +33,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { claudeAuthEnv, stripAnsi } from "./claude-code-auth.js";
+import { primaryClaudeAccountId } from "../../sdk/claude-accounts.js";
 
 export type ClaudeLoginState = "idle" | "waiting" | "done" | "failed";
 
@@ -43,6 +44,10 @@ export interface ClaudeLoginStatus {
   /** "no_cli" | "timeout" | "exit" — what went wrong, when it did. */
   error?: string;
   detail?: string;
+  /** The account being signed in; absent for the primary (the pre-accounts call). */
+  accountId?: string;
+  /** Done only: another account is already signed in as the same person and organization. */
+  duplicateOf?: { id: string; label: string; email?: string };
 }
 
 export interface ClaudeLoginDeps {
@@ -61,6 +66,8 @@ export interface ClaudeLoginDeps {
   shimDir?: () => string;
   /** Delivers the pasted redirect to the CLI. */
   fetchImpl?: typeof fetch;
+  /** The other account holding the same identity as `id`, once its sign-in finished. */
+  duplicateOf?: (id: string) => { id: string; label: string; email?: string } | null;
 }
 
 /** Why a pasted address was refused — each maps to a message in the dialog. */
@@ -114,6 +121,8 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
   let urlFile: string | null = null;
   let shimDir: string | null = null;
 
+  let accountId: string | undefined;
+
   const finish = (next: ClaudeLoginStatus) => {
     if (timer) clearTimeout(timer);
     timer = null;
@@ -123,7 +132,7 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
       try { rmSync(shimDir, { recursive: true, force: true }); } catch { /* a temp dir; the OS gets it eventually */ }
       shimDir = null;
     }
-    status = next;
+    status = accountId ? { ...next, accountId } : next;
   };
 
   /** Docker mode: pick up the link the shim wrote, once the CLI has called it. */
@@ -135,21 +144,29 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
     } catch { /* not written yet */ }
   }
 
-  function start(): ClaudeLoginStatus {
+  function start(opts: { accountId?: string } = {}): ClaudeLoginStatus {
     // A second click while the page is still open reuses it, rather than
     // starting a race between two OAuth states where only one can win.
     if (child && status.state === "waiting") {
-      readAuthorizeUrl();
-      return status;
+      if (opts.accountId === accountId) {
+        readAuthorizeUrl();
+        return status;
+      }
+      // A different account: reusing the open page would sign the wrong one in.
+      cancel();
     }
+    accountId = opts.accountId;
 
     const cli = deps.cli();
     if (!cli) {
-      status = { state: "failed", error: "no_cli" };
+      status = { state: "failed", error: "no_cli", ...(accountId ? { accountId } : {}) };
       return status;
     }
 
-    const env: NodeJS.ProcessEnv = { ...process.env, ...claudeAuthEnv() };
+    const env: NodeJS.ProcessEnv = { ...process.env, ...claudeAuthEnv({ accountId }) };
+    // claudeAuthEnv leaves the token out for another account, but the spread
+    // above would still hand the process-level one to the sign-in child.
+    if (accountId && accountId !== primaryClaudeAccountId()) delete env.CLAUDE_CODE_OAUTH_TOKEN;
     if (deps.captureBrowser) {
       shimDir = (deps.shimDir ?? (() => mkdtempSync(join(tmpdir(), "kernl-claude-login-"))))();
       const { shim, file } = writeShim(shimDir);
@@ -160,7 +177,7 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
     let output = "";
     const proc = spawn(cli, ["auth", "login", "--claudeai"], env);
     child = proc;
-    status = { state: "waiting" };
+    status = { state: "waiting", ...(accountId ? { accountId } : {}) };
 
     const collect = (chunk: Buffer | string) => {
       output = (output + chunk.toString()).slice(-8000);
@@ -176,7 +193,9 @@ export function createClaudeLogin(deps: ClaudeLoginDeps) {
       if (child !== proc) return;
       if (code === 0) {
         try { deps.onSignedIn?.(); } catch { /* the session is there either way */ }
-        finish({ state: "done" });
+        let dup: ClaudeLoginStatus["duplicateOf"];
+        try { dup = (accountId && deps.duplicateOf?.(accountId)) || undefined; } catch { /* the warning is optional */ }
+        finish({ state: "done", ...(dup ? { duplicateOf: dup } : {}) });
       } else {
         const tail = stripAnsi(output).trim().split("\n")
           .filter((l) => !/^(Opening browser|If the browser)/.test(l.trim()))

@@ -24,6 +24,7 @@ import { orderLinksByHealth, runWithFallbackChain } from "./fallback-chain.js";
 import { getProviderConfig, isConnected } from "./credentials.js";
 import { stripReasoning } from "./strip-reasoning.js";
 import { parseJsonCompletion } from "./parse-json-completion.js";
+import { trackLlmCall } from "../../sdk/llm-inflight.js";
 
 /** Hard ceiling for an in-place backoff sleep on a rate-limited LAST link.
  *  We never block longer than this even if the provider's Retry-After is huge —
@@ -367,12 +368,13 @@ export class LlmClient {
         // as the model name belongs to grok/claude/nvidia. Routing has to
         // stay here in TS where /models + materializeLink already pick the
         // right baseUrl per provider.
-        let result: LlmChatResult;
-        if (link.provider === "anthropic") {
-          result = await this.chatAnthropic(link, opts, model, maxTokens);
-        } else {
-          result = await this.chatOpenAI(link, opts, model, maxTokens);
-        }
+        // In flight from the moment the limiter lets it through until this
+        // attempt settles, under the link and model actually tried; the
+        // instrumented Claude Code adapter inside does not register it again.
+        const result: LlmChatResult = await trackLlmCall({ slug, model, caller: opts.caller }, () =>
+          link.provider === "anthropic"
+            ? this.chatAnthropic(link, opts, model, maxTokens)
+            : this.chatOpenAI(link, opts, model, maxTokens));
         if (release) { release(); release = null; } // free the slot ASAP
         const latency = Date.now() - t0;
         providerHealth.recordSuccess(slug, latency);

@@ -19,8 +19,8 @@
  * - Declarative chains — fired from the router (AgentExecutor) when needed.
  */
 
-import { mkdirSync, existsSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, existsSync, readdirSync, statSync, chmodSync, rmSync } from "node:fs";
+import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import {
@@ -62,11 +62,19 @@ import {
   isClaudeAccessError,
   claudeLimitFallback,
   rememberClaudeLimit,
+  rememberClaudeAccountDown,
   routeAroundClaudeLimit,
   getClaudeModelLimit,
+  pickClaudeRoute,
+  primaryClaudeAccountId,
+  listClaudeAccounts,
+  claudeAccountDir,
+  readClaudeIdentity,
+  beginLlmCall,
 } from "@kernl/extension-sdk";
 import { createNativeCodingTools, nativeFallbackBindSource } from "./native-coding-tools.js";
 import { failureNote } from "./failure-note.js";
+import { RESUME_PROMPT, findTranscript, handOverTranscript, removeTranscript, transcriptRunsRoot } from "./claude-resume.js";
 import type { Agent, AgentRun, AgentFlow } from "../../../../../src/modules/agents/types.js";
 import type { AgentService } from "../../../../../src/modules/agents/service.js";
 import { seedOfficeHome, officeHomeGuidance } from "../../../../../src/modules/agents/office-home.js";
@@ -202,6 +210,21 @@ interface AgentVariablesMcp {
  * slash, dot, control char, or shell metacharacter is rejected outright. Length
  * cap mirrors the existing `__workspace__` regex for symmetry.
  */
+/** Passes of one run add up per model: a resumed or rotated run spends on several. */
+function addSdkUsage(into: SdkModelUsage[], more: SdkModelUsage[]): SdkModelUsage[] {
+  const out = into.map((u) => ({ ...u }));
+  for (const u of more) {
+    const found = out.find((o) => o.model === u.model);
+    if (!found) { out.push({ ...u }); continue; }
+    found.inputTokens += u.inputTokens;
+    found.outputTokens += u.outputTokens;
+    found.cacheReadTokens += u.cacheReadTokens;
+    found.cacheWriteTokens += u.cacheWriteTokens;
+    if (u.costUsd !== undefined) found.costUsd = (found.costUsd ?? 0) + u.costUsd;
+  }
+  return out;
+}
+
 function isSafeIdentifier(value: unknown): value is string {
   return typeof value === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(value);
 }
@@ -223,6 +246,8 @@ const KERNEL_LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "kernel"]);
 
 /** Where every sandbox driver mounts the agent's cwd (and sets its workdir). */
 const SANDBOX_WORKSPACE_PATH = "/workspace";
+// The reason sandbox transcript dirs are left open is logged once per process.
+let warnedOpenTranscriptDir = false;
 
 function isLocalMcpUrl(raw: string): boolean {
   try {
@@ -616,6 +641,16 @@ export class ClaudeCodeExecutor {
 
     // Handle returned by the sandbox driver. Cleaned up in the `finally`.
     let sandboxHandle: SandboxHandle | null = null;
+    // Transcripts kept so a run cut by the usage limit can resume on another
+    // account. Sessions were never persisted before, so the `finally` removes
+    // them again: the ones under account dirs and the sandbox's per-run dir.
+    const persistedTranscripts: Array<{ dir: string; cwd: string; sessionId: string }> = [];
+    const keepTranscript = (dir: string, cwd: string, sessionId: string) => {
+      if (!persistedTranscripts.some((t) => t.dir === dir && t.sessionId === sessionId)) {
+        persistedTranscripts.push({ dir, cwd, sessionId });
+      }
+    };
+    let transcriptRunDir: string | null = null;
     // Hoisted to execute()'s scope so the diagnostic probe in the catch can
     // reproduce the exact auth/cwd config the SDK used.
     let cwdResolved = "";
@@ -736,6 +771,36 @@ export class ClaudeCodeExecutor {
         ...(vars.__env__ ?? {}),
       };
       childEnvResolved = childEnv;
+
+      // Which subscription account and model this run starts on. Accounts are
+      // subscriptions, so an API-key run stays on the primary as before. With
+      // every route limited, the run still makes today's single attempt (on
+      // the primary) so it fails with the usage-limit error the chain expects.
+      const requestedModel = agent.model || "claude-opus-4-6";
+      const primaryAccount = primaryClaudeAccountId();
+      let route = (useOAuth ? pickClaudeRoute(requestedModel) : null)
+        ?? { accountId: primaryAccount, model: routeAroundClaudeLimit(requestedModel) };
+      // Continuing a cut run on another account resumes its conversation,
+      // which needs the CLI to keep the transcript. With a single account
+      // there is nowhere to resume, and sessions stay unpersisted as before.
+      const resumable = useOAuth && listClaudeAccounts().length > 1;
+      const pastedToken = getProviderConfig("claude-code").oauthToken;
+      // A token that reached the env some other way (process env, __env__)
+      // belongs to the primary as much as a pasted one does.
+      const inheritedToken = childEnv.CLAUDE_CODE_OAUTH_TOKEN;
+      const authFor = (accountId: string) => {
+        const auth = claudeAuthEnv({ oauthToken: pastedToken, accountId });
+        // claudeAuthEnv decides which account owns the token; it can only add
+        // it, so on any other account the inherited one is taken out here.
+        const tokenAccount = auth.CLAUDE_CONFIG_DIR === claudeAuthEnv({ oauthToken: pastedToken }).CLAUDE_CONFIG_DIR;
+        return { auth, tokenAccount };
+      };
+      const applyChildAuth = (accountId: string) => {
+        const { auth, tokenAccount } = authFor(accountId);
+        childEnv.CLAUDE_CODE_OAUTH_TOKEN = tokenAccount ? inheritedToken : undefined;
+        Object.assign(childEnv, auth);
+      };
+
       if (useOAuth) {
         childEnv.ANTHROPIC_API_KEY = undefined;
         childEnv.ANTHROPIC_AUTH_TOKEN = undefined;
@@ -747,7 +812,8 @@ export class ClaudeCodeExecutor {
         // Kernl session the CLI now answers "Not logged in", which the agent
         // panel turns into the sign-in. On Windows the credential sits in
         // Credential Manager keyed by this dir, so it has to match exactly.
-        Object.assign(childEnv, claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }));
+        // Each pass re-applies this for the account it runs on.
+        applyChildAuth(route.accountId);
       } else if (apiKey) {
         childEnv.ANTHROPIC_API_KEY = apiKey;
       }
@@ -842,6 +908,10 @@ export class ClaudeCodeExecutor {
         ...(allowed.length > 0 ? allowed : ["mcp__kernel__*"]),
       ];
 
+      // Kept so a switch of account can prepare the sandbox again on the new
+      // account's session (the driver mounts one account's credentials).
+      let sandboxRunOpts: SandboxRunOptions | null = null;
+      let sandboxEnvFor: (accountId: string) => Record<string, string | undefined> = () => ({});
       if (driverSlug) {
         if (!this.sandboxRegistry) {
           throw new Error(
@@ -876,10 +946,15 @@ export class ClaudeCodeExecutor {
         }
         // A pasted setup-token is Kernl's session too; the driver mounts the
         // credential file of the dashboard sign-in, never the host's.
-        const sandboxToken = useOAuth
-          ? claudeAuthEnv({ oauthToken: getProviderConfig("claude-code").oauthToken }).CLAUDE_CODE_OAUTH_TOKEN
-          : undefined;
-        if (sandboxToken) sandboxEnv.CLAUDE_CODE_OAUTH_TOKEN = sandboxToken;
+        // Only the primary's: another account runs on its own mounted session.
+        const inheritedSandboxToken = sandboxEnv.CLAUDE_CODE_OAUTH_TOKEN;
+        sandboxEnvFor = (accountId: string) => {
+          const env = { ...sandboxEnv };
+          if (!useOAuth) return env;
+          const { auth, tokenAccount } = authFor(accountId);
+          env.CLAUDE_CODE_OAUTH_TOKEN = tokenAccount ? auth.CLAUDE_CODE_OAUTH_TOKEN ?? inheritedSandboxToken : undefined;
+          return env;
+        };
 
         const skillMounts: Array<{ name: string; hostPath: string }> = [];
         for (const name of vars.__skills__ ?? []) {
@@ -912,6 +987,26 @@ export class ClaudeCodeExecutor {
           : (typeof vars.__sandbox_network__ === "string" && vars.__sandbox_network__
               ? vars.__sandbox_network__
               : defaultNetwork);
+        // The sandbox's HOME dies with its container; the transcript a resume
+        // needs lives in a per-run dir every container of this run mounts.
+        if (resumable) {
+          const dir = join(transcriptRunsRoot(this.configRef?.sqlite.path), run.id);
+          try {
+            mkdirSync(dir, { recursive: true });
+            // Private when the sandbox writes as the kernel's own uid; open
+            // otherwise, or the sandbox user could not write its transcript.
+            const sandboxUid = this.sandboxRegistry.getDriver(driverSlug)?.sandboxUid?.() ?? null;
+            const sameUid = sandboxUid !== null && typeof process.getuid === "function" && sandboxUid === process.getuid();
+            chmodSync(dir, sameUid ? 0o700 : 0o777);
+            if (!sameUid && !warnedOpenTranscriptDir) {
+              warnedOpenTranscriptDir = true;
+              log.warn(`ClaudeCodeExecutor: sandbox transcript dirs are world-writable (0777): driver "${driverSlug}" ${sandboxUid === null ? "does not say which uid it runs as" : `runs as uid ${sandboxUid}, the kernel as ${process.getuid?.() ?? "unknown"}`}`);
+            }
+            transcriptRunDir = dir;
+          } catch (err) {
+            log.warn(`ClaudeCodeExecutor: no transcript dir for run ${run.id} (it will not be resumed on another account): ${err instanceof Error ? err.message : String(err)}`);
+          }
+        }
         const runOpts: SandboxRunOptions = {
           runId: run.id,
           workspace: {
@@ -919,12 +1014,15 @@ export class ClaudeCodeExecutor {
             hostPath: hostPathFromKernel(cwd),
             snapshotId: vars.__sandbox_snapshot__,
           },
-          env: sandboxEnv,
+          env: sandboxEnvFor(route.accountId),
           network,
           image: vars.__sandbox_image__,
           skillMounts,
           pluginMounts,
+          ...(useOAuth ? { claudeAccountId: route.accountId } : {}),
+          ...(transcriptRunDir ? { transcriptDir: transcriptRunDir } : {}),
         };
+        sandboxRunOpts = runOpts;
 
         sandboxHandle = await this.sandboxRegistry.prepareRun(driverSlug, runOpts);
         executableToUse = sandboxHandle.executablePath;
@@ -996,7 +1094,8 @@ export class ClaudeCodeExecutor {
         // We only inherit when the agent asks for it explicitly via
         // __settings_mode__: 'inherit'.
         settingSources: policy.inheritSettings && vars.__settings_mode__ === "inherit" ? ["user"] : [],
-        persistSession: false,
+        // Kept only when the run may have to resume on another account.
+        persistSession: resumable,
         pathToClaudeCodeExecutable: executableToUse,
         env: childEnv,
         // Capture the CLI stderr — essential for diagnosing auth/billing failures
@@ -1028,17 +1127,36 @@ export class ClaudeCodeExecutor {
       };
 
       const llmCaller = `claude_code:${agent.name}`;
-      // A model known to be over its usage limit is not tried again until it resets.
-      const requestedModel = options.model ?? "claude-opus-4-6";
-      let llmModel = routeAroundClaudeLimit(requestedModel);
-      if (llmModel !== requestedModel) {
-        const reason = getClaudeModelLimit(requestedModel)?.detail ?? "Configured model is still usage limited";
-        const fields = { from_provider: "claude_code", from_model: requestedModel, to_provider: "claude_code", to_model: llmModel, reason };
+      // A model (or account) known to be over its usage limit is not tried
+      // again until it resets: the route picked above already skips it.
+      let llmModel = route.model;
+      // Only worth a row when there is more than one account to tell apart.
+      if (useOAuth && listClaudeAccounts().length > 1) {
+        const account = claudeAccountName(route.accountId);
+        service.logEvent({
+          run_id: run.id, agent_id: agent.id, agent_name: agent.name,
+          event_type: "step", event_subtype: "claude_account",
+          detail: `Claude Code account: ${account}`, raw_data: { account },
+        });
+        events?.emit("agent:flow:step", {
+          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+          type: "claude_account", account, content_preview: `Claude Code account: ${account}`,
+        });
+      }
+      if (llmModel !== requestedModel || route.accountId !== primaryAccount) {
+        const reason = getClaudeModelLimit(requestedModel, Date.now(), primaryAccount)?.detail ?? "Configured model is still usage limited";
+        const fields = {
+          from_provider: "claude_code", from_model: requestedModel, to_provider: "claude_code", to_model: llmModel, reason,
+          ...(useOAuth ? { from_account: claudeAccountName(primaryAccount), to_account: claudeAccountName(route.accountId) } : {}),
+        };
         events?.emit("agent:flow:model_fallback", { agent_id: agent.id, agent_name: agent.name, run_id: run.id, ...fields });
         service.logEvent({
           run_id: run.id, agent_id: agent.id, agent_name: agent.name,
           event_type: "step", event_subtype: "model_fallback",
-          detail: `${requestedModel} → ${llmModel}: ${reason}`, raw_data: fields,
+          detail: "from_account" in fields && fields.from_account !== fields.to_account
+            ? `${requestedModel} (${fields.from_account}) → ${llmModel} (${fields.to_account}): ${reason}`
+            : `${requestedModel} → ${llmModel}: ${reason}`,
+          raw_data: fields,
         });
       }
       const llmStartedAt = Date.now();
@@ -1057,22 +1175,149 @@ export class ClaudeCodeExecutor {
 
       let usage: SdkModelUsage[] = [];
 
-      // One pass per model. The usage limit does not throw: the CLI answers
-      // with the notice as text and a "success" result, which used to close
-      // the run as completed with the notice as its result.
+      // Move the run to another (account, model) before its next pass. False
+      // when the sandbox could not be prepared on the new account: the caller
+      // then ends the run the way it would have without a route to go to.
+      const moveTo = async (
+        next: { accountId: string; model: string },
+        why: { text: string; reason: string; raw: Record<string, unknown>; resumed?: boolean },
+      ): Promise<boolean> => {
+        // The sandbox mounts one account's session: a new account needs it
+        // prepared again. Either nothing ran in it yet (`produced` is false)
+        // or the run resumes, and its transcript is in the per-run dir the
+        // new container mounts as well.
+        if (sandboxRunOpts && sandboxHandle && this.sandboxRegistry && driverSlug && next.accountId !== route.accountId) {
+          await this.sandboxRegistry.cleanup(sandboxHandle).catch((err) => {
+            log.warn(`ClaudeCodeExecutor: sandbox cleanup failed: ${String(err)}`);
+          });
+          sandboxHandle = null;
+          try {
+            sandboxRunOpts = { ...sandboxRunOpts, env: sandboxEnvFor(next.accountId), claudeAccountId: next.accountId };
+            sandboxHandle = await this.sandboxRegistry.prepareRun(driverSlug, sandboxRunOpts);
+            options.pathToClaudeCodeExecutable = sandboxHandle.executablePath;
+          } catch (err) {
+            log.warn(`ClaudeCodeExecutor: agent "${agent.name}" — sandbox could not be prepared on account ${claudeAccountName(next.accountId)}: ${err instanceof Error ? err.message : String(err)}`);
+            return false;
+          }
+        }
+        const accounts = useOAuth
+          ? { from_account: claudeAccountName(route.accountId), to_account: claudeAccountName(next.accountId) }
+          : null;
+        const where = accounts && accounts.from_account !== accounts.to_account
+          ? { from: ` on ${accounts.from_account}`, to: ` on ${accounts.to_account}` }
+          : { from: "", to: "" };
+        const verb = why.resumed ? "resuming the conversation on" : "retrying on";
+        const resumed = why.resumed ? { resumed: true } : {};
+        log.warn(`ClaudeCodeExecutor: agent "${agent.name}" — ${llmModel}${where.from} ${why.text}, ${verb} ${next.model}${where.to}`);
+        service.logEvent({
+          run_id: run.id,
+          agent_id: agent.id,
+          agent_name: agent.name,
+          event_type: "step",
+          event_subtype: "model_fallback",
+          detail: `${llmModel}${where.from} ${why.text} — ${verb} ${next.model}${where.to}`,
+          raw_data: { from: llmModel, to: next.model, ...accounts, ...why.raw, ...resumed },
+        });
+        events?.emit("agent:flow:model_fallback", {
+          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+          from_provider: "claude_code", from_model: llmModel,
+          to_provider: "claude_code", to_model: next.model, reason: why.reason,
+          ...accounts,
+          ...resumed,
+        });
+        route = next;
+        llmModel = next.model;
+        return true;
+      };
+
+      // One pass per (account, model). The usage limit does not throw: the CLI
+      // answers with the notice as text and a "success" result, which used to
+      // close the run as completed with the notice as its result.
+      // The CLI session a resumed pass continues, and the limit that ended the
+      // pass it continues; set at most once per run.
+      let resumedSession: string | null = null;
+      let resumeHit: NonNullable<ClaudeLimitObserver["hit"]> | null = null;
+      // Ends the run with the usage limit: the cut every path short of a
+      // finished pass comes back to.
+      const cutWithLimit = (hit: NonNullable<ClaudeLimitObserver["hit"]>, produced: boolean) => {
+        const limitError = new ClaudeUsageLimitError(hit, llmModel);
+        limitError.partial = produced;
+        errorMsg = limitError.message;
+        recordLlmCall({
+          slug: "claude-code",
+          model: llmModel,
+          ok: false,
+          latencyMs: Date.now() - llmStartedAt,
+          errorKind: "exhausted",
+          errorMsg,
+          caller: `agent:${agent.name}`,
+          startedAt: llmStartedAt,
+        }, { silent: true });
+        if (params.allowProviderFallback && !produced && !abortController.signal.aborted) throw limitError;
+      };
+      const noteAccountDown = (accountId: string, message: string) => {
+        const dead = claudeAccountName(accountId);
+        rememberClaudeAccountDown(accountId);
+        service.logEvent({
+          run_id: run.id, agent_id: agent.id, agent_name: agent.name,
+          event_type: "step", event_subtype: "claude_account_down",
+          detail: `Claude Code session of ${dead} failed: ${message.slice(0, 160)}`,
+          raw_data: { account: dead, error: message.slice(0, 2000) },
+        });
+        events?.emit("agent:flow:step", {
+          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
+          type: "claude_account_down", account: dead, content_preview: `Claude Code session of ${dead} failed`,
+        });
+      };
       for (;;) {
         options.model = llmModel;
+        if (useOAuth) applyChildAuth(route.accountId);
+        // Stopped between the hand-over and the resumed call: end as the cut would have.
+        if (resumeHit && abortController.signal.aborted) {
+          cutWithLimit(resumeHit, true);
+          break;
+        }
         const limit = new ClaudeLimitObserver();
-        let produced = false;
-        const q = query({ prompt: goal, options });
+        // A resumed pass carries the work of the pass it continues: it is
+        // never started over. `resumeOutput` tells whether it did any of its own.
+        let produced = resumedSession !== null;
+        let resumeOutput = false;
+        let passSession: string | null = null;
+        // A resumed pass that fails before doing anything new ends like the
+        // cut it replaced, not with its own error.
+        let resumeFailure: { message: string; access: boolean } | null = null;
+        const q = query({ prompt: resumedSession ? RESUME_PROMPT : goal, options });
+        // Shown in the LIVE pill for as long as this pass runs, whatever ends it.
+        // beginLlmCall rather than trackLlmCall: a kernel llm() call made while
+        // the pass runs is a call of its own and must still show.
+        const endInFlight = beginLlmCall({ slug: "claude-code", model: llmModel, caller: `agent:${agent.name}` });
+        // A backup account whose session is dead (its credentials file is there,
+        // so it read as connected) must not end a run the primary would have
+        // ended differently: the run moves on and the account sits out a while.
+        // The primary keeps today's handling.
+        const canLeaveDeadAccount = () =>
+          useOAuth && route.accountId !== primaryAccount && !produced && !abortController.signal.aborted;
+        let deadSession: { message: string; thrown?: unknown } | null = null;
 
         try {
           for await (const msg of q) {
             if (abortController.signal.aborted) break;
+            if (msg.type === "system" && msg.subtype === "init" && typeof msg.session_id === "string") {
+              passSession = msg.session_id;
+              // In a sandbox the transcript is in the per-run dir instead.
+              if (resumable && !usingSandbox && childEnv.CLAUDE_CONFIG_DIR) {
+                keepTranscript(childEnv.CLAUDE_CONFIG_DIR, cwd, passSession);
+              }
+            }
+            // Before the limit check: the result that reports the limit still
+            // carries what the pass spent, and a resumed run adds to it.
+            if (msg.type === "result") usage = addSdkUsage(usage, sdkResultUsage(msg, llmModel));
             if (limit.observe(msg)) continue;
             // The CLI words a dead session as an assistant message too; that is not work done.
-            if (msg.type === "assistant" && !isClaudeAccessError(JSON.stringify(msg.message?.content ?? ""))) produced = true;
-            if (msg.type === "result") usage = sdkResultUsage(msg, llmModel);
+            if (msg.type === "assistant" && !isClaudeAccessError(JSON.stringify(msg.message?.content ?? ""))) {
+              produced = true;
+              resumeOutput = true;
+            }
             // Each `assistant` message is one LLM turn — log it so the operator
             // can see the SDK loop progress at the same granularity as the
             // OpenAI-shaped providers' instrumentProvider wrapper.
@@ -1119,11 +1364,53 @@ export class ClaudeCodeExecutor {
               caller: `agent:${agent.name}`,
               startedAt: llmStartedAt,
             }, { silent: true });
-            // No model of the subscription can run: only another provider can.
-            if (kind === "auth" && params.allowProviderFallback && !produced && !abortController.signal.aborted) {
-              throw new ClaudeAccessError(message, llmModel);
+            if (resumeHit && !resumeOutput) resumeFailure = { message, access: kind === "auth" };
+            else if (kind === "auth" && canLeaveDeadAccount()) deadSession = { message, thrown: err };
+            else {
+              // No model of the subscription can run: only another provider can.
+              if (kind === "auth" && params.allowProviderFallback && !produced && !abortController.signal.aborted) {
+                throw new ClaudeAccessError(message, llmModel);
+              }
+              throw err;
             }
-            throw err;
+          }
+        } finally {
+          endInFlight();
+        }
+        // A resumed pass that ended without any output is a failed resume even
+        // when it reported no error: finishing "completed" would hide that the
+        // work stopped at A's limit.
+        if (!resumeFailure && resumeHit && !resumeOutput && !limit.hit && !abortController.signal.aborted) {
+          resumeFailure = errorMsg
+            ? { message: errorMsg, access: isClaudeAccessError(errorMsg) }
+            : { message: "the resumed conversation produced no output", access: false };
+        }
+        if (resumeFailure && resumeHit) {
+          log.warn(`ClaudeCodeExecutor: agent "${agent.name}" — resumed conversation failed on ${claudeAccountName(route.accountId)} before doing anything: ${resumeFailure.message.slice(0, 200)}`);
+          if (resumeFailure.access) noteAccountDown(route.accountId, resumeFailure.message);
+          finalText = "";
+          cutWithLimit(resumeHit, true);
+          break;
+        }
+        if (!deadSession && !limit.hit && errorMsg && isClaudeAccessError(errorMsg) && canLeaveDeadAccount()) {
+          deadSession = { message: errorMsg };
+        }
+        if (deadSession) {
+          noteAccountDown(route.accountId, deadSession.message);
+          const next = pickClaudeRoute(requestedModel);
+          if (next && next.accountId !== route.accountId
+            && await moveTo(next, { text: "could not use its session", reason: deadSession.message, raw: { error: "session" } })) {
+            // The failed pass's text is not the run's answer.
+            errorMsg = "";
+            finalText = "";
+            continue;
+          }
+          // Nowhere else to go: end exactly as a dead session always has.
+          if (deadSession.thrown !== undefined) {
+            if (params.allowProviderFallback && !produced && !abortController.signal.aborted) {
+              throw new ClaudeAccessError(deadSession.message, llmModel);
+            }
+            throw deadSession.thrown;
           }
         }
         // Same dead session, reported through the result instead of a throw.
@@ -1133,47 +1420,61 @@ export class ClaudeCodeExecutor {
         }
         if (!limit.hit) break;
 
-        rememberClaudeLimit(llmModel, limit.hit);
-        // Only a run that has not done anything yet can start over elsewhere.
-        const next = produced ? null : claudeLimitFallback(llmModel);
+        rememberClaudeLimit(llmModel, limit.hit, Date.now(), route.accountId);
+        // Only a run that has not done anything yet (and was not stopped) can
+        // start over elsewhere: the same model on the next account first, then
+        // the fallback model. An API-key run has no accounts to move across.
+        let next: { accountId: string; model: string } | null = null;
+        if (!produced && !abortController.signal.aborted) {
+          if (useOAuth) next = pickClaudeRoute(requestedModel);
+          else {
+            const model = claudeLimitFallback(llmModel);
+            next = model ? { accountId: route.accountId, model } : null;
+          }
+          // A hit the limit store did not block would loop on the same route.
+          if (next && next.accountId === route.accountId && next.model === llmModel) next = null;
+        }
+        // A run that already did work is never started over; it can only
+        // continue its own conversation on another account with the same
+        // model, once per run. Anything short of that cuts it as before.
+        let resume: string | null = null;
+        if (produced && resumable && resumedSession === null && passSession && !abortController.signal.aborted) {
+          const candidate = pickClaudeRoute(requestedModel);
+          if (candidate && candidate.model === llmModel && candidate.accountId !== route.accountId) {
+            const toDir = authFor(candidate.accountId).auth.CLAUDE_CONFIG_DIR;
+            const ready = usingSandbox
+              ? transcriptRunDir !== null && findTranscript(transcriptRunDir, SANDBOX_WORKSPACE_PATH, passSession) !== null
+              : !!childEnv.CLAUDE_CONFIG_DIR && !!toDir && handOverTranscript(childEnv.CLAUDE_CONFIG_DIR, toDir, cwd, passSession);
+            if (ready) {
+              if (!usingSandbox && toDir) keepTranscript(toDir, cwd, passSession);
+              next = candidate;
+              resume = passSession;
+            } else {
+              log.warn(`ClaudeCodeExecutor: agent "${agent.name}" — transcript of session ${passSession} could not be handed over; the run cannot resume on another account`);
+            }
+          }
+        }
+        const hit = limit.hit;
+        if (next && !(await moveTo(next, {
+          text: "hit its usage limit",
+          reason: hit.detail,
+          raw: {
+            limit_type: hit.limitType ?? hit.kind,
+            resets_at: hit.resetsAt ? new Date(hit.resetsAt).toISOString() : null,
+          },
+          resumed: resume !== null,
+        }))) next = null;
+        if (next && resume) {
+          resumedSession = resume;
+          resumeHit = hit;
+          options.resume = resume;
+          // Whatever the cut pass left is not the resumed pass's error.
+          errorMsg = "";
+        }
         if (!next) {
-          const limitError = new ClaudeUsageLimitError(limit.hit, llmModel);
-          limitError.partial = produced;
-          errorMsg = limitError.message;
-          recordLlmCall({
-            slug: "claude-code",
-            model: llmModel,
-            ok: false,
-            latencyMs: Date.now() - llmStartedAt,
-            errorKind: "exhausted",
-            errorMsg,
-            caller: `agent:${agent.name}`,
-            startedAt: llmStartedAt,
-          }, { silent: true });
-          if (params.allowProviderFallback && !produced && !abortController.signal.aborted) throw limitError;
+          cutWithLimit(limit.hit, produced);
           break;
         }
-        log.warn(`ClaudeCodeExecutor: agent "${agent.name}" — ${llmModel} hit its usage limit, retrying on ${next}`);
-        service.logEvent({
-          run_id: run.id,
-          agent_id: agent.id,
-          agent_name: agent.name,
-          event_type: "step",
-          event_subtype: "model_fallback",
-          detail: `${llmModel} hit its usage limit — retrying on ${next}`,
-          raw_data: {
-            from: llmModel,
-            to: next,
-            limit_type: limit.hit.limitType ?? limit.hit.kind,
-            resets_at: limit.hit.resetsAt ? new Date(limit.hit.resetsAt).toISOString() : null,
-          },
-        });
-        events?.emit("agent:flow:model_fallback", {
-          agent_id: agent.id, agent_name: agent.name, run_id: run.id,
-          from_provider: "claude_code", from_model: llmModel,
-          to_provider: "claude_code", to_model: next, reason: limit.hit.detail,
-        });
-        llmModel = next;
       }
 
       // Token usage per model for the whole run, so agent spend shows up
@@ -1395,6 +1696,16 @@ export class ClaudeCodeExecutor {
         await this.sandboxRegistry.cleanup(sandboxHandle).catch((err) => {
           log.warn(`ClaudeCodeExecutor: sandbox cleanup failed: ${String(err)}`);
         });
+      }
+      for (const t of persistedTranscripts) {
+        try { removeTranscript(t.dir, t.cwd, t.sessionId); } catch (err) {
+          log.warn(`ClaudeCodeExecutor: transcript cleanup failed: ${String(err)}`);
+        }
+      }
+      if (transcriptRunDir) {
+        try { rmSync(transcriptRunDir, { recursive: true, force: true }); } catch (err) {
+          log.warn(`ClaudeCodeExecutor: transcript dir cleanup failed: ${String(err)}`);
+        }
       }
     }
   }
@@ -2055,3 +2366,13 @@ function reproduceCommand(cwd: string, bin: string, useOAuth: boolean): string {
   return `cd ${cwd} && ${useOAuth ? "" : "ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY "}${bin} -p "ping"`;
 }
 
+
+/**
+ * How a Claude Code account is named in run events: its label, else the
+ * subscription's email, else its id (the operator may not have named it).
+ */
+function claudeAccountName(id: string): string {
+  const label = listClaudeAccounts().find((a) => a.id === id)?.label.trim();
+  if (label) return label;
+  return readClaudeIdentity(claudeAccountDir(id))?.email ?? id;
+}

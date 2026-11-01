@@ -15,6 +15,7 @@
  * provider chain moves past.
  */
 
+import { isClaudeAccountConnected, listClaudeAccounts, primaryClaudeAccountId } from "./claude-accounts.js";
 import { log } from "./log.js";
 
 export type ClaudeLimitKind = "rate_limit" | "billing";
@@ -124,51 +125,165 @@ export class ClaudeLimitObserver {
 
 // One map for the kernel and every extension bundle that carries a copy of
 // this file — otherwise chat and agents would each rediscover the same limit.
-const LIMITS_KEY = Symbol.for("kernl.claudeCodeLimitedModels");
-const DETAILS_KEY = Symbol.for("kernl.claudeCodeLimitDetails");
+// ".v2": the key format changed to "<account>|<model>"; bundles still carrying
+// the old copy of this file must not read or write this map.
+const LIMITS_KEY = Symbol.for("kernl.claudeCodeLimits.v2");
+const DETAILS_KEY = Symbol.for("kernl.claudeCodeLimitDetails.v2");
 function limitDetails(): Map<string, ClaudeLimitHit> {
   const g = globalThis as unknown as Record<symbol, Map<string, ClaudeLimitHit> | undefined>;
   return (g[DETAILS_KEY] ??= new Map<string, ClaudeLimitHit>());
 }
 
-/** Diagnostic view, including the short aliases used by the global chain. */
-export function getClaudeModelLimit(model: string, now: number = Date.now()): (ClaudeLimitHit & { blockedUntil: number }) | null {
-  const candidates = [model];
-  if (/^(sonnet|opus|haiku|fable)$/.test(model)) {
-    candidates.push(...[...limited().keys()].filter((key) => key.startsWith(`claude-${model}-`)));
-  }
-  for (const key of candidates) {
-    if (!isClaudeModelLimited(key, now)) continue;
-    const hit = limitDetails().get(key);
-    return { kind: hit?.kind ?? "rate_limit", detail: hit?.detail ?? "Usage limit reached", ...hit, blockedUntil: limited().get(key)! };
-  }
-  return null;
-}
 function limited(): Map<string, number> {
   const g = globalThis as unknown as Record<symbol, Map<string, number> | undefined>;
   return (g[LIMITS_KEY] ??= new Map<string, number>());
 }
 
-/** Keep `model` out until its limit lifts. */
-export function rememberClaudeLimit(model: string, hit: ClaudeLimitHit, now: number = Date.now()): void {
-  const until = hit.resetsAt && hit.resetsAt > now ? hit.resetsAt : now + UNKNOWN_RESET_MS;
-  limited().set(model, until);
-  limitDetails().set(model, { ...hit });
+// Accounts whose CLI session failed (expired, revoked) while a run rotated
+// onto them, epoch ms until which they are skipped. Same sharing as above.
+const DOWN_KEY = Symbol.for("kernl.claudeCodeAccountsDown.v2");
+/** How long an account whose session failed stays out of rotation. */
+const ACCOUNT_DOWN_MS = 10 * 60 * 1000;
+function accountsDown(): Map<string, number> {
+  const g = globalThis as unknown as Record<symbol, Map<string, number> | undefined>;
+  return (g[DOWN_KEY] ??= new Map<string, number>());
 }
 
-export function isClaudeModelLimited(model: string, now: number = Date.now()): boolean {
-  const until = limited().get(model);
+/**
+ * Keep `accountId` out of rotation for a while: its credentials file is there
+ * (so it reads as connected) but the CLI could not use the session. Without
+ * this every run would keep landing on it while the primary is limited.
+ */
+export function rememberClaudeAccountDown(accountId: string, now: number = Date.now(), ttlMs: number = ACCOUNT_DOWN_MS): void {
+  accountsDown().set(accountId, now + ttlMs);
+}
+
+export function isClaudeAccountDown(accountId: string, now: number = Date.now()): boolean {
+  const until = accountsDown().get(accountId);
   if (until === undefined) return false;
   if (now >= until) {
-    limited().delete(model);
+    accountsDown().delete(accountId);
     return false;
   }
   return true;
 }
 
+const FABLE_MODEL = /fable/i;
+const MODEL_FAMILY_LIMIT = /opus|sonnet|haiku|fable/i;
+
+/** The short family names the global chain uses for a Claude model ("sonnet"). */
+const FAMILY_ALIAS = /^(sonnet|opus|haiku|fable)$/;
+export function isClaudeFamilyAlias(model: string): boolean {
+  return FAMILY_ALIAS.test(model);
+}
+
+/**
+ * Whether `model` is the model `wanted` names: the same id, or — when
+ * `wanted` is a bare family alias — a full id of that family
+ * ("sonnet" → "claude-sonnet-5-5", never "claude-opus-5-5").
+ */
+export function claudeModelMatches(wanted: string, model: string): boolean {
+  return model === wanted || (isClaudeFamilyAlias(wanted) && model.startsWith(`claude-${wanted}-`));
+}
+
+/**
+ * Accounts a run could actually use: connected and not marked down. With none
+ * (fresh install, tests) the primary still stands in, so limits keep working on it.
+ */
+function connectedAccountIds(now: number = Date.now()): string[] {
+  const ids = listClaudeAccounts()
+    .map((a) => a.id)
+    .filter((id) => isClaudeAccountConnected(id) && !isClaudeAccountDown(id, now));
+  return ids.length > 0 ? ids : [primaryClaudeAccountId()];
+}
+
+/**
+ * The stored key that keeps `model` out of `accountId`, if any. `<acc>|*` is
+ * the subscription-wide limit (5-hour, weekly, unknown): it blocks every model
+ * but Fable, whose weekly bucket is its own.
+ */
+function blockingKey(accountId: string, model: string, now: number): string | null {
+  const keys = FABLE_MODEL.test(model) ? [`${accountId}|${model}`] : [`${accountId}|*`, `${accountId}|${model}`];
+  for (const key of keys) {
+    const until = limited().get(key);
+    if (until === undefined) continue;
+    if (now >= until) {
+      limited().delete(key);
+      continue;
+    }
+    return key;
+  }
+  return null;
+}
+
+function limitOn(accountId: string, model: string, now: number): (ClaudeLimitHit & { blockedUntil: number }) | null {
+  const candidates = [model];
+  if (isClaudeFamilyAlias(model)) {
+    const prefix = `${accountId}|`;
+    candidates.push(...[...limited().keys()]
+      .filter((key) => key.startsWith(prefix) && key.slice(prefix.length) !== model && claudeModelMatches(model, key.slice(prefix.length)))
+      .map((key) => key.slice(prefix.length)));
+  }
+  for (const candidate of candidates) {
+    const key = blockingKey(accountId, candidate, now);
+    if (!key) continue;
+    const hit = limitDetails().get(key);
+    return { kind: hit?.kind ?? "rate_limit", detail: hit?.detail ?? "Usage limit reached", ...hit, blockedUntil: limited().get(key)! };
+  }
+  return null;
+}
+
+/**
+ * Diagnostic view, including the short aliases used by the global chain. With
+ * an account: that account. Without: only when every connected account is
+ * limited, reported by the one that frees up first.
+ */
+export function getClaudeModelLimit(model: string, now: number = Date.now(), accountId?: string): (ClaudeLimitHit & { blockedUntil: number }) | null {
+  if (accountId !== undefined) return limitOn(accountId, model, now);
+  let earliest: (ClaudeLimitHit & { blockedUntil: number }) | null = null;
+  for (const id of connectedAccountIds(now)) {
+    const l = limitOn(id, model, now);
+    if (!l) return null;
+    if (!earliest || l.blockedUntil < earliest.blockedUntil) earliest = l;
+  }
+  return earliest;
+}
+
+/**
+ * Keep `model` out of the account until its limit lifts. Model-specific hits
+ * (a family named in `limitType`, no `limitType` at all, or any hit seen on a
+ * Fable model) are stored per model; the rest block the account as a whole. Default account: the primary.
+ */
+export function rememberClaudeLimit(model: string, hit: ClaudeLimitHit, now: number = Date.now(), accountId: string = primaryClaudeAccountId()): void {
+  const until = hit.resetsAt && hit.resetsAt > now ? hit.resetsAt : now + UNKNOWN_RESET_MS;
+  // No limitType at all stays per model (the pre-accounts behaviour, pinned by
+  // the diagnostics tests); only a named non-family type is known to be account-wide.
+  const specific = FABLE_MODEL.test(model) || !hit.limitType || MODEL_FAMILY_LIMIT.test(hit.limitType);
+  const key = `${accountId}|${specific ? model : "*"}`;
+  limited().set(key, until);
+  limitDetails().set(key, { ...hit });
+}
+
+export function isClaudeModelLimited(model: string, now: number = Date.now(), accountId: string = primaryClaudeAccountId()): boolean {
+  if (isClaudeFamilyAlias(model)) return limitOn(accountId, model, now) !== null;
+  return blockingKey(accountId, model, now) !== null;
+}
+
+/** Live limits on one account for the dashboard: `model` is "*" for the whole subscription. */
+export function listClaudeLimits(accountId: string, now: number = Date.now()): Array<{ model: string; blockedUntil: number; detail: string }> {
+  const prefix = `${accountId}|`;
+  const out: Array<{ model: string; blockedUntil: number; detail: string }> = [];
+  for (const [key, until] of limited()) {
+    if (!key.startsWith(prefix) || now >= until) continue;
+    out.push({ model: key.slice(prefix.length), blockedUntil: until, detail: limitDetails().get(key)?.detail ?? "" });
+  }
+  return out.sort((x, y) => x.model.localeCompare(y.model));
+}
+
 export function clearClaudeLimits(): void {
   limited().clear();
   limitDetails().clear();
+  accountsDown().clear();
 }
 
 function fallbackModel(): string {
@@ -176,11 +291,34 @@ function fallbackModel(): string {
   return env === undefined ? DEFAULT_FALLBACK_MODEL : env.trim();
 }
 
-/** The model to retry a limited one on, or null when there is none left. */
-export function claudeLimitFallback(model: string, now: number = Date.now()): string | null {
+/** The configured fallback for `model`, before any limit check. */
+function fallbackCandidate(model: string): string | null {
   const next = fallbackModel();
   if (!next || next === model || /fable/i.test(model)) return null;
-  return isClaudeModelLimited(next, now) ? null : next;
+  return next;
+}
+
+/** The model to retry a limited one on, or null when there is none left. */
+export function claudeLimitFallback(model: string, now: number = Date.now(), accountId?: string): string | null {
+  const next = fallbackCandidate(model);
+  if (!next) return null;
+  return isClaudeModelLimited(next, now, accountId) ? null : next;
+}
+
+/**
+ * Where to run `requested`: the first connected account (list order) not
+ * limited on it, then the same for its fallback. Null when every route is out.
+ */
+export function pickClaudeRoute(requested: string, now: number = Date.now()): { accountId: string; model: string } | null {
+  const fallback = fallbackCandidate(requested);
+  const models = fallback ? [requested, fallback] : [requested];
+  const accounts = connectedAccountIds(now);
+  for (const model of models) {
+    for (const accountId of accounts) {
+      if (!isClaudeModelLimited(model, now, accountId)) return { accountId, model };
+    }
+  }
+  return null;
 }
 
 /** `requested`, or its fallback while `requested` is known to be limited. */

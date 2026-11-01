@@ -31,7 +31,8 @@ import type {
   SandboxRunOptions,
   ConfigField,
 } from "../driver.js";
-import { kernlClaudeSessionFiles } from "./docker-driver.js";
+import { SANDBOX_TRANSCRIPTS_PATH, sandboxTranscriptLines } from "../driver.js";
+import { sandboxSessionSources } from "./docker-driver.js";
 import { prepareSandboxCredentials, writeSandboxClaudeJson } from "../claude-session.js";
 
 const WRAPPER_DIR = "/app/data/.cube-wrappers";
@@ -217,9 +218,7 @@ export class CubeSandboxDriver implements SandboxDriver {
     // The session is Kernl's own (the AI connections sign-in), never the
     // operator's host ~/.claude: a sandboxed agent must not keep running on a
     // subscription Kernl says is disconnected. Explicit overrides still win.
-    const session = kernlClaudeSessionFiles();
-    const claudeJson = opts.hostBinaries?.claudeJson ?? process.env.HOST_CLAUDE_JSON ?? null;
-    const claudeCreds = opts.hostBinaries?.claudeCreds ?? process.env.HOST_CLAUDE_CREDS ?? null;
+    const session = sandboxSessionSources(opts.claudeAccountId, opts.hostBinaries);
 
     const hostWorkspace = opts.workspace.hostPath || kernelPathToHost(opts.workspace.kernelPath);
 
@@ -240,11 +239,13 @@ export class CubeSandboxDriver implements SandboxDriver {
     ];
     // .claude.json goes in as a per-run copy: the CLI rewrites the original
     // with a rename, which can pull it out from under the mount mid-start.
-    const jsonCopy = writeSandboxClaudeJson(claudeJson ?? session.json, resolve(WRAPPER_DIR, `${opts.runId}-claude.json`));
-    const jsonSrc = jsonCopy ? kernelPathToHost(jsonCopy) : claudeJson;
+    const jsonCopy = session.json ? writeSandboxClaudeJson(session.json, resolve(WRAPPER_DIR, `${opts.runId}-claude.json`)) : null;
+    const jsonSrc = jsonCopy ? kernelPathToHost(jsonCopy) : (session.jsonIsOverride ? session.json : null);
     // Kernl's own session goes in as a copy without the refresh token (see ../claude-session.ts).
-    const credsCopy = claudeCreds ? null : await prepareSandboxCredentials(session.creds, resolve(WRAPPER_DIR, `${opts.runId}-credentials.json`));
-    const credsSrc = claudeCreds ?? (credsCopy ? kernelPathToHost(credsCopy) : null);
+    const credsCopy = session.credsIsOverride || !session.creds
+      ? null
+      : await prepareSandboxCredentials(session.creds, resolve(WRAPPER_DIR, `${opts.runId}-credentials.json`), opts.claudeAccountId);
+    const credsSrc = session.credsIsOverride ? session.creds : (credsCopy ? kernelPathToHost(credsCopy) : null);
     if (jsonSrc) mountArgs.push(`--volume ${shellQuote(jsonSrc)}:/mnt/claude.json:ro`);
     if (credsSrc) mountArgs.push(`--volume ${shellQuote(credsSrc)}:/mnt/credentials.json:ro`);
     const skillNames: string[] = [];
@@ -260,6 +261,9 @@ export class CubeSandboxDriver implements SandboxDriver {
     for (const m of opts.extraMounts ?? []) {
       mountArgs.push(`--volume ${shellQuote(m.host)}:${shellQuote(m.container)}${m.readonly ? ":ro" : ""}`);
     }
+
+    // The run's transcripts live outside the sandbox (see sandboxTranscriptLines).
+    if (opts.transcriptDir) mountArgs.push(`--volume ${shellQuote(kernelPathToHost(opts.transcriptDir))}:${SANDBOX_TRANSCRIPTS_PATH}`);
 
     const bootstrapPath = resolve(WRAPPER_DIR, `${opts.runId}-bootstrap.sh`);
     const skillLinkLines: string[] = [];
@@ -279,6 +283,7 @@ export class CubeSandboxDriver implements SandboxDriver {
       'if [ -f /mnt/claude.json ]; then cp /mnt/claude.json "$HOME/.claude.json"; chmod 600 "$HOME/.claude.json"; fi',
       'if [ -f /mnt/credentials.json ]; then cp /mnt/credentials.json "$HOME/.claude/.credentials.json"; chmod 600 "$HOME/.claude/.credentials.json"; fi',
       ...skillLinkLines,
+      ...sandboxTranscriptLines(opts.transcriptDir),
       `exec ${entry}`,
       "",
     ].join("\n");

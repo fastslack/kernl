@@ -3,6 +3,7 @@ import * as providerHealth from "./provider-health.js";
 // the boundary gate keeps call-log out of them.
 import { recordLlmCall } from "../../sdk/facades.js";
 import { getCatalogEntry } from "./provider-catalog.js";
+import { beginLlmCall } from "../../sdk/llm-inflight.js";
 import { logLlmStart, logLlmEnd, logLlmFail } from "./logger.js";
 import type { ChatLlmProvider } from "./chat-provider.js";
 
@@ -50,6 +51,10 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
       preview,
     });
 
+    // Shown live in the LIVE pill until the call settles, whichever way —
+    // unless the llm() driver already registered it (its Claude Code route
+    // lands here).
+    const endInFlight = beginLlmCall({ slug, model: requestedModel, caller });
     try {
       const result = await original(msgs, opts);
       const durationMs = Date.now() - t0;
@@ -111,6 +116,8 @@ export function instrumentProvider<P extends ChatLlmProvider>(p: P): P {
         toolsSent: opts?.tools?.length ?? 0,
       }, { silent: true });
       throw err;
+    } finally {
+      endInFlight();
     }
   };
   return p;

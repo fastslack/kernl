@@ -96,7 +96,9 @@ export function needsRefresh(o: OauthBlock | undefined, now: number, minMs: numb
   return o.expiresAt - now < minMs;
 }
 
-let inFlight: Promise<void> | null = null;
+// One refresh per credentials file: each account refreshes in its own config
+// dir, so a launch on account B must not wait on (or inherit) A's refresh.
+const inFlight = new Map<string, Promise<void>>();
 
 /**
  * Refresh Kernl's session in place when it would expire during a run.
@@ -114,13 +116,14 @@ export function ensureFreshClaudeSession(opts: {
   minMs?: number;
   now?: () => number;
 }): Promise<void> {
-  if (inFlight) return inFlight;
+  const running = inFlight.get(opts.credsPath);
+  if (running) return running;
   const now = opts.now ?? Date.now;
   const minMs = opts.minMs ?? MIN_SANDBOX_TOKEN_MS;
   const creds = readCreds(opts.credsPath);
   if (!creds || !needsRefresh(creds.claudeAiOauth, now(), minMs)) return Promise.resolve();
 
-  inFlight = (async () => {
+  const run = (async () => {
     try {
       const marked = { ...creds, claudeAiOauth: { ...creds.claudeAiOauth, expiresAt: now() - 1000 } };
       const tmp = `${opts.credsPath}.${process.pid}.tmp`;
@@ -136,27 +139,42 @@ export function ensureFreshClaudeSession(opts: {
     } catch (err) {
       log.warn(`Claude session refresh before a sandbox run failed: ${err instanceof Error ? err.message : String(err)}`);
     } finally {
-      inFlight = null;
+      inFlight.delete(opts.credsPath);
     }
   })();
-  return inFlight;
+  inFlight.set(opts.credsPath, run);
+  return run;
 }
 
-/** One minimal call on Kernl's claude-code link — enough for the CLI to refresh. */
-export async function pingClaudeCode(): Promise<void> {
+/** One minimal call on an account's claude-code link — enough for the CLI to refresh. */
+export async function pingClaudeCode(accountId?: string): Promise<void> {
   // Imported lazily: the LLM client pulls in the whole provider registry,
   // which the sandbox drivers have no other reason to load.
-  const { createPinnedLlmClient } = await import("../llm/client.js");
-  const client = createPinnedLlmClient("claude-code", "haiku", {} as never);
-  if (!client) throw new Error("claude-code link unavailable");
-  await client.chat({ user: "ok", maxTokens: 5, caller: "sandbox:session-refresh" });
+  const { primaryClaudeAccountId } = await import("../../sdk/claude-accounts.js");
+  if (!accountId || accountId === primaryClaudeAccountId()) {
+    const { createPinnedLlmClient } = await import("../llm/client.js");
+    const client = createPinnedLlmClient("claude-code", "haiku", {} as never);
+    if (!client) throw new Error("claude-code link unavailable");
+    await client.chat({ user: "ok", maxTokens: 5, caller: "sandbox:session-refresh" });
+    return;
+  }
+  // The pinned client always spawns the CLI on the primary's config dir; a
+  // specific account needs an adapter whose child env points at its own.
+  const { buildChatAdapter } = await import("../llm/chat-factory.js");
+  const adapter = buildChatAdapter("claude-code", {}, { claudeCode: { accountId } });
+  if (!adapter) throw new Error("claude-code link unavailable");
+  await adapter.chatCompletion([{ role: "user", content: "ok" }], {
+    model: "haiku",
+    max_tokens: 5,
+    caller: "sandbox:session-refresh",
+  });
 }
 
 /**
  * The credentials a sandbox mounts: refreshed first if they would expire
  * mid-run, then copied without the refresh token. Null when Kernl has no session.
  */
-export async function prepareSandboxCredentials(src: string, dest: string): Promise<string | null> {
-  await ensureFreshClaudeSession({ credsPath: src, ping: pingClaudeCode });
+export async function prepareSandboxCredentials(src: string, dest: string, accountId?: string): Promise<string | null> {
+  await ensureFreshClaudeSession({ credsPath: src, ping: () => pingClaudeCode(accountId) });
   return writeSandboxCredentials(src, dest);
 }

@@ -36,6 +36,7 @@ import type { BuiltinHandler } from "../../../../../src/modules/agents/builtin-h
 
 import { AgentEvalService } from "./eval-service.js";
 import { ClaudeCodeExecutor } from "./claude-code-executor.js";
+import { sweepTranscriptRunDirs, transcriptRunsRoot } from "./claude-resume.js";
 import { MeetingExecutor } from "./meeting-executor.js";
 import { DebateOrchestrator } from "./debate-orchestrator.js";
 import { InboxWaker } from "./inbox-waker.js";
@@ -132,6 +133,10 @@ export function createAgentAdvancedModule(): AgentAdvancedModule {
       // ── Claude Agent SDK alt executor (executor_type='claude_code') ──
       const claudeCodeExecutor = new ClaudeCodeExecutor();
       claudeCodeExecutor.setConfig(ctx.config);
+      // Per-run transcript dirs of sandboxed runs: none of those runs survived
+      // the restart, so whatever is left there was never cleaned up.
+      const sweptTranscripts = sweepTranscriptRunDirs(transcriptRunsRoot(ctx.config.sqlite.path));
+      if (sweptTranscripts > 0) log.info(`agent-advanced: removed ${sweptTranscripts} leftover sandbox transcript dir(s)`);
       claudeCodeExecutor.setEvalService(evalService);
       claudeCodeExecutor.setNativeExecutor(agentExecutor);
       // registerAltExecutor will forward the stashed SandboxDriverRegistry

@@ -16,7 +16,8 @@ import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { execSync } from "node:child_process";
 import { log } from "../../logger.js";
-import { claudeConfigDir } from "../../llm/claude-code-auth.js";
+import { claudeConfigDir } from "../../../sdk/claude-cli.js";
+import { primaryClaudeAccountId } from "../../../sdk/claude-accounts.js";
 import { prepareSandboxCredentials, writeSandboxClaudeJson } from "../claude-session.js";
 import type {
   SandboxDriver,
@@ -26,6 +27,7 @@ import type {
   SandboxRunOptions,
   ConfigField,
 } from "../driver.js";
+import { SANDBOX_TRANSCRIPTS_PATH, sandboxTranscriptLines } from "../driver.js";
 
 const WRAPPER_DIR = "/app/data/.claude-wrappers";
 
@@ -181,9 +183,7 @@ export class DockerSandboxDriver implements SandboxDriver {
     // The session is Kernl's own (the AI connections sign-in), never the
     // operator's host ~/.claude: a sandboxed agent must not keep running on a
     // subscription Kernl says is disconnected. Explicit overrides still win.
-    const session = kernlClaudeSessionFiles();
-    const claudeJson = opts.hostBinaries?.claudeJson ?? process.env.HOST_CLAUDE_JSON ?? null;
-    const claudeCreds = opts.hostBinaries?.claudeCreds ?? process.env.HOST_CLAUDE_CREDS ?? null;
+    const session = sandboxSessionSources(opts.claudeAccountId, opts.hostBinaries);
 
 
     const envFlags: string[] = [];
@@ -205,15 +205,15 @@ export class DockerSandboxDriver implements SandboxDriver {
     // volume and go through mountForKernelPath. Missing ones are not mounted.
     // .claude.json goes in as a per-run copy: the CLI rewrites the original
     // with a rename, which can pull it out from under the bind mid-start.
-    const jsonCopy = writeSandboxClaudeJson(claudeJson ?? session.json, resolve(WRAPPER_DIR, `${opts.runId}-claude.json`));
+    const jsonCopy = session.json ? writeSandboxClaudeJson(session.json, resolve(WRAPPER_DIR, `${opts.runId}-claude.json`)) : null;
     if (jsonCopy) mounts.push(mountForKernelPath(jsonCopy, "/mnt/claude.json", { readonly: true }));
     // An override the kernel can't read (a host path it doesn't see) is bound as before.
-    else if (claudeJson) mounts.push(`  -v ${shellQuote(claudeJson)}:/mnt/claude.json:ro \\`);
-    if (claudeCreds) mounts.push(`  -v ${shellQuote(claudeCreds)}:/mnt/credentials.json:ro \\`);
-    else {
+    else if (session.json && session.jsonIsOverride) mounts.push(`  -v ${shellQuote(session.json)}:/mnt/claude.json:ro \\`);
+    if (session.creds && session.credsIsOverride) mounts.push(`  -v ${shellQuote(session.creds)}:/mnt/credentials.json:ro \\`);
+    else if (session.creds) {
       // A copy without the refresh token: a sandbox that refreshed would
       // rotate it away from Kernl's own file (see ../claude-session.ts).
-      const creds = await prepareSandboxCredentials(session.creds, resolve(WRAPPER_DIR, `${opts.runId}-credentials.json`));
+      const creds = await prepareSandboxCredentials(session.creds, resolve(WRAPPER_DIR, `${opts.runId}-credentials.json`), opts.claudeAccountId);
       if (creds) mounts.push(mountForKernelPath(creds, "/mnt/credentials.json", { readonly: true }));
     }
 
@@ -226,6 +226,9 @@ export class DockerSandboxDriver implements SandboxDriver {
       if (!/^[A-Za-z0-9_-]{1,64}$/.test(p.name)) continue;
       mounts.push(`  -v ${shellQuote(p.hostPath)}:/plugins/${p.name}:ro \\`);
     }
+
+    // The run's transcripts live outside the container (see sandboxTranscriptLines).
+    if (opts.transcriptDir) mounts.push(mountForKernelPath(opts.transcriptDir, SANDBOX_TRANSCRIPTS_PATH));
 
     const bootstrapPath = resolve(WRAPPER_DIR, `${opts.runId}-bootstrap.sh`);
     const skillLinkLines: string[] = [];
@@ -245,6 +248,7 @@ export class DockerSandboxDriver implements SandboxDriver {
       'if [ -f /mnt/claude.json ]; then cp /mnt/claude.json "$HOME/.claude.json"; chmod 600 "$HOME/.claude.json"; fi',
       'if [ -f /mnt/credentials.json ]; then cp /mnt/credentials.json "$HOME/.claude/.credentials.json"; chmod 600 "$HOME/.claude/.credentials.json"; fi',
       ...skillLinkLines,
+      ...sandboxTranscriptLines(opts.transcriptDir),
       `exec ${entry}`,
       "",
     ].join("\n");
@@ -288,6 +292,11 @@ export class DockerSandboxDriver implements SandboxDriver {
       driver: this.slug,
       startedAt: new Date().toISOString(),
     };
+  }
+
+  sandboxUid(): number | null {
+    const uid = Number.parseInt(this.cfg.runAs.split(":")[0] ?? "", 10);
+    return Number.isFinite(uid) ? uid : null;
   }
 
   async cleanup(handle: SandboxHandle): Promise<void> {
@@ -370,9 +379,32 @@ export function mountForKernelPath(
  * The Claude Code session the dashboard sign-in writes (CLAUDE_CONFIG_DIR is
  * Kernl's config dir, so the CLI keeps both files there). Kernel-side paths.
  */
-export function kernlClaudeSessionFiles(): { json: string; creds: string } {
-  const dir = claudeConfigDir();
+export function kernlClaudeSessionFiles(accountId?: string): { json: string; creds: string } {
+  const dir = claudeConfigDir(process.env, accountId);
   return { json: join(dir, ".claude.json"), creds: join(dir, ".credentials.json") };
+}
+
+/**
+ * Which `.claude.json` / `.credentials.json` a sandbox for this account mounts.
+ *
+ * The host overrides (`hostBinaries`, HOST_CLAUDE_JSON/CREDS) name one
+ * subscription's files, so they apply only to the primary account; any other
+ * account gets its own files from Kernl's config dirs.
+ */
+export function sandboxSessionSources(
+  accountId?: string,
+  hostBinaries?: { claudeJson?: string; claudeCreds?: string },
+): { json: string | null; creds: string | null; jsonIsOverride: boolean; credsIsOverride: boolean } {
+  const files = kernlClaudeSessionFiles(accountId);
+  const overridable = !accountId || accountId === primaryClaudeAccountId();
+  const jsonOverride = overridable ? (hostBinaries?.claudeJson ?? process.env.HOST_CLAUDE_JSON ?? null) : null;
+  const credsOverride = overridable ? (hostBinaries?.claudeCreds ?? process.env.HOST_CLAUDE_CREDS ?? null) : null;
+  return {
+    json: jsonOverride ?? files.json,
+    creds: credsOverride ?? files.creds,
+    jsonIsOverride: jsonOverride !== null,
+    credsIsOverride: credsOverride !== null,
+  };
 }
 
 export function kernelPathToHost(p: string): string {

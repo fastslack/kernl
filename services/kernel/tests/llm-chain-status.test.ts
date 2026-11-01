@@ -31,3 +31,22 @@ describe("live chain diagnostics", () => {
     }
   });
 });
+
+describe("GET /api/llm/chain body", () => {
+  it("adds the calls in flight and the call-log slug to each link", async () => {
+    const { buildChainView } = await import("../src/core/llm/chain-status.js");
+    const { beginLlmCall, listInFlight, clearInFlight } = await import("../src/sdk/llm-inflight.js");
+    const end = beginLlmCall({ slug: "claude-code", model: "sonnet", caller: "chat" });
+    try {
+      const view = buildChainView(
+        { primary: primary, fallbacks: [{ slug: "openai", provider: "openai", model: "", available: true }] },
+        {}, [], listInFlight(),
+      );
+      expect(view.primary.inFlight).toHaveLength(1);
+      expect(view.primary.inFlight[0].caller).toBe("chat");
+      expect(view.primary.logSlug).toBe("claude-code");
+      expect(view.fallbacks[0].inFlight).toEqual([]);
+      expect(view.fallbacks[0].logSlug).toBe("openai");
+    } finally { end(); clearInFlight(); }
+  });
+});

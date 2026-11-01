@@ -311,6 +311,13 @@ export async function initHttpAndMcp(args: {
       const { createClaudeLogin } = await import("../llm/claude-code-login.js");
       const { findClaudeCli } = await import("../../sdk/claude-cli.js");
       const { resetClaudeCodeSdkCache } = await import("../llm/client.js");
+      // The account store feeds the SDK resolver; any change to the list must
+      // re-resolve the clients exactly like a sign-in does.
+      const { setClaudeAccountsOnChange, duplicateOf, listAccounts } = await import("../llm/claude-accounts-store.js");
+      setClaudeAccountsOnChange((why) => {
+        resetClaudeCodeSdkCache();
+        refreshLlmConsumers(why);
+      });
       registerConnectRoutes(httpServer, {
         registry: llmRegistry,
         claudeCode: config.claudeCode,
@@ -347,6 +354,12 @@ export async function initHttpAndMcp(args: {
             refreshLlmConsumers("Claude Code signed in");
           },
           captureBrowser: existsSync("/.dockerenv"),
+          duplicateOf: (id) => {
+            const other = duplicateOf(id);
+            if (!other) return null;
+            const email = listAccounts().find((a) => a.id === other.id)?.identity?.email;
+            return { id: other.id, label: other.label, ...(email ? { email } : {}) };
+          },
           // On a shared volume, the host relay (docker-compose.host.yml) sees
           // the link and catches the redirect itself: no paste needed.
           ...(process.env.KERNL_CLAUDE_LOGIN_DIR ? {

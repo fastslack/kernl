@@ -1,4 +1,5 @@
-import { describeChainLink } from "./chain-status.js";
+import { buildChainView } from "./chain-status.js";
+import { listInFlight } from "../../sdk/llm-inflight.js";
 /**
  * Admin HTTP routes for LlmProviderRegistry.
  *
@@ -250,6 +251,10 @@ export function registerLlmProviderRoutes(
     } else {
       delete config.oauthToken;
     }
+
+    // Same for the Claude account list: only claude-accounts-store.ts writes it.
+    if (Array.isArray(stored.accounts)) config.accounts = stored.accounts;
+    else delete config.accounts;
 
     const ok = registry.saveConfig(slug, config);
     if (!ok) { server.json(res, 500, { error: "failed to persist config" }); return; }
@@ -554,15 +559,9 @@ export function registerLlmProviderRoutes(
   //   "auth"      → blocked because of 401/403 (bad key / forbidden)
   //   "degraded"  → recent transient failures, still in rotation
   server.route("GET", "/api/llm/chain", () => {
-    const chain = llm().describeChain();
-    const health = getAllHealth();
-    const blockedModels = blocklist.listAll();
-    const describe = (link: { slug: string; provider: string; model: string; available: boolean }, isPrimary: boolean) =>
-      describeChainLink(link, isPrimary, health[link.slug], blockedModels.find((b) => b.slug === link.slug && b.model === link.model));
-    return {
-      primary: describe(chain.primary, true),
-      fallbacks: chain.fallbacks.map(l => describe(l, false)),
-    };
+    // Each link also carries `inFlight` (calls running on it now, oldest
+    // first) and `logSlug` (its slug in /api/llm/calls and /api/llm/usage).
+    return buildChainView(llm().describeChain(), getAllHealth(), blocklist.listAll(), listInFlight());
   });
 }
 

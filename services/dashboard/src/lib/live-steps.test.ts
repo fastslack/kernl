@@ -7,7 +7,8 @@
 
 import { describe, it, expect } from "bun:test";
 import type { AgentFlowEvent } from "./stores.js";
-import { liveToolRows, liveDisplayRows, plainStepText, liveCallParts, liveResultParts, liveEventKey } from "./live-steps.js";
+import { eventLogToFlowEvents, isHistoryEventRow } from "./history-steps.js";
+import { fallbackEnds, liveToolRows, liveDisplayRows, plainStepText, liveCallParts, liveResultParts, liveEventKey } from "./live-steps.js";
 import {
   liveStepIcon,
   liveStepLabel,
@@ -437,5 +438,63 @@ describe("LLM fallback visibility", () => {
     expect(liveStepLabel(liveEventType(e))).toBe("LLM fallback");
     expect(liveStepIcon(liveEventType(e))).toBe("⚠️");
     expect(liveStepSummary(e)).toBe("sonnet → gpt-5-nano");
+  });
+});
+
+describe("LLM fallback with accounts", () => {
+  it("names only the accounts when the model did not change", () => {
+    const e = ev({ from_model: "claude-opus-5-5", to_model: "claude-opus-5-5", from_account: "Personal", to_account: "Trabajo" }, "agent:flow:model_fallback");
+    expect(liveStepSummary(e)).toBe("cuenta «Personal» → «Trabajo» (claude-opus-5-5)");
+  });
+
+  it("names account and model on both sides when both changed", () => {
+    const e = ev({ from_model: "opus", to_model: "fable", from_account: "A", to_account: "B" }, "agent:flow:model_fallback");
+    expect(liveStepSummary(e)).toBe("A · opus → B · fable");
+  });
+
+  it("keeps the model-only line when no account is reported", () => {
+    const e = ev({ from_model: "opus", to_model: "sonnet" }, "agent:flow:model_fallback");
+    expect(liveStepSummary(e)).toBe("opus → sonnet");
+    expect(fallbackEnds(e.data).accountOnly).toBe(false);
+  });
+
+  it("shows which account a run started on and when one was skipped", () => {
+    expect(liveStepSummary(ev({ type: "claude_account", account: "Personal" }, "agent:flow:step"))).toBe("Cuenta: «Personal»");
+    expect(liveStepSummary(ev({ type: "claude_account_down", account: "Trabajo" }, "agent:flow:step")))
+      .toBe("Sesión de «Trabajo» caída — se saltea por un rato");
+    expect(liveStepLabel("claude_account")).toBe("Claude account");
+  });
+});
+
+describe("claude account steps from history", () => {
+  const row = (event_subtype: string, raw_data: Record<string, unknown>) =>
+    ({ event_type: "step", event_subtype, detail: "x", raw_data: JSON.stringify(raw_data), created_at: "2026-10-31T10:00:00Z" }) as never;
+  it("summarizes a stored claude_account row", () => {
+    const [e] = eventLogToFlowEvents(row("claude_account", { account: "Personal" }), "r1");
+    expect(liveEventSummary(e)).toBe("Cuenta: «Personal»");
+  });
+  it("summarizes a stored claude_account_down row", () => {
+    const [e] = eventLogToFlowEvents(row("claude_account_down", { account: "Trabajo", error: "boom" }), "r1");
+    expect(liveEventSummary(e)).toBe("Sesión de «Trabajo» caída — se saltea por un rato");
+  });
+  it("names the account only when it differs", () => {
+    const e = ev({ from_model: "opus", to_model: "fable", from_account: "A", to_account: "A" }, "agent:flow:model_fallback");
+    expect(liveStepSummary(e)).toBe("opus → fable");
+  });
+});
+
+describe("history filter for step rows", () => {
+  const rows = [
+    { event_type: "step", event_subtype: "claude_account", detail: "", raw_data: JSON.stringify({ account: "Personal" }), created_at: "" },
+    { event_type: "step", event_subtype: "tool_call", detail: "", raw_data: "{}", created_at: "" },
+    { event_type: "step", event_subtype: "claude_account_down", detail: "", raw_data: JSON.stringify({ account: "Trabajo" }), created_at: "" },
+    { event_type: "run", event_subtype: "started", detail: "", raw_data: "{}", created_at: "" },
+  ] as never[];
+  it("keeps only the two account steps among step rows, and still other event rows", () => {
+    expect(rows.filter(isHistoryEventRow).map((r: any) => r.event_subtype)).toEqual(["claude_account", "claude_account_down", "started"]);
+  });
+  it("runs filter, conversion and summary end to end", () => {
+    const lines = rows.filter(isHistoryEventRow).flatMap((r) => eventLogToFlowEvents(r, "r1")).map(liveEventSummary).slice(0, 2);
+    expect(lines).toEqual(["Cuenta: «Personal»", "Sesión de «Trabajo» caída — se saltea por un rato"]);
   });
 });

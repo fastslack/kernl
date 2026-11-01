@@ -8,7 +8,10 @@ import {
   writeSandboxClaudeJson,
   needsRefresh,
   ensureFreshClaudeSession,
+  prepareSandboxCredentials,
 } from "../src/core/sandbox/claude-session.js";
+import { claudeAccountDir, setClaudeAccountResolver } from "../src/sdk/claude-accounts.js";
+import { kernlClaudeSessionFiles } from "../src/core/sandbox/drivers/docker-driver.js";
 import { classifyError } from "../src/core/llm/provider-health.js";
 
 // A sandbox that refreshed the session rotated the refresh token away from
@@ -105,6 +108,60 @@ describe("refresh before a sandbox run", () => {
     const after = JSON.parse(readFileSync(creds, "utf-8")).claudeAiOauth;
     expect(after.accessToken).toBe("at-1");
     expect(after.refreshToken).toBe("rt-1");
+  });
+});
+
+// Each account has its own credentials file and its own refresh: one shared
+// in-flight slot would hand account B the promise of account A's refresh and
+// leave B's token to expire mid-run.
+describe("refresh with several accounts", () => {
+  let dir: string;
+  beforeEach(() => { dir = mkdtempSync(join(tmpdir(), "kernl-session-multi-")); });
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const fresh = (at: string) => JSON.stringify({ claudeAiOauth: { accessToken: at, refreshToken: `rt-${at}`, expiresAt: Date.now() + 8 * HOUR } });
+
+  it("refreshes two files concurrently, each ping rewriting only its own file", async () => {
+    const a = join(dir, "a.json");
+    const b = join(dir, "b.json");
+    writeFileSync(a, JSON.stringify(session(Date.now() + 60_000)));
+    writeFileSync(b, JSON.stringify(session(Date.now() + 60_000)));
+    const pings = { a: 0, b: 0 };
+    await Promise.all([
+      ensureFreshClaudeSession({ credsPath: a, ping: async () => { pings.a++; writeFileSync(a, fresh("at-a")); } }),
+      ensureFreshClaudeSession({ credsPath: b, ping: async () => { pings.b++; writeFileSync(b, fresh("at-b")); } }),
+    ]);
+    expect(pings).toEqual({ a: 1, b: 1 });
+    expect(JSON.parse(readFileSync(a, "utf-8")).claudeAiOauth.accessToken).toBe("at-a");
+    expect(JSON.parse(readFileSync(b, "utf-8")).claudeAiOauth.accessToken).toBe("at-b");
+  });
+
+  it("shares one refresh between two launches on the same file", async () => {
+    const a = join(dir, "a.json");
+    writeFileSync(a, JSON.stringify(session(Date.now() + 60_000)));
+    let pinged = 0;
+    const ping = async () => { pinged++; await new Promise((r) => setTimeout(r, 20)); writeFileSync(a, fresh("at-a")); };
+    await Promise.all([ensureFreshClaudeSession({ credsPath: a, ping }), ensureFreshClaudeSession({ credsPath: a, ping })]);
+    expect(pinged).toBe(1);
+  });
+
+  it("prepares an account's credentials by pinging that account", async () => {
+    const saved = process.env.XDG_CONFIG_HOME;
+    process.env.XDG_CONFIG_HOME = dir;
+    setClaudeAccountResolver(() => [{ id: "default", label: "" }, { id: "second", label: "" }]);
+    try {
+      const { creds } = kernlClaudeSessionFiles("second");
+      expect(creds.startsWith(claudeAccountDir("second"))).toBe(true);
+      const { mkdirSync } = await import("node:fs");
+      mkdirSync(claudeAccountDir("second"), { recursive: true });
+      writeFileSync(creds, JSON.stringify(session(Date.now() + HOUR * 5)));
+      const out = await prepareSandboxCredentials(creds, join(dir, "copy.json"), "second");
+      expect(out).toBe(join(dir, "copy.json"));
+      expect(JSON.parse(readFileSync(out!, "utf-8")).claudeAiOauth.refreshToken).toBeUndefined();
+    } finally {
+      setClaudeAccountResolver(null);
+      if (saved === undefined) delete process.env.XDG_CONFIG_HOME; else process.env.XDG_CONFIG_HOME = saved;
+    }
   });
 });
 

@@ -15,7 +15,7 @@
   import { liveStepHtml } from '$lib/step-view.js';
   import { emailCommId } from '$lib/agent-helpers.js';
   import {
-    liveStepIcon, liveStepLabel, liveEventType, liveEventSummary,
+    liveStepIcon, liveStepLabel, liveEventType, liveEventSummary, fallbackEnds,
     liveStepSummary, liveStepCategory, liveFmtDelta, liveFmtTokens,
     liveStepTokens, runElapsedMs, runTokensTotal,
     liveStepDeltaMs as liveStepDeltaMsOf,
@@ -118,10 +118,11 @@
 <div class="ip-body live-body">
   {#if modelSwitches.length}
     {@const change = modelSwitches[0]}
+    {@const ends = fallbackEnds(change.data)}
     <div class="llm-fallback-notice" role="status">
-      <span class="llm-tag limited" title={String(change.data.reason ?? change.data.error ?? '')}>{String(change.data.from_model ?? change.data.from ?? change.data.from_provider ?? 'LLM')} · limitado</span>
+      <span class="llm-tag limited" title={String(change.data.reason ?? change.data.error ?? '')}>{ends.from} · limitado</span>
       <span aria-hidden="true">→</span>
-      <span class="llm-tag active">{String(change.data.to_model || change.data.to || change.data.to_provider || 'LLM')}</span>
+      <span class="llm-tag active">{ends.to}</span>
     </div>
   {/if}
   {#if !liveHeadEvent || !modelSwitches.includes(liveHeadEvent)}

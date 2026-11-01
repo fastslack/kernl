@@ -77,6 +77,8 @@ export interface ClaudeCodeProviderOptions {
    * interactive login cannot run (no PTY). Injected as CLAUDE_CODE_OAUTH_TOKEN.
    */
   oauthToken?: string;
+  /** Claude Code account whose session this adapter's CLI runs on; absent means the primary. */
+  accountId?: string;
   /**
    * CLAUDE_CODE_DEFAULT_MODEL — the model picked for this provider in
    * Settings.
@@ -708,7 +710,7 @@ export class ChatClaudeCodeProvider {
     // $HOME is the image layer, so a `--force-recreate` threw the login away and
     // every LLM feature started failing with "Not logged in". Assigned last so
     // it also wins over the HOST_HOME redirect above.
-    Object.assign(childEnv, claudeAuthEnv({ oauthToken: this.cfg.oauthToken }));
+    Object.assign(childEnv, claudeAuthEnv({ oauthToken: this.cfg.oauthToken, accountId: this.cfg.accountId }));
     return childEnv;
   }
 
