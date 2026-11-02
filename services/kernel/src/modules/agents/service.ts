@@ -1509,7 +1509,9 @@ export class AgentService {
         asker.flow_id ?? "",
         q.from_agent_id,
         `ANSWER: ${q.question.slice(0, 160)}`,
-        `${who} answered your question.\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
+        // The id travels with the answer: a host op that needs the operator's approval (a big DEV write)
+        // asks for it, and without it the asker had to ask again (web#2677, 01/11: five times).
+        `${who} answered your question (question_id: ${q.id}).\n\n**Question:** ${q.question}\n\n**Answer:** ${q.selected_option}` +
           (q.answered_note && q.answered_note !== q.selected_option ? `\n\n**Note:** ${q.answered_note}` : ""),
         isoNow(),
       );
